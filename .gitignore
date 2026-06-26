@@ -36,3 +36,6 @@ backend/count.js
 backend/extract-pdf.js
 backend/fix-schema.js
 backend/update-schema.js
+/package-lock.json
+backend/.gitignore
+frontend/.gitignore
