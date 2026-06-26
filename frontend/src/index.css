@@ -1,0 +1,245 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  /* ========================================================================
+     THE LIGHT TRANSLATION CONSTITUTION - CSS TOKENS
+     ======================================================================== */
+
+  /* 1. COLOR PRIMITIVES */
+  --simprok-white: #FFFFFF;
+  --simprok-surface-light: #F8FAFC;
+  --simprok-trust-blue-500: #2563EB;
+  --simprok-trust-blue-600: #1D4ED8;
+  --simprok-bright-sky-blue-50: #F0F9FF;
+  --simprok-bright-sky-blue-100: #E0F2FE;
+  --simprok-bright-sky-blue-400: #38BDF8;
+  --simprok-bright-sky-blue-500: #0EA5E9;
+  --simprok-bright-sky-blue-600: #0284C7;
+  --simprok-bright-sky-blue-700: #0369A1;
+  --simprok-glory-purple-50: #F3E8FF;
+  --simprok-glory-purple-500: #7E22CE;
+  --simprok-engineering-blue-50: #F8FAFC;
+  --simprok-engineering-blue-100: #F1F5F9;
+  --simprok-engineering-blue-200: #E2E8F0;
+  --simprok-engineering-blue-700: #334155;
+  --simprok-engineering-blue-800: #1E293B;
+  --simprok-engineering-blue-900: #0F172A;
+  --simprok-success-green-50: #F0FDF4;
+  --simprok-success-green-600: #16A34A;
+  --simprok-critical-red-50: #FEF2F2;
+  --simprok-critical-red-600: #DC2626;
+
+  /* 2. SPACING SYSTEM (8px Grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* 3. RADIUS SYSTEM */
+  --radius-none: 0px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* 4. ELEVATION SYSTEM */
+  --elevation-0: none;
+  --elevation-1: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --elevation-2: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  --elevation-3: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+
+  /* 5. TYPOGRAPHY SYSTEM */
+  --font-sans: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+  --text-4xl: 36px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+}
+
+/* ========================================================================
+   GLOBAL RESETS & FOUNDATION
+   ======================================================================== */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--simprok-surface-light);
+  color: var(--simprok-engineering-blue-900);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ========================================================================
+   CERTAINTY SYSTEM (C0-C5)
+   ======================================================================== */
+
+.certainty-c0 {
+  opacity: 0.3;
+  font-style: italic;
+  border-style: dashed;
+}
+
+.certainty-c1 {
+  opacity: 0.5;
+  font-weight: var(--weight-regular);
+}
+
+.certainty-c2 {
+  opacity: 0.7;
+  font-weight: var(--weight-regular);
+}
+
+.certainty-c3 {
+  opacity: 0.85;
+  font-weight: var(--weight-medium);
+}
+
+.certainty-c4 {
+  opacity: 1;
+  font-weight: var(--weight-semibold);
+  color: var(--simprok-engineering-blue-900);
+}
+
+.certainty-c5 {
+  opacity: 1;
+  font-weight: var(--weight-bold);
+  color: var(--simprok-engineering-blue-900);
+}
+
+/* ========================================================================
+   COMPONENT GRAMMAR
+   ======================================================================== */
+
+/* Fact Grammar */
+.simprok-fact-card {
+  background-color: var(--simprok-white);
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  box-shadow: var(--elevation-0);
+}
+
+.simprok-numeric {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Insight Grammar */
+.simprok-insight-card {
+  background-color: var(--simprok-white);
+  border: 1px solid transparent;
+  border-left: 4px solid var(--simprok-glory-purple-500);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: var(--elevation-1);
+}
+
+/* Primary Button */
+.simprok-button {
+  background-color: var(--simprok-trust-blue-500);
+  color: var(--simprok-white);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: none;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.simprok-button:hover {
+  background-color: var(--simprok-trust-blue-600);
+}
+
+.simprok-button:focus-visible {
+  outline: 2px solid var(--simprok-trust-blue-500);
+  outline-offset: 2px;
+}
+
+/* Risk Alert */
+.simprok-risk-alert {
+  background-color: var(--simprok-critical-red-50);
+  border: 1px solid var(--simprok-critical-red-600);
+  color: var(--simprok-critical-red-600);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  font-weight: var(--weight-medium);
+}
+
+/* ========================================================================
+   VISUAL DNA SIGNATURES (CP-84)
+   ======================================================================== */
+
+/* DNA-03: Executive Haiku — Product Signature
+   The first thing a user reads. One truth. One sentence.
+   Blue luminance = SIMPROK speaking.
+   White background = space to think.
+   The Haiku is the Light before the data. */
+.simprok-haiku {
+  background-color: var(--simprok-white);
+  border: 1px solid var(--simprok-bright-sky-blue-500);
+  border-left: 4px solid var(--simprok-bright-sky-blue-500);
+  border-radius: var(--radius-md);
+  padding: var(--space-8);
+  box-shadow: 0 0 20px rgba(14, 165, 233, 0.15), 0 4px 6px rgba(0, 0, 0, 0.04);
+}
+
+.simprok-haiku__label {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--simprok-bright-sky-blue-600);
+  margin-bottom: var(--space-4);
+}
+
+.simprok-haiku__text {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-medium);
+  color: var(--simprok-engineering-blue-900);
+  line-height: 1.5;
+}
+
+/* DNA-04: Authority Card — Human Terminus
+   Every logic chain ends at a human.
+   Navy border = Authority lives here.
+   The human name is the most important element.
+   SIMPROK calculates. Humans decide. */
+.simprok-authority-card {
+  background-color: var(--simprok-white);
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-left: 4px solid var(--simprok-engineering-blue-800);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  box-shadow: var(--elevation-0);
+}
+
+.simprok-authority-card--pending {
+  background-color: var(--simprok-engineering-blue-50);
+}
+
+.simprok-authority-card--approved {
+  border-left-color: var(--simprok-success-green-600);
+}
+
+.simprok-authority-card--rejected {
+  border-left-color: var(--simprok-critical-red-600);
+}

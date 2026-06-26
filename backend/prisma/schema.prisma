@@ -1,0 +1,1578 @@
+// =======================================================
+// SIMPROK - SCHEMA BASELINE 001
+// Checkpoint: 31 | Date: 2026-06-16
+// Status: READY FOR MIGRATION
+// =======================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================
+// SECTION A: IDENTITY & BOUNDARY FOUNDATION
+// =====================================================
+
+model Account {
+  id           String        @id @default(uuid()) @db.Uuid
+  email        String        @unique
+  passwordHash String
+  displayName  String
+  status       AccountStatus @default(PENDING)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  memberships WorkspaceMembership[]
+
+  @@map("accounts")
+}
+
+enum AccountStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+model Organization {
+  id        String           @id @default(uuid()) @db.Uuid
+  name      String
+  type      OrganizationType @default(COMPANY)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  workspaces              Workspace[]
+  projects                Project[]
+  priceSubmissionReviews  PriceSubmissionReview[]
+
+  @@map("organizations")
+}
+
+enum OrganizationType {
+  PERSONAL
+  COMPANY
+  GOVERNMENT
+  STATE_OWNED_ENTERPRISE
+  CONSULTANT
+  NON_PROFIT
+  EDUCATION
+}
+
+model Workspace {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization       Organization          @relation(fields: [organizationId], references: [id])
+  memberships        WorkspaceMembership[]
+  roles              Role[]
+  positions          Position[]
+  approvalMatrices   ApprovalMatrix[]
+  projects           Project[]
+  stakeholderBridges ProjectStakeholder[]
+  ahsps              AHSP[]
+  ahspVersions       AHSPVersion[]
+  ahspSnapshots      AHSPSnapshot[]
+  resourceCatalogs   ResourceCatalog[]
+  basicPrices        BasicPrice[]
+  priceSubmissions   PriceSubmission[]
+  priceSubmissionReviews PriceSubmissionReview[]
+
+  @@index([organizationId])
+  @@map("workspaces")
+}
+
+// =====================================================
+// SECTION B: ACCESS GATEWAY & OPERATIONAL RESOURCE
+// =====================================================
+
+enum MembershipStatus {
+  INVITED
+  PENDING
+  ACTIVE
+  SUSPENDED
+  INACTIVE
+  EXPIRED
+  REJECTED
+}
+
+model WorkspaceMembership {
+  id          String           @id @default(uuid()) @db.Uuid
+  accountId   String           @db.Uuid
+  workspaceId String           @db.Uuid
+  status      MembershipStatus @default(INVITED)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  account         Account             @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userProfile     User?
+  membershipRoles MembershipRole[]
+  assignments     ProjectAssignment[]
+
+  @@unique([accountId, workspaceId])
+  @@index([accountId])
+  @@index([workspaceId])
+  @@map("workspace_memberships")
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+model User {
+  id                    String     @id @default(uuid()) @db.Uuid
+  workspaceMembershipId String     @unique @db.Uuid
+  workspaceId           String     @db.Uuid
+  fullName              String
+  status                UserStatus @default(ACTIVE)
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  membership          WorkspaceMembership  @relation(fields: [workspaceMembershipId], references: [id], onDelete: Cascade)
+  positionAssignments PositionAssignment[]
+
+  createdAHSPs     AHSP[]           @relation("AHSPCreatedBy")
+  approvedAHSPs    AHSP[]           @relation("AHSPApprovedBy")
+  transferredAHSPs AHSP[]           @relation("AHSPOwnershipTransferredBy")
+  archivedAHSPs    AHSP[]           @relation("AHSPArchivedBy")
+  deletedAHSPs     AHSP[]           @relation("AHSPDeletedBy")
+  FormalDecision   FormalDecision[]
+  assignedPriceSubmissionReviews PriceSubmissionReview[] @relation("PriceSubmissionReviewAssignedTo")
+  priceSubmissionReviewDecisions PriceSubmissionReviewDecision[] @relation("PriceSubmissionReviewDecidedBy")
+
+  @@map("users")
+}
+
+// =====================================================
+// SECTION C: PARALEL RBAC ENGINE (WORKSPACE OWNED)
+// =====================================================
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  name        String
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @db.Uuid
+  code        String
+  name        String
+  description String?  @db.Text
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rolePermissions RolePermission[]
+  membershipRoles MembershipRole[]
+
+  @@unique([workspaceId, code])
+  @@index([workspaceId])
+  @@map("roles")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  roleId       String   @db.Uuid
+  permissionId String   @db.Uuid
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model MembershipRole {
+  id                    String    @id @default(uuid()) @db.Uuid
+  workspaceMembershipId String    @db.Uuid
+  roleId                String    @db.Uuid
+  startDate             DateTime  @default(now())
+  endDate               DateTime?
+  isActive              Boolean   @default(true)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  workspaceMembership WorkspaceMembership @relation(fields: [workspaceMembershipId], references: [id], onDelete: Cascade)
+  role                Role                @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceMembershipId])
+  @@index([roleId])
+  @@index([isActive])
+  @@map("membership_roles")
+}
+
+// =====================================================
+// SECTION D: AUTHORITY & PROJECT BOUNDARY
+// =====================================================
+
+model Position {
+  id               String   @id @default(uuid()) @db.Uuid
+  workspaceId      String   @db.Uuid
+  name             String
+  code             String
+  parentPositionId String?  @db.Uuid
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workspace           Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parentPosition      Position?            @relation("PositionToParent", fields: [parentPositionId], references: [id])
+  childPositions      Position[]           @relation("PositionToParent")
+  assignments         PositionAssignment[]
+  approvalMatrices    ApprovalMatrix[]
+  positionAuthorities PositionAuthority[]
+  projectBaselines    ProjectBaseline[]
+  projectRisks        ProjectRisk[]
+  formalDecisions     FormalDecision[]
+
+  @@index([workspaceId])
+  @@map("positions")
+}
+
+model PositionAssignment {
+  id         String    @id @default(uuid()) @db.Uuid
+  positionId String    @db.Uuid
+  userId     String    @db.Uuid
+  assignedAt DateTime  @default(now())
+  removedAt  DateTime?
+  isActive   Boolean   @default(true)
+
+  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([positionId])
+  @@map("position_assignments")
+}
+
+model ApprovalMatrix {
+  id                 String   @id @default(uuid()) @db.Uuid
+  workspaceId        String   @db.Uuid
+  authorityId        String   @db.Uuid
+  objectType         String
+  requiredPositionId String   @db.Uuid
+  minValue           Decimal? @db.Decimal(18, 2)
+  maxValue           Decimal? @db.Decimal(18, 2)
+  priority           Int      @default(0)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  authority        Authority @relation(fields: [authorityId], references: [id])
+  requiredPosition Position  @relation(fields: [requiredPositionId], references: [id])
+
+  @@index([workspaceId])
+  @@index([authorityId])
+  @@index([requiredPositionId])
+  @@map("approval_matrices")
+}
+
+// =====================================================
+// SECTION E: PROJECT ENGINE & MULTI-STAKEHOLDER ARENA
+// =====================================================
+
+model Project {
+  id             String        @id @default(uuid()) @db.Uuid
+  workspaceId    String        @db.Uuid
+  organizationId String        @db.Uuid
+  code           String
+  name           String
+  description    String?       @db.Text
+  location       String?
+  clientName     String?
+  type           ProjectType   @default(GENERAL)
+  address        Json?
+  budgetBaseline Decimal?      @db.Decimal(18, 2)
+  startDate      DateTime?
+  endDate        DateTime?
+  createdById    String?       @db.Uuid
+  deletedAt      DateTime?
+  status         ProjectStatus @default(PLANNED)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contracts        ProjectContract[]
+  stakeholders     ProjectStakeholder[]
+  assignments      ProjectAssignment[]
+  wbsNodes         WbsNode[]
+  boqStructures    BoqStructure[]
+  rabDocuments     RabDocument[]
+  baselines        ProjectBaseline[]
+  progressReports  ProgressReport[]
+  deviationSignals DeviationSignal[]
+  risks            ProjectRisk[]
+  forecasts        ProjectForecast[]
+  recommendations  Recommendation[]
+  formalDecisions  FormalDecision[]
+
+  @@unique([workspaceId, code])
+  @@index([workspaceId])
+  @@index([organizationId])
+  @@map("projects")
+}
+
+enum ProjectType {
+  GENERAL
+  EPCC
+  CONSTRUCTION_ONLY
+  DESIGN_ONLY
+  RENOVATION
+}
+
+enum ProjectStatus {
+  PLANNED
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  ARCHIVED
+  CANCELLED
+}
+
+model ProjectContract {
+  id             String   @id @default(uuid()) @db.Uuid
+  projectId      String   @db.Uuid
+  contractNumber String
+  value          Decimal  @db.Decimal(18, 2)
+  startDate      DateTime
+  endDate        DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, contractNumber])
+  @@map("project_contracts")
+}
+
+model ProjectStakeholder {
+  id          String          @id @default(uuid()) @db.Uuid
+  projectId   String          @db.Uuid
+  workspaceId String          @db.Uuid
+  roleType    StakeholderType @default(CONTRACTOR)
+  joinedAt    DateTime        @default(now())
+
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, workspaceId])
+  @@index([projectId])
+  @@index([workspaceId])
+  @@map("project_stakeholders")
+}
+
+enum StakeholderType {
+  OWNER
+  CONTRACTOR
+  SUPERVISORY_CONSULTANT
+  PLANNING_CONSULTANT
+}
+
+enum AssignmentStatus {
+  ASSIGNED
+  INACTIVE
+  REMOVED
+}
+
+model ProjectAssignment {
+  id                    String           @id @default(uuid()) @db.Uuid
+  workspaceMembershipId String           @db.Uuid
+  projectId             String           @db.Uuid
+  roleInProject         String
+  assignedAt            DateTime         @default(now())
+  revokedAt             DateTime?
+  isPrimaryAssignment   Boolean          @default(false)
+  status                AssignmentStatus @default(ASSIGNED)
+
+  membership WorkspaceMembership @relation(fields: [workspaceMembershipId], references: [id], onDelete: Cascade)
+  project    Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceMembershipId, projectId])
+  @@index([workspaceMembershipId])
+  @@index([projectId])
+  @@map("project_assignments")
+}
+
+enum WbsNodeType {
+  LOCATION
+  ELEMENT
+  WORK_ITEM
+}
+
+model WbsNode {
+  id        String      @id @default(uuid()) @db.Uuid
+  projectId String      @db.Uuid
+  parentId  String?     @db.Uuid
+  nodeType  WbsNodeType
+  code      String
+  name      String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent   WbsNode?  @relation("WbsToWbs", fields: [parentId], references: [id])
+  children WbsNode[] @relation("WbsToWbs")
+  boqItems BoqItem[]
+
+  @@index([projectId])
+  @@index([parentId])
+  @@map("wbs_nodes")
+}
+
+// =====================================================
+// SECTION F: AHSP DOMAIN (RESOURCE & METHOD FORMULA)
+// =====================================================
+
+enum MethodType {
+  MANUAL
+  MECHANICAL
+  SEMI_MECHANICAL
+  CHEMICAL
+  OTHER
+}
+
+enum LocationType {
+  GENERAL
+  URBAN
+  RURAL
+  MOUNTAIN
+  SWAMP
+  COASTAL
+  OFFSHORE
+  OTHER
+}
+
+enum AhspVersionStatus {
+  DRAFT
+  UNDER_REVIEW
+  VERIFIED
+  PUBLISHED
+  SUPERSEDED
+  ARCHIVED
+}
+
+enum SourceType {
+  OFFICIAL
+  WORKSPACE
+  USER
+  SYSTEM
+}
+
+enum ImportStatus {
+  PENDING
+  RUNNING
+  FAILED
+  PARTIAL_SUCCESS
+  COMPLETED
+}
+
+model AHSP {
+  id           String       @id @default(uuid()) @db.Uuid
+  workspaceId  String?      @db.Uuid // NULL for Official Repository (Tenant Scope)
+  workType     String
+  methodType   MethodType
+  locationType LocationType
+  methodName   String
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  ownershipType OwnershipType @default(USER_ASSET)
+  reviewStatus  ReviewStatus  @default(PENDING)
+
+  createdByUserId  String?   @db.Uuid
+  approvedAt       DateTime?
+  approvedByUserId String?   @db.Uuid
+  approvedByName   String?
+  approvedByEmail  String?
+
+  ownershipTransferredAt       DateTime?
+  ownershipTransferredByUserId String?   @db.Uuid
+  ownershipTransferredByName   String?
+  ownershipTransferredByEmail  String?
+
+  archivedAt       DateTime?
+  archivedByUserId String?   @db.Uuid
+  archivedByName   String?
+  archivedByEmail  String?
+
+  deletedAt       DateTime?
+  deletedByUserId String?   @db.Uuid
+  deletedByName   String?
+  deletedByEmail  String?
+
+  workspace                  Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser              User?      @relation("AHSPCreatedBy", fields: [createdByUserId], references: [id])
+  approvedByUser             User?      @relation("AHSPApprovedBy", fields: [approvedByUserId], references: [id])
+  ownershipTransferredByUser User?      @relation("AHSPOwnershipTransferredBy", fields: [ownershipTransferredByUserId], references: [id])
+  archivedByUser             User?      @relation("AHSPArchivedBy", fields: [archivedByUserId], references: [id])
+  deletedByUser              User?      @relation("AHSPDeletedBy", fields: [deletedByUserId], references: [id])
+
+  versions   AHSPVersion[]
+  snapshots  AHSPSnapshot[]
+  importJobs AHSPImportJob[]
+  auditLogs  AHSPAuditLog[]
+
+  @@unique([workspaceId, workType, methodType, locationType, methodName])
+  @@index([workspaceId])
+  @@index([ownershipType])
+  @@index([reviewStatus])
+  @@index([workspaceId, ownershipType])
+  @@index([workspaceId, reviewStatus])
+  @@index([deletedAt])
+  @@index([archivedAt])
+  @@map("ahsps")
+}
+
+model AHSPVersion {
+  id                  String            @id @default(uuid()) @db.Uuid
+  ahspId              String            @db.Uuid
+  workspaceId         String?           @db.Uuid // Tenant Scope wajib ada
+  versionNumber       Int
+  status              AhspVersionStatus @default(DRAFT)
+  effectiveDate       DateTime?
+  expiredDate         DateTime?
+  regulationReference String?
+  regulationPage      String?
+  regulationSection   String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  ahsp      AHSP           @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  workspace Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  resources AHSPResource[]
+  snapshots AHSPSnapshot[]
+  auditLogs AHSPAuditLog[]
+  BoqItem   BoqItem[]
+
+  @@unique([ahspId, versionNumber])
+  @@index([ahspId])
+  @@index([workspaceId])
+  @@map("ahsp_versions")
+}
+
+model AHSPResource {
+  id               String   @id @default(uuid()) @db.Uuid
+  ahspVersionId    String   @db.Uuid
+  resourceId       String // Temporary String (No FK)
+  resourceType     String // Temporary String
+  coefficient      Decimal  @db.Decimal(18, 6)
+  baseUnit         String
+  conversionFactor Decimal? @db.Decimal(18, 6)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  ahspVersion AHSPVersion @relation(fields: [ahspVersionId], references: [id], onDelete: Cascade)
+
+  @@index([ahspVersionId])
+  @@index([resourceId])
+  @@map("ahsp_resources")
+}
+
+model AHSPSourceDocument {
+  id         String     @id @default(uuid()) @db.Uuid
+  sourceType SourceType
+  name       String
+  reference  String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@map("ahsp_source_documents")
+}
+
+model AHSPImportJob {
+  id             String       @id @default(uuid()) @db.Uuid
+  ahspId         String?      @db.Uuid
+  status         ImportStatus @default(PENDING)
+  idempotencyKey String       @unique
+  checksum       String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  ahsp      AHSP?                @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  lines     AHSPImportLine[]
+  evidences AHSPImportEvidence[]
+
+  @@index([ahspId])
+  @@map("ahsp_import_jobs")
+}
+
+model AHSPImportLine {
+  id           String       @id @default(uuid()) @db.Uuid
+  importJobId  String       @db.Uuid
+  lineNumber   Int
+  rawData      Json
+  status       ImportStatus @default(PENDING)
+  errorMessage String?      @db.Text
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  importJob AHSPImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@index([importJobId])
+  @@map("ahsp_import_lines")
+}
+
+model AHSPImportEvidence {
+  id             String   @id @default(uuid()) @db.Uuid
+  importJobId    String   @db.Uuid
+  sourcePage     String?
+  sourceTable    String?
+  sourceRow      String?
+  rawCoefficient String?
+  rawUnit        String?
+  createdAt      DateTime @default(now())
+
+  importJob AHSPImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@index([importJobId])
+  @@map("ahsp_import_evidences")
+}
+
+model AHSPSnapshot {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String?  @db.Uuid // Tenant Scope wajib ada
+  sourceAhspId    String   @db.Uuid // Snapshot Identity
+  sourceVersionId String   @db.Uuid // Snapshot Identity
+  snapshotDate    DateTime @default(now()) // Snapshot Identity
+
+  // Data Deep Copy
+  workType      String
+  methodType    MethodType
+  locationType  LocationType
+  methodName    String
+  versionNumber Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace   Workspace?             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ahsp        AHSP                   @relation(fields: [sourceAhspId], references: [id])
+  ahspVersion AHSPVersion            @relation(fields: [sourceVersionId], references: [id])
+  resources   AHSPSnapshotResource[]
+  boqItems    BoqItem[]
+
+  @@unique([sourceAhspId, sourceVersionId, snapshotDate])
+  @@index([workspaceId])
+  @@index([sourceAhspId])
+  @@index([sourceVersionId])
+  @@map("ahsp_snapshots")
+}
+
+model AHSPSnapshotResource {
+  id               String   @id @default(uuid()) @db.Uuid
+  snapshotId       String   @db.Uuid
+  resourceId       String
+  resourceType     String
+  coefficient      Decimal  @db.Decimal(18, 6)
+  baseUnit         String
+  conversionFactor Decimal? @db.Decimal(18, 6)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  snapshot AHSPSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@index([snapshotId])
+  @@map("ahsp_snapshot_resources")
+}
+
+model AHSPAuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  ahspId        String   @db.Uuid
+  ahspVersionId String?  @db.Uuid
+  action        String // Created, Updated, Deleted dll
+  who           String // userId or system
+  when          DateTime @default(now())
+  before        Json?
+  after         Json?
+  reason        String?  @db.Text
+
+  ahsp        AHSP         @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  ahspVersion AHSPVersion? @relation(fields: [ahspVersionId], references: [id], onDelete: Cascade)
+
+  @@index([ahspId])
+  @@index([ahspVersionId])
+  @@map("ahsp_audit_logs")
+}
+
+enum OwnershipType {
+  SIMPROK_ASSET
+  APPROVED_COMMUNITY_ASSET
+  USER_ASSET
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// =====================================================
+// SECTION D.1: MISSING AUTHORITY MODELS
+// =====================================================
+
+model Authority {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  name        String
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  positionAuthorities PositionAuthority[]
+  approvalMatrices    ApprovalMatrix[]
+
+  @@map("authorities")
+}
+
+model PositionAuthority {
+  id          String   @id @default(uuid()) @db.Uuid
+  positionId  String   @db.Uuid
+  authorityId String   @db.Uuid
+  assignedAt  DateTime @default(now())
+
+  position  Position  @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  authority Authority @relation(fields: [authorityId], references: [id], onDelete: Cascade)
+
+  @@unique([positionId, authorityId])
+  @@index([positionId])
+  @@index([authorityId])
+  @@map("position_authorities")
+}
+
+// =====================================================
+// SECTION G: RESOURCE CATALOG & BASIC PRICE DOMAIN
+// =====================================================
+
+enum ResourceType {
+  MATERIAL
+  LABOR
+  EQUIPMENT
+}
+
+model ResourceCatalog {
+  id             String       @id @default(uuid()) @db.Uuid
+  workspaceId    String?      @db.Uuid
+  code           String
+  name           String
+  type           ResourceType
+  baseUnit       String
+  specifications Json?
+  tkdnValue      Decimal?     @db.Decimal(5, 2)
+  status         String       @default("ACTIVE")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  basicPrices          BasicPrice[]
+  workspace            Workspace?             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  priceSubmissions PriceSubmission[]
+  canonicalPricePoints CanonicalPricePoint[]
+
+  @@unique([workspaceId, code])
+  @@index([workspaceId])
+  @@map("resource_catalogs")
+}
+
+enum PriceSourceType {
+  VENDOR_QUOTE
+  MARKET_SURVEY
+  REGULATION
+  SYSTEM_ESTIMATE
+}
+
+enum PriceVerificationStatus {
+  UNVERIFIED
+  SUBMITTED
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  PUBLISHED
+}
+
+enum PriceSourceOrigin {
+  GOVERNMENT
+  SUPPLIER
+  STORE
+  DISTRIBUTOR
+  FIELD_REPORT
+  COMMUNITY_REPORT
+}
+
+enum PriceFreshnessStatus {
+  CURRENT
+  EXPIRING
+  EXPIRED
+}
+
+enum PriceSubmissionStatus {
+  SUBMITTED
+  NEEDS_CORRECTION
+  RESUBMITTED
+  ACCEPTED
+  UNDER_REVIEW
+  VERIFIED
+  PUBLISHED
+  REJECTED
+}
+
+enum PriceSubmissionActorType {
+  SYSTEM
+  HUMAN
+}
+
+model PriceSubmission {
+  id                  String                @id @default(uuid()) @db.Uuid
+  workspaceId         String?               @db.Uuid
+  organizationId      String?               @db.Uuid
+  resourceId          String                @db.Uuid
+  regionId            String?               @db.Uuid
+  reportedByAccountId String?               @db.Uuid // TODO FK to Account later
+  sourceOrigin        PriceSourceOrigin
+  sourceType          PriceSourceType       @default(MARKET_SURVEY)
+  status              PriceSubmissionStatus @default(SUBMITTED)
+  currentRevisionId   String?               @db.Uuid
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  resource        ResourceCatalog           @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  workspace       Workspace?                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  revisions       PriceSubmissionRevision[]
+  audits          PriceSubmissionAudit[]
+  publishedPrices BasicPrice[]
+  review          PriceSubmissionReview?
+
+  @@index([workspaceId])
+  @@index([workspaceId, organizationId])
+  @@index([organizationId])
+  @@index([resourceId])
+  @@index([reportedByAccountId])
+  @@index([status])
+  @@map("price_submissions")
+}
+
+model PriceSubmissionRevision {
+  id                String   @id @default(uuid()) @db.Uuid
+  submissionId      String   @db.Uuid
+  revisionNumber    Int
+  value             Decimal  @db.Decimal(18, 2)
+  effectiveDate     DateTime?
+  validUntil        DateTime?
+  photoUrl          String?
+  gpsLat            Decimal? @db.Decimal(10, 7)
+  gpsLng            Decimal? @db.Decimal(10, 7)
+  note              String?  @db.Text
+  validationPassed  Boolean  @default(false)
+  validationMessage String?  @db.Text
+  createdAt         DateTime @default(now())
+
+  submission PriceSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@unique([submissionId, revisionNumber])
+  @@index([submissionId])
+  @@map("price_submission_revisions")
+}
+
+model PriceSubmissionAudit {
+  id             String                   @id @default(uuid()) @db.Uuid
+  submissionId   String                   @db.Uuid
+  fromStatus     PriceSubmissionStatus?
+  toStatus       PriceSubmissionStatus
+  actorType      PriceSubmissionActorType
+  actorAccountId String?                  @db.Uuid
+  reason         String?                  @db.Text
+  createdAt      DateTime                 @default(now())
+
+  submission PriceSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+  @@map("price_submission_audits")
+}
+
+// =====================================================
+// SECTION G.1: REALITY INTAKE ZONE FOUNDATION
+// =====================================================
+
+enum IntakeJobStatus {
+  QUEUED
+  EXTRACTING
+  UNDERSTANDING
+  VALIDATING
+  NEEDS_REVIEW
+  REVIEWING
+  PUBLISHED
+  FAILED
+  REVIEW_EXPIRED
+  QUARANTINED
+}
+
+enum KnowledgeLifecycleStatus {
+  CANDIDATE
+  VALIDATED
+  NEEDS_REVIEW
+  PUBLISHED
+  REJECTED
+  EXPIRED
+  QUARANTINED
+}
+
+enum ValidationStatus {
+  MATCHED
+  PARTIAL_MATCH
+  AMBIGUOUS
+  UNRESOLVED
+  NEEDS_REVIEW
+}
+
+enum ReviewSlaState {
+  OPEN
+  ESCALATED
+  EXPIRED
+  RESOLVED
+}
+
+enum ReviewActionType {
+  RESOLVE
+  REASSIGN_MEANING
+  REJECT
+  REQUEST_MORE
+}
+
+enum PriceReviewActionType {
+  ACCEPT
+  REQUEST_CORRECTION
+  REJECT
+  REASSIGN
+}
+
+model SourceDocument {
+  id                  String   @id @default(uuid()) @db.Uuid
+  workspaceId         String   @db.Uuid
+  organizationId      String   @db.Uuid
+  uploadedByAccountId String   @db.Uuid
+  fileName            String
+  mimeType            String
+  byteSize            Int
+  checksum            String
+  storageRef          String
+  createdAt           DateTime @default(now())
+
+  intakeJobs IntakeJob[]
+
+  @@index([workspaceId])
+  @@index([organizationId])
+  @@index([checksum])
+  @@map("source_documents")
+}
+
+model IntakeJob {
+  id                 String          @id @default(uuid()) @db.Uuid
+  sourceDocumentId   String          @db.Uuid
+  workspaceId        String          @db.Uuid
+  organizationId     String          @db.Uuid
+  idempotencyKey     String
+  status             IntakeJobStatus @default(QUEUED)
+  lastCompletedStage String?
+  correlationId      String
+  claimedAt          DateTime?
+  attempts           Int             @default(0)
+  version            Int             @default(0)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  sourceDocument      SourceDocument       @relation(fields: [sourceDocumentId], references: [id], onDelete: Restrict)
+  extractionArtifacts ExtractionArtifact[]
+  candidates          KnowledgeCandidate[]
+
+  @@unique([idempotencyKey])
+  @@index([sourceDocumentId])
+  @@index([workspaceId])
+  @@index([status])
+  @@map("intake_jobs")
+}
+
+model ExtractionArtifact {
+  id          String   @id @default(uuid()) @db.Uuid
+  intakeJobId String   @db.Uuid
+  rawRows     Json
+  detectedColumns Json?
+  rowCount    Int
+  createdAt   DateTime @default(now())
+
+  intakeJob  IntakeJob            @relation(fields: [intakeJobId], references: [id], onDelete: Cascade)
+  candidates KnowledgeCandidate[]
+
+  @@index([intakeJobId])
+  @@map("extraction_artifacts")
+}
+
+model CanonicalPricePoint {
+  id                String             @id @default(uuid()) @db.Uuid
+  resourceRef       String
+  resourceCatalogId String?            @db.Uuid
+  value             Decimal            @db.Decimal(18, 2)
+  unit              String
+  sourceOrigin      PriceSourceOrigin
+  effectiveDate     DateTime?
+  createdAt         DateTime           @default(now())
+
+  resourceCatalog ResourceCatalog?     @relation(fields: [resourceCatalogId], references: [id])
+  candidate       KnowledgeCandidate?
+  knowledgeEvents KnowledgeEvent[]
+
+  @@index([resourceCatalogId])
+  @@map("canonical_price_points")
+}
+
+model KnowledgeCandidate {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  intakeJobId           String                   @db.Uuid
+  extractionArtifactId  String                   @db.Uuid
+  workspaceId           String                   @db.Uuid
+  organizationId        String                   @db.Uuid
+  knowledgeType         String                   @default("PRICE_POINT")
+  contextPath           String?
+  canonicalPricePointId String?                  @unique @db.Uuid
+  confidence            Float                    @default(0)
+  lifecycleStatus       KnowledgeLifecycleStatus @default(CANDIDATE)
+  version               Int                      @default(0)
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  intakeJob           IntakeJob            @relation(fields: [intakeJobId], references: [id], onDelete: Cascade)
+  extractionArtifact  ExtractionArtifact   @relation(fields: [extractionArtifactId], references: [id], onDelete: Cascade)
+  canonicalPricePoint CanonicalPricePoint? @relation(fields: [canonicalPricePointId], references: [id])
+  validationResults   ValidationResult[]
+  reviewTasks         ReviewTask[]
+
+  @@index([intakeJobId])
+  @@index([extractionArtifactId])
+  @@index([workspaceId])
+  @@index([lifecycleStatus])
+  @@map("knowledge_candidates")
+}
+
+model ValidationResult {
+  id          String           @id @default(uuid()) @db.Uuid
+  candidateId String           @db.Uuid
+  status      ValidationStatus
+  confidence  Float
+  messages    String?          @db.Text
+  createdAt   DateTime         @default(now())
+
+  candidate KnowledgeCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+  @@map("validation_results")
+}
+
+model ReviewTask {
+  id               String         @id @default(uuid()) @db.Uuid
+  candidateId      String         @db.Uuid
+  assignedToUserId String?        @db.Uuid
+  slaState         ReviewSlaState @default(OPEN)
+  openedAt         DateTime       @default(now())
+  escalatedAt      DateTime?
+  expiresAt        DateTime?
+  version          Int            @default(0)
+
+  candidate KnowledgeCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  decisions ReviewDecision[]
+
+  @@index([candidateId])
+  @@index([slaState])
+  @@map("review_tasks")
+}
+
+model ReviewDecision {
+  id              String           @id @default(uuid()) @db.Uuid
+  reviewTaskId    String           @db.Uuid
+  decidedByUserId String           @db.Uuid
+  action          ReviewActionType
+  note            String?          @db.Text
+  decidedAt       DateTime         @default(now())
+
+  reviewTask ReviewTask @relation(fields: [reviewTaskId], references: [id], onDelete: Cascade)
+
+  @@index([reviewTaskId])
+  @@map("review_decisions")
+}
+
+model PriceSubmissionReview {
+  id                String         @id @default(uuid()) @db.Uuid
+  priceSubmissionId String         @unique @db.Uuid
+  workspaceId       String         @db.Uuid
+  organizationId    String         @db.Uuid
+  slaState          ReviewSlaState @default(OPEN)
+  openedAt          DateTime       @default(now())
+  escalatedAt       DateTime?
+  expiredAt         DateTime?
+  resolvedAt        DateTime?
+  assignedToUserId  String?        @db.Uuid
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  submission   PriceSubmission                @relation(fields: [priceSubmissionId], references: [id], onDelete: Cascade)
+  workspace    Workspace                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  organization Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedTo   User?                          @relation("PriceSubmissionReviewAssignedTo", fields: [assignedToUserId], references: [id])
+  decisions    PriceSubmissionReviewDecision[]
+
+  @@index([workspaceId, organizationId])
+  @@index([organizationId])
+  @@index([slaState])
+  @@index([assignedToUserId])
+  @@map("price_submission_reviews")
+}
+
+model PriceSubmissionReviewDecision {
+  id              String                @id @default(uuid()) @db.Uuid
+  reviewId        String                @db.Uuid
+  decidedByUserId String                @db.Uuid
+  action          PriceReviewActionType
+  note            String?               @db.Text
+  decidedAt       DateTime              @default(now())
+  createdAt       DateTime              @default(now())
+
+  review    PriceSubmissionReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  decidedBy User                  @relation("PriceSubmissionReviewDecidedBy", fields: [decidedByUserId], references: [id])
+
+  @@index([reviewId])
+  @@index([decidedByUserId])
+  @@index([action])
+  @@map("price_submission_review_decisions")
+}
+
+model KnowledgeEvent {
+  id                    String   @id @default(uuid()) @db.Uuid
+  sequence              BigInt   @unique @default(autoincrement())
+  envelopeId            String   @db.Uuid
+  knowledgeType         String
+  workspaceId           String   @db.Uuid
+  organizationId        String   @db.Uuid
+  canonicalPricePointId String?  @db.Uuid
+  publishedAt           DateTime @default(now())
+  publishedByRef        String
+  provenanceChain       Json
+  revision              Int      @default(1)
+
+  canonicalPricePoint CanonicalPricePoint? @relation(fields: [canonicalPricePointId], references: [id])
+
+  @@index([envelopeId])
+  @@index([workspaceId])
+  @@index([knowledgeType])
+  @@map("knowledge_events")
+}
+
+model BasicPrice {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  resourceId          String                  @db.Uuid
+  workspaceId         String?                 @db.Uuid
+  organizationId      String?                 @db.Uuid
+  regionId            String?                 @db.Uuid
+  sourceSubmissionId  String?                 @unique @db.Uuid
+  effectiveDate       DateTime
+  value               Decimal                 @db.Decimal(18, 2)
+  sourceType          PriceSourceType         @default(SYSTEM_ESTIMATE)
+  verificationStatus  PriceVerificationStatus @default(UNVERIFIED)
+  sourceOrigin        PriceSourceOrigin       @default(SUPPLIER)
+  freshnessStatus     PriceFreshnessStatus    @default(CURRENT)
+  reportedByAccountId String?                 @db.Uuid
+  reviewDate          DateTime?
+  validUntil          DateTime?
+  status              String                  @default("PUBLISHED")
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  resource         ResourceCatalog  @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  workspace        Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sourceSubmission PriceSubmission? @relation(fields: [sourceSubmissionId], references: [id])
+
+  @@index([resourceId])
+  @@index([workspaceId])
+  @@index([workspaceId, organizationId])
+  @@index([organizationId])
+  @@index([sourceSubmissionId])
+  @@map("basic_prices")
+}
+
+// =====================================================
+// SECTION H: BOQ & RAB DOMAIN
+// =====================================================
+
+model BoqStructure {
+  id        String   @id @default(uuid()) @db.Uuid
+  projectId String?  @db.Uuid
+  name      String
+  version   Int
+  status    String   @default("DRAFT")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items   BoqItem[]
+  rabs    RabDocument[]
+
+  @@index([projectId])
+  @@map("boq_structures")
+}
+
+enum BoqItemType {
+  FOLDER
+  WORK_ITEM
+}
+
+model BoqItem {
+  id             String      @id @default(uuid()) @db.Uuid
+  boqStructureId String      @db.Uuid
+  parentId       String?     @db.Uuid
+  wbsNodeId      String?     @db.Uuid
+  wbsCode        String
+  name           String
+  itemType       BoqItemType @default(WORK_ITEM)
+  quantity       Decimal     @db.Decimal(18, 2)
+  unit           String
+  ahspVersionId  String?     @db.Uuid
+  ahspSnapshotId String?     @db.Uuid
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  boqStructure    BoqStructure    @relation(fields: [boqStructureId], references: [id], onDelete: Cascade)
+  parent          BoqItem?        @relation("BoqItemToParent", fields: [parentId], references: [id])
+  children        BoqItem[]       @relation("BoqItemToParent")
+  wbsNode         WbsNode?        @relation(fields: [wbsNodeId], references: [id])
+  ahspVersion     AHSPVersion?    @relation(fields: [ahspVersionId], references: [id])
+  ahspSnapshot    AHSPSnapshot?   @relation(fields: [ahspSnapshotId], references: [id])
+  progressEntries ProgressEntry[]
+
+  @@index([boqStructureId])
+  @@index([parentId])
+  @@index([wbsNodeId])
+  @@map("boq_items")
+}
+
+model RabDocument {
+  id              String   @id @default(uuid()) @db.Uuid
+  projectId       String?  @db.Uuid
+  boqStructureId  String   @db.Uuid
+  version         Int
+  name            String
+  documentType    String?
+  businessLabel   String?
+  overheadPercent Decimal  @default(0) @db.Decimal(5, 2)
+  profitPercent   Decimal  @default(0) @db.Decimal(5, 2)
+  taxPercent      Decimal  @default(0) @db.Decimal(5, 2)
+  totalBaseCost   Decimal  @db.Decimal(18, 2)
+  totalFinalCost  Decimal  @db.Decimal(18, 2)
+  status          String   @default("DRAFT")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project      Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  boqStructure BoqStructure      @relation(fields: [boqStructureId], references: [id])
+  baselines    ProjectBaseline[]
+
+  @@index([projectId])
+  @@map("rab_documents")
+}
+
+// =====================================================
+// SECTION I: BASELINE GOVERNANCE DOMAIN
+// =====================================================
+
+model ProjectBaseline {
+  id                   String   @id @default(uuid()) @db.Uuid
+  projectId            String   @db.Uuid
+  rabDocumentId        String   @db.Uuid
+  versionNumber        Int
+  status               String   @default("ACTIVE")
+  approvedAt           DateTime
+  approvedByPositionId String?  @db.Uuid
+  justification        String?  @db.Text
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  rabDocument     RabDocument      @relation(fields: [rabDocumentId], references: [id])
+  approvedBy      Position?        @relation(fields: [approvedByPositionId], references: [id])
+  progressReports ProgressReport[]
+
+  @@index([projectId])
+  @@map("project_baselines")
+}
+
+// =====================================================
+// SECTION J: MONITORING & DEVIATION DOMAIN
+// =====================================================
+
+model ProgressReport {
+  id              String   @id @default(uuid()) @db.Uuid
+  projectId       String   @db.Uuid
+  baselineId      String   @db.Uuid
+  periodStartDate DateTime
+  periodEndDate   DateTime
+  status          String   @default("DRAFT")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  overallPlannedProgress Decimal? @db.Decimal(5, 2)
+  overallActualProgress  Decimal? @db.Decimal(5, 2)
+  overallPlannedCost     Decimal? @db.Decimal(18, 2)
+  overallActualCost      Decimal? @db.Decimal(18, 2)
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  baseline         ProjectBaseline   @relation(fields: [baselineId], references: [id])
+  entries          ProgressEntry[]
+  deviationSignals DeviationSignal[]
+  forecasts        ProjectForecast[]
+
+  @@index([projectId])
+  @@map("progress_reports")
+}
+
+model ProgressEntry {
+  id                String  @id @default(uuid()) @db.Uuid
+  progressReportId  String  @db.Uuid
+  boqItemId         String  @db.Uuid
+  installedQuantity Decimal @db.Decimal(18, 2)
+  actualCost        Decimal @db.Decimal(18, 2)
+  earnedValue       Decimal @db.Decimal(18, 2)
+
+  workDate DateTime?
+  notes    String?   @db.Text
+  photoUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  progressReport ProgressReport @relation(fields: [progressReportId], references: [id], onDelete: Cascade)
+  boqItem        BoqItem        @relation(fields: [boqItemId], references: [id])
+
+  @@index([progressReportId])
+  @@map("progress_entries")
+}
+
+enum DeviationType {
+  PRICE
+  QUANTITY
+  PRODUCTIVITY
+  SCHEDULE
+}
+
+enum SeverityLevel {
+  NORMAL
+  WATCH
+  WARNING
+  CRITICAL
+}
+
+enum PriorityLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TrendDirection {
+  IMPROVING
+  STABLE
+  DEGRADING
+  VOLATILE
+}
+
+model DeviationSignal {
+  id               String         @id @default(uuid()) @db.Uuid
+  projectId        String         @db.Uuid
+  progressReportId String         @db.Uuid
+  type             DeviationType
+  severity         SeverityLevel  @default(NORMAL)
+  cpi              Decimal?       @db.Decimal(10, 4)
+  spi              Decimal?       @db.Decimal(10, 4)
+  trend            TrendDirection @default(STABLE)
+  description      String         @db.Text
+  createdAt        DateTime       @default(now())
+
+  project        Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  progressReport ProgressReport @relation(fields: [progressReportId], references: [id])
+  risks          ProjectRisk[]
+
+  @@index([projectId])
+  @@map("deviation_signals")
+}
+
+// =====================================================
+// SECTION K: RISK & FORECAST DOMAIN
+// =====================================================
+
+enum RiskCategory {
+  COST
+  SCHEDULE
+  SCOPE
+  QUALITY
+}
+
+enum RiskStatus {
+  IDENTIFIED
+  MITIGATING
+  RESOLVED
+  MATERIALIZED
+}
+
+model ProjectRisk {
+  id                    String        @id @default(uuid()) @db.Uuid
+  projectId             String        @db.Uuid
+  deviationSignalId     String?       @db.Uuid
+  title                 String        @default("Identified Risk")
+  description           String?       @db.Text
+  category              RiskCategory
+  probability           Decimal       @db.Decimal(4, 3)
+  impact                Decimal       @db.Decimal(18, 2)
+  riskScore             Decimal       @db.Decimal(18, 2)
+  classification        PriorityLevel @default(LOW)
+  status                RiskStatus    @default(IDENTIFIED)
+  escalatedToPositionId String?       @db.Uuid
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  deviationSignal DeviationSignal? @relation(fields: [deviationSignalId], references: [id])
+  escalatedTo     Position?        @relation(fields: [escalatedToPositionId], references: [id])
+
+  @@index([projectId])
+  @@map("project_risks")
+}
+
+enum ConfidenceLevel {
+  VERY_LOW
+  LOW
+  MEDIUM
+  HIGH
+  VERY_HIGH
+}
+
+model ProjectForecast {
+  id               String          @id @default(uuid()) @db.Uuid
+  projectId        String          @db.Uuid
+  progressReportId String          @db.Uuid
+  eacCost          Decimal         @db.Decimal(18, 2)
+  etcCost          Decimal         @db.Decimal(18, 2)
+  projectedEndDate DateTime
+  confidenceLevel  ConfidenceLevel @default(MEDIUM)
+  createdAt        DateTime        @default(now())
+
+  project        Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  progressReport ProgressReport @relation(fields: [progressReportId], references: [id])
+
+  @@index([projectId])
+  @@map("project_forecasts")
+}
+
+// =====================================================
+// SECTION L: RECOMMENDATION & DECISION SUPPORT DOMAIN
+// =====================================================
+
+enum RecommendationTrigger {
+  RISK
+  FORECAST
+  DEVIATION
+  PATTERN
+}
+
+enum RecommendationCategory {
+  COST_RECOVERY
+  SCHEDULE_RECOVERY
+  RISK_MITIGATION
+  OPPORTUNITY
+  STRATEGIC_SIGNAL
+}
+
+enum RecommendationStatus {
+  GENERATED
+  VIEWED
+  ACTED_ON
+  DISMISSED
+}
+
+model Recommendation {
+  id          String                 @id @default(uuid()) @db.Uuid
+  projectId   String                 @db.Uuid
+  triggerType RecommendationTrigger
+  triggerId   String                 @db.Uuid
+  category    RecommendationCategory
+  context     String                 @db.Text
+  analysis    String                 @db.Text
+  urgency     PriorityLevel          @default(LOW)
+  status      RecommendationStatus   @default(GENERATED)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  project   Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  options   RecommendationOption[]
+  decisions FormalDecision[]
+
+  @@index([projectId])
+  @@map("recommendations")
+}
+
+model RecommendationOption {
+  id               String   @id @default(uuid()) @db.Uuid
+  recommendationId String   @db.Uuid
+  description      String   @db.Text
+  expectedImpact   String   @db.Text
+  rank             Int
+  createdAt        DateTime @default(now())
+
+  recommendation Recommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@index([recommendationId])
+  @@map("recommendation_options")
+}
+
+enum DecisionStatus {
+  RECORDED
+  EXECUTING
+  COMPLETED
+}
+
+model FormalDecision {
+  id                  String         @id @default(uuid()) @db.Uuid
+  projectId           String         @db.Uuid
+  recommendationId    String?        @db.Uuid
+  decidedByUserId     String         @db.Uuid
+  decidedByPositionId String?        @db.Uuid
+  decision            String         @db.Text
+  rationale           String         @db.Text
+  status              DecisionStatus @default(RECORDED)
+  actualOutcome       String?        @db.Text
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  recommendation    Recommendation? @relation(fields: [recommendationId], references: [id])
+  decidedByUser     User            @relation(fields: [decidedByUserId], references: [id])
+  decidedByPosition Position?       @relation(fields: [decidedByPositionId], references: [id])
+
+  @@index([projectId])
+  @@map("formal_decisions")
+}

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "baseline-002-artifacts",
+    "**/*spec.ts",
+    "scripts/**/*.ts"
+  ]
+}
