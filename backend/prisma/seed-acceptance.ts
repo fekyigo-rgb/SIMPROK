@@ -1,0 +1,367 @@
+import { PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
+
+const prisma = new PrismaClient();
+
+const PASSWORD = 'Test1234!';
+const SALT_ROUNDS = 10;
+
+const ids = {
+  permissionProjectView: '10000000-0000-4000-8000-000000000001',
+  orgA: '10000000-0000-4000-8000-000000000002',
+  orgB: '10000000-0000-4000-8000-000000000003',
+  workspaceA: '10000000-0000-4000-8000-000000000004',
+  workspaceB: '10000000-0000-4000-8000-000000000005',
+  roleAcceptanceMember: '10000000-0000-4000-8000-000000000006',
+  accountAssigned: '10000000-0000-4000-8000-000000000007',
+  accountNonassigned: '10000000-0000-4000-8000-000000000008',
+  accountCrosstenant: '10000000-0000-4000-8000-000000000009',
+  membershipAssigned: '10000000-0000-4000-8000-000000000010',
+  membershipNonassigned: '10000000-0000-4000-8000-000000000011',
+  membershipCrosstenant: '10000000-0000-4000-8000-000000000012',
+  userAssigned: '10000000-0000-4000-8000-000000000013',
+  userNonassigned: '10000000-0000-4000-8000-000000000014',
+  userCrosstenant: '10000000-0000-4000-8000-000000000015',
+  membershipRoleAssigned: '10000000-0000-4000-8000-000000000016',
+  membershipRoleNonassigned: '10000000-0000-4000-8000-000000000017',
+  projectX: '10000000-0000-4000-8000-000000000018',
+  projectAssignmentAssigned: '10000000-0000-4000-8000-000000000019',
+};
+
+async function main() {
+  const passwordHash = await bcrypt.hash(PASSWORD, SALT_ROUNDS);
+
+  const permission = await prisma.permission.upsert({
+    where: { code: 'PROJECT_VIEW' },
+    update: { name: 'View Projects' },
+    create: {
+      id: ids.permissionProjectView,
+      code: 'PROJECT_VIEW',
+      name: 'View Projects',
+    },
+  });
+
+  const orgA = await prisma.organization.upsert({
+    where: { id: ids.orgA },
+    update: { name: 'Org-A', type: 'COMPANY' },
+    create: {
+      id: ids.orgA,
+      name: 'Org-A',
+      type: 'COMPANY',
+    },
+  });
+
+  const orgB = await prisma.organization.upsert({
+    where: { id: ids.orgB },
+    update: { name: 'Org-B', type: 'COMPANY' },
+    create: {
+      id: ids.orgB,
+      name: 'Org-B',
+      type: 'COMPANY',
+    },
+  });
+
+  const workspaceA = await prisma.workspace.upsert({
+    where: { id: ids.workspaceA },
+    update: {
+      name: 'Workspace-A',
+      organizationId: orgA.id,
+    },
+    create: {
+      id: ids.workspaceA,
+      name: 'Workspace-A',
+      organizationId: orgA.id,
+    },
+  });
+
+  const workspaceB = await prisma.workspace.upsert({
+    where: { id: ids.workspaceB },
+    update: {
+      name: 'Workspace-B',
+      organizationId: orgB.id,
+    },
+    create: {
+      id: ids.workspaceB,
+      name: 'Workspace-B',
+      organizationId: orgB.id,
+    },
+  });
+
+  const role = await prisma.role.upsert({
+    where: {
+      workspaceId_code: {
+        workspaceId: workspaceA.id,
+        code: 'ACCEPTANCE_MEMBER',
+      },
+    },
+    update: {
+      name: 'Acceptance Member',
+      description: 'Acceptance test member role',
+      isSystem: false,
+    },
+    create: {
+      id: ids.roleAcceptanceMember,
+      workspaceId: workspaceA.id,
+      code: 'ACCEPTANCE_MEMBER',
+      name: 'Acceptance Member',
+      description: 'Acceptance test member role',
+      isSystem: false,
+    },
+  });
+
+  await prisma.rolePermission.upsert({
+    where: {
+      roleId_permissionId: {
+        roleId: role.id,
+        permissionId: permission.id,
+      },
+    },
+    update: {},
+    create: {
+      roleId: role.id,
+      permissionId: permission.id,
+    },
+  });
+
+  const assignedAccount = await prisma.account.upsert({
+    where: { email: 'assigned@test.local' },
+    update: {
+      passwordHash,
+      displayName: 'Assigned Acceptance User',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.accountAssigned,
+      email: 'assigned@test.local',
+      passwordHash,
+      displayName: 'Assigned Acceptance User',
+      status: 'ACTIVE',
+    },
+  });
+
+  const nonassignedAccount = await prisma.account.upsert({
+    where: { email: 'nonassigned@test.local' },
+    update: {
+      passwordHash,
+      displayName: 'Nonassigned Acceptance User',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.accountNonassigned,
+      email: 'nonassigned@test.local',
+      passwordHash,
+      displayName: 'Nonassigned Acceptance User',
+      status: 'ACTIVE',
+    },
+  });
+
+  const crosstenantAccount = await prisma.account.upsert({
+    where: { email: 'crosstenant@test.local' },
+    update: {
+      passwordHash,
+      displayName: 'Cross-Tenant Acceptance User',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.accountCrosstenant,
+      email: 'crosstenant@test.local',
+      passwordHash,
+      displayName: 'Cross-Tenant Acceptance User',
+      status: 'ACTIVE',
+    },
+  });
+
+  const assignedMembership = await prisma.workspaceMembership.upsert({
+    where: {
+      accountId_workspaceId: {
+        accountId: assignedAccount.id,
+        workspaceId: workspaceA.id,
+      },
+    },
+    update: { status: 'ACTIVE' },
+    create: {
+      id: ids.membershipAssigned,
+      accountId: assignedAccount.id,
+      workspaceId: workspaceA.id,
+      status: 'ACTIVE',
+    },
+  });
+
+  const nonassignedMembership = await prisma.workspaceMembership.upsert({
+    where: {
+      accountId_workspaceId: {
+        accountId: nonassignedAccount.id,
+        workspaceId: workspaceA.id,
+      },
+    },
+    update: { status: 'ACTIVE' },
+    create: {
+      id: ids.membershipNonassigned,
+      accountId: nonassignedAccount.id,
+      workspaceId: workspaceA.id,
+      status: 'ACTIVE',
+    },
+  });
+
+  const crosstenantMembership = await prisma.workspaceMembership.upsert({
+    where: {
+      accountId_workspaceId: {
+        accountId: crosstenantAccount.id,
+        workspaceId: workspaceB.id,
+      },
+    },
+    update: { status: 'ACTIVE' },
+    create: {
+      id: ids.membershipCrosstenant,
+      accountId: crosstenantAccount.id,
+      workspaceId: workspaceB.id,
+      status: 'ACTIVE',
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { workspaceMembershipId: assignedMembership.id },
+    update: {
+      workspaceId: workspaceA.id,
+      fullName: 'Assigned Acceptance User',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.userAssigned,
+      workspaceMembershipId: assignedMembership.id,
+      workspaceId: workspaceA.id,
+      fullName: 'Assigned Acceptance User',
+      status: 'ACTIVE',
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { workspaceMembershipId: nonassignedMembership.id },
+    update: {
+      workspaceId: workspaceA.id,
+      fullName: 'Nonassigned Acceptance User',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.userNonassigned,
+      workspaceMembershipId: nonassignedMembership.id,
+      workspaceId: workspaceA.id,
+      fullName: 'Nonassigned Acceptance User',
+      status: 'ACTIVE',
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { workspaceMembershipId: crosstenantMembership.id },
+    update: {
+      workspaceId: workspaceB.id,
+      fullName: 'Cross-Tenant Acceptance User',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.userCrosstenant,
+      workspaceMembershipId: crosstenantMembership.id,
+      workspaceId: workspaceB.id,
+      fullName: 'Cross-Tenant Acceptance User',
+      status: 'ACTIVE',
+    },
+  });
+
+  await prisma.membershipRole.upsert({
+    where: { id: ids.membershipRoleAssigned },
+    update: {
+      workspaceMembershipId: assignedMembership.id,
+      roleId: role.id,
+      isActive: true,
+      endDate: null,
+    },
+    create: {
+      id: ids.membershipRoleAssigned,
+      workspaceMembershipId: assignedMembership.id,
+      roleId: role.id,
+      isActive: true,
+    },
+  });
+
+  await prisma.membershipRole.upsert({
+    where: { id: ids.membershipRoleNonassigned },
+    update: {
+      workspaceMembershipId: nonassignedMembership.id,
+      roleId: role.id,
+      isActive: true,
+      endDate: null,
+    },
+    create: {
+      id: ids.membershipRoleNonassigned,
+      workspaceMembershipId: nonassignedMembership.id,
+      roleId: role.id,
+      isActive: true,
+    },
+  });
+
+  const project = await prisma.project.upsert({
+    where: {
+      workspaceId_code: {
+        workspaceId: workspaceA.id,
+        code: 'ACC-X',
+      },
+    },
+    update: {
+      organizationId: orgA.id,
+      name: 'Acceptance Project X',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.projectX,
+      workspaceId: workspaceA.id,
+      organizationId: orgA.id,
+      code: 'ACC-X',
+      name: 'Acceptance Project X',
+      status: 'ACTIVE',
+    },
+  });
+
+  await prisma.projectAssignment.upsert({
+    where: {
+      workspaceMembershipId_projectId: {
+        workspaceMembershipId: assignedMembership.id,
+        projectId: project.id,
+      },
+    },
+    update: {
+      roleInProject: 'PROJECT_MANAGER',
+      isPrimaryAssignment: true,
+      status: 'ASSIGNED',
+      revokedAt: null,
+    },
+    create: {
+      id: ids.projectAssignmentAssigned,
+      workspaceMembershipId: assignedMembership.id,
+      projectId: project.id,
+      roleInProject: 'PROJECT_MANAGER',
+      isPrimaryAssignment: true,
+      status: 'ASSIGNED',
+    },
+  });
+
+  console.log('Acceptance seed complete');
+  console.log({
+    projectCode: project.code,
+    projectId: project.id,
+    workspaceAId: workspaceA.id,
+    accounts: [
+      assignedAccount.email,
+      nonassignedAccount.email,
+      crosstenantAccount.email,
+    ],
+  });
+}
+
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
