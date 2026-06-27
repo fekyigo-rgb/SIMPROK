@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { WorkspaceController } from './workspace.controller';
+import { WorkspaceService } from './workspace.service';
 
 describe('WorkspaceController', () => {
   let controller: WorkspaceController;
@@ -7,6 +8,17 @@ describe('WorkspaceController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [WorkspaceController],
+      providers: [
+        {
+          provide: WorkspaceService,
+          useValue: {
+            findAll: jest.fn(),
+            findOne: jest.fn(),
+            findByOrganization: jest.fn(),
+            healthCheck: jest.fn(),
+          },
+        },
+      ],
     }).compile();
 
     controller = module.get<WorkspaceController>(WorkspaceController);
