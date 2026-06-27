@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { type FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -18,7 +18,7 @@ export function ProjectSetupPage() {
   const { token, activeWorkspaceId } = useAuth();
   const navigate = useNavigate();
 
-  const handleSetup = async (e: React.FormEvent) => {
+  const handleSetup = async (e: FormEvent) => {
     e.preventDefault();
     if (!token || !activeWorkspaceId) return;
 

@@ -1,4 +1,3 @@
-import React from 'react';
 import { InsightHeader } from '../molecules/InsightHeader';
 import { Button } from '../atoms/Button';
 import { GloryAccent } from '../atoms/GloryAccent';

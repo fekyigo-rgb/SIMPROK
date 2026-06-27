@@ -1,5 +1,3 @@
-import React from 'react';
-
 interface NumericFactProps {
   value: string | number;
   certaintyLevel?: 'C0' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5';

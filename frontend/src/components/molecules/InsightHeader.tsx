@@ -1,4 +1,3 @@
-import React from 'react';
 import { GloryAccent } from '../atoms/GloryAccent';
 
 interface InsightHeaderProps {

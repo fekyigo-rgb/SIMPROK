@@ -1,4 +1,3 @@
-import React from 'react';
 import { FactHeader } from '../molecules/FactHeader';
 import { DeviationSignal } from '../molecules/DeviationSignal';
 

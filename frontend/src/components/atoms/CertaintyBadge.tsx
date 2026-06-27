@@ -1,4 +1,3 @@
-import React from 'react';
 import { ShieldCheck, HelpCircle, Clock, CheckCircle } from 'lucide-react';
 
 interface CertaintyBadgeProps {

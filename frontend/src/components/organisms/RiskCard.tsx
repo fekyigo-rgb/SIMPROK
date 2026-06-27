@@ -1,4 +1,3 @@
-import React from 'react';
 import { RiskIndicator } from '../atoms/RiskIndicator';
 import { NumericFact } from '../atoms/NumericFact';
 

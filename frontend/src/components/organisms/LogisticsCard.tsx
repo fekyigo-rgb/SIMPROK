@@ -1,4 +1,3 @@
-import React from 'react';
 import { CertaintyBadge } from '../atoms/CertaintyBadge';
 import { NumericFact } from '../atoms/NumericFact';
 

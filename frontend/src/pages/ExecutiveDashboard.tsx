@@ -1,4 +1,3 @@
-import React from 'react';
 import { ProjectCard } from '../components/organisms/ProjectCard';
 import { ExecutiveHaiku } from '../components/molecules/ExecutiveHaiku';
 

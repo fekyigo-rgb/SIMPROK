@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ExecutiveHaiku } from '../components/molecules/ExecutiveHaiku';
 import { ProjectCard } from '../components/organisms/ProjectCard';
 import { useAuth } from '../contexts/AuthContext';

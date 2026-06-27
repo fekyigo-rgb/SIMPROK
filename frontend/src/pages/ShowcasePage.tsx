@@ -1,4 +1,3 @@
-import React from 'react';
 import { CertaintyBadge } from '../components/atoms/CertaintyBadge';
 import { RiskIndicator } from '../components/atoms/RiskIndicator';
 import { GloryAccent } from '../components/atoms/GloryAccent';

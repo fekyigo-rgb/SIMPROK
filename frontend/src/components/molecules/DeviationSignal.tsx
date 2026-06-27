@@ -1,4 +1,3 @@
-import React from 'react';
 import { NumericFact } from '../atoms/NumericFact';
 
 interface DeviationSignalProps {

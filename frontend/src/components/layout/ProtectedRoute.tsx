@@ -1,4 +1,4 @@
-import React from 'react';
+import type { ReactNode } from 'react';
 import { Navigate, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -21,8 +21,8 @@ export function ProtectedRoute() {
   return <Outlet />;
 }
 
-export function RoleRoute({ allowedRoles, children }: { allowedRoles: string[], children: React.ReactNode }) {
-  const { activeRoles, account, logout } = useAuth();
+export function RoleRoute({ allowedRoles, children }: { allowedRoles: string[], children: ReactNode }) {
+  const { activeRoles, logout } = useAuth();
   const navigate = useNavigate();
   
   const hasAccess = allowedRoles.some(role => activeRoles.includes(role));

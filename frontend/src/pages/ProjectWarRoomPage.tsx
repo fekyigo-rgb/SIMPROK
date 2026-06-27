@@ -1,11 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ProgressCard } from '../components/organisms/ProgressCard';
 import { RiskCard } from '../components/organisms/RiskCard';
 import { ForecastCard } from '../components/organisms/ForecastCard';
-import { ApprovalCard } from '../components/organisms/ApprovalCard';
 import { RecommendationCard } from '../components/organisms/RecommendationCard';
-import { LogisticsCard } from '../components/organisms/LogisticsCard';
 import { Button } from '../components/atoms/Button';
 import { useAuth } from '../contexts/AuthContext';
 import { DeviationSignal } from '../components/molecules/DeviationSignal';
