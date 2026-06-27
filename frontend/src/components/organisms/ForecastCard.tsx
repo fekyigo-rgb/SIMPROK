@@ -8,7 +8,7 @@ interface ForecastCardProps {
   etc: number; // Estimate to Complete (Cost)
   projectedFinishDate: string;
   confidencePercentage: number;
-  certaintyLevel: 'C1' | 'C2';
+  certaintyLevel: 'C0' | 'C1' | 'C2';
 }
 
 export function ForecastCard({
@@ -71,7 +71,13 @@ export function ForecastCard({
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--simprok-engineering-blue-700)' }}>Statistical Confidence</span>
-          <NumericFact value={confidencePercentage} suffix="%" size="sm" certaintyLevel={certaintyLevel} />
+          {certaintyLevel === 'C0' ? (
+            <span className="certainty-c0" style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-700)', fontFamily: 'var(--font-mono)' }}>
+              Unknown
+            </span>
+          ) : (
+            <NumericFact value={confidencePercentage} suffix="%" size="sm" certaintyLevel={certaintyLevel} />
+          )}
         </div>
       </div>
     </div>
