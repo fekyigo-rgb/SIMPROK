@@ -1,11 +1,11 @@
 import { useNavigate } from 'react-router-dom';
 
 interface ProjectCardProps {
-  id: string;
+  id?: string;
   projectName: string;
   projectCode: string;
   projectManager: string;
-  status: 'HEALTHY' | 'WARNING' | 'CRITICAL';
+  status?: 'HEALTHY' | 'WARNING' | 'CRITICAL';
 }
 
 export function ProjectCard({
@@ -16,6 +16,8 @@ export function ProjectCard({
   status
 }: ProjectCardProps) {
   const navigate = useNavigate();
+  const canNavigate = Boolean(id);
+  const displayedStatus = status ?? 'UNKNOWN';
 
   let borderColor = 'var(--simprok-engineering-blue-200)';
   let accentColor = 'var(--simprok-engineering-blue-500)';
@@ -30,14 +32,14 @@ export function ProjectCard({
 
   return (
     <div 
-      onClick={() => navigate(`/project/${id}`)}
+      onClick={canNavigate ? () => navigate(`/project/${id}`) : undefined}
       style={{ 
         backgroundColor: 'var(--simprok-white)', 
         border: `1px solid ${borderColor}`,
         borderLeft: `4px solid ${accentColor}`,
         borderRadius: 'var(--radius-sm)', 
         padding: 'var(--space-4)',
-        cursor: 'pointer',
+        cursor: canNavigate ? 'pointer' : 'default',
         display: 'flex',
         flexDirection: 'column',
         gap: 'var(--space-2)',
@@ -45,17 +47,19 @@ export function ProjectCard({
         transition: 'transform 0.2s ease, box-shadow 0.2s ease'
       }}
       onMouseEnter={(e) => {
+        if (!canNavigate) return;
         e.currentTarget.style.transform = 'translateY(-2px)';
         e.currentTarget.style.boxShadow = 'var(--elevation-2)';
       }}
       onMouseLeave={(e) => {
+        if (!canNavigate) return;
         e.currentTarget.style.transform = 'translateY(0)';
         e.currentTarget.style.boxShadow = 'var(--elevation-1)';
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--simprok-engineering-blue-700)', fontFamily: 'var(--font-mono)' }}>{projectCode}</span>
-        <span style={{ fontSize: 'var(--text-xs)', color: accentColor, fontWeight: 'var(--weight-bold)' }}>{status}</span>
+        <span style={{ fontSize: 'var(--text-xs)', color: accentColor, fontWeight: 'var(--weight-bold)' }}>{displayedStatus}</span>
       </div>
       <h4 style={{ fontSize: 'var(--text-base)', color: 'var(--simprok-engineering-blue-900)', margin: 0 }}>
         {projectName}

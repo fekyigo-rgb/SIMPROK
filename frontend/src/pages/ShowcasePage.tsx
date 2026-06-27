@@ -264,7 +264,6 @@ export function ShowcasePage() {
           projectName="Jakarta-Bandung High Speed Rail Foundation"
           projectCode="PRJ-HSR-2026"
           projectManager="Budi Santoso, ST."
-          lastUpdated="2026-06-19 15:00:00"
         />
 
       </section>
