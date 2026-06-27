@@ -2,6 +2,11 @@ import { type FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
+const toSafeNumber = (value: string): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 export function ProjectSetupPage() {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
@@ -80,9 +85,9 @@ export function ProjectSetupPage() {
           <input type="text" value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="Item Name" required style={{ flex: 2, padding: '8px' }}/>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <input type="number" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Quantity" required style={{ flex: 1, padding: '8px' }}/>
+          <input type="number" value={quantity} onChange={(e) => setQuantity(toSafeNumber(e.target.value))} placeholder="Quantity" required style={{ flex: 1, padding: '8px' }}/>
           <input type="text" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="Unit" required style={{ flex: 1, padding: '8px' }}/>
-          <input type="number" value={plannedCost} onChange={(e) => setPlannedCost(e.target.value)} placeholder="Planned Cost (IDR)" required style={{ flex: 2, padding: '8px' }}/>
+          <input type="number" value={plannedCost} onChange={(e) => setPlannedCost(toSafeNumber(e.target.value))} placeholder="Planned Cost (IDR)" required style={{ flex: 2, padding: '8px' }}/>
         </div>
 
         <button type="submit" disabled={submitting} style={{ marginTop: 'var(--space-6)', padding: '12px', backgroundColor: 'var(--simprok-engineering-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
