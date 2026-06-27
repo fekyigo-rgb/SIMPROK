@@ -4,6 +4,7 @@ coverage/
 generated/
 .env
 .env.*
+!backend/.env.test.example
 .tmp.driveupload/
 *.bak
 *.backup

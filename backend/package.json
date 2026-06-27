@@ -18,7 +18,10 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "verify:db:test": "tsx scripts/test-database-guard.ts",
+    "test:e2e:safe": "tsx scripts/run-e2e-safe.ts",
+    "test:e2e": "npm run test:e2e:safe",
+    "gate:post-recovery": "npm run build && npm run test && npm run test:e2e && npm --prefix ../frontend run build"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
