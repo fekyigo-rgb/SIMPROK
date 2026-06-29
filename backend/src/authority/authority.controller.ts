@@ -1,112 +1,118 @@
 import {
-    Body,
-    Controller,
-    Get,
-    Param,
-    Post,
-    } from '@nestjs/common';
-    
-    import { AuthorityService } from './authority.service';
-    
-    import { CreatePositionDto } from './dto/create-position.dto';
-    import { CreateAuthorityDto } from './dto/create-authority.dto';
-    import { AssignPositionDto } from './dto/assign-position.dto';
-    import { AssignAuthorityDto } from './dto/assign-authority.dto';
-    import { CreateApprovalMatrixDto } from './dto/create-approval-matrix.dto';
-    
-    @Controller('authority')
-    export class AuthorityController {
-    constructor(
-    private readonly authorityService: AuthorityService,
-    ) {}
-    
-    @Get('health')
-    healthCheck() {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Permissions } from '../common/decorators/permissions.decorator';
+import { AuthorityService } from './authority.service';
+
+import { CreatePositionDto } from './dto/create-position.dto';
+import { CreateAuthorityDto } from './dto/create-authority.dto';
+import { AssignPositionDto } from './dto/assign-position.dto';
+import { AssignAuthorityDto } from './dto/assign-authority.dto';
+import { CreateApprovalMatrixDto } from './dto/create-approval-matrix.dto';
+
+@Controller('authority')
+export class AuthorityController {
+  constructor(private readonly authorityService: AuthorityService) {}
+
+  @Get('health')
+  healthCheck() {
     return this.authorityService.healthCheck();
-    }
-    
-    @Post('positions')
-    createPosition(
-    @Body() createPositionDto: CreatePositionDto,
-    ) {
-    return this.authorityService.createPosition(
-    createPositionDto,
-    );
-    }
-    
-    @Get('positions')
-    findAllPositions() {
-    return this.authorityService.findAllPositions();
-    }
-    
-    @Get('positions/:id')
-    findPosition(@Param('id') id: string) {
-    return this.authorityService.findPosition(id);
-    }
-    
-    @Post('authorities')
-    createAuthority(
-    @Body() createAuthorityDto: CreateAuthorityDto,
-    ) {
-    return this.authorityService.createAuthority(
-    createAuthorityDto,
-    );
-    }
-    
-    @Get('authorities')
-    findAllAuthorities() {
-    return this.authorityService.findAllAuthorities();
-    }
-    
-    @Post('assignments')
-    assignPosition(
-    @Body() assignPositionDto: AssignPositionDto,
-    ) {
-    return this.authorityService.assignPosition(
-    assignPositionDto,
-    );
-    }
-    
-    @Post('position-authorities')
-    assignAuthority(
-    @Body() assignAuthorityDto: AssignAuthorityDto,
-    ) {
-    return this.authorityService.assignAuthority(
-    assignAuthorityDto,
-    );
-    }
-    
-    @Get('positions/:id/authorities')
-    findAuthoritiesByPosition(
-    @Param('id') id: string,
-    ) {
-    return this.authorityService.findAuthoritiesByPosition(
-    id,
-    );
-    }
-    
-    @Post('approval-matrices')
-    createApprovalMatrix(
-    @Body()
-    createApprovalMatrixDto: CreateApprovalMatrixDto,
-    ) {
-    return this.authorityService.createApprovalMatrix(
-    createApprovalMatrixDto,
-    );
-    }
-    
-    @Get('approval-matrices')
-    findAllApprovalMatrices() {
-    return this.authorityService.findAllApprovalMatrices();
-    }
-    
-    @Get('approval-matrices/:id')
-    findApprovalMatrix(
-    @Param('id') id: string,
-    ) {
-    return this.authorityService.findApprovalMatrix(
-    id,
-    );
-    }
-    }
+  }
+
+  @Post('positions')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('AUTHORITY_MANAGE')
+  createPosition(@Req() request: any, @Body() createPositionDto: CreatePositionDto) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.createPosition(workspaceId, createPositionDto);
+  }
+
+  @Get('positions')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('AUTHORITY_VIEW')
+  findAllPositions(@Req() request: any) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.findAllPositions(workspaceId);
+  }
+
+  @Get('positions/:id')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('AUTHORITY_VIEW')
+  findPosition(@Req() request: any, @Param('id') id: string) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.findPosition(id, workspaceId);
+  }
+
+  @Post('authorities')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('AUTHORITY_MANAGE')
+  createAuthority(@Req() request: any, @Body() createAuthorityDto: CreateAuthorityDto) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.createAuthority(workspaceId, createAuthorityDto);
+  }
+
+  @Get('authorities')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('AUTHORITY_VIEW')
+  findAllAuthorities(@Req() request: any) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.findAllAuthorities(workspaceId);
+  }
+
+  @Post('assignments')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('AUTHORITY_ASSIGN')
+  assignPosition(@Req() request: any, @Body() assignPositionDto: AssignPositionDto) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.assignPosition(workspaceId, assignPositionDto);
+  }
+
+  @Post('position-authorities')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('AUTHORITY_ASSIGN')
+  assignAuthority(@Req() request: any, @Body() assignAuthorityDto: AssignAuthorityDto) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.assignAuthority(workspaceId, assignAuthorityDto);
+  }
+
+  @Get('positions/:id/authorities')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('AUTHORITY_VIEW')
+  findAuthoritiesByPosition(@Req() request: any, @Param('id') id: string) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.findAuthoritiesByPosition(id, workspaceId);
+  }
+
+  @Post('approval-matrices')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('APPROVAL_MATRIX_MANAGE')
+  createApprovalMatrix(@Req() request: any, @Body() createApprovalMatrixDto: CreateApprovalMatrixDto) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.createApprovalMatrix(workspaceId, createApprovalMatrixDto);
+  }
+
+  @Get('approval-matrices')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('APPROVAL_MATRIX_VIEW')
+  findAllApprovalMatrices(@Req() request: any) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.findAllApprovalMatrices(workspaceId);
+  }
+
+  @Get('approval-matrices/:id')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('APPROVAL_MATRIX_VIEW')
+  findApprovalMatrix(@Req() request: any, @Param('id') id: string) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.authorityService.findApprovalMatrix(id, workspaceId);
+  }
+}
     

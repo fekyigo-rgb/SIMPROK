@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -18,13 +19,13 @@ export class AuthorityService {
   // POSITION
   // =====================================================
 
-  async createPosition(createPositionDto: CreatePositionDto) {
+  async createPosition(workspaceId: string, createPositionDto: CreatePositionDto) {
+    if (!workspaceId) throw new ForbiddenException('Workspace context is required');
     return this.prisma.position.create({
       data: {
         name: createPositionDto.name,
         code: createPositionDto.code,
-        // Gunakan pola .connect untuk relasi
-        workspace: { connect: { id: createPositionDto.workspaceId } },
+        workspace: { connect: { id: workspaceId } },
         ...(createPositionDto.parentPositionId && {
           parentPosition: { connect: { id: createPositionDto.parentPositionId } },
         }),
@@ -32,17 +33,22 @@ export class AuthorityService {
     });
   }
 
-  findAllPositions() {
+  findAllPositions(workspaceId: string) {
+    if (!workspaceId) throw new ForbiddenException('Workspace context is required');
     return this.prisma.position.findMany({
+      where: { workspaceId },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async findPosition(id: string) {
+  async findPosition(id: string, workspaceId: string) {
+    if (!workspaceId) throw new ForbiddenException('Workspace context is required');
     const position = await this.prisma.position.findUnique({
       where: { id },
     });
-    if (!position) throw new NotFoundException('Position not found');
+    if (!position || position.workspaceId !== workspaceId) {
+      throw new NotFoundException('Position not found');
+    }
     return position;
   }
 
@@ -50,10 +56,16 @@ export class AuthorityService {
   // POSITION ASSIGNMENT
   // =====================================================
 
-  async assignPosition(assignPositionDto: AssignPositionDto) {
+  async assignPosition(workspaceId: string, assignPositionDto: AssignPositionDto) {
+    if (!workspaceId) throw new ForbiddenException('Workspace context is required');
     const { userId, positionId } = assignPositionDto;
 
-    // Pastikan relasi benar-benar ada di DB
+    // Pastikan posisi berada di workspace yang sama dengan context
+    const position = await this.prisma.position.findUnique({ where: { id: positionId } });
+    if (!position || position.workspaceId !== workspaceId) {
+      throw new NotFoundException('Position not found or does not belong to workspace');
+    }
+
     const activeHolder = await this.prisma.positionAssignment.findFirst({
       where: { positionId, isActive: true },
     });
@@ -65,7 +77,6 @@ export class AuthorityService {
     return this.prisma.positionAssignment.create({
       data: {
         isActive: true,
-        // Hubungkan via relasi
         user: { connect: { id: userId } },
         position: { connect: { id: positionId } },
       },
@@ -76,21 +87,19 @@ export class AuthorityService {
   // AUTHORITY (Pending Prisma Schema Restoration)
   // =====================================================
 
-  async createAuthority(createAuthorityDto: CreateAuthorityDto) {
-    // Berdasarkan CHEK ANTIGRATIVY.pdf, Authority dan PositionAuthority adalah "UNCHANGED MODELS"
-    // Namun saat ini hilang dari schema.prisma. Metode ini disiapkan agar build tidak error.
+  async createAuthority(workspaceId: string, createAuthorityDto: CreateAuthorityDto) {
     throw new ConflictException('Authority model is missing from Prisma Schema.');
   }
 
-  findAllAuthorities() {
+  findAllAuthorities(workspaceId: string) {
     throw new ConflictException('Authority model is missing from Prisma Schema.');
   }
 
-  async assignAuthority(assignAuthorityDto: AssignAuthorityDto) {
+  async assignAuthority(workspaceId: string, assignAuthorityDto: AssignAuthorityDto) {
     throw new ConflictException('PositionAuthority model is missing from Prisma Schema.');
   }
 
-  findAuthoritiesByPosition(id: string) {
+  findAuthoritiesByPosition(id: string, workspaceId: string) {
     throw new ConflictException('PositionAuthority model is missing from Prisma Schema.');
   }
 
@@ -98,34 +107,46 @@ export class AuthorityService {
   // APPROVAL MATRIX
   // =====================================================
 
-  async createApprovalMatrix(createApprovalMatrixDto: CreateApprovalMatrixDto) {
+  async createApprovalMatrix(workspaceId: string, createApprovalMatrixDto: CreateApprovalMatrixDto) {
+    if (!workspaceId) throw new ForbiddenException('Workspace context is required');
+    
+    // Pastikan posisi yang dibutuhkan ada dan berada di workspace yang sama
+    const requiredPosition = await this.prisma.position.findUnique({ where: { id: createApprovalMatrixDto.requiredPositionId } });
+    if (!requiredPosition || requiredPosition.workspaceId !== workspaceId) {
+      throw new NotFoundException('Required position not found or does not belong to workspace');
+    }
+
     return this.prisma.approvalMatrix.create({
       data: {
         objectType: createApprovalMatrixDto.objectType,
         minValue: createApprovalMatrixDto.minValue ?? null,
         maxValue: createApprovalMatrixDto.maxValue ?? null,
         priority: createApprovalMatrixDto.priority ?? 0,
-        // Relasi wajib dihubungkan
-        workspace: { connect: { id: createApprovalMatrixDto.workspaceId } },
+        workspace: { connect: { id: workspaceId } },
         authority: { connect: { id: createApprovalMatrixDto.authorityId } },
         requiredPosition: { connect: { id: createApprovalMatrixDto.requiredPositionId } },
       },
     });
   }
 
-  findAllApprovalMatrices() {
+  findAllApprovalMatrices(workspaceId: string) {
+    if (!workspaceId) throw new ForbiddenException('Workspace context is required');
     return this.prisma.approvalMatrix.findMany({
+      where: { workspaceId },
       include: { requiredPosition: true },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async findApprovalMatrix(id: string) {
+  async findApprovalMatrix(id: string, workspaceId: string) {
+    if (!workspaceId) throw new ForbiddenException('Workspace context is required');
     const matrix = await this.prisma.approvalMatrix.findUnique({
       where: { id },
       include: { requiredPosition: true },
     });
-    if (!matrix) throw new NotFoundException('Approval matrix not found');
+    if (!matrix || matrix.workspaceId !== workspaceId) {
+      throw new NotFoundException('Approval matrix not found');
+    }
     return matrix;
   }
 
