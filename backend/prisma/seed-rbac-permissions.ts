@@ -40,6 +40,11 @@ const permissions = [
     name: 'Manage Approval Matrices',
     description: 'Manage approval matrix rules within an authorized workspace.',
   },
+  {
+    code: 'FIELD_PROGRESS_SUBMIT',
+    name: 'Submit Field Progress',
+    description: 'Allows an assigned field actor (e.g. Foreman) to submit field progress entries for an assigned project. This is a WRITE/SUBMIT permission and must not be granted to VIEW-only roles.',
+  },
 ];
 
 const directorAllowedPermissionCodes = [
@@ -53,6 +58,7 @@ const directorForbiddenPermissionCodes = [
   'AUTHORITY_MANAGE',
   'AUTHORITY_ASSIGN',
   'APPROVAL_MATRIX_MANAGE',
+  'FIELD_PROGRESS_SUBMIT', // DIRECTOR is view-only; must never submit field progress
 ];
 
 async function assertDatabaseGuard(): Promise<void> {
@@ -83,6 +89,17 @@ async function main() {
     throw new Error('STOP: DIRECTOR role not found. No role creation is allowed in this bootstrap.');
   }
 
+  const foremanRoles = await prisma.role.findMany({
+    where: { code: 'FOREMAN' },
+    select: { id: true, workspaceId: true, code: true, name: true },
+    orderBy: { workspaceId: 'asc' },
+  });
+
+  // FOREMAN roles may not exist yet in all workspaces.
+  // This is acceptable: the permission will be assigned to any FOREMAN roles that DO exist.
+  // When FOREMAN roles are created for specific workspaces, this bootstrap must be re-run.
+  console.log(`FOREMAN roles found: ${foremanRoles.length} (will assign FIELD_PROGRESS_SUBMIT to each)`);
+
   await prisma.$transaction(async (tx) => {
     const ensuredPermissions = new Map<string, string>();
 
@@ -99,6 +116,7 @@ async function main() {
       ensuredPermissions.set(ensured.code, ensured.id);
     }
 
+    // ── DIRECTOR: forbidden permission guard ─────────────────────────────
     const forbiddenPermissionIds = directorForbiddenPermissionCodes
       .map((code) => ensuredPermissions.get(code))
       .filter((id): id is string => Boolean(id));
@@ -117,6 +135,7 @@ async function main() {
       );
     }
 
+    // ── DIRECTOR: grant allowed VIEW permissions ─────────────────────────
     for (const role of directorRoles) {
       for (const code of directorAllowedPermissionCodes) {
         const permissionId = ensuredPermissions.get(code);
@@ -140,6 +159,32 @@ async function main() {
         });
       }
     }
+
+    // ── FOREMAN: grant FIELD_PROGRESS_SUBMIT ────────────────────────────
+    // FOREMAN is a WRITE/SUBMIT role for field actors.
+    // DIRECTOR, ACCEPTANCE_MEMBER, and any other role must NOT receive this permission.
+    if (foremanRoles.length > 0) {
+      const fieldProgressPermId = ensuredPermissions.get('FIELD_PROGRESS_SUBMIT');
+      if (!fieldProgressPermId) {
+        throw new Error('STOP: FIELD_PROGRESS_SUBMIT permission was not ensured.');
+      }
+
+      for (const role of foremanRoles) {
+        await tx.rolePermission.upsert({
+          where: {
+            roleId_permissionId: {
+              roleId: role.id,
+              permissionId: fieldProgressPermId,
+            },
+          },
+          update: {},
+          create: {
+            roleId: role.id,
+            permissionId: fieldProgressPermId,
+          },
+        });
+      }
+    }
   });
 
   console.log('RBAC permission bootstrap complete');
@@ -148,6 +193,8 @@ async function main() {
     directorRoleCount: directorRoles.length,
     directorGrantedPermissions: directorAllowedPermissionCodes,
     directorForbiddenPermissionsNotGranted: directorForbiddenPermissionCodes,
+    foremanRoleCount: foremanRoles.length,
+    foremanGrantedPermissions: ['FIELD_PROGRESS_SUBMIT'],
   });
 }
 
