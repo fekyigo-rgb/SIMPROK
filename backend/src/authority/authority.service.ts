@@ -21,6 +21,14 @@ export class AuthorityService {
 
   async createPosition(workspaceId: string, createPositionDto: CreatePositionDto) {
     if (!workspaceId) throw new ForbiddenException('Workspace context is required');
+
+    if (createPositionDto.parentPositionId) {
+      const parentPosition = await this.prisma.position.findUnique({ where: { id: createPositionDto.parentPositionId } });
+      if (!parentPosition || parentPosition.workspaceId !== workspaceId) {
+        throw new NotFoundException('Parent position not found or does not belong to workspace');
+      }
+    }
+
     return this.prisma.position.create({
       data: {
         name: createPositionDto.name,
@@ -64,6 +72,11 @@ export class AuthorityService {
     const position = await this.prisma.position.findUnique({ where: { id: positionId } });
     if (!position || position.workspaceId !== workspaceId) {
       throw new NotFoundException('Position not found or does not belong to workspace');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || user.workspaceId !== workspaceId) {
+      throw new NotFoundException('User not found or does not belong to workspace');
     }
 
     const activeHolder = await this.prisma.positionAssignment.findFirst({

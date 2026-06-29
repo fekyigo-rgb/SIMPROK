@@ -299,6 +299,47 @@ describe('Authority Security (e2e)', () => {
       .expect(404); // Not Found or does not belong to workspace
   });
 
+  it('Workspace-A cannot create position with parentPositionId from Workspace-B', async () => {
+    const token = await login(userManageEmail);
+    // Create a parent position in Workspace-B manually
+    const posB = await prisma.position.create({
+      data: { name: 'Parent B', code: 'PAR_B', workspaceId: workspaceBId }
+    });
+
+    await request(app.getHttpServer())
+      .post('/authority/positions')
+      .send({ name: 'Child A', code: 'CH_A', parentPositionId: posB.id })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(404);
+
+    const check = await prisma.position.findFirst({ where: { code: 'CH_A' } });
+    expect(check).toBeNull();
+  });
+
+  it('Workspace-A cannot assign Workspace-B user to Workspace-A position', async () => {
+    const token = await login(userManageEmail);
+
+    // Create a user in Workspace-B
+    const accountB = await prisma.account.create({ data: { email: 'userB.authority@test.local', passwordHash: 'abc', displayName: 'B', status: 'ACTIVE' } });
+    const membershipB = await prisma.workspaceMembership.create({
+      data: { account: { connect: { id: accountB.id } }, workspace: { connect: { id: workspaceBId } }, status: 'ACTIVE' }
+    });
+    const userB = await prisma.user.create({
+      data: { workspaceMembershipId: membershipB.id, workspaceId: workspaceBId, fullName: 'User B', status: 'ACTIVE' }
+    });
+
+    await request(app.getHttpServer())
+      .post('/authority/assignments')
+      .send({ userId: userB.id, positionId: positionAId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(404);
+
+    const check = await prisma.positionAssignment.findFirst({ where: { userId: userB.id, positionId: positionAId } });
+    expect(check).toBeNull();
+  });
+
   // Health Check Tests
   it('GET /authority/health remains public only if response is non-sensitive', async () => {
     const response = await request(app.getHttpServer()).get('/authority/health').expect(200);
