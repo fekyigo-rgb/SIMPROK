@@ -4,12 +4,13 @@ import { PrismaModule } from '../prisma/prisma.module'; // Wajib: akses database
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { getRequiredJwtSecret } from './jwt-secret';
 
 @Module({
   imports: [
     PrismaModule, // Menggantikan UsersModule agar AuthService bisa mengakses model Account
     JwtModule.register({
-      secret: process.env.JWT_SECRET || 'simprok-secret',
+      secret: getRequiredJwtSecret(),
       signOptions: {
         expiresIn: '1d',
       },
