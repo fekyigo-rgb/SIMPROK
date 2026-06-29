@@ -205,27 +205,44 @@ describe('Progress Security (e2e)', () => {
 
   it('2. authenticated user without project access -> rejected', async () => {
     const token = await login(userNoAccessEmail);
+    const beforeReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
+    const beforeEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
+
     await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/field`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .send({ projectId: projectAId, entries: [] })
       .expect(403);
+
+    const afterReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
+    const afterEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
+    expect(afterReports).toBe(beforeReports);
+    expect(afterEntries).toBe(beforeEntries);
   });
 
   it('3. project-assigned user with PROJECT_VIEW only -> POST progress rejected 403', async () => {
     const token = await login(userViewEmail);
+    const beforeReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
+    const beforeEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
+
     await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/field`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .send({ projectId: projectAId, entries: [] })
       .expect(403);
+
+    const afterReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
+    const afterEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
+    expect(afterReports).toBe(beforeReports);
+    expect(afterEntries).toBe(beforeEntries);
   });
 
   it('4. project-assigned user with FIELD_PROGRESS_SUBMIT -> accepted', async () => {
     const token = await login(userSubmitEmail);
     const beforeReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
+    const beforeEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
     
     await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/field`)
@@ -242,12 +259,31 @@ describe('Progress Security (e2e)', () => {
       .expect(201);
 
     const afterReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
+    const afterEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
     expect(afterReports).toBe(beforeReports + 1);
+    expect(afterEntries).toBe(beforeEntries + 1);
+
+    // Verify relation matches the target project
+    const latestReport = await prisma.progressReport.findFirst({
+      where: { projectId: projectAId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        project: true,
+        entries: true,
+      }
+    });
+
+    expect(latestReport).toBeDefined();
+    expect(latestReport!.projectId).toBe(projectAId);
+    expect(latestReport!.project.workspaceId).toBe(workspaceAId);
+    expect(latestReport!.entries.length).toBeGreaterThan(0);
+    expect(latestReport!.entries[0].boqItemId).toBe(boqItemAId);
   });
 
   it('5. cross-tenant user cannot submit progress to another workspace project', async () => {
     const token = await login(userCrossEmail);
     const beforeReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
+    const beforeEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
 
     // Try to submit to Project A using Workspace B user
     await request(app.getHttpServer())
@@ -265,6 +301,8 @@ describe('Progress Security (e2e)', () => {
       .expect(404); // ProjectAccessGuard usually returns 404 for cross-tenant
 
     const afterReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
+    const afterEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
     expect(afterReports).toBe(beforeReports);
+    expect(afterEntries).toBe(beforeEntries);
   });
 });
