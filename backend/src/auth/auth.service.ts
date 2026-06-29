@@ -70,6 +70,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    if (account.status !== 'ACTIVE') {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
     const payload = {
       sub: account.id,
       email: account.email,
