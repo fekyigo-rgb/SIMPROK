@@ -1,4 +1,4 @@
-import { Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, UseGuards, Req } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 import { WorkspaceService } from './workspace.service';
@@ -9,8 +9,9 @@ export class WorkspaceController {
   constructor(private readonly workspaceService: WorkspaceService) {}
 
   @Get()
-  findAll() {
-    return this.workspaceService.findAll();
+  findAll(@Req() request: any) {
+    const accountId = request.user.id;
+    return this.workspaceService.findAllForAccount(accountId);
   }
 
   @Get('health')

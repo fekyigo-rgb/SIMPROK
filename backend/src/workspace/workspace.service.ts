@@ -5,8 +5,16 @@ import { PrismaService } from '../prisma/prisma.service';
 export class WorkspaceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll() {
+  findAllForAccount(accountId: string) {
     return this.prisma.workspace.findMany({
+      where: {
+        memberships: {
+          some: {
+            accountId,
+            status: 'ACTIVE',
+          },
+        },
+      },
       orderBy: {
         createdAt: 'desc',
       },

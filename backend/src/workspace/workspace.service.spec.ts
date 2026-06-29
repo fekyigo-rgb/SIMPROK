@@ -47,11 +47,20 @@ describe('WorkspaceService', () => {
     expect(service).toBeDefined();
   });
 
-  it('findAll returns workspaces ordered by newest first', async () => {
+  it('findAllForAccount returns only workspaces for the given accountId, ordered by newest first', async () => {
     prisma.workspace.findMany.mockResolvedValue([workspace]);
 
-    await expect(service.findAll()).resolves.toEqual([workspace]);
+    const accountId = 'test-account-id';
+    await expect(service.findAllForAccount(accountId)).resolves.toEqual([workspace]);
     expect(prisma.workspace.findMany).toHaveBeenCalledWith({
+      where: {
+        memberships: {
+          some: {
+            accountId,
+            status: 'ACTIVE',
+          },
+        },
+      },
       orderBy: {
         createdAt: 'desc',
       },
