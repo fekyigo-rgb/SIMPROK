@@ -7,15 +7,22 @@ import { useNavigate } from 'react-router-dom';
 export function ObservatoryPage() {
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  const { token } = useAuth();
+  const { token, activeWorkspaceId } = useAuth();
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !activeWorkspaceId) return;
+
+    setLoading(true);
+    setError(null);
     
     fetch('http://localhost:3000/projects', {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-workspace-id': activeWorkspaceId,
+      }
     })
       .then(res => {
         if (!res.ok) throw new Error('Failed to fetch projects');
@@ -27,10 +34,10 @@ export function ObservatoryPage() {
       })
       .catch(err => {
         console.error('Failed to fetch projects:', err);
-        setProjects([]);
+        setError('Unable to load projects');
         setLoading(false);
       });
-  }, [token]);
+  }, [token, activeWorkspaceId]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-8)' }}>
@@ -56,6 +63,8 @@ export function ObservatoryPage() {
         
         {loading ? (
           <p>Loading portfolio intelligence...</p>
+        ) : error ? (
+          <p>{error}</p>
         ) : projects.length === 0 ? (
           <p>No active projects found. The database is empty.</p>
         ) : (
