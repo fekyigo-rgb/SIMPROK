@@ -8,6 +8,7 @@ import {
   Post,
   Req,
   UseGuards,
+  MethodNotAllowedException,
 } from '@nestjs/common';
 
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -66,9 +67,9 @@ export class OrganizationController {
   }
 
   @Delete(':id')
-  @UseGuards(RolesGuard, PermissionsGuard)
-  @Permissions('PROJECT_CREATE')
-  remove(@Param('id') id: string) {
-    return this.organizationService.remove(id);
+  remove() {
+    throw new MethodNotAllowedException(
+      'Organization deletion is disabled until explicit organization deletion governance is implemented.',
+    );
   }
 }

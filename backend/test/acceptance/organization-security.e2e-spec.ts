@@ -226,4 +226,78 @@ describe('Organization Security (e2e)', () => {
     // User-A IS a member of Workspace-A, so Org-A should still appear
     expect(ids).toContain(orgAId);
   });
+  // ── Test 7: DELETE /organizations/:id no token ─────────────────────────────
+  it('7. no token -> DELETE /organizations/:id returns 401', async () => {
+    await request(app.getHttpServer())
+      .delete(`/organizations/${orgBId}`)
+      .expect(401);
+
+    // Org-B still exists
+    const org = await prisma.organization.findUnique({ where: { id: orgBId } });
+    expect(org).toBeDefined();
+  });
+
+  // ── Test 8: DELETE /organizations/:id authenticated ────────────────────────
+  it('8. authenticated user -> DELETE /organizations/:id returns 405', async () => {
+    const token = await login(userAEmail);
+
+    const initialCount = await prisma.organization.count();
+
+    await request(app.getHttpServer())
+      .delete(`/organizations/${orgAId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(405);
+
+    // Organization count unchanged
+    const finalCount = await prisma.organization.count();
+    expect(finalCount).toEqual(initialCount);
+
+    // Org-A still exists
+    const org = await prisma.organization.findUnique({ where: { id: orgAId } });
+    expect(org).toBeDefined();
+  });
+
+  // ── Test 9: DELETE cross-tenant target ─────────────────────────────────────
+  it('9. Workspace-A user attempts DELETE on Org-B returns 405', async () => {
+    const token = await login(userAEmail);
+
+    await request(app.getHttpServer())
+      .delete(`/organizations/${orgBId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(405);
+
+    // Org-B still exists
+    const orgB = await prisma.organization.findUnique({ where: { id: orgBId } });
+    expect(orgB).toBeDefined();
+  });
+
+  // ── Test 10: DELETE spoofed x-workspace-id ─────────────────────────────────
+  it('10. Workspace-A user spoofing x-workspace-id returns 405', async () => {
+    const token = await login(userAEmail);
+
+    await request(app.getHttpServer())
+      .delete(`/organizations/${orgBId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceBId)
+      .expect(405);
+
+    // Org-B still exists
+    const orgB = await prisma.organization.findUnique({ where: { id: orgBId } });
+    expect(orgB).toBeDefined();
+  });
+
+  // ── Test 11: DELETE no x-workspace-id ──────────────────────────────────────
+  it('11. DELETE without x-workspace-id returns 405 (not 400)', async () => {
+    const token = await login(userAEmail);
+
+    await request(app.getHttpServer())
+      .delete(`/organizations/${orgAId}`)
+      .set('Authorization', `Bearer ${token}`)
+      // No x-workspace-id
+      .expect(405);
+
+    // Org-A still exists
+    const orgA = await prisma.organization.findUnique({ where: { id: orgAId } });
+    expect(orgA).toBeDefined();
+  });
 });
