@@ -28,8 +28,20 @@ export class OrganizationService {
     });
   }
 
-  findAll() {
+  findAllForAccount(accountId: string) {
     return this.prisma.organization.findMany({
+      where: {
+        workspaces: {
+          some: {
+            memberships: {
+              some: {
+                accountId,
+                status: 'ACTIVE',
+              },
+            },
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
