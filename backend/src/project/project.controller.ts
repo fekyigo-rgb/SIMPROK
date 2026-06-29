@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Req, UseGuards } from '@nestjs/common';
 import { ProjectService } from './project.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
@@ -32,8 +32,10 @@ export class ProjectController {
   @Get()
   @UseGuards(PermissionsGuard)
   @Permissions('PROJECT_VIEW')
-  async findAllGlobal() {
-    return this.projectService.findAllGlobal();
+  async findAllGlobal(@Req() request: any) {
+    return this.projectService.findAllByWorkspace(
+      request.workspaceContext.workspaceId,
+    );
   }
 
   @Get('workspace/:workspaceId')
