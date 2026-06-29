@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ProjectService } from './project.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
@@ -15,7 +15,17 @@ export class ProjectController {
   @Post()
   @UseGuards(PermissionsGuard)
   @Permissions('PROJECT_CREATE')
-  async create(@Body() createProjectDto: CreateProjectDto) {
+  async create(@Req() request: any, @Body() createProjectDto: CreateProjectDto) {
+    const contextWorkspaceId = request.workspaceContext?.workspaceId;
+    if (!contextWorkspaceId) {
+      throw new BadRequestException('Workspace context is required');
+    }
+    // Body workspaceId must not override context. Reject mismatch.
+    if (createProjectDto.workspaceId && createProjectDto.workspaceId !== contextWorkspaceId) {
+      throw new ForbiddenException('Body workspaceId does not match active workspace context');
+    }
+    // Force workspaceId from context — source of truth
+    createProjectDto.workspaceId = contextWorkspaceId;
     return this.projectService.create(createProjectDto);
   }
 
@@ -41,8 +51,16 @@ export class ProjectController {
   @Get('workspace/:workspaceId')
   @UseGuards(PermissionsGuard)
   @Permissions('PROJECT_VIEW')
-  async findAll(@Param('workspaceId') workspaceId: string) {
-    return this.projectService.findAllByWorkspace(workspaceId);
+  async findAll(@Req() request: any, @Param('workspaceId') workspaceId: string) {
+    const contextWorkspaceId = request.workspaceContext?.workspaceId;
+    if (!contextWorkspaceId) {
+      throw new BadRequestException('Workspace context is required');
+    }
+    // URL param must match context — reject cross-tenant param override
+    if (workspaceId !== contextWorkspaceId) {
+      throw new ForbiddenException('Workspace param does not match active workspace context');
+    }
+    return this.projectService.findAllByWorkspace(contextWorkspaceId);
   }
 
   @Get(':projectId')
