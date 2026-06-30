@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { apiFetch } from '../../utils/apiClient';
 
 export function SubmitProgressPage() {
   const { projectId, boqItemId } = useParams();
@@ -16,9 +17,7 @@ export function SubmitProgressPage() {
 
   useEffect(() => {
     if (!token || !projectId || !boqItemId) return;
-    fetch(`http://localhost:3000/projects/${projectId}/boq`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
+    apiFetch(`http://localhost:3000/projects/${projectId}/boq`)
       .then(res => res.json())
       .then(data => {
         if (data && data.items) {
@@ -52,11 +51,10 @@ export function SubmitProgressPage() {
     };
 
     try {
-      const res = await fetch(`http://localhost:3000/projects/${projectId}/progress/field`, {
+      const res = await apiFetch(`http://localhost:3000/projects/${projectId}/progress/field`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
         },
         body: JSON.stringify(payload)
       });

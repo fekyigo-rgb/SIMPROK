@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { apiFetch } from '../../utils/apiClient';
 
 export function ProjectWorkPage() {
   const { projectId } = useParams();
@@ -12,9 +13,7 @@ export function ProjectWorkPage() {
   useEffect(() => {
     if (!token || !projectId) return;
 
-    fetch(`http://localhost:3000/projects/${projectId}/boq`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
+    apiFetch(`http://localhost:3000/projects/${projectId}/boq`)
       .then(res => res.json())
       .then(data => {
         setItems(Array.isArray(data) ? data : []);

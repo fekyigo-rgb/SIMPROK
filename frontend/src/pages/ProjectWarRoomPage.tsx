@@ -7,6 +7,7 @@ import { RecommendationCard } from '../components/organisms/RecommendationCard';
 import { Button } from '../components/atoms/Button';
 import { useAuth } from '../contexts/AuthContext';
 import { DeviationSignal } from '../components/molecules/DeviationSignal';
+import { apiFetch } from '../utils/apiClient';
 
 type RoomType = 'HUB' | 'REALITY' | 'HORIZON' | 'STORM' | 'WISDOM' | 'AUTHORITY' | 'LOGISTICS';
 
@@ -27,14 +28,13 @@ export function ProjectWarRoomPage() {
   useEffect(() => {
     async function fetchIntelligence() {
       try {
-        const headers = { Authorization: `Bearer ${token}` };
         const [projRes, realRes, horzRes, stormRes, wisRes, authRes] = await Promise.all([
-          fetch(`http://localhost:3000/projects/${id}`, { headers }),
-          fetch(`http://localhost:3000/projects/${id}/reality`, { headers }),
-          fetch(`http://localhost:3000/projects/${id}/horizon`, { headers }),
-          fetch(`http://localhost:3000/projects/${id}/storm`, { headers }),
-          fetch(`http://localhost:3000/projects/${id}/wisdom`, { headers }),
-          fetch(`http://localhost:3000/projects/${id}/authority`, { headers })
+          apiFetch(`http://localhost:3000/projects/${id}`),
+          apiFetch(`http://localhost:3000/projects/${id}/reality`),
+          apiFetch(`http://localhost:3000/projects/${id}/horizon`),
+          apiFetch(`http://localhost:3000/projects/${id}/storm`),
+          apiFetch(`http://localhost:3000/projects/${id}/wisdom`),
+          apiFetch(`http://localhost:3000/projects/${id}/authority`)
         ]);
 
         if (!projRes.ok) throw new Error('Failed to fetch project details');
