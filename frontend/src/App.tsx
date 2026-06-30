@@ -25,13 +25,13 @@ function App() {
           
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<DashboardLayout />}>
-              <Route index element={<RoleRoute allowedRoles={['DIRECTOR', 'ENTERPRISE']}><ObservatoryPage /></RoleRoute>} />
-              <Route path="project/new" element={<RoleRoute allowedRoles={['PROJECT_MANAGER', 'DIRECTOR']}><ProjectSetupPage /></RoleRoute>} />
-              <Route path="project/:id" element={<RoleRoute allowedRoles={['PROJECT_MANAGER', 'DIRECTOR', 'ENGINEER']}><ProjectWarRoomPage /></RoleRoute>} />
+              <Route index element={<RoleRoute allowedRoles={['DIRECTOR']}><ObservatoryPage /></RoleRoute>} />
+              <Route path="project/new" element={<RoleRoute allowedRoles={['DIRECTOR']}><ProjectSetupPage /></RoleRoute>} />
+              <Route path="project/:id" element={<ProjectWarRoomPage />} />
               <Route path="showcase" element={<ShowcasePage />} />
             </Route>
             
-            <Route path="/field" element={<RoleRoute allowedRoles={['FOREMAN', 'FIELD_ENGINEER', 'DIRECTOR', 'ENTERPRISE']}><FieldLayout /></RoleRoute>}>
+            <Route path="/field" element={<FieldLayout />}>
               <Route index element={<FieldTerminalPage />} />
               <Route path="project/:projectId" element={<ProjectWorkPage />} />
               <Route path="project/:projectId/progress/:boqItemId" element={<SubmitProgressPage />} />
