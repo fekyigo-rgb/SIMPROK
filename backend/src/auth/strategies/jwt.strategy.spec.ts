@@ -48,7 +48,7 @@ describe('JwtStrategy', () => {
             workspace: { name: 'WS 1' },
             id: 'mem-1',
             membershipRoles: [
-              { role: { name: 'ROLE_ADMIN' } }
+              { role: { name: 'Role Admin', code: 'ROLE_ADMIN' } }
             ]
           }
         ]

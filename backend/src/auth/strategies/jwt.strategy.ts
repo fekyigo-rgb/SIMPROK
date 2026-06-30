@@ -48,7 +48,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         workspaceId: u.workspaceId,
         workspaceName: u.workspace.name,
         userId: u.id,
-        roles: u.membershipRoles.map(r => r.role.name)
+        roles: u.membershipRoles.map(r => r.role.code)
       }))
     };
   }
