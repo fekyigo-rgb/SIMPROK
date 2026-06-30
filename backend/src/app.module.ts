@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -27,6 +29,13 @@ import { RealityIntakeModule } from './reality-intake/reality-intake.module';
       isGlobal: true,
     }),
 
+    ThrottlerModule.forRoot([{
+      name: 'login',
+      // Very high default limit = effectively no throttle for non-login routes.
+      // Login route overrides this via @Throttle({ login: { limit: X, ttl: Y } }).
+      ttl: Number(process.env.LOGIN_RATE_LIMIT_TTL_SECONDS ?? 60) * 1000,
+      limit: 100000,
+    }]),
     PrismaModule,
     UsersModule,
     AuthModule,
@@ -43,6 +52,6 @@ import { RealityIntakeModule } from './reality-intake/reality-intake.module';
     RealityIntakeModule,
   ],
   controllers: [AppController],
-  providers: [AppService, RolesGuard, PermissionsGuard],
+  providers: [AppService, RolesGuard, PermissionsGuard, { provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

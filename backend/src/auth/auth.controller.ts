@@ -6,12 +6,23 @@ import {
   UseGuards,
   UnauthorizedException,
 } from '@nestjs/common';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+
+// Default values evaluated at class-definition time.
+// Other e2e suites run with NODE_ENV=test so these resolve to 10000 (no false throttle).
+// The auth-rate-limit.e2e-spec sets LOGIN_RATE_LIMIT_MAX_ATTEMPTS=3 and
+// NODE_ENV=production before importing AppModule, so those specs resolve to 3.
+const LOGIN_LIMIT = Number(
+  process.env.LOGIN_RATE_LIMIT_MAX_ATTEMPTS ??
+  (process.env.NODE_ENV === 'test' ? 10000 : 5)
+);
+const LOGIN_TTL = Number(process.env.LOGIN_RATE_LIMIT_TTL_SECONDS ?? 60) * 1000;
 
 @Controller('auth')
 export class AuthController {
@@ -24,12 +35,14 @@ export class AuthController {
   }
 
   @Post('login')
+  @Throttle({ login: { limit: LOGIN_LIMIT, ttl: LOGIN_TTL } })
   async login(@Body() loginDto: LoginDto) {
     // Memastikan login memvalidasi terhadap Account
     return this.authService.login(loginDto);
   }
 
   @Get('profile')
+  @SkipThrottle()
   @UseGuards(JwtAuthGuard)
   async profile(@CurrentUser() account: any) {
     // Sesuai REG-001: 
