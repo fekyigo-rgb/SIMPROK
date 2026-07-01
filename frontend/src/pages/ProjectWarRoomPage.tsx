@@ -24,6 +24,8 @@ export function ProjectWarRoomPage() {
   const [wisdom, setWisdom] = useState<any[]>([]);
   const [authority, setAuthority] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorStatus, setErrorStatus] = useState<number | undefined>();
+  const [errorKind, setErrorKind] = useState<'unauthorized' | 'forbidden' | 'not-found' | 'workspace' | 'server' | 'network' | undefined>();
 
   useEffect(() => {
     async function fetchIntelligence() {
@@ -37,7 +39,16 @@ export function ProjectWarRoomPage() {
           apiFetch(`http://localhost:3000/projects/${id}/authority`)
         ]);
 
-        if (!projRes.ok) throw new Error('Failed to fetch project details');
+        if (!projRes.ok) {
+          setErrorStatus(projRes.status);
+          if (projRes.status === 401) setErrorKind('unauthorized');
+          else if (projRes.status === 403) setErrorKind('forbidden');
+          else if (projRes.status === 404) setErrorKind('not-found');
+          else if (projRes.status === 400) setErrorKind('workspace');
+          else setErrorKind('server');
+          setLoading(false);
+          return;
+        }
 
         setProject(await projRes.json());
         setReality(await realRes.json());
@@ -48,6 +59,7 @@ export function ProjectWarRoomPage() {
         setLoading(false);
       } catch (error) {
         console.error('Intelligence Fetch Failed:', error);
+        setErrorKind('network');
         setLoading(false);
       }
     }
@@ -57,7 +69,24 @@ export function ProjectWarRoomPage() {
   }, [id, token]);
 
   if (loading) return <div style={{ padding: 'var(--space-8)' }}>Initializing Project Intelligence...</div>;
-  if (!project) return <div style={{ padding: 'var(--space-8)' }}>Project Reality Not Found.</div>;
+  if (!project && !errorKind) return <div style={{ padding: 'var(--space-8)' }}>Project Reality Not Found.</div>;
+
+  if (errorKind) {
+    let message = 'Terjadi kesalahan sistem.';
+    if (errorKind === 'unauthorized') message = 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
+    else if (errorKind === 'forbidden') message = 'Anda tidak memiliki akses ke proyek ini.';
+    else if (errorKind === 'not-found') message = 'Proyek tidak ditemukan.';
+    else if (errorKind === 'workspace') message = 'Konteks workspace belum valid. Pilih workspace kembali.';
+    else if (errorKind === 'server') message = 'Data proyek gagal dimuat. Coba lagi beberapa saat.';
+    else if (errorKind === 'network') message = 'Data proyek gagal dimuat. Coba lagi beberapa saat.';
+    
+    return (
+      <div style={{ padding: 'var(--space-8)' }}>
+        <p style={{ color: 'var(--simprok-critical-red-600)', fontWeight: 'var(--weight-semibold)' }}>{message}</p>
+        {errorStatus && <p style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-500)' }}>HTTP Status: {errorStatus}</p>}
+      </div>
+    );
+  }
 
   const tabs: { id: RoomType; label: string; alert?: boolean }[] = [
     { id: 'HUB', label: 'War Room Hub' },
