@@ -157,7 +157,7 @@ export class ProjectService {
     });
 
     const report = reports[0];
-    if (!report) return null;
+    if (!report) return { available: false, status: 'UNAVAILABLE', message: 'Data realitas belum tersedia', data: null };
 
     // Fetch baseline to get total planned cost
     const baseline = await this.prisma.projectBaseline.findFirst({
@@ -221,7 +221,7 @@ export class ProjectService {
       orderBy: { createdAt: 'desc' },
       take: 1,
     });
-    return forecasts[0] || null;
+    return forecasts[0] || { available: false, status: 'UNAVAILABLE', message: 'Data proyeksi belum tersedia', data: null };
   }
 
   async getStorm(projectId: string) {
