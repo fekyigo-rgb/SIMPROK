@@ -77,8 +77,8 @@ export function ProjectWarRoomPage() {
     else if (errorKind === 'forbidden') message = 'Anda tidak memiliki akses ke proyek ini.';
     else if (errorKind === 'not-found') message = 'Proyek tidak ditemukan.';
     else if (errorKind === 'workspace') message = 'Konteks workspace belum valid. Pilih workspace kembali.';
-    else if (errorKind === 'server') message = 'Data proyek gagal dimuat. Coba lagi beberapa saat.';
-    else if (errorKind === 'network') message = 'Data proyek gagal dimuat. Coba lagi beberapa saat.';
+    else if (errorKind === 'server') message = 'Data proyek gagal dimuat. Silakan coba lagi beberapa saat.';
+    else if (errorKind === 'network') message = 'Data proyek gagal dimuat. Silakan coba lagi beberapa saat.';
     
     return (
       <div style={{ padding: 'var(--space-8)' }}>
@@ -190,7 +190,7 @@ export function ProjectWarRoomPage() {
                   📡 Launch Field Terminal
                 </button>
               </div>
-              {reality ? (
+              {reality && reality.available !== false ? (
                 <ProgressCard 
                   itemName="Overall Project Execution"
                   itemCode="WBS-ROOT"
@@ -202,7 +202,7 @@ export function ProjectWarRoomPage() {
                   actualCostRecorded={(parseFloat(reality.overallActualCost) || 0) > 0}
                   certaintyLevel="C4"
                 />
-              ) : <p>No reality data logged yet.</p>}
+              ) : <p style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-text-light)', fontStyle: 'italic' }}>Data realitas belum tersedia.</p>}
               
               {/* DEVIATION SIGNALS */}
               {reality?.deviationSignals && reality.deviationSignals.length > 0 && (
@@ -242,7 +242,7 @@ export function ProjectWarRoomPage() {
                 <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: '#92400E', fontWeight: 'var(--weight-semibold)' }}>Forecast Engine Not Yet Activated</p>
                 <p style={{ margin: '4px 0 0', fontSize: 'var(--text-xs)', color: '#B45309' }}>Data shown below is seeded verification data, not derived from project execution. A Forecast Engine must be activated before Horizon Room can be trusted.</p>
               </div>
-              {horizon ? (
+              {horizon && horizon.available !== false ? (
                 <ForecastCard 
                   title="[UNVERIFIED] Projected Baseline Breach"
                   scenarioDescription="[SEED DATA — NOT INTELLIGENCE] This is placeholder forecast data created during system verification."
@@ -252,7 +252,7 @@ export function ProjectWarRoomPage() {
                   confidencePercentage={0}
                   certaintyLevel="C0"
                 />
-              ) : <p>No forecast data available.</p>}
+              ) : <p style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-text-light)', fontStyle: 'italic' }}>Data proyeksi belum tersedia.</p>}
               <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--simprok-engineering-blue-100)' }}>
                 <Button onClick={() => setActiveRoom('STORM')} style={{ backgroundColor: 'var(--simprok-critical-red-600)' }}>Proceed to Storm Room (Risk) →</Button>
               </div>
