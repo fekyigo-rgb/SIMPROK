@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Navigate, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatRoleLabel } from '../../utils/roleLabels';
 
 export function ProtectedRoute() {
   const { account, token, activeWorkspaceId } = useAuth();
@@ -41,10 +42,10 @@ export function RoleRoute({ allowedRoles, children }: { allowedRoles: string[], 
             Your current workspace role does not have authorization to enter this zone.
           </p>
           <p style={{ color: 'var(--simprok-engineering-blue-500)', fontSize: 'var(--text-sm)' }}>
-            Active roles: <strong>{activeRoles.length > 0 ? activeRoles.join(', ') : '(none — please logout and login again)'}</strong>
+            Active roles: <strong>{activeRoles.length > 0 ? activeRoles.map(formatRoleLabel).join(', ') : '(none — please logout and login again)'}</strong>
           </p>
           <p style={{ color: 'var(--simprok-engineering-blue-500)', fontSize: 'var(--text-sm)' }}>
-            Required: <strong>{allowedRoles.join(' or ')}</strong>
+            Required: <strong>{allowedRoles.map(formatRoleLabel).join(' or ')}</strong>
           </p>
         </div>
 

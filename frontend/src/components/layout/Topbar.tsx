@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { formatRoleLabel } from '../../utils/roleLabels';
 
 export function Topbar() {
   const { account, activeRoles, logout } = useAuth();
@@ -19,7 +20,7 @@ export function Topbar() {
     .join('')
     .toUpperCase();
 
-  const roleLabel = activeRoles.length > 0 ? activeRoles[0] : 'No Role Assigned';
+  const roleLabel = activeRoles.length > 0 ? formatRoleLabel(activeRoles[0]) : 'No Role Assigned';
 
   return (
     <header style={{
