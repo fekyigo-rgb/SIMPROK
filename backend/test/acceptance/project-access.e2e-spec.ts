@@ -92,7 +92,7 @@ describe('ProjectAccessGuard acceptance (e2e)', () => {
     const token = await login('assigned@test.local');
 
     const response = await request(app.getHttpServer())
-      .get('/projects')
+      .get(`/projects/workspace/${workspaceAId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(200);
@@ -121,7 +121,7 @@ describe('ProjectAccessGuard acceptance (e2e)', () => {
     const token = await login('assigned@test.local');
 
     const response = await request(app.getHttpServer())
-      .get('/projects')
+      .get(`/projects/workspace/${workspaceAId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(200);
@@ -138,7 +138,7 @@ describe('ProjectAccessGuard acceptance (e2e)', () => {
     const token = await login('crosstenant@test.local');
 
     await request(app.getHttpServer())
-      .get('/projects')
+      .get(`/projects/workspace/${workspaceAId}`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(403);

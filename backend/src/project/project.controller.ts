@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
+import { PERMISSIONS } from '../common/constants/permissions';
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -41,7 +42,7 @@ export class ProjectController {
 
   @Get()
   @UseGuards(PermissionsGuard)
-  @Permissions('PROJECT_VIEW')
+  @Permissions(PERMISSIONS.OBSERVATORY_VIEW)
   async findAllGlobal(@Req() request: any) {
     return this.projectService.findAllByWorkspace(
       request.workspaceContext.workspaceId,

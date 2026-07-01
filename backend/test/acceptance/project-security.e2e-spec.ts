@@ -17,8 +17,9 @@ describe('Project Security (e2e)', () => {
   let workspaceBId: string;
   let workspaceBProjectId: string;
 
-  let userCreateEmail = 'proj.create.sec@test.local';
-  let userViewEmail = 'proj.view.sec@test.local';
+  let userCreateEmail = 'proj.create.sec.v2@test.local';
+  let userViewEmail = 'proj.view.sec.v2@test.local';
+  let userDirectorEmail = 'proj.director.sec.v2@test.local';
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -32,26 +33,26 @@ describe('Project Security (e2e)', () => {
 
     // Setup two orgs and workspaces
     const orgA = await prisma.organization.create({
-      data: { name: 'Org Project Sec A', type: 'COMPANY' }
+      data: { name: 'Org Project Sec A v2', type: 'COMPANY' }
     });
     const wsA = await prisma.workspace.create({
-      data: { name: 'WS A Proj Sec', organizationId: orgA.id }
+      data: { name: 'WS A Proj Sec v2', organizationId: orgA.id }
     });
     workspaceAId = wsA.id;
 
     const orgB = await prisma.organization.create({
-      data: { name: 'Org Project Sec B', type: 'COMPANY' }
+      data: { name: 'Org Project Sec B v2', type: 'COMPANY' }
     });
     const wsB = await prisma.workspace.create({
-      data: { name: 'WS B Proj Sec', organizationId: orgB.id }
+      data: { name: 'WS B Proj Sec v2', organizationId: orgB.id }
     });
     workspaceBId = wsB.id;
 
     // Create a project in Workspace-B (the target for cross-tenant read/write attacks)
     const wsBProject = await prisma.project.create({
       data: {
-        name: 'Workspace B Probe Project',
-        code: 'WSB-PROBE-SEC',
+        name: 'Workspace B Probe Project v2',
+        code: 'WSB-PROBE-SEC-2',
         workspaceId: wsB.id,
         organizationId: orgB.id,
       }
@@ -69,22 +70,35 @@ describe('Project Security (e2e)', () => {
       update: {},
       create: { code: 'PROJECT_VIEW', name: 'Project View' }
     });
+    const permObservatory = await prisma.permission.upsert({
+      where: { code: 'OBSERVATORY_VIEW' },
+      update: {},
+      create: { code: 'OBSERVATORY_VIEW', name: 'Observatory View' }
+    });
 
     // Setup roles in Workspace-A
     const roleCreate = await prisma.role.create({
       data: {
-        name: 'Project Creator Sec',
-        code: 'ROLE_PROJ_CREATE_SEC',
+        name: 'Project Creator Sec v2',
+        code: 'ROLE_PROJ_CREATE_SEC_V2',
         workspace: { connect: { id: workspaceAId } },
         rolePermissions: { create: [{ permissionId: permCreate.id }, { permissionId: permView.id }] }
       }
     });
     const roleView = await prisma.role.create({
       data: {
-        name: 'Project Viewer Sec',
-        code: 'ROLE_PROJ_VIEW_SEC',
+        name: 'Project Viewer Sec v2',
+        code: 'ROLE_PROJ_VIEW_SEC_V2',
         workspace: { connect: { id: workspaceAId } },
         rolePermissions: { create: [{ permissionId: permView.id }] }
+      }
+    });
+    const roleDirector = await prisma.role.create({
+      data: {
+        name: 'Project Director Sec v2',
+        code: 'ROLE_PROJ_DIRECTOR_SEC_V2',
+        workspace: { connect: { id: workspaceAId } },
+        rolePermissions: { create: [{ permissionId: permObservatory.id }, { permissionId: permView.id }] }
       }
     });
 
@@ -115,10 +129,11 @@ describe('Project Security (e2e)', () => {
 
     await createUserWithRole(userCreateEmail, roleCreate.id);
     await createUserWithRole(userViewEmail, roleView.id);
+    await createUserWithRole(userDirectorEmail, roleDirector.id);
   });
 
   afterAll(async () => {
-    const emailPatterns = [userCreateEmail, userViewEmail];
+    const emailPatterns = [userCreateEmail, userViewEmail, userDirectorEmail];
     const accounts = await prisma.account.findMany({ where: { email: { in: emailPatterns } } });
     const accountIds = accounts.map(a => a.id);
     const memberships = await prisma.workspaceMembership.findMany({ where: { accountId: { in: accountIds } } });
@@ -128,13 +143,13 @@ describe('Project Security (e2e)', () => {
     await prisma.workspaceMembership.deleteMany({ where: { id: { in: membershipIds } } });
     await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
 
-    await prisma.role.deleteMany({ where: { code: { in: ['ROLE_PROJ_CREATE_SEC', 'ROLE_PROJ_VIEW_SEC'] } } });
+    await prisma.role.deleteMany({ where: { code: { in: ['ROLE_PROJ_CREATE_SEC_V2', 'ROLE_PROJ_VIEW_SEC_V2', 'ROLE_PROJ_DIRECTOR_SEC_V2'] } } });
 
     // cleanup probe project
     await prisma.project.deleteMany({ where: { id: workspaceBProjectId } });
 
     await prisma.workspace.deleteMany({ where: { id: { in: [workspaceAId, workspaceBId] } } });
-    await prisma.organization.deleteMany({ where: { name: { in: ['Org Project Sec A', 'Org Project Sec B'] } } });
+    await prisma.organization.deleteMany({ where: { name: { in: ['Org Project Sec A v2', 'Org Project Sec B v2'] } } });
 
     await app.close();
     await prisma.$disconnect();
@@ -162,6 +177,12 @@ describe('Project Security (e2e)', () => {
   it('2. no token -> GET /projects/workspace/:workspaceId returns 401', async () => {
     await request(app.getHttpServer())
       .get(`/projects/workspace/${workspaceAId}`)
+      .expect(401);
+  });
+
+  it('2b. no token -> GET /projects returns 401', async () => {
+    await request(app.getHttpServer())
+      .get('/projects')
       .expect(401);
   });
 
@@ -246,17 +267,26 @@ describe('Project Security (e2e)', () => {
     for (const p of res.body) {
       expect(p.workspaceId).toBe(workspaceAId);
     }
-    // Must NOT contain Workspace-B probe project
     const leakedIds = res.body.map((p: any) => p.id);
     expect(leakedIds).not.toContain(workspaceBProjectId);
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // Regression: GET /projects still scoped
+  // GET /projects — Observatory/portfolio list read hardening
   // ──────────────────────────────────────────────────────────────────────
 
-  it('7. GET /projects does not leak Workspace-B projects into Workspace-A context', async () => {
+  it('7. Non-observatory role (PROJECT_VIEW only) cannot GET /projects', async () => {
     const token = await login(userViewEmail);
+
+    await request(app.getHttpServer())
+      .get('/projects')
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(403);
+  });
+
+  it('8. DIRECTOR role (OBSERVATORY_VIEW) can GET /projects and it is tenant-scoped', async () => {
+    const token = await login(userDirectorEmail);
 
     const res = await request(app.getHttpServer())
       .get('/projects')
@@ -265,7 +295,14 @@ describe('Project Security (e2e)', () => {
       .expect(200);
 
     expect(Array.isArray(res.body)).toBe(true);
-    const wsBProjects = res.body.filter((p: any) => p.workspaceId === workspaceBId);
-    expect(wsBProjects).toHaveLength(0);
+    // All returned projects must belong to Workspace-A
+    for (const p of res.body) {
+      expect(p.workspaceId).toBe(workspaceAId);
+    }
+    // Must NOT contain Workspace-B probe project
+    const leakedIds = res.body.map((p: any) => p.id);
+    expect(leakedIds).not.toContain(workspaceBProjectId);
   });
+
+
 });
