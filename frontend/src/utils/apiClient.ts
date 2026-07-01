@@ -26,5 +26,12 @@ export async function apiFetch(
     headers,
   };
 
-  return fetch(input, finalInit);
+  const response = await fetch(input, finalInit);
+  
+  if (response.status === 401 && typeof window !== 'undefined') {
+    // Only signals stale session; callers still receive Response and handle page-level errors.
+    window.dispatchEvent(new Event('simprok:unauthorized'));
+  }
+
+  return response;
 }

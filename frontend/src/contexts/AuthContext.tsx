@@ -30,6 +30,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(localStorage.getItem('simprok_token'));
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(localStorage.getItem('simprok_workspace'));
 
+  const logout = React.useCallback(() => {
+    localStorage.removeItem('simprok_token');
+    localStorage.removeItem('simprok_workspace');
+    setToken(null);
+    setAccount(null);
+    setActiveWorkspaceId(null);
+  }, []);
+
   useEffect(() => {
     if (token) {
       // Validate token and fetch profile
@@ -41,9 +49,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return res.json();
       })
       .then(data => setAccount(data))
-      .catch(() => logout());
+      .catch(() => {
+        // If profile fetch fails (e.g. 401), we dispatch the global event.
+        // The event listener will handle the actual logout.
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('simprok:unauthorized'));
+        } else {
+          logout();
+        }
+      });
     }
-  }, [token]);
+  }, [token, logout]);
 
   const login = (newToken: string, newAccount: Account) => {
     localStorage.setItem('simprok_token', newToken);
@@ -51,13 +67,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccount(newAccount);
   };
 
-  const logout = () => {
-    localStorage.removeItem('simprok_token');
-    localStorage.removeItem('simprok_workspace');
-    setToken(null);
-    setAccount(null);
-    setActiveWorkspaceId(null);
-  };
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      console.warn('[SIMPROK] 401 Unauthorized detected, clearing session.');
+      logout();
+    };
+
+    window.addEventListener('simprok:unauthorized', handleUnauthorized);
+    return () => {
+      window.removeEventListener('simprok:unauthorized', handleUnauthorized);
+    };
+  }, [logout]);
 
   const setActiveWorkspace = (workspaceId: string) => {
     localStorage.setItem('simprok_workspace', workspaceId);
