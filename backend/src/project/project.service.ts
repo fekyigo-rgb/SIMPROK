@@ -195,7 +195,7 @@ export class ProjectService {
     }
 
     const overallActualProgress = entryCount > 0 ? (totalActualProgressPct / entryCount) : 0;
-    const overallPlannedProgress = 50; // Stubbed — no time-phased schedule model exists
+    const overallPlannedProgress = null; // Truthful: no time-phased schedule model exists
 
     // NOTE: No actualCost fallback. If actualCost is 0, it means field did not record it.
     // SIMPROK must not invent evidence. 0 = NOT YET RECORDED. The UI must display this honestly.
