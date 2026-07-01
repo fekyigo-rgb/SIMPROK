@@ -1,6 +1,14 @@
 import { type FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { apiFetch } from '../utils/apiClient';
+
+const checkStatus = (status: number) => {
+  if (status === 401) return 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
+  if (status === 403) return 'Anda tidak memiliki akses untuk membuka data ini.';
+  if (status === 400) return 'Konteks workspace atau permintaan belum valid. Pilih workspace kembali.';
+  return 'Data gagal dimuat. Coba lagi beberapa saat.';
+};
 
 const toSafeNumber = (value: string): number => {
   const parsed = Number(value);
@@ -30,29 +38,23 @@ export function ProjectSetupPage() {
     setSubmitting(true);
     try {
       // 1. Create Project
-      const projRes = await fetch('http://localhost:3000/projects', {
+      const projRes = await apiFetch('http://localhost:3000/projects', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, code, description, workspaceId: activeWorkspaceId })
       });
-      if (!projRes.ok) throw new Error('Failed to create project');
+      if (!projRes.ok) throw new Error(checkStatus(projRes.status));
       const project = await projRes.json();
 
       // 2. Initiate Setup
-      const initRes = await fetch(`http://localhost:3000/projects/${project.id}/initiate`, {
+      const initRes = await apiFetch(`http://localhost:3000/projects/${project.id}/initiate`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           items: [{ wbsCode, name: itemName, quantity: Number(quantity), unit, plannedCost: Number(plannedCost) }]
         })
       });
-      if (!initRes.ok) throw new Error('Failed to initiate project setup');
+      if (!initRes.ok) throw new Error(checkStatus(initRes.status));
 
       alert('Project initiated successfully! Baseline Active.');
       navigate(`/project/${project.id}`);

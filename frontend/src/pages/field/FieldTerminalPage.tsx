@@ -1,21 +1,32 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { apiFetch } from '../../utils/apiClient';
 
 export function FieldTerminalPage() {
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const { token, activeWorkspaceId } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
     if (!token || !activeWorkspaceId) return;
 
-    fetch(`http://localhost:3000/projects/workspace/${activeWorkspaceId}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
+    setLoading(true);
+    setError(null);
+
+    apiFetch(`http://localhost:3000/projects/workspace/${activeWorkspaceId}`)
       .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch projects');
+        if (!res.ok) {
+          const status = res.status;
+          let msg = 'Data gagal dimuat. Coba lagi beberapa saat.';
+          if (status === 401) msg = 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
+          else if (status === 403) msg = 'Anda tidak memiliki akses untuk membuka data ini.';
+          else if (status === 400) msg = 'Konteks workspace atau permintaan belum valid. Pilih workspace kembali.';
+          else if (status === 404) msg = 'Data tidak ditemukan.';
+          throw new Error(msg);
+        }
         return res.json();
       })
       .then(data => {
@@ -24,6 +35,7 @@ export function FieldTerminalPage() {
       })
       .catch(err => {
         console.error('Failed to fetch projects:', err);
+        setError(err.message || 'Data gagal dimuat. Coba lagi beberapa saat.');
         setProjects([]);
         setLoading(false);
       });
@@ -42,6 +54,8 @@ export function FieldTerminalPage() {
       
       {loading ? (
         <p>Memuat daftar proyek...</p>
+      ) : error ? (
+        <p>{error}</p>
       ) : projects.length === 0 ? (
         <p>Tidak ada proyek yang ditugaskan kepada Anda.</p>
       ) : (

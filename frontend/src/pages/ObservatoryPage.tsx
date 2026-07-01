@@ -3,6 +3,7 @@ import { ExecutiveHaiku } from '../components/molecules/ExecutiveHaiku';
 import { ProjectCard } from '../components/organisms/ProjectCard';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { apiFetch } from '../utils/apiClient';
 
 export function ObservatoryPage() {
   const [projects, setProjects] = useState<any[]>([]);
@@ -18,14 +19,17 @@ export function ObservatoryPage() {
     setLoading(true);
     setError(null);
     
-    fetch('http://localhost:3000/projects', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'x-workspace-id': activeWorkspaceId,
-      }
-    })
+    apiFetch('http://localhost:3000/projects')
       .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch projects');
+        if (!res.ok) {
+          const status = res.status;
+          let msg = 'Data gagal dimuat. Coba lagi beberapa saat.';
+          if (status === 401) msg = 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
+          else if (status === 403) msg = 'Anda tidak memiliki akses untuk membuka data ini.';
+          else if (status === 400) msg = 'Konteks workspace atau permintaan belum valid. Pilih workspace kembali.';
+          else if (status === 404) msg = 'Data tidak ditemukan.';
+          throw new Error(msg);
+        }
         return res.json();
       })
       .then(data => {
@@ -34,7 +38,7 @@ export function ObservatoryPage() {
       })
       .catch(err => {
         console.error('Failed to fetch projects:', err);
-        setError('Unable to load projects');
+        setError(err.message || 'Data gagal dimuat. Coba lagi beberapa saat.');
         setLoading(false);
       });
   }, [token, activeWorkspaceId]);
