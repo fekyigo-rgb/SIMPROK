@@ -51,6 +51,11 @@ const permissions = [
     name: 'Create Projects',
     description: 'Create or initiate project records where authorized.',
   },
+  {
+    code: PERMISSIONS.OBSERVATORY_VIEW,
+    name: 'View Observatory',
+    description: 'View workspace-scoped Observatory or portfolio intelligence data.',
+  },
 ];
 
 const directorAllowedPermissionCodes = [
@@ -58,6 +63,7 @@ const directorAllowedPermissionCodes = [
   'AUTHORITY_VIEW',
   'APPROVAL_MATRIX_VIEW',
   PERMISSIONS.PROJECT_CREATE,
+  PERMISSIONS.OBSERVATORY_VIEW,
 ];
 
 const directorForbiddenPermissionCodes = [

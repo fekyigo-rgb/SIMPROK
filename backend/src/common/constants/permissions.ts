@@ -126,9 +126,9 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   {
     code: PERMISSIONS.OBSERVATORY_VIEW,
     domain: PERMISSION_DOMAINS.OBSERVATORY,
-    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
     description: 'View workspace-scoped Observatory or portfolio intelligence data.',
-    note: 'Declared for future DEBT-04 Observatory Backend RBAC. Do not seed or enforce in A1.',
+    note: 'Seeded through RBAC seed in DEBT-04-A1. Endpoint enforcement is a separate DEBT-04 slice.',
   },
 ] as const;
 
@@ -143,8 +143,7 @@ export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.FIELD_PROGRESS_SUBMIT,
   PERMISSIONS.PROJECT_VIEW,
   PERMISSIONS.PROJECT_CREATE,
-];
-
-export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.OBSERVATORY_VIEW,
 ];
+
+export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [];
