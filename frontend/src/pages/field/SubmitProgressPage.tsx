@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
 
+type ErrorKind = 'unauthorized' | 'forbidden' | 'not-found' | 'workspace' | 'server' | 'network' | null;
+
 export function SubmitProgressPage() {
   const { projectId, boqItemId } = useParams();
   const navigate = useNavigate();
@@ -14,18 +16,38 @@ export function SubmitProgressPage() {
   const [photoUrl, setPhotoUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [boqItem, setBoqItem] = useState<any>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
+  const [errorKind, setErrorKind] = useState<ErrorKind>(null);
 
   useEffect(() => {
     if (!token || !projectId || !boqItemId) return;
     apiFetch(`http://localhost:3000/projects/${projectId}/boq`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          setErrorStatus(res.status);
+          if (res.status === 401) setErrorKind('unauthorized');
+          else if (res.status === 403) setErrorKind('forbidden');
+          else if (res.status === 404) setErrorKind('not-found');
+          else if (res.status === 400) setErrorKind('workspace');
+          else setErrorKind('server');
+          return null;
+        }
+        return res.json();
+      })
       .then(data => {
-        if (data && data.items) {
+        if (!data) return;
+        if (data.items) {
           const item = data.items.find((i: any) => i.id === boqItemId);
+          setBoqItem(item);
+        } else if (Array.isArray(data)) {
+          const item = data.find((i: any) => i.id === boqItemId);
           setBoqItem(item);
         }
       })
-      .catch(err => console.error(err));
+      .catch(err => {
+        console.error(err);
+        setErrorKind('network');
+      });
   }, [token, projectId, boqItemId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -72,6 +94,13 @@ export function SubmitProgressPage() {
     }
   };
 
+  let errorMessage = '';
+  if (errorKind === 'unauthorized') errorMessage = 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
+  else if (errorKind === 'forbidden') errorMessage = 'Anda tidak memiliki akses ke proyek ini.';
+  else if (errorKind === 'not-found') errorMessage = 'Proyek tidak ditemukan.';
+  else if (errorKind === 'workspace') errorMessage = 'Konteks workspace belum valid. Pilih workspace kembali.';
+  else if (errorKind === 'server' || errorKind === 'network') errorMessage = 'Data pekerjaan gagal dimuat. Coba lagi beberapa saat.';
+
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', borderRadius: 'var(--radius-lg)', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
       <button 
@@ -83,7 +112,12 @@ export function SubmitProgressPage() {
 
       <h2 style={{ fontSize: 'var(--text-2xl)', color: 'var(--simprok-engineering-blue-900)', marginBottom: 'var(--space-6)' }}>Lapor Progress Harian</h2>
 
-      {boqItem && (
+      {errorKind ? (
+        <div style={{ padding: 'var(--space-6)', backgroundColor: '#FEE2E2', color: '#991B1B', borderRadius: 'var(--radius-lg)', marginBottom: 'var(--space-6)' }}>
+          <h3 style={{ margin: '0 0 var(--space-2) 0' }}>Akses Ditolak ({errorStatus || 'Network'})</h3>
+          <p style={{ margin: 0 }}>{errorMessage}</p>
+        </div>
+      ) : boqItem && (
         <div style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-4)', backgroundColor: 'var(--simprok-engineering-blue-50)', borderLeft: '4px solid var(--simprok-engineering-blue-500)', borderRadius: '4px' }}>
           <h3 style={{ margin: '0 0 8px 0', color: 'var(--simprok-engineering-blue-900)', fontSize: 'var(--text-lg)' }}>
             {boqItem.wbsCode} - {boqItem.name}

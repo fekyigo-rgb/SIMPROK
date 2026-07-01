@@ -3,10 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
 
+type ErrorKind = 'unauthorized' | 'forbidden' | 'not-found' | 'workspace' | 'server' | 'network' | null;
+
 export function ProjectWorkPage() {
   const { projectId } = useParams();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
+  const [errorKind, setErrorKind] = useState<ErrorKind>(null);
   const { token } = useAuth();
   const navigate = useNavigate();
 
@@ -14,17 +18,38 @@ export function ProjectWorkPage() {
     if (!token || !projectId) return;
 
     apiFetch(`http://localhost:3000/projects/${projectId}/boq`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          setErrorStatus(res.status);
+          if (res.status === 401) setErrorKind('unauthorized');
+          else if (res.status === 403) setErrorKind('forbidden');
+          else if (res.status === 404) setErrorKind('not-found');
+          else if (res.status === 400) setErrorKind('workspace');
+          else setErrorKind('server');
+          setLoading(false);
+          return null;
+        }
+        return res.json();
+      })
       .then(data => {
-        setItems(Array.isArray(data) ? data : []);
+        if (data === null) return;
+        setItems(Array.isArray(data) ? data : (data.items || []));
         setLoading(false);
       })
       .catch(err => {
         console.error('Failed to fetch BOQ:', err);
+        setErrorKind('network');
         setItems([]);
         setLoading(false);
       });
   }, [token, projectId]);
+
+  let errorMessage = '';
+  if (errorKind === 'unauthorized') errorMessage = 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
+  else if (errorKind === 'forbidden') errorMessage = 'Anda tidak memiliki akses ke proyek ini.';
+  else if (errorKind === 'not-found') errorMessage = 'Proyek tidak ditemukan.';
+  else if (errorKind === 'workspace') errorMessage = 'Konteks workspace belum valid. Pilih workspace kembali.';
+  else if (errorKind === 'server' || errorKind === 'network') errorMessage = 'Data pekerjaan gagal dimuat. Coba lagi beberapa saat.';
 
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto' }}>
@@ -39,6 +64,11 @@ export function ProjectWorkPage() {
       
       {loading ? (
         <p>Memuat daftar pekerjaan...</p>
+      ) : errorKind ? (
+        <div style={{ padding: 'var(--space-6)', backgroundColor: '#FEE2E2', color: '#991B1B', borderRadius: 'var(--radius-lg)' }}>
+          <h3 style={{ margin: '0 0 var(--space-2) 0' }}>Akses Ditolak ({errorStatus || 'Network'})</h3>
+          <p style={{ margin: 0 }}>{errorMessage}</p>
+        </div>
       ) : items.length === 0 ? (
         <p>Tidak ada pekerjaan (BOQ) yang ditemukan untuk proyek ini. Pastikan RAB Baseline sudah aktif.</p>
       ) : (
