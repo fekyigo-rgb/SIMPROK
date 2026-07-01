@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { PERMISSIONS } from '../src/common/constants/permissions';
 
 const prisma = new PrismaClient();
 
@@ -45,12 +46,18 @@ const permissions = [
     name: 'Submit Field Progress',
     description: 'Allows an assigned field actor (e.g. Foreman) to submit field progress entries for an assigned project. This is a WRITE/SUBMIT permission and must not be granted to VIEW-only roles.',
   },
+  {
+    code: PERMISSIONS.PROJECT_CREATE,
+    name: 'Create Projects',
+    description: 'Create or initiate project records where authorized.',
+  },
 ];
 
 const directorAllowedPermissionCodes = [
   'WORKSPACE_MEMBERSHIP_VIEW',
   'AUTHORITY_VIEW',
   'APPROVAL_MATRIX_VIEW',
+  PERMISSIONS.PROJECT_CREATE,
 ];
 
 const directorForbiddenPermissionCodes = [

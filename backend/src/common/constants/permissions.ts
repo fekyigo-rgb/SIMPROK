@@ -119,9 +119,9 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   {
     code: PERMISSIONS.PROJECT_CREATE,
     domain: PERMISSION_DOMAINS.PROJECT,
-    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
     description: 'Create or initiate project records where authorized.',
-    note: 'Known ghost permission from IDENTITY-A0: used by controllers but not seeded yet. Do not seed in A1.',
+    note: 'Seeded through RBAC seed in IDENTITY-A2. Runtime DB requires normal seed/test setup to materialize this permission.',
   },
   {
     code: PERMISSIONS.OBSERVATORY_VIEW,
@@ -142,9 +142,9 @@ export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.APPROVAL_MATRIX_MANAGE,
   PERMISSIONS.FIELD_PROGRESS_SUBMIT,
   PERMISSIONS.PROJECT_VIEW,
+  PERMISSIONS.PROJECT_CREATE,
 ];
 
 export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
-  PERMISSIONS.PROJECT_CREATE,
   PERMISSIONS.OBSERVATORY_VIEW,
 ];
