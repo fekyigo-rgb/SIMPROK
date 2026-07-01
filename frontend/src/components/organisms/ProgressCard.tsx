@@ -5,7 +5,7 @@ interface ProgressCardProps {
   itemName: string;
   itemCode: string;
   weight: number;
-  plannedProgress: number; // Percentage
+  plannedProgress: number | null; // Percentage
   actualProgress: number; // Percentage
   plannedCost: number;
   actualCost: number;

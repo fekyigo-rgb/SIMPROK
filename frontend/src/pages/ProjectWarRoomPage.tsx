@@ -195,7 +195,7 @@ export function ProjectWarRoomPage() {
                   itemName="Overall Project Execution"
                   itemCode="WBS-ROOT"
                   weight={100}
-                  plannedProgress={parseFloat(reality.overallPlannedProgress) || 0}
+                  plannedProgress={reality.overallPlannedProgress != null ? parseFloat(reality.overallPlannedProgress) : null}
                   actualProgress={parseFloat(reality.overallActualProgress) || 0}
                   plannedCost={parseFloat(reality.overallPlannedCost) || 0}
                   actualCost={parseFloat(reality.overallActualCost) || 0}

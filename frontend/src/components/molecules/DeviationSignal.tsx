@@ -2,11 +2,12 @@ import { NumericFact } from '../atoms/NumericFact';
 
 interface DeviationSignalProps {
   label: string;
-  plannedValue: number;
+  plannedValue: number | null;
   actualValue: number;
   unit?: string;
   lowerIsBetter?: boolean;
 }
+
 
 export function DeviationSignal({ 
   label, 
@@ -15,11 +16,11 @@ export function DeviationSignal({
   unit = '',
   lowerIsBetter = false 
 }: DeviationSignalProps) {
-  
-  const variance = actualValue - plannedValue;
-  const isPositiveVariance = lowerIsBetter ? variance <= 0 : variance >= 0;
+  const hasPlan = plannedValue !== null && plannedValue !== undefined;
+  const variance = hasPlan ? actualValue - plannedValue : null;
+  const isPositiveVariance = hasPlan ? (lowerIsBetter ? variance! <= 0 : variance! >= 0) : false;
   const varianceColor = isPositiveVariance ? 'var(--simprok-success-green-600)' : 'var(--simprok-critical-red-600)';
-  const varianceSign = variance > 0 ? '+' : '';
+  const varianceSign = hasPlan && variance! > 0 ? '+' : '';
 
   return (
     <div style={{
@@ -43,7 +44,11 @@ export function DeviationSignal({
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 'var(--space-4)', alignItems: 'center' }}>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--simprok-engineering-blue-700)' }}>Planned (C2)</span>
-          <NumericFact value={plannedValue} suffix={unit} certaintyLevel="C2" size="sm" />
+          {hasPlan ? (
+            <NumericFact value={plannedValue!} suffix={unit} certaintyLevel="C2" size="sm" />
+          ) : (
+            <span style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-500)', fontStyle: 'italic', height: '24px', display: 'flex', alignItems: 'center' }}>Belum tersedia</span>
+          )}
         </div>
         
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -59,12 +64,16 @@ export function DeviationSignal({
           borderLeft: '1px solid var(--simprok-engineering-blue-200)'
         }}>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--simprok-engineering-blue-700)' }}>Variance</span>
-          <span 
-            className="simprok-numeric certainty-c4" 
-            style={{ color: varianceColor, fontSize: 'var(--text-base)' }}
-          >
-            {varianceSign}{variance}{unit}
-          </span>
+          {hasPlan ? (
+            <span 
+              className="simprok-numeric certainty-c4" 
+              style={{ color: varianceColor, fontSize: 'var(--text-base)' }}
+            >
+              {varianceSign}{variance}{unit}
+            </span>
+          ) : (
+            <span style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-500)', height: '24px', display: 'flex', alignItems: 'center' }}>N/A</span>
+          )}
         </div>
       </div>
     </div>
