@@ -49,8 +49,9 @@ export class OrganizationController {
   @Get(':id')
   @UseGuards(RolesGuard, PermissionsGuard)
   @Permissions('PROJECT_VIEW')
-  findOne(@Param('id') id: string) {
-    return this.organizationService.findOne(id);
+  findOne(@Param('id') id: string, @Req() request: any) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.organizationService.findOneForWorkspace(id, workspaceId);
   }
 
   @Patch(':id')
@@ -59,9 +60,12 @@ export class OrganizationController {
   update(
     @Param('id') id: string,
     @Body() updateOrganizationDto: UpdateOrganizationDto,
+    @Req() request: any,
   ) {
-    return this.organizationService.update(
+    const workspaceId = request.workspaceContext?.workspaceId;
+    return this.organizationService.updateForWorkspace(
       id,
+      workspaceId,
       updateOrganizationDto,
     );
   }

@@ -53,12 +53,47 @@ describe('Organization Security (e2e)', () => {
     });
     workspaceBId = wsB.id;
 
+    // Setup permissions
+    const permView = await prisma.permission.upsert({
+      where: { code: 'PROJECT_VIEW' },
+      update: {},
+      create: { code: 'PROJECT_VIEW', name: 'Project View' }
+    });
+    const permCreate = await prisma.permission.upsert({
+      where: { code: 'PROJECT_CREATE' },
+      update: {},
+      create: { code: 'PROJECT_CREATE', name: 'Project Create' }
+    });
+
+    // Setup roles
+    const roleA = await prisma.role.create({
+      data: {
+        name: 'Org Admin A',
+        code: 'ORG_ADMIN_A',
+        workspace: { connect: { id: workspaceAId } },
+        rolePermissions: { create: [{ permissionId: permView.id }, { permissionId: permCreate.id }] }
+      }
+    });
+    const roleB = await prisma.role.create({
+      data: {
+        name: 'Org Admin B',
+        code: 'ORG_ADMIN_B',
+        workspace: { connect: { id: workspaceBId } },
+        rolePermissions: { create: [{ permissionId: permView.id }, { permissionId: permCreate.id }] }
+      }
+    });
+
     // User A: ACTIVE member of Workspace-A only
     const accountA = await prisma.account.create({
       data: { email: userAEmail, passwordHash, displayName: userAEmail, status: 'ACTIVE' }
     });
     const membershipA = await prisma.workspaceMembership.create({
-      data: { accountId: accountA.id, workspaceId: workspaceAId, status: 'ACTIVE' }
+      data: {
+        accountId: accountA.id,
+        workspaceId: workspaceAId,
+        status: 'ACTIVE',
+        membershipRoles: { create: [{ roleId: roleA.id }] }
+      }
     });
     await prisma.user.create({
       data: {
@@ -74,7 +109,12 @@ describe('Organization Security (e2e)', () => {
       data: { email: userBEmail, passwordHash, displayName: userBEmail, status: 'ACTIVE' }
     });
     const membershipB = await prisma.workspaceMembership.create({
-      data: { accountId: accountB.id, workspaceId: workspaceBId, status: 'ACTIVE' }
+      data: {
+        accountId: accountB.id,
+        workspaceId: workspaceBId,
+        status: 'ACTIVE',
+        membershipRoles: { create: [{ roleId: roleB.id }] }
+      }
     });
     await prisma.user.create({
       data: {
@@ -94,8 +134,10 @@ describe('Organization Security (e2e)', () => {
     const membershipIds = memberships.map(m => m.id);
 
     await prisma.user.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });
+    await prisma.membershipRole.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });
     await prisma.workspaceMembership.deleteMany({ where: { id: { in: membershipIds } } });
     await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
+    await prisma.role.deleteMany({ where: { code: { in: ['ORG_ADMIN_A', 'ORG_ADMIN_B'] } } });
     await prisma.workspace.deleteMany({ where: { id: { in: [workspaceAId, workspaceBId] } } });
     await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
 
@@ -299,5 +341,70 @@ describe('Organization Security (e2e)', () => {
     // Org-A still exists
     const orgA = await prisma.organization.findUnique({ where: { id: orgAId } });
     expect(orgA).toBeDefined();
+  });
+
+  // ── Test 12: GET /organizations/:id no token ───────────────────────────────
+  it('12. no token -> GET /organizations/:id returns 401', async () => {
+    await request(app.getHttpServer())
+      .get(`/organizations/${orgAId}`)
+      .expect(401);
+  });
+
+  // ── Test 13: GET /organizations/:id same-workspace ─────────────────────────
+  it('13. same-workspace authorized -> GET /organizations/:id returns success', async () => {
+    const token = await login(userAEmail);
+
+    const res = await request(app.getHttpServer())
+      .get(`/organizations/${orgAId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+      
+    expect(res.body.id).toEqual(orgAId);
+  });
+
+  // ── Test 14: GET /organizations/:id cross-tenant ───────────────────────────
+  it('14. cross-tenant -> GET /organizations/:id returns 404', async () => {
+    const token = await login(userAEmail);
+
+    // User A belongs to Workspace A, has PROJECT_VIEW in Workspace A.
+    // Tries to access Org B using their valid Workspace A context.
+    await request(app.getHttpServer())
+      .get(`/organizations/${orgBId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(404);
+  });
+
+  // ── Test 15: PATCH /organizations/:id same-workspace ───────────────────────
+  it('15. same-workspace authorized -> PATCH /organizations/:id returns success', async () => {
+    const token = await login(userAEmail);
+
+    const res = await request(app.getHttpServer())
+      .patch(`/organizations/${orgAId}`)
+      .send({ name: 'Org Security A Updated' })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+      
+    expect(res.body.name).toEqual('Org Security A Updated');
+  });
+
+  // ── Test 16: PATCH /organizations/:id cross-tenant ─────────────────────────
+  it('16. cross-tenant -> PATCH /organizations/:id returns 404', async () => {
+    const token = await login(userAEmail);
+
+    await request(app.getHttpServer())
+      .patch(`/organizations/${orgBId}`)
+      .send({ name: 'Org B Compromised' })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(404);
+  });
+
+  // ── Test 17: PATCH no mutation ─────────────────────────────────────────────
+  it('17. cross-tenant PATCH denied does not mutate data', async () => {
+    const orgB = await prisma.organization.findUnique({ where: { id: orgBId } });
+    expect(orgB?.name).toEqual('Org Security B'); // Ensure it wasn't mutated in previous test
   });
 });

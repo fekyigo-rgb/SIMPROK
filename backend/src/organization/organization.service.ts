@@ -58,8 +58,42 @@ export class OrganizationService {
     return organization;
   }
 
+  async findOneForWorkspace(id: string, workspaceId: string) {
+    if (!workspaceId) {
+      throw new NotFoundException('Organization not found');
+    }
+
+    const organization = await this.prisma.organization.findFirst({
+      where: {
+        id,
+        workspaces: {
+          some: { id: workspaceId },
+        },
+      },
+    });
+
+    if (!organization) {
+      throw new NotFoundException('Organization not found');
+    }
+
+    return organization;
+  }
+
   async update(id: string, updateOrganizationDto: UpdateOrganizationDto) {
     await this.findOne(id);
+
+    return this.prisma.organization.update({
+      where: { id },
+      data: updateOrganizationDto,
+    });
+  }
+
+  async updateForWorkspace(
+    id: string,
+    workspaceId: string,
+    updateOrganizationDto: UpdateOrganizationDto,
+  ) {
+    await this.findOneForWorkspace(id, workspaceId);
 
     return this.prisma.organization.update({
       where: { id },
