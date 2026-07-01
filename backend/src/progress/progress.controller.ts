@@ -12,9 +12,8 @@ export class ProgressController {
   constructor(private readonly progressService: ProgressService) {}
 
   @Post('field')
-  // We'll require basic progress submission permission
-  // For field terminal, FOREMAN should have this, but for now we'll just require authentication or PROJECT_VIEW
-  @Permissions('PROJECT_VIEW')
+  // This is a write action. It must strictly require FIELD_PROGRESS_SUBMIT.
+  @Permissions('FIELD_PROGRESS_SUBMIT')
   async submitFieldProgress(
     @Param('projectId') projectId: string,
     @Body() submitDto: SubmitFieldProgressDto,
