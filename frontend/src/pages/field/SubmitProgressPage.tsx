@@ -203,7 +203,7 @@ export function SubmitProgressPage() {
             opacity: submitting ? 0.7 : 1
           }}
         >
-          {submitting ? 'Mengirim...' : 'Kirim Laporan'}
+          {submitting ? 'Mengirim...' : 'Kirim Progress'}
         </button>
       </form>
     </div>

@@ -11,7 +11,7 @@ export function FieldLayout() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', backgroundColor: '#F8FAFC' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#F8FAFC' }}>
       {/* Simple Header for Field Workers */}
       <header style={{ 
         backgroundColor: 'var(--simprok-engineering-blue-900)', 
