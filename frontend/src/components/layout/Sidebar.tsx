@@ -5,8 +5,9 @@ export function Sidebar() {
 
   const navItems = [
     { name: 'Observatory', path: '/' },
+    { name: 'Buat RAB', path: '/project/new' },
     { name: 'Field Terminal', path: '/field' },
-    { name: 'UI Showcase', path: '/showcase' },
+    { name: 'UI Showcase (Dev)', path: '/showcase' },
   ];
 
   return (

@@ -10,30 +10,54 @@ const checkStatus = (status: number) => {
   return 'Data gagal dimuat. Coba lagi beberapa saat.';
 };
 
-const toSafeNumber = (value: string): number => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
+
+
+interface BoqItemInput {
+  wbsCode: string;
+  name: string;
+  quantity: number;
+  unit: string;
+  plannedCost: number;
+}
 
 export function ProjectSetupPage() {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [description, setDescription] = useState('');
   
-  // Minimal BOQ Item state
-  const [wbsCode, setWbsCode] = useState('WBS.1.1');
-  const [itemName, setItemName] = useState('Pekerjaan Persiapan');
-  const [quantity, setQuantity] = useState(1);
-  const [unit, setUnit] = useState('ls');
-  const [plannedCost, setPlannedCost] = useState(10000000);
+  const [items, setItems] = useState<BoqItemInput[]>([
+    { wbsCode: 'WBS.1.1', name: 'Pekerjaan Persiapan', quantity: 1, unit: 'ls', plannedCost: 10000000 }
+  ]);
   
   const [submitting, setSubmitting] = useState(false);
   const { token, activeWorkspaceId } = useAuth();
   const navigate = useNavigate();
 
+  const handleAddItem = () => {
+    setItems([...items, { wbsCode: '', name: '', quantity: 1, unit: 'ls', plannedCost: 0 }]);
+  };
+
+  const handleRemoveItem = (index: number) => {
+    const newItems = [...items];
+    newItems.splice(index, 1);
+    setItems(newItems);
+  };
+
+  const handleChangeItem = (index: number, field: keyof BoqItemInput, value: string | number) => {
+    const newItems = [...items];
+    newItems[index] = { ...newItems[index], [field]: value };
+    setItems(newItems);
+  };
+
+  const totalEstimasi = items.reduce((sum, item) => sum + (Number(item.plannedCost) || 0), 0);
+
   const handleSetup = async (e: FormEvent) => {
     e.preventDefault();
     if (!token || !activeWorkspaceId) return;
+    if (items.length === 0) {
+      alert('Tambahkan minimal 1 Item BOQ.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -51,12 +75,16 @@ export function ProjectSetupPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: [{ wbsCode, name: itemName, quantity: Number(quantity), unit, plannedCost: Number(plannedCost) }]
+          items: items.map(item => ({
+            ...item,
+            quantity: Number(item.quantity),
+            plannedCost: Number(item.plannedCost)
+          }))
         })
       });
       if (!initRes.ok) throw new Error(checkStatus(initRes.status));
 
-      alert('Project initiated successfully! Baseline Active.');
+      alert('RAB berhasil dibuat dan Baseline aktif!');
       navigate(`/project/${project.id}`);
     } catch (err: any) {
       alert(err.message);
@@ -65,35 +93,81 @@ export function ProjectSetupPage() {
   };
 
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', borderRadius: 'var(--radius-lg)' }}>
-      <h2 style={{ fontSize: 'var(--text-2xl)', color: 'var(--simprok-engineering-blue-900)', marginBottom: 'var(--space-6)' }}>Start New Project</h2>
+    <div style={{ maxWidth: '1000px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', borderRadius: 'var(--radius-lg)' }}>
+      <h2 style={{ fontSize: 'var(--text-2xl)', color: 'var(--simprok-engineering-blue-900)', marginBottom: 'var(--space-6)' }}>Workspace Penyusunan RAB</h2>
       <form onSubmit={handleSetup} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-        <div>
-          <label>Project Name</label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} required style={{ width: '100%', padding: '8px' }}/>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
+          <div>
+            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Nama Proyek</label>
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)} required style={{ width: '100%', padding: '8px' }}/>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Kode Proyek</label>
+            <input type="text" value={code} onChange={(e) => setCode(e.target.value)} required style={{ width: '100%', padding: '8px' }}/>
+          </div>
         </div>
         <div>
-          <label>Project Code</label>
-          <input type="text" value={code} onChange={(e) => setCode(e.target.value)} required style={{ width: '100%', padding: '8px' }}/>
-        </div>
-        <div>
-          <label>Description</label>
+          <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Deskripsi</label>
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} style={{ width: '100%', padding: '8px' }}/>
         </div>
 
-        <h3 style={{ marginTop: 'var(--space-4)' }}>Initial BOQ Item (Required to Activate Baseline)</h3>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <input type="text" value={wbsCode} onChange={(e) => setWbsCode(e.target.value)} placeholder="WBS Code" required style={{ flex: 1, padding: '8px' }}/>
-          <input type="text" value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="Item Name" required style={{ flex: 2, padding: '8px' }}/>
-        </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <input type="number" value={quantity} onChange={(e) => setQuantity(toSafeNumber(e.target.value))} placeholder="Quantity" required style={{ flex: 1, padding: '8px' }}/>
-          <input type="text" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="Unit" required style={{ flex: 1, padding: '8px' }}/>
-          <input type="number" value={plannedCost} onChange={(e) => setPlannedCost(toSafeNumber(e.target.value))} placeholder="Planned Cost (IDR)" required style={{ flex: 2, padding: '8px' }}/>
+        <div style={{ marginTop: 'var(--space-6)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)' }}>Daftar Item BOQ</h3>
+          <button type="button" onClick={handleAddItem} style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-engineering-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+            + Tambah Item
+          </button>
         </div>
 
-        <button type="submit" disabled={submitting} style={{ marginTop: 'var(--space-6)', padding: '12px', backgroundColor: 'var(--simprok-engineering-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-          {submitting ? 'Creating...' : 'Create & Activate Baseline'}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 'var(--space-2)' }}>
+            <thead>
+              <tr style={{ backgroundColor: 'var(--simprok-engineering-blue-50)', textAlign: 'left' }}>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>WBS/Kode</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Nama Item</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '100px' }}>Volume</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '100px' }}>Satuan</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '200px' }}>Biaya Rencana Item</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '80px' }}>Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, index) => (
+                <tr key={index} style={{ borderBottom: '1px solid var(--simprok-engineering-blue-100)' }}>
+                  <td style={{ padding: '8px' }}>
+                    <input type="text" value={item.wbsCode} onChange={(e) => handleChangeItem(index, 'wbsCode', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
+                  </td>
+                  <td style={{ padding: '8px' }}>
+                    <input type="text" value={item.name} onChange={(e) => handleChangeItem(index, 'name', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
+                  </td>
+                  <td style={{ padding: '8px' }}>
+                    <input type="number" value={item.quantity} onChange={(e) => handleChangeItem(index, 'quantity', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
+                  </td>
+                  <td style={{ padding: '8px' }}>
+                    <input type="text" value={item.unit} onChange={(e) => handleChangeItem(index, 'unit', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
+                  </td>
+                  <td style={{ padding: '8px' }}>
+                    <input type="number" value={item.plannedCost} onChange={(e) => handleChangeItem(index, 'plannedCost', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
+                  </td>
+                  <td style={{ padding: '8px', textAlign: 'center' }}>
+                    <button type="button" onClick={() => handleRemoveItem(index)} style={{ padding: '6px', backgroundColor: 'var(--simprok-critical-red-100)', color: 'var(--simprok-critical-red-600)', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                      Hapus
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginTop: 'var(--space-4)', padding: 'var(--space-4)', backgroundColor: 'var(--simprok-engineering-blue-50)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 'var(--text-lg)', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-900)' }}>Total Estimasi:</span>
+          <span style={{ fontSize: 'var(--text-2xl)', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-600)' }}>
+            Rp {totalEstimasi.toLocaleString()}
+          </span>
+        </div>
+
+        <button type="submit" disabled={submitting} style={{ marginTop: 'var(--space-6)', padding: '16px', fontSize: 'var(--text-lg)', fontWeight: 'bold', backgroundColor: 'var(--simprok-engineering-blue-900)', color: 'white', border: 'none', borderRadius: '8px', cursor: submitting ? 'not-allowed' : 'pointer', opacity: submitting ? 0.7 : 1 }}>
+          {submitting ? 'Menyimpan...' : 'Simpan & Aktifkan Baseline'}
         </button>
       </form>
     </div>
