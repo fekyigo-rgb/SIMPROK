@@ -27,7 +27,9 @@ export class ProjectController {
     }
     // Force workspaceId from context — source of truth
     createProjectDto.workspaceId = contextWorkspaceId;
-    return this.projectService.create(createProjectDto);
+    
+    const accountId = request.user?.id;
+    return this.projectService.create(createProjectDto, accountId);
   }
 
   @Post(':projectId/initiate')

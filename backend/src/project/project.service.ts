@@ -11,7 +11,7 @@ export class ProjectService {
     private deviationService: DeviationService
   ) {}
 
-  async create(data: CreateProjectDto) {
+  async create(data: CreateProjectDto, creatorAccountId?: string) {
     try {
       const workspace = await this.prisma.workspace.findUnique({
         where: { id: data.workspaceId },
@@ -22,18 +22,45 @@ export class ProjectService {
         throw new NotFoundException('Workspace not found');
       }
 
-      return await this.prisma.project.create({
-        data: {
-          name: data.name,
-          code: data.code,
-          description: data.description,
-          workspace: {
-            connect: { id: data.workspaceId },
+      return await this.prisma.$transaction(async (tx) => {
+        const project = await tx.project.create({
+          data: {
+            name: data.name,
+            code: data.code,
+            description: data.description,
+            workspace: {
+              connect: { id: data.workspaceId },
+            },
+            organization: {
+              connect: { id: workspace.organizationId },
+            },
           },
-          organization: {
-            connect: { id: workspace.organizationId },
-          },
-        },
+        });
+
+        if (creatorAccountId) {
+          const membership = await tx.workspaceMembership.findUnique({
+            where: {
+              accountId_workspaceId: {
+                accountId: creatorAccountId,
+                workspaceId: data.workspaceId,
+              }
+            }
+          });
+
+          if (membership) {
+            await tx.projectAssignment.create({
+              data: {
+                projectId: project.id,
+                workspaceMembershipId: membership.id,
+                roleInProject: 'OWNER',
+                isPrimaryAssignment: true,
+                status: 'ASSIGNED'
+              }
+            });
+          }
+        }
+
+        return project;
       });
     } catch (error) {
       if (error instanceof NotFoundException) {
