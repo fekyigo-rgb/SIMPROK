@@ -87,19 +87,34 @@ export class ProjectService {
       });
 
       let totalCost = 0;
+      const tempIdMap = new Map<string, string>();
 
       // 2. Create BoqItems
       for (const item of data.items) {
-        await tx.boqItem.create({
+        let parentId: string | undefined = undefined;
+        if (item.parentTempId && tempIdMap.has(item.parentTempId)) {
+          parentId = tempIdMap.get(item.parentTempId);
+        }
+
+        const createdItem = await tx.boqItem.create({
           data: {
             boqStructureId: boqStructure.id,
+            parentId,
             wbsCode: item.wbsCode,
             name: item.name,
-            quantity: item.quantity,
-            unit: item.unit,
+            quantity: item.quantity || 0,
+            unit: item.unit || '',
+            itemType: item.itemType === 'FOLDER' ? 'FOLDER' : 'WORK_ITEM',
           }
         });
-        totalCost += item.plannedCost;
+
+        if (item.tempId) {
+          tempIdMap.set(item.tempId, createdItem.id);
+        }
+
+        if (item.itemType !== 'FOLDER') {
+          totalCost += item.plannedCost || 0;
+        }
       }
 
       // 3. Create RabDocument
