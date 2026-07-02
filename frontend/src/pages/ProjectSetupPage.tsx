@@ -240,11 +240,11 @@ export function ProjectSetupPage() {
                         Rp {(subtotals[item.tempId] || 0).toLocaleString()}
                       </td>
                       <td style={{ padding: '8px', textAlign: 'center' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
-                          <button type="button" onClick={() => handleAddItem(item.tempId)} style={{ padding: '6px 12px', backgroundColor: 'var(--simprok-engineering-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
-                            + Item
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
+                          <button type="button" onClick={() => handleAddItem(item.tempId)} style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-engineering-blue-800)', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold', width: '100%' }}>
+                            + Tambah Item
                           </button>
-                          <button type="button" onClick={() => handleRemoveItem(index)} style={{ padding: '4px', backgroundColor: 'transparent', color: 'var(--simprok-critical-red-600)', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '12px' }}>
+                          <button type="button" onClick={() => handleRemoveItem(index)} style={{ padding: '4px', backgroundColor: 'transparent', color: 'var(--simprok-critical-red-600)', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '13px' }}>
                             Hapus Sub
                           </button>
                         </div>
