@@ -187,26 +187,24 @@ export function SubmitProgressPage() {
           </p>
         </div>
 
-        <div style={{ position: 'sticky', bottom: 0, backgroundColor: 'white', padding: 'var(--space-4) 0', borderTop: '1px solid var(--simprok-engineering-blue-200)', marginTop: 'var(--space-4)', zIndex: 10 }}>
-          <button 
-            type="submit" 
-            disabled={submitting}
-            style={{ 
-              width: '100%',
-              padding: 'var(--space-4)', 
-              backgroundColor: 'var(--simprok-engineering-blue-600)', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: 'var(--radius-md)', 
-              fontSize: 'var(--text-lg)',
-              fontWeight: 'var(--weight-semibold)',
-              cursor: submitting ? 'not-allowed' : 'pointer',
-              opacity: submitting ? 0.7 : 1
-            }}
-          >
-            {submitting ? 'Mengirim...' : 'Kirim Progress'}
-          </button>
-        </div>
+        <button
+          type="submit"
+          disabled={submitting}
+          style={{
+            width: '100%',
+            marginTop: '24px',
+            padding: '12px 16px',
+            borderRadius: '8px',
+            border: 'none',
+            backgroundColor: 'var(--simprok-engineering-blue-900)',
+            color: 'white',
+            fontWeight: 600,
+            cursor: submitting ? 'not-allowed' : 'pointer',
+            opacity: submitting ? 0.7 : 1,
+          }}
+        >
+          {submitting ? 'Mengirim...' : 'Kirim Progress'}
+        </button>
       </form>
     </div>
   );
