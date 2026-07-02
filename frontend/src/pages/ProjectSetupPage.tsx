@@ -230,21 +230,24 @@ export function ProjectSetupPage() {
                       <td style={{ padding: '8px' }}>
                         <input type="text" value={item.wbsCode} onChange={(e) => handleChangeItem(index, 'wbsCode', e.target.value)} required style={{ width: '100%', padding: '6px', fontWeight: 'bold' }} placeholder="Cth: A" />
                       </td>
-                      <td style={{ padding: '8px' }} colSpan={4}>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <input type="text" value={item.name} onChange={(e) => handleChangeItem(index, 'name', e.target.value)} required style={{ flex: 1, padding: '6px', fontWeight: 'bold' }} placeholder="Nama Sub Judul Pekerjaan" />
-                          <button type="button" onClick={() => handleAddItem(item.tempId)} style={{ padding: '6px 12px', backgroundColor: 'var(--simprok-engineering-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
-                            + Item
-                          </button>
-                        </div>
+                      <td style={{ padding: '8px' }}>
+                        <input type="text" value={item.name} onChange={(e) => handleChangeItem(index, 'name', e.target.value)} required style={{ width: '100%', padding: '6px', fontWeight: 'bold' }} placeholder="Nama Sub Judul Pekerjaan" />
                       </td>
+                      <td style={{ padding: '8px' }}></td>
+                      <td style={{ padding: '8px' }}></td>
+                      <td style={{ padding: '8px' }}></td>
                       <td style={{ padding: '8px', textAlign: 'right', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-900)' }}>
                         Rp {(subtotals[item.tempId] || 0).toLocaleString()}
                       </td>
                       <td style={{ padding: '8px', textAlign: 'center' }}>
-                        <button type="button" onClick={() => handleRemoveItem(index)} style={{ padding: '6px', backgroundColor: 'transparent', color: 'var(--simprok-critical-red-600)', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
-                          Hapus Sub
-                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
+                          <button type="button" onClick={() => handleAddItem(item.tempId)} style={{ padding: '6px 12px', backgroundColor: 'var(--simprok-engineering-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
+                            + Item
+                          </button>
+                          <button type="button" onClick={() => handleRemoveItem(index)} style={{ padding: '4px', backgroundColor: 'transparent', color: 'var(--simprok-critical-red-600)', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '12px' }}>
+                            Hapus Sub
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
