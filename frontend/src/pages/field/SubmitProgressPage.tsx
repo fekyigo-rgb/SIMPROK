@@ -102,7 +102,7 @@ export function SubmitProgressPage() {
   else if (errorKind === 'server' || errorKind === 'network') errorMessage = 'Data pekerjaan gagal dimuat. Coba lagi beberapa saat.';
 
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', borderRadius: 'var(--radius-lg)', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
+    <div style={{ maxWidth: '600px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', paddingBottom: '100px', borderRadius: 'var(--radius-lg)', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
       <button 
         onClick={() => navigate(`/field/project/${projectId}`)}
         style={{ background: 'none', border: 'none', color: 'var(--simprok-engineering-blue-600)', cursor: 'pointer', padding: 0, marginBottom: 'var(--space-6)', fontSize: 'var(--text-base)' }}
@@ -187,24 +187,26 @@ export function SubmitProgressPage() {
           </p>
         </div>
 
-        <button 
-          type="submit" 
-          disabled={submitting}
-          style={{ 
-            marginTop: 'var(--space-4)',
-            padding: 'var(--space-4)', 
-            backgroundColor: 'var(--simprok-engineering-blue-600)', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: 'var(--radius-md)', 
-            fontSize: 'var(--text-lg)',
-            fontWeight: 'var(--weight-semibold)',
-            cursor: submitting ? 'not-allowed' : 'pointer',
-            opacity: submitting ? 0.7 : 1
-          }}
-        >
-          {submitting ? 'Mengirim...' : 'Kirim Progress'}
-        </button>
+        <div style={{ position: 'sticky', bottom: '-32px', backgroundColor: 'white', padding: 'var(--space-4) 0', borderTop: '1px solid var(--simprok-engineering-blue-200)', marginTop: 'var(--space-4)', zIndex: 10 }}>
+          <button 
+            type="submit" 
+            disabled={submitting}
+            style={{ 
+              width: '100%',
+              padding: 'var(--space-4)', 
+              backgroundColor: 'var(--simprok-engineering-blue-600)', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: 'var(--radius-md)', 
+              fontSize: 'var(--text-lg)',
+              fontWeight: 'var(--weight-semibold)',
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              opacity: submitting ? 0.7 : 1
+            }}
+          >
+            {submitting ? 'Mengirim...' : 'Kirim Progress'}
+          </button>
+        </div>
       </form>
     </div>
   );
