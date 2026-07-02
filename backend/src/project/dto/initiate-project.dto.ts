@@ -1,4 +1,4 @@
-import { IsArray, ValidateNested, IsString, IsNotEmpty, IsNumber } from 'class-validator';
+import { IsArray, ValidateNested, IsString, IsNotEmpty, IsNumber, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class BoqItemDto {
@@ -11,6 +11,7 @@ export class BoqItemDto {
   name: string;
 
   @IsNumber()
+  @Min(0.000001)
   quantity: number;
 
   @IsString()
@@ -18,6 +19,7 @@ export class BoqItemDto {
   unit: string;
 
   @IsNumber()
+  @Min(0)
   plannedCost: number;
 }
 
