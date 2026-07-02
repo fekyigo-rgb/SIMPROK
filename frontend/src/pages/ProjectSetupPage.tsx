@@ -68,6 +68,29 @@ export function ProjectSetupPage() {
       return;
     }
 
+    // Domain validation
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item.wbsCode.trim() || !item.name.trim() || !item.unit.trim()) {
+        alert('Lengkapi WBS, Nama Item, Volume, Satuan, dan Harga Satuan.');
+        return;
+      }
+      const vol = safeNumber(item.quantity);
+      if (vol <= 0) {
+        alert('Volume harus lebih besar dari 0.');
+        return;
+      }
+      const price = safeNumber(item.unitPrice);
+      if (price < 0) {
+        alert('Harga Satuan tidak boleh negatif.');
+        return;
+      }
+      if (rowTotals[i] < 0) {
+        alert('Jumlah tidak boleh negatif.');
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
       // 1. Create Project
@@ -154,13 +177,13 @@ export function ProjectSetupPage() {
                     <input type="text" value={item.name} onChange={(e) => handleChangeItem(index, 'name', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
                   </td>
                   <td style={{ padding: '8px' }}>
-                    <input type="number" step="any" value={item.quantity} onChange={(e) => handleChangeItem(index, 'quantity', e.target.value)} required style={{ width: '100%', padding: '6px', textAlign: 'right' }} />
+                    <input type="number" min="0.000001" step="any" value={item.quantity} onChange={(e) => handleChangeItem(index, 'quantity', e.target.value)} required style={{ width: '100%', padding: '6px', textAlign: 'right' }} />
                   </td>
                   <td style={{ padding: '8px' }}>
                     <input type="text" value={item.unit} onChange={(e) => handleChangeItem(index, 'unit', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
                   </td>
                   <td style={{ padding: '8px' }}>
-                    <input type="number" step="any" value={item.unitPrice} onChange={(e) => handleChangeItem(index, 'unitPrice', e.target.value)} required style={{ width: '100%', padding: '6px', textAlign: 'right' }} />
+                    <input type="number" min="0" step="any" value={item.unitPrice} onChange={(e) => handleChangeItem(index, 'unitPrice', e.target.value)} required style={{ width: '100%', padding: '6px', textAlign: 'right' }} />
                   </td>
                   <td style={{ padding: '8px', textAlign: 'right', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-800)' }}>
                     Rp {rowTotals[index].toLocaleString()}
