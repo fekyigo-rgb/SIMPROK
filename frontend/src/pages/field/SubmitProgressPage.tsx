@@ -187,7 +187,7 @@ export function SubmitProgressPage() {
           </p>
         </div>
 
-        <div style={{ position: 'sticky', bottom: '-32px', backgroundColor: 'white', padding: 'var(--space-4) 0', borderTop: '1px solid var(--simprok-engineering-blue-200)', marginTop: 'var(--space-4)', zIndex: 10 }}>
+        <div style={{ position: 'sticky', bottom: 0, backgroundColor: 'white', padding: 'var(--space-4) 0', borderTop: '1px solid var(--simprok-engineering-blue-200)', marginTop: 'var(--space-4)', zIndex: 10 }}>
           <button 
             type="submit" 
             disabled={submitting}
