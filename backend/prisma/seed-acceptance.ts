@@ -26,6 +26,12 @@ const ids = {
   membershipRoleNonassigned: '10000000-0000-4000-8000-000000000017',
   projectX: '10000000-0000-4000-8000-000000000018',
   projectAssignmentAssigned: '10000000-0000-4000-8000-000000000019',
+  roleForeman: '10000000-0000-4000-8000-000000000020',
+  accountForeman: '10000000-0000-4000-8000-000000000021',
+  membershipForeman: '10000000-0000-4000-8000-000000000022',
+  userForeman: '10000000-0000-4000-8000-000000000023',
+  membershipRoleForeman: '10000000-0000-4000-8000-000000000024',
+  projectAssignmentForeman: '10000000-0000-4000-8000-000000000025',
 };
 
 async function main() {
@@ -344,6 +350,131 @@ async function main() {
     },
   });
 
+
+  const roleForeman = await prisma.role.upsert({
+    where: {
+      workspaceId_code: {
+        workspaceId: workspaceA.id,
+        code: 'FOREMAN',
+      },
+    },
+    update: {
+      name: 'Foreman',
+      description: 'Field terminal actor',
+      isSystem: false,
+    },
+    create: {
+      id: ids.roleForeman,
+      workspaceId: workspaceA.id,
+      code: 'FOREMAN',
+      name: 'Foreman',
+      description: 'Field terminal actor',
+      isSystem: false,
+    },
+  });
+
+  const foremanAccount = await prisma.account.upsert({
+    where: { email: 'foreman@test.local' },
+    update: {
+      passwordHash,
+      displayName: 'Foreman Test Actor',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.accountForeman,
+      email: 'foreman@test.local',
+      passwordHash,
+      displayName: 'Foreman Test Actor',
+      status: 'ACTIVE',
+    },
+  });
+
+  const foremanMembership = await prisma.workspaceMembership.upsert({
+    where: {
+      accountId_workspaceId: {
+        accountId: foremanAccount.id,
+        workspaceId: workspaceA.id,
+      },
+    },
+    update: { status: 'ACTIVE' },
+    create: {
+      id: ids.membershipForeman,
+      accountId: foremanAccount.id,
+      workspaceId: workspaceA.id,
+      status: 'ACTIVE',
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { workspaceMembershipId: foremanMembership.id },
+    update: {
+      workspaceId: workspaceA.id,
+      fullName: 'Foreman Test Actor',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.userForeman,
+      workspaceMembershipId: foremanMembership.id,
+      workspaceId: workspaceA.id,
+      fullName: 'Foreman Test Actor',
+      status: 'ACTIVE',
+    },
+  });
+
+  await prisma.membershipRole.upsert({
+    where: { id: ids.membershipRoleForeman },
+    update: {
+      workspaceMembershipId: foremanMembership.id,
+      roleId: roleForeman.id,
+      isActive: true,
+      endDate: null,
+    },
+    create: {
+      id: ids.membershipRoleForeman,
+      workspaceMembershipId: foremanMembership.id,
+      roleId: roleForeman.id,
+      isActive: true,
+    },
+  });
+
+  await prisma.projectAssignment.upsert({
+    where: {
+      workspaceMembershipId_projectId: {
+        workspaceMembershipId: foremanMembership.id,
+        projectId: project.id,
+      },
+    },
+    update: {
+      roleInProject: 'FOREMAN',
+      isPrimaryAssignment: true,
+      status: 'ASSIGNED',
+      revokedAt: null,
+    },
+    create: {
+      id: ids.projectAssignmentForeman,
+      workspaceMembershipId: foremanMembership.id,
+      projectId: project.id,
+      roleInProject: 'FOREMAN',
+      isPrimaryAssignment: true,
+      status: 'ASSIGNED',
+    },
+  });
+
+
+  await prisma.rolePermission.upsert({
+    where: {
+      roleId_permissionId: {
+        roleId: roleForeman.id,
+        permissionId: permission.id,
+      },
+    },
+    update: {},
+    create: {
+      roleId: roleForeman.id,
+      permissionId: permission.id,
+    },
+  });
+
   console.log('Acceptance seed complete');
   console.log({
     projectCode: project.code,
@@ -353,6 +484,7 @@ async function main() {
       assignedAccount.email,
       nonassignedAccount.email,
       crosstenantAccount.email,
+      foremanAccount.email,
     ],
   });
 }
