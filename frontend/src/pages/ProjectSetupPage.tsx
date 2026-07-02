@@ -10,14 +10,17 @@ const checkStatus = (status: number) => {
   return 'Data gagal dimuat. Coba lagi beberapa saat.';
 };
 
-
+const safeNumber = (val: any): number => {
+  const num = Number(val);
+  return Number.isNaN(num) ? 0 : num;
+};
 
 interface BoqItemInput {
   wbsCode: string;
   name: string;
-  quantity: number;
+  quantity: string | number;
   unit: string;
-  plannedCost: number;
+  unitPrice: string | number;
 }
 
 export function ProjectSetupPage() {
@@ -26,7 +29,7 @@ export function ProjectSetupPage() {
   const [description, setDescription] = useState('');
   
   const [items, setItems] = useState<BoqItemInput[]>([
-    { wbsCode: 'WBS.1.1', name: 'Pekerjaan Persiapan', quantity: 1, unit: 'ls', plannedCost: 10000000 }
+    { wbsCode: 'WBS.1.1', name: 'Pekerjaan Persiapan', quantity: 1, unit: 'ls', unitPrice: 10000000 }
   ]);
   
   const [submitting, setSubmitting] = useState(false);
@@ -34,10 +37,14 @@ export function ProjectSetupPage() {
   const navigate = useNavigate();
 
   const handleAddItem = () => {
-    setItems([...items, { wbsCode: '', name: '', quantity: 1, unit: 'ls', plannedCost: 0 }]);
+    setItems([...items, { wbsCode: '', name: '', quantity: 1, unit: 'ls', unitPrice: 0 }]);
   };
 
   const handleRemoveItem = (index: number) => {
+    if (items.length <= 1) {
+      alert('Minimal harus ada 1 Item BOQ.');
+      return;
+    }
     const newItems = [...items];
     newItems.splice(index, 1);
     setItems(newItems);
@@ -49,7 +56,9 @@ export function ProjectSetupPage() {
     setItems(newItems);
   };
 
-  const totalEstimasi = items.reduce((sum, item) => sum + (Number(item.plannedCost) || 0), 0);
+  // Compute row totals safely
+  const rowTotals = items.map(item => safeNumber(item.quantity) * safeNumber(item.unitPrice));
+  const totalEstimasi = rowTotals.reduce((sum, val) => sum + val, 0);
 
   const handleSetup = async (e: FormEvent) => {
     e.preventDefault();
@@ -71,14 +80,18 @@ export function ProjectSetupPage() {
       const project = await projRes.json();
 
       // 2. Initiate Setup
+      // DEBT-RAB-UNITPRICE-PERSISTENCE: Backend lacks separate unitPrice field in BoqItem.
+      // We send the computed lineTotal (Jumlah) as plannedCost.
       const initRes = await apiFetch(`http://localhost:3000/projects/${project.id}/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: items.map(item => ({
-            ...item,
-            quantity: Number(item.quantity),
-            plannedCost: Number(item.plannedCost)
+          items: items.map((item, idx) => ({
+            wbsCode: item.wbsCode,
+            name: item.name,
+            quantity: safeNumber(item.quantity),
+            unit: item.unit,
+            plannedCost: rowTotals[idx] // send Jumlah as plannedCost
           }))
         })
       });
@@ -93,7 +106,7 @@ export function ProjectSetupPage() {
   };
 
   return (
-    <div style={{ maxWidth: '1000px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', borderRadius: 'var(--radius-lg)' }}>
+    <div style={{ maxWidth: '1200px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', borderRadius: 'var(--radius-lg)' }}>
       <h2 style={{ fontSize: 'var(--text-2xl)', color: 'var(--simprok-engineering-blue-900)', marginBottom: 'var(--space-6)' }}>Workspace Penyusunan RAB</h2>
       <form onSubmit={handleSetup} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
@@ -113,7 +126,7 @@ export function ProjectSetupPage() {
 
         <div style={{ marginTop: 'var(--space-6)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)' }}>Daftar Item BOQ</h3>
-          <button type="button" onClick={handleAddItem} style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-engineering-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+          <button type="button" onClick={handleAddItem} style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-engineering-blue-800)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
             + Tambah Item
           </button>
         </div>
@@ -124,10 +137,11 @@ export function ProjectSetupPage() {
               <tr style={{ backgroundColor: 'var(--simprok-engineering-blue-50)', textAlign: 'left' }}>
                 <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>WBS/Kode</th>
                 <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Nama Item</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '100px' }}>Volume</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '100px' }}>Satuan</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '200px' }}>Biaya Rencana Item</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '80px' }}>Aksi</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '80px', textAlign: 'right' }}>Volume</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '80px' }}>Satuan</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '150px', textAlign: 'right' }}>Harga Satuan</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '180px', textAlign: 'right' }}>Jumlah</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '80px', textAlign: 'center' }}>Aksi</th>
               </tr>
             </thead>
             <tbody>
@@ -140,16 +154,19 @@ export function ProjectSetupPage() {
                     <input type="text" value={item.name} onChange={(e) => handleChangeItem(index, 'name', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
                   </td>
                   <td style={{ padding: '8px' }}>
-                    <input type="number" value={item.quantity} onChange={(e) => handleChangeItem(index, 'quantity', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
+                    <input type="number" step="any" value={item.quantity} onChange={(e) => handleChangeItem(index, 'quantity', e.target.value)} required style={{ width: '100%', padding: '6px', textAlign: 'right' }} />
                   </td>
                   <td style={{ padding: '8px' }}>
                     <input type="text" value={item.unit} onChange={(e) => handleChangeItem(index, 'unit', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
                   </td>
                   <td style={{ padding: '8px' }}>
-                    <input type="number" value={item.plannedCost} onChange={(e) => handleChangeItem(index, 'plannedCost', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
+                    <input type="number" step="any" value={item.unitPrice} onChange={(e) => handleChangeItem(index, 'unitPrice', e.target.value)} required style={{ width: '100%', padding: '6px', textAlign: 'right' }} />
+                  </td>
+                  <td style={{ padding: '8px', textAlign: 'right', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-800)' }}>
+                    Rp {rowTotals[index].toLocaleString()}
                   </td>
                   <td style={{ padding: '8px', textAlign: 'center' }}>
-                    <button type="button" onClick={() => handleRemoveItem(index)} style={{ padding: '6px', backgroundColor: 'var(--simprok-critical-red-100)', color: 'var(--simprok-critical-red-600)', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                    <button type="button" onClick={() => handleRemoveItem(index)} disabled={items.length <= 1} style={{ padding: '6px', backgroundColor: items.length <= 1 ? '#ccc' : 'var(--simprok-critical-red-100)', color: items.length <= 1 ? '#666' : 'var(--simprok-critical-red-600)', border: 'none', borderRadius: '4px', cursor: items.length <= 1 ? 'not-allowed' : 'pointer' }}>
                       Hapus
                     </button>
                   </td>
@@ -161,7 +178,7 @@ export function ProjectSetupPage() {
 
         <div style={{ marginTop: 'var(--space-4)', padding: 'var(--space-4)', backgroundColor: 'var(--simprok-engineering-blue-50)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: 'var(--text-lg)', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-900)' }}>Total Estimasi:</span>
-          <span style={{ fontSize: 'var(--text-2xl)', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-600)' }}>
+          <span style={{ fontSize: 'var(--text-2xl)', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-800)' }}>
             Rp {totalEstimasi.toLocaleString()}
           </span>
         </div>
