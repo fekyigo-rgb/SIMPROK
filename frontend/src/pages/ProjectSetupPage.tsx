@@ -171,14 +171,61 @@ const findInsertIndexAfterSubtree = (items: BoqItemInput[], parentTempId: string
   return insertIndex;
 };
 
+const toOrderedItems = (roots: BoqTreeNode[]): BoqItemInput[] => flattenPreorder(roots).map((node, index) => ({
+  tempId: node.tempId,
+  parentTempId: node.parentTempId,
+  itemType: node.itemType,
+  wbsCode: node.wbsCode,
+  name: node.name,
+  quantity: node.quantity,
+  unit: node.unit,
+  unitPrice: node.unitPrice,
+  collapsed: node.collapsed,
+  sortOrder: index,
+}));
+
+const findSiblingList = (nodes: BoqTreeNode[], tempId: string): BoqTreeNode[] | null => {
+  if (nodes.some((node) => node.tempId === tempId)) return nodes;
+
+  for (const node of nodes) {
+    const found = findSiblingList(node.children, tempId);
+    if (found) return found;
+  }
+
+  return null;
+};
+
+const canMoveSibling = (items: BoqItemInput[], tempId: string, direction: 'up' | 'down') => {
+  const siblings = findSiblingList(buildTree(items), tempId);
+  if (!siblings) return false;
+
+  const index = siblings.findIndex((node) => node.tempId === tempId);
+  if (index === -1) return false;
+
+  return direction === 'up' ? index > 0 : index < siblings.length - 1;
+};
+
+const moveSibling = (items: BoqItemInput[], tempId: string, direction: 'up' | 'down') => {
+  const roots = buildTree(items);
+  const siblings = findSiblingList(roots, tempId);
+  if (!siblings) return items;
+
+  const index = siblings.findIndex((node) => node.tempId === tempId);
+  const targetIndex = direction === 'up' ? index - 1 : index + 1;
+  if (index === -1 || targetIndex < 0 || targetIndex >= siblings.length) return items;
+
+  [siblings[index], siblings[targetIndex]] = [siblings[targetIndex], siblings[index]];
+  return toOrderedItems(roots);
+};
+
 const buttonStyle = (variant: 'primary' | 'secondary' | 'ghost' | 'danger' = 'secondary') => {
   const base = {
     border: 'none',
-    borderRadius: '6px',
+    borderRadius: '4px',
     cursor: 'pointer',
     fontWeight: 600,
-    fontSize: '13px',
-    padding: '7px 10px',
+    fontSize: '12px',
+    padding: '4px 7px',
     whiteSpace: 'nowrap' as const,
   };
 
@@ -229,6 +276,10 @@ export function ProjectSetupPage() {
 
   const toggleCollapse = (tempId: string) => {
     setItems((current) => current.map((item) => (item.tempId === tempId ? { ...item, collapsed: !item.collapsed } : item)));
+  };
+
+  const moveRow = (tempId: string, direction: 'up' | 'down') => {
+    setItems((current) => moveSibling(current, tempId, direction));
   };
 
   const validateRows = (orderedRows: BoqTreeNode[]) => {
@@ -318,6 +369,8 @@ export function ProjectSetupPage() {
     const isNote = node.itemType === 'NOTE';
     const hasChildren = node.children.length > 0;
     const rowLineTotal = lineTotal(node);
+    const canMoveUp = canMoveSibling(items, node.tempId, 'up');
+    const canMoveDown = canMoveSibling(items, node.tempId, 'down');
 
     return (
       <tr
@@ -327,18 +380,18 @@ export function ProjectSetupPage() {
           borderBottom: '1px solid var(--simprok-engineering-blue-100)',
         }}
       >
-        <td style={{ padding: '8px', minWidth: '130px' }}>
+        <td style={{ padding: '4px 6px', minWidth: '130px' }}>
           <input
             type="text"
             value={node.wbsCode}
             onChange={(e) => updateItem(node.tempId, 'wbsCode', e.target.value)}
             required={!isNote}
-            style={{ width: '100%', padding: '6px', fontWeight: isFolder ? 'bold' : 'normal' }}
+            style={{ width: '100%', padding: '3px 5px', minHeight: '26px', fontWeight: isFolder ? 'bold' : 'normal' }}
             placeholder={isNote ? 'Opsional' : 'Kode'}
           />
         </td>
-        <td style={{ padding: '8px', minWidth: '280px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: `${node.depth * 24}px` }}>
+        <td style={{ padding: '4px 6px', minWidth: '280px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', paddingLeft: `${node.depth * 18}px` }}>
             {isFolder ? (
               <button type="button" onClick={() => toggleCollapse(node.tempId)} style={buttonStyle('ghost')}>
                 {node.collapsed ? 'Buka' : 'Tutup'}
@@ -353,12 +406,12 @@ export function ProjectSetupPage() {
               value={node.name}
               onChange={(e) => updateItem(node.tempId, 'name', e.target.value)}
               required
-              style={{ flex: 1, minWidth: 0, padding: '6px', fontWeight: isFolder ? 'bold' : 'normal' }}
+              style={{ flex: 1, minWidth: 0, padding: '3px 5px', minHeight: '26px', fontWeight: isFolder ? 'bold' : 'normal' }}
               placeholder={isNote ? 'Isi catatan' : 'Uraian pekerjaan'}
             />
           </div>
         </td>
-        <td style={{ padding: '8px', width: '100px' }}>
+        <td style={{ padding: '4px 6px', width: '100px' }}>
           {isWorkItem && (
             <input
               type="number"
@@ -367,22 +420,22 @@ export function ProjectSetupPage() {
               value={node.quantity}
               onChange={(e) => updateItem(node.tempId, 'quantity', e.target.value)}
               required
-              style={{ width: '100%', padding: '6px', textAlign: 'right' }}
+              style={{ width: '100%', padding: '3px 5px', minHeight: '26px', textAlign: 'right' }}
             />
           )}
         </td>
-        <td style={{ padding: '8px', width: '90px' }}>
+        <td style={{ padding: '4px 6px', width: '90px' }}>
           {isWorkItem && (
             <input
               type="text"
               value={node.unit}
               onChange={(e) => updateItem(node.tempId, 'unit', e.target.value)}
               required
-              style={{ width: '100%', padding: '6px' }}
+              style={{ width: '100%', padding: '3px 5px', minHeight: '26px' }}
             />
           )}
         </td>
-        <td style={{ padding: '8px', width: '150px' }}>
+        <td style={{ padding: '4px 6px', width: '150px' }}>
           {isWorkItem && (
             <input
               type="number"
@@ -391,15 +444,17 @@ export function ProjectSetupPage() {
               value={node.unitPrice}
               onChange={(e) => updateItem(node.tempId, 'unitPrice', e.target.value)}
               required
-              style={{ width: '100%', padding: '6px', textAlign: 'right' }}
+              style={{ width: '100%', padding: '3px 5px', minHeight: '26px', textAlign: 'right' }}
             />
           )}
         </td>
-        <td style={{ padding: '8px', width: '170px', textAlign: 'right', fontWeight: isFolder ? 'bold' : 600, color: 'var(--simprok-engineering-blue-900)' }}>
+        <td style={{ padding: '4px 6px', width: '170px', textAlign: 'right', fontWeight: isFolder ? 'bold' : 600, color: 'var(--simprok-engineering-blue-900)' }}>
           {isFolder ? formatRupiah(rowSubtotal) : isWorkItem ? formatRupiah(rowLineTotal) : '-'}
         </td>
-        <td style={{ padding: '8px', minWidth: '280px' }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'flex-end' }}>
+        <td style={{ padding: '4px 6px', minWidth: '280px' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', justifyContent: 'flex-end', alignItems: 'center' }}>
+            <button type="button" disabled={!canMoveUp} onClick={() => moveRow(node.tempId, 'up')} style={{ ...buttonStyle('ghost'), opacity: canMoveUp ? 1 : 0.35, cursor: canMoveUp ? 'pointer' : 'not-allowed' }}>Naik</button>
+            <button type="button" disabled={!canMoveDown} onClick={() => moveRow(node.tempId, 'down')} style={{ ...buttonStyle('ghost'), opacity: canMoveDown ? 1 : 0.35, cursor: canMoveDown ? 'pointer' : 'not-allowed' }}>Turun</button>
             {isFolder && (
               <>
                 <button type="button" onClick={() => addRow('FOLDER', node.tempId)} style={buttonStyle('secondary')}>+ Sub Judul Anak</button>
@@ -438,7 +493,7 @@ export function ProjectSetupPage() {
 
         <div style={{ marginTop: 'var(--space-6)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
           <h3 style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)' }}>Daftar RAB</h3>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
             <button type="button" onClick={() => addRow('FOLDER', null)} style={buttonStyle('secondary')}>+ Tambah Sub Judul</button>
             <button type="button" onClick={() => addRow('WORK_ITEM', null)} style={buttonStyle('primary')}>+ Tambah Item</button>
             <button type="button" onClick={() => addRow('NOTE', null)} style={buttonStyle('secondary')}>+ Tambah Catatan</button>
@@ -449,13 +504,13 @@ export function ProjectSetupPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1100px' }}>
             <thead>
               <tr style={{ backgroundColor: 'var(--simprok-engineering-blue-50)', textAlign: 'left' }}>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Kode</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Uraian / Catatan</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Volume</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Satuan</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Harga Satuan</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Jumlah / Subtotal</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Aksi</th>
+                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Kode</th>
+                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Uraian / Catatan</th>
+                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Volume</th>
+                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Satuan</th>
+                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Harga Satuan</th>
+                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Jumlah / Subtotal</th>
+                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Aksi</th>
               </tr>
             </thead>
             <tbody>
@@ -488,4 +543,5 @@ export function ProjectSetupPage() {
     </div>
   );
 }
+
 
