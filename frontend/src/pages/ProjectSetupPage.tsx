@@ -540,7 +540,7 @@ export function ProjectSetupPage() {
             </span>
           </div>
           <div style={{ color: 'white' }}>
-            <NumericFact value={formatRupiah(totalEstimasi)} size="xl" certaintyLevel="C3" />
+            <NumericFact value={formatRupiah(totalEstimasi)} size="xl" />
           </div>
         </div>
 
