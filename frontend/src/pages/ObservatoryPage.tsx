@@ -4,6 +4,28 @@ import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../utils/apiClient';
 
+const isTestProject = (project: any) => {
+  const name = (project.name || '').toUpperCase();
+  const code = (project.code || '').toUpperCase();
+
+  if (name.includes('SPPG') || code.includes('SPPG')) return false;
+  if (name.includes('PERCOBAAN') || code.includes('PERCOBAAN')) return false;
+  if (name.includes('ACCEPTANCE PROJECT') || code.includes('ACC-X')) return false;
+
+  if (name.startsWith('TEST ')) return true;
+  if (code.startsWith('A3A-')) return true;
+  if (code.startsWith('A3B-')) return true;
+  if (code.startsWith('T-ROUND')) return true;
+  if (name.includes('VALIDATION') || code.includes('VALIDATION')) return true;
+  if (name.includes('HIERARCHY') || code.includes('HIERARCHY')) return true;
+  if (name.includes('FIX') || code.includes('FIX')) return true;
+  if (name.includes('FORMULA') || code.includes('FORMULA')) return true;
+  if (name.includes('ROUND') || code.includes('ROUND')) return true;
+  if (name.includes('INVALID NEGATIVE') || code.includes('INVALID NEGATIVE')) return true;
+
+  return false;
+};
+
 export function ObservatoryPage() {
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -75,23 +97,50 @@ export function ObservatoryPage() {
         </div>
         
         {loading ? (
-          <p>Loading portfolio intelligence...</p>
+          <p>Memuat data proyek...</p>
         ) : error ? (
           <p>{error}</p>
         ) : projects.length === 0 ? (
-          <p>No active projects found. The database is empty.</p>
+          <p>Belum ada proyek. Data masih kosong.</p>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 'var(--space-4)' }}>
-            {projects.map(p => (
-              <ProjectCard 
-                key={p.id}
-                id={p.id}
-                projectCode={p.code}
-                projectName={p.name}
-                projectManager="System Assigned" // Will be fetched from RBAC later
-                status={p.status || 'HEALTHY'} // Fallback
-              />
-            ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+            
+            {projects.filter(p => !isTestProject(p)).length > 0 && (
+              <div>
+                <h4 style={{ fontSize: 'var(--text-base)', color: 'var(--simprok-engineering-blue-800)', marginBottom: 'var(--space-3)' }}>Proyek Saya</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 'var(--space-4)' }}>
+                  {projects.filter(p => !isTestProject(p)).map(p => (
+                    <ProjectCard 
+                      key={p.id}
+                      id={p.id}
+                      projectCode={p.code}
+                      projectName={p.name}
+                      projectManager="Belum ditentukan"
+                      status={p.status || 'HEALTHY'}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {projects.filter(p => isTestProject(p)).length > 0 && (
+              <div>
+                <h4 style={{ fontSize: 'var(--text-base)', color: 'var(--simprok-engineering-blue-500)', marginBottom: 'var(--space-3)' }}>Data Uji / Internal</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 'var(--space-4)', opacity: 0.8 }}>
+                  {projects.filter(p => isTestProject(p)).map(p => (
+                    <ProjectCard 
+                      key={p.id}
+                      id={p.id}
+                      projectCode={p.code}
+                      projectName={p.name}
+                      projectManager="Belum ditentukan"
+                      status={p.status || 'HEALTHY'}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            
           </div>
         )}
       </section>
