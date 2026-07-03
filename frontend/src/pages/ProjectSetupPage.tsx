@@ -242,8 +242,11 @@ export function ProjectSetupPage() {
   const [description, setDescription] = useState('');
   const [items, setItems] = useState<BoqItemInput[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [activeParentTempId, setActiveParentTempId] = useState<string | null>(null);
   const { token, activeWorkspaceId } = useAuth();
   const navigate = useNavigate();
+
+  const activeFolder = activeParentTempId ? items.find((i) => i.tempId === activeParentTempId) : null;
 
   const roots = useMemo(() => buildTree(items), [items]);
   const visibleRows = useMemo(() => collectVisibleRows(roots), [roots]);
@@ -399,6 +402,7 @@ export function ProjectSetupPage() {
         </td>
         <td style={{ padding: '2px 4px', minWidth: '280px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '5px', paddingLeft: `${node.depth * 18}px` }}>
+            {node.depth > 0 && <span style={{ color: 'var(--simprok-engineering-blue-300)', marginRight: '2px', fontWeight: 'bold' }}>└</span>}
             {isFolder ? (
               <button type="button" onClick={() => toggleCollapse(node.tempId)} style={{ ...buttonStyle('ghost'), padding: '2px 4px', fontSize: '11px' }}>
                 {node.collapsed ? 'Buka' : 'Tutup'}
@@ -462,6 +466,9 @@ export function ProjectSetupPage() {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', justifyContent: 'flex-end', alignItems: 'center' }}>
             {isFolder && (
               <>
+                <button type="button" title="Jadikan Konteks Aktif" onClick={() => setActiveParentTempId(node.tempId)} style={{ ...buttonStyle(activeParentTempId === node.tempId ? 'primary' : 'secondary'), padding: '2px 4px', fontSize: '11px' }}>
+                  Aktif
+                </button>
                 <button type="button" title="Tambah Sub Judul Anak" onClick={() => addRow('FOLDER', node.tempId)} style={{ ...buttonStyle('secondary'), padding: '2px 4px', fontSize: '11px' }}>+Sub</button>
                 <button type="button" title="Tambah Item" onClick={() => addRow('WORK_ITEM', node.tempId)} style={{ ...buttonStyle('primary'), padding: '2px 4px', fontSize: '11px' }}>+Item</button>
                 <button type="button" title="Tambah Catatan" onClick={() => addRow('NOTE', node.tempId)} style={{ ...buttonStyle('secondary'), padding: '2px 4px', fontSize: '11px' }}>+Cttn</button>
@@ -497,11 +504,21 @@ export function ProjectSetupPage() {
         </div>
 
         <div style={{ marginTop: 'var(--space-6)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-          <h3 style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)' }}>Daftar RAB</h3>
+          <div>
+            <h3 style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)' }}>Daftar RAB</h3>
+            <div style={{ marginTop: '4px', fontSize: '13px', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-700)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>Tambah ke: {activeFolder ? (activeFolder.name || activeFolder.wbsCode || 'Folder Baru') : 'Level Utama'}</span>
+              {activeFolder && (
+                <button type="button" onClick={() => setActiveParentTempId(null)} style={{ ...buttonStyle('ghost'), padding: '2px 6px', fontSize: '11px' }}>
+                  Gunakan Level Utama
+                </button>
+              )}
+            </div>
+          </div>
           <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-            <button type="button" onClick={() => addRow('FOLDER', null)} style={buttonStyle('secondary')}>+ Tambah Sub Judul</button>
-            <button type="button" onClick={() => addRow('WORK_ITEM', null)} style={buttonStyle('primary')}>+ Tambah Item</button>
-            <button type="button" onClick={() => addRow('NOTE', null)} style={buttonStyle('secondary')}>+ Tambah Catatan</button>
+            <button type="button" onClick={() => addRow('FOLDER', activeParentTempId)} style={buttonStyle('secondary')}>+ Tambah Sub Judul</button>
+            <button type="button" onClick={() => addRow('WORK_ITEM', activeParentTempId)} style={buttonStyle('primary')}>+ Tambah Item</button>
+            <button type="button" onClick={() => addRow('NOTE', activeParentTempId)} style={buttonStyle('secondary')}>+ Tambah Catatan</button>
           </div>
         </div>
 
