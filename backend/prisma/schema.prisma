@@ -1241,6 +1241,7 @@ model BoqStructure {
 enum BoqItemType {
   FOLDER
   WORK_ITEM
+  NOTE
 }
 
 model BoqItem {
@@ -1253,6 +1254,9 @@ model BoqItem {
   itemType       BoqItemType @default(WORK_ITEM)
   quantity       Decimal     @db.Decimal(18, 2)
   unit           String
+  unitPrice      Decimal?    @db.Decimal(18, 2)
+  lineTotal      Decimal?    @db.Decimal(18, 2)
+  sortOrder      Int         @default(0)
   ahspVersionId  String?     @db.Uuid
   ahspSnapshotId String?     @db.Uuid
   createdAt      DateTime    @default(now())

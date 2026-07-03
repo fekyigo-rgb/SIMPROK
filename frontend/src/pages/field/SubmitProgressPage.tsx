@@ -36,11 +36,16 @@ export function SubmitProgressPage() {
       })
       .then(data => {
         if (!data) return;
+        let item = null;
         if (data.items) {
-          const item = data.items.find((i: any) => i.id === boqItemId);
-          setBoqItem(item);
+          item = data.items.find((i: any) => i.id === boqItemId);
         } else if (Array.isArray(data)) {
-          const item = data.find((i: any) => i.id === boqItemId);
+          item = data.find((i: any) => i.id === boqItemId);
+        }
+        
+        if (item && item.itemType !== 'WORK_ITEM') {
+          setErrorKind('forbidden');
+        } else {
           setBoqItem(item);
         }
       })

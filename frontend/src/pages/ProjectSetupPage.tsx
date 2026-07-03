@@ -159,7 +159,7 @@ export function ProjectSetupPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: items.map(item => ({
+          items: items.map((item, index) => ({
             tempId: item.tempId,
             parentTempId: item.parentTempId || undefined,
             itemType: item.itemType,
@@ -167,7 +167,9 @@ export function ProjectSetupPage() {
             name: item.name,
             quantity: item.itemType === 'FOLDER' ? 0 : safeNumber(item.quantity),
             unit: item.itemType === 'FOLDER' ? '' : item.unit,
-            plannedCost: item.itemType === 'FOLDER' ? 0 : (safeNumber(item.quantity) * safeNumber(item.unitPrice))
+            unitPrice: item.itemType === 'FOLDER' ? 0 : safeNumber(item.unitPrice),
+            plannedCost: item.itemType === 'FOLDER' ? 0 : (safeNumber(item.quantity) * safeNumber(item.unitPrice)),
+            sortOrder: index
           }))
         })
       });

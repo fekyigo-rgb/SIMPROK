@@ -1,4 +1,5 @@
-import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
@@ -86,14 +87,38 @@ export class ProjectService {
         }
       });
 
-      let totalCost = 0;
+      let totalCost = new Prisma.Decimal(0);
       const tempIdMap = new Map<string, string>();
+      const folderSet = new Set<string>();
 
       // 2. Create BoqItems
+      let orderCounter = 0;
       for (const item of data.items) {
         let parentId: string | undefined = undefined;
-        if (item.parentTempId && tempIdMap.has(item.parentTempId)) {
+        if (item.parentTempId) {
+          if (!tempIdMap.has(item.parentTempId)) {
+            throw new BadRequestException(`Parent reference ${item.parentTempId} not found in preceding items.`);
+          }
           parentId = tempIdMap.get(item.parentTempId);
+          if (!folderSet.has(parentId!)) {
+            throw new BadRequestException(`Parent of ${item.name} must be a FOLDER.`);
+          }
+        }
+
+        const isFolder = item.itemType === 'FOLDER';
+        const isNote = item.itemType === 'NOTE';
+        
+        let unitPrice: Prisma.Decimal | null = null;
+        let lineTotal: Prisma.Decimal | null = null;
+        let quantity = new Prisma.Decimal(0);
+        let unit = '';
+
+        if (!isFolder && !isNote) {
+          quantity = new Prisma.Decimal(item.quantity || 0);
+          unitPrice = new Prisma.Decimal(item.unitPrice || 0);
+          lineTotal = quantity.mul(unitPrice);
+          totalCost = totalCost.add(lineTotal);
+          unit = item.unit || '';
         }
 
         const createdItem = await tx.boqItem.create({
@@ -102,18 +127,20 @@ export class ProjectService {
             parentId,
             wbsCode: item.wbsCode,
             name: item.name,
-            quantity: item.quantity || 0,
-            unit: item.unit || '',
-            itemType: item.itemType === 'FOLDER' ? 'FOLDER' : 'WORK_ITEM',
+            quantity,
+            unit,
+            itemType: isFolder ? 'FOLDER' : (isNote ? 'NOTE' : 'WORK_ITEM'),
+            unitPrice,
+            lineTotal,
+            sortOrder: item.sortOrder ?? orderCounter++,
           }
         });
 
         if (item.tempId) {
           tempIdMap.set(item.tempId, createdItem.id);
         }
-
-        if (item.itemType !== 'FOLDER') {
-          totalCost += item.plannedCost || 0;
+        if (isFolder) {
+          folderSet.add(createdItem.id);
         }
       }
 
@@ -315,7 +342,7 @@ export class ProjectService {
 
     return await this.prisma.boqItem.findMany({
       where: { boqStructureId: rab.boqStructureId },
-      orderBy: { wbsCode: 'asc' },
+      orderBy: { sortOrder: 'asc' },
     });
   }
 }

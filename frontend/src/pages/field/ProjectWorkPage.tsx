@@ -73,7 +73,7 @@ export function ProjectWorkPage() {
         <p>Tidak ada pekerjaan (BOQ) yang ditemukan untuk proyek ini. Pastikan RAB Baseline sudah aktif.</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-          {items.map(item => (
+          {items.filter(item => item.itemType === 'WORK_ITEM').map(item => (
             <div 
               key={item.id}
               onClick={() => navigate(`/field/project/${projectId}/progress/${item.id}`)}

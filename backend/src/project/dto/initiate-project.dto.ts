@@ -1,5 +1,11 @@
-import { IsArray, ValidateNested, IsString, IsNotEmpty, IsNumber, Min, IsOptional, ValidateIf } from 'class-validator';
+import { IsArray, ValidateNested, IsString, IsNotEmpty, IsNumber, Min, IsOptional, ValidateIf, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
+
+export enum ItemTypeEnum {
+  FOLDER = 'FOLDER',
+  WORK_ITEM = 'WORK_ITEM',
+  NOTE = 'NOTE',
+}
 
 export class BoqItemDto {
   @IsString()
@@ -10,18 +16,24 @@ export class BoqItemDto {
   @IsNotEmpty()
   name: string;
 
-  @ValidateIf(o => o.itemType !== 'FOLDER')
+  @ValidateIf(o => o.itemType !== 'FOLDER' && o.itemType !== 'NOTE')
   @IsNumber()
   @Min(0.000001)
-  quantity: number;
+  quantity?: number;
 
+  @ValidateIf(o => o.itemType !== 'FOLDER' && o.itemType !== 'NOTE')
   @IsString()
-  @IsOptional() // Make unit optional for FOLDER items
+  @IsNotEmpty()
   unit?: string;
 
+  @ValidateIf(o => o.itemType !== 'FOLDER' && o.itemType !== 'NOTE')
   @IsNumber()
   @Min(0)
-  plannedCost: number;
+  unitPrice?: number;
+
+  @IsNumber()
+  @IsOptional()
+  plannedCost?: number; // legacy for now, backend will recalculate
 
   @IsString()
   @IsOptional()
@@ -31,9 +43,12 @@ export class BoqItemDto {
   @IsOptional()
   parentTempId?: string;
 
-  @IsString()
+  @IsEnum(ItemTypeEnum)
+  itemType: ItemTypeEnum;
+
+  @IsNumber()
   @IsOptional()
-  itemType?: string; // 'FOLDER' or 'WORK_ITEM'
+  sortOrder?: number;
 }
 
 export class InitiateProjectDto {
