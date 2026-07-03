@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react';
+﻿import { type FormEvent, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiFetch } from '../utils/apiClient';
@@ -10,168 +10,297 @@ const checkStatus = (status: number) => {
   return 'Data gagal dimuat. Coba lagi beberapa saat.';
 };
 
-const safeNumber = (val: any): number => {
-  const num = Number(val);
-  return Number.isNaN(num) ? 0 : num;
-};
+type BoqItemType = 'FOLDER' | 'WORK_ITEM' | 'NOTE';
 
-const generateTempId = () => 'TEMP-' + Math.random().toString(36).substr(2, 9);
+type BoqItemField = keyof BoqItemInput;
 
 interface BoqItemInput {
   tempId: string;
   parentTempId: string | null;
-  itemType: 'FOLDER' | 'WORK_ITEM';
+  itemType: BoqItemType;
   wbsCode: string;
   name: string;
   quantity: string | number;
   unit: string;
   unitPrice: string | number;
+  collapsed?: boolean;
+  sortOrder: number;
 }
+
+interface BoqTreeNode extends BoqItemInput {
+  children: BoqTreeNode[];
+  depth: number;
+}
+
+interface VisibleRow {
+  node: BoqTreeNode;
+  subtotal: number;
+}
+
+const generateTempId = () => 'TEMP-' + Math.random().toString(36).slice(2, 11);
+
+const createItem = (itemType: BoqItemType, parentTempId: string | null, sortOrder: number): BoqItemInput => ({
+  tempId: generateTempId(),
+  parentTempId,
+  itemType,
+  wbsCode: '',
+  name: '',
+  quantity: itemType === 'WORK_ITEM' ? 1 : 0,
+  unit: itemType === 'WORK_ITEM' ? 'ls' : '',
+  unitPrice: 0,
+  collapsed: false,
+  sortOrder,
+});
+
+const toFiniteNumber = (value: string | number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+};
+
+const safeDisplayNumber = (value: string | number): number => {
+  const parsed = toFiniteNumber(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatRupiah = (value: number) => `Rp ${value.toLocaleString('id-ID')}`;
+
+const lineTotal = (item: BoqItemInput): number => {
+  if (item.itemType !== 'WORK_ITEM') return 0;
+  return safeDisplayNumber(item.quantity) * safeDisplayNumber(item.unitPrice);
+};
+
+const buildTree = (items: BoqItemInput[]): BoqTreeNode[] => {
+  const nodeMap = new Map<string, BoqTreeNode>();
+  const roots: BoqTreeNode[] = [];
+
+  items.forEach((item) => {
+    nodeMap.set(item.tempId, { ...item, children: [], depth: 0 });
+  });
+
+  items.forEach((item) => {
+    const node = nodeMap.get(item.tempId);
+    if (!node) return;
+
+    if (item.parentTempId) {
+      const parent = nodeMap.get(item.parentTempId);
+      if (parent) {
+        node.depth = parent.depth + 1;
+        parent.children.push(node);
+        return;
+      }
+    }
+
+    roots.push(node);
+  });
+
+  const assignDepth = (nodes: BoqTreeNode[], depth: number) => {
+    nodes.forEach((node) => {
+      node.depth = depth;
+      assignDepth(node.children, depth + 1);
+    });
+  };
+
+  assignDepth(roots, 0);
+  return roots;
+};
+
+const subtotal = (node: BoqTreeNode): number => {
+  if (node.itemType === 'WORK_ITEM') return lineTotal(node);
+  if (node.itemType === 'NOTE') return 0;
+  return node.children.reduce((sum, child) => sum + subtotal(child), 0);
+};
+
+const grandTotal = (roots: BoqTreeNode[]): number => roots.reduce((sum, node) => sum + subtotal(node), 0);
+
+const flatWorkItemTotal = (items: BoqItemInput[]): number => items.reduce((sum, item) => sum + lineTotal(item), 0);
+
+const flattenPreorder = (roots: BoqTreeNode[]): BoqTreeNode[] => {
+  const result: BoqTreeNode[] = [];
+  const visit = (node: BoqTreeNode) => {
+    result.push(node);
+    node.children.forEach(visit);
+  };
+  roots.forEach(visit);
+  return result;
+};
+
+const collectVisibleRows = (roots: BoqTreeNode[]): VisibleRow[] => {
+  const rows: VisibleRow[] = [];
+
+  const visit = (node: BoqTreeNode) => {
+    rows.push({ node, subtotal: subtotal(node) });
+    if (!node.collapsed) {
+      node.children.forEach(visit);
+    }
+  };
+
+  roots.forEach(visit);
+  return rows;
+};
+
+const collectDescendantIds = (items: BoqItemInput[], tempId: string): Set<string> => {
+  const ids = new Set<string>([tempId]);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    items.forEach((item) => {
+      if (item.parentTempId && ids.has(item.parentTempId) && !ids.has(item.tempId)) {
+        ids.add(item.tempId);
+        changed = true;
+      }
+    });
+  }
+
+  return ids;
+};
+
+const findInsertIndexAfterSubtree = (items: BoqItemInput[], parentTempId: string | null) => {
+  if (!parentTempId) return items.length;
+
+  const parentIndex = items.findIndex((item) => item.tempId === parentTempId);
+  if (parentIndex === -1) return items.length;
+
+  const descendants = collectDescendantIds(items, parentTempId);
+  let insertIndex = parentIndex + 1;
+
+  while (insertIndex < items.length && descendants.has(items[insertIndex].tempId)) {
+    insertIndex += 1;
+  }
+
+  return insertIndex;
+};
+
+const buttonStyle = (variant: 'primary' | 'secondary' | 'ghost' | 'danger' = 'secondary') => {
+  const base = {
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontWeight: 600,
+    fontSize: '13px',
+    padding: '7px 10px',
+    whiteSpace: 'nowrap' as const,
+  };
+
+  if (variant === 'primary') return { ...base, backgroundColor: 'var(--simprok-engineering-blue-800)', color: 'white' };
+  if (variant === 'danger') return { ...base, backgroundColor: 'var(--simprok-critical-red-100)', color: 'var(--simprok-critical-red-600)' };
+  if (variant === 'ghost') return { ...base, backgroundColor: 'transparent', color: 'var(--simprok-engineering-blue-700)', border: '1px solid var(--simprok-engineering-blue-200)' };
+  return { ...base, backgroundColor: 'var(--simprok-engineering-blue-50)', color: 'var(--simprok-engineering-blue-900)', border: '1px solid var(--simprok-engineering-blue-200)' };
+};
 
 export function ProjectSetupPage() {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [description, setDescription] = useState('');
-  
   const [items, setItems] = useState<BoqItemInput[]>([]);
-  
   const [submitting, setSubmitting] = useState(false);
   const { token, activeWorkspaceId } = useAuth();
   const navigate = useNavigate();
 
-  const handleAddSection = () => {
-    setItems([...items, { 
-      tempId: generateTempId(), 
-      parentTempId: null, 
-      itemType: 'FOLDER', 
-      wbsCode: '', 
-      name: '', 
-      quantity: 0, 
-      unit: '', 
-      unitPrice: 0 
-    }]);
-  };
+  const roots = useMemo(() => buildTree(items), [items]);
+  const visibleRows = useMemo(() => collectVisibleRows(roots), [roots]);
+  const totalEstimasi = useMemo(() => grandTotal(roots), [roots]);
+  const flatTotal = useMemo(() => flatWorkItemTotal(items), [items]);
 
-  const handleAddItem = (parentTempId: string) => {
-    // Insert item immediately after the parent or its existing children
-    const newItems = [...items];
-    const parentIndex = newItems.findIndex(i => i.tempId === parentTempId);
-    if (parentIndex === -1) return;
-    
-    // Find the last item of this parent to insert after it
-    let insertIndex = parentIndex + 1;
-    while (insertIndex < newItems.length && newItems[insertIndex].parentTempId === parentTempId) {
-      insertIndex++;
+  const addRow = (itemType: BoqItemType, parentTempId: string | null) => {
+    if (parentTempId) {
+      const parent = items.find((item) => item.tempId === parentTempId);
+      if (!parent || parent.itemType !== 'FOLDER') return;
     }
-    
-    newItems.splice(insertIndex, 0, {
-      tempId: generateTempId(),
-      parentTempId,
-      itemType: 'WORK_ITEM',
-      wbsCode: '',
-      name: '',
-      quantity: 1,
-      unit: 'ls',
-      unitPrice: 0
+
+    setItems((current) => {
+      const insertIndex = findInsertIndexAfterSubtree(current, parentTempId);
+      const next = [...current];
+      next.splice(insertIndex, 0, createItem(itemType, parentTempId, current.length));
+      return next;
     });
-    setItems(newItems);
   };
 
-  const handleRemoveItem = (index: number) => {
-    const itemToRemove = items[index];
-    let newItems = [...items];
-    
-    if (itemToRemove.itemType === 'FOLDER') {
-      // Remove folder and all its children
-      newItems = newItems.filter(i => i.tempId !== itemToRemove.tempId && i.parentTempId !== itemToRemove.tempId);
-    } else {
-      newItems.splice(index, 1);
+  const removeRow = (tempId: string) => {
+    setItems((current) => {
+      const deletedIds = collectDescendantIds(current, tempId);
+      return current.filter((item) => !deletedIds.has(item.tempId) && (!item.parentTempId || !deletedIds.has(item.parentTempId)));
+    });
+  };
+
+  const updateItem = (tempId: string, field: BoqItemField, value: string | number | boolean) => {
+    setItems((current) => current.map((item) => (item.tempId === tempId ? { ...item, [field]: value } : item)));
+  };
+
+  const toggleCollapse = (tempId: string) => {
+    setItems((current) => current.map((item) => (item.tempId === tempId ? { ...item, collapsed: !item.collapsed } : item)));
+  };
+
+  const validateRows = (orderedRows: BoqTreeNode[]) => {
+    if (orderedRows.length === 0) return 'Tambahkan minimal 1 Sub Judul, Item, atau Catatan RAB.';
+
+    for (const item of orderedRows) {
+      const rowName = item.name.trim() || item.wbsCode.trim() || 'baris RAB';
+
+      if (!item.name.trim()) return `Lengkapi Uraian untuk ${rowName}.`;
+      if (item.itemType !== 'NOTE' && !item.wbsCode.trim()) return `Lengkapi Kode untuk ${rowName}.`;
+
+      if (item.itemType === 'WORK_ITEM') {
+        const quantity = toFiniteNumber(item.quantity);
+        const unitPrice = toFiniteNumber(item.unitPrice);
+
+        if (!Number.isFinite(quantity) || quantity <= 0) return `Volume ${rowName} harus angka lebih besar dari 0.`;
+        if (!item.unit.trim()) return `Lengkapi Satuan untuk ${rowName}.`;
+        if (!Number.isFinite(unitPrice) || unitPrice < 0) return `Harga Satuan ${rowName} harus angka 0 atau lebih.`;
+        if (!Number.isFinite(quantity * unitPrice)) return `Jumlah ${rowName} tidak valid.`;
+      }
     }
-    setItems(newItems);
+
+    return null;
   };
 
-  const handleChangeItem = (index: number, field: keyof BoqItemInput, value: string | number) => {
-    const newItems = [...items];
-    newItems[index] = { ...newItems[index], [field]: value };
-    setItems(newItems);
+  const buildPayload = () => {
+    const orderedRows = flattenPreorder(buildTree(items));
+    return orderedRows.map((item, index) => {
+      const isWorkItem = item.itemType === 'WORK_ITEM';
+      const quantity = isWorkItem ? toFiniteNumber(item.quantity) : 0;
+      const unitPrice = isWorkItem ? toFiniteNumber(item.unitPrice) : 0;
+
+      return {
+        tempId: item.tempId,
+        parentTempId: item.parentTempId || undefined,
+        itemType: item.itemType,
+        wbsCode: item.itemType === 'NOTE' && !item.wbsCode.trim() ? '-' : item.wbsCode.trim(),
+        name: item.name.trim(),
+        quantity: isWorkItem ? quantity : 0,
+        unit: isWorkItem ? item.unit.trim() : '',
+        unitPrice: isWorkItem ? unitPrice : 0,
+        plannedCost: isWorkItem ? quantity * unitPrice : 0,
+        sortOrder: index,
+      };
+    });
   };
-
-  // Compute subtotals and grand total
-  const subtotals: Record<string, number> = {};
-  let totalEstimasi = 0;
-
-  items.forEach(item => {
-    if (item.itemType === 'WORK_ITEM' && item.parentTempId) {
-      const lineTotal = safeNumber(item.quantity) * safeNumber(item.unitPrice);
-      subtotals[item.parentTempId] = (subtotals[item.parentTempId] || 0) + lineTotal;
-      totalEstimasi += lineTotal;
-    }
-  });
 
   const handleSetup = async (e: FormEvent) => {
     e.preventDefault();
     if (!token || !activeWorkspaceId) return;
-    if (items.length === 0) {
-      alert('Tambahkan minimal 1 Sub Judul / Item BOQ.');
-      return;
-    }
 
-    // Domain validation
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (!item.wbsCode.trim() || !item.name.trim()) {
-        alert('Lengkapi Kode dan Nama untuk semua baris.');
-        return;
-      }
-      if (item.itemType === 'WORK_ITEM') {
-        if (!item.unit.trim()) {
-          alert('Lengkapi Satuan untuk Item Pekerjaan.');
-          return;
-        }
-        const vol = safeNumber(item.quantity);
-        if (vol <= 0) {
-          alert('Volume Item Pekerjaan harus lebih besar dari 0.');
-          return;
-        }
-        const price = safeNumber(item.unitPrice);
-        if (price < 0) {
-          alert('Harga Satuan tidak boleh negatif.');
-          return;
-        }
-      }
+    const orderedRows = flattenPreorder(buildTree(items));
+    const validationError = validateRows(orderedRows);
+    if (validationError) {
+      alert(validationError);
+      return;
     }
 
     setSubmitting(true);
     try {
-      // 1. Create Project
       const projRes = await apiFetch('http://localhost:3000/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, code, description, workspaceId: activeWorkspaceId })
+        body: JSON.stringify({ name, code, description, workspaceId: activeWorkspaceId }),
       });
       if (!projRes.ok) throw new Error(checkStatus(projRes.status));
       const project = await projRes.json();
 
-      // 2. Initiate Setup
-      // DEBT-RAB-UNITPRICE-PERSISTENCE: Backend lacks separate unitPrice field in BoqItem.
-      // We send the computed lineTotal (Jumlah) as plannedCost for items.
       const initRes = await apiFetch(`http://localhost:3000/projects/${project.id}/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          items: items.map((item, index) => ({
-            tempId: item.tempId,
-            parentTempId: item.parentTempId || undefined,
-            itemType: item.itemType,
-            wbsCode: item.wbsCode,
-            name: item.name,
-            quantity: item.itemType === 'FOLDER' ? 0 : safeNumber(item.quantity),
-            unit: item.itemType === 'FOLDER' ? '' : item.unit,
-            unitPrice: item.itemType === 'FOLDER' ? 0 : safeNumber(item.unitPrice),
-            plannedCost: item.itemType === 'FOLDER' ? 0 : (safeNumber(item.quantity) * safeNumber(item.unitPrice)),
-            sortOrder: index
-          }))
-        })
+        body: JSON.stringify({ items: buildPayload() }),
       });
       if (!initRes.ok) throw new Error(checkStatus(initRes.status));
 
@@ -183,112 +312,158 @@ export function ProjectSetupPage() {
     }
   };
 
+  const renderRow = ({ node, subtotal: rowSubtotal }: VisibleRow) => {
+    const isFolder = node.itemType === 'FOLDER';
+    const isWorkItem = node.itemType === 'WORK_ITEM';
+    const isNote = node.itemType === 'NOTE';
+    const hasChildren = node.children.length > 0;
+    const rowLineTotal = lineTotal(node);
+
+    return (
+      <tr
+        key={node.tempId}
+        style={{
+          backgroundColor: isFolder ? 'var(--simprok-engineering-blue-50)' : isNote ? '#F8FAFC' : 'white',
+          borderBottom: '1px solid var(--simprok-engineering-blue-100)',
+        }}
+      >
+        <td style={{ padding: '8px', minWidth: '130px' }}>
+          <input
+            type="text"
+            value={node.wbsCode}
+            onChange={(e) => updateItem(node.tempId, 'wbsCode', e.target.value)}
+            required={!isNote}
+            style={{ width: '100%', padding: '6px', fontWeight: isFolder ? 'bold' : 'normal' }}
+            placeholder={isNote ? 'Opsional' : 'Kode'}
+          />
+        </td>
+        <td style={{ padding: '8px', minWidth: '280px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: `${node.depth * 24}px` }}>
+            {isFolder ? (
+              <button type="button" onClick={() => toggleCollapse(node.tempId)} style={buttonStyle('ghost')}>
+                {node.collapsed ? 'Buka' : 'Tutup'}
+              </button>
+            ) : (
+              <span style={{ width: '58px', color: 'var(--simprok-engineering-blue-500)', fontSize: '12px' }}>
+                {isNote ? 'Catatan' : 'Item'}
+              </span>
+            )}
+            <input
+              type="text"
+              value={node.name}
+              onChange={(e) => updateItem(node.tempId, 'name', e.target.value)}
+              required
+              style={{ flex: 1, minWidth: 0, padding: '6px', fontWeight: isFolder ? 'bold' : 'normal' }}
+              placeholder={isNote ? 'Isi catatan' : 'Uraian pekerjaan'}
+            />
+          </div>
+        </td>
+        <td style={{ padding: '8px', width: '100px' }}>
+          {isWorkItem && (
+            <input
+              type="number"
+              min="0.000001"
+              step="any"
+              value={node.quantity}
+              onChange={(e) => updateItem(node.tempId, 'quantity', e.target.value)}
+              required
+              style={{ width: '100%', padding: '6px', textAlign: 'right' }}
+            />
+          )}
+        </td>
+        <td style={{ padding: '8px', width: '90px' }}>
+          {isWorkItem && (
+            <input
+              type="text"
+              value={node.unit}
+              onChange={(e) => updateItem(node.tempId, 'unit', e.target.value)}
+              required
+              style={{ width: '100%', padding: '6px' }}
+            />
+          )}
+        </td>
+        <td style={{ padding: '8px', width: '150px' }}>
+          {isWorkItem && (
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={node.unitPrice}
+              onChange={(e) => updateItem(node.tempId, 'unitPrice', e.target.value)}
+              required
+              style={{ width: '100%', padding: '6px', textAlign: 'right' }}
+            />
+          )}
+        </td>
+        <td style={{ padding: '8px', width: '170px', textAlign: 'right', fontWeight: isFolder ? 'bold' : 600, color: 'var(--simprok-engineering-blue-900)' }}>
+          {isFolder ? formatRupiah(rowSubtotal) : isWorkItem ? formatRupiah(rowLineTotal) : '-'}
+        </td>
+        <td style={{ padding: '8px', minWidth: '280px' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'flex-end' }}>
+            {isFolder && (
+              <>
+                <button type="button" onClick={() => addRow('FOLDER', node.tempId)} style={buttonStyle('secondary')}>+ Sub Judul Anak</button>
+                <button type="button" onClick={() => addRow('WORK_ITEM', node.tempId)} style={buttonStyle('primary')}>+ Item</button>
+                <button type="button" onClick={() => addRow('NOTE', node.tempId)} style={buttonStyle('secondary')}>+ Catatan</button>
+                {hasChildren && <span style={{ alignSelf: 'center', color: 'var(--simprok-engineering-blue-600)', fontSize: '12px' }}>{node.children.length} anak</span>}
+              </>
+            )}
+            <button type="button" onClick={() => removeRow(node.tempId)} style={buttonStyle('danger')}>
+              {isFolder ? 'Hapus Subtree' : 'Hapus'}
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', borderRadius: 'var(--radius-lg)' }}>
+    <div style={{ maxWidth: '1280px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', borderRadius: 'var(--radius-lg)' }}>
       <h2 style={{ fontSize: 'var(--text-2xl)', color: 'var(--simprok-engineering-blue-900)', marginBottom: 'var(--space-6)' }}>Workspace Penyusunan RAB</h2>
       <form onSubmit={handleSetup} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-4)' }}>
           <div>
             <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Nama Proyek</label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} required style={{ width: '100%', padding: '8px' }}/>
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)} required style={{ width: '100%', padding: '8px' }} />
           </div>
           <div>
             <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Kode Proyek</label>
-            <input type="text" value={code} onChange={(e) => setCode(e.target.value)} required style={{ width: '100%', padding: '8px' }}/>
+            <input type="text" value={code} onChange={(e) => setCode(e.target.value)} required style={{ width: '100%', padding: '8px' }} />
           </div>
         </div>
         <div>
           <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Deskripsi</label>
-          <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} style={{ width: '100%', padding: '8px' }}/>
+          <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} style={{ width: '100%', padding: '8px' }} />
         </div>
 
-        <div style={{ marginTop: 'var(--space-6)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ marginTop: 'var(--space-6)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
           <h3 style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)' }}>Daftar RAB</h3>
-          <button type="button" onClick={handleAddSection} style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-engineering-blue-800)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-            + Tambah Sub Judul
-          </button>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button type="button" onClick={() => addRow('FOLDER', null)} style={buttonStyle('secondary')}>+ Tambah Sub Judul</button>
+            <button type="button" onClick={() => addRow('WORK_ITEM', null)} style={buttonStyle('primary')}>+ Tambah Item</button>
+            <button type="button" onClick={() => addRow('NOTE', null)} style={buttonStyle('secondary')}>+ Tambah Catatan</button>
+          </div>
         </div>
 
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 'var(--space-2)' }}>
+        <div style={{ overflowX: 'auto', border: '1px solid var(--simprok-engineering-blue-100)', borderRadius: '8px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1100px' }}>
             <thead>
               <tr style={{ backgroundColor: 'var(--simprok-engineering-blue-50)', textAlign: 'left' }}>
                 <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Kode</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Uraian Pekerjaan</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '80px', textAlign: 'right' }}>Volume</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '80px' }}>Satuan</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '150px', textAlign: 'right' }}>Harga Satuan</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '180px', textAlign: 'right' }}>Jumlah / Subtotal</th>
-                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '120px', textAlign: 'center' }}>Aksi</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Uraian / Catatan</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Volume</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Satuan</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Harga Satuan</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Jumlah / Subtotal</th>
+                <th style={{ padding: '12px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Aksi</th>
               </tr>
             </thead>
             <tbody>
-              {items.map((item, index) => {
-                const isSection = item.itemType === 'FOLDER';
-                
-                if (isSection) {
-                  return (
-                    <tr key={item.tempId} style={{ backgroundColor: 'var(--simprok-engineering-blue-50)', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>
-                      <td style={{ padding: '8px' }}>
-                        <input type="text" value={item.wbsCode} onChange={(e) => handleChangeItem(index, 'wbsCode', e.target.value)} required style={{ width: '100%', padding: '6px', fontWeight: 'bold' }} placeholder="Cth: A" />
-                      </td>
-                      <td style={{ padding: '8px' }}>
-                        <input type="text" value={item.name} onChange={(e) => handleChangeItem(index, 'name', e.target.value)} required style={{ width: '100%', padding: '6px', fontWeight: 'bold' }} placeholder="Nama Sub Judul Pekerjaan" />
-                      </td>
-                      <td style={{ padding: '8px' }}></td>
-                      <td style={{ padding: '8px' }}></td>
-                      <td style={{ padding: '8px' }}></td>
-                      <td style={{ padding: '8px', textAlign: 'right', fontWeight: 'bold', color: 'var(--simprok-engineering-blue-900)' }}>
-                        Rp {(subtotals[item.tempId] || 0).toLocaleString()}
-                      </td>
-                      <td style={{ padding: '8px', textAlign: 'center' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
-                          <button type="button" onClick={() => handleAddItem(item.tempId)} style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-engineering-blue-800)', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold', width: '100%' }}>
-                            + Tambah Item
-                          </button>
-                          <button type="button" onClick={() => handleRemoveItem(index)} style={{ padding: '4px', backgroundColor: 'transparent', color: 'var(--simprok-critical-red-600)', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '13px' }}>
-                            Hapus Sub
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                }
-
-                // WORK_ITEM row
-                const lineTotal = safeNumber(item.quantity) * safeNumber(item.unitPrice);
-                return (
-                  <tr key={item.tempId} style={{ borderBottom: '1px solid var(--simprok-engineering-blue-100)' }}>
-                    <td style={{ padding: '8px', paddingLeft: '24px' }}>
-                      <input type="text" value={item.wbsCode} onChange={(e) => handleChangeItem(index, 'wbsCode', e.target.value)} required style={{ width: '100%', padding: '6px' }} placeholder="A.1" />
-                    </td>
-                    <td style={{ padding: '8px' }}>
-                      <input type="text" value={item.name} onChange={(e) => handleChangeItem(index, 'name', e.target.value)} required style={{ width: '100%', padding: '6px' }} placeholder="Nama Item" />
-                    </td>
-                    <td style={{ padding: '8px' }}>
-                      <input type="number" min="0.000001" step="any" value={item.quantity} onChange={(e) => handleChangeItem(index, 'quantity', e.target.value)} required style={{ width: '100%', padding: '6px', textAlign: 'right' }} />
-                    </td>
-                    <td style={{ padding: '8px' }}>
-                      <input type="text" value={item.unit} onChange={(e) => handleChangeItem(index, 'unit', e.target.value)} required style={{ width: '100%', padding: '6px' }} />
-                    </td>
-                    <td style={{ padding: '8px' }}>
-                      <input type="number" min="0" step="any" value={item.unitPrice} onChange={(e) => handleChangeItem(index, 'unitPrice', e.target.value)} required style={{ width: '100%', padding: '6px', textAlign: 'right' }} />
-                    </td>
-                    <td style={{ padding: '8px', textAlign: 'right', color: 'var(--simprok-engineering-blue-800)' }}>
-                      Rp {lineTotal.toLocaleString()}
-                    </td>
-                    <td style={{ padding: '8px', textAlign: 'center' }}>
-                      <button type="button" onClick={() => handleRemoveItem(index)} style={{ padding: '6px', backgroundColor: 'var(--simprok-critical-red-100)', color: 'var(--simprok-critical-red-600)', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                        Hapus
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {visibleRows.map(renderRow)}
               {items.length === 0 && (
                 <tr>
                   <td colSpan={7} style={{ padding: '24px', textAlign: 'center', color: '#666' }}>
-                    Belum ada RAB. Silakan tambah Sub Judul terlebih dahulu.
+                    Belum ada RAB. Tambahkan Sub Judul, Item, atau Catatan.
                   </td>
                 </tr>
               )}
@@ -296,11 +471,14 @@ export function ProjectSetupPage() {
           </table>
         </div>
 
-        <div style={{ marginTop: 'var(--space-4)', padding: 'var(--space-4)', backgroundColor: 'var(--simprok-engineering-blue-900)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: 'var(--text-xl)', fontWeight: 'bold', color: 'white' }}>Total Estimasi:</span>
-          <span style={{ fontSize: 'var(--text-3xl)', fontWeight: 'bold', color: 'white' }}>
-            Rp {totalEstimasi.toLocaleString()}
-          </span>
+        <div style={{ marginTop: 'var(--space-4)', padding: 'var(--space-4)', backgroundColor: 'var(--simprok-engineering-blue-900)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
+          <div>
+            <span style={{ display: 'block', fontSize: 'var(--text-xl)', fontWeight: 'bold', color: 'white' }}>Total Estimasi</span>
+            <span style={{ display: 'block', fontSize: '12px', color: 'var(--simprok-engineering-blue-100)' }}>
+              Subtotal hirarki: {formatRupiah(totalEstimasi)} | Sum item: {formatRupiah(flatTotal)}
+            </span>
+          </div>
+          <span style={{ fontSize: 'var(--text-3xl)', fontWeight: 'bold', color: 'white' }}>{formatRupiah(totalEstimasi)}</span>
         </div>
 
         <button type="submit" disabled={submitting} style={{ marginTop: 'var(--space-6)', padding: '16px', fontSize: 'var(--text-lg)', fontWeight: 'bold', backgroundColor: 'var(--simprok-engineering-blue-800)', color: 'white', border: 'none', borderRadius: '8px', cursor: submitting ? 'not-allowed' : 'pointer', opacity: submitting ? 0.7 : 1 }}>
@@ -310,3 +488,4 @@ export function ProjectSetupPage() {
     </div>
   );
 }
+
