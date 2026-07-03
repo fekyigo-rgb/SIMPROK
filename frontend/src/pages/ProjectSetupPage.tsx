@@ -2,6 +2,7 @@ import { type FormEvent, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiFetch } from '../utils/apiClient';
+import { NumericFact } from '../components/atoms/NumericFact';
 
 const checkStatus = (status: number) => {
   if (status === 401) return 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
@@ -538,7 +539,9 @@ export function ProjectSetupPage() {
               Subtotal hirarki: {formatRupiah(totalEstimasi)} | Sum item: {formatRupiah(flatTotal)}
             </span>
           </div>
-          <span style={{ fontSize: 'var(--text-3xl)', fontWeight: 'bold', color: 'white' }}>{formatRupiah(totalEstimasi)}</span>
+          <div style={{ color: 'white' }}>
+            <NumericFact value={formatRupiah(totalEstimasi)} size="xl" certaintyLevel="C3" />
+          </div>
         </div>
 
         <button type="submit" disabled={submitting} style={{ marginTop: 'var(--space-6)', padding: '16px', fontSize: 'var(--text-lg)', fontWeight: 'bold', backgroundColor: 'var(--simprok-engineering-blue-800)', color: 'white', border: 'none', borderRadius: '8px', cursor: submitting ? 'not-allowed' : 'pointer', opacity: submitting ? 0.7 : 1 }}>
