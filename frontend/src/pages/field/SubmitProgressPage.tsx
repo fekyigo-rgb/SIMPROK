@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
+import { FactHeader } from '../../components/molecules/FactHeader';
 
 type ErrorKind = 'unauthorized' | 'forbidden' | 'not-found' | 'workspace' | 'server' | 'network' | null;
 
@@ -124,13 +125,16 @@ export function SubmitProgressPage() {
         </div>
       ) : boqItem && (
         <div style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-4)', backgroundColor: 'var(--simprok-engineering-blue-50)', borderLeft: '4px solid var(--simprok-engineering-blue-500)', borderRadius: '4px' }}>
-          <h3 style={{ margin: '0 0 8px 0', color: 'var(--simprok-engineering-blue-900)', fontSize: 'var(--text-lg)' }}>
+          <h3 style={{ margin: '0 0 16px 0', color: 'var(--simprok-engineering-blue-900)', fontSize: 'var(--text-lg)' }}>
             {boqItem.wbsCode} - {boqItem.name}
           </h3>
-          <div style={{ display: 'flex', gap: '16px', color: 'var(--simprok-engineering-blue-700)', fontSize: 'var(--text-sm)' }}>
-            <div><strong>Target:</strong> {boqItem.quantity} {boqItem.unit}</div>
-            <div><strong>Satuan:</strong> {boqItem.unit}</div>
-          </div>
+          <FactHeader 
+            label="Target Volume" 
+            value={boqItem.quantity} 
+            suffix={boqItem.unit} 
+            certaintyLevel="C5" 
+            showBadge={false} 
+          />
         </div>
       )}
 
