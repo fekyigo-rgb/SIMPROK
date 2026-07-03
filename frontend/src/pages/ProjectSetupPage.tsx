@@ -1,4 +1,4 @@
-﻿import { type FormEvent, useMemo, useState } from 'react';
+import { type FormEvent, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiFetch } from '../utils/apiClient';
@@ -380,25 +380,31 @@ export function ProjectSetupPage() {
           borderBottom: '1px solid var(--simprok-engineering-blue-100)',
         }}
       >
-        <td style={{ padding: '4px 6px', minWidth: '130px' }}>
+        <td style={{ padding: '2px 4px', width: '40px', textAlign: 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'center' }}>
+            <button type="button" disabled={!canMoveUp} onClick={() => moveRow(node.tempId, 'up')} style={{ border: 'none', background: 'transparent', padding: '0 4px', cursor: canMoveUp ? 'pointer' : 'not-allowed', opacity: canMoveUp ? 1 : 0.3, fontSize: '14px', lineHeight: 1 }} title="Naik">▲</button>
+            <button type="button" disabled={!canMoveDown} onClick={() => moveRow(node.tempId, 'down')} style={{ border: 'none', background: 'transparent', padding: '0 4px', cursor: canMoveDown ? 'pointer' : 'not-allowed', opacity: canMoveDown ? 1 : 0.3, fontSize: '14px', lineHeight: 1 }} title="Turun">▼</button>
+          </div>
+        </td>
+        <td style={{ padding: '2px 4px', minWidth: '130px' }}>
           <input
             type="text"
             value={node.wbsCode}
             onChange={(e) => updateItem(node.tempId, 'wbsCode', e.target.value)}
             required={!isNote}
-            style={{ width: '100%', padding: '3px 5px', minHeight: '26px', fontWeight: isFolder ? 'bold' : 'normal' }}
+            style={{ width: '100%', padding: '2px 4px', fontWeight: isFolder ? 'bold' : 'normal' }}
             placeholder={isNote ? 'Opsional' : 'Kode'}
           />
         </td>
-        <td style={{ padding: '4px 6px', minWidth: '280px' }}>
+        <td style={{ padding: '2px 4px', minWidth: '280px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '5px', paddingLeft: `${node.depth * 18}px` }}>
             {isFolder ? (
-              <button type="button" onClick={() => toggleCollapse(node.tempId)} style={buttonStyle('ghost')}>
+              <button type="button" onClick={() => toggleCollapse(node.tempId)} style={{ ...buttonStyle('ghost'), padding: '2px 4px', fontSize: '11px' }}>
                 {node.collapsed ? 'Buka' : 'Tutup'}
               </button>
             ) : (
-              <span style={{ width: '58px', color: 'var(--simprok-engineering-blue-500)', fontSize: '12px' }}>
-                {isNote ? 'Catatan' : 'Item'}
+              <span style={{ width: '38px', color: 'var(--simprok-engineering-blue-500)', fontSize: '11px', textAlign: 'center' }}>
+                {isNote ? 'Cttn' : 'Item'}
               </span>
             )}
             <input
@@ -406,12 +412,12 @@ export function ProjectSetupPage() {
               value={node.name}
               onChange={(e) => updateItem(node.tempId, 'name', e.target.value)}
               required
-              style={{ flex: 1, minWidth: 0, padding: '3px 5px', minHeight: '26px', fontWeight: isFolder ? 'bold' : 'normal' }}
+              style={{ flex: 1, minWidth: 0, padding: '2px 4px', fontWeight: isFolder ? 'bold' : 'normal' }}
               placeholder={isNote ? 'Isi catatan' : 'Uraian pekerjaan'}
             />
           </div>
         </td>
-        <td style={{ padding: '4px 6px', width: '100px' }}>
+        <td style={{ padding: '2px 4px', width: '100px' }}>
           {isWorkItem && (
             <input
               type="number"
@@ -420,22 +426,22 @@ export function ProjectSetupPage() {
               value={node.quantity}
               onChange={(e) => updateItem(node.tempId, 'quantity', e.target.value)}
               required
-              style={{ width: '100%', padding: '3px 5px', minHeight: '26px', textAlign: 'right' }}
+              style={{ width: '100%', padding: '2px 4px', textAlign: 'right' }}
             />
           )}
         </td>
-        <td style={{ padding: '4px 6px', width: '90px' }}>
+        <td style={{ padding: '2px 4px', width: '90px' }}>
           {isWorkItem && (
             <input
               type="text"
               value={node.unit}
               onChange={(e) => updateItem(node.tempId, 'unit', e.target.value)}
               required
-              style={{ width: '100%', padding: '3px 5px', minHeight: '26px' }}
+              style={{ width: '100%', padding: '2px 4px' }}
             />
           )}
         </td>
-        <td style={{ padding: '4px 6px', width: '150px' }}>
+        <td style={{ padding: '2px 4px', width: '150px' }}>
           {isWorkItem && (
             <input
               type="number"
@@ -444,27 +450,25 @@ export function ProjectSetupPage() {
               value={node.unitPrice}
               onChange={(e) => updateItem(node.tempId, 'unitPrice', e.target.value)}
               required
-              style={{ width: '100%', padding: '3px 5px', minHeight: '26px', textAlign: 'right' }}
+              style={{ width: '100%', padding: '2px 4px', textAlign: 'right' }}
             />
           )}
         </td>
-        <td style={{ padding: '4px 6px', width: '170px', textAlign: 'right', fontWeight: isFolder ? 'bold' : 600, color: 'var(--simprok-engineering-blue-900)' }}>
+        <td style={{ padding: '2px 4px', width: '170px', textAlign: 'right', fontWeight: isFolder ? 'bold' : 600, color: 'var(--simprok-engineering-blue-900)' }}>
           {isFolder ? formatRupiah(rowSubtotal) : isWorkItem ? formatRupiah(rowLineTotal) : '-'}
         </td>
-        <td style={{ padding: '4px 6px', minWidth: '280px' }}>
+        <td style={{ padding: '2px 4px', minWidth: '160px' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', justifyContent: 'flex-end', alignItems: 'center' }}>
-            <button type="button" disabled={!canMoveUp} onClick={() => moveRow(node.tempId, 'up')} style={{ ...buttonStyle('ghost'), opacity: canMoveUp ? 1 : 0.35, cursor: canMoveUp ? 'pointer' : 'not-allowed' }}>Naik</button>
-            <button type="button" disabled={!canMoveDown} onClick={() => moveRow(node.tempId, 'down')} style={{ ...buttonStyle('ghost'), opacity: canMoveDown ? 1 : 0.35, cursor: canMoveDown ? 'pointer' : 'not-allowed' }}>Turun</button>
             {isFolder && (
               <>
-                <button type="button" onClick={() => addRow('FOLDER', node.tempId)} style={buttonStyle('secondary')}>+ Sub Judul Anak</button>
-                <button type="button" onClick={() => addRow('WORK_ITEM', node.tempId)} style={buttonStyle('primary')}>+ Item</button>
-                <button type="button" onClick={() => addRow('NOTE', node.tempId)} style={buttonStyle('secondary')}>+ Catatan</button>
-                {hasChildren && <span style={{ alignSelf: 'center', color: 'var(--simprok-engineering-blue-600)', fontSize: '12px' }}>{node.children.length} anak</span>}
+                <button type="button" title="Tambah Sub Judul Anak" onClick={() => addRow('FOLDER', node.tempId)} style={{ ...buttonStyle('secondary'), padding: '2px 4px', fontSize: '11px' }}>+Sub</button>
+                <button type="button" title="Tambah Item" onClick={() => addRow('WORK_ITEM', node.tempId)} style={{ ...buttonStyle('primary'), padding: '2px 4px', fontSize: '11px' }}>+Item</button>
+                <button type="button" title="Tambah Catatan" onClick={() => addRow('NOTE', node.tempId)} style={{ ...buttonStyle('secondary'), padding: '2px 4px', fontSize: '11px' }}>+Cttn</button>
+                {hasChildren && <span style={{ alignSelf: 'center', color: 'var(--simprok-engineering-blue-600)', fontSize: '10px' }}>{node.children.length}</span>}
               </>
             )}
-            <button type="button" onClick={() => removeRow(node.tempId)} style={buttonStyle('danger')}>
-              {isFolder ? 'Hapus Subtree' : 'Hapus'}
+            <button type="button" title={isFolder ? 'Hapus Subtree' : 'Hapus'} onClick={() => removeRow(node.tempId)} style={{ ...buttonStyle('danger'), padding: '2px 4px', fontSize: '14px', background: 'transparent', border: 'none', color: '#dc2626' }}>
+              🗑
             </button>
           </div>
         </td>
@@ -503,14 +507,15 @@ export function ProjectSetupPage() {
         <div style={{ overflowX: 'auto', border: '1px solid var(--simprok-engineering-blue-100)', borderRadius: '8px' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1100px' }}>
             <thead>
-              <tr style={{ backgroundColor: 'var(--simprok-engineering-blue-50)', textAlign: 'left' }}>
-                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Kode</th>
-                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Uraian / Catatan</th>
-                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Volume</th>
-                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Satuan</th>
-                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Harga Satuan</th>
-                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Jumlah / Subtotal</th>
-                <th style={{ padding: '7px 8px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right' }}>Aksi</th>
+              <tr style={{ backgroundColor: 'var(--simprok-engineering-blue-50)', textAlign: 'left', fontSize: '12px' }}>
+                <th style={{ padding: '4px', width: '30px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}></th>
+                <th style={{ padding: '4px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Kode</th>
+                <th style={{ padding: '4px', borderBottom: '2px solid var(--simprok-engineering-blue-200)' }}>Uraian / Catatan</th>
+                <th style={{ padding: '4px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right', width: '80px' }}>Volume</th>
+                <th style={{ padding: '4px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', width: '60px' }}>Sat</th>
+                <th style={{ padding: '4px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right', width: '120px' }}>Harga Satuan</th>
+                <th style={{ padding: '4px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right', width: '140px' }}>Jumlah / Subtotal</th>
+                <th style={{ padding: '4px', borderBottom: '2px solid var(--simprok-engineering-blue-200)', textAlign: 'right', width: '160px' }}>Aksi</th>
               </tr>
             </thead>
             <tbody>
