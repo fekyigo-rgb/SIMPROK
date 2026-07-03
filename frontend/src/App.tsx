@@ -25,7 +25,7 @@ function App() {
           
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<DashboardLayout />}>
-              <Route index element={<RoleRoute allowedRoles={['DIRECTOR']}><ObservatoryPage /></RoleRoute>} />
+              <Route index element={<RoleRoute allowedRoles={['DIRECTOR', 'FOREMAN', 'OWNER', 'MANDOR']}><ObservatoryPage /></RoleRoute>} />
               <Route path="project/new" element={<RoleRoute allowedRoles={['DIRECTOR']}><ProjectSetupPage /></RoleRoute>} />
               <Route path="project/:id" element={<ProjectWarRoomPage />} />
               <Route path="showcase" element={<ShowcasePage />} />

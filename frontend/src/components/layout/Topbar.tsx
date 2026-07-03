@@ -39,7 +39,7 @@ export function Topbar() {
       {/* Left Context */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
         <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--weight-semibold)', color: 'var(--simprok-engineering-blue-900)', margin: 0 }}>
-          Global Portfolio Overview
+          Beranda SIMPROK
         </h2>
       </div>
 

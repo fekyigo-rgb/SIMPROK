@@ -1,13 +1,17 @@
 import { Link, useLocation } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
 
 export function Sidebar() {
   const location = useLocation();
+  const { activeRoles } = useAuth();
+  
+  const isDirektur = activeRoles.includes('DIRECTOR') || activeRoles.includes('OWNER');
 
   const navItems = [
-    { name: 'Observatory', path: '/' },
-    { name: 'Buat RAB', path: '/project/new' },
-    { name: 'Field Terminal', path: '/field' },
-    { name: 'UI Showcase (Dev)', path: '/showcase' },
+    { name: 'Beranda / Proyek Saya', path: '/' },
+    ...(isDirektur ? [{ name: 'Buat RAB', path: '/project/new' }] : []),
+    { name: 'Pantau / Lapor Progress', path: '/field' },
+    { name: 'UI Showcase (Internal)', path: '/showcase' },
   ];
 
   return (

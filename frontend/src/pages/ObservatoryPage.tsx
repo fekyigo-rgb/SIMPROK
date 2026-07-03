@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { ExecutiveHaiku } from '../components/molecules/ExecutiveHaiku';
 import { ProjectCard } from '../components/organisms/ProjectCard';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -11,7 +10,7 @@ export function ObservatoryPage() {
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  const { token, activeWorkspaceId } = useAuth();
+  const { token, activeWorkspaceId, activeRoles } = useAuth();
 
   useEffect(() => {
     if (!token || !activeWorkspaceId) return;
@@ -46,23 +45,33 @@ export function ObservatoryPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-8)' }}>
       
-      {/* DNA-03: Executive Haiku — Only shows when evidence is verified */}
-      <ExecutiveHaiku 
-        text="Portfolio intelligence engine is not yet activated. Project list reflects live database records. Navigate to a War Room to observe verified project reality."
-        certaintyLevel="C4"
-      />
+      {/* Welcome Greeting */}
+      <div style={{ backgroundColor: 'var(--simprok-bright-sky-blue-50)', padding: 'var(--space-4)', borderRadius: 'var(--radius-md)', border: '1px solid var(--simprok-bright-sky-blue-200)' }}>
+        <p style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)', fontSize: 'var(--text-md)', fontWeight: 'var(--weight-medium)' }}>
+          Selamat datang. Pilih ruang kerja yang ingin Anda lanjutkan.
+        </p>
+      </div>
 
       {/* PORTFOLIO DOORS: Entry points to War Rooms */}
       <section>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
           <h3 style={{ fontSize: 'var(--text-lg)', color: 'var(--simprok-engineering-blue-900)', fontWeight: 'var(--weight-semibold)', margin: 0 }}>
-            Active Projects Portfolio
+            Ikhtisar Proyek
           </h3>
-          <button 
-            onClick={() => navigate('/project/new')}
-            style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-bright-sky-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-            + Start New Project
-          </button>
+          <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
+            <button 
+              onClick={() => navigate('/field')}
+              style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-engineering-blue-100)', color: 'var(--simprok-engineering-blue-900)', border: '1px solid var(--simprok-engineering-blue-300)', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
+              Pantau / Lapor Progress
+            </button>
+            {activeRoles.some(r => ['DIRECTOR', 'OWNER'].includes(r)) && (
+              <button 
+                onClick={() => navigate('/project/new')}
+                style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-bright-sky-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
+                + Buat RAB Baru
+              </button>
+            )}
+          </div>
         </div>
         
         {loading ? (
