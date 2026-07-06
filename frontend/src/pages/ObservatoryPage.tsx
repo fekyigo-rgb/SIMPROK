@@ -1,10 +1,33 @@
 import { useEffect, useState } from 'react';
-import { ProjectCard } from '../components/organisms/ProjectCard';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../utils/apiClient';
+import { RabWorkspacePage } from './RabWorkspacePage';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  Briefcase,
+  ClipboardList,
+  CloudSun,
+  PackageSearch,
+  Store,
+} from 'lucide-react';
 
-const isTestProject = (project: any) => {
+interface ObservatoryProject {
+  id?: string;
+  name?: string;
+  code?: string;
+  status?: 'HEALTHY' | 'WARNING' | 'CRITICAL';
+  progressPercent?: number;
+}
+
+interface ProjectGroup {
+  label: string;
+  projects: ObservatoryProject[];
+}
+
+const isTestProject = (project: ObservatoryProject) => {
   const name = (project.name || '').toUpperCase();
   const code = (project.code || '').toUpperCase();
 
@@ -26,21 +49,69 @@ const isTestProject = (project: any) => {
   return false;
 };
 
+const buildProjectGroups = (projectList: ObservatoryProject[]): ProjectGroup[] => {
+  const groups = projectList.reduce<Record<string, ObservatoryProject[]>>((acc, project) => {
+    const status = project.status || 'Menunggu Realisasi';
+    const label = status === 'HEALTHY'
+      ? 'Proyek Hijau / On Plan'
+      : status === 'WARNING'
+        ? 'Proyek Menunggu Review'
+        : status === 'CRITICAL'
+          ? 'Proyek Kritis'
+          : 'Proyek Menunggu Realisasi';
+
+    acc[label] = [...(acc[label] || []), project];
+    return acc;
+  }, {});
+
+  return Object.entries(groups).flatMap(([label, groupedProjects]) => {
+    const chunks: ProjectGroup[] = [];
+    for (let index = 0; index < groupedProjects.length; index += 3) {
+      chunks.push({
+        label: groupedProjects.length > 3 ? `${label} ${Math.floor(index / 3) + 1}` : label,
+        projects: groupedProjects.slice(index, index + 3),
+      });
+    }
+    return chunks;
+  });
+};
+
+const getStatusLabel = (status?: ObservatoryProject['status']) => {
+  if (status === 'HEALTHY') return 'On plan';
+  if (status === 'WARNING') return 'Perlu review';
+  if (status === 'CRITICAL') return 'Kritis';
+  return 'Belum ada realisasi';
+};
+
 export function ObservatoryPage() {
-  const [projects, setProjects] = useState<any[]>([]);
+  const [projects, setProjects] = useState<ObservatoryProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [projectGroupIndex, setProjectGroupIndex] = useState(0);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const { token, activeWorkspaceId, activeRoles } = useAuth();
+  const canCreateRab = activeRoles.some(r => ['DIRECTOR', 'OWNER'].includes(r));
+  const activeProjects = projects.filter(p => !isTestProject(p));
+  const projectGroups = buildProjectGroups(activeProjects);
+  const safeProjectGroupIndex = projectGroups.length > 0 ? projectGroupIndex % projectGroups.length : 0;
+  const activeProjectGroup = projectGroups[safeProjectGroupIndex];
+  const placeholderRoom = searchParams.get('ruang');
+
+  const goTo = (path: string) => {
+    navigate(path);
+  };
 
   useEffect(() => {
     if (!token || !activeWorkspaceId) return;
 
-    setLoading(true);
-    setError(null);
-    
-    apiFetch('http://localhost:3000/projects')
+    Promise.resolve()
+      .then(() => {
+        setLoading(true);
+        setError(null);
+        return apiFetch('http://localhost:3000/projects');
+      })
       .then(res => {
         if (!res.ok) {
           const status = res.status;
@@ -54,7 +125,7 @@ export function ObservatoryPage() {
         return res.json();
       })
       .then(data => {
-        setProjects(Array.isArray(data) ? data : []);
+        setProjects(Array.isArray(data) ? data as ObservatoryProject[] : []);
         setLoading(false);
       })
       .catch(err => {
@@ -64,87 +135,315 @@ export function ObservatoryPage() {
       });
   }, [token, activeWorkspaceId]);
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-8)' }}>
-      
-      {/* Welcome Greeting */}
-      <div style={{ backgroundColor: 'var(--simprok-bright-sky-blue-50)', padding: 'var(--space-4)', borderRadius: 'var(--radius-md)', border: '1px solid var(--simprok-bright-sky-blue-200)' }}>
-        <p style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)', fontSize: 'var(--text-md)', fontWeight: 'var(--weight-medium)' }}>
-          Selamat datang. Pilih ruang kerja yang ingin Anda lanjutkan.
-        </p>
-      </div>
+  useEffect(() => {
+    if (projectGroups.length <= 1) return;
 
-      {/* PORTFOLIO DOORS: Entry points to War Rooms */}
-      <section>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
-          <h3 style={{ fontSize: 'var(--text-lg)', color: 'var(--simprok-engineering-blue-900)', fontWeight: 'var(--weight-semibold)', margin: 0 }}>
-            Ikhtisar Proyek
-          </h3>
-          <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
-            <button 
-              onClick={() => navigate('/field')}
-              style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-engineering-blue-100)', color: 'var(--simprok-engineering-blue-900)', border: '1px solid var(--simprok-engineering-blue-300)', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-              Pantau / Lapor Progress
+    const timer = window.setInterval(() => {
+      setProjectGroupIndex(current => (current + 1) % projectGroups.length);
+    }, 7000);
+
+    return () => window.clearInterval(timer);
+  }, [projectGroups.length]);
+
+  if (placeholderRoom === 'ruang-kerja-rab') {
+    return <RabWorkspacePage />;
+  }
+
+  return (
+    <div className="simprok-home">
+      {placeholderRoom ? (
+        <section className="simprok-honest-frame simprok-honest-frame--compact" aria-label="Placeholder ruang">
+          <span className="simprok-honest-frame__badge">Belum tersambung</span>
+          <p>Ruang {placeholderRoom.replace(/-/g, ' ')} sudah menjadi pintu hidup. Panel detailnya menunggu engine atau data tersambung.</p>
+        </section>
+      ) : null}
+
+      <section className="simprok-welcome">
+        <div className="simprok-welcome__copy">
+          <div className="simprok-welcome__topline">
+            <span className="simprok-section-kicker">Beranda</span>
+            <button
+              className="simprok-weather-chip"
+              onClick={() => goTo('/?ruang=cuaca-lokal')}
+              title="Cuaca lokal - Belum tersambung"
+              aria-label="Cuaca lokal - Belum tersambung"
+              data-route="/?ruang=cuaca-lokal"
+            >
+              <CloudSun size={16} aria-hidden="true" />
+              <span>Cuaca lokal</span>
+              <span className="simprok-weather-chip__badge">Belum tersambung</span>
             </button>
-            {activeRoles.some(r => ['DIRECTOR', 'OWNER'].includes(r)) && (
-              <button 
-                onClick={() => navigate('/project/new')}
-                style={{ padding: '8px 16px', backgroundColor: 'var(--simprok-bright-sky-blue-600)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-                + Buat RAB Baru
-              </button>
-            )}
+          </div>
+          <h1>Selamat datang di SIMPROK.</h1>
+          <p>Platform intelijen proyek untuk menyusun RAB, membaca realitas lapangan, dan membantu keputusan manusia.</p>
+          <div className="simprok-welcome__actions">
+            <button
+              className="simprok-welcome__cta"
+              onClick={() => goTo(canCreateRab ? '/project/new' : '/?ruang=akses-buat-rab')}
+              title={canCreateRab ? 'Mulai Buat RAB' : 'Mulai Buat RAB - Menunggu akses'}
+              aria-label={canCreateRab ? 'Mulai Buat RAB' : 'Mulai Buat RAB - Menunggu akses'}
+              data-route={canCreateRab ? '/project/new' : '/?ruang=akses-buat-rab'}
+            >
+              Mulai Buat RAB
+            </button>
+            <button
+              className="simprok-welcome__cta"
+              onClick={() => goTo('/?ruang=proyek-saya')}
+              title="Lihat Proyek Saya"
+              aria-label="Lihat Proyek Saya"
+              data-route="/?ruang=proyek-saya"
+            >
+              Lihat Proyek Saya
+            </button>
+            <button
+              className="simprok-welcome__cta simprok-welcome__cta--ghost"
+              onClick={() => goTo('/?ruang=pelajari-simprok')}
+              title="Pelajari SIMPROK"
+              aria-label="Pelajari SIMPROK"
+              data-route="/?ruang=pelajari-simprok"
+            >
+              Pelajari SIMPROK
+            </button>
           </div>
         </div>
-        
-        {loading ? (
-          <p>Memuat data proyek...</p>
-        ) : error ? (
-          <p>{error}</p>
-        ) : projects.length === 0 ? (
-          <p>Belum ada proyek. Data masih kosong.</p>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
-            
-            {projects.filter(p => !isTestProject(p)).length > 0 && (
-              <div>
-                <h4 style={{ fontSize: 'var(--text-base)', color: 'var(--simprok-engineering-blue-800)', marginBottom: 'var(--space-3)' }}>Proyek Saya</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 'var(--space-4)' }}>
-                  {projects.filter(p => !isTestProject(p)).map(p => (
-                    <ProjectCard 
-                      key={p.id}
-                      id={p.id}
-                      projectCode={p.code}
-                      projectName={p.name}
-                      projectManager="Belum ditentukan"
-                      status={p.status || 'HEALTHY'}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {projects.filter(p => isTestProject(p)).length > 0 && (
-              <div>
-                <h4 style={{ fontSize: 'var(--text-base)', color: 'var(--simprok-engineering-blue-500)', marginBottom: 'var(--space-3)' }}>Data Uji / Internal</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 'var(--space-4)', opacity: 0.8 }}>
-                  {projects.filter(p => isTestProject(p)).map(p => (
-                    <ProjectCard 
-                      key={p.id}
-                      id={p.id}
-                      projectCode={p.code}
-                      projectName={p.name}
-                      projectManager="Belum ditentukan"
-                      status={p.status || 'HEALTHY'}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-            
-          </div>
-        )}
       </section>
 
+      <section className="simprok-section">
+        <div className="simprok-section__header">
+          <div>
+            <span className="simprok-section-kicker">Pintu Kerja Utama</span>
+            <h2>Mulai dari ruang yang paling sering dipakai.</h2>
+          </div>
+        </div>
+        <div className="simprok-door-grid">
+          <button
+            className="simprok-work-door simprok-work-door--primary"
+            onClick={() => goTo(canCreateRab ? '/project/new' : '/?ruang=akses-buat-rab')}
+            title={canCreateRab ? 'Buat RAB' : 'Buat RAB - Menunggu akses'}
+            aria-label={canCreateRab ? 'Buat RAB' : 'Buat RAB - Menunggu akses'}
+            data-route={canCreateRab ? '/project/new' : '/?ruang=akses-buat-rab'}
+          >
+            <span className="simprok-work-door__icon"><ClipboardList size={26} /></span>
+            <span>
+              <strong>Buat RAB</strong>
+              <small>{canCreateRab ? 'Masuk ke ruang penyusunan RAB.' : 'Menunggu akses untuk membuka ruang RAB.'}</small>
+            </span>
+            <ArrowRight size={20} aria-hidden="true" />
+          </button>
+
+          <button
+            className="simprok-work-door"
+            onClick={() => goTo('/?ruang=proyek-saya')}
+            title="Proyek Saya"
+            aria-label="Proyek Saya"
+            data-route="/?ruang=proyek-saya"
+          >
+            <span className="simprok-work-door__icon"><Briefcase size={26} /></span>
+            <span>
+              <strong>Proyek Saya</strong>
+              <small>Lihat daftar proyek dari data runtime yang tersedia.</small>
+            </span>
+            <ArrowRight size={20} aria-hidden="true" />
+          </button>
+
+          <button
+            className="simprok-work-door"
+            onClick={() => goTo('/field')}
+            title="Monitoring"
+            aria-label="Monitoring"
+            data-route="/field"
+          >
+            <span className="simprok-work-door__icon"><Activity size={26} /></span>
+            <span>
+              <strong>Monitoring</strong>
+              <small>Masuk ke ruang pantau dan laporan progress.</small>
+            </span>
+            <ArrowRight size={20} aria-hidden="true" />
+          </button>
+        </div>
+      </section>
+
+      <section className="simprok-living-room" aria-label="Proyek Berjalan SIMPROK">
+        <div className="simprok-living-room__main">
+          <section className="simprok-section simprok-living-card">
+            <div className="simprok-section__header">
+              <div>
+                <span className="simprok-section-kicker">Proyek Berjalan</span>
+                <h2>Proyek Aktif / RAB berjalan</h2>
+              </div>
+              <span className="simprok-source-label">Maksimal 3 tampil</span>
+            </div>
+
+            {loading ? (
+              <div className="simprok-honest-frame">
+                <span className="simprok-honest-frame__badge">Menunggu data</span>
+                <p>SIMPROK sedang memuat data proyek dari API existing.</p>
+              </div>
+            ) : error ? (
+              <div className="simprok-honest-frame">
+                <span className="simprok-honest-frame__badge">Belum tersambung</span>
+                <p>{error}</p>
+              </div>
+            ) : activeProjects.length === 0 ? (
+              <div className="simprok-honest-frame">
+                <span className="simprok-honest-frame__badge">Menunggu data</span>
+                <p>Belum ada RAB berjalan atau proyek aktif. Mulai dari Buat RAB atau buka Proyek Saya.</p>
+              </div>
+            ) : activeProjectGroup ? (
+              <div className="simprok-rotator">
+                <div className="simprok-rotator__header">
+                  <strong>{activeProjectGroup.label}</strong>
+                  <span>{activeProjectGroup.projects.length} proyek tampil</span>
+                </div>
+                <div className="simprok-running-list">
+                  {activeProjectGroup.projects.map((project, index) => (
+                    <button
+                      key={project.id || `${project.code || 'project'}-${index}`}
+                      className="simprok-running-project"
+                      onClick={() => project.id ? goTo(`/project/${project.id}`) : goTo('/?ruang=proyek-belum-lengkap')}
+                      title={project.id ? `Buka proyek ${project.name || 'tanpa nama'}` : 'Proyek belum lengkap'}
+                      aria-label={project.id ? `Buka proyek ${project.name || 'tanpa nama'}` : 'Proyek belum lengkap'}
+                      data-route={project.id ? `/project/${project.id}` : '/?ruang=proyek-belum-lengkap'}
+                    >
+                      <span className={`simprok-status-dot simprok-status-dot--${(project.status || 'waiting').toLowerCase()}`} />
+                      <span className="simprok-running-project__body">
+                        <strong>{project.name || 'Proyek tanpa nama'}</strong>
+                        <small>{project.code || 'Menunggu kode'}</small>
+                        {typeof project.progressPercent === 'number' ? (
+                          <span className="simprok-progress-track" aria-label="Progress proyek">
+                            <span style={{ width: `${Math.max(0, Math.min(project.progressPercent, 100))}%` }} />
+                          </span>
+                        ) : (
+                          <em>Belum ada realisasi</em>
+                        )}
+                      </span>
+                      <span className="simprok-running-project__status">{getStatusLabel(project.status)}</span>
+                    </button>
+                  ))}
+                </div>
+                {projectGroups.length > 1 ? (
+                  <div className="simprok-rotator__dots" aria-label="Indikator grup proyek">
+                    {projectGroups.map((group, index) => (
+                      <button
+                        key={`${group.label}-${index}`}
+                        className={index === safeProjectGroupIndex ? 'simprok-rotator__dot simprok-rotator__dot--active' : 'simprok-rotator__dot'}
+                        onClick={() => setProjectGroupIndex(index)}
+                        title={`Tampilkan grup ${group.label}`}
+                        aria-label={`Tampilkan grup ${group.label}`}
+                        data-route={`/?ruang=proyek-grup-${index + 1}`}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="simprok-section simprok-living-card simprok-living-card--compact">
+            <div className="simprok-section__header">
+              <div>
+                <span className="simprok-section-kicker">Wilayah Material</span>
+                <h2>Daftar Pemasok Material</h2>
+              </div>
+              <span className="simprok-source-label">Maksimal 5 tampil</span>
+            </div>
+            <button
+              className="simprok-supplier-strip simprok-honest-frame"
+              onClick={() => goTo('/?ruang=pemasok-material')}
+              title="Daftar Pemasok Material - Belum tersambung"
+              aria-label="Daftar Pemasok Material - Belum tersambung"
+              data-route="/?ruang=pemasok-material"
+            >
+              <span className="simprok-honest-frame__badge">Belum tersambung</span>
+              <Store size={24} aria-hidden="true" />
+              <span>Daftar toko / supplier material daerah akan tampil setelah data supplier tersambung.</span>
+            </button>
+          </section>
+
+          <section className="simprok-section simprok-living-card simprok-living-card--compact">
+            <div className="simprok-section__header">
+              <div>
+                <span className="simprok-section-kicker">Update Terbaru</span>
+                <h2>Bursa Material</h2>
+              </div>
+              <span className="simprok-source-label">Harga terpisah</span>
+            </div>
+            <button
+              className="simprok-material-ticker simprok-honest-frame"
+              onClick={() => goTo('/?ruang=bursa-material')}
+              title="Bursa Material - Belum tersambung"
+              aria-label="Bursa Material - Belum tersambung"
+              data-route="/?ruang=bursa-material"
+            >
+              <span className="simprok-honest-frame__badge">Belum tersambung</span>
+              <PackageSearch size={24} aria-hidden="true" />
+              <span>Perubahan harga material terbaru akan tampil setelah data harga tersambung.</span>
+            </button>
+          </section>
+        </div>
+
+        <aside className="simprok-living-room__side" aria-label="Perlu Perhatian">
+          <section className="simprok-attention-room">
+            <div className="simprok-attention-room__header">
+              <AlertTriangle size={22} aria-hidden="true" />
+              <div>
+                <h2>Perlu Perhatian</h2>
+              </div>
+            </div>
+            <div className="simprok-attention-list">
+              <button
+                className="simprok-attention-item simprok-attention-item--review"
+                onClick={() => goTo('/?ruang=review-rab')}
+                title="RAB menunggu review - Standby"
+                aria-label="RAB menunggu review - Standby"
+                data-route="/?ruang=review-rab"
+              >
+                <strong>Review</strong>
+                <span>RAB menunggu persetujuan akan tampil di sini.</span>
+              </button>
+              <button
+                className="simprok-attention-item simprok-attention-item--info"
+                onClick={() => goTo('/?ruang=update-ahsp-basic-price')}
+                title="Update AHSP dan Basic Price - Standby"
+                aria-label="Update AHSP dan Basic Price - Standby"
+                data-route="/?ruang=update-ahsp-basic-price"
+              >
+                <strong>Aksi</strong>
+                <span>Update AHSP dan Basic Price menunggu data tersambung.</span>
+              </button>
+              <button
+                className="simprok-attention-item simprok-attention-item--waiting"
+                onClick={() => goTo('/?ruang=data-proyek-belum-lengkap')}
+                title="Data proyek belum lengkap - Standby"
+                aria-label="Data proyek belum lengkap - Standby"
+                data-route="/?ruang=data-proyek-belum-lengkap"
+              >
+                <strong>Standby</strong>
+                <span>Lokasi, draft, dan item penting akan muncul saat tersedia.</span>
+              </button>
+            </div>
+          </section>
+        </aside>
+      </section>
+
+      <nav className="simprok-mobile-nav" aria-label="Navigasi cepat mobile">
+        <button onClick={() => goTo('/')} title="Beranda" aria-label="Beranda" data-route="/">
+          <Briefcase size={18} />
+          <span>Beranda</span>
+        </button>
+        <button onClick={() => goTo(canCreateRab ? '/project/new' : '/?ruang=akses-buat-rab')} title="Buat RAB" aria-label="Buat RAB" data-route={canCreateRab ? '/project/new' : '/?ruang=akses-buat-rab'}>
+          <ClipboardList size={18} />
+          <span>Buat RAB</span>
+        </button>
+        <button onClick={() => goTo('/?ruang=proyek-saya')} title="Proyek" aria-label="Proyek" data-route="/?ruang=proyek-saya">
+          <Briefcase size={18} />
+          <span>Proyek</span>
+        </button>
+        <button onClick={() => goTo('/field')} title="Monitoring" aria-label="Monitoring" data-route="/field">
+          <Activity size={18} />
+          <span>Monitoring</span>
+        </button>
+      </nav>
     </div>
   );
 }

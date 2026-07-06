@@ -1,93 +1,84 @@
 import { Link, useLocation } from 'react-router-dom';
-import { useAuth } from '../../contexts/AuthContext';
+import {
+  Activity,
+  BarChart3,
+  BookOpen,
+  Briefcase,
+  ClipboardList,
+  HardHat,
+  HelpCircle,
+  Home,
+  PackageSearch,
+  Pickaxe,
+  RefreshCcw,
+  Settings,
+  ShieldAlert,
+  Users,
+} from 'lucide-react';
+
+const navItems = [
+  { name: 'Beranda', path: '/', icon: Home, routeLabel: 'Beranda SIMPROK' },
+  { name: 'Buat RAB', path: '/project/new', icon: ClipboardList, routeLabel: 'Ruang buat RAB' },
+  { name: 'Proyek Saya', path: '/?ruang=proyek-saya', icon: Briefcase, routeLabel: 'Proyek Saya' },
+  { name: 'Monitoring', path: '/field', icon: Activity, routeLabel: 'Ruang monitoring dan laporan progress' },
+  { name: 'Recovery', path: '/?ruang=recovery', icon: RefreshCcw, routeLabel: 'Placeholder Recovery' },
+  { name: 'Insight / War Room', path: '/?ruang=insight-war-room', icon: BarChart3, routeLabel: 'Placeholder Insight / War Room' },
+  { name: 'AHSP', path: '/?ruang=ahsp', icon: BookOpen, routeLabel: 'Placeholder AHSP' },
+  { name: 'Basic Price', path: '/?ruang=basic-price', icon: PackageSearch, routeLabel: 'Placeholder Basic Price' },
+  { name: 'Peralatan', path: '/?ruang=peralatan', icon: Pickaxe, routeLabel: 'Placeholder Peralatan' },
+  { name: 'Personel', path: '/?ruang=personel', icon: Users, routeLabel: 'Placeholder Personel' },
+  { name: 'Metode Pelaksanaan', path: '/?ruang=metode-pelaksanaan', icon: HardHat, routeLabel: 'Placeholder Metode Pelaksanaan' },
+  { name: 'Risiko Bahaya', path: '/?ruang=risiko-bahaya', icon: ShieldAlert, routeLabel: 'Placeholder Risiko Bahaya' },
+  { name: 'Pengaturan', path: '/?ruang=pengaturan', icon: Settings, routeLabel: 'Placeholder Pengaturan' },
+  { name: 'Bantuan', path: '/?ruang=bantuan', icon: HelpCircle, routeLabel: 'Placeholder Bantuan' },
+];
 
 export function Sidebar() {
   const location = useLocation();
-  const { activeRoles } = useAuth();
-  
-  const isDirektur = activeRoles.includes('DIRECTOR') || activeRoles.includes('OWNER');
-
-  const navItems = [
-    { name: 'Beranda / Proyek Saya', path: '/' },
-    ...(isDirektur ? [{ name: 'Buat RAB', path: '/project/new' }] : []),
-    { name: 'Pantau / Lapor Progress', path: '/field' },
-    { name: 'UI Showcase (Internal)', path: '/showcase' },
-  ];
 
   return (
-    <aside style={{
-      width: '260px',
-      backgroundColor: 'var(--simprok-white)',
-      borderRight: '1px solid var(--simprok-engineering-blue-100)',
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100vh',
-      position: 'sticky',
-      top: 0
-    }}>
-      
-      {/* Brand Header */}
-      <div style={{ padding: 'var(--space-6)', backgroundColor: 'var(--simprok-bright-sky-blue-600)', borderBottom: '1px solid var(--simprok-bright-sky-blue-700)' }}>
-        <h1 style={{ 
-          fontSize: 'var(--text-3xl)', 
-          fontWeight: 'var(--weight-bold)', 
-          color: 'var(--simprok-white)',
-          margin: 0,
-          letterSpacing: '0.02em'
-        }}>
+    <aside className="simprok-sidebar" aria-label="Navigasi utama SIMPROK">
+      <div className="simprok-sidebar__brand">
+        <div className="simprok-sidebar__symbol-frame">
+          <img
+            src="/brand/simprok-symbol.png"
+            alt="Logo SIMPROK"
+            className="simprok-sidebar__symbol"
+          />
+        </div>
+        <h1>
           SIMPROK
         </h1>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--simprok-bright-sky-blue-100)', letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 'var(--weight-medium)' }}>
-          Sistem Manajemen Proyek
+        <span>
+          Sistem Intelijen Manajemen Proyek
         </span>
       </div>
 
-      {/* Navigation Links */}
-      <nav style={{ flex: 1, padding: 'var(--space-6) var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+      <nav className="simprok-sidebar__nav">
         {navItems.map((item) => {
-          const isActive = location.pathname === item.path;
+          const Icon = item.icon;
+          const isActive = item.path === '/'
+            ? location.pathname === '/' && !location.search
+            : location.pathname + location.search === item.path || location.pathname === item.path;
           return (
             <Link 
               key={item.path} 
               to={item.path}
-              style={{
-                padding: 'var(--space-3) var(--space-4)',
-                textDecoration: 'none',
-                color: isActive ? 'var(--simprok-bright-sky-blue-600)' : 'var(--simprok-engineering-blue-700)',
-                backgroundColor: isActive ? 'var(--simprok-bright-sky-blue-50)' : 'transparent',
-                borderRadius: '6px',
-                fontSize: 'var(--text-sm)',
-                fontWeight: isActive ? 'var(--weight-semibold)' : 'var(--weight-medium)',
-                transition: 'all 0.2s ease-in-out',
-                display: 'flex',
-                alignItems: 'center'
-              }}
+              className={`simprok-sidebar__link${isActive ? ' simprok-sidebar__link--active' : ''}`}
+              title={item.routeLabel}
+              aria-label={item.routeLabel}
+              data-route={item.path}
             >
-              <div style={{
-                width: '4px',
-                height: '16px',
-                backgroundColor: isActive ? 'var(--simprok-bright-sky-blue-500)' : 'transparent',
-                borderRadius: '2px',
-                marginRight: 'var(--space-3)'
-              }} />
-              {item.name}
+              <Icon size={18} aria-hidden="true" />
+              <span>{item.name}</span>
             </Link>
           );
         })}
       </nav>
 
-      {/* Owner Brand Footer */}
-      <div style={{ padding: 'var(--space-6)', borderTop: '1px solid var(--simprok-engineering-blue-100)', backgroundColor: 'var(--simprok-white)' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-          <span style={{ fontSize: '10px', color: 'var(--simprok-engineering-blue-600)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 'var(--weight-medium)' }}>
-            A Product of
-          </span>
-          <span style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-900)', fontWeight: 'var(--weight-bold)', letterSpacing: '0.02em' }}>
-            Dirk & Jo Group
-          </span>
-        </div>
+      <div className="simprok-sidebar__footer">
+        Product by Dirk &amp; Jo Group
       </div>
-
     </aside>
   );
 }

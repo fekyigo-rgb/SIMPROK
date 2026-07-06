@@ -1,10 +1,46 @@
-import { useNavigate } from 'react-router-dom';
+import { useMemo } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Bell, CircleHelp, LogOut, MessageSquare, UserCircle } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatRoleLabel } from '../../utils/roleLabels';
+
+interface AccountWithDisplayName {
+  displayName?: string;
+  email?: string;
+}
 
 export function Topbar() {
   const { account, activeRoles, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const normalizedPath = location.pathname.replace(/\/$/, '') || '/';
+
+  const topbarMeta = useMemo(() => {
+    const ruang = searchParams.get('ruang');
+
+    if (normalizedPath === '/project/new') {
+      return {
+        title: 'Persiapan RAB',
+        subtitle: 'Lengkapi data pekerjaan sebelum masuk ke Ruang Kerja RAB',
+        mobileLabel: 'Persiapan RAB',
+      };
+    }
+
+    if (normalizedPath === '/' && ruang === 'ruang-kerja-rab') {
+      return {
+        title: 'Ruang Kerja RAB',
+        subtitle: 'Susun item, volume, AHSP, harga, dan total secara jujur',
+        mobileLabel: 'Ruang Kerja RAB',
+      };
+    }
+
+    return {
+      title: 'Beranda SIMPROK',
+      subtitle: 'Ruang kendali proyek yang terang dan jujur',
+      mobileLabel: 'Beranda',
+    };
+  }, [normalizedPath, searchParams]);
 
   const handleLogout = () => {
     logout();
@@ -12,7 +48,7 @@ export function Topbar() {
   };
 
   // Derive initials from displayName or email
-  const displayName = (account as any)?.displayName || account?.email || 'User';
+  const displayName = (account as AccountWithDisplayName | null)?.displayName || account?.email || 'User';
   const initials = displayName
     .split(' ')
     .map((w: string) => w[0])
@@ -22,68 +58,79 @@ export function Topbar() {
 
   const roleLabel = activeRoles.length > 0 ? formatRoleLabel(activeRoles[0]) : 'No Role Assigned';
 
+  const openPlaceholder = (ruang: string) => {
+    navigate(`/?ruang=${ruang}`);
+  };
+
   return (
-    <header style={{
-      height: '72px',
-      backgroundColor: 'var(--simprok-white)',
-      borderBottom: '1px solid var(--simprok-engineering-blue-100)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      padding: '0 var(--space-8)',
-      position: 'sticky',
-      top: 0,
-      zIndex: 10
-    }}>
-      
-      {/* Left Context */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
-        <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--weight-semibold)', color: 'var(--simprok-engineering-blue-900)', margin: 0 }}>
-          Beranda SIMPROK
-        </h2>
+    <header className="simprok-topbar">
+      <div className="simprok-topbar__brand-mobile">
+        <strong>SIMPROK</strong>
+        <span>{topbarMeta.mobileLabel}</span>
       </div>
 
-      {/* Right Context: User Profile + Logout */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-bold)', color: 'var(--simprok-engineering-blue-900)' }}>
+      <div className="simprok-topbar__title">
+        <h2>{topbarMeta.title}</h2>
+        <span>{topbarMeta.subtitle}</span>
+      </div>
+
+      <div className="simprok-topbar__actions">
+        <button
+          className="simprok-icon-button"
+          onClick={() => openPlaceholder('pesan')}
+          title="Pesan - Belum tersambung"
+          aria-label="Pesan - Belum tersambung"
+          data-route="/?ruang=pesan"
+        >
+          <MessageSquare size={18} />
+        </button>
+        <button
+          className="simprok-icon-button"
+          onClick={() => openPlaceholder('notifikasi')}
+          title="Notifikasi - Belum tersambung"
+          aria-label="Notifikasi - Belum tersambung"
+          data-route="/?ruang=notifikasi"
+        >
+          <Bell size={18} />
+        </button>
+        <button
+          className="simprok-icon-button"
+          onClick={() => openPlaceholder('bantuan')}
+          title="Bantuan"
+          aria-label="Bantuan"
+          data-route="/?ruang=bantuan"
+        >
+          <CircleHelp size={18} />
+        </button>
+        <button
+          className="simprok-profile-button"
+          onClick={() => openPlaceholder('profil')}
+          title="Profil akun - Belum tersambung"
+          aria-label="Profil akun - Belum tersambung"
+          data-route="/?ruang=profil"
+        >
+          <span className="simprok-profile-button__text">
+            <span>
             {displayName}
-          </span>
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--simprok-engineering-blue-600)' }}>
+            </span>
+            <small>
             {roleLabel}
+            </small>
           </span>
-        </div>
-        <div style={{ 
-          width: '40px', 
-          height: '40px', 
-          borderRadius: '50%', 
-          backgroundColor: 'var(--simprok-engineering-blue-900)',
-          color: 'var(--simprok-white)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontWeight: 'var(--weight-bold)'
-        }}>
-          {initials}
-        </div>
+          <span className="simprok-profile-button__avatar" aria-hidden="true">
+            {initials || <UserCircle size={18} />}
+          </span>
+        </button>
         <button
           onClick={handleLogout}
           title="Logout"
-          style={{
-            background: 'transparent',
-            border: '1px solid var(--simprok-engineering-blue-200)',
-            color: 'var(--simprok-engineering-blue-700)',
-            padding: 'var(--space-2) var(--space-3)',
-            borderRadius: 'var(--radius-md)',
-            cursor: 'pointer',
-            fontSize: 'var(--text-sm)',
-            fontWeight: 'var(--weight-medium)',
-          }}
+          aria-label="Logout"
+          className="simprok-icon-button simprok-icon-button--logout"
+          data-route="/login"
         >
-          Logout
+          <LogOut size={18} />
         </button>
       </div>
-
     </header>
   );
 }
