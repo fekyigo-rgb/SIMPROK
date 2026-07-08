@@ -28,6 +28,15 @@ export const PERMISSIONS = {
   PROJECT_CREATE: 'PROJECT_CREATE',
 
   OBSERVATORY_VIEW: 'OBSERVATORY_VIEW',
+
+  // Golden Path v0 — AHSP domain
+  AHSP_VIEW: 'AHSP_VIEW',
+  AHSP_MANAGE: 'AHSP_MANAGE',
+  AHSP_APPROVE: 'AHSP_APPROVE',
+
+  // Golden Path v0 — Basic Price domain
+  BASIC_PRICE_VIEW: 'BASIC_PRICE_VIEW',
+  BASIC_PRICE_MANAGE: 'BASIC_PRICE_MANAGE',
 } as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -48,6 +57,8 @@ export const PERMISSION_DOMAINS = {
   FIELD_PROGRESS: 'FIELD_PROGRESS',
   PROJECT: 'PROJECT',
   OBSERVATORY: 'OBSERVATORY',
+  AHSP: 'AHSP',
+  BASIC_PRICE: 'BASIC_PRICE',
 } as const;
 
 export type PermissionDomain =
@@ -130,6 +141,43 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     description: 'View workspace-scoped Observatory or portfolio intelligence data.',
     note: 'Seeded through RBAC seed in DEBT-04-A1. Endpoint enforcement is a separate DEBT-04 slice.',
   },
+  // ── Golden Path v0 — AHSP Domain ──────────────────────────────────────────
+  {
+    code: PERMISSIONS.AHSP_VIEW,
+    domain: PERMISSION_DOMAINS.AHSP,
+    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    description: 'View AHSP records and versions within an authorized workspace.',
+    note: 'Declared in Golden Path v0 Slice A. Requires DB seed in next seed slice before endpoint is functionally usable.',
+  },
+  {
+    code: PERMISSIONS.AHSP_MANAGE,
+    domain: PERMISSION_DOMAINS.AHSP,
+    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    description: 'Create, update, archive, delete AHSP records and versions within an authorized workspace.',
+    note: 'Declared in Golden Path v0 Slice A. Requires DB seed before use.',
+  },
+  {
+    code: PERMISSIONS.AHSP_APPROVE,
+    domain: PERMISSION_DOMAINS.AHSP,
+    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    description: 'Approve AHSP records and promote them to workspace or official status.',
+    note: 'Declared in Golden Path v0 Slice A. Requires DB seed before use.',
+  },
+  // ── Golden Path v0 — Basic Price Domain ───────────────────────────────────
+  {
+    code: PERMISSIONS.BASIC_PRICE_VIEW,
+    domain: PERMISSION_DOMAINS.BASIC_PRICE,
+    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    description: 'View basic price records scoped to workspace or global catalog.',
+    note: 'Declared in Golden Path v0 Slice A. Requires DB seed before use.',
+  },
+  {
+    code: PERMISSIONS.BASIC_PRICE_MANAGE,
+    domain: PERMISSION_DOMAINS.BASIC_PRICE,
+    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    description: 'Submit and manage basic price records within an authorized workspace.',
+    note: 'Declared in Golden Path v0 Slice A. Reserved for write operations in a later slice.',
+  },
 ] as const;
 
 export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
@@ -146,4 +194,11 @@ export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.OBSERVATORY_VIEW,
 ];
 
-export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [];
+// Declared but not yet seeded into DB — must be seeded before endpoints are functionally accessible.
+export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
+  PERMISSIONS.AHSP_VIEW,
+  PERMISSIONS.AHSP_MANAGE,
+  PERMISSIONS.AHSP_APPROVE,
+  PERMISSIONS.BASIC_PRICE_VIEW,
+  PERMISSIONS.BASIC_PRICE_MANAGE,
+];

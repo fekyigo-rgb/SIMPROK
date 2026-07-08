@@ -4,8 +4,13 @@ import { AhspVersionService } from './services/ahsp-version.service';
 import { AhspSnapshotService } from './services/ahsp-snapshot.service';
 import { AhspImportService } from './services/ahsp-import.service';
 import { AhspAuditService } from './services/ahsp-audit.service';
+import { AhspController } from './ahsp.controller';
+import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
-  providers: [AhspService, AhspVersionService, AhspSnapshotService, AhspImportService, AhspAuditService]
+  imports: [PrismaModule],
+  controllers: [AhspController],
+  providers: [AhspService, AhspVersionService, AhspSnapshotService, AhspImportService, AhspAuditService],
+  exports: [AhspService, AhspVersionService, AhspSnapshotService],
 })
 export class AhspModule {}
