@@ -82,12 +82,15 @@ export function ProjectListPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [retryCount, setRetryCount] = useState(0);
+
   useEffect(() => {
     async function loadProjects() {
       try {
         setLoading(true);
         setError(null);
-        const data = await apiFetch('/projects') as any;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = (await apiFetch('/projects')) as any;
         if (Array.isArray(data)) {
           setProjects(data.map(mapProjectToItem));
         } else if (data && Array.isArray(data.data)) {
@@ -101,8 +104,9 @@ export function ProjectListPage() {
         setLoading(false);
       }
     }
+    
     loadProjects();
-  }, []);
+  }, [retryCount]);
 
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -229,7 +233,7 @@ export function ProjectListPage() {
           <button
             className="simprok-projects__empty-reset"
             type="button"
-            onClick={() => window.location.reload()}
+            onClick={() => setRetryCount((c) => c + 1)}
           >
             Coba lagi
           </button>

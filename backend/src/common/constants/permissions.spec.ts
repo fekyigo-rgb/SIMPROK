@@ -24,7 +24,7 @@ describe('Permissions Catalog', () => {
     });
   });
 
-  it('should include Golden Path v0 Slice A permissions in DECLARED_NOT_SEEDED_PERMISSION_CODES', () => {
+  it('should include Golden Path v0 Slice A permissions in SEEDED_PERMISSION_CODES', () => {
     const expectedNewPermissions = [
       PERMISSIONS.AHSP_VIEW,
       PERMISSIONS.AHSP_MANAGE,
@@ -34,7 +34,7 @@ describe('Permissions Catalog', () => {
     ];
 
     expectedNewPermissions.forEach((permissionCode) => {
-      expect(DECLARED_NOT_SEEDED_PERMISSION_CODES).toContain(permissionCode);
+      expect(SEEDED_PERMISSION_CODES).toContain(permissionCode);
     });
   });
 });

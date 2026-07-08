@@ -145,38 +145,38 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   {
     code: PERMISSIONS.AHSP_VIEW,
     domain: PERMISSION_DOMAINS.AHSP,
-    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
     description: 'View AHSP records and versions within an authorized workspace.',
-    note: 'Declared in Golden Path v0 Slice A. Requires DB seed in next seed slice before endpoint is functionally usable.',
+    note: 'Seeded in Golden Path v0 Slice B.',
   },
   {
     code: PERMISSIONS.AHSP_MANAGE,
     domain: PERMISSION_DOMAINS.AHSP,
-    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
     description: 'Create, update, archive, delete AHSP records and versions within an authorized workspace.',
-    note: 'Declared in Golden Path v0 Slice A. Requires DB seed before use.',
+    note: 'Seeded in Golden Path v0 Slice B.',
   },
   {
     code: PERMISSIONS.AHSP_APPROVE,
     domain: PERMISSION_DOMAINS.AHSP,
-    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
     description: 'Approve AHSP records and promote them to workspace or official status.',
-    note: 'Declared in Golden Path v0 Slice A. Requires DB seed before use.',
+    note: 'Seeded in Golden Path v0 Slice B.',
   },
   // ── Golden Path v0 — Basic Price Domain ───────────────────────────────────
   {
     code: PERMISSIONS.BASIC_PRICE_VIEW,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
     description: 'View basic price records scoped to workspace or global catalog.',
-    note: 'Declared in Golden Path v0 Slice A. Requires DB seed before use.',
+    note: 'Seeded in Golden Path v0 Slice B.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_MANAGE,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.NEEDED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
     description: 'Submit and manage basic price records within an authorized workspace.',
-    note: 'Declared in Golden Path v0 Slice A. Reserved for write operations in a later slice.',
+    note: 'Seeded in Golden Path v0 Slice B.',
   },
 ] as const;
 
@@ -192,13 +192,12 @@ export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.PROJECT_VIEW,
   PERMISSIONS.PROJECT_CREATE,
   PERMISSIONS.OBSERVATORY_VIEW,
-];
-
-// Declared but not yet seeded into DB — must be seeded before endpoints are functionally accessible.
-export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.AHSP_VIEW,
   PERMISSIONS.AHSP_MANAGE,
   PERMISSIONS.AHSP_APPROVE,
   PERMISSIONS.BASIC_PRICE_VIEW,
   PERMISSIONS.BASIC_PRICE_MANAGE,
 ];
+
+// Declared but not yet seeded into DB — must be seeded before endpoints are functionally accessible.
+export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [];
