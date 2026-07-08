@@ -20,12 +20,82 @@
       "type": "LABOR",
       "unit": "Org/Hari",
       "price": 208333.33333333334
+    },
+    {
+      "code": "BP-12",
+      "name": "Tukang Besi",
+      "type": "LABOR",
+      "unit": "Org/Hari",
+      "price": 208333.33333333334
+    },
+    {
+      "code": "BP-13",
+      "name": "Tukang Kayu",
+      "type": "LABOR",
+      "unit": "Org/Hari",
+      "price": 208333.33333333334
+    },
+    {
+      "code": "BP-15",
+      "name": "Tukang vibrator",
+      "type": "EQUIPMENT",
+      "unit": "Org/Hari",
+      "price": 208333.33333333334
+    },
+    {
+      "code": "BP-33",
+      "name": "Kawat jaring",
+      "type": "MATERIAL",
+      "unit": "Lbr",
+      "price": 1100000
+    },
+    {
+      "code": "BP-34",
+      "name": "Panel beton pracetak",
+      "type": "MATERIAL",
+      "unit": "Lbr",
+      "price": 4
+    },
+    {
+      "code": "BP-35",
+      "name": "Kolom beton pracetak",
+      "type": "MATERIAL",
+      "unit": "Batang",
+      "price": 5
+    },
+    {
+      "code": "BP-36",
+      "name": "Mortar Siap Pakai (semen instan)",
+      "type": "MATERIAL",
+      "unit": "Kg",
+      "price": 15500
+    },
+    {
+      "code": "BP-37",
+      "name": "Teraso Cor",
+      "type": "MATERIAL",
+      "unit": "Buah",
+      "price": 5.2
+    },
+    {
+      "code": "BP-316",
+      "name": "Sewa crane",
+      "type": "EQUIPMENT",
+      "unit": "U/J",
+      "price": 1714285.7142857143
+    },
+    {
+      "code": "BP-317",
+      "name": "Sewa Excavtor Standart",
+      "type": "EQUIPMENT",
+      "unit": "U/J",
+      "price": 1214490.2544351073
     }
   ],
   "ahspAnalyses": [
     {
-      "code": "A",
-      "name": "Tenaga Kerja",
+      "code": "1.7.7.1.1.b (a)",
+      "name": "Penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3",
       "workType": "Pekerjaan",
       "unit": "ls",
       "components": [
@@ -40,15 +110,7 @@
           "resourceType": "LABOR",
           "coefficient": 0.04,
           "baseUnit": "OH"
-        }
-      ]
-    },
-    {
-      "code": "A",
-      "name": "Tenaga Kerja",
-      "workType": "Pekerjaan",
-      "unit": "ls",
-      "components": [
+        },
         {
           "resourceName": "Pekerja",
           "resourceType": "LABOR",
@@ -66,6 +128,598 @@
           "resourceType": "MATERIAL",
           "coefficient": 0.1224,
           "baseUnit": "Jam"
+        },
+        {
+          "resourceName": "Dump Truck",
+          "resourceType": "EQUIPMENT",
+          "coefficient": 0.1707,
+          "baseUnit": "Jam"
+        }
+      ]
+    },
+    {
+      "code": "1.7.14.a (a)",
+      "name": "1 m3 Timbunan Biasa",
+      "workType": "Pekerjaan",
+      "unit": "ls",
+      "components": [
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 0.1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.01,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tanah Biasa / liat berpasir",
+          "resourceType": "MATERIAL",
+          "coefficient": 1.4,
+          "baseUnit": "m3"
+        }
+      ]
+    },
+    {
+      "code": "1.7.14.b (a)",
+      "name": "1 m3 Timbunan Tanah Biasa / Berpasir",
+      "workType": "Pekerjaan",
+      "unit": "ls",
+      "components": [
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 0.125,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.0125,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tanah berpasir",
+          "resourceType": "MATERIAL",
+          "coefficient": 1.6,
+          "baseUnit": "m3"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 0.0159,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.0038,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tanah Pilihan",
+          "resourceType": "MATERIAL",
+          "coefficient": 1.2,
+          "baseUnit": "m3"
+        },
+        {
+          "resourceName": "Dump Truck",
+          "resourceType": "EQUIPMENT",
+          "coefficient": 0.14,
+          "baseUnit": "Jam"
+        },
+        {
+          "resourceName": "Wheel Loader",
+          "resourceType": "MATERIAL",
+          "coefficient": 0,
+          "baseUnit": "Jam"
+        },
+        {
+          "resourceName": "Motor Grader",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.0038,
+          "baseUnit": "Jam"
+        },
+        {
+          "resourceName": "Tandem",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.0112,
+          "baseUnit": "Jam"
+        },
+        {
+          "resourceName": "Watertanker",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.034,
+          "baseUnit": "Jam"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 0.0016,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Besi",
+          "resourceType": "LABOR",
+          "coefficient": 0.0016,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.00016,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.00016,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "BjTP atau BjTS",
+          "resourceType": "MATERIAL",
+          "coefficient": 1.02,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Kawat bendrat",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.028,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.25,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.025,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "PC : Portland Cement",
+          "resourceType": "MATERIAL",
+          "coefficient": 406,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "PB : Pasir Beton",
+          "resourceType": "MATERIAL",
+          "coefficient": 684,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Kr : Kerikil / agregat",
+          "resourceType": "MATERIAL",
+          "coefficient": 1026,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Air",
+          "resourceType": "MATERIAL",
+          "coefficient": 215,
+          "baseUnit": "Liter"
+        },
+        {
+          "resourceName": "Beton Mixer",
+          "resourceType": "EQUIPMENT",
+          "coefficient": 0.227,
+          "baseUnit": "Jam"
+        },
+        {
+          "resourceName": "Concreate Vibraator",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.1205,
+          "baseUnit": "Jam"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.25,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.025,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "PC : Portland Cement",
+          "resourceType": "MATERIAL",
+          "coefficient": 368,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "PB : Pasir Beton",
+          "resourceType": "MATERIAL",
+          "coefficient": 770,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Kr : Kerikil / agregat",
+          "resourceType": "MATERIAL",
+          "coefficient": 1009,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Air",
+          "resourceType": "MATERIAL",
+          "coefficient": 202,
+          "baseUnit": "Liter"
+        },
+        {
+          "resourceName": "Beton Mixer",
+          "resourceType": "EQUIPMENT",
+          "coefficient": 0.1475,
+          "baseUnit": "Hari"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.25,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.025,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.05,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "PC : Portland Cement",
+          "resourceType": "MATERIAL",
+          "coefficient": 352,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "PB : Pasir Beton",
+          "resourceType": "MATERIAL",
+          "coefficient": 731,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Kr : Kerikil / agregat",
+          "resourceType": "MATERIAL",
+          "coefficient": 1031,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Air",
+          "resourceType": "MATERIAL",
+          "coefficient": 215,
+          "baseUnit": "Liter"
+        },
+        {
+          "resourceName": "Beton Mixer",
+          "resourceType": "EQUIPMENT",
+          "coefficient": 0.238,
+          "baseUnit": "Hari"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.25,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.025,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "PC : Portland Cement",
+          "resourceType": "MATERIAL",
+          "coefficient": 299,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "PB : Pasir Beton",
+          "resourceType": "MATERIAL",
+          "coefficient": 799,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Kr : Kerikil / agregat",
+          "resourceType": "MATERIAL",
+          "coefficient": 1017,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Air",
+          "resourceType": "MATERIAL",
+          "coefficient": 215,
+          "baseUnit": "Liter"
+        },
+        {
+          "resourceName": "Beton Mixer",
+          "resourceType": "EQUIPMENT",
+          "coefficient": 0.238,
+          "baseUnit": "Hari"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 0.36,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.18,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.018,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.036,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Multiplex 9 mm",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.4,
+          "baseUnit": "lmbar"
+        },
+        {
+          "resourceName": "Kaso 5/7 cm",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.008,
+          "baseUnit": "m3"
+        },
+        {
+          "resourceName": "Paku 5 cm & 7 cm",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.3,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Minyak bekesting",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.2,
+          "baseUnit": "Liter"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.5,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.1,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Portland Cement",
+          "resourceType": "MATERIAL",
+          "coefficient": 252,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Pasir Pasang",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.44,
+          "baseUnit": "m3"
+        },
+        {
+          "resourceName": "Batu Belah",
+          "resourceType": "MATERIAL",
+          "coefficient": 1.2,
+          "baseUnit": "m3"
+        },
+        {
+          "resourceName": "Beton Mixer",
+          "resourceType": "EQUIPMENT",
+          "coefficient": 0.00726,
+          "baseUnit": "Hari"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 0.3,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.15,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.015,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.015,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Portland Cement",
+          "resourceType": "MATERIAL",
+          "coefficient": 10.224,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Pasir Pasang",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.02,
+          "baseUnit": "m3"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 0.3,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.15,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.015,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.015,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Portland Cement",
+          "resourceType": "MATERIAL",
+          "coefficient": 10.224,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Pasir Pasang",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.015,
+          "baseUnit": "m3"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 0.2,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.11,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.01,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.01,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Portland Cement",
+          "resourceType": "MATERIAL",
+          "coefficient": 3.25,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Pekerja",
+          "resourceType": "LABOR",
+          "coefficient": 0.02,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Tukang Batu",
+          "resourceType": "LABOR",
+          "coefficient": 0.063,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Kepala Tukang",
+          "resourceType": "LABOR",
+          "coefficient": 0.0063,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Mandor",
+          "resourceType": "LABOR",
+          "coefficient": 0.003,
+          "baseUnit": "OH"
+        },
+        {
+          "resourceName": "Plamur",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.1,
+          "baseUnit": "Kg"
+        },
+        {
+          "resourceName": "Cat Penutup",
+          "resourceType": "MATERIAL",
+          "coefficient": 0.26,
+          "baseUnit": "Kg"
         }
       ]
     }
@@ -107,13 +761,295 @@
       "type": "AHSP_TO_BASIC_PRICE",
       "from": "Pekerja",
       "to": "Pekerja",
-      "confidence": "MEDIUM"
+      "confidence": "HIGH"
     },
     {
       "type": "AHSP_TO_BASIC_PRICE",
       "from": "Pekerja",
       "to": "Pekerja",
-      "confidence": "MEDIUM"
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Besi",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kawat bendrat",
+      "to": "Kawat jaring",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "PB : Pasir Beton",
+      "to": "Panel beton pracetak",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Beton Mixer",
+      "to": "Panel beton pracetak",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "PB : Pasir Beton",
+      "to": "Panel beton pracetak",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Beton Mixer",
+      "to": "Panel beton pracetak",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "PB : Pasir Beton",
+      "to": "Panel beton pracetak",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Beton Mixer",
+      "to": "Panel beton pracetak",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "PB : Pasir Beton",
+      "to": "Panel beton pracetak",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Beton Mixer",
+      "to": "Panel beton pracetak",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Batu Belah",
+      "to": "Tukang Batu",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Beton Mixer",
+      "to": "Panel beton pracetak",
+      "confidence": "LOW"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Pekerja",
+      "to": "Pekerja",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Tukang Batu",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "AHSP_TO_BASIC_PRICE",
+      "from": "Kepala Tukang",
+      "to": "Tukang",
+      "confidence": "HIGH"
+    },
+    {
+      "type": "BOQ_TO_AHSP",
+      "from": "Mobilisasi dan Demobilisasi",
+      "to": "Penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3",
+      "confidence": "NOT_MATCHED"
     }
   ],
   "warnings": []
