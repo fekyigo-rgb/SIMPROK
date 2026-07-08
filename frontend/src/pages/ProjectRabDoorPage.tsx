@@ -1,6 +1,7 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Archive, ChevronLeft, ChevronRight, Download, FileText, Lock, Maximize2, Minimize2, Printer, RotateCcw, Upload, ZoomIn, ZoomOut } from 'lucide-react';
+import { Archive, ChevronLeft, ChevronRight, Download, FileText, Lock, Maximize2, Minimize2, Printer, RotateCcw, Upload, ZoomIn, ZoomOut, AlertTriangle } from 'lucide-react';
+import { apiFetch } from '../utils/apiClient';
 
 type RabStatus = 'Draft' | 'Terkunci' | 'Approved' | 'Selesai';
 type PanelMode = 'compact' | 'wide' | 'collapsed';
@@ -24,54 +25,6 @@ interface RabRow {
   total: string;
 }
 
-const rabProjects: Record<string, RabProject> = {
-  'gedung-a': {
-    name: 'Pembangunan Gedung A',
-    code: 'PRJ-2026-GDG-001',
-    owner: 'Dinas PU Kab. Buru',
-    location: 'Namlea, Maluku',
-    fiscalYear: '2026',
-    status: 'Draft',
-    value: 'Rp 2.500.000.000',
-  },
-  'pipa-b': {
-    name: 'Renovasi Jaringan Pipa B',
-    code: 'PRJ-2026-PIP-002',
-    owner: 'Dinas PU Kab. Buru',
-    location: 'Namlea, Maluku',
-    fiscalYear: '2026',
-    status: 'Terkunci',
-    value: 'Rp 850.000.000',
-  },
-  'kendaraan-c': {
-    name: 'Pengadaan Kendaraan C',
-    code: 'PRJ-2026-KDR-003',
-    owner: 'Dinas PU Kab. Buru',
-    location: 'Namlea, Maluku',
-    fiscalYear: '2026',
-    status: 'Approved',
-    value: 'Rp 1.200.000.000',
-  },
-  'infrastruktur-d': {
-    name: 'Perbaikan Infrastruktur D',
-    code: 'PRJ-2026-INF-004',
-    owner: 'Dinas PU Kab. Buru',
-    location: 'Namlea, Maluku',
-    fiscalYear: '2026',
-    status: 'Approved',
-    value: 'Rp 5.400.000.000',
-  },
-  'arsip-e': {
-    name: 'Pekerjaan Drainase E',
-    code: 'PRJ-2026-DRN-005',
-    owner: 'Dinas PU Kab. Buru',
-    location: 'Namlea, Maluku',
-    fiscalYear: '2026',
-    status: 'Selesai',
-    value: 'Rp 640.000.000',
-  },
-};
-
 const defaultProject: RabProject = {
   name: 'Rencana Anggaran Biaya',
   code: 'Data belum tersedia',
@@ -82,15 +35,7 @@ const defaultProject: RabProject = {
   value: 'Data belum tersedia',
 };
 
-const rabRows: RabRow[] = [
-  { code: '1.1', description: 'Pekerjaan persiapan dan mobilisasi', unit: 'ls', volume: '1,00', unitPrice: 'Rp 125.000.000', total: 'Rp 125.000.000' },
-  { code: '2.1', description: 'Galian tanah struktur segmen utama', unit: 'm3', volume: '480,00', unitPrice: 'Rp 185.000', total: 'Rp 88.800.000' },
-  { code: '2.2', description: 'Urugan pilihan dan pemadatan lapis pondasi', unit: 'm3', volume: '350,00', unitPrice: 'Rp 245.000', total: 'Rp 85.750.000' },
-  { code: '3.1', description: 'Beton mutu K-250 termasuk bekisting', unit: 'm3', volume: '210,00', unitPrice: 'Rp 1.375.000', total: 'Rp 288.750.000' },
-  { code: '3.2', description: 'Pembesian struktur utama diameter bervariasi', unit: 'kg', volume: '18.500,00', unitPrice: 'Rp 19.500', total: 'Rp 360.750.000' },
-  { code: '4.1', description: 'Pekerjaan drainase dan saluran pelengkap', unit: 'm', volume: '320,00', unitPrice: 'Rp 845.000', total: 'Rp 270.400.000' },
-  { code: '5.1', description: 'Finishing, pembersihan area, dan demobilisasi', unit: 'ls', volume: '1,00', unitPrice: 'Rp 96.500.000', total: 'Rp 96.500.000' },
-];
+const formatRupiah = (value: number) => `Rp ${Math.round(value).toLocaleString('id-ID')}`;
 
 const supportDocuments = [
   'Spesifikasi Teknis',
@@ -110,12 +55,72 @@ function isReadOnly(status: RabStatus) {
 export function ProjectRabDoorPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
-  const project = projectId ? rabProjects[projectId] || defaultProject : defaultProject;
+  
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [project, setProject] = useState<RabProject>(defaultProject);
+  const [rabRows, setRabRows] = useState<RabRow[]>([]);
+  
   const [zoom, setZoom] = useState(100);
   const [panelMode, setPanelMode] = useState<PanelMode>('compact');
   const [activeSupport, setActiveSupport] = useState('Spesifikasi Teknis');
   const [addendumOpen, setAddendumOpen] = useState(false);
   const [officialActionMessage, setOfficialActionMessage] = useState('');
+  
+  useEffect(() => {
+    async function loadData() {
+      if (!projectId) return;
+      try {
+        setLoading(true);
+        setError(null);
+        
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const projData = (await apiFetch(`/projects/${projectId}`)) as any;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const boqData = (await apiFetch(`/projects/${projectId}/boq`)) as any;
+
+        let mappedStatus: RabStatus = 'Draft';
+        if (projData?.status === 'ACTIVE') mappedStatus = 'Terkunci';
+        else if (projData?.status === 'COMPLETED') mappedStatus = 'Selesai';
+        else if (projData?.status === 'ON_HOLD') mappedStatus = 'Terkunci';
+
+        setProject({
+          name: projData?.name || 'Rencana Anggaran Biaya',
+          code: projData?.id ? `PRJ-${String(projData.id).slice(0, 5).toUpperCase()}` : 'Data belum tersedia',
+          owner: 'Belum tersedia',
+          location: 'Belum tersedia',
+          fiscalYear: 'Belum tersedia',
+          status: mappedStatus,
+          value: projData?.budgetBaseline ? formatRupiah(projData.budgetBaseline) : 'Belum tersedia',
+        });
+
+        if (Array.isArray(boqData)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setRabRows(boqData.map((item: any, idx: number) => {
+            const qty = Number(item.quantity) || 0;
+            const up = Number(item.unitPrice) || 0;
+            return {
+              code: item.wbsCode || String(idx + 1),
+              description: item.name || 'Data belum tersedia',
+              unit: item.unit || '-',
+              volume: qty > 0 ? qty.toLocaleString('id-ID') : '-',
+              unitPrice: up > 0 ? formatRupiah(up) : '-',
+              total: qty > 0 && up > 0 ? formatRupiah(qty * up) : '-',
+            };
+          }));
+        } else {
+          setRabRows([]);
+        }
+
+      } catch {
+        setError('RAB proyek belum dapat dimuat.');
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, [projectId]);
+
   const readOnly = isReadOnly(project.status);
   const archived = project.status === 'Selesai';
   const zoomStyle = useMemo(
@@ -252,6 +257,8 @@ export function ProjectRabDoorPage() {
             </div>
           </header>
 
+
+
           <div className="simprok-rab-actions">
             {project.status === 'Terkunci' || project.status === 'Approved' ? (
               <button type="button" className="simprok-rab-button simprok-rab-button--gold" onClick={handleAddendumAction}>
@@ -274,32 +281,48 @@ export function ProjectRabDoorPage() {
 
           <div className="simprok-rab-canvas">
             <div className="simprok-rab-canvas__zoom" style={zoomStyle}>
-              <table className="simprok-rab-table">
-                <thead>
-                  <tr>
-                    <th>Kode</th>
-                    <th>Uraian Pekerjaan</th>
-                    <th>Satuan</th>
-                    <th>Volume</th>
-                    <th>Harga Satuan</th>
-                    <th>Jumlah</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rabRows.map((row) => (
-                    <tr key={row.code}>
-                      <td>{row.code}</td>
-                      <td>{row.description}</td>
-                      <td>{row.unit}</td>
-                      <td>{row.volume}</td>
-                      <td>{row.unitPrice}</td>
-                      <td>{row.total}</td>
-                      <td>{readOnly ? 'Read-only' : 'Draft RAB'}</td>
+              {loading ? (
+                <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--simprok-text-muted)' }}>
+                  Memuat dokumen RAB...
+                </div>
+              ) : error ? (
+                <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--simprok-text-muted)' }}>
+                  <AlertTriangle size={24} style={{ margin: '0 auto 1rem', display: 'block' }} />
+                  {error}
+                </div>
+              ) : rabRows.length === 0 ? (
+                <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--simprok-text-muted)' }}>
+                  <FileText size={24} style={{ margin: '0 auto 1rem', display: 'block' }} />
+                  RAB/BOQ belum tersedia untuk proyek ini.
+                </div>
+              ) : (
+                <table className="simprok-rab-table">
+                  <thead>
+                    <tr>
+                      <th>Kode</th>
+                      <th>Uraian Pekerjaan</th>
+                      <th>Satuan</th>
+                      <th>Volume</th>
+                      <th>Harga Satuan</th>
+                      <th>Jumlah</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {rabRows.map((row) => (
+                      <tr key={row.code}>
+                        <td>{row.code}</td>
+                        <td>{row.description}</td>
+                        <td>{row.unit}</td>
+                        <td>{row.volume}</td>
+                        <td>{row.unitPrice}</td>
+                        <td>{row.total}</td>
+                        <td>{readOnly ? 'Read-only' : 'Draft RAB'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </section>
