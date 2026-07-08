@@ -188,10 +188,10 @@ export function ObservatoryPage() {
             </button>
             <button
               className="simprok-welcome__cta"
-              onClick={() => goTo('/?ruang=proyek-saya')}
+              onClick={() => goTo('/proyek')}
               title="Lihat Proyek Saya"
               aria-label="Lihat Proyek Saya"
-              data-route="/?ruang=proyek-saya"
+              data-route="/proyek"
             >
               Lihat Proyek Saya
             </button>
@@ -233,10 +233,10 @@ export function ObservatoryPage() {
 
           <button
             className="simprok-work-door"
-            onClick={() => goTo('/?ruang=proyek-saya')}
+            onClick={() => goTo('/proyek')}
             title="Proyek Saya"
             aria-label="Proyek Saya"
-            data-route="/?ruang=proyek-saya"
+            data-route="/proyek"
           >
             <span className="simprok-work-door__icon"><Briefcase size={26} /></span>
             <span>
@@ -435,7 +435,7 @@ export function ObservatoryPage() {
           <ClipboardList size={18} />
           <span>Buat RAB</span>
         </button>
-        <button onClick={() => goTo('/?ruang=proyek-saya')} title="Proyek" aria-label="Proyek" data-route="/?ruang=proyek-saya">
+        <button onClick={() => goTo('/proyek')} title="Proyek" aria-label="Proyek" data-route="/proyek">
           <Briefcase size={18} />
           <span>Proyek</span>
         </button>

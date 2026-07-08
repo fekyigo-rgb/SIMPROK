@@ -3,38 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiFetch } from '../utils/apiClient';
 import { NumericFact } from '../components/atoms/NumericFact';
-import { ArrowRight, CircleHelp, MapPin, Send, Sparkles, X } from 'lucide-react';
-
-const rabStartOptions = [
-  {
-    id: 'manual',
-    label: 'Manual',
-    hint: 'Isi Data Pekerjaan langkah demi langkah.',
-    connected: true,
-    connectedMessage: 'Mode manual aktif. Lengkapi Data Pekerjaan di bawah.',
-  },
-  {
-    id: 'import-boq',
-    label: 'Import BOQ',
-    hint: 'Unggah BOQ dari file eksternal.',
-    connected: false,
-    connectedMessage: 'Belum tersambung. Engine import BOQ belum aktif.',
-  },
-  {
-    id: 'template',
-    label: 'Template',
-    hint: 'Mulai dari template RAB yang tersedia.',
-    connected: false,
-    connectedMessage: 'Standby. Perpustakaan template belum tersambung.',
-  },
-  {
-    id: 'draft',
-    label: 'Lanjutkan Draft',
-    hint: 'Lanjutkan pekerjaan RAB yang belum selesai.',
-    connected: false,
-    connectedMessage: 'Menunggu data. Draft tersimpan permanen belum tersambung ke backend.',
-  },
-] as const;
+import { ArrowRight, MapPin, Send, Sparkles, X } from 'lucide-react';
 
 const requiredPreparationFields = [
   'Nama Proyek',
@@ -79,7 +48,6 @@ export function ProjectSetupPage() {
   const navigate = useNavigate();
   const [interactionText, setInteractionText] = useState('');
   const [interactionStatus, setInteractionStatus] = useState('Engine belum aktif');
-  const [startModeStatus, setStartModeStatus] = useState('Mode manual aktif. Lengkapi Data Pekerjaan di bawah.');
   const [selectedKategori, setSelectedKategori] = useState('');
   const [selectedBidang, setSelectedBidang] = useState<string[]>([]);
 
@@ -104,10 +72,6 @@ export function ProjectSetupPage() {
     setInteractionStatus('Engine belum aktif. Konteks belum diproses. Ruang sudah disiapkan.');
   };
 
-  const handleStartOption = (option: typeof rabStartOptions[number]) => {
-    setStartModeStatus(option.connectedMessage);
-  };
-
   return (
     <div className="simprok-rab-prep">
       <header className="simprok-rab-prep__header">
@@ -126,42 +90,6 @@ export function ProjectSetupPage() {
           Ruang Transisi RAB
         </div>
       </header>
-
-      <div className="simprok-lifecycle-chips" aria-label="Status Lifecycle RAB">
-        <div className="simprok-lifecycle-chips__items">
-          <span className="simprok-lifecycle-chip simprok-lifecycle-chip--active">Draft / Terbuka</span>
-          <span className="simprok-lifecycle-chip">Kunci RAB</span>
-          <span className="simprok-lifecycle-chip">Approved / Disetujui</span>
-          <span className="simprok-lifecycle-chip">Addendum</span>
-        </div>
-        <p className="simprok-lifecycle-chips__note">Simpan Draft &ne; Kunci RAB &ne; Approved.</p>
-      </div>
-
-      <section className="simprok-rab-start" aria-label="Cara Mulai RAB">
-        <div className="simprok-rab-start__header">
-          <span className="simprok-section-kicker">Cara Mulai RAB</span>
-          <h2>Pilih cara memulai penyusunan RAB.</h2>
-        </div>
-        <div className="simprok-rab-start__grid">
-          {rabStartOptions.map((option) => (
-            <button
-              key={option.id}
-              className="simprok-rab-start__option"
-              onClick={() => handleStartOption(option)}
-              title={`${option.label} - ${option.connected ? 'aktif' : 'belum tersambung'}`}
-              aria-label={`${option.label} - ${option.connected ? 'aktif' : 'belum tersambung'}`}
-              data-route={`/?ruang=cara-mulai-${option.id}`}
-            >
-              <strong>{option.label}</strong>
-              <small>{option.hint}</small>
-              {!option.connected ? (
-                <span className="simprok-rab-start__badge">Belum tersambung</span>
-              ) : null}
-            </button>
-          ))}
-        </div>
-        <p className="simprok-rab-start__status">{startModeStatus}</p>
-      </section>
 
       <div className="simprok-rab-prep__grid">
         <section className="simprok-rab-card simprok-rab-form-card" aria-label="Data Pekerjaan">
@@ -192,7 +120,7 @@ export function ProjectSetupPage() {
             <div className="simprok-rab-form__section">
               <span className="simprok-rab-form__label">Arah Perhitungan SIMPROK</span>
               <div className="simprok-rab-form__grid">
-                <label className="simprok-rab-field">
+                <label className="simprok-rab-field simprok-rab-field--kategori">
                   <span>Kategori</span>
                   <select value={selectedKategori} onChange={(e) => handleKategoriChange(e.target.value)}>
                     <option value="">Pilih Kategori...</option>
@@ -205,7 +133,6 @@ export function ProjectSetupPage() {
                 {showBidang ? (
                   <div className="simprok-rab-field simprok-rab-field--wide simprok-bidang-block">
                     <span>Bidang Pekerjaan</span>
-                    <p className="simprok-bidang-block__hint">Pilih satu atau beberapa bidang yang paling dekat dengan pekerjaan.</p>
                     <div className="simprok-multi-select">
                       {bidangPekerjaanOptions.map((bidang) => (
                         <label key={bidang} className="simprok-multi-select__item">
@@ -218,19 +145,9 @@ export function ProjectSetupPage() {
                         </label>
                       ))}
                     </div>
-                    <p className="simprok-multi-select__helper">
-                      Jalan/jembatan &rarr; Bina Marga. Gedung/fasilitas umum &rarr; Cipta Karya. Rumah/kawasan &rarr; Perumahan. Sungai/irigasi/talud &rarr; Sumber Daya Air.
-                    </p>
                   </div>
-                ) : (
-                  <p className="simprok-rab-field--wide simprok-bidang-note">
-                    Bidang pekerjaan konstruksi hanya diperlukan untuk kategori pekerjaan konstruksi.
-                  </p>
-                )}
+                ) : null}
               </div>
-              <p className="simprok-arah-helper">
-                SIMPROK akan membaca kategori, bidang pekerjaan, lokasi, dan tahun harga untuk menentukan arah AHSP, Basic Price, dan template RAB ketika mesin tersambung.
-              </p>
             </div>
 
             <div className="simprok-rab-form__section">
@@ -249,25 +166,11 @@ export function ProjectSetupPage() {
                   <textarea rows={2} placeholder="Contoh: Keramik Tipe A, Granit Tipe C, Gypsum Jenis A, Kabel Tipe D..." />
                 </label>
               </div>
-              <p className="simprok-arah-helper">
-                Pagu membantu SIMPROK menilai kesesuaian anggaran dengan luasan, spesifikasi, dan pilihan analisa ketika mesin tersambung. Spesifikasi material utama membantu SIMPROK memilih AHSP dan Basic Price lebih akurat (dapat diimpor dari Excel/Word ketika mesin tersambung).
-              </p>
-            </div>
-
-            <div className="simprok-rab-location-note">
-              <CircleHelp size={18} aria-hidden="true" />
-              <p>Lokasi lengkap membantu SIMPROK membaca Harga Dasar (Basic Price), AHSP, supplier, Bursa Material, Execution Factor, metode, dan risiko secara lebih akurat dari database (setelah tersambung).</p>
             </div>
           </form>
         </section>
 
         <aside className="simprok-rab-card simprok-rab-interaction" aria-label="Ruang Interaksi SIMPROK">
-          <div className="simprok-rab-status-chips">
-            <span className="simprok-rab-status-chip">Draft terbuka &middot; mengikuti Basic Price</span>
-            <span className="simprok-rab-status-chip simprok-rab-status-chip--disabled">Terkunci &middot; snapshot harga dibekukan</span>
-            <span className="simprok-rab-status-chip simprok-rab-status-chip--disabled">Approved &middot; perubahan melalui Addendum</span>
-          </div>
-
           <img
             src="/brand/simprok-symbol.png"
             alt=""

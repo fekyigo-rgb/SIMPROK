@@ -24,8 +24,8 @@ export function LoginPage() {
       const data = await res.json();
       login(data.access_token, data.account);
       navigate('/workspace-select');
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Login gagal');
     }
   };
 

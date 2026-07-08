@@ -19,7 +19,7 @@ import {
 const navItems = [
   { name: 'Beranda', path: '/', icon: Home, routeLabel: 'Beranda SIMPROK' },
   { name: 'Buat RAB', path: '/project/new', icon: ClipboardList, routeLabel: 'Ruang buat RAB' },
-  { name: 'Proyek Saya', path: '/?ruang=proyek-saya', icon: Briefcase, routeLabel: 'Proyek Saya' },
+  { name: 'Proyek Saya', path: '/proyek', icon: Briefcase, routeLabel: 'Proyek Saya' },
   { name: 'Monitoring', path: '/field', icon: Activity, routeLabel: 'Ruang monitoring dan laporan progress' },
   { name: 'Recovery', path: '/?ruang=recovery', icon: RefreshCcw, routeLabel: 'Placeholder Recovery' },
   { name: 'Insight / War Room', path: '/?ruang=insight-war-room', icon: BarChart3, routeLabel: 'Placeholder Insight / War Room' },

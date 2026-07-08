@@ -5,8 +5,12 @@ import { PrismaService } from '../prisma/prisma.service';
 export class WorkspaceMembershipService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll() {
+  findAllForAccount(accountId: string) {
     return this.prisma.workspaceMembership.findMany({
+      where: {
+        accountId,
+        status: 'ACTIVE',
+      },
       include: {
         userProfile: true,
         workspace: true,
@@ -15,9 +19,13 @@ export class WorkspaceMembershipService {
     });
   }
 
-  async findOne(id: string) {
-    const membership = await this.prisma.workspaceMembership.findUnique({
-      where: { id },
+  async findOneForAccount(id: string, accountId: string) {
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: {
+        id,
+        accountId,
+        status: 'ACTIVE',
+      },
       include: {
         userProfile: true,
         workspace: true,
@@ -31,11 +39,16 @@ export class WorkspaceMembershipService {
     return membership;
   }
 
-  findByWorkspace(workspaceId: string) {
+  findByWorkspaceForAccount(workspaceId: string, accountId: string) {
     return this.prisma.workspaceMembership.findMany({
-      where: { workspaceId },
+      where: {
+        workspaceId,
+        accountId,
+        status: 'ACTIVE',
+      },
       include: {
         userProfile: true,
+        workspace: true,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -51,7 +64,7 @@ export class WorkspaceMembershipService {
     });
   }
 
-  async findByUser(userId: string) {
+  async findByUserForAccount(userId: string, accountId: string) {
     // Berdasarkan Identity Chain resmi di PDF: Account -> WorkspaceMembership -> User
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -65,7 +78,7 @@ export class WorkspaceMembershipService {
       },
     });
 
-    if (!user || !user.membership) {
+    if (!user || !user.membership || user.membership.accountId !== accountId || user.membership.status !== 'ACTIVE') {
       throw new NotFoundException('Workspace membership not found for this user');
     }
 

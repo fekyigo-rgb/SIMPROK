@@ -35,6 +35,30 @@ export function Topbar() {
       };
     }
 
+    if (normalizedPath === '/proyek') {
+      return {
+        title: 'Proyek Saya',
+        subtitle: 'Daftar aset kerja dan proyek yang dapat Anda akses',
+        mobileLabel: 'Proyek Saya',
+      };
+    }
+
+    if (/^\/project\/[^/]+\/detail$/.test(normalizedPath)) {
+      return {
+        title: 'Detail Proyek',
+        subtitle: 'Identitas, governance, dan pintu ruang kerja proyek',
+        mobileLabel: 'Detail Proyek',
+      };
+    }
+
+    if (/^\/project\/[^/]+\/rab(\/.*)?$/.test(normalizedPath)) {
+      return {
+        title: 'Rencana Anggaran Biaya',
+        subtitle: 'Dokumen RAB resmi proyek',
+        mobileLabel: 'RAB Proyek',
+      };
+    }
+
     return {
       title: 'Beranda SIMPROK',
       subtitle: 'Ruang kendali proyek yang terang dan jujur',

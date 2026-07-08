@@ -3,6 +3,11 @@ import { DashboardLayout } from './components/layout/DashboardLayout';
 import { ObservatoryPage } from './pages/ObservatoryPage';
 import { ProjectWarRoomPage } from './pages/ProjectWarRoomPage';
 import { ProjectSetupPage } from './pages/ProjectSetupPage';
+import { ProjectRabDoorPage } from './pages/ProjectRabDoorPage';
+import { ProjectAhspSnapshotPage } from './pages/ProjectAhspSnapshotPage';
+import { ProjectDetailDoorPage } from './pages/ProjectDetailDoorPage';
+import { ProjectNotesPage } from './pages/ProjectNotesPage';
+import { ProjectListPage } from './pages/ProjectListPage';
 import { ShowcasePage } from './pages/ShowcasePage';
 
 import { AuthProvider } from './contexts/AuthContext';
@@ -26,7 +31,12 @@ function App() {
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<DashboardLayout />}>
               <Route index element={<RoleRoute allowedRoles={['DIRECTOR', 'FOREMAN', 'OWNER', 'MANDOR']}><ObservatoryPage /></RoleRoute>} />
+              <Route path="proyek" element={<ProjectListPage />} />
               <Route path="project/new" element={<RoleRoute allowedRoles={['DIRECTOR', 'OWNER']}><ProjectSetupPage /></RoleRoute>} />
+              <Route path="project/:projectId/rab" element={<ProjectRabDoorPage />} />
+              <Route path="project/:projectId/rab/ahsp-snapshot" element={<ProjectAhspSnapshotPage />} />
+              <Route path="project/:projectId/detail" element={<ProjectDetailDoorPage />} />
+              <Route path="project/:projectId/catatan" element={<ProjectNotesPage />} />
               <Route path="project/:id" element={<ProjectWarRoomPage />} />
               <Route path="showcase" element={<RoleRoute allowedRoles={['OWNER']}><ShowcasePage /></RoleRoute>} />
             </Route>

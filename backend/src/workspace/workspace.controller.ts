@@ -20,12 +20,12 @@ export class WorkspaceController {
   }
 
   @Get('organization/:organizationId')
-  findByOrganization(@Param('organizationId') organizationId: string) {
-    return this.workspaceService.findByOrganization(organizationId);
+  findByOrganization(@Param('organizationId') organizationId: string, @Req() request: any) {
+    return this.workspaceService.findByOrganizationForAccount(organizationId, request.user.id);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.workspaceService.findOne(id);
+  findOne(@Param('id') id: string, @Req() request: any) {
+    return this.workspaceService.findOneForAccount(id, request.user.id);
   }
 }

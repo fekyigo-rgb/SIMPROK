@@ -9,6 +9,7 @@ describe('WorkspaceService', () => {
     workspace: {
       findMany: jest.Mock;
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
     };
   };
 
@@ -27,6 +28,7 @@ describe('WorkspaceService', () => {
       workspace: {
         findMany: jest.fn(),
         findUnique: jest.fn(),
+        findFirst: jest.fn(),
       },
     };
 
@@ -67,39 +69,59 @@ describe('WorkspaceService', () => {
     });
   });
 
-  it('findOne returns a workspace by id', async () => {
-    prisma.workspace.findUnique.mockResolvedValue(workspace);
+  it('findOneForAccount returns a workspace only when account has active membership', async () => {
+    prisma.workspace.findFirst.mockResolvedValue(workspace);
 
-    await expect(service.findOne(workspace.id)).resolves.toEqual(workspace);
-    expect(prisma.workspace.findUnique).toHaveBeenCalledWith({
+    const accountId = 'test-account-id';
+    await expect(service.findOneForAccount(workspace.id, accountId)).resolves.toEqual(workspace);
+    expect(prisma.workspace.findFirst).toHaveBeenCalledWith({
       where: {
         id: workspace.id,
+        memberships: {
+          some: {
+            accountId,
+            status: 'ACTIVE',
+          },
+        },
       },
     });
   });
 
-  it('findOne throws NotFoundException when workspace does not exist', async () => {
-    prisma.workspace.findUnique.mockResolvedValue(null);
+  it('findOneForAccount throws NotFoundException when workspace is outside account scope', async () => {
+    prisma.workspace.findFirst.mockResolvedValue(null);
 
-    await expect(service.findOne('missing-workspace')).rejects.toBeInstanceOf(
+    await expect(service.findOneForAccount('missing-workspace', 'test-account-id')).rejects.toBeInstanceOf(
       NotFoundException,
     );
-    expect(prisma.workspace.findUnique).toHaveBeenCalledWith({
+    expect(prisma.workspace.findFirst).toHaveBeenCalledWith({
       where: {
         id: 'missing-workspace',
+        memberships: {
+          some: {
+            accountId: 'test-account-id',
+            status: 'ACTIVE',
+          },
+        },
       },
     });
   });
 
-  it('findByOrganization returns organization workspaces ordered by newest first', async () => {
+  it('findByOrganizationForAccount returns organization workspaces scoped to account', async () => {
     prisma.workspace.findMany.mockResolvedValue([workspace]);
 
+    const accountId = 'test-account-id';
     await expect(
-      service.findByOrganization(workspace.organizationId),
+      service.findByOrganizationForAccount(workspace.organizationId, accountId),
     ).resolves.toEqual([workspace]);
     expect(prisma.workspace.findMany).toHaveBeenCalledWith({
       where: {
         organizationId: workspace.organizationId,
+        memberships: {
+          some: {
+            accountId,
+            status: 'ACTIVE',
+          },
+        },
       },
       orderBy: {
         createdAt: 'desc',

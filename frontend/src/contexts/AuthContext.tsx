@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
 interface Membership {
@@ -95,6 +96,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Stale workspace ID — auto-correct
       console.warn('[SIMPROK] Stale workspaceId detected, auto-correcting...');
       const first = account.memberships[0];
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveWorkspace(first.workspaceId);
     }
   }, [account, activeWorkspaceId]);
