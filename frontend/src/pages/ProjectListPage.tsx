@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, MessageSquare, Search, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { getProjectNoteSummary } from '../projectNotes';
+
+import { apiFetch } from '../utils/apiClient';
 
 type RabStatus = 'draft' | 'terkunci' | 'approved' | 'berjalan' | 'selesai';
 type UserInvolvement = 'dibuat' | 'ditugaskan' | 'diundang_dibagikan';
@@ -16,49 +18,27 @@ interface ProjectItem {
   progress?: number;
 }
 
-const projects: ProjectItem[] = [
-  {
-    id: 'gedung-a',
-    nama: 'Pembangunan Gedung A',
-    status: 'draft',
-    involvement: 'dibuat',
-    nilai: 'Rp 2.500.000.000',
-    keterangan: 'Menunggu arahan / ',
-  },
-  {
-    id: 'pipa-b',
-    nama: 'Renovasi Jaringan Pipa B',
-    status: 'terkunci',
-    involvement: 'diundang_dibagikan',
-    nilai: 'Rp 850.000.000',
-    keterangan: 'Butuh finalisasi',
-  },
-  {
-    id: 'kendaraan-c',
-    nama: 'Pengadaan Kendaraan C',
-    status: 'approved',
-    involvement: 'dibuat',
-    nilai: 'Rp 1.200.000.000',
-    keterangan: 'Siap pelaksanaan',
-  },
-  {
-    id: 'infrastruktur-d',
-    nama: 'Perbaikan Infrastruktur D',
-    status: 'berjalan',
-    involvement: 'ditugaskan',
-    nilai: 'Rp 5.400.000.000',
-    keterangan: 'Berjalan  65%',
-    progress: 65,
-  },
-  {
-    id: 'arsip-e',
-    nama: 'Pekerjaan Drainase E',
-    status: 'selesai',
-    involvement: 'ditugaskan',
-    nilai: 'Rp 640.000.000',
-    keterangan: 'Masuk arsip',
-  },
-];
+function mapProjectToItem(backendProject: Record<string, unknown>): ProjectItem {
+  let mappedStatus: RabStatus = 'draft';
+  if (backendProject.status === 'ACTIVE') mappedStatus = 'berjalan';
+  else if (backendProject.status === 'COMPLETED') mappedStatus = 'selesai';
+  else if (backendProject.status === 'ON_HOLD') mappedStatus = 'terkunci';
+  else if (backendProject.status === 'PLANNED') mappedStatus = 'draft';
+
+  const budget = backendProject.budgetBaseline 
+    ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(Number(backendProject.budgetBaseline))
+    : 'Belum tersedia';
+
+  return {
+    id: String(backendProject.id),
+    nama: (backendProject.name as string) || 'Proyek Tanpa Nama',
+    status: mappedStatus,
+    involvement: 'dibuat', // Fallback, backend might not provide full involvement details yet
+    nilai: budget,
+    keterangan: (backendProject.description as string) || 'Belum ada keterangan',
+    progress: mappedStatus === 'berjalan' ? 0 : undefined,
+  };
+}
 
 const statusLabel: Record<RabStatus, string> = {
   draft: 'Draft',
@@ -98,6 +78,32 @@ export function ProjectListPage() {
   const [statusFilter, setStatusFilter] = useState<RabStatus | 'semua'>('semua');
   const [involvementFilter, setInvolvementFilter] = useState<UserInvolvement | 'semua'>('semua');
 
+  const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadProjects() {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await apiFetch('/projects') as any;
+        if (Array.isArray(data)) {
+          setProjects(data.map(mapProjectToItem));
+        } else if (data && Array.isArray(data.data)) {
+          setProjects(data.data.map(mapProjectToItem));
+        } else {
+          setProjects([]);
+        }
+      } catch {
+        setError('Daftar proyek belum dapat dimuat.');
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadProjects();
+  }, []);
+
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
@@ -111,7 +117,7 @@ export function ProjectListPage() {
 
       return matchQuery && matchStatus && matchInvolvement;
     });
-  }, [query, statusFilter, involvementFilter]);
+  }, [projects, query, statusFilter, involvementFilter]);
 
   const openRab = (id: string) => {
     navigate(buildRabPath(id));
@@ -213,16 +219,33 @@ export function ProjectListPage() {
         </div>
       </header>
 
-      {filteredProjects.length === 0 ? (
+      {loading ? (
         <div className="simprok-projects__empty">
-          <p>Tidak ada proyek dengan kriteria ini.</p>
+          <p>Memuat daftar proyek...</p>
+        </div>
+      ) : error ? (
+        <div className="simprok-projects__empty">
+          <p>{error}</p>
           <button
             className="simprok-projects__empty-reset"
             type="button"
-            onClick={resetFilters}
+            onClick={() => window.location.reload()}
           >
-            Reset pencarian
+            Coba lagi
           </button>
+        </div>
+      ) : filteredProjects.length === 0 ? (
+        <div className="simprok-projects__empty">
+          <p>{projects.length === 0 ? 'Belum ada proyek yang dapat diakses.' : 'Tidak ada proyek dengan kriteria ini.'}</p>
+          {projects.length > 0 && (
+            <button
+              className="simprok-projects__empty-reset"
+              type="button"
+              onClick={resetFilters}
+            >
+              Reset pencarian
+            </button>
+          )}
         </div>
       ) : (
         <div className="simprok-projects__grid">

@@ -56,6 +56,31 @@ const permissions = [
     name: 'View Observatory',
     description: 'View workspace-scoped Observatory or portfolio intelligence data.',
   },
+  {
+    code: PERMISSIONS.AHSP_VIEW,
+    name: 'View AHSP',
+    description: 'View AHSP records and versions within an authorized workspace.',
+  },
+  {
+    code: PERMISSIONS.AHSP_MANAGE,
+    name: 'Manage AHSP',
+    description: 'Create, update, archive, delete AHSP records and versions within an authorized workspace.',
+  },
+  {
+    code: PERMISSIONS.AHSP_APPROVE,
+    name: 'Approve AHSP',
+    description: 'Approve AHSP records and promote them to workspace or official status.',
+  },
+  {
+    code: PERMISSIONS.BASIC_PRICE_VIEW,
+    name: 'View Basic Price',
+    description: 'View basic price records scoped to workspace or global catalog.',
+  },
+  {
+    code: PERMISSIONS.BASIC_PRICE_MANAGE,
+    name: 'Manage Basic Price',
+    description: 'Submit and manage basic price records within an authorized workspace.',
+  },
 ];
 
 const directorAllowedPermissionCodes = [
@@ -64,6 +89,11 @@ const directorAllowedPermissionCodes = [
   'APPROVAL_MATRIX_VIEW',
   PERMISSIONS.PROJECT_CREATE,
   PERMISSIONS.OBSERVATORY_VIEW,
+  PERMISSIONS.AHSP_VIEW,
+  PERMISSIONS.AHSP_MANAGE,
+  PERMISSIONS.AHSP_APPROVE,
+  PERMISSIONS.BASIC_PRICE_VIEW,
+  PERMISSIONS.BASIC_PRICE_MANAGE,
 ];
 
 const directorForbiddenPermissionCodes = [
