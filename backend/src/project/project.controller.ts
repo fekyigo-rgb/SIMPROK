@@ -114,4 +114,11 @@ export class ProjectController {
   async getBoq(@Param('projectId') projectId: string) {
     return this.projectService.getBoq(projectId);
   }
+
+  @Get(':projectId/ahsp-snapshot')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions('AHSP_VIEW')
+  async getAhspSnapshot(@Param('projectId') projectId: string) {
+    return this.projectService.getAhspSnapshot(projectId);
+  }
 }

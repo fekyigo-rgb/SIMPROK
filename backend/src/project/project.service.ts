@@ -345,4 +345,24 @@ export class ProjectService {
       orderBy: { sortOrder: 'asc' },
     });
   }
+
+  async getAhspSnapshot(projectId: string) {
+    const boqItems = await this.getBoq(projectId);
+    if (!boqItems.length) return [];
+
+    const snapshotIds = boqItems
+      .map(item => item.ahspSnapshotId)
+      .filter((id): id is string => id !== null);
+
+    if (!snapshotIds.length) return [];
+
+    return await this.prisma.aHSPSnapshot.findMany({
+      where: {
+        id: { in: snapshotIds }
+      },
+      include: {
+        resources: true,
+      }
+    });
+  }
 }
