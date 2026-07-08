@@ -9,7 +9,7 @@ import { ProjectDetailDoorPage } from './pages/ProjectDetailDoorPage';
 import { ProjectNotesPage } from './pages/ProjectNotesPage';
 import { ProjectListPage } from './pages/ProjectListPage';
 import { ShowcasePage } from './pages/ShowcasePage';
-
+import { FirstRealInputPreviewPage } from './pages/FirstRealInputPreviewPage';
 import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute, RoleRoute } from './components/layout/ProtectedRoute';
 import { LoginPage } from './pages/LoginPage';
@@ -39,6 +39,7 @@ function App() {
               <Route path="project/:projectId/catatan" element={<ProjectNotesPage />} />
               <Route path="project/:id" element={<ProjectWarRoomPage />} />
               <Route path="showcase" element={<RoleRoute allowedRoles={['OWNER']}><ShowcasePage /></RoleRoute>} />
+              <Route path="first-real-input-preview" element={<FirstRealInputPreviewPage />} />
             </Route>
             
             <Route path="/field" element={<FieldLayout />}>

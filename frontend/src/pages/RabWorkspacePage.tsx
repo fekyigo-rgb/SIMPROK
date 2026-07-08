@@ -324,8 +324,8 @@ export function RabWorkspacePage() {
       </header>
 
       <section className="simprok-rab-toolbar" aria-label="Aksi Ruang Kerja RAB">
-        <button onClick={() => openPlaceholder('Import BOQ')} title="Import BOQ - belum tersambung" aria-label="Import BOQ - belum tersambung" data-route="/?ruang=import-boq"><FileInput size={17} /> Import BOQ</button>
-        <button onClick={() => openPlaceholder('Cari AHSP')} title="Cari AHSP - engine belum aktif" aria-label="Cari AHSP - engine belum aktif" data-route="/?ruang=cari-ahsp"><Search size={17} /> Cari AHSP</button>
+        <button onClick={() => navigate('/first-real-input-preview?tab=boq')} title="Preview Import BOQ (Data Contoh)" aria-label="Preview Import BOQ" data-route="/?ruang=import-boq"><FileInput size={17} /> Import BOQ (Preview)</button>
+        <button onClick={() => navigate('/first-real-input-preview?tab=ahsp')} title="Preview Cari AHSP (Data Contoh)" aria-label="Preview Cari AHSP" data-route="/?ruang=cari-ahsp"><Search size={17} /> Cari AHSP (Preview)</button>
         <button onClick={() => openPlaceholder('Export')} title="Export - belum tersambung" aria-label="Export - belum tersambung" data-route="/?ruang=export-rab"><FileDown size={17} /> Export</button>
         <button onClick={() => openPlaceholder('Print')} title="Print - belum tersambung" aria-label="Print - belum tersambung" data-route="/?ruang=print-rab"><Printer size={17} /> Print</button>
         <button className="simprok-rab-toolbar__save" onClick={() => handleDraftGate('Simpan Draft')} title="Simpan Draft - draft lokal" aria-label="Simpan Draft - draft lokal" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue}><Save size={17} /> Simpan Draft</button>
