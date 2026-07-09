@@ -40,3 +40,8 @@ backend/update-schema.js
 /package-lock.json
 backend/.gitignore
 frontend/.gitignore
+
+# SIMPROK local raw intake artifacts
+/data/
+/first-real-input-files/
+/first-real-input-files.zip
