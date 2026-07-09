@@ -18,31 +18,46 @@ Do not commit.
 
 ## Current Task
 
-P2B  DETAIL PROYEK REFINEMENT KECIL
+P3A — RUANG HIDUP RAB / RAB VIEWER REAL PROJECT ENTRY
 
 Goal:
-Make Detail Proyek for real project UUID feel like the proper Detail Proyek room, not a fallback page, while preserving P2A real API hydration.
+Ensure /project/:projectId/rab opens as Ruang Hidup RAB / RAB Viewer for real project UUID,
+not as an empty fallback, not as fake data, and not as the editable RAB workspace.
 
 Scope:
 
-- frontend/src/pages/ProjectDetailDoorPage.tsx only
+- frontend/src/pages/ProjectRabDoorPage.tsx only
+- If another file is required, STOP and report before editing.
 
-Mode:
-Focused implementation.
+Product Law:
+- Ruang Hidup RAB / RAB Viewer = result/viewer/snapshot room.
+- Ruang Kerja RAB = editable draft workspace.
+- Project name/card from Proyek Saya opens /project/:projectId/rab.
+- Detail Proyek button "Buka Ruang RAB" opens /project/:projectId/rab.
+- Do not route to Monitoring or War Room.
+- Do not claim approval/RBAC/backend engine active without evidence.
+
+Required behavior:
+1. Real project UUID should render a proper RAB Viewer/Ruang Hidup RAB page.
+2. Use real project fields from API if available.
+3. If RAB/BOQ/detail data is not available, show honest placeholder: "Belum tersedia" or "Menunggu data RAB".
+4. Do not show fixture/sample RAB as if it belongs to a real API project.
+5. Keep existing good visual structure as much as possible.
+6. Keep support document/snapshot doors honest: AHSP, Basic Price, TKDN, Metode, Spesifikasi, Schedule, Peralatan.
+7. Do not create fake backend/RBAC/approval claims.
 
 Do NOT:
 - touch backend
 - touch schema
 - touch migration
 - touch RAB Workspace
-- touch RAB Door
 - touch Monitoring
 - touch War Room
 - touch Topbar
 - touch index.css
 - touch AGENTS.md
 - touch CLAUDE.md
-- touch docs agent files except this NEXT_TASK update
+- touch data/ or first-real-input-files*
 - stage
 - commit
 

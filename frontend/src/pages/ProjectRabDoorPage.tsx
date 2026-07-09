@@ -73,11 +73,9 @@ export function ProjectRabDoorPage() {
       try {
         setLoading(true);
         setError(null);
-        
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const projData = (await apiFetch(`/projects/${projectId}`)) as any;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const boqData = (await apiFetch(`/projects/${projectId}/boq`)) as any;
 
         let mappedStatus: RabStatus = 'Draft';
         if (projData?.status === 'ACTIVE') mappedStatus = 'Terkunci';
@@ -86,34 +84,42 @@ export function ProjectRabDoorPage() {
 
         setProject({
           name: projData?.name || 'Rencana Anggaran Biaya',
-          code: projData?.id ? `PRJ-${String(projData.id).slice(0, 5).toUpperCase()}` : 'Data belum tersedia',
-          owner: 'Belum tersedia',
-          location: 'Belum tersedia',
-          fiscalYear: 'Belum tersedia',
+          code: projData?.code || (projData?.id ? `PRJ-${String(projData.id).slice(0, 8).toUpperCase()}` : 'Belum tersedia'),
+          owner: projData?.ownerName || projData?.owner || 'Belum tersedia',
+          location: projData?.location || 'Belum tersedia',
+          fiscalYear: projData?.fiscalYear || 'Belum tersedia',
           status: mappedStatus,
           value: projData?.budgetBaseline ? formatRupiah(projData.budgetBaseline) : 'Belum tersedia',
         });
 
-        if (Array.isArray(boqData)) {
+        // BOQ is optional — failure means no data yet, not a viewer error
+        try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          setRabRows(boqData.map((item: any, idx: number) => {
-            const qty = Number(item.quantity) || 0;
-            const up = Number(item.unitPrice) || 0;
-            return {
-              code: item.wbsCode || String(idx + 1),
-              description: item.name || 'Data belum tersedia',
-              unit: item.unit || '-',
-              volume: qty > 0 ? qty.toLocaleString('id-ID') : '-',
-              unitPrice: up > 0 ? formatRupiah(up) : '-',
-              total: qty > 0 && up > 0 ? formatRupiah(qty * up) : '-',
-            };
-          }));
-        } else {
+          const boqData = (await apiFetch(`/projects/${projectId}/boq`)) as any;
+          if (Array.isArray(boqData) && boqData.length > 0) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            setRabRows(boqData.map((item: any, idx: number) => {
+              const qty = Number(item.quantity) || 0;
+              const up = Number(item.unitPrice) || 0;
+              return {
+                code: item.wbsCode || String(idx + 1),
+                description: item.name || 'Belum tersedia',
+                unit: item.unit || '-',
+                volume: qty > 0 ? qty.toLocaleString('id-ID') : '-',
+                unitPrice: up > 0 ? formatRupiah(up) : '-',
+                total: qty > 0 && up > 0 ? formatRupiah(qty * up) : '-',
+              };
+            }));
+          } else {
+            setRabRows([]);
+          }
+        } catch {
+          // BOQ belum tersedia — tampilkan viewer tetap, bukan error
           setRabRows([]);
         }
 
       } catch {
-        setError('RAB proyek belum dapat dimuat.');
+        setError('Proyek tidak ditemukan atau belum dapat dimuat.');
       } finally {
         setLoading(false);
       }
@@ -220,9 +226,8 @@ export function ProjectRabDoorPage() {
           <header className="simprok-rab-toolbar">
             <div>
               <h2>Dokumen RAB</h2>
-              <p>RAB ditampilkan sebagai dokumen resmi. Perubahan isi RAB mengikuti mekanisme perubahan.</p>
               {!archived ? (
-                <small>Beberapa aksi resmi seperti penyimpanan, addendum, dan audit trail menunggu integrasi backend.</small>
+                <small>Beberapa aksi resmi seperti export, cetak, dan import menunggu integrasi backend.</small>
               ) : null}
             </div>
             <div className="simprok-rab-toolbar__actions">
@@ -238,11 +243,6 @@ export function ProjectRabDoorPage() {
                 <Upload size={15} aria-hidden="true" />
                 Import Data Pendukung
               </button>
-              {!archived ? (
-                <button type="button" className="simprok-rab-toolbar__gold" onClick={handleAddendumAction} aria-label="Ajukan Perubahan atau Addendum">
-                  Ajukan Perubahan / Addendum
-                </button>
-              ) : null}
               <button type="button" onClick={() => changeZoom(zoom - 10)} aria-label="Zoom out">
                 <ZoomOut size={15} aria-hidden="true" />
               </button>
@@ -256,22 +256,6 @@ export function ProjectRabDoorPage() {
               </button>
             </div>
           </header>
-
-
-
-          <div className="simprok-rab-actions">
-            {project.status === 'Terkunci' || project.status === 'Approved' ? (
-              <button type="button" className="simprok-rab-button simprok-rab-button--gold" onClick={handleAddendumAction}>
-                Ajukan Addendum
-              </button>
-            ) : null}
-            {archived ? (
-              <span className="simprok-rab-readonly-pill">
-                <Lock size={13} aria-hidden="true" />
-                Read-only arsip
-              </span>
-            ) : null}
-          </div>
 
           {addendumOpen ? (
             <div className="simprok-rab-addendum">
@@ -360,7 +344,7 @@ export function ProjectRabDoorPage() {
                       <FileText size={15} aria-hidden="true" />
                       {doc}
                     </span>
-                    <em>Siap Ditinjau</em>
+                    <em>Belum tersedia</em>
                   </button>
                 ))}
               </div>
@@ -370,7 +354,7 @@ export function ProjectRabDoorPage() {
                   <article key={snapshot} className="simprok-rab-snapshot">
                     <div>
                       <strong>{snapshot}</strong>
-                      <span>Snapshot Aktif</span>
+                      <span>Menunggu mesin</span>
                     </div>
                     <button type="button" onClick={() => openSnapshot(snapshot)}>
                       Buka Snapshot
@@ -380,11 +364,12 @@ export function ProjectRabDoorPage() {
               </div>
 
               <div className="simprok-rab-support-preview">
+                <span className="simprok-rab-support-preview__label">Keterangan Data Pendukung</span>
                 <strong>{activeSupport}</strong>
                 <p>
                   {snapshots.includes(activeSupport)
                     ? 'Snapshot ini adalah acuan yang melekat pada RAB. Detail resmi akan mengikuti mesin snapshot.'
-                    : 'Dokumen pendukung pada shell ini dimodelkan sudah terbentuk otomatis setelah RAB jadi dan siap ditinjau sesuai kewenangan.'}
+                    : 'Dokumen ini akan terbentuk setelah RAB jadi dan siap ditinjau sesuai kewenangan. Belum tersedia saat ini.'}
                 </p>
               </div>
             </>
