@@ -45,6 +45,7 @@ type ProjectDetail = typeof baseProjectDetail & {
   status: 'Draft' | 'Terkunci' | 'Approved' | 'Berjalan' | 'Selesai';
   relation: string;
   code: string;
+  dataSource?: 'fixture' | 'api';
 };
 
 const projectDetailById: Record<string, ProjectDetail> = {
@@ -55,6 +56,7 @@ const projectDetailById: Record<string, ProjectDetail> = {
     relation: 'Dibuat oleh Saya',
     code: 'PRJ-2026-GDG-001',
     lockedValue: 'Belum terkunci',
+    dataSource: 'fixture',
   },
   'pipa-b': {
     ...baseProjectDetail,
@@ -62,6 +64,7 @@ const projectDetailById: Record<string, ProjectDetail> = {
     status: 'Terkunci',
     relation: 'Diundang / Dibagikan',
     code: 'PRJ-2026-PIP-002',
+    dataSource: 'fixture',
   },
   'kendaraan-c': {
     ...baseProjectDetail,
@@ -72,6 +75,7 @@ const projectDetailById: Record<string, ProjectDetail> = {
     category: 'Pengadaan Barang',
     lockedValue: 'Rp 1.185.000.000',
     plannedValue: 'Rp 1.200.000.000',
+    dataSource: 'fixture',
   },
   'infrastruktur-d': {
     ...baseProjectDetail,
@@ -81,6 +85,7 @@ const projectDetailById: Record<string, ProjectDetail> = {
     code: 'PRJ-2026-INF-004',
     plannedValue: 'Rp 5.400.000.000',
     lockedValue: 'Rp 5.320.000.000',
+    dataSource: 'fixture',
   },
   'arsip-e': {
     ...baseProjectDetail,
@@ -90,6 +95,7 @@ const projectDetailById: Record<string, ProjectDetail> = {
     code: 'PRJ-2026-DRN-005',
     plannedValue: 'Rp 640.000.000',
     lockedValue: 'Rp 632.000.000',
+    dataSource: 'fixture',
   },
 };
 
@@ -215,6 +221,7 @@ const mapApiProjectToDetail = (project: Record<string, unknown>): ProjectDetail 
   myRole: 'Relasi belum tersedia dari API',
   myAccess: 'Akses detail tersedia; kewenangan menunggu RBAC/backend aktif.',
   relationStatus: 'Data proyek nyata dari API. Kewenangan belum ditegakkan mesin.',
+  dataSource: 'api',
 });
 
 function DataList({ rows }: { rows: DataRow[] }) {
@@ -405,6 +412,9 @@ export function ProjectDetailDoorPage() {
   const updateFormalDraft = (key: keyof typeof formalDraft, value: string) => {
     setFormalDraft((current) => ({ ...current, [key]: value }));
   };
+
+  const isApiProject = projectDetail?.dataSource === 'api';
+
   if (!projectDetail) {
     return (
       <main className="simprok-detail">
@@ -461,8 +471,14 @@ export function ProjectDetailDoorPage() {
             <span>{formalData.location || 'Belum diisi'}</span>
             <span>{formalData.year || 'Belum diisi'}</span>
             <span>{projectDetail.relation}</span>
+            {isApiProject ? <span>Data API proyek nyata</span> : null}
           </div>
           <p className="simprok-detail__technical">projectId: {projectId || 'tidak tersedia'}</p>
+          {isApiProject ? (
+            <p className="simprok-detail-note">
+              Detail Proyek ini memakai data project nyata dari API. Field administrasi yang belum tersedia tetap ditandai jujur sebagai belum tersedia.
+            </p>
+          ) : null}
         </div>
         <div className="simprok-detail-hero__actions">
           <button type="button" className="simprok-detail-button simprok-detail-button--secondary" onClick={() => openChangeDrawer()}>
@@ -589,7 +605,7 @@ export function ProjectDetailDoorPage() {
               <div>
                 <p className="adaptive-governance__eyebrow">Governance</p>
                 <h3 id="adaptive-governance-title">Para Pihak & Kewenangan</h3>
-                <p>Organisasi, personel, jabatan/fungsi, dan kewenangan per orang.</p>
+                <p>{isApiProject ? 'Governance proyek nyata menunggu data pihak, personel, dan kewenangan dari backend.' : 'Organisasi, personel, jabatan/fungsi, dan kewenangan per orang.'}</p>
               </div>
               <span className="adaptive-governance__status">
                 <Lock size={13} aria-hidden="true" />
@@ -598,8 +614,8 @@ export function ProjectDetailDoorPage() {
             </header>
 
             <div className="adaptive-gov-law adaptive-gov-law--compact">
-              <strong>Kerangka draft</strong>
-              <span>Kewenangan ditampilkan per personel. Penegakan akses menunggu RBAC/backend aktif.</span>
+              <strong>{isApiProject ? 'Data governance belum tersambung' : 'Kerangka draft'}</strong>
+              <span>{isApiProject ? 'SIMPROK tidak menampilkan pihak contoh sebagai data nyata. Kewenangan akan tampil setelah assignment/RBAC backend tersedia.' : 'Kewenangan ditampilkan per personel. Penegakan akses menunggu RBAC/backend aktif.'}</span>
             </div>
 
             <div className="adaptive-gov-actions">
@@ -617,8 +633,18 @@ export function ProjectDetailDoorPage() {
               <span>Kewenangan belum ditegakkan mesin. Tombol tetap ditampilkan sebagai locked-door action.</span>
             </div>
 
-            <div className="adaptive-gov-org-list" aria-label="Pihak / Organisasi">
-              {governanceOrganizations.map((organization) => (
+            {isApiProject ? (
+              <DataList
+                rows={[
+                  { label: 'Sumber data proyek', value: 'API project nyata' },
+                  { label: 'Pihak / organisasi', value: 'Belum tersedia dari API' },
+                  { label: 'Personel dan kewenangan', value: 'Menunggu RBAC/backend assignment' },
+                  { label: 'Akses saya', value: projectDetail.myAccess },
+                ]}
+              />
+            ) : (
+              <div className="adaptive-gov-org-list" aria-label="Pihak / Organisasi">
+                {governanceOrganizations.map((organization) => (
                 <article key={organization.name} className="adaptive-gov-org">
                   <header className="adaptive-gov-org__header">
                     <div className="adaptive-gov-org__icon" aria-hidden="true">
@@ -661,8 +687,9 @@ export function ProjectDetailDoorPage() {
                     <small>Menunggu RBAC</small>
                   </button>
                 </article>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
           </section>
         </DetailCard>
