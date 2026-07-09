@@ -67,7 +67,7 @@ const involvementOptions: { value: UserInvolvement | 'semua'; label: string }[] 
 const buildRabPath = (id: string) => `/project/${id}/rab`;
 const buildDetailPath = (id: string) => `/project/${id}/detail`;
 const buildNotesPath = (id: string) => `/project/${id}/catatan`;
-const buildContinueDraftPath = (id: string) => buildRabPath(id);
+const buildContinueDraftPath = (id: string) => `/project/${id}/rab/workspace`;
 const buildUnlockPath = (id: string) => buildRabPath(id);
 const buildMonitoringPath = (id: string) => `/project/${id}`;
 const buildDeleteDraftPath = (id: string) => buildDetailPath(id);
@@ -89,12 +89,23 @@ export function ProjectListPage() {
       try {
         setLoading(true);
         setError(null);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data = (await apiFetch('/projects')) as any;
+        const response = await apiFetch('/projects');
+        if (!response.ok) {
+          throw new Error(`GET /projects failed with ${response.status}`);
+        }
+
+        const data: unknown = await response.json();
+        let projectRows: unknown[] = [];
         if (Array.isArray(data)) {
-          setProjects(data.map(mapProjectToItem));
-        } else if (data && Array.isArray(data.data)) {
-          setProjects(data.data.map(mapProjectToItem));
+          projectRows = data;
+        } else if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown }).data)) {
+          projectRows = (data as { data: unknown[] }).data;
+        } else if (data && typeof data === 'object' && Array.isArray((data as { projects?: unknown }).projects)) {
+          projectRows = (data as { projects: unknown[] }).projects;
+        }
+
+        if (projectRows.length > 0) {
+          setProjects(projectRows.map((project) => mapProjectToItem(project as Record<string, unknown>)));
         } else {
           setProjects([]);
         }
