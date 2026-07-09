@@ -8,6 +8,13 @@
       "price": 158333.33333333334
     },
     {
+      "code": "L.04",
+      "name": "Mandor",
+      "type": "LABOR",
+      "unit": "Org/Hari",
+      "price": 250000
+    },
+    {
       "code": "BP-10",
       "name": "Tukang",
       "type": "LABOR",
@@ -78,6 +85,20 @@
       "price": 5.2
     },
     {
+      "code": "M.08.d.2",
+      "name": "Tanah Biasa",
+      "type": "MATERIAL",
+      "unit": "M³",
+      "price": 158333.33333333334
+    },
+    {
+      "code": "(M09)",
+      "name": "Tanah Pilihan",
+      "type": "MATERIAL",
+      "unit": "M³",
+      "price": 273666.6666666667
+    },
+    {
       "code": "BP-316",
       "name": "Sewa crane",
       "type": "EQUIPMENT",
@@ -90,6 +111,13 @@
       "type": "EQUIPMENT",
       "unit": "U/J",
       "price": 1214490.2544351073
+    },
+    {
+      "code": "E.13.b",
+      "name": "Sewa Dump Truck 7Ton",
+      "type": "EQUIPMENT",
+      "unit": "U/J",
+      "price": 714285.7142857143
     }
   ],
   "ahspAnalyses": [
@@ -110,30 +138,6 @@
           "resourceType": "LABOR",
           "coefficient": 0.04,
           "baseUnit": "OH"
-        },
-        {
-          "resourceName": "Pekerja",
-          "resourceType": "LABOR",
-          "coefficient": 0.3087,
-          "baseUnit": "OJ"
-        },
-        {
-          "resourceName": "Mandor",
-          "resourceType": "LABOR",
-          "coefficient": 0.030869999999999998,
-          "baseUnit": "OJ"
-        },
-        {
-          "resourceName": "Exavator (Standar) - 125 HP",
-          "resourceType": "MATERIAL",
-          "coefficient": 0.1224,
-          "baseUnit": "Jam"
-        },
-        {
-          "resourceName": "Dump Truck",
-          "resourceType": "EQUIPMENT",
-          "coefficient": 0.1707,
-          "baseUnit": "Jam"
         }
       ]
     },
@@ -726,6 +730,24 @@
   ],
   "boqItems": [
     {
+      "wbsCode": "RAW-87",
+      "name": "Menggali dan Memuat 1 m3 tanah biasa dari SP/hasil galian ke DT menggunakan Exca Std. dan angkut 1 km",
+      "unit": "m3",
+      "quantity": 1800
+    },
+    {
+      "wbsCode": "RAW-75",
+      "name": "1 m3 Timbunan dan Pemadatan Sirtu secara manual",
+      "unit": "m3",
+      "quantity": 659
+    },
+    {
+      "wbsCode": "RAW-71",
+      "name": "Penghamparan, perataan dan Pemadatan tanah ringan (Standar Proctor)",
+      "unit": "m3",
+      "quantity": 1800
+    },
+    {
       "wbsCode": "1",
       "name": "Mobilisasi dan Demobilisasi",
       "unit": "LS",
@@ -1052,5 +1074,9 @@
       "confidence": "NOT_MATCHED"
     }
   ],
-  "warnings": []
+  "warnings": [
+    "Kandidat Golden Thread ditambahkan dari raw Excel BOQ row 87, 75, dan 71 agar data preview selaras dengan AHSP pekerjaan tanah.",
+    "Komponen AHSP Penggalian dikoreksi mengikuti blok raw AHSP row 10-11; baris analisa berikutnya tidak dihitung sebagai komponen Penggalian.",
+    "Basic Price tambahan berasal dari raw Excel: Mandor row 22, Tanah Biasa row 66, Tanah Pilihan row 65, dan Sewa Dump Truck 7Ton row 322."
+  ]
 }
