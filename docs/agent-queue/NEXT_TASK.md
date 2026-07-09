@@ -18,44 +18,46 @@ Do not commit.
 
 ## Current Task
 
-SAFETY-002 STEP 1  DIAGNOSE ONLY
+SAFETY-003  RAW DATA POLICY
 
 Goal:
-Find why these files show modified even though normal git diff appears empty:
+Define an honest repository policy for remaining raw Owner data files so future agents know whether to keep, ignore, document, or commit them in a separate approved slice.
 
-- frontend/src/components/layout/Topbar.tsx
-- frontend/src/index.css
+Files to classify:
+
+- data/
+- first-real-input-files.zip
+- first-real-input-files/
 
 Mode:
-Read-only only.
+Read-only policy audit only.
 
 Do NOT:
-- edit
-- checkout
-- restore
+- edit raw data
+- move raw data
+- delete raw data
 - stage
 - commit
-- delete
 - cleanup
+- add gitignore or gitattributes unless PM/Owner explicitly approves a later patch
 
 Commands:
 git status --short
-git diff --stat -- frontend/src/components/layout/Topbar.tsx frontend/src/index.css
-git diff --ignore-all-space -- frontend/src/components/layout/Topbar.tsx frontend/src/index.css
-git ls-files --eol frontend/src/components/layout/Topbar.tsx frontend/src/index.css
-git check-attr -a frontend/src/components/layout/Topbar.tsx frontend/src/index.css
-Test-Path .gitattributes
-if (Test-Path .gitattributes) { Get-Content .gitattributes }
+Get-ChildItem data -Recurse | Select-Object FullName, Length, LastWriteTime
+Get-ChildItem first-real-input-files -Recurse | Select-Object FullName, Length, LastWriteTime
+Get-Item first-real-input-files.zip
 git diff --cached --name-only
 
 Report:
 A. Status
-B. Is the change purely line-ending CRLF/LF? Give evidence.
-C. Does .gitattributes exist? yes/no.
-D. Any real content diff?
-E. Recommendation: restore / gitattributes / leave  with reason.
-F. Confirm nothing was edited, staged, or committed.
-G. Git status after.
+B. Raw data inventory
+C. Which files are source-of-truth candidates?
+D. Which files are duplicates or transport artifacts?
+E. Recommended policy: KEEP_UNTRACKED / COMMIT_IN_SEPARATE_SLICE / IGNORE / DELETE_LATER
+F. Risks if committed
+G. Risks if left untracked
+H. Confirm nothing was edited, staged, or committed
+I. Git status after
 
 ## Faith Closing
 
