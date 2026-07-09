@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, type CSSProperties } from 'react';
+import { useMemo, useState, useEffect, useRef, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Archive, ChevronLeft, ChevronRight, Download, FileText, Lock, Maximize2, Minimize2, Printer, RotateCcw, Upload, ZoomIn, ZoomOut, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
@@ -66,6 +66,8 @@ export function ProjectRabDoorPage() {
   const [activeSupport, setActiveSupport] = useState('Spesifikasi Teknis');
   const [addendumOpen, setAddendumOpen] = useState(false);
   const [officialActionMessage, setOfficialActionMessage] = useState('');
+  const rabDocumentRef = useRef<HTMLDivElement>(null);
+  const [rabDocumentSize, setRabDocumentSize] = useState({ width: 1180, height: 240 });
   
   useEffect(() => {
     async function loadData() {
@@ -129,11 +131,55 @@ export function ProjectRabDoorPage() {
 
   const readOnly = isReadOnly(project.status);
   const archived = project.status === 'Selesai';
+  const zoomScale = zoom / 100;
+  const hasRabRows = rabRows.length > 0;
+
+  useEffect(() => {
+    const node = rabDocumentRef.current;
+    if (!node) return;
+
+    const measureDocument = () => {
+      setRabDocumentSize({
+        width: Math.max(node.scrollWidth, hasRabRows ? 1180 : 1),
+        height: Math.max(node.scrollHeight, 1),
+      });
+    };
+
+    measureDocument();
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measureDocument);
+      return () => window.removeEventListener('resize', measureDocument);
+    }
+
+    const observer = new ResizeObserver(measureDocument);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [error, hasRabRows, loading, rabRows]);
+
   const zoomStyle = useMemo(
     () => ({
-      '--simprok-rab-zoom': zoom / 100,
+      '--simprok-rab-zoom': zoomScale,
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: hasRabRows ? `${Math.max(rabDocumentSize.width, 1180)}px` : '100%',
+      minWidth: hasRabRows ? '1180px' : '0',
+      transform: `scale(${zoomScale})`,
+      transformOrigin: 'top left',
     }) as CSSProperties,
-    [zoom],
+    [hasRabRows, rabDocumentSize.width, zoomScale],
+  );
+
+  const zoomScrollAreaStyle = useMemo(
+    () => ({
+      position: 'relative',
+      width: hasRabRows ? `${Math.max(rabDocumentSize.width, 1180) * zoomScale}px` : '100%',
+      minWidth: hasRabRows ? `${1180 * zoomScale}px` : '100%',
+      height: `${Math.max(rabDocumentSize.height, 1) * zoomScale}px`,
+      minHeight: hasRabRows ? undefined : '100%',
+    }) as CSSProperties,
+    [hasRabRows, rabDocumentSize.height, rabDocumentSize.width, zoomScale],
   );
 
   const changeZoom = (nextZoom: number) => {
@@ -264,7 +310,8 @@ export function ProjectRabDoorPage() {
           ) : null}
 
           <div className="simprok-rab-canvas">
-            <div className="simprok-rab-canvas__zoom" style={zoomStyle}>
+            <div style={zoomScrollAreaStyle}>
+              <div ref={rabDocumentRef} className="simprok-rab-canvas__zoom" style={zoomStyle}>
               {loading ? (
                 <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--simprok-text-muted)' }}>
                   Memuat dokumen RAB...
@@ -307,6 +354,7 @@ export function ProjectRabDoorPage() {
                   </tbody>
                 </table>
               )}
+              </div>
             </div>
           </div>
         </section>
