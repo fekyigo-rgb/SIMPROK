@@ -69,8 +69,12 @@ const buildDetailPath = (id: string) => `/project/${id}/detail`;
 const buildNotesPath = (id: string) => `/project/${id}/catatan`;
 const buildContinueDraftPath = (id: string) => `/project/${id}/rab/workspace`;
 const buildUnlockPath = (id: string) => buildRabPath(id);
-const buildMonitoringPath = (id: string) => `/project/${id}`;
-const buildDeleteDraftPath = (id: string) => buildDetailPath(id);
+
+interface ProjectCardAction {
+  label: string;
+  path?: string;
+  disabledReason?: string;
+}
 
 export function ProjectListPage() {
   const navigate = useNavigate();
@@ -152,7 +156,7 @@ export function ProjectListPage() {
     setInvolvementFilter('semua');
   };
 
-  const primaryAction = (project: ProjectItem) => {
+  const primaryAction = (project: ProjectItem): ProjectCardAction => {
     switch (project.status) {
       case 'draft':
         return {
@@ -166,13 +170,13 @@ export function ProjectListPage() {
         };
       case 'approved':
         return {
-          label: 'Masuk Monitoring',
-          path: buildMonitoringPath(project.id),
+          label: 'Monitoring HOLD',
+          disabledReason: 'Monitoring belum aktif pada slice ini.',
         };
       case 'berjalan':
         return {
-          label: 'Pantau Progress',
-          path: buildMonitoringPath(project.id),
+          label: 'Progress HOLD',
+          disabledReason: 'Monitoring progress belum aktif pada slice ini.',
         };
       case 'selesai':
       default:
@@ -228,7 +232,13 @@ export function ProjectListPage() {
             ))}
           </select>
 
-          <button className="simprok-projects__sort" type="button" aria-label="Urutkan">
+          <button
+            className="simprok-projects__sort"
+            type="button"
+            aria-label="Urutkan - belum aktif"
+            title="Urutkan belum aktif"
+            disabled
+          >
             <SlidersHorizontal size={16} aria-hidden="true" />
           </button>
         </div>
@@ -316,7 +326,12 @@ export function ProjectListPage() {
                   <button
                     className="simprok-project-card__primary"
                     type="button"
-                    onClick={() => navigate(action.path)}
+                    onClick={() => {
+                      if (action.path) navigate(action.path);
+                    }}
+                    disabled={!action.path}
+                    title={action.disabledReason}
+                    aria-label={action.disabledReason ? `${action.label} - ${action.disabledReason}` : action.label}
                   >
                     {action.label}
                   </button>
@@ -325,8 +340,9 @@ export function ProjectListPage() {
                     <button
                       className="simprok-project-card__danger"
                       type="button"
-                      aria-label="Hapus draft"
-                      onClick={() => navigate(buildDeleteDraftPath(project.id))}
+                      aria-label="Hapus draft - belum aktif"
+                      title="Hapus draft belum aktif"
+                      disabled
                     >
                       <Trash2 size={16} aria-hidden="true" />
                     </button>
