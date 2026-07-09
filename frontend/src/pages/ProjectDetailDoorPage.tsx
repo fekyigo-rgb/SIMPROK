@@ -1,6 +1,7 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowRight, ChevronRight, FileText, Lock, X } from 'lucide-react';
+import { apiFetch } from '../utils/apiClient';
 
 type ChangeType = 'identity' | 'party' | 'personnel' | 'access';
 
@@ -39,12 +40,14 @@ const baseProjectDetail = {
   relationStatus: 'Tidak ada relasi',
 };
 
-const projectDetailById: Record<string, typeof baseProjectDetail & {
+type ProjectDetail = typeof baseProjectDetail & {
   name: string;
   status: 'Draft' | 'Terkunci' | 'Approved' | 'Berjalan' | 'Selesai';
   relation: string;
   code: string;
-}> = {
+};
+
+const projectDetailById: Record<string, ProjectDetail> = {
   'gedung-a': {
     ...baseProjectDetail,
     name: 'Pembangunan Gedung A',
@@ -145,6 +148,75 @@ const governanceOrganizations = [
   },
 ];
 
+const statusLabelFromApi = (status: unknown): ProjectDetail['status'] => {
+  if (status === 'ACTIVE') return 'Berjalan';
+  if (status === 'ON_HOLD') return 'Terkunci';
+  if (status === 'COMPLETED' || status === 'ARCHIVED') return 'Selesai';
+  return 'Draft';
+};
+
+const formatOptionalDate = (value: unknown) => {
+  if (typeof value !== 'string' || !value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }).format(date);
+};
+
+const formatOptionalRupiah = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return 'Belum tersedia';
+  const numericValue = Number(value);
+  if (Number.isNaN(numericValue)) return 'Belum tersedia';
+  return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(numericValue);
+};
+
+const extractYear = (project: Record<string, unknown>) => {
+  const candidates = [project.startDate, project.createdAt, project.updatedAt];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || !candidate) continue;
+    const date = new Date(candidate);
+    if (!Number.isNaN(date.getTime())) return String(date.getFullYear());
+  }
+  return '';
+};
+
+const buildFormalData = (detail?: ProjectDetail) => ({
+  code: detail?.code || '',
+  name: detail?.name || '',
+  owner: detail?.owner || '',
+  category: detail?.category || '',
+  location: detail?.location || '',
+  year: detail?.year || '',
+  status: detail?.status || '',
+  plannedValue: detail?.plannedValue || '',
+  fundingSource: detail?.fundingSource || '',
+  description: detail?.description || '',
+  specification: detail?.specification || '',
+  notes: detail?.notes || '',
+  startDate: detail?.startDate || '',
+  endDate: detail?.endDate || '',
+});
+
+const mapApiProjectToDetail = (project: Record<string, unknown>): ProjectDetail => ({
+  ...baseProjectDetail,
+  name: typeof project.name === 'string' && project.name.trim() ? project.name : 'Proyek Tanpa Nama',
+  status: statusLabelFromApi(project.status),
+  relation: 'Relasi menunggu data akses proyek',
+  code: typeof project.code === 'string' && project.code.trim() ? project.code : String(project.id || 'Belum tersedia'),
+  owner: typeof project.clientName === 'string' && project.clientName.trim() ? project.clientName : 'Belum tersedia',
+  category: typeof project.type === 'string' && project.type.trim() ? project.type : 'Belum tersedia',
+  location: typeof project.location === 'string' && project.location.trim() ? project.location : 'Belum tersedia',
+  year: extractYear(project),
+  plannedValue: formatOptionalRupiah(project.budgetBaseline),
+  lockedValue: project.status === 'PLANNED' ? 'Belum terkunci' : 'Belum tersedia',
+  fundingSource: 'Belum tersedia',
+  description: typeof project.description === 'string' ? project.description : '',
+  startDate: formatOptionalDate(project.startDate),
+  endDate: formatOptionalDate(project.endDate),
+  myRole: 'Relasi belum tersedia dari API',
+  myAccess: 'Akses detail tersedia; kewenangan menunggu RBAC/backend aktif.',
+  relationStatus: 'Data proyek nyata dari API. Kewenangan belum ditegakkan mesin.',
+});
+
 function DataList({ rows }: { rows: DataRow[] }) {
   return (
     <dl className="simprok-detail-data">
@@ -212,24 +284,12 @@ function Drawer({
 export function ProjectDetailDoorPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
-  const projectDetail = projectId ? projectDetailById[projectId] : undefined;
+  const initialProjectDetail = projectId ? projectDetailById[projectId] : undefined;
+  const [projectDetail, setProjectDetail] = useState<ProjectDetail | undefined>(initialProjectDetail);
+  const [detailLoading, setDetailLoading] = useState(!initialProjectDetail && Boolean(projectId));
+  const [detailError, setDetailError] = useState('');
   const [formalEditOpen, setFormalEditOpen] = useState(false);
-  const [formalData, setFormalData] = useState({
-    code: projectDetail?.code || '',
-    name: projectDetail?.name || '',
-    owner: projectDetail?.owner || '',
-    category: projectDetail?.category || '',
-    location: projectDetail?.location || '',
-    year: projectDetail?.year || '',
-    status: projectDetail?.status || '',
-    plannedValue: projectDetail?.plannedValue || '',
-    fundingSource: projectDetail?.fundingSource || '',
-    description: projectDetail?.description || '',
-    specification: projectDetail?.specification || '',
-    notes: projectDetail?.notes || '',
-    startDate: projectDetail?.startDate || '',
-    endDate: projectDetail?.endDate || '',
-  });
+  const [formalData, setFormalData] = useState(() => buildFormalData(initialProjectDetail));
   const [formalDraft, setFormalDraft] = useState(formalData);
   const [changeDrawerOpen, setChangeDrawerOpen] = useState(false);
   const [preselectedChangeType, setPreselectedChangeType] = useState<ChangeType | null>(null);
@@ -245,6 +305,65 @@ export function ProjectDetailDoorPage() {
     attachmentNote: '',
     reviewer: '',
   });
+
+  useEffect(() => {
+    const fixtureDetail = projectId ? projectDetailById[projectId] : undefined;
+    if (fixtureDetail) {
+      const nextFormalData = buildFormalData(fixtureDetail);
+      setProjectDetail(fixtureDetail);
+      setFormalData(nextFormalData);
+      setFormalDraft(nextFormalData);
+      setDetailError('');
+      setDetailLoading(false);
+      return;
+    }
+
+    if (!projectId) {
+      setProjectDetail(undefined);
+      setFormalData(buildFormalData());
+      setFormalDraft(buildFormalData());
+      setDetailError('projectId tidak tersedia.');
+      setDetailLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError('');
+
+    apiFetch(`/projects/${projectId}`)
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`GET /projects/${projectId} gagal dengan status ${response.status}`);
+        }
+        const data = (await response.json()) as unknown;
+        if (!data || typeof data !== 'object') {
+          throw new Error('Respons proyek tidak berisi object data.');
+        }
+        return mapApiProjectToDetail(data as Record<string, unknown>);
+      })
+      .then((nextProjectDetail) => {
+        if (cancelled) return;
+        const nextFormalData = buildFormalData(nextProjectDetail);
+        setProjectDetail(nextProjectDetail);
+        setFormalData(nextFormalData);
+        setFormalDraft(nextFormalData);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setProjectDetail(undefined);
+        setFormalData(buildFormalData());
+        setFormalDraft(buildFormalData());
+        setDetailError('Data proyek belum dapat dimuat dari API.');
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   const openRabRoom = () => {
     if (!projectId) {
@@ -299,7 +418,9 @@ export function ProjectDetailDoorPage() {
         <section className="simprok-detail-hero">
           <div className="simprok-detail-hero__main">
             <h1>Detail Proyek</h1>
-            <p className="simprok-detail-note">Data detail proyek belum tersedia untuk proyek ini.</p>
+            <p className="simprok-detail-note">
+              {detailLoading ? 'Memuat data proyek dari API...' : detailError || 'Data detail proyek belum tersedia untuk proyek ini.'}
+            </p>
             <p className="simprok-detail__technical">projectId: {projectId || 'tidak tersedia'}</p>
           </div>
           <button type="button" className="simprok-detail-button simprok-detail-button--plain" onClick={() => navigate('/proyek')}>
