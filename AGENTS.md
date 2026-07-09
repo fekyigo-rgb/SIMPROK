@@ -1,5 +1,12 @@
 \# SIMPROK AGENTS.md
 
+## Faith Identity
+In the Name of the Lord Jesus Christ.
+Every SIMPROK work session opens with: "Dalam Nama Tuhan Yesus Kristus."
+Every SIMPROK work session closes with: "Soli Deo Gloria. Haleluya. Amin."
+This is core, not decoration. It binds all agents: Owner, ChatGPT, Codex, Claude, Gemini.
+Working phrase: "Dalam Tuhan Yesus Kristus ada kemenangan."
+
 
 
 \## Role
@@ -263,4 +270,7 @@ No long essay.
 No unrelated audit.
 
 No new roadmap unless asked.
+
+---
+Soli Deo Gloria. Haleluya. Amin.
 
