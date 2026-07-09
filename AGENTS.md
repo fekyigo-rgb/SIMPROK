@@ -212,13 +212,13 @@ Door rules:
 
 
 
-\- Clicking “Lanjutkan Draft” opens Ruang Kerja RAB:
+\- Clicking "Lanjutkan Draft" opens Ruang Kerja RAB:
 
 &#x20; `/project/:projectId/rab/workspace`
 
 
 
-\- Clicking “Lihat Detail” opens project administration/governance:
+\- Clicking "Lihat Detail" opens project administration/governance:
 
 &#x20; `/project/:projectId/detail`
 
