@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { ConflictException, Injectable, InternalServerErrorException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -66,6 +66,16 @@ export class ProjectService {
     } catch (error) {
       if (error instanceof NotFoundException) {
         throw error;
+      }
+
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002' &&
+        Array.isArray(error.meta?.target) &&
+        error.meta.target.includes('workspaceId') &&
+        error.meta.target.includes('code')
+      ) {
+        throw new ConflictException('Kode proyek sudah dipakai di workspace ini. Gunakan kode lain.');
       }
 
       console.error('ProjectService Error:', error);

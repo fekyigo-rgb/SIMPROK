@@ -4,6 +4,7 @@ import { ObservatoryPage } from './pages/ObservatoryPage';
 import { ProjectWarRoomPage } from './pages/ProjectWarRoomPage';
 import { ProjectSetupPage } from './pages/ProjectSetupPage';
 import { ProjectRabDoorPage } from './pages/ProjectRabDoorPage';
+import { RabWorkspacePage } from './pages/RabWorkspacePage';
 import { ProjectAhspSnapshotPage } from './pages/ProjectAhspSnapshotPage';
 import { ProjectDetailDoorPage } from './pages/ProjectDetailDoorPage';
 import { ProjectNotesPage } from './pages/ProjectNotesPage';
@@ -34,6 +35,7 @@ function App() {
               <Route path="proyek" element={<ProjectListPage />} />
               <Route path="project/new" element={<RoleRoute allowedRoles={['DIRECTOR', 'OWNER']}><ProjectSetupPage /></RoleRoute>} />
               <Route path="project/:projectId/rab" element={<ProjectRabDoorPage />} />
+              <Route path="project/:projectId/rab/workspace" element={<RabWorkspacePage />} />
               <Route path="project/:projectId/rab/ahsp-snapshot" element={<ProjectAhspSnapshotPage />} />
               <Route path="project/:projectId/detail" element={<ProjectDetailDoorPage />} />
               <Route path="project/:projectId/catatan" element={<ProjectNotesPage />} />

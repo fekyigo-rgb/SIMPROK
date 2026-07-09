@@ -1,3 +1,11 @@
+const API_BASE_URL = 'http://localhost:3000';
+
+const resolveApiInput = (input: RequestInfo | URL): RequestInfo | URL => {
+  if (typeof input !== 'string') return input;
+  if (!input.startsWith('/')) return input;
+  return `${API_BASE_URL}${input}`;
+};
+
 export async function apiFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -26,7 +34,7 @@ export async function apiFetch(
     headers,
   };
 
-  const response = await fetch(input, finalInit);
+  const response = await fetch(resolveApiInput(input), finalInit);
   
   if (response.status === 401 && typeof window !== 'undefined') {
     // Only signals stale session; callers still receive Response and handle page-level errors.

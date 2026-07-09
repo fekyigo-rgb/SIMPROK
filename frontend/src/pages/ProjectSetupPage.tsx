@@ -46,10 +46,18 @@ const bidangPekerjaanOptions = [
 
 export function ProjectSetupPage() {
   const navigate = useNavigate();
+  const { token, activeWorkspaceId } = useAuth();
   const [interactionText, setInteractionText] = useState('');
   const [interactionStatus, setInteractionStatus] = useState('Engine belum aktif');
   const [selectedKategori, setSelectedKategori] = useState('');
   const [selectedBidang, setSelectedBidang] = useState<string[]>([]);
+  const [preparationData, setPreparationData] = useState<Record<string, string>>({});
+  const [projectCode, setProjectCode] = useState('');
+  const [budgetCeiling, setBudgetCeiling] = useState('');
+  const [mainMaterialSpec, setMainMaterialSpec] = useState('');
+  const [draftStatus, setDraftStatus] = useState('Belum ada draft project yang dibuat.');
+  const [draftError, setDraftError] = useState('');
+  const [creatingDraft, setCreatingDraft] = useState(false);
 
   const showBidang = kategoriDenganBidang.includes(selectedKategori);
 
@@ -70,6 +78,105 @@ export function ProjectSetupPage() {
   const handleInteraction = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setInteractionStatus('Engine belum aktif. Konteks belum diproses. Ruang sudah disiapkan.');
+  };
+
+  const updatePreparationField = (field: string, value: string) => {
+    setPreparationData((current) => ({ ...current, [field]: value }));
+  };
+
+  const buildDraftProjectCode = () => {
+    const explicitCode = projectCode.trim();
+    if (explicitCode) return explicitCode;
+
+    const rawName = preparationData['Nama Proyek']?.trim() || 'RAB';
+    const slug = rawName
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 20);
+    const uniqueSuffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`.toUpperCase();
+
+    return `${slug || 'RAB'}-${uniqueSuffix}`;
+  };
+
+  const buildDraftDescription = () => {
+    const filledFields = requiredPreparationFields
+      .map((field) => `${field}: ${preparationData[field]?.trim() || 'Belum diisi'}`);
+
+    return [
+      'Draft project dibuat dari Persiapan RAB. Belum baseline resmi dan belum RAB final.',
+      `Kategori: ${selectedKategori}`,
+      showBidang ? `Bidang Pekerjaan: ${selectedBidang.join(', ')}` : null,
+      budgetCeiling.trim() ? `Pagu Anggaran: ${budgetCeiling.trim()}` : null,
+      mainMaterialSpec.trim() ? `Spesifikasi Material Utama: ${mainMaterialSpec.trim()}` : null,
+      interactionText.trim() ? `Konteks Lapangan: ${interactionText.trim()}` : null,
+      ...filledFields,
+    ].filter(Boolean).join('\n');
+  };
+
+  const validateDraftInput = () => {
+    const workspaceId = getRequestWorkspaceId(activeWorkspaceId);
+    if (!token || !workspaceId) {
+      return 'Sesi atau workspace belum aktif. Silakan login dan pilih workspace kembali.';
+    }
+
+    const projectName = preparationData['Nama Proyek']?.trim();
+    if (!projectName) return 'Nama pekerjaan/proyek wajib diisi.';
+    if (!selectedKategori) return 'Kategori pengadaan wajib dipilih.';
+    if (showBidang && selectedBidang.length === 0) return 'Bidang pekerjaan wajib dipilih untuk kategori konstruksi.';
+
+    return null;
+  };
+
+  const handleCreateDraftProject = async () => {
+    const validationError = validateDraftInput();
+    if (validationError) {
+      setDraftError(validationError);
+      setDraftStatus('Draft project belum dibuat.');
+      return;
+    }
+
+    setCreatingDraft(true);
+    setDraftError('');
+    setDraftStatus('Membuat draft project. Belum baseline resmi.');
+
+    try {
+      const workspaceId = getRequestWorkspaceId(activeWorkspaceId);
+      if (!workspaceId) {
+        throw new Error('Draft project belum dapat dibuat. Workspace context belum tersedia.');
+      }
+
+      const draftPayload = {
+        name: preparationData['Nama Proyek'].trim(),
+        code: buildDraftProjectCode(),
+        description: buildDraftDescription(),
+        workspaceId,
+      };
+
+      const response = await apiFetch('/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draftPayload),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readApiErrorMessage(response));
+      }
+
+      const project = await response.json();
+      const projectId = project?.id || project?.projectId;
+      if (!projectId) {
+        throw new Error('Project draft berhasil dibuat, tetapi projectId tidak ditemukan pada response API.');
+      }
+
+      setDraftStatus('Draft project dibuat. Masuk ke Ruang Kerja RAB. Belum baseline resmi.');
+      navigate(`/project/${projectId}/rab/workspace`);
+    } catch (error) {
+      setDraftError(error instanceof Error ? error.message : 'Project draft belum dapat dibuat. Periksa koneksi/API atau data wajib.');
+      setDraftStatus('Project draft belum dapat dibuat.');
+    } finally {
+      setCreatingDraft(false);
+    }
   };
 
   return (
@@ -108,9 +215,19 @@ export function ProjectSetupPage() {
                   <label key={field} className={field === 'Alamat Detail' ? 'simprok-rab-field simprok-rab-field--wide' : 'simprok-rab-field'}>
                     <span>{field}</span>
                     {field === 'Alamat Detail' ? (
-                      <textarea rows={3} placeholder="Isi sesuai lokasi pekerjaan" />
+                      <textarea
+                        rows={3}
+                        value={preparationData[field] || ''}
+                        onChange={(event) => updatePreparationField(field, event.target.value)}
+                        placeholder="Isi sesuai lokasi pekerjaan"
+                      />
                     ) : (
-                      <input type={field.includes('Tahun') ? 'number' : 'text'} placeholder="Belum diisi" />
+                      <input
+                        type={field.includes('Tahun') ? 'number' : 'text'}
+                        value={preparationData[field] || ''}
+                        onChange={(event) => updatePreparationField(field, event.target.value)}
+                        placeholder="Belum diisi"
+                      />
                     )}
                   </label>
                 ))}
@@ -155,15 +272,30 @@ export function ProjectSetupPage() {
               <div className="simprok-rab-form__grid">
                 <label className="simprok-rab-field">
                   <span>Kode Proyek / Kode RAB</span>
-                  <input type="text" placeholder="Otomatis bila pola tersedia" />
+                  <input
+                    type="text"
+                    value={projectCode}
+                    onChange={(event) => setProjectCode(event.target.value)}
+                    placeholder="Otomatis bila pola tersedia"
+                  />
                 </label>
                 <label className="simprok-rab-field">
                   <span>Pagu Anggaran</span>
-                  <input type="number" placeholder="Opsional" />
+                  <input
+                    type="number"
+                    value={budgetCeiling}
+                    onChange={(event) => setBudgetCeiling(event.target.value)}
+                    placeholder="Opsional"
+                  />
                 </label>
                 <label className="simprok-rab-field simprok-rab-field--wide">
                   <span>Spesifikasi Material Utama</span>
-                  <textarea rows={2} placeholder="Contoh: Keramik Tipe A, Granit Tipe C, Gypsum Jenis A, Kabel Tipe D..." />
+                  <textarea
+                    rows={2}
+                    value={mainMaterialSpec}
+                    onChange={(event) => setMainMaterialSpec(event.target.value)}
+                    placeholder="Contoh: Keramik Tipe A, Granit Tipe C, Gypsum Jenis A, Kabel Tipe D..."
+                  />
                 </label>
               </div>
             </div>
@@ -221,6 +353,9 @@ export function ProjectSetupPage() {
       </div>
 
       <footer className="simprok-rab-prep__footer">
+        <div style={{ flex: '1 1 260px', color: draftError ? '#C0392B' : '#16294B', fontSize: '0.9rem' }}>
+          <strong>Status Draft:</strong> {draftError || draftStatus}
+        </div>
         <button
           className="simprok-rab-action simprok-rab-action--secondary"
           onClick={() => navigate('/')}
@@ -233,12 +368,13 @@ export function ProjectSetupPage() {
         </button>
         <button
           className="simprok-rab-action simprok-rab-action--primary"
-          onClick={() => navigate('/?ruang=ruang-kerja-rab')}
-          title="Lanjut ke Ruang Kerja RAB - placeholder jujur"
-          aria-label="Lanjut ke Ruang Kerja RAB - placeholder jujur"
-          data-route="/?ruang=ruang-kerja-rab"
+          onClick={handleCreateDraftProject}
+          disabled={creatingDraft}
+          title="Buat draft project dan lanjut ke Ruang Kerja RAB"
+          aria-label="Buat draft project dan lanjut ke Ruang Kerja RAB"
+          data-route="/project/:projectId/rab/workspace"
         >
-          Lanjut ke Ruang Kerja RAB
+          {creatingDraft ? 'Membuat Draft...' : 'Lanjut ke Ruang Kerja RAB'}
           <ArrowRight size={18} aria-hidden="true" />
         </button>
       </footer>
@@ -251,6 +387,31 @@ const checkStatus = (status: number) => {
   if (status === 403) return 'Anda tidak memiliki akses untuk membuka data ini.';
   if (status === 400) return 'Konteks workspace atau permintaan belum valid. Pilih workspace kembali.';
   return 'Data gagal dimuat. Coba lagi beberapa saat.';
+};
+
+const getRequestWorkspaceId = (activeWorkspaceId: string | null) => {
+  if (typeof window === 'undefined') return activeWorkspaceId;
+  return localStorage.getItem('simprok_workspace') || activeWorkspaceId;
+};
+
+const readApiErrorMessage = async (response: Response) => {
+  const fallback = checkStatus(response.status);
+
+  try {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const payload = await response.json();
+      const message = Array.isArray(payload?.message)
+        ? payload.message.join(', ')
+        : payload?.message || payload?.error;
+      return `Draft project belum dapat dibuat. API menolak request: ${response.status}. ${message || fallback}`;
+    }
+
+    const text = await response.text();
+    return `Draft project belum dapat dibuat. API menolak request: ${response.status}. ${text || fallback}`;
+  } catch {
+    return `Draft project belum dapat dibuat. API menolak request: ${response.status}. ${fallback}`;
+  }
 };
 
 type BoqItemType = 'FOLDER' | 'WORK_ITEM' | 'NOTE';

@@ -1,5 +1,5 @@
 import { type MouseEvent, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowLeft,
@@ -154,9 +154,10 @@ const createRow = (type: RabRowType, parentId: string | null, sortOrder: number)
 
 export function RabWorkspacePage() {
   const navigate = useNavigate();
+  const { projectId: routeProjectId } = useParams();
   const [searchParams] = useSearchParams();
   const layoutContext = useOutletContext<DashboardOutletContext | null>();
-  const projectId = searchParams.get('projectId');
+  const projectId = routeProjectId || searchParams.get('projectId');
   const [rows, setRows] = useState<RabRow[]>(localDraftRows);
   const [volumes, setVolumes] = useState<Record<string, number>>(localDraftVolumes);
   const [unitPrices, setUnitPrices] = useState<Record<string, number>>(
@@ -168,7 +169,7 @@ export function RabWorkspacePage() {
   const [selectedRowId, setSelectedRowId] = useState('excavation');
   const [marginPercent, setMarginPercent] = useState(10);
   const [ppnPercent, setPpnPercent] = useState(11);
-  const [statusMessage, setStatusMessage] = useState(projectId ? 'Memuat BOQ baseline aktif...' : 'Draft lokal, belum tersimpan permanen');
+  const [statusMessage, setStatusMessage] = useState(projectId ? `Draft project aktif: ${projectId}` : 'Draft lokal, belum tersimpan permanen');
 
   useEffect(() => {
     if (!projectId) {
@@ -209,7 +210,7 @@ export function RabWorkspacePage() {
           return acc;
         }, {}));
         setSelectedRowId(mappedRows.find((row) => row.type === 'item')?.id || 'excavation');
-        setStatusMessage(mappedRows.length > 0 ? 'Data BOQ dibaca read-only. Edit tetap draft lokal.' : 'BOQ kosong. Menampilkan draft lokal, belum tersimpan permanen.');
+        setStatusMessage(mappedRows.length > 0 ? `Draft project aktif: ${projectId}. Data BOQ dibaca read-only; edit tetap draft lokal.` : `Draft project aktif: ${projectId}. BOQ kosong atau belum baseline; menampilkan draft lokal.`);
       })
       .catch((error: unknown) => {
         console.error('Failed to fetch RAB BOQ:', error);
@@ -220,7 +221,7 @@ export function RabWorkspacePage() {
           return acc;
         }, {}));
         setSelectedRowId('excavation');
-        setStatusMessage('BOQ belum tersambung. Draft lokal, belum tersimpan permanen.');
+        setStatusMessage(`Draft project aktif: ${projectId}. BOQ belum tersambung; draft lokal, belum baseline resmi.`);
       });
   }, [projectId]);
 
@@ -318,7 +319,7 @@ export function RabWorkspacePage() {
         <div>
           <div className="simprok-rab-workspace__eyebrow">SIMPROK / Buat RAB / Ruang Kerja RAB</div>
           <h1>Ruang Kerja RAB</h1>
-          <p>{projectId ? 'BOQ baseline aktif dibaca read-only dari proyek. Edit halaman ini tetap draft lokal.' : 'Tidak ada projectId. Menampilkan contoh kerja frontend sebagai draft lokal, belum tersimpan permanen.'}</p>
+          <p>{projectId ? `Draft project aktif: ${projectId}. Ruang ini untuk kerja/edit/import RAB; belum baseline resmi.` : 'Tidak ada projectId. Menampilkan contoh kerja frontend sebagai draft lokal, belum tersimpan permanen.'}</p>
         </div>
         <span className="simprok-rab-workspace__status">{statusMessage}</span>
       </header>
