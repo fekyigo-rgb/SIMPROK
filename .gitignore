@@ -45,3 +45,6 @@ frontend/.gitignore
 /data/
 /first-real-input-files/
 /first-real-input-files.zip
+
+# SIMPROK local agent runtime artifacts
+/docs/agent-queue/RUN_REPORT.local.md

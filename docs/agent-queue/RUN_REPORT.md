@@ -1,16 +1,17 @@
 # SIMPROK RUN REPORT
 
 ## Task
-Pending agent execution.
+Template for local Autopilot runs.
 
 ## Preflight
-Pending agent execution.
+This tracked file is a template.
+Runtime reports are written to docs/agent-queue/RUN_REPORT.local.md.
 
 ## Files Changed
-Pending agent execution.
+Pending local run.
 
 ## Build/Test
-Pending agent execution.
+Pending local run.
 
 ## Reviewer Notes
 Pending PM/Owner review.
@@ -19,4 +20,4 @@ Pending PM/Owner review.
 Pending Owner PASS / REVISE / STOP.
 
 ## Status
-PENDING_AGENT_EXECUTION
+TEMPLATE

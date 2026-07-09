@@ -75,8 +75,10 @@ Pending Owner PASS / REVISE / STOP.
 PENDING_AGENT_EXECUTION
 "@
 
-Set-Content -LiteralPath "docs/agent-queue/RUN_REPORT.md" -Value $report -Encoding UTF8
+$reportPath = "docs/agent-queue/RUN_REPORT.local.md"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText((Resolve-Path -LiteralPath (Split-Path -Parent $reportPath)).Path + [System.IO.Path]::DirectorySeparatorChar + (Split-Path -Leaf $reportPath), $report, $utf8NoBom)
 
 Write-Host ""
-Write-Host "Run report updated: docs/agent-queue/RUN_REPORT.md"
+Write-Host "Run report updated: docs/agent-queue/RUN_REPORT.local.md"
 Write-Host "Soli Deo Gloria. Haleluya. Amin."
