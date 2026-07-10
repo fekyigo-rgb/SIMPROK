@@ -1,6 +1,6 @@
-# SIMPROK NEXT TASK
+﻿# SIMPROK NEXT TASK
 
-Status: ACTIVE
+Status: HOLD_FOR_OWNER_NEXT_DIRECTION
 
 ## Faith Opening
 
@@ -9,72 +9,64 @@ Dalam Nama Tuhan Yesus Kristus.
 ## Agent Instruction
 
 Read AGENTS.md first.
-Execute only this task.
+Read CLAUDE.md if working with Claude Code.
 Do not ask Owner to re-explain SIMPROK.
 Do not perform broad audit.
-Do not edit outside allowed files.
+Do not edit source code until Owner gives a new focused task.
+Do not touch Monitoring / War Room.
 Do not stage.
 Do not commit.
 
+## Current Locked Checkpoint
+
+P3B:
+- Commit: d91924a
+- Message: fix(rab): polish living rab viewer layout
+- Status: OWNER PASS / COMMITTED / LOCKED
+
+P3C:
+- Commit: 45c5e7a
+- Message: fix(rab): support viewer zoom scroll area
+- Status: OWNER PASS / COMMITTED / LOCKED
+
+P4B:
+- Commit: dac5dde
+- Message: fix(rab): polish RAB and AHSP snapshot viewer hierarchy
+- Status: OWNER PASS / BUILD PASS / COMMITTED / LOCKED
+
+## Locked Result Summary
+
+RAB Viewer / Ruang Hidup RAB:
+- Visual hierarchy accepted by Owner as-is.
+- RAB/BOQ empty state remains honest.
+- Data Pendukung panel remains.
+- Status & Mekanisme remains.
+- No Monitoring / War Room work.
+
+AHSP Snapshot:
+- AHSP categories must come from actual RAB/BOQ FOLDER/subjudul.
+- No hardcoded fake categories.
+- "Semua Kategori" is filter control only.
+- AHSP empty state remains honest.
+- Topbar route context fixed for AHSP Snapshot.
+
 ## Current Task
 
-P3A — RUANG HIDUP RAB / RAB VIEWER REAL PROJECT ENTRY
+No active coding task.
 
-Goal:
-Ensure /project/:projectId/rab opens as Ruang Hidup RAB / RAB Viewer for real project UUID,
-not as an empty fallback, not as fake data, and not as the editable RAB workspace.
+Wait for Owner next instruction.
 
-Scope:
+If Owner gives a new task:
+1. Verify repo status first.
+2. Identify exact allowed files.
+3. Execute only that task.
+4. Do not broaden scope.
+5. Do not stage or commit without Owner PASS.
 
-- frontend/src/pages/ProjectRabDoorPage.tsx only
-- If another file is required, STOP and report before editing.
+## Commands for next agent start
 
-Product Law:
-- Ruang Hidup RAB / RAB Viewer = result/viewer/snapshot room.
-- Ruang Kerja RAB = editable draft workspace.
-- Project name/card from Proyek Saya opens /project/:projectId/rab.
-- Detail Proyek button "Buka Ruang RAB" opens /project/:projectId/rab.
-- Do not route to Monitoring or War Room.
-- Do not claim approval/RBAC/backend engine active without evidence.
-
-Required behavior:
-1. Real project UUID should render a proper RAB Viewer/Ruang Hidup RAB page.
-2. Use real project fields from API if available.
-3. If RAB/BOQ/detail data is not available, show honest placeholder: "Belum tersedia" or "Menunggu data RAB".
-4. Do not show fixture/sample RAB as if it belongs to a real API project.
-5. Keep existing good visual structure as much as possible.
-6. Keep support document/snapshot doors honest: AHSP, Basic Price, TKDN, Metode, Spesifikasi, Schedule, Peralatan.
-7. Do not create fake backend/RBAC/approval claims.
-
-Do NOT:
-- touch backend
-- touch schema
-- touch migration
-- touch RAB Workspace
-- touch Monitoring
-- touch War Room
-- touch Topbar
-- touch index.css
-- touch AGENTS.md
-- touch CLAUDE.md
-- touch data/ or first-real-input-files*
-- stage
-- commit
-
-Commands:
 git status --short
-git diff --cached --name-only
-npm run build
-
-Report:
-A. Status
-B. Root cause
-C. File changed
-D. Fix summary
-E. Build result
-F. Browser result
-G. Git status after
-H. READY_FOR_PM_REVIEW or STOP
+git log --oneline -5
 
 ## Faith Closing
 
