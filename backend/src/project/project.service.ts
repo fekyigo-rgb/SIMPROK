@@ -13,6 +13,39 @@ export class ProjectService {
     private deviationService: DeviationService
   ) {}
 
+  private buildDraftRecap(
+    subtotal: Prisma.Decimal,
+    marginPercentInput?: number | Prisma.Decimal | null,
+    taxPercentInput?: number | Prisma.Decimal | null,
+  ) {
+    const marginPercent = new Prisma.Decimal(marginPercentInput ?? 10);
+    const taxPercent = new Prisma.Decimal(taxPercentInput ?? 11);
+    const marginAmount = subtotal.mul(marginPercent).div(100);
+    const taxAmount = subtotal.add(marginAmount).mul(taxPercent).div(100);
+    const grandTotal = subtotal.add(marginAmount).add(taxAmount);
+
+    return {
+      subtotal,
+      marginPercent,
+      marginAmount,
+      taxPercent,
+      taxAmount,
+      grandTotal,
+    };
+  }
+
+  private serializeDraftRecap(recap: ReturnType<ProjectService['buildDraftRecap']>) {
+    return {
+      subtotal: Number(recap.subtotal),
+      marginPercent: Number(recap.marginPercent),
+      marginAmount: Number(recap.marginAmount),
+      taxPercent: Number(recap.taxPercent),
+      ppnPercent: Number(recap.taxPercent),
+      taxAmount: Number(recap.taxAmount),
+      grandTotal: Number(recap.grandTotal),
+    };
+  }
+
   async create(data: CreateProjectDto, creatorAccountId?: string) {
     try {
       const workspace = await this.prisma.workspace.findUnique({
@@ -357,20 +390,37 @@ export class ProjectService {
     });
   }
 
-  async getDraftBoq(projectId: string): Promise<{ structureId: string | null; items: object[] }> {
+  async getDraftBoq(projectId: string): Promise<{ structureId: string | null; items: object[]; recap: object }> {
     const structure = await this.prisma.boqStructure.findFirst({
       where: { projectId, name: 'Working Draft', status: 'DRAFT' },
       orderBy: { createdAt: 'desc' },
     });
-    if (!structure) return { structureId: null, items: [] };
+    if (!structure) {
+      return {
+        structureId: null,
+        items: [],
+        recap: this.serializeDraftRecap(this.buildDraftRecap(new Prisma.Decimal(0))),
+      };
+    }
     const items = await this.prisma.boqItem.findMany({
       where: { boqStructureId: structure.id },
       orderBy: { sortOrder: 'asc' },
     });
-    return { structureId: structure.id, items };
+    const rab = await this.prisma.rabDocument.findFirst({
+      where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const subtotal = rab
+      ? new Prisma.Decimal(rab.totalBaseCost)
+      : items.reduce(
+        (sum, item) => sum.add(item.itemType === 'WORK_ITEM' && item.lineTotal ? item.lineTotal : 0),
+        new Prisma.Decimal(0),
+      );
+    const recap = this.buildDraftRecap(subtotal, rab?.profitPercent, rab?.taxPercent);
+    return { structureId: structure.id, items, recap: this.serializeDraftRecap(recap) };
   }
 
-  async saveDraftBoq(projectId: string, dto: SaveDraftBoqDto): Promise<{ structureId: string; items: object[] }> {
+  async saveDraftBoq(projectId: string, dto: SaveDraftBoqDto): Promise<{ structureId: string; items: object[]; recap: object }> {
     return await this.prisma.$transaction(async (tx) => {
       let structure = await tx.boqStructure.findFirst({
         where: { projectId, name: 'Working Draft', status: 'DRAFT' },
@@ -388,6 +438,7 @@ export class ProjectService {
 
       const tempIdMap = new Map<string, string>();
       const insertedItems: object[] = [];
+      let subtotal = new Prisma.Decimal(0);
 
       for (const [index, row] of dto.rows.entries()) {
         const parentId = row.parentTempId ? (tempIdMap.get(row.parentTempId) ?? null) : null;
@@ -396,6 +447,9 @@ export class ProjectService {
         const quantity = (!isFolder && !isNote) ? new Prisma.Decimal(row.quantity ?? 0) : new Prisma.Decimal(0);
         const unitPrice = (!isFolder && !isNote) ? new Prisma.Decimal(row.unitPrice ?? 0) : null;
         const lineTotal = (unitPrice !== null) ? quantity.mul(unitPrice) : null;
+        if (row.itemType === 'WORK_ITEM' && lineTotal !== null) {
+          subtotal = subtotal.add(lineTotal);
+        }
 
         const created = await tx.boqItem.create({
           data: {
@@ -415,7 +469,43 @@ export class ProjectService {
         insertedItems.push(created);
       }
 
-      return { structureId: structure.id, items: insertedItems };
+      const taxPercent = dto.taxPercent ?? dto.ppnPercent ?? 0;
+      const recap = this.buildDraftRecap(subtotal, dto.marginPercent ?? 0, taxPercent);
+      const rabData = {
+        overheadPercent: new Prisma.Decimal(0),
+        profitPercent: recap.marginPercent,
+        taxPercent: recap.taxPercent,
+        totalBaseCost: recap.subtotal,
+        totalFinalCost: recap.grandTotal,
+      };
+
+      const updatedDraftRabs = await tx.rabDocument.updateMany({
+        where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
+        data: rabData,
+      });
+
+      if (updatedDraftRabs.count === 0) {
+        await tx.rabDocument.create({
+          data: {
+            projectId,
+            boqStructureId: structure.id,
+            name: 'Working Draft RAB',
+            version: 1,
+            status: 'DRAFT',
+            ...rabData,
+          },
+        });
+      }
+
+      const persistedRab = await tx.rabDocument.findFirst({
+        where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
+        orderBy: { updatedAt: 'desc' },
+      });
+      const persistedRecap = persistedRab
+        ? this.buildDraftRecap(new Prisma.Decimal(persistedRab.totalBaseCost), persistedRab.profitPercent, persistedRab.taxPercent)
+        : recap;
+
+      return { structureId: structure.id, items: insertedItems, recap: this.serializeDraftRecap(persistedRecap) };
     });
   }
 

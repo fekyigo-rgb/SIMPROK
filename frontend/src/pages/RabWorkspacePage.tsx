@@ -52,6 +52,22 @@ interface BoqItemResponse {
   ahspSnapshotId?: string | null;
 }
 
+interface DraftRecapResponse {
+  subtotal?: string | number | null;
+  marginPercent?: string | number | null;
+  marginAmount?: string | number | null;
+  ppnPercent?: string | number | null;
+  taxPercent?: string | number | null;
+  taxAmount?: string | number | null;
+  grandTotal?: string | number | null;
+}
+
+interface DraftBoqResponse {
+  structureId: string | null;
+  items: BoqItemResponse[];
+  recap?: DraftRecapResponse | null;
+}
+
 interface NumberedRabRow extends RabRow {
   number: string;
   depth: number;
@@ -196,6 +212,17 @@ export function RabWorkspacePage() {
   const [ppnPercent, setPpnPercent] = useState(11);
   const [statusMessage, setStatusMessage] = useState(projectId ? 'Memuat draft...' : 'Tidak ada project aktif.');
 
+  const applyRecap = (recap?: DraftRecapResponse | null) => {
+    if (!recap) return;
+    if (recap.marginPercent !== null && recap.marginPercent !== undefined) {
+      setMarginPercent(toNumber(recap.marginPercent));
+    }
+    const persistedPpnPercent = recap.taxPercent ?? recap.ppnPercent;
+    if (persistedPpnPercent !== null && persistedPpnPercent !== undefined) {
+      setPpnPercent(toNumber(persistedPpnPercent));
+    }
+  };
+
   const applyRows = (items: BoqItemResponse[]) => {
     const mappedRows = mapBoqToRows(items);
     const nextVolumes = items.reduce<Record<string, number>>((acc, item) => {
@@ -222,18 +249,19 @@ export function RabWorkspacePage() {
       return;
     }
 
-    apiFetch(`http://localhost:3000/projects/${projectId}/boq/draft`)
+    apiFetch(`/projects/${projectId}/boq/draft`)
       .then((response) => {
         if (!response.ok) throw new Error('draft-load-failed');
         return response.json();
       })
-      .then((data: { structureId: string | null; items: BoqItemResponse[] }) => {
+      .then((data: DraftBoqResponse) => {
+        applyRecap(data.recap);
         if (data.items.length > 0) {
           applyRows(data.items);
           setStatusMessage('Draft tersimpan dimuat. Ruang kerja siap.');
         } else {
           // No saved draft — seed from baseline if available, else empty
-          return apiFetch(`http://localhost:3000/projects/${projectId}/boq`)
+          return apiFetch(`/projects/${projectId}/boq`)
             .then((r) => r.ok ? r.json() : [])
             .then((baseline: unknown) => {
               const baselineItems = Array.isArray(baseline) ? baseline as BoqItemResponse[] : [];
@@ -327,6 +355,9 @@ export function RabWorkspacePage() {
     setStatusMessage('Menyimpan draft...');
 
     const payload = {
+      marginPercent,
+      ppnPercent,
+      taxPercent: ppnPercent,
       rows: rows.map((row, index) => ({
         tempId: row.id,
         parentTempId: row.parentId,
@@ -340,14 +371,14 @@ export function RabWorkspacePage() {
       })),
     };
 
-    apiFetch(`http://localhost:3000/projects/${projectId}/boq/draft`, {
+    apiFetch(`/projects/${projectId}/boq/draft`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
-      .then((r) => r.ok ? apiFetch(`http://localhost:3000/projects/${projectId}/boq/draft`) : Promise.reject(r.status))
-      .then((r) => r.ok ? r.json() : Promise.reject('reload-failed'))
-      .then((fresh: { structureId: string | null; items: BoqItemResponse[] }) => {
+      .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+      .then((fresh: DraftBoqResponse) => {
+        applyRecap(fresh.recap);
         const mappedRows = mapBoqToRows(fresh.items);
         const nextVolumes = fresh.items.reduce<Record<string, number>>((acc, item) => {
           acc[item.id] = toNumber(item.quantity);

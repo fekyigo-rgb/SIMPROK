@@ -23,6 +23,7 @@ export class DraftBoqRowDto {
   @IsNumber()
   @Min(0)
   @IsOptional()
+  @Type(() => Number)
   quantity?: number;
 
   @IsString()
@@ -32,10 +33,12 @@ export class DraftBoqRowDto {
   @IsNumber()
   @Min(0)
   @IsOptional()
+  @Type(() => Number)
   unitPrice?: number;
 
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   sortOrder?: number;
 }
 
@@ -44,4 +47,22 @@ export class SaveDraftBoqDto {
   @ValidateNested({ each: true })
   @Type(() => DraftBoqRowDto)
   rows: DraftBoqRowDto[];
+
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  @Type(() => Number)
+  marginPercent?: number;
+
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  @Type(() => Number)
+  ppnPercent?: number;
+
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  @Type(() => Number)
+  taxPercent?: number;
 }
