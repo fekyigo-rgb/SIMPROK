@@ -5,6 +5,7 @@ import { apiFetch } from '../utils/apiClient';
 
 type RabStatus = 'Draft' | 'Terkunci' | 'Approved' | 'Selesai';
 type PanelMode = 'compact' | 'wide' | 'collapsed';
+type RabSource = 'baseline' | 'draft' | 'empty';
 
 interface RabProject {
   name: string;
@@ -25,6 +26,16 @@ interface RabRow {
   total: string;
 }
 
+interface DraftRecap {
+  subtotal?: number | string | null;
+  marginPercent?: number | string | null;
+  marginAmount?: number | string | null;
+  taxPercent?: number | string | null;
+  ppnPercent?: number | string | null;
+  taxAmount?: number | string | null;
+  grandTotal?: number | string | null;
+}
+
 const defaultProject: RabProject = {
   name: 'Nama proyek belum tersedia',
   code: 'Data belum tersedia',
@@ -36,6 +47,25 @@ const defaultProject: RabProject = {
 };
 
 const formatRupiah = (value: number) => `Rp ${Math.round(value).toLocaleString('id-ID')}`;
+
+const toFiniteNumber = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mapBoqRowsToRabRows = (items: any[]): RabRow[] => items.map((item, idx) => {
+  const qty = Number(item.quantity) || 0;
+  const up = Number(item.unitPrice) || 0;
+  return {
+    code: item.wbsCode || String(idx + 1),
+    description: item.name || 'Belum tersedia',
+    unit: item.unit || '-',
+    volume: qty > 0 ? qty.toLocaleString('id-ID') : '-',
+    unitPrice: up > 0 ? formatRupiah(up) : '-',
+    total: qty > 0 && up > 0 ? formatRupiah(qty * up) : '-',
+  };
+});
 
 const supportDocuments = [
   'Spesifikasi Teknis',
@@ -63,6 +93,8 @@ export function ProjectRabDoorPage() {
   const [error, setError] = useState<string | null>(null);
   const [project, setProject] = useState<RabProject>(defaultProject);
   const [rabRows, setRabRows] = useState<RabRow[]>([]);
+  const [rabSource, setRabSource] = useState<RabSource>('empty');
+  const [draftRecap, setDraftRecap] = useState<DraftRecap | null>(null);
   
   const [zoom, setZoom] = useState(100);
   const [panelMode, setPanelMode] = useState<PanelMode>('compact');
@@ -98,31 +130,54 @@ export function ProjectRabDoorPage() {
           value: projData?.budgetBaseline ? formatRupiah(projData.budgetBaseline) : 'Belum tersedia',
         });
 
-        // BOQ is optional — failure means no data yet, not a viewer error
+        let shouldLoadDraft = false;
+
+        // Draft fallback is allowed only after baseline loads successfully and returns no rows.
         try {
           const boqResponse = await apiFetch(`/projects/${projectId}/boq`);
+          if (!boqResponse.ok) {
+            throw new Error('Baseline RAB response is not OK');
+          }
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const boqData = await boqResponse.json() as any;
           if (Array.isArray(boqData) && boqData.length > 0) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            setRabRows(boqData.map((item: any, idx: number) => {
-              const qty = Number(item.quantity) || 0;
-              const up = Number(item.unitPrice) || 0;
-              return {
-                code: item.wbsCode || String(idx + 1),
-                description: item.name || 'Belum tersedia',
-                unit: item.unit || '-',
-                volume: qty > 0 ? qty.toLocaleString('id-ID') : '-',
-                unitPrice: up > 0 ? formatRupiah(up) : '-',
-                total: qty > 0 && up > 0 ? formatRupiah(qty * up) : '-',
-              };
-            }));
+            setRabRows(mapBoqRowsToRabRows(boqData));
+            setRabSource('baseline');
+            setDraftRecap(null);
           } else {
             setRabRows([]);
+            shouldLoadDraft = true;
           }
         } catch {
-          // BOQ belum tersedia — tampilkan viewer tetap, bukan error
+          // Baseline failure must stay visible; do not silently fallback to draft.
           setRabRows([]);
+          setRabSource('empty');
+          setDraftRecap(null);
+          setError('RAB belum bisa dimuat. Gagal membaca baseline RAB. Coba muat ulang atau periksa akses proyek.');
+          return;
+        }
+
+        if (shouldLoadDraft) {
+          try {
+            const draftResponse = await apiFetch(`/projects/${projectId}/boq/draft`);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const draftData = await draftResponse.json() as any;
+            const draftItems = Array.isArray(draftData?.items) ? draftData.items : [];
+
+            if (draftItems.length > 0) {
+              setRabRows(mapBoqRowsToRabRows(draftItems));
+              setRabSource('draft');
+              setDraftRecap(draftData?.recap ?? null);
+            } else {
+              setRabRows([]);
+              setRabSource('empty');
+              setDraftRecap(null);
+            }
+          } catch {
+            setRabRows([]);
+            setRabSource('empty');
+            setDraftRecap(null);
+          }
         }
 
       } catch {
@@ -136,8 +191,10 @@ export function ProjectRabDoorPage() {
 
   const readOnly = isReadOnly(project.status);
   const archived = project.status === 'Selesai';
+  const isDraftPreview = rabSource === 'draft';
   const zoomScale = zoom / 100;
   const hasRabRows = rabRows.length > 0;
+  const draftTaxPercent = draftRecap?.ppnPercent ?? draftRecap?.taxPercent ?? 0;
 
   useEffect(() => {
     const node = rabDocumentRef.current;
@@ -205,11 +262,15 @@ export function ProjectRabDoorPage() {
     showOfficialActionMessage('Jalur Addendum disiapkan. Engine perubahan resmi belum aktif.');
   };
 
-  const statusMechanismCopy = archived
-    ? 'RAB selesai terkunci otomatis sebagai arsip. Perubahan tidak dimungkinkan; riwayat tetap utuh.'
-    : readOnly
-      ? 'RAB ini sudah menjadi acuan resmi. Perubahan isi RAB dilakukan melalui mekanisme Addendum.'
-      : 'RAB masih dapat disempurnakan sesuai kewenangan sebelum dikunci.';
+  const statusMechanismCopy = isDraftPreview
+    ? 'RAB draft tersimpan, belum menjadi baseline resmi. Viewer ini hanya membaca draft dan tidak mengunci RAB.'
+    : rabSource === 'empty'
+      ? 'Belum ada baseline resmi atau draft tersimpan untuk proyek ini.'
+      : archived
+        ? 'RAB selesai terkunci otomatis sebagai arsip. Perubahan tidak dimungkinkan; riwayat tetap utuh.'
+        : readOnly
+          ? 'RAB ini sudah menjadi acuan resmi. Perubahan isi RAB dilakukan melalui mekanisme Addendum.'
+          : 'RAB masih dapat disempurnakan sesuai kewenangan sebelum dikunci.';
 
   return (
     <main className="simprok-rab">
@@ -241,11 +302,11 @@ export function ProjectRabDoorPage() {
           <span className="simprok-rab-mechanism__label">Status & Mekanisme</span>
           <div className="simprok-rab-mechanism__chips">
             <span className={`simprok-rab-status simprok-rab-status--${project.status.toLowerCase()}`}>
-              {archived ? <Archive size={14} aria-hidden="true" /> : readOnly ? <Lock size={14} aria-hidden="true" /> : null}
-              {archived ? 'Selesai  Arsip' : project.status === 'Draft' ? 'Draft' : 'RAB Terkunci'}
+              {archived ? <Archive size={14} aria-hidden="true" /> : readOnly && !isDraftPreview ? <Lock size={14} aria-hidden="true" /> : null}
+              {isDraftPreview ? 'Draft  Belum Dikunci' : archived ? 'Selesai  Arsip' : project.status === 'Draft' ? 'Draft' : 'RAB Terkunci'}
             </span>
-            {project.status === 'Approved' ? <span className="simprok-rab-status simprok-rab-status--approved">Approved</span> : null}
-            {readOnly && !archived ? <span className="simprok-rab-status simprok-rab-status--approved">Baseline 01</span> : null}
+            {rabSource === 'baseline' && project.status === 'Approved' ? <span className="simprok-rab-status simprok-rab-status--approved">Approved</span> : null}
+            {rabSource === 'baseline' && readOnly && !archived ? <span className="simprok-rab-status simprok-rab-status--approved">Baseline 01</span> : null}
           </div>
           <p>{statusMechanismCopy}</p>
           {!archived ? (
@@ -268,7 +329,9 @@ export function ProjectRabDoorPage() {
           <header className="simprok-rab-toolbar">
             <div>
               <h2>Dokumen RAB</h2>
-              {!archived ? (
+              {isDraftPreview ? (
+                <small>Draft Preview: RAB draft tersimpan, belum menjadi baseline resmi.</small>
+              ) : !archived ? (
                 <small>Beberapa aksi resmi seperti export, cetak, dan import menunggu integrasi backend.</small>
               ) : null}
             </div>
@@ -320,35 +383,51 @@ export function ProjectRabDoorPage() {
               ) : rabRows.length === 0 ? (
                 <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--simprok-text-muted)' }}>
                   <FileText size={24} style={{ margin: '0 auto 1rem', display: 'block' }} />
-                  RAB/BOQ belum tersedia untuk proyek ini.
+                  <strong style={{ display: 'block', color: '#16294B', marginBottom: '0.375rem' }}>RAB belum tersedia.</strong>
+                  <span>Belum ada baseline resmi atau draft tersimpan untuk proyek ini.</span>
                 </div>
               ) : (
-                <table className="simprok-rab-table">
-                  <thead>
-                    <tr>
-                      <th>Kode</th>
-                      <th>Uraian Pekerjaan</th>
-                      <th>Satuan</th>
-                      <th>Volume</th>
-                      <th>Harga Satuan</th>
-                      <th>Jumlah</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rabRows.map((row) => (
-                      <tr key={row.code}>
-                        <td>{row.code}</td>
-                        <td>{row.description}</td>
-                        <td>{row.unit}</td>
-                        <td>{row.volume}</td>
-                        <td>{row.unitPrice}</td>
-                        <td>{row.total}</td>
-                        <td>{readOnly ? 'Read-only' : 'Draft RAB'}</td>
+                <>
+                  {isDraftPreview ? (
+                    <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', border: '1px solid #D0D5DD', borderRadius: '8px', color: '#16294B', background: '#F8FAFC' }}>
+                      <strong>RAB draft tersimpan, belum menjadi baseline resmi.</strong>
+                    </div>
+                  ) : null}
+                  <table className="simprok-rab-table">
+                    <thead>
+                      <tr>
+                        <th>Kode</th>
+                        <th>Uraian Pekerjaan</th>
+                        <th>Satuan</th>
+                        <th>Volume</th>
+                        <th>Harga Satuan</th>
+                        <th>Jumlah</th>
+                        <th>Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {rabRows.map((row) => (
+                        <tr key={row.code}>
+                          <td>{row.code}</td>
+                          <td>{row.description}</td>
+                          <td>{row.unit}</td>
+                          <td>{row.volume}</td>
+                          <td>{row.unitPrice}</td>
+                          <td>{row.total}</td>
+                          <td>{isDraftPreview ? 'Draft Preview' : readOnly ? 'Read-only' : 'Draft RAB'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {isDraftPreview && draftRecap ? (
+                    <div style={{ marginTop: '0.875rem', display: 'grid', gap: '0.4rem', maxWidth: '360px', color: '#16294B' }}>
+                      <span>Subtotal: <strong>{formatRupiah(toFiniteNumber(draftRecap.subtotal))}</strong></span>
+                      <span>Margin {toFiniteNumber(draftRecap.marginPercent).toLocaleString('id-ID')}%: <strong>{formatRupiah(toFiniteNumber(draftRecap.marginAmount))}</strong></span>
+                      <span>PPN {toFiniteNumber(draftTaxPercent).toLocaleString('id-ID')}%: <strong>{formatRupiah(toFiniteNumber(draftRecap.taxAmount))}</strong></span>
+                      <span>Grand Total Draft: <strong>{formatRupiah(toFiniteNumber(draftRecap.grandTotal))}</strong></span>
+                    </div>
+                  ) : null}
+                </>
               )}
               </div>
             </div>
