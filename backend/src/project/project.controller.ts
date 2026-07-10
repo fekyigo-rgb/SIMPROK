@@ -1,7 +1,8 @@
-import { Controller, Post, Body, Get, Param, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Put, Body, Get, Param, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ProjectService } from './project.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
+import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -113,6 +114,23 @@ export class ProjectController {
   @Permissions('PROJECT_VIEW')
   async getBoq(@Param('projectId') projectId: string) {
     return this.projectService.getBoq(projectId);
+  }
+
+  @Get(':projectId/boq/draft')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions('PROJECT_VIEW')
+  async getDraftBoq(@Param('projectId') projectId: string) {
+    return this.projectService.getDraftBoq(projectId);
+  }
+
+  @Put(':projectId/boq/draft')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions('PROJECT_CREATE') // TODO: promote to RAB_DRAFT_EDIT when that permission is seeded
+  async saveDraftBoq(
+    @Param('projectId') projectId: string,
+    @Body() dto: SaveDraftBoqDto,
+  ) {
+    return this.projectService.saveDraftBoq(projectId, dto);
   }
 
   @Get(':projectId/ahsp-snapshot')

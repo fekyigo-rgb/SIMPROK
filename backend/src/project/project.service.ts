@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
+import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { DeviationService } from './deviation.service';
 
 @Injectable()
@@ -353,6 +354,68 @@ export class ProjectService {
     return await this.prisma.boqItem.findMany({
       where: { boqStructureId: rab.boqStructureId },
       orderBy: { sortOrder: 'asc' },
+    });
+  }
+
+  async getDraftBoq(projectId: string): Promise<{ structureId: string | null; items: object[] }> {
+    const structure = await this.prisma.boqStructure.findFirst({
+      where: { projectId, name: 'Working Draft', status: 'DRAFT' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!structure) return { structureId: null, items: [] };
+    const items = await this.prisma.boqItem.findMany({
+      where: { boqStructureId: structure.id },
+      orderBy: { sortOrder: 'asc' },
+    });
+    return { structureId: structure.id, items };
+  }
+
+  async saveDraftBoq(projectId: string, dto: SaveDraftBoqDto): Promise<{ structureId: string; items: object[] }> {
+    return await this.prisma.$transaction(async (tx) => {
+      let structure = await tx.boqStructure.findFirst({
+        where: { projectId, name: 'Working Draft', status: 'DRAFT' },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!structure) {
+        structure = await tx.boqStructure.create({
+          data: { projectId, name: 'Working Draft', version: 1, status: 'DRAFT' },
+        });
+      }
+
+      // Safe full-replace: nullify parent refs first to avoid self-FK conflict, then delete.
+      await tx.boqItem.updateMany({ where: { boqStructureId: structure.id }, data: { parentId: null } });
+      await tx.boqItem.deleteMany({ where: { boqStructureId: structure.id } });
+
+      const tempIdMap = new Map<string, string>();
+      const insertedItems: object[] = [];
+
+      for (const [index, row] of dto.rows.entries()) {
+        const parentId = row.parentTempId ? (tempIdMap.get(row.parentTempId) ?? null) : null;
+        const isFolder = row.itemType === 'FOLDER';
+        const isNote = row.itemType === 'NOTE';
+        const quantity = (!isFolder && !isNote) ? new Prisma.Decimal(row.quantity ?? 0) : new Prisma.Decimal(0);
+        const unitPrice = (!isFolder && !isNote) ? new Prisma.Decimal(row.unitPrice ?? 0) : null;
+        const lineTotal = (unitPrice !== null) ? quantity.mul(unitPrice) : null;
+
+        const created = await tx.boqItem.create({
+          data: {
+            boqStructureId: structure.id,
+            parentId,
+            wbsCode: row.wbsCode ?? '',
+            name: row.name,
+            itemType: isFolder ? 'FOLDER' : isNote ? 'NOTE' : 'WORK_ITEM',
+            quantity,
+            unit: (!isFolder && !isNote) ? (row.unit ?? '') : '',
+            unitPrice,
+            lineTotal,
+            sortOrder: row.sortOrder ?? index,
+          },
+        });
+        tempIdMap.set(row.tempId, created.id);
+        insertedItems.push(created);
+      }
+
+      return { structureId: structure.id, items: insertedItems };
     });
   }
 
