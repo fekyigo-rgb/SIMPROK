@@ -76,6 +76,14 @@ interface NumberedRabRow extends RabRow {
 
 const formatRupiah = (value: number) => `Rp ${Math.round(value).toLocaleString('id-ID')}`;
 
+const formatDraftNumber = (value: number) => Number(value || 0).toLocaleString('id-ID');
+
+const parseDraftNumber = (value: string) => {
+  const normalized = value.replace(/\./g, '').replace(/,/g, '.').replace(/[^\d.-]/g, '');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 const toNumber = (value: string | number | null | undefined) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -495,7 +503,7 @@ export function RabWorkspacePage() {
           </div>
 
           <div className="simprok-rab-table-wrap">
-            <table className="simprok-rab-table">
+            <table className="simprok-rab-table simprok-rab-draft-table">
               <thead>
                 <tr>
                   <th className="simprok-rab-col-atur">Atur</th>
@@ -614,15 +622,15 @@ export function RabWorkspacePage() {
                       </td>
                       <td>{row.type === 'item' ? <input className={(volumes[row.id] || 0) < 0 ? 'simprok-rab-number-invalid' : ''} type="number" step="0.01" value={volumes[row.id] || 0} onChange={(event) => setVolumes((current) => ({ ...current, [row.id]: Number(event.target.value) }))} aria-label={`Volume ${row.name}`} /> : null}</td>
                       <td>{row.type === 'item' ? <input className="simprok-rab-description-input" value={row.unit} onChange={(event) => updateRowUnit(row.id, event.target.value)} aria-label={`Satuan ${row.name}`} /> : null}</td>
-                      <td>
+                      <td className="simprok-rab-unit-price-column">
                         {row.type === 'item' ? (
                           <span className="simprok-rab-price-cell">
-                            <input className={(unitPrices[row.id] ?? row.unitPrice) < 0 ? 'simprok-rab-number-invalid' : ''} type="number" step="1" value={unitPrices[row.id] ?? row.unitPrice} onChange={(event) => setUnitPrices((current) => ({ ...current, [row.id]: Number(event.target.value) }))} aria-label={`Harga satuan ${row.name}`} />
+                            <input className={(unitPrices[row.id] ?? row.unitPrice) < 0 ? 'simprok-rab-number-invalid' : ''} type="text" inputMode="numeric" value={formatDraftNumber(unitPrices[row.id] ?? row.unitPrice)} onChange={(event) => setUnitPrices((current) => ({ ...current, [row.id]: parseDraftNumber(event.target.value) }))} aria-label={`Harga satuan ${row.name}`} />
                             {row.manualUnitPrice ? <span className="simprok-rab-manual-chip">MANUAL</span> : null}
                           </span>
                         ) : null}
                       </td>
-                      <td>{row.type === 'item' ? formatRupiah(amount) : ''}</td>
+                      <td className="simprok-rab-amount-column">{row.type === 'item' ? formatRupiah(amount) : ''}</td>
                       <td>
                         <div className="simprok-rab-row-actions">
                           {row.type === 'folder' ? (
