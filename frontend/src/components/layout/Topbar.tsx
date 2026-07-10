@@ -51,6 +51,14 @@ export function Topbar() {
       };
     }
 
+    if (/^\/project\/[^/]+\/rab\/ahsp-snapshot$/.test(normalizedPath)) {
+      return {
+        title: 'AHSP Snapshot',
+        subtitle: 'Snapshot analisa harga satuan proyek',
+        mobileLabel: 'AHSP Snapshot',
+      };
+    }
+
     if (/^\/project\/[^/]+\/rab(\/.*)?$/.test(normalizedPath)) {
       return {
         title: 'Rencana Anggaran Biaya',

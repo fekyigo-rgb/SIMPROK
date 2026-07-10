@@ -26,7 +26,7 @@ interface RabRow {
 }
 
 const defaultProject: RabProject = {
-  name: 'Rencana Anggaran Biaya',
+  name: 'Nama proyek belum tersedia',
   code: 'Data belum tersedia',
   owner: 'Data belum tersedia',
   location: 'Data belum tersedia',
@@ -46,7 +46,10 @@ const supportDocuments = [
   'TKDN',
 ];
 
-const snapshots = ['AHSP Snapshot', 'Basic Price Snapshot'];
+const snapshotDoors = [
+  { name: 'AHSP Snapshot', hasPage: true },
+  { name: 'Basic Price Snapshot', hasPage: false },
+] as const;
 
 function isReadOnly(status: RabStatus) {
   return status === 'Terkunci' || status === 'Approved' || status === 'Selesai';
@@ -76,8 +79,9 @@ export function ProjectRabDoorPage() {
         setLoading(true);
         setError(null);
 
+        const projResponse = await apiFetch(`/projects/${projectId}`);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const projData = (await apiFetch(`/projects/${projectId}`)) as any;
+        const projData = await projResponse.json() as any;
 
         let mappedStatus: RabStatus = 'Draft';
         if (projData?.status === 'ACTIVE') mappedStatus = 'Terkunci';
@@ -85,7 +89,7 @@ export function ProjectRabDoorPage() {
         else if (projData?.status === 'ON_HOLD') mappedStatus = 'Terkunci';
 
         setProject({
-          name: projData?.name || 'Rencana Anggaran Biaya',
+          name: projData?.name || 'Nama proyek belum tersedia',
           code: projData?.code || (projData?.id ? `PRJ-${String(projData.id).slice(0, 8).toUpperCase()}` : 'Belum tersedia'),
           owner: projData?.ownerName || projData?.owner || 'Belum tersedia',
           location: projData?.location || 'Belum tersedia',
@@ -96,8 +100,9 @@ export function ProjectRabDoorPage() {
 
         // BOQ is optional — failure means no data yet, not a viewer error
         try {
+          const boqResponse = await apiFetch(`/projects/${projectId}/boq`);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const boqData = (await apiFetch(`/projects/${projectId}/boq`)) as any;
+          const boqData = await boqResponse.json() as any;
           if (Array.isArray(boqData) && boqData.length > 0) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             setRabRows(boqData.map((item: any, idx: number) => {
@@ -186,15 +191,6 @@ export function ProjectRabDoorPage() {
     setZoom(Math.min(140, Math.max(80, nextZoom)));
   };
 
-  const openSnapshot = (snapshot: string) => {
-    if (snapshot === 'AHSP Snapshot' && projectId) {
-      navigate(`/project/${projectId}/rab/ahsp-snapshot`);
-      return;
-    }
-
-    setActiveSupport(snapshot);
-  };
-
   const showOfficialActionMessage = (message: string) => {
     setOfficialActionMessage(message);
   };
@@ -231,9 +227,9 @@ export function ProjectRabDoorPage() {
 
       <section className="simprok-rab-hero">
         <div className="simprok-rab-hero__document">
-          <p className="simprok-rab-eyebrow">Dokumen Resmi Proyek</p>
-          <h1>Rencana Anggaran Biaya (RAB)</h1>
-          <h2>{project.name}</h2>
+          <p className="simprok-rab-eyebrow">Ruang Hidup RAB</p>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#16294B', margin: '0 0 0.125rem' }}>{project.name}</h1>
+          <p className="simprok-rab-module-label" style={{ fontSize: '1.0625rem', fontWeight: 600, color: '#16294B', margin: '0 0 0.5rem' }}>Rencana Anggaran Biaya (RAB)</p>
           <div className="simprok-rab-identity" aria-label="Identitas RAB">
             <span><b>Kode RAB:</b> {project.code}</span>
             <span><b>Instansi / Owner:</b> {project.owner}</span>
@@ -385,6 +381,7 @@ export function ProjectRabDoorPage() {
             </button>
           ) : (
             <>
+              <p className="simprok-rab-section-label">Dokumen Pendukung</p>
               <div className="simprok-rab-doc-list">
                 {supportDocuments.map((doc) => (
                   <button key={doc} type="button" className={activeSupport === doc ? 'simprok-rab-doc simprok-rab-doc--active' : 'simprok-rab-doc'} onClick={() => setActiveSupport(doc)}>
@@ -397,16 +394,23 @@ export function ProjectRabDoorPage() {
                 ))}
               </div>
 
+              <p className="simprok-rab-section-label">Snapshot Acuan</p>
               <div className="simprok-rab-snapshot-list">
-                {snapshots.map((snapshot) => (
-                  <article key={snapshot} className="simprok-rab-snapshot">
+                {snapshotDoors.map((snapshot) => (
+                  <article key={snapshot.name} className="simprok-rab-snapshot">
                     <div>
-                      <strong>{snapshot}</strong>
+                      <strong>{snapshot.name}</strong>
                       <span>Menunggu mesin</span>
                     </div>
-                    <button type="button" onClick={() => openSnapshot(snapshot)}>
-                      Buka Snapshot
-                    </button>
+                    {snapshot.hasPage && projectId ? (
+                      <button type="button" onClick={() => navigate(`/project/${projectId}/rab/ahsp-snapshot`)}>
+                        Buka Snapshot
+                      </button>
+                    ) : (
+                      <button type="button" className="simprok-rab-snapshot__secondary" onClick={() => setActiveSupport(snapshot.name)}>
+                        Lihat Keterangan
+                      </button>
+                    )}
                   </article>
                 ))}
               </div>
@@ -415,8 +419,10 @@ export function ProjectRabDoorPage() {
                 <span className="simprok-rab-support-preview__label">Keterangan Data Pendukung</span>
                 <strong>{activeSupport}</strong>
                 <p>
-                  {snapshots.includes(activeSupport)
-                    ? 'Snapshot ini adalah acuan yang melekat pada RAB. Detail resmi akan mengikuti mesin snapshot.'
+                  {snapshotDoors.some(s => s.name === activeSupport)
+                    ? snapshotDoors.find(s => s.name === activeSupport)?.hasPage
+                      ? 'Snapshot AHSP tersedia sebagai referensi acuan harga satuan pekerjaan yang melekat pada RAB ini.'
+                      : 'Snapshot Basic Price akan tersedia setelah engine data harga dasar tersambung ke RAB ini. Belum tersedia saat ini.'
                     : 'Dokumen ini akan terbentuk setelah RAB jadi dan siap ditinjau sesuai kewenangan. Belum tersedia saat ini.'}
                 </p>
               </div>

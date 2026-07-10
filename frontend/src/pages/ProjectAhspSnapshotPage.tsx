@@ -29,14 +29,22 @@ interface AhspItem {
   };
 }
 
+interface BoqSnapshotRow {
+  id?: string;
+  parentId?: string | null;
+  name?: string;
+  itemType?: string;
+  ahspSnapshotId?: string | null;
+}
+
 const defaultProjectMeta = {
-  name: 'Data belum tersedia',
+  name: 'Nama proyek belum tersedia',
   rabCode: 'Data belum tersedia',
   owner: 'Data belum tersedia',
   rabStatus: 'Data belum tersedia',
 };
 
-const categories = ['Semua Kategori', 'Pekerjaan Persiapan', 'Pekerjaan Tanah', 'Pekerjaan Struktur Beton', 'Pekerjaan Finishing'] as const;
+const ALL_CATEGORIES = 'Semua Kategori';
 
 export function ProjectAhspSnapshotPage() {
   const { projectId } = useParams();
@@ -47,9 +55,10 @@ export function ProjectAhspSnapshotPage() {
   
   const [projectMeta, setProjectMeta] = useState(defaultProjectMeta);
   const [ahspItems, setAhspItems] = useState<AhspItem[]>([]);
+  const [rabCategories, setRabCategories] = useState<string[]>([]);
   
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<string>('Semua Kategori');
+  const [category, setCategory] = useState<string>(ALL_CATEGORIES);
   const [selectedCode, setSelectedCode] = useState('');
   const [exportMessage, setExportMessage] = useState('');
 
@@ -69,11 +78,62 @@ export function ProjectAhspSnapshotPage() {
         else if (projData?.status === 'ON_HOLD') mappedStatus = 'RAB Terkunci';
 
         setProjectMeta({
-          name: projData?.name || 'Data belum tersedia',
+          name: projData?.name || 'Nama proyek belum tersedia',
           rabCode: projData?.id ? `PRJ-${String(projData.id).slice(0, 5).toUpperCase()}` : 'Data belum tersedia',
           owner: 'Belum tersedia',
           rabStatus: mappedStatus,
         });
+
+        let snapshotCategoryById = new Map<string, string>();
+        try {
+          const boqResponse = await apiFetch(`/projects/${projectId}/boq`);
+          const boqData = await boqResponse.json();
+
+          if (Array.isArray(boqData)) {
+            const folderNameById = new Map<string, string>();
+            const parentIdById = new Map<string, string | null>();
+            const nextCategories: string[] = [];
+
+            (boqData as BoqSnapshotRow[]).forEach((row) => {
+              if (row.id) {
+                parentIdById.set(row.id, row.parentId ?? null);
+              }
+
+              if (row.itemType === 'FOLDER' && row.id && row.name?.trim()) {
+                const folderName = row.name.trim();
+                folderNameById.set(row.id, folderName);
+                if (!nextCategories.includes(folderName)) {
+                  nextCategories.push(folderName);
+                }
+              }
+            });
+
+            const findFolderCategory = (row: BoqSnapshotRow) => {
+              let parentId = row.parentId ?? null;
+              while (parentId) {
+                const folderName = folderNameById.get(parentId);
+                if (folderName) return folderName;
+                parentId = parentIdById.get(parentId) ?? null;
+              }
+              return row.itemType === 'FOLDER' && row.name?.trim() ? row.name.trim() : null;
+            };
+
+            snapshotCategoryById = new Map(
+              (boqData as BoqSnapshotRow[])
+                .filter((row) => row.ahspSnapshotId)
+                .map((row) => [row.ahspSnapshotId as string, findFolderCategory(row) || 'Subjudul RAB belum tersedia'])
+            );
+
+            setRabCategories(nextCategories);
+            setCategory((current) => (current === ALL_CATEGORIES || nextCategories.includes(current) ? current : ALL_CATEGORIES));
+          } else {
+            setRabCategories([]);
+            setCategory(ALL_CATEGORIES);
+          }
+        } catch {
+          setRabCategories([]);
+          setCategory(ALL_CATEGORIES);
+        }
 
         const snapshotResponse = await apiFetch(`/projects/${projectId}/ahsp-snapshot`);
         const snapshotData = await snapshotResponse.json();
@@ -100,7 +160,7 @@ export function ProjectAhspSnapshotPage() {
             }
             return {
               code: snapshot.id || 'Unknown',
-              category: snapshot.workType || 'Lainnya',
+              category: snapshotCategoryById.get(snapshot.id) || snapshot.workType || 'Subjudul RAB belum tersedia',
               description: snapshot.methodName || 'Data belum tersedia',
               unit: '-',
               total: 'Belum tersedia',
@@ -117,9 +177,13 @@ export function ProjectAhspSnapshotPage() {
           if (mappedItems.length > 0) {
             setSelectedCode(mappedItems[0].code);
           }
+        } else {
+          setAhspItems([]);
         }
       } catch {
         setError('Snapshot AHSP belum dapat dimuat.');
+        setRabCategories([]);
+        setAhspItems([]);
       } finally {
         setLoading(false);
       }
@@ -130,7 +194,7 @@ export function ProjectAhspSnapshotPage() {
   const filteredItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return ahspItems.filter((item) => {
-      const matchCategory = category === 'Semua Kategori' || item.category === category;
+      const matchCategory = category === ALL_CATEGORIES || item.category === category;
       const matchQuery =
         normalizedQuery.length === 0 ||
         item.code.toLowerCase().includes(normalizedQuery) ||
@@ -170,8 +234,9 @@ export function ProjectAhspSnapshotPage() {
       <section className="simprok-ahsp-snapshot-hero">
         <div>
           <p className="simprok-ahsp-snapshot__eyebrow">Snapshot Aktif</p>
-          <h1>AHSP Snapshot</h1>
-          <p>Analisa Harga Satuan Pekerjaan yang menjadi acuan RAB ini.</p>
+          <h1 className="simprok-ahsp-snapshot__module-title" style={{ fontSize: '1.25rem', fontWeight: 700, color: '#1DA1F2', margin: '0 0 0.25rem' }}>AHSP Snapshot</h1>
+          <p className="simprok-ahsp-snapshot__desc" style={{ fontSize: '0.875rem', margin: '0 0 0.375rem' }}>Analisa Harga Satuan Pekerjaan yang menjadi acuan RAB ini.</p>
+          <p className="simprok-ahsp-snapshot__project-name" style={{ fontSize: '1.25rem', fontWeight: 700, color: '#16294B', margin: '0.25rem 0 0' }}>{projectMeta.name}</p>
         </div>
         <span className="simprok-ahsp-snapshot__lock">
           <Lock size={14} aria-hidden="true" />
@@ -219,16 +284,20 @@ export function ProjectAhspSnapshotPage() {
       <div className="simprok-ahsp-snapshot__layout">
         <aside className="simprok-ahsp-snapshot__filters" aria-label="Filter kategori AHSP">
           <h2>Kategori AHSP</h2>
-          {categories.map((item) => (
-            <button
-              key={item}
-              type="button"
-              className={category === item ? 'simprok-ahsp-snapshot__filter simprok-ahsp-snapshot__filter--active' : 'simprok-ahsp-snapshot__filter'}
-              onClick={() => setCategory(item)}
-            >
-              {item}
-            </button>
-          ))}
+          {rabCategories.length > 0 ? (
+            [ALL_CATEGORIES, ...rabCategories].map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={category === item ? 'simprok-ahsp-snapshot__filter simprok-ahsp-snapshot__filter--active' : 'simprok-ahsp-snapshot__filter'}
+                onClick={() => setCategory(item)}
+              >
+                {item}
+              </button>
+            ))
+          ) : (
+            <div className="simprok-ahsp-snapshot__empty">Kategori RAB/subjudul belum tersedia untuk proyek ini.</div>
+          )}
         </aside>
 
         <section className="simprok-ahsp-snapshot__list" aria-label="Daftar AHSP">
