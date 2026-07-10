@@ -5,14 +5,6 @@ import { getProjectNotes, type NoteJenis, type NoteStatus, type NoteTertaut, typ
 
 type NoteFilter = 'semua' | NoteJenis | 'terbuka' | 'rab' | 'jadwal';
 
-const projectNamesById: Record<string, string> = {
-  'gedung-a': 'Pembangunan Gedung A',
-  'pipa-b': 'Renovasi Jaringan Pipa B',
-  'kendaraan-c': 'Pengadaan Kendaraan C',
-  'infrastruktur-d': 'Perbaikan Infrastruktur D',
-  'arsip-e': 'Pekerjaan Drainase E',
-};
-
 const noteFilterLabels: Record<NoteFilter, string> = {
   semua: 'Semua',
   rapat: 'Rapat',
@@ -67,7 +59,6 @@ function formatNoteTime(waktuISO: string) {
 export function ProjectNotesPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
-  const projectName = projectId ? projectNamesById[projectId] : undefined;
   const [notes, setNotes] = useState<ProjectNote[]>(() => getProjectNotes(projectId || ''));
   const [noteFilter, setNoteFilter] = useState<NoteFilter>('semua');
   const [noteFormOpen, setNoteFormOpen] = useState(false);
@@ -141,7 +132,7 @@ export function ProjectNotesPage() {
         </button>
         <span>/</span>
         <button type="button" onClick={() => navigate(projectId ? `/project/${projectId}/detail` : '/proyek')}>
-          {projectName || 'Detail Proyek'}
+          Detail Proyek
         </button>
         <span>/</span>
         <strong>Catatan & Diskusi</strong>
@@ -153,7 +144,7 @@ export function ProjectNotesPage() {
             <MessageSquare size={20} />
           </div>
           <div>
-            <p className="simprok-catatan-room__eyebrow">{projectName || 'Proyek'}</p>
+            <p className="simprok-catatan-room__eyebrow">Proyek</p>
             <h1 id="catatan-title">Catatan & Diskusi Proyek</h1>
             <p>Masukan personel, notulen rapat, dan catatan yang tertelusur, tertaut, tertanggapi.</p>
           </div>
@@ -218,7 +209,12 @@ export function ProjectNotesPage() {
         ) : null}
 
         <div className="simprok-catatan-feed">
-          {filteredNotes.length === 0 ? (
+          {notes.length === 0 ? (
+            <div className="simprok-catatan-empty">
+              <p>Belum ada catatan tersimpan untuk proyek ini.</p>
+              <p>Mesin catatan/diskusi belum tersambung ke backend. Ruang ini disiapkan sebagai pintu kerja proyek.</p>
+            </div>
+          ) : filteredNotes.length === 0 ? (
             <div className="simprok-catatan-empty">Belum ada catatan pada filter ini.</div>
           ) : (
             filteredNotes.map((note) => (
