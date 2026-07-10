@@ -583,49 +583,41 @@ export function RabWorkspacePage() {
           </footer>
         </section>
 
-        <aside className="simprok-ahsp-drawer" aria-label="Detail Analisa AHSP">
-          <div className="simprok-ahsp-drawer__header">
-            <div>
-              <h2>Detail Analisa AHSP</h2>
+        {selectedItem ? (
+          <aside className="simprok-ahsp-drawer" aria-label="Detail Analisa AHSP">
+            <div className="simprok-ahsp-drawer__header">
+              <div>
+                <h2>Detail Analisa AHSP</h2>
+              </div>
+              <button onClick={() => setSelectedRowId('')} title="Tutup panel" aria-label="Tutup panel"><X size={17} /></button>
             </div>
-            <button onClick={() => setSelectedRowId('')} title="Tutup panel" aria-label="Tutup panel" data-route="/?ruang=ruang-kerja-rab"><X size={17} /></button>
-          </div>
-
-          {selectedItem ? (
-            <>
-              <div className="simprok-ahsp-drawer__selected">
-                <strong>{selectedItem.name}</strong>
-                <small>{selectedItem.number} - {selectedItem.unit || 'satuan menunggu data'}</small>
-              </div>
-              <div className="simprok-ahsp-meta">
-                <div><span>Kode AHSP</span><strong>{selectedItem.ahspCode || 'Belum dipilih'}</strong></div>
-                <div><span>Status AHSP</span><strong>{selectedItem.ahspCode ? 'Standby' : 'Engine belum aktif'}</strong></div>
-                <div><span>Sumber Harga</span><strong>Belum tersambung</strong></div>
-                <div><span>Persistensi</span><strong>{projectId ? 'Draft tersimpan di server' : 'Belum ada project aktif'}</strong></div>
-              </div>
-              <div className="simprok-ahsp-drawer__frame">
-                <span className="simprok-honest-frame__badge">Engine belum aktif</span>
-                <p>Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine AHSP tersambung. Angka detail tidak dibuat palsu.</p>
-              </div>
-              <button className="simprok-execution-factor" onClick={() => openPlaceholder('Atur Execution Factor')} title="Atur Execution Factor - engine belum aktif" aria-label="Atur Execution Factor - engine belum aktif" data-route="/?ruang=execution-factor">
-                <Sparkles size={18} />
-                <span><strong>Atur Execution Factor</strong><small>Rekomendasi kondisi lapangan menunggu mesin.</small></span>
-              </button>
-              <div className="simprok-ahsp-total">
-                <span>Total Harga Satuan</span>
-                <strong>{formatRupiah(unitPrices[selectedItem.id] ?? selectedItem.unitPrice)}</strong>
-              </div>
-              <button className="simprok-ahsp-drawer__primary" onClick={handlePickAhsp} title="Pilih / Ganti AHSP - belum tersambung" aria-label="Pilih / Ganti AHSP - belum tersambung" data-route="/?ruang=pilih-ganti-ahsp">
-                <ListChecks size={17} /> Pilih / Ganti AHSP
-              </button>
-            </>
-          ) : (
+            <div className="simprok-ahsp-drawer__selected">
+              <strong>{selectedItem.name}</strong>
+              <small>{selectedItem.number} - {selectedItem.unit || 'satuan menunggu data'}</small>
+            </div>
+            <div className="simprok-ahsp-meta">
+              <div><span>Kode AHSP</span><strong>{selectedItem.ahspCode || 'Belum dipilih'}</strong></div>
+              <div><span>Status AHSP</span><strong>{selectedItem.ahspCode ? 'Standby' : 'Engine belum aktif'}</strong></div>
+              <div><span>Sumber Harga</span><strong>Belum tersambung</strong></div>
+              <div><span>Persistensi</span><strong>{projectId ? 'Draft tersimpan di server' : 'Belum ada project aktif'}</strong></div>
+            </div>
             <div className="simprok-ahsp-drawer__frame">
-              <span className="simprok-honest-frame__badge">Standby</span>
-              <p>Pilih item pekerjaan untuk membuka detail analisa AHSP.</p>
+              <span className="simprok-honest-frame__badge">Engine belum aktif</span>
+              <p>Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine AHSP tersambung. Angka detail tidak dibuat palsu.</p>
             </div>
-          )}
-        </aside>
+            <button className="simprok-execution-factor" onClick={() => openPlaceholder('Atur Execution Factor')} title="Atur Execution Factor - engine belum aktif" aria-label="Atur Execution Factor - engine belum aktif" data-route="/?ruang=execution-factor">
+              <Sparkles size={18} />
+              <span><strong>Atur Execution Factor</strong><small>Rekomendasi kondisi lapangan menunggu mesin.</small></span>
+            </button>
+            <div className="simprok-ahsp-total">
+              <span>Total Harga Satuan</span>
+              <strong>{formatRupiah(unitPrices[selectedItem.id] ?? selectedItem.unitPrice)}</strong>
+            </div>
+            <button className="simprok-ahsp-drawer__primary" onClick={handlePickAhsp} title="Pilih / Ganti AHSP - belum tersambung" aria-label="Pilih / Ganti AHSP - belum tersambung" data-route="/?ruang=pilih-ganti-ahsp">
+              <ListChecks size={17} /> Pilih / Ganti AHSP
+            </button>
+          </aside>
+        ) : null}
       </main>
     </div>
   );

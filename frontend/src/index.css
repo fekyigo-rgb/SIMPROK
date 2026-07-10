@@ -1470,11 +1470,12 @@ body {
 }
 .simprok-rab-workspace__body {
   gap: var(--space-4);
-  grid-template-columns: minmax(0, 1fr) 340px;
-  align-items: start;
-  display: grid;
+  align-items: flex-start;
+  display: flex;
 }
 .simprok-rab-sheet {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
 }
 .simprok-rab-sheet__label {
@@ -1598,13 +1599,20 @@ body {
 .simprok-rab-table-action {
   padding: 6px 10px;
 }
+@keyframes simprok-ahsp-slide-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
 .simprok-ahsp-drawer {
   gap: var(--space-4);
   padding: var(--space-4);
   flex-direction: column;
+  flex: none;
+  width: 340px;
   display: flex;
   position: sticky;
   top: 92px;
+  animation: simprok-ahsp-slide-in 0.2s ease;
 }
 .simprok-ahsp-drawer__header {
   justify-content: space-between;
@@ -1769,8 +1777,40 @@ body {
   background: var(--simprok-authority-navy-900) !important;
   color: var(--simprok-white) !important;
 }
-.simprok-rab-workspace__body {
-  grid-template-columns: minmax(0, 1fr) 400px;
+.simprok-rab-sidebar-shell {
+  width: 286px;
+  flex: none;
+  overflow: hidden;
+  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.simprok-rab-sidebar-shell--collapsed {
+  width: 0;
+}
+.simprok-rab-sidebar-toggle {
+  position: fixed;
+  top: 50vh;
+  transform: translateY(-50%);
+  z-index: 200;
+  width: 22px;
+  height: 56px;
+  background: var(--simprok-white);
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-left: none;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--simprok-bright-sky-blue-600);
+  box-shadow: 2px 0 8px #1da1f214;
+  padding: 0;
+  transition: left 0.22s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.16s, box-shadow 0.16s;
+}
+.simprok-rab-sidebar-toggle:hover,
+.simprok-rab-sidebar-toggle:focus-visible {
+  background: var(--simprok-bright-sky-blue-50);
+  box-shadow: 2px 0 14px #1da1f230;
+  outline: none;
 }
 .simprok-rab-table {
   min-width: 1180px;
@@ -2202,9 +2242,15 @@ body {
   .simprok-section-grid,
   .simprok-living-room,
   .simprok-rab-prep__grid,
-  .simprok-rab-workspace__body,
   .simprok-rab-summary {
     grid-template-columns: 1fr;
+  }
+  .simprok-rab-workspace__body {
+    flex-direction: column;
+  }
+  .simprok-rab-sidebar-shell,
+  .simprok-rab-sidebar-toggle {
+    display: none;
   }
   .simprok-living-room__side,
   .simprok-ahsp-drawer {

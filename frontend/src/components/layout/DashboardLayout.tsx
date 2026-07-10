@@ -1,3 +1,4 @@
+import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { Sidebar } from './Sidebar';
@@ -13,19 +14,34 @@ export interface DashboardOutletContext {
 
 export function DashboardLayout() {
   const location = useLocation();
-  const isRabWorkspaceFocus = new URLSearchParams(location.search).get('ruang') === 'ruang-kerja-rab';
+  const isRabWorkspaceFocus = location.pathname.includes('/rab/workspace');
   const [isRabSidebarVisible, setIsRabSidebarVisible] = useState(false);
   const isSidebarVisible = !isRabWorkspaceFocus || isRabSidebarVisible;
 
   useEffect(() => {
-    if (!isRabWorkspaceFocus) return;
-    const resetFocusSidebar = window.setTimeout(() => setIsRabSidebarVisible(false), 0);
-    return () => window.clearTimeout(resetFocusSidebar);
+    if (isRabWorkspaceFocus) {
+      setIsRabSidebarVisible(false);
+    }
   }, [isRabWorkspaceFocus, location.key]);
 
   return (
     <div className="simprok-app-shell">
-      {isSidebarVisible ? <Sidebar /> : null}
+      <div
+        className={`simprok-rab-sidebar-shell${isRabWorkspaceFocus && !isSidebarVisible ? ' simprok-rab-sidebar-shell--collapsed' : ''}`}
+      >
+        <Sidebar />
+      </div>
+      {isRabWorkspaceFocus ? (
+        <button
+          className="simprok-rab-sidebar-toggle"
+          style={{ left: isSidebarVisible ? '286px' : '0px' }}
+          onClick={() => setIsRabSidebarVisible((v) => !v)}
+          aria-label={isSidebarVisible ? 'Sembunyikan menu navigasi' : 'Tampilkan menu navigasi'}
+          title={isSidebarVisible ? 'Sembunyikan menu' : 'Tampilkan menu'}
+        >
+          {isSidebarVisible ? <ChevronsLeft size={15} /> : <ChevronsRight size={15} />}
+        </button>
+      ) : null}
       <div className="simprok-app-shell__main">
         <Topbar />
         <main className="simprok-page-shell">
