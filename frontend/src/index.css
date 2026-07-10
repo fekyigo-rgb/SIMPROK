@@ -1824,7 +1824,7 @@ body {
   border-right: 0;
 }
 .simprok-rab-col-atur {
-  width: 46px;
+  width: 48px;
   text-align: center !important;
 }
 .simprok-rab-col-no {
@@ -1836,9 +1836,15 @@ body {
   text-align: right !important;
 }
 .simprok-rab-row-move {
+  grid-template-columns: 20px 20px;
   justify-content: center;
-  gap: 0;
-  display: flex;
+  gap: 2px;
+  display: grid;
+}
+.simprok-rab-row-move button:disabled {
+  color: var(--simprok-engineering-blue-200);
+  cursor: not-allowed;
+  pointer-events: none;
 }
 .simprok-rab-row-move button,
 .simprok-rab-delete {

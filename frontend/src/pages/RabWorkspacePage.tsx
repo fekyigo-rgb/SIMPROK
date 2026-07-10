@@ -3,6 +3,7 @@ import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react
 import {
   ArrowDown,
   ArrowLeft,
+  ArrowRight,
   ArrowUp,
   ChevronsLeft,
   ChevronsRight,
@@ -122,6 +123,50 @@ const moveWithinSiblings = (rows: RabRow[], rowId: string, direction: 'up' | 'do
   });
 };
 
+const normalizeSortOrders = (rows: RabRow[]): RabRow[] => {
+  const byParent = new Map<string | null, RabRow[]>();
+  for (const row of rows) {
+    const key = row.parentId;
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key)!.push(row);
+  }
+  const updated: RabRow[] = [];
+  for (const siblings of byParent.values()) {
+    siblings.sort((a, b) => a.sortOrder - b.sortOrder);
+    siblings.forEach((row, i) => updated.push({ ...row, sortOrder: i }));
+  }
+  return updated;
+};
+
+const indentRow = (rows: RabRow[], rowId: string): RabRow[] => {
+  const row = rows.find((r) => r.id === rowId);
+  if (!row) return rows;
+  const siblings = rows
+    .filter((r) => r.parentId === row.parentId)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  const rowIndex = siblings.findIndex((r) => r.id === rowId);
+  if (rowIndex <= 0) return rows;
+  const newParent = siblings[rowIndex - 1];
+  if (newParent.type !== 'folder') return rows;
+  const newSiblings = rows.filter((r) => r.parentId === newParent.id);
+  const maxSort = newSiblings.length > 0 ? Math.max(...newSiblings.map((r) => r.sortOrder)) + 1 : 0;
+  return normalizeSortOrders(
+    rows.map((r) => (r.id === rowId ? { ...r, parentId: newParent.id, sortOrder: maxSort } : r)),
+  );
+};
+
+const outdentRow = (rows: RabRow[], rowId: string): RabRow[] => {
+  const row = rows.find((r) => r.id === rowId);
+  if (!row || row.parentId === null) return rows;
+  const parent = rows.find((r) => r.id === row.parentId);
+  if (!parent) return rows;
+  return normalizeSortOrders(
+    rows.map((r) =>
+      r.id === rowId ? { ...r, parentId: parent.parentId, sortOrder: parent.sortOrder + 0.5 } : r,
+    ),
+  );
+};
+
 const createRow = (type: RabRowType, parentId: string | null, sortOrder: number): RabRow => ({
   id: `local-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
   parentId,
@@ -225,6 +270,19 @@ export function RabWorkspacePage() {
     .filter((row) => row.type === 'item' && ((volumes[row.id] || 0) < 0 || (unitPrices[row.id] ?? row.unitPrice) < 0))
     .map((row) => row.id)), [rows, unitPrices, volumes]);
   const hasNegativeValue = negativeRows.size > 0;
+
+  const siblingsByParent = useMemo(() => {
+    const map = new Map<string | null, RabRow[]>();
+    for (const row of rows) {
+      const key = row.parentId;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(row);
+    }
+    for (const siblings of map.values()) {
+      siblings.sort((a, b) => a.sortOrder - b.sortOrder);
+    }
+    return map;
+  }, [rows]);
 
   const subtotal = useMemo(() => rows.reduce((sum, row) => {
     if (row.type !== 'item') return sum;
@@ -440,6 +498,11 @@ export function RabWorkspacePage() {
                   const amount = row.type === 'item' ? (volumes[row.id] || 0) * unitPrice : 0;
                   const selected = row.id === selectedRowId;
                   const hasNegativeRowValue = negativeRows.has(row.id);
+                  const siblings = siblingsByParent.get(row.parentId) ?? [];
+                  const siblingIndex = siblings.findIndex((r) => r.id === row.id);
+                  const prevSibling = siblingIndex > 0 ? siblings[siblingIndex - 1] : null;
+                  const canIndent = prevSibling !== null && prevSibling.type === 'folder';
+                  const canOutdent = row.parentId !== null;
 
                   if (row.type === 'note') {
                     return (
@@ -447,7 +510,9 @@ export function RabWorkspacePage() {
                         <td>
                           <div className="simprok-rab-row-move">
                             <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas"><ArrowUp size={14} /></button>
+                            <button onClick={() => setRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian"><ArrowRight size={14} /></button>
                             <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah"><ArrowDown size={14} /></button>
+                            <button onClick={() => setRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat"><ArrowLeft size={14} /></button>
                           </div>
                         </td>
                         <td></td>
@@ -469,7 +534,9 @@ export function RabWorkspacePage() {
                       <td>
                         <div className="simprok-rab-row-move">
                           <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas"><ArrowUp size={14} /></button>
+                          <button onClick={() => setRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian"><ArrowRight size={14} /></button>
                           <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah"><ArrowDown size={14} /></button>
+                          <button onClick={() => setRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat"><ArrowLeft size={14} /></button>
                         </div>
                       </td>
                       <td className="simprok-rab-row__number">{row.number}</td>
