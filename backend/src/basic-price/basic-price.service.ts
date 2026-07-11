@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
+import { Prisma } from '@prisma/client';
 
 /**
  * BasicPriceService — Golden Path v0 Slice A
@@ -16,31 +18,111 @@ export class BasicPriceService {
    * Ambil semua harga dasar yang berlaku untuk workspace ini.
    * Termasuk harga workspace-specific dan harga global (workspaceId = null, status PUBLISHED).
    */
-  async findAllForWorkspace(workspaceId: string) {
-    return this.prisma.basicPrice.findMany({
-      where: {
-        status: 'PUBLISHED',
-        OR: [
-          { workspaceId },
-          { workspaceId: null },
-        ],
-      },
-      include: {
-        resource: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-            type: true,
-            baseUnit: true,
+  async findAllForWorkspace(workspaceId: string, query: GetBasicPricesDto = {}) {
+    const {
+      search,
+      resourceId,
+      regionId,
+      year,
+      sourceOrigin,
+      verificationStatus,
+      freshnessStatus,
+      unit,
+      page = 1,
+      limit = 20,
+      sortBy = 'effectiveDate',
+      sortOrder = 'desc',
+    } = query;
+
+    const where: Prisma.BasicPriceWhereInput = {
+      status: 'PUBLISHED',
+      OR: [{ workspaceId }, { workspaceId: null }],
+    };
+
+    const resourceFilter: Prisma.ResourceCatalogWhereInput = {
+      OR: [{ workspaceId }, { workspaceId: null }],
+    };
+
+    if (search) {
+      resourceFilter.AND = [
+        {
+          OR: [
+            { code: { contains: search, mode: 'insensitive' } },
+            { name: { contains: search, mode: 'insensitive' } },
+          ],
+        },
+      ];
+    }
+
+    if (unit) {
+      resourceFilter.baseUnit = unit;
+    }
+
+    if (Object.keys(resourceFilter).length > 0) {
+      where.resource = resourceFilter;
+    }
+
+    if (resourceId) {
+      where.resourceId = resourceId;
+    }
+
+    if (regionId) {
+      where.regionId = regionId;
+    }
+
+    if (year) {
+      const startOfYear = new Date(`${year}-01-01T00:00:00.000Z`);
+      const endOfYear = new Date(`${year}-12-31T23:59:59.999Z`);
+      where.effectiveDate = { gte: startOfYear, lte: endOfYear };
+    }
+
+    if (sourceOrigin) {
+      where.sourceOrigin = sourceOrigin;
+    }
+
+    if (verificationStatus) {
+      where.verificationStatus = verificationStatus;
+    }
+
+    if (freshnessStatus) {
+      where.freshnessStatus = freshnessStatus;
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [total, data] = await Promise.all([
+      this.prisma.basicPrice.count({ where }),
+      this.prisma.basicPrice.findMany({
+        where,
+        include: {
+          resource: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+              type: true,
+              baseUnit: true,
+            },
           },
         },
+        orderBy: [
+          { [sortBy]: sortOrder },
+          { id: 'asc' }, // deterministic sorting tie-breaker
+        ],
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
       },
-      orderBy: [
-        { effectiveDate: 'desc' },
-        { createdAt: 'desc' },
-      ],
-    });
+    };
   }
 
   /**
@@ -51,10 +133,7 @@ export class BasicPriceService {
       where: {
         id,
         status: 'PUBLISHED',
-        OR: [
-          { workspaceId },
-          { workspaceId: null },
-        ],
+        OR: [{ workspaceId }, { workspaceId: null }],
       },
       include: {
         resource: true,
@@ -77,10 +156,7 @@ export class BasicPriceService {
       where: {
         resourceId,
         status: 'PUBLISHED',
-        OR: [
-          { workspaceId },
-          { workspaceId: null },
-        ],
+        OR: [{ workspaceId }, { workspaceId: null }],
       },
       include: {
         resource: {
