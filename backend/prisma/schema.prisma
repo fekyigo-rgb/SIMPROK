@@ -300,6 +300,7 @@ model Project {
   code           String
   name           String
   description    String?       @db.Text
+  mainMaterialSpec String?       @db.Text
   location       String?
   clientName     String?
   type           ProjectType   @default(GENERAL)

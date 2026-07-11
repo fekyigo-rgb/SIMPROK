@@ -216,6 +216,7 @@ const mapApiProjectToDetail = (project: Record<string, unknown>): ProjectDetail 
   lockedValue: project.status === 'PLANNED' ? 'Belum terkunci' : 'Belum tersedia',
   fundingSource: 'Belum tersedia',
   description: typeof project.description === 'string' ? project.description : '',
+  specification: typeof project.mainMaterialSpec === 'string' ? project.mainMaterialSpec : '',
   startDate: formatOptionalDate(project.startDate),
   endDate: formatOptionalDate(project.endDate),
   myRole: 'Relasi belum tersedia dari API',

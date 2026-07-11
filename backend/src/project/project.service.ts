@@ -4,7 +4,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
 import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
+import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { DeviationService } from './deviation.service';
+import { detectIntakeMode } from './intake-mode.kernel';
 
 @Injectable()
 export class ProjectService {
@@ -46,6 +48,27 @@ export class ProjectService {
     };
   }
 
+  private serializeDecimalString(value: Prisma.Decimal | number | string | null | undefined): string | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    return new Prisma.Decimal(value).toFixed(2);
+  }
+
+  private normalizeOptionalText(value: string | null | undefined): string | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private decimalOrNull(value: string | null | undefined): Prisma.Decimal | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    return new Prisma.Decimal(value);
+  }
+
   async create(data: CreateProjectDto, creatorAccountId?: string) {
     try {
       const workspace = await this.prisma.workspace.findUnique({
@@ -63,6 +86,8 @@ export class ProjectService {
             name: data.name,
             code: data.code,
             description: data.description,
+            budgetBaseline: this.decimalOrNull(data.budgetBaseline),
+            mainMaterialSpec: this.normalizeOptionalText(data.mainMaterialSpec),
             workspace: {
               connect: { id: data.workspaceId },
             },
@@ -367,6 +392,84 @@ export class ProjectService {
       include: {
         recommendation: true,
       }
+    });
+  }
+
+  async getIntakeMode(projectId: string) {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        id: true,
+        budgetBaseline: true,
+        mainMaterialSpec: true,
+      },
+    });
+
+    if (!project) throw new NotFoundException('Project not found');
+
+    const baselineWorkItemCount = await this.prisma.boqItem.count({
+      where: {
+        itemType: 'WORK_ITEM',
+        boqStructure: {
+          projectId,
+          rabs: {
+            some: {
+              baselines: { some: { status: 'ACTIVE' } },
+            },
+          },
+        },
+      },
+    });
+
+    const draftWorkItemCount = await this.prisma.boqItem.count({
+      where: {
+        itemType: 'WORK_ITEM',
+        boqStructure: {
+          projectId,
+          status: 'DRAFT',
+        },
+      },
+    });
+
+    return detectIntakeMode({
+      boqDraftWorkItemCount: draftWorkItemCount,
+      boqBaselineWorkItemCount: baselineWorkItemCount,
+      budgetBaseline: this.serializeDecimalString(project.budgetBaseline),
+      mainMaterialSpec: project.mainMaterialSpec,
+    });
+  }
+
+  async updateIntakeContext(projectId: string, dto: UpdateProjectIntakeContextDto) {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true },
+    });
+
+    if (!project) throw new NotFoundException('Project not found');
+
+    const activeBaselineCount = await this.prisma.projectBaseline.count({
+      where: { projectId, status: 'ACTIVE' },
+    });
+
+    if (activeBaselineCount > 0) {
+      throw new ConflictException('Data proyek telah menjadi bagian dari baseline resmi. Gunakan mekanisme perubahan resmi.');
+    }
+
+    const data: Prisma.ProjectUpdateInput = {};
+
+    if (Object.prototype.hasOwnProperty.call(dto, 'budgetBaseline')) {
+      data.budgetBaseline = dto.budgetBaseline == null
+        ? null
+        : new Prisma.Decimal(dto.budgetBaseline);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dto, 'mainMaterialSpec')) {
+      data.mainMaterialSpec = this.normalizeOptionalText(dto.mainMaterialSpec) ?? null;
+    }
+
+    return await this.prisma.project.update({
+      where: { id: projectId },
+      data,
     });
   }
 
