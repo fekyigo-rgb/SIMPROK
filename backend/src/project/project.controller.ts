@@ -1,9 +1,11 @@
 import { Controller, Post, Put, Patch, Body, Get, Param, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ProjectService } from './project.service';
+import { RabIntelligenceProposalService } from './rab-intelligence-proposal.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
 import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
+import { CreateRabIntelligenceProposalDto } from './dto/create-rab-intelligence-proposal.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -13,7 +15,10 @@ import { PERMISSIONS } from '../common/constants/permissions';
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
 export class ProjectController {
-  constructor(private readonly projectService: ProjectService) {}
+  constructor(
+    private readonly projectService: ProjectService,
+    private readonly rabIntelligenceProposalService: RabIntelligenceProposalService,
+  ) {}
 
   @Post()
   @UseGuards(PermissionsGuard)
@@ -157,5 +162,17 @@ export class ProjectController {
   @Permissions('AHSP_VIEW')
   async getAhspSnapshot(@Param('projectId') projectId: string) {
     return this.projectService.getAhspSnapshot(projectId);
+  }
+
+  @Post(':projectId/rab-intelligence/proposals')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions('PROJECT_VIEW')
+  async createRabIntelligenceProposal(
+    @Req() request: any,
+    @Param('projectId') projectId: string,
+    @Body() dto: CreateRabIntelligenceProposalDto,
+  ) {
+    const accountId = request.user?.id;
+    return this.rabIntelligenceProposalService.propose(projectId, accountId, dto);
   }
 }
