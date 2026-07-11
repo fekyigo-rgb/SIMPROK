@@ -1,4 +1,5 @@
-import { Controller, Get, Param, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Req, UseGuards, Query } from '@nestjs/common';
+import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
@@ -24,13 +25,13 @@ export class BasicPriceController {
 
   /**
    * GET /basic-prices
-   * Ambil semua harga dasar untuk workspace aktif.
+   * Ambil semua harga dasar untuk workspace aktif dengan filter, pencarian, dan paginasi.
    */
   @Get()
   @Permissions('BASIC_PRICE_VIEW')
-  findAll(@Req() request: any) {
+  findAll(@Req() request: any, @Query() query: GetBasicPricesDto) {
     const workspaceId: string = request.workspaceContext?.workspaceId;
-    return this.basicPriceService.findAllForWorkspace(workspaceId);
+    return this.basicPriceService.findAllForWorkspace(workspaceId, query);
   }
 
   /**
