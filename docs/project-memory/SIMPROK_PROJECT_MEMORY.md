@@ -88,3 +88,28 @@ Digantikan oleh enam mode final A-F.
 - Desain tidak boleh disebut implemented tanpa bukti repository/runtime.
 - Masukan AI lain adalah bahan, bukan keputusan.
 - Jangan membuat checkpoint baru kecuali Owner meminta.
+
+## P7C PRODUCT INTELLIGENCE LAW
+
+- Current document version:
+  `v1.0-DRAFT`
+- Status:
+  `DRAFT — DESIGN ONLY`
+- Owner PASS:
+  `NOT YET GIVEN`
+- Active policy version remains:
+  `P8A_CONSTITUTIONAL_AI_BOUNDARY_V1`
+- Future policy version after explicit Owner PASS:
+  `P7C_PRODUCT_INTELLIGENCE_LAW_V1`
+- Implementation authority:
+  `NONE until separate Owner/PM implementation gate`
+- Key direction carried by the draft:
+  `AHSP One — Applications Many — EF Contextual per Occurrence`
+- Completed occurrence verdict:
+  `B — current boqItemRef is only the current proxy; it is not a structural Work Occurrence guarantee. A distinct occurrence reference will eventually be required.`
+- Current AI EF path:
+  `HARD LOCKED / NOT_ALLOWED under P8A_CONSTITUTIONAL_AI_BOUNDARY_V1. P7C LAW-6.7 is draft alignment, not new implementation authority.`
+- Retrieval rule:
+  Read Project Memory first, then the canonical P7C document, then locked Foundation/ADR sources and repository reality.
+- Duplication rule:
+  Do not copy the full P7C law into Project Memory. Keep only this pointer/status to prevent two versions of truth.

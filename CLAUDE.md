@@ -168,4 +168,16 @@ Frase kerja: "Dalam Tuhan Yesus Kristus ada kemenangan."
 
 ---
 
+## Product Intelligence Law Pointer
+
+Before architecture, implementation, audit, or product-law work, read `docs/project-memory/SIMPROK_PROJECT_MEMORY.md`.
+
+For RAB Intelligence, BOQ, AHSP, Basic Price, Supply/Logistics, Execution Factor, Work Occurrence, Execution Assessment, or Cost Kernel, read `docs/product-intelligence/P7C_PRODUCT_INTELLIGENCE_LAW.md`.
+
+The canonical document status and version determine whether the law is still DRAFT or active. DRAFT is not implementation authority.
+
+Do not duplicate or reinterpret the full law in AGENTS.md, CLAUDE.md, prompts, or Project Memory. Use pointers only.
+
+If repository reality conflicts with locked law, report the gap. Do not silently change the law or repository evidence.
+
 Soli Deo Gloria. Haleluya. Amin.
