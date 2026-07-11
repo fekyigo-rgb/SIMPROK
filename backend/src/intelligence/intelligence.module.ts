@@ -5,6 +5,8 @@ import { ConstitutionalAiBoundaryService } from './constitutional-ai-boundary.se
 import { DisabledIntelligenceProvider } from './disabled-intelligence.provider';
 import { IntelligenceEvidenceService } from './intelligence-evidence.service';
 import { IntelligenceProviderRegistryService } from './intelligence-provider-registry';
+import { OpenAiIntelligenceProvider } from './openai-intelligence.provider';
+import { OpenAiProviderConfigService } from './openai-provider.config';
 import { SimprokIntelligenceOrchestrator } from './simprok-intelligence.orchestrator';
 
 @Module({
@@ -14,6 +16,8 @@ import { SimprokIntelligenceOrchestrator } from './simprok-intelligence.orchestr
     IntelligenceEvidenceService,
     AiProviderConfigService,
     DisabledIntelligenceProvider,
+    OpenAiProviderConfigService,
+    OpenAiIntelligenceProvider,
     IntelligenceProviderRegistryService,
     SimprokIntelligenceOrchestrator,
   ],

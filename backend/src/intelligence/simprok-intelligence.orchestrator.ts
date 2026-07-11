@@ -10,6 +10,7 @@ import {
   SimprokIntelligencePort,
 } from './simprok-intelligence.port';
 import {
+  getProviderReasonCode,
   ProviderIntelligenceProposalItem,
   ProviderIntelligenceRequest,
   ProviderIntelligenceResponse,
@@ -46,9 +47,10 @@ export class SimprokIntelligenceOrchestrator implements SimprokIntelligencePort 
       const provider = this.registry.resolve();
       resolvedProviderId = provider.providerId;
       response = await provider.generateProposal(this.buildProviderRequest(request));
-    } catch {
+    } catch (error) {
       const result = await this.constitutionalBoundary.providerUnavailable(request, {
         providerIdentifier: resolvedProviderId ?? 'UNRESOLVED_PROVIDER',
+        reasonCode: getProviderReasonCode(error),
       });
       return result.proposal;
     }
