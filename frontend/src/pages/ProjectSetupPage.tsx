@@ -107,11 +107,18 @@ export function ProjectSetupPage() {
       'Draft project dibuat dari Persiapan RAB. Belum baseline resmi dan belum RAB final.',
       `Kategori: ${selectedKategori}`,
       showBidang ? `Bidang Pekerjaan: ${selectedBidang.join(', ')}` : null,
-      budgetCeiling.trim() ? `Pagu Anggaran: ${budgetCeiling.trim()}` : null,
-      mainMaterialSpec.trim() ? `Spesifikasi Material Utama: ${mainMaterialSpec.trim()}` : null,
       interactionText.trim() ? `Konteks Lapangan: ${interactionText.trim()}` : null,
       ...filledFields,
     ].filter(Boolean).join('\n');
+  };
+
+  const normalizeBudgetCeiling = () => {
+    const trimmed = budgetCeiling.trim();
+    if (!trimmed) return { value: undefined };
+    if (!/^(?:0|[1-9]\d{0,15})(?:\.\d{1,2})?$/.test(trimmed)) {
+      return { error: 'Pagu Anggaran harus angka tanpa separator ribuan, tidak negatif, dan maksimal 2 angka desimal.' };
+    }
+    return { value: trimmed };
   };
 
   const validateDraftInput = () => {
@@ -124,6 +131,8 @@ export function ProjectSetupPage() {
     if (!projectName) return 'Nama pekerjaan/proyek wajib diisi.';
     if (!selectedKategori) return 'Kategori pengadaan wajib dipilih.';
     if (showBidang && selectedBidang.length === 0) return 'Bidang pekerjaan wajib dipilih untuk kategori konstruksi.';
+    const budgetValidation = normalizeBudgetCeiling();
+    if (budgetValidation.error) return budgetValidation.error;
 
     return null;
   };
@@ -146,11 +155,15 @@ export function ProjectSetupPage() {
         throw new Error('Draft project belum dapat dibuat. Workspace context belum tersedia.');
       }
 
+      const normalizedBudget = normalizeBudgetCeiling().value;
+      const normalizedSpec = mainMaterialSpec.trim();
       const draftPayload = {
         name: preparationData['Nama Proyek'].trim(),
         code: buildDraftProjectCode(),
         description: buildDraftDescription(),
         workspaceId,
+        ...(normalizedBudget ? { budgetBaseline: normalizedBudget } : {}),
+        ...(normalizedSpec ? { mainMaterialSpec: normalizedSpec } : {}),
       };
 
       const response = await apiFetch('/projects', {

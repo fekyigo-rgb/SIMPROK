@@ -1,8 +1,9 @@
-import { Controller, Post, Put, Body, Get, Param, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Put, Patch, Body, Get, Param, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ProjectService } from './project.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
 import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
+import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -107,6 +108,24 @@ export class ProjectController {
   @Permissions('PROJECT_VIEW')
   async getAuthority(@Param('projectId') projectId: string) {
     return this.projectService.getAuthority(projectId);
+  }
+
+  @Get(':projectId/intake-mode')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions('PROJECT_VIEW')
+  async getIntakeMode(@Param('projectId') projectId: string) {
+    return this.projectService.getIntakeMode(projectId);
+  }
+
+  @Patch(':projectId/intake-context')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  // TODO(P7C-PERMISSION-DEBT): Replace PROJECT_CREATE with a dedicated project intake-context edit permission after Identity/Permission design approval.
+  @Permissions('PROJECT_CREATE')
+  async updateIntakeContext(
+    @Param('projectId') projectId: string,
+    @Body() dto: UpdateProjectIntakeContextDto,
+  ) {
+    return this.projectService.updateIntakeContext(projectId, dto);
   }
 
   @Get(':projectId/boq')

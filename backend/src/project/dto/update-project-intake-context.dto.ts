@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsString, IsNotEmpty, IsOptional, IsUUID, Matches, MaxLength } from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 const DECIMAL_18_2_NON_NEGATIVE = /^(?:0|[1-9]\d{0,15})(?:\.\d{1,2})?$/;
 
@@ -9,19 +9,7 @@ const normalizeOptionalText = ({ value }: { value: unknown }) => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
-export class CreateProjectDto {
-  @IsString()
-  @IsNotEmpty()
-  name: string;
-
-  @IsString()
-  @IsNotEmpty()
-  code: string;
-
-  @IsString()
-  @IsOptional()
-  description?: string;
-
+export class UpdateProjectIntakeContextDto {
   @IsString()
   @Matches(DECIMAL_18_2_NON_NEGATIVE)
   @IsOptional()
@@ -32,8 +20,4 @@ export class CreateProjectDto {
   @MaxLength(5000)
   @IsOptional()
   mainMaterialSpec?: string | null;
-
-  @IsUUID()
-  @IsNotEmpty()
-  workspaceId: string;
 }

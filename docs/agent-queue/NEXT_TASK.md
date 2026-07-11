@@ -1,6 +1,6 @@
 ﻿# SIMPROK NEXT TASK
 
-Status: HOLD_FOR_OWNER_NEXT_DIRECTION
+Status: IMPLEMENTED_ON_BRANCH / AWAITING_OWNER_REVIEW
 
 ## Faith Opening
 
@@ -52,9 +52,16 @@ AHSP Snapshot:
 
 ## Current Task
 
-No active coding task.
+P7C Canonical Intake Contract implemented on branch:
 
-Wait for Owner next instruction.
+feat/p7c-canonical-intake-contract
+
+Status:
+- Backend implementation done.
+- Frontend create/read-back integration done.
+- API/runtime Mode C and Mode F evidence done.
+- Browser visual desktop/mobile audit not completed because no browser automation/tooling is available in the session.
+- PR review by Owner/PM still required.
 
 If Owner gives a new task:
 1. Verify repo status first.
