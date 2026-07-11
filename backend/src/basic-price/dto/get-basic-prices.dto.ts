@@ -26,8 +26,11 @@ export class GetBasicPricesDto {
   @IsEnum(PriceSourceOrigin)
   sourceOrigin?: PriceSourceOrigin;
 
+  // Public API hard lock: only the terminal PUBLISHED verification is queryable.
+  // Internal-curation statuses (UNVERIFIED/SUBMITTED/UNDER_REVIEW/VERIFIED/REJECTED)
+  // are rejected here; the service also enforces this defensively.
   @IsOptional()
-  @IsEnum(PriceVerificationStatus)
+  @IsIn([PriceVerificationStatus.PUBLISHED])
   verificationStatus?: PriceVerificationStatus;
 
   @IsOptional()

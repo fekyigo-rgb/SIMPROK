@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { PriceVerificationStatus } from '@prisma/client';
 import { BasicPriceService } from './basic-price.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -15,6 +16,7 @@ describe('BasicPriceService', () => {
 
   const workspaceId = 'ws-golden-path-01';
 
+  // Public-eligible record: lifecycle PUBLISHED + verification terminal PUBLISHED.
   const mockPrice = {
     id: 'bp-01',
     resourceId: 'rc-01',
@@ -22,10 +24,10 @@ describe('BasicPriceService', () => {
     value: '150000.00',
     effectiveDate: new Date('2026-01-01'),
     status: 'PUBLISHED',
-    sourceOrigin: 'SURVEY',
+    sourceOrigin: 'GOVERNMENT',
     sourceType: 'MARKET_SURVEY',
-    verificationStatus: 'VERIFIED',
-    freshnessStatus: 'FRESH',
+    verificationStatus: 'PUBLISHED',
+    freshnessStatus: 'CURRENT',
     resource: {
       id: 'rc-01',
       code: 'MAT-SEMEN-01',
@@ -58,23 +60,77 @@ describe('BasicPriceService', () => {
     expect(service).toBeDefined();
   });
 
-  describe('findAllForWorkspace', () => {
-    it('returns basic prices scoped to workspace and global with pagination', async () => {
+  describe('findAllForWorkspace — public eligibility hard lock', () => {
+    it('base where always enforces status=PUBLISHED, verificationStatus=PUBLISHED, and tenant/global', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId);
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: 'PUBLISHED',
+            verificationStatus: PriceVerificationStatus.PUBLISHED,
+            OR: [{ workspaceId }, { workspaceId: null }],
+          }),
+        }),
+      );
+      // count uses the same eligibility where → meta.total only counts eligible
+      expect(prisma.basicPrice.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: 'PUBLISHED',
+            verificationStatus: PriceVerificationStatus.PUBLISHED,
+          }),
+        }),
+      );
+    });
+
+    it('returns basic prices with pagination meta', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
       const result = await service.findAllForWorkspace(workspaceId);
 
       expect(result.data).toEqual([mockPrice]);
-      expect(result.meta).toEqual({
-        total: 1,
-        page: 1,
-        limit: 20,
-        totalPages: 1,
-      });
+      expect(result.meta).toEqual({ total: 1, page: 1, limit: 20, totalPages: 1 });
     });
 
-    it('applies search match correctly for resource code and name within tenant/global visibility', async () => {
+    it('accepts verificationStatus=PUBLISHED query without widening eligibility', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await expect(
+        service.findAllForWorkspace(workspaceId, {
+          verificationStatus: PriceVerificationStatus.PUBLISHED,
+        }),
+      ).resolves.toBeDefined();
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            verificationStatus: PriceVerificationStatus.PUBLISHED,
+          }),
+        }),
+      );
+    });
+
+    it.each([
+      PriceVerificationStatus.VERIFIED,
+      PriceVerificationStatus.UNVERIFIED,
+      PriceVerificationStatus.SUBMITTED,
+      PriceVerificationStatus.UNDER_REVIEW,
+      PriceVerificationStatus.REJECTED,
+    ])('rejects internal-curation verificationStatus=%s with BadRequest (defensive, not only DTO)', async (status) => {
+      await expect(
+        service.findAllForWorkspace(workspaceId, { verificationStatus: status }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
+    });
+
+    it('applies search within tenant/global visibility (does not drop eligibility)', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
@@ -83,6 +139,8 @@ describe('BasicPriceService', () => {
       expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
+            status: 'PUBLISHED',
+            verificationStatus: PriceVerificationStatus.PUBLISHED,
             resource: {
               OR: [{ workspaceId }, { workspaceId: null }],
               AND: [
@@ -99,25 +157,13 @@ describe('BasicPriceService', () => {
       );
     });
 
-    it('applies search mismatch safely (empty array)', async () => {
-      prisma.basicPrice.findMany.mockResolvedValue([]);
-      prisma.basicPrice.count.mockResolvedValue(0);
-
-      const result = await service.findAllForWorkspace(workspaceId, { search: 'NonExistent' });
-
-      expect(result.data).toEqual([]);
-      expect(result.meta.total).toBe(0);
-    });
-
-    it('applies individual filters correctly', async () => {
+    it('applies non-verification filters correctly alongside eligibility', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
-      // Testing sourceOrigin, verificationStatus, freshnessStatus, year, regionId, resourceId
       await service.findAllForWorkspace(workspaceId, {
-        sourceOrigin: 'SURVEY' as any,
-        verificationStatus: 'VERIFIED' as any,
-        freshnessStatus: 'FRESH' as any,
+        sourceOrigin: 'GOVERNMENT' as any,
+        freshnessStatus: 'EXPIRED' as any,
         year: 2026,
         regionId: 'reg-01',
         resourceId: 'rc-01',
@@ -126,9 +172,10 @@ describe('BasicPriceService', () => {
       expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            sourceOrigin: 'SURVEY',
-            verificationStatus: 'VERIFIED',
-            freshnessStatus: 'FRESH',
+            status: 'PUBLISHED',
+            verificationStatus: PriceVerificationStatus.PUBLISHED,
+            sourceOrigin: 'GOVERNMENT',
+            freshnessStatus: 'EXPIRED',
             regionId: 'reg-01',
             resourceId: 'rc-01',
             effectiveDate: {
@@ -144,17 +191,14 @@ describe('BasicPriceService', () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
-      await service.findAllForWorkspace(workspaceId, {
-        search: 'Semen',
-        unit: 'Zak',
-      });
+      await service.findAllForWorkspace(workspaceId, { search: 'Semen', unit: 'Zak' });
 
       expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            OR: [{ workspaceId }, { workspaceId: null }], // Tenant scope on basicPrice
+            OR: [{ workspaceId }, { workspaceId: null }],
             resource: {
-              OR: [{ workspaceId }, { workspaceId: null }], // Tenant scope on resource
+              OR: [{ workspaceId }, { workspaceId: null }],
               baseUnit: 'Zak',
               AND: [
                 {
@@ -170,27 +214,18 @@ describe('BasicPriceService', () => {
       );
     });
 
-    it('enforces pagination and maximum limit gracefully', async () => {
+    it('enforces pagination skip/take', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
-      // We test the logic that passes pagination values to Prisma skip/take.
-      // Note: The limit max 50 is enforced at DTO validation layer,
-      // but we test if the service handles the injected limit properly.
-      await service.findAllForWorkspace(workspaceId, {
-        page: 2,
-        limit: 50,
-      });
+      await service.findAllForWorkspace(workspaceId, { page: 2, limit: 50 });
 
       expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          skip: 50,
-          take: 50,
-        }),
+        expect.objectContaining({ skip: 50, take: 50 }),
       );
     });
 
-    it('applies deterministic sorting using effectiveDate and tie-breaker id', async () => {
+    it('applies deterministic sorting with id tie-breaker', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
@@ -201,17 +236,14 @@ describe('BasicPriceService', () => {
 
       expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          orderBy: [
-            { effectiveDate: 'desc' },
-            { id: 'asc' },
-          ],
+          orderBy: [{ effectiveDate: 'desc' }, { id: 'asc' }],
         }),
       );
     });
   });
 
-  describe('findOneForWorkspace', () => {
-    it('returns a price when found in workspace scope (Tenant visibility)', async () => {
+  describe('findOneForWorkspace — eligibility hard lock', () => {
+    it('where enforces status=PUBLISHED, verificationStatus=PUBLISHED, tenant/global', async () => {
       prisma.basicPrice.findFirst.mockResolvedValue(mockPrice);
 
       const result = await service.findOneForWorkspace('bp-01', workspaceId);
@@ -222,13 +254,14 @@ describe('BasicPriceService', () => {
           where: expect.objectContaining({
             id: 'bp-01',
             status: 'PUBLISHED',
+            verificationStatus: PriceVerificationStatus.PUBLISHED,
             OR: [{ workspaceId }, { workspaceId: null }],
           }),
         }),
       );
     });
 
-    it('returns global price properly', async () => {
+    it('returns eligible global price', async () => {
       prisma.basicPrice.findFirst.mockResolvedValue({ ...mockPrice, workspaceId: null });
 
       const result = await service.findOneForWorkspace('bp-01', workspaceId);
@@ -236,7 +269,15 @@ describe('BasicPriceService', () => {
       expect(result.workspaceId).toBeNull();
     });
 
-    it('throws NotFoundException when price is outside workspace scope (Cross-tenant)', async () => {
+    it('throws NotFound for internal-curation record (filtered by eligibility where → null)', async () => {
+      prisma.basicPrice.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.findOneForWorkspace('bp-internal', workspaceId),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('throws NotFound for cross-tenant record', async () => {
       prisma.basicPrice.findFirst.mockResolvedValue(null);
 
       await expect(
@@ -245,8 +286,8 @@ describe('BasicPriceService', () => {
     });
   });
 
-  describe('findByResource', () => {
-    it('returns prices for a resource scoped to workspace or global', async () => {
+  describe('findByResource — eligibility hard lock', () => {
+    it('where enforces status=PUBLISHED, verificationStatus=PUBLISHED, tenant/global', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
 
       const result = await service.findByResource('rc-01', workspaceId);
@@ -257,10 +298,8 @@ describe('BasicPriceService', () => {
           where: {
             resourceId: 'rc-01',
             status: 'PUBLISHED',
-            OR: [
-              { workspaceId },
-              { workspaceId: null },
-            ],
+            verificationStatus: PriceVerificationStatus.PUBLISHED,
+            OR: [{ workspaceId }, { workspaceId: null }],
           },
         }),
       );
