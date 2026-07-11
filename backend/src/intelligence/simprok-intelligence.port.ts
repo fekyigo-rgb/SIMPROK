@@ -7,6 +7,7 @@ export type RabIntelligenceRequest = {
   projectId: string;
   accountId: string;
   boqSourceRef?: string;
+  boqItemRefs?: string[];
   projectContextRef: string;
   mainMaterialSpecRef?: string;
   efPermission: EfPermission;
