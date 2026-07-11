@@ -70,6 +70,8 @@ export type ConstitutionalEvaluationContext = {
   promptInputHash?: string;
   toolsRequested?: string[];
   selectedExecutionFactorRefsByBoqItemRef?: Record<string, string[]>;
+  /** Optional vendor-neutral failure classification (e.g. OPENAI_AUTH_FAILED) surfaced by providerUnavailable(). */
+  reasonCode?: string;
 };
 
 export type ConstitutionalEvaluationResult = {
@@ -91,6 +93,9 @@ export class ConstitutionalAiBoundaryService {
     context: ConstitutionalEvaluationContext = {},
   ): Promise<ConstitutionalEvaluationResult> {
     const rejections = new Set<string>();
+    if (context.reasonCode) {
+      rejections.add(context.reasonCode);
+    }
     const toolsRequested = [
       ...(context.toolsRequested ?? []),
       ...this.stringArray(rawProposal.toolsRequested),
@@ -174,11 +179,12 @@ export class ConstitutionalAiBoundaryService {
     request: RabIntelligenceRequest,
     context: ConstitutionalEvaluationContext = {},
   ): Promise<ConstitutionalEvaluationResult> {
+    const extraReasons = context.reasonCode ? [context.reasonCode] : [];
     const proposal: RabIntelligenceProposal = {
       requestId: request.requestId,
       status: 'NEEDS_REVIEW',
       items: [],
-      warnings: ['PROVIDER_UNAVAILABLE', 'MANUAL_REVIEW_AVAILABLE'],
+      warnings: ['PROVIDER_UNAVAILABLE', 'MANUAL_REVIEW_AVAILABLE', ...extraReasons],
     };
 
     const result = {
@@ -192,7 +198,7 @@ export class ConstitutionalAiBoundaryService {
         toolsRequested: context.toolsRequested ?? [],
         toolsAllowed: [],
         toolsDenied: [],
-        policyRejections: ['PROVIDER_UNAVAILABLE'],
+        policyRejections: ['PROVIDER_UNAVAILABLE', ...extraReasons],
       }),
     };
 

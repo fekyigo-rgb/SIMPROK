@@ -21,6 +21,7 @@
     "verify:db:test": "tsx scripts/test-database-guard.ts",
     "test:e2e:safe": "tsx scripts/run-e2e-safe.ts",
     "test:e2e": "npm run test:e2e:safe",
+    "test:openai:smoke": "tsx scripts/openai-smoke.ts",
     "gate:post-recovery": "npm run build && npm run test && npm run test:e2e && npm --prefix ../frontend run build"
   },
   "dependencies": {
@@ -36,6 +37,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "exceljs": "^4.4.0",
+    "openai": "^6.46.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.21.0",

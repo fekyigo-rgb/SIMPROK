@@ -57,3 +57,20 @@ export interface SimprokIntelligenceProvider {
     request: ProviderIntelligenceRequest,
   ): Promise<ProviderIntelligenceResponse>;
 }
+
+/**
+ * Optional, vendor-neutral failure classification any provider error MAY
+ * carry (structurally, not by inheritance) so the orchestrator can surface
+ * *why* a provider failed in evidence without importing a vendor SDK/type.
+ */
+export interface ProviderFailureReason {
+  readonly reasonCode: string;
+}
+
+export function getProviderReasonCode(error: unknown): string | undefined {
+  if (error && typeof error === 'object' && 'reasonCode' in error) {
+    const code = (error as { reasonCode?: unknown }).reasonCode;
+    return typeof code === 'string' ? code : undefined;
+  }
+  return undefined;
+}

@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { AiProviderConfigService } from './ai-provider.config';
 import { DisabledIntelligenceProvider } from './disabled-intelligence.provider';
+import { OpenAiIntelligenceProvider } from './openai-intelligence.provider';
 import { SimprokIntelligenceProvider } from './simprok-intelligence-provider';
 
 export interface IntelligenceProviderRegistry {
@@ -28,8 +29,12 @@ export class IntelligenceProviderRegistryService implements IntelligenceProvider
   constructor(
     private readonly config: AiProviderConfigService,
     disabledProvider: DisabledIntelligenceProvider,
+    @Optional() openAiProvider?: OpenAiIntelligenceProvider,
   ) {
     this.register(disabledProvider);
+    if (openAiProvider) {
+      this.register(openAiProvider);
+    }
   }
 
   register(provider: SimprokIntelligenceProvider): void {
