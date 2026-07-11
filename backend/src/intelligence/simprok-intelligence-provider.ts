@@ -1,4 +1,8 @@
-import { EfPermission } from './simprok-intelligence.port';
+import {
+  EfPermission,
+  RabIntelligenceBoqItemContext,
+  RabIntelligenceCanonicalCandidate,
+} from './simprok-intelligence.port';
 import { SimprokIntelligenceTool } from './simprok-intelligence-tools';
 
 export type ProviderIntelligenceRequest = {
@@ -11,8 +15,17 @@ export type ProviderIntelligenceRequest = {
   action: 'GENERATE_DRAFT_RAB';
 
   boqItemRefs: string[];
+  /** Bounded, sanitized grounding context -- optional, defaults to []. */
+  boqItems?: RabIntelligenceBoqItemContext[];
+  /** Bounded canonical candidates the provider may select from -- optional, defaults to []. */
+  ahspCandidates?: RabIntelligenceCanonicalCandidate[];
+  basicPriceCandidates?: RabIntelligenceCanonicalCandidate[];
+  /** Stable, content-free reference. Never the project name or free text. */
   projectContextRef: string;
+  /** Stable, content-free reference. Never raw spec text -- see mainMaterialSpecContext. */
   mainMaterialSpecRef?: string;
+  /** Bounded, sanitized spec content actually used for grounding. */
+  mainMaterialSpecContext?: string;
 
   efPermission: EfPermission;
 
