@@ -23,6 +23,7 @@ import { AhspModule } from './ahsp/ahsp.module';
 import { ProgressModule } from './progress/progress.module';
 import { RealityIntakeModule } from './reality-intake/reality-intake.module';
 import { BasicPriceModule } from './basic-price/basic-price.module';
+import { IntelligenceModule } from './intelligence/intelligence.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { BasicPriceModule } from './basic-price/basic-price.module';
     ProjectModule,
     AhspModule,
     BasicPriceModule,
+    IntelligenceModule,
     ProgressModule,
     RealityIntakeModule,
   ],
