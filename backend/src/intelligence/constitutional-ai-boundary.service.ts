@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   RabIntelligenceProposal,
   RabIntelligenceProposalItem,
   RabIntelligenceRequest,
 } from './simprok-intelligence.port';
+import { IntelligenceEvidenceService } from './intelligence-evidence.service';
 import { isAllowedIntelligenceTool } from './simprok-intelligence-tools';
 
 export const P8A_POLICY_VERSION = 'P8A-1';
@@ -47,6 +48,7 @@ export type IntelligenceEvidenceRecord = {
   modelIdentifier: string;
   policyVersion: string;
   promptInputHash: string;
+  status: 'READY' | 'PARTIAL' | 'NEEDS_REVIEW' | 'REJECTED_BY_POLICY' | 'PROVIDER_UNAVAILABLE';
   sourceReferences: string[];
   toolsRequested: string[];
   toolsAllowed: string[];
@@ -57,6 +59,7 @@ export type IntelligenceEvidenceRecord = {
   efPermission: RabIntelligenceRequest['efPermission'];
   efReferences: string[];
   confidence: number[];
+  reasonCodes: string[];
   policyRejections: string[];
   timestamp: string;
 };
@@ -77,7 +80,10 @@ export type ConstitutionalEvaluationResult = {
 
 @Injectable()
 export class ConstitutionalAiBoundaryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly evidenceService: IntelligenceEvidenceService,
+  ) {}
 
   async evaluateRabProposal(
     request: RabIntelligenceRequest,
@@ -145,10 +151,11 @@ export class ConstitutionalAiBoundaryService {
       warnings: [...new Set([...rawProposal.warnings, ...rejections])],
     };
 
-    return {
+    const result = {
       proposal,
       rejected: proposal.status === 'REJECTED_BY_POLICY',
       evidence: this.buildEvidence(request, proposal, {
+        status: proposal.status,
         providerIdentifier: context.providerIdentifier ?? 'UNCONNECTED_PROVIDER',
         modelIdentifier: context.modelIdentifier ?? 'UNCONNECTED_MODEL',
         promptInputHash: context.promptInputHash ?? 'NO_RAW_PROMPT_STORED',
@@ -158,12 +165,15 @@ export class ConstitutionalAiBoundaryService {
         policyRejections: [...rejections],
       }),
     };
+
+    await this.persistEvidence(result.evidence);
+    return result;
   }
 
-  providerUnavailable(
+  async providerUnavailable(
     request: RabIntelligenceRequest,
     context: ConstitutionalEvaluationContext = {},
-  ): ConstitutionalEvaluationResult {
+  ): Promise<ConstitutionalEvaluationResult> {
     const proposal: RabIntelligenceProposal = {
       requestId: request.requestId,
       status: 'NEEDS_REVIEW',
@@ -171,10 +181,11 @@ export class ConstitutionalAiBoundaryService {
       warnings: ['PROVIDER_UNAVAILABLE', 'MANUAL_REVIEW_AVAILABLE'],
     };
 
-    return {
+    const result = {
       proposal,
       rejected: false,
       evidence: this.buildEvidence(request, proposal, {
+        status: 'PROVIDER_UNAVAILABLE',
         providerIdentifier: context.providerIdentifier ?? 'UNCONNECTED_PROVIDER',
         modelIdentifier: context.modelIdentifier ?? 'UNCONNECTED_MODEL',
         promptInputHash: context.promptInputHash ?? 'NO_RAW_PROMPT_STORED',
@@ -184,6 +195,9 @@ export class ConstitutionalAiBoundaryService {
         policyRejections: ['PROVIDER_UNAVAILABLE'],
       }),
     };
+
+    await this.persistEvidence(result.evidence);
+    return result;
   }
 
   private async evaluateItem(
@@ -288,6 +302,7 @@ export class ConstitutionalAiBoundaryService {
     request: RabIntelligenceRequest,
     proposal: RabIntelligenceProposal,
     params: {
+      status: IntelligenceEvidenceRecord['status'];
       providerIdentifier: string;
       modelIdentifier: string;
       promptInputHash: string;
@@ -307,6 +322,7 @@ export class ConstitutionalAiBoundaryService {
       modelIdentifier: params.modelIdentifier,
       policyVersion: P8A_POLICY_VERSION,
       promptInputHash: params.promptInputHash,
+      status: params.status,
       sourceReferences: [
         request.boqSourceRef,
         request.projectContextRef,
@@ -325,8 +341,22 @@ export class ConstitutionalAiBoundaryService {
       efPermission: request.efPermission,
       efReferences: proposal.items.flatMap((item) => item.executionFactorRefs),
       confidence: proposal.items.map((item) => item.confidence),
+      reasonCodes: [
+        ...new Set(proposal.items.flatMap((item) => item.reasonCodes)),
+      ],
       policyRejections: params.policyRejections,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  private async persistEvidence(record: IntelligenceEvidenceRecord) {
+    try {
+      await this.evidenceService.append(record);
+    } catch (error) {
+      throw new InternalServerErrorException({
+        code: 'INTELLIGENCE_EVIDENCE_PERSISTENCE_FAILED',
+        message: 'Intelligence evidence could not be persisted',
+      });
+    }
   }
 }

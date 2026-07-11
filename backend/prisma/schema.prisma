@@ -26,7 +26,8 @@ model Account {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
-  memberships WorkspaceMembership[]
+  memberships          WorkspaceMembership[]
+  intelligenceEvidence IntelligenceEvidence[]
 
   @@map("accounts")
 }
@@ -45,9 +46,10 @@ model Organization {
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
 
-  workspaces              Workspace[]
-  projects                Project[]
-  priceSubmissionReviews  PriceSubmissionReview[]
+  workspaces             Workspace[]
+  projects               Project[]
+  priceSubmissionReviews PriceSubmissionReview[]
+  intelligenceEvidence   IntelligenceEvidence[]
 
   @@map("organizations")
 }
@@ -69,20 +71,21 @@ model Workspace {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization       Organization          @relation(fields: [organizationId], references: [id])
-  memberships        WorkspaceMembership[]
-  roles              Role[]
-  positions          Position[]
-  approvalMatrices   ApprovalMatrix[]
-  projects           Project[]
-  stakeholderBridges ProjectStakeholder[]
-  ahsps              AHSP[]
-  ahspVersions       AHSPVersion[]
-  ahspSnapshots      AHSPSnapshot[]
-  resourceCatalogs   ResourceCatalog[]
-  basicPrices        BasicPrice[]
-  priceSubmissions   PriceSubmission[]
+  organization           Organization            @relation(fields: [organizationId], references: [id])
+  memberships            WorkspaceMembership[]
+  roles                  Role[]
+  positions              Position[]
+  approvalMatrices       ApprovalMatrix[]
+  projects               Project[]
+  stakeholderBridges     ProjectStakeholder[]
+  ahsps                  AHSP[]
+  ahspVersions           AHSPVersion[]
+  ahspSnapshots          AHSPSnapshot[]
+  resourceCatalogs       ResourceCatalog[]
+  basicPrices            BasicPrice[]
+  priceSubmissions       PriceSubmission[]
   priceSubmissionReviews PriceSubmissionReview[]
+  intelligenceEvidence   IntelligenceEvidence[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -294,41 +297,42 @@ model ApprovalMatrix {
 // =====================================================
 
 model Project {
-  id             String        @id @default(uuid()) @db.Uuid
-  workspaceId    String        @db.Uuid
-  organizationId String        @db.Uuid
-  code           String
-  name           String
-  description    String?       @db.Text
+  id               String        @id @default(uuid()) @db.Uuid
+  workspaceId      String        @db.Uuid
+  organizationId   String        @db.Uuid
+  code             String
+  name             String
+  description      String?       @db.Text
   mainMaterialSpec String?       @db.Text
-  location       String?
-  clientName     String?
-  type           ProjectType   @default(GENERAL)
-  address        Json?
-  budgetBaseline Decimal?      @db.Decimal(18, 2)
-  startDate      DateTime?
-  endDate        DateTime?
-  createdById    String?       @db.Uuid
-  deletedAt      DateTime?
-  status         ProjectStatus @default(PLANNED)
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  location         String?
+  clientName       String?
+  type             ProjectType   @default(GENERAL)
+  address          Json?
+  budgetBaseline   Decimal?      @db.Decimal(18, 2)
+  startDate        DateTime?
+  endDate          DateTime?
+  createdById      String?       @db.Uuid
+  deletedAt        DateTime?
+  status           ProjectStatus @default(PLANNED)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
-  workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  contracts        ProjectContract[]
-  stakeholders     ProjectStakeholder[]
-  assignments      ProjectAssignment[]
-  wbsNodes         WbsNode[]
-  boqStructures    BoqStructure[]
-  rabDocuments     RabDocument[]
-  baselines        ProjectBaseline[]
-  progressReports  ProgressReport[]
-  deviationSignals DeviationSignal[]
-  risks            ProjectRisk[]
-  forecasts        ProjectForecast[]
-  recommendations  Recommendation[]
-  formalDecisions  FormalDecision[]
+  workspace            Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  organization         Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contracts            ProjectContract[]
+  stakeholders         ProjectStakeholder[]
+  assignments          ProjectAssignment[]
+  wbsNodes             WbsNode[]
+  boqStructures        BoqStructure[]
+  rabDocuments         RabDocument[]
+  baselines            ProjectBaseline[]
+  progressReports      ProgressReport[]
+  deviationSignals     DeviationSignal[]
+  risks                ProjectRisk[]
+  forecasts            ProjectForecast[]
+  recommendations      Recommendation[]
+  formalDecisions      FormalDecision[]
+  intelligenceEvidence IntelligenceEvidence[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -351,6 +355,58 @@ enum ProjectStatus {
   COMPLETED
   ARCHIVED
   CANCELLED
+}
+
+enum IntelligenceEvidenceStatus {
+  READY
+  PARTIAL
+  NEEDS_REVIEW
+  REJECTED_BY_POLICY
+  PROVIDER_UNAVAILABLE
+}
+
+enum IntelligenceEfPermission {
+  ALLOWED
+  NOT_ALLOWED
+  SELECTED_ITEMS_ONLY
+}
+
+model IntelligenceEvidence {
+  id                    String                     @id @default(uuid()) @db.Uuid
+  requestId             String
+  workspaceId           String                     @db.Uuid
+  organizationId        String                     @db.Uuid
+  projectId             String                     @db.Uuid
+  accountId             String                     @db.Uuid
+  providerIdentifier    String?
+  modelIdentifier       String?
+  policyVersion         String
+  inputHash             String
+  status                IntelligenceEvidenceStatus
+  sourceReferences      String[]
+  toolsRequested        String[]
+  toolsAllowed          String[]
+  toolsDenied           String[]
+  selectedAhspIds       String[]
+  selectedBasicPriceIds String[]
+  efPermission          IntelligenceEfPermission
+  efReferences          String[]
+  confidence            Float?
+  reasonCodes           String[]
+  policyRejections      String[]
+  createdAt             DateTime                   @default(now())
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([requestId])
+  @@index([workspaceId, organizationId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([createdAt])
+  @@map("intelligence_evidence")
 }
 
 model ProjectContract {

@@ -38,6 +38,7 @@ describe('ConstitutionalAiBoundaryService', () => {
   function createService(options?: {
     ahspFound?: boolean;
     basicPriceFound?: boolean;
+    evidenceAppendRejects?: boolean;
   }) {
     const prisma = {
       aHSP: {
@@ -55,12 +56,23 @@ describe('ConstitutionalAiBoundaryService', () => {
         ),
       },
     };
+    const evidence = {
+      append: jest.fn(
+        options?.evidenceAppendRejects
+          ? () => Promise.reject(new Error('append failed'))
+          : () => Promise.resolve(),
+      ),
+    };
 
-    return { service: new ConstitutionalAiBoundaryService(prisma as any), prisma };
+    return {
+      service: new ConstitutionalAiBoundaryService(prisma as any, evidence as any),
+      prisma,
+      evidence,
+    };
   }
 
   it('PASS-01 accepts valid canonical proposal', async () => {
-    const { service } = createService();
+    const { service, evidence } = createService();
 
     const result = await service.evaluateRabProposal(request, validProposal, {
       providerIdentifier: 'test-provider',
@@ -81,30 +93,43 @@ describe('ConstitutionalAiBoundaryService', () => {
       selectedBasicPriceIds: ['price-a'],
       efReferences: ['ef-a'],
     });
+    expect(evidence.append).toHaveBeenCalledTimes(1);
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'READY',
+      reasonCodes: ['MATCHED_WORK_TYPE'],
+    }));
   });
 
   it('BLOCK-01 rejects fabricated AHSP', async () => {
-    const { service } = createService({ ahspFound: false });
+    const { service, evidence } = createService({ ahspFound: false });
 
     const result = await service.evaluateRabProposal(request, validProposal);
 
     expect(result.proposal.status).toBe('REJECTED_BY_POLICY');
     expect(result.proposal.items[0].selectedAhspId).toBeNull();
     expect(result.evidence.policyRejections).toContain('AHSP_NOT_CANONICAL');
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'REJECTED_BY_POLICY',
+      policyRejections: ['AHSP_NOT_CANONICAL'],
+    }));
   });
 
   it('BLOCK-02 rejects fabricated Basic Price', async () => {
-    const { service } = createService({ basicPriceFound: false });
+    const { service, evidence } = createService({ basicPriceFound: false });
 
     const result = await service.evaluateRabProposal(request, validProposal);
 
     expect(result.proposal.status).toBe('REJECTED_BY_POLICY');
     expect(result.proposal.items[0].selectedBasicPriceIds).toEqual([]);
     expect(result.evidence.policyRejections).toContain('BASIC_PRICE_NOT_CANONICAL:price-a');
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'REJECTED_BY_POLICY',
+      policyRejections: ['BASIC_PRICE_NOT_CANONICAL:price-a'],
+    }));
   });
 
   it('BLOCK-03 rejects cross-tenant private references without leakage', async () => {
-    const { service, prisma } = createService({ ahspFound: false, basicPriceFound: false });
+    const { service, prisma, evidence } = createService({ ahspFound: false, basicPriceFound: false });
 
     const result = await service.evaluateRabProposal(request, validProposal);
 
@@ -123,10 +148,17 @@ describe('ConstitutionalAiBoundaryService', () => {
       }),
     }));
     expect(result.proposal.status).toBe('REJECTED_BY_POLICY');
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: request.workspaceId,
+      organizationId: request.organizationId,
+      projectId: request.projectId,
+      accountId: request.accountId,
+      status: 'REJECTED_BY_POLICY',
+    }));
   });
 
   it('BLOCK-04 strips EF when permission is NOT_ALLOWED and records violation', async () => {
-    const { service } = createService();
+    const { service, evidence } = createService();
 
     const result = await service.evaluateRabProposal(
       { ...request, efPermission: 'NOT_ALLOWED' },
@@ -136,10 +168,16 @@ describe('ConstitutionalAiBoundaryService', () => {
     expect(result.proposal.status).toBe('NEEDS_REVIEW');
     expect(result.proposal.items[0].executionFactorRefs).toEqual([]);
     expect(result.evidence.policyRejections).toContain('EF_NOT_ALLOWED');
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'NEEDS_REVIEW',
+      efPermission: 'NOT_ALLOWED',
+      efReferences: [],
+      policyRejections: ['EF_NOT_ALLOWED'],
+    }));
   });
 
   it('BLOCK-05 rejects AI-generated money fields', async () => {
-    const { service } = createService();
+    const { service, evidence } = createService();
 
     const result = await service.evaluateRabProposal(request, {
       ...validProposal,
@@ -148,10 +186,14 @@ describe('ConstitutionalAiBoundaryService', () => {
 
     expect(result.proposal.status).toBe('REJECTED_BY_POLICY');
     expect(result.evidence.policyRejections).toContain('MODEL_MONEY_REJECTED');
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'REJECTED_BY_POLICY',
+      policyRejections: ['MODEL_MONEY_REJECTED'],
+    }));
   });
 
   it('BLOCK-06 rejects forbidden authority actions', async () => {
-    const { service } = createService();
+    const { service, evidence } = createService();
 
     const result = await service.evaluateRabProposal(request, {
       ...validProposal,
@@ -160,10 +202,14 @@ describe('ConstitutionalAiBoundaryService', () => {
 
     expect(result.proposal.status).toBe('REJECTED_BY_POLICY');
     expect(result.evidence.policyRejections).toContain('FORBIDDEN_AUTHORITY_ACTION');
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'REJECTED_BY_POLICY',
+      policyRejections: ['FORBIDDEN_AUTHORITY_ACTION'],
+    }));
   });
 
   it('BLOCK-07 treats prompt injection as data and keeps tool allowlist closed', async () => {
-    const { service } = createService();
+    const { service, evidence } = createService();
 
     const result = await service.evaluateRabProposal(
       {
@@ -181,10 +227,16 @@ describe('ConstitutionalAiBoundaryService', () => {
     expect(result.evidence.toolsAllowed).toEqual(['READ_BOQ_STRUCTURE']);
     expect(result.evidence.toolsDenied).toEqual(['SHELL', 'RAW_SQL']);
     expect(result.evidence.policyRejections).toContain('TOOL_NOT_ALLOWED');
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'REJECTED_BY_POLICY',
+      toolsAllowed: ['READ_BOQ_STRUCTURE'],
+      toolsDenied: ['SHELL', 'RAW_SQL'],
+      policyRejections: ['TOOL_NOT_ALLOWED'],
+    }));
   });
 
   it('BLOCK-08 rejects invalid confidence', async () => {
-    const { service } = createService();
+    const { service, evidence } = createService();
 
     const result = await service.evaluateRabProposal(request, {
       ...validProposal,
@@ -193,12 +245,16 @@ describe('ConstitutionalAiBoundaryService', () => {
 
     expect(result.proposal.status).toBe('REJECTED_BY_POLICY');
     expect(result.evidence.policyRejections).toContain('INVALID_CONFIDENCE');
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'REJECTED_BY_POLICY',
+      policyRejections: ['INVALID_CONFIDENCE'],
+    }));
   });
 
-  it('SAFE-FAIL-01 returns structured provider unavailable result without mutation', () => {
-    const { service, prisma } = createService();
+  it('SAFE-FAIL-01 records structured provider unavailable result without mutation', async () => {
+    const { service, prisma, evidence } = createService();
 
-    const result = service.providerUnavailable(request, {
+    const result = await service.providerUnavailable(request, {
       providerIdentifier: 'future-provider',
       modelIdentifier: 'future-model',
     });
@@ -210,7 +266,23 @@ describe('ConstitutionalAiBoundaryService', () => {
       warnings: ['PROVIDER_UNAVAILABLE', 'MANUAL_REVIEW_AVAILABLE'],
     });
     expect(result.evidence.policyRejections).toContain('PROVIDER_UNAVAILABLE');
+    expect(result.evidence.status).toBe('PROVIDER_UNAVAILABLE');
+    expect(evidence.append).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'PROVIDER_UNAVAILABLE',
+      policyRejections: ['PROVIDER_UNAVAILABLE'],
+    }));
     expect(prisma.aHSP.findFirst).not.toHaveBeenCalled();
     expect(prisma.basicPrice.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('prevents successful evaluation when evidence persistence fails', async () => {
+    const { service, evidence } = createService({ evidenceAppendRejects: true });
+
+    await expect(service.evaluateRabProposal(request, validProposal)).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'INTELLIGENCE_EVIDENCE_PERSISTENCE_FAILED',
+      }),
+    });
+    expect(evidence.append).toHaveBeenCalledTimes(1);
   });
 });
