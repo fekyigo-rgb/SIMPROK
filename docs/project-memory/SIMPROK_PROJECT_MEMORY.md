@@ -10,8 +10,8 @@ Repository: fekyigo-rgb/SIMPROK
 - P6B/P6C: LOCKED.
 - P7A: LOCKED.
 - P7B: LOCKED.
-- P7C: DESIGN SYNTHESIS IN PROGRESS.
-- Coding P7C: STOP.
+- P7C: CANONICAL INTAKE CONTRACT IMPLEMENTED_ON_BRANCH.
+- Coding P7C: AWAITING_OWNER_REVIEW.
 
 ## 2. Keputusan Owner
 
@@ -70,7 +70,16 @@ Digantikan oleh enam mode final A-F.
 |---|---|---|
 | P7A | LOCKED | commit 982b135 |
 | P7B | LOCKED | commit bf24a32 |
-| P7C | DESIGN ONLY | belum ada commit implementasi |
+| P7C Canonical Intake Contract | IMPLEMENTED_ON_BRANCH | branch feat/p7c-canonical-intake-contract; migration 20260711000000_p7c_canonical_intake_contract; API PATCH /projects/:projectId/intake-context and GET /projects/:projectId/intake-mode; backend build PASS; backend unit 122 PASS; serial e2e 114 PASS; frontend build PASS; runtime API Mode C/F PASS; browser visual audit not run because no browser automation/tooling available |
+
+## 5.1 P7C Implementation Notes
+
+- Pagu source of truth: `Project.budgetBaseline`.
+- Main material specification source of truth: `Project.mainMaterialSpec`.
+- `Project.description` remains project narrative; no automatic parsing/backfill from legacy description text.
+- Mode AF is derived by `backend/src/project/intake-mode.kernel.ts`; no mode is stored in the database.
+- Temporary permission debt: PATCH intake context uses `PROJECT_CREATE` with `ProjectAccessGuard` + `PermissionsGuard`.
+- Limitations still not implemented: AHSP Recommendation Engine, Basic Price Recommendation Engine, Execution Factor Engine, Daftar Kebutuhan Material, logistics, monitoring.
 
 ## 6. Aturan Pengelolaan
 
