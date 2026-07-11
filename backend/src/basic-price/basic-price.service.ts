@@ -1,7 +1,24 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
-import { Prisma } from '@prisma/client';
+import { Prisma, PriceVerificationStatus } from '@prisma/client';
+
+/**
+ * Public Basic Price eligibility — OWNER-LOCKED.
+ *
+ * Ruang publik hanya menerima harga yang sudah lolos PUBLIKASI manusia.
+ * Dua sumbu wajib (keduanya):
+ *   - lifecycle:      status = 'PUBLISHED'
+ *   - verification:   verificationStatus = PUBLISHED (terminal)
+ *
+ * VERIFIED != PUBLISHED. VERIFIED berarti "terbukti valid" tetapi belum diputuskan
+ * publikasi → tetap internal/kurasi dan tidak boleh keluar via API publik.
+ *
+ * Catatan (controlled schema debt, TIDAK diperbaiki di slice ini): BasicPrice.status
+ * ber-default 'PUBLISHED', sehingga status='PUBLISHED' sendirian tidak membuktikan
+ * kelolosan kurasi — karena itu verificationStatus=PUBLISHED wajib ikut.
+ */
+const PUBLIC_BASIC_PRICE_VERIFICATION_STATUS = PriceVerificationStatus.PUBLISHED;
 
 /**
  * BasicPriceService — Golden Path v0 Slice A
@@ -34,8 +51,22 @@ export class BasicPriceService {
       sortOrder = 'desc',
     } = query;
 
+    // Defensive enforcement (independent of ValidationPipe): the public API must not
+    // accept internal-curation verification statuses as a way to open data.
+    if (
+      verificationStatus &&
+      verificationStatus !== PUBLIC_BASIC_PRICE_VERIFICATION_STATUS
+    ) {
+      throw new BadRequestException(
+        `verificationStatus '${verificationStatus}' is not permitted on the public Basic Price API`,
+      );
+    }
+
+    // Base eligibility (hard lock): status PUBLISHED AND verification terminal PUBLISHED.
+    // The optional query param cannot widen this — it is validated above and otherwise ignored.
     const where: Prisma.BasicPriceWhereInput = {
       status: 'PUBLISHED',
+      verificationStatus: PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
       OR: [{ workspaceId }, { workspaceId: null }],
     };
 
@@ -78,10 +109,6 @@ export class BasicPriceService {
 
     if (sourceOrigin) {
       where.sourceOrigin = sourceOrigin;
-    }
-
-    if (verificationStatus) {
-      where.verificationStatus = verificationStatus;
     }
 
     if (freshnessStatus) {
@@ -133,6 +160,7 @@ export class BasicPriceService {
       where: {
         id,
         status: 'PUBLISHED',
+        verificationStatus: PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
         OR: [{ workspaceId }, { workspaceId: null }],
       },
       include: {
@@ -156,6 +184,7 @@ export class BasicPriceService {
       where: {
         resourceId,
         status: 'PUBLISHED',
+        verificationStatus: PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
         OR: [{ workspaceId }, { workspaceId: null }],
       },
       include: {
