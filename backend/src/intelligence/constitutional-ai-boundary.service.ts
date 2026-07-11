@@ -93,6 +93,9 @@ export class ConstitutionalAiBoundaryService {
     context: ConstitutionalEvaluationContext = {},
   ): Promise<ConstitutionalEvaluationResult> {
     const rejections = new Set<string>();
+    if (context.reasonCode) {
+      rejections.add(context.reasonCode);
+    }
     const toolsRequested = [
       ...(context.toolsRequested ?? []),
       ...this.stringArray(rawProposal.toolsRequested),

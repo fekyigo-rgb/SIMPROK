@@ -24,6 +24,17 @@ const VALID_PROVIDER_STATUSES = new Set<ProviderIntelligenceResponse['status']>(
 ]);
 
 /**
+ * AI Execution Factor hard lock (server-side, provider-path only). The AI
+ * path never activates EF regardless of what a caller requests -- EF has no
+ * Execution Factor Engine / occurrence model behind it yet (see occurrence
+ * check, P8A-2B PR #9 pre-merge lock), so the AI path is not permitted to
+ * assess or apply it at all. This does not change manual/user-controlled EF
+ * behavior anywhere else in SIMPROK.
+ */
+const AI_EF_EFFECTIVE_PERMISSION: RabIntelligenceRequest['efPermission'] = 'NOT_ALLOWED';
+const EF_AI_PATH_LOCKED_REASON = 'EF_AI_PATH_LOCKED';
+
+/**
  * Business Service -> SimprokIntelligencePort -> Provider Registry ->
  * Selected Provider Adapter -> Constitutional AI Boundary -> Intelligence
  * Evidence -> Draft result only.
@@ -40,15 +51,22 @@ export class SimprokIntelligenceOrchestrator implements SimprokIntelligencePort 
   ) {}
 
   async proposeRabDraft(request: RabIntelligenceRequest): Promise<RabIntelligenceProposal> {
+    // Never trust or forward the caller's ALLOWED / SELECTED_ITEMS_ONLY into
+    // the provider or the Constitutional Boundary on the AI path.
+    const lockedRequest: RabIntelligenceRequest = {
+      ...request,
+      efPermission: AI_EF_EFFECTIVE_PERMISSION,
+    };
+
     let resolvedProviderId: string | undefined;
     let response: ProviderIntelligenceResponse;
 
     try {
       const provider = this.registry.resolve();
       resolvedProviderId = provider.providerId;
-      response = await provider.generateProposal(this.buildProviderRequest(request));
+      response = await provider.generateProposal(this.buildProviderRequest(lockedRequest));
     } catch (error) {
-      const result = await this.constitutionalBoundary.providerUnavailable(request, {
+      const result = await this.constitutionalBoundary.providerUnavailable(lockedRequest, {
         providerIdentifier: resolvedProviderId ?? 'UNRESOLVED_PROVIDER',
         reasonCode: getProviderReasonCode(error),
       });
@@ -56,12 +74,20 @@ export class SimprokIntelligenceOrchestrator implements SimprokIntelligencePort 
     }
 
     if (!this.isWellFormedResponse(response)) {
-      const result = await this.constitutionalBoundary.providerUnavailable(request, {
+      const result = await this.constitutionalBoundary.providerUnavailable(lockedRequest, {
         providerIdentifier: response?.providerId ?? resolvedProviderId ?? 'UNRESOLVED_PROVIDER',
         modelIdentifier: response?.modelId,
       });
       return result.proposal;
     }
+
+    // A provider response containing any non-empty executionFactorRefs must
+    // never be accepted silently. The Constitutional Boundary already strips
+    // EF and records EF_NOT_ALLOWED for any NOT_ALLOWED request (defense in
+    // depth, unmodified locked logic); this adds one explicit, stable,
+    // vendor-neutral marker specifically for the AI-path hard lock so it is
+    // auditable as distinct from a normal user-configured NOT_ALLOWED case.
+    const efLockTriggered = response.items.some((item) => item.executionFactorRefs.length > 0);
 
     // Spread the full raw response (not just the known-good fields) so the
     // Constitutional Boundary can detect and reject any rogue field a
@@ -76,13 +102,14 @@ export class SimprokIntelligenceOrchestrator implements SimprokIntelligencePort 
     } as RabIntelligenceProposal & Record<string, unknown>;
 
     const evaluation = await this.constitutionalBoundary.evaluateRabProposal(
-      request,
+      lockedRequest,
       rawProposal,
       {
         providerIdentifier: response.providerId,
         modelIdentifier: response.modelId,
         promptInputHash: 'NO_RAW_PROMPT_STORED',
         toolsRequested: response.requestedTools,
+        reasonCode: efLockTriggered ? EF_AI_PATH_LOCKED_REASON : undefined,
       },
     );
 
