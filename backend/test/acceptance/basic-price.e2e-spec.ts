@@ -64,10 +64,8 @@ describe('Basic Price Public Eligibility (e2e)', () => {
     const wsB = await prisma.workspace.create({ data: { name: 'WS BPHLK B', organizationId: orgB.id } });
     workspaceBId = wsB.id;
 
-    const permView = await prisma.permission.upsert({
+    const permView = await prisma.permission.findUniqueOrThrow({
       where: { code: 'BASIC_PRICE_VIEW' },
-      update: {},
-      create: { code: 'BASIC_PRICE_VIEW', name: 'Basic Price View' },
     });
 
     const viewerRole = await prisma.role.create({

@@ -32,6 +32,15 @@ const ids = {
   userForeman: '10000000-0000-4000-8000-000000000023',
   membershipRoleForeman: '10000000-0000-4000-8000-000000000024',
   projectAssignmentForeman: '10000000-0000-4000-8000-000000000025',
+  permissionBasicPriceView: '10000000-0000-4000-8000-000000000026',
+  permissionProjectCreate: '10000000-0000-4000-8000-000000000027',
+  permissionAuthorityView: '10000000-0000-4000-8000-000000000028',
+  permissionAuthorityManage: '10000000-0000-4000-8000-000000000029',
+  permissionApprovalMatrixManage: '10000000-0000-4000-8000-000000000030',
+  permissionApprovalMatrixView: '10000000-0000-4000-8000-000000000031',
+  permissionAuthorityAssign: '10000000-0000-4000-8000-000000000032',
+  permissionObservatoryView: '10000000-0000-4000-8000-000000000033',
+  permissionFieldProgressSubmit: '10000000-0000-4000-8000-000000000034',
 };
 
 async function main() {
@@ -46,6 +55,64 @@ async function main() {
       name: 'View Projects',
     },
   });
+
+  const canonicalPermissions = [
+    {
+      id: ids.permissionBasicPriceView,
+      code: 'BASIC_PRICE_VIEW',
+      name: 'Basic Price View',
+    },
+    {
+      id: ids.permissionProjectCreate,
+      code: 'PROJECT_CREATE',
+      name: 'Project Create',
+    },
+    {
+      id: ids.permissionAuthorityView,
+      code: 'AUTHORITY_VIEW',
+      name: 'Auth View',
+    },
+    {
+      id: ids.permissionAuthorityManage,
+      code: 'AUTHORITY_MANAGE',
+      name: 'Auth Manage',
+    },
+    {
+      id: ids.permissionApprovalMatrixManage,
+      code: 'APPROVAL_MATRIX_MANAGE',
+      name: 'App Manage',
+    },
+    {
+      id: ids.permissionApprovalMatrixView,
+      code: 'APPROVAL_MATRIX_VIEW',
+      name: 'App View',
+    },
+    {
+      id: ids.permissionAuthorityAssign,
+      code: 'AUTHORITY_ASSIGN',
+      name: 'Auth Assign',
+    },
+    {
+      id: ids.permissionObservatoryView,
+      code: 'OBSERVATORY_VIEW',
+      name: 'Observatory View',
+    },
+    {
+      id: ids.permissionFieldProgressSubmit,
+      code: 'FIELD_PROGRESS_SUBMIT',
+      name: 'Submit Progress',
+    },
+  ];
+
+  await Promise.all(
+    canonicalPermissions.map((canonicalPermission) =>
+      prisma.permission.upsert({
+        where: { code: canonicalPermission.code },
+        update: { name: canonicalPermission.name },
+        create: canonicalPermission,
+      }),
+    ),
+  );
 
   const orgA = await prisma.organization.upsert({
     where: { id: ids.orgA },

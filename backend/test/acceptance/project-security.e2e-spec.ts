@@ -60,20 +60,14 @@ describe('Project Security (e2e)', () => {
     workspaceBProjectId = wsBProject.id;
 
     // Setup permissions
-    const permCreate = await prisma.permission.upsert({
+    const permCreate = await prisma.permission.findUniqueOrThrow({
       where: { code: 'PROJECT_CREATE' },
-      update: {},
-      create: { code: 'PROJECT_CREATE', name: 'Project Create' }
     });
-    const permView = await prisma.permission.upsert({
+    const permView = await prisma.permission.findUniqueOrThrow({
       where: { code: 'PROJECT_VIEW' },
-      update: {},
-      create: { code: 'PROJECT_VIEW', name: 'Project View' }
     });
-    const permObservatory = await prisma.permission.upsert({
+    const permObservatory = await prisma.permission.findUniqueOrThrow({
       where: { code: 'OBSERVATORY_VIEW' },
-      update: {},
-      create: { code: 'OBSERVATORY_VIEW', name: 'Observatory View' }
     });
 
     // Setup roles in Workspace-A
