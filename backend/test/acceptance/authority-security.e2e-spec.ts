@@ -270,6 +270,20 @@ describe('Authority Security (e2e)', () => {
     expect(pos?.workspaceId).toBe(workspaceAId);
   });
 
+  it('rejects position creation without workspace context and creates no record', async () => {
+    const token = await login(userManageEmail);
+    await request(app.getHttpServer())
+      .post('/authority/positions')
+      .send({ name: 'No Context Position', code: 'NO_CONTEXT_POS' })
+      .set('Authorization', `Bearer ${token}`)
+      .expect(400);
+
+    const position = await prisma.position.findFirst({
+      where: { code: 'NO_CONTEXT_POS' },
+    });
+    expect(position).toBeNull();
+  });
+
   it('Workspace-A context cannot create position into Workspace-B by body workspaceId override', async () => {
     const token = await login(userManageEmail);
     await request(app.getHttpServer())
@@ -282,6 +296,29 @@ describe('Authority Security (e2e)', () => {
     const positions = await prisma.position.findMany({
       where: {
         code: 'BAD_SCOPE_POS',
+        workspaceId: { in: [workspaceAId, workspaceBId] },
+      },
+    });
+    expect(positions).toHaveLength(0);
+  });
+
+  it.each([
+    ['invalid UUID', 'not-a-uuid', 'INVALID_UUID_POS'],
+    ['empty string', '', 'EMPTY_WORKSPACE_POS'],
+    ['null', null, 'NULL_WORKSPACE_POS'],
+    ['numeric zero', 0, 'ZERO_WORKSPACE_POS'],
+  ])('rejects position workspaceId %s with 400 and creates no record', async (_label, workspaceId, code) => {
+    const token = await login(userManageEmail);
+    await request(app.getHttpServer())
+      .post('/authority/positions')
+      .send({ name: `Rejected ${code}`, code, workspaceId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(400);
+
+    const positions = await prisma.position.findMany({
+      where: {
+        code,
         workspaceId: { in: [workspaceAId, workspaceBId] },
       },
     });
@@ -320,6 +357,25 @@ describe('Authority Security (e2e)', () => {
     expect(matrix?.workspaceId).toBe(workspaceAId);
   });
 
+  it('rejects approval matrix creation without workspace context and creates no record', async () => {
+    const token = await login(userManageEmail);
+    await request(app.getHttpServer())
+      .post('/authority/approval-matrices')
+      .send({
+        objectType: 'AUTH_SCOPE_NO_CONTEXT',
+        priority: 2,
+        requiredPositionId: positionAId,
+        authorityId,
+      })
+      .set('Authorization', `Bearer ${token}`)
+      .expect(400);
+
+    const matrix = await prisma.approvalMatrix.findFirst({
+      where: { objectType: 'AUTH_SCOPE_NO_CONTEXT' },
+    });
+    expect(matrix).toBeNull();
+  });
+
   it('Workspace-A context cannot create approval matrix into Workspace-B by body workspaceId override', async () => {
     const token = await login(userManageEmail);
     await request(app.getHttpServer())
@@ -332,6 +388,29 @@ describe('Authority Security (e2e)', () => {
     const matrices = await prisma.approvalMatrix.findMany({
       where: {
         objectType: 'AUTH_SCOPE_MISMATCH',
+        workspaceId: { in: [workspaceAId, workspaceBId] },
+      },
+    });
+    expect(matrices).toHaveLength(0);
+  });
+
+  it.each([
+    ['invalid UUID', 'not-a-uuid', 'AUTH_SCOPE_INVALID_UUID'],
+    ['empty string', '', 'AUTH_SCOPE_EMPTY_WORKSPACE'],
+    ['null', null, 'AUTH_SCOPE_NULL_WORKSPACE'],
+    ['numeric zero', 0, 'AUTH_SCOPE_ZERO_WORKSPACE'],
+  ])('rejects approval matrix workspaceId %s with 400 and creates no record', async (_label, workspaceId, objectType) => {
+    const token = await login(userManageEmail);
+    await request(app.getHttpServer())
+      .post('/authority/approval-matrices')
+      .send({ objectType, priority: 2, requiredPositionId: positionAId, authorityId, workspaceId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(400);
+
+    const matrices = await prisma.approvalMatrix.findMany({
+      where: {
+        objectType,
         workspaceId: { in: [workspaceAId, workspaceBId] },
       },
     });

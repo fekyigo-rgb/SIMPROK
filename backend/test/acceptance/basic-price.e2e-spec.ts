@@ -1,4 +1,4 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
@@ -49,8 +49,6 @@ describe('Basic Price Public Eligibility (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    // Match real runtime (main.ts): app.useGlobalPipes(new ValidationPipe()).
-    app.useGlobalPipes(new ValidationPipe());
     await app.init();
     prisma = new PrismaClient();
 
@@ -305,13 +303,43 @@ describe('Basic Price Public Eligibility (e2e)', () => {
   });
 
   it('response contract stays {data, meta} and deterministic (default paging)', async () => {
-    // NOTE: numeric query params (limit/page) are intentionally NOT sent here.
-    // The runtime ValidationPipe has no `transform`, so limit/page arrive as strings
-    // and break Prisma take/skip — a pre-existing PR#12 pagination defect that is
-    // OUT OF SCOPE for this eligibility slice (see Risk/Debt). Default paging is used.
     const res = await listAsA(`?search=${TAG}`).expect(200);
     expect(Array.isArray(res.body.data)).toBe(true);
     expect(res.body.data.length).toBe(3);
     expect(res.body.meta).toEqual({ total: 3, page: 1, limit: 20, totalPages: 1 });
+    expect(typeof res.body.meta.page).toBe('number');
+    expect(typeof res.body.meta.limit).toBe('number');
+  });
+
+  it('transforms pagination query strings and returns deterministic non-overlapping pages', async () => {
+    const firstPage = await listAsA(
+      `?search=${TAG}&sortBy=effectiveDate&sortOrder=desc&page=1&limit=1`,
+    ).expect(200);
+    const secondPage = await listAsA(
+      `?search=${TAG}&sortBy=effectiveDate&sortOrder=desc&page=2&limit=1`,
+    ).expect(200);
+
+    expect(firstPage.body.meta).toEqual({ total: 3, page: 1, limit: 1, totalPages: 3 });
+    expect(secondPage.body.meta).toEqual({ total: 3, page: 2, limit: 1, totalPages: 3 });
+    expect(firstPage.body.data).toHaveLength(1);
+    expect(secondPage.body.data).toHaveLength(1);
+    expect(firstPage.body.data[0].resource.code).toBe('MAT-A-VALID');
+    expect(secondPage.body.data[0].resource.code).toBe('MAT-GLOBAL-CUR');
+    expect(secondPage.body.data[0].id).not.toBe(firstPage.body.data[0].id);
+    expect(typeof firstPage.body.meta.page).toBe('number');
+    expect(typeof firstPage.body.meta.limit).toBe('number');
+  });
+
+  it.each([
+    ['page=abc', 'page=abc'],
+    ['page=0', 'page=0'],
+    ['limit=abc', 'limit=abc'],
+    ['limit=0', 'limit=0'],
+    ['limit=51', 'limit=51'],
+    ['year=abc', 'year=abc'],
+    ['year=1999', 'year=1999'],
+    ['year=2101', 'year=2101'],
+  ])('rejects invalid numeric query %s with 400', async (_label, query) => {
+    await listAsA(`?${query}`).expect(400);
   });
 });
