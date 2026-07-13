@@ -91,15 +91,11 @@ describe('Progress Security (e2e)', () => {
     });
 
     // Setup permissions
-    const permView = await prisma.permission.upsert({
+    const permView = await prisma.permission.findUniqueOrThrow({
       where: { code: 'PROJECT_VIEW' },
-      update: {},
-      create: { code: 'PROJECT_VIEW', name: 'Project View' }
     });
-    const permSubmit = await prisma.permission.upsert({
+    const permSubmit = await prisma.permission.findUniqueOrThrow({
       where: { code: 'FIELD_PROGRESS_SUBMIT' },
-      update: {},
-      create: { code: 'FIELD_PROGRESS_SUBMIT', name: 'Submit Progress' }
     });
 
     // Setup roles in Workspaces

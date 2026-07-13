@@ -15,6 +15,7 @@ describe('Authority Security (e2e)', () => {
 
   let workspaceAId: string;
   let workspaceBId: string;
+  let organizationId: string;
   let positionAId: string;
   let approvalMatrixAId: string;
 
@@ -38,6 +39,7 @@ describe('Authority Security (e2e)', () => {
     const org = await prisma.organization.create({
       data: { name: 'Org Authority Test', type: 'COMPANY' }
     });
+    organizationId = org.id;
     const workspaceA = await prisma.workspace.create({
       data: { name: 'Workspace A Auth', organizationId: org.id }
     });
@@ -72,30 +74,20 @@ describe('Authority Security (e2e)', () => {
     approvalMatrixAId = approvalMatrix.id;
 
     // Setup Permissions
-    const permView = await prisma.permission.upsert({
+    const permView = await prisma.permission.findUniqueOrThrow({
       where: { code: 'AUTHORITY_VIEW' },
-      update: {},
-      create: { code: 'AUTHORITY_VIEW', name: 'Auth View' }
     });
-    const permManage = await prisma.permission.upsert({
+    const permManage = await prisma.permission.findUniqueOrThrow({
       where: { code: 'AUTHORITY_MANAGE' },
-      update: {},
-      create: { code: 'AUTHORITY_MANAGE', name: 'Auth Manage' }
     });
-    const permAppMatrixManage = await prisma.permission.upsert({
+    const permAppMatrixManage = await prisma.permission.findUniqueOrThrow({
       where: { code: 'APPROVAL_MATRIX_MANAGE' },
-      update: {},
-      create: { code: 'APPROVAL_MATRIX_MANAGE', name: 'App Manage' }
     });
-    const permAppMatrixView = await prisma.permission.upsert({
+    const permAppMatrixView = await prisma.permission.findUniqueOrThrow({
       where: { code: 'APPROVAL_MATRIX_VIEW' },
-      update: {},
-      create: { code: 'APPROVAL_MATRIX_VIEW', name: 'App View' }
     });
-    const permAssign = await prisma.permission.upsert({
+    const permAssign = await prisma.permission.findUniqueOrThrow({
       where: { code: 'AUTHORITY_ASSIGN' },
-      update: {},
-      create: { code: 'AUTHORITY_ASSIGN', name: 'Auth Assign' }
     });
 
     // Setup Roles in Workspace A
@@ -178,6 +170,7 @@ describe('Authority Security (e2e)', () => {
     await prisma.position.deleteMany({ where: { workspaceId: { in: [workspaceAId, workspaceBId] } } });
     await prisma.role.deleteMany({ where: { workspaceId: { in: [workspaceAId, workspaceBId] } } });
     await prisma.workspace.deleteMany({ where: { id: { in: [workspaceAId, workspaceBId] } } });
+    await prisma.organization.delete({ where: { id: organizationId } });
     await prisma.$disconnect();
     await app.close();
   });

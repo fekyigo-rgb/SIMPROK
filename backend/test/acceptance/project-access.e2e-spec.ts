@@ -66,6 +66,7 @@ describe('ProjectAccessGuard acceptance (e2e)', () => {
   });
 
   afterAll(async () => {
+    await prisma.project.delete({ where: { id: workspaceBProjectId } });
     await prisma.$disconnect();
     await app.close();
   });

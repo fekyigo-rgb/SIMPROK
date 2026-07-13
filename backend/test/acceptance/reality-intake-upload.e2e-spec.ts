@@ -18,6 +18,8 @@ describe('Reality intake upload acceptance (e2e)', () => {
   let workspaceAId: string;
   let assignedAccountId: string;
   let organizationId: string;
+  let fixtureIntakeJobId: string | undefined;
+  let fixtureSourceDocumentId: string | undefined;
 
   beforeAll(async () => {
     storageDir = await fs.mkdtemp(path.join(os.tmpdir(), 'simprok-intake-'));
@@ -47,6 +49,14 @@ describe('Reality intake upload acceptance (e2e)', () => {
   });
 
   afterAll(async () => {
+    if (fixtureIntakeJobId) {
+      await prisma.intakeJob.delete({ where: { id: fixtureIntakeJobId } });
+    }
+    if (fixtureSourceDocumentId) {
+      await prisma.sourceDocument.delete({
+        where: { id: fixtureSourceDocumentId },
+      });
+    }
     await prisma.$disconnect();
     await app.close();
     await fs.rm(storageDir, { recursive: true, force: true });
@@ -104,6 +114,9 @@ describe('Reality intake upload acceptance (e2e)', () => {
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       })
       .expect(201);
+
+    fixtureIntakeJobId = first.body.intakeJobId;
+    fixtureSourceDocumentId = first.body.sourceDocumentId;
 
     expect(first.body).toMatchObject({
       status: 'QUEUED',

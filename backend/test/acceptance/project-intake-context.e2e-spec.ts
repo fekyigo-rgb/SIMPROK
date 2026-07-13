@@ -38,15 +38,11 @@ describe('Project intake context security (e2e)', () => {
     const passwordHash = await bcrypt.hash(PASSWORD, SALT_ROUNDS);
 
     const [projectView, projectCreate] = await Promise.all([
-      prisma.permission.upsert({
+      prisma.permission.findUniqueOrThrow({
         where: { code: 'PROJECT_VIEW' },
-        update: {},
-        create: { code: 'PROJECT_VIEW', name: 'Project View' },
       }),
-      prisma.permission.upsert({
+      prisma.permission.findUniqueOrThrow({
         where: { code: 'PROJECT_CREATE' },
-        update: {},
-        create: { code: 'PROJECT_CREATE', name: 'Project Create' },
       }),
     ]);
 
