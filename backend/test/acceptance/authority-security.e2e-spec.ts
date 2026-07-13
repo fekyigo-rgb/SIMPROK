@@ -288,6 +288,28 @@ describe('Authority Security (e2e)', () => {
     expect(positions).toHaveLength(0);
   });
 
+  it.each([
+    ['invalid UUID', 'not-a-uuid', 'INVALID_UUID_POS'],
+    ['empty string', '', 'EMPTY_WORKSPACE_POS'],
+    ['null', null, 'NULL_WORKSPACE_POS'],
+  ])('rejects position workspaceId %s with 400 and creates no record', async (_label, workspaceId, code) => {
+    const token = await login(userManageEmail);
+    await request(app.getHttpServer())
+      .post('/authority/positions')
+      .send({ name: `Rejected ${code}`, code, workspaceId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(400);
+
+    const positions = await prisma.position.findMany({
+      where: {
+        code,
+        workspaceId: { in: [workspaceAId, workspaceBId] },
+      },
+    });
+    expect(positions).toHaveLength(0);
+  });
+
   it('Workspace-A context creates an approval matrix when body workspaceId is omitted', async () => {
     const token = await login(userManageEmail);
     const res = await request(app.getHttpServer())
@@ -332,6 +354,28 @@ describe('Authority Security (e2e)', () => {
     const matrices = await prisma.approvalMatrix.findMany({
       where: {
         objectType: 'AUTH_SCOPE_MISMATCH',
+        workspaceId: { in: [workspaceAId, workspaceBId] },
+      },
+    });
+    expect(matrices).toHaveLength(0);
+  });
+
+  it.each([
+    ['invalid UUID', 'not-a-uuid', 'AUTH_SCOPE_INVALID_UUID'],
+    ['empty string', '', 'AUTH_SCOPE_EMPTY_WORKSPACE'],
+    ['null', null, 'AUTH_SCOPE_NULL_WORKSPACE'],
+  ])('rejects approval matrix workspaceId %s with 400 and creates no record', async (_label, workspaceId, objectType) => {
+    const token = await login(userManageEmail);
+    await request(app.getHttpServer())
+      .post('/authority/approval-matrices')
+      .send({ objectType, priority: 2, requiredPositionId: positionAId, authorityId, workspaceId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(400);
+
+    const matrices = await prisma.approvalMatrix.findMany({
+      where: {
+        objectType,
         workspaceId: { in: [workspaceAId, workspaceBId] },
       },
     });
