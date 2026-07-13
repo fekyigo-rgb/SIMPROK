@@ -69,10 +69,14 @@ export class ProjectService {
     return new Prisma.Decimal(value);
   }
 
-  async create(data: CreateProjectDto, creatorAccountId?: string) {
+  async create(
+    data: CreateProjectDto,
+    workspaceId: string,
+    creatorAccountId?: string,
+  ) {
     try {
       const workspace = await this.prisma.workspace.findUnique({
-        where: { id: data.workspaceId },
+        where: { id: workspaceId },
         select: { organizationId: true },
       });
 
@@ -89,7 +93,7 @@ export class ProjectService {
             budgetBaseline: this.decimalOrNull(data.budgetBaseline),
             mainMaterialSpec: this.normalizeOptionalText(data.mainMaterialSpec),
             workspace: {
-              connect: { id: data.workspaceId },
+              connect: { id: workspaceId },
             },
             organization: {
               connect: { id: workspace.organizationId },
@@ -102,7 +106,7 @@ export class ProjectService {
             where: {
               accountId_workspaceId: {
                 accountId: creatorAccountId,
-                workspaceId: data.workspaceId,
+                workspaceId,
               }
             }
           });

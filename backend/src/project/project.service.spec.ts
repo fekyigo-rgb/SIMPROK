@@ -39,6 +39,15 @@ describe('ProjectService P7C intake contract', () => {
     return { prisma, tx };
   }
 
+  it('accepts a public create payload without client-supplied workspaceId', async () => {
+    const dto = plainToInstance(CreateProjectDto, {
+      name: 'Project',
+      code: 'SERVER-SCOPED',
+    });
+
+    await expect(validate(dto)).resolves.toHaveLength(0);
+  });
+
   it('stores budgetBaseline and mainMaterialSpec on create', async () => {
     const { prisma, tx } = createPrismaMock();
     const service = new ProjectService(prisma as any, {} as any);
@@ -47,10 +56,9 @@ describe('ProjectService P7C intake contract', () => {
       name: 'Project',
       code: 'P7C',
       description: 'Narasi',
-      workspaceId: 'workspace-1',
       budgetBaseline: '250000000.00',
       mainMaterialSpec: '  Beton K-300  ',
-    });
+    }, 'workspace-1');
 
     expect(tx.project.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -65,7 +73,7 @@ describe('ProjectService P7C intake contract', () => {
     const { prisma, tx } = createPrismaMock();
     const service = new ProjectService(prisma as any, {} as any);
 
-    await service.create({ name: 'Project', code: 'P7C', workspaceId: 'workspace-1' });
+    await service.create({ name: 'Project', code: 'P7C' }, 'workspace-1');
 
     expect(tx.project.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -82,9 +90,8 @@ describe('ProjectService P7C intake contract', () => {
     await service.create({
       name: 'Project',
       code: 'P7C',
-      workspaceId: 'workspace-1',
       mainMaterialSpec: '   ',
-    });
+    }, 'workspace-1');
 
     expect(tx.project.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ mainMaterialSpec: null }),
@@ -92,9 +99,9 @@ describe('ProjectService P7C intake contract', () => {
   });
 
   it.each([
-    ['negative pagu', CreateProjectDto, { name: 'P', code: 'P', workspaceId: '10000000-0000-4000-8000-000000000001', budgetBaseline: '-1' }],
-    ['invalid decimal', CreateProjectDto, { name: 'P', code: 'P', workspaceId: '10000000-0000-4000-8000-000000000001', budgetBaseline: 'abc' }],
-    ['more than 2 decimals', CreateProjectDto, { name: 'P', code: 'P', workspaceId: '10000000-0000-4000-8000-000000000001', budgetBaseline: '1.234' }],
+    ['negative pagu', CreateProjectDto, { name: 'P', code: 'P', budgetBaseline: '-1' }],
+    ['invalid decimal', CreateProjectDto, { name: 'P', code: 'P', budgetBaseline: 'abc' }],
+    ['more than 2 decimals', CreateProjectDto, { name: 'P', code: 'P', budgetBaseline: '1.234' }],
   ])('rejects %s in DTO validation', async (_label, dtoClass, payload) => {
     const dto = plainToInstance(dtoClass, payload);
     await expect(validate(dto)).resolves.not.toHaveLength(0);

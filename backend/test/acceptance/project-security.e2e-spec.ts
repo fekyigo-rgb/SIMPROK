@@ -190,21 +190,23 @@ describe('Project Security (e2e)', () => {
   // POST /projects — tenant write hardening
   // ──────────────────────────────────────────────────────────────────────
 
-  it('3. Workspace-A user with PROJECT_CREATE cannot create project in Workspace-B via body workspaceId override', async () => {
+  it('3. mismatched body workspaceId is rejected and cannot create in either workspace', async () => {
     const token = await login(userCreateEmail);
 
-    const res = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .post('/projects')
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)        // context = Workspace-A
-      .send({ name: 'Attack Project', code: 'ATTACK-B', workspaceId: workspaceBId })  // body = Workspace-B
+      .send({ name: 'Attack Project', code: 'ATTACK-B', workspaceId: workspaceBId })
       .expect(403);
 
-    // Confirm no project was created in Workspace-B with that code
-    const leaked = await prisma.project.findFirst({
-      where: { workspaceId: workspaceBId, code: 'ATTACK-B' }
+    const created = await prisma.project.findMany({
+      where: {
+        workspaceId: { in: [workspaceAId, workspaceBId] },
+        code: 'ATTACK-B',
+      },
     });
-    expect(leaked).toBeNull();
+    expect(created).toHaveLength(0);
   });
 
   it('4a. Workspace-A user can create project when body workspaceId matches context', async () => {
@@ -237,6 +239,19 @@ describe('Project Security (e2e)', () => {
 
     // cleanup
     await prisma.project.delete({ where: { id: res.body.id } });
+  });
+
+  it('4c. project creation without workspace context is rejected safely', async () => {
+    const token = await login(userCreateEmail);
+
+    await request(app.getHttpServer())
+      .post('/projects')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'No Context Project', code: 'NO-CONTEXT' })
+      .expect(400);
+
+    await expect(prisma.project.findFirst({ where: { code: 'NO-CONTEXT' } }))
+      .resolves.toBeNull();
   });
 
   // ──────────────────────────────────────────────────────────────────────
