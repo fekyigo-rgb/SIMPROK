@@ -1,0 +1,123 @@
+name: PR Quality Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-quality-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  backend-quality:
+    name: Backend Build and Unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/simprok_test?schema=public
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Validate Prisma schema
+        run: npx prisma validate
+      - name: Build backend
+        run: npm run build
+      - name: Run backend unit tests serially
+        run: npm test -- --runInBand
+
+  frontend-quality:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build frontend
+        run: npm run build
+
+  official-safe-e2e:
+    name: Official Safe E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: simprok_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d simprok_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/simprok_test?schema=public
+      JWT_SECRET: ci-only-simprok-test-secret
+      SIMPROK_E2E_DESTRUCTIVE_CAPABILITY: RESET_SIMPROK_TEST_DATABASE
+      INTAKE_WORKER_ENABLED: 'false'
+      INTAKE_UNDERSTANDING_WORKER_ENABLED: 'false'
+      INTAKE_PUBLICATION_WORKER_ENABLED: 'false'
+      INTAKE_BUSINESS_SUBSCRIPTION_WORKER_ENABLED: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Create isolated test environment
+        run: |
+          {
+            echo 'NODE_ENV=test'
+            echo 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/simprok_test?schema=public'
+            echo 'JWT_SECRET=ci-only-simprok-test-secret'
+            echo 'SIMPROK_E2E_DESTRUCTIVE_CAPABILITY=RESET_SIMPROK_TEST_DATABASE'
+            echo 'INTAKE_WORKER_ENABLED=false'
+            echo 'INTAKE_UNDERSTANDING_WORKER_ENABLED=false'
+            echo 'INTAKE_PUBLICATION_WORKER_ENABLED=false'
+            echo 'INTAKE_BUSINESS_SUBSCRIPTION_WORKER_ENABLED=false'
+          } > .env.test
+      - name: Verify isolated test database
+        run: npm run verify:db:test
+      - name: Run official safe E2E lifecycle
+        run: npm run test:e2e
