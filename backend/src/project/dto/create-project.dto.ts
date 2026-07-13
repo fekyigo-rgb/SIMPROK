@@ -33,7 +33,7 @@ export class CreateProjectDto {
   @IsOptional()
   mainMaterialSpec?: string | null;
 
+  @IsOptional()
   @IsUUID()
-  @IsNotEmpty()
-  workspaceId: string;
+  workspaceId?: string;
 }

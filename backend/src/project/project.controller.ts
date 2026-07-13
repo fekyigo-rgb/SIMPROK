@@ -28,15 +28,17 @@ export class ProjectController {
     if (!contextWorkspaceId) {
       throw new BadRequestException('Workspace context is required');
     }
-    // Body workspaceId must not override context. Reject mismatch.
-    if (createProjectDto.workspaceId && createProjectDto.workspaceId !== contextWorkspaceId) {
-      throw new ForbiddenException('Body workspaceId does not match active workspace context');
+    if (
+      createProjectDto.workspaceId &&
+      createProjectDto.workspaceId !== contextWorkspaceId
+    ) {
+      throw new ForbiddenException(
+        'Body workspaceId does not match active workspace context',
+      );
     }
-    // Force workspaceId from context — source of truth
-    createProjectDto.workspaceId = contextWorkspaceId;
-    
+
     const accountId = request.user?.id;
-    return this.projectService.create(createProjectDto, accountId);
+    return this.projectService.create(createProjectDto, contextWorkspaceId, accountId);
   }
 
   @Post(':projectId/initiate')
