@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Post,
@@ -32,6 +33,12 @@ export class AuthorityController {
   @Permissions('AUTHORITY_MANAGE')
   createPosition(@Req() request: any, @Body() createPositionDto: CreatePositionDto) {
     const workspaceId = request.workspaceContext?.workspaceId;
+    if (
+      createPositionDto.workspaceId !== undefined &&
+      createPositionDto.workspaceId !== workspaceId
+    ) {
+      throw new ForbiddenException('Workspace claim does not match workspace context');
+    }
     return this.authorityService.createPosition(workspaceId, createPositionDto);
   }
 
@@ -96,6 +103,12 @@ export class AuthorityController {
   @Permissions('APPROVAL_MATRIX_MANAGE')
   createApprovalMatrix(@Req() request: any, @Body() createApprovalMatrixDto: CreateApprovalMatrixDto) {
     const workspaceId = request.workspaceContext?.workspaceId;
+    if (
+      createApprovalMatrixDto.workspaceId !== undefined &&
+      createApprovalMatrixDto.workspaceId !== workspaceId
+    ) {
+      throw new ForbiddenException('Workspace claim does not match workspace context');
+    }
     return this.authorityService.createApprovalMatrix(workspaceId, createApprovalMatrixDto);
   }
 
@@ -115,4 +128,3 @@ export class AuthorityController {
     return this.authorityService.findApprovalMatrix(id, workspaceId);
   }
 }
-    

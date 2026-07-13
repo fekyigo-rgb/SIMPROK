@@ -1,8 +1,9 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString, IsUUID, ValidateIf } from 'class-validator';
 
 export class CreatePositionDto {
-  @IsString()
-  workspaceId: string;
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsUUID()
+  workspaceId?: string;
 
   @IsString()
   code: string;

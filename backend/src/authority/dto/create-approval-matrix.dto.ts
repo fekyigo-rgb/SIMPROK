@@ -1,8 +1,9 @@
-import { IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsNumber, IsOptional, IsString, IsUUID, ValidateIf } from 'class-validator';
 
 export class CreateApprovalMatrixDto {
-  @IsString()
-  workspaceId: string;
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsUUID()
+  workspaceId?: string;
 
   @IsString()
   authorityId: string;

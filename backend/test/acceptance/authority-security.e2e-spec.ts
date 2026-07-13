@@ -244,33 +244,120 @@ describe('Authority Security (e2e)', () => {
     await request(app.getHttpServer()).get('/authority/approval-matrices').set('Authorization', `Bearer ${token}`).set('x-workspace-id', workspaceBId).expect(403);
   });
 
-  it('Workspace-A context cannot create position into Workspace-B by body workspaceId override', async () => {
+  it('Workspace-A context creates a position when body workspaceId is omitted', async () => {
     const token = await login(userManageEmail);
     const res = await request(app.getHttpServer())
       .post('/authority/positions')
-      .send({ name: 'Bad Pos', code: 'BAD', workspaceId: workspaceBId }) // attempting override
+      .send({ name: 'Context Position', code: 'CTX_POS' })
       .set('Authorization', `Bearer ${token}`)
-      .set('x-workspace-id', workspaceAId) // valid context
-      .expect(201); // it creates but in workspace A!
+      .set('x-workspace-id', workspaceAId)
+      .expect(201);
 
-    // Verify it was created in A
     const pos = await prisma.position.findUnique({ where: { id: res.body.id } });
     expect(pos?.workspaceId).toBe(workspaceAId);
   });
 
-  it('Workspace-A context cannot create approval matrix into Workspace-B by body workspaceId override', async () => {
+  it('Workspace-A context creates a position when body workspaceId matches', async () => {
     const token = await login(userManageEmail);
-    // Since requiredPositionId must belong to the workspace in context, we will pass a valid positionAId
-    // but try to override workspaceId to workspaceBId
     const res = await request(app.getHttpServer())
-      .post('/authority/approval-matrices')
-      .send({ objectType: 'BOQ', priority: 2, requiredPositionId: positionAId, authorityId: authorityId, workspaceId: workspaceBId })
+      .post('/authority/positions')
+      .send({ name: 'Matching Position', code: 'MATCH_POS', workspaceId: workspaceAId })
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
-      .expect(201); // it creates but in A
+      .expect(201);
 
-    const am = await prisma.approvalMatrix.findUnique({ where: { id: res.body.id } });
-    expect(am?.workspaceId).toBe(workspaceAId);
+    const pos = await prisma.position.findUnique({ where: { id: res.body.id } });
+    expect(pos?.workspaceId).toBe(workspaceAId);
+  });
+
+  it('Workspace-A context cannot create position into Workspace-B by body workspaceId override', async () => {
+    const token = await login(userManageEmail);
+    await request(app.getHttpServer())
+      .post('/authority/positions')
+      .send({ name: 'Bad Pos', code: 'BAD_SCOPE_POS', workspaceId: workspaceBId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(403);
+
+    const positions = await prisma.position.findMany({
+      where: {
+        code: 'BAD_SCOPE_POS',
+        workspaceId: { in: [workspaceAId, workspaceBId] },
+      },
+    });
+    expect(positions).toHaveLength(0);
+  });
+
+  it('Workspace-A context creates an approval matrix when body workspaceId is omitted', async () => {
+    const token = await login(userManageEmail);
+    const res = await request(app.getHttpServer())
+      .post('/authority/approval-matrices')
+      .send({ objectType: 'AUTH_SCOPE_CONTEXT', priority: 2, requiredPositionId: positionAId, authorityId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(201);
+
+    const matrix = await prisma.approvalMatrix.findUnique({ where: { id: res.body.id } });
+    expect(matrix?.workspaceId).toBe(workspaceAId);
+  });
+
+  it('Workspace-A context creates an approval matrix when body workspaceId matches', async () => {
+    const token = await login(userManageEmail);
+    const res = await request(app.getHttpServer())
+      .post('/authority/approval-matrices')
+      .send({
+        objectType: 'AUTH_SCOPE_MATCH',
+        priority: 2,
+        requiredPositionId: positionAId,
+        authorityId,
+        workspaceId: workspaceAId,
+      })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(201);
+
+    const matrix = await prisma.approvalMatrix.findUnique({ where: { id: res.body.id } });
+    expect(matrix?.workspaceId).toBe(workspaceAId);
+  });
+
+  it('Workspace-A context cannot create approval matrix into Workspace-B by body workspaceId override', async () => {
+    const token = await login(userManageEmail);
+    await request(app.getHttpServer())
+      .post('/authority/approval-matrices')
+      .send({ objectType: 'AUTH_SCOPE_MISMATCH', priority: 2, requiredPositionId: positionAId, authorityId, workspaceId: workspaceBId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(403);
+
+    const matrices = await prisma.approvalMatrix.findMany({
+      where: {
+        objectType: 'AUTH_SCOPE_MISMATCH',
+        workspaceId: { in: [workspaceAId, workspaceBId] },
+      },
+    });
+    expect(matrices).toHaveLength(0);
+  });
+
+  it('Workspace-A cannot create approval matrix with requiredPositionId from Workspace-B', async () => {
+    const token = await login(userManageEmail);
+    const positionB = await prisma.position.create({
+      data: { name: 'Required Position B', code: 'REQ_POS_B', workspaceId: workspaceBId },
+    });
+
+    await request(app.getHttpServer())
+      .post('/authority/approval-matrices')
+      .send({ objectType: 'AUTH_SCOPE_CROSS_POSITION', requiredPositionId: positionB.id, authorityId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(404);
+
+    const matrices = await prisma.approvalMatrix.findMany({
+      where: {
+        objectType: 'AUTH_SCOPE_CROSS_POSITION',
+        workspaceId: { in: [workspaceAId, workspaceBId] },
+      },
+    });
+    expect(matrices).toHaveLength(0);
   });
 
   it('Assignment write cannot link or assign entities across workspaces', async () => {
