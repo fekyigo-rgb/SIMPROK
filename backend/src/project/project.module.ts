@@ -5,9 +5,10 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { DeviationService } from './deviation.service';
 import { RabIntelligenceProposalService } from './rab-intelligence-proposal.service';
 import { IntelligenceModule } from '../intelligence/intelligence.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [PrismaModule, IntelligenceModule],
+  imports: [PrismaModule, IntelligenceModule, AuthModule],
   controllers: [ProjectController],
   providers: [ProjectService, DeviationService, RabIntelligenceProposalService],
 })

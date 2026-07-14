@@ -6,7 +6,7 @@ import { getProjectNoteSummary } from '../projectNotes';
 import { apiFetch } from '../utils/apiClient';
 
 type RabStatus = 'draft' | 'terkunci' | 'approved' | 'berjalan' | 'selesai';
-type UserInvolvement = 'dibuat' | 'ditugaskan' | 'diundang_dibagikan';
+type UserInvolvement = 'ditugaskan';
 
 interface ProjectItem {
   id: string;
@@ -33,7 +33,7 @@ function mapProjectToItem(backendProject: Record<string, unknown>): ProjectItem 
     id: String(backendProject.id),
     nama: (backendProject.name as string) || 'Proyek Tanpa Nama',
     status: mappedStatus,
-    involvement: 'dibuat', // Fallback, backend might not provide full involvement details yet
+    involvement: 'ditugaskan',
     nilai: budget,
     keterangan: (backendProject.description as string) || 'Belum ada keterangan',
     progress: mappedStatus === 'berjalan' ? 0 : undefined,
@@ -59,9 +59,7 @@ const rabStatusOptions: { value: RabStatus | 'semua'; label: string }[] = [
 
 const involvementOptions: { value: UserInvolvement | 'semua'; label: string }[] = [
   { value: 'semua', label: 'Semua' },
-  { value: 'dibuat', label: 'Dibuat oleh Saya' },
   { value: 'ditugaskan', label: 'Ditugaskan ke Saya' },
-  { value: 'diundang_dibagikan', label: 'Diundang / Dibagikan' },
 ];
 
 const buildRabPath = (id: string) => `/project/${id}/rab`;
@@ -93,9 +91,9 @@ export function ProjectListPage() {
       try {
         setLoading(true);
         setError(null);
-        const response = await apiFetch('/projects');
+        const response = await apiFetch('/projects/mine');
         if (!response.ok) {
-          throw new Error(`GET /projects failed with ${response.status}`);
+          throw new Error(`GET /projects/mine failed with ${response.status}`);
         }
 
         const data: unknown = await response.json();
@@ -261,7 +259,7 @@ export function ProjectListPage() {
         </div>
       ) : filteredProjects.length === 0 ? (
         <div className="simprok-projects__empty">
-          <p>{projects.length === 0 ? 'Belum ada proyek yang dapat diakses.' : 'Tidak ada proyek dengan kriteria ini.'}</p>
+          <p>{projects.length === 0 ? 'Belum ada proyek yang ditugaskan kepada Anda.' : 'Tidak ada proyek dengan kriteria ini.'}</p>
           {projects.length > 0 && (
             <button
               className="simprok-projects__empty-reset"
