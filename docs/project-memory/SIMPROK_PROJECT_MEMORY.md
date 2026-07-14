@@ -13,7 +13,8 @@ Repository: fekyigo-rgb/SIMPROK
 - P7C: CANONICAL INTAKE CONTRACT IMPLEMENTED_ON_BRANCH.
 - Coding P7C: AWAITING_OWNER_REVIEW.
 - Basic Price–AHSP Implementation Blueprint v1.0: OWNER PASS — FOUNDATION LOCKED.
-- BP-AHSP Phase 1 Deterministic Resource Price Resolution Proof: OWNER/PM IMPLEMENTATION GATE — GO; awaiting implementation.
+- BP-AHSP Phase 1 Deterministic Resource Price Resolution Proof: COMMITTED_PASS melalui PR #22, merge commit `217b5f8dca983d24b51be18208d2ab00f6a38845`.
+- BP-AHSP Phase 2 Project AHSP Occurrence Persistence: OWNER/PM IMPLEMENTATION GATE — GO.
 
 ## 2. Keputusan Owner
 
@@ -89,6 +90,7 @@ Digantikan oleh enam mode final A-F.
 | P7A | LOCKED | commit 982b135 |
 | P7B | LOCKED | commit bf24a32 |
 | P7C Canonical Intake Contract | IMPLEMENTED_ON_BRANCH | branch feat/p7c-canonical-intake-contract; migration 20260711000000_p7c_canonical_intake_contract; API PATCH /projects/:projectId/intake-context and GET /projects/:projectId/intake-mode; backend build PASS; backend unit 122 PASS; serial e2e 114 PASS; frontend build PASS; runtime API Mode C/F PASS; browser visual audit not run because no browser automation/tooling available |
+| BP-AHSP Phase 1 | COMMITTED_PASS | PR #22; merge commit `217b5f8dca983d24b51be18208d2ab00f6a38845`; pure deterministic worker-price resolution kernel; focused 19/19 PASS; backend unit 33 suites/263 tests PASS; safe E2E 18 suites/172 tests PASS; residual PASS; PR Quality Gate SUCCESS |
 
 ## 5.1 P7C Implementation Notes
 
@@ -145,7 +147,7 @@ Digantikan oleh enam mode final A-F.
 - Owner PASS:
   `14 Juli 2026`
 - Implementation authority:
-  `FOUNDATION LOCKED; NONE until a separate bounded Owner/PM implementation gate`
+  `FOUNDATION LOCKED; each production slice requires a separate bounded Owner/PM implementation gate`
 - Core placement law:
   `SIMPROK automatically selects Basic Price inside the project AHSP occurrence; the user may inspect, compare, and override; RAB only consumes the resulting AHSP unit price.`
 - Master law:
@@ -155,15 +157,30 @@ Digantikan oleh enam mode final A-F.
 - Duplication rule:
   Do not copy the full blueprint into Project Memory. Keep only this pointer/status to prevent two versions of truth.
 
-## 8. ACTIVE BOUNDED IMPLEMENTATION GATE
+## 8. COMPLETED BOUNDED IMPLEMENTATION GATE — PHASE 1
 
 - Gate document:
   `docs/implementation-gates/BP_AHSP_PHASE1_DETERMINISTIC_RESOURCE_PROOF.md`
 - Status:
+  `COMMITTED_PASS`
+- Merge evidence:
+  `PR #22; merge commit 217b5f8dca983d24b51be18208d2ab00f6a38845`
+- Delivered scope:
+  `Pure backend deterministic proof: Pekerja + LABOR + OH → Pekerja + LABOR + Org/Hari → exactly one public-eligible Basic Price → AUTO_SELECTED with factor 1 and explanation.`
+- Runtime limitation:
+  `Kernel exists on main but is not yet wired to production persistence or an endpoint.`
+
+## 9. ACTIVE BOUNDED IMPLEMENTATION GATE — PHASE 2
+
+- Gate document:
+  `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`
+- Status:
   `OWNER/PM IMPLEMENTATION GATE — GO`
 - Scope:
-  `Pure backend proof only: Pekerja + LABOR + OH → Pekerja + LABOR + Org/Hari → exactly one already-eligible Basic Price → AUTO_SELECTED with factor 1 and explanation.`
+  `Create ProjectAhspOccurrence and ProjectAhspResourceResolution; wire the Phase 1 kernel into a guarded backend runtime endpoint; persist RESOLVED, UNRESOLVED, or NEEDS_REVIEW outcomes and the selected Basic Price trace inside the project AHSP occurrence.`
+- Placement:
+  `Do not store resource-level selection in BoqItem or RAB. Do not mutate master AHSP or old snapshots.`
 - Forbidden in this phase:
-  `No schema, migration, database I/O, endpoint, frontend, persistence, snapshot, Cost Kernel arithmetic, RAB change, publication fix, precedence rule, multi-price ranking, fuzzy matching, or universal unit engine.`
+  `No frontend, no override, no comparison UI, no multi-price ranking, no publication fix, no global/workspace precedence rule, no universal unit engine, no Cost Kernel arithmetic, no AHSP unit-price calculation, no RAB change, and no snapshot backfill.`
 - Delivery rule:
-  `Implement on feat/bp-ahsp-phase1-deterministic-proof; do not merge; return IMPLEMENTATION_PASS_AWAITING_PM_GATE or STOP/FAIL.`
+  `Implement on feat/bp-ahsp-phase2-occurrence-persistence; do not merge or create PR before PM code review; return IMPLEMENTATION_PASS_AWAITING_PM_GATE or STOP/FAIL.`
