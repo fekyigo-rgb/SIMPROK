@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface ProjectAccessContext {
@@ -36,6 +37,7 @@ export class ProjectAccessPolicyService {
       include: {
         userProfile: true,
         membershipRoles: {
+          where: { isActive: true },
           include: {
             role: true,
           },
@@ -52,6 +54,21 @@ export class ProjectAccessPolicyService {
     }
 
     return membership;
+  }
+
+  private buildActiveAssignmentWhere(
+    membershipId: string,
+    workspaceId: string,
+    projectId?: string,
+  ): Prisma.ProjectAssignmentWhereInput {
+    return {
+      workspaceMembershipId: membershipId,
+      status: 'ASSIGNED',
+      ...(projectId ? { projectId } : {}),
+      project: {
+        workspaceId,
+      },
+    };
   }
 
   async resolveProjectAccess(
@@ -76,16 +93,15 @@ export class ProjectAccessPolicyService {
       return { kind: 'MEMBERSHIP_NOT_FOUND' };
     }
 
-    const assignment = await this.prisma.projectAssignment.findUnique({
-      where: {
-        workspaceMembershipId_projectId: {
-          workspaceMembershipId: membership.id,
-          projectId: project.id,
-        },
-      },
+    const assignment = await this.prisma.projectAssignment.findFirst({
+      where: this.buildActiveAssignmentWhere(
+        membership.id,
+        project.workspaceId,
+        project.id,
+      ),
     });
 
-    if (!assignment || assignment.status !== 'ASSIGNED') {
+    if (!assignment) {
       return { kind: 'ASSIGNMENT_REQUIRED' };
     }
 
@@ -114,13 +130,7 @@ export class ProjectAccessPolicyService {
     }
 
     const assignments = await this.prisma.projectAssignment.findMany({
-      where: {
-        workspaceMembershipId: membership.id,
-        status: 'ASSIGNED',
-        project: {
-          workspaceId,
-        },
-      },
+      where: this.buildActiveAssignmentWhere(membership.id, workspaceId),
       include: {
         project: true,
       },
