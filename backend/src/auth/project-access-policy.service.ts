@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Project } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface ProjectAccessContext {
@@ -22,11 +22,47 @@ export type ProjectAccessResolution =
       kind: 'PROJECT_NOT_FOUND' | 'MEMBERSHIP_NOT_FOUND' | 'ASSIGNMENT_REQUIRED';
     };
 
+interface EligibleMembershipRecord {
+  id: string;
+  status: string;
+  userProfile: { id: string } | null;
+  membershipRoles: Array<{
+    role: {
+      code: string;
+    };
+  }>;
+}
+
+interface AssignedProjectRecord {
+  id: string;
+  roleInProject: string;
+  isPrimaryAssignment: boolean;
+  assignedAt: Date;
+  project: Project;
+}
+
+interface AssignedAccessRecord {
+  membership: EligibleMembershipRecord;
+  assignments: AssignedProjectRecord[];
+}
+
+export type AccessibleProject = Project & {
+  access: {
+    assignmentId: string;
+    roleInProject: string;
+    isPrimaryAssignment: boolean;
+    assignedAt: Date;
+  };
+};
+
 @Injectable()
 export class ProjectAccessPolicyService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async findEligibleMembership(accountId: string, workspaceId: string) {
+  private async findEligibleMembership(
+    accountId: string,
+    workspaceId: string,
+  ): Promise<EligibleMembershipRecord | null> {
     const membership = await this.prisma.workspaceMembership.findUnique({
       where: {
         accountId_workspaceId: {
@@ -34,12 +70,18 @@ export class ProjectAccessPolicyService {
           workspaceId,
         },
       },
-      include: {
-        userProfile: true,
+      select: {
+        id: true,
+        status: true,
+        userProfile: {
+          select: { id: true },
+        },
         membershipRoles: {
           where: { isActive: true },
-          include: {
-            role: true,
+          select: {
+            role: {
+              select: { code: true },
+            },
           },
         },
       },
@@ -66,21 +108,21 @@ export class ProjectAccessPolicyService {
       status: 'ASSIGNED',
       ...(projectId ? { projectId } : {}),
       project: {
-        workspaceId,
+        is: { workspaceId },
       },
     };
   }
 
   /**
    * Canonical assignment predicate for both project-scoped guard checks and
-   * the accessible-project list. Keeping the membership eligibility and
+   * the accessible-project list. Keeping membership eligibility and the
    * ProjectAssignment query in one function prevents guard/list drift.
    */
   private async findAssignedAccess(
     accountId: string,
     workspaceId: string,
     projectId?: string,
-  ) {
+  ): Promise<AssignedAccessRecord | null> {
     const membership = await this.findEligibleMembership(accountId, workspaceId);
 
     if (!membership) {
@@ -153,7 +195,10 @@ export class ProjectAccessPolicyService {
     };
   }
 
-  async listAccessibleProjects(accountId: string, workspaceId: string) {
+  async listAccessibleProjects(
+    accountId: string,
+    workspaceId: string,
+  ): Promise<AccessibleProject[]> {
     const access = await this.findAssignedAccess(accountId, workspaceId);
 
     if (!access) {
