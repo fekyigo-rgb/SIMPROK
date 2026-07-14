@@ -2,25 +2,32 @@
 
 ## Project AHSP Occurrence Persistence — Implementation Plan
 
-**Status:** `PLAN ONLY — NOT IMPLEMENTED — AWAITING PM/ARCHITECT REVIEW`
-**Author:** Claude Code (repository executor)
+**Status:** `PLAN REVISED — NOT IMPLEMENTED — AWAITING PM/ARCHITECT REVIEW`
+**Planning draft:** Claude Code
+**Production executor:** Codex
 **Branch:** `feat/bp-ahsp-phase2-occurrence-persistence`
 **Date:** 14 Juli 2026
-**Scope of this document:** planning only. No `schema.prisma` change, no migration, no backend/frontend/test/seed/package change is included in this branch at this stage.
+**Revision basis:** `docs/implementation-gates/BP_AHSP_PHASE2_PM_PLAN_REVIEW_DECISIONS.md` — binding; controls wherever this plan differs. Original planning base: `1281e70fa9a1ba8505d17eae02930d49d3e3b33e` (confirmed `BASELINE_VALID` by that record §1).
+**Scope of this document:** planning only. No `schema.prisma` change, no migration, no backend/frontend/test/seed/package change is included in this branch at this stage. Claude Code is not authorized to write the Phase 2 migration or production implementation — production implementation authority is `CODEX ONLY` per the revision basis §2.
 
 This document is the required implementation plan for the gate
 `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`,
 binding-clarified by
-`docs/implementation-gates/BP_AHSP_PHASE2_ARCHITECT_CLARIFICATIONS.md`.
-Where this plan appears to conflict with either document, those two documents win;
-this plan exists to translate them into an exact, repository-grounded build plan and
-to surface every ambiguity found during re-anchor **before** any code is written.
+`docs/implementation-gates/BP_AHSP_PHASE2_ARCHITECT_CLARIFICATIONS.md`,
+and further binding-controlled by
+`docs/implementation-gates/BP_AHSP_PHASE2_PM_PLAN_REVIEW_DECISIONS.md`.
+Where this plan appears to conflict with any of the three, those documents win, with the
+PM Plan Review Decisions record controlling over the earlier two wherever it speaks; this
+plan exists to translate them into an exact, repository-grounded build plan and to surface
+every ambiguity found during re-anchor **before** any code is written. This revision
+incorporates every PM Plan Review Decision without renegotiation; nothing decided there is
+reopened here.
 
 ---
 
 ## 0. Re-anchor confirmation
 
-Read in full, in order, before drafting this plan:
+Read in full, in order, before revising this plan:
 
 1. `docs/project-memory/SIMPROK_PROJECT_MEMORY.md`
 2. `docs/project-memory/SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT_OWNER_LOCK.md`
@@ -28,10 +35,17 @@ Read in full, in order, before drafting this plan:
 4. `docs/implementation-gates/BP_AHSP_PHASE1_DETERMINISTIC_RESOURCE_PROOF.md`
 5. `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`
 6. `docs/implementation-gates/BP_AHSP_PHASE2_ARCHITECT_CLARIFICATIONS.md`
-7. Current repository reality: `backend/prisma/schema.prisma`, migrations, `BasicPriceService`,
+7. `docs/implementation-gates/BP_AHSP_PHASE2_PM_PLAN_REVIEW_DECISIONS.md` — this revision's
+   controlling input; closes the open questions the first draft raised.
+8. Current repository reality: `backend/prisma/schema.prisma`, migrations, `BasicPriceService`,
    `ProjectAccessGuard`, `PermissionsGuard`, `ProjectAccessPolicyService`, permission catalog,
    RBAC seed, `ProjectController`, `AhspController`, the Phase 1 kernel and its spec, and
-   representative e2e specs.
+   representative e2e specs. Re-verified unchanged by this revision except where noted.
+
+This revision also merged `origin/main` (merge commit `ee4ffac5619fed3ae7df6469bfa21b96e628d207`,
+bringing in `72879663f3bdab17ce023bebe25e887f03e748c4`) into the feature branch to pick up
+the PM Plan Review Decisions record itself, per the Repository Synchronization Law. No
+conflict occurred.
 
 Locked laws carried into this plan without renegotiation:
 
@@ -44,6 +58,12 @@ Locked laws carried into this plan without renegotiation:
 - `EXPIRED` Basic Price is never auto-selected in Phase 2.
 - No Cost Kernel, no AHSP unit price, no RAB arithmetic, no Execution Factor.
 - Production entity names are locked: `ProjectAhspOccurrence`, `ProjectAhspResourceResolution`.
+- Freshness architecture is **Option C**, locked by PM Plan Review Decisions §3: the kernel
+  gains one optional `freshnessStatus` field on `BasicPriceCandidate`; no unit-predicate
+  export from the kernel, no alias duplication in the service.
+- Phase 2 is a **name-exact proof, not a code-exact proof** (PM Plan Review Decisions §5) —
+  stated verbatim in H and in the eventual implementation report.
+- Production implementation authority is `CODEX ONLY` (PM Plan Review Decisions §2).
 
 ---
 
@@ -62,6 +82,14 @@ git status --short: (empty — clean)
 Verified via `git fetch origin --prune`, `git checkout main && git pull --ff-only`, then
 `git checkout feat/bp-ahsp-phase2-occurrence-persistence && git pull --ff-only`. All four
 values matched the expected baseline in the task brief before any file was touched.
+
+**Baseline explanation, confirmed by PM Plan Review Decisions §1:** `1281e70` is the correct
+expected base of the authorized planning prompt — local feature `HEAD`, `origin/main`, and
+the remote feature branch all matched it before this plan file was first created. An older
+SHA, `6be5bf24c13f2e6a8b0b2d8b8d8ca624296a7b6e`, is a valid ancestor of `1281e70` (superseded
+by the Repository Synchronization Law and the Architect Clarification Addendum) and is
+**not** the expected base — it is mentioned here only to close that ambiguity, not because
+this plan was ever built from it. Verdict: `BASELINE_VALID`, `NO_BASELINE_STOP`.
 
 ### A.2 Current relevant schema (as of base SHA)
 
@@ -99,7 +127,7 @@ Read in full: `backend/prisma/schema.prisma` (1639 lines). Relevant existing mod
 | Project-scoped access | `ProjectAccessGuard` + `ProjectAccessPolicyService.resolveProjectAccess()` | `backend/src/auth/guards/project-access.guard.ts`, `backend/src/auth/project-access-policy.service.ts` |
 | Permission enforcement | `PermissionsGuard` + `@Permissions()` decorator | `backend/src/auth/guards/permissions.guard.ts`, `backend/src/common/decorators/permissions.decorator.ts` |
 | Permission codes | `PERMISSIONS.AHSP_MANAGE`, `PERMISSIONS.AHSP_VIEW` (already declared **and already seeded** to `DIRECTOR` role in `prisma/seed-rbac-permissions.ts`) | `backend/src/common/constants/permissions.ts` |
-| Deterministic resolver | `resolveAhspResourcePrice()` | `backend/src/ahsp/price-resolution/ahsp-resource-price-resolution.kernel.ts` (merged on `main`, untouched by this plan except the open question in A.4 finding 2) |
+| Deterministic resolver | `resolveAhspResourcePrice()` | `backend/src/ahsp/price-resolution/ahsp-resource-price-resolution.kernel.ts` (merged on `main`; this revision authorizes one additive field on `BasicPriceCandidate` plus a freshness branch inside the kernel — Option C, F.4, locked by PM Plan Review Decisions §3) |
 | Basic Price eligibility | `BasicPriceService.findByResource()`, `BasicPriceService.findOneForWorkspace()` | `backend/src/basic-price/basic-price.service.ts` |
 | Module wiring precedent | `ProjectController` already combines `@UseGuards(ProjectAccessGuard, PermissionsGuard)` with `@Permissions('AHSP_VIEW')` on `GET :projectId/ahsp-snapshot` — the *exact* shape Phase 2's GET endpoint needs | `backend/src/project/project.controller.ts:185-190` |
 | Idempotent-create pattern | `ProjectService.create()` (P2002 → `ConflictException`) and `IntakeEnqueueService.findExistingJob()` / `isUniqueConstraintError()` (pre-check + P2002 fallback) | `backend/src/project/project.service.ts:129-146`, `backend/src/reality-intake/intake-enqueue.service.ts:116-144` |
@@ -107,7 +135,9 @@ Read in full: `backend/prisma/schema.prisma` (1639 lines). Relevant existing mod
 
 ### A.4 Conflicts or missing capabilities found
 
-These are surfaced for PM/Architect judgment, not silently resolved:
+Findings from the original planning pass, now carried forward with their PM Plan Review
+Decisions verdict. Nothing here is silently rewritten — superseded framing is marked, not
+deleted.
 
 1. **`PermissionsGuard` resolves `workspaceId` independently of `ProjectAccessGuard`.**
    `PermissionsGuard` reads `x-workspace-id` header / query / route param
@@ -115,34 +145,47 @@ These are surfaced for PM/Architect judgment, not silently resolved:
    DB-verified context `ProjectAccessGuard` attaches). This is pre-existing repository
    behavior, already used today by `GET :projectId/ahsp-snapshot` and every other
    `ProjectAccessGuard + PermissionsGuard` route in `ProjectController` — Phase 2 does not
-   invent it. But it means a caller could send an `x-workspace-id` header pointing at a
+   invent it. It means a caller could send an `x-workspace-id` header pointing at a
    *different* workspace than the project's real workspace and still pass the permission
    check there, while `ProjectAccessGuard` independently and correctly verifies real
-   project membership/assignment. **Recommendation (see E.3): the service must scope all
-   reads/writes using `request.projectAccess.workspaceId`** (DB-verified by
-   `ProjectAccessPolicyService` against the project's actual `workspaceId`), never the
-   header-derived `request.workspaceContext.workspaceId`, for persistence/query scoping.
-   This is a repository-wide seam, not a Phase-2-only defect; flagged as a risk in L, not a
-   blocker.
+   project membership/assignment.
+   **STATUS: RESOLVED — SECURITY BLOCKER, LOCKED (PM Plan Review Decisions §9).** The
+   original draft's recommendation (service-layer scoping only, treated as a non-blocking
+   risk) is superseded: PM ruled that service-layer scoping alone is insufficient and
+   authorized a bounded fix inside `PermissionsGuard` itself. Full design in E.3; this is
+   now a required in-scope change (D, K), not a residual risk.
 
 2. **The Phase 1 kernel does not export its unit-compatibility predicate**, and the Phase 2
    gate's "expired-only → `NEEDS_REVIEW`" rule (gate §8.8, addendum §3) cannot be
-   implemented correctly without it. Detail and recommendation in F.4/L.1 — this is the
-   single most important open question in this plan.
+   implemented correctly without it.
+   **STATUS: RESOLVED — Option C locked (PM Plan Review Decisions §3).** Neither of the
+   original draft's two options (export the predicate; duplicate the alias set) was
+   chosen — PM rejected both explicitly. Instead the kernel's own input contract gains one
+   optional `freshnessStatus` field, and the kernel evaluates freshness internally. Full
+   design in F.3/F.4.
 
 3. **`BasicPrice` has no `unit` column.** The Phase 1 kernel's `BasicPriceCandidate.unit`
    field assumes a price can carry its own unit independent of the resolved
    `ResourceCatalog.baseUnit`. In the real schema, a price's unit is only ever the
    `baseUnit` of its related `ResourceCatalog` row, and `BasicPriceService.findByResource(resourceId)`
    is already scoped to one catalog row — so every real candidate necessarily shares one
-   unit. Consequence for the test matrix: see J.3.
+   unit.
+   **STATUS: ACCEPTED as repository reality (PM Plan Review Decisions §8).** A wrong-unit
+   Basic Price for an otherwise-correct catalog cannot be constructed as a truthful E2E
+   fixture, and none will be manufactured to satisfy a checklist. Kernel regression tests
+   remain the authoritative proof; Phase 2 service tests may prove forwarding/fail-closed
+   behavior with mocks. Consequence for the test matrix: see J.3.
 
 4. **No `ResourceCatalog` service exists anywhere in `backend/src`.** Candidate loading for
    Phase 2 must be a new direct Prisma query inside the new service (there is nothing to
    "reuse" here the way `BasicPriceService` is reused). Query shape specified in F.2.
+   **STATUS: unchanged by this revision** — no PM Plan Review Decision addressed this
+   directly; the plan's original design (F.2) stands.
 
 5. Guard/permission wiring for a brand-new project-scoped module is otherwise fully
-   precedented (`ProjectController` pattern in A.3) — no conflict there.
+   precedented (`ProjectController` pattern in A.3) — no conflict there. **STATUS:
+   unchanged**, and now additionally exercised by the new `PermissionsGuard` branch from
+   finding 1's resolution.
 
 ---
 
@@ -222,7 +265,7 @@ model ProjectAhspResourceResolution {
   ahspUnit        String
 
   // Resolution outcome
-  resourceCatalodId    String?                      @db.Uuid // see naming note below
+  resourceCatalogId    String?                      @db.Uuid
   selectedBasicPriceId String?                       @db.Uuid
   status               ProjectAhspResolutionStatus
   selectionMode        ProjectAhspSelectionMode?
@@ -261,9 +304,11 @@ model ProjectAhspResourceResolution {
 }
 ```
 
-(`resourceCatalodId` above is a typo guard for the reviewer — the actual field name is
-**`resourceCatalogId`**; written out correctly in every other reference in this document
-and must be typed correctly at implementation time.)
+**Correction (PM Plan Review Decisions §7):** the earlier draft of this schema block spelled
+this field `resourceCatalodId` and described the misspelling as a deliberate "typo guard."
+PM rejected that framing outright — it was a real typo, and canonical plan examples must
+compile exactly as written. The block above is corrected; `resourceCatalogId` is the field
+name everywhere in this document and must be typed correctly at implementation time.
 
 Field-to-gate mapping (gate §6.3 required-field list → this schema):
 
@@ -289,11 +334,9 @@ Field-to-gate mapping (gate §6.3 required-field list → this schema):
 | Indonesian explanation | `explanation` |
 | policy version string | `policyVersion` |
 
-Design decision flagged for confirmation: `canonicalUnit` is a plain nullable `String`
-(only ever `"PERSON_DAY"` in this phase) rather than a new single-member enum, to avoid
-introducing an enum with exactly one value for a bounded proof. If PM/Architect prefers a
-`ProjectAhspCanonicalUnit { PERSON_DAY }` enum for stronger DB typing ahead of Phase 3's
-unit dictionary, that is a one-line change to this plan before implementation.
+**Locked (PM Plan Review Decisions §7):** `canonicalUnit` remains a plain nullable `String`
+for Phase 2. No single-member enum is created. The only value the bounded proof ever writes
+is `"PERSON_DAY"`.
 
 Decimal precision note: the kernel returns `sourcePriceValue`/`adaptedPriceValue` as exact
 decimal **strings** to avoid float loss. Prisma `Decimal` columns accept a string directly
@@ -451,8 +494,15 @@ real migration file.)
 
 ## D. Runtime architecture
 
+**Scope correction (PM Plan Review Decisions §10):** the original draft scoped this section
+to the new `project-ahsp` module only, with the Phase 1 kernel change left "conditional"
+(K). Since Option C (F.4) and the `PermissionsGuard` security fix (E.3) are both now locked,
+required changes, this revision adds the Phase 1 kernel, its spec, `PermissionsGuard`, and
+a new `PermissionsGuard` spec to the proposed implementation scope explicitly — none of
+these are optional or conditional in this revision.
+
 Proposed new bounded module, matching the gate's recommended path and the "Allowed
-Production Scope" list exactly:
+Production Scope" list, plus the two locked cross-cutting changes:
 
 ```text
 backend/src/project-ahsp/
@@ -463,6 +513,15 @@ backend/src/project-ahsp/
   project-ahsp.controller.spec.ts        (optional — see D.1)
   dto/
     create-project-ahsp-occurrence.dto.ts
+
+backend/src/ahsp/price-resolution/
+  ahsp-resource-price-resolution.kernel.ts       (modified — Option C, F.4)
+  ahsp-resource-price-resolution.kernel.spec.ts  (modified — additive regression tests, F.4)
+
+backend/src/auth/guards/
+  permissions.guard.ts       (modified — bounded security fix, E.3)
+  permissions.guard.spec.ts  (new — no such file exists today; confirmed absent from
+                               `backend/src/auth/guards/` by repository search)
 ```
 
 Plus:
@@ -508,6 +567,14 @@ backend/prisma/migrations/<timestamp>_bp_ahsp_phase2_project_occurrence_persiste
   convention — a tagged, fully self-cleaning fixture set), because Phase 2 needs a specific,
   controlled `AHSPVersion` → `AHSPResource` → `ResourceCatalog` → `BasicPrice` chain that the
   shared acceptance seed does not guarantee. Full matrix in J.2.
+- **`ahsp-resource-price-resolution.kernel.ts` / `.kernel.spec.ts`** — additive-only change:
+  one optional field on the exported `BasicPriceCandidate` interface and one freshness
+  branch inside `resolveAhspResourcePrice()`'s existing Step 3 logic. Every existing Phase 1
+  test must still pass unmodified. Full design and required regression tests in F.4.
+- **`permissions.guard.ts` / `permissions.guard.spec.ts`** — one bounded conditional branch
+  inside `PermissionsGuard.canActivate()`; no new guard class, no new decorator, no change
+  to `ProjectAccessPolicyService`. `permissions.guard.spec.ts` is a new file — no spec
+  currently exists for this guard. Full design and required tests in E.3/J.2a.
 
 ### D.2 Endpoints (unchanged from gate)
 
@@ -546,18 +613,58 @@ No new access-resolution logic is introduced. `ProjectAccessGuard` continues to 
 `ProjectAccessPolicyService.resolveProjectAccess(accountId, projectId)` unmodified and
 attaches `request.projectAccess` (`{ projectId, workspaceId, ... }`, DB-verified).
 
-### E.3 WorkspaceId source of truth for this module (recommendation, needs confirmation)
+### E.3 `PermissionsGuard` security fix — LOCKED (PM Plan Review Decisions §9)
 
-Because of the seam in A.4 finding 1, this plan recommends: **`ProjectAhspService` reads
-`workspaceId` exclusively from `request.projectAccess.workspaceId`** (set by
-`ProjectAccessGuard`, verified against the project's real `workspaceId` in the database),
-not from `request.workspaceContext.workspaceId` (set by `PermissionsGuard` from the
-client-supplied `x-workspace-id` header). `PermissionsGuard` still runs and still requires
-a valid, permission-holding `x-workspace-id` header (existing behavior, unchanged) — but
-the header's value is used only to satisfy that guard, never passed into the service layer
-for query/persistence scoping. The account ID for `createdByAccountId` comes from
-`request.user.id` (populated by `JwtAuthGuard`/JWT strategy), also never from the request
-body.
+The seam identified in A.4 finding 1 is not merely a service-layer scoping convention to
+work around. PM Plan Review Decisions §9 rules that **service query scoping alone is
+insufficient**: "a caller could otherwise present permission from a different workspace
+while targeting a project they are assigned to." PM authorizes and requires one bounded
+change to `PermissionsGuard` itself:
+
+- When `request.projectAccess.workspaceId` is present — true for every route in this
+  module, since the guard order is `JwtAuthGuard, ProjectAccessGuard, PermissionsGuard` and
+  `ProjectAccessGuard` always runs first and attaches it — that value becomes the
+  **authoritative** workspace for the permission/membership/role lookup inside
+  `PermissionsGuard.canActivate()`. The lookup that currently reads
+  `membership.membershipRoles → role.rolePermissions → permission.code`
+  (`permissions.guard.ts:51-101`) is evaluated against `request.projectAccess.workspaceId`,
+  not against whatever the client supplied.
+- If the request **also** explicitly supplies a workspace context (header/query/param) and
+  it differs from `request.projectAccess.workspaceId`, `PermissionsGuard` must reject with
+  `403` — a mismatch is an authorization fact ("you are presenting credentials for a
+  workspace you are not operating in"), not a malformed request, so it is not `400`.
+- If the request is on a project-scoped route and supplies **no** explicit workspace
+  context at all, this plan's default is to still require it exactly as today (see the
+  "plan-level default" note below) — the bounded fix adds an authoritative-source-and-
+  mismatch-rejection check; it does not relax the existing header-required behavior, to
+  keep the change to the single narrow branch PM authorized and to avoid any regression to
+  routes/tests that already always supply the header.
+- Non-project-scoped routes (no `request.projectAccess` attached — `ProjectAccessGuard` is
+  not in that route's guard chain) retain their existing behavior exactly: workspace
+  context still comes from `x-workspace-id` header/query/param, unchanged. This is a
+  narrow, additive conditional branch inside `PermissionsGuard`, not a rewrite.
+- No second project-access predicate and no new guard class are introduced —
+  `ProjectAccessPolicyService` remains the single project-access predicate (E.2, unchanged),
+  and `PermissionsGuard` gains one conditional branch, not a new class.
+
+**Plan-level default flagged for confirmation:** PM Plan Review Decisions §9 does not spell
+out whether the `x-workspace-id` header becomes optional on project-scoped routes once
+`request.projectAccess.workspaceId` is authoritative. This plan chooses the more
+conservative reading — keep the header required everywhere, unchanged — because it
+satisfies all five required tests in §9 without touching the "missing header → 400"
+behavior any existing route or e2e spec (all of which always supply the header today) relies
+on. If PM/Architect intended the header to become optional on project routes, that is a
+one-line change to this section before implementation.
+
+This closes the seam completely: a caller can no longer present a valid permission from a
+workspace they are not targeting to authorize an operation against a project in a different
+workspace. `ProjectAhspService` continues to read `workspaceId` from
+`request.projectAccess.workspaceId` for query/persistence scoping (unchanged design intent
+from the first draft) — after this guard fix, that value and any *matching* `x-workspace-id`
+header are guaranteed consistent by construction; a mismatched header never reaches the
+service at all, because the guard rejects it first. The account ID for `createdByAccountId`
+comes from `request.user.id` (populated by `JwtAuthGuard`/JWT strategy), also never from the
+request body.
 
 ### E.4 Query scoping
 
@@ -575,9 +682,11 @@ body.
 | No/invalid JWT | 401 | `JwtAuthGuard` (passport-jwt default) |
 | Project not found / membership not found | 404 | `ProjectAccessGuard` → `ProjectAccessPolicyService` |
 | Membership exists, no active assignment to project | 403 | `ProjectAccessGuard` ("Project assignment required") |
-| Missing `x-workspace-id` header | 400 | `PermissionsGuard` (existing behavior — not part of the gate's 401/403/404 list but a real, pre-existing status this route inherits; noted, not changed) |
+| Missing `x-workspace-id` header | 400 | `PermissionsGuard` (existing behavior — not part of the gate's 401/403/404 list but a real, pre-existing status this route inherits; unchanged by E.3's fix per this plan's conservative default) |
+| `x-workspace-id` header supplied and differs from `request.projectAccess.workspaceId` | 403 | `PermissionsGuard` — **new**, E.3 security fix (PM Plan Review Decisions §9) |
 | `x-workspace-id` workspace has no active membership | 403 | `PermissionsGuard` |
-| Missing `AHSP_MANAGE` (POST) / `AHSP_VIEW` (GET) | 403 | `PermissionsGuard` |
+| Missing `AHSP_MANAGE` (POST) / `AHSP_VIEW` (GET) | 403 | `PermissionsGuard`, evaluated against `request.projectAccess.workspaceId` (E.3) |
+| Permission held only in a different workspace than the project's real workspace | 403 | `PermissionsGuard` — **new**, E.3 security fix closes this (previously would have incorrectly passed) |
 | Occurrence belongs to another project/workspace | 404 | service-level scoped query (E.4) — no existence leak |
 | Idempotency key reused with identical payload | 200/201, same IDs | service (G) |
 | Idempotency key reused with different payload | 409 | service (G) |
@@ -597,9 +706,11 @@ body.
    attempt (test matrix J.1.14).
 3. Idempotency pre-check (G).
 4. Load `ResourceCatalog` candidates (F.2).
-5. Load `BasicPrice` candidates via `BasicPriceService.findByResource()`, apply the Phase 2
-   freshness boundary (F.4).
-6. Call `resolveAhspResourcePrice()` (Phase 1 kernel) with the assembled input.
+5. Load `BasicPrice` candidates via `BasicPriceService.findByResource()` and map them 1:1
+   into the kernel's (Option C) candidate shape, including a `freshnessStatus` passthrough
+   (F.3). The service applies **no** freshness or unit pre-filtering itself.
+6. Call `resolveAhspResourcePrice()` (Phase 1 kernel) with the assembled input — the kernel
+   now evaluates the Phase 2 freshness boundary internally (F.4, Option C).
 7. If the kernel result is `RESOLVED`, revalidate `selectedBasicPriceId` via
    `BasicPriceService.findOneForWorkspace()` (F.5).
 8. Persist occurrence + resolution atomically (G).
@@ -641,91 +752,135 @@ const rows = await this.basicPriceService.findByResource(resolvedCatalogId, work
 // verificationStatus=PUBLISHED, tenant-or-global) — this predicate is reused, not duplicated.
 ```
 
-Each row is mapped to the kernel's `BasicPriceCandidate` shape:
+Each row is mapped to the kernel's (Option C) `BasicPriceCandidate` shape, now including the
+optional `freshnessStatus` passthrough field authorized by PM Plan Review Decisions §3:
 
 ```ts
 {
   id: row.id,
   resourceId: row.resourceId,
-  value: row.value.toString(),       // Prisma Decimal → exact string, never Number(row.value)
+  value: row.value.toString(),          // Prisma Decimal → exact string, never Number(row.value)
   sourceOrigin: row.sourceOrigin,
-  unit: row.resource.baseUnit,       // see A.4 finding 3 — BasicPrice has no independent unit
+  unit: row.resource.baseUnit,          // see A.4 finding 3 — BasicPrice has no independent unit
+  freshnessStatus: row.freshnessStatus, // 'CURRENT' | 'EXPIRING' | 'EXPIRED' — raw passthrough, no interpretation here
 }
 ```
 
-### F.4 Phase 2 freshness boundary — the central open design question
+The service performs **no** unit-compatibility pre-check and **no** freshness-based
+filtering before this call — every `findByResource()` row is mapped 1:1 into a candidate and
+handed to the kernel exactly as returned. All freshness *and* unit decisions are made inside
+the kernel, which remains the single resolver.
 
-Gate §8.8 / addendum §3 require: `CURRENT` and `EXPIRING` may auto-resolve; `EXPIRED` must
-not; **if only expired-but-otherwise-compatible candidates exist, persist `NEEDS_REVIEW`**
-(not the kernel's own `UNRESOLVED`), with a distinct Phase-2 reason. "Compatible" here means
-matching `resourceId` **and** unit (test matrix item 8, wrong-unit, must still be
-`UNRESOLVED`/`BASIC_PRICE_UNIT_NOT_SUPPORTED` regardless of freshness — so "compatible" is
-not merely "same resourceId").
+### F.4 Phase 2 freshness boundary — Option C, LOCKED (PM Plan Review Decisions §3)
 
-The kernel's `BasicPriceCandidate` type carries no freshness field at all — freshness
-splitting **must** happen in the service, before the kernel is called, and the kernel
-cannot itself distinguish "zero candidates because none exist" from "zero candidates
-because we filtered out the only ones that existed." Concretely, this requires the service
-to independently know whether a given candidate is unit-compatible **before** invoking the
-kernel — the exact same bounded labor-day-unit check the kernel already performs
-internally, but the kernel does not currently export it.
+This replaces the first draft's F.4 in full. That draft proposed two options — exporting the
+kernel's internal unit predicate for service-side filtering (option a), or duplicating the
+bounded alias set inside the service (option b) — and left the choice open (L.1). PM
+rejected both explicitly ("Option (a)... is rejected. Option (b)... is forbidden.") and
+locked a third design instead: extend the kernel's own input contract with one optional
+field, so all freshness *and* unit logic stays inside the single resolver.
 
-**Recommended design (needs explicit PM/Architect confirmation before implementation):**
+Gate §8.8 / addendum §3 requirement, unchanged: `CURRENT` and `EXPIRING` may auto-resolve;
+`EXPIRED` must not; if only expired-but-otherwise-compatible candidates exist, persist
+`NEEDS_REVIEW` with a distinct reason. "Compatible" means matching `resourceId` **and**
+unit — a wrong-unit `EXPIRED` candidate must not create an expired-only review outcome;
+unit failure stays authoritative over freshness (PM Plan Review Decisions §3, final bullet).
 
-1. Export the kernel's existing internal `isLaborDayUnit()` predicate (or the
-   `LABOR_DAY_UNIT_ALIASES` set it reads) as a **named export** from
-   `ahsp-resource-price-resolution.kernel.ts`. This is a pure, additive, zero-behavior-change
-   export of logic that already exists and is already tested in Phase 1 — it does not alter
-   `resolveAhspResourcePrice()`'s behavior or Phase 1's own test results.
-2. In the service, before calling the kernel: split `findByResource()` rows by
-   `isLaborDayUnit(row.resource.baseUnit)` into `unitCompatible` and the rest (ignored —
-   they are the "wrong unit" case, always `UNRESOLVED` regardless of freshness, per test
-   matrix item 8).
-3. Within `unitCompatible`, split by `freshnessStatus !== 'EXPIRED'` into
-   `eligibleForKernel` and `expiredOnly`.
-4. Call the kernel with `eligibleBasicPriceCandidates: eligibleForKernel` (mapped per F.3).
-5. If the kernel returns `UNRESOLVED` with a Basic-Price-related reason
-   (`NO_BASIC_PRICE_CANDIDATE`) **and** `expiredOnly.length > 0`, override the persisted
-   status to `NEEDS_REVIEW` with a Phase-2-defined reason code (e.g.
-   `ONLY_EXPIRED_BASIC_PRICE_CANDIDATES`, appended to the kernel's own reason codes, not
-   replacing them) and `selectedBasicPriceId = null`. Otherwise persist the kernel's result
-   as-is.
+**Locked design:**
 
-**Open question for PM/Architect:** modifying
-`backend/src/ahsp/price-resolution/ahsp-resource-price-resolution.kernel.ts` (even a pure
-additive export) is **not** explicitly listed in the Phase 2 gate's "Allowed Production
-Scope" (§11), which only lists `schema.prisma`, one migration, `app.module.ts`, new
-`backend/src/project-ahsp/**`, tests, and the `BasicPriceModule` import. Two paths forward,
-both preserved in this plan pending PM/Architect direction:
+1. Add one optional field to the kernel's exported `BasicPriceCandidate` interface:
 
-- **(a) Preferred:** authorize a tiny additive export from the kernel file as in-scope,
-  since it changes zero Phase 1 behavior and avoids duplicating the bounded alias set.
-- **(b) Fallback:** duplicate the bounded `LABOR_DAY_UNIT_ALIASES` set as a private
-  constant inside `project-ahsp.service.ts`, with a code comment cross-referencing the
-  kernel file and an explicit note that the two lists must be changed together. This keeps
-  the kernel file untouched but introduces the exact kind of duplication the "single
-  authorized resolver" principle exists to prevent.
+   ```ts
+   export interface BasicPriceCandidate {
+     readonly id: string;
+     readonly resourceId: string;
+     readonly value: string;
+     readonly sourceOrigin: string;
+     readonly unit: string;
+     readonly freshnessStatus?: 'CURRENT' | 'EXPIRING' | 'EXPIRED';
+   }
+   ```
 
-This plan does not choose between (a) and (b) unilaterally — it is flagged here as a
-required PM/Architect decision before implementation begins (see L.1).
+2. Kernel behavior, inside `resolveAhspResourcePrice()`'s existing Step 3 (unchanged
+   entry point, unchanged purity — still no I/O, still deterministic):
+   - A candidate with `freshnessStatus` **omitted** is treated as selectable — this
+     preserves every existing Phase 1 test and caller unchanged (backward compatible by
+     construction).
+   - Among unit-compatible candidates (existing Step 3b logic, unchanged), split by
+     freshness: `CURRENT`/`EXPIRING`/omitted → **active**; `EXPIRED` → **inactive**.
+   - Zero active, one-or-more inactive → `NEEDS_REVIEW`, `selectedBasicPriceId` unset, new
+     reason code `ONLY_EXPIRED_BASIC_PRICE_CANDIDATES` (appended to the existing reason-code
+     union — does not replace `NO_BASIC_PRICE_CANDIDATE`, `MULTIPLE_BASIC_PRICE_CANDIDATES`,
+     etc., which continue to mean what they already mean).
+   - Exactly one active candidate → that candidate resolves, exactly as today, regardless of
+     how many `EXPIRED` candidates also exist alongside it — expired candidates present next
+     to one active one never block or alter selection.
+   - More than one active candidate → `NEEDS_REVIEW` via the existing
+     `MULTIPLE_BASIC_PRICE_CANDIDATES` path, unchanged.
+   - Zero unit-compatible candidates at all (active or expired) → existing
+     `UNRESOLVED`/`BASIC_PRICE_UNIT_NOT_SUPPORTED`/`NO_BASIC_PRICE_CANDIDATE` path,
+     unchanged.
 
-### F.5 Revalidation before persistence
+3. The service's only responsibility (F.3) is to transport `freshnessStatus` unmodified from
+   each `findByResource()` row into the candidate handed to the kernel. The service performs
+   **no** pre-filtering, **no** unit-alias duplication, and imports **no** predicate from the
+   kernel — the kernel file's only change is the widened `BasicPriceCandidate` type and the
+   freshness branch inside its existing Step 3 logic.
+
+**Required kernel regression tests** (`ahsp-resource-price-resolution.kernel.spec.ts`,
+additive to the existing Phase 1 suite — every existing Phase 1 test must still pass
+unmodified, proving backward compatibility), matching PM Plan Review Decisions §3 exactly:
+
+1. Candidates without `freshnessStatus` preserve Phase 1 behavior (re-run an existing Phase
+   1 fixture unchanged; assert identical output).
+2. Only `EXPIRED` compatible candidates → `NEEDS_REVIEW`, `reasonCodes` includes
+   `ONLY_EXPIRED_BASIC_PRICE_CANDIDATES`, no `selectedBasicPriceId`.
+3. One current (`CURRENT`/`EXPIRING`) plus one or more `EXPIRED` candidates for the same
+   resource → the active candidate resolves normally (`RESOLVED`); the expired candidate(s)
+   are excluded from the count that would otherwise trigger `MULTIPLE_BASIC_PRICE_CANDIDATES`.
+4. Two active (`CURRENT`/`EXPIRING`) compatible candidates → `NEEDS_REVIEW` via the existing
+   `MULTIPLE_BASIC_PRICE_CANDIDATES` path (proves Option C did not loosen the existing
+   multi-candidate rule).
+5. `EXPIRED` wrong-unit candidates retain existing unit-not-supported behavior — they do not
+   create an expired-only review outcome.
+
+Kernel scope discipline preserved: no fuzzy/semantic/alias/embedding/AI matching is added;
+the only new logic is a freshness split on an already-unit-filtered candidate set, using
+data the service transports verbatim from the database.
+
+### F.5 Revalidation before persistence — LOCKED failure behavior (PM Plan Review Decisions §6)
 
 `BasicPriceService.findOneForWorkspace(selectedBasicPriceId, workspaceId)` is called
 immediately before the row is written (F.1 step 7), using the same eligibility predicate as
-candidate loading (reused, not re-implemented). If it throws `NotFoundException` (the price
-became ineligible between candidate-load and persistence — e.g. withdrawn), the service
-persists `UNRESOLVED` instead of `RESOLVED` with a Phase-2 reason (e.g.
-`SELECTED_BASIC_PRICE_NO_LONGER_ELIGIBLE`), not a hard 500 — fail-closed, not fail-crash.
-This exact outcome-on-revalidation-failure is not specified verbatim by the gate; it is a
-plan-level default proposed for confirmation, consistent with the blueprint's
-"fail-closed... say what is missing" law.
+candidate loading (reused, not re-implemented — "not a second eligibility predicate; it
+reuses the existing BasicPrice service," decision §6, verbatim).
+
+The first draft proposed this outcome as a plan-level default needing confirmation. PM
+accepted and locked it exactly. If `findOneForWorkspace()` throws `NotFoundException` (the
+price became ineligible between candidate-load and persistence — e.g. withdrawn), the
+service must fail closed and persist, verbatim:
+
+- `status = UNRESOLVED`
+- `selectedBasicPriceId = null`
+- **no source/adapted price trace persisted as selected truth** — `sourcePriceValue`,
+  `sourcePriceUnit`, `adaptedPriceValue`, `conversionFactor`, `canonicalUnit`,
+  `selectionMode`, `selectedSourceOrigin`, `selectedFreshnessStatus`,
+  `selectedEffectiveDate` all remain `null`, even though the kernel had momentarily computed
+  a `RESOLVED` result before revalidation ran — a failed revalidation must not leave a
+  half-`RESOLVED`-looking row
+- `reasonCodes` includes `SELECTED_BASIC_PRICE_NO_LONGER_ELIGIBLE`
+- `resolutionMethod = DETERMINISTIC_ATTEMPTED` (H, PM Plan Review Decisions §4 — this
+  outcome did not survive revalidation, so it is not `EXACT_DETERMINISTIC`)
+- **no unhandled 500** — the `NotFoundException` from `findOneForWorkspace()` is caught
+  inside the service and converted into this persisted outcome, never propagated raw to the
+  controller
 
 ### F.6 No tie-breaker, no second predicate
 
 No ordering by nominal value, date, freshness, DB order, or UUID is added anywhere in F —
-multi-candidate outcomes are always `NEEDS_REVIEW`, exactly as the kernel already decides
-once it receives the (freshness-and-unit-pre-filtered) candidate list.
+multi-candidate outcomes are always `NEEDS_REVIEW`, decided entirely inside the kernel (F.4,
+Option C) once it receives the full unit-compatible candidate list the service transports
+without pre-filtering.
 
 ---
 
@@ -800,10 +955,15 @@ Every persisted `ProjectAhspResourceResolution` row carries (see B.3 for exact f
 - `status` (`ProjectAhspResolutionStatus`)
 - `selectionMode` (nullable `ProjectAhspSelectionMode`, only `AUTO_SELECTED` ever written
   in Phase 2)
-- `resolutionMethod` — always the literal string `"EXACT_DETERMINISTIC"` in this phase,
-  since the Phase 1 kernel is the only resolver used regardless of outcome status
-- `reasonCodes` (`String[]`) — the kernel's own `ReasonCode` values, plus the Phase-2-only
-  codes introduced in F.4/F.5 when applicable
+- `resolutionMethod` — **truthful per outcome, LOCKED (PM Plan Review Decisions §4)**:
+  `"EXACT_DETERMINISTIC"` only when `status = RESOLVED`; `"DETERMINISTIC_ATTEMPTED"` when
+  `status = UNRESOLVED` or `NEEDS_REVIEW`, including the F.5 revalidation-failure path. Never
+  write `EXACT_DETERMINISTIC` for an unresolved or ambiguous result. No numeric confidence
+  value is authorized anywhere in this schema (unchanged from the first draft).
+- `reasonCodes` (`String[]`) — the kernel's own `ReasonCode` values (now including
+  `ONLY_EXPIRED_BASIC_PRICE_CANDIDATES` from Option C, F.4), plus the one Phase-2-service
+  reason code from F.5's locked revalidation-failure path
+  (`SELECTED_BASIC_PRICE_NO_LONGER_ELIGIBLE`)
 - `explanation` — the kernel's Indonesian explanation string when the kernel produced the
   result; a plain-language Indonesian explanation authored by the service for the
   Phase-2-only override paths (expired-only, revalidation-failure)
@@ -828,6 +988,19 @@ Every persisted `ProjectAhspResourceResolution` row carries (see B.3 for exact f
 No numeric confidence field exists anywhere in this schema (confirmed absent from B.3) —
 matches addendum §8 exactly.
 
+### H.1 Resource identity honesty — explicit statement (PM Plan Review Decisions §5)
+
+Phase 2 uses the existing Phase 1 exact normalized-name resolver unchanged: trim, lowercase,
+collapse repeated whitespace inside the kernel, exact name equality, matching resource type,
+bounded labor-day unit equivalence. It performs no fuzzy, semantic, alias, embedding, AI, or
+LLM matching. Phase 2 is therefore, stated exactly as PM requires it to appear in this plan
+and in the eventual implementation report:
+
+```text
+NAME-EXACT PROOF
+NOT CODE-EXACT PROOF
+```
+
 ---
 
 ## I. No-money boundary
@@ -851,6 +1024,14 @@ bounded labor-day proof — this is evidence storage, not calculation, matching 
 own framing ("Factor 1 → adapted price equals source price exactly (same string, no
 arithmetic)").
 
+**Confirmed unchanged by this revision:** none of Option C (F.4), the `PermissionsGuard`
+fix (E.3), the resolution-method correction (H), or the revalidation-failure lock (F.5)
+touch money, RAB, Cost Kernel, Execution Factor, snapshots, ranking, fuzzy/AI matching, or a
+second eligibility predicate — every prohibition in this table and in §0's locked laws holds
+exactly as in the first draft. PM Plan Review Decisions §9's `PermissionsGuard` change is a
+tenant-isolation fix at the auth layer, not a change to what this module persists or
+calculates.
+
 ---
 
 ## J. Test matrix
@@ -869,17 +1050,26 @@ arithmetic)").
    (409).
 5. Zero catalog candidates → `UNRESOLVED`.
 6. Multiple exact catalog candidates → `NEEDS_REVIEW`.
-7. Zero eligible Basic Price (after freshness/unit split) → `UNRESOLVED`.
-8. Wrong Basic Price unit → `UNRESOLVED/BASIC_PRICE_UNIT_NOT_SUPPORTED` — **at the kernel
-   unit-test layer only** (already proven in Phase 1's own spec); see J.3 for why this
-   cannot be independently re-proven with real `BasicPriceService`-backed data at the
-   Phase 2 service layer, and the proposed resolution.
-9. Multiple unit-compatible, non-expired Basic Prices → `NEEDS_REVIEW`; assert no
-   cheapest/highest/first selection logic exists.
+7. Zero `findByResource()` rows returned → `UNRESOLVED` (the service performs no
+   pre-filtering per Option C — F.3/F.4 — so this proves the empty-array-to-kernel path
+   directly).
+8. Wrong Basic Price unit → `UNRESOLVED/BASIC_PRICE_UNIT_NOT_SUPPORTED`. Proven two ways
+   per PM Plan Review Decisions §8: (i) **authoritatively** at the kernel regression-test
+   layer (F.4, already covering this since Phase 1 and unchanged by Option C); (ii) at this
+   service layer by mocking `findByResource()` to return a row whose `resource.baseUnit` is
+   a non-labor-day unit and asserting the service forwards it to the real kernel unmodified
+   and persists the kernel's verdict unchanged — a fail-closed forwarding proof, not a
+   fresh eligibility decision. See J.3 for why a real end-to-end DB fixture for this case is
+   not attempted.
+9. Multiple unit-compatible, non-expired (active) Basic Prices → `NEEDS_REVIEW` via the
+   kernel's `MULTIPLE_BASIC_PRICE_CANDIDATES` path (F.4 point 2); assert no
+   cheapest/highest/first selection logic exists anywhere in the service.
 10. A very high nominal value resolves identically to a normal one; no warning field, no
     behavioral branch on magnitude.
-11. Only expired unit-compatible candidates exist → `NEEDS_REVIEW` with the Phase-2 reason
-    from F.4, `selectedBasicPriceId = null` (this is the primary proof of the F.4 design).
+11. Only `EXPIRED` unit-compatible candidates exist → `NEEDS_REVIEW`,
+    `reasonCodes` includes `ONLY_EXPIRED_BASIC_PRICE_CANDIDATES` (emitted directly by the
+    kernel's Option C freshness branch, F.4 — not a service-side override, unlike the first
+    draft's rejected design), `selectedBasicPriceId = null`.
 12. Workspace `AHSPVersion` from another workspace → rejected before kernel invocation
     (F.1 step 1).
 13. Global `AHSPVersion` (`workspaceId = null`) → allowed.
@@ -888,8 +1078,18 @@ arithmetic)").
 15. Master `AHSP`/`AHSPVersion`/`AHSPResource` rows are never passed to any Prisma `update`/
     `delete` call in the service (assert on the mock — no `update`/`delete` invocation
     against those models).
-16. Revalidation failure path (F.5): `findOneForWorkspace()` mock throws `NotFoundException`
-    → persisted status becomes `UNRESOLVED`, not a thrown 500.
+16. Revalidation failure path (F.5, locked by PM Plan Review Decisions §6):
+    `findOneForWorkspace()` mock throws `NotFoundException` → persisted row has
+    `status = UNRESOLVED`, `selectedBasicPriceId = null`, every selected-price-trace field
+    (`sourcePriceValue`, `sourcePriceUnit`, `adaptedPriceValue`, `conversionFactor`,
+    `canonicalUnit`, `selectionMode`, `selectedSourceOrigin`, `selectedFreshnessStatus`,
+    `selectedEffectiveDate`) is `null`, `reasonCodes` includes
+    `SELECTED_BASIC_PRICE_NO_LONGER_ELIGIBLE`, `resolutionMethod = DETERMINISTIC_ATTEMPTED`,
+    and no exception escapes the service method.
+17. `resolutionMethod` truthfulness (PM Plan Review Decisions §4): a `RESOLVED` result
+    persists `EXACT_DETERMINISTIC`; both an `UNRESOLVED` result (item 5 or 7) and a
+    `NEEDS_REVIEW` result (item 6, 9, or 11) persist `DETERMINISTIC_ATTEMPTED` — asserted
+    explicitly, not merely implied by the other test cases.
 
 ### J.2 E2E/security tests (`project-ahsp-occurrence.e2e-spec.ts`, real `simprok_test` DB)
 
@@ -916,6 +1116,36 @@ arithmetic)").
 11. Safe E2E guard: confirm the suite runs only under `simprok_test`
     (`scripts/test-database-guard.ts`) and `RESIDUAL_RESULT: PASS` is reported by
     `run-e2e-safe.ts` after this spec is included in the suite.
+12. End-to-end proof of the E.3 security fix on this module's own routes: an account with
+    `AHSP_MANAGE` in Workspace B, holding a valid assignment to a Workspace A project,
+    calling `POST /projects/:projectId/ahsp-occurrences` with `x-workspace-id: <Workspace B
+    id>` → `403` (permission from Workspace B must not authorize the Workspace A project
+    operation). The same account calling with `x-workspace-id: <Workspace A id>` (matching)
+    → normal success/failure per its actual Workspace A permissions, unaffected.
+
+### J.2a `PermissionsGuard` security regression tests — new (PM Plan Review Decisions §9)
+
+`backend/src/auth/guards/permissions.guard.spec.ts` (new file — see D). Unit-level, mocking
+`Reflector` and `PrismaService`, isolated from HTTP/DB, covering all five tests §9 requires:
+
+1. Project-scoped route (`request.projectAccess` present): permission is checked in the
+   actual project workspace (`request.projectAccess.workspaceId`), not a differing supplied
+   header — construct a request with both present and differing, assert the lookup query
+   uses `request.projectAccess.workspaceId`.
+2. A membership/role granting the required permission only in Workspace B, with
+   `request.projectAccess.workspaceId = Workspace A`, does not authorize — `403`
+   (`ForbiddenException`).
+3. Explicitly mismatched `x-workspace-id` (header differs from
+   `request.projectAccess.workspaceId`) is rejected with `403`.
+4. Matching `x-workspace-id` (equal to `request.projectAccess.workspaceId`) continues to
+   pass exactly as before.
+5. Non-project-scoped route (no `request.projectAccess` on the request — the route's guard
+   chain never included `ProjectAccessGuard`) retains today's exact behavior: workspace
+   context from header/query/param, `400` if absent, `403` if the resolved workspace grants
+   no membership or insufficient permission — unchanged by this fix.
+
+The end-to-end complement to tests 2/3/4 above, exercised through this module's real HTTP
+routes, is J.2 item 12.
 
 ### J.3 Known test-matrix limitation (flagged, not silently dropped)
 
@@ -928,9 +1158,12 @@ cannot exist as real data. This case remains fully proven at the Phase 1 kernel 
 layer (already merged, already passing) using synthetic `BasicPriceCandidate.unit` values,
 and is additionally proven indirectly at the Phase 2 unit-test layer (J.1.8) by directly
 constructing a service-level `BasicPriceCandidate` array with a mismatched unit and
-asserting the kernel-forwarding path preserves the kernel's verdict unchanged. Recommend
-PM/Architect accept this as sufficient coverage for Phase 2 rather than requiring an
-unconstructable E2E fixture.
+asserting the kernel-forwarding path preserves the kernel's verdict unchanged. **Accepted
+and locked as sufficient coverage (PM Plan Review Decisions §8):** "kernel regression tests
+remain the authoritative proof for malformed/synthetic wrong-unit candidates; Phase 2
+service tests may prove forwarding/fail-closed behavior with mocks; do not manufacture
+impossible database data merely to satisfy an E2E checklist." No E2E fixture for this case
+will be attempted.
 
 ---
 
@@ -946,32 +1179,33 @@ backend/src/project-ahsp/project-ahsp.service.ts                                
 backend/src/project-ahsp/project-ahsp.service.spec.ts                                  (new)
 backend/src/project-ahsp/dto/create-project-ahsp-occurrence.dto.ts                     (new)
 backend/test/acceptance/project-ahsp-occurrence.e2e-spec.ts                            (new)
+backend/src/ahsp/price-resolution/ahsp-resource-price-resolution.kernel.ts             (modified — Option C, F.4; locked, unconditional per PM Plan Review Decisions §3)
+backend/src/ahsp/price-resolution/ahsp-resource-price-resolution.kernel.spec.ts        (modified — additive regression tests, F.4)
+backend/src/auth/guards/permissions.guard.ts                                           (modified — bounded security fix, E.3; locked per PM Plan Review Decisions §9)
+backend/src/auth/guards/permissions.guard.spec.ts                                      (new — no such file exists today)
 ```
 
-Conditionally (pending F.4 decision (a) vs (b)):
-
-```text
-backend/src/ahsp/price-resolution/ahsp-resource-price-resolution.kernel.ts             (modified — additive export only, if (a) is authorized)
-```
+**Scope correction (PM Plan Review Decisions §10):** the first draft listed the kernel
+change as conditional on an unresolved (a)-vs-(b) choice, and did not list
+`PermissionsGuard` at all. Both are now firm, locked, in-scope items — see D.
 
 This plan itself is the only file changed on this branch at the current (planning) stage:
 
 ```text
-docs/implementation-plans/BP_AHSP_PHASE2_IMPLEMENTATION_PLAN.md                        (new — this file)
+docs/implementation-plans/BP_AHSP_PHASE2_IMPLEMENTATION_PLAN.md                        (this file — revised)
 ```
 
 ---
 
 ## L. Risks and STOP conditions
 
-### L.1 Kernel export question (F.4) — highest-priority open item
+### L.1 Kernel export question (F.4) — RESOLVED (Option C locked, PM Plan Review Decisions §3)
 
-Whether the Phase 2 service may add a tiny additive export to the Phase 1 kernel file, or
-must instead duplicate its bounded unit-alias set locally, is not decided by this plan.
-**Recommendation: resolve this explicitly before implementation starts** — it changes the
-shape of one file and one design decision, not the schema or the endpoints, so it should
-not block schema/migration review, but must be confirmed before the resolution-flow code is
-written.
+The first draft's highest-priority open item — export the unit predicate, or duplicate it —
+is closed. PM rejected both and locked a third design: one optional `freshnessStatus` field
+on `BasicPriceCandidate`, evaluated entirely inside the kernel. No further PM/Architect
+input is needed on this point before implementation; see F.4 for the full locked design and
+required regression tests.
 
 ### L.2 `BasicPriceService` sufficiency
 
@@ -981,9 +1215,10 @@ predicate." Finding: `findByResource()` + `findOneForWorkspace()` **are** suffic
 eligibility predicate itself (status + verificationStatus + tenant-or-global) — no second
 eligibility predicate is proposed anywhere in this plan. The freshness split in F.4 is not
 a second *eligibility* predicate; it is Phase-2-specific *bounding logic* the gate itself
-mandates (§8.8), applied after `findByResource()`'s eligibility filter already ran. This
-plan treats that distinction as settled, not a STOP condition — flagged here so
-PM/Architect can object if they read it differently.
+mandates (§8.8), now implemented entirely inside the kernel via Option C (F.4) rather than
+as a service-side filter. **Confirmed settled by PM Plan Review Decisions §8/§9**, which
+reuse `findByResource()`/`findOneForWorkspace()` as the sole eligibility source throughout —
+no STOP condition here.
 
 ### L.3 Workspace ambiguity (tenant vs. global `AHSPVersion`/`ResourceCatalog`)
 
@@ -1023,13 +1258,36 @@ matching type (`Uuid`), and the additive relation-array declarations have no SQL
 (B.5). No existing migration in `backend/prisma/migrations/` needs to be reordered or
 amended.
 
-### L.8 WorkspaceId source-of-truth seam (A.4 finding 1 / E.3)
+### L.8 WorkspaceId source-of-truth seam (A.4 finding 1 / E.3) — RESOLVED, now a required change
 
-Not new to Phase 2, but Phase 2 is the first time this module explicitly persists
-tenant-scoped data behind this exact guard combination outside `ProjectController` itself.
-Recommend the E.3 default (scope by `request.projectAccess.workspaceId`) be explicitly
-confirmed by PM/Architect, since it is a plan-level judgment call rather than a literal
-instruction in either gate document.
+The first draft treated this as a non-blocking risk with a service-layer-only workaround.
+**PM Plan Review Decisions §9 ruled that insufficient** and locked a bounded
+`PermissionsGuard` fix instead (E.3) — this is no longer a residual risk to monitor; it is a
+required, in-scope code change (D, K) with its own test obligations (J.2 item 12, J.2a).
+The one still-open sub-decision is the conservative default noted in E.3 (whether the
+`x-workspace-id` header becomes optional on project routes) — flagged there, not here, since
+it does not change whether the fix ships, only one edge-case detail of its shape.
+
+### L.9 `PermissionsGuard` regression risk — new (E.3, PM Plan Review Decisions §9)
+
+The bounded fix in E.3 changes behavior on every existing route that combines
+`ProjectAccessGuard` with `PermissionsGuard` (today: several routes in `ProjectController`,
+per A.3), not only the two new Phase 2 endpoints — because the fix lives inside the shared
+`PermissionsGuard` class. Mitigation already designed into E.3/J.2a:
+
+- the fix only activates when `request.projectAccess` is present, so non-project-scoped
+  routes are provably unaffected by construction (J.2a test 5);
+- for the project-scoped routes that already exist today (`ProjectController`), every
+  request in current usage and in the existing e2e suite (`project-access.e2e-spec.ts`,
+  `project-intake-context.e2e-spec.ts`, etc.) already supplies an `x-workspace-id` header
+  that matches the actual project's workspace (callers are not presenting cross-workspace
+  credentials today), so the new mismatch-rejection branch should not change any passing
+  existing test's outcome — but this is a prediction, not yet a proof;
+- **required before this change ships:** the full existing backend unit and safe-E2E suites
+  (gate §14, C) must still pass unmodified after the `PermissionsGuard` change, in addition
+  to the new tests in J.2/J.2a. Any existing test that starts failing because of this change
+  must be treated as a signal to re-examine the fix's shape with PM/Architect, not silently
+  adjusted to pass.
 
 ---
 
