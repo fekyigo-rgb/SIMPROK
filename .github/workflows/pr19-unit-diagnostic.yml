@@ -1,0 +1,30 @@
+name: PR19 Unit Diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    if: github.head_ref == 'diagnostic/pr19-unit-failure'
+    runs-on: ubuntu-24.04
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://diagnostic:diagnostic@localhost:5432/simprok_test?schema=public
+    steps:
+      - name: Print failing unit test details only
+        shell: bash
+        run: |
+          set -e
+          git clone --quiet --depth 1 --branch diagnostic/pr19-unit-failure https://x-access-token:${{ github.token }}@github.com/fekyigo-rgb/SIMPROK.git repo
+          cd repo/backend
+          npm ci --silent >/dev/null 2>&1
+          npx prisma generate >/dev/null 2>&1
+          set +e
+          output="$(npm test -- --runInBand 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output" | tail -n 140
+          exit "$status"
