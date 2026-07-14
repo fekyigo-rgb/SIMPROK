@@ -9,6 +9,7 @@ import { CreateRabIntelligenceProposalDto } from './dto/create-rab-intelligence-
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { ProjectAccessPolicyService } from '../auth/project-access-policy.service';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 
@@ -18,6 +19,7 @@ export class ProjectController {
   constructor(
     private readonly projectService: ProjectService,
     private readonly rabIntelligenceProposalService: RabIntelligenceProposalService,
+    private readonly projectAccessPolicy: ProjectAccessPolicyService,
   ) {}
 
   @Post()
@@ -75,7 +77,7 @@ export class ProjectController {
       throw new BadRequestException('Authenticated account context is required');
     }
 
-    return this.projectService.findAccessibleByAccount(
+    return this.projectAccessPolicy.listAccessibleProjects(
       accountId,
       contextWorkspaceId,
     );
