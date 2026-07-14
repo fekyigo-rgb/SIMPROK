@@ -40,14 +40,14 @@ export class ProjectAccessGuard implements CanActivate {
       projectId,
     );
 
-    if (
-      resolution.kind === 'PROJECT_NOT_FOUND' ||
-      resolution.kind === 'MEMBERSHIP_NOT_FOUND'
-    ) {
-      throw new NotFoundException('Project not found');
-    }
+    if (resolution.kind !== 'GRANTED') {
+      if (
+        resolution.kind === 'PROJECT_NOT_FOUND' ||
+        resolution.kind === 'MEMBERSHIP_NOT_FOUND'
+      ) {
+        throw new NotFoundException('Project not found');
+      }
 
-    if (resolution.kind === 'ASSIGNMENT_REQUIRED') {
       throw new ForbiddenException('Project assignment required');
     }
 
