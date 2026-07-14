@@ -75,6 +75,7 @@ export type ReasonCode =
   | 'RESOURCE_TYPE_MISMATCH'
   | 'UNIT_NOT_SUPPORTED'
   | 'NO_BASIC_PRICE_CANDIDATE'
+  | 'BASIC_PRICE_UNIT_NOT_SUPPORTED'
   | 'MULTIPLE_BASIC_PRICE_CANDIDATES';
 
 export interface ResolvedResolution {
@@ -272,11 +273,12 @@ export function resolveAhspResourcePrice(
   }
 
   // ---- Step 3: Basic Price candidate filtering ----
-  const matchingPrices = eligibleBasicPriceCandidates.filter(
+  // 3a. Filter by resourceId (catalog identity match).
+  const resourceMatchingPrices = eligibleBasicPriceCandidates.filter(
     (price) => price.resourceId === resolvedCatalog.id,
   );
 
-  if (matchingPrices.length === 0) {
+  if (resourceMatchingPrices.length === 0) {
     return {
       ...baseContext,
       status: 'UNRESOLVED',
@@ -295,7 +297,35 @@ export function resolveAhspResourcePrice(
     };
   }
 
-  if (matchingPrices.length > 1) {
+  // 3b. Among resource-matching prices, retain only those whose unit is
+  //     a supported labor-day equivalent. Other units (e.g. Jam) are not
+  //     candidates for Phase 1 and must not resolve with factor 1.
+  //     No hour-to-day or other conversion is added here.
+  const compatiblePrices = resourceMatchingPrices.filter(
+    (price) => isLaborDayUnit(price.unit),
+  );
+
+  if (compatiblePrices.length === 0) {
+    return {
+      ...baseContext,
+      status: 'UNRESOLVED',
+      reasonCodes: [
+        'EXACT_RESOURCE_NAME_MATCH',
+        'RESOURCE_TYPE_MATCH',
+        'LABOR_DAY_UNIT_EQUIVALENT',
+        'BASIC_PRICE_UNIT_NOT_SUPPORTED',
+      ],
+      explanation:
+        `Identitas sumber daya "${rawResourceRef}" berhasil dipetakan ke katalog ` +
+        `"${resolvedCatalog.name}" (${resolvedCatalog.id}), ` +
+        `tetapi tidak ada Basic Price dengan unit labor-day yang didukung ` +
+        `(OH / Org/Hari / Orang/Hari). ` +
+        `Basic Price yang tersedia memiliki unit tidak kompatibel dan tidak dapat ` +
+        `digunakan tanpa konversi yang belum diizinkan di Phase 1.`,
+    };
+  }
+
+  if (compatiblePrices.length > 1) {
     return {
       ...baseContext,
       status: 'NEEDS_REVIEW',
@@ -306,15 +336,15 @@ export function resolveAhspResourcePrice(
         'MULTIPLE_BASIC_PRICE_CANDIDATES',
       ],
       explanation:
-        `Identitas sumber daya berhasil dipetakan, tetapi ditemukan ` +
-        `${matchingPrices.length} Basic Price untuk katalog ` +
-        `"${resolvedCatalog.name}" (${resolvedCatalog.id}). ` +
+        `Identitas sumber daya berhasil dipetakan dan unit labor-day cocok, ` +
+        `tetapi ditemukan ${compatiblePrices.length} Basic Price yang kompatibel ` +
+        `untuk katalog "${resolvedCatalog.name}" (${resolvedCatalog.id}). ` +
         `Pemilihan otomatis multi-harga belum didukung di Phase 1. ` +
         `Diperlukan tinjauan manual.`,
     };
   }
 
-  const selectedPrice = matchingPrices[0];
+  const selectedPrice = compatiblePrices[0];
 
   // ---- Step 4: RESOLVED — factor 1, price string returned exactly ----
   return {

@@ -15,6 +15,11 @@
  * 10.  A very high nominal price resolves exactly the same way; no price-based warning
  * 11.  Unrelated Basic Prices from another ResourceCatalog are never selected
  * 12.  Input decimal strings returned exactly without conversion to JavaScript number
+ * PM-REVISE new tests:
+ * 13.  Pekerja/OH + catalog Org/Hari + Basic Price unit Jam → UNRESOLVED / BASIC_PRICE_UNIT_NOT_SUPPORTED
+ * 14.  One Org/Hari price + one Jam price for same resource → only Org/Hari selected, not NEEDS_REVIEW
+ * 15.  Two labor-day-compatible prices → NEEDS_REVIEW (unchanged behavior)
+ * 16.  Basic Price unit case/whitespace variations → still RESOLVED
  */
 
 import {
@@ -72,7 +77,9 @@ const PRICE_PEKERJA_ALTERNATIVE: BasicPriceCandidate = {
   id: 'price-pekerja-uuid-002',
   resourceId: 'catalog-pekerja-uuid-001',
   value: '135000.00',
-  sourceOrigin: 'MARKET_SURVEY',
+  // FIELD_REPORT is the correct PriceSourceOrigin enum value for this fixture.
+  // MARKET_SURVEY is not a valid PriceSourceOrigin in the repository schema.
+  sourceOrigin: 'FIELD_REPORT',
   unit: 'Org/Hari',
 };
 
@@ -411,5 +418,115 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
     expect(result.explanation).toContain(CATALOG_PEKERJA.id);
     expect(result.explanation).toContain(PRICE_PEKERJA_STANDARD.id);
     expect(result.explanation).toContain('SIMPROK menghitung');
+  });
+
+  // ----------------------------------------------------------
+  // PM-REVISE Test 13: Basic Price unit Jam → BASIC_PRICE_UNIT_NOT_SUPPORTED
+  // ----------------------------------------------------------
+  it('13 (PM-REVISE). Pekerja/OH + catalog Org/Hari + Basic Price unit Jam → UNRESOLVED / BASIC_PRICE_UNIT_NOT_SUPPORTED', () => {
+    const priceJam: BasicPriceCandidate = {
+      id: 'price-pekerja-jam-uuid-001',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '15000.00',
+      sourceOrigin: 'GOVERNMENT',
+      unit: 'Jam',
+    };
+
+    const result = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      eligibleBasicPriceCandidates: [priceJam],
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toContain('BASIC_PRICE_UNIT_NOT_SUPPORTED');
+    expect(result.reasonCodes).toContain('EXACT_RESOURCE_NAME_MATCH');
+    expect(result.reasonCodes).toContain('LABOR_DAY_UNIT_EQUIVALENT');
+    // Must NOT have selectedBasicPriceId
+    expect((result as any).selectedBasicPriceId).toBeUndefined();
+    expect(result.explanation).toContain('labor-day');
+  });
+
+  // ----------------------------------------------------------
+  // PM-REVISE Test 14: One compatible (Org/Hari) + one incompatible (Jam) price
+  //   → selects the compatible one, not NEEDS_REVIEW
+  // ----------------------------------------------------------
+  it('14 (PM-REVISE). One Org/Hari price + one Jam price for same resource → RESOLVED with Org/Hari, not NEEDS_REVIEW', () => {
+    const priceJam: BasicPriceCandidate = {
+      id: 'price-pekerja-jam-uuid-002',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '15000.00',
+      sourceOrigin: 'GOVERNMENT',
+      unit: 'Jam',
+    };
+
+    const result = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      // Both prices match by resourceId; only Org/Hari is labor-day-compatible.
+      eligibleBasicPriceCandidates: [PRICE_PEKERJA_STANDARD, priceJam],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    if (result.status !== 'RESOLVED') return;
+    // Must select the compatible Org/Hari price, not the Jam price
+    expect(result.selectedBasicPriceId).toBe(PRICE_PEKERJA_STANDARD.id);
+    expect(result.sourceUnit).toBe('Org/Hari');
+    expect(result.reasonCodes).toContain('SINGLE_ELIGIBLE_BASIC_PRICE');
+    // Must NOT be NEEDS_REVIEW because the Jam price was correctly excluded
+    expect(result.status).not.toBe('NEEDS_REVIEW');
+  });
+
+  // ----------------------------------------------------------
+  // PM-REVISE Test 15: Two labor-day-compatible prices → still NEEDS_REVIEW
+  // ----------------------------------------------------------
+  it('15 (PM-REVISE). Two labor-day-compatible prices for same resource → NEEDS_REVIEW (unchanged)', () => {
+    const result = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      // Both are Org/Hari — both are compatible — kernel cannot select automatically
+      eligibleBasicPriceCandidates: [PRICE_PEKERJA_STANDARD, PRICE_PEKERJA_ALTERNATIVE],
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('MULTIPLE_BASIC_PRICE_CANDIDATES');
+    expect(result.explanation).toContain('kompatibel');
+  });
+
+  // ----------------------------------------------------------
+  // PM-REVISE Test 16: Basic Price unit case and whitespace variations → RESOLVED
+  // ----------------------------------------------------------
+  it('16 (PM-REVISE). Basic Price unit case and surrounding whitespace variations are accepted as labor-day', () => {
+    const priceUpperOH: BasicPriceCandidate = {
+      ...PRICE_PEKERJA_STANDARD,
+      id: 'price-pekerja-upper-oh-uuid-001',
+      unit: '  OH  ',
+    };
+    const priceOrangHari: BasicPriceCandidate = {
+      ...PRICE_PEKERJA_STANDARD,
+      id: 'price-pekerja-orang-hari-uuid-001',
+      unit: 'orang/hari',
+    };
+
+    // Each tested individually to ensure one compatible price → RESOLVED
+    const resultOH = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      eligibleBasicPriceCandidates: [priceUpperOH],
+    });
+    expect(resultOH.status).toBe('RESOLVED');
+    if (resultOH.status === 'RESOLVED') {
+      expect(resultOH.selectedBasicPriceId).toBe(priceUpperOH.id);
+    }
+
+    const resultOrangHari = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      eligibleBasicPriceCandidates: [priceOrangHari],
+    });
+    expect(resultOrangHari.status).toBe('RESOLVED');
+    if (resultOrangHari.status === 'RESOLVED') {
+      expect(resultOrangHari.selectedBasicPriceId).toBe(priceOrangHari.id);
+    }
   });
 });
