@@ -26,5 +26,5 @@ jobs:
           output="$(npm run build 2>&1)"
           status=$?
           set -e
-          printf '%s\n' "$output" | grep -E 'error TS|Found [0-9]+ error' || printf '%s\n' "$output" | tail -n 60
+          printf '%s\n' "$output" | tail -n 60
           exit "$status"
