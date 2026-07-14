@@ -13,8 +13,10 @@ Repository: fekyigo-rgb/SIMPROK
 - P7C: CANONICAL INTAKE CONTRACT IMPLEMENTED_ON_BRANCH.
 - Coding P7C: AWAITING_OWNER_REVIEW.
 - Basic Price–AHSP Implementation Blueprint v1.0: OWNER PASS — FOUNDATION LOCKED.
+- Project, RAB, Authority & Unit Law v1.0: OWNER LOCKED — CANONICAL.
 - BP-AHSP Phase 1 Deterministic Resource Price Resolution Proof: COMMITTED_PASS melalui PR #22, merge commit `217b5f8dca983d24b51be18208d2ab00f6a38845`.
-- BP-AHSP Phase 2 Project AHSP Occurrence Persistence: OWNER/PM IMPLEMENTATION GATE — GO.
+- Security prerequisite — Project Permission Workspace Authority: ACTIVE; wajib diselesaikan dan di-merge sebelum BP-AHSP Phase 2 production implementation.
+- BP-AHSP Phase 2 Project AHSP Occurrence Persistence: HOLD pending merged security prerequisite; plan/gate tetap aktif dan tidak dibatalkan.
 
 ## 2. Keputusan Owner
 
@@ -74,6 +76,7 @@ Execution context dan keputusan EF melekat pada setiap occurrence/item, bukan pa
 - Repository reality audit sebelum first implementation slice.
 - Semantik final ACCEPT / VERIFIED / PUBLISHED pada Basic Price.
 - Precedence ResourceCatalog dan Basic Price global vs workspace.
+- Final permission catalog for RAB draft editing and project AHSP occurrence writing.
 
 ## 4. Keputusan yang Digantikan
 
@@ -219,12 +222,42 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Gate document:
   `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`
 - Status:
-  `OWNER/PM IMPLEMENTATION GATE — GO`
-- Scope:
+  `HOLD — SECURITY PREREQUISITE MUST MERGE FIRST`
+- Security prerequisite documents:
+  - `docs/implementation-gates/BP_AHSP_PHASE2_ARCHITECT_FINAL_REVIEW_DECISIONS.md`
+  - `docs/implementation-gates/SECURITY_PROJECT_PERMISSION_WORKSPACE_AUTHORITY_SUPPLEMENT.md`
+- Scope after prerequisite:
   `Create ProjectAhspOccurrence and ProjectAhspResourceResolution; wire the Phase 1 kernel into a guarded backend runtime endpoint; persist RESOLVED, UNRESOLVED, or NEEDS_REVIEW outcomes and the selected Basic Price trace inside the project AHSP occurrence.`
 - Placement:
   `Do not store resource-level selection in BoqItem or RAB. Do not mutate master AHSP or old snapshots.`
 - Forbidden in this phase:
   `No frontend, no override, no comparison UI, no multi-price ranking, no publication fix, no global/workspace precedence rule, no universal unit engine, no Cost Kernel arithmetic, no AHSP unit-price calculation, no RAB change, and no snapshot backfill.`
 - Delivery rule:
-  `Implement on feat/bp-ahsp-phase2-occurrence-persistence; do not merge or create PR before PM code review; return IMPLEMENTATION_PASS_AWAITING_PM_GATE or STOP/FAIL.`
+  `Merge the independent PermissionsGuard security PR first; then synchronize main and the Phase 2 branch before continuing. Do not merge or create a Phase 2 PR before PM code review and complete gates.`
+
+## 10. PROJECT, RAB, AUTHORITY & UNIT LAW
+
+- Canonical document:
+  `docs/project-memory/SIMPROK_PROJECT_RAB_AUTHORITY_UNIT_LAW.md`
+- Version:
+  `v1.0`
+- Status:
+  `OWNER LOCKED — CANONICAL`
+- Source:
+  `Owner document DESAIN 6. Pintu dan Kewenangan RAB, normalized on 14 Juli 2026.`
+- Core authority law:
+  `Workspace permission must be evaluated in the project’s real Workspace and combined with ProjectAssignment; membership alone is insufficient.`
+- Door law:
+  `PROJECT_CREATE is not RAB_DRAFT_EDIT; project creation, RAB viewing/editing, locking, and approval are distinct authorities.`
+- Placement law:
+  `Basic Price resolution and selection live inside the project AHSP occurrence; RAB only consumes the resulting AHSP unit price.`
+- Unit gate law:
+  `AHSPVersion.outputUnit and BOQ-unit compatibility are mandatory before BOQ Volume × AHSP Unit Price; incompatible or unsupported conversion is NEEDS_REVIEW.`
+- Conversion truth law:
+  `Audit AHSPResource.conversionFactor before introducing UnitConversionRule; two canonical homes for the same conversion factor are forbidden.`
+- Current effective order:
+  `Security prerequisite → BP-AHSP Phase 2 persistence → KAMUS-UNIT-KERNEL-01A → KAMUS-UNIT-KERNEL-01B → one live RAB line → broader Governance/RBAC debts.`
+- Retrieval rule:
+  `For project/RAB/authority/unit work, read Project Memory, then this canonical law, then the Basic Price–AHSP Owner Lock and Blueprint, then applicable gates and repository/runtime evidence.`
+- Duplication rule:
+  `Do not copy the full law into other documents. Keep pointers/status only to prevent two versions of truth.`
