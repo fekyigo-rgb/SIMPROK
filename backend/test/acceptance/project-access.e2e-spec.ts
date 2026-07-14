@@ -8,7 +8,7 @@ import { AppModule } from '../../src/app.module';
 const PASSWORD = 'Test1234!';
 const PROJECT_CODE = 'ACC-X';
 
-describe('ProjectAccessGuard acceptance (e2e)', () => {
+describe('Project assignment access contract (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaClient;
   let projectId: string;
@@ -80,49 +80,107 @@ describe('ProjectAccessGuard acceptance (e2e)', () => {
     return response.body.access_token;
   }
 
-  it('rejects GET /projects when workspace context is missing', async () => {
+  it('rejects GET /projects/mine when workspace context is missing', async () => {
     const token = await login('assigned@test.local');
 
     await request(app.getHttpServer())
-      .get('/projects')
+      .get('/projects/mine')
       .set('Authorization', `Bearer ${token}`)
       .expect(400);
   });
 
-  it('returns only projects for the requested workspace context', async () => {
+  it('returns ACC-X from /projects/mine for the assigned member', async () => {
     const token = await login('assigned@test.local');
 
     const response = await request(app.getHttpServer())
-      .get(`/projects/workspace/${workspaceAId}`)
+      .get('/projects/mine')
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(200);
 
-    expect(Array.isArray(response.body)).toBe(true);
     expect(response.body).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: projectId,
           code: PROJECT_CODE,
           workspaceId: workspaceAId,
-        }),
-      ]),
-    );
-    expect(response.body).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: workspaceBProjectId,
-          workspaceId: workspaceBId,
+          access: expect.objectContaining({
+            assignmentId: expect.any(String),
+            roleInProject: expect.any(String),
+            isPrimaryAssignment: expect.any(Boolean),
+          }),
         }),
       ]),
     );
   });
 
-  it('does not leak Workspace-B projects through Workspace-A context', async () => {
+  it('returns an empty mine list for PROJECT_VIEW member without assignment', async () => {
+    const token = await login('nonassigned@test.local');
+
+    const response = await request(app.getHttpServer())
+      .get('/projects/mine')
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+
+    expect(response.body).toEqual([]);
+  });
+
+  it('rejects mine list for an account outside the active workspace', async () => {
+    const token = await login('crosstenant@test.local');
+
+    await request(app.getHttpServer())
+      .get('/projects/mine')
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(403);
+  });
+
+  it('keeps workspace-wide list unavailable to non-observatory members', async () => {
+    const token = await login('assigned@test.local');
+
+    await request(app.getHttpServer())
+      .get(`/projects/workspace/${workspaceAId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(403);
+  });
+
+  it('preserves guard/list equivalence for an assigned member', async () => {
+    const token = await login('assigned@test.local');
+
+    await request(app.getHttpServer())
+      .get(`/projects/${projectId}/reality`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+  });
+
+  it('preserves guard/list equivalence for a nonassigned member', async () => {
+    const token = await login('nonassigned@test.local');
+
+    await request(app.getHttpServer())
+      .get(`/projects/${projectId}/reality`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(403);
+  });
+
+  it('preserves cross-tenant concealment on project-scoped access', async () => {
+    const token = await login('crosstenant@test.local');
+
+    await request(app.getHttpServer())
+      .get(`/projects/${projectId}/reality`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(404);
+  });
+
+  it('does not include Workspace-B projects in the assigned mine list', async () => {
     const token = await login('assigned@test.local');
 
     const response = await request(app.getHttpServer())
-      .get(`/projects/workspace/${workspaceAId}`)
+      .get('/projects/mine')
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(200);
@@ -133,45 +191,5 @@ describe('ProjectAccessGuard acceptance (e2e)', () => {
 
     expect(workspaceIds).toContain(workspaceAId);
     expect(workspaceIds).not.toContain(workspaceBId);
-  });
-
-  it('rejects GET /projects for an account outside the requested workspace', async () => {
-    const token = await login('crosstenant@test.local');
-
-    await request(app.getHttpServer())
-      .get(`/projects/workspace/${workspaceAId}`)
-      .set('Authorization', `Bearer ${token}`)
-      .set('x-workspace-id', workspaceAId)
-      .expect(403);
-  });
-
-  it('returns 200 for an assigned workspace member', async () => {
-    const token = await login('assigned@test.local');
-
-    await request(app.getHttpServer())
-      .get(`/projects/${projectId}/reality`)
-      .set('Authorization', `Bearer ${token}`)
-      .set('x-workspace-id', workspaceAId)
-      .expect(200);
-  });
-
-  it('returns 403 for a workspace member without project assignment', async () => {
-    const token = await login('nonassigned@test.local');
-
-    await request(app.getHttpServer())
-      .get(`/projects/${projectId}/reality`)
-      .set('Authorization', `Bearer ${token}`)
-      .set('x-workspace-id', workspaceAId)
-      .expect(403);
-  });
-
-  it('returns 404 for cross-tenant access', async () => {
-    const token = await login('crosstenant@test.local');
-
-    await request(app.getHttpServer())
-      .get(`/projects/${projectId}/reality`)
-      .set('Authorization', `Bearer ${token}`)
-      .set('x-workspace-id', workspaceAId)
-      .expect(404);
   });
 });
