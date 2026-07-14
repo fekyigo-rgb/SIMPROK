@@ -89,6 +89,48 @@ describe('Project assignment access contract (e2e)', () => {
       .expect(400);
   });
 
+  it('proves the nonassigned actor has PROJECT_VIEW but no ACC-X assignment', async () => {
+    const account = await prisma.account.findUniqueOrThrow({
+      where: { email: 'nonassigned@test.local' },
+      select: {
+        memberships: {
+          where: { workspaceId: workspaceAId },
+          select: {
+            membershipRoles: {
+              where: { isActive: true },
+              select: {
+                role: {
+                  select: {
+                    rolePermissions: {
+                      select: {
+                        permission: { select: { code: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            assignments: {
+              where: { projectId, status: 'ASSIGNED' },
+              select: { id: true },
+            },
+          },
+        },
+      },
+    });
+
+    const membership = account.memberships[0];
+    const permissions =
+      membership?.membershipRoles.flatMap((membershipRole) =>
+        membershipRole.role.rolePermissions.map(
+          (rolePermission) => rolePermission.permission.code,
+        ),
+      ) ?? [];
+
+    expect(permissions).toContain('PROJECT_VIEW');
+    expect(membership?.assignments).toEqual([]);
+  });
+
   it('returns ACC-X from /projects/mine for the assigned member', async () => {
     const token = await login('assigned@test.local');
 
@@ -146,25 +188,36 @@ describe('Project assignment access contract (e2e)', () => {
       .expect(403);
   });
 
-  it('preserves guard/list equivalence for an assigned member', async () => {
-    const token = await login('assigned@test.local');
+  it.each([
+    ['assigned@test.local', true, 200],
+    ['nonassigned@test.local', false, 403],
+  ])(
+    'enforces mine-list iff project-guard equivalence for %s',
+    async (email, expectedListed, expectedGuardStatus) => {
+      const token = await login(email);
 
-    await request(app.getHttpServer())
-      .get(`/projects/${projectId}/reality`)
-      .set('Authorization', `Bearer ${token}`)
-      .set('x-workspace-id', workspaceAId)
-      .expect(200);
-  });
+      const mineResponse = await request(app.getHttpServer())
+        .get('/projects/mine')
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
 
-  it('preserves guard/list equivalence for a nonassigned member', async () => {
-    const token = await login('nonassigned@test.local');
+      const listed = mineResponse.body.some(
+        (candidate: { id: string }) => candidate.id === projectId,
+      );
 
-    await request(app.getHttpServer())
-      .get(`/projects/${projectId}/reality`)
-      .set('Authorization', `Bearer ${token}`)
-      .set('x-workspace-id', workspaceAId)
-      .expect(403);
-  });
+      const guardResponse = await request(app.getHttpServer())
+        .get(`/projects/${projectId}/reality`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId);
+
+      const guardGranted = guardResponse.status === 200;
+
+      expect(listed).toBe(expectedListed);
+      expect(guardResponse.status).toBe(expectedGuardStatus);
+      expect(listed).toBe(guardGranted);
+    },
+  );
 
   it('preserves cross-tenant concealment on project-scoped access', async () => {
     const token = await login('crosstenant@test.local');
