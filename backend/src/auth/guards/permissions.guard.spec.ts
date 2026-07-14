@@ -143,4 +143,13 @@ describe('PermissionsGuard', () => {
       membershipId: 'membership-1',
     });
   });
+
+  it('10. a matching header cannot mask a conflicting query workspace -> 403 with no membership lookup', async () => {
+    request.projectAccess = { workspaceId: 'workspace-a' };
+    request.headers['x-workspace-id'] = 'workspace-a';
+    request.query = { workspaceId: 'workspace-b' };
+
+    await expect(guard.canActivate(createContext())).rejects.toThrow(ForbiddenException);
+    expect(prisma.workspaceMembership.findFirst).not.toHaveBeenCalled();
+  });
 });

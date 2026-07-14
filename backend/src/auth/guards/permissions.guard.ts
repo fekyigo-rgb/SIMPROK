@@ -40,23 +40,41 @@ export class PermissionsGuard implements CanActivate {
     // Jika ProjectAccessGuard sudah berjalan lebih dulu (rute project-scoped),
     // request.projectAccess.workspaceId adalah workspace yang sudah diverifikasi
     // ke database dan menjadi otoritatif untuk evaluasi izin — bukan header klien.
-    const explicitWorkspaceId: string | undefined =
-      request.headers['x-workspace-id'] ||
-      request.query['workspaceId'] ||
-      request.params['workspaceId'];
     const projectWorkspaceId: string | undefined = request.projectAccess?.workspaceId;
 
     let workspaceId: string;
 
     if (projectWorkspaceId) {
-      if (explicitWorkspaceId && explicitWorkspaceId !== projectWorkspaceId) {
-        throw new ForbiddenException(
-          'Supplied workspace context does not match the authorized project workspace',
-        );
+      // Setiap explicit workspace context yang diberikan — header, query, ATAU route param —
+      // harus persis sama dengan project workspace. Diperiksa satu per satu (bukan lewat
+      // precedence `||`) supaya satu context yang cocok tidak menutupi context lain yang
+      // berbeda. Strict equality saja: tidak ada lowercase/trim/normalisasi. Nilai yang
+      // bukan string tunggal (array/object) fail closed sebagai mismatch.
+      const suppliedWorkspaceContexts: unknown[] = [
+        request.headers['x-workspace-id'],
+        request.query['workspaceId'],
+        request.params['workspaceId'],
+      ];
+
+      for (const supplied of suppliedWorkspaceContexts) {
+        if (supplied === undefined) {
+          continue;
+        }
+        if (typeof supplied !== 'string' || supplied !== projectWorkspaceId) {
+          throw new ForbiddenException(
+            'Supplied workspace context does not match the authorized project workspace',
+          );
+        }
       }
+
       workspaceId = projectWorkspaceId;
     } else {
-      // Rute non-project: perilaku lama tetap utuh — workspace eksplisit wajib.
+      // Rute non-project: perilaku lama tetap utuh — precedence dan wajib-ada tidak berubah.
+      const explicitWorkspaceId: string | undefined =
+        request.headers['x-workspace-id'] ||
+        request.query['workspaceId'] ||
+        request.params['workspaceId'];
+
       if (!explicitWorkspaceId) {
         throw new BadRequestException('Missing active Workspace Context (x-workspace-id header is required)');
       }

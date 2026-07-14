@@ -273,4 +273,18 @@ describe('Project permission workspace authority (e2e)', () => {
     expect(response.body).not.toHaveProperty('available');
     expect(response.body).not.toHaveProperty('data');
   });
+
+  it('9. a matching header cannot mask a conflicting query workspace -> 403 with no data leak', async () => {
+    const token = await login(emails.legitA);
+
+    const response = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/reality`)
+      .query({ workspaceId: workspaceBId })
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(403);
+
+    expect(response.body).not.toHaveProperty('available');
+    expect(response.body).not.toHaveProperty('data');
+  });
 });
