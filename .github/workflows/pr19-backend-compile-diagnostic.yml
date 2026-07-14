@@ -18,7 +18,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          git clone --quiet --depth 1 --branch diagnostic/pr19-backend-build https://github.com/fekyigo-rgb/SIMPROK.git repo
+          git clone --quiet --depth 1 --branch diagnostic/pr19-backend-build https://x-access-token:${{ github.token }}@github.com/fekyigo-rgb/SIMPROK.git repo
           cd repo/backend
           npm ci --silent >/dev/null 2>&1
           npx prisma generate >/dev/null 2>&1
