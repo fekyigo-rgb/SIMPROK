@@ -12,7 +12,7 @@ Repository: fekyigo-rgb/SIMPROK
 - P7B: LOCKED.
 - P7C: CANONICAL INTAKE CONTRACT IMPLEMENTED_ON_BRANCH.
 - Coding P7C: AWAITING_OWNER_REVIEW.
-- Basic Price–AHSP Implementation Blueprint v1.0: OWNER REVIEW DRAFT — BASIS BEFORE IMPLEMENTATION PROMPT.
+- Basic Price–AHSP Implementation Blueprint v1.0: OWNER PASS — FOUNDATION LOCKED.
 
 ## 2. Keputusan Owner
 
@@ -48,6 +48,20 @@ Satu AHSP master dapat digunakan pada banyak BOQ item.
 Execution context dan keputusan EF melekat pada setiap occurrence/item, bukan pada master AHSP.
 
 **Status:** P7C CORE LAW - menunggu Owner PASS final P7C.
+
+### DEC-BP-AHSP-001 - Basic Price Selection Inside Project AHSP Occurrence
+
+- Basic Price mencatat fakta harga; nominal tinggi/rendah bukan alasan peringatan.
+- Identitas publik utama: Harga Pemerintah, Harga Toko/Supplier, atau Harga Lapangan.
+- SIMPROK memilih Basic Price secara otomatis di dalam project AHSP occurrence.
+- User dapat melihat alasan, melihat harga pembanding, dan mengganti harga.
+- Pilihan dan override disimpan di AHSP occurrence/snapshot, bukan di baris RAB.
+- Master AHSP tetap otoritatif dan tidak berubah karena konteks harga proyek.
+- Basic Price menyesuaikan satu arah ke satuan AHSP melalui konversi deterministik dan berbukti.
+- Snapshot lama tidak pernah di-backfill.
+- RAB hanya mengonsumsi Harga Satuan hasil AHSP.
+
+**Status:** OWNER PASS — FOUNDATION LOCKED pada 14 Juli 2026.
 
 ## 3. Keputusan Terbuka
 
@@ -121,17 +135,21 @@ Digantikan oleh enam mode final A-F.
 
 - Canonical document:
   `docs/project-memory/SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT.md`
+- Owner Lock Record:
+  `docs/project-memory/SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT_OWNER_LOCK.md`
 - Version:
   `v1.0`
 - Status:
-  `OWNER REVIEW DRAFT — BASIS BEFORE IMPLEMENTATION PROMPT`
+  `OWNER PASS — FOUNDATION LOCKED`
+- Owner PASS:
+  `14 Juli 2026`
 - Implementation authority:
-  `NONE until explicit Owner PASS and a separate bounded implementation gate`
+  `FOUNDATION LOCKED; NONE until a separate bounded Owner/PM implementation gate`
 - Core placement law:
   `SIMPROK automatically selects Basic Price inside the project AHSP occurrence; the user may inspect, compare, and override; RAB only consumes the resulting AHSP unit price.`
 - Master law:
   `Master AHSP remains authoritative and unchanged. Project price resolution, conversion evidence, selection, and override belong to the project AHSP occurrence/snapshot.`
 - Retrieval rule:
-  Read this blueprint before creating or executing any Basic Price, resource bridge, unit conversion, AHSP price-resolution, Cost Kernel, or Golden Thread implementation prompt.
+  Read Project Memory first, then the Owner Lock Record, then the canonical blueprint, before creating or executing any Basic Price, resource bridge, unit conversion, AHSP price-resolution, Cost Kernel, or Golden Thread implementation prompt.
 - Duplication rule:
   Do not copy the full blueprint into Project Memory. Keep only this pointer/status to prevent two versions of truth.
