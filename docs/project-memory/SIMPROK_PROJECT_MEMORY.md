@@ -1,4 +1,4 @@
-﻿# SIMPROK - Living Project Memory
+# SIMPROK - Living Project Memory
 
 Owner: Feky de Fretes
 PM / Gate Keeper: ChatGPT
@@ -12,6 +12,7 @@ Repository: fekyigo-rgb/SIMPROK
 - P7B: LOCKED.
 - P7C: CANONICAL INTAKE CONTRACT IMPLEMENTED_ON_BRANCH.
 - Coding P7C: AWAITING_OWNER_REVIEW.
+- Basic Price–AHSP Implementation Blueprint v1.0: OWNER REVIEW DRAFT — BASIS BEFORE IMPLEMENTATION PROMPT.
 
 ## 2. Keputusan Owner
 
@@ -55,6 +56,8 @@ Execution context dan keputusan EF melekat pada setiap occurrence/item, bukan pa
 - Profil spesifik AHSP.
 - Matriks sumber harga x cakupan x mobilisasi x EF.
 - Repository reality audit sebelum first implementation slice.
+- Semantik final ACCEPT / VERIFIED / PUBLISHED pada Basic Price.
+- Precedence ResourceCatalog dan Basic Price global vs workspace.
 
 ## 4. Keputusan yang Digantikan
 
@@ -113,3 +116,22 @@ Digantikan oleh enam mode final A-F.
   Read Project Memory first, then the canonical P7C document, then locked Foundation/ADR sources and repository reality.
 - Duplication rule:
   Do not copy the full P7C law into Project Memory. Keep only this pointer/status to prevent two versions of truth.
+
+## 7. BASIC PRICE–AHSP IMPLEMENTATION BLUEPRINT
+
+- Canonical document:
+  `docs/project-memory/SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT.md`
+- Version:
+  `v1.0`
+- Status:
+  `OWNER REVIEW DRAFT — BASIS BEFORE IMPLEMENTATION PROMPT`
+- Implementation authority:
+  `NONE until explicit Owner PASS and a separate bounded implementation gate`
+- Core placement law:
+  `SIMPROK automatically selects Basic Price inside the project AHSP occurrence; the user may inspect, compare, and override; RAB only consumes the resulting AHSP unit price.`
+- Master law:
+  `Master AHSP remains authoritative and unchanged. Project price resolution, conversion evidence, selection, and override belong to the project AHSP occurrence/snapshot.`
+- Retrieval rule:
+  Read this blueprint before creating or executing any Basic Price, resource bridge, unit conversion, AHSP price-resolution, Cost Kernel, or Golden Thread implementation prompt.
+- Duplication rule:
+  Do not copy the full blueprint into Project Memory. Keep only this pointer/status to prevent two versions of truth.
