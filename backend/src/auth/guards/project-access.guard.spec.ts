@@ -6,68 +6,19 @@ import {
 } from '@nestjs/common';
 import { ProjectAccessGuard } from './project-access.guard';
 
-describe('ProjectAccessGuard', () => {
-  const project = {
-    id: 'p1',
-    workspaceId: 'w1',
-    status: 'ACTIVE',
-  };
-  const user = {
-    id: 'u1',
-    workspaceMembershipId: 'm1',
-    workspaceId: 'w1',
-    fullName: 'Project User',
-    status: 'ACTIVE',
-    createdAt: new Date('2026-01-01T00:00:00.000Z'),
-    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-  };
-  const membership = {
-    id: 'm1',
-    accountId: 'account-1',
-    workspaceId: 'w1',
-    status: 'ACTIVE',
-    createdAt: new Date('2026-01-01T00:00:00.000Z'),
-    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-    userProfile: user,
-    membershipRoles: [
-      {
-        id: 'mr1',
-        workspaceMembershipId: 'm1',
-        roleId: 'r1',
-        startDate: new Date('2026-01-01T00:00:00.000Z'),
-        endDate: null,
-        isActive: true,
-        createdAt: new Date('2026-01-01T00:00:00.000Z'),
-        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-        role: {
-          id: 'r1',
-          workspaceId: 'w1',
-          code: 'PROJECT_MANAGER',
-          name: 'Project Manager',
-          description: null,
-          isSystem: true,
-          createdAt: new Date('2026-01-01T00:00:00.000Z'),
-          updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-        },
-      },
-    ],
-  };
-  const assignment = {
-    id: 'a1',
-    workspaceMembershipId: 'm1',
-    projectId: 'p1',
-    roleInProject: 'PM',
-    assignedAt: new Date('2026-01-01T00:00:00.000Z'),
-    revokedAt: null,
-    isPrimaryAssignment: true,
-    status: 'ASSIGNED',
-  };
+const grantedContext = {
+  projectId: 'p1',
+  workspaceId: 'w1',
+  projectStatus: 'ACTIVE',
+  membershipId: 'm1',
+  assignmentId: 'a1',
+  roleInProject: 'PM',
+  isPrimaryAssignment: true,
+  roles: ['PROJECT_MANAGER'],
+};
 
-  let prisma: {
-    project: { findUnique: jest.Mock };
-    workspaceMembership: { findUnique: jest.Mock };
-    projectAssignment: { findUnique: jest.Mock };
-  };
+describe('ProjectAccessGuard', () => {
+  let accessPolicy: { resolveProjectAccess: jest.Mock };
   let guard: ProjectAccessGuard;
   let request: any;
 
@@ -79,97 +30,48 @@ describe('ProjectAccessGuard', () => {
     }) as ExecutionContext;
 
   beforeEach(() => {
-    prisma = {
-      project: { findUnique: jest.fn().mockResolvedValue(project) },
-      workspaceMembership: { findUnique: jest.fn().mockResolvedValue(membership) },
-      projectAssignment: { findUnique: jest.fn().mockResolvedValue(assignment) },
+    accessPolicy = {
+      resolveProjectAccess: jest.fn().mockResolvedValue({
+        kind: 'GRANTED',
+        context: grantedContext,
+      }),
     };
-    guard = new ProjectAccessGuard(prisma as any);
+    guard = new ProjectAccessGuard(accessPolicy as any);
     request = {
-      user: { id: 'account-1', email: 'account@example.com', memberships: [] },
+      user: { id: 'account-1' },
       params: { projectId: 'p1' },
     };
   });
 
-  it('throws 404 when project is not found', async () => {
-    prisma.project.findUnique.mockResolvedValue(null);
+  it('delegates access resolution to the shared policy', async () => {
+    await expect(guard.canActivate(createContext())).resolves.toBe(true);
 
-    await expect(guard.canActivate(createContext())).rejects.toThrow(
-      NotFoundException,
+    expect(accessPolicy.resolveProjectAccess).toHaveBeenCalledWith(
+      'account-1',
+      'p1',
     );
+    expect(request.projectAccess).toEqual(grantedContext);
   });
 
-  it("throws 404 when account is not a member of project's workspace", async () => {
-    prisma.workspaceMembership.findUnique.mockResolvedValue(null);
+  it.each(['PROJECT_NOT_FOUND', 'MEMBERSHIP_NOT_FOUND'] as const)(
+    'returns 404 for %s',
+    async (kind) => {
+      accessPolicy.resolveProjectAccess.mockResolvedValue({ kind });
 
-    await expect(guard.canActivate(createContext())).rejects.toThrow(
-      NotFoundException,
-    );
-  });
+      await expect(guard.canActivate(createContext())).rejects.toThrow(
+        NotFoundException,
+      );
+    },
+  );
 
-  it('throws 404 when membership exists but status is not ACTIVE', async () => {
-    prisma.workspaceMembership.findUnique.mockResolvedValue({
-      ...membership,
-      status: 'SUSPENDED',
-    });
-
-    await expect(guard.canActivate(createContext())).rejects.toThrow(
-      NotFoundException,
-    );
-  });
-
-  it('throws 403 when workspace member has no active ProjectAssignment', async () => {
-    prisma.projectAssignment.findUnique.mockResolvedValue({
-      ...assignment,
-      status: 'REMOVED',
+  it('returns 403 when assignment is required', async () => {
+    accessPolicy.resolveProjectAccess.mockResolvedValue({
+      kind: 'ASSIGNMENT_REQUIRED',
     });
 
     await expect(guard.canActivate(createContext())).rejects.toThrow(
       ForbiddenException,
     );
-  });
-
-  it('returns true and populates projectAccess when active assignment exists', async () => {
-    await expect(guard.canActivate(createContext())).resolves.toBe(true);
-
-    expect(request.projectAccess).toEqual({
-      projectId: 'p1',
-      workspaceId: 'w1',
-      projectStatus: 'ACTIVE',
-      membershipId: 'm1',
-      assignmentId: 'a1',
-      roleInProject: 'PM',
-      isPrimaryAssignment: true,
-      roles: ['PROJECT_MANAGER'],
-    });
-    expect(prisma.project.findUnique).toHaveBeenCalledWith({
-      where: { id: 'p1' },
-      select: { id: true, workspaceId: true, status: true },
-    });
-    expect(prisma.workspaceMembership.findUnique).toHaveBeenCalledWith({
-      where: {
-        accountId_workspaceId: {
-          accountId: 'account-1',
-          workspaceId: 'w1',
-        },
-      },
-      include: {
-        userProfile: true,
-        membershipRoles: {
-          include: {
-            role: true,
-          },
-        },
-      },
-    });
-    expect(prisma.projectAssignment.findUnique).toHaveBeenCalledWith({
-      where: {
-        workspaceMembershipId_projectId: {
-          workspaceMembershipId: 'm1',
-          projectId: 'p1',
-        },
-      },
-    });
   });
 
   it('throws UnauthorizedException when req.user is missing', async () => {
