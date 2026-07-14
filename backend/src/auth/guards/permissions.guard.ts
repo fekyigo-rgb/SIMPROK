@@ -30,20 +30,55 @@ export class PermissionsGuard implements CanActivate {
     // 2. Ambil Request HTTP dan AccountId dari JWT (Via JwtStrategy)
     const request = context.switchToHttp().getRequest();
     // accountId didapat dari request.user (setelah diisi oleh JwtStrategy)
-    const accountId = request.user?.id; 
+    const accountId = request.user?.id;
 
     if (!accountId) {
       throw new ForbiddenException('Account authentication context not found');
     }
 
-    // 3. Ambil dan Validasi Workspace Context
-    const workspaceId =
-      request.headers['x-workspace-id'] ||
-      request.query['workspaceId'] ||
-      request.params['workspaceId'];
+    // 3. Tentukan Workspace Context
+    // Jika ProjectAccessGuard sudah berjalan lebih dulu (rute project-scoped),
+    // request.projectAccess.workspaceId adalah workspace yang sudah diverifikasi
+    // ke database dan menjadi otoritatif untuk evaluasi izin — bukan header klien.
+    const projectWorkspaceId: string | undefined = request.projectAccess?.workspaceId;
 
-    if (!workspaceId) {
-      throw new BadRequestException('Missing active Workspace Context (x-workspace-id header is required)');
+    let workspaceId: string;
+
+    if (projectWorkspaceId) {
+      // Setiap explicit workspace context yang diberikan — header, query, ATAU route param —
+      // harus persis sama dengan project workspace. Diperiksa satu per satu (bukan lewat
+      // precedence `||`) supaya satu context yang cocok tidak menutupi context lain yang
+      // berbeda. Strict equality saja: tidak ada lowercase/trim/normalisasi. Nilai yang
+      // bukan string tunggal (array/object) fail closed sebagai mismatch.
+      const suppliedWorkspaceContexts: unknown[] = [
+        request.headers['x-workspace-id'],
+        request.query['workspaceId'],
+        request.params['workspaceId'],
+      ];
+
+      for (const supplied of suppliedWorkspaceContexts) {
+        if (supplied === undefined) {
+          continue;
+        }
+        if (typeof supplied !== 'string' || supplied !== projectWorkspaceId) {
+          throw new ForbiddenException(
+            'Supplied workspace context does not match the authorized project workspace',
+          );
+        }
+      }
+
+      workspaceId = projectWorkspaceId;
+    } else {
+      // Rute non-project: perilaku lama tetap utuh — precedence dan wajib-ada tidak berubah.
+      const explicitWorkspaceId: string | undefined =
+        request.headers['x-workspace-id'] ||
+        request.query['workspaceId'] ||
+        request.params['workspaceId'];
+
+      if (!explicitWorkspaceId) {
+        throw new BadRequestException('Missing active Workspace Context (x-workspace-id header is required)');
+      }
+      workspaceId = explicitWorkspaceId;
     }
 
     // 4. Resolusi Izin berdasarkan Account + Workspace (Identity Chain Verification)
