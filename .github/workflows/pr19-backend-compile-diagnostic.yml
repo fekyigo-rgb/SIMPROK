@@ -1,0 +1,34 @@
+name: PR19 Backend Compile Diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    if: github.head_ref == 'diagnostic/pr19-backend-build'
+    runs-on: ubuntu-24.04
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://diagnostic:diagnostic@localhost:5432/simprok_test?schema=public
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Print backend TypeScript errors only
+        shell: bash
+        run: |
+          set -e
+          npm ci --silent >/dev/null 2>&1
+          npx prisma generate >/dev/null 2>&1
+          set +e
+          output="$(npm run build 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output" | grep -E 'error TS|Found [0-9]+ error' || printf '%s\n' "$output" | tail -n 60
+          exit "$status"
