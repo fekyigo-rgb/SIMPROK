@@ -60,9 +60,30 @@ export class ProjectController {
     );
   }
 
-  @Get('workspace/:workspaceId')
+  @Get('mine')
   @UseGuards(PermissionsGuard)
   @Permissions('PROJECT_VIEW')
+  async findMine(@Req() request: any) {
+    const contextWorkspaceId = request.workspaceContext?.workspaceId;
+    const accountId = request.user?.id;
+
+    if (!contextWorkspaceId) {
+      throw new BadRequestException('Workspace context is required');
+    }
+
+    if (!accountId) {
+      throw new BadRequestException('Authenticated account context is required');
+    }
+
+    return this.projectService.findAccessibleByAccount(
+      accountId,
+      contextWorkspaceId,
+    );
+  }
+
+  @Get('workspace/:workspaceId')
+  @UseGuards(PermissionsGuard)
+  @Permissions(PERMISSIONS.OBSERVATORY_VIEW)
   async findAll(@Req() request: any, @Param('workspaceId') workspaceId: string) {
     const contextWorkspaceId = request.workspaceContext?.workspaceId;
     if (!contextWorkspaceId) {
