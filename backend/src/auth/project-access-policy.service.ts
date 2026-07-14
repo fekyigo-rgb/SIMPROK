@@ -71,6 +71,42 @@ export class ProjectAccessPolicyService {
     };
   }
 
+  /**
+   * Canonical assignment predicate for both project-scoped guard checks and
+   * the accessible-project list. Keeping the membership eligibility and
+   * ProjectAssignment query in one function prevents guard/list drift.
+   */
+  private async findAssignedAccess(
+    accountId: string,
+    workspaceId: string,
+    projectId?: string,
+  ) {
+    const membership = await this.findEligibleMembership(accountId, workspaceId);
+
+    if (!membership) {
+      return null;
+    }
+
+    const assignments = await this.prisma.projectAssignment.findMany({
+      where: this.buildActiveAssignmentWhere(
+        membership.id,
+        workspaceId,
+        projectId,
+      ),
+      include: {
+        project: true,
+      },
+      orderBy: {
+        assignedAt: 'desc',
+      },
+    });
+
+    return {
+      membership,
+      assignments,
+    };
+  }
+
   async resolveProjectAccess(
     accountId: string,
     projectId: string,
@@ -84,22 +120,17 @@ export class ProjectAccessPolicyService {
       return { kind: 'PROJECT_NOT_FOUND' };
     }
 
-    const membership = await this.findEligibleMembership(
+    const access = await this.findAssignedAccess(
       accountId,
       project.workspaceId,
+      project.id,
     );
 
-    if (!membership) {
+    if (!access) {
       return { kind: 'MEMBERSHIP_NOT_FOUND' };
     }
 
-    const assignment = await this.prisma.projectAssignment.findFirst({
-      where: this.buildActiveAssignmentWhere(
-        membership.id,
-        project.workspaceId,
-        project.id,
-      ),
-    });
+    const assignment = access.assignments[0];
 
     if (!assignment) {
       return { kind: 'ASSIGNMENT_REQUIRED' };
@@ -111,35 +142,25 @@ export class ProjectAccessPolicyService {
         projectId: project.id,
         workspaceId: project.workspaceId,
         projectStatus: project.status,
-        membershipId: membership.id,
+        membershipId: access.membership.id,
         assignmentId: assignment.id,
         roleInProject: assignment.roleInProject,
         isPrimaryAssignment: assignment.isPrimaryAssignment,
-        roles: membership.membershipRoles.map((membershipRole) =>
-          membershipRole.role.code,
+        roles: access.membership.membershipRoles.map(
+          (membershipRole) => membershipRole.role.code,
         ),
       },
     };
   }
 
   async listAccessibleProjects(accountId: string, workspaceId: string) {
-    const membership = await this.findEligibleMembership(accountId, workspaceId);
+    const access = await this.findAssignedAccess(accountId, workspaceId);
 
-    if (!membership) {
+    if (!access) {
       return [];
     }
 
-    const assignments = await this.prisma.projectAssignment.findMany({
-      where: this.buildActiveAssignmentWhere(membership.id, workspaceId),
-      include: {
-        project: true,
-      },
-      orderBy: {
-        assignedAt: 'desc',
-      },
-    });
-
-    return assignments.map((assignment) => ({
+    return access.assignments.map((assignment) => ({
       ...assignment.project,
       access: {
         assignmentId: assignment.id,
