@@ -3,8 +3,10 @@ import { JwtModule } from '@nestjs/jwt';
 import { PrismaModule } from '../prisma/prisma.module'; // Wajib: akses database langsung
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
-import { JwtStrategy } from './strategies/jwt.strategy';
+import { ProjectAccessGuard } from './guards/project-access.guard';
 import { getRequiredJwtSecret } from './jwt-secret';
+import { ProjectAccessPolicyService } from './project-access-policy.service';
+import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
   imports: [
@@ -20,6 +22,9 @@ import { getRequiredJwtSecret } from './jwt-secret';
   providers: [
     AuthService,
     JwtStrategy,
+    ProjectAccessPolicyService,
+    ProjectAccessGuard,
   ],
+  exports: [ProjectAccessPolicyService, ProjectAccessGuard],
 })
 export class AuthModule {}
