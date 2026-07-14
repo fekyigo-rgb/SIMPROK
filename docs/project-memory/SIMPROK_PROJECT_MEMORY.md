@@ -13,6 +13,7 @@ Repository: fekyigo-rgb/SIMPROK
 - P7C: CANONICAL INTAKE CONTRACT IMPLEMENTED_ON_BRANCH.
 - Coding P7C: AWAITING_OWNER_REVIEW.
 - Basic Price–AHSP Implementation Blueprint v1.0: OWNER PASS — FOUNDATION LOCKED.
+- BP-AHSP Phase 1 Deterministic Resource Price Resolution Proof: OWNER/PM IMPLEMENTATION GATE — GO; awaiting implementation.
 
 ## 2. Keputusan Owner
 
@@ -153,3 +154,16 @@ Digantikan oleh enam mode final A-F.
   Read Project Memory first, then the Owner Lock Record, then the canonical blueprint, before creating or executing any Basic Price, resource bridge, unit conversion, AHSP price-resolution, Cost Kernel, or Golden Thread implementation prompt.
 - Duplication rule:
   Do not copy the full blueprint into Project Memory. Keep only this pointer/status to prevent two versions of truth.
+
+## 8. ACTIVE BOUNDED IMPLEMENTATION GATE
+
+- Gate document:
+  `docs/implementation-gates/BP_AHSP_PHASE1_DETERMINISTIC_RESOURCE_PROOF.md`
+- Status:
+  `OWNER/PM IMPLEMENTATION GATE — GO`
+- Scope:
+  `Pure backend proof only: Pekerja + LABOR + OH → Pekerja + LABOR + Org/Hari → exactly one already-eligible Basic Price → AUTO_SELECTED with factor 1 and explanation.`
+- Forbidden in this phase:
+  `No schema, migration, database I/O, endpoint, frontend, persistence, snapshot, Cost Kernel arithmetic, RAB change, publication fix, precedence rule, multi-price ranking, fuzzy matching, or universal unit engine.`
+- Delivery rule:
+  `Implement on feat/bp-ahsp-phase1-deterministic-proof; do not merge; return IMPLEMENTATION_PASS_AWAITING_PM_GATE or STOP/FAIL.`
