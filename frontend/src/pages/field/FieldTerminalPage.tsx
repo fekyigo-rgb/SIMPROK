@@ -18,7 +18,7 @@ export function FieldTerminalPage() {
     setLoading(true);
     setError(null);
 
-    apiFetch(`http://localhost:3000/projects/workspace/${activeWorkspaceId}`)
+    apiFetch('/projects/mine')
       .then(res => {
         if (!res.ok) {
           const status = res.status;
