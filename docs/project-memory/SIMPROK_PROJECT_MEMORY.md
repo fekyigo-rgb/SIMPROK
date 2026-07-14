@@ -109,6 +109,50 @@ Digantikan oleh enam mode final A-F.
 - Masukan AI lain adalah bahan, bukan keputusan.
 - Jangan membuat checkpoint baru kecuali Owner meminta.
 
+### 6.1 REPOSITORY SYNCHRONIZATION LAW — OWNER LOCKED
+
+Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, branch remote, PR, dan GitHub Actions tidak boleh tertinggal jauh atau membawa kebenaran yang berbeda.
+
+**Sebelum setiap pekerjaan:**
+
+1. `git fetch origin --prune`
+2. Buktikan branch aktif, `HEAD`, `origin/main`, dan `git status --short`.
+3. Untuk pekerjaan baru, mulai dari latest clean `origin/main` yang memuat seluruh commit dokumentasi/gate terbaru.
+4. Jangan bekerja dari branch lokal lama hanya karena branch itu masih terbuka.
+5. Bila local dan remote divergen atau worktree tidak bersih, STOP dan laporkan sebelum edit.
+
+**Sebelum commit dan push:**
+
+1. Jalankan gate yang diwajibkan.
+2. Jalankan `git diff --check`.
+3. Periksa `git status --short` dan scope file.
+4. Commit hanya setelah hasil akhir gate diketahui, bukan ketika task masih berjalan.
+5. Push branch dan buktikan local `HEAD` sama dengan remote branch head.
+
+**Sebelum PR dan merge:**
+
+1. PM/Gatekeeper membandingkan branch terhadap current `main` dan memeriksa exact changed files.
+2. CI harus selesai dan PASS.
+3. Merge memakai exact reviewed head SHA agar perubahan tersembunyi ditolak.
+4. Owner memberi PASS eksplisit sebelum merge.
+
+**Sesudah merge:**
+
+1. GitHub merge status dan merge commit diverifikasi.
+2. Owner menyelaraskan clone lokal dengan:
+   `git checkout main` lalu `git pull --ff-only origin main`.
+3. Buktikan `HEAD = origin/main` dan worktree clean.
+4. Branch fitur berikutnya dibuat dari `main` terbaru setelah seluruh gate/document commits masuk.
+5. PM tidak boleh menyatakan tahap berikutnya aktif tanpa menyebut expected base SHA/commit.
+
+**Pembagian kebenaran:**
+
+- GitHub remote/commit/PR/CI: diverifikasi langsung oleh PM/Gatekeeper.
+- Runtime lokal, port, browser, `.env.test`, dan database lokal: dibuktikan melalui PowerShell Owner atau implementer, lalu dicocokkan dengan repository evidence.
+- Laporan implementer bukan sumber kebenaran tunggal.
+
+**Status:** OWNER LOCKED pada 14 Juli 2026.
+
 ## P7C PRODUCT INTELLIGENCE LAW
 
 - Current document version:
