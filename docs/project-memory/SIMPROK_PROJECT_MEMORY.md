@@ -15,8 +15,8 @@ Repository: fekyigo-rgb/SIMPROK
 - Basic Price–AHSP Implementation Blueprint v1.0: OWNER PASS — FOUNDATION LOCKED.
 - Project, RAB, Authority & Unit Law v1.0: OWNER LOCKED — CANONICAL.
 - BP-AHSP Phase 1 Deterministic Resource Price Resolution Proof: COMMITTED_PASS melalui PR #22, merge commit `217b5f8dca983d24b51be18208d2ab00f6a38845`.
-- Security prerequisite — Project Permission Workspace Authority: ACTIVE; wajib diselesaikan dan di-merge sebelum BP-AHSP Phase 2 production implementation.
-- BP-AHSP Phase 2 Project AHSP Occurrence Persistence: HOLD pending merged security prerequisite; plan/gate tetap aktif dan tidak dibatalkan.
+- Security prerequisite — Project Permission Workspace Authority: MERGED_PASS melalui PR #23, merge commit `6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`.
+- BP-AHSP Phase 2 Project AHSP Occurrence Persistence: ACTIVE — NEXT ACTIVE TARGET; security prerequisite telah selesai dan merged.
 
 ## 2. Keputusan Owner
 
@@ -94,6 +94,7 @@ Digantikan oleh enam mode final A-F.
 | P7B | LOCKED | commit bf24a32 |
 | P7C Canonical Intake Contract | IMPLEMENTED_ON_BRANCH | branch feat/p7c-canonical-intake-contract; migration 20260711000000_p7c_canonical_intake_contract; API PATCH /projects/:projectId/intake-context and GET /projects/:projectId/intake-mode; backend build PASS; backend unit 122 PASS; serial e2e 114 PASS; frontend build PASS; runtime API Mode C/F PASS; browser visual audit not run because no browser automation/tooling available |
 | BP-AHSP Phase 1 | COMMITTED_PASS | PR #22; merge commit `217b5f8dca983d24b51be18208d2ab00f6a38845`; pure deterministic worker-price resolution kernel; focused 19/19 PASS; backend unit 33 suites/263 tests PASS; safe E2E 18 suites/172 tests PASS; residual PASS; PR Quality Gate SUCCESS |
+| Security Project Permission Workspace Authority | MERGED_PASS | PR #23; merge commit `6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`; focused PermissionsGuard unit 10/10 PASS; focused security E2E 9/9 PASS; backend unit 34 suites/273 tests PASS; safe E2E 18 suites/176 tests PASS; frontend build PASS; PR Quality Gate SUCCESS |
 
 ## 5.1 P7C Implementation Notes
 
@@ -222,18 +223,20 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Gate document:
   `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`
 - Status:
-  `HOLD — SECURITY PREREQUISITE MUST MERGE FIRST`
+  `ACTIVE — SECURITY PREREQUISITE MERGED_PASS; NEXT ACTIVE TARGET`
+- Security prerequisite evidence:
+  `PR #23; merge commit 6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`
 - Security prerequisite documents:
   - `docs/implementation-gates/BP_AHSP_PHASE2_ARCHITECT_FINAL_REVIEW_DECISIONS.md`
   - `docs/implementation-gates/SECURITY_PROJECT_PERMISSION_WORKSPACE_AUTHORITY_SUPPLEMENT.md`
-- Scope after prerequisite:
+- Active scope:
   `Create ProjectAhspOccurrence and ProjectAhspResourceResolution; wire the Phase 1 kernel into a guarded backend runtime endpoint; persist RESOLVED, UNRESOLVED, or NEEDS_REVIEW outcomes and the selected Basic Price trace inside the project AHSP occurrence.`
 - Placement:
   `Do not store resource-level selection in BoqItem or RAB. Do not mutate master AHSP or old snapshots.`
 - Forbidden in this phase:
   `No frontend, no override, no comparison UI, no multi-price ranking, no publication fix, no global/workspace precedence rule, no universal unit engine, no Cost Kernel arithmetic, no AHSP unit-price calculation, no RAB change, and no snapshot backfill.`
 - Delivery rule:
-  `Merge the independent PermissionsGuard security PR first; then synchronize main and the Phase 2 branch before continuing. Do not merge or create a Phase 2 PR before PM code review and complete gates.`
+  `Synchronize the Phase 2 implementation branch with latest main containing PR #23 and this status update. Do not merge or create a Phase 2 PR before PM code review and complete gates.`
 
 ## 10. PROJECT, RAB, AUTHORITY & UNIT LAW
 
@@ -256,7 +259,7 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Conversion truth law:
   `Audit AHSPResource.conversionFactor before introducing UnitConversionRule; two canonical homes for the same conversion factor are forbidden.`
 - Current effective order:
-  `Security prerequisite → BP-AHSP Phase 2 persistence → KAMUS-UNIT-KERNEL-01A → KAMUS-UNIT-KERNEL-01B → one live RAB line → broader Governance/RBAC debts.`
+  `Security prerequisite (MERGED_PASS) → BP-AHSP Phase 2 persistence (ACTIVE) → KAMUS-UNIT-KERNEL-01A → KAMUS-UNIT-KERNEL-01B → one live RAB line → broader Governance/RBAC debts.`
 - Retrieval rule:
   `For project/RAB/authority/unit work, read Project Memory, then this canonical law, then the Basic Price–AHSP Owner Lock and Blueprint, then applicable gates and repository/runtime evidence.`
 - Duplication rule:
