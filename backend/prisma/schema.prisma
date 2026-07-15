@@ -86,6 +86,7 @@ model Workspace {
   priceSubmissions       PriceSubmission[]
   priceSubmissionReviews PriceSubmissionReview[]
   intelligenceEvidence   IntelligenceEvidence[]
+  projectAhspOccurrences ProjectAhspOccurrence[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -144,13 +145,13 @@ model User {
   membership          WorkspaceMembership  @relation(fields: [workspaceMembershipId], references: [id], onDelete: Cascade)
   positionAssignments PositionAssignment[]
 
-  createdAHSPs     AHSP[]           @relation("AHSPCreatedBy")
-  approvedAHSPs    AHSP[]           @relation("AHSPApprovedBy")
-  transferredAHSPs AHSP[]           @relation("AHSPOwnershipTransferredBy")
-  archivedAHSPs    AHSP[]           @relation("AHSPArchivedBy")
-  deletedAHSPs     AHSP[]           @relation("AHSPDeletedBy")
-  FormalDecision   FormalDecision[]
-  assignedPriceSubmissionReviews PriceSubmissionReview[] @relation("PriceSubmissionReviewAssignedTo")
+  createdAHSPs                   AHSP[]                          @relation("AHSPCreatedBy")
+  approvedAHSPs                  AHSP[]                          @relation("AHSPApprovedBy")
+  transferredAHSPs               AHSP[]                          @relation("AHSPOwnershipTransferredBy")
+  archivedAHSPs                  AHSP[]                          @relation("AHSPArchivedBy")
+  deletedAHSPs                   AHSP[]                          @relation("AHSPDeletedBy")
+  FormalDecision                 FormalDecision[]
+  assignedPriceSubmissionReviews PriceSubmissionReview[]         @relation("PriceSubmissionReviewAssignedTo")
   priceSubmissionReviewDecisions PriceSubmissionReviewDecision[] @relation("PriceSubmissionReviewDecidedBy")
 
   @@map("users")
@@ -317,8 +318,8 @@ model Project {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  workspace            Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  organization         Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace            Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  organization         Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   contracts            ProjectContract[]
   stakeholders         ProjectStakeholder[]
   assignments          ProjectAssignment[]
@@ -333,6 +334,7 @@ model Project {
   recommendations      Recommendation[]
   formalDecisions      FormalDecision[]
   intelligenceEvidence IntelligenceEvidence[]
+  ahspOccurrences      ProjectAhspOccurrence[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -617,12 +619,13 @@ model AHSPVersion {
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
 
-  ahsp      AHSP           @relation(fields: [ahspId], references: [id], onDelete: Cascade)
-  workspace Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  resources AHSPResource[]
-  snapshots AHSPSnapshot[]
-  auditLogs AHSPAuditLog[]
-  BoqItem   BoqItem[]
+  ahsp                   AHSP                    @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  workspace              Workspace?              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  resources              AHSPResource[]
+  snapshots              AHSPSnapshot[]
+  auditLogs              AHSPAuditLog[]
+  BoqItem                BoqItem[]
+  projectAhspOccurrences ProjectAhspOccurrence[]
 
   @@unique([ahspId, versionNumber])
   @@index([ahspId])
@@ -641,7 +644,8 @@ model AHSPResource {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  ahspVersion AHSPVersion @relation(fields: [ahspVersionId], references: [id], onDelete: Cascade)
+  ahspVersion                    AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Cascade)
+  projectAhspResourceResolutions ProjectAhspResourceResolution[]
 
   @@index([ahspVersionId])
   @@index([resourceId])
@@ -842,10 +846,11 @@ model ResourceCatalog {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  basicPrices          BasicPrice[]
-  workspace            Workspace?             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  priceSubmissions PriceSubmission[]
-  canonicalPricePoints CanonicalPricePoint[]
+  basicPrices                    BasicPrice[]
+  workspace                      Workspace?                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  priceSubmissions               PriceSubmission[]
+  canonicalPricePoints           CanonicalPricePoint[]
+  projectAhspResourceResolutions ProjectAhspResourceResolution[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -930,19 +935,19 @@ model PriceSubmission {
 }
 
 model PriceSubmissionRevision {
-  id                String   @id @default(uuid()) @db.Uuid
-  submissionId      String   @db.Uuid
+  id                String    @id @default(uuid()) @db.Uuid
+  submissionId      String    @db.Uuid
   revisionNumber    Int
-  value             Decimal  @db.Decimal(18, 2)
+  value             Decimal   @db.Decimal(18, 2)
   effectiveDate     DateTime?
   validUntil        DateTime?
   photoUrl          String?
-  gpsLat            Decimal? @db.Decimal(10, 7)
-  gpsLng            Decimal? @db.Decimal(10, 7)
-  note              String?  @db.Text
-  validationPassed  Boolean  @default(false)
-  validationMessage String?  @db.Text
-  createdAt         DateTime @default(now())
+  gpsLat            Decimal?  @db.Decimal(10, 7)
+  gpsLng            Decimal?  @db.Decimal(10, 7)
+  note              String?   @db.Text
+  validationPassed  Boolean   @default(false)
+  validationMessage String?   @db.Text
+  createdAt         DateTime  @default(now())
 
   submission PriceSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
@@ -1070,12 +1075,12 @@ model IntakeJob {
 }
 
 model ExtractionArtifact {
-  id          String   @id @default(uuid()) @db.Uuid
-  intakeJobId String   @db.Uuid
-  rawRows     Json
+  id              String   @id @default(uuid()) @db.Uuid
+  intakeJobId     String   @db.Uuid
+  rawRows         Json
   detectedColumns Json?
-  rowCount    Int
-  createdAt   DateTime @default(now())
+  rowCount        Int
+  createdAt       DateTime @default(now())
 
   intakeJob  IntakeJob            @relation(fields: [intakeJobId], references: [id], onDelete: Cascade)
   candidates KnowledgeCandidate[]
@@ -1085,16 +1090,16 @@ model ExtractionArtifact {
 }
 
 model CanonicalPricePoint {
-  id                String             @id @default(uuid()) @db.Uuid
+  id                String            @id @default(uuid()) @db.Uuid
   resourceRef       String
-  resourceCatalogId String?            @db.Uuid
-  value             Decimal            @db.Decimal(18, 2)
+  resourceCatalogId String?           @db.Uuid
+  value             Decimal           @db.Decimal(18, 2)
   unit              String
   sourceOrigin      PriceSourceOrigin
   effectiveDate     DateTime?
-  createdAt         DateTime           @default(now())
+  createdAt         DateTime          @default(now())
 
-  resourceCatalog ResourceCatalog?     @relation(fields: [resourceCatalogId], references: [id])
+  resourceCatalog ResourceCatalog?    @relation(fields: [resourceCatalogId], references: [id])
   candidate       KnowledgeCandidate?
   knowledgeEvents KnowledgeEvent[]
 
@@ -1190,10 +1195,10 @@ model PriceSubmissionReview {
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
-  submission   PriceSubmission                @relation(fields: [priceSubmissionId], references: [id], onDelete: Cascade)
-  workspace    Workspace                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  organization Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  assignedTo   User?                          @relation("PriceSubmissionReviewAssignedTo", fields: [assignedToUserId], references: [id])
+  submission   PriceSubmission                 @relation(fields: [priceSubmissionId], references: [id], onDelete: Cascade)
+  workspace    Workspace                       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  organization Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedTo   User?                           @relation("PriceSubmissionReviewAssignedTo", fields: [assignedToUserId], references: [id])
   decisions    PriceSubmissionReviewDecision[]
 
   @@index([workspaceId, organizationId])
@@ -1262,9 +1267,10 @@ model BasicPrice {
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
 
-  resource         ResourceCatalog  @relation(fields: [resourceId], references: [id], onDelete: Cascade)
-  workspace        Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  sourceSubmission PriceSubmission? @relation(fields: [sourceSubmissionId], references: [id])
+  resource                       ResourceCatalog                 @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  workspace                      Workspace?                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sourceSubmission               PriceSubmission?                @relation(fields: [sourceSubmissionId], references: [id])
+  projectAhspResourceResolutions ProjectAhspResourceResolution[]
 
   @@index([resourceId])
   @@index([workspaceId])
@@ -1272,6 +1278,92 @@ model BasicPrice {
   @@index([organizationId])
   @@index([sourceSubmissionId])
   @@map("basic_prices")
+}
+
+// =====================================================
+// SECTION G1: BP-AHSP PHASE 2 — PROJECT AHSP OCCURRENCE
+// Bounded technical/project-context container for one
+// deterministic AHSP resource price-resolution attempt.
+// ProjectAhspOccurrence != canonical WorkOccurrence.
+// =====================================================
+
+enum ProjectAhspResolutionStatus {
+  RESOLVED
+  UNRESOLVED
+  NEEDS_REVIEW
+}
+
+enum ProjectAhspSelectionMode {
+  AUTO_SELECTED
+  USER_OVERRIDDEN
+}
+
+enum ProjectAhspResolutionMethod {
+  EXACT_DETERMINISTIC
+  DETERMINISTIC_ATTEMPTED
+}
+
+model ProjectAhspOccurrence {
+  id                 String   @id @default(uuid()) @db.Uuid
+  workspaceId        String   @db.Uuid
+  projectId          String   @db.Uuid
+  ahspVersionId      String   @db.Uuid
+  idempotencyKey     String
+  createdByAccountId String?  @db.Uuid
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  workspace           Workspace                       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project             Project                         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ahspVersion         AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Restrict)
+  resourceResolutions ProjectAhspResourceResolution[]
+
+  @@unique([projectId, idempotencyKey])
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([ahspVersionId])
+  @@map("project_ahsp_occurrences")
+}
+
+model ProjectAhspResourceResolution {
+  id                      String                      @id @default(uuid()) @db.Uuid
+  occurrenceId            String                      @db.Uuid
+  ahspResourceId          String                      @db.Uuid
+  rawAhspResourceRef      String
+  rawAhspResourceType     String
+  ahspCoefficient         Decimal                     @db.Decimal(18, 6)
+  ahspUnit                String
+  resourceCatalogId       String?                     @db.Uuid
+  selectedBasicPriceId    String?                     @db.Uuid
+  status                  ProjectAhspResolutionStatus
+  selectionMode           ProjectAhspSelectionMode?
+  canonicalUnit           String?
+  sourcePriceValue        Decimal?                    @db.Decimal(18, 2)
+  sourceUnit              String?
+  adaptedPriceValue       Decimal?                    @db.Decimal(18, 2)
+  conversionFactor        Decimal?                    @db.Decimal(18, 6)
+  selectedSourceOrigin    PriceSourceOrigin?
+  selectedFreshnessStatus PriceFreshnessStatus?
+  selectedEffectiveDate   DateTime?
+  resolutionMethod        ProjectAhspResolutionMethod
+  reasonCodes             String[]
+  explanation             String                      @db.Text
+  policyVersion           String
+  createdAt               DateTime                    @default(now())
+  updatedAt               DateTime                    @updatedAt
+
+  occurrence         ProjectAhspOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  originalResource   AHSPResource          @relation(fields: [ahspResourceId], references: [id], onDelete: Restrict)
+  resolvedCatalog    ResourceCatalog?      @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  selectedBasicPrice BasicPrice?           @relation(fields: [selectedBasicPriceId], references: [id], onDelete: Restrict)
+
+  @@unique([occurrenceId, ahspResourceId], map: "pahr_occurrence_ahsp_resource_key")
+  @@index([occurrenceId])
+  @@index([ahspResourceId])
+  @@index([resourceCatalogId])
+  @@index([selectedBasicPriceId])
+  @@index([status])
+  @@map("project_ahsp_resource_resolutions")
 }
 
 // =====================================================
