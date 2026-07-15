@@ -16,7 +16,9 @@ Repository: fekyigo-rgb/SIMPROK
 - Project, RAB, Authority & Unit Law v1.0: OWNER LOCKED — CANONICAL.
 - BP-AHSP Phase 1 Deterministic Resource Price Resolution Proof: COMMITTED_PASS melalui PR #22, merge commit `217b5f8dca983d24b51be18208d2ab00f6a38845`.
 - Security prerequisite — Project Permission Workspace Authority: MERGED_PASS melalui PR #23, merge commit `6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`.
-- BP-AHSP Phase 2 Project AHSP Occurrence Persistence: ACTIVE — NEXT ACTIVE TARGET; security prerequisite telah selesai dan merged.
+- BP-AHSP Phase 2 Commit B — freshness-aware deterministic resolution: `61e98fe546f689df65c884db894298bbbc525e6e`; PM GATE PASS; OWNER PASS; LOCKED.
+- BP-AHSP Phase 2 Commit C — project occurrence persistence schema: `04767a0f4cde035ff38446ba8a867ab09b0b809e`; PM GATE PASS; OWNER PASS; LOCKED.
+- BP-AHSP Phase 2 Commit D — guarded runtime persistence wiring: READ-ONLY PREFLIGHT PM PASS WITH EXECUTION CONDITIONS; implementation remains LOCKED and requires separate bounded Owner/PM authorization.
 
 ## 2. Keputusan Owner
 
@@ -223,20 +225,98 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Gate document:
   `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`
 - Status:
-  `ACTIVE — SECURITY PREREQUISITE MERGED_PASS; NEXT ACTIVE TARGET`
+  `ACTIVE — COMMIT B AND COMMIT C OWNER PASS / LOCKED; COMMIT D READ-ONLY PREFLIGHT PM PASS WITH EXECUTION CONDITIONS; COMMIT D IMPLEMENTATION LOCKED.`
 - Security prerequisite evidence:
   `PR #23; merge commit 6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`
 - Security prerequisite documents:
   - `docs/implementation-gates/BP_AHSP_PHASE2_ARCHITECT_FINAL_REVIEW_DECISIONS.md`
   - `docs/implementation-gates/SECURITY_PROJECT_PERMISSION_WORKSPACE_AUTHORITY_SUPPLEMENT.md`
-- Active scope:
-  `Create ProjectAhspOccurrence and ProjectAhspResourceResolution; wire the Phase 1 kernel into a guarded backend runtime endpoint; persist RESOLVED, UNRESOLVED, or NEEDS_REVIEW outcomes and the selected Basic Price trace inside the project AHSP occurrence.`
+- Completed bounded scope:
+  `Commit B completed the freshness-aware deterministic resolution kernel. Commit C completed the additive ProjectAhspOccurrence and ProjectAhspResourceResolution persistence schema and migration.`
+- Pending bounded scope:
+  `Commit D may later wire the locked deterministic kernel to guarded POST and GET project-AHSP occurrence endpoints and persist truthful RESOLVED, UNRESOLVED, or NEEDS_REVIEW outcomes. Commit D has no implementation authority until a separate Owner/PM gate is issued.`
 - Placement:
   `Do not store resource-level selection in BoqItem or RAB. Do not mutate master AHSP or old snapshots.`
 - Forbidden in this phase:
   `No frontend, no override, no comparison UI, no multi-price ranking, no publication fix, no global/workspace precedence rule, no universal unit engine, no Cost Kernel arithmetic, no AHSP unit-price calculation, no RAB change, and no snapshot backfill.`
 - Delivery rule:
-  `Synchronize the Phase 2 implementation branch with latest main containing PR #23 and this status update. Do not merge or create a Phase 2 PR before PM code review and complete gates.`
+  `Synchronize the Phase 2 implementation branch with latest main containing PR #23 and this status update. Do not merge or create a Phase 2 PR before PM code review and complete gates. Commit D must start from the exact reviewed post-memory-sync baseline. No PR or merge is authorized. No schema, migration, index, kernel, BasicPriceService, security guard, permission catalog, seed, package, frontend, Cost Kernel, AHSP unit-price, RAB, Execution Factor, or snapshot change may be added to Commit D.`
+
+## 9.1 BP-AHSP PHASE 2 COMMIT CHECKPOINTS
+
+### Commit B — Freshness-Aware Deterministic Resolution
+
+- Commit:
+  `61e98fe546f689df65c884db894298bbbc525e6e`
+- Message:
+  `feat(ahsp): add freshness-aware deterministic resolution`
+- Status:
+  `COMMIT_B_PM_GATE_PASS; OWNER_PASS_COMMIT_B; LOCKED`
+- Scope:
+  `Exactly the deterministic price-resolution kernel and its focused specification.`
+- Evidence:
+  `Focused kernel 1 suite / 24 tests PASS; backend unit 34 suites / 278 tests PASS; backend build PASS.`
+
+### Commit C — Project Occurrence Persistence Schema
+
+- Commit:
+  `04767a0f4cde035ff38446ba8a867ab09b0b809e`
+- Parent:
+  `61e98fe546f689df65c884db894298bbbc525e6e`
+- Message:
+  `feat(ahsp): add project occurrence persistence schema`
+- Migration:
+  `20260715113019_bp_ahsp_phase2_project_occurrence_persistence`
+- SQL SHA-256:
+  `b2a842cfbd623348cacff8be536c6f6b69340d8c146e0d778a03dae84850ac74`
+- Status:
+  `COMMIT_C_PM_GATE_PASS; OWNER_PASS_COMMIT_C; LOCKED`
+- Scope:
+  `Three enums, ProjectAhspOccurrence, ProjectAhspResourceResolution, and one additive migration.`
+- SQL inventory:
+  `3 CREATE TYPE; 2 CREATE TABLE; 2 CREATE UNIQUE INDEX; 8 CREATE INDEX; 7 FOREIGN KEY; 0 data writes.`
+- Evidence:
+  `Prisma format and validate PASS; backend build PASS; focused kernel 24 tests PASS; backend unit 34 suites / 278 tests PASS; safe E2E 18 suites / 176 tests PASS; database fingerprint 60 tables; residual PASS; advisory lock released; frontend build PASS.`
+- Accepted non-blocking notes:
+  `Prisma format produced verified whitespace-only realignment outside the new schema section, with no semantic drift. The original executor prompt was truncated after section 33, but the continuation prompt restated all mandatory gates and the official safe E2E gate was executed. No amend or corrective commit was required.`
+
+### Commit D — Read-Only Preflight Status
+
+- Status:
+  `COMMIT_D_READ_ONLY_PREFLIGHT_PM_GATE_PASS_WITH_EXECUTION_CONDITIONS`
+- Implementation authority:
+  `NONE — COMMIT D REMAINS LOCKED`
+- Maximum planned scope:
+  `Seven backend/runtime/test files only.`
+- Planned endpoints:
+  `POST /projects/:projectId/ahsp-occurrences`
+  `GET /projects/:projectId/ahsp-occurrences/:occurrenceId`
+- Security:
+  `JwtAuthGuard → ProjectAccessGuard → PermissionsGuard. Trusted workspace comes from request.projectAccess.workspaceId. Trusted account comes from request.user.id.`
+- Temporary permission:
+  `POST may use AHSP_MANAGE only for this bounded Phase 2 proof; GET uses AHSP_VIEW. Final project-AHSP write permission remains OPEN debt. AHSP_MANAGE must not become the final authority design.`
+- Freshness bridge — PM verified repository reality:
+  `BasicPriceService.findByResource() uses Prisma findMany without a top-level select, so BasicPrice scalar fields, including freshnessStatus, are returned. The nested resource select limits only the related ResourceCatalog fields. Commit D must still prove with a real test that freshnessStatus is passed unchanged to the kernel and that EXPIRED prices are never auto-selected. Failure is STOP_ELIGIBILITY.`
+- Request-body security gate:
+  `Global ValidationPipe does not whitelist extra fields. The controller must explicitly pick only ahspVersionId, ahspResourceId, and idempotencyKey. Object spread and forwarding the complete body are forbidden. A real spoof-field test must prove that body-supplied workspaceId, projectId, createdByAccountId, status, selected price, and policyVersion are ignored. Failure is STOP_SECURITY_SPOOF_GUARD.`
+- AHSP relationship gate:
+  `The service must prove that ahspResourceId belongs to the requested ahspVersionId. An explicit real test is mandatory. Failure is STOP_AHSP_RESOURCE_VERSION_MISMATCH.`
+- Idempotency:
+  `Same project and idempotency key with the same version/resource returns the existing result. Different payload returns 409. Concurrent identical requests create exactly one occurrence and one resolution. A unique race must re-read the winner.`
+- Decimal:
+  `Money and Decimal values must use Prisma.Decimal or exact strings. Number(), parseFloat(), and JavaScript floating-point arithmetic are forbidden.`
+- Kernel:
+  `The locked deterministic kernel must remain unchanged and be called exactly once for each new resolution attempt. Expired-only and multiple-active outcomes remain NEEDS_REVIEW without automatic selection.`
+- Test integrity:
+  `expect(true).toBe(true), focused tests, skipped tests, and fake assertions are forbidden. The official future E2E gate is npm run test:e2e:safe and must finish with residual PASS and advisory-lock release.`
+- Policy version:
+  `BP_AHSP_PHASE2_NAME_EXACT_OPTION_C_V1`
+- Non-equivalence:
+  `ProjectAhspOccurrence is not canonical WorkOccurrence or ExecutionAssessment. idempotencyKey is not occurrenceKey. Commit D must not introduce boqItemId, WBS, schedule/activity identity, location/work-face identity, Execution Factor, Cost Kernel, AHSP unit-price arithmetic, RAB arithmetic, snapshot mutation, or master AHSP mutation.`
+- Forbidden Commit D changes:
+  `No schema, migration, index, kernel, BasicPriceService, security guard, permission catalog, seed, package, frontend, Cost Kernel, RAB, Execution Factor, or snapshot change.`
+- Next gate:
+  `After this Project Memory synchronization receives PM and Owner PASS, Commit D requires a new exact baseline and separate bounded implementation authorization. Preflight PASS is not implementation authorization.`
 
 ## 10. PROJECT, RAB, AUTHORITY & UNIT LAW
 
