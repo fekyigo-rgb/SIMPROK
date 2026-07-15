@@ -24,6 +24,7 @@ import { ProgressModule } from './progress/progress.module';
 import { RealityIntakeModule } from './reality-intake/reality-intake.module';
 import { BasicPriceModule } from './basic-price/basic-price.module';
 import { IntelligenceModule } from './intelligence/intelligence.module';
+import { ProjectAhspModule } from './project-ahsp/project-ahsp.module';
 
 @Module({
   imports: [
@@ -31,13 +32,15 @@ import { IntelligenceModule } from './intelligence/intelligence.module';
       isGlobal: true,
     }),
 
-    ThrottlerModule.forRoot([{
-      name: 'login',
-      // Very high default limit = effectively no throttle for non-login routes.
-      // Login route overrides this via @Throttle({ login: { limit: X, ttl: Y } }).
-      ttl: Number(process.env.LOGIN_RATE_LIMIT_TTL_SECONDS ?? 60) * 1000,
-      limit: 100000,
-    }]),
+    ThrottlerModule.forRoot([
+      {
+        name: 'login',
+        // Very high default limit = effectively no throttle for non-login routes.
+        // Login route overrides this via @Throttle({ login: { limit: X, ttl: Y } }).
+        ttl: Number(process.env.LOGIN_RATE_LIMIT_TTL_SECONDS ?? 60) * 1000,
+        limit: 100000,
+      },
+    ]),
     PrismaModule,
     UsersModule,
     AuthModule,
@@ -54,6 +57,7 @@ import { IntelligenceModule } from './intelligence/intelligence.module';
     IntelligenceModule,
     ProgressModule,
     RealityIntakeModule,
+    ProjectAhspModule,
   ],
   controllers: [AppController],
   providers: [
