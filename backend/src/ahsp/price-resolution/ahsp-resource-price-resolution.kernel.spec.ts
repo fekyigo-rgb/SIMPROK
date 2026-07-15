@@ -529,4 +529,167 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       expect(resultOrangHari.selectedBasicPriceId).toBe(priceOrangHari.id);
     }
   });
+
+  // ----------------------------------------------------------
+  // BP-AHSP-PHASE-2 Option C: Freshness-Aware Deterministic Resolution
+  // Bounded, additive regression tests. Existing fixtures above remain
+  // untouched and continue to carry no freshnessStatus field.
+  // ----------------------------------------------------------
+
+  // ----------------------------------------------------------
+  // TEST 20 (Option C): Missing freshnessStatus preserves Phase 1 behavior
+  // ----------------------------------------------------------
+  it('20 (Option C). Missing freshnessStatus preserves Phase 1 behavior and remains selectable', () => {
+    const result = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      eligibleBasicPriceCandidates: [PRICE_PEKERJA_STANDARD],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    if (result.status !== 'RESOLVED') return;
+    expect(result.selectedBasicPriceId).toBe(PRICE_PEKERJA_STANDARD.id);
+    expect(result.sourcePriceValue).toBe(PRICE_PEKERJA_STANDARD.value);
+    expect(result.adaptedPriceValue).toBe(PRICE_PEKERJA_STANDARD.value);
+    expect(result.reasonCodes).toContain('SINGLE_ELIGIBLE_BASIC_PRICE');
+    expect(result.reasonCodes).not.toContain('ONLY_EXPIRED_BASIC_PRICE_CANDIDATES');
+  });
+
+  // ----------------------------------------------------------
+  // TEST 21 (Option C): Only expired compatible candidates → NEEDS_REVIEW
+  // ----------------------------------------------------------
+  it('21 (Option C). Only expired compatible Basic Price candidates return NEEDS_REVIEW without selection', () => {
+    const priceExpiredA: BasicPriceCandidate = {
+      id: 'price-pekerja-expired-uuid-001',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '120000.00',
+      sourceOrigin: 'GOVERNMENT',
+      unit: 'Org/Hari',
+      freshnessStatus: 'EXPIRED',
+    };
+    const priceExpiredB: BasicPriceCandidate = {
+      id: 'price-pekerja-expired-uuid-002',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '125000.00',
+      sourceOrigin: 'FIELD_REPORT',
+      unit: 'Org/Hari',
+      freshnessStatus: 'EXPIRED',
+    };
+
+    const result = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      eligibleBasicPriceCandidates: [priceExpiredA, priceExpiredB],
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('ONLY_EXPIRED_BASIC_PRICE_CANDIDATES');
+    expect(result.reasonCodes).not.toContain('MULTIPLE_BASIC_PRICE_CANDIDATES');
+    expect((result as any).selectedBasicPriceId).toBeUndefined();
+    expect(result.explanation).toContain('kedaluwarsa');
+    expect(result.explanation).toContain('tinjauan manusia');
+    expect(result.explanation).not.toMatch(/dipilih otomatis/i);
+  });
+
+  // ----------------------------------------------------------
+  // TEST 22 (Option C): One CURRENT plus expired candidates → current resolves
+  // ----------------------------------------------------------
+  it('22 (Option C). One CURRENT compatible candidate plus expired candidates resolves to the current candidate', () => {
+    const priceCurrent: BasicPriceCandidate = {
+      id: 'price-pekerja-current-uuid-001',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '130000.00',
+      sourceOrigin: 'GOVERNMENT',
+      unit: 'Org/Hari',
+      freshnessStatus: 'CURRENT',
+    };
+    const priceExpired: BasicPriceCandidate = {
+      id: 'price-pekerja-expired-uuid-003',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '110000.00',
+      sourceOrigin: 'FIELD_REPORT',
+      unit: 'Org/Hari',
+      freshnessStatus: 'EXPIRED',
+    };
+
+    const result = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      eligibleBasicPriceCandidates: [priceCurrent, priceExpired],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    if (result.status !== 'RESOLVED') return;
+    expect(result.selectedBasicPriceId).toBe(priceCurrent.id);
+    expect(result.sourcePriceValue).toBe(priceCurrent.value);
+    expect(result.adaptedPriceValue).toBe(priceCurrent.value);
+    expect(result.reasonCodes).not.toContain('ONLY_EXPIRED_BASIC_PRICE_CANDIDATES');
+  });
+
+  // ----------------------------------------------------------
+  // TEST 23 (Option C): Multiple active candidates → NEEDS_REVIEW
+  // ----------------------------------------------------------
+  it('23 (Option C). Multiple active compatible candidates (CURRENT + EXPIRING) return NEEDS_REVIEW without selection', () => {
+    const priceCurrent: BasicPriceCandidate = {
+      id: 'price-pekerja-current-uuid-002',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '130000.00',
+      sourceOrigin: 'GOVERNMENT',
+      unit: 'Org/Hari',
+      freshnessStatus: 'CURRENT',
+    };
+    const priceExpiring: BasicPriceCandidate = {
+      id: 'price-pekerja-expiring-uuid-001',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '128000.00',
+      sourceOrigin: 'FIELD_REPORT',
+      unit: 'Org/Hari',
+      freshnessStatus: 'EXPIRING',
+    };
+    const priceExpired: BasicPriceCandidate = {
+      id: 'price-pekerja-expired-uuid-004',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '100000.00',
+      sourceOrigin: 'GOVERNMENT',
+      unit: 'Org/Hari',
+      freshnessStatus: 'EXPIRED',
+    };
+
+    const result = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      eligibleBasicPriceCandidates: [priceCurrent, priceExpiring, priceExpired],
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('MULTIPLE_BASIC_PRICE_CANDIDATES');
+    expect(result.reasonCodes).not.toContain('ONLY_EXPIRED_BASIC_PRICE_CANDIDATES');
+    expect((result as any).selectedBasicPriceId).toBeUndefined();
+  });
+
+  // ----------------------------------------------------------
+  // TEST 24 (Option C): Expired wrong-unit candidate preserves existing
+  // unit-not-supported behavior; must not produce an expired-only result
+  // ----------------------------------------------------------
+  it('24 (Option C). Expired candidate with unsupported unit preserves existing unit-not-supported outcome', () => {
+    const priceExpiredJam: BasicPriceCandidate = {
+      id: 'price-pekerja-expired-jam-uuid-001',
+      resourceId: 'catalog-pekerja-uuid-001',
+      value: '15000.00',
+      sourceOrigin: 'GOVERNMENT',
+      unit: 'Jam',
+      freshnessStatus: 'EXPIRED',
+    };
+
+    const result = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      eligibleBasicPriceCandidates: [priceExpiredJam],
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toContain('BASIC_PRICE_UNIT_NOT_SUPPORTED');
+    expect(result.reasonCodes).not.toContain('ONLY_EXPIRED_BASIC_PRICE_CANDIDATES');
+    expect((result as any).selectedBasicPriceId).toBeUndefined();
+  });
 });
