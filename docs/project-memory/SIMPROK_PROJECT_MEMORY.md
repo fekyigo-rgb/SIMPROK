@@ -18,7 +18,9 @@ Repository: fekyigo-rgb/SIMPROK
 - Security prerequisite — Project Permission Workspace Authority: MERGED_PASS melalui PR #23, merge commit `6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`.
 - BP-AHSP Phase 2 Commit B — freshness-aware deterministic resolution: `61e98fe546f689df65c884db894298bbbc525e6e`; PM GATE PASS; OWNER PASS; LOCKED.
 - BP-AHSP Phase 2 Commit C — project occurrence persistence schema: `04767a0f4cde035ff38446ba8a867ab09b0b809e`; PM GATE PASS; OWNER PASS; LOCKED.
-- BP-AHSP Phase 2 Commit D — guarded runtime persistence wiring: READ-ONLY PREFLIGHT PM PASS WITH EXECUTION CONDITIONS; implementation remains LOCKED and requires separate bounded Owner/PM authorization.
+- BP-AHSP Phase 2 Commit D — guarded runtime persistence wiring: IMPLEMENTED and MERGED; implementation commit `97377ac0ef51b8cbfd49240af4f0b297556501c2`; Phase 2 merge commit `e89ba7c3dddc2335827831efd57cfbedd53ac32b`.
+- BP-AHSP Phase 2 first real Project AHSP occurrence: `PASS_RESOLVED`; runtime proof `CLOSED_WITH_DB_REVERIFICATION_PASS`; documentation closure remains `PENDING_PM_REVIEW`.
+- Main / PR #27 head: `032529662021961e06f646d6bd8b20642900dfab`; canonical production entrypoint: `node dist/src/main`.
 
 ## 2. Keputusan Owner
 
@@ -97,6 +99,7 @@ Digantikan oleh enam mode final A-F.
 | P7C Canonical Intake Contract | IMPLEMENTED_ON_BRANCH | branch feat/p7c-canonical-intake-contract; migration 20260711000000_p7c_canonical_intake_contract; API PATCH /projects/:projectId/intake-context and GET /projects/:projectId/intake-mode; backend build PASS; backend unit 122 PASS; serial e2e 114 PASS; frontend build PASS; runtime API Mode C/F PASS; browser visual audit not run because no browser automation/tooling available |
 | BP-AHSP Phase 1 | COMMITTED_PASS | PR #22; merge commit `217b5f8dca983d24b51be18208d2ab00f6a38845`; pure deterministic worker-price resolution kernel; focused 19/19 PASS; backend unit 33 suites/263 tests PASS; safe E2E 18 suites/172 tests PASS; residual PASS; PR Quality Gate SUCCESS |
 | Security Project Permission Workspace Authority | MERGED_PASS | PR #23; merge commit `6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`; focused PermissionsGuard unit 10/10 PASS; focused security E2E 9/9 PASS; backend unit 34 suites/273 tests PASS; safe E2E 18 suites/176 tests PASS; frontend build PASS; PR Quality Gate SUCCESS |
+| BP-AHSP Phase 2 | IMPLEMENTED_MERGED; RUNTIME_PROOF_CLOSED | implementation commit `97377ac0ef51b8cbfd49240af4f0b297556501c2`; merge commit `e89ba7c3dddc2335827831efd57cfbedd53ac32b`; first real occurrence `PASS_RESOLVED`; DB-only closure audit PASS; detailed evidence: `docs/implementation-gates/BP_AHSP_PHASE2_FIRST_REAL_OCCURRENCE_CLOSURE.md` |
 
 ## 5.1 P7C Implementation Notes
 
@@ -220,27 +223,29 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Runtime limitation:
   `Kernel exists on main but is not yet wired to production persistence or an endpoint.`
 
-## 9. ACTIVE BOUNDED IMPLEMENTATION GATE — PHASE 2
+## 9. COMPLETED BOUNDED IMPLEMENTATION GATE — PHASE 2
 
 - Gate document:
   `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`
 - Status:
-  `ACTIVE — COMMIT B AND COMMIT C OWNER PASS / LOCKED; COMMIT D READ-ONLY PREFLIGHT PM PASS WITH EXECUTION CONDITIONS; COMMIT D IMPLEMENTATION LOCKED.`
+  `IMPLEMENTED_MERGED — COMMIT B, COMMIT C, AND COMMIT D COMPLETE; FIRST REAL OCCURRENCE PASS_RESOLVED; RUNTIME PROOF CLOSED WITH DB REVERIFICATION PASS; DOCUMENTATION CLOSURE APPROVED FOR MERGE BY OWNER.`
 - Security prerequisite evidence:
   `PR #23; merge commit 6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`
 - Security prerequisite documents:
   - `docs/implementation-gates/BP_AHSP_PHASE2_ARCHITECT_FINAL_REVIEW_DECISIONS.md`
   - `docs/implementation-gates/SECURITY_PROJECT_PERMISSION_WORKSPACE_AUTHORITY_SUPPLEMENT.md`
 - Completed bounded scope:
-  `Commit B completed the freshness-aware deterministic resolution kernel. Commit C completed the additive ProjectAhspOccurrence and ProjectAhspResourceResolution persistence schema and migration.`
-- Pending bounded scope:
-  `Commit D may later wire the locked deterministic kernel to guarded POST and GET project-AHSP occurrence endpoints and persist truthful RESOLVED, UNRESOLVED, or NEEDS_REVIEW outcomes. Commit D has no implementation authority until a separate Owner/PM gate is issued.`
+  `Commit B completed the freshness-aware deterministic resolution kernel. Commit C completed the additive ProjectAhspOccurrence and ProjectAhspResourceResolution persistence schema and migration. Commit D wired the guarded POST and GET project-AHSP occurrence endpoints and persists truthful RESOLVED, UNRESOLVED, or NEEDS_REVIEW outcomes.`
+- Closure evidence:
+  `The bounded first real occurrence is PASS_RESOLVED and the DB-only closure audit passed in a REPEATABLE READ, READ ONLY transaction. Detailed identities and values remain in docs/implementation-gates/BP_AHSP_PHASE2_FIRST_REAL_OCCURRENCE_CLOSURE.md.`
 - Placement:
   `Do not store resource-level selection in BoqItem or RAB. Do not mutate master AHSP or old snapshots.`
 - Forbidden in this phase:
   `No frontend, no override, no comparison UI, no multi-price ranking, no publication fix, no global/workspace precedence rule, no universal unit engine, no Cost Kernel arithmetic, no AHSP unit-price calculation, no RAB change, and no snapshot backfill.`
-- Delivery rule:
+- Historical delivery rule — `SUPERSEDED_BY_IMPLEMENTATION_AND_RUNTIME_PROOF`:
   `Synchronize the Phase 2 implementation branch with latest main containing PR #23 and this status update. Do not merge or create a Phase 2 PR before PM code review and complete gates. Commit D must start from the exact reviewed post-memory-sync baseline. No PR or merge is authorized. No schema, migration, index, kernel, BasicPriceService, security guard, permission catalog, seed, package, frontend, Cost Kernel, AHSP unit-price, RAB, Execution Factor, or snapshot change may be added to Commit D.`
+- Current documentation closure rule:
+  `PM review and the explicit Owner decision are PASS for the docs-only Phase 2 closure. PR #28 is authorized for merge only when the final exact head retains the approved two-path docs-only scope, has no unresolved review or requested changes, is mergeable, and its current-head CI succeeds. This acceptance and merge do not open the next product slice.`
 
 ## 9.1 BP-AHSP PHASE 2 COMMIT CHECKPOINTS
 
@@ -280,12 +285,18 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Accepted non-blocking notes:
   `Prisma format produced verified whitespace-only realignment outside the new schema section, with no semantic drift. The original executor prompt was truncated after section 33, but the continuation prompt restated all mandatory gates and the official safe E2E gate was executed. No amend or corrective commit was required.`
 
-### Commit D — Read-Only Preflight Status
+### Commit D — Implementation and Runtime Proof Status
 
 - Status:
-  `COMMIT_D_READ_ONLY_PREFLIGHT_PM_GATE_PASS_WITH_EXECUTION_CONDITIONS`
-- Implementation authority:
-  `NONE — COMMIT D REMAINS LOCKED`
+  `IMPLEMENTED_MERGED; FIRST REAL OCCURRENCE PASS_RESOLVED; RUNTIME PROOF CLOSED WITH DB REVERIFICATION PASS`
+- Implementation commit:
+  `97377ac0ef51b8cbfd49240af4f0b297556501c2`
+- Phase 2 merge commit:
+  `e89ba7c3dddc2335827831efd57cfbedd53ac32b`
+- Main / PR #27 head and production entrypoint:
+  `032529662021961e06f646d6bd8b20642900dfab; node dist/src/main`
+- Historical preflight status:
+  `COMMIT_D_READ_ONLY_PREFLIGHT_PM_GATE_PASS_WITH_EXECUTION_CONDITIONS — SUPERSEDED_BY_IMPLEMENTATION_AND_RUNTIME_PROOF`
 - Maximum planned scope:
   `Seven backend/runtime/test files only.`
 - Planned endpoints:
@@ -315,8 +326,16 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
   `ProjectAhspOccurrence is not canonical WorkOccurrence or ExecutionAssessment. idempotencyKey is not occurrenceKey. Commit D must not introduce boqItemId, WBS, schedule/activity identity, location/work-face identity, Execution Factor, Cost Kernel, AHSP unit-price arithmetic, RAB arithmetic, snapshot mutation, or master AHSP mutation.`
 - Forbidden Commit D changes:
   `No schema, migration, index, kernel, BasicPriceService, security guard, permission catalog, seed, package, frontend, Cost Kernel, RAB, Execution Factor, or snapshot change.`
-- Next gate:
-  `After this Project Memory synchronization receives PM and Owner PASS, Commit D requires a new exact baseline and separate bounded implementation authorization. Preflight PASS is not implementation authorization.`
+- First real occurrence and closure:
+  `FIRST_PROJECT_AHSP_OCCURRENCE_VERDICT=PASS_RESOLVED; DB_ONLY_CLOSURE_AUDIT=PASS; BP_AHSP_PHASE2_RUNTIME_PROOF=CLOSED_WITH_DB_REVERIFICATION_PASS; DOCUMENTATION_CLOSURE_STATUS=APPROVED_FOR_MERGE.`
+- Bounded ownership decision:
+  `The exact Resource Catalog and Basic Price used by the proof remain Workspace A only. This statement is bounded to those exact proof records and does not settle universal workspace/global precedence.`
+- Runtime lifecycle debt:
+  `BACKEND_LIFECYCLE_DEBT=UTANG_RUNTIME_PROCESS_LIFECYCLE_OPEN_NON_BLOCKING.`
+- Bounded exclusions remain active:
+  `Phase 2 does not calculate coefficient × price, resource cost, AHSP unit price, subtotal, or RAB total; it does not complete Cost Kernel, Execution Factor, snapshot, override, comparison UI, frontend, or universal workspace/global precedence.`
+- Next delivery gate:
+  `The locked order remains KAMUS-UNIT-KERNEL-01A → KAMUS-UNIT-KERNEL-01B → one live RAB line, each under its own Owner/PM gate. Selecting or opening the next target requires a new Owner decision and gate.`
 
 ## 10. PROJECT, RAB, AUTHORITY & UNIT LAW
 
@@ -339,7 +358,7 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Conversion truth law:
   `Audit AHSPResource.conversionFactor before introducing UnitConversionRule; two canonical homes for the same conversion factor are forbidden.`
 - Current effective order:
-  `Security prerequisite (MERGED_PASS) → BP-AHSP Phase 2 persistence (ACTIVE) → KAMUS-UNIT-KERNEL-01A → KAMUS-UNIT-KERNEL-01B → one live RAB line → broader Governance/RBAC debts.`
+  `Security prerequisite (MERGED_PASS) → BP-AHSP Phase 2 persistence (IMPLEMENTED_MERGED; RUNTIME_PROOF_CLOSED) → KAMUS-UNIT-KERNEL-01A → KAMUS-UNIT-KERNEL-01B → one live RAB line → broader Governance/RBAC debts.`
 - Retrieval rule:
   `For project/RAB/authority/unit work, read Project Memory, then this canonical law, then the Basic Price–AHSP Owner Lock and Blueprint, then applicable gates and repository/runtime evidence.`
 - Duplication rule:
