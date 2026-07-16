@@ -22,8 +22,11 @@ Foundation dan hukum domain tetap dirujuk melalui Project Memory, Basic Price–
 
 - Phase 2 implementation commit: `97377ac0ef51b8cbfd49240af4f0b297556501c2`
 - Phase 2 merge commit: `e89ba7c3dddc2335827831efd57cfbedd53ac32b`
-- PR #27 / main HEAD: `032529662021961e06f646d6bd8b20642900dfab`
+- Phase 2 implementation/runtime-proof baseline — PR #27 main head at the time of proof: `032529662021961e06f646d6bd8b20642900dfab`
 - Production entrypoint: `node dist/src/main`
+- Documentation closure final reviewed head: `625d2eb6fd3aa2d982a6c4091bc347f448783a05`
+- Documentation closure PR: `#28`
+- Documentation closure merge commit: `1510a0457e983c0bf8cbb3bedf4d3535bfc76fde`
 
 ## 4. Exact source identity and values
 
@@ -138,9 +141,13 @@ AHSP tetap otoritatif; Basic Price menyesuaikan. SIMPROK menghitung; manusia mem
 FIRST_PROJECT_AHSP_OCCURRENCE_VERDICT=PASS_RESOLVED
 BP_AHSP_PHASE2_RUNTIME_PROOF=CLOSED_WITH_DB_REVERIFICATION_PASS
 BACKEND_LIFECYCLE_DEBT=UTANG_RUNTIME_PROCESS_LIFECYCLE_OPEN_NON_BLOCKING
-DOCUMENTATION_CLOSURE_STATUS=APPROVED_FOR_MERGE
+DOCUMENTATION_CLOSURE_STATUS=MERGED_VIA_PR_28
 OWNER_ACCEPTANCE=PASS
 OWNER_MERGE_DECISION=APPROVED
+DOCUMENTATION_CLOSURE_PR=28
+DOCUMENTATION_CLOSURE_MERGE_COMMIT=1510a0457e983c0bf8cbb3bedf4d3535bfc76fde
 ```
+
+A6 post-merge truth sync hanya mencatat repository reality dari PR #28. A6 tidak menjalankan ulang atau mengubah runtime, database, API, maupun bukti Phase 2.
 
 Memilih atau membuka target delivery berikutnya tetap memerlukan keputusan Owner dan gate baru. Urutan yang dipertahankan adalah `KAMUS-UNIT-KERNEL-01A`, kemudian `KAMUS-UNIT-KERNEL-01B`, kemudian satu live RAB line setelah gate masing-masing.
