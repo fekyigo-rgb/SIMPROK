@@ -223,7 +223,7 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Runtime limitation:
   `Kernel exists on main but is not yet wired to production persistence or an endpoint.`
 
-## 9. ACTIVE BOUNDED IMPLEMENTATION GATE — PHASE 2
+## 9. COMPLETED BOUNDED IMPLEMENTATION GATE — PHASE 2
 
 - Gate document:
   `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`
@@ -242,8 +242,10 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
   `Do not store resource-level selection in BoqItem or RAB. Do not mutate master AHSP or old snapshots.`
 - Forbidden in this phase:
   `No frontend, no override, no comparison UI, no multi-price ranking, no publication fix, no global/workspace precedence rule, no universal unit engine, no Cost Kernel arithmetic, no AHSP unit-price calculation, no RAB change, and no snapshot backfill.`
-- Delivery rule:
+- Historical delivery rule — `SUPERSEDED_BY_IMPLEMENTATION_AND_RUNTIME_PROOF`:
   `Synchronize the Phase 2 implementation branch with latest main containing PR #23 and this status update. Do not merge or create a Phase 2 PR before PM code review and complete gates. Commit D must start from the exact reviewed post-memory-sync baseline. No PR or merge is authorized. No schema, migration, index, kernel, BasicPriceService, security guard, permission catalog, seed, package, frontend, Cost Kernel, AHSP unit-price, RAB, Execution Factor, or snapshot change may be added to Commit D.`
+- Current documentation closure rule:
+  `The docs-only closure branch remains DOCUMENTATION_CLOSURE_STATUS=PENDING_PM_REVIEW and OWNER_ACCEPTANCE=PENDING. No PR or merge is authorized until the exact corrected remote head receives PM review and an explicit Owner decision. This documentation correction does not open the next product slice.`
 
 ## 9.1 BP-AHSP PHASE 2 COMMIT CHECKPOINTS
 
@@ -356,7 +358,7 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Conversion truth law:
   `Audit AHSPResource.conversionFactor before introducing UnitConversionRule; two canonical homes for the same conversion factor are forbidden.`
 - Current effective order:
-  `Security prerequisite (MERGED_PASS) → BP-AHSP Phase 2 persistence (ACTIVE) → KAMUS-UNIT-KERNEL-01A → KAMUS-UNIT-KERNEL-01B → one live RAB line → broader Governance/RBAC debts.`
+  `Security prerequisite (MERGED_PASS) → BP-AHSP Phase 2 persistence (IMPLEMENTED_MERGED; RUNTIME_PROOF_CLOSED) → KAMUS-UNIT-KERNEL-01A → KAMUS-UNIT-KERNEL-01B → one live RAB line → broader Governance/RBAC debts.`
 - Retrieval rule:
   `For project/RAB/authority/unit work, read Project Memory, then this canonical law, then the Basic Price–AHSP Owner Lock and Blueprint, then applicable gates and repository/runtime evidence.`
 - Duplication rule:
