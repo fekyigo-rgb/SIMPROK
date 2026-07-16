@@ -19,8 +19,8 @@ Repository: fekyigo-rgb/SIMPROK
 - BP-AHSP Phase 2 Commit B — freshness-aware deterministic resolution: `61e98fe546f689df65c884db894298bbbc525e6e`; PM GATE PASS; OWNER PASS; LOCKED.
 - BP-AHSP Phase 2 Commit C — project occurrence persistence schema: `04767a0f4cde035ff38446ba8a867ab09b0b809e`; PM GATE PASS; OWNER PASS; LOCKED.
 - BP-AHSP Phase 2 Commit D — guarded runtime persistence wiring: IMPLEMENTED and MERGED; implementation commit `97377ac0ef51b8cbfd49240af4f0b297556501c2`; Phase 2 merge commit `e89ba7c3dddc2335827831efd57cfbedd53ac32b`.
-- BP-AHSP Phase 2 first real Project AHSP occurrence: `PASS_RESOLVED`; runtime proof `CLOSED_WITH_DB_REVERIFICATION_PASS`; documentation closure remains `PENDING_PM_REVIEW`.
-- Main / PR #27 head: `032529662021961e06f646d6bd8b20642900dfab`; canonical production entrypoint: `node dist/src/main`.
+- BP-AHSP Phase 2 first real Project AHSP occurrence: `PASS_RESOLVED`; runtime proof `CLOSED_WITH_DB_REVERIFICATION_PASS`; documentation closure `MERGED_VIA_PR_28` through PR #28, merge commit `1510a0457e983c0bf8cbb3bedf4d3535bfc76fde`.
+- Phase 2 implementation/runtime-proof baseline — PR #27 main head at the time of proof: `032529662021961e06f646d6bd8b20642900dfab`; canonical production entrypoint: `node dist/src/main`.
 
 ## 2. Keputusan Owner
 
@@ -228,7 +228,7 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Gate document:
   `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`
 - Status:
-  `IMPLEMENTED_MERGED — COMMIT B, COMMIT C, AND COMMIT D COMPLETE; FIRST REAL OCCURRENCE PASS_RESOLVED; RUNTIME PROOF CLOSED WITH DB REVERIFICATION PASS; DOCUMENTATION CLOSURE APPROVED FOR MERGE BY OWNER.`
+  `IMPLEMENTED_MERGED — COMMIT B, COMMIT C, AND COMMIT D COMPLETE; FIRST REAL OCCURRENCE PASS_RESOLVED; RUNTIME PROOF CLOSED WITH DB REVERIFICATION PASS; DOCUMENTATION CLOSURE MERGED VIA PR #28; MERGE COMMIT 1510a0457e983c0bf8cbb3bedf4d3535bfc76fde.`
 - Security prerequisite evidence:
   `PR #23; merge commit 6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`
 - Security prerequisite documents:
@@ -244,8 +244,8 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
   `No frontend, no override, no comparison UI, no multi-price ranking, no publication fix, no global/workspace precedence rule, no universal unit engine, no Cost Kernel arithmetic, no AHSP unit-price calculation, no RAB change, and no snapshot backfill.`
 - Historical delivery rule — `SUPERSEDED_BY_IMPLEMENTATION_AND_RUNTIME_PROOF`:
   `Synchronize the Phase 2 implementation branch with latest main containing PR #23 and this status update. Do not merge or create a Phase 2 PR before PM code review and complete gates. Commit D must start from the exact reviewed post-memory-sync baseline. No PR or merge is authorized. No schema, migration, index, kernel, BasicPriceService, security guard, permission catalog, seed, package, frontend, Cost Kernel, AHSP unit-price, RAB, Execution Factor, or snapshot change may be added to Commit D.`
-- Current documentation closure rule:
-  `PM review and the explicit Owner decision are PASS for the docs-only Phase 2 closure. PR #28 is authorized for merge only when the final exact head retains the approved two-path docs-only scope, has no unresolved review or requested changes, is mergeable, and its current-head CI succeeds. This acceptance and merge do not open the next product slice.`
+- Documentation closure result:
+  `PM review and Owner acceptance passed for final reviewed head 625d2eb6fd3aa2d982a6c4091bc347f448783a05. PR #28 merged through merge commit 1510a0457e983c0bf8cbb3bedf4d3535bfc76fde after final-head CI succeeded. This closure does not open the next product slice.`
 
 ## 9.1 BP-AHSP PHASE 2 COMMIT CHECKPOINTS
 
@@ -293,8 +293,8 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
   `97377ac0ef51b8cbfd49240af4f0b297556501c2`
 - Phase 2 merge commit:
   `e89ba7c3dddc2335827831efd57cfbedd53ac32b`
-- Main / PR #27 head and production entrypoint:
-  `032529662021961e06f646d6bd8b20642900dfab; node dist/src/main`
+- Historical implementation/runtime-proof baseline and production entrypoint:
+  `PR #27 main head at the time of proof: 032529662021961e06f646d6bd8b20642900dfab; node dist/src/main`
 - Historical preflight status:
   `COMMIT_D_READ_ONLY_PREFLIGHT_PM_GATE_PASS_WITH_EXECUTION_CONDITIONS — SUPERSEDED_BY_IMPLEMENTATION_AND_RUNTIME_PROOF`
 - Maximum planned scope:
@@ -327,7 +327,7 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Forbidden Commit D changes:
   `No schema, migration, index, kernel, BasicPriceService, security guard, permission catalog, seed, package, frontend, Cost Kernel, RAB, Execution Factor, or snapshot change.`
 - First real occurrence and closure:
-  `FIRST_PROJECT_AHSP_OCCURRENCE_VERDICT=PASS_RESOLVED; DB_ONLY_CLOSURE_AUDIT=PASS; BP_AHSP_PHASE2_RUNTIME_PROOF=CLOSED_WITH_DB_REVERIFICATION_PASS; DOCUMENTATION_CLOSURE_STATUS=APPROVED_FOR_MERGE.`
+  `FIRST_PROJECT_AHSP_OCCURRENCE_VERDICT=PASS_RESOLVED; DB_ONLY_CLOSURE_AUDIT=PASS; BP_AHSP_PHASE2_RUNTIME_PROOF=CLOSED_WITH_DB_REVERIFICATION_PASS; DOCUMENTATION_CLOSURE_STATUS=MERGED_VIA_PR_28; DOCUMENTATION_CLOSURE_PR=28; DOCUMENTATION_CLOSURE_MERGE_COMMIT=1510a0457e983c0bf8cbb3bedf4d3535bfc76fde.`
 - Bounded ownership decision:
   `The exact Resource Catalog and Basic Price used by the proof remain Workspace A only. This statement is bounded to those exact proof records and does not settle universal workspace/global precedence.`
 - Runtime lifecycle debt:
