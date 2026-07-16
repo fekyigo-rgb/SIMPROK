@@ -228,7 +228,7 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Gate document:
   `docs/implementation-gates/BP_AHSP_PHASE2_PROJECT_OCCURRENCE_PERSISTENCE.md`
 - Status:
-  `IMPLEMENTED_MERGED — COMMIT B, COMMIT C, AND COMMIT D COMPLETE; FIRST REAL OCCURRENCE PASS_RESOLVED; RUNTIME PROOF CLOSED WITH DB REVERIFICATION PASS; DOCUMENTATION CLOSURE PENDING PM REVIEW.`
+  `IMPLEMENTED_MERGED — COMMIT B, COMMIT C, AND COMMIT D COMPLETE; FIRST REAL OCCURRENCE PASS_RESOLVED; RUNTIME PROOF CLOSED WITH DB REVERIFICATION PASS; DOCUMENTATION CLOSURE APPROVED FOR MERGE BY OWNER.`
 - Security prerequisite evidence:
   `PR #23; merge commit 6dc7000456e8f6a58aed9f66fbe1f17eb5d5e4eb`
 - Security prerequisite documents:
@@ -245,7 +245,7 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Historical delivery rule — `SUPERSEDED_BY_IMPLEMENTATION_AND_RUNTIME_PROOF`:
   `Synchronize the Phase 2 implementation branch with latest main containing PR #23 and this status update. Do not merge or create a Phase 2 PR before PM code review and complete gates. Commit D must start from the exact reviewed post-memory-sync baseline. No PR or merge is authorized. No schema, migration, index, kernel, BasicPriceService, security guard, permission catalog, seed, package, frontend, Cost Kernel, AHSP unit-price, RAB, Execution Factor, or snapshot change may be added to Commit D.`
 - Current documentation closure rule:
-  `The docs-only closure branch remains DOCUMENTATION_CLOSURE_STATUS=PENDING_PM_REVIEW and OWNER_ACCEPTANCE=PENDING. No PR or merge is authorized until the exact corrected remote head receives PM review and an explicit Owner decision. This documentation correction does not open the next product slice.`
+  `PM review and the explicit Owner decision are PASS for the docs-only Phase 2 closure. PR #28 is authorized for merge only when the final exact head retains the approved two-path docs-only scope, has no unresolved review or requested changes, is mergeable, and its current-head CI succeeds. This acceptance and merge do not open the next product slice.`
 
 ## 9.1 BP-AHSP PHASE 2 COMMIT CHECKPOINTS
 
@@ -327,7 +327,7 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
 - Forbidden Commit D changes:
   `No schema, migration, index, kernel, BasicPriceService, security guard, permission catalog, seed, package, frontend, Cost Kernel, RAB, Execution Factor, or snapshot change.`
 - First real occurrence and closure:
-  `FIRST_PROJECT_AHSP_OCCURRENCE_VERDICT=PASS_RESOLVED; DB_ONLY_CLOSURE_AUDIT=PASS; BP_AHSP_PHASE2_RUNTIME_PROOF=CLOSED_WITH_DB_REVERIFICATION_PASS; DOCUMENTATION_CLOSURE_STATUS=PENDING_PM_REVIEW.`
+  `FIRST_PROJECT_AHSP_OCCURRENCE_VERDICT=PASS_RESOLVED; DB_ONLY_CLOSURE_AUDIT=PASS; BP_AHSP_PHASE2_RUNTIME_PROOF=CLOSED_WITH_DB_REVERIFICATION_PASS; DOCUMENTATION_CLOSURE_STATUS=APPROVED_FOR_MERGE.`
 - Bounded ownership decision:
   `The exact Resource Catalog and Basic Price used by the proof remain Workspace A only. This statement is bounded to those exact proof records and does not settle universal workspace/global precedence.`
 - Runtime lifecycle debt:
