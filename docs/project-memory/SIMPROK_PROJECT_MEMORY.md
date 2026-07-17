@@ -6,7 +6,7 @@ Repository: fekyigo-rgb/SIMPROK
 
 ## 1. Status Produk Terkini
 
-- KAMUS Unit Kernel 01A: `MERGED`; production activation `PASS_SUBSTANTIVE` for canonical source, schema/reference data in `simprok_db`, and the bounded backend application path. Column Evidence Addendum V1.1: `PASS`. Backend HTTP runtime: `NOT_PROVEN`; frontend integration, 01B, Cost Kernel, Execution Factor, and RAB arithmetic remain closed. Documentation closure, Owner acceptance, and Owner merge decision for this docs-only sync remain pending.
+- KAMUS Unit Kernel 01A: `MERGED`; production activation `PASS_SUBSTANTIVE` for canonical source, schema/reference data in `simprok_db`, and the bounded backend application path. Column Evidence Addendum V1.1: `PASS`. Backend HTTP runtime: `NOT_PROVEN`; frontend integration, 01B, Cost Kernel, Execution Factor, and RAB arithmetic remain closed. Documentation closure and Owner acceptance are `PASS`; PR #31 merge is authorized only under the exact final guards. 01B and the next product slice remain closed.
 
 - Main clean dan sinkron dengan origin/main.
 - P6B/P6C: LOCKED.
@@ -431,7 +431,7 @@ This is an Owner operational clarification, not a Foundation, Kitab, ADR, or uni
 
 ### 11.7 Documentation closure state
 
-- `DOCUMENTATION_CLOSURE_STATUS=PENDING_PM_REVIEW`
-- `OWNER_ACCEPTANCE=PENDING`
-- `OWNER_MERGE_DECISION=PENDING`
-- `PR_MERGE_AUTHORIZED=NO`
+- `DOCUMENTATION_CLOSURE_STATUS=PASS`
+- `OWNER_ACCEPTANCE=PASS`
+- `OWNER_MERGE_DECISION=PASS`
+- `PR_MERGE_AUTHORIZED=YES`
