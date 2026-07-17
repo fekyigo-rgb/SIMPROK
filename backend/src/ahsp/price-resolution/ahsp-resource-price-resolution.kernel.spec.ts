@@ -29,6 +29,13 @@ import {
   BasicPriceCandidate,
 } from './ahsp-resource-price-resolution.kernel';
 
+const VALIDATED_PERSON_DAY_PRICE_UNIT = {
+  status: 'RESOLVED',
+  canonicalUnitCode: 'PERSON_DAY',
+  quantityFactor: '1',
+  priceOperation: 'IDENTITY',
+} as const;
+
 // ============================================================
 // SHARED TEST FIXTURES
 // ============================================================
@@ -71,6 +78,7 @@ const PRICE_PEKERJA_STANDARD: BasicPriceCandidate = {
   value: '120000.00',
   sourceOrigin: 'GOVERNMENT',
   unit: 'Org/Hari',
+  unitResolution: { status: 'RESOLVED', canonicalUnitCode: 'PERSON_DAY', quantityFactor: '1', priceOperation: 'IDENTITY' },
 };
 
 const PRICE_PEKERJA_ALTERNATIVE: BasicPriceCandidate = {
@@ -81,6 +89,7 @@ const PRICE_PEKERJA_ALTERNATIVE: BasicPriceCandidate = {
   // MARKET_SURVEY is not a valid PriceSourceOrigin in the repository schema.
   sourceOrigin: 'FIELD_REPORT',
   unit: 'Org/Hari',
+  unitResolution: { status: 'RESOLVED', canonicalUnitCode: 'PERSON_DAY', quantityFactor: '1', priceOperation: 'IDENTITY' },
 };
 
 const PRICE_MANDOR: BasicPriceCandidate = {
@@ -89,6 +98,7 @@ const PRICE_MANDOR: BasicPriceCandidate = {
   value: '180000.00',
   sourceOrigin: 'GOVERNMENT',
   unit: 'Org/Hari',
+  unitResolution: { status: 'RESOLVED', canonicalUnitCode: 'PERSON_DAY', quantityFactor: '1', priceOperation: 'IDENTITY' },
 };
 
 const BASE_INPUT: Omit<
@@ -101,6 +111,13 @@ const BASE_INPUT: Omit<
   rawResourceRef: 'Pekerja',
   resourceType: 'LABOR',
   ahspUnit: 'OH',
+  validatedUnitResolution: {
+    status: 'RESOLVED',
+    canonicalUnitCode: 'PERSON_DAY',
+    quantityFactor: '1',
+    rawSourceUnit: 'OH',
+    rawTargetUnit: 'Org/Hari',
+  },
 };
 
 // ============================================================
@@ -200,6 +217,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
 
     const result = resolveAhspResourcePrice({
       ...BASE_INPUT,
+      validatedUnitResolution: { ...BASE_INPUT.validatedUnitResolution, status: 'NEEDS_REVIEW' },
       resourceCatalogCandidates: [catalogJam],
       eligibleBasicPriceCandidates: [PRICE_PEKERJA_STANDARD],
     });
@@ -226,6 +244,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       rawResourceRef: 'Semen',
       resourceType: 'MATERIAL',
       ahspUnit: 'sak',
+      validatedUnitResolution: { ...BASE_INPUT.validatedUnitResolution, status: 'NEEDS_REVIEW' },
       resourceCatalogCandidates: [catalogKg],
       eligibleBasicPriceCandidates: [],
     });
@@ -430,6 +449,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       value: '15000.00',
       sourceOrigin: 'GOVERNMENT',
       unit: 'Jam',
+      unitResolution: { status: 'NEEDS_REVIEW', canonicalUnitCode: null, quantityFactor: null, priceOperation: null },
     };
 
     const result = resolveAhspResourcePrice({
@@ -458,6 +478,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       value: '15000.00',
       sourceOrigin: 'GOVERNMENT',
       unit: 'Jam',
+      unitResolution: { status: 'NEEDS_REVIEW', canonicalUnitCode: null, quantityFactor: null, priceOperation: null },
     };
 
     const result = resolveAhspResourcePrice({
@@ -566,6 +587,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       sourceOrigin: 'GOVERNMENT',
       unit: 'Org/Hari',
       freshnessStatus: 'EXPIRED',
+      unitResolution: VALIDATED_PERSON_DAY_PRICE_UNIT,
     };
     const priceExpiredB: BasicPriceCandidate = {
       id: 'price-pekerja-expired-uuid-002',
@@ -574,6 +596,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       sourceOrigin: 'FIELD_REPORT',
       unit: 'Org/Hari',
       freshnessStatus: 'EXPIRED',
+      unitResolution: VALIDATED_PERSON_DAY_PRICE_UNIT,
     };
 
     const result = resolveAhspResourcePrice({
@@ -602,6 +625,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       sourceOrigin: 'GOVERNMENT',
       unit: 'Org/Hari',
       freshnessStatus: 'CURRENT',
+      unitResolution: VALIDATED_PERSON_DAY_PRICE_UNIT,
     };
     const priceExpired: BasicPriceCandidate = {
       id: 'price-pekerja-expired-uuid-003',
@@ -610,6 +634,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       sourceOrigin: 'FIELD_REPORT',
       unit: 'Org/Hari',
       freshnessStatus: 'EXPIRED',
+      unitResolution: VALIDATED_PERSON_DAY_PRICE_UNIT,
     };
 
     const result = resolveAhspResourcePrice({
@@ -637,6 +662,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       sourceOrigin: 'GOVERNMENT',
       unit: 'Org/Hari',
       freshnessStatus: 'CURRENT',
+      unitResolution: VALIDATED_PERSON_DAY_PRICE_UNIT,
     };
     const priceExpiring: BasicPriceCandidate = {
       id: 'price-pekerja-expiring-uuid-001',
@@ -645,6 +671,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       sourceOrigin: 'FIELD_REPORT',
       unit: 'Org/Hari',
       freshnessStatus: 'EXPIRING',
+      unitResolution: VALIDATED_PERSON_DAY_PRICE_UNIT,
     };
     const priceExpired: BasicPriceCandidate = {
       id: 'price-pekerja-expired-uuid-004',
@@ -653,6 +680,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       sourceOrigin: 'GOVERNMENT',
       unit: 'Org/Hari',
       freshnessStatus: 'EXPIRED',
+      unitResolution: VALIDATED_PERSON_DAY_PRICE_UNIT,
     };
 
     const result = resolveAhspResourcePrice({
@@ -678,6 +706,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       value: '15000.00',
       sourceOrigin: 'GOVERNMENT',
       unit: 'Jam',
+      unitResolution: { status: 'NEEDS_REVIEW', canonicalUnitCode: null, quantityFactor: null, priceOperation: null },
       freshnessStatus: 'EXPIRED',
     };
 

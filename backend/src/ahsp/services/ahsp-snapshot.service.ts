@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AhspAuditService } from './ahsp-audit.service';
 
@@ -16,6 +16,8 @@ export class AhspSnapshotService {
     });
 
     if (!version) throw new NotFoundException('AHSP Version not found');
+    if (!version.outputUnit || !version.outputUnitDefinitionId)
+      throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
 
     const snapshot = await this.prisma.aHSPSnapshot.create({
       data: {
@@ -27,6 +29,8 @@ export class AhspSnapshotService {
         locationType: version.ahsp.locationType,
         methodName: version.ahsp.methodName,
         versionNumber: version.versionNumber,
+        outputUnit: version.outputUnit,
+        outputUnitDefinitionId: version.outputUnitDefinitionId,
         resources: {
           create: version.resources.map(r => ({
             resourceId: r.resourceId,

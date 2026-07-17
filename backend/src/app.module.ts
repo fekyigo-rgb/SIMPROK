@@ -25,6 +25,7 @@ import { RealityIntakeModule } from './reality-intake/reality-intake.module';
 import { BasicPriceModule } from './basic-price/basic-price.module';
 import { IntelligenceModule } from './intelligence/intelligence.module';
 import { ProjectAhspModule } from './project-ahsp/project-ahsp.module';
+import { UnitKernelModule } from './unit-kernel/unit-kernel.module';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { ProjectAhspModule } from './project-ahsp/project-ahsp.module';
     ProgressModule,
     RealityIntakeModule,
     ProjectAhspModule,
+    UnitKernelModule,
   ],
   controllers: [AppController],
   providers: [

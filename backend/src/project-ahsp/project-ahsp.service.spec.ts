@@ -4,6 +4,7 @@ import { BasicPriceService } from '../basic-price/basic-price.service';
 import { PrismaService } from '../prisma/prisma.service';
 import * as kernel from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { ProjectAhspService } from './project-ahsp.service';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 
 describe('ProjectAhspService', () => {
   const input = {
@@ -45,6 +46,7 @@ describe('ProjectAhspService', () => {
   let prisma: any;
   let basicPrices: any;
   let service: ProjectAhspService;
+  let units: any;
   let createData: any;
 
   beforeEach(() => {
@@ -77,9 +79,21 @@ describe('ProjectAhspService', () => {
       findByResource: jest.fn().mockResolvedValue([price]),
       findOneForWorkspace: jest.fn().mockResolvedValue(price),
     };
+    units = {
+      resolve: jest.fn().mockResolvedValue({
+        status: 'RESOLVED',
+        sourceUnitDefinition: { id: 'unit-person-day', code: 'PERSON_DAY' },
+        targetUnitDefinition: { id: 'unit-person-day', code: 'PERSON_DAY' },
+        conversionRuleId: null,
+        conversionRuleVersion: null,
+        quantityFactor: '1',
+        priceOperation: 'IDENTITY',
+      }),
+    };
     service = new ProjectAhspService(
       prisma as PrismaService,
       basicPrices as BasicPriceService,
+      units as UnitKernelService,
     );
   });
 
@@ -185,10 +199,21 @@ describe('ProjectAhspService', () => {
     expect(saved.sourcePriceValue).toBe('1234567890123456.78');
     expect(saved.adaptedPriceValue).toBe('1234567890123456.78');
     expect(saved.ahspCoefficient.toString()).toBe('1.234567');
-    expect(saved.conversionFactor).toBe('1');
+    expect(saved.conversionFactor).toBeNull();
+    expect(saved.quantityFactor).toBe('1');
     expect(saved.canonicalUnit).toBe('PERSON_DAY');
     expect(saved.policyVersion).toBe('BP_AHSP_PHASE2_NAME_EXACT_OPTION_C_V1');
     expect(result.resourceResolutions).toHaveLength(1);
+  });
+
+  it('uses UnitKernelService for AHSP-to-catalog and each matching Basic Price unit', async () => {
+    const aliasPrice = { ...price, resource: { ...catalog, baseUnit: 'OH' } };
+    basicPrices.findByResource.mockResolvedValue([aliasPrice]);
+    basicPrices.findOneForWorkspace.mockResolvedValue(aliasPrice);
+    await service.create(input);
+    expect(units.resolve).toHaveBeenNthCalledWith(1, 'OH', 'Org/Hari', catalog.id);
+    expect(units.resolve).toHaveBeenNthCalledWith(2, 'OH', 'Org/Hari', catalog.id);
+    expect(units.resolve).toHaveBeenCalledTimes(2);
   });
 
   it.each([
