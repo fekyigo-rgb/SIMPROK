@@ -6,7 +6,7 @@ Repository: fekyigo-rgb/SIMPROK
 
 ## 1. Status Produk Terkini
 
-- KAMUS Unit Kernel 01A: IMPLEMENTED_ON_BRANCH on `feat/kamus-unit-kernel-01a`; additive canonical unit schema/resolver, Phase 2 PERSON_DAY cutover, legacy write shut-off, AHSP output-unit freeze, and internal BOQ compatibility metadata complete. PM remediation 01 removed raw-string Basic Price unit authority; remediation 02 binds resolver evidence to exact raw pairs and rejects missing/null/blank output units before resolution/writes. Backend unit 321 PASS, safe E2E 190 PASS on guarded `simprok_test`, frontend unchanged build PASS; awaiting PM/Owner re-review. `simprok_db` migration/write: NO.
+- KAMUS Unit Kernel 01A: `MERGED`; production activation `PASS_SUBSTANTIVE` for canonical source, schema/reference data in `simprok_db`, and the bounded backend application path. Column Evidence Addendum V1.1: `PASS`. Backend HTTP runtime: `NOT_PROVEN`; frontend integration, 01B, Cost Kernel, Execution Factor, and RAB arithmetic remain closed. Documentation closure, Owner acceptance, and Owner merge decision for this docs-only sync remain pending.
 
 - Main clean dan sinkron dengan origin/main.
 - P6B/P6C: LOCKED.
@@ -365,3 +365,69 @@ Tujuan: komputer Owner, clone lokal `C:\SIMPROK`, branch kerja, `origin/main`, b
   `For project/RAB/authority/unit work, read Project Memory, then this canonical law, then the Basic Price–AHSP Owner Lock and Blueprint, then applicable gates and repository/runtime evidence.`
 - Duplication rule:
   `Do not copy the full law into other documents. Keep pointers/status only to prevent two versions of truth.`
+
+## 11. KAMUS UNIT KERNEL 01A PRODUCTION ACTIVATION TRUTH RECORD
+
+### 11.1 Status and layered activation boundary
+
+- `KAMUS_UNIT_KERNEL_01A_IMPLEMENTATION_STATUS=MERGED`
+- `KAMUS_UNIT_KERNEL_01A_PRODUCTION_ACTIVATION_STATUS=PASS_SUBSTANTIVE`
+- `COLUMN_EVIDENCE_ADDENDUM_V1_1=PASS`
+- `BACKEND_HTTP_RUNTIME_STATUS=NOT_PROVEN`
+- `KAMUS_UNIT_KERNEL_01B_STATUS=CLOSED`
+- `NEXT_PRODUCT_SLICE_OPENED=NO`
+- PR #30 merged from base `e204674790ec4ee1ba1a6232351ccac76ac04a6f`; canonical main and merge commit are `773e88c47e0f225cdf294da923c4a99a7b501a61`.
+- Merged source establishes the three canonical homes `UnitDefinition`, `UnitAlias`, and `UnitConversionRule`; gives `AHSPVersion` output-unit identity; routes the Phase 2 PERSON_DAY path through the resolver; removes hard-coded alias ownership as a second canonical home; and rejects new legacy `conversionFactor` writes.
+- The four evidence layers remain distinct: merged source; schema/reference data in `simprok_db`; bounded application-code proof; and backend HTTP/frontend/RAB activation.
+- `01A is active in canonical source, schema/reference data in simprok_db, and the bounded backend application path. Backend HTTP, frontend integration, 01B monetary adaptation, Cost Kernel, and RAB arithmetic remain unproven or closed.`
+
+### 11.2 Historical production database and backup evidence
+
+This docs-only closure did not access the database. The following is historical verified activation evidence:
+
+- Database `simprok_db`; migration `20260717010000_kamus_unit_kernel_01a`: record count 1, finished YES, rolled back NO, applied steps 1, failed migration count 0.
+- Reference data: `UnitDefinition=8`, `UnitAlias=11`, `UnitConversionRule=0`; canonical-unit duplicate count 0.
+- `AHSPVersion.outputUnit` and `AHSPVersion.outputUnitDefinitionId` columns are available.
+- Global SAK-to-KG, ROLL-to-M1, and TRUCK-capacity rule counts are each 0. `UnitConversionRule=0` is fail-closed evidence, not a deficiency: no global SAK, ROLL, or TRUCK assumption exists without evidence.
+- Pre-activation backup: `C:\SIMPROK_BACKUPS\simprok_db_20260717_131222_pre_kamus_unit_kernel_01a.dump`; 226479 bytes; SHA-256 `53ea17c92c64372144945b6e81c2a78c94e31d97db76ecb43cd9a43db45b3c33`; PostgreSQL 17.10; `PG_RESTORE_LIST_PASS`. A restore was not run.
+
+### 11.3 Locked-column evidence and historical hash limitation
+
+- Occurrence `8d1c421f-bfb9-467e-8d67-2cd54dd60a06`: locked projection match YES; no mutation detected in locked projection YES.
+- Resolution `c616807f-93db-4f6a-b63e-91011b364915`: locked projection match YES; no mutation detected in locked projection YES.
+- Resolution evidence: status `RESOLVED`; selection mode `AUTO_SELECTED`; method `EXACT_DETERMINISTIC`; canonical unit `PERSON_DAY`; source unit `Org/Hari`; source and adapted price `158333.33`; stored legacy `conversionFactor=1.000000`; stored `quantityFactor=NULL`.
+- Ownership evidence: `resourceCatalogId=e29aac23-70ff-42ab-b9ca-e96472ba6cf0`; Basic Price `a3266896-da53-4306-9cae-e25535d4e31e`; both Workspace `10000000-0000-4000-8000-000000000004`; selected source origin `FIELD_REPORT`; Basic Price status `PUBLISHED`.
+- Reason codes: `EXACT_RESOURCE_NAME_MATCH`, `RESOURCE_TYPE_MATCH`, `LABOR_DAY_UNIT_EQUIVALENT`, `SINGLE_ELIGIBLE_BASIC_PRICE`.
+- `No mutation was detected within the locked occurrence and resolution column projections.`
+- `Absolute immutability was not proven.`
+- Historical hashes exist, but their inline activation projection/serialization procedure was not persisted and is not reproducible. No hash rerun occurred; hashes are therefore not repeatable canonical evidence. This is not evidence of a data mismatch. Reproducible locked-column comparison is the closure evidence; no byte-for-byte hash proof is claimed.
+
+### 11.4 Bounded proof and runtime exclusions
+
+- `BOUNDED_RESOLVER_PROOF=PASS_FROM_PRODUCTION_ACTIVATION_TRANSCRIPT_NOT_RERUN`; rerun NO.
+- Historical activation proof: OH and Orang/Hari each resolve to PERSON_DAY with factor 1 and `IDENTITY`; unknown aliases fail closed; SAK to KG without an evidence rule fails closed; first-occurrence re-resolution remains `158333.33`, PERSON_DAY, factor 1; the bounded proof performed no persistence.
+- `BACKEND_HTTP_LIVE=NOT_PROVEN`; port 3000 listener count at the V1.1 addendum was 0; API end-to-end proven NO; frontend Unit Kernel connected NO.
+- 01B, Cost Kernel, Execution Factor, frontend production, and RAB arithmetic were not opened.
+
+### 11.5 Evidence-addendum history
+
+- V1.0 — prompt `SIMPROK-KAMUS-UNIT-KERNEL-01A-PRODUCTION-ACTIVATION-EVIDENCE-ADDENDUM-V1_0-FINAL`; executor `CLAUDE_CODE`; normalized verdict `STOP_READ_ONLY_LAW_VIOLATED_AND_REPRODUCIBLE_PROCEDURE_UNAVAILABLE`. The historical hash procedure was not reproducible, the bounded-proof procedure was not available as a persisted harness, and at least two temp-file writes occurred. There was no repository or database write, no migration/activation rerun, and no runtime damage detected.
+- V1.1 — prompt `SIMPROK-KAMUS-UNIT-KERNEL-01A-COLUMN-EVIDENCE-ADDENDUM-V1_1-FINAL`; executor `CLAUDE_CODE`; verdict `READ_ONLY_COLUMN_EVIDENCE_ADDENDUM_PASS`. Exact repository, backup, database, migration, reference counts, occurrence projection, resolution projection, and ownership matched in a `REPEATABLE READ, READ ONLY` transaction. Filesystem/repository/database/Git/GitHub/backend/API write count was 0. No hash or bounded-proof rerun occurred; HTTP remained unproven and 01B remained closed.
+
+### 11.6 Owner operational clarification — executor coordination
+
+This is an Owner operational clarification, not a Foundation, Kitab, ADR, or universal constitutional amendment. The authorized executor pool is `CODEX_GPT_5_6_SOL`, `CLAUDE_CODE`, and `CURSOR_AGENT`.
+
+1. Only one executor is active for one task, branch, and worktree.
+2. The Owner appoints the executor in each execution decision; the executor cannot change mid-task without a new Owner decision.
+3. Other executors are read-only reviewers. Two executors may not stage, commit, push, merge, or write the database concurrently.
+4. Handoff must carry branch, HEAD, worktree, database/migration state, and last verdict.
+5. Autopilot 4 Guarded is an operating discipline, not an executor.
+6. Single writer means one active writer per task, not a permanent vendor/model monopoly.
+
+### 11.7 Documentation closure state
+
+- `DOCUMENTATION_CLOSURE_STATUS=PENDING_PM_REVIEW`
+- `OWNER_ACCEPTANCE=PENDING`
+- `OWNER_MERGE_DECISION=PENDING`
+- `PR_MERGE_AUTHORIZED=NO`
