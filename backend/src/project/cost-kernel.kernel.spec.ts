@@ -183,23 +183,59 @@ describe('Cost Kernel Grade A R1', () => {
     });
   });
 
-  it('uses frozen prices for OH, KG, M3, and Liter without runtime resolvers', () => {
+  it('uses frozen prices for OH, KG, M3, and Liter resources exactly as supplied', () => {
     const result = calculateCostKernel(makeInput());
     expect(result.status).toBe(COST_CALCULATION_STATUS.CALCULATED);
     expect(result.status === 'CALCULATED' ? result.resources : []).toHaveLength(
       13,
     );
-    const unitKernelRuntimeCallCount = 0;
-    const basicPriceRuntimeLookupCount = 0;
-    const missingPriceFallbackAttemptCount = 0;
-    expect({
-      unitKernelRuntimeCallCount,
-      basicPriceRuntimeLookupCount,
-      missingPriceFallbackAttemptCount,
-    }).toEqual({
-      unitKernelRuntimeCallCount: 0,
-      basicPriceRuntimeLookupCount: 0,
-      missingPriceFallbackAttemptCount: 0,
-    });
+    // calculateCostKernel is a pure function: its only imports are Prisma.Decimal
+    // and the unit-kernel string primitive used by exactUnit() below. It has no
+    // reference to BasicPriceService, UnitKernelService, or any other resolver,
+    // so there is nothing here it could call at runtime. The real no-resolver
+    // proof — that CostKernelService itself never queries a resolver beyond the
+    // frozen ProjectAhspResourceResolution rows — lives in
+    // cost-kernel.service.spec.ts, backed by a Prisma access guard, not a
+    // hand-set counter.
+  });
+
+  describe('exactUnit compatibility law', () => {
+    const withUnits = (boqUnit: string, outputUnit: string) =>
+      calculateCostKernel({ ...makeInput(), boqUnit, outputUnit });
+
+    it.each([
+      ['M1', 'M1'],
+      ['M1', 'm1'],
+      ['m1', 'M1'],
+      ['M1', 'M¹'],
+      ['M¹', 'm1'],
+      ['M', 'M'],
+      ['M', 'm'],
+      ['Kg', 'KG'],
+      ['  M1 ', 'M1'],
+    ])(
+      'accepts compatible boqUnit=%s vs outputUnit=%s as a match',
+      (boqUnit, outputUnit) => {
+        expect(withUnits(boqUnit, outputUnit).status).toBe(
+          COST_CALCULATION_STATUS.CALCULATED,
+        );
+      },
+    );
+
+    it.each([
+      ['M', 'M1'],
+      ['M1', 'M2'],
+      ['M2', 'M3'],
+      ['Kg', 'Liter'],
+      ['M1', 'Kg'],
+    ])(
+      'fails closed for incompatible boqUnit=%s vs outputUnit=%s',
+      (boqUnit, outputUnit) => {
+        expect(withUnits(boqUnit, outputUnit)).toMatchObject({
+          status: COST_CALCULATION_STATUS.FAIL_CLOSED,
+          reason: COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH,
+        });
+      },
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { Controller, Post, Put, Patch, Body, Get, Param, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Put, Patch, Body, Get, Param, Query, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ProjectService } from './project.service';
 import { RabIntelligenceProposalService } from './rab-intelligence-proposal.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -167,6 +167,21 @@ export class ProjectController {
       throw new BadRequestException('Trusted project workspace is required');
     }
     return this.costKernelService.calculateBoqItem(boqItemId, projectId, workspaceId);
+  }
+
+  @Get(':projectId/boq/cost-calculations')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.PROJECT_VIEW)
+  async calculateBoqItemsCost(@Req() request: any, @Param('projectId') projectId: string, @Query('boqItemIds') boqItemIdsParam?: string) {
+    const workspaceId = request.projectAccess?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('Trusted project workspace is required');
+    }
+    const boqItemIds = (boqItemIdsParam ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.costKernelService.calculateBoqItems(boqItemIds, projectId, workspaceId);
   }
 
   @Put(':projectId/boq/draft')

@@ -9,6 +9,7 @@ import {
   CostKernelInput,
   CalculatedResource,
 } from './cost-kernel.contracts';
+import { normalizeUnitAlias } from '../unit-kernel/unit-normalization';
 
 const fail = (
   boqItemId: string,
@@ -30,8 +31,13 @@ const parsePositiveDecimal = (value: string): Prisma.Decimal | null => {
   }
 };
 
-const exactUnit = (value: string) =>
-  value.normalize('NFKC').trim().toUpperCase();
+/**
+ * Identity comparison only (BOQ unit vs AHSP output unit), via the existing
+ * canonical unit-kernel string primitive. M1/m1/M¹ normalize equal; "M" and
+ * "M1" stay distinct because unit-kernel treats them as separate canonical
+ * dimensional codes — this must never widen into alias/conversion lookup.
+ */
+const exactUnit = (value: string) => normalizeUnitAlias(value);
 
 /** Pure Grade A arithmetic over already-frozen resource resolutions. */
 export function calculateCostKernel(

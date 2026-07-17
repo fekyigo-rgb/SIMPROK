@@ -13,6 +13,7 @@ describe('Cost Kernel Grade A R1 test certification (e2e)', () => {
   let app: INestApplication;
   let projectId: string;
   let boqItemId: string;
+  let noAhspBoqItemId: string;
   let workspaceId: string;
   let otherWorkspaceId: string;
   let ahspId: string;
@@ -290,6 +291,21 @@ describe('Cost Kernel Grade A R1 test certification (e2e)', () => {
       },
     });
     boqItemId = item.id;
+
+    const noAhspItem = await prisma.boqItem.create({
+      data: {
+        boqStructureId: structure.id,
+        wbsCode: '1.1.1.2',
+        name: `${tag} manual line without AHSP`,
+        itemType: 'WORK_ITEM',
+        quantity: '5',
+        unit: 'M1',
+        unitPrice: null,
+        lineTotal: null,
+        ahspVersionId: null,
+      },
+    });
+    noAhspBoqItemId = noAhspItem.id;
   }, 30_000);
 
   afterAll(async () => {
@@ -364,5 +380,92 @@ describe('Cost Kernel Grade A R1 test certification (e2e)', () => {
 
   it('rejects a token from another tenant', async () => {
     await getCalculation(otherTenantToken).expect(404);
+  });
+
+  const getBatchCalculation = (bearer: string, boqItemIds: string[]) =>
+    request(app.getHttpServer())
+      .get(`/projects/${projectId}/boq/cost-calculations`)
+      .query({ boqItemIds: boqItemIds.join(',') })
+      .set('Authorization', `Bearer ${bearer}`);
+
+  it('returns a single-source-of-truth batch result: the calculated line plus an exact directCostTotal, without persisting anything', async () => {
+    const before = await prisma.boqItem.findUniqueOrThrow({
+      where: { id: boqItemId },
+    });
+    const response = await getBatchCalculation(token, [boqItemId]).expect(200);
+
+    expect(response.body.items).toHaveLength(1);
+    expect(response.body.items[0]).toMatchObject({
+      status: 'CALCULATED',
+      boqItemId,
+      ahspUnitPrice: '2004055',
+      lineTotal: '20040550',
+    });
+    expect(response.body.directCostTotal).toBe('20040550');
+
+    const after = await prisma.boqItem.findUniqueOrThrow({
+      where: { id: boqItemId },
+    });
+    expect(after.unitPrice).toEqual(before.unitPrice);
+    expect(after.lineTotal).toEqual(before.lineTotal);
+    expect(after.unitPrice).toBeNull();
+    expect(after.lineTotal).toBeNull();
+  });
+
+  it('isolates a fail-closed line from a valid line in the same batch and excludes it from directCostTotal', async () => {
+    const response = await getBatchCalculation(token, [
+      boqItemId,
+      noAhspBoqItemId,
+    ]).expect(200);
+
+    expect(response.body.items).toHaveLength(2);
+    expect(response.body.items[0]).toMatchObject({
+      status: 'CALCULATED',
+      boqItemId,
+      lineTotal: '20040550',
+    });
+    expect(response.body.items[1]).toMatchObject({
+      status: 'FAIL_CLOSED',
+      boqItemId: noAhspBoqItemId,
+      reason: 'MISSING_AHSP_VERSION',
+    });
+    // The fail-closed line contributes nothing — directCostTotal stays exactly
+    // the valid line's lineTotal, proving one bad line cannot corrupt the total.
+    expect(response.body.directCostTotal).toBe('20040550');
+  });
+
+  it('reports BOQ_ITEM_NOT_FOUND for an id outside the project without dropping the valid line', async () => {
+    const response = await getBatchCalculation(token, [
+      boqItemId,
+      '00000000-0000-0000-0000-000000000000',
+    ]).expect(200);
+
+    expect(response.body.items).toHaveLength(2);
+    expect(response.body.items[0]).toMatchObject({
+      status: 'CALCULATED',
+      boqItemId,
+    });
+    expect(response.body.items[1]).toMatchObject({
+      status: 'FAIL_CLOSED',
+      reason: 'BOQ_ITEM_NOT_FOUND',
+    });
+    expect(response.body.directCostTotal).toBe('20040550');
+  });
+
+  it('returns an empty batch result for no boqItemIds without error', async () => {
+    const response = await request(app.getHttpServer())
+      .get(`/projects/${projectId}/boq/cost-calculations`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect(response.body).toEqual({ items: [], directCostTotal: '0' });
+  });
+
+  it('rejects an assigned member without PROJECT_VIEW on the batch endpoint', async () => {
+    await getBatchCalculation(noPermissionToken, [boqItemId]).expect(403);
+  });
+
+  it('rejects a token from another tenant on the batch endpoint', async () => {
+    await getBatchCalculation(otherTenantToken, [boqItemId]).expect(404);
   });
 });

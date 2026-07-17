@@ -1,8 +1,36 @@
-import { type MouseEvent, useEffect, useMemo, useState } from 'react';
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronsLeft, ChevronsRight, FileDown, FileInput, FolderOpen, ListChecks, LockKeyhole, Printer, Save, Search, Sparkles, Trash2, X } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ChevronsLeft,
+  ChevronsRight,
+  FileDown,
+  FileInput,
+  FolderOpen,
+  ListChecks,
+  LockKeyhole,
+  Printer,
+  Save,
+  Search,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
-import { type CostCalculationResponse, toRabCostDisplay } from '../utils/rabCostDisplay';
+import {
+  applyBatchResults,
+  beginLoadingRows,
+  computeDirectCostTotal,
+  formatBackendRupiah,
+  invalidateRow,
+  markRequestFailed,
+  toRabCostDisplay,
+  type CostBatchResponse,
+  type CostRowStatus,
+} from '../utils/rabCostDisplay';
 import type { DashboardOutletContext } from '../components/layout/DashboardLayout';
 
 type RabRowType = 'folder' | 'item' | 'note';
@@ -13,6 +41,8 @@ interface RabRow {
   type: RabRowType;
   name: string;
   ahspCode: string;
+  /** Non-null only for WORK_ITEM rows with an AHSP association — the Cost Kernel eligibility flag. */
+  ahspVersionId: string | null;
   category: string;
   unit: string;
   unitPrice: number;
@@ -97,13 +127,14 @@ const buildNumberedRows = (rows: RabRow[]): NumberedRabRow[] => {
   return result;
 };
 
-const mapBoqToRows = (items: BoqItemResponse[]) =>
-  items.map((item, index): RabRow => ({
+const mapBoqToRows = (items: BoqItemResponse[]) => items
+  .map((item, index): RabRow => ({
     id: item.id,
     parentId: item.parentId || null,
     type: item.itemType === 'FOLDER' ? 'folder' : item.itemType === 'NOTE' ? 'note' : 'item',
     name: item.name,
     ahspCode: item.ahspVersionId || item.ahspSnapshotId ? item.wbsCode.trim() : '',
+    ahspVersionId: item.itemType === 'WORK_ITEM' ? (item.ahspVersionId ?? null) : null,
     category: item.itemType === 'FOLDER' ? 'Subjudul' : item.itemType === 'NOTE' ? 'Catatan' : 'Standby',
     unit: item.unit || '',
     unitPrice: toNumber(item.unitPrice),
@@ -116,7 +147,9 @@ const moveWithinSiblings = (rows: RabRow[], rowId: string, direction: 'up' | 'do
   const row = rows.find((item) => item.id === rowId);
   if (!row) return rows;
 
-  const siblings = rows.filter((item) => item.parentId === row.parentId).sort((a, b) => a.sortOrder - b.sortOrder);
+  const siblings = rows
+    .filter((item) => item.parentId === row.parentId)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
   const index = siblings.findIndex((item) => item.id === rowId);
   const targetIndex = direction === 'up' ? index - 1 : index + 1;
   if (index < 0 || targetIndex < 0 || targetIndex >= siblings.length) return rows;
@@ -148,14 +181,18 @@ const normalizeSortOrders = (rows: RabRow[]): RabRow[] => {
 const indentRow = (rows: RabRow[], rowId: string): RabRow[] => {
   const row = rows.find((r) => r.id === rowId);
   if (!row) return rows;
-  const siblings = rows.filter((r) => r.parentId === row.parentId).sort((a, b) => a.sortOrder - b.sortOrder);
+  const siblings = rows
+    .filter((r) => r.parentId === row.parentId)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
   const rowIndex = siblings.findIndex((r) => r.id === rowId);
   if (rowIndex <= 0) return rows;
   const newParent = siblings[rowIndex - 1];
   if (newParent.type !== 'folder') return rows;
   const newSiblings = rows.filter((r) => r.parentId === newParent.id);
   const maxSort = newSiblings.length > 0 ? Math.max(...newSiblings.map((r) => r.sortOrder)) + 1 : 0;
-  return normalizeSortOrders(rows.map((r) => (r.id === rowId ? { ...r, parentId: newParent.id, sortOrder: maxSort } : r)));
+  return normalizeSortOrders(
+    rows.map((r) => (r.id === rowId ? { ...r, parentId: newParent.id, sortOrder: maxSort } : r)),
+  );
 };
 
 const outdentRow = (rows: RabRow[], rowId: string): RabRow[] => {
@@ -163,7 +200,11 @@ const outdentRow = (rows: RabRow[], rowId: string): RabRow[] => {
   if (!row || row.parentId === null) return rows;
   const parent = rows.find((r) => r.id === row.parentId);
   if (!parent) return rows;
-  return normalizeSortOrders(rows.map((r) => (r.id === rowId ? { ...r, parentId: parent.parentId, sortOrder: parent.sortOrder + 0.5 } : r)));
+  return normalizeSortOrders(
+    rows.map((r) =>
+      r.id === rowId ? { ...r, parentId: parent.parentId, sortOrder: parent.sortOrder + 0.5 } : r,
+    ),
+  );
 };
 
 const createRow = (type: RabRowType, parentId: string | null, sortOrder: number): RabRow => ({
@@ -172,6 +213,7 @@ const createRow = (type: RabRowType, parentId: string | null, sortOrder: number)
   type,
   name: type === 'folder' ? 'Sub Judul Baru' : type === 'note' ? 'Catatan baru' : 'Item pekerjaan baru',
   ahspCode: type === 'item' ? '' : '',
+  ahspVersionId: null,
   category: type === 'folder' ? 'Subjudul' : type === 'note' ? 'Catatan' : 'Standby',
   unit: type === 'item' ? 'ls' : '',
   unitPrice: 0,
@@ -189,7 +231,8 @@ export function RabWorkspacePage() {
   const [rows, setRows] = useState<RabRow[]>([]);
   const [volumes, setVolumes] = useState<Record<string, number>>({});
   const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
-  const [costCalculations, setCostCalculations] = useState<Record<string, CostCalculationResponse>>({});
+  const [costRowStatuses, setCostRowStatuses] = useState<Record<string, CostRowStatus>>({});
+  const costLoadGenerationRef = useRef(0);
   const [selectedRowId, setSelectedRowId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [marginPercent, setMarginPercent] = useState(10);
@@ -225,28 +268,39 @@ export function RabWorkspacePage() {
 
   const loadCostCalculations = (items: BoqItemResponse[]) => {
     if (!projectId) return;
-    const eligibleItems = items.filter((item) => item.itemType === 'WORK_ITEM' && item.ahspVersionId);
-    if (eligibleItems.length === 0) {
-      setCostCalculations({});
+    const eligibleIds = items.filter((item) => item.itemType === 'WORK_ITEM' && item.ahspVersionId).map((item) => item.id);
+    const generation = ++costLoadGenerationRef.current;
+
+    if (eligibleIds.length === 0) {
+      setCostRowStatuses({});
       return;
     }
-    Promise.all(
-      eligibleItems.map(async (item) => {
-        const response = await apiFetch(`/projects/${projectId}/boq/items/${item.id}/cost-calculation`);
+
+    setCostRowStatuses(beginLoadingRows(eligibleIds));
+
+    const query = eligibleIds.map(encodeURIComponent).join(',');
+    apiFetch(`/projects/${projectId}/boq/cost-calculations?boqItemIds=${query}`)
+      .then((response) => {
         if (!response.ok) throw new Error('cost-calculation-load-failed');
-        return response.json() as Promise<CostCalculationResponse>;
-      }),
-    )
-      .then((calculations) => setCostCalculations(Object.fromEntries(calculations.map((calculation) => [calculation.boqItemId, calculation]))))
-      .catch(() => setCostCalculations({}));
+        return response.json() as Promise<CostBatchResponse>;
+      })
+      .then((batch) => {
+        if (generation !== costLoadGenerationRef.current) return;
+        setCostRowStatuses((current) => applyBatchResults(current, batch.items));
+      })
+      .catch(() => {
+        if (generation !== costLoadGenerationRef.current) return;
+        setCostRowStatuses((current) => markRequestFailed(current, eligibleIds));
+      });
   };
 
   useEffect(() => {
     if (!projectId) {
+      costLoadGenerationRef.current += 1;
       setRows([]);
       setVolumes({});
       setUnitPrices({});
-      setCostCalculations({});
+      setCostRowStatuses({});
       setSelectedRowId('');
       setStatusMessage('Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.');
       return;
@@ -274,10 +328,11 @@ export function RabWorkspacePage() {
                 loadCostCalculations(baselineItems);
                 setStatusMessage('Draft kosong. Data baseline dimuat sebagai titik awal — klik Simpan Draft untuk menyimpan perubahan.');
               } else {
+                costLoadGenerationRef.current += 1;
                 setRows([]);
                 setVolumes({});
                 setUnitPrices({});
-                setCostCalculations({});
+                setCostRowStatuses({});
                 setSelectedRowId('');
                 setStatusMessage('Draft kosong. Tambahkan item pekerjaan, lalu klik Simpan Draft.');
               }
@@ -286,10 +341,11 @@ export function RabWorkspacePage() {
       })
       .catch((error: unknown) => {
         console.error('Failed to load RAB draft:', error);
+        costLoadGenerationRef.current += 1;
         setRows([]);
         setVolumes({});
         setUnitPrices({});
-        setCostCalculations({});
+        setCostRowStatuses({});
         setSelectedRowId('');
         setStatusMessage('Gagal memuat draft. Periksa koneksi backend dan coba lagi.');
       });
@@ -301,10 +357,11 @@ export function RabWorkspacePage() {
     const row = numberedRows.find((item) => item.id === selectedRowId);
     return row?.type === 'item' ? row : null;
   }, [numberedRows, selectedRowId]);
-  const selectedCostDisplay = selectedItem && costCalculations[selectedItem.id]
-    ? toRabCostDisplay(costCalculations[selectedItem.id])
-    : null;
-  const negativeRows = useMemo(() => new Set(rows.filter((row) => row.type === 'item' && ((volumes[row.id] || 0) < 0 || (unitPrices[row.id] ?? row.unitPrice) < 0)).map((row) => row.id)), [rows, unitPrices, volumes]);
+  const selectedCostStatus = selectedItem ? costRowStatuses[selectedItem.id] : undefined;
+  const selectedCostDisplay = selectedCostStatus ? toRabCostDisplay(selectedCostStatus) : null;
+  const negativeRows = useMemo(() => new Set(rows
+    .filter((row) => row.type === 'item' && ((volumes[row.id] || 0) < 0 || (unitPrices[row.id] ?? row.unitPrice) < 0))
+    .map((row) => row.id)), [rows, unitPrices, volumes]);
   const hasNegativeValue = negativeRows.size > 0;
 
   const siblingsByParent = useMemo(() => {
@@ -320,14 +377,24 @@ export function RabWorkspacePage() {
     return map;
   }, [rows]);
 
-  const subtotal = useMemo(
+  // Cost Kernel calculated lines contribute their exact backend lineTotal (decimal-string
+  // addition, never re-multiplied from volume * unitPrice); manual/non-kernel lines keep the
+  // existing volume * unitPrice path. See computeDirectCostTotal for the single aggregation rule.
+  const directCostTotalExact = useMemo(
     () =>
-      rows.reduce((sum, row) => {
-        if (row.type !== 'item') return sum;
-        return sum + (volumes[row.id] || 0) * (unitPrices[row.id] ?? row.unitPrice);
-      }, 0),
-    [rows, unitPrices, volumes],
+      computeDirectCostTotal(
+        rows
+          .filter((row): row is RabRow & { type: 'item' } => row.type === 'item')
+          .map((row) => ({
+            id: row.id,
+            isKernelEligible: row.ahspVersionId !== null,
+            manualAmount: (volumes[row.id] || 0) * (unitPrices[row.id] ?? row.unitPrice),
+          })),
+        costRowStatuses,
+      ),
+    [rows, unitPrices, volumes, costRowStatuses],
   );
+  const subtotal = Number(directCostTotalExact) || 0;
 
   const margin = subtotal * (marginPercent / 100);
   const ppn = (subtotal + margin) * (ppnPercent / 100);
@@ -405,7 +472,11 @@ export function RabWorkspacePage() {
         setRows(mappedRows);
         setVolumes(nextVolumes);
         setUnitPrices(nextUnitPrices);
-        setSelectedRowId(mappedRows.find((r) => r.id === currentSelected)?.id || mappedRows.find((r) => r.type === 'item')?.id || '');
+        setSelectedRowId(
+          mappedRows.find((r) => r.id === currentSelected)?.id ||
+          mappedRows.find((r) => r.type === 'item')?.id ||
+          '',
+        );
         setStatusMessage(`Draft tersimpan — ${new Date().toLocaleTimeString('id-ID')}.`);
       })
       .catch(() => {
@@ -448,6 +519,7 @@ export function RabWorkspacePage() {
 
   const updateRowUnit = (rowId: string, unit: string) => {
     setRows((current) => current.map((row) => (row.id === rowId ? { ...row, unit } : row)));
+    setCostRowStatuses((current) => invalidateRow(current, rowId));
   };
 
   return (
@@ -557,8 +629,9 @@ export function RabWorkspacePage() {
                 ) : null}
                 {numberedRows.map((row) => {
                   const unitPrice = unitPrices[row.id] ?? row.unitPrice;
-                  const costCalculation = costCalculations[row.id];
-                  const costDisplay = costCalculation ? toRabCostDisplay(costCalculation) : null;
+                  const isKernelEligible = row.ahspVersionId !== null;
+                  const costStatus = costRowStatuses[row.id];
+                  const costDisplay = costStatus ? toRabCostDisplay(costStatus) : null;
                   const amount = row.type === 'item' ? (volumes[row.id] || 0) * unitPrice : 0;
                   const selected = row.id === selectedRowId;
                   const hasNegativeRowValue = negativeRows.has(row.id);
@@ -652,12 +725,13 @@ export function RabWorkspacePage() {
                             type="number"
                             step="0.01"
                             value={volumes[row.id] || 0}
-                            onChange={(event) =>
+                            onChange={(event) => {
                               setVolumes((current) => ({
                                 ...current,
                                 [row.id]: Number(event.target.value),
-                              }))
-                            }
+                              }));
+                              setCostRowStatuses((current) => invalidateRow(current, row.id));
+                            }}
                             aria-label={`Volume ${row.name}`}
                           />
                         ) : null}
@@ -666,10 +740,12 @@ export function RabWorkspacePage() {
                       <td className="simprok-rab-unit-price-column">
                         {row.type === 'item' ? (
                           <span className="simprok-rab-price-cell">
-                            {costCalculation?.status === 'CALCULATED' ? (
-                              <strong aria-label={`Harga satuan ${row.name}`}>{costDisplay?.unitPrice}</strong>
-                            ) : costCalculation?.status === 'FAIL_CLOSED' ? (
-                              <span aria-label={`Harga satuan ${row.name}`}>—</span>
+                            {isKernelEligible ? (
+                              costStatus?.kind === 'calculated' ? (
+                                <strong aria-label={`Harga satuan ${row.name}`}>{costDisplay?.unitPrice}</strong>
+                              ) : (
+                                <span aria-label={`Harga satuan ${row.name}`} title={costDisplay?.badge}>—</span>
+                              )
                             ) : (
                               <>
                                 <input
@@ -691,7 +767,15 @@ export function RabWorkspacePage() {
                           </span>
                         ) : null}
                       </td>
-                      <td className="simprok-rab-amount-column">{row.type === 'item' ? (costCalculation?.status === 'CALCULATED' ? costDisplay?.lineTotal : costCalculation?.status === 'FAIL_CLOSED' ? '—' : formatRupiah(amount)) : ''}</td>
+                      <td className="simprok-rab-amount-column">
+                        {row.type === 'item'
+                          ? isKernelEligible
+                            ? costStatus?.kind === 'calculated'
+                              ? costDisplay?.lineTotal
+                              : '—'
+                            : formatRupiah(amount)
+                          : ''}
+                      </td>
                       <td>
                         <div className="simprok-rab-row-actions">
                           {row.type === 'folder' ? (
@@ -730,7 +814,7 @@ export function RabWorkspacePage() {
               <div className="simprok-rab-recap__rows">
                 <div className="simprok-rab-recap__row simprok-rab-recap__row--plain">
                   <span className="simprok-rab-recap__label">Total / Biaya Langsung</span>
-                  <strong className="simprok-rab-recap__value">{formatRupiah(subtotal)}</strong>
+                  <strong className="simprok-rab-recap__value">{formatBackendRupiah(directCostTotalExact)}</strong>
                 </div>
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Margin / Profit</span>

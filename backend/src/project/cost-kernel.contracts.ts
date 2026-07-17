@@ -19,6 +19,7 @@ export const COST_CALCULATION_REASON = {
   INVALID_COEFFICIENT: 'INVALID_COEFFICIENT',
   RESOURCE_AHSP_VERSION_MISMATCH: 'RESOURCE_AHSP_VERSION_MISMATCH',
   INVALID_DECIMAL: 'INVALID_DECIMAL',
+  INTERNAL_CALCULATION_ERROR: 'INTERNAL_CALCULATION_ERROR',
 } as const;
 
 export type CostCalculationReason =
@@ -81,3 +82,14 @@ export interface CostCalculationFailure {
 export type CostCalculationResult =
   | CostCalculationSuccess
   | CostCalculationFailure;
+
+/**
+ * Single source of truth for a batch of eligible BOQ lines: per-item results
+ * plus the exact decimal sum of CALCULATED lineTotal values. Frontend must
+ * treat directCostTotal as authoritative for the kernel-covered portion of
+ * Total/Biaya Langsung and must never recompute it from volume * unitPrice.
+ */
+export interface CostKernelBatchResult {
+  items: CostCalculationResult[];
+  directCostTotal: string;
+}
