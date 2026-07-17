@@ -15,6 +15,7 @@ import {
   AhspResourceResolutionResult,
   resolveAhspResourcePrice,
 } from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 
 const POLICY_VERSION = 'BP_AHSP_PHASE2_NAME_EXACT_OPTION_C_V1';
 const includeResolutions = { resourceResolutions: true } as const;
@@ -36,6 +37,7 @@ export class ProjectAhspService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly basicPrices: BasicPriceService,
+    private readonly units: UnitKernelService,
   ) {}
 
   private findExisting(
@@ -117,6 +119,11 @@ export class ProjectAhspService {
       sourceUnit: null,
       adaptedPriceValue: null,
       conversionFactor: null,
+      sourceUnitDefinitionId: null,
+      targetUnitDefinitionId: null,
+      unitConversionRuleId: null,
+      unitConversionRuleVersion: null,
+      quantityFactor: null,
       selectedSourceOrigin: null,
       selectedFreshnessStatus: null,
       selectedEffectiveDate: null,
@@ -145,6 +152,11 @@ export class ProjectAhspService {
       sourceUnit: null,
       adaptedPriceValue: null,
       conversionFactor: null,
+      sourceUnitDefinitionId: null,
+      targetUnitDefinitionId: null,
+      unitConversionRuleId: null,
+      unitConversionRuleVersion: null,
+      quantityFactor: null,
       selectedSourceOrigin: null,
       selectedFreshnessStatus: null,
       selectedEffectiveDate: null,
@@ -206,7 +218,7 @@ export class ProjectAhspService {
         sourcePriceValue: result.sourcePriceValue,
         sourceUnit: price.resource.baseUnit,
         adaptedPriceValue: result.adaptedPriceValue,
-        conversionFactor: result.conversionFactor,
+        conversionFactor: null,
         selectedSourceOrigin: price.sourceOrigin,
         selectedFreshnessStatus: price.freshnessStatus,
         selectedEffectiveDate: price.effectiveDate,
@@ -246,7 +258,7 @@ export class ProjectAhspService {
         ),
       )
     ).flat();
-    const prices = priceRows.map((price) => ({
+    const rawPrices = priceRows.map((price) => ({
       id: price.id,
       resourceId: price.resourceId,
       value: price.value.toString(),
@@ -254,6 +266,45 @@ export class ProjectAhspService {
       unit: price.resource.baseUnit,
       freshnessStatus: price.freshnessStatus,
     }));
+    const catalogMatches = catalogs.filter(
+      (catalog) =>
+        catalog.name.trim().toLowerCase().replace(/\s+/g, ' ') ===
+          resource.resourceId.trim().toLowerCase().replace(/\s+/g, ' ') &&
+        catalog.type === resource.resourceType,
+    );
+    const unitResolution =
+      catalogMatches.length === 1
+        ? await this.units.resolve(
+            resource.baseUnit,
+            catalogMatches[0].baseUnit,
+            catalogMatches[0].id,
+          )
+        : null;
+    const prices = await Promise.all(
+      rawPrices.map(async (price) => {
+        const priceUnitResolution =
+          catalogMatches.length === 1 &&
+          price.resourceId === catalogMatches[0].id
+            ? await this.units.resolve(
+                price.unit,
+                catalogMatches[0].baseUnit,
+                catalogMatches[0].id,
+              )
+            : null;
+        return {
+          ...price,
+          unitResolution: {
+            status: priceUnitResolution?.status ?? 'NEEDS_REVIEW',
+            canonicalUnitCode:
+              priceUnitResolution?.targetUnitDefinition?.code ?? null,
+            quantityFactor: priceUnitResolution?.quantityFactor ?? null,
+            priceOperation: priceUnitResolution?.priceOperation ?? null,
+            rawSourceUnit: priceUnitResolution?.rawSourceUnit ?? '',
+            rawTargetUnit: priceUnitResolution?.rawTargetUnit ?? '',
+          },
+        } as const;
+      }),
+    );
     const candidateById = new Map(prices.map((price) => [price.id, price]));
     const result = resolveAhspResourcePrice({
       projectId: input.projectId,
@@ -264,6 +315,14 @@ export class ProjectAhspService {
       ahspUnit: resource.baseUnit,
       resourceCatalogCandidates: catalogs,
       eligibleBasicPriceCandidates: prices,
+      validatedUnitResolution: {
+        status: unitResolution?.status ?? 'NEEDS_REVIEW',
+        canonicalUnitCode:
+          unitResolution?.targetUnitDefinition?.code ?? null,
+        quantityFactor: unitResolution?.quantityFactor ?? null,
+        rawSourceUnit: unitResolution?.rawSourceUnit ?? '',
+        rawTargetUnit: unitResolution?.rawTargetUnit ?? '',
+      },
     });
     const outcome = await this.mapOutcome(
       result,
@@ -277,6 +336,14 @@ export class ProjectAhspService {
       ahspCoefficient: resource.coefficient,
       ahspUnit: resource.baseUnit,
       ...outcome,
+      sourceUnitDefinitionId:
+        unitResolution?.sourceUnitDefinition?.id ?? null,
+      targetUnitDefinitionId:
+        unitResolution?.targetUnitDefinition?.id ?? null,
+      unitConversionRuleId: unitResolution?.conversionRuleId ?? null,
+      unitConversionRuleVersion:
+        unitResolution?.conversionRuleVersion ?? null,
+      quantityFactor: unitResolution?.quantityFactor ?? null,
     };
 
     try {

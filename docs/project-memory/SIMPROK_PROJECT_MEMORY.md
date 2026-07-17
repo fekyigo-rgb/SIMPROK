@@ -6,6 +6,8 @@ Repository: fekyigo-rgb/SIMPROK
 
 ## 1. Status Produk Terkini
 
+- KAMUS Unit Kernel 01A: IMPLEMENTED_ON_BRANCH on `feat/kamus-unit-kernel-01a`; additive canonical unit schema/resolver, Phase 2 PERSON_DAY cutover, legacy write shut-off, AHSP output-unit freeze, and internal BOQ compatibility metadata complete. PM remediation 01 removed raw-string Basic Price unit authority; remediation 02 binds resolver evidence to exact raw pairs and rejects missing/null/blank output units before resolution/writes. Backend unit 321 PASS, safe E2E 190 PASS on guarded `simprok_test`, frontend unchanged build PASS; awaiting PM/Owner re-review. `simprok_db` migration/write: NO.
+
 - Main clean dan sinkron dengan origin/main.
 - P6B/P6C: LOCKED.
 - P7A: LOCKED.

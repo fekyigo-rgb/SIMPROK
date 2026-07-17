@@ -30,6 +30,8 @@ describe('AhspSnapshotService', () => {
     id: 'version-1',
     ahspId: 'ahsp-1',
     versionNumber: 3,
+    outputUnit: 'M3',
+    outputUnitDefinitionId: 'unit-m3',
     ahsp: {
       id: 'ahsp-1',
       workType: 'Concrete Work',
@@ -106,6 +108,8 @@ describe('AhspSnapshotService', () => {
         locationType: version.ahsp.locationType,
         methodName: version.ahsp.methodName,
         versionNumber: version.versionNumber,
+        outputUnit: version.outputUnit,
+        outputUnitDefinitionId: version.outputUnitDefinitionId,
         resources: {
           create: [
             {
@@ -126,5 +130,11 @@ describe('AhspSnapshotService', () => {
       who: 'user-1',
       after: snapshot,
     });
+  });
+
+  it('refuses to snapshot an unresolved legacy output unit', async () => {
+    prisma.aHSPVersion.findUnique.mockResolvedValue({ ...version, outputUnit: null, outputUnitDefinitionId: null });
+    await expect(service.createSnapshot(version.id, snapshot.workspaceId, 'user-1')).rejects.toThrow('AHSP_OUTPUT_UNIT_UNRESOLVED');
+    expect(prisma.aHSPSnapshot.create).not.toHaveBeenCalled();
   });
 });

@@ -6,9 +6,10 @@ import { AhspImportService } from './services/ahsp-import.service';
 import { AhspAuditService } from './services/ahsp-audit.service';
 import { AhspController } from './ahsp.controller';
 import { PrismaModule } from '../prisma/prisma.module';
+import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, UnitKernelModule],
   controllers: [AhspController],
   providers: [AhspService, AhspVersionService, AhspSnapshotService, AhspImportService, AhspAuditService],
   exports: [AhspService, AhspVersionService, AhspSnapshotService],

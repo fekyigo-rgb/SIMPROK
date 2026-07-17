@@ -540,6 +540,102 @@ enum SourceType {
   SYSTEM
 }
 
+enum UnitDimension {
+  COUNT
+  MASS
+  LENGTH
+  AREA
+  VOLUME
+  TIME
+  PERSON_TIME
+  EQUIPMENT_TIME
+}
+
+enum UnitKind {
+  CANONICAL
+  COMMERCIAL_PACKAGE
+  CONTEXTUAL
+}
+
+enum UnitConversionType {
+  EXACT_GLOBAL
+  PACKAGE_CONTENT
+  RESOURCE_SPECIFIC
+  DENSITY_REQUIRED
+  CONTEXTUAL_TIME
+  NOT_CONVERTIBLE
+}
+
+enum UnitConversionRuleStatus {
+  ACTIVE
+  RETIRED
+}
+
+model UnitDefinition {
+  id          String        @id @default(uuid()) @db.Uuid
+  code        String        @unique
+  displayName String
+  symbol      String
+  dimension   UnitDimension
+  kind        UnitKind
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  aliases               UnitAlias[]
+  sourceConversionRules UnitConversionRule[]            @relation("UnitRuleSource")
+  targetConversionRules UnitConversionRule[]            @relation("UnitRuleTarget")
+  ahspVersions          AHSPVersion[]                   @relation("AHSPVersionOutputUnit")
+  ahspSnapshots         AHSPSnapshot[]                  @relation("AHSPSnapshotOutputUnit")
+  resolutionSourceUnits ProjectAhspResourceResolution[] @relation("ResolutionSourceUnit")
+  resolutionTargetUnits ProjectAhspResourceResolution[] @relation("ResolutionTargetUnit")
+
+  @@map("unit_definitions")
+}
+
+model UnitAlias {
+  id               String   @id @default(uuid()) @db.Uuid
+  rawAlias         String
+  normalizedAlias  String
+  unitDefinitionId String   @db.Uuid
+  context          String?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  unitDefinition UnitDefinition @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+
+  @@index([normalizedAlias, isActive])
+  @@index([unitDefinitionId])
+  @@map("unit_aliases")
+}
+
+model UnitConversionRule {
+  id                String                   @id @default(uuid()) @db.Uuid
+  sourceUnitId      String                   @db.Uuid
+  targetUnitId      String                   @db.Uuid
+  conversionType    UnitConversionType
+  quantityFactor    Decimal                  @db.Decimal(24, 12)
+  resourceCatalogId String?                  @db.Uuid
+  evidenceReference String?
+  evidenceHash      String?
+  evidencePayload   Json?
+  version           Int
+  status            UnitConversionRuleStatus @default(ACTIVE)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  sourceUnit      UnitDefinition                  @relation("UnitRuleSource", fields: [sourceUnitId], references: [id], onDelete: Restrict)
+  targetUnit      UnitDefinition                  @relation("UnitRuleTarget", fields: [targetUnitId], references: [id], onDelete: Restrict)
+  resourceCatalog ResourceCatalog?                @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  resolutions     ProjectAhspResourceResolution[]
+
+  @@unique([sourceUnitId, targetUnitId, conversionType, resourceCatalogId, version], map: "unit_conversion_rule_version_key")
+  @@index([sourceUnitId, targetUnitId, status])
+  @@index([resourceCatalogId])
+  @@map("unit_conversion_rules")
+}
+
 enum ImportStatus {
   PENDING
   RUNNING
@@ -606,18 +702,20 @@ model AHSP {
 }
 
 model AHSPVersion {
-  id                  String            @id @default(uuid()) @db.Uuid
-  ahspId              String            @db.Uuid
-  workspaceId         String?           @db.Uuid // Tenant Scope wajib ada
-  versionNumber       Int
-  status              AhspVersionStatus @default(DRAFT)
-  effectiveDate       DateTime?
-  expiredDate         DateTime?
-  regulationReference String?
-  regulationPage      String?
-  regulationSection   String?
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  id                     String            @id @default(uuid()) @db.Uuid
+  ahspId                 String            @db.Uuid
+  workspaceId            String?           @db.Uuid // Tenant Scope wajib ada
+  versionNumber          Int
+  status                 AhspVersionStatus @default(DRAFT)
+  effectiveDate          DateTime?
+  expiredDate            DateTime?
+  regulationReference    String?
+  regulationPage         String?
+  regulationSection      String?
+  outputUnit             String?
+  outputUnitDefinitionId String?           @db.Uuid
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
 
   ahsp                   AHSP                    @relation(fields: [ahspId], references: [id], onDelete: Cascade)
   workspace              Workspace?              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -626,6 +724,7 @@ model AHSPVersion {
   auditLogs              AHSPAuditLog[]
   BoqItem                BoqItem[]
   projectAhspOccurrences ProjectAhspOccurrence[]
+  outputUnitDefinition   UnitDefinition?         @relation("AHSPVersionOutputUnit", fields: [outputUnitDefinitionId], references: [id], onDelete: Restrict)
 
   @@unique([ahspId, versionNumber])
   @@index([ahspId])
@@ -720,20 +819,23 @@ model AHSPSnapshot {
   snapshotDate    DateTime @default(now()) // Snapshot Identity
 
   // Data Deep Copy
-  workType      String
-  methodType    MethodType
-  locationType  LocationType
-  methodName    String
-  versionNumber Int
+  workType               String
+  methodType             MethodType
+  locationType           LocationType
+  methodName             String
+  versionNumber          Int
+  outputUnit             String?
+  outputUnitDefinitionId String?      @db.Uuid
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace   Workspace?             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ahsp        AHSP                   @relation(fields: [sourceAhspId], references: [id])
-  ahspVersion AHSPVersion            @relation(fields: [sourceVersionId], references: [id])
-  resources   AHSPSnapshotResource[]
-  boqItems    BoqItem[]
+  workspace            Workspace?             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ahsp                 AHSP                   @relation(fields: [sourceAhspId], references: [id])
+  ahspVersion          AHSPVersion            @relation(fields: [sourceVersionId], references: [id])
+  resources            AHSPSnapshotResource[]
+  boqItems             BoqItem[]
+  outputUnitDefinition UnitDefinition?        @relation("AHSPSnapshotOutputUnit", fields: [outputUnitDefinitionId], references: [id], onDelete: Restrict)
 
   @@unique([sourceAhspId, sourceVersionId, snapshotDate])
   @@index([workspaceId])
@@ -851,6 +953,7 @@ model ResourceCatalog {
   priceSubmissions               PriceSubmission[]
   canonicalPricePoints           CanonicalPricePoint[]
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
+  unitConversionRules            UnitConversionRule[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -1326,42 +1429,53 @@ model ProjectAhspOccurrence {
 }
 
 model ProjectAhspResourceResolution {
-  id                      String                      @id @default(uuid()) @db.Uuid
-  occurrenceId            String                      @db.Uuid
-  ahspResourceId          String                      @db.Uuid
-  rawAhspResourceRef      String
-  rawAhspResourceType     String
-  ahspCoefficient         Decimal                     @db.Decimal(18, 6)
-  ahspUnit                String
-  resourceCatalogId       String?                     @db.Uuid
-  selectedBasicPriceId    String?                     @db.Uuid
-  status                  ProjectAhspResolutionStatus
-  selectionMode           ProjectAhspSelectionMode?
-  canonicalUnit           String?
-  sourcePriceValue        Decimal?                    @db.Decimal(18, 2)
-  sourceUnit              String?
-  adaptedPriceValue       Decimal?                    @db.Decimal(18, 2)
-  conversionFactor        Decimal?                    @db.Decimal(18, 6)
-  selectedSourceOrigin    PriceSourceOrigin?
-  selectedFreshnessStatus PriceFreshnessStatus?
-  selectedEffectiveDate   DateTime?
-  resolutionMethod        ProjectAhspResolutionMethod
-  reasonCodes             String[]
-  explanation             String                      @db.Text
-  policyVersion           String
-  createdAt               DateTime                    @default(now())
-  updatedAt               DateTime                    @updatedAt
+  id                        String                      @id @default(uuid()) @db.Uuid
+  occurrenceId              String                      @db.Uuid
+  ahspResourceId            String                      @db.Uuid
+  rawAhspResourceRef        String
+  rawAhspResourceType       String
+  ahspCoefficient           Decimal                     @db.Decimal(18, 6)
+  ahspUnit                  String
+  resourceCatalogId         String?                     @db.Uuid
+  selectedBasicPriceId      String?                     @db.Uuid
+  status                    ProjectAhspResolutionStatus
+  selectionMode             ProjectAhspSelectionMode?
+  canonicalUnit             String?
+  sourcePriceValue          Decimal?                    @db.Decimal(18, 2)
+  sourceUnit                String?
+  adaptedPriceValue         Decimal?                    @db.Decimal(18, 2)
+  conversionFactor          Decimal?                    @db.Decimal(18, 6)
+  sourceUnitDefinitionId    String?                     @db.Uuid
+  targetUnitDefinitionId    String?                     @db.Uuid
+  unitConversionRuleId      String?                     @db.Uuid
+  unitConversionRuleVersion Int?
+  quantityFactor            Decimal?                    @db.Decimal(24, 12)
+  selectedSourceOrigin      PriceSourceOrigin?
+  selectedFreshnessStatus   PriceFreshnessStatus?
+  selectedEffectiveDate     DateTime?
+  resolutionMethod          ProjectAhspResolutionMethod
+  reasonCodes               String[]
+  explanation               String                      @db.Text
+  policyVersion             String
+  createdAt                 DateTime                    @default(now())
+  updatedAt                 DateTime                    @updatedAt
 
-  occurrence         ProjectAhspOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
-  originalResource   AHSPResource          @relation(fields: [ahspResourceId], references: [id], onDelete: Restrict)
-  resolvedCatalog    ResourceCatalog?      @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
-  selectedBasicPrice BasicPrice?           @relation(fields: [selectedBasicPriceId], references: [id], onDelete: Restrict)
+  occurrence           ProjectAhspOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  originalResource     AHSPResource          @relation(fields: [ahspResourceId], references: [id], onDelete: Restrict)
+  resolvedCatalog      ResourceCatalog?      @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  selectedBasicPrice   BasicPrice?           @relation(fields: [selectedBasicPriceId], references: [id], onDelete: Restrict)
+  sourceUnitDefinition UnitDefinition?       @relation("ResolutionSourceUnit", fields: [sourceUnitDefinitionId], references: [id], onDelete: Restrict)
+  targetUnitDefinition UnitDefinition?       @relation("ResolutionTargetUnit", fields: [targetUnitDefinitionId], references: [id], onDelete: Restrict)
+  unitConversionRule   UnitConversionRule?   @relation(fields: [unitConversionRuleId], references: [id], onDelete: Restrict)
 
   @@unique([occurrenceId, ahspResourceId], map: "pahr_occurrence_ahsp_resource_key")
   @@index([occurrenceId])
   @@index([ahspResourceId])
   @@index([resourceCatalogId])
   @@index([selectedBasicPriceId])
+  @@index([sourceUnitDefinitionId])
+  @@index([targetUnitDefinitionId])
+  @@index([unitConversionRuleId])
   @@index([status])
   @@map("project_ahsp_resource_resolutions")
 }

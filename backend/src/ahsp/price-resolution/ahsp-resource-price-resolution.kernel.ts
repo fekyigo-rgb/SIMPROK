@@ -51,6 +51,19 @@ export interface BasicPriceCandidate {
    * active/selectable for backward compatibility.
    */
   readonly freshnessStatus?: 'CURRENT' | 'EXPIRING' | 'EXPIRED';
+  readonly unitResolution: ValidatedBasicPriceUnitResolution;
+}
+
+export interface ValidatedBasicPriceUnitResolution {
+  readonly status: 'RESOLVED' | 'NEEDS_REVIEW' | 'NOT_CONVERTIBLE';
+  readonly canonicalUnitCode: string | null;
+  readonly quantityFactor: string | null;
+  readonly priceOperation:
+    | 'IDENTITY'
+    | 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR'
+    | null;
+  readonly rawSourceUnit: string;
+  readonly rawTargetUnit: string;
 }
 
 export interface AhspResourceResolutionInput {
@@ -62,6 +75,13 @@ export interface AhspResourceResolutionInput {
   readonly ahspUnit: string;
   readonly resourceCatalogCandidates: ReadonlyArray<ResourceCatalogCandidate>;
   readonly eligibleBasicPriceCandidates: ReadonlyArray<BasicPriceCandidate>;
+  readonly validatedUnitResolution: {
+    readonly status: 'RESOLVED' | 'NEEDS_REVIEW' | 'NOT_CONVERTIBLE';
+    readonly canonicalUnitCode: string | null;
+    readonly quantityFactor: string | null;
+    readonly rawSourceUnit: string;
+    readonly rawTargetUnit: string;
+  };
 }
 
 // ============================================================
@@ -161,22 +181,6 @@ function normalizeResourceName(raw: string): string {
  * Supported canonical equivalence (case-insensitive, trimmed):
  *   OH == Org/Hari == Orang/Hari == PERSON_DAY
  */
-const LABOR_DAY_UNIT_CANONICAL = 'PERSON_DAY';
-const LABOR_DAY_UNIT_ALIASES: ReadonlySet<string> = new Set([
-  'oh',
-  'org/hari',
-  'orang/hari',
-  'person_day',
-]);
-
-function normalizeLaborUnit(raw: string): string {
-  return raw.trim().toLowerCase();
-}
-
-function isLaborDayUnit(raw: string): boolean {
-  return LABOR_DAY_UNIT_ALIASES.has(normalizeLaborUnit(raw));
-}
-
 // ============================================================
 // KERNEL ENTRY POINT
 // ============================================================
@@ -208,6 +212,7 @@ export function resolveAhspResourcePrice(
     ahspUnit,
     resourceCatalogCandidates,
     eligibleBasicPriceCandidates,
+    validatedUnitResolution,
   } = input;
 
   // Shared context for all result variants
@@ -265,10 +270,13 @@ export function resolveAhspResourcePrice(
   const resolvedCatalog = exactCatalogMatches[0];
 
   // ---- Step 2: Unit equivalence check ----
-  const ahspUnitIsLaborDay = isLaborDayUnit(ahspUnit);
-  const catalogUnitIsLaborDay = isLaborDayUnit(resolvedCatalog.baseUnit);
-
-  if (!ahspUnitIsLaborDay || !catalogUnitIsLaborDay) {
+  if (
+    validatedUnitResolution.status !== 'RESOLVED' ||
+    validatedUnitResolution.rawSourceUnit !== ahspUnit ||
+    validatedUnitResolution.rawTargetUnit !== resolvedCatalog.baseUnit ||
+    validatedUnitResolution.canonicalUnitCode !== 'PERSON_DAY' ||
+    validatedUnitResolution.quantityFactor !== '1'
+  ) {
     return {
       ...baseContext,
       status: 'UNRESOLVED',
@@ -311,7 +319,13 @@ export function resolveAhspResourcePrice(
   //     candidates for Phase 1 and must not resolve with factor 1.
   //     No hour-to-day or other conversion is added here.
   const compatiblePrices = resourceMatchingPrices.filter(
-    (price) => isLaborDayUnit(price.unit),
+    (price) =>
+      price.unitResolution.status === 'RESOLVED' &&
+      price.unitResolution.rawSourceUnit === price.unit &&
+      price.unitResolution.rawTargetUnit === resolvedCatalog.baseUnit &&
+      price.unitResolution.canonicalUnitCode === 'PERSON_DAY' &&
+      price.unitResolution.quantityFactor === '1' &&
+      price.unitResolution.priceOperation === 'IDENTITY',
   );
 
   if (compatiblePrices.length === 0) {
@@ -396,7 +410,7 @@ export function resolveAhspResourcePrice(
     sourcePriceValue: selectedPrice.value,
     sourceUnit: selectedPrice.unit,
     ahspUnit,
-    canonicalUnit: LABOR_DAY_UNIT_CANONICAL,
+    canonicalUnit: 'PERSON_DAY',
     conversionFactor: '1',
     // Factor 1 → adapted price equals source price exactly (same string, no arithmetic).
     adaptedPriceValue: selectedPrice.value,
