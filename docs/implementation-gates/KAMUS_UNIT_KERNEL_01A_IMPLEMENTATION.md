@@ -55,7 +55,7 @@ Baseline: `e204674790ec4ee1ba1a6232351ccac76ac04a6f`
 
 ## Closed boundaries preserved
 
-01B, package-price adaptation, material/equipment Project AHSP resolution, AHSP unit-price, Cost Kernel, Execution Factor, BOQ/RAB arithmetic, frontend production work, runtime/API proof, override, and snapshot backfill remain closed.
+Backend HTTP/API end-to-end proof remains closed; bounded application-code proof passed during production activation and was not rerun during the documentation closure. Frontend production work, 01B, package-price adaptation, material/equipment Project AHSP resolution, AHSP unit-price, Cost Kernel, Execution Factor, BOQ/RAB arithmetic, override, and snapshot backfill remain closed.
 
 ## Production activation truth sync
 
@@ -104,7 +104,7 @@ Historical hashes exist, but the inline activation projection/serialization proc
 
 ### Owner operational clarification — executor coordination
 
-This operational clarification does not amend Foundation, Kitab, or ADR and is not a universal constitutional amendment. Authorized pool: `CODEX_GPT_5_6_SOL`, `CLAUDE_CODE`, `CURSOR_AGENT`. One Owner-appointed executor is the only writer for one task/branch/worktree; no mid-task executor change occurs without a new Owner decision; other executors review read-only; concurrent stage/commit/push/merge/database writes are forbidden. Handoff carries branch, HEAD, worktree, database/migration state, and last verdict. Autopilot 4 Guarded is an operating discipline, not an executor. Single writer is per task, not a permanent vendor/model monopoly.
+This operational clarification does not amend Foundation, Kitab, or ADR and is not a universal constitutional amendment. Authorized executor classes: `CODEX`, `CLAUDE_CODE`, `CURSOR_AGENT`. Model and version labels are informational unless the Owner explicitly pins an exact model for a specific task. PR #31 docs-only truth sync executor class: CODEX; reported model label: CODEX_GPT_5; continued under Owner follow-up authorization. One Owner-appointed executor is the only writer for one task/branch/worktree; no mid-task executor change occurs without a new Owner decision; other executors review read-only; concurrent stage/commit/push/merge/database writes are forbidden. Handoff carries branch, HEAD, worktree, database/migration state, and last verdict. Autopilot 4 Guarded is an operating discipline, not an executor. Single writer is per task, not a permanent vendor/model monopoly.
 
 ### Documentation closure state
 

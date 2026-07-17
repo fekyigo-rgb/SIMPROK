@@ -416,7 +416,11 @@ This docs-only closure did not access the database. The following is historical 
 
 ### 11.6 Owner operational clarification — executor coordination
 
-This is an Owner operational clarification, not a Foundation, Kitab, ADR, or universal constitutional amendment. The authorized executor pool is `CODEX_GPT_5_6_SOL`, `CLAUDE_CODE`, and `CURSOR_AGENT`.
+This is an Owner operational clarification, not a Foundation, Kitab, ADR, or universal constitutional amendment. The authorized executor classes are `CODEX`, `CLAUDE_CODE`, and `CURSOR_AGENT`.
+
+`Model and version labels are informational unless the Owner explicitly pins an exact model for a specific task.`
+
+`PR #31 docs-only truth sync executor class: CODEX; reported model label: CODEX_GPT_5; continued under Owner follow-up authorization.`
 
 1. Only one executor is active for one task, branch, and worktree.
 2. The Owner appoints the executor in each execution decision; the executor cannot change mid-task without a new Owner decision.
