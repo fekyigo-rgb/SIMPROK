@@ -1,4 +1,4 @@
-import { type MouseEvent, useEffect, useMemo, useState } from 'react';
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowDown,
@@ -20,6 +20,17 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
+import {
+  applyBatchResults,
+  beginLoadingRows,
+  computeDirectCostTotal,
+  formatBackendRupiah,
+  invalidateRow,
+  markRequestFailed,
+  toRabCostDisplay,
+  type CostBatchResponse,
+  type CostRowStatus,
+} from '../utils/rabCostDisplay';
 import type { DashboardOutletContext } from '../components/layout/DashboardLayout';
 
 type RabRowType = 'folder' | 'item' | 'note';
@@ -30,6 +41,8 @@ interface RabRow {
   type: RabRowType;
   name: string;
   ahspCode: string;
+  /** Non-null only for WORK_ITEM rows with an AHSP association — the Cost Kernel eligibility flag. */
+  ahspVersionId: string | null;
   category: string;
   unit: string;
   unitPrice: number;
@@ -73,13 +86,15 @@ interface NumberedRabRow extends RabRow {
   depth: number;
 }
 
-
 const formatRupiah = (value: number) => `Rp ${Math.round(value).toLocaleString('id-ID')}`;
 
 const formatDraftNumber = (value: number) => Number(value || 0).toLocaleString('id-ID');
 
 const parseDraftNumber = (value: string) => {
-  const normalized = value.replace(/\./g, '').replace(/,/g, '.').replace(/[^\d.-]/g, '');
+  const normalized = value
+    .replace(/\./g, '')
+    .replace(/,/g, '.')
+    .replace(/[^\d.-]/g, '');
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 };
@@ -119,6 +134,7 @@ const mapBoqToRows = (items: BoqItemResponse[]) => items
     type: item.itemType === 'FOLDER' ? 'folder' : item.itemType === 'NOTE' ? 'note' : 'item',
     name: item.name,
     ahspCode: item.ahspVersionId || item.ahspSnapshotId ? item.wbsCode.trim() : '',
+    ahspVersionId: item.itemType === 'WORK_ITEM' ? (item.ahspVersionId ?? null) : null,
     category: item.itemType === 'FOLDER' ? 'Subjudul' : item.itemType === 'NOTE' ? 'Catatan' : 'Standby',
     unit: item.unit || '',
     unitPrice: toNumber(item.unitPrice),
@@ -197,6 +213,7 @@ const createRow = (type: RabRowType, parentId: string | null, sortOrder: number)
   type,
   name: type === 'folder' ? 'Sub Judul Baru' : type === 'note' ? 'Catatan baru' : 'Item pekerjaan baru',
   ahspCode: type === 'item' ? '' : '',
+  ahspVersionId: null,
   category: type === 'folder' ? 'Subjudul' : type === 'note' ? 'Catatan' : 'Standby',
   unit: type === 'item' ? 'ls' : '',
   unitPrice: 0,
@@ -214,6 +231,8 @@ export function RabWorkspacePage() {
   const [rows, setRows] = useState<RabRow[]>([]);
   const [volumes, setVolumes] = useState<Record<string, number>>({});
   const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
+  const [costRowStatuses, setCostRowStatuses] = useState<Record<string, CostRowStatus>>({});
+  const costLoadGenerationRef = useRef(0);
   const [selectedRowId, setSelectedRowId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [marginPercent, setMarginPercent] = useState(10);
@@ -247,11 +266,41 @@ export function RabWorkspacePage() {
     setSelectedRowId(mappedRows.find((row) => row.type === 'item')?.id || '');
   };
 
+  const loadCostCalculations = (items: BoqItemResponse[]) => {
+    if (!projectId) return;
+    const eligibleIds = items.filter((item) => item.itemType === 'WORK_ITEM' && item.ahspVersionId).map((item) => item.id);
+    const generation = ++costLoadGenerationRef.current;
+
+    if (eligibleIds.length === 0) {
+      setCostRowStatuses({});
+      return;
+    }
+
+    setCostRowStatuses(beginLoadingRows(eligibleIds));
+
+    const query = eligibleIds.map(encodeURIComponent).join(',');
+    apiFetch(`/projects/${projectId}/boq/cost-calculations?boqItemIds=${query}`)
+      .then((response) => {
+        if (!response.ok) throw new Error('cost-calculation-load-failed');
+        return response.json() as Promise<CostBatchResponse>;
+      })
+      .then((batch) => {
+        if (generation !== costLoadGenerationRef.current) return;
+        setCostRowStatuses((current) => applyBatchResults(current, batch.items));
+      })
+      .catch(() => {
+        if (generation !== costLoadGenerationRef.current) return;
+        setCostRowStatuses((current) => markRequestFailed(current, eligibleIds));
+      });
+  };
+
   useEffect(() => {
     if (!projectId) {
+      costLoadGenerationRef.current += 1;
       setRows([]);
       setVolumes({});
       setUnitPrices({});
+      setCostRowStatuses({});
       setSelectedRowId('');
       setStatusMessage('Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.');
       return;
@@ -266,20 +315,24 @@ export function RabWorkspacePage() {
         applyRecap(data.recap);
         if (data.items.length > 0) {
           applyRows(data.items);
+          loadCostCalculations(data.items);
           setStatusMessage('Draft tersimpan dimuat. Ruang kerja siap.');
         } else {
           // No saved draft — seed from baseline if available, else empty
           return apiFetch(`/projects/${projectId}/boq`)
-            .then((r) => r.ok ? r.json() : [])
+            .then((r) => (r.ok ? r.json() : []))
             .then((baseline: unknown) => {
-              const baselineItems = Array.isArray(baseline) ? baseline as BoqItemResponse[] : [];
+              const baselineItems = Array.isArray(baseline) ? (baseline as BoqItemResponse[]) : [];
               if (baselineItems.length > 0) {
                 applyRows(baselineItems);
+                loadCostCalculations(baselineItems);
                 setStatusMessage('Draft kosong. Data baseline dimuat sebagai titik awal — klik Simpan Draft untuk menyimpan perubahan.');
               } else {
+                costLoadGenerationRef.current += 1;
                 setRows([]);
                 setVolumes({});
                 setUnitPrices({});
+                setCostRowStatuses({});
                 setSelectedRowId('');
                 setStatusMessage('Draft kosong. Tambahkan item pekerjaan, lalu klik Simpan Draft.');
               }
@@ -288,13 +341,15 @@ export function RabWorkspacePage() {
       })
       .catch((error: unknown) => {
         console.error('Failed to load RAB draft:', error);
+        costLoadGenerationRef.current += 1;
         setRows([]);
         setVolumes({});
         setUnitPrices({});
+        setCostRowStatuses({});
         setSelectedRowId('');
         setStatusMessage('Gagal memuat draft. Periksa koneksi backend dan coba lagi.');
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   const numberedRows = useMemo(() => buildNumberedRows(rows), [rows]);
@@ -302,6 +357,8 @@ export function RabWorkspacePage() {
     const row = numberedRows.find((item) => item.id === selectedRowId);
     return row?.type === 'item' ? row : null;
   }, [numberedRows, selectedRowId]);
+  const selectedCostStatus = selectedItem ? costRowStatuses[selectedItem.id] : undefined;
+  const selectedCostDisplay = selectedCostStatus ? toRabCostDisplay(selectedCostStatus) : null;
   const negativeRows = useMemo(() => new Set(rows
     .filter((row) => row.type === 'item' && ((volumes[row.id] || 0) < 0 || (unitPrices[row.id] ?? row.unitPrice) < 0))
     .map((row) => row.id)), [rows, unitPrices, volumes]);
@@ -320,10 +377,24 @@ export function RabWorkspacePage() {
     return map;
   }, [rows]);
 
-  const subtotal = useMemo(() => rows.reduce((sum, row) => {
-    if (row.type !== 'item') return sum;
-    return sum + (volumes[row.id] || 0) * (unitPrices[row.id] ?? row.unitPrice);
-  }, 0), [rows, unitPrices, volumes]);
+  // Cost Kernel calculated lines contribute their exact backend lineTotal (decimal-string
+  // addition, never re-multiplied from volume * unitPrice); manual/non-kernel lines keep the
+  // existing volume * unitPrice path. See computeDirectCostTotal for the single aggregation rule.
+  const directCostTotalExact = useMemo(
+    () =>
+      computeDirectCostTotal(
+        rows
+          .filter((row): row is RabRow & { type: 'item' } => row.type === 'item')
+          .map((row) => ({
+            id: row.id,
+            isKernelEligible: row.ahspVersionId !== null,
+            manualAmount: (volumes[row.id] || 0) * (unitPrices[row.id] ?? row.unitPrice),
+          })),
+        costRowStatuses,
+      ),
+    [rows, unitPrices, volumes, costRowStatuses],
+  );
+  const subtotal = Number(directCostTotalExact) || 0;
 
   const margin = subtotal * (marginPercent / 100);
   const ppn = (subtotal + margin) * (ppnPercent / 100);
@@ -384,9 +455,10 @@ export function RabWorkspacePage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
-      .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((fresh: DraftBoqResponse) => {
         applyRecap(fresh.recap);
+        loadCostCalculations(fresh.items);
         const mappedRows = mapBoqToRows(fresh.items);
         const nextVolumes = fresh.items.reduce<Record<string, number>>((acc, item) => {
           acc[item.id] = toNumber(item.quantity);
@@ -442,11 +514,12 @@ export function RabWorkspacePage() {
   };
 
   const updateRowName = (rowId: string, name: string) => {
-    setRows((current) => current.map((row) => row.id === rowId ? { ...row, name } : row));
+    setRows((current) => current.map((row) => (row.id === rowId ? { ...row, name } : row)));
   };
 
   const updateRowUnit = (rowId: string, unit: string) => {
-    setRows((current) => current.map((row) => row.id === rowId ? { ...row, unit } : row));
+    setRows((current) => current.map((row) => (row.id === rowId ? { ...row, unit } : row)));
+    setCostRowStatuses((current) => invalidateRow(current, rowId));
   };
 
   return (
@@ -473,12 +546,24 @@ export function RabWorkspacePage() {
       </header>
 
       <section className="simprok-rab-toolbar" aria-label="Aksi Ruang Kerja RAB">
-        <button onClick={() => navigate('/first-real-input-preview?tab=boq')} title="Preview Import BOQ (Data Contoh)" aria-label="Preview Import BOQ" data-route="/?ruang=import-boq"><FileInput size={17} /> Import BOQ (Preview)</button>
-        <button onClick={() => navigate('/first-real-input-preview?tab=ahsp')} title="Preview Cari AHSP (Data Contoh)" aria-label="Preview Cari AHSP" data-route="/?ruang=cari-ahsp"><Search size={17} /> Cari AHSP (Preview)</button>
-        <button onClick={() => openPlaceholder('Export')} title="Export - belum tersambung" aria-label="Export - belum tersambung" data-route="/?ruang=export-rab"><FileDown size={17} /> Export</button>
-        <button onClick={() => openPlaceholder('Print')} title="Print - belum tersambung" aria-label="Print - belum tersambung" data-route="/?ruang=print-rab"><Printer size={17} /> Print</button>
-        <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId}><Save size={17} /> {isSaving ? 'Menyimpan...' : 'Simpan Draft'}</button>
-        <button className="simprok-rab-toolbar__lock" onClick={() => openPlaceholder('Kunci RAB')} title="Kunci RAB - menunggu mesin finalisasi" aria-label="Kunci RAB - belum aktif" data-route="/?ruang=kunci-rab" aria-disabled={true}><LockKeyhole size={17} /> Kunci RAB</button>
+        <button onClick={() => navigate('/first-real-input-preview?tab=boq')} title="Preview Import BOQ (Data Contoh)" aria-label="Preview Import BOQ" data-route="/?ruang=import-boq">
+          <FileInput size={17} /> Import BOQ (Preview)
+        </button>
+        <button onClick={() => navigate('/first-real-input-preview?tab=ahsp')} title="Preview Cari AHSP (Data Contoh)" aria-label="Preview Cari AHSP" data-route="/?ruang=cari-ahsp">
+          <Search size={17} /> Cari AHSP (Preview)
+        </button>
+        <button onClick={() => openPlaceholder('Export')} title="Export - belum tersambung" aria-label="Export - belum tersambung" data-route="/?ruang=export-rab">
+          <FileDown size={17} /> Export
+        </button>
+        <button onClick={() => openPlaceholder('Print')} title="Print - belum tersambung" aria-label="Print - belum tersambung" data-route="/?ruang=print-rab">
+          <Printer size={17} /> Print
+        </button>
+        <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId}>
+          <Save size={17} /> {isSaving ? 'Menyimpan...' : 'Simpan Draft'}
+        </button>
+        <button className="simprok-rab-toolbar__lock" onClick={() => openPlaceholder('Kunci RAB')} title="Kunci RAB - menunggu mesin finalisasi" aria-label="Kunci RAB - belum aktif" data-route="/?ruang=kunci-rab" aria-disabled={true}>
+          <LockKeyhole size={17} /> Kunci RAB
+        </button>
       </section>
       {hasNegativeValue ? (
         <div className="simprok-rab-validation-alert" role="alert">
@@ -490,8 +575,12 @@ export function RabWorkspacePage() {
         <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="alert">
           <strong>Peringatan Navigasi (Draft Lokal)</strong>
           <p>Perubahan data pekerjaan dapat memengaruhi rekomendasi AHSP, Basic Price, Execution Factor, dan total RAB. Item RAB yang sudah dibuat tetap dipertahankan.</p>
-          <p><em>Navigasi kembali ke Persiapan RAB ditahan sementara agar isi RAB lokal tidak hilang. Backflow penuh menunggu penyimpanan draft/persistence siap.</em></p>
-          <button onClick={() => setShowBackflowWarning(false)} className="simprok-rab-action simprok-rab-action--secondary" style={{ marginTop: '10px' }}>Tutup Peringatan</button>
+          <p>
+            <em>Navigasi kembali ke Persiapan RAB ditahan sementara agar isi RAB lokal tidak hilang. Backflow penuh menunggu penyimpanan draft/persistence siap.</em>
+          </p>
+          <button onClick={() => setShowBackflowWarning(false)} className="simprok-rab-action simprok-rab-action--secondary" style={{ marginTop: '10px' }}>
+            Tutup Peringatan
+          </button>
         </div>
       ) : null}
 
@@ -522,11 +611,17 @@ export function RabWorkspacePage() {
                   <tr>
                     <td colSpan={9}>
                       <div className="simprok-rab-empty-state" role="status">
-                        <p><strong>Draft RAB masih kosong.</strong></p>
+                        <p>
+                          <strong>Draft RAB masih kosong.</strong>
+                        </p>
                         <p>Tambahkan Sub Judul atau Item pekerjaan untuk mulai menyusun RAB.</p>
                         <div className="simprok-rab-empty-state__actions">
-                          <button className="simprok-rab-add-sub" onClick={() => addChild(null, 'folder')} aria-label="Tambah Sub Judul ke draft">+ Sub Judul</button>
-                          <button className="simprok-rab-add-item" onClick={() => addChild(null, 'item')} aria-label="Tambah Item pekerjaan ke draft">+ Item</button>
+                          <button className="simprok-rab-add-sub" onClick={() => addChild(null, 'folder')} aria-label="Tambah Sub Judul ke draft">
+                            + Sub Judul
+                          </button>
+                          <button className="simprok-rab-add-item" onClick={() => addChild(null, 'item')} aria-label="Tambah Item pekerjaan ke draft">
+                            + Item
+                          </button>
                         </div>
                       </div>
                     </td>
@@ -534,6 +629,9 @@ export function RabWorkspacePage() {
                 ) : null}
                 {numberedRows.map((row) => {
                   const unitPrice = unitPrices[row.id] ?? row.unitPrice;
+                  const isKernelEligible = row.ahspVersionId !== null;
+                  const costStatus = costRowStatuses[row.id];
+                  const costDisplay = costStatus ? toRabCostDisplay(costStatus) : null;
                   const amount = row.type === 'item' ? (volumes[row.id] || 0) * unitPrice : 0;
                   const selected = row.id === selectedRowId;
                   const hasNegativeRowValue = negativeRows.has(row.id);
@@ -548,10 +646,18 @@ export function RabWorkspacePage() {
                       <tr key={row.id} className="simprok-rab-row simprok-rab-row--note">
                         <td>
                           <div className="simprok-rab-row-move">
-                            <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas"><ArrowUp size={14} /></button>
-                            <button onClick={() => setRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian"><ArrowRight size={14} /></button>
-                            <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah"><ArrowDown size={14} /></button>
-                            <button onClick={() => setRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat"><ArrowLeft size={14} /></button>
+                            <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
+                              <ArrowUp size={14} />
+                            </button>
+                            <button onClick={() => setRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
+                              <ArrowRight size={14} />
+                            </button>
+                            <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
+                              <ArrowDown size={14} />
+                            </button>
+                            <button onClick={() => setRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
+                              <ArrowLeft size={14} />
+                            </button>
                           </div>
                         </td>
                         <td></td>
@@ -559,23 +665,31 @@ export function RabWorkspacePage() {
                         <td colSpan={5} style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
                           <input className="simprok-rab-description-input" value={row.name} onChange={(event) => updateRowName(row.id, event.target.value)} aria-label="Uraian catatan" />
                         </td>
-                        <td><button className="simprok-rab-delete" onClick={() => removeRow(row.id)} title="Hapus catatan" aria-label="Hapus catatan"><Trash2 size={15} /></button></td>
+                        <td>
+                          <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} title="Hapus catatan" aria-label="Hapus catatan">
+                            <Trash2 size={15} />
+                          </button>
+                        </td>
                       </tr>
                     );
                   }
 
                   return (
-                    <tr
-                      key={row.id}
-                      className={['simprok-rab-row', row.type === 'folder' ? 'simprok-rab-row--folder' : '', selected ? 'simprok-rab-row--selected' : '', hasNegativeRowValue ? 'simprok-rab-row--invalid' : ''].filter(Boolean).join(' ')}
-                      onClick={(event) => handleRowClick(row.id, event)}
-                    >
+                    <tr key={row.id} className={['simprok-rab-row', row.type === 'folder' ? 'simprok-rab-row--folder' : '', selected ? 'simprok-rab-row--selected' : '', hasNegativeRowValue ? 'simprok-rab-row--invalid' : ''].filter(Boolean).join(' ')} onClick={(event) => handleRowClick(row.id, event)}>
                       <td>
                         <div className="simprok-rab-row-move">
-                          <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas"><ArrowUp size={14} /></button>
-                          <button onClick={() => setRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian"><ArrowRight size={14} /></button>
-                          <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah"><ArrowDown size={14} /></button>
-                          <button onClick={() => setRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat"><ArrowLeft size={14} /></button>
+                          <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
+                            <ArrowUp size={14} />
+                          </button>
+                          <button onClick={() => setRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
+                            <ArrowRight size={14} />
+                          </button>
+                          <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
+                            <ArrowDown size={14} />
+                          </button>
+                          <button onClick={() => setRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
+                            <ArrowLeft size={14} />
+                          </button>
                         </div>
                       </td>
                       <td className="simprok-rab-row__number">{row.number}</td>
@@ -583,32 +697,16 @@ export function RabWorkspacePage() {
                         {row.type === 'item' ? (
                           <div className="simprok-rab-ahsp-cell">
                             {row.ahspCode ? (
-                              <button
-                                className="simprok-rab-ahsp-code"
-                                onClick={() => activateRow(row.id)}
-                                title="Buka Detail Analisa AHSP"
-                                aria-label={`Buka AHSP ${row.ahspCode}`}
-                                data-route={`/?ruang=detail-ahsp-${row.id}`}
-                              >
+                              <button className="simprok-rab-ahsp-code" onClick={() => activateRow(row.id)} title="Buka Detail Analisa AHSP" aria-label={`Buka AHSP ${row.ahspCode}`} data-route={`/?ruang=detail-ahsp-${row.id}`}>
                                 {row.ahspCode}
                               </button>
                             ) : (
-                              <button
-                                className="simprok-rab-ahsp-pick"
-                                onClick={() => activateRow(row.id)}
-                                title="Pilih AHSP"
-                                aria-label="Pilih AHSP"
-                                data-route={`/?ruang=pilih-ahsp-${row.id}`}
-                              >
+                              <button className="simprok-rab-ahsp-pick" onClick={() => activateRow(row.id)} title="Pilih AHSP" aria-label="Pilih AHSP" data-route={`/?ruang=pilih-ahsp-${row.id}`}>
                                 Pilih AHSP
                               </button>
                             )}
-                            {row.manualAhsp ? (
-                              <span className="simprok-rab-ahsp-badge simprok-rab-ahsp-badge--manual">MANUAL</span>
-                            ) : null}
-                            <span className="simprok-rab-ahsp-badge">
-                              {row.ahspCode ? 'Standby' : 'Menunggu rekomendasi'}
-                            </span>
+                            {row.manualAhsp ? <span className="simprok-rab-ahsp-badge simprok-rab-ahsp-badge--manual">MANUAL</span> : null}
+                            <span className="simprok-rab-ahsp-badge">{costDisplay ? costDisplay.badge : row.ahspCode ? 'Standby' : 'Menunggu rekomendasi'}</span>
                           </div>
                         ) : row.type === 'folder' ? (
                           <small>{row.category}</small>
@@ -620,28 +718,83 @@ export function RabWorkspacePage() {
                           <input className="simprok-rab-description-input" value={row.name} onChange={(event) => updateRowName(row.id, event.target.value)} aria-label={`Uraian ${row.type === 'folder' ? 'sub judul' : 'item pekerjaan'}`} />
                         </span>
                       </td>
-                      <td>{row.type === 'item' ? <input className={(volumes[row.id] || 0) < 0 ? 'simprok-rab-number-invalid' : ''} type="number" step="0.01" value={volumes[row.id] || 0} onChange={(event) => setVolumes((current) => ({ ...current, [row.id]: Number(event.target.value) }))} aria-label={`Volume ${row.name}`} /> : null}</td>
+                      <td>
+                        {row.type === 'item' ? (
+                          <input
+                            className={(volumes[row.id] || 0) < 0 ? 'simprok-rab-number-invalid' : ''}
+                            type="number"
+                            step="0.01"
+                            value={volumes[row.id] || 0}
+                            onChange={(event) => {
+                              setVolumes((current) => ({
+                                ...current,
+                                [row.id]: Number(event.target.value),
+                              }));
+                              setCostRowStatuses((current) => invalidateRow(current, row.id));
+                            }}
+                            aria-label={`Volume ${row.name}`}
+                          />
+                        ) : null}
+                      </td>
                       <td>{row.type === 'item' ? <input className="simprok-rab-description-input" value={row.unit} onChange={(event) => updateRowUnit(row.id, event.target.value)} aria-label={`Satuan ${row.name}`} /> : null}</td>
                       <td className="simprok-rab-unit-price-column">
                         {row.type === 'item' ? (
                           <span className="simprok-rab-price-cell">
-                            <input className={(unitPrices[row.id] ?? row.unitPrice) < 0 ? 'simprok-rab-number-invalid' : ''} type="text" inputMode="numeric" value={formatDraftNumber(unitPrices[row.id] ?? row.unitPrice)} onChange={(event) => setUnitPrices((current) => ({ ...current, [row.id]: parseDraftNumber(event.target.value) }))} aria-label={`Harga satuan ${row.name}`} />
-                            {row.manualUnitPrice ? <span className="simprok-rab-manual-chip">MANUAL</span> : null}
+                            {isKernelEligible ? (
+                              costStatus?.kind === 'calculated' ? (
+                                <strong aria-label={`Harga satuan ${row.name}`}>{costDisplay?.unitPrice}</strong>
+                              ) : (
+                                <span aria-label={`Harga satuan ${row.name}`} title={costDisplay?.badge}>—</span>
+                              )
+                            ) : (
+                              <>
+                                <input
+                                  className={(unitPrices[row.id] ?? row.unitPrice) < 0 ? 'simprok-rab-number-invalid' : ''}
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={formatDraftNumber(unitPrices[row.id] ?? row.unitPrice)}
+                                  onChange={(event) =>
+                                    setUnitPrices((current) => ({
+                                      ...current,
+                                      [row.id]: parseDraftNumber(event.target.value),
+                                    }))
+                                  }
+                                  aria-label={`Harga satuan ${row.name}`}
+                                />
+                                {row.manualUnitPrice ? <span className="simprok-rab-manual-chip">MANUAL</span> : null}
+                              </>
+                            )}
                           </span>
                         ) : null}
                       </td>
-                      <td className="simprok-rab-amount-column">{row.type === 'item' ? formatRupiah(amount) : ''}</td>
+                      <td className="simprok-rab-amount-column">
+                        {row.type === 'item'
+                          ? isKernelEligible
+                            ? costStatus?.kind === 'calculated'
+                              ? costDisplay?.lineTotal
+                              : '—'
+                            : formatRupiah(amount)
+                          : ''}
+                      </td>
                       <td>
                         <div className="simprok-rab-row-actions">
                           {row.type === 'folder' ? (
                             <>
-                              <button className="simprok-rab-add-sub" onClick={() => addChild(row.id, 'folder')} title="Tambah Sub Judul" aria-label="Tambah Sub Judul">+ Sub Judul</button>
-                              <button className="simprok-rab-add-item" onClick={() => addChild(row.id, 'item')} title="Tambah Item" aria-label="Tambah Item">+ Item</button>
+                              <button className="simprok-rab-add-sub" onClick={() => addChild(row.id, 'folder')} title="Tambah Sub Judul" aria-label="Tambah Sub Judul">
+                                + Sub Judul
+                              </button>
+                              <button className="simprok-rab-add-item" onClick={() => addChild(row.id, 'item')} title="Tambah Item" aria-label="Tambah Item">
+                                + Item
+                              </button>
                             </>
                           ) : row.type === 'item' ? (
-                            <button className="simprok-rab-table-action" onClick={() => setSelectedRowId(row.id)} title="Buka Detail Analisa AHSP" aria-label="Buka Detail Analisa AHSP" data-route={`/?ruang=detail-ahsp-${row.id}`}>Detail</button>
+                            <button className="simprok-rab-table-action" onClick={() => setSelectedRowId(row.id)} title="Buka Detail Analisa AHSP" aria-label="Buka Detail Analisa AHSP" data-route={`/?ruang=detail-ahsp-${row.id}`}>
+                              Detail
+                            </button>
                           ) : null}
-                          <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} title="Hapus baris" aria-label="Hapus baris"><Trash2 size={15} /></button>
+                          <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} title="Hapus baris" aria-label="Hapus baris">
+                            <Trash2 size={15} />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -661,7 +814,7 @@ export function RabWorkspacePage() {
               <div className="simprok-rab-recap__rows">
                 <div className="simprok-rab-recap__row simprok-rab-recap__row--plain">
                   <span className="simprok-rab-recap__label">Total / Biaya Langsung</span>
-                  <strong className="simprok-rab-recap__value">{formatRupiah(subtotal)}</strong>
+                  <strong className="simprok-rab-recap__value">{formatBackendRupiah(directCostTotalExact)}</strong>
                 </div>
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Margin / Profit</span>
@@ -695,17 +848,33 @@ export function RabWorkspacePage() {
               <div>
                 <h2>Detail Analisa AHSP</h2>
               </div>
-              <button onClick={() => setSelectedRowId('')} title="Tutup panel" aria-label="Tutup panel"><X size={17} /></button>
+              <button onClick={() => setSelectedRowId('')} title="Tutup panel" aria-label="Tutup panel">
+                <X size={17} />
+              </button>
             </div>
             <div className="simprok-ahsp-drawer__selected">
               <strong>{selectedItem.name}</strong>
-              <small>{selectedItem.number} - {selectedItem.unit || 'satuan menunggu data'}</small>
+              <small>
+                {selectedItem.number} - {selectedItem.unit || 'satuan menunggu data'}
+              </small>
             </div>
             <div className="simprok-ahsp-meta">
-              <div><span>Kode AHSP</span><strong>{selectedItem.ahspCode || 'Belum dipilih'}</strong></div>
-              <div><span>Status AHSP</span><strong>{selectedItem.ahspCode ? 'Standby' : 'Engine belum aktif'}</strong></div>
-              <div><span>Sumber Harga</span><strong>Belum tersambung</strong></div>
-              <div><span>Persistensi</span><strong>{projectId ? 'Draft tersimpan di server' : 'Belum ada project aktif'}</strong></div>
+              <div>
+                <span>Kode AHSP</span>
+                <strong>{selectedItem.ahspCode || 'Belum dipilih'}</strong>
+              </div>
+              <div>
+                <span>Status AHSP</span>
+                <strong>{selectedItem.ahspCode ? 'Standby' : 'Engine belum aktif'}</strong>
+              </div>
+              <div>
+                <span>Sumber Harga</span>
+                <strong>Belum tersambung</strong>
+              </div>
+              <div>
+                <span>Persistensi</span>
+                <strong>{projectId ? 'Draft tersimpan di server' : 'Belum ada project aktif'}</strong>
+              </div>
             </div>
             <div className="simprok-ahsp-drawer__frame">
               <span className="simprok-honest-frame__badge">Engine belum aktif</span>
@@ -713,11 +882,14 @@ export function RabWorkspacePage() {
             </div>
             <button className="simprok-execution-factor" onClick={() => openPlaceholder('Atur Execution Factor')} title="Atur Execution Factor - engine belum aktif" aria-label="Atur Execution Factor - engine belum aktif" data-route="/?ruang=execution-factor">
               <Sparkles size={18} />
-              <span><strong>Atur Execution Factor</strong><small>Rekomendasi kondisi lapangan menunggu mesin.</small></span>
+              <span>
+                <strong>Atur Execution Factor</strong>
+                <small>Rekomendasi kondisi lapangan menunggu mesin.</small>
+              </span>
             </button>
             <div className="simprok-ahsp-total">
               <span>Total Harga Satuan</span>
-              <strong>{formatRupiah(unitPrices[selectedItem.id] ?? selectedItem.unitPrice)}</strong>
+              <strong>{selectedCostDisplay?.unitPrice ?? formatRupiah(unitPrices[selectedItem.id] ?? selectedItem.unitPrice)}</strong>
             </div>
             <button className="simprok-ahsp-drawer__primary" onClick={handlePickAhsp} title="Pilih / Ganti AHSP - belum tersambung" aria-label="Pilih / Ganti AHSP - belum tersambung" data-route="/?ruang=pilih-ganti-ahsp">
               <ListChecks size={17} /> Pilih / Ganti AHSP

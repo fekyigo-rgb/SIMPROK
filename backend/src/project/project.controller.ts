@@ -1,4 +1,4 @@
-import { Controller, Post, Put, Patch, Body, Get, Param, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Put, Patch, Body, Get, Param, Query, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ProjectService } from './project.service';
 import { RabIntelligenceProposalService } from './rab-intelligence-proposal.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -12,6 +12,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { ProjectAccessPolicyService } from '../auth/project-access-policy.service';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
+import { CostKernelService } from './cost-kernel.service';
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -20,6 +21,7 @@ export class ProjectController {
     private readonly projectService: ProjectService,
     private readonly rabIntelligenceProposalService: RabIntelligenceProposalService,
     private readonly projectAccessPolicy: ProjectAccessPolicyService,
+    private readonly costKernelService: CostKernelService,
   ) {}
 
   @Post()
@@ -30,13 +32,8 @@ export class ProjectController {
     if (!contextWorkspaceId) {
       throw new BadRequestException('Workspace context is required');
     }
-    if (
-      createProjectDto.workspaceId &&
-      createProjectDto.workspaceId !== contextWorkspaceId
-    ) {
-      throw new ForbiddenException(
-        'Body workspaceId does not match active workspace context',
-      );
+    if (createProjectDto.workspaceId && createProjectDto.workspaceId !== contextWorkspaceId) {
+      throw new ForbiddenException('Body workspaceId does not match active workspace context');
     }
 
     const accountId = request.user?.id;
@@ -46,10 +43,7 @@ export class ProjectController {
   @Post(':projectId/initiate')
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   @Permissions('PROJECT_CREATE')
-  async initiateSetup(
-    @Param('projectId') projectId: string,
-    @Body() initiateProjectDto: InitiateProjectDto,
-  ) {
+  async initiateSetup(@Param('projectId') projectId: string, @Body() initiateProjectDto: InitiateProjectDto) {
     return this.projectService.initiateSetup(projectId, initiateProjectDto);
   }
 
@@ -57,9 +51,7 @@ export class ProjectController {
   @UseGuards(PermissionsGuard)
   @Permissions(PERMISSIONS.OBSERVATORY_VIEW)
   async findAllGlobal(@Req() request: any) {
-    return this.projectService.findAllByWorkspace(
-      request.workspaceContext.workspaceId,
-    );
+    return this.projectService.findAllByWorkspace(request.workspaceContext.workspaceId);
   }
 
   @Get('mine')
@@ -77,10 +69,7 @@ export class ProjectController {
       throw new BadRequestException('Authenticated account context is required');
     }
 
-    return this.projectAccessPolicy.listAccessibleProjects(
-      accountId,
-      contextWorkspaceId,
-    );
+    return this.projectAccessPolicy.listAccessibleProjects(accountId, contextWorkspaceId);
   }
 
   @Get('workspace/:workspaceId')
@@ -151,10 +140,7 @@ export class ProjectController {
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   // TODO(P7C-PERMISSION-DEBT): Replace PROJECT_CREATE with a dedicated project intake-context edit permission after Identity/Permission design approval.
   @Permissions('PROJECT_CREATE')
-  async updateIntakeContext(
-    @Param('projectId') projectId: string,
-    @Body() dto: UpdateProjectIntakeContextDto,
-  ) {
+  async updateIntakeContext(@Param('projectId') projectId: string, @Body() dto: UpdateProjectIntakeContextDto) {
     return this.projectService.updateIntakeContext(projectId, dto);
   }
 
@@ -172,13 +158,36 @@ export class ProjectController {
     return this.projectService.getDraftBoq(projectId);
   }
 
+  @Get(':projectId/boq/items/:boqItemId/cost-calculation')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.PROJECT_VIEW)
+  async calculateBoqItemCost(@Req() request: any, @Param('projectId') projectId: string, @Param('boqItemId') boqItemId: string) {
+    const workspaceId = request.projectAccess?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('Trusted project workspace is required');
+    }
+    return this.costKernelService.calculateBoqItem(boqItemId, projectId, workspaceId);
+  }
+
+  @Get(':projectId/boq/cost-calculations')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.PROJECT_VIEW)
+  async calculateBoqItemsCost(@Req() request: any, @Param('projectId') projectId: string, @Query('boqItemIds') boqItemIdsParam?: string) {
+    const workspaceId = request.projectAccess?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('Trusted project workspace is required');
+    }
+    const boqItemIds = (boqItemIdsParam ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.costKernelService.calculateBoqItems(boqItemIds, projectId, workspaceId);
+  }
+
   @Put(':projectId/boq/draft')
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   @Permissions('PROJECT_CREATE') // TODO: promote to RAB_DRAFT_EDIT when that permission is seeded
-  async saveDraftBoq(
-    @Param('projectId') projectId: string,
-    @Body() dto: SaveDraftBoqDto,
-  ) {
+  async saveDraftBoq(@Param('projectId') projectId: string, @Body() dto: SaveDraftBoqDto) {
     return this.projectService.saveDraftBoq(projectId, dto);
   }
 
@@ -192,11 +201,7 @@ export class ProjectController {
   @Post(':projectId/rab-intelligence/proposals')
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   @Permissions('PROJECT_VIEW')
-  async createRabIntelligenceProposal(
-    @Req() request: any,
-    @Param('projectId') projectId: string,
-    @Body() dto: CreateRabIntelligenceProposalDto,
-  ) {
+  async createRabIntelligenceProposal(@Req() request: any, @Param('projectId') projectId: string, @Body() dto: CreateRabIntelligenceProposalDto) {
     const accountId = request.user?.id;
     return this.rabIntelligenceProposalService.propose(projectId, accountId, dto);
   }
