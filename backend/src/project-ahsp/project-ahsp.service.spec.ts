@@ -80,7 +80,7 @@ describe('ProjectAhspService', () => {
       findOneForWorkspace: jest.fn().mockResolvedValue(price),
     };
     units = {
-      resolve: jest.fn().mockResolvedValue({
+      resolve: jest.fn().mockImplementation((rawSourceUnit: string, rawTargetUnit: string) => Promise.resolve({
         status: 'RESOLVED',
         sourceUnitDefinition: { id: 'unit-person-day', code: 'PERSON_DAY' },
         targetUnitDefinition: { id: 'unit-person-day', code: 'PERSON_DAY' },
@@ -88,7 +88,9 @@ describe('ProjectAhspService', () => {
         conversionRuleVersion: null,
         quantityFactor: '1',
         priceOperation: 'IDENTITY',
-      }),
+        rawSourceUnit,
+        rawTargetUnit,
+      })),
     };
     service = new ProjectAhspService(
       prisma as PrismaService,

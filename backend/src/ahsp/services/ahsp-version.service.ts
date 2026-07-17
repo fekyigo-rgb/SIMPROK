@@ -35,6 +35,8 @@ export class AhspVersionService {
       if (r.conversionFactor !== undefined && r.conversionFactor !== null)
         throw new BadRequestException('LEGACY_CONVERSION_FACTOR_WRITE_FORBIDDEN');
     });
+    if (typeof data.outputUnit !== 'string' || data.outputUnit.trim().length === 0)
+      throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
     const outputResolution = await this.units.resolve(data.outputUnit, data.outputUnit);
     if (outputResolution.status !== 'RESOLVED' || !outputResolution.sourceUnitDefinition)
       throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');

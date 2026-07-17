@@ -62,6 +62,8 @@ export interface ValidatedBasicPriceUnitResolution {
     | 'IDENTITY'
     | 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR'
     | null;
+  readonly rawSourceUnit: string;
+  readonly rawTargetUnit: string;
 }
 
 export interface AhspResourceResolutionInput {
@@ -270,6 +272,8 @@ export function resolveAhspResourcePrice(
   // ---- Step 2: Unit equivalence check ----
   if (
     validatedUnitResolution.status !== 'RESOLVED' ||
+    validatedUnitResolution.rawSourceUnit !== ahspUnit ||
+    validatedUnitResolution.rawTargetUnit !== resolvedCatalog.baseUnit ||
     validatedUnitResolution.canonicalUnitCode !== 'PERSON_DAY' ||
     validatedUnitResolution.quantityFactor !== '1'
   ) {
@@ -317,6 +321,8 @@ export function resolveAhspResourcePrice(
   const compatiblePrices = resourceMatchingPrices.filter(
     (price) =>
       price.unitResolution.status === 'RESOLVED' &&
+      price.unitResolution.rawSourceUnit === price.unit &&
+      price.unitResolution.rawTargetUnit === resolvedCatalog.baseUnit &&
       price.unitResolution.canonicalUnitCode === 'PERSON_DAY' &&
       price.unitResolution.quantityFactor === '1' &&
       price.unitResolution.priceOperation === 'IDENTITY',

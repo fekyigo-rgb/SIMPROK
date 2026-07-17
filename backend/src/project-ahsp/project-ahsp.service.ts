@@ -299,6 +299,8 @@ export class ProjectAhspService {
               priceUnitResolution?.targetUnitDefinition?.code ?? null,
             quantityFactor: priceUnitResolution?.quantityFactor ?? null,
             priceOperation: priceUnitResolution?.priceOperation ?? null,
+            rawSourceUnit: priceUnitResolution?.rawSourceUnit ?? '',
+            rawTargetUnit: priceUnitResolution?.rawTargetUnit ?? '',
           },
         } as const;
       }),
@@ -318,8 +320,8 @@ export class ProjectAhspService {
         canonicalUnitCode:
           unitResolution?.targetUnitDefinition?.code ?? null,
         quantityFactor: unitResolution?.quantityFactor ?? null,
-        rawSourceUnit: resource.baseUnit,
-        rawTargetUnit: catalogMatches[0]?.baseUnit ?? '',
+        rawSourceUnit: unitResolution?.rawSourceUnit ?? '',
+        rawTargetUnit: unitResolution?.rawTargetUnit ?? '',
       },
     });
     const outcome = await this.mapOutcome(

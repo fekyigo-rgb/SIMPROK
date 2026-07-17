@@ -55,6 +55,7 @@ describe('AhspVersionService', () => {
   };
 
   beforeEach(async () => {
+    units.resolve.mockReset();
     prisma = {
       aHSP: {
         findUnique: jest.fn(),
@@ -113,8 +114,6 @@ describe('AhspVersionService', () => {
         userId: 'user-1',
         regulationReference: 'SNI-001',
         effectiveDate: new Date('2026-06-01T00:00:00.000Z'),
-        outputUnit: 'M3',
-        outputUnitDefinitionId: 'unit-m3',
       }),
     ).resolves.toEqual({
       ...version,
@@ -203,6 +202,16 @@ describe('AhspVersionService', () => {
     await expect(service.createVersion(ahsp.id, { resources: [resource], outputUnit: 'M3', userId: 'user-1' })).rejects.toThrow('LEGACY_CONVERSION_FACTOR_WRITE_FORBIDDEN');
     units.resolve.mockResolvedValue({ status: 'NEEDS_REVIEW' });
     await expect(service.createVersion(ahsp.id, { resources: [{ ...resource, conversionFactor: undefined }], outputUnit: 'unknown', userId: 'user-1' })).rejects.toThrow('AHSP_OUTPUT_UNIT_UNRESOLVED');
+    expect(prisma.aHSPVersion.create).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, '', '   '])('rejects missing/null/blank outputUnit %p before resolver or writes', async (outputUnit) => {
+    await expect(service.createVersion(ahsp.id, {
+      resources: [{ ...resource, conversionFactor: undefined }],
+      outputUnit: outputUnit as unknown as string,
+      userId: 'user-1',
+    })).rejects.toThrow('AHSP_OUTPUT_UNIT_UNRESOLVED');
+    expect(units.resolve).not.toHaveBeenCalled();
     expect(prisma.aHSPVersion.create).not.toHaveBeenCalled();
   });
 });

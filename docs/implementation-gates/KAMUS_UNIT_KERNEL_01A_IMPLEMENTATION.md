@@ -26,6 +26,13 @@ Baseline: `e204674790ec4ee1ba1a6232351ccac76ac04a6f`
 - Cross-alias regression intent is preserved: OH and Orang/Hari Basic Price aliases resolve against an Org/Hari catalog unit; Jam remains excluded; one compatible plus one Jam selects the compatible candidate; multiple compatible active candidates remain `NEEDS_REVIEW`.
 - Production first-occurrence read-only audit: `BasicPrice` has no independent unit column; its effective unit comes from its ResourceCatalog. The exact selected source and resolved catalog both report `Org/Hari`.
 
+## PM remediation 02
+
+- Resolver metadata is bound to the exact raw source/target pair it certifies for both AHSP-to-catalog and every Basic Price candidate-to-catalog decision.
+- Valid PERSON_DAY/factor-1 metadata cannot be reused for a different raw pair; negative kernel tests enforce fail-closed behavior.
+- Missing, null, empty, and whitespace-only AHSP `outputUnit` values are rejected as `AHSP_OUTPUT_UNIT_UNRESOLVED` before UnitKernelService or database writes.
+- No schema or migration change was introduced by this remediation.
+
 ## Database safety
 
 - Legacy audit ran in one `REPEATABLE READ, READ ONLY` transaction.
@@ -41,7 +48,7 @@ Baseline: `e204674790ec4ee1ba1a6232351ccac76ac04a6f`
 - `prisma validate`: PASS
 - `prisma generate`: PASS
 - Focused unit/regression: 6 suites / 65 tests PASS
-- Backend unit: 37 suites / 315 tests PASS
+- Backend unit: 37 suites / 321 tests PASS
 - Backend build: PASS
 - Official safe E2E: 19 suites / 190 tests PASS; database guard PASS; residual PASS; advisory lock released
 - Frontend unchanged-regression build: PASS
