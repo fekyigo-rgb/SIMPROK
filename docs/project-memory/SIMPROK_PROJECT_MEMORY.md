@@ -79,6 +79,10 @@ Execution context dan keputusan EF melekat pada setiap occurrence/item, bukan pa
 
 Adapter XLSX IMPORT-FIRST-01 adalah vertical-local intake sementara. Doc-03 Article-05 dan Doc-02 Article-13 mengenai Reality Intake asynchronous di Platform Layer belum dipenuhi. Jalur ini diizinkan Owner khusus untuk BOQ XLSX → Preview → Persetujuan manusia → Working Draft kosong → Frontend RAB. Adapter wajib tetap terpisah, pure, tanpa database dan tanpa business dependency agar dapat dipindahkan melalui perubahan wiring tanpa menulis ulang parser. Utang ditutup ketika Platform Reality Intake dibuka sesuai ADR-002.
 
+### UTANG-FAKE-ZERO-04 — sentinel penyimpanan baris struktural
+
+FOLDER dan NOTE adalah baris struktural, bukan pekerjaan terukur. Karena schema saat ini mewajibkan quantity dan unit, nilai database `quantity=0` dan `unit=''` adalah sentinel penyimpanan legacy saja: bukan fakta bisnis, tidak masuk aritmetika, dan tidak ditampilkan sebagai quantity/unit. WORK_ITEM tidak boleh memakai sentinel ini. Utang ditutup ketika quantity/unit struktural menjadi nullable atau baris struktural dipindahkan ke representasi khusus melalui slice schema yang diotorisasi terpisah.
+
 - Kamus konteks universal AHSP.
 - Profil sensitivitas keluarga pekerjaan.
 - Profil spesifik AHSP.

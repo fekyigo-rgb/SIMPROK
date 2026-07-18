@@ -25,6 +25,7 @@ import {
   beginLoadingRows,
   computeDirectCostTotal,
   formatBackendRupiah,
+  formatBoqImportMeasurement,
   invalidateRow,
   markRequestFailed,
   toRabCostDisplay,
@@ -84,6 +85,7 @@ interface DraftBoqResponse {
 interface BoqImportPreview {
   importFingerprint: string; fileName: string; sheetName: string; totalSourceRows: number;
   acceptedRows: number; warningRows: number; rejectedRows: number; displayedRowCount: number;
+  folderRows: number; workItemRows: number; noteRows: number;
   previewTruncated: boolean; sourceQuantityMaxScale: number; sourceQuantityRowsExceedingScale2: number;
   canApprove: boolean; displayedRows: Array<{ sourceRowNumber: number; description: string; quantityDecimalString: string | null; unitRaw: string | null; itemType: string; warnings: string[]; errors: string[] }>;
 }
@@ -264,7 +266,7 @@ export function RabWorkspacePage() {
   const applyRows = (items: BoqItemResponse[]) => {
     const mappedRows = mapBoqToRows(items);
     const nextVolumes = items.reduce<Record<string, number>>((acc, item) => {
-      acc[item.id] = toNumber(item.quantity);
+      if (item.itemType === 'WORK_ITEM') acc[item.id] = toNumber(item.quantity);
       return acc;
     }, {});
     const nextUnitPrices = mappedRows.reduce<Record<string, number>>((acc, row) => {
@@ -454,8 +456,8 @@ export function RabWorkspacePage() {
         itemType: row.type === 'folder' ? 'FOLDER' : row.type === 'note' ? 'NOTE' : 'WORK_ITEM',
         name: row.name,
         wbsCode: row.ahspCode || '',
-        quantity: volumes[row.id] ?? 0,
-        unit: row.unit,
+        quantity: row.type === 'item' ? volumes[row.id] : undefined,
+        unit: row.type === 'item' ? row.unit : undefined,
         unitPrice: row.manualUnitPrice ? (unitPrices[row.id] ?? row.unitPrice) : undefined,
         sortOrder: row.sortOrder ?? index,
       })),
@@ -614,9 +616,10 @@ export function RabWorkspacePage() {
         <section className="simprok-rab-validation-alert simprok-rab-validation-alert--info" aria-label="Preview Import BOQ">
           <strong>{importPreview.fileName} — sheet {importPreview.sheetName}</strong>
           <p>Valid {importPreview.acceptedRows}; peringatan {importPreview.warningRows}; error {importPreview.rejectedRows}. Skala quantity maksimum {importPreview.sourceQuantityMaxScale}.</p>
+          <p>{importPreview.folderRows} bagian; {importPreview.workItemRows} item pekerjaan; {importPreview.noteRows} catatan.</p>
           <p>Menampilkan {importPreview.displayedRowCount} dari {importPreview.acceptedRows + importPreview.rejectedRows} baris{importPreview.previewTruncated ? ' (preview dibatasi)' : ''}.</p>
           <div style={{ maxHeight: 240, overflow: 'auto' }}>
-            {importPreview.displayedRows.map((row) => <div key={row.sourceRowNumber}>Baris {row.sourceRowNumber}: {row.description} — {row.quantityDecimalString ?? '—'} {row.unitRaw ?? ''}{row.errors.length ? ` [${row.errors.join(', ')}]` : ''}</div>)}
+            {importPreview.displayedRows.map((row) => <div key={row.sourceRowNumber}>Baris {row.sourceRowNumber}: {row.description}{formatBoqImportMeasurement(row.itemType, row.quantityDecimalString, row.unitRaw)}{row.errors.length ? ` [${row.errors.join(', ')}]` : ''}</div>)}
           </div>
           <button onClick={() => void approveImport()} disabled={!importPreview.canApprove || isImporting}>{isImporting ? 'Sedang mengimpor BOQ' : 'Setujui dan Import'}</button>
         </section>

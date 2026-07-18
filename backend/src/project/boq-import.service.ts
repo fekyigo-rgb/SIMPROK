@@ -6,7 +6,8 @@ import { BOQ_PARSER_CONTRACT_VERSION, BoqImportKnowledgeObject, BoqXlsxIntakeAda
 
 export const MAX_UPLOAD_BYTES = 10_485_760;
 export const MAX_PREVIEW_DISPLAY_ROWS = 500;
-const TARGET_DRAFT_ID = 'dec139d9-a978-4cbd-8e29-9fa88ec23b93';
+const WORKING_DRAFT_NAME = 'Working Draft';
+const STRUCTURAL_ROW_STORAGE = Object.freeze({ quantity: '0', unit: '' });
 type UploadedXlsx = { buffer: Buffer; size: number; originalname: string; mimetype?: string };
 
 @Injectable()
@@ -40,10 +41,15 @@ export class BoqImportService {
     const rejectedRows = knowledge.rows.filter((row) => row.errors.length > 0).length;
     const warningRows = knowledge.rows.filter((row) => row.warnings.length > 0).length;
     const displayedRows = prioritized.slice(0, MAX_PREVIEW_DISPLAY_ROWS);
+    const accepted = knowledge.rows.filter((row) => row.errors.length === 0);
+    const folderRows = accepted.filter((row) => row.itemType === 'FOLDER').length;
+    const workItemRows = accepted.filter((row) => row.itemType === 'WORK_ITEM').length;
+    const noteRows = accepted.filter((row) => row.itemType === 'NOTE').length;
     return {
       importFingerprint: this.fingerprint(projectId, workspaceId, knowledge), sourceSha256: knowledge.sourceSha256,
       fileName: knowledge.fileName, sheetName: knowledge.sheetName, totalSourceRows: knowledge.totalSourceRows,
-      acceptedRows: knowledge.rows.length - rejectedRows, warningRows, rejectedRows, displayedRows,
+      acceptedRows: folderRows + workItemRows + noteRows, folderRows, workItemRows, noteRows,
+      warningRows, rejectedRows, displayedRows,
       displayedRowCount: displayedRows.length, previewTruncated: displayedRows.length < knowledge.rows.length,
       sourceQuantityMaxScale: knowledge.sourceQuantityEvidence.maxScale,
       sourceQuantityRowsExceedingScale2: knowledge.sourceQuantityEvidence.rowsExceedingScale2,
@@ -59,23 +65,36 @@ export class BoqImportService {
     if (knowledge.sourceQuantityEvidence.rowsExceedingScale2 > 0) throw new BadRequestException('QUANTITY_SCALE_EXCEEDS_CURRENT_SCHEMA');
 
     return this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<Array<{ id: string; projectId: string; status: string }>>(Prisma.sql`
-        SELECT "id", "projectId", "status" FROM "boq_structures" WHERE "id" = ${TARGET_DRAFT_ID}::uuid FOR UPDATE
+      const candidates = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT bs."id" FROM "boq_structures" bs
+        INNER JOIN "projects" p ON p."id" = bs."projectId"
+        WHERE bs."projectId" = ${projectId}::uuid AND p."workspaceId" = ${workspaceId}::uuid
+          AND bs."status" = 'DRAFT' AND bs."name" = ${WORKING_DRAFT_NAME}
+        ORDER BY bs."id" ASC
+      `);
+      if (candidates.length === 0) throw new NotFoundException('WORKING_DRAFT_NOT_FOUND');
+      if (candidates.length > 1) throw new ConflictException('MULTIPLE_WORKING_DRAFTS');
+      const locked = await tx.$queryRaw<Array<{ id: string; projectId: string; status: string; name: string }>>(Prisma.sql`
+        SELECT "id", "projectId", "status", "name" FROM "boq_structures"
+        WHERE "id" = ${candidates[0].id}::uuid FOR UPDATE
       `);
       const draft = locked[0];
-      if (!draft || draft.projectId !== projectId) throw new NotFoundException('WORKING_DRAFT_NOT_FOUND');
-      const project = await tx.project.findFirst({ where: { id: projectId, workspaceId }, select: { id: true } });
-      if (!project || draft.status !== 'DRAFT') throw new NotFoundException('WORKING_DRAFT_NOT_FOUND');
+      if (!draft || draft.projectId !== projectId || draft.status !== 'DRAFT' || draft.name !== WORKING_DRAFT_NAME) throw new NotFoundException('WORKING_DRAFT_NOT_FOUND');
       if (await tx.boqItem.count({ where: { boqStructureId: draft.id } })) throw new ConflictException('WORKING_DRAFT_NOT_EMPTY');
 
       const ids = new Map<string, string>();
       const created: Array<{ id: string }> = [];
       for (const row of knowledge.rows) {
+        const structural = row.itemType === 'FOLDER' || row.itemType === 'NOTE';
+        if (!structural && !row.quantityDecimalString) throw new BadRequestException('WORK_ITEM_QUANTITY_REQUIRED');
+        if (!structural && !row.unitRaw) throw new BadRequestException('WORK_ITEM_UNIT_REQUIRED');
         const parentId = row.parentSourceReference ? ids.get(row.parentSourceReference) ?? null : null;
         const item = await tx.boqItem.create({ data: {
           boqStructureId: draft.id, parentId, wbsCode: row.sourceCode ?? '', name: row.description,
-          itemType: row.itemType, quantity: new Prisma.Decimal(row.quantityDecimalString ?? '0'),
-          unit: row.unitRaw ?? '', unitPrice: null, lineTotal: null, sortOrder: row.sortOrder,
+          itemType: row.itemType,
+          quantity: new Prisma.Decimal(structural ? STRUCTURAL_ROW_STORAGE.quantity : row.quantityDecimalString!),
+          unit: structural ? STRUCTURAL_ROW_STORAGE.unit : row.unitRaw!,
+          unitPrice: null, lineTotal: null, sortOrder: row.sortOrder,
         }});
         ids.set(`row:${row.sourceRowNumber}`, item.id); created.push(item);
       }

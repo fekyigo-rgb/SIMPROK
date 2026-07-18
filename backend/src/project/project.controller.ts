@@ -15,6 +15,7 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 import { CostKernelService } from './cost-kernel.service';
 import { BoqImportService, MAX_UPLOAD_BYTES } from './boq-import.service';
+import { BoqImportProjectAccessGuard } from './boq-import-project-access.guard';
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -28,7 +29,7 @@ export class ProjectController {
   ) {}
 
   @Post(':projectId/boq/import/preview')
-  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @UseGuards(BoqImportProjectAccessGuard, PermissionsGuard)
   @Permissions(PERMISSIONS.RAB_VIEW)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async previewBoqImport(@Req() request: any, @Param('projectId') projectId: string, @UploadedFile() file: any, @Body('selectedSheet') selectedSheet?: string) {
@@ -36,7 +37,7 @@ export class ProjectController {
   }
 
   @Post(':projectId/boq/import/approve')
-  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @UseGuards(BoqImportProjectAccessGuard, PermissionsGuard)
   @Permissions(PERMISSIONS.RAB_DRAFT_EDIT)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   async approveBoqImport(@Req() request: any, @Param('projectId') projectId: string, @UploadedFile() file: any, @Body('importFingerprint') fingerprint: string, @Body('selectedSheet') selectedSheet?: string) {

@@ -69,6 +69,7 @@ export class BoqXlsxIntakeAdapter {
     const rows: BoqImportKnowledgeRow[] = [];
     let activeFolder: string | null = null;
     let maxScale = 0;
+    let rowsExceedingScale2 = 0;
     const examples: BoqImportKnowledgeObject['sourceQuantityEvidence']['examples'] = [];
 
     for (const sourceRowNumber of meaningful.filter((row) => row > headerRow + 1)) {
@@ -89,7 +90,10 @@ export class BoqXlsxIntakeAdapter {
       if (normalizedQuantity) {
         const scale = normalizedQuantity.includes('.') ? normalizedQuantity.split('.')[1].length : 0;
         maxScale = Math.max(maxScale, scale);
-        if (scale > 2 && examples.length < 10) examples.push({ sourceRowNumber, rawValue: rawQuantity, normalizedDecimal: normalizedQuantity, scale });
+        if (scale > 2) {
+          rowsExceedingScale2 += 1;
+          if (examples.length < 10) examples.push({ sourceRowNumber, rawValue: rawQuantity, normalizedDecimal: normalizedQuantity, scale });
+        }
       }
 
       const reference = `row:${sourceRowNumber}`;
@@ -115,7 +119,7 @@ export class BoqXlsxIntakeAdapter {
       sheetName: sheet.name,
       totalSourceRows: meaningful.length,
       rows,
-      sourceQuantityEvidence: { maxScale, rowsExceedingScale2: examples.length, examples },
+      sourceQuantityEvidence: { maxScale, rowsExceedingScale2, examples },
     };
   }
 }
