@@ -25,6 +25,7 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<Account | null>(null);
@@ -42,7 +43,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (token) {
       // Validate token and fetch profile
-      fetch('http://localhost:3000/auth/profile', {
+      fetch(`${API_BASE_URL}/auth/profile`, {
         headers: { Authorization: `Bearer ${token}` }
       })
       .then(res => {

@@ -51,6 +51,8 @@ const permissions = [
     name: 'Create Projects',
     description: 'Create or initiate project records where authorized.',
   },
+  { code: PERMISSIONS.RAB_VIEW, name: 'View RAB', description: 'View RAB drafts and bounded import previews.' },
+  { code: PERMISSIONS.RAB_DRAFT_EDIT, name: 'Edit RAB Draft', description: 'Edit RAB drafts and approve bounded BOQ imports.' },
   {
     code: PERMISSIONS.OBSERVATORY_VIEW,
     name: 'View Observatory',
@@ -88,6 +90,8 @@ const directorAllowedPermissionCodes = [
   'AUTHORITY_VIEW',
   'APPROVAL_MATRIX_VIEW',
   PERMISSIONS.PROJECT_CREATE,
+  PERMISSIONS.RAB_VIEW,
+  PERMISSIONS.RAB_DRAFT_EDIT,
   PERMISSIONS.OBSERVATORY_VIEW,
   PERMISSIONS.AHSP_VIEW,
   PERMISSIONS.AHSP_MANAGE,

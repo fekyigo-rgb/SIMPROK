@@ -81,6 +81,13 @@ interface DraftBoqResponse {
   recap?: DraftRecapResponse | null;
 }
 
+interface BoqImportPreview {
+  importFingerprint: string; fileName: string; sheetName: string; totalSourceRows: number;
+  acceptedRows: number; warningRows: number; rejectedRows: number; displayedRowCount: number;
+  previewTruncated: boolean; sourceQuantityMaxScale: number; sourceQuantityRowsExceedingScale2: number;
+  canApprove: boolean; displayedRows: Array<{ sourceRowNumber: number; description: string; quantityDecimalString: string | null; unitRaw: string | null; itemType: string; warnings: string[]; errors: string[] }>;
+}
+
 interface NumberedRabRow extends RabRow {
   number: string;
   depth: number;
@@ -138,7 +145,7 @@ const mapBoqToRows = (items: BoqItemResponse[]) => items
     category: item.itemType === 'FOLDER' ? 'Subjudul' : item.itemType === 'NOTE' ? 'Catatan' : 'Standby',
     unit: item.unit || '',
     unitPrice: toNumber(item.unitPrice),
-    manualUnitPrice: false,
+    manualUnitPrice: item.unitPrice !== null && item.unitPrice !== undefined,
     manualAhsp: false,
     sortOrder: item.sortOrder ?? index,
   }));
@@ -238,6 +245,10 @@ export function RabWorkspacePage() {
   const [marginPercent, setMarginPercent] = useState(10);
   const [ppnPercent, setPpnPercent] = useState(11);
   const [statusMessage, setStatusMessage] = useState(projectId ? 'Memuat draft...' : 'Tidak ada project aktif.');
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<BoqImportPreview | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const applyRecap = (recap?: DraftRecapResponse | null) => {
     if (!recap) return;
@@ -445,7 +456,7 @@ export function RabWorkspacePage() {
         wbsCode: row.ahspCode || '',
         quantity: volumes[row.id] ?? 0,
         unit: row.unit,
-        unitPrice: unitPrices[row.id] ?? row.unitPrice,
+        unitPrice: row.manualUnitPrice ? (unitPrices[row.id] ?? row.unitPrice) : undefined,
         sortOrder: row.sortOrder ?? index,
       })),
     };
@@ -465,7 +476,7 @@ export function RabWorkspacePage() {
           return acc;
         }, {});
         const nextUnitPrices = mappedRows.reduce<Record<string, number>>((acc, row) => {
-          if (row.type === 'item') acc[row.id] = row.unitPrice;
+          if (row.type === 'item' && row.manualUnitPrice) acc[row.id] = row.unitPrice;
           return acc;
         }, {});
         const currentSelected = selectedRowId;
@@ -522,6 +533,39 @@ export function RabWorkspacePage() {
     setCostRowStatuses((current) => invalidateRow(current, rowId));
   };
 
+  const reloadDraft = async () => {
+    if (!projectId) return;
+    const response = await apiFetch(`/projects/${projectId}/boq/draft`);
+    if (!response.ok) throw new Error('draft-reload-failed');
+    const draft = await response.json() as DraftBoqResponse;
+    applyRecap(draft.recap); applyRows(draft.items); loadCostCalculations(draft.items);
+  };
+
+  const previewImport = async (file: File) => {
+    if (!projectId) return;
+    setImportFile(file); setImportPreview(null); setIsImporting(true); setStatusMessage('Membaca BOQ...');
+    try {
+      const body = new FormData(); body.append('file', file); body.append('selectedSheet', 'RAB');
+      const response = await apiFetch(`/projects/${projectId}/boq/import/preview`, { method: 'POST', body });
+      if (!response.ok) throw new Error(await response.text());
+      const preview = await response.json() as BoqImportPreview;
+      setImportPreview(preview); setStatusMessage(`Preview BOQ siap: ${preview.acceptedRows} baris valid.`);
+    } catch { setStatusMessage('Preview BOQ gagal. Periksa file dan coba lagi.'); }
+    finally { setIsImporting(false); }
+  };
+
+  const approveImport = async () => {
+    if (!projectId || !importFile || !importPreview || isImporting) return;
+    setIsImporting(true); setStatusMessage('Sedang mengimpor BOQ');
+    try {
+      const body = new FormData(); body.append('file', importFile); body.append('selectedSheet', importPreview.sheetName); body.append('importFingerprint', importPreview.importFingerprint);
+      const response = await apiFetch(`/projects/${projectId}/boq/import/approve`, { method: 'POST', body });
+      if (!response.ok) throw new Error(await response.text());
+      await reloadDraft(); setImportPreview(null); setImportFile(null); setStatusMessage('BOQ berhasil diimpor ke Working Draft.');
+    } catch { setStatusMessage('Import gagal. Preview tetap tersedia untuk dicoba kembali.'); }
+    finally { setIsImporting(false); }
+  };
+
   return (
     <div className="simprok-rab-workspace">
       <div className="simprok-rab-focus-nav" aria-label="Navigasi Ruang Kerja RAB">
@@ -546,8 +590,9 @@ export function RabWorkspacePage() {
       </header>
 
       <section className="simprok-rab-toolbar" aria-label="Aksi Ruang Kerja RAB">
-        <button onClick={() => navigate('/first-real-input-preview?tab=boq')} title="Preview Import BOQ (Data Contoh)" aria-label="Preview Import BOQ" data-route="/?ruang=import-boq">
-          <FileInput size={17} /> Import BOQ (Preview)
+        <input ref={importInputRef} hidden type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void previewImport(file); }} />
+        <button onClick={() => importInputRef.current?.click()} disabled={!projectId || isImporting} title="Import BOQ XLSX" aria-label="Import BOQ">
+          <FileInput size={17} /> Import BOQ
         </button>
         <button onClick={() => navigate('/first-real-input-preview?tab=ahsp')} title="Preview Cari AHSP (Data Contoh)" aria-label="Preview Cari AHSP" data-route="/?ruang=cari-ahsp">
           <Search size={17} /> Cari AHSP (Preview)
@@ -565,6 +610,17 @@ export function RabWorkspacePage() {
           <LockKeyhole size={17} /> Kunci RAB
         </button>
       </section>
+      {importPreview ? (
+        <section className="simprok-rab-validation-alert simprok-rab-validation-alert--info" aria-label="Preview Import BOQ">
+          <strong>{importPreview.fileName} — sheet {importPreview.sheetName}</strong>
+          <p>Valid {importPreview.acceptedRows}; peringatan {importPreview.warningRows}; error {importPreview.rejectedRows}. Skala quantity maksimum {importPreview.sourceQuantityMaxScale}.</p>
+          <p>Menampilkan {importPreview.displayedRowCount} dari {importPreview.acceptedRows + importPreview.rejectedRows} baris{importPreview.previewTruncated ? ' (preview dibatasi)' : ''}.</p>
+          <div style={{ maxHeight: 240, overflow: 'auto' }}>
+            {importPreview.displayedRows.map((row) => <div key={row.sourceRowNumber}>Baris {row.sourceRowNumber}: {row.description} — {row.quantityDecimalString ?? '—'} {row.unitRaw ?? ''}{row.errors.length ? ` [${row.errors.join(', ')}]` : ''}</div>)}
+          </div>
+          <button onClick={() => void approveImport()} disabled={!importPreview.canApprove || isImporting}>{isImporting ? 'Sedang mengimpor BOQ' : 'Setujui dan Import'}</button>
+        </section>
+      ) : null}
       {hasNegativeValue ? (
         <div className="simprok-rab-validation-alert" role="alert">
           Ada nilai minus pada Volume atau Harga Satuan. Perbaiki sebelum menyimpan draft.
@@ -746,7 +802,7 @@ export function RabWorkspacePage() {
                               ) : (
                                 <span aria-label={`Harga satuan ${row.name}`} title={costDisplay?.badge}>—</span>
                               )
-                            ) : (
+                            ) : row.manualUnitPrice ? (
                               <>
                                 <input
                                   className={(unitPrices[row.id] ?? row.unitPrice) < 0 ? 'simprok-rab-number-invalid' : ''}
@@ -761,9 +817,9 @@ export function RabWorkspacePage() {
                                   }
                                   aria-label={`Harga satuan ${row.name}`}
                                 />
-                                {row.manualUnitPrice ? <span className="simprok-rab-manual-chip">MANUAL</span> : null}
+                                <span className="simprok-rab-manual-chip">MANUAL</span>
                               </>
-                            )}
+                            ) : <span aria-label={`Harga satuan ${row.name}`}>—</span>}
                           </span>
                         ) : null}
                       </td>
@@ -773,7 +829,7 @@ export function RabWorkspacePage() {
                             ? costStatus?.kind === 'calculated'
                               ? costDisplay?.lineTotal
                               : '—'
-                            : formatRupiah(amount)
+                            : row.manualUnitPrice ? formatRupiah(amount) : '—'
                           : ''}
                       </td>
                       <td>

@@ -41,6 +41,8 @@ const ids = {
   permissionAuthorityAssign: '10000000-0000-4000-8000-000000000032',
   permissionObservatoryView: '10000000-0000-4000-8000-000000000033',
   permissionFieldProgressSubmit: '10000000-0000-4000-8000-000000000034',
+  permissionRabView: '10000000-0000-4000-8000-000000000035',
+  permissionRabDraftEdit: '10000000-0000-4000-8000-000000000036',
 };
 
 async function main() {
@@ -102,6 +104,8 @@ async function main() {
       code: 'FIELD_PROGRESS_SUBMIT',
       name: 'Submit Progress',
     },
+    { id: ids.permissionRabView, code: 'RAB_VIEW', name: 'RAB View' },
+    { id: ids.permissionRabDraftEdit, code: 'RAB_DRAFT_EDIT', name: 'RAB Draft Edit' },
   ];
 
   await Promise.all(
@@ -195,6 +199,14 @@ async function main() {
       permissionId: permission.id,
     },
   });
+
+  for (const permissionId of [ids.permissionRabView, ids.permissionRabDraftEdit]) {
+    await prisma.rolePermission.upsert({
+      where: { roleId_permissionId: { roleId: role.id, permissionId } },
+      update: {},
+      create: { roleId: role.id, permissionId },
+    });
+  }
 
   const assignedAccount = await prisma.account.upsert({
     where: { email: 'assigned@test.local' },

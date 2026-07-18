@@ -26,6 +26,8 @@ export const PERMISSIONS = {
 
   PROJECT_VIEW: 'PROJECT_VIEW',
   PROJECT_CREATE: 'PROJECT_CREATE',
+  RAB_VIEW: 'RAB_VIEW',
+  RAB_DRAFT_EDIT: 'RAB_DRAFT_EDIT',
 
   OBSERVATORY_VIEW: 'OBSERVATORY_VIEW',
 
@@ -134,6 +136,8 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     description: 'Create or initiate project records where authorized.',
     note: 'Seeded through RBAC seed in IDENTITY-A2. Runtime DB requires normal seed/test setup to materialize this permission.',
   },
+  { code: PERMISSIONS.RAB_VIEW, domain: PERMISSION_DOMAINS.PROJECT, state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT, description: 'View RAB drafts and import previews for an authorized project.' },
+  { code: PERMISSIONS.RAB_DRAFT_EDIT, domain: PERMISSION_DOMAINS.PROJECT, state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT, description: 'Edit an authorized project RAB draft, including approved BOQ import.' },
   {
     code: PERMISSIONS.OBSERVATORY_VIEW,
     domain: PERMISSION_DOMAINS.OBSERVATORY,
@@ -191,6 +195,8 @@ export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.FIELD_PROGRESS_SUBMIT,
   PERMISSIONS.PROJECT_VIEW,
   PERMISSIONS.PROJECT_CREATE,
+  PERMISSIONS.RAB_VIEW,
+  PERMISSIONS.RAB_DRAFT_EDIT,
   PERMISSIONS.OBSERVATORY_VIEW,
   PERMISSIONS.AHSP_VIEW,
   PERMISSIONS.AHSP_MANAGE,

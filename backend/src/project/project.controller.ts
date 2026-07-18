@@ -1,4 +1,5 @@
-import { Controller, Post, Put, Patch, Body, Get, Param, Query, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Put, Patch, Body, Get, Param, Query, Req, UseGuards, ForbiddenException, BadRequestException, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ProjectService } from './project.service';
 import { RabIntelligenceProposalService } from './rab-intelligence-proposal.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -13,6 +14,7 @@ import { ProjectAccessPolicyService } from '../auth/project-access-policy.servic
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 import { CostKernelService } from './cost-kernel.service';
+import { BoqImportService, MAX_UPLOAD_BYTES } from './boq-import.service';
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -22,7 +24,24 @@ export class ProjectController {
     private readonly rabIntelligenceProposalService: RabIntelligenceProposalService,
     private readonly projectAccessPolicy: ProjectAccessPolicyService,
     private readonly costKernelService: CostKernelService,
+    private readonly boqImportService: BoqImportService,
   ) {}
+
+  @Post(':projectId/boq/import/preview')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.RAB_VIEW)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  async previewBoqImport(@Req() request: any, @Param('projectId') projectId: string, @UploadedFile() file: any, @Body('selectedSheet') selectedSheet?: string) {
+    return this.boqImportService.preview(projectId, request.projectAccess.workspaceId, file, selectedSheet);
+  }
+
+  @Post(':projectId/boq/import/approve')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.RAB_DRAFT_EDIT)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  async approveBoqImport(@Req() request: any, @Param('projectId') projectId: string, @UploadedFile() file: any, @Body('importFingerprint') fingerprint: string, @Body('selectedSheet') selectedSheet?: string) {
+    return this.boqImportService.approve(projectId, request.projectAccess.workspaceId, fingerprint, file, selectedSheet);
+  }
 
   @Post()
   @UseGuards(PermissionsGuard)
