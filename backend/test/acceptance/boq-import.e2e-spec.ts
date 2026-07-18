@@ -59,7 +59,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
 
   it('enforces account, tenant, workspace, project, and FOREMAN boundaries', async () => {
     await postFile(`/projects/${PROJECT_A}/boq/import/approve`, foremanToken).field('selectedSheet', 'RAB').field('importFingerprint', 'x').expect(403);
-    await preview(nonassignedToken).expect(404); await preview(crosstenantToken).expect(404);
+    await preview(nonassignedToken).expect(403); await preview(crosstenantToken).expect(404);
     await postFile(`/projects/${PROJECT_A}/boq/import/preview`, assignedToken, WORKSPACE_B).field('selectedSheet', 'RAB').expect(403);
     await postFile('/projects/10000000-0000-4000-8000-000000000099/boq/import/preview', assignedToken).field('selectedSheet', 'RAB').expect(404);
   });

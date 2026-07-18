@@ -83,6 +83,10 @@ Adapter XLSX IMPORT-FIRST-01 adalah vertical-local intake sementara. Doc-03 Arti
 
 FOLDER dan NOTE adalah baris struktural, bukan pekerjaan terukur. Karena schema saat ini mewajibkan quantity dan unit, nilai database `quantity=0` dan `unit=''` adalah sentinel penyimpanan legacy saja: bukan fakta bisnis, tidak masuk aritmetika, dan tidak ditampilkan sebagai quantity/unit. WORK_ITEM tidak boleh memakai sentinel ini. Utang ditutup ketika quantity/unit struktural menjadi nullable atau baris struktural dipindahkan ke representasi khusus melalui slice schema yang diotorisasi terpisah.
 
+### UTANG-ACCESS-05 — Project existence concealment
+
+Canonical `ProjectAccessGuard` saat ini mengembalikan 404 untuk `PROJECT_NOT_FOUND`, 404 untuk `MEMBERSHIP_NOT_FOUND`, dan 403 untuk `ASSIGNMENT_REQUIRED`. Respons 403 dapat mengungkap bahwa proyek ada kepada anggota workspace terautentikasi yang tidak ditugaskan. Perubahan agar `ASSIGNMENT_REQUIRED` menjadi 404 harus dilakukan sebagai security slice terpisah yang mencakup seluruh route project-scoped, dengan regression penuh serta gate Owner/PM/Architect. IMPORT-FIRST-01 tidak boleh memecah perilaku akses kanonik.
+
 - Kamus konteks universal AHSP.
 - Profil sensitivitas keluarga pekerjaan.
 - Profil spesifik AHSP.
