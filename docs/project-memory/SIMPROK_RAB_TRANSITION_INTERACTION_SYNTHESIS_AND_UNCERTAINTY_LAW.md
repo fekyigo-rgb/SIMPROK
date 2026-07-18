@@ -1,64 +1,118 @@
 # SIMPROK — Hukum Ruang Transisi, Ruang Interaksi, Sintesis RAB, BOQ Enrichment, dan Ketidakpastian
 
-**Document ID:** `SIMPROK-RAB-TRANSITION-INTERACTION-SYNTHESIS-LAW-V1`  
+**Document ID:** `SIMPROK-RAB-TRANSITION-INTERACTION-SYNTHESIS-LAW-V1.1`  
 **Owner:** Feky de Fretes  
 **PM / Gatekeeper:** ChatGPT  
 **Decision date:** 18 Juli 2026  
-**Status:** `OWNER DECIDED — PRODUCT LAW LOCKED; DETAIL TAXONOMY AND RUNTIME IMPLEMENTATION PARTIAL`  
+**Harmonization date:** 18 Juli 2026  
+**Status:** `OWNER DECIDED — PRODUCT LAW LOCKED; HARMONIZED; DETAIL ARCHITECTURE AND RUNTIME IMPLEMENTATION PARTIAL`  
 **Repository:** `fekyigo-rgb/SIMPROK`
 
 ---
 
-## 1. Tujuan
+## 1. Tujuan dan Efek Hukum
 
-Dokumen ini mengunci hasil diskusi Owner tentang:
+Dokumen ini mengunci dan mempertajam keputusan Owner mengenai:
 
-- fungsi `Persiapan RAB / Ruang Transisi RAB`;
-- fungsi `Ruang Interaksi SIMPROK`;
+- `Persiapan RAB / Ruang Transisi RAB`;
+- `Ruang Interaksi SIMPROK`;
 - hukum masuk ke `Ruang Kerja RAB`;
-- perbedaan perjalanan pengguna yang belum memiliki BOQ dan yang sudah memiliki BOQ;
-- perbedaan Template Synthesis, BOQ Enrichment, dan Scoped Recalculation;
+- perbedaan perjalanan pengguna yang belum mempunyai BOQ dan yang sudah mempunyai BOQ;
+- `Template Synthesis`, `BOQ Enrichment`, dan `Scoped Recalculation`;
 - hubungan AHSP, Basic Price, spesifikasi, asumsi metode, Metode Pelaksanaan, dan keputusan manusia;
-- cara SIMPROK menghitung RAB secara lengkap tanpa menyembunyikan ketidakpastian;
-- bagian yang telah dikunci, bagian yang masih harus dirancang, dan realitas runtime yang belum hidup.
+- cara menghitung Draft RAB secara jujur tanpa menyembunyikan ketidakpastian;
+- batas antara perhitungan, verifikasi, review, approval, dan lock.
 
-Dokumen ini dibuat agar ChatGPT, Codex, Claude, Claude Code, Gemini, Cursor, Antigravity, dan agent berikutnya tidak mengulang diskusi yang sama, tidak membongkar keputusan lama, dan tidak membuat implementasi yang saling bertentangan.
+Dokumen ini dibuat agar ChatGPT, Codex, Claude, Claude Code, Gemini, Cursor, Antigravity, dan agent berikutnya tidak mengulang diskusi yang sama, tidak membongkar hukum lama, dan tidak membuat implementasi yang saling bertentangan.
+
+### 1.1 Non-supersession law
+
+Dokumen ini **tidak mengganti hukum lama yang telah dikunci**. Ia:
+
+```text
+MELURUSKAN YANG BENGKOK
+→ tanpa menghapus sejarah
+
+MEMPERTEBAL CAHAYA
+→ tanpa membuat sumber kebenaran kedua
+
+MEMPERTAJAM KONTRAK
+→ tanpa membongkar fondasi
+```
+
+Keputusan lama hanya dianggap digantikan bila dokumen ini menyebutnya secara eksplisit dalam **Supersession Register**. Selain itu, seluruh hukum lama tetap berlaku.
+
+### 1.2 Perubahan hukum
+
+Perubahan berikutnya terhadap dokumen ini wajib melalui:
+
+```text
+proposal perubahan
+→ impact review lintas hukum
+→ Owner decision
+→ version bump
+→ implementation gate
+→ test/evidence update
+```
+
+Agent dilarang menyunting makna hukum secara diam-diam melalui prompt, source code, atau ringkasan baru.
 
 ---
 
-## 2. Dokumen yang Harus Dibaca Bersama
+## 2. Kepemilikan Normatif dan Batas Anti-Tumpang-Tindih
 
-Dokumen ini bukan pengganti hukum SIMPROK yang sudah ada. Ia adalah penajaman dan kelanjutan.
+Setiap bidang mempunyai tepat satu rumah hukum utama.
+
+| Bidang | Rumah hukum utama | Kedudukan dokumen ini |
+|---|---|---|
+| Project, Workspace, assignment, permission, authority | `SIMPROK_PROJECT_RAB_AUTHORITY_UNIT_LAW.md` | Tidak mendefinisikan ulang permission atau authority |
+| Nama ruang, pintu navigasi, Draft/Baseline/Addendum | `SIMPROK_RAB_PEKERJAAN_NAVIGATION_LIFECYCLE_LAW.md` | Hanya menjelaskan perilaku transisi menuju workspace |
+| Basic Price, AHSP occurrence, selection, conversion, snapshot | Blueprint BP–AHSP + Owner Lock | Tidak menciptakan rumah harga atau occurrence kedua |
+| Unit compatibility dan conversion | `SIMPROK_PROJECT_RAB_AUTHORITY_UNIT_LAW.md` + Unit Kernel gates | Tidak menciptakan unit engine baru |
+| Product Intelligence umum | `P7C_PRODUCT_INTELLIGENCE_LAW.md` | P7C masih DRAFT; dokumen ini mengunci keputusan Owner pada scope transisi/interaksi |
+| Ruang Transisi, Ruang Interaksi, dua perjalanan BOQ, proses mesin, uncertainty UX | **Dokumen ini** | Rumah normatif utama |
+| Status implemented/live | Repository, database, runtime, dan browser evidence | Hukum tidak boleh dipakai untuk memalsukan realitas |
+
+### 2.1 Aturan pembacaan
 
 Wajib dibaca bersama:
 
 1. `docs/project-memory/SIMPROK_PROJECT_MEMORY.md`
 2. `docs/project-memory/SIMPROK_RAB_PEKERJAAN_NAVIGATION_LIFECYCLE_LAW.md`
 3. `docs/project-memory/SIMPROK_PROJECT_RAB_AUTHORITY_UNIT_LAW.md`
-4. `docs/project-memory/SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT.md`
-5. `docs/project-memory/SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT_OWNER_LOCK.md`
-6. `docs/product-intelligence/P7C_PRODUCT_INTELLIGENCE_LAW.md`
-7. realitas source code, database, runtime, dan browser terbaru.
+4. `docs/project-memory/SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT_OWNER_LOCK.md`
+5. `docs/project-memory/SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT.md`
+6. dokumen ini
+7. `docs/product-intelligence/P7C_PRODUCT_INTELLIGENCE_LAW.md`
+8. repository/runtime/browser evidence terbaru.
 
-Bila terdapat konflik:
+### 2.2 Precedence
 
 ```text
-OWNER LOCK TERBARU
-→ lebih tinggi daripada ringkasan agent
-
-REPOSITORY REALITY
-→ menentukan apa yang benar-benar implemented/live
-
-DESIGN LOCK
-≠ SOURCE MERGED
-≠ PROCESS LIVE
-≠ USER JOURNEY LIVE
-≠ PRODUCTION DATA LIVE
+OWNER CONSTITUTION / FOUNDATION
+↓
+OWNER-LOCKED DOMAIN LAWS
+↓
+OWNER-LOCKED DOCUMENT INI PADA SCOPE-NYA
+↓
+LOCKED IMPLEMENTATION GATES
+↓
+DRAFT DESIGN DOCUMENTS
+↓
+IMPLEMENTATION CONTRACTS
+↓
+REPOSITORY / RUNTIME REALITY UNTUK STATUS
 ```
+
+Repository reality menentukan apa yang hidup, tetapi tidak boleh dipakai untuk mengubah hukum diam-diam. Ketidaksesuaian adalah **gap**, bukan alasan mengarang kesesuaian.
+
+### 2.3 Repetition law
+
+Ringkasan hukum lain di dokumen ini bersifat **context pointer**, bukan sumber normatif kedua. Bila ringkasan berbeda dengan rumah hukum utamanya, rumah hukum utama menang dan konflik wajib dilaporkan.
 
 ---
 
-## 3. DNA dan Prinsip Dasar yang Mengikat
+## 3. DNA dan Prinsip Dasar
 
 ```text
 DNA_SIMPROK=REDUCE_UNCERTAINTY
@@ -75,82 +129,75 @@ SIMPROK_MENYEDIAKAN
 
 Maknanya:
 
-1. SIMPROK tidak boleh sekadar menunggu semua data sempurna lalu baru bekerja.
-2. SIMPROK tidak boleh mengarang kepastian ketika data belum cukup.
-3. SIMPROK harus menyediakan hasil terbaik berdasarkan basis yang dapat ditelusuri.
-4. Ketidakpastian harus ditampilkan, dijelaskan, dan dikurangi secara bertahap.
-5. Pengguna harus dipermudah, bukan dipaksa mengisi formulir panjang sebelum dapat bekerja.
-6. Kecerdasan SIMPROK harus kaya di dalam, tetapi pengalaman pengguna sederhana, tenang, dan profesional di luar.
+1. SIMPROK tidak menunggu semua data sempurna untuk mulai membantu.
+2. SIMPROK tidak mengarang fakta, sumber, harga, volume, atau kepastian.
+3. SIMPROK menyediakan hasil terbaik berdasarkan basis yang dapat ditelusuri.
+4. Ketidakpastian harus terlihat, dijelaskan, dan dikurangi bertahap.
+5. Pengguna dipermudah, bukan dipaksa menyelesaikan formulir panjang sebelum bekerja.
+6. Kecerdasan kaya di dalam; pengalaman sederhana, tenang, dan profesional di luar.
+7. Semua rekomendasi penting tetap merupakan proposal sampai manusia berwenang menetapkan.
 
 ---
 
-## 4. Kedudukan Empat Ruang Utama
+## 4. Kedudukan Ruang
 
 ### 4.1 Persiapan RAB / Ruang Transisi RAB
 
-Ruang Transisi adalah tempat pengguna mulai memberikan konteks awal sebelum atau sambil menuju Ruang Kerja RAB.
+Ruang Transisi adalah tempat pengguna memberikan konteks awal sebelum atau sambil menuju Ruang Kerja RAB.
 
-Fungsinya:
+Fungsi:
 
 - menampung Data Utama dan Data Opsional;
-- menanyakan apakah pengguna sudah mempunyai BOQ;
-- menampung konteks awal melalui Ruang Interaksi;
-- menentukan perjalanan awal yang tepat;
+- mengetahui apakah pengguna sudah mempunyai BOQ;
+- menerima konteks awal melalui Ruang Interaksi;
+- menentukan pengalaman awal yang sesuai;
 - menyiagakan mesin SIMPROK;
 - bukan pagar yang menahan pengguna masuk ke Ruang Kerja RAB.
 
 ### 4.2 Ruang Interaksi SIMPROK
 
-Ruang Interaksi adalah lapisan klarifikasi kontekstual dan opsional.
-
-Fungsinya:
+Ruang Interaksi adalah lapisan klarifikasi kontekstual dan opsional untuk:
 
 - menggali maksud pekerjaan;
 - memperjelas informasi ambigu;
 - meningkatkan kualitas rekomendasi AHSP;
-- meningkatkan ketepatan Basic Price;
-- membantu menyusun spesifikasi;
-- membantu memahami kebutuhan material, tenaga, dan alat;
+- meningkatkan ketepatan pemilihan Basic Price yang sudah mempunyai basis sah;
+- membantu menyusun dan menyempurnakan spesifikasi;
+- memahami kebutuhan material, tenaga, alat, akses, dan logistik;
 - membantu menghasilkan draft Metode Pelaksanaan setelah konteks dan AHSP semakin jelas;
 - mengubah jawaban bermakna menjadi fakta atau keputusan terstruktur.
 
-Ruang Interaksi bukan chatbot kosmetik, bukan syarat masuk, dan bukan pengganti form atau keputusan formal.
+Ruang Interaksi bukan chatbot kosmetik, bukan syarat masuk, bukan satu-satunya cara bekerja, dan bukan pengganti keputusan formal.
 
 ### 4.3 Ruang Kerja RAB
 
-Ruang Kerja RAB adalah tempat bekerja dan mengedit Draft RAB.
-
-Pengguna harus dapat masuk walaupun Data Utama belum lengkap atau masih kosong.
+Ruang Kerja RAB adalah editor Draft RAB. Pengguna dapat masuk walaupun Data Utama masih kosong atau belum lengkap, selama gerbang keamanan dan kewenangan sah terpenuhi.
 
 Di dalamnya pengguna dapat:
 
-- menyusun secara manual;
-- menerima Template RAB dari SIMPROK;
+- menyusun manual;
+- menerima Template RAB;
 - mengimpor BOQ;
-- meninjau preview BOQ;
+- meninjau preview;
 - memilih atau menerima rekomendasi AHSP;
 - melengkapi volume;
-- memilih mode SIMPROK atau manual;
-- menjalankan kalkulasi ulang secara terarah;
-- berinteraksi dengan SIMPROK pada konteks item tertentu;
+- memakai mode SIMPROK atau manual;
+- menghitung ulang secara terarah;
+- menggunakan Ruang Interaksi pada konteks tertentu;
 - menyimpan Draft;
-- mempersiapkan review, approval, dan lock sesuai lifecycle dan kewenangan.
+- mempersiapkan review, approval, dan lock sesuai hukum lifecycle/authority.
 
 ### 4.4 RAB Pekerjaan
 
-`RAB Pekerjaan` tetap merupakan rumah permanen lifecycle untuk pekerjaan terkait, sesuai hukum navigasi yang sudah dikunci.
-
-Ruang ini tidak digantikan oleh dokumen ini.
+`RAB Pekerjaan` tetap merupakan rumah permanen lifecycle satu pekerjaan sesuai hukum navigasi. Dokumen ini tidak mengubah nama, pintu, lifecycle, atau Addendum law tersebut.
 
 ---
 
 ## 5. Hukum Masuk ke Ruang Kerja RAB
 
-### 5.1 Keputusan Owner
+### 5.1 Data Utama bukan pagar
 
-> **Data Utama tidak boleh menjadi kunci/blokir untuk menahan pengguna masuk ke Ruang Kerja RAB.**
-
-Perilaku wajib:
+> **Data Utama tidak boleh menjadi blokir universal yang menahan pengguna masuk ke Ruang Kerja RAB.**
 
 ```text
 DATA_KOSONG
@@ -161,41 +208,82 @@ DATA_SEBAGIAN
 → ENGINE_SIAGA
 
 DATA_CUKUP
-ATAU USER_MENERIMA_ASUMSI_SIMPROK
-→ READY_TO_SYNTHESIZE_OR_PROCESS
+ATAU USER_MENERIMA_ASUMSI_YANG_DITAMPILKAN
+→ ENGINE_READY
 ```
 
-### 5.2 Istilah frontend
+### 5.2 Gerbang yang tetap sah
 
-Untuk tahap awal, label `Wajib diisi` tidak boleh memberi kesan bahwa seluruh field adalah pagar masuk.
+Keputusan ini tidak menghapus gerbang keamanan atau integritas sistem. Yang tetap dapat menjadi gate:
 
-Label yang disarankan:
+- autentikasi;
+- workspace aktif;
+- ProjectAssignment;
+- permission/authority;
+- lifecycle Draft yang editable;
+- validasi teknis request;
+- identitas internal Draft/Project yang dibutuhkan sistem.
+
+Bila product form kosong, implementasi boleh membuat identitas provisional yang jujur atau membuka workspace sebelum persistence final. Implementasi dilarang menurunkan keamanan hanya demi entry tanpa data.
+
+### 5.3 Istilah frontend
+
+Label `Wajib diisi` tidak boleh memberi kesan semua field adalah pagar masuk.
+
+Label arah yang disarankan:
 
 > **Konteks Utama Pekerjaan — dapat dilengkapi kapan saja**
 
-atau label profesional lain yang memiliki makna sama.
+Tanda bintang, bila digunakan, harus menjelaskan kewajiban pada tahap tertentu, bukan larangan universal.
 
-Tanda bintang, bila tetap digunakan, harus memiliki arti berbasis tahap, bukan larangan universal.
+### 5.4 Progressive requirement
 
-### 5.3 Progressive Requirement
-
-Data menjadi wajib sesuai konsekuensi prosesnya:
-
-| Tahap | Hukum kebutuhan data |
+| Tahap | Kebutuhan data |
 |---|---|
-| Masuk Ruang Kerja RAB | Tidak boleh diblokir oleh kelengkapan Data Utama |
-| Menyalakan engine siaga | Minimal satu informasi bermakna cukup untuk memulai pemahaman awal |
-| Meminta Template Synthesis | Konteks minimum cukup atau pengguna menyetujui asumsi SIMPROK |
-| Menghitung jumlah item | Volume dibutuhkan; bila belum ada, template dan Harga Satuan tetap dapat tersedia |
-| Menentukan harga kontekstual | Lokasi, tahun harga, dan sumber dibutuhkan atau harus memakai basis sementara bertanda |
-| Review | Semua ketidakpastian dan basis nilai harus terlihat |
-| Approval/Lock | Ketidakpastian kritis harus diselesaikan atau diterima oleh manusia berwenang |
+| Masuk Ruang Kerja RAB | Tidak diblokir oleh kelengkapan Data Utama |
+| Engine siaga | Minimal satu informasi bermakna |
+| Template Synthesis | Konteks minimum atau persetujuan memakai asumsi yang ditampilkan |
+| Harga Satuan AHSP | Semua resource wajib computationally resolved dengan nilai terlacak |
+| Jumlah item | Volume tersedia |
+| Harga kontekstual | Lokasi/waktu/coverage tersedia atau basis referensi jujur dipilih |
+| Review | Seluruh sumber, asumsi, dan ketidakpastian terlihat |
+| Approval/Lock | Ketidakpastian kritis diselesaikan atau diterima manusia berwenang |
 
 ---
 
-## 6. Engine Readiness — Siaga Tidak Sama dengan Mengarang Hasil
+## 6. Satu Canonical Pipeline, Dua Perjalanan Pengguna
 
-Keputusan Owner bahwa pengisian data membuat mesin aktif harus diterjemahkan dengan aman:
+Dua perjalanan BOQ **bukan dua business pipeline terpisah**.
+
+Keduanya hidup dalam satu canonical pipeline:
+
+```text
+INTAKE
+→ GAP_DETECTION
+→ GAP_FILLING_PROPOSAL
+→ HUMAN_GATE
+→ DETERMINISTIC_RESOLUTION_AND_COST_KERNEL
+→ REVIEW / PAGU_LENS BILA ADA
+```
+
+Perbedaannya hanya pada input awal dan tahap orchestration:
+
+```text
+TANPA_BOQ
+→ TEMPLATE_SYNTHESIS
+→ CONVERGE_KE_CANONICAL_RAB_PIPELINE
+
+DENGAN_BOQ
+→ IMPORT_PREVIEW_APPROVAL
+→ BOQ_ENRICHMENT
+→ CONVERGE_KE_CANONICAL_RAB_PIPELINE
+```
+
+Dilarang membangun domain model, Cost Kernel, pricing engine, atau lifecycle terpisah untuk masing-masing perjalanan.
+
+---
+
+## 7. Engine Readiness
 
 ```text
 BELUM_ADA_DATA
@@ -207,28 +295,26 @@ ADA_INFORMASI_BERMAKNA
 KONTEKS_MINIMUM_CUKUP
 → ENGINE_READY
 
-USER_MEMILIH_GUNAKAN_ASUMSI_SIMPROK
+USER_MEMILIH_GUNAKAN_ASUMSI_YANG_DITAMPILKAN
 → ENGINE_READY_WITH_DISCLOSED_ASSUMPTIONS
 ```
 
-Satu kolom terisi tidak otomatis memberikan izin kepada SIMPROK untuk mengarang RAB final.
+Satu kolom terisi berarti mesin mulai membaca, bukan izin mengarang RAB final.
 
-Satu kolom terisi berarti:
+Engine standby boleh:
 
-- engine mulai membaca;
-- klasifikasi awal dapat dimulai;
-- kandidat template dapat disiapkan;
-- Ruang Interaksi dapat mengajukan klarifikasi yang relevan;
-- sistem dapat menunjukkan apa yang masih kurang;
-- pengguna tetap dapat masuk dan bekerja.
+- memulai klasifikasi awal;
+- menyiapkan kandidat template;
+- menemukan gap;
+- menyiapkan pertanyaan relevan;
+- menunjukkan informasi yang masih kurang;
+- membiarkan pengguna bekerja manual.
 
 ---
 
-## 7. Pertanyaan Awal yang Wajib Ada: Status BOQ
+## 8. Pertanyaan Awal: Status BOQ
 
-Ruang Transisi harus membedakan perjalanan awal pengguna.
-
-Contoh pilihan:
+Ruang Transisi harus menyediakan pilihan bermakna:
 
 ```text
 BAGAIMANA_ANDA_INGIN_MEMULAI?
@@ -238,49 +324,42 @@ BAGAIMANA_ANDA_INGIN_MEMULAI?
 3. BELUM_YAKIN_BANTU_SAYA_MENENTUKAN
 ```
 
-Pilihan ini mengubah proses backend/orchestrator, bukan sekadar teks atau tampilan.
+Pilihan ini mengubah orchestration state, bukan membuat pricing/lifecycle pipeline baru.
 
 ---
 
-## 8. Jalur A — Pengguna Belum Mempunyai BOQ
+## 9. Jalur A — Belum Mempunyai BOQ
 
-### 8.1 Tujuan
-
-SIMPROK membantu menghasilkan Template RAB yang lengkap secara struktur dan kecerdasan, bukan sekadar tabel kosong.
-
-### 8.2 Alur utama
+### 9.1 Alur
 
 ```text
 BELUM_PUNYA_BOQ
 → DATA_UTAMA_OPSIONAL_DAN_INTERAKSI
 → LANJUT_KE_RUANG_KERJA_RAB
 → TEMPLATE_SYNTHESIS
+→ CANONICAL_RAB_PIPELINE
 → RAB_DRAFT_READY_OR_NEEDS_REVIEW
 ```
 
-### 8.3 Hasil Template Synthesis
+### 9.2 Template Synthesis
 
-Berdasarkan informasi yang tersedia, Template RAB dapat berisi:
+Template dapat menyediakan:
 
 - WBS/struktur pekerjaan;
 - kelompok/subjudul;
 - item pekerjaan;
 - satuan;
 - kandidat atau rekomendasi AHSP;
-- Harga Satuan berdasarkan basis terbaik yang tersedia;
+- Harga Satuan bila seluruh resource mempunyai nilai terlacak dan lolos technical gates;
 - resource tenaga, material, dan alat;
 - tanda ketidakpastian;
 - catatan asumsi;
 - volume kosong untuk dilengkapi pengguna;
-- rekomendasi volume hanya bila ada basis yang sah.
+- rekomendasi volume hanya bila ada basis sah.
 
-### 8.4 Bila konteks cukup
+### 9.3 Konteks belum cukup
 
-Template dapat disusun otomatis saat pengguna melanjutkan ke Ruang Kerja RAB.
-
-### 8.5 Bila konteks belum cukup
-
-Pengguna tetap masuk ke Ruang Kerja RAB dan diberi pilihan:
+Pengguna tetap masuk dan mendapat pilihan:
 
 ```text
 [SUSUN_DENGAN_REKOMENDASI_SIMPROK]
@@ -290,118 +369,108 @@ Pengguna tetap masuk ke Ruang Kerja RAB dan diberi pilihan:
 
 Tidak boleh ada dead end.
 
-### 8.6 Volume
+### 9.4 Volume
 
 Bila volume belum tersedia:
 
-- SIMPROK tetap dapat menghasilkan struktur, AHSP, Harga Satuan, resource, dan status;
-- `Jumlah = Volume × Harga Satuan` belum dapat lengkap sampai volume tersedia;
-- ketiadaan volume harus ditampilkan jujur;
-- SIMPROK tidak boleh mengarang volume tanpa basis.
+- struktur, kandidat AHSP, resource, dan status tetap dapat tersedia;
+- Harga Satuan hanya tersedia bila technical/pricing gates lengkap;
+- Jumlah item belum tersedia;
+- total proyek belum boleh disebut lengkap;
+- volume tidak boleh dikarang tanpa basis.
 
 ---
 
-## 9. Jalur B — Pengguna Sudah Mempunyai BOQ
+## 10. Jalur B — Sudah Mempunyai BOQ
 
-### 9.1 Hukum utama
-
-Ketika pengguna menyatakan sudah mempunyai BOQ, masuk ke Ruang Kerja RAB **tidak boleh langsung memicu Template Synthesis**.
-
-State awal:
-
-```text
-HAS_EXISTING_BOQ
-→ BOQ_WAITING_FOR_INPUT
-```
-
-### 9.2 Alur utama
+### 10.1 Alur
 
 ```text
 SUDAH_PUNYA_BOQ
 → MASUK_RUANG_KERJA_RAB
+→ BOQ_WAITING_FOR_INPUT
 → INPUT_OR_IMPORT_BOQ
 → PREVIEW_BOQ_ASLI
 → USER_MEMERIKSA
 → USER_MENEKAN_SETUJUI_DAN_PROSES
 → BOQ_ENRICHMENT
+→ CANONICAL_RAB_PIPELINE
 → RAB_DRAFT_READY_OR_NEEDS_REVIEW
 ```
 
-### 9.3 Sebelum persetujuan
+### 10.2 Sebelum persetujuan preview
 
 SIMPROK boleh:
 
 - membaca file;
-- membuat preview;
+- menampilkan preview;
 - menunjukkan error parsing;
-- menampilkan normalisasi yang akan dilakukan;
+- menunjukkan normalisasi yang diusulkan;
 - meminta koreksi struktur.
 
-SIMPROK tidak boleh diam-diam menafsirkan dan mengubah BOQ menjadi RAB sebelum pengguna menyetujui preview.
+SIMPROK tidak boleh mengubah BOQ menjadi RAB atau menetapkan interpretasi final sebelum pengguna menyetujui preview.
 
-### 9.4 Setelah persetujuan
+### 10.3 Setelah persetujuan
 
 BOQ Enrichment dapat:
 
-- mempertahankan BOQ asli sebagai sumber;
-- mengklasifikasikan setiap item;
+- mempertahankan BOQ asli sebagai evidence;
+- mengklasifikasikan item;
 - menormalisasi satuan;
 - memahami domain dan jenis pekerjaan;
 - menemukan kandidat AHSP;
 - merekomendasikan AHSP;
-- menghubungkan Basic Price;
-- menghitung Harga Satuan dan Jumlah;
+- menjalankan Basic Price resolution di dalam project AHSP occurrence;
+- menghitung melalui Cost Kernel;
 - menunjukkan resource;
-- memberi tanda pada bagian ambigu;
+- memberi tanda ambiguitas;
 - membuat daftar keputusan yang perlu diperiksa.
 
 ---
 
-## 10. Tiga Proses Mesin yang Berbeda
+## 11. Tiga Proses Mesin
 
-Satu fungsi besar bernama `render` dilarang menjadi implementasi universal.
+Satu fungsi universal `render` dilarang.
 
-### 10.1 Template Synthesis
-
-Untuk pengguna yang belum mempunyai BOQ.
+### 11.1 Template Synthesis
 
 ```text
 PROJECT_CONTEXT
-→ TEMPLATE_RAB
+→ TEMPLATE_RAB_PROPOSAL
 ```
 
-Label pengguna yang disarankan:
+Untuk pengguna tanpa BOQ.
+
+Label arah:
 
 > **Susun Template RAB dengan SIMPROK**
 
-### 10.2 BOQ Enrichment
-
-Untuk pengguna yang telah mempunyai BOQ.
+### 11.2 BOQ Enrichment
 
 ```text
-USER_BOQ_APPROVED
-→ ENRICHED_RAB
+USER_APPROVED_BOQ
+→ ENRICHED_RAB_PROPOSAL
 ```
 
-Label pengguna yang disarankan:
+Untuk BOQ milik pengguna.
+
+Label arah:
 
 > **Setujui & Proses BOQ dengan SIMPROK**
 
-### 10.3 Scoped Recalculation
+### 11.3 Scoped Recalculation
 
-Untuk perubahan setelah RAB terbentuk.
-
-Pemicu dapat berupa:
+Pemicu:
 
 - perubahan volume;
 - perubahan AHSP;
-- perubahan Basic Price;
+- perubahan Basic Price selection/override;
 - perubahan spesifikasi;
-- perubahan Execution Factor;
+- Execution Factor bila scope tersebut telah dibuka melalui gate tersendiri;
 - item baru;
-- perubahan konteks yang berdampak pada kalkulasi.
+- perubahan konteks yang memengaruhi kalkulasi.
 
-Scope yang diperbolehkan:
+Scope:
 
 ```text
 SELURUH_RAB
@@ -410,127 +479,115 @@ ITEM_TERPILIH
 ITEM_BARU
 ```
 
-Label pengguna yang disarankan:
+Scoped recalculation diprioritaskan daripada memproses ulang seluruh RAB tanpa kebutuhan.
 
-- `Hitung Ulang Seluruh RAB`;
-- `Proses Bagian Ini`;
-- `Hitung Item Terpilih`;
-- `Hitung Item Baru dengan SIMPROK`.
+### 11.4 Batas EF
 
-Scoped Recalculation harus lebih diutamakan daripada memproses ulang seluruh RAB tanpa kebutuhan.
+Penyebutan EF dalam dokumen ini tidak membuka AI EF path atau mengubah EF lock. EF hanya dapat dipakai setelah gate tersendiri yang sah; EF tetap tidak menyimpan rupiah dan biaya hanya lahir melalui requirement/resource/Cost Kernel.
 
 ---
 
-## 11. Mode SIMPROK dan Mode Manual
+## 12. Mode SIMPROK dan Mode Manual
 
-SIMPROK tidak boleh memaksa semua item dihitung melalui mesin.
-
-Setiap item dapat memiliki sumber nilai yang jelas:
+Sumber nilai harus eksplisit, misalnya:
 
 ```text
 SIMPROK_CALCULATED
-MANUAL
-IMPORTED
-USER_CONFIRMED
+MANUAL_UNSOURCED
+IMPORTED_REFERENCE
+USER_CONFIRMED_REFERENCE
 ```
 
-### 11.1 Mode SIMPROK
+### 12.1 Mode SIMPROK
 
 ```text
 AHSP
-→ BASIC_PRICE
-→ UNIT_RESOLUTION
-→ EXECUTION_FACTOR_BILA_ADA
+→ RESOURCE_RESOLUTION
+→ BASIC_PRICE_SELECTION
+→ UNIT_ADAPTATION
+→ EXECUTION_REQUIREMENT_BILA_SAH
 → COST_KERNEL
 → HARGA_SATUAN
 → JUMLAH
 ```
 
-### 11.2 Mode manual
+### 12.2 Mode manual
 
-Pengguna dapat mengisi nilai secara manual sesuai kewenangan.
+Nilai manual boleh dipakai sesuai kewenangan, tetapi:
 
-Wajib diberi label jujur:
+- harus berlabel `MANUAL_UNSOURCED` bila tidak mempunyai sumber canonical;
+- bukan Basic Price canonical;
+- tidak boleh diberi `basicPriceId` palsu;
+- tidak boleh masuk selected Basic Price snapshot seolah canonical;
+- tidak boleh diberi badge `Dihitung SIMPROK`.
 
-> **Harga Manual — tidak dihitung oleh Cost Kernel SIMPROK**
+Label arah:
 
-### 11.3 Larangan dua sumber kebenaran
+> **Harga Manual — belum bersumber dan tidak dihitung oleh Cost Kernel SIMPROK**
 
-- nilai manual tidak boleh diam-diam menimpa nilai SIMPROK;
-- nilai SIMPROK tidak boleh diam-diam menimpa nilai manual;
-- perubahan mode harus eksplisit dan tercatat;
-- recap harus mengetahui sumber setiap angka.
+### 12.3 Larangan dua sumber kebenaran
+
+- nilai manual tidak menimpa nilai SIMPROK diam-diam;
+- nilai SIMPROK tidak menimpa nilai manual diam-diam;
+- perubahan mode eksplisit dan diaudit;
+- recap mengetahui sumber setiap angka;
+- RAB tidak melakukan ulang Basic Price selection yang menjadi rumah project AHSP occurrence.
 
 ---
 
-## 12. Ruang Interaksi — Opsional, Kontekstual, dan Produktif
+## 13. Ruang Interaksi
 
-### 12.1 Tidak wajib
+### 13.1 Opsional
 
 ```text
 RUANG_INTERAKSI=OPSIONAL
 
 TIDAK_BERINTERAKSI
-→ RAB_DRAFT_TETAP_DAPAT_DIHASILKAN
+→ USER_TETAP_DAPAT_BEKERJA
+→ PROPOSAL_RAB_TETAP_DAPAT_DIBENTUK_SESUAI_BASIS
 
 SEMAKIN_AKTIF_BERINTERAKSI
 → PEMAHAMAN_DAN_KETEPATAN_MENINGKAT
 ```
 
-### 12.2 Nada komunikasi
+Keputusan kritis sebelum lock tetap harus diselesaikan atau diterima, tetapi penyelesaiannya dapat melalui form, pemilihan langsung, review, approval action, atau Ruang Interaksi. Percakapan bukan satu-satunya jalur.
 
-Pertanyaan SIMPROK harus:
+### 13.2 Nada
+
+Pertanyaan harus:
 
 - sopan;
 - tenang;
 - lemah lembut;
 - tidak menginterogasi;
 - tidak mendesak;
-- menjelaskan alasan bertanya;
-- menjelaskan dampaknya;
+- menjelaskan alasan dan dampak;
 - menawarkan rekomendasi awal;
-- selalu menyediakan pilihan `Bahas nanti` bila tidak kritis untuk tindakan saat itu.
+- menyediakan `Bahas nanti` bila tidak kritis saat itu.
 
-Contoh pola:
+### 13.3 Pertanyaan bernilai
 
-> “Saya menemukan bagian yang mungkin perlu diperjelas agar hasilnya semakin sesuai dengan maksud Bapak. Untuk pekerjaan ini saya sementara menggunakan pilihan A karena paling sesuai dengan informasi yang tersedia. Apakah pilihan tersebut ingin digunakan, dilihat alternatifnya, atau dibahas nanti?”
+SIMPROK hanya bertanya bila jawaban dapat mengubah atau memperjelas:
 
-### 12.3 Pertanyaan harus bernilai
-
-SIMPROK hanya bertanya bila jawaban dapat:
-
-- mengubah kandidat AHSP;
-- mengubah spesifikasi;
-- mengubah Basic Price;
-- mengubah kebutuhan material, tenaga, atau alat;
-- mengubah asumsi penerapan formula;
-- mengubah Execution Factor;
-- mengurangi risiko;
-- meningkatkan kepastian;
-- memengaruhi kelayakan approval/lock.
-
-### 12.4 Konteks pertanyaan
-
-Setiap pertanyaan harus terikat pada satu atau lebih konteks:
-
-- project;
-- WBS;
-- BOQ item;
-- AHSP candidate/application;
-- AHSP resource;
-- Basic Price;
+- kandidat AHSP;
 - spesifikasi;
-- kondisi lapangan;
-- dokumen Metode Pelaksanaan;
-- ketidakpastian tertentu.
+- pemilihan Basic Price existing;
+- kebutuhan material, tenaga, atau alat;
+- asumsi penerapan formula;
+- Execution Factor bila dibuka;
+- risiko;
+- kepastian;
+- baseline readiness.
 
-Pengguna tidak boleh dipaksa menjelaskan ulang konteks yang sudah diketahui sistem.
+### 13.4 Konteks
 
-### 12.5 Jawaban harus menjadi data terstruktur
+Pertanyaan terikat pada project, WBS, BOQ item, AHSP candidate/application, resource, Basic Price, spesifikasi, kondisi lapangan, metode, atau uncertainty tertentu.
 
-Jawaban bermakna tidak boleh berhenti sebagai teks chat.
+Pengguna tidak boleh diminta menjelaskan ulang fakta yang sudah diketahui.
 
-Contoh:
+### 13.5 Jawaban menjadi data
+
+Jawaban bermakna harus menjadi fakta/keputusan terstruktur, misalnya:
 
 ```text
 DECISION_TYPE=CONCRETE_SUPPLY_METHOD
@@ -541,18 +598,9 @@ DECIDED_BY=ACCOUNT_ID
 DECIDED_AT=TIMESTAMP
 ```
 
-atau:
+Teks percakapan dapat disimpan sebagai evidence, tetapi mesin memakai data terstruktur.
 
-```text
-FACT_TYPE=PROJECT_ACCESS_CONDITION
-VALUE=NARROW_ACCESS
-SOURCE=USER_INTERACTION
-APPLIES_TO=PROJECT_ID
-```
-
-Teks percakapan dapat disimpan sebagai audit/evidence, tetapi mesin harus menggunakan fakta/keputusan terstruktur.
-
-### 12.6 Larangan
+### 13.6 Larangan
 
 Ruang Interaksi tidak boleh:
 
@@ -562,151 +610,163 @@ Ruang Interaksi tidak boleh:
 - mengubah keputusan tanpa persetujuan;
 - menyembunyikan asumsi;
 - menghasilkan percakapan panjang tanpa perubahan state/data;
-- menghentikan RAB hanya karena data opsional belum tersedia;
+- menghentikan pekerjaan hanya karena data opsional belum tersedia;
 - menjadi satu-satunya cara mengoperasikan SIMPROK.
 
 ---
 
-## 13. Hukum Perhitungan Lengkap dan Ketidakpastian
+## 14. Perhitungan, Resolution, Verification, dan Ketidakpastian
 
-### 13.1 Koreksi terhadap pernyataan lama
+### 14.1 Empat keadaan yang tidak boleh dicampur
 
-Pernyataan berikut dinyatakan `SUPERSEDED`:
+```text
+COMPUTATIONALLY_RESOLVED
+≠ TRUST_VERIFIED
+≠ CALCULATION_READY
+≠ BASELINE_READY
+```
 
-> “AHSP boleh dipilih sebelum seluruh resource resolved, tetapi belum boleh dihitung.”
+- `COMPUTATIONALLY_RESOLVED`: resource identity, unit adaptation, dan nilai numerik tersedia secara deterministik.
+- `TRUST_VERIFIED`: provenance/evidence telah memenuhi tingkat verifikasi tertentu.
+- `CALCULATION_READY`: seluruh resource wajib computationally resolved dan exact completeness gate lulus.
+- `BASELINE_READY`: uncertainty kritis telah diselesaikan atau diterima manusia berwenang.
 
-Kalimat tersebut terlalu mudah dimaknai bahwa SIMPROK berhenti menghitung ketika ada ketidakpastian.
+Cost Kernel tetap fail-closed terhadap resource yang belum computationally resolved. Ketidakpastian verifikasi tidak boleh dipakai untuk melewati technical gate.
 
-### 13.2 Hukum baru
+### 14.2 AI tidak menciptakan Basic Price atau angka
 
-> **SIMPROK harus menghasilkan RAB Draft secara lengkap berdasarkan basis terbaik yang tersedia dan dapat ditelusuri. Ketidakpastian tidak boleh disembunyikan, tetapi tidak selalu menghentikan perhitungan.**
+`SIMPROK_RECOMMENDATION` berarti rekomendasi terhadap:
 
-### 13.3 Tidak boleh menghitung sebagian lalu menyebutnya lengkap
+- Basic Price existing dan tenant-visible;
+- referensi harga yang benar-benar diterima sistem;
+- pilihan manusia yang berlabel jujur;
+- atau tindakan yang perlu dilakukan.
 
-Dilarang:
+Ia **tidak** berarti AI boleh menciptakan harga, sumber, ID, tanggal, lokasi, coverage, atau provenance.
 
-- menghilangkan resource wajib yang belum pasti;
-- memberi harga nol agar kalkulasi lolos;
-- hanya menjumlahkan resource yang tersedia lalu menyebutnya Harga Satuan lengkap;
-- memilih angka tanpa sumber atau alasan;
-- menyembunyikan status referensi/asumsi;
-- menganggap angka sementara sebagai angka terverifikasi.
+Jika tidak ada nilai numerik yang dapat dipertanggungjawabkan:
 
-### 13.4 Basis nilai yang dapat dipakai pada Draft
+```text
+RESOURCE_STATUS=BLOCKED_OR_NEEDS_REVIEW
+COST_KERNEL=NOT_RUN_FOR_THAT_LINE
+FAKE_ZERO=FORBIDDEN
+INVENTED_PRICE=FORBIDDEN
+```
 
-Setiap resource wajib harus mempunyai nilai yang memiliki basis dan jejak, misalnya:
+### 14.3 Hukum perhitungan lengkap
 
-- VERIFIED;
-- USER_SELECTED;
-- GOVERNMENT_REFERENCE;
-- SUPPLIER_REFERENCE;
-- FIELD_REPORTED;
-- NEAREST_REGION_REFERENCE;
-- SIMPROK_RECOMMENDED_ASSUMPTION;
-- sumber sah lain yang dijelaskan.
+> SIMPROK tidak boleh menghitung sebagian komponen AHSP lalu menyebutnya Harga Satuan lengkap.
 
-Basis tersebut tidak semuanya memiliki tingkat kepastian yang sama.
+Untuk baris yang diberi Harga Satuan SIMPROK:
 
-### 13.5 Calculation Ready dan Baseline Ready
+```text
+EXPECTED_AHSP_RESOURCE_SET
+== RESOLVED_RESOURCE_SET
+```
+
+Semua resource wajib harus mempunyai coefficient, unit, nilai terlacak, conversion evidence bila diperlukan, dan status resolution yang sah.
+
+### 14.4 Tiga dimensi kelengkapan
+
+#### A. Structural completeness
+
+Semua pekerjaan yang diketahui/diusulkan tercantum atau ditandai belum tersedia/needs review.
+
+#### B. AHSP component completeness
+
+Tidak ada resource wajib yang dihilangkan dari Harga Satuan.
+
+#### C. Monetary completeness
+
+- Harga Satuan hanya tersedia bila AHSP component completeness lulus.
+- Jumlah item hanya tersedia bila volume ada.
+- Total proyek hanya boleh disebut lengkap bila seluruh item yang termasuk scope memiliki volume dan nilai yang sah.
+- Bila sebagian volume belum ada, hasil disebut `Draft/Provisional`, bukan total RAB lengkap.
+
+### 14.5 Calculation Ready dan Baseline Ready
 
 ```text
 CALCULATION_READY
-→ seluruh resource wajib memiliki nilai berbasis dan dapat ditelusuri
-→ RAB Draft dapat dihitung lengkap
+→ semua resource wajib computationally resolved
+→ exact resource-set completeness lulus
+→ Harga Satuan dapat dihitung
 
 BASELINE_READY
-→ ketidakpastian kritis diselesaikan
-ATAU
-→ diterima secara eksplisit oleh manusia berwenang
-→ RAB dapat diajukan untuk approval/lock
+→ uncertainty kritis diselesaikan
+ATAU diterima manusia berwenang
+→ RAB dapat menuju approval/lock
 ```
 
-### 13.6 Tingkat tanda ketidakpastian
+### 14.6 Tingkat uncertainty
 
-Konsep warna/status berikut dikunci sebagai arah UX; nama final dan desain visual dapat dipertajam kemudian:
+Arah UX:
 
 ```text
 HIJAU
 → dihitung dan terverifikasi
 
 KUNING
-→ dihitung dengan referensi/asumsi wajar; perlu diperiksa
+→ dihitung dengan referensi yang sah tetapi perlu pemeriksaan
 
 MERAH
-→ dihitung, tetapi ada keputusan penting yang wajib diselesaikan atau diterima sebelum approval/lock
+→ dihitung dengan basis terlacak, namun keputusan penting wajib diselesaikan/diterima sebelum lock
 
 BLOKIR
-→ tidak ada basis angka yang dapat dipertanggungjawabkan; SIMPROK dilarang mengarang
+→ tidak ada basis numerik/teknis yang dapat dipertanggungjawabkan; dilarang mengarang
 ```
 
-Merah tidak otomatis berarti tidak ada harga. Merah berarti ketidakpastian penting masih hidup.
+Merah dapat memiliki harga karena input computationally resolved tetapi trust/decision belum final. Blokir tidak boleh memiliki Harga Satuan SIMPROK palsu.
 
-Blokir adalah pilihan terakhir bila tidak ada basis yang sah sama sekali.
+### 14.7 Pengguna tidak menjawab
 
-### 13.7 Pengguna tidak menjawab
+Jika pengguna tidak menjawab:
 
-```text
-AMBIGUITAS_ADA
-DAN USER_TIDAK_MENJAWAB
-→ gunakan rekomendasi terbaik yang dapat dijelaskan
-→ hitung lengkap bila seluruh resource mempunyai basis
-→ beri status dan catatan
-→ masukkan ke daftar pemeriksaan
-→ jangan klaim user confirmed
-```
+- gunakan rekomendasi existing yang paling dapat dijelaskan bila technical gates lengkap;
+- beri status dan catatan;
+- masukkan ke daftar pemeriksaan;
+- jangan klaim `USER_CONFIRMED`;
+- bila tidak ada nilai sah, blokir kalkulasi baris terkait secara jujur.
 
 ---
 
-## 14. AHSP — Penajaman Tanpa Membongkar Hukum Lama
+## 15. AHSP, Bidang, Spesifikasi, dan Metode
 
-Keputusan lama tetap berlaku:
+Bagian ini adalah penajaman pada scope pengalaman/intelligence. Identitas, occurrence, unit, Basic Price, dan Cost Kernel tetap dikontrol hukum utamanya.
+
+### 15.1 Hukum lama tetap
 
 - AHSP adalah formula/metode kerja berotoritas;
 - AHSPVersion immutable;
-- Basic Price menyesuaikan satuan yang diminta AHSP;
-- occurrence adalah snapshot kontekstual setiap penerapan;
-- SIMPROK merekomendasikan;
-- manusia memilih/menetapkan;
+- Basic Price menyesuaikan satu arah ke unit AHSP;
+- selection/override hidup di project AHSP occurrence/snapshot;
+- occurrence adalah snapshot kontekstual;
+- RAB mengonsumsi hasil AHSP;
 - Cost Kernel menghitung;
 - baseline resmi immutable.
 
-Penajaman hari ini tidak membatalkan hukum tersebut.
+### 15.2 Bidang/domain
 
-### 14.1 Domain/bidang
+Bidang seperti Bina Marga, Cipta Karya, SDA, Umum, dan lainnya adalah konteks keterterapan, bukan satu-satunya identitas AHSP.
 
-Bidang seperti:
-
-- Bina Marga;
-- Cipta Karya;
-- Sumber Daya Air;
-- Umum;
-- bidang lain;
-
-adalah konteks keterterapan AHSP, bukan satu-satunya identitas AHSP.
-
-Hukum:
+Dikunci:
 
 1. Nama pekerjaan sama tidak otomatis berarti AHSP sama.
-2. Total Harga Satuan sama tidak otomatis berarti AHSP identik.
+2. Total Harga Satuan sama tidak membuktikan AHSP identik.
 3. Perbedaan formula, resource, coefficient, unit, output unit, standar, atau asumsi penerapan dapat berarti AHSP berbeda.
-4. Satu AHSP yang benar-benar sama boleh berlaku untuk beberapa bidang.
+4. Satu AHSP yang benar-benar sama dan applicable boleh digunakan lintas bidang.
 5. Jangan menduplikasi formula hanya karena bidang berbeda.
 6. Jangan auto-match berdasarkan nama, mutu, bidang, atau total harga saja.
-7. Satu paket dapat multidisiplin; bidang utama project tidak selalu sama dengan konteks semua item.
+7. Satu paket dapat multidisiplin; bidang project tidak selalu sama dengan konteks semua item.
 
-Exact schema dan taxonomy domain masih harus melalui architecture gate tersendiri.
+Exact Work Domain taxonomy dan schema belum dikunci.
 
-### 14.2 Jenis pekerjaan
+### 15.3 Jenis pekerjaan
 
-Jenis pekerjaan menjawab pekerjaan apa yang sebenarnya dihitung.
+Jenis pekerjaan menjawab pekerjaan apa yang sebenarnya dianalisis. SIMPROK boleh mengklasifikasikan dan merekomendasikan; pengguna dapat mengoreksi ketika ambigu.
 
-SIMPROK boleh mengklasifikasikan dan merekomendasikan, tetapi bila ambigu pengguna dapat memilih atau mengoreksi.
+Exact Work Type taxonomy belum dikunci.
 
-Exact canonical Work Type taxonomy belum dikunci dalam dokumen ini.
-
-### 14.3 Spesifikasi
-
-Spesifikasi dapat berada dalam tiga keadaan:
+### 15.4 Spesifikasi
 
 ```text
 SPEC_KNOWN
@@ -714,167 +774,118 @@ SPEC_PARTIAL
 SPEC_NOT_PROVIDED
 ```
 
-Hukum:
+- spesifikasi yang ada menjadi constraint;
+- spesifikasi yang belum ada tidak menjadi pagar entry;
+- SIMPROK dapat menawarkan spesifikasi lazim sebagai proposal dan menjelaskan dampak;
+- pilihan sementara diberi status;
+- fakta spesifikasi dan dokumen Spesifikasi Teknis final tidak sama;
+- dokumen final berkembang sepanjang keputusan proyek semakin jelas.
 
-- spesifikasi yang sudah tersedia menjadi constraint nyata;
-- spesifikasi yang belum tersedia tidak boleh membuat pengguna dilarang masuk atau bekerja;
-- SIMPROK dapat menawarkan spesifikasi lazim dan menjelaskan dampaknya;
-- pilihan sementara harus diberi status;
-- dokumen Spesifikasi Teknis final dapat terbentuk dan disempurnakan sepanjang proses;
-- fakta spesifikasi dan dokumen Spesifikasi Teknis tidak boleh dianggap hal yang sama.
-
-### 14.4 Metode
-
-Harus dibedakan:
+### 15.5 Metode
 
 ```text
 AHSP_METHOD_ASSUMPTION
-≠
-FINAL_PROJECT_METHOD_STATEMENT
+≠ FINAL_PROJECT_METHOD_STATEMENT
 ```
 
-- AHSP dapat membawa asumsi formula/metode penerapan, misalnya manual/mekanis, ready-mix/site-mix, alat tertentu, atau kondisi normal.
-- Asumsi tersebut dapat digunakan untuk menjelaskan kandidat AHSP.
-- Dokumen Metode Pelaksanaan final tidak harus ada sebelum memilih AHSP.
-- Metode Pelaksanaan final lahir setelah BOQ, AHSP terpilih, spesifikasi, kondisi lokasi, resource, alat, Execution Factor, urutan kerja, dan keputusan manusia semakin jelas.
+- AHSP master dapat menyimpan method/formula assumption sesuai blueprint;
+- asumsi tersebut membantu menjelaskan keterterapan kandidat;
+- dokumen Metode Pelaksanaan final tidak wajib ada sebelum memilih AHSP;
+- metode final lahir dari BOQ, AHSP terpilih, spesifikasi, lokasi, resource, alat, EF yang sah, urutan kerja, dan keputusan manusia.
 
-Jadi SIMPROK tidak boleh meminta dokumen Metode Pelaksanaan final sebagai prasyarat universal untuk memilih AHSP.
+Tidak ada konflik: method pada AHSP menjelaskan formula; Metode Pelaksanaan final menjelaskan pelaksanaan project.
 
-### 14.5 Output unit
+### 15.6 Output unit
 
-`BoqItem.unit` harus kompatibel dengan `AHSPVersion.outputUnit` melalui hukum Unit Kernel yang sudah ada.
+`BoqItem.unit` harus kompatibel dengan `AHSPVersion.outputUnit` melalui Unit Kernel law. Resource unit dapat berbeda dari output unit. Unit mismatch fail-closed.
 
-Resource unit di dalam AHSP boleh berbeda dari output unit.
+### 15.7 Standar/referensi/versi
 
-Unit mismatch yang nyata harus fail-closed; alias yang sah harus dinormalisasi.
+AHSP harus memiliki provenance jujur: sumber, acuan, kode/tahun, version, ownership, review status, dan konteks berlaku. Referensi lama/nonpemerintah tidak otomatis dibuang, tetapi statusnya tidak boleh disembunyikan.
 
-### 14.6 Standar/referensi/versi
+### 15.8 Keputusan manusia
 
-Setiap AHSP harus memiliki provenance yang jujur:
-
-- sumber;
-- dokumen acuan;
-- kode/tahun;
-- version;
-- ownership;
-- review status;
-- konteks berlaku.
-
-Referensi lama atau nonpemerintah tidak otomatis dibuang, tetapi status dan asal-usulnya tidak boleh disembunyikan.
-
-### 14.7 Resource dan Basic Price
-
-AHSP dapat ditemukan, direkomendasikan, atau dipilih sebelum semua harga berstatus VERIFIED.
-
-Agar dapat dihitung lengkap, setiap resource wajib harus memiliki nilai berbasis dan dapat ditelusuri.
-
-Status verifikasi harga memengaruhi tingkat kepastian dan kesiapan baseline, bukan izin untuk menghitung secara parsial.
-
-### 14.8 Manusia mengonfirmasi keputusan bermakna
-
-Konfirmasi manusia diperlukan pada titik yang memiliki konsekuensi, misalnya:
-
-- klasifikasi pekerjaan ambigu;
-- spesifikasi penting belum jelas;
-- pemilihan AHSP;
-- penerimaan/override Basic Price;
-- penerimaan asumsi penting;
-- review;
-- approval/lock.
-
-Pengguna tidak harus mengonfirmasi setiap operasi teknis kecil.
+Konfirmasi manusia dibutuhkan pada keputusan bermakna, misalnya klasifikasi ambigu, spesifikasi kritis, AHSP selection, Basic Price override, penerimaan asumsi, review, approval, dan lock. Pengguna tidak wajib mengonfirmasi setiap operasi teknis kecil.
 
 ---
 
-## 15. State Machine Pengalaman Pengguna
-
-State yang dikunci sebagai bahasa produk/arsitektur:
+## 16. State Machine Pengalaman
 
 ```text
 PREPARATION_EMPTY
-→ ruang kerja dapat dibuka
+→ workspace dapat dibuka
 
 PREPARATION_PARTIAL
 → engine siaga
 
 NO_BOQ_READY_TO_SYNTHESIZE
-→ template dapat disusun
+→ template proposal dapat disusun
 
 NO_BOQ_NEEDS_CONTEXT_OR_ASSUMPTION
-→ user tetap masuk; pilih rekomendasi, tambah konteks, atau manual
+→ tetap masuk; rekomendasi, tambah konteks, atau manual
 
 HAS_BOQ_WAITING_FOR_INPUT
 → tidak ada auto-synthesis
 
 BOQ_PREVIEW_WAITING_APPROVAL
-→ BOQ sudah dibaca; belum diproses menjadi RAB
+→ belum diproses menjadi RAB
 
 BOQ_APPROVED_FOR_ENRICHMENT
-→ engine boleh memperkaya dan menghitung
+→ enrichment boleh berjalan
 
 RAB_DRAFT_READY
-→ RAB terbentuk dan dapat diedit
+→ Draft terbentuk dan editable
 
 RAB_NEEDS_REVIEW
-→ RAB dihitung lengkap; ada tanda ketidakpastian
+→ Draft memiliki calculation/proposal dengan uncertainty terlihat
 
 BASELINE_READY
-→ keputusan kritis diselesaikan/diterima sesuai kewenangan
+→ keputusan kritis selesai/diterima sesuai kewenangan
 ```
 
-Nama enum/backend final dapat berbeda, tetapi makna state tidak boleh hilang atau dicampur.
+Nama enum final dapat berbeda; makna state tidak boleh dicampur.
 
 ---
 
-## 16. Hukum Data dan Auditability
+## 17. Data dan Auditability
 
-### 16.1 Data terstruktur
+Lokasi, bidang, status BOQ, spesifikasi, konteks, dan keputusan tidak boleh selamanya hanya dirangkai menjadi `Project.description`.
 
-Lokasi, bidang, status BOQ, spesifikasi, konteks, dan keputusan pengguna tidak boleh selamanya hanya dirangkai menjadi satu `Project.description`.
-
-`description` dapat tetap menjadi narasi manusia, tetapi mesin membutuhkan data terstruktur.
-
-### 16.2 Evidence dan keputusan
-
-Sistem harus mampu menjawab:
+Sistem harus dapat menjawab:
 
 - siapa memberikan informasi;
 - kapan;
 - melalui form, import, atau Ruang Interaksi;
-- berlaku untuk project/bagian/item mana;
+- berlaku pada project/bagian/item mana;
 - apakah fakta, asumsi, rekomendasi, atau keputusan;
-- apakah user confirmed;
-- apa dampaknya;
-- versi kalkulasi mana yang menggunakannya.
-
-### 16.3 Tidak ada perubahan tersembunyi
+- apakah user-confirmed;
+- dampaknya;
+- versi kalkulasi mana yang memakainya.
 
 SIMPROK tidak boleh diam-diam:
 
 - mengganti BOQ asli;
-- memilih AHSP final;
-- mengubah mode manual;
+- memilih AHSP final tanpa human gate yang disyaratkan;
 - menerima asumsi atas nama pengguna;
-- menimpa nilai;
-- menghilangkan tanda ketidakpastian.
+- menimpa mode manual;
+- menghilangkan uncertainty;
+- mengubah angka tanpa trace.
 
 ---
 
-## 17. Realitas Runtime yang Dibuktikan pada 18 Juli 2026
+## 18. Realitas Runtime — 18 Juli 2026
 
-Source `frontend/src/pages/ProjectSetupPage.tsx` saat ini menunjukkan:
+`frontend/src/pages/ProjectSetupPage.tsx` saat ini menunjukkan:
 
-1. daftar sembilan field diberi nama `requiredPreparationFields`;
-2. UI menampilkan label `Wajib diisi`;
-3. validasi tombol saat ini benar-benar menolak bila Nama Proyek kosong, Kategori belum dipilih, atau Bidang belum dipilih untuk kategori konstruksi;
-4. `Kirim Konteks` hanya mengubah status lokal menjadi `Engine belum aktif`; konteks belum diproses;
+1. sembilan field dinamai `requiredPreparationFields`;
+2. UI menampilkan `Wajib diisi`;
+3. validasi menolak bila Nama Proyek, Kategori, atau Bidang tertentu belum tersedia;
+4. `Kirim Konteks` hanya mengubah status lokal `Engine belum aktif`;
 5. belum ada pilihan sudah/belum mempunyai BOQ;
-6. tombol `Lanjut ke Ruang Kerja RAB` selalu membuat Draft Project lalu menavigasi ke workspace;
+6. tombol lanjut selalu membuat Draft Project dan menuju workspace;
 7. belum ada Template Synthesis;
 8. belum ada BOQ Enrichment;
-9. sebagian besar konteks disusun menjadi teks `Project.description`, bukan data terstruktur.
-
-Status:
+9. banyak konteks dirangkai ke `Project.description`.
 
 ```text
 RUANG_TRANSISI_VISUAL=AVAILABLE
@@ -887,85 +898,59 @@ STRUCTURED_CONTEXT=INSUFFICIENT
 CURRENT_RUNTIME=HONEST_UI_SHELL_NOT_FULL_PRODUCT_ENGINE
 ```
 
-Dokumen ini tidak mengklaim fitur-fitur tersebut hidup.
+Dokumen ini tidak mengklaim fitur tersebut hidup.
 
 ---
 
-## 18. Bagian yang Sudah Dikunci
+## 19. Owner-Locked Decisions
 
 ```text
-LOCKED_01
-DATA_UTAMA_TIDAK_BOLEH_MEMBLOKIR_MASUK_RUANG_KERJA_RAB
-
-LOCKED_02
-RUANG_INTERAKSI_OPSIONAL_TETAPI_KONTEKSTUAL_DAN_PRODUKTIF
-
-LOCKED_03
-JAWABAN_BERMAKNA_HARUS_MENJADI_DATA_ATAU_KEPUTUSAN_TERSTRUKTUR
-
-LOCKED_04
-BELUM_PUNYA_BOQ_DAN_SUDAH_PUNYA_BOQ_ADALAH_DUA_PERJALANAN_BERBEDA
-
-LOCKED_05
-TANPA_BOQ_DAPAT_MEMICU_TEMPLATE_SYNTHESIS
-
-LOCKED_06
-DENGAN_BOQ_MENUNGGU_INPUT_PREVIEW_DAN_PERSETUJUAN_SEBELUM_ENRICHMENT
-
-LOCKED_07
-TEMPLATE_SYNTHESIS_BOQ_ENRICHMENT_DAN_SCOPED_RECALCULATION_TIDAK_BOLEH_DICAMPUR
-
-LOCKED_08
-MODE_MANUAL_DAN_MODE_SIMPROK_HARUS_JUJUR_DAN_TIDAK_SALING_MENIMPA
-
-LOCKED_09
-SIMPROK_TIDAK_BOLEH_MENGHITUNG_SEBAGIAN_LALU_MENYEBUTNYA_LENGKAP
-
-LOCKED_10
-RAB_DRAFT_DAPAT_DIHITUNG_DENGAN_BASIS_TERLACAK_DAN_TANDA_KETIDAKPASTIAN
-
-LOCKED_11
-KETIDAKPASTIAN_KRITIS_HARUS_DISELESAIKAN_ATAU_DITERIMA_SEBELUM_LOCK
-
-LOCKED_12
-METODE_PELAKSANAAN_FINAL_LAHIR_SETELAH_AHSP_DAN_KONTEKS_SEMAKIN_JELAS
-
-LOCKED_13
-SPESIFIKASI_DAPAT_SUDAH_ADA_SEBAGIAN_ATAU_BELUM_ADA
-
-LOCKED_14
-AHSP_DAPAT_BERLAKU_LINTAS_BIDANG_BILA_FORMULA_DAN_KETERTERAPANNYA_SAMA
-
-LOCKED_15
-NAMA_ATAU_TOTAL_HARGA_SAMA_TIDAK_MEMBUKTIKAN_AHSP_IDENTIK
-
-LOCKED_16
-SIMPROK_MEREKOMENDASIKAN_MANUSIA_MENETAPKAN
+LOCKED_01 DATA_UTAMA_TIDAK_MEMBLOKIR_ENTRY
+LOCKED_02 SECURITY_AND_AUTHORITY_GATES_TETAP_BERLAKU
+LOCKED_03 SATU_CANONICAL_PIPELINE_DENGAN_DUA_UX_JOURNEYS
+LOCKED_04 RUANG_INTERAKSI_OPSIONAL_KONTEKSTUAL_PRODUKTIF
+LOCKED_05 JAWABAN_BERMAKNA_MENJADI_DATA_ATAU_KEPUTUSAN
+LOCKED_06 TANPA_BOQ_MEMAKAI_TEMPLATE_SYNTHESIS
+LOCKED_07 DENGAN_BOQ_MENUNGGU_IMPORT_PREVIEW_APPROVAL
+LOCKED_08 TEMPLATE_SYNTHESIS_BOQ_ENRICHMENT_SCOPED_RECALCULATION_DIPISAH
+LOCKED_09 MODE_MANUAL_DAN_SIMPROK_JUJUR_DAN_TIDAK_SALING_MENIMPA
+LOCKED_10 AI_TIDAK_MENCIPTAKAN_BASIC_PRICE_ATAU_ANGKA
+LOCKED_11 COST_KERNEL_TETAP_FAIL_CLOSED_TERHADAP_INPUT_BELUM_RESOLVED
+LOCKED_12 TIDAK_MENGHITUNG_SEBAGIAN_KOMPONEN_AHSP_LALU_MENYEBUT_LENGKAP
+LOCKED_13 STRUCTURAL_AHSP_COMPONENT_DAN_MONETARY_COMPLETENESS_DIBEDAKAN
+LOCKED_14 UNCERTAINTY_TERLACAK_DAPAT_HIDUP_DI_DRAFT
+LOCKED_15 UNCERTAINTY_KRITIS_DISELESAIKAN_ATAU_DITERIMA_SEBELUM_LOCK
+LOCKED_16 SPESIFIKASI_DAPAT_KNOWN_PARTIAL_NOT_PROVIDED
+LOCKED_17 FINAL_METHOD_FOLLOWS_SELECTED_AHSP_AND_CLEARER_CONTEXT
+LOCKED_18 AHSP_DAPAT_LINTAS_BIDANG_BILA_IDENTIK_DAN_APPLICABLE
+LOCKED_19 NAMA_ATAU_TOTAL_SAMA_TIDAK_MEMBUKTIKAN_AHSP_IDENTIK
+LOCKED_20 SIMPROK_MEREKOMENDASIKAN_MANUSIA_MENETAPKAN
+LOCKED_21 HUKUM_LAMA_TETAP_BERLAKU_KECUALI_EXPLICITLY_SUPERSEDED
+LOCKED_22 SATU_BIDANG_SATU_RUMAH_NORMATIF_ANTI_DUPLICATION
 ```
 
 ---
 
-## 19. Bagian yang Belum Dikunci Secara Detail
+## 20. Detail yang Belum Dikunci
 
-Bagian berikut belum boleh diimplementasikan berdasarkan tebakan agent:
+Tidak boleh diimplementasikan berdasarkan tebakan agent:
 
-1. exact minimum context untuk Template Synthesis per jenis proyek;
+1. minimum context Template Synthesis per jenis proyek;
 2. Katalog Ambiguitas final;
-3. taxonomy Work Domain final;
-4. taxonomy Work Type final;
-5. exact schema untuk structured project facts dan decisions;
-6. exact API Ruang Interaksi;
-7. exact confidence scoring;
-8. nama enum/status backend final;
+3. Work Domain taxonomy;
+4. Work Type taxonomy;
+5. schema structured facts/decisions;
+6. API Ruang Interaksi;
+7. confidence scoring;
+8. enum backend final;
 9. visual warna/icon final;
-10. exact permission mapping per role;
-11. model AI dan orchestration teknis final;
-12. aturan generasi volume;
-13. batas performa dan job processing;
-14. exact approval policy untuk menerima ketidakpastian merah;
-15. exact integrasi Execution Factor.
-
-Status:
+10. permission mapping per role;
+11. AI orchestration teknis;
+12. aturan rekomendasi/generasi volume;
+13. performance/job limits;
+14. approval policy menerima uncertainty merah;
+15. exact EF integration;
+16. exact identity/persistence model untuk interaction threads dan decisions.
 
 ```text
 DIRECTION_LOCKED
@@ -975,141 +960,153 @@ DO_NOT_GUESS
 
 ---
 
-## 20. Katalog Ambiguitas — Agenda Lanjutan
+## 21. Katalog Ambiguitas — Agenda Lanjutan
 
-Owner dan PM akan membahas secara terpisah bagian yang selalu berpotensi ambigu dalam:
+Katalog final akan dibahas terpisah untuk:
 
 - pemilihan AHSP;
-- penciptaan Spesifikasi Teknis;
-- penentuan Basic Price;
-- kebutuhan material;
-- kebutuhan tenaga kerja;
-- kebutuhan alat;
-- logistik;
-- kondisi akses;
+- Spesifikasi Teknis;
+- Basic Price;
+- material;
+- tenaga kerja;
+- alat;
+- logistik/akses;
 - risiko/cuaca;
 - Execution Factor;
-- pembuatan Metode Pelaksanaan.
+- Metode Pelaksanaan.
 
-Keluarga awal yang dapat diaudit, tetapi belum merupakan taxonomy final:
+Keluarga awal yang belum menjadi taxonomy final:
 
-- scope dan batas pekerjaan;
+- scope/batas pekerjaan;
 - jenis pekerjaan;
 - bidang/keterterapan;
-- mutu dan spesifikasi;
+- mutu/spesifikasi;
 - unit/output unit;
 - asumsi formula AHSP;
 - standard/reference/version;
 - resource mapping;
-- sumber/lokasi/tanggal harga;
-- alat dan produktivitas;
+- sumber/lokasi/tanggal/coverage harga;
+- alat/produktivitas;
 - akses/logistik;
 - inclusions/exclusions;
-- volume dan pengukuran;
+- volume/pengukuran;
 - kondisi lapangan.
 
-Setiap ambiguity type nantinya harus memiliki:
-
-- alasan deteksi;
-- dampak;
-- pertanyaan elegan;
-- rekomendasi awal;
-- opsi `Bahas nanti`;
-- state terstruktur;
-- pengaruh terhadap kalkulasi;
-- pengaruh terhadap baseline readiness.
+Setiap ambiguity type nantinya wajib memiliki alasan deteksi, dampak, pertanyaan elegan, rekomendasi awal, opsi `Bahas nanti`, structured state, pengaruh kalkulasi, dan pengaruh baseline readiness.
 
 ---
 
-## 21. Larangan untuk Agent dan Implementer
+## 22. Larangan
 
 Dilarang:
 
-1. mengembalikan Data Utama sebagai pagar masuk universal;
-2. memaksa pengguna memakai Ruang Interaksi;
-3. menjadikan chat sebagai teks yang tidak memengaruhi data;
-4. menjalankan Template Synthesis bagi pengguna yang sudah mempunyai BOQ sebelum persetujuan;
-5. mengubah BOQ asli diam-diam;
-6. membangun satu universal render function untuk semua perjalanan;
-7. memproses ulang seluruh RAB bila hanya satu item berubah tanpa alasan;
-8. menyembunyikan sumber nilai/asumsi;
-9. menghitung sebagian dan menyebut hasil lengkap;
-10. mengisi nol untuk resource yang belum mempunyai basis;
-11. menganggap spesifikasi selalu tersedia;
-12. meminta Metode Pelaksanaan final sebagai prasyarat universal memilih AHSP;
-13. menduplikasi AHSP hanya karena bidang berbeda;
-14. menyamakan AHSP hanya karena nama atau total harga sama;
-15. mengklaim engine hidup hanya karena UI tersedia;
-16. membongkar hukum AHSP, Basic Price, Unit Kernel, Cost Kernel, lifecycle, atau baseline yang sudah dikunci.
+1. menjadikan Data Utama pagar entry universal;
+2. menghapus security/permission/lifecycle gates;
+3. memaksa Ruang Interaksi;
+4. menyimpan chat tanpa structured effect;
+5. membuat dua canonical business pipelines berdasarkan status BOQ;
+6. menjalankan Template Synthesis bagi BOQ existing sebelum persetujuan;
+7. mengubah BOQ asli diam-diam;
+8. membangun universal render function;
+9. memproses seluruh RAB ketika hanya satu scope berubah tanpa alasan;
+10. menciptakan Basic Price, angka, source, ID, atau provenance;
+11. memberi fake zero;
+12. menghitung sebagian komponen AHSP lalu menyebut Harga Satuan lengkap;
+13. menyebut total proyek lengkap ketika volume/item belum lengkap;
+14. menyamakan technical unresolved dengan sekadar belum verified;
+15. meminta spesifikasi selalu tersedia;
+16. meminta Metode Pelaksanaan final sebagai universal prerequisite;
+17. menduplikasi AHSP hanya karena bidang berbeda;
+18. menyamakan AHSP hanya karena nama/total sama;
+19. membuka EF tanpa gate;
+20. mengklaim engine hidup hanya karena UI tersedia;
+21. mendefinisikan ulang navigasi, authority, unit, Basic Price, occurrence, atau lifecycle di luar rumah hukumnya;
+22. membongkar locked law tanpa explicit Owner revision.
 
 ---
 
-## 22. Retrieval Rule untuk Semua Agent IA
+## 23. Supersession Register
 
-Sebelum memberi rekomendasi, menulis prompt, merancang schema, mengubah frontend/backend, atau mengklaim status implementasi terkait Persiapan RAB, Ruang Interaksi, template, BOQ, AHSP, Basic Price, spesifikasi, Metode Pelaksanaan, render, atau ketidakpastian:
+Hanya pernyataan berikut yang dinyatakan digantikan:
+
+### SUPERSEDED-01
+
+Pernyataan percakapan:
+
+> “AHSP boleh dipilih sebelum seluruh resource resolved, tetapi belum boleh dihitung.”
+
+Diganti dengan:
+
+> AHSP dapat direkomendasikan/dipilih sebagai proposal, tetapi Cost Kernel hanya menghitung bila seluruh resource wajib computationally resolved dan exact completeness gate lulus. Resource boleh belum mencapai trust verification tertinggi, tetapi harus mempunyai nilai dan provenance terlacak. AI dilarang mengarang harga. Ketidakpastian kritis tetap harus diselesaikan atau diterima sebelum lock.
+
+Tidak ada locked AHSP, Basic Price, Unit, Cost Kernel, lifecycle, authority, atau baseline law lain yang digantikan oleh dokumen ini.
+
+---
+
+## 24. Retrieval Rule
+
+Sebelum memberi rekomendasi, menulis prompt, merancang schema, mengubah frontend/backend, atau mengklaim status terkait Persiapan RAB, Ruang Interaksi, template, BOQ, AHSP, Basic Price, spesifikasi, metode, render, atau uncertainty:
 
 1. baca `AGENTS.md`;
-2. baca `SIMPROK_PROJECT_MEMORY.md`;
-3. baca `SIMPROK_RAB_PEKERJAAN_NAVIGATION_LIFECYCLE_LAW.md`;
-4. baca dokumen ini;
-5. baca `SIMPROK_PROJECT_RAB_AUTHORITY_UNIT_LAW.md`;
-6. baca Basic Price–AHSP Blueprint dan Owner Lock;
-7. audit repository/runtime/browser terbaru;
-8. pisahkan FACT, OWNER LOCK, INFERENCE, RECOMMENDATION, dan RUNTIME REALITY;
-9. jangan mengganti keputusan Owner berdasarkan mayoritas pendapat agent;
-10. bila masih ambigu, laporkan ambiguity dan exact decision needed—jangan mengarang.
+2. baca `docs/project-memory/README.md`;
+3. baca `SIMPROK_PROJECT_MEMORY.md`;
+4. baca hukum navigasi/lifecycle;
+5. baca hukum authority/unit;
+6. baca Owner Lock dan Blueprint BP–AHSP;
+7. baca dokumen ini;
+8. baca P7C sebagai DRAFT design reference;
+9. audit repository/runtime/browser;
+10. pisahkan FACT, OWNER LOCK, INFERENCE, RECOMMENDATION, dan RUNTIME REALITY;
+11. bila ambigu, laporkan exact decision needed—jangan mengarang.
 
 ---
 
-## 23. Handoff Ringkas
+## 25. Handoff
 
 ```text
-DOCUMENT_ID=SIMPROK-RAB-TRANSITION-INTERACTION-SYNTHESIS-LAW-V1
-STATUS=OWNER_DECIDED_PRODUCT_LAW_LOCKED_RUNTIME_PARTIAL
+DOCUMENT_ID=SIMPROK-RAB-TRANSITION-INTERACTION-SYNTHESIS-LAW-V1.1
+STATUS=OWNER_DECIDED_PRODUCT_LAW_LOCKED_HARMONIZED_RUNTIME_PARTIAL
+
+NON_SUPERSESSION=YES
+NORMATIVE_HOME_MATRIX=LOCKED
+CANONICAL_PIPELINE_COUNT=1
+UX_JOURNEY_COUNT=2
 
 WORKSPACE_ENTRY_BLOCKED_BY_DATA=NO
+SECURITY_AUTHORITY_GATES=YES
 DATA_MAIN_ROLE=IMPROVE_CONTEXT_NOT_GATE_ENTRY
-ENGINE_AFTER_FIRST_MEANINGFUL_INPUT=STANDBY
+ENGINE_AFTER_MEANINGFUL_INPUT=STANDBY
 
 RUANG_INTERAKSI=OPTIONAL_CONTEXTUAL_STRUCTURED
-
 NO_BOQ_PATH=TEMPLATE_SYNTHESIS
 HAS_BOQ_PATH=IMPORT_PREVIEW_APPROVE_THEN_BOQ_ENRICHMENT
-
 POST_RAB_PROCESS=SCOPED_RECALCULATION
-MANUAL_MODE=SUPPORTED_AND_LABELED
 
-RAB_DRAFT_CALCULATION=COMPLETE_WITH_TRACEABLE_BASIS
-PARTIAL_CALCULATION_PRESENTED_AS_COMPLETE=FORBIDDEN
+AI_CREATES_BASIC_PRICE=NO
+COST_KERNEL_ACCEPTS_UNRESOLVED_RESOURCE=NO
+PARTIAL_AHSP_COMPONENT_CALCULATION_AS_COMPLETE=FORBIDDEN
+
+COMPLETENESS_DIMENSIONS=STRUCTURAL_AHSP_COMPONENT_MONETARY
 UNCERTAINTY=VISIBLE_EXPLAINED_ACTIONABLE
 CRITICAL_UNCERTAINTY_BEFORE_LOCK=RESOLVE_OR_AUTHORIZED_ACCEPTANCE
 
-FINAL_METHOD_STATEMENT=DERIVED_AFTER_AHSP_AND_CONTEXT
-SPECIFICATION=KNOWN_OR_PARTIAL_OR_NOT_PROVIDED
-AHSP_CROSS_DOMAIN_REUSE=ALLOWED_IF_TRULY_APPLICABLE
-SAME_NAME_OR_TOTAL=NOT_IDENTITY_PROOF
+FINAL_METHOD_STATEMENT=DERIVED_AFTER_SELECTED_AHSP_AND_CLEARER_CONTEXT
+SPECIFICATION_STATE=KNOWN_PARTIAL_OR_NOT_PROVIDED
+AHSP_CROSS_DOMAIN_REUSE=ALLOWED_IF_IDENTICAL_AND_APPLICABLE
+SAME_NAME_OR_TOTAL_PROVES_IDENTITY=NO
 
-CURRENT_TRANSITION_UI=HONEST_SHELL
-INTERACTION_ENGINE=NOT_LIVE
-TEMPLATE_SYNTHESIS=NOT_LIVE
-BOQ_ENRICHMENT=NOT_LIVE
-PRODUCTION_GOLDEN_THREAD=NOT_LIVE
+CURRENT_RUNTIME=HONEST_UI_SHELL_NOT_FULL_PRODUCT_ENGINE
+DETAIL_ARCHITECTURE=REQUIRED
 ```
 
 ---
 
-## 24. Prinsip Penutup
+## 26. Prinsip Penutup
 
-SIMPROK tidak boleh berkata:
+SIMPROK tidak menghalangi manusia untuk mulai bekerja. SIMPROK mulai memahami dari informasi sekecil apa pun, tetapi tidak mengarang. SIMPROK menyediakan proposal dan perhitungan terbaik dari data yang mempunyai identitas, unit, nilai, sumber, dan jejak yang sah. SIMPROK menunjukkan ketidakpastian, bertanya dengan lembut bila berguna, menghitung hanya ketika technical gates lengkap, dan menyerahkan keputusan bermakna kepada manusia.
 
-> “Data belum lengkap, kerjakan semuanya sendiri.”
+**SIMPROK kaya dan kuat di dalam, sederhana dan jujur di luar.**  
+**SIMPROK menghitung. Manusia memutuskan.**  
+**Reduce Uncertainty.**
 
-SIMPROK harus mampu berkata:
-
-> “Ruang kerja sudah siap. Berikut hasil terbaik berdasarkan informasi yang tersedia. Bagian berikut masih memiliki ketidakpastian; saya dapat membantu memperjelasnya sekarang atau nanti. Semakin banyak konteks yang Bapak berikan, semakin tepat RAB, AHSP, harga, sumber daya, spesifikasi, dan Metode Pelaksanaan yang saya sediakan.”
-
-SIMPROK harus mempermudah manusia tanpa menggantikan kewenangan manusia.
-
-**SIMPROK menghitung. SIMPROK merekomendasikan. SIMPROK menyediakan. Manusia memutuskan, menetapkan, dan menentukan.**
-
-Soli Deo Gloria. Segala kemuliaan hanya bagi Tuhan Yesus Kristus. Amin.
+Soli Deo Gloria. Segala kemuliaan hanya bagi Tuhan Yesus Kristus. Haleluya. Amin.
