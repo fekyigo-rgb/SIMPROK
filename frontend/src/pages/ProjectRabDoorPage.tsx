@@ -15,6 +15,8 @@ interface RabProject {
   fiscalYear: string;
   status: RabStatus;
   value: string;
+  /** Raw backend Project.status, used only to gate the draft fallback below — never derived from the display RabStatus. */
+  rawStatus: string;
 }
 
 interface RabRow {
@@ -44,7 +46,11 @@ const defaultProject: RabProject = {
   fiscalYear: 'Data belum tersedia',
   status: 'Draft',
   value: 'Data belum tersedia',
+  rawStatus: '',
 };
+
+/** Mirrors RAB_EDITABLE_PROJECT_STATUSES on the backend — the only status under which a Working Draft may exist to fall back to. */
+const RAB_EDITABLE_PROJECT_STATUSES = ['PLANNED'];
 
 const formatRupiah = (value: number) => `Rp ${Math.round(value).toLocaleString('id-ID')}`;
 
@@ -120,6 +126,9 @@ export function ProjectRabDoorPage() {
         else if (projData?.status === 'COMPLETED') mappedStatus = 'Selesai';
         else if (projData?.status === 'ON_HOLD') mappedStatus = 'Terkunci';
 
+        const rawStatus = typeof projData?.status === 'string' ? projData.status : '';
+        const isPlannedProject = RAB_EDITABLE_PROJECT_STATUSES.includes(rawStatus);
+
         setProject({
           name: projData?.name || 'Nama proyek belum tersedia',
           code: projData?.code || (projData?.id ? `PRJ-${String(projData.id).slice(0, 8).toUpperCase()}` : 'Belum tersedia'),
@@ -128,6 +137,7 @@ export function ProjectRabDoorPage() {
           fiscalYear: projData?.fiscalYear || 'Belum tersedia',
           status: mappedStatus,
           value: projData?.budgetBaseline ? formatRupiah(projData.budgetBaseline) : 'Belum tersedia',
+          rawStatus,
         });
 
         let shouldLoadDraft = false;
@@ -157,12 +167,12 @@ export function ProjectRabDoorPage() {
           return;
         }
 
-        if (shouldLoadDraft) {
+        if (shouldLoadDraft && isPlannedProject) {
           try {
             const draftResponse = await apiFetch(`/projects/${projectId}/boq/draft`);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const draftData = await draftResponse.json() as any;
-            const draftItems = Array.isArray(draftData?.items) ? draftData.items : [];
+            const draftItems = draftResponse.ok && Array.isArray(draftData?.items) ? draftData.items : [];
 
             if (draftItems.length > 0) {
               setRabRows(mapBoqRowsToRabRows(draftItems));
@@ -178,6 +188,12 @@ export function ProjectRabDoorPage() {
             setRabSource('empty');
             setDraftRecap(null);
           }
+        } else if (shouldLoadDraft) {
+          // Non-PLANNED project with no baseline rows: a Working Draft is not
+          // a lawful concept here — do not call GET /boq/draft at all.
+          setRabRows([]);
+          setRabSource('empty');
+          setDraftRecap(null);
         }
 
       } catch {
@@ -191,6 +207,7 @@ export function ProjectRabDoorPage() {
 
   const readOnly = isReadOnly(project.status);
   const archived = project.status === 'Selesai';
+  const isPlannedProject = RAB_EDITABLE_PROJECT_STATUSES.includes(project.rawStatus);
   const isDraftPreview = rabSource === 'draft';
   const zoomScale = zoom / 100;
   const hasRabRows = rabRows.length > 0;
@@ -265,7 +282,7 @@ export function ProjectRabDoorPage() {
   const statusMechanismCopy = isDraftPreview
     ? 'RAB draft tersimpan, belum menjadi baseline resmi. Viewer ini hanya membaca draft dan tidak mengunci RAB.'
     : rabSource === 'empty'
-      ? 'Belum ada baseline resmi atau draft tersimpan untuk proyek ini.'
+      ? (isPlannedProject ? 'Belum ada baseline resmi atau draft tersimpan untuk proyek ini.' : 'RAB baseline belum tersedia untuk proyek ini.')
       : archived
         ? 'RAB selesai terkunci otomatis sebagai arsip. Perubahan tidak dimungkinkan; riwayat tetap utuh.'
         : readOnly
@@ -384,7 +401,7 @@ export function ProjectRabDoorPage() {
                 <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--simprok-text-muted)' }}>
                   <FileText size={24} style={{ margin: '0 auto 1rem', display: 'block' }} />
                   <strong style={{ display: 'block', color: '#16294B', marginBottom: '0.375rem' }}>RAB belum tersedia.</strong>
-                  <span>Belum ada baseline resmi atau draft tersimpan untuk proyek ini.</span>
+                  <span>{isPlannedProject ? 'Belum ada baseline resmi atau draft tersimpan untuk proyek ini.' : 'RAB baseline belum tersedia untuk proyek ini.'}</span>
                 </div>
               ) : (
                 <>

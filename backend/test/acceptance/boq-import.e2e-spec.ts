@@ -5,7 +5,12 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { buildPortableBoqXlsx } from '../fixtures/boq-xlsx.fixture';
 
-const PROJECT_A = '10000000-0000-4000-8000-000000000018';
+// PROJECT_A is a dedicated ad-hoc PLANNED project, not ACC-X. Under the
+// canonical RAB draft-lifecycle law (RabLifecyclePolicyService), ACC-X's
+// status is ACTIVE, which is now correctly PROJECT_NOT_DRAFT and therefore
+// blocked from import — see docs/project-memory/SIMPROK_PROJECT_MEMORY.md
+// §12.3. This suite needs a project that is actually lawfully editable.
+const PROJECT_A = '35000000-0000-4000-8000-000000000005';
 const PROJECT_B = '35000000-0000-4000-8000-000000000001';
 const WORKSPACE_A = '10000000-0000-4000-8000-000000000004';
 const WORKSPACE_B = '10000000-0000-4000-8000-000000000005';
@@ -21,8 +26,23 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
     await app.init(); prisma = new PrismaClient(); source = await buildPortableBoqXlsx();
-    const projectA = await prisma.project.findUniqueOrThrow({ where: { id: PROJECT_A } });
-    await prisma.project.upsert({ where: { id: PROJECT_B }, update: { workspaceId: WORKSPACE_A, organizationId: projectA.organizationId }, create: { id: PROJECT_B, workspaceId: WORKSPACE_A, organizationId: projectA.organizationId, code: 'ACC-IMPORT-B', name: 'Import isolation B' } });
+    const orgA = await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A }, select: { organizationId: true } });
+    await prisma.project.upsert({ where: { id: PROJECT_A }, update: { workspaceId: WORKSPACE_A, organizationId: orgA.organizationId, status: 'PLANNED' }, create: { id: PROJECT_A, workspaceId: WORKSPACE_A, organizationId: orgA.organizationId, code: 'ACC-IMPORT-A', name: 'Import isolation A' } });
+    await prisma.project.upsert({ where: { id: PROJECT_B }, update: { workspaceId: WORKSPACE_A, organizationId: orgA.organizationId }, create: { id: PROJECT_B, workspaceId: WORKSPACE_A, organizationId: orgA.organizationId, code: 'ACC-IMPORT-B', name: 'Import isolation B' } });
+
+    const assignedAccount = await prisma.account.findUniqueOrThrow({ where: { email: 'assigned@test.local' } });
+    const assignedMembership = await prisma.workspaceMembership.findUniqueOrThrow({ where: { accountId_workspaceId: { accountId: assignedAccount.id, workspaceId: WORKSPACE_A } } });
+    const foremanAccount = await prisma.account.findUniqueOrThrow({ where: { email: 'foreman@test.local' } });
+    const foremanMembership = await prisma.workspaceMembership.findUniqueOrThrow({ where: { accountId_workspaceId: { accountId: foremanAccount.id, workspaceId: WORKSPACE_A } } });
+    await prisma.projectAssignment.upsert({
+      where: { workspaceMembershipId_projectId: { workspaceMembershipId: assignedMembership.id, projectId: PROJECT_A } },
+      update: { status: 'ASSIGNED' }, create: { workspaceMembershipId: assignedMembership.id, projectId: PROJECT_A, roleInProject: 'PROJECT_MANAGER', isPrimaryAssignment: false, status: 'ASSIGNED' },
+    });
+    await prisma.projectAssignment.upsert({
+      where: { workspaceMembershipId_projectId: { workspaceMembershipId: foremanMembership.id, projectId: PROJECT_A } },
+      update: { status: 'ASSIGNED' }, create: { workspaceMembershipId: foremanMembership.id, projectId: PROJECT_A, roleInProject: 'FOREMAN', isPrimaryAssignment: false, status: 'ASSIGNED' },
+    });
+
     await prisma.boqStructure.deleteMany({ where: { id: { in: [DRAFT_A, DRAFT_B, DUPLICATE_DRAFT] } } });
     await prisma.boqStructure.createMany({ data: [
       { id: DRAFT_A, projectId: PROJECT_A, name: 'Working Draft', status: 'DRAFT', version: 1 },
@@ -42,7 +62,8 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   afterAll(async () => {
     await prisma.boqItem.deleteMany({ where: { boqStructureId: { in: [DRAFT_A, DRAFT_B, DUPLICATE_DRAFT] } } });
     await prisma.boqStructure.deleteMany({ where: { id: { in: [DRAFT_A, DRAFT_B, DUPLICATE_DRAFT] } } });
-    await prisma.project.deleteMany({ where: { id: PROJECT_B } });
+    await prisma.projectAssignment.deleteMany({ where: { projectId: PROJECT_A } });
+    await prisma.project.deleteMany({ where: { id: { in: [PROJECT_A, PROJECT_B] } } });
     await prisma.$disconnect(); await app.close();
   });
 

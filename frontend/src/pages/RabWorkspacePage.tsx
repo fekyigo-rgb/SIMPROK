@@ -76,11 +76,26 @@ interface DraftRecapResponse {
   grandTotal?: string | number | null;
 }
 
+interface RabLifecycleCapability {
+  canEnterEditableDraftWorkspace: boolean;
+  canEditDraft: boolean;
+  reasonCode: string | null;
+}
+
 interface DraftBoqResponse {
   structureId: string | null;
   items: BoqItemResponse[];
   recap?: DraftRecapResponse | null;
+  capability?: RabLifecycleCapability | null;
 }
+
+type CapabilityState =
+  | { kind: 'no-project' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; canEditDraft: boolean }
+  | { kind: 'lifecycle-denied'; reasonCode: string | null }
+  | { kind: 'not-found' }
+  | { kind: 'error' };
 
 interface BoqImportPreview {
   importFingerprint: string; fileName: string; sheetName: string; totalSourceRows: number;
@@ -247,6 +262,8 @@ export function RabWorkspacePage() {
   const [marginPercent, setMarginPercent] = useState(10);
   const [ppnPercent, setPpnPercent] = useState(11);
   const [statusMessage, setStatusMessage] = useState(projectId ? 'Memuat draft...' : 'Tidak ada project aktif.');
+  const [capabilityState, setCapabilityState] = useState<CapabilityState>(projectId ? { kind: 'loading' } : { kind: 'no-project' });
+  const [retryToken, setRetryToken] = useState(0);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<BoqImportPreview | null>(null);
   const [isImporting, setIsImporting] = useState(false);
@@ -316,54 +333,84 @@ export function RabWorkspacePage() {
       setCostRowStatuses({});
       setSelectedRowId('');
       setStatusMessage('Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.');
+      setCapabilityState({ kind: 'no-project' });
       return;
     }
 
-    apiFetch(`/projects/${projectId}/boq/draft`)
-      .then((response) => {
-        if (!response.ok) throw new Error('draft-load-failed');
-        return response.json();
-      })
-      .then((data: DraftBoqResponse) => {
-        applyRecap(data.recap);
-        if (data.items.length > 0) {
-          applyRows(data.items);
-          loadCostCalculations(data.items);
-          setStatusMessage('Draft tersimpan dimuat. Ruang kerja siap.');
-        } else {
-          // No saved draft — seed from baseline if available, else empty
-          return apiFetch(`/projects/${projectId}/boq`)
-            .then((r) => (r.ok ? r.json() : []))
-            .then((baseline: unknown) => {
-              const baselineItems = Array.isArray(baseline) ? (baseline as BoqItemResponse[]) : [];
-              if (baselineItems.length > 0) {
-                applyRows(baselineItems);
-                loadCostCalculations(baselineItems);
-                setStatusMessage('Draft kosong. Data baseline dimuat sebagai titik awal — klik Simpan Draft untuk menyimpan perubahan.');
-              } else {
-                costLoadGenerationRef.current += 1;
-                setRows([]);
-                setVolumes({});
-                setUnitPrices({});
-                setCostRowStatuses({});
-                setSelectedRowId('');
-                setStatusMessage('Draft kosong. Tambahkan item pekerjaan, lalu klik Simpan Draft.');
-              }
-            });
-        }
-      })
-      .catch((error: unknown) => {
+    let cancelled = false;
+    setCapabilityState({ kind: 'loading' });
+    setStatusMessage('Memuat draft...');
+
+    const run = async () => {
+      let response: Response;
+      try {
+        response = await apiFetch(`/projects/${projectId}/boq/draft`);
+      } catch (error) {
+        if (cancelled) return;
         console.error('Failed to load RAB draft:', error);
+        setCapabilityState({ kind: 'error' });
+        setStatusMessage('Gagal memuat draft. Periksa koneksi backend dan coba lagi.');
+        return;
+      }
+      if (cancelled) return;
+
+      // GET boq/draft's contract is intentionally always 200 for an accessible
+      // project — it only describes reality and never expresses lifecycle
+      // state as an HTTP error. capability.canEditDraft is the sole signal.
+      if (response.status === 404) {
+        setCapabilityState({ kind: 'not-found' });
+        return;
+      }
+      if (!response.ok) {
+        setCapabilityState({ kind: 'error' });
+        setStatusMessage('Gagal memuat draft. Periksa koneksi backend dan coba lagi.');
+        return;
+      }
+
+      const data: DraftBoqResponse = await response.json();
+      if (cancelled) return;
+
+      if (data.capability?.canEditDraft !== true) {
+        setCapabilityState({ kind: 'lifecycle-denied', reasonCode: data.capability?.reasonCode ?? null });
+        return;
+      }
+
+      setCapabilityState({ kind: 'ready', canEditDraft: true });
+
+      applyRecap(data.recap);
+      if (data.items.length > 0) {
+        applyRows(data.items);
+        loadCostCalculations(data.items);
+        setStatusMessage('Draft tersimpan dimuat. Ruang kerja siap.');
+        return;
+      }
+
+      // No saved draft — seed from baseline if available, else empty
+      const baselineResponse = await apiFetch(`/projects/${projectId}/boq`).catch(() => null);
+      if (cancelled) return;
+      const baseline = baselineResponse && baselineResponse.ok ? await baselineResponse.json() : [];
+      const baselineItems = Array.isArray(baseline) ? (baseline as BoqItemResponse[]) : [];
+      if (baselineItems.length > 0) {
+        applyRows(baselineItems);
+        loadCostCalculations(baselineItems);
+        setStatusMessage('Draft kosong. Data baseline dimuat sebagai titik awal — klik Simpan Draft untuk menyimpan perubahan.');
+      } else {
         costLoadGenerationRef.current += 1;
         setRows([]);
         setVolumes({});
         setUnitPrices({});
         setCostRowStatuses({});
         setSelectedRowId('');
-        setStatusMessage('Gagal memuat draft. Periksa koneksi backend dan coba lagi.');
-      });
+        setStatusMessage('Draft kosong. Tambahkan item pekerjaan, lalu klik Simpan Draft.');
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [projectId, retryToken]);
 
   const numberedRows = useMemo(() => buildNumberedRows(rows), [rows]);
   const selectedItem = useMemo(() => {
@@ -432,7 +479,13 @@ export function RabWorkspacePage() {
     activateRow(rowId);
   };
 
+  const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft;
+
   const handleSaveDraft = () => {
+    if (!canEditDraft) {
+      setStatusMessage('Simpan diblokir: ruang kerja ini belum siap diedit.');
+      return;
+    }
     if (hasNegativeValue) {
       setStatusMessage('Simpan diblokir: volume dan harga satuan tidak boleh minus.');
       return;
@@ -544,7 +597,7 @@ export function RabWorkspacePage() {
   };
 
   const previewImport = async (file: File) => {
-    if (!projectId) return;
+    if (!projectId || !canEditDraft) return;
     setImportFile(file); setImportPreview(null); setIsImporting(true); setStatusMessage('Membaca BOQ...');
     try {
       const body = new FormData(); body.append('file', file); body.append('selectedSheet', 'RAB');
@@ -557,7 +610,7 @@ export function RabWorkspacePage() {
   };
 
   const approveImport = async () => {
-    if (!projectId || !importFile || !importPreview || isImporting) return;
+    if (!projectId || !canEditDraft || !importFile || !importPreview || isImporting) return;
     setIsImporting(true); setStatusMessage('Sedang mengimpor BOQ');
     try {
       const body = new FormData(); body.append('file', importFile); body.append('selectedSheet', importPreview.sheetName); body.append('importFingerprint', importPreview.importFingerprint);
@@ -567,6 +620,92 @@ export function RabWorkspacePage() {
     } catch { setStatusMessage('Import gagal. Preview tetap tersedia untuk dicoba kembali.'); }
     finally { setIsImporting(false); }
   };
+
+  if (capabilityState.kind === 'loading') {
+    return (
+      <div className="simprok-rab-workspace">
+        <header className="simprok-rab-workspace__header">
+          <div>
+            <div className="simprok-rab-workspace__eyebrow">SIMPROK / Buat RAB / Ruang Kerja RAB</div>
+            <h1>Ruang Kerja RAB</h1>
+            <p>Memuat kapabilitas ruang kerja...</p>
+          </div>
+        </header>
+        <div className="simprok-rab-empty-state" role="status">
+          <p>Memuat draft...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (capabilityState.kind === 'lifecycle-denied') {
+    return (
+      <div className="simprok-rab-workspace">
+        <header className="simprok-rab-workspace__header">
+          <div>
+            <div className="simprok-rab-workspace__eyebrow">SIMPROK / Buat RAB / Ruang Kerja RAB</div>
+            <h1>Ruang Kerja RAB</h1>
+          </div>
+        </header>
+        <div className="simprok-rab-validation-alert" role="alert">
+          <p>
+            RAB proyek ini sudah menjadi baseline atau telah disetujui.
+            Perubahan harus melalui mekanisme resmi.
+          </p>
+          <button
+            className="simprok-rab-action simprok-rab-action--secondary"
+            onClick={() => navigate(`/project/${projectId}/rab`)}
+          >
+            Kembali ke Ruang Hidup RAB
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (capabilityState.kind === 'not-found') {
+    return (
+      <div className="simprok-rab-workspace">
+        <header className="simprok-rab-workspace__header">
+          <div>
+            <div className="simprok-rab-workspace__eyebrow">SIMPROK / Buat RAB / Ruang Kerja RAB</div>
+            <h1>Ruang Kerja RAB</h1>
+          </div>
+        </header>
+        <div className="simprok-rab-validation-alert" role="alert">
+          <p>Proyek atau Draft tidak dapat ditemukan.</p>
+          <button
+            className="simprok-rab-action simprok-rab-action--secondary"
+            onClick={() => navigate('/proyek')}
+          >
+            Kembali ke Proyek Saya
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (capabilityState.kind === 'error') {
+    return (
+      <div className="simprok-rab-workspace">
+        <header className="simprok-rab-workspace__header">
+          <div>
+            <div className="simprok-rab-workspace__eyebrow">SIMPROK / Buat RAB / Ruang Kerja RAB</div>
+            <h1>Ruang Kerja RAB</h1>
+          </div>
+        </header>
+        <div className="simprok-rab-validation-alert" role="alert">
+          <p>Gagal memuat ruang kerja. Periksa koneksi dan coba lagi.</p>
+          <button
+            className="simprok-rab-action simprok-rab-action--secondary"
+            onClick={() => setRetryToken((token) => token + 1)}
+          >
+            Coba lagi
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="simprok-rab-workspace">
@@ -593,7 +732,7 @@ export function RabWorkspacePage() {
 
       <section className="simprok-rab-toolbar" aria-label="Aksi Ruang Kerja RAB">
         <input ref={importInputRef} hidden type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void previewImport(file); }} />
-        <button onClick={() => importInputRef.current?.click()} disabled={!projectId || isImporting} title="Import BOQ XLSX" aria-label="Import BOQ">
+        <button onClick={() => importInputRef.current?.click()} disabled={!projectId || !canEditDraft || isImporting} title="Import BOQ XLSX" aria-label="Import BOQ">
           <FileInput size={17} /> Import BOQ
         </button>
         <button onClick={() => navigate('/first-real-input-preview?tab=ahsp')} title="Preview Cari AHSP (Data Contoh)" aria-label="Preview Cari AHSP" data-route="/?ruang=cari-ahsp">
@@ -605,7 +744,7 @@ export function RabWorkspacePage() {
         <button onClick={() => openPlaceholder('Print')} title="Print - belum tersambung" aria-label="Print - belum tersambung" data-route="/?ruang=print-rab">
           <Printer size={17} /> Print
         </button>
-        <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId}>
+        <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId || !canEditDraft}>
           <Save size={17} /> {isSaving ? 'Menyimpan...' : 'Simpan Draft'}
         </button>
         <button className="simprok-rab-toolbar__lock" onClick={() => openPlaceholder('Kunci RAB')} title="Kunci RAB - menunggu mesin finalisasi" aria-label="Kunci RAB - belum aktif" data-route="/?ruang=kunci-rab" aria-disabled={true}>
@@ -621,7 +760,7 @@ export function RabWorkspacePage() {
           <div style={{ maxHeight: 240, overflow: 'auto' }}>
             {importPreview.displayedRows.map((row) => <div key={row.sourceRowNumber}>Baris {row.sourceRowNumber}: {row.description}{formatBoqImportMeasurement(row.itemType, row.quantityDecimalString, row.unitRaw)}{row.errors.length ? ` [${row.errors.join(', ')}]` : ''}</div>)}
           </div>
-          <button onClick={() => void approveImport()} disabled={!importPreview.canApprove || isImporting}>{isImporting ? 'Sedang mengimpor BOQ' : 'Setujui dan Import'}</button>
+          <button onClick={() => void approveImport()} disabled={!importPreview.canApprove || !canEditDraft || isImporting}>{isImporting ? 'Sedang mengimpor BOQ' : 'Setujui dan Import'}</button>
         </section>
       ) : null}
       {hasNegativeValue ? (

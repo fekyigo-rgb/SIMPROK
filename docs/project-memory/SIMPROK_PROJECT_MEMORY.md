@@ -75,18 +75,6 @@ Execution context dan keputusan EF melekat pada setiap occurrence/item, bukan pa
 
 ## 3. Keputusan Terbuka
 
-### UTANG-PLATFORM-03 — IMPORT-FIRST-01 vertical-local intake sementara
-
-Adapter XLSX IMPORT-FIRST-01 adalah vertical-local intake sementara. Doc-03 Article-05 dan Doc-02 Article-13 mengenai Reality Intake asynchronous di Platform Layer belum dipenuhi. Jalur ini diizinkan Owner khusus untuk BOQ XLSX → Preview → Persetujuan manusia → Working Draft kosong → Frontend RAB. Adapter wajib tetap terpisah, pure, tanpa database dan tanpa business dependency agar dapat dipindahkan melalui perubahan wiring tanpa menulis ulang parser. Utang ditutup ketika Platform Reality Intake dibuka sesuai ADR-002.
-
-### UTANG-FAKE-ZERO-04 — sentinel penyimpanan baris struktural
-
-FOLDER dan NOTE adalah baris struktural, bukan pekerjaan terukur. Karena schema saat ini mewajibkan quantity dan unit, nilai database `quantity=0` dan `unit=''` adalah sentinel penyimpanan legacy saja: bukan fakta bisnis, tidak masuk aritmetika, dan tidak ditampilkan sebagai quantity/unit. WORK_ITEM tidak boleh memakai sentinel ini. Utang ditutup ketika quantity/unit struktural menjadi nullable atau baris struktural dipindahkan ke representasi khusus melalui slice schema yang diotorisasi terpisah.
-
-### UTANG-ACCESS-05 — Project existence concealment
-
-Canonical `ProjectAccessGuard` saat ini mengembalikan 404 untuk `PROJECT_NOT_FOUND`, 404 untuk `MEMBERSHIP_NOT_FOUND`, dan 403 untuk `ASSIGNMENT_REQUIRED`. Respons 403 dapat mengungkap bahwa proyek ada kepada anggota workspace terautentikasi yang tidak ditugaskan. Perubahan agar `ASSIGNMENT_REQUIRED` menjadi 404 harus dilakukan sebagai security slice terpisah yang mencakup seluruh route project-scoped, dengan regression penuh serta gate Owner/PM/Architect. IMPORT-FIRST-01 tidak boleh memecah perilaku akses kanonik.
-
 - Kamus konteks universal AHSP.
 - Profil sensitivitas keluarga pekerjaan.
 - Profil spesifik AHSP.
@@ -447,3 +435,164 @@ This is an Owner operational clarification, not a Foundation, Kitab, ADR, or uni
 - `OWNER_ACCEPTANCE=PASS`
 - `OWNER_MERGE_DECISION=PASS`
 - `PR_MERGE_AUTHORIZED=YES`
+
+## 12. UTANG-LIFECYCLE-06 — canonical RAB draft-lifecycle closure (PR #35)
+
+### 12.1 What triggered this
+
+- Owner discovered that a direct URL opened an editable RAB workspace for
+  ACC-X. The prior browser proof used for RAB/BOQ import work was a route
+  proof only — it did not prove the route was reached through a lawful
+  product journey, and it did not prove the route was denied when it should
+  be.
+- Root cause: `GET/PUT /projects/:projectId/boq/draft` and the BOQ import
+  preview/approve routes had no lifecycle authority at all. `RabWorkspacePage`
+  rendered a fully editable grid unconditionally on load. `ProjectListPage`
+  derived the "Lanjutkan Draft" card action from `Project.status`, which is
+  informational and can drift from the real Working Draft/baseline/RAB state.
+
+### 12.2 What PR #35 changes (as corrected by the Owner's final-planned-state addendum)
+
+- Adds one canonical authority: `RabLifecyclePolicyService`
+  (`backend/src/project/rab-lifecycle-policy.service.ts`). It reads
+  `ProjectBaseline` (ACTIVE), `RabDocument` (APPROVED), and `BoqStructure`
+  (DRAFT, name `Working Draft`) counts, plus `Project.status` as an
+  **eligibility door**, and returns
+  `{ canEnterEditableDraftWorkspace, canEditDraft, reasonCode, projectStatus, activeBaselineCount, approvedRabCount, workingDraftCount }`.
+  Reason priority: `ACTIVE_BASELINE_EXISTS` > `APPROVED_RAB_EXISTS` >
+  `MULTIPLE_WORKING_DRAFTS` > `PROJECT_NOT_DRAFT` > allowed. `Project.status`
+  never fabricates a baseline/approved-RAB fact and never overrides 1-3 — a
+  `PLANNED` project with a real active baseline is still
+  `ACTIVE_BASELINE_EXISTS`, not allowed.
+- `ProjectStatus` has no `DRAFT` member. The canonical editable-status set is
+  `RAB_EDITABLE_PROJECT_STATUSES = [ProjectStatus.PLANNED]`, exported from
+  the same file. `PLANNED` is the "Draft / Perencanaan" planning status in
+  product language; `BoqStructure.status = 'DRAFT'` is a separate domain
+  (Working Draft structure status) and must never be confused with it.
+- New pre-Multer guard `RabEditableLifecycleGuard`
+  (`backend/src/project/rab-editable-lifecycle.guard.ts`) holds zero
+  lifecycle derivation logic of its own — it only calls
+  `RabLifecyclePolicyService.evaluate` and throws the exact reason code.
+  Attached to `POST .../boq/import/preview` and `POST .../boq/import/approve`
+  as `@UseGuards(ProjectAccessGuard, PermissionsGuard, RabEditableLifecycleGuard)`,
+  ahead of `@UseInterceptors(FileInterceptor(...))`. A blocked project is now
+  rejected before file buffering, XLSX validation, parsing, or fingerprint
+  calculation — proven by E2E cases where a blocked project's `import/approve`
+  reports the true reason code even with a garbage fingerprint, and a corrupt
+  file/wrong extension on `import/preview` reports the true reason code
+  instead of a file-validation error.
+- Enforced on: `GET /projects/:projectId/boq/draft` (409 + reasonCode when
+  blocked; truthful empty draft + capability when zero drafts),
+  `PUT /projects/:projectId/boq/draft` (requires `RAB_DRAFT_EDIT`, not
+  `PROJECT_CREATE`; locks the Project row `FOR UPDATE`, re-evaluates
+  lifecycle, creates the Working Draft on first save, 409s on duplicates),
+  `POST .../boq/import/preview` (`RAB_VIEW` + the guard above), and
+  `POST .../boq/import/approve` (`RAB_DRAFT_EDIT` + the guard above; the
+  transactional Project-row-lock re-check inside the service remains as the
+  TOCTOU-safe final authority for a project that becomes blocked *during* the
+  request, which the guard cannot catch since it only runs once at the start).
+- `ProjectService.create` now atomically creates exactly one empty Working
+  Draft (`BoqStructure`, DRAFT, version 1) alongside the project — never a
+  baseline, approved RAB, or progress report, and `initiateSetup` is not
+  called. `Project.status` defaults to `PLANNED`, so a new project is
+  immediately RAB-editable.
+- `GET /projects/mine` now returns a batched `rabLifecycle` projection per
+  project (three `groupBy` queries total, not N+1).
+  `ProjectListPage.primaryAction` reads
+  `rabLifecycle.canEnterEditableDraftWorkspace` / `workingDraftCount` first;
+  `Project.status` only selects the fallback label/action (e.g. "Buka Kunci",
+  "Lihat Arsip") when the project is not lifecycle-editable.
+- `RabWorkspacePage` is fail-closed by construction: capability starts
+  `loading`, no editable control (grid, Import BOQ, Simpan Draft) renders
+  before a `ready` capability response arrives; any 409 (including
+  `PROJECT_NOT_DRAFT`) renders the lifecycle message with a button back to
+  `/project/:projectId/rab`; a 404 renders a message with a button to
+  `/proyek`; other failures stay fail-closed with a retry action.
+- `ProjectRabDoorPage` (the read-only "Ruang Hidup RAB" viewer) no longer
+  calls `GET /boq/draft` as a fallback for a non-`PLANNED` project with no
+  baseline rows — it shows "RAB baseline belum tersedia untuk proyek ini."
+  directly. It has no editable controls to begin with (no Import BOQ, no
+  Simpan Draft); this change only removes an unnecessary network call and
+  makes the honest-empty-state reason precise instead of relying on an
+  error-shaped response body incidentally parsing to an empty array.
+
+### 12.3 ACC-X — resolved, not a gap anymore
+
+- The original task assumed ACC-X was already blocked by an existing
+  baseline/approved RAB. Read-only inspection of `simprok_test` showed ACC-X
+  actually has zero `ProjectBaseline`, zero `APPROVED` `RabDocument`, zero
+  `BoqStructure`, zero `ProgressReport`, and `Project.status = ACTIVE`. Under
+  the first version of the law (data-only, `Project.status` purely
+  informational), that made ACC-X a *lawful zero-draft project* —
+  `canEnterEditableDraftWorkspace=true` — which did not match the Owner's
+  intent for ACC-X and was reported as an open gap.
+- The Owner's final-planned-state addendum resolved this by making
+  `Project.status` an eligibility gate (§12.2): ACC-X's status is `ACTIVE`,
+  not `PLANNED`, so it is now correctly `PROJECT_NOT_DRAFT` —
+  `canEnterEditableDraftWorkspace=false`, `canEditDraft=false` — with zero
+  baseline/approved/draft facts underneath. Its card shows the informational
+  "Berjalan" fallback (no "Mulai RAB", no "Lanjutkan Draft"; "Lihat Detail"
+  remains visible as a separate, always-present control). ACC-X's seed
+  fixture itself was never mutated to force this — the new status-gate law is
+  what makes the real, already-seeded ACC-X row resolve correctly on its own.
+- E2E coverage now uses ACC-X directly as the `PROJECT_NOT_DRAFT` fixture
+  (`backend/test/acceptance/rab-lifecycle.e2e-spec.ts`, "blocked project —
+  PROJECT_NOT_DRAFT" and "ACC-X canonical result" describe blocks), alongside
+  dedicated ad-hoc fixture projects for `ACTIVE_BASELINE_EXISTS` /
+  `APPROVED_RAB_EXISTS` / `MULTIPLE_WORKING_DRAFTS` and the import-approve
+  TOCTOU case.
+
+### 12.4 Still open — do not claim closed
+
+- `docs/agent-queue/NEXT_TASK.md`'s "browser visual audit not completed — no
+  browser automation/tooling available in the session" note from the P7C
+  slice still applies here: no browser-automation tool exists in this
+  session, so the manual click-through
+  (Login → Proyek Saya → RAB-DRAFT-PROOF → Lanjutkan/Mulai RAB → Ruang Kerja
+  RAB → Import BOQ → Preview → Setujui dan Import) was not performed by the
+  agent. The `RAB-DRAFT-PROOF` acceptance fixture (code `RAB-DRAFT-PROOF`,
+  workspace Workspace-A, status `PLANNED`, `assigned@test.local` assigned,
+  exactly one empty Working Draft, idempotent reseed that never touches an
+  already-imported draft) is seeded in `simprok_test` and reserved for the
+  Owner (or a session with real browser tooling) to run that walkthrough
+  directly.
+- The `RAB_VIEW`/`RAB_DRAFT_EDIT` production-permission gap first found here
+  is now tracked as its own entry — see [[UTANG-PERMISSION-08]] (§13) — since
+  it broadened to five missing permission codes and is a distinct concern
+  from the lifecycle law itself.
+- Unaudited RAB write routes (anything touching RAB beyond the routes/pages
+  listed in 12.2) remain follow-up scope. Do not claim global RAB lifecycle
+  closure from this entry.
+
+### 12.5 Do not create UTANG-LIFECYCLE-06b
+
+No interim `Project.status`-only gate (ignoring baseline/approved-RAB/draft
+facts) and no interim data-only gate (ignoring `Project.status`) is accepted
+as a substitute for the canonical `RabLifecyclePolicyService` authority in
+§12.2 — both were tried in sequence on this same entry and corrected in
+place. If a new gap is found against this closure, extend this entry or open
+a new, distinctly-named debt — do not fork a "b" variant of this one.
+
+## 13. UTANG-PERMISSION-08 — five SEEDED_CURRENT permissions absent from simprok_db
+
+- `backend/src/common/constants/permissions.ts` declares `RAB_VIEW`,
+  `RAB_DRAFT_EDIT`, `AHSP_APPROVE`, `BASIC_PRICE_VIEW`, and
+  `BASIC_PRICE_MANAGE` as `SEEDED_CURRENT`. A read-only inventory of
+  `simprok_db` (verified inside a `BEGIN TRANSACTION READ ONLY` /
+  `current_setting('transaction_read_only') = on` block; zero writes) found
+  none of the five exist as `Permission` rows there — they were only ever
+  seeded into the test database (`simprok_test` via `prisma/seed-acceptance.ts`
+  and `prisma/seed-rbac-permissions.ts`).
+- `DIRECTOR_RAB_VIEW_PRESENT=NO`, `DIRECTOR_RAB_DRAFT_EDIT_PRESENT=NO` — the
+  DIRECTOR role in `simprok_db` has `AHSP_MANAGE`, `AHSP_VIEW`,
+  `APPROVAL_MATRIX_VIEW`, `AUTHORITY_VIEW`, `OBSERVATORY_VIEW`,
+  `PROJECT_CREATE`, `PROJECT_VIEW`, `WORKSPACE_MEMBERSHIP_VIEW` — none of the
+  five gap permissions.
+- `PRODUCTION_ACTIVATION_BLOCKED_UNTIL=RAB_VIEW_AND_RAB_DRAFT_EDIT_SEEDED_AND_GRANTED`
+  at minimum for PR #35's routes specifically; the other three
+  (`AHSP_APPROVE`, `BASIC_PRICE_VIEW`, `BASIC_PRICE_MANAGE`) block whatever
+  their own consuming routes are, out of scope for this entry to enumerate.
+- Not fixed here: seeding and granting production permissions is an Owner/PM
+  governance decision (who gets `RAB_DRAFT_EDIT` in production, under which
+  role), not an executor decision. `PRODUCTION_DATABASE_WRITE_COUNT=0` for
+  this finding.

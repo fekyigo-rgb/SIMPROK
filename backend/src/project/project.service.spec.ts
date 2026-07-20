@@ -18,6 +18,9 @@ describe('ProjectService P7C intake contract', () => {
       projectAssignment: {
         create: jest.fn(),
       },
+      boqStructure: {
+        create: jest.fn().mockResolvedValue({ id: 'draft-1' }),
+      },
     };
     const prisma = {
       workspace: {
@@ -50,7 +53,7 @@ describe('ProjectService P7C intake contract', () => {
 
   it('stores budgetBaseline and mainMaterialSpec on create', async () => {
     const { prisma, tx } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await service.create({
       name: 'Project',
@@ -67,11 +70,14 @@ describe('ProjectService P7C intake contract', () => {
         mainMaterialSpec: 'Beton K-300',
       }),
     });
+    expect(tx.boqStructure.create).toHaveBeenCalledWith({
+      data: { projectId: 'project-1', name: 'Working Draft', version: 1, status: 'DRAFT' },
+    });
   });
 
   it('keeps omitted budgetBaseline and mainMaterialSpec null on create data', async () => {
     const { prisma, tx } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await service.create({ name: 'Project', code: 'P7C' }, 'workspace-1');
 
@@ -85,7 +91,7 @@ describe('ProjectService P7C intake contract', () => {
 
   it('normalizes whitespace spec to null on create', async () => {
     const { prisma, tx } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await service.create({
       name: 'Project',
@@ -109,7 +115,7 @@ describe('ProjectService P7C intake contract', () => {
 
   it('patches budget only', async () => {
     const { prisma } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await service.updateIntakeContext('project-1', { budgetBaseline: '100000.50' });
 
@@ -121,7 +127,7 @@ describe('ProjectService P7C intake contract', () => {
 
   it('patches spec only', async () => {
     const { prisma } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await service.updateIntakeContext('project-1', { mainMaterialSpec: 'Semen Tipe I' });
 
@@ -133,7 +139,7 @@ describe('ProjectService P7C intake contract', () => {
 
   it('does not clear omitted fields', async () => {
     const { prisma } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await service.updateIntakeContext('project-1', {});
 
@@ -145,7 +151,7 @@ describe('ProjectService P7C intake contract', () => {
 
   it('clears nullable fields when PATCH receives null', async () => {
     const { prisma } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await service.updateIntakeContext('project-1', { budgetBaseline: null, mainMaterialSpec: null });
 
@@ -157,7 +163,7 @@ describe('ProjectService P7C intake contract', () => {
 
   it('ignores workspaceId and organizationId body fields', async () => {
     const { prisma } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await service.updateIntakeContext('project-1', {
       budgetBaseline: '1',
@@ -174,7 +180,7 @@ describe('ProjectService P7C intake contract', () => {
   it('rejects PATCH when an active official baseline exists', async () => {
     const { prisma } = createPrismaMock();
     prisma.projectBaseline.count.mockResolvedValue(1);
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await expect(service.updateIntakeContext('project-1', { budgetBaseline: '1' }))
       .rejects.toBeInstanceOf(ConflictException);
@@ -189,7 +195,7 @@ describe('ProjectService P7C intake contract', () => {
       mainMaterialSpec: null,
       description: 'Pagu Anggaran: 999999999\nSpesifikasi Material Utama: Beton',
     });
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await expect(service.getIntakeMode('project-1')).resolves.toMatchObject({
       pagu: { status: 'MISSING' },
@@ -207,7 +213,7 @@ describe('ProjectService P7C intake contract', () => {
     prisma.boqItem.count
       .mockResolvedValueOnce(0)
       .mockResolvedValueOnce(1);
-    const service = new ProjectService(prisma as any, {} as any);
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await expect(service.getIntakeMode('project-1')).resolves.toMatchObject({
       mode: 'C',

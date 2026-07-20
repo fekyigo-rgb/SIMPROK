@@ -8,6 +8,15 @@ import { apiFetch } from '../utils/apiClient';
 type RabStatus = 'draft' | 'terkunci' | 'approved' | 'berjalan' | 'selesai';
 type UserInvolvement = 'ditugaskan';
 
+interface RabLifecycleProjection {
+  canEnterEditableDraftWorkspace: boolean;
+  canEditDraft: boolean;
+  reasonCode: string | null;
+  workingDraftCount: number;
+  activeBaselineCount: number;
+  approvedRabCount: number;
+}
+
 interface ProjectItem {
   id: string;
   nama: string;
@@ -16,18 +25,22 @@ interface ProjectItem {
   nilai: string;
   keterangan: string;
   progress?: number;
+  rabLifecycle?: RabLifecycleProjection;
 }
 
 function mapProjectToItem(backendProject: Record<string, unknown>): ProjectItem {
+  // Project.status only drives informational chip text — never RAB editability.
   let mappedStatus: RabStatus = 'draft';
   if (backendProject.status === 'ACTIVE') mappedStatus = 'berjalan';
   else if (backendProject.status === 'COMPLETED') mappedStatus = 'selesai';
   else if (backendProject.status === 'ON_HOLD') mappedStatus = 'terkunci';
   else if (backendProject.status === 'PLANNED') mappedStatus = 'draft';
 
-  const budget = backendProject.budgetBaseline 
+  const budget = backendProject.budgetBaseline
     ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(Number(backendProject.budgetBaseline))
     : 'Belum tersedia';
+
+  const rabLifecycle = backendProject.rabLifecycle as RabLifecycleProjection | undefined;
 
   return {
     id: String(backendProject.id),
@@ -37,6 +50,7 @@ function mapProjectToItem(backendProject: Record<string, unknown>): ProjectItem 
     nilai: budget,
     keterangan: (backendProject.description as string) || 'Belum ada keterangan',
     progress: mappedStatus === 'berjalan' ? 0 : undefined,
+    rabLifecycle,
   };
 }
 
@@ -155,11 +169,19 @@ export function ProjectListPage() {
   };
 
   const primaryAction = (project: ProjectItem): ProjectCardAction => {
+    // Backend-derived RAB lifecycle is the sole authority on Working Draft
+    // editability — Project.status below only picks the informational fallback.
+    if (project.rabLifecycle?.canEnterEditableDraftWorkspace) {
+      return project.rabLifecycle.workingDraftCount === 0
+        ? { label: 'Mulai RAB', path: buildContinueDraftPath(project.id) }
+        : { label: 'Lanjutkan Draft', path: buildContinueDraftPath(project.id) };
+    }
+
     switch (project.status) {
       case 'draft':
         return {
-          label: 'Lanjutkan Draft',
-          path: buildContinueDraftPath(project.id),
+          label: 'RAB Terkunci',
+          disabledReason: 'RAB proyek ini sudah menjadi baseline atau telah disetujui.',
         };
       case 'terkunci':
         return {

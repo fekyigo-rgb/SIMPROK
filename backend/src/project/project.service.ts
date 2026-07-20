@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, InternalServerErrorException, NotFoundException, BadRequestException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, ProjectStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
@@ -7,12 +7,14 @@ import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { DeviationService } from './deviation.service';
 import { detectIntakeMode } from './intake-mode.kernel';
+import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from './rab-lifecycle-policy.service';
 
 @Injectable()
 export class ProjectService {
   constructor(
     private prisma: PrismaService,
-    private deviationService: DeviationService
+    private deviationService: DeviationService,
+    private rabLifecyclePolicy: RabLifecyclePolicyService,
   ) {}
 
   private buildDraftRecap(
@@ -123,6 +125,18 @@ export class ProjectService {
             });
           }
         }
+
+        // A new project is born with exactly one empty Working Draft — never a
+        // baseline, approved RAB, or progress report. Those only exist once a
+        // human explicitly moves the project through the official mechanism.
+        await tx.boqStructure.create({
+          data: {
+            projectId: project.id,
+            name: WORKING_DRAFT_STRUCTURE_NAME,
+            version: 1,
+            status: 'DRAFT',
+          },
+        });
 
         return project;
       });
@@ -497,9 +511,18 @@ export class ProjectService {
     });
   }
 
-  async getDraftBoq(projectId: string): Promise<{ structureId: string | null; items: object[]; recap: object }> {
+  /**
+   * Intentional final contract: always 200, never 409. GET only describes
+   * reality — it never creates a Working Draft, never mutates anything, and
+   * never expresses lifecycle state as an HTTP error. `capability` is the
+   * sole signal of editability; callers (RabWorkspacePage) must not render
+   * editable controls unless capability.canEditDraft is true.
+   */
+  async getDraftBoq(projectId: string, projectStatus: ProjectStatus): Promise<{ structureId: string | null; items: object[]; recap: object; capability: object }> {
+    const capability = await this.rabLifecyclePolicy.evaluate(projectId, projectStatus);
+
     const structure = await this.prisma.boqStructure.findFirst({
-      where: { projectId, name: 'Working Draft', status: 'DRAFT' },
+      where: { projectId, name: WORKING_DRAFT_STRUCTURE_NAME, status: 'DRAFT' },
       orderBy: { createdAt: 'desc' },
     });
     if (!structure) {
@@ -507,6 +530,7 @@ export class ProjectService {
         structureId: null,
         items: [],
         recap: this.serializeDraftRecap(this.buildDraftRecap(new Prisma.Decimal(0))),
+        capability,
       };
     }
     const items = await this.prisma.boqItem.findMany({
@@ -524,18 +548,29 @@ export class ProjectService {
         new Prisma.Decimal(0),
       );
     const recap = this.buildDraftRecap(subtotal, rab?.profitPercent, rab?.taxPercent);
-    return { structureId: structure.id, items, recap: this.serializeDraftRecap(recap) };
+    return { structureId: structure.id, items, recap: this.serializeDraftRecap(recap), capability };
   }
 
   async saveDraftBoq(projectId: string, dto: SaveDraftBoqDto): Promise<{ structureId: string; items: object[]; recap: object }> {
     return await this.prisma.$transaction(async (tx) => {
+      const lockedProject = await tx.$queryRaw<Array<{ id: string; status: string }>>(
+        Prisma.sql`SELECT "id", "status" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
+      );
+      const project = lockedProject[0];
+      if (!project) throw new NotFoundException('Project not found');
+
+      const capability = await this.rabLifecyclePolicy.evaluateInTransaction(tx, projectId, project.status as ProjectStatus);
+      if (!capability.canEditDraft) {
+        throw new ConflictException(capability.reasonCode);
+      }
+
       let structure = await tx.boqStructure.findFirst({
-        where: { projectId, name: 'Working Draft', status: 'DRAFT' },
+        where: { projectId, name: WORKING_DRAFT_STRUCTURE_NAME, status: 'DRAFT' },
         orderBy: { createdAt: 'desc' },
       });
       if (!structure) {
         structure = await tx.boqStructure.create({
-          data: { projectId, name: 'Working Draft', version: 1, status: 'DRAFT' },
+          data: { projectId, name: WORKING_DRAFT_STRUCTURE_NAME, version: 1, status: 'DRAFT' },
         });
       }
 

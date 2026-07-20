@@ -1,19 +1,23 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 import { createHash } from 'crypto';
-import { Prisma } from '@prisma/client';
+import { Prisma, ProjectStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { BOQ_PARSER_CONTRACT_VERSION, BoqImportKnowledgeObject, BoqXlsxIntakeAdapter } from './boq-xlsx-intake.adapter';
+import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from './rab-lifecycle-policy.service';
 
 export const MAX_UPLOAD_BYTES = 10_485_760;
 export const MAX_PREVIEW_DISPLAY_ROWS = 500;
-const WORKING_DRAFT_NAME = 'Working Draft';
+const WORKING_DRAFT_NAME = WORKING_DRAFT_STRUCTURE_NAME;
 const STRUCTURAL_ROW_STORAGE = Object.freeze({ quantity: '0', unit: '' });
 type UploadedXlsx = { buffer: Buffer; size: number; originalname: string; mimetype?: string };
 
 @Injectable()
 export class BoqImportService {
   private readonly adapter = new BoqXlsxIntakeAdapter();
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rabLifecyclePolicy: RabLifecyclePolicyService,
+  ) {}
 
   private validateFile(file: UploadedXlsx | undefined): asserts file is UploadedXlsx {
     if (!file?.buffer) throw new BadRequestException('XLSX file is required');
@@ -34,6 +38,9 @@ export class BoqImportService {
     return createHash('sha256').update([projectId, workspaceId, knowledge.sourceSha256, knowledge.sheetName, BOQ_PARSER_CONTRACT_VERSION].join('|')).digest('hex').toUpperCase();
   }
 
+  // Lifecycle is enforced by RabEditableLifecycleGuard before this method is
+  // ever invoked (pre-Multer — see project.controller.ts). No second check
+  // here: one derivation source, read once, before file parsing.
   async preview(projectId: string, workspaceId: string, file?: UploadedXlsx, selectedSheet?: string) {
     this.validateFile(file);
     const knowledge = await this.parse(file, selectedSheet);
@@ -65,6 +72,18 @@ export class BoqImportService {
     if (knowledge.sourceQuantityEvidence.rowsExceedingScale2 > 0) throw new BadRequestException('QUANTITY_SCALE_EXCEEDS_CURRENT_SCHEMA');
 
     return this.prisma.$transaction(async (tx) => {
+      const lockedProject = await tx.$queryRaw<Array<{ id: string; status: string }>>(
+        Prisma.sql`SELECT "id", "status" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
+      );
+      if (lockedProject.length === 0) throw new NotFoundException('Project not found');
+
+      const capability = await this.rabLifecyclePolicy.evaluateInTransaction(tx, projectId, lockedProject[0].status as ProjectStatus);
+      // MULTIPLE_WORKING_DRAFTS is left to the candidate lookup below, which already
+      // locks the exact structure row and reports the identical reason code.
+      if (!capability.canEnterEditableDraftWorkspace && capability.reasonCode !== 'MULTIPLE_WORKING_DRAFTS') {
+        throw new ConflictException(capability.reasonCode);
+      }
+
       const candidates = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT bs."id" FROM "boq_structures" bs
         INNER JOIN "projects" p ON p."id" = bs."projectId"
