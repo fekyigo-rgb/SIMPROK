@@ -48,6 +48,8 @@ const ids = {
   boqStructureRabDraftProof: '10000000-0000-4000-8000-000000000039',
   roleAcceptanceProjectCreator: '10000000-0000-4000-8000-000000000040',
   membershipRoleAssignedProjectCreator: '10000000-0000-4000-8000-000000000041',
+  roleAcceptanceFrontendDoorDirector: '10000000-0000-4000-8000-000000000042',
+  membershipRoleAssignedFrontendDoorDirector: '10000000-0000-4000-8000-000000000043',
 };
 
 async function main() {
@@ -323,6 +325,52 @@ async function main() {
       id: ids.membershipRoleAssignedProjectCreator,
       workspaceMembershipId: assignedMembership.id,
       roleId: roleAcceptanceProjectCreator.id,
+      isActive: true,
+    },
+  });
+
+  // The "Buat RAB" frontend door (Sidebar / ObservatoryPage -> /project/new)
+  // is gated by RoleRoute checking literal role codes DIRECTOR/OWNER in
+  // activeRoles (frontend/src/components/layout/ProtectedRoute.tsx), which
+  // is entirely separate from the backend RBAC PROJECT_CREATE permission
+  // above. This role carries zero permissions of its own — it exists only
+  // to satisfy that frontend role-code check, so it grants no additional
+  // backend authority. Without it, RAB_LIFECYCLE-06's PROJECT_CREATE grant
+  // is necessary but not sufficient to reach the create-project UI.
+  const roleAcceptanceFrontendDoorDirector = await prisma.role.upsert({
+    where: {
+      workspaceId_code: {
+        workspaceId: workspaceA.id,
+        code: 'DIRECTOR',
+      },
+    },
+    update: {
+      name: 'Acceptance Frontend Door (DIRECTOR)',
+      description: 'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
+      isSystem: false,
+    },
+    create: {
+      id: ids.roleAcceptanceFrontendDoorDirector,
+      workspaceId: workspaceA.id,
+      code: 'DIRECTOR',
+      name: 'Acceptance Frontend Door (DIRECTOR)',
+      description: 'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
+      isSystem: false,
+    },
+  });
+
+  await prisma.membershipRole.upsert({
+    where: { id: ids.membershipRoleAssignedFrontendDoorDirector },
+    update: {
+      workspaceMembershipId: assignedMembership.id,
+      roleId: roleAcceptanceFrontendDoorDirector.id,
+      isActive: true,
+      endDate: null,
+    },
+    create: {
+      id: ids.membershipRoleAssignedFrontendDoorDirector,
+      workspaceMembershipId: assignedMembership.id,
+      roleId: roleAcceptanceFrontendDoorDirector.id,
       isActive: true,
     },
   });

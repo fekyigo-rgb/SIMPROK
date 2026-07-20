@@ -4,18 +4,15 @@ import { ArrowRight, MessageSquare, Search, SlidersHorizontal, Trash2 } from 'lu
 import { getProjectNoteSummary } from '../projectNotes';
 
 import { apiFetch } from '../utils/apiClient';
+import {
+  buildDetailPath,
+  buildRabPath,
+  primaryAction,
+  type RabLifecycleProjection,
+  type RabStatus,
+} from '../utils/projectCardAction';
 
-type RabStatus = 'draft' | 'terkunci' | 'approved' | 'berjalan' | 'selesai';
 type UserInvolvement = 'ditugaskan';
-
-interface RabLifecycleProjection {
-  canEnterEditableDraftWorkspace: boolean;
-  canEditDraft: boolean;
-  reasonCode: string | null;
-  workingDraftCount: number;
-  activeBaselineCount: number;
-  approvedRabCount: number;
-}
 
 interface ProjectItem {
   id: string;
@@ -76,17 +73,7 @@ const involvementOptions: { value: UserInvolvement | 'semua'; label: string }[] 
   { value: 'ditugaskan', label: 'Ditugaskan ke Saya' },
 ];
 
-const buildRabPath = (id: string) => `/project/${id}/rab`;
-const buildDetailPath = (id: string) => `/project/${id}/detail`;
 const buildNotesPath = (id: string) => `/project/${id}/catatan`;
-const buildContinueDraftPath = (id: string) => `/project/${id}/rab/workspace`;
-const buildUnlockPath = (id: string) => buildRabPath(id);
-
-interface ProjectCardAction {
-  label: string;
-  path?: string;
-  disabledReason?: string;
-}
 
 export function ProjectListPage() {
   const navigate = useNavigate();
@@ -166,45 +153,6 @@ export function ProjectListPage() {
     setQuery('');
     setStatusFilter('semua');
     setInvolvementFilter('semua');
-  };
-
-  const primaryAction = (project: ProjectItem): ProjectCardAction => {
-    // Backend-derived RAB lifecycle is the sole authority on Working Draft
-    // editability — Project.status below only picks the informational fallback.
-    if (project.rabLifecycle?.canEnterEditableDraftWorkspace) {
-      return project.rabLifecycle.workingDraftCount === 0
-        ? { label: 'Mulai RAB', path: buildContinueDraftPath(project.id) }
-        : { label: 'Lanjutkan Draft', path: buildContinueDraftPath(project.id) };
-    }
-
-    switch (project.status) {
-      case 'draft':
-        return {
-          label: 'RAB Terkunci',
-          disabledReason: 'RAB proyek ini sudah menjadi baseline atau telah disetujui.',
-        };
-      case 'terkunci':
-        return {
-          label: 'Buka Kunci',
-          path: buildUnlockPath(project.id),
-        };
-      case 'approved':
-        return {
-          label: 'Monitoring HOLD',
-          disabledReason: 'Monitoring belum aktif pada slice ini.',
-        };
-      case 'berjalan':
-        return {
-          label: 'Progress HOLD',
-          disabledReason: 'Monitoring progress belum aktif pada slice ini.',
-        };
-      case 'selesai':
-      default:
-        return {
-          label: 'Lihat Arsip',
-          path: buildDetailPath(project.id),
-        };
-    }
   };
 
   return (

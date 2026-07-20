@@ -44,6 +44,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
   let assignedToken: string;
   let foremanToken: string;
   let createOnlyToken: string;
+  let nonassignedToken: string;
   let source: Buffer;
   let workspaceAId: string;
   let orgAId: string;
@@ -174,6 +175,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
     assignedToken = await login('assigned@test.local');
     foremanToken = await login('foreman@test.local');
     createOnlyToken = await login(CREATE_ONLY_EMAIL);
+    nonassignedToken = await login('nonassigned@test.local');
   });
 
   beforeEach(async () => {
@@ -411,6 +413,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         .expect(201);
 
       const newProjectId = createResponse.body.id;
+      expect(createResponse.body.status).toBe('PLANNED');
       const drafts = await prisma.boqStructure.findMany({ where: { projectId: newProjectId } });
       expect(drafts).toHaveLength(1);
       expect(drafts[0]).toMatchObject({ name: 'Working Draft', status: 'DRAFT', version: 1 });
@@ -428,6 +431,17 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         .expect(403);
 
       await postFile(`/projects/${newProjectId}/boq/import/approve`, createOnlyToken).field('selectedSheet', 'RAB').field('importFingerprint', 'x').expect(403);
+    });
+
+    it('account without PROJECT_CREATE cannot create a project — the "Buat RAB" door\'s backend half', async () => {
+      await request(app.getHttpServer())
+        .post('/projects')
+        .set('Authorization', `Bearer ${nonassignedToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ name: 'Should Not Be Created', code: 'LC-DENIED-CREATE' })
+        .expect(403);
+
+      expect(await prisma.project.count({ where: { code: 'LC-DENIED-CREATE' } })).toBe(0);
     });
 
     it('FOREMAN cannot save a draft (PUT), mirroring the existing FOREMAN import-approve denial', async () => {
