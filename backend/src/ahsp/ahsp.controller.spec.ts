@@ -3,7 +3,7 @@ import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { PrismaService } from '../prisma/prisma.service';
+import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import { AhspController } from './ahsp.controller';
 import { AhspService } from './services/ahsp.service';
 import { AhspVersionService } from './services/ahsp-version.service';
@@ -40,11 +40,14 @@ describe('AhspController', () => {
         { provide: AhspService, useValue: ahspService },
         { provide: AhspVersionService, useValue: ahspVersionService },
         { provide: AhspSnapshotService, useValue: ahspSnapshotService },
-        // PermissionsGuard requires Reflector + PrismaService at instantiation time.
+        // PermissionsGuard requires Reflector + WorkspacePermissionResolverService at instantiation time.
         // We provide minimal stubs so NestJS DI can resolve the guard in unit test context.
         // Guard logic itself is not under test here — we only verify class-level metadata.
-        { provide: Reflector, useValue: { getAllAndOverride: jest.fn().mockReturnValue([]) } },
-        { provide: PrismaService, useValue: {} },
+        {
+          provide: Reflector,
+          useValue: { getAllAndOverride: jest.fn().mockReturnValue([]) },
+        },
+        { provide: WorkspacePermissionResolverService, useValue: {} },
         PermissionsGuard,
       ],
     }).compile();

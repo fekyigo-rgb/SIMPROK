@@ -1,4 +1,12 @@
-import { IsArray, ValidateNested, IsString, IsNumber, Min, IsOptional, IsEnum } from 'class-validator';
+import {
+  IsArray,
+  ValidateNested,
+  IsString,
+  IsNumber,
+  Min,
+  IsOptional,
+  IsEnum,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { ItemTypeEnum } from './initiate-project.dto';
 
@@ -30,11 +38,16 @@ export class DraftBoqRowDto {
   @IsOptional()
   unit?: string;
 
+  /**
+   * null/undefined = no authoritative price yet (never invent 0). An
+   * explicit numeric 0 is a real human-entered price and must round-trip
+   * as 0, distinct from "not priced".
+   */
   @IsNumber()
   @Min(0)
   @IsOptional()
   @Type(() => Number)
-  unitPrice?: number;
+  unitPrice?: number | null;
 
   @IsNumber()
   @IsOptional()

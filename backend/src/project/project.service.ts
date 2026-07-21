@@ -1,4 +1,10 @@
-import { ConflictException, Injectable, InternalServerErrorException, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { Prisma, ProjectStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -7,7 +13,10 @@ import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { DeviationService } from './deviation.service';
 import { detectIntakeMode } from './intake-mode.kernel';
-import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from './rab-lifecycle-policy.service';
+import {
+  RabLifecyclePolicyService,
+  WORKING_DRAFT_STRUCTURE_NAME,
+} from './rab-lifecycle-policy.service';
 
 @Injectable()
 export class ProjectService {
@@ -38,8 +47,12 @@ export class ProjectService {
     };
   }
 
-  private serializeDraftRecap(recap: ReturnType<ProjectService['buildDraftRecap']>) {
+  private serializeDraftRecap(
+    recap: ReturnType<ProjectService['buildDraftRecap']>,
+    pricingStatus: 'COMPLETE' | 'INCOMPLETE' = 'COMPLETE',
+  ) {
     return {
+      pricingStatus,
       subtotal: Number(recap.subtotal),
       marginPercent: Number(recap.marginPercent),
       marginAmount: Number(recap.marginAmount),
@@ -50,7 +63,48 @@ export class ProjectService {
     };
   }
 
-  private serializeDecimalString(value: Prisma.Decimal | number | string | null | undefined): string | null {
+  /**
+   * Honest "no authoritative total yet" recap. Used whenever one or more
+   * WORK_ITEM rows lack a priced unitPrice — never fabricate a Rp0/partial
+   * grand total from rows that are still unpriced (5D null-integrity law).
+   */
+  private incompletePricingRecap(
+    marginPercentInput?: number | Prisma.Decimal | null,
+    taxPercentInput?: number | Prisma.Decimal | null,
+  ) {
+    return {
+      pricingStatus: 'INCOMPLETE' as const,
+      subtotal: null,
+      marginPercent:
+        marginPercentInput === null || marginPercentInput === undefined
+          ? null
+          : Number(marginPercentInput),
+      marginAmount: null,
+      taxPercent:
+        taxPercentInput === null || taxPercentInput === undefined
+          ? null
+          : Number(taxPercentInput),
+      ppnPercent:
+        taxPercentInput === null || taxPercentInput === undefined
+          ? null
+          : Number(taxPercentInput),
+      taxAmount: null,
+      grandTotal: null,
+    };
+  }
+
+  /** Any WORK_ITEM row without a priced unitPrice makes the whole draft's monetary recap non-authoritative. */
+  private hasIncompletePricing(
+    items: readonly { itemType: string; unitPrice: Prisma.Decimal | null }[],
+  ): boolean {
+    return items.some(
+      (item) => item.itemType === 'WORK_ITEM' && item.unitPrice === null,
+    );
+  }
+
+  private serializeDecimalString(
+    value: Prisma.Decimal | number | string | null | undefined,
+  ): string | null {
     if (value === null || value === undefined) {
       return null;
     }
@@ -58,14 +112,18 @@ export class ProjectService {
     return new Prisma.Decimal(value).toFixed(2);
   }
 
-  private normalizeOptionalText(value: string | null | undefined): string | null | undefined {
+  private normalizeOptionalText(
+    value: string | null | undefined,
+  ): string | null | undefined {
     if (value === undefined) return undefined;
     if (value === null) return null;
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
 
-  private decimalOrNull(value: string | null | undefined): Prisma.Decimal | null | undefined {
+  private decimalOrNull(
+    value: string | null | undefined,
+  ): Prisma.Decimal | null | undefined {
     if (value === undefined) return undefined;
     if (value === null) return null;
     return new Prisma.Decimal(value);
@@ -109,8 +167,8 @@ export class ProjectService {
               accountId_workspaceId: {
                 accountId: creatorAccountId,
                 workspaceId,
-              }
-            }
+              },
+            },
           });
 
           if (membership) {
@@ -120,8 +178,8 @@ export class ProjectService {
                 workspaceMembershipId: membership.id,
                 roleInProject: 'OWNER',
                 isPrimaryAssignment: true,
-                status: 'ASSIGNED'
-              }
+                status: 'ASSIGNED',
+              },
             });
           }
         }
@@ -152,11 +210,15 @@ export class ProjectService {
         error.meta.target.includes('workspaceId') &&
         error.meta.target.includes('code')
       ) {
-        throw new ConflictException('Kode proyek sudah dipakai di workspace ini. Gunakan kode lain.');
+        throw new ConflictException(
+          'Kode proyek sudah dipakai di workspace ini. Gunakan kode lain.',
+        );
       }
 
       console.error('ProjectService Error:', error);
-      throw new InternalServerErrorException('Gagal membuat proyek. Pastikan Workspace ID valid dan data lengkap.');
+      throw new InternalServerErrorException(
+        'Gagal membuat proyek. Pastikan Workspace ID valid dan data lengkap.',
+      );
     }
   }
 
@@ -166,7 +228,8 @@ export class ProjectService {
       const lockedProject = await tx.$queryRaw<Array<{ id: string }>>(
         Prisma.sql`SELECT "id" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
       );
-      if (lockedProject.length === 0) throw new NotFoundException('Project not found');
+      if (lockedProject.length === 0)
+        throw new NotFoundException('Project not found');
 
       // Draft identity is state-based and deliberately independent of its name.
       const draftStructures = await tx.boqStructure.findMany({
@@ -179,14 +242,16 @@ export class ProjectService {
 
       // New projects reuse their one existing DRAFT. Legacy zero-draft
       // projects may create exactly one container here.
-      const boqStructure = draftStructures[0] ?? await tx.boqStructure.create({
-        data: {
-          projectId,
-          name: 'Main BOQ',
-          version: 1,
-          status: 'DRAFT',
-        },
-      });
+      const boqStructure =
+        draftStructures[0] ??
+        (await tx.boqStructure.create({
+          data: {
+            projectId,
+            name: 'Main BOQ',
+            version: 1,
+            status: 'DRAFT',
+          },
+        }));
 
       // A populated draft means setup already ran. The project row lock makes
       // this a safe no-op for sequential and concurrent duplicate requests,
@@ -207,17 +272,21 @@ export class ProjectService {
         let parentId: string | undefined = undefined;
         if (item.parentTempId) {
           if (!tempIdMap.has(item.parentTempId)) {
-            throw new BadRequestException(`Parent reference ${item.parentTempId} not found in preceding items.`);
+            throw new BadRequestException(
+              `Parent reference ${item.parentTempId} not found in preceding items.`,
+            );
           }
           parentId = tempIdMap.get(item.parentTempId);
           if (!folderSet.has(parentId!)) {
-            throw new BadRequestException(`Parent of ${item.name} must be a FOLDER.`);
+            throw new BadRequestException(
+              `Parent of ${item.name} must be a FOLDER.`,
+            );
           }
         }
 
         const isFolder = item.itemType === 'FOLDER';
         const isNote = item.itemType === 'NOTE';
-        
+
         let unitPrice: Prisma.Decimal | null = null;
         let lineTotal: Prisma.Decimal | null = null;
         let quantity = new Prisma.Decimal(0);
@@ -238,11 +307,11 @@ export class ProjectService {
             name: item.name,
             quantity,
             unit,
-            itemType: isFolder ? 'FOLDER' : (isNote ? 'NOTE' : 'WORK_ITEM'),
+            itemType: isFolder ? 'FOLDER' : isNote ? 'NOTE' : 'WORK_ITEM',
             unitPrice,
             lineTotal,
             sortOrder: item.sortOrder ?? orderCounter++,
-          }
+          },
         });
 
         if (item.tempId) {
@@ -287,14 +356,20 @@ export class ProjectService {
       include: {
         entries: {
           include: {
-            boqItem: true
-          }
+            boqItem: true,
+          },
         },
-      }
+      },
     });
 
     const report = reports[0];
-    if (!report) return { available: false, status: 'UNAVAILABLE', message: 'Data realitas belum tersedia', data: null };
+    if (!report)
+      return {
+        available: false,
+        status: 'UNAVAILABLE',
+        message: 'Data realitas belum tersedia',
+        data: null,
+      };
 
     // Fetch baseline to get total planned cost
     const baseline = await this.prisma.projectBaseline.findFirst({
@@ -305,7 +380,7 @@ export class ProjectService {
     let overallPlannedCost = 0;
     if (baseline && baseline.rabDocumentId) {
       const rab = await this.prisma.rabDocument.findUnique({
-        where: { id: baseline.rabDocumentId }
+        where: { id: baseline.rabDocumentId },
       });
       if (rab) {
         overallPlannedCost = Number(rab.totalBaseCost) || 0;
@@ -320,18 +395,19 @@ export class ProjectService {
     for (const entry of report.entries) {
       const installedQty = Number(entry.installedQuantity) || 0;
       const plannedQty = Number(entry.boqItem.quantity) || 1; // prevent div/0
-      
+
       const itemProgressPct = Math.min((installedQty / plannedQty) * 100, 100);
       totalActualProgressPct += itemProgressPct;
       entryCount++;
 
-      // Since BoqItem doesn't store unitPrice directly in the schema, 
+      // Since BoqItem doesn't store unitPrice directly in the schema,
       // we derive a proportional actual cost from the overall planned cost for verification.
       // In a real scenario, this would use AHSP snapshot resource calculations.
       overallActualCost += Number(entry.actualCost) || 0;
     }
 
-    const overallActualProgress = entryCount > 0 ? (totalActualProgressPct / entryCount) : 0;
+    const overallActualProgress =
+      entryCount > 0 ? totalActualProgressPct / entryCount : 0;
     const overallPlannedProgress = null; // Truthful: no time-phased schedule model exists
 
     // NOTE: No actualCost fallback. If actualCost is 0, it means field did not record it.
@@ -339,7 +415,11 @@ export class ProjectService {
 
     // PHASE 01: DEVIATION INTELLIGENCE
     // Generate verified deviations based strictly on known foundations
-    const deviationSignals = await this.deviationService.computeAndPersist(projectId, report.id, report.entries);
+    const deviationSignals = await this.deviationService.computeAndPersist(
+      projectId,
+      report.id,
+      report.entries,
+    );
 
     return {
       ...report,
@@ -347,7 +427,7 @@ export class ProjectService {
       overallActualProgress,
       overallPlannedCost,
       overallActualCost,
-      deviationSignals
+      deviationSignals,
     };
   }
 
@@ -358,15 +438,22 @@ export class ProjectService {
       orderBy: { createdAt: 'desc' },
       take: 1,
     });
-    return forecasts[0] || { available: false, status: 'UNAVAILABLE', message: 'Data proyeksi belum tersedia', data: null };
+    return (
+      forecasts[0] || {
+        available: false,
+        status: 'UNAVAILABLE',
+        message: 'Data proyeksi belum tersedia',
+        data: null,
+      }
+    );
   }
 
   async getStorm(projectId: string) {
     // Return active risks
     return await this.prisma.projectRisk.findMany({
-      where: { 
+      where: {
         projectId,
-        status: { in: ['IDENTIFIED', 'MITIGATING'] } // Assuming these statuses
+        status: { in: ['IDENTIFIED', 'MITIGATING'] }, // Assuming these statuses
       },
       orderBy: { riskScore: 'desc' },
     });
@@ -379,7 +466,7 @@ export class ProjectService {
       orderBy: { createdAt: 'desc' },
       include: {
         options: true,
-      }
+      },
     });
   }
 
@@ -390,7 +477,7 @@ export class ProjectService {
       orderBy: { createdAt: 'desc' },
       include: {
         recommendation: true,
-      }
+      },
     });
   }
 
@@ -438,7 +525,10 @@ export class ProjectService {
     });
   }
 
-  async updateIntakeContext(projectId: string, dto: UpdateProjectIntakeContextDto) {
+  async updateIntakeContext(
+    projectId: string,
+    dto: UpdateProjectIntakeContextDto,
+  ) {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: { id: true },
@@ -451,19 +541,23 @@ export class ProjectService {
     });
 
     if (activeBaselineCount > 0) {
-      throw new ConflictException('Data proyek telah menjadi bagian dari baseline resmi. Gunakan mekanisme perubahan resmi.');
+      throw new ConflictException(
+        'Data proyek telah menjadi bagian dari baseline resmi. Gunakan mekanisme perubahan resmi.',
+      );
     }
 
     const data: Prisma.ProjectUpdateInput = {};
 
     if (Object.prototype.hasOwnProperty.call(dto, 'budgetBaseline')) {
-      data.budgetBaseline = dto.budgetBaseline == null
-        ? null
-        : new Prisma.Decimal(dto.budgetBaseline);
+      data.budgetBaseline =
+        dto.budgetBaseline == null
+          ? null
+          : new Prisma.Decimal(dto.budgetBaseline);
     }
 
     if (Object.prototype.hasOwnProperty.call(dto, 'mainMaterialSpec')) {
-      data.mainMaterialSpec = this.normalizeOptionalText(dto.mainMaterialSpec) ?? null;
+      data.mainMaterialSpec =
+        this.normalizeOptionalText(dto.mainMaterialSpec) ?? null;
     }
 
     return await this.prisma.project.update({
@@ -477,7 +571,7 @@ export class ProjectService {
       where: { projectId, status: 'ACTIVE' },
       orderBy: { versionNumber: 'desc' },
     });
-    
+
     if (!baseline) return [];
 
     const rab = await this.prisma.rabDocument.findUnique({
@@ -499,8 +593,19 @@ export class ProjectService {
    * sole signal of editability; callers (RabWorkspacePage) must not render
    * editable controls unless capability.canEditDraft is true.
    */
-  async getDraftBoq(projectId: string, projectStatus: ProjectStatus): Promise<{ structureId: string | null; items: object[]; recap: object; capability: object }> {
-    const capability = await this.rabLifecyclePolicy.evaluate(projectId, projectStatus);
+  async getDraftBoq(
+    projectId: string,
+    projectStatus: ProjectStatus,
+  ): Promise<{
+    structureId: string | null;
+    items: object[];
+    recap: object;
+    capability: object;
+  }> {
+    const capability = await this.rabLifecyclePolicy.evaluate(
+      projectId,
+      projectStatus,
+    );
 
     const structure = await this.prisma.boqStructure.findFirst({
       where: { projectId, name: WORKING_DRAFT_STRUCTURE_NAME, status: 'DRAFT' },
@@ -510,7 +615,9 @@ export class ProjectService {
       return {
         structureId: null,
         items: [],
-        recap: this.serializeDraftRecap(this.buildDraftRecap(new Prisma.Decimal(0))),
+        recap: this.serializeDraftRecap(
+          this.buildDraftRecap(new Prisma.Decimal(0)),
+        ),
         capability,
       };
     }
@@ -518,6 +625,21 @@ export class ProjectService {
       where: { boqStructureId: structure.id },
       orderBy: { sortOrder: 'asc' },
     });
+
+    // A stale RabDocument recap from a time when every row was priced is not
+    // authoritative once the live items include an unpriced WORK_ITEM — the
+    // read path re-derives pricingStatus from current items every time
+    // rather than trusting a persisted flag (5D: "existing draft recap lama
+    // tidak boleh dipakai sebagai otoritas untuk rows yang kini incomplete").
+    if (this.hasIncompletePricing(items)) {
+      return {
+        structureId: structure.id,
+        items,
+        recap: this.incompletePricingRecap(),
+        capability,
+      };
+    }
+
     const rab = await this.prisma.rabDocument.findFirst({
       where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
       orderBy: { updatedAt: 'desc' },
@@ -525,51 +647,105 @@ export class ProjectService {
     const subtotal = rab
       ? new Prisma.Decimal(rab.totalBaseCost)
       : items.reduce(
-        (sum, item) => sum.add(item.itemType === 'WORK_ITEM' && item.lineTotal ? item.lineTotal : 0),
-        new Prisma.Decimal(0),
-      );
-    const recap = this.buildDraftRecap(subtotal, rab?.profitPercent, rab?.taxPercent);
-    return { structureId: structure.id, items, recap: this.serializeDraftRecap(recap), capability };
+          (sum, item) =>
+            sum.add(
+              item.itemType === 'WORK_ITEM' && item.lineTotal
+                ? item.lineTotal
+                : 0,
+            ),
+          new Prisma.Decimal(0),
+        );
+    const recap = this.buildDraftRecap(
+      subtotal,
+      rab?.profitPercent,
+      rab?.taxPercent,
+    );
+    return {
+      structureId: structure.id,
+      items,
+      recap: this.serializeDraftRecap(recap),
+      capability,
+    };
   }
 
-  async saveDraftBoq(projectId: string, dto: SaveDraftBoqDto): Promise<{ structureId: string; items: object[]; recap: object }> {
+  async saveDraftBoq(
+    projectId: string,
+    dto: SaveDraftBoqDto,
+  ): Promise<{ structureId: string; items: object[]; recap: object }> {
     return await this.prisma.$transaction(async (tx) => {
-      const lockedProject = await tx.$queryRaw<Array<{ id: string; status: string }>>(
+      const lockedProject = await tx.$queryRaw<
+        Array<{ id: string; status: string }>
+      >(
         Prisma.sql`SELECT "id", "status" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
       );
       const project = lockedProject[0];
       if (!project) throw new NotFoundException('Project not found');
 
-      const capability = await this.rabLifecyclePolicy.evaluateInTransaction(tx, projectId, project.status as ProjectStatus);
+      const capability = await this.rabLifecyclePolicy.evaluateInTransaction(
+        tx,
+        projectId,
+        project.status as ProjectStatus,
+      );
       if (!capability.canEditDraft) {
         throw new ConflictException(capability.reasonCode);
       }
 
       let structure = await tx.boqStructure.findFirst({
-        where: { projectId, name: WORKING_DRAFT_STRUCTURE_NAME, status: 'DRAFT' },
+        where: {
+          projectId,
+          name: WORKING_DRAFT_STRUCTURE_NAME,
+          status: 'DRAFT',
+        },
         orderBy: { createdAt: 'desc' },
       });
       if (!structure) {
         structure = await tx.boqStructure.create({
-          data: { projectId, name: WORKING_DRAFT_STRUCTURE_NAME, version: 1, status: 'DRAFT' },
+          data: {
+            projectId,
+            name: WORKING_DRAFT_STRUCTURE_NAME,
+            version: 1,
+            status: 'DRAFT',
+          },
         });
       }
 
       // Safe full-replace: nullify parent refs first to avoid self-FK conflict, then delete.
-      await tx.boqItem.updateMany({ where: { boqStructureId: structure.id }, data: { parentId: null } });
+      await tx.boqItem.updateMany({
+        where: { boqStructureId: structure.id },
+        data: { parentId: null },
+      });
       await tx.boqItem.deleteMany({ where: { boqStructureId: structure.id } });
 
       const tempIdMap = new Map<string, string>();
-      const insertedItems: object[] = [];
+      const insertedItems: Array<{
+        itemType: string;
+        unitPrice: Prisma.Decimal | null;
+        lineTotal: Prisma.Decimal | null;
+        [key: string]: unknown;
+      }> = [];
       let subtotal = new Prisma.Decimal(0);
 
       for (const [index, row] of dto.rows.entries()) {
-        const parentId = row.parentTempId ? (tempIdMap.get(row.parentTempId) ?? null) : null;
+        const parentId = row.parentTempId
+          ? (tempIdMap.get(row.parentTempId) ?? null)
+          : null;
         const isFolder = row.itemType === 'FOLDER';
         const isNote = row.itemType === 'NOTE';
-        const quantity = (!isFolder && !isNote) ? new Prisma.Decimal(row.quantity ?? 0) : new Prisma.Decimal(0);
-        const unitPrice = (!isFolder && !isNote) ? new Prisma.Decimal(row.unitPrice ?? 0) : null;
-        const lineTotal = (unitPrice !== null) ? quantity.mul(unitPrice) : null;
+        const quantity =
+          !isFolder && !isNote
+            ? new Prisma.Decimal(row.quantity ?? 0)
+            : new Prisma.Decimal(0);
+        // null/undefined unitPrice means "not priced yet" and must stay null —
+        // never collapse an unknown price into a fabricated 0 (5D null-integrity law).
+        const hasExplicitPrice =
+          !isFolder &&
+          !isNote &&
+          row.unitPrice !== null &&
+          row.unitPrice !== undefined;
+        const unitPrice = hasExplicitPrice
+          ? new Prisma.Decimal(row.unitPrice as number)
+          : null;
+        const lineTotal = unitPrice !== null ? quantity.mul(unitPrice) : null;
         if (row.itemType === 'WORK_ITEM' && lineTotal !== null) {
           subtotal = subtotal.add(lineTotal);
         }
@@ -582,7 +758,7 @@ export class ProjectService {
             name: row.name,
             itemType: isFolder ? 'FOLDER' : isNote ? 'NOTE' : 'WORK_ITEM',
             quantity,
-            unit: (!isFolder && !isNote) ? (row.unit ?? '') : '',
+            unit: !isFolder && !isNote ? (row.unit ?? '') : '',
             unitPrice,
             lineTotal,
             sortOrder: row.sortOrder ?? index,
@@ -592,8 +768,31 @@ export class ProjectService {
         insertedItems.push(created);
       }
 
+      const pricingIncomplete = this.hasIncompletePricing(insertedItems);
+
+      if (pricingIncomplete) {
+        // Do not persist a synthetic RabDocument recap while pricing is
+        // incomplete — an existing DRAFT RabDocument row (from before this
+        // save, when the draft may have been fully priced) is left as-is on
+        // disk, but never served as authoritative: getDraftBoq() re-derives
+        // pricingStatus from live items on every read, independent of this
+        // row's stored numbers.
+        return {
+          structureId: structure.id,
+          items: insertedItems,
+          recap: this.incompletePricingRecap(
+            dto.marginPercent,
+            dto.taxPercent ?? dto.ppnPercent,
+          ),
+        };
+      }
+
       const taxPercent = dto.taxPercent ?? dto.ppnPercent ?? 0;
-      const recap = this.buildDraftRecap(subtotal, dto.marginPercent ?? 0, taxPercent);
+      const recap = this.buildDraftRecap(
+        subtotal,
+        dto.marginPercent ?? 0,
+        taxPercent,
+      );
       const rabData = {
         overheadPercent: new Prisma.Decimal(0),
         profitPercent: recap.marginPercent,
@@ -625,10 +824,18 @@ export class ProjectService {
         orderBy: { updatedAt: 'desc' },
       });
       const persistedRecap = persistedRab
-        ? this.buildDraftRecap(new Prisma.Decimal(persistedRab.totalBaseCost), persistedRab.profitPercent, persistedRab.taxPercent)
+        ? this.buildDraftRecap(
+            new Prisma.Decimal(persistedRab.totalBaseCost),
+            persistedRab.profitPercent,
+            persistedRab.taxPercent,
+          )
         : recap;
 
-      return { structureId: structure.id, items: insertedItems, recap: this.serializeDraftRecap(persistedRecap) };
+      return {
+        structureId: structure.id,
+        items: insertedItems,
+        recap: this.serializeDraftRecap(persistedRecap),
+      };
     });
   }
 
@@ -637,18 +844,18 @@ export class ProjectService {
     if (!boqItems.length) return [];
 
     const snapshotIds = boqItems
-      .map(item => item.ahspSnapshotId)
+      .map((item) => item.ahspSnapshotId)
       .filter((id): id is string => id !== null);
 
     if (!snapshotIds.length) return [];
 
     return await this.prisma.aHSPSnapshot.findMany({
       where: {
-        id: { in: snapshotIds }
+        id: { in: snapshotIds },
       },
       include: {
         resources: true,
-      }
+      },
     });
   }
 }

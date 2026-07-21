@@ -29,21 +29,44 @@ Mencatat PR yang relevan dengan urutan produk aktif. Sumber: GitHub
   IMPORT RETRY/IDEMPOTENCY GAP (lihat DEBT.md)
 - SOURCE: `gh pr view 35 --json state,closed,mergeCommit,mergedAt` + body PR #35
 
-## PR #36 (slice ini)
+## PR #36
 - TITLE: docs(control): add canonical roadmap and multi-agent work method
 - TYPE: docs-only — canonical control closure
-- STATE: OPEN, DRAFT
-- BASE_BRANCH: main
-- HEAD_BRANCH: docs/canonical-agent-control-20260721
-- HEAD_SHA_SEBELUM_SLICE_INI: `af6a2a6220227c5e1a0236d53c424261b6cceb83`
-- HEAD_SHA_SETELAH_SLICE_INI: lihat `docs/control/STATE.md` (`PENDING_UNTIL_PUSH`
-  saat berkas ini ditulis; nilai eksak final ada pada PR #36 di GitHub
-  setelah push)
-- MERGE_SHA: BELUM ADA — MERGE=NO pada slice ini
+- STATE: MERGED
+- MERGE_SHA: `18c4a1fd1cd951e7e0facc2c9ea8313a7d4372c3`
 - ROADMAP_ITEM: RM-00
 - PRODUCTION_ACTIVATION: NO
-- SIMPROK_DB_WRITE: NO (0 write sepanjang slice ini)
-- SOURCE: `gh pr view 36 --json state,isDraft,headRefOid,baseRefName,mergeable`
+- SIMPROK_DB_WRITE: NO (0 write sepanjang slice PR #36)
+- SOURCE: `gh pr view 36 --json state,isDraft,headRefOid,baseRefName,mergeable`,
+  dikonfirmasi via `git log` main setelah fetch pada slice RM-01a-CODE
+  (`18c4a1f Merge pull request #36 from fekyigo-rgb/docs/canonical-agent-control-20260721`).
+
+## PR RM-01a-CODE (slice ini, nomor PR belum ada saat berkas ini ditulis)
+- TITLE: fix(auth,project): RM-01a-CODE authority matrix, null-integrity,
+  activation planner
+- TYPE: code — permission resolver, frontend capability fail-closed,
+  BOQ null-integrity, narrow activation planner (test-only)
+- STATE: BELUM DIBUAT saat berkas ini ditulis — akan DRAFT setelah push
+- BASE_BRANCH: main
+- HEAD_BRANCH: feat/rm-01-boq-authority-code
+- BASE_SHA: `18c4a1fd1cd951e7e0facc2c9ea8313a7d4372c3` (origin/main exact,
+  diverifikasi sebelum edit)
+- HEAD_SHA: PENDING_UNTIL_PUSH — lihat `docs/control/STATE.md` dan body PR
+  untuk nilai eksak begitu tersedia; tidak dikarang di sini.
+- MERGE_SHA: BELUM ADA — MERGE=NO pada slice ini
+- ROADMAP_ITEM: RM-01
+- EXECUTION_SPEC_ID: RM-01a-CODE
+- PRODUCTION_ACTIVATION: NO
+- SIMPROK_DB_CONNECTION_COUNT: 0
+- SIMPROK_DB_WRITE_COUNT: 0
+- DEBT: UTANG-AUTHZ-11 → CODE_READY_AWAITING_EXACT_SHA_REVIEW (bukan
+  CLOSED); UTANG-PERMISSION-08 tetap STILL_OPEN; UTANG-AUTOBASELINE-13
+  tetap CLOSED_BY_PR_37 (non-regression dibuktikan ulang).
+- PANEL MERAH (CARA-KERJA.md §10.8) — status saat berkas ini ditulis:
+  ARCHITECT_EXACT_SHA_REVIEW=WAITING,
+  GEMINI_CONSTITUTION_EXACT_SHA_REVIEW=WAITING,
+  INDEPENDENT_SECURITY_AUDIT=WAITING, OWNER_BROWSER_PROOF=WAITING,
+  OWNER_MERGE_DECISION=WAITING.
 
 ## PR #37
 - TITLE: fix(project): keep initiate setup draft-only (UTANG-AUTOBASELINE-13)

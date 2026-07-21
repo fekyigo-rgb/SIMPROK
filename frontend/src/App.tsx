@@ -12,7 +12,7 @@ import { ProjectListPage } from './pages/ProjectListPage';
 import { ShowcasePage } from './pages/ShowcasePage';
 import { FirstRealInputPreviewPage } from './pages/FirstRealInputPreviewPage';
 import { AuthProvider } from './contexts/AuthContext';
-import { ProtectedRoute, RoleRoute } from './components/layout/ProtectedRoute';
+import { ProtectedRoute, RoleRoute, PermissionRoute } from './components/layout/ProtectedRoute';
 import { LoginPage } from './pages/LoginPage';
 import { WorkspaceSelectPage } from './pages/WorkspaceSelectPage';
 
@@ -33,9 +33,9 @@ function App() {
             <Route path="/" element={<DashboardLayout />}>
               <Route index element={<RoleRoute allowedRoles={['DIRECTOR', 'FOREMAN', 'OWNER', 'MANDOR']}><ObservatoryPage /></RoleRoute>} />
               <Route path="proyek" element={<ProjectListPage />} />
-              <Route path="project/new" element={<RoleRoute allowedRoles={['DIRECTOR', 'OWNER']}><ProjectSetupPage /></RoleRoute>} />
-              <Route path="project/:projectId/rab" element={<ProjectRabDoorPage />} />
-              <Route path="project/:projectId/rab/workspace" element={<RabWorkspacePage />} />
+              <Route path="project/new" element={<PermissionRoute permission="PROJECT_CREATE"><ProjectSetupPage /></PermissionRoute>} />
+              <Route path="project/:projectId/rab" element={<PermissionRoute permission="RAB_VIEW"><ProjectRabDoorPage /></PermissionRoute>} />
+              <Route path="project/:projectId/rab/workspace" element={<PermissionRoute permission="RAB_DRAFT_EDIT"><RabWorkspacePage /></PermissionRoute>} />
               <Route path="project/:projectId/rab/ahsp-snapshot" element={<ProjectAhspSnapshotPage />} />
               <Route path="project/:projectId/detail" element={<ProjectDetailDoorPage />} />
               <Route path="project/:projectId/catatan" element={<ProjectNotesPage />} />

@@ -6,14 +6,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { PrismaService } from '../../prisma/prisma.service';
 import { PERMISSIONS_KEY } from '../../common/decorators/permissions.decorator';
+import { WorkspacePermissionResolverService } from '../workspace-permission-resolver.service';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
-    private readonly prisma: PrismaService,
+    private readonly permissionResolver: WorkspacePermissionResolverService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -40,7 +40,8 @@ export class PermissionsGuard implements CanActivate {
     // Jika ProjectAccessGuard sudah berjalan lebih dulu (rute project-scoped),
     // request.projectAccess.workspaceId adalah workspace yang sudah diverifikasi
     // ke database dan menjadi otoritatif untuk evaluasi izin — bukan header klien.
-    const projectWorkspaceId: string | undefined = request.projectAccess?.workspaceId;
+    const projectWorkspaceId: string | undefined =
+      request.projectAccess?.workspaceId;
 
     let workspaceId: string;
 
@@ -76,73 +77,40 @@ export class PermissionsGuard implements CanActivate {
         request.params['workspaceId'];
 
       if (!explicitWorkspaceId) {
-        throw new BadRequestException('Missing active Workspace Context (x-workspace-id header is required)');
+        throw new BadRequestException(
+          'Missing active Workspace Context (x-workspace-id header is required)',
+        );
       }
       workspaceId = explicitWorkspaceId;
     }
 
-    // 4. Resolusi Izin berdasarkan Account + Workspace (Identity Chain Verification)
-    // Sesuai REG-001: WorkspaceMembership adalah gerbang akses resmi
-    const membership = await this.prisma.workspaceMembership.findFirst({
-      where: {
-        accountId: accountId, // Menggunakan accountId (Platform Identity)
-        workspaceId: workspaceId,
-        status: 'ACTIVE',
-      },
-      select: {
-        id: true, // Membership ID untuk audit trail
-        membershipRoles: {
-          where: {
-            isActive: true,
-            OR: [
-              { endDate: null },
-              { endDate: { gte: new Date() } }
-            ]
-          },
-          select: {
-            role: {
-              select: {
-                rolePermissions: {
-                  select: {
-                    permission: {
-                      select: {
-                        code: true,
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    // 4. Resolusi Izin berdasarkan Account + Workspace — satu-satunya sumber,
+    // dipakai bersama oleh GET /auth/capabilities. Lihat
+    // WorkspacePermissionResolverService untuk semantik lengkap.
+    const effective = await this.permissionResolver.resolve(
+      accountId,
+      workspaceId,
+    );
 
-    if (!membership) {
+    if (!effective) {
       throw new ForbiddenException('You do not have access to this workspace');
     }
 
-    // 5. Ekstrak Semua Kode Izin yang Valid
-    const workspaceScopedPermissions = membership.membershipRoles.flatMap(
-      (membershipRole) =>
-        membershipRole.role.rolePermissions.map(
-          (rolePermission) => rolePermission.permission.code,
-        ),
-    );
-
-    // 6. Evaluasi Hak Akses
+    // 5. Evaluasi Hak Akses
     const hasRequiredPermission = requiredPermissions.some((permission) =>
-      workspaceScopedPermissions.includes(permission),
+      effective.permissions.includes(permission),
     );
 
     if (!hasRequiredPermission) {
-      throw new ForbiddenException('Access Denied: Insufficient Permission for this Workspace');
+      throw new ForbiddenException(
+        'Access Denied: Insufficient Permission for this Workspace',
+      );
     }
 
-    // 7. Simpan konteks untuk digunakan service atau guard berikutnya
+    // 6. Simpan konteks untuk digunakan service atau guard berikutnya
     request.workspaceContext = {
       workspaceId: workspaceId,
-      membershipId: membership.id,
+      membershipId: effective.membershipId,
     };
 
     return true;
