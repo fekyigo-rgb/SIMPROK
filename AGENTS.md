@@ -287,3 +287,15 @@ If repository reality conflicts with locked law, report the gap. Do not silently
 
 Soli Deo Gloria. Haleluya. Amin.
 
+---
+
+## Canonical Multi-Agent Control
+
+Before architecture, audit, implementation, documentation, or verdict work, read:
+
+- `docs/control/README.md`;
+- `docs/control/CARA-KERJA.md` in full;
+- `docs/control/ROADMAP.md` in full;
+- `docs/control/STATE.md` when it becomes available.
+
+The Owner supplied `CARA-KERJA.md` version 2.1 FINAL and `ROADMAP.md` FINAL v1.0 OWNER-LOCKED on 21 July 2026. Read their exact current repository versions; do not rely on conversation memory or a shortened retelling. If evidence, state, or document applicability is unclear, report `NEEDS_REVIEW` or `FAIL_CLOSED`; do not invent.
