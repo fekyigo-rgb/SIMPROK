@@ -161,17 +161,41 @@ export class ProjectService {
   }
 
   async initiateSetup(projectId: string, data: InitiateProjectDto) {
-    const project = await this.prisma.project.findUnique({ where: { id: projectId } });
-    if (!project) throw new NotFoundException('Project not found');
-
     return await this.prisma.$transaction(async (tx) => {
-      // 1. Create BoqStructure
-      const boqStructure = await tx.boqStructure.create({
+      // Serialize setup attempts per project so duplicate requests cannot race.
+      const lockedProject = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
+      );
+      if (lockedProject.length === 0) throw new NotFoundException('Project not found');
+
+      // Draft identity is state-based and deliberately independent of its name.
+      const draftStructures = await tx.boqStructure.findMany({
+        where: { projectId, status: 'DRAFT' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      if (draftStructures.length > 1) {
+        throw new ConflictException('MULTIPLE_DRAFT_BOQ_STRUCTURES');
+      }
+
+      // A completed setup is a successful no-op. The row lock above makes
+      // this safe for sequential retries and concurrent duplicate requests.
+      const existingActiveBaseline = await tx.projectBaseline.findFirst({
+        where: { projectId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (existingActiveBaseline) {
+        return { message: 'Project setup completed successfully' };
+      }
+
+      // New projects reuse their one existing DRAFT. Legacy zero-draft
+      // projects may create exactly one container here.
+      const boqStructure = draftStructures[0] ?? await tx.boqStructure.create({
         data: {
           projectId,
           name: 'Main BOQ',
           version: 1,
-        }
+          status: 'DRAFT',
+        },
       });
 
       let totalCost = new Prisma.Decimal(0);
