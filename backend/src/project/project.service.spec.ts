@@ -222,6 +222,79 @@ describe('ProjectService P7C intake contract', () => {
   });
 });
 
+describe('ProjectService initiateSetup collision guard', () => {
+  function createSetupHarness(drafts: Array<{ id: string; name: string; status: string }>) {
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'project-1' }]),
+      boqStructure: {
+        findMany: jest.fn().mockResolvedValue(drafts),
+        create: jest.fn().mockResolvedValue({ id: 'created-draft' }),
+      },
+      boqItem: {
+        create: jest.fn().mockResolvedValue({ id: 'item-1' }),
+      },
+      rabDocument: {
+        create: jest.fn().mockResolvedValue({ id: 'rab-1' }),
+      },
+      projectBaseline: {
+        findFirst: jest.fn(),
+        create: jest.fn().mockResolvedValue({ id: 'baseline-1' }),
+      },
+      progressReport: {
+        create: jest.fn().mockResolvedValue({ id: 'report-1' }),
+      },
+      project: {
+        update: jest.fn().mockResolvedValue({ id: 'project-1' }),
+      },
+    };
+    const prisma = { $transaction: jest.fn((callback) => callback(tx)) };
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
+    return { service, tx };
+  }
+
+  it('reuses one arbitrarily named DRAFT and makes a second initiate call a no-op', async () => {
+    const { service, tx } = createSetupHarness([
+      { id: 'owner-draft', name: 'Nama Bebas Owner', status: 'DRAFT' },
+    ]);
+    tx.projectBaseline.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'baseline-1' });
+
+    const payload = {
+      items: [{ wbsCode: '1', name: 'Mobilisasi', itemType: 'WORK_ITEM', quantity: 2, unit: 'ls', unitPrice: 100 }],
+    } as any;
+
+    const first = await service.initiateSetup('project-1', payload);
+    const second = await service.initiateSetup('project-1', payload);
+
+    expect(second).toEqual(first);
+    expect(tx.boqStructure.create).not.toHaveBeenCalled();
+    expect(tx.boqItem.create).toHaveBeenCalledTimes(1);
+    expect(tx.boqItem.create).toHaveBeenCalledWith({ data: expect.objectContaining({ boqStructureId: 'owner-draft' }) });
+    expect(tx.rabDocument.create).toHaveBeenCalledTimes(1);
+    expect(tx.projectBaseline.create).toHaveBeenCalledTimes(1);
+    expect(tx.progressReport.create).toHaveBeenCalledTimes(1);
+    expect(tx.project.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects multiple DRAFT containers without inspecting their names or writing setup artifacts', async () => {
+    const { service, tx } = createSetupHarness([
+      { id: 'draft-1', name: 'First Arbitrary Name', status: 'DRAFT' },
+      { id: 'draft-2', name: 'Second Unrelated Name', status: 'DRAFT' },
+    ]);
+
+    await expect(service.initiateSetup('project-1', { items: [] })).rejects.toThrow('MULTIPLE_DRAFT_BOQ_STRUCTURES');
+
+    expect(tx.projectBaseline.findFirst).not.toHaveBeenCalled();
+    expect(tx.boqStructure.create).not.toHaveBeenCalled();
+    expect(tx.boqItem.create).not.toHaveBeenCalled();
+    expect(tx.rabDocument.create).not.toHaveBeenCalled();
+    expect(tx.projectBaseline.create).not.toHaveBeenCalled();
+    expect(tx.progressReport.create).not.toHaveBeenCalled();
+    expect(tx.project.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('UpdateProjectIntakeContextDto validation', () => {
   it('rejects invalid decimal strings', async () => {
     const dto = plainToInstance(UpdateProjectIntakeContextDto, { budgetBaseline: '1,000' });
