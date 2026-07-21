@@ -200,6 +200,10 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
       const createdByCreateOnly = await prisma.projectAssignment.findMany({ where: { workspaceMembershipId: { in: membershipIds } }, select: { projectId: true } });
       const extraProjectIds = createdByCreateOnly.map((a) => a.projectId);
       await prisma.projectAssignment.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });
+      await prisma.progressReport.deleteMany({ where: { projectId: { in: extraProjectIds } } });
+      await prisma.projectBaseline.deleteMany({ where: { projectId: { in: extraProjectIds } } });
+      await prisma.rabDocument.deleteMany({ where: { projectId: { in: extraProjectIds } } });
+      await prisma.boqItem.deleteMany({ where: { boqStructure: { projectId: { in: extraProjectIds } } } });
       await prisma.boqStructure.deleteMany({ where: { projectId: { in: extraProjectIds } } });
       await prisma.project.deleteMany({ where: { id: { in: extraProjectIds } } });
       await prisma.user.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });
@@ -431,6 +435,69 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         .expect(403);
 
       await postFile(`/projects/${newProjectId}/boq/import/approve`, createOnlyToken).field('selectedSheet', 'RAB').field('importFingerprint', 'x').expect(403);
+    });
+
+    it('initiateSetup reuses the sole DRAFT by state, is idempotent on retry, and creates each setup artifact exactly once', async () => {
+      const createResponse = await request(app.getHttpServer())
+        .post('/projects')
+        .set('Authorization', `Bearer ${createOnlyToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ name: 'Lifecycle Idempotent Setup', code: 'LC-IDEMPOTENT-SETUP' })
+        .expect(201);
+
+      const projectId = createResponse.body.id;
+      const structuresAfterCreate = await prisma.boqStructure.findMany({ where: { projectId } });
+      expect(structuresAfterCreate).toHaveLength(1);
+
+      const originalStructureId = structuresAfterCreate[0].id;
+      await prisma.boqStructure.update({ where: { id: originalStructureId }, data: { name: 'Owner-Named Draft Container' } });
+
+      const payload = {
+        items: [{ wbsCode: '1', name: 'Mobilisasi', itemType: 'WORK_ITEM', quantity: 2, unit: 'ls', unitPrice: 100 }],
+      };
+      const initiate = () => request(app.getHttpServer())
+        .post(`/projects/${projectId}/initiate`)
+        .set('Authorization', `Bearer ${createOnlyToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send(payload);
+
+      const first = await initiate().expect(201);
+      const second = await initiate().expect(201);
+
+      expect(second.body).toEqual(first.body);
+      const structuresAfterRetries = await prisma.boqStructure.findMany({ where: { projectId } });
+      expect(structuresAfterRetries).toHaveLength(1);
+      expect(structuresAfterRetries[0]).toMatchObject({ id: originalStructureId, name: 'Owner-Named Draft Container', status: 'DRAFT' });
+      expect(await prisma.boqItem.count({ where: { boqStructureId: originalStructureId } })).toBe(1);
+      expect(await prisma.rabDocument.count({ where: { projectId, status: 'APPROVED' } })).toBe(1);
+      expect(await prisma.projectBaseline.count({ where: { projectId, status: 'ACTIVE' } })).toBe(1);
+      expect(await prisma.progressReport.count({ where: { projectId } })).toBe(1);
+    });
+
+    it('initiateSetup rejects two DRAFT containers regardless of their names and creates no setup artifacts', async () => {
+      const createResponse = await request(app.getHttpServer())
+        .post('/projects')
+        .set('Authorization', `Bearer ${createOnlyToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ name: 'Lifecycle Collision Guard', code: 'LC-COLLISION-GUARD' })
+        .expect(201);
+
+      const projectId = createResponse.body.id;
+      await prisma.boqStructure.updateMany({ where: { projectId }, data: { name: 'First Arbitrary Draft Name' } });
+      await prisma.boqStructure.create({ data: { projectId, name: 'Second Unrelated Draft Name', version: 2, status: 'DRAFT' } });
+
+      const response = await request(app.getHttpServer())
+        .post(`/projects/${projectId}/initiate`)
+        .set('Authorization', `Bearer ${createOnlyToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ items: [] })
+        .expect(409);
+
+      expect(response.body.message).toBe('MULTIPLE_DRAFT_BOQ_STRUCTURES');
+      expect(await prisma.boqStructure.count({ where: { projectId, status: 'DRAFT' } })).toBe(2);
+      expect(await prisma.rabDocument.count({ where: { projectId } })).toBe(0);
+      expect(await prisma.projectBaseline.count({ where: { projectId } })).toBe(0);
+      expect(await prisma.progressReport.count({ where: { projectId } })).toBe(0);
     });
 
     it('account without PROJECT_CREATE cannot create a project — the "Buat RAB" door\'s backend half', async () => {
