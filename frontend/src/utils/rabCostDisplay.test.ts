@@ -5,6 +5,7 @@ import {
   applyBatchResults,
   beginLoadingRows,
   computeDirectCostTotal,
+  formatBoqImportMeasurement,
   invalidateRow,
   markRequestFailed,
   sumDecimalStrings,
@@ -12,6 +13,12 @@ import {
   type CostCalculationResponse,
   type CostRowStatus,
 } from "./rabCostDisplay.ts";
+
+test('structural import rows never render quantity-zero or unit sentinels', () => {
+  assert.equal(formatBoqImportMeasurement('FOLDER', '0', ''), '');
+  assert.equal(formatBoqImportMeasurement('NOTE', '0', ''), '');
+  assert.equal(formatBoqImportMeasurement('WORK_ITEM', '12', 'm3'), ' — 12 m3');
+});
 
 const calculatedResponse: Extract<CostCalculationResponse, { status: "CALCULATED" }> = {
   status: "CALCULATED",

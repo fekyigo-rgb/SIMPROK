@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:3000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
 const resolveApiInput = (input: RequestInfo | URL): RequestInfo | URL => {
   if (typeof input !== 'string') return input;

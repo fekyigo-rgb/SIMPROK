@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, type Project } from '@prisma/client';
+import { Prisma, ProjectStatus, type Project } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface ProjectAccessContext {
   projectId: string;
   workspaceId: string;
-  projectStatus: string;
+  projectStatus: ProjectStatus;
   membershipId: string;
   assignmentId: string;
   roleInProject: string;

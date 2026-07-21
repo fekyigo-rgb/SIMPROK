@@ -179,3 +179,9 @@ export const computeDirectCostTotal = (
   }
   return addDecimalStrings(sumDecimalStrings(kernelLineTotals), manualTotal.toString());
 };
+
+export const formatBoqImportMeasurement = (
+  itemType: string,
+  quantity: string | null,
+  unit: string | null,
+): string => itemType === 'WORK_ITEM' ? ` — ${quantity ?? '—'} ${unit ?? ''}` : '';

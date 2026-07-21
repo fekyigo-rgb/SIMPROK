@@ -435,3 +435,333 @@ This is an Owner operational clarification, not a Foundation, Kitab, ADR, or uni
 - `OWNER_ACCEPTANCE=PASS`
 - `OWNER_MERGE_DECISION=PASS`
 - `PR_MERGE_AUTHORIZED=YES`
+
+## 12. UTANG-LIFECYCLE-06 — canonical RAB draft-lifecycle closure (PR #35)
+
+### 12.1 What triggered this
+
+- Owner discovered that a direct URL opened an editable RAB workspace for
+  ACC-X. The prior browser proof used for RAB/BOQ import work was a route
+  proof only — it did not prove the route was reached through a lawful
+  product journey, and it did not prove the route was denied when it should
+  be.
+- Root cause: `GET/PUT /projects/:projectId/boq/draft` and the BOQ import
+  preview/approve routes had no lifecycle authority at all. `RabWorkspacePage`
+  rendered a fully editable grid unconditionally on load. `ProjectListPage`
+  derived the "Lanjutkan Draft" card action from `Project.status`, which is
+  informational and can drift from the real Working Draft/baseline/RAB state.
+
+### 12.2 What PR #35 changes (as corrected by the Owner's final-planned-state addendum)
+
+- Adds one canonical authority: `RabLifecyclePolicyService`
+  (`backend/src/project/rab-lifecycle-policy.service.ts`). It reads
+  `ProjectBaseline` (ACTIVE), `RabDocument` (APPROVED), and `BoqStructure`
+  (DRAFT, name `Working Draft`) counts, plus `Project.status` as an
+  **eligibility door**, and returns
+  `{ canEnterEditableDraftWorkspace, canEditDraft, reasonCode, projectStatus, activeBaselineCount, approvedRabCount, workingDraftCount }`.
+  Reason priority: `ACTIVE_BASELINE_EXISTS` > `APPROVED_RAB_EXISTS` >
+  `MULTIPLE_WORKING_DRAFTS` > `PROJECT_NOT_DRAFT` > allowed. `Project.status`
+  never fabricates a baseline/approved-RAB fact and never overrides 1-3 — a
+  `PLANNED` project with a real active baseline is still
+  `ACTIVE_BASELINE_EXISTS`, not allowed.
+- `ProjectStatus` has no `DRAFT` member. The canonical editable-status set is
+  `RAB_EDITABLE_PROJECT_STATUSES = [ProjectStatus.PLANNED]`, exported from
+  the same file. `PLANNED` is the "Draft / Perencanaan" planning status in
+  product language; `BoqStructure.status = 'DRAFT'` is a separate domain
+  (Working Draft structure status) and must never be confused with it.
+- New pre-Multer guard `RabEditableLifecycleGuard`
+  (`backend/src/project/rab-editable-lifecycle.guard.ts`) holds zero
+  lifecycle derivation logic of its own — it only calls
+  `RabLifecyclePolicyService.evaluate` and throws the exact reason code.
+  Attached to `POST .../boq/import/preview` and `POST .../boq/import/approve`
+  as `@UseGuards(ProjectAccessGuard, PermissionsGuard, RabEditableLifecycleGuard)`,
+  ahead of `@UseInterceptors(FileInterceptor(...))`. A blocked project is now
+  rejected before file buffering, XLSX validation, parsing, or fingerprint
+  calculation — proven by E2E cases where a blocked project's `import/approve`
+  reports the true reason code even with a garbage fingerprint, and a corrupt
+  file/wrong extension on `import/preview` reports the true reason code
+  instead of a file-validation error.
+- Enforced on: `GET /projects/:projectId/boq/draft` (409 + reasonCode when
+  blocked; truthful empty draft + capability when zero drafts),
+  `PUT /projects/:projectId/boq/draft` (requires `RAB_DRAFT_EDIT`, not
+  `PROJECT_CREATE`; locks the Project row `FOR UPDATE`, re-evaluates
+  lifecycle, creates the Working Draft on first save, 409s on duplicates),
+  `POST .../boq/import/preview` (`RAB_VIEW` + the guard above), and
+  `POST .../boq/import/approve` (`RAB_DRAFT_EDIT` + the guard above; the
+  transactional Project-row-lock re-check inside the service remains as the
+  TOCTOU-safe final authority for a project that becomes blocked *during* the
+  request, which the guard cannot catch since it only runs once at the start).
+- `ProjectService.create` now atomically creates exactly one empty Working
+  Draft (`BoqStructure`, DRAFT, version 1) alongside the project — never a
+  baseline, approved RAB, or progress report, and `initiateSetup` is not
+  called. `Project.status` defaults to `PLANNED`, so a new project is
+  immediately RAB-editable.
+- `GET /projects/mine` now returns a batched `rabLifecycle` projection per
+  project (three `groupBy` queries total, not N+1).
+  `ProjectListPage.primaryAction` reads
+  `rabLifecycle.canEnterEditableDraftWorkspace` / `workingDraftCount` first;
+  `Project.status` only selects the fallback label/action (e.g. "Buka Kunci",
+  "Lihat Arsip") when the project is not lifecycle-editable.
+- `RabWorkspacePage` is fail-closed by construction: capability starts
+  `loading`, no editable control (grid, Import BOQ, Simpan Draft) renders
+  before a `ready` capability response arrives; any 409 (including
+  `PROJECT_NOT_DRAFT`) renders the lifecycle message with a button back to
+  `/project/:projectId/rab`; a 404 renders a message with a button to
+  `/proyek`; other failures stay fail-closed with a retry action.
+- `ProjectRabDoorPage` (the read-only "Ruang Hidup RAB" viewer) no longer
+  calls `GET /boq/draft` as a fallback for a non-`PLANNED` project with no
+  baseline rows — it shows "RAB baseline belum tersedia untuk proyek ini."
+  directly. It has no editable controls to begin with (no Import BOQ, no
+  Simpan Draft); this change only removes an unnecessary network call and
+  makes the honest-empty-state reason precise instead of relying on an
+  error-shaped response body incidentally parsing to an empty array.
+
+### 12.3 ACC-X — resolved, not a gap anymore
+
+- The original task assumed ACC-X was already blocked by an existing
+  baseline/approved RAB. Read-only inspection of `simprok_test` showed ACC-X
+  actually has zero `ProjectBaseline`, zero `APPROVED` `RabDocument`, zero
+  `BoqStructure`, zero `ProgressReport`, and `Project.status = ACTIVE`. Under
+  the first version of the law (data-only, `Project.status` purely
+  informational), that made ACC-X a *lawful zero-draft project* —
+  `canEnterEditableDraftWorkspace=true` — which did not match the Owner's
+  intent for ACC-X and was reported as an open gap.
+- The Owner's final-planned-state addendum resolved this by making
+  `Project.status` an eligibility gate (§12.2): ACC-X's status is `ACTIVE`,
+  not `PLANNED`, so it is now correctly `PROJECT_NOT_DRAFT` —
+  `canEnterEditableDraftWorkspace=false`, `canEditDraft=false` — with zero
+  baseline/approved/draft facts underneath. Its card shows the informational
+  "Berjalan" fallback (no "Mulai RAB", no "Lanjutkan Draft"; "Lihat Detail"
+  remains visible as a separate, always-present control). ACC-X's seed
+  fixture itself was never mutated to force this — the new status-gate law is
+  what makes the real, already-seeded ACC-X row resolve correctly on its own.
+- E2E coverage now uses ACC-X directly as the `PROJECT_NOT_DRAFT` fixture
+  (`backend/test/acceptance/rab-lifecycle.e2e-spec.ts`, "blocked project —
+  PROJECT_NOT_DRAFT" and "ACC-X canonical result" describe blocks), alongside
+  dedicated ad-hoc fixture projects for `ACTIVE_BASELINE_EXISTS` /
+  `APPROVED_RAB_EXISTS` / `MULTIPLE_WORKING_DRAFTS` and the import-approve
+  TOCTOU case.
+
+### 12.4 Still open — do not claim closed
+
+- `docs/agent-queue/NEXT_TASK.md`'s "browser visual audit not completed — no
+  browser automation/tooling available in the session" note from the P7C
+  slice still applies here: no browser-automation tool exists in this
+  session, so the manual click-through
+  (Login → Proyek Saya → RAB-DRAFT-PROOF → Lanjutkan/Mulai RAB → Ruang Kerja
+  RAB → Import BOQ → Preview → Setujui dan Import) was not performed by the
+  agent. The `RAB-DRAFT-PROOF` acceptance fixture (code `RAB-DRAFT-PROOF`,
+  workspace Workspace-A, status `PLANNED`, `assigned@test.local` assigned,
+  exactly one empty Working Draft, idempotent reseed that never touches an
+  already-imported draft) is seeded in `simprok_test` and reserved for the
+  Owner (or a session with real browser tooling) to run that walkthrough
+  directly.
+- The `RAB_VIEW`/`RAB_DRAFT_EDIT` production-permission gap first found here
+  is now tracked as its own entry — see [[UTANG-PERMISSION-08]] (§13) — since
+  it broadened to five missing permission codes and is a distinct concern
+  from the lifecycle law itself.
+- Unaudited RAB write routes (anything touching RAB beyond the routes/pages
+  listed in 12.2) remain follow-up scope. Do not claim global RAB lifecycle
+  closure from this entry.
+
+### 12.5 Do not create UTANG-LIFECYCLE-06b
+
+No interim `Project.status`-only gate (ignoring baseline/approved-RAB/draft
+facts) and no interim data-only gate (ignoring `Project.status`) is accepted
+as a substitute for the canonical `RabLifecyclePolicyService` authority in
+§12.2 — both were tried in sequence on this same entry and corrected in
+place. If a new gap is found against this closure, extend this entry or open
+a new, distinctly-named debt — do not fork a "b" variant of this one.
+
+## 13. UTANG-PERMISSION-08 — five SEEDED_CURRENT permissions absent from simprok_db
+
+- `backend/src/common/constants/permissions.ts` declares `RAB_VIEW`,
+  `RAB_DRAFT_EDIT`, `AHSP_APPROVE`, `BASIC_PRICE_VIEW`, and
+  `BASIC_PRICE_MANAGE` as `SEEDED_CURRENT`. A read-only inventory of
+  `simprok_db` (verified inside a `BEGIN TRANSACTION READ ONLY` /
+  `current_setting('transaction_read_only') = on` block; zero writes) found
+  none of the five exist as `Permission` rows there — they were only ever
+  seeded into the test database (`simprok_test` via `prisma/seed-acceptance.ts`
+  and `prisma/seed-rbac-permissions.ts`).
+- `DIRECTOR_RAB_VIEW_PRESENT=NO`, `DIRECTOR_RAB_DRAFT_EDIT_PRESENT=NO` — the
+  DIRECTOR role in `simprok_db` has `AHSP_MANAGE`, `AHSP_VIEW`,
+  `APPROVAL_MATRIX_VIEW`, `AUTHORITY_VIEW`, `OBSERVATORY_VIEW`,
+  `PROJECT_CREATE`, `PROJECT_VIEW`, `WORKSPACE_MEMBERSHIP_VIEW` — none of the
+  five gap permissions.
+- `PRODUCTION_ACTIVATION_BLOCKED_UNTIL=RAB_VIEW_AND_RAB_DRAFT_EDIT_SEEDED_AND_GRANTED`
+  at minimum for PR #35's routes specifically; the other three
+  (`AHSP_APPROVE`, `BASIC_PRICE_VIEW`, `BASIC_PRICE_MANAGE`) block whatever
+  their own consuming routes are, out of scope for this entry to enumerate.
+- Not fixed here: seeding and granting production permissions is an Owner/PM
+  governance decision (who gets `RAB_DRAFT_EDIT` in production, under which
+  role), not an executor decision. `PRODUCTION_DATABASE_WRITE_COUNT=0` for
+  this finding.
+
+## 14. PR #35 evidence closure — final seed truth, the "Buat RAB" door, and UTANG-TSC-10
+
+### 14.1 Final committed seed truth (from `git show HEAD -- backend/prisma/seed-acceptance.ts`)
+
+- `SEED_ADDED_ACCOUNT_COUNT=0` — no `Account` row is created by this diff.
+- `SEED_ADDED_ROLE_COUNT=2` — `ACCEPTANCE_PROJECT_CREATOR` (grants exactly
+  `PROJECT_CREATE`, nothing else) and `DIRECTOR` (grants zero permissions —
+  see §14.2).
+- `SEED_ADDED_ROLE_PERMISSION_COUNT=1` — `ACCEPTANCE_PROJECT_CREATOR` →
+  `PROJECT_CREATE` only.
+- `SEED_ADDED_MEMBERSHIP_ROLE_COUNT=2` — both new roles are granted to
+  `assigned@test.local`'s membership only, as a *second and third* role
+  alongside its existing `ACCEPTANCE_MEMBER` role — never by widening
+  `ACCEPTANCE_MEMBER` itself.
+- `SEED_ADDED_PROJECT_COUNT=1` — `RAB-DRAFT-PROOF` (code
+  `RAB-DRAFT-PROOF`, status `PLANNED`).
+- `SEED_ADDED_ASSIGNMENT_COUNT=1` — `assigned@test.local` as
+  `PROJECT_MANAGER`/`ASSIGNED` on `RAB-DRAFT-PROOF`.
+- `SEED_ADDED_WORKING_DRAFT_COUNT=1` — one `BoqStructure` (`Working Draft`,
+  `DRAFT`, version 1), created only if none already exists (idempotent).
+- `SEED_ADDED_BOQ_ITEM_COUNT=0`, `SEED_ADDED_ACTIVE_BASELINE_COUNT=0`,
+  `SEED_ADDED_APPROVED_RAB_COUNT=0`, `SEED_ADDED_PROGRESS_REPORT_COUNT=0`.
+- `RAB-DRAFT-PROOF = AUTOMATED_ACCEPTANCE_FIXTURE_ONLY`. It is never the
+  Owner's positive browser proof. `OWNER_POSITIVE_BROWSER_PROJECT =
+  CREATED_THROUGH_UI` — the Owner creates their own project live, through
+  "Buat RAB", during the manual walkthrough.
+
+### 14.2 The real "Buat RAB" door — corrects an earlier wrong assumption
+
+- There is no button literally labeled "Buat Proyek" anywhere in this
+  frontend, and it is not on `ProjectListPage` ("Proyek Saya"). The real
+  entry point is **"Buat RAB"**, rendered on the Sidebar and on
+  `ObservatoryPage` (`frontend/src/pages/ObservatoryPage.tsx`), routing to
+  `/project/new` → `ProjectSetupPage`.
+- That door has **two independent gates**, discovered by reading source, not
+  assumed:
+  1. Backend: `POST /projects` requires the RBAC permission `PROJECT_CREATE`
+     (`PermissionsGuard` + `@Permissions('PROJECT_CREATE')` in
+     `project.controller.ts`).
+  2. Frontend: button visibility (`canCreateRab` in `ObservatoryPage.tsx`)
+     and route access (`RoleRoute allowedRoles={['DIRECTOR','OWNER']}` in
+     `frontend/src/components/layout/ProtectedRoute.tsx`, wrapping
+     `/project/new` in `App.tsx`) both check literal role-code strings
+     `DIRECTOR`/`OWNER` in `activeRoles` — a value sourced from
+     `membershipRole.role.code` (`src/auth/strategies/jwt.strategy.ts`).
+     This check is **entirely independent of the RBAC permission system** —
+     it does not consult `Permission`/`RolePermission` at all.
+  3. Confirmed by grep that no backend authorization logic anywhere checks
+     the literal string `'DIRECTOR'` — the role-code `DIRECTOR` has zero
+     backend RBAC meaning by itself; its only effect is satisfying that one
+     frontend string check.
+- Consequence: granting `PROJECT_CREATE` alone (§14.1) is **necessary but
+  not sufficient** to reach the door in a browser. A second, additive
+  seed seed change was required: a bare role literally coded `DIRECTOR`,
+  carrying **zero permissions**, granted only to `assigned@test.local`'s
+  membership. It exists solely to satisfy the frontend's role-name check;
+  it grants no backend authority beyond what `ACCEPTANCE_PROJECT_CREATOR`
+  already grants.
+- This is reported plainly as what it is: a workaround for a pre-existing
+  architectural inconsistency (permission-gated backend vs. role-name-gated
+  frontend door) that predates PR #35. It is not a fix to that
+  inconsistency — the inconsistency itself is unaudited and out of scope
+  here.
+
+### 14.3 Permission semantic change audit (source-verified, `simprok_test`, read-only)
+
+- `ACCEPTANCE_MEMBER` role permissions unchanged: `PROJECT_VIEW`,
+  `RAB_VIEW`, `RAB_DRAFT_EDIT` only — `SHARED_ROLE_PERMISSION_WIDENED=NO`.
+- `ACCEPTANCE_PROJECT_CREATOR` role permissions: exactly `PROJECT_CREATE`.
+- Only account holding `ACCEPTANCE_PROJECT_CREATOR` (or the new `DIRECTOR`
+  role): `assigned@test.local`. `nonassigned@test.local`,
+  `crosstenant@test.local`, and `foreman@test.local` hold neither.
+  `FOREMAN` role permissions: `PROJECT_VIEW` only.
+- Searched all 9 e2e spec files referencing `assigned@test.local`
+  (`ASSIGNED_ACCOUNT_TEST_FILE_COUNT=9`): none asserted that account lacks
+  `PROJECT_CREATE`. `TESTS_PREVIOUSLY_EXPECTING_NO_PROJECT_CREATE=NONE`,
+  `TEST_EXPECTATION_WEAKENED_COUNT=0`.
+- Added, not previously present: an explicit E2E proving
+  `nonassigned@test.local` (which provably lacks `PROJECT_CREATE`) gets 403
+  on `POST /projects`, and an explicit assertion that a project created
+  through that endpoint has `status: 'PLANNED'`
+  (`backend/test/acceptance/rab-lifecycle.e2e-spec.ts`).
+
+### 14.4 Button labels — now proven by an extracted, tested pure function
+
+- `primaryAction` (previously inline in `ProjectListPage.tsx`) is extracted
+  to `frontend/src/utils/projectCardAction.ts`, a pure function of
+  `{ id, status, rabLifecycle }`, matching the existing extracted-utility
+  pattern (`rabCostDisplay.ts`). Covered by
+  `frontend/src/utils/projectCardAction.test.ts` (5 new `node --test`
+  cases; frontend test count 19 → 24).
+- Proven: `canEnterEditableDraftWorkspace=true` + `workingDraftCount=0` →
+  "Mulai RAB"; `workingDraftCount=1` → "Lanjutkan Draft"; every
+  non-editable combination across all 5 status chips × all 4 reason codes
+  (20 combinations) never shows either editable label.
+- No frontend component-test framework (RTL/jsdom) exists in this repo —
+  only the Node built-in test runner over pure utility functions. Button
+  *rendering* in the actual DOM is proven by source citation
+  (`ObservatoryPage.tsx` lines noted in §14.2), not by an automated
+  component test. Do not claim a rendered-DOM proof that does not exist.
+
+### 14.5 UTANG-TSC-10 — pre-existing type errors outside this slice
+
+- `npm run build` (the official gate, `tsconfig.build.json`, excludes spec
+  files) passes clean. A full-repository `npx tsc --noEmit -p .` (not one
+  of the permanent gates; run once as an ad hoc diagnostic) currently
+  surfaces pre-existing type errors in files this PR never touches:
+  `src/authority/dto/workspace-scope.dto.spec.ts`,
+  `test/acceptance/reality-intake-price-submission-review.e2e-spec.ts`,
+  `test/acceptance/reality-intake-publication.e2e-spec.ts`. Not fixed here
+  — out of scope for PR #35.
+- One error that diagnostic surfaced *was* in this PR's own file set
+  (`project.service.spec.ts`: `new ProjectService(prisma, mock)` called with
+  2 args against a 3-arg constructor) and has been fixed. It was invisible
+  to `npm run build` (excludes specs) and to `npm test` (ts-jest does not
+  enforce constructor arity at runtime), so it was passing by accident, not
+  by correctness.
+
+### 14.6 First E2E run: honestly labeled, not proven
+
+- `FIRST_RUN_RESULT=FAIL` (65 tests failed, residual drift across ~13
+  tables) occurred while a full-repository `tsc --noEmit` ran concurrently
+  in the background with `test:e2e:safe`.
+  `FIRST_RUN_FAILURE_CAUSE=LIKELY_RESOURCE_CONTENTION` — a solo re-run of
+  the identical suite immediately after passed completely clean. This is
+  circumstantial, not a controlled experiment: resource contention is the
+  most likely explanation given the failing suites were unrelated to this
+  PR's files, but it is not mathematically proven.
+- Across the final evidence-closure pass, `test:e2e:safe` was run solo four
+  times total against the same committed state: **PASS, FAIL, FAIL, PASS**.
+  Both failures were in suites this PR never touches, and both were
+  different failures each time:
+  - Run 2: `rab-intelligence-proposal.e2e-spec.ts` — its `afterAll` exceeded
+    Jest's 5000ms default hook timeout. `RESIDUAL_RESULT` still PASSED that
+    run (cleanup finished just slowly, not incorrectly).
+  - Run 3: `progress-security.e2e-spec.ts` — its `afterAll` hit a real
+    foreign-key violation (`projectBaseline.deleteMany` before
+    `ProgressReport` rows referencing that baseline were gone), aborting
+    partway and leaving orphaned rows (`RESIDUAL_RESULT=FAIL`, confirmed
+    real, not a timing artifact). Re-running that one file in isolation
+    reproduced a related FK failure deterministically **once residue from
+    the prior run already existed** (confirms the cleanup ordering is
+    fragile, not that it always fails on a pristine DB — it passed clean on
+    run 1's fresh reset).
+  - Run 4 (final, authoritative): fresh reset, solo, clean —
+    22/22 suites, 235/235 tests, `RESIDUAL_RESULT=PASS`.
+  - This is recorded as **UTANG-E2E-CLEANUP-11**: `progress-security.e2e-spec.ts`
+    and `rab-intelligence-proposal.e2e-spec.ts` have `afterAll` cleanup that
+    is not reliably robust to slow DB timing or FK ordering, independent of
+    any PR #35 change (neither file, nor `ProgressReport`, nor
+    `ProjectBaseline` deletion ordering, was touched here). Every dedicated
+    focused run of this PR's own files
+    (`rab-lifecycle-policy.service.spec.ts`, `rab-lifecycle.e2e-spec.ts`,
+    `boq-import.e2e-spec.ts`, `cost-kernel.service.spec.ts`) passed cleanly
+    on every single attempt, with no flakiness observed. Not fixed here —
+    out of scope for PR #35.
+
+### 14.7 Main checkout (`C:\SIMPROK`) — corrected wording
+
+- `MAIN_CHECKOUT_TRACKED_STATUS_CLEAN=YES` — zero modified/staged tracked
+  files.
+- `MAIN_CHECKOUT_UNTRACKED_ENTRY_COUNT=2`:
+  `SIMPROK-ARTIFACTS/`, `backend/.claude/` — both present before this
+  session began (not task-created), neither modified.
+  `TASK_CREATED_MAIN_CHECKOUT_CHANGE_COUNT=0`.
+- Do not report a bare `MAIN_CHECKOUT_STATUS_CLEAN=YES` without naming
+  these two untracked entries — "clean" without qualification implies zero
+  entries of any kind, which was never true.

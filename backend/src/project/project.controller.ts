@@ -1,4 +1,5 @@
-import { Controller, Post, Put, Patch, Body, Get, Param, Query, Req, UseGuards, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Put, Patch, Body, Get, Param, Query, Req, UseGuards, ForbiddenException, BadRequestException, InternalServerErrorException, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ProjectService } from './project.service';
 import { RabIntelligenceProposalService } from './rab-intelligence-proposal.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -13,6 +14,9 @@ import { ProjectAccessPolicyService } from '../auth/project-access-policy.servic
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 import { CostKernelService } from './cost-kernel.service';
+import { BoqImportService, MAX_UPLOAD_BYTES } from './boq-import.service';
+import { RabLifecyclePolicyService } from './rab-lifecycle-policy.service';
+import { RabEditableLifecycleGuard } from './rab-editable-lifecycle.guard';
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -22,7 +26,25 @@ export class ProjectController {
     private readonly rabIntelligenceProposalService: RabIntelligenceProposalService,
     private readonly projectAccessPolicy: ProjectAccessPolicyService,
     private readonly costKernelService: CostKernelService,
+    private readonly boqImportService: BoqImportService,
+    private readonly rabLifecyclePolicy: RabLifecyclePolicyService,
   ) {}
+
+  @Post(':projectId/boq/import/preview')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard, RabEditableLifecycleGuard)
+  @Permissions(PERMISSIONS.RAB_VIEW)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  async previewBoqImport(@Req() request: any, @Param('projectId') projectId: string, @UploadedFile() file: any, @Body('selectedSheet') selectedSheet?: string) {
+    return this.boqImportService.preview(projectId, request.projectAccess.workspaceId, file, selectedSheet);
+  }
+
+  @Post(':projectId/boq/import/approve')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard, RabEditableLifecycleGuard)
+  @Permissions(PERMISSIONS.RAB_DRAFT_EDIT)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  async approveBoqImport(@Req() request: any, @Param('projectId') projectId: string, @UploadedFile() file: any, @Body('importFingerprint') fingerprint: string, @Body('selectedSheet') selectedSheet?: string) {
+    return this.boqImportService.approve(projectId, request.projectAccess.workspaceId, fingerprint, file, selectedSheet);
+  }
 
   @Post()
   @UseGuards(PermissionsGuard)
@@ -69,7 +91,17 @@ export class ProjectController {
       throw new BadRequestException('Authenticated account context is required');
     }
 
-    return this.projectAccessPolicy.listAccessibleProjects(accountId, contextWorkspaceId);
+    const projects = await this.projectAccessPolicy.listAccessibleProjects(accountId, contextWorkspaceId);
+    const projectStatusById = new Map(projects.map((project) => [project.id, project.status]));
+    const rabLifecycleByProjectId = await this.rabLifecyclePolicy.evaluateBatch(
+      projects.map((project) => project.id),
+      projectStatusById,
+    );
+
+    return projects.map((project) => ({
+      ...project,
+      rabLifecycle: rabLifecycleByProjectId.get(project.id),
+    }));
   }
 
   @Get('workspace/:workspaceId')
@@ -154,8 +186,12 @@ export class ProjectController {
   @Get(':projectId/boq/draft')
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   @Permissions('PROJECT_VIEW')
-  async getDraftBoq(@Param('projectId') projectId: string) {
-    return this.projectService.getDraftBoq(projectId);
+  async getDraftBoq(@Req() request: any, @Param('projectId') projectId: string) {
+    const projectStatus = request.projectAccess?.projectStatus;
+    if (!projectStatus) {
+      throw new InternalServerErrorException('PROJECT_STATUS_MISSING_FROM_ACCESS_CONTEXT');
+    }
+    return this.projectService.getDraftBoq(projectId, projectStatus);
   }
 
   @Get(':projectId/boq/items/:boqItemId/cost-calculation')
@@ -186,7 +222,7 @@ export class ProjectController {
 
   @Put(':projectId/boq/draft')
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
-  @Permissions('PROJECT_CREATE') // TODO: promote to RAB_DRAFT_EDIT when that permission is seeded
+  @Permissions(PERMISSIONS.RAB_DRAFT_EDIT)
   async saveDraftBoq(@Param('projectId') projectId: string, @Body() dto: SaveDraftBoqDto) {
     return this.projectService.saveDraftBoq(projectId, dto);
   }

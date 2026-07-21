@@ -41,6 +41,15 @@ const ids = {
   permissionAuthorityAssign: '10000000-0000-4000-8000-000000000032',
   permissionObservatoryView: '10000000-0000-4000-8000-000000000033',
   permissionFieldProgressSubmit: '10000000-0000-4000-8000-000000000034',
+  permissionRabView: '10000000-0000-4000-8000-000000000035',
+  permissionRabDraftEdit: '10000000-0000-4000-8000-000000000036',
+  projectRabDraftProof: '10000000-0000-4000-8000-000000000037',
+  projectAssignmentRabDraftProof: '10000000-0000-4000-8000-000000000038',
+  boqStructureRabDraftProof: '10000000-0000-4000-8000-000000000039',
+  roleAcceptanceProjectCreator: '10000000-0000-4000-8000-000000000040',
+  membershipRoleAssignedProjectCreator: '10000000-0000-4000-8000-000000000041',
+  roleAcceptanceFrontendDoorDirector: '10000000-0000-4000-8000-000000000042',
+  membershipRoleAssignedFrontendDoorDirector: '10000000-0000-4000-8000-000000000043',
 };
 
 async function main() {
@@ -102,6 +111,8 @@ async function main() {
       code: 'FIELD_PROGRESS_SUBMIT',
       name: 'Submit Progress',
     },
+    { id: ids.permissionRabView, code: 'RAB_VIEW', name: 'RAB View' },
+    { id: ids.permissionRabDraftEdit, code: 'RAB_DRAFT_EDIT', name: 'RAB Draft Edit' },
   ];
 
   await Promise.all(
@@ -196,6 +207,14 @@ async function main() {
     },
   });
 
+  for (const permissionId of [ids.permissionRabView, ids.permissionRabDraftEdit]) {
+    await prisma.rolePermission.upsert({
+      where: { roleId_permissionId: { roleId: role.id, permissionId } },
+      update: {},
+      create: { roleId: role.id, permissionId },
+    });
+  }
+
   const assignedAccount = await prisma.account.upsert({
     where: { email: 'assigned@test.local' },
     update: {
@@ -257,6 +276,102 @@ async function main() {
       accountId: assignedAccount.id,
       workspaceId: workspaceA.id,
       status: 'ACTIVE',
+    },
+  });
+
+  // Second, additional role granting PROJECT_CREATE to assigned@test.local
+  // specifically — not added to the shared ACCEPTANCE_MEMBER role, so
+  // nonassigned@test.local (which also holds ACCEPTANCE_MEMBER) does not
+  // gain PROJECT_CREATE as a side effect. This lets assigned@test.local
+  // (PROJECT_CREATE + RAB_VIEW + RAB_DRAFT_EDIT together) run the full
+  // Buat Proyek -> Lanjutkan Draft -> Import BOQ browser journey end to end.
+  const roleAcceptanceProjectCreator = await prisma.role.upsert({
+    where: {
+      workspaceId_code: {
+        workspaceId: workspaceA.id,
+        code: 'ACCEPTANCE_PROJECT_CREATOR',
+      },
+    },
+    update: {
+      name: 'Acceptance Project Creator',
+      description: 'Grants PROJECT_CREATE to the assigned acceptance member only',
+      isSystem: false,
+    },
+    create: {
+      id: ids.roleAcceptanceProjectCreator,
+      workspaceId: workspaceA.id,
+      code: 'ACCEPTANCE_PROJECT_CREATOR',
+      name: 'Acceptance Project Creator',
+      description: 'Grants PROJECT_CREATE to the assigned acceptance member only',
+      isSystem: false,
+    },
+  });
+
+  await prisma.rolePermission.upsert({
+    where: { roleId_permissionId: { roleId: roleAcceptanceProjectCreator.id, permissionId: ids.permissionProjectCreate } },
+    update: {},
+    create: { roleId: roleAcceptanceProjectCreator.id, permissionId: ids.permissionProjectCreate },
+  });
+
+  await prisma.membershipRole.upsert({
+    where: { id: ids.membershipRoleAssignedProjectCreator },
+    update: {
+      workspaceMembershipId: assignedMembership.id,
+      roleId: roleAcceptanceProjectCreator.id,
+      isActive: true,
+      endDate: null,
+    },
+    create: {
+      id: ids.membershipRoleAssignedProjectCreator,
+      workspaceMembershipId: assignedMembership.id,
+      roleId: roleAcceptanceProjectCreator.id,
+      isActive: true,
+    },
+  });
+
+  // The "Buat RAB" frontend door (Sidebar / ObservatoryPage -> /project/new)
+  // is gated by RoleRoute checking literal role codes DIRECTOR/OWNER in
+  // activeRoles (frontend/src/components/layout/ProtectedRoute.tsx), which
+  // is entirely separate from the backend RBAC PROJECT_CREATE permission
+  // above. This role carries zero permissions of its own — it exists only
+  // to satisfy that frontend role-code check, so it grants no additional
+  // backend authority. Without it, RAB_LIFECYCLE-06's PROJECT_CREATE grant
+  // is necessary but not sufficient to reach the create-project UI.
+  const roleAcceptanceFrontendDoorDirector = await prisma.role.upsert({
+    where: {
+      workspaceId_code: {
+        workspaceId: workspaceA.id,
+        code: 'DIRECTOR',
+      },
+    },
+    update: {
+      name: 'Acceptance Frontend Door (DIRECTOR)',
+      description: 'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
+      isSystem: false,
+    },
+    create: {
+      id: ids.roleAcceptanceFrontendDoorDirector,
+      workspaceId: workspaceA.id,
+      code: 'DIRECTOR',
+      name: 'Acceptance Frontend Door (DIRECTOR)',
+      description: 'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
+      isSystem: false,
+    },
+  });
+
+  await prisma.membershipRole.upsert({
+    where: { id: ids.membershipRoleAssignedFrontendDoorDirector },
+    update: {
+      workspaceMembershipId: assignedMembership.id,
+      roleId: roleAcceptanceFrontendDoorDirector.id,
+      isActive: true,
+      endDate: null,
+    },
+    create: {
+      id: ids.membershipRoleAssignedFrontendDoorDirector,
+      workspaceMembershipId: assignedMembership.id,
+      roleId: roleAcceptanceFrontendDoorDirector.id,
+      isActive: true,
     },
   });
 
@@ -541,6 +656,72 @@ async function main() {
       permissionId: permission.id,
     },
   });
+
+  // RAB-DRAFT-PROOF: lawful positive fixture for the RAB draft-lifecycle proof.
+  // assigned@test.local reaches this via Proyek Saya -> Lanjutkan/Mulai RAB ->
+  // Ruang Kerja RAB, never a direct URL. No baseline, no approved RAB, no
+  // progress report, no initiateSetup call — exactly one empty Working Draft.
+  const rabDraftProofProject = await prisma.project.upsert({
+    where: {
+      workspaceId_code: {
+        workspaceId: workspaceA.id,
+        code: 'RAB-DRAFT-PROOF',
+      },
+    },
+    update: {
+      organizationId: orgA.id,
+      name: 'RAB Draft Import Proof',
+    },
+    create: {
+      id: ids.projectRabDraftProof,
+      workspaceId: workspaceA.id,
+      organizationId: orgA.id,
+      code: 'RAB-DRAFT-PROOF',
+      name: 'RAB Draft Import Proof',
+      status: 'PLANNED',
+    },
+  });
+
+  await prisma.projectAssignment.upsert({
+    where: {
+      workspaceMembershipId_projectId: {
+        workspaceMembershipId: assignedMembership.id,
+        projectId: rabDraftProofProject.id,
+      },
+    },
+    update: {
+      roleInProject: 'PROJECT_MANAGER',
+      status: 'ASSIGNED',
+      revokedAt: null,
+    },
+    create: {
+      id: ids.projectAssignmentRabDraftProof,
+      workspaceMembershipId: assignedMembership.id,
+      projectId: rabDraftProofProject.id,
+      roleInProject: 'PROJECT_MANAGER',
+      isPrimaryAssignment: false,
+      status: 'ASSIGNED',
+    },
+  });
+
+  // Idempotent by design: only creates the Working Draft if this project has
+  // none yet. A re-seed must never touch a draft that already has real rows
+  // from a browser-proof import.
+  const existingRabDraftProofDrafts = await prisma.boqStructure.findMany({
+    where: { projectId: rabDraftProofProject.id, name: 'Working Draft', status: 'DRAFT' },
+    select: { id: true },
+  });
+  if (existingRabDraftProofDrafts.length === 0) {
+    await prisma.boqStructure.create({
+      data: {
+        id: ids.boqStructureRabDraftProof,
+        projectId: rabDraftProofProject.id,
+        name: 'Working Draft',
+        version: 1,
+        status: 'DRAFT',
+      },
+    });
+  }
 
   console.log('Acceptance seed complete');
   console.log({
