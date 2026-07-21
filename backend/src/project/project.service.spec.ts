@@ -231,6 +231,7 @@ describe('ProjectService initiateSetup collision guard', () => {
         create: jest.fn().mockResolvedValue({ id: 'created-draft' }),
       },
       boqItem: {
+        count: jest.fn(),
         create: jest.fn().mockResolvedValue({ id: 'item-1' }),
       },
       rabDocument: {
@@ -256,9 +257,9 @@ describe('ProjectService initiateSetup collision guard', () => {
     const { service, tx } = createSetupHarness([
       { id: 'owner-draft', name: 'Nama Bebas Owner', status: 'DRAFT' },
     ]);
-    tx.projectBaseline.findFirst
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ id: 'baseline-1' });
+    tx.boqItem.count
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1);
 
     const payload = {
       items: [{ wbsCode: '1', name: 'Mobilisasi', itemType: 'WORK_ITEM', quantity: 2, unit: 'ls', unitPrice: 100 }],
@@ -271,10 +272,10 @@ describe('ProjectService initiateSetup collision guard', () => {
     expect(tx.boqStructure.create).not.toHaveBeenCalled();
     expect(tx.boqItem.create).toHaveBeenCalledTimes(1);
     expect(tx.boqItem.create).toHaveBeenCalledWith({ data: expect.objectContaining({ boqStructureId: 'owner-draft' }) });
-    expect(tx.rabDocument.create).toHaveBeenCalledTimes(1);
-    expect(tx.projectBaseline.create).toHaveBeenCalledTimes(1);
-    expect(tx.progressReport.create).toHaveBeenCalledTimes(1);
-    expect(tx.project.update).toHaveBeenCalledTimes(1);
+    expect(tx.rabDocument.create).not.toHaveBeenCalled();
+    expect(tx.projectBaseline.create).not.toHaveBeenCalled();
+    expect(tx.progressReport.create).not.toHaveBeenCalled();
+    expect(tx.project.update).not.toHaveBeenCalled();
   });
 
   it('rejects multiple DRAFT containers without inspecting their names or writing setup artifacts', async () => {
@@ -285,7 +286,7 @@ describe('ProjectService initiateSetup collision guard', () => {
 
     await expect(service.initiateSetup('project-1', { items: [] })).rejects.toThrow('MULTIPLE_DRAFT_BOQ_STRUCTURES');
 
-    expect(tx.projectBaseline.findFirst).not.toHaveBeenCalled();
+    expect(tx.boqItem.count).not.toHaveBeenCalled();
     expect(tx.boqStructure.create).not.toHaveBeenCalled();
     expect(tx.boqItem.create).not.toHaveBeenCalled();
     expect(tx.rabDocument.create).not.toHaveBeenCalled();

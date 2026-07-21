@@ -437,7 +437,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
       await postFile(`/projects/${newProjectId}/boq/import/approve`, createOnlyToken).field('selectedSheet', 'RAB').field('importFingerprint', 'x').expect(403);
     });
 
-    it('initiateSetup reuses the sole DRAFT by state, is idempotent on retry, and creates each setup artifact exactly once', async () => {
+    it('initiateSetup reuses the sole DRAFT by state and remains draft-only across retries', async () => {
       const createResponse = await request(app.getHttpServer())
         .post('/projects')
         .set('Authorization', `Bearer ${createOnlyToken}`)
@@ -450,6 +450,10 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
       expect(structuresAfterCreate).toHaveLength(1);
 
       const originalStructureId = structuresAfterCreate[0].id;
+      expect(structuresAfterCreate[0].status).toBe('DRAFT');
+      expect(await prisma.rabDocument.count({ where: { projectId, status: 'APPROVED' } })).toBe(0);
+      expect(await prisma.projectBaseline.count({ where: { projectId } })).toBe(0);
+      expect(await prisma.progressReport.count({ where: { projectId } })).toBe(0);
       await prisma.boqStructure.update({ where: { id: originalStructureId }, data: { name: 'Owner-Named Draft Container' } });
 
       const payload = {
@@ -469,9 +473,12 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
       expect(structuresAfterRetries).toHaveLength(1);
       expect(structuresAfterRetries[0]).toMatchObject({ id: originalStructureId, name: 'Owner-Named Draft Container', status: 'DRAFT' });
       expect(await prisma.boqItem.count({ where: { boqStructureId: originalStructureId } })).toBe(1);
-      expect(await prisma.rabDocument.count({ where: { projectId, status: 'APPROVED' } })).toBe(1);
-      expect(await prisma.projectBaseline.count({ where: { projectId, status: 'ACTIVE' } })).toBe(1);
-      expect(await prisma.progressReport.count({ where: { projectId } })).toBe(1);
+      const rabDocuments = await prisma.rabDocument.findMany({ where: { projectId }, select: { status: true } });
+      expect(rabDocuments.every((rab) => rab.status === 'DRAFT')).toBe(true);
+      expect(await prisma.rabDocument.count({ where: { projectId, status: 'APPROVED' } })).toBe(0);
+      expect(await prisma.projectBaseline.count({ where: { projectId } })).toBe(0);
+      expect(await prisma.progressReport.count({ where: { projectId } })).toBe(0);
+      expect(await prisma.project.findUnique({ where: { id: projectId }, select: { status: true } })).toMatchObject({ status: 'PLANNED' });
     });
 
     it('initiateSetup rejects two DRAFT containers regardless of their names and creates no setup artifacts', async () => {
@@ -495,6 +502,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
 
       expect(response.body.message).toBe('MULTIPLE_DRAFT_BOQ_STRUCTURES');
       expect(await prisma.boqStructure.count({ where: { projectId, status: 'DRAFT' } })).toBe(2);
+      expect(await prisma.boqItem.count({ where: { boqStructure: { projectId } } })).toBe(0);
       expect(await prisma.rabDocument.count({ where: { projectId } })).toBe(0);
       expect(await prisma.projectBaseline.count({ where: { projectId } })).toBe(0);
       expect(await prisma.progressReport.count({ where: { projectId } })).toBe(0);
