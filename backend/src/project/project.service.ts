@@ -161,20 +161,43 @@ export class ProjectService {
   }
 
   async initiateSetup(projectId: string, data: InitiateProjectDto) {
-    const project = await this.prisma.project.findUnique({ where: { id: projectId } });
-    if (!project) throw new NotFoundException('Project not found');
-
     return await this.prisma.$transaction(async (tx) => {
-      // 1. Create BoqStructure
-      const boqStructure = await tx.boqStructure.create({
+      // Serialize setup attempts per project so duplicate requests cannot race.
+      const lockedProject = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
+      );
+      if (lockedProject.length === 0) throw new NotFoundException('Project not found');
+
+      // Draft identity is state-based and deliberately independent of its name.
+      const draftStructures = await tx.boqStructure.findMany({
+        where: { projectId, status: 'DRAFT' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      if (draftStructures.length > 1) {
+        throw new ConflictException('MULTIPLE_DRAFT_BOQ_STRUCTURES');
+      }
+
+      // New projects reuse their one existing DRAFT. Legacy zero-draft
+      // projects may create exactly one container here.
+      const boqStructure = draftStructures[0] ?? await tx.boqStructure.create({
         data: {
           projectId,
           name: 'Main BOQ',
           version: 1,
-        }
+          status: 'DRAFT',
+        },
       });
 
-      let totalCost = new Prisma.Decimal(0);
+      // A populated draft means setup already ran. The project row lock makes
+      // this a safe no-op for sequential and concurrent duplicate requests,
+      // without inventing approval, baseline, or monitoring state.
+      const existingItemCount = await tx.boqItem.count({
+        where: { boqStructureId: boqStructure.id },
+      });
+      if (existingItemCount > 0) {
+        return { message: 'Project setup completed successfully' };
+      }
+
       const tempIdMap = new Map<string, string>();
       const folderSet = new Set<string>();
 
@@ -204,7 +227,6 @@ export class ProjectService {
           quantity = new Prisma.Decimal(item.quantity || 0);
           unitPrice = new Prisma.Decimal(item.unitPrice || 0);
           lineTotal = quantity.mul(unitPrice);
-          totalCost = totalCost.add(lineTotal);
           unit = item.unit || '';
         }
 
@@ -230,47 +252,6 @@ export class ProjectService {
           folderSet.add(createdItem.id);
         }
       }
-
-      // 3. Create RabDocument
-      const rab = await tx.rabDocument.create({
-        data: {
-          projectId,
-          boqStructureId: boqStructure.id,
-          name: 'Initial RAB',
-          version: 1,
-          totalBaseCost: totalCost,
-          totalFinalCost: totalCost,
-          status: 'APPROVED',
-        }
-      });
-
-      // 4. Activate ProjectBaseline
-      const baseline = await tx.projectBaseline.create({
-        data: {
-          projectId,
-          rabDocumentId: rab.id,
-          versionNumber: 1,
-          status: 'ACTIVE',
-          approvedAt: new Date(),
-        }
-      });
-
-      // 5. Create initial ProgressReport to open field entry
-      await tx.progressReport.create({
-        data: {
-          projectId,
-          baselineId: baseline.id,
-          periodStartDate: new Date(),
-          periodEndDate: new Date(),
-          status: 'SUBMITTED',
-        }
-      });
-
-      // Update project status to ACTIVE
-      await tx.project.update({
-        where: { id: projectId },
-        data: { status: 'ACTIVE' }
-      });
 
       return { message: 'Project setup completed successfully' };
     });
