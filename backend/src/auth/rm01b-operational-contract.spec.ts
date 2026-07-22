@@ -61,6 +61,14 @@ describe('RM01B dormant operational contract', () => {
     expect(grants.join('\n')).not.toMatch(/passwordHash/i);
   });
 
+  it('audit role exits nonzero on every explicit fail-closed branch', () => {
+    const failClosedTraps =
+      auditRole.match(/^\s*SELECT 1 \/ 0 AS fail_closed;\s*$/gm) ?? [];
+    expect(failClosedTraps).toHaveLength(7);
+    expect(auditRole).not.toMatch(/^\s*\\quit\b/gm);
+    expect(auditRole).toContain('STOP_DATABASE_IDENTITY_MISMATCH');
+  });
+
   it('operational assets contain no embedded connection or secret literal', () => {
     const assets = [fingerprint, auditRole, runner, moduleSource].join('\n');
     expect(assets).not.toMatch(/postgres(?:ql)?:\/\//i);

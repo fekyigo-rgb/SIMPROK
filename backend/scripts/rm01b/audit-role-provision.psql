@@ -2,13 +2,13 @@
 \if :{?audit_role}
 \else
   \echo 'Set audit_role before running this asset.'
-  \quit
+  SELECT 1 / 0 AS fail_closed;
 \endif
 SELECT current_database() = 'simprok_db' AS database_ok \gset
 \if :database_ok
 \else
   \echo 'STOP_DATABASE_IDENTITY_MISMATCH'
-  \quit
+  SELECT 1 / 0 AS fail_closed;
 \endif
 SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'audit_role') AS role_exists \gset
 \if :role_exists
@@ -44,7 +44,7 @@ SELECT (
 \if :attributes_ok
 \else
   \echo 'STOP_UNEXPECTED_AUDIT_ROLE_PRIVILEGE'
-  \quit
+  SELECT 1 / 0 AS fail_closed;
 \endif
 SELECT NOT EXISTS (
   SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member
@@ -53,7 +53,7 @@ SELECT NOT EXISTS (
 \if :memberships_ok
 \else
   \echo 'STOP_UNEXPECTED_AUDIT_ROLE_PRIVILEGE'
-  \quit
+  SELECT 1 / 0 AS fail_closed;
 \endif
 SELECT NOT (
   has_database_privilege(:'audit_role', current_database(), 'CREATE')
@@ -62,7 +62,7 @@ SELECT NOT (
 \if :create_privileges_ok
 \else
   \echo 'STOP_UNEXPECTED_AUDIT_ROLE_PRIVILEGE'
-  \quit
+  SELECT 1 / 0 AS fail_closed;
 \endif
 SELECT NOT EXISTS (
   SELECT 1 FROM information_schema.role_table_grants
@@ -72,7 +72,7 @@ SELECT NOT EXISTS (
 \if :mutations_absent
 \else
   \echo 'STOP_UNEXPECTED_AUDIT_ROLE_PRIVILEGE'
-  \quit
+  SELECT 1 / 0 AS fail_closed;
 \endif
 SELECT NOT EXISTS (
   SELECT 1 FROM information_schema.role_column_grants
@@ -94,6 +94,6 @@ SELECT NOT EXISTS (
 \if :column_allowlist_ok
 \else
   \echo 'STOP_UNEXPECTED_AUDIT_ROLE_PRIVILEGE'
-  \quit
+  SELECT 1 / 0 AS fail_closed;
 \endif
 COMMIT;
