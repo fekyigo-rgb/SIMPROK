@@ -16,6 +16,11 @@ Status: MUTABLE OPERATIONAL POINTER. Baca ini di awal setiap sesi agen.
 6. Lanjutkan hanya pada `CURRENT_PRODUCT_TARGET` di `STATE.md` dan hanya
    dalam kewenangan kursi yang berlaku. Jangan membuka roadmap item lain.
 
+CURRENT_PRODUCT_TARGET = RM-01
+CURRENT_GATE = RM01B_SOURCE_PREP
+PRODUCTION_ACTIVATION_STATE = NO
+NEXT_GATE = PHASE_1A_AUDIT_ROLE_DCL_AFTER_FULL_RED_GATE
+
 Bila bukti, status, atau konflik dokumen belum jelas: laporkan
 `NEEDS_REVIEW` atau `FAIL_CLOSED`. Jangan mengarang.
 

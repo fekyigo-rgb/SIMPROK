@@ -1,0 +1,69 @@
+\set ON_ERROR_STOP on
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL statement_timeout = '15s';
+SET LOCAL lock_timeout = '3s';
+WITH proof AS (
+  SELECT current_database() AS database_name, current_user AS current_identity,
+         session_user AS session_identity,
+         current_setting('transaction_read_only') AS transaction_read_only
+)
+SELECT json_build_object('record','SESSION_PROOF','database',database_name,
+  'currentIdentity',current_identity,'sessionIdentity',session_identity,
+  'transactionReadOnly',transaction_read_only)::text FROM proof;
+WITH anchor AS (
+  SELECT w.id, w.name, w."organizationId", o.name AS organization_name
+  FROM workspaces w JOIN organizations o ON o.id = w."organizationId"
+  WHERE w.id = '10000000-0000-4000-8000-000000000004' AND w.name = 'Workspace-A'
+    AND o.id = '10000000-0000-4000-8000-000000000002' AND o.name = 'Org-A'
+), account_matches AS (
+  SELECT count(*)::int AS count FROM accounts WHERE (id,email) IN (
+    ('10000000-0000-4000-8000-000000000007','assigned@test.local'),
+    ('10000000-0000-4000-8000-000000000008','nonassigned@test.local'),
+    ('10000000-0000-4000-8000-000000000009','crosstenant@test.local'),
+    ('10000000-0000-4000-8000-000000000021','foreman@test.local'))
+), project_matches AS (
+  SELECT count(*)::int AS count FROM projects WHERE (id,code) IN (
+    ('10000000-0000-4000-8000-000000000018','ACC-X'),
+    ('10000000-0000-4000-8000-000000000037','RAB-DRAFT-PROOF'))
+), role_matches AS (
+  SELECT count(*)::int AS count FROM roles WHERE (id,code) IN (
+    ('10000000-0000-4000-8000-000000000006','ACCEPTANCE_MEMBER'),
+    ('10000000-0000-4000-8000-000000000020','FOREMAN'),
+    ('10000000-0000-4000-8000-000000000040','ACCEPTANCE_PROJECT_CREATOR'),
+    ('10000000-0000-4000-8000-000000000042','DIRECTOR'))
+), relation_matches AS (
+  SELECT
+    (SELECT count(*) FROM workspace_memberships WHERE id IN (
+      '10000000-0000-4000-8000-000000000010','10000000-0000-4000-8000-000000000011',
+      '10000000-0000-4000-8000-000000000012','10000000-0000-4000-8000-000000000022')) +
+    (SELECT count(*) FROM membership_roles WHERE id IN (
+      '10000000-0000-4000-8000-000000000016','10000000-0000-4000-8000-000000000017',
+      '10000000-0000-4000-8000-000000000024','10000000-0000-4000-8000-000000000041',
+      '10000000-0000-4000-8000-000000000043')) +
+    (SELECT count(*) FROM project_assignments WHERE id IN (
+      '10000000-0000-4000-8000-000000000019','10000000-0000-4000-8000-000000000025',
+      '10000000-0000-4000-8000-000000000038')) AS count
+), counts AS (
+  SELECT (SELECT count(*) FROM anchor)::int AS anchor_count,
+    account_matches.count AS account_count, project_matches.count AS project_count,
+    role_matches.count AS role_count, relation_matches.count::int AS relation_count
+  FROM account_matches, project_matches, role_matches, relation_matches
+), classified AS (
+  SELECT *, ((account_count=4)::int+(project_count=2)::int+(role_count=4)::int+(relation_count=12)::int) AS matching_categories,
+    CASE
+      WHEN anchor_count=1 AND ((account_count=4)::int+(project_count=2)::int+(role_count=4)::int+(relation_count=12)::int)>=2
+        THEN 'CURRENT_ACCEPTANCE_FINGERPRINT_CONFIRMED'
+      WHEN anchor_count=0 AND account_count=0 AND project_count=0 AND role_count=0 AND relation_count=0
+        THEN 'NO_CURRENT_ACCEPTANCE_FINGERPRINT_DETECTED'
+      ELSE 'PARTIAL_OR_CONFLICTING_MATCH'
+    END AS fingerprint_status FROM counts
+)
+SELECT json_build_object('record','CURRENT_STATE_FINGERPRINT',
+  'anchorCount',anchor_count,'accountSentinelCount',account_count,
+  'projectSentinelCount',project_count,'roleSentinelCount',role_count,
+  'relationSentinelCount',relation_count,'matchingIndependentCategories',matching_categories,
+  'fingerprintStatus',fingerprint_status,
+  'targetIdentity',CASE WHEN fingerprint_status='PARTIAL_OR_CONFLICTING_MATCH'
+    THEN 'TARGET_IDENTITY_AMBIGUOUS' ELSE 'UNDECIDED_BY_DATABASE' END,
+  'ownerRuntimeAuthorization','OWNER_DECISION_REQUIRED')::text FROM classified;
+ROLLBACK;

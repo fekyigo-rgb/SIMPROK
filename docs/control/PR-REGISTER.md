@@ -83,3 +83,35 @@ Mencatat PR yang relevan dengan urutan produk aktif. Sumber: GitHub
 - SOURCE: `gh pr view 37 --json state,closed,mergeCommit,mergedAt` + body PR #37
 
 ## Soli Deo Gloria. Haleluya. Amin.
+
+## RM-01a-CODE final closure — PR #38
+
+- STATE: MERGED
+- HEAD_SHA: b171792d66edbbbbea2a8872389a3014f5a9bce6
+- MERGE_SHA: 3f0b731777680559158436a664b9cb4ecda68837
+- MERGED_AT: 2026-07-22T00:54:35Z
+- ROADMAP_ITEM: RM-01
+- AUTHORITY_CODE: MERGED
+- FRONTEND_BACKEND_CAPABILITY_ALIGNMENT: MERGED
+- NULL_UNIT_PRICE_INTEGRITY: MERGED
+- PRODUCTION_ACTIVATION: NO
+
+This closes the earlier temporary RM-01a-CODE register entry. Merge does not
+activate production grants.
+
+## RM01B SOURCE PREP Draft PR
+
+- TITLE: chore(rm01): prepare source-controlled production activation
+- STATE: DRAFT
+- HEAD_BRANCH: feat/rm-01b-source-prep
+- BASE_SHA: 3f0b731777680559158436a664b9cb4ecda68837
+- PR_NUMBER: 39
+- HEAD_SHA: SEE_GITHUB_PR_39_FINAL_HEAD
+- ROADMAP_ITEM: RM-01
+- CLASSIFICATION: RED
+- PRODUCTION_ACTIVATION: NO
+- SIMPROK_DB_CONNECTION_COUNT: 0
+- SIMPROK_DB_WRITE_COUNT: 0
+- MERGE: NO
+
+## Soli Deo Gloria. Haleluya. Amin.
