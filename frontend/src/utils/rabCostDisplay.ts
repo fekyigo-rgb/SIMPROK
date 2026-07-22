@@ -180,6 +180,28 @@ export const computeDirectCostTotal = (
   return addDecimalStrings(sumDecimalStrings(kernelLineTotals), manualTotal.toString());
 };
 
+export interface PricingCompletenessRow {
+  id: string;
+  isKernelEligible: boolean;
+  manualUnitPrice: boolean;
+}
+
+/**
+ * A draft's recap (subtotal, margin, PPN, grand total) is only authoritative
+ * once every WORK_ITEM row has a real price — a calculated Cost Kernel
+ * price, or an explicitly manually-entered one. An unpriced row (e.g. a
+ * freshly BOQ-imported item nobody has priced yet) must never silently
+ * contribute Rp0 to a total that's displayed as if it were complete
+ * (RM-01a-CODE null-integrity law).
+ */
+export const isDraftPricingComplete = (
+  rows: readonly PricingCompletenessRow[],
+  costRowStatuses: Record<string, CostRowStatus>,
+): boolean =>
+  rows.every((row) =>
+    row.isKernelEligible ? costRowStatuses[row.id]?.kind === "calculated" : row.manualUnitPrice,
+  );
+
 export const formatBoqImportMeasurement = (
   itemType: string,
   quantity: string | null,

@@ -9,92 +9,97 @@ AS_OF_DATE = 2026-07-21 (Asia/Jayapura)
 ## Field pra-merge (CARA-KERJA.md §3)
 
 ```
-BASE_MAIN_SHA        = 478ce4f76960e4e557d7f32a15b20df3c7639905
-PR_NUMBER             = 36
-PR_HEAD_SHA           = PENDING_UNTIL_PUSH
-                         (exact SHA hanya sah setelah push final; lihat
-                         evidence SHA PR #36 di GitHub dan body PR #36 untuk
-                         nilai eksak begitu tersedia — tidak dikarang di sini)
-ACTIVE_BRANCH         = docs/canonical-agent-control-20260721
-ACTIVE_WORKTREE       = C:\Users\asus\SIMPROK-WT-CONTROL-DOCS
-ACTIVE_SINGLE_WRITER  = CLAUDE_CODE (slice RM00-PR36-CANONICAL-CONTROL-CLOSURE-02)
+BASE_MAIN_SHA        = 18c4a1fd1cd951e7e0facc2c9ea8313a7d4372c3
+PR_NUMBER             = PENDING_UNTIL_PUSH (lihat PR body untuk nomor eksak
+                         setelah Draft PR dibuka)
+PR_HEAD_SHA           = PENDING_UNTIL_PUSH (exact SHA hanya sah setelah push
+                         final; tidak dikarang di sini — lihat PR body/GitHub
+                         untuk nilai eksak begitu tersedia)
+ACTIVE_BRANCH         = feat/rm-01-boq-authority-code
+ACTIVE_WORKTREE       = C:\Users\asus\SIMPROK-WT-RM01-CODE
+ACTIVE_SINGLE_WRITER  = CLAUDE_CODE (slice RM-01a-CODE)
 GOLDEN_THREAD_LIVE    = NO
                          Harga/line-total nyata (Golden Thread hidup) belum
-                         boleh diklaim sebelum RM-02 sampai RM-05 selesai
-                         (Import Basic Price, Import AHSP, dan slice terkait).
-                         BOQ import saat ini menyimpan kuantitas/struktur;
-                         harga sumber belum menjadi otoritas uang.
-GATE_STATE            = HIJAU — docs-only, menunggu push final ke Draft PR #36
-                         dan raw-source review Arsitek pada exact SHA.
-BROWSER_PROOF_STATE   = NOT_APPLICABLE_DOCS_ONLY (slice ini tidak menyentuh
-                         application code atau UI)
+                         boleh diklaim sebelum RM-02 sampai RM-05 selesai.
+                         Slice ini memperkuat null-integrity (harga belum
+                         diisi tetap null, tidak pernah dikarang jadi Rp0)
+                         tetapi tidak mengaktifkan sumber harga baru.
+GATE_STATE            = KUNING/MERAH (CLASSIFICATION=RED per kontrak
+                         RM-01a-CODE) — code readiness selesai, seluruh
+                         permanent gate lokal hijau, menunggu push final ke
+                         Draft PR dan Panel Merah §10.8 lengkap (Arsitek,
+                         Gemini, Codex independent audit, Owner browser
+                         proof, Owner merge decision).
+BROWSER_PROOF_STATE   = WAITING — executor tidak mengklaim
+                         OWNER_BROWSER_PASS; hanya Owner yang dapat
+                         menyatakan PASS pada exact SHA.
 PRODUCTION_ACTIVATION_STATE = NO
-OWNER_DECISIONS_WAITING     = MERGE_OR_REJECT_PR_36
-ACTIVE_DEBTS                = lihat docs/control/DEBT.md — ringkasan OPEN:
-                         UTANG-PLATFORM-03, UTANG-FAKE-ZERO-04,
-                         UTANG-ACCESS-05, UTANG-LIFECYCLE-06,
-                         UTANG-PERMISSION-08, UTANG-TSC-10 (NEEDS_REVIEW),
-                         UTANG-AUTHZ-11, UTANG-E2E-CLEANUP-11 (NEEDS_REVIEW),
-                         UTANG-PROOF-12, UTANG-READONLY-ACCT (NEEDS_REVIEW),
-                         OD-04 DECIMAL PRECISION, IMPORT RETRY/IDEMPOTENCY GAP.
+OWNER_DECISIONS_WAITING     = MERGE_OR_REJECT setelah Panel Merah lengkap;
+                         keputusan aktivasi produksi (`simprok_db` seed
+                         RAB_VIEW/RAB_DRAFT_EDIT) tetap terpisah di gate
+                         RM-01b-PRODUCTION-ACTIVATION.
+ACTIVE_DEBTS                = lihat docs/control/DEBT.md — ringkasan:
+                         UTANG-PLATFORM-03 (OPEN), UTANG-FAKE-ZERO-04 (OPEN),
+                         UTANG-ACCESS-05 (OPEN), UTANG-LIFECYCLE-06 (OPEN),
+                         UTANG-PERMISSION-08 (STILL_OPEN — kode aktivasi
+                         siap, simprok_db belum tersentuh),
+                         UTANG-TSC-10 (NEEDS_REVIEW), UTANG-AUTHZ-11
+                         (CODE_READY_AWAITING_EXACT_SHA_REVIEW — bukan
+                         CLOSED), UTANG-E2E-CLEANUP-11 (NEEDS_REVIEW),
+                         UTANG-PROOF-12 (OPEN), UTANG-READONLY-ACCT
+                         (NEEDS_REVIEW), OD-04 DECIMAL PRECISION (OPEN),
+                         IMPORT RETRY/IDEMPOTENCY GAP (KNOWN_GAP).
+                         UTANG-AUTOBASELINE-13 tetap CLOSED_BY_PR_37 —
+                         slice ini membuktikan `initiateSetup()` tidak
+                         berubah sama sekali (nol diff pada method itu).
 ```
 
 ## Keadaan produk hari ini
 
 ```
-CURRENT_PRODUCT_TARGET  = RM-00
-CURRENT_GATE             = PR_36_EXACT_SHA_REVIEW_AND_OWNER_MERGE_PENDING
-NEXT_PRODUCT_TARGET      = RM-01
+CURRENT_PRODUCT_TARGET  = RM-01
+CURRENT_GATE             = RM01a_CODE_READY_AWAITING_RED_PANEL_EXACT_SHA_REVIEW
+NEXT_PRODUCT_TARGET      = RM-01b-PRODUCTION-ACTIVATION (setelah Panel Merah
+                         PASS dan Owner merge decision)
 ```
 
-## Realitas GitHub (evidence SHA per klaim)
+## Realitas GitHub (evidence per klaim, slice RM-01a-CODE)
 
-- PR #21 — CLOSED tanpa merge.
-  Evidence: `gh pr view 21` → `state=CLOSED`, `mergeCommit=null`,
-  `mergedAt=null`, `closedAt=2026-07-21T02:34:06Z`.
-- PR #35 — MERGED.
-  Evidence: `gh pr view 35` → `mergeCommit.oid=095002bdebb77a8439015551ec853be5b91d50dc`,
-  `mergedAt=2026-07-21T03:03:38Z`.
-- PR #37 — MERGED.
-  Evidence: `gh pr view 37` → `mergeCommit.oid=478ce4f76960e4e557d7f32a15b20df3c7639905`,
-  `mergedAt=2026-07-21T07:09:21Z`.
-- PR #36 — OPEN, Draft, sedang diproses slice ini.
-  Evidence: `gh pr view 36` → `state=OPEN`, `isDraft=true`,
-  `headRefOid=af6a2a6220227c5e1a0236d53c424261b6cceb83` (SHA sebelum slice ini).
-- Open PR count = 1; satu-satunya open PR adalah #36.
-  Evidence: `gh pr list --state open` → satu baris, nomor 36.
-- Merge-base PR #36 dengan main = `095002bdebb77a8439015551ec853be5b91d50dc`
-  (`git merge-base main origin/docs/canonical-agent-control-20260721`).
-- Divergensi sebelum slice ini: branch ahead 4, behind main 5
-  (`git rev-list --left-right --count main...origin/docs/canonical-agent-control-20260721`
-  → `5 4`).
+- origin/main sebelum slice ini = `18c4a1fd1cd951e7e0facc2c9ea8313a7d4372c3`
+  (`git fetch origin --prune` + `git rev-parse origin/main`).
+- Open PR count sebelum slice ini = 0 (`gh pr list --state open`).
+- PR #36 (RM-00) — MERGED, merge commit
+  `18c4a1fd1cd951e7e0facc2c9ea8313a7d4372c3` (`gh pr view 36`).
+- Worktree terisolasi: `C:\Users\asus\SIMPROK-WT-RM01-CODE`, branch baru
+  `feat/rm-01-boq-authority-code`, dibuat langsung dari `origin/main` exact
+  (`git worktree add ... -b feat/rm-01-boq-authority-code origin/main`).
+- `C:\SIMPROK` tidak disentuh sepanjang slice ini — tetap `main` @
+  `478ce4f76960e4e557d7f32a15b20df3c7639905` (SHA lama, sebelum PR #36
+  merge tersinkron ke situ; worktree RM-01a-CODE ini yang membawa origin
+  terbaru, bukan `C:\SIMPROK`), tracked/staged diff kosong, dua untracked
+  path terlindungi (`SIMPROK-ARTIFACTS/`, `backend/.claude/`) tidak
+  tersentuh.
 
-## C:\SIMPROK
+## RM-01a-CODE — apa yang berubah (ringkas; lihat PR body untuk exact files)
 
-```
-C:\SIMPROK branch          = main
-C:\SIMPROK HEAD             = 478ce4f76960e4e557d7f32a15b20df3c7639905
-C:\SIMPROK tracked diff     = kosong
-C:\SIMPROK staged diff      = kosong
-Untracked path terlindungi = SIMPROK-ARTIFACTS/, backend/.claude/ (tidak disentuh)
-```
-
-## BOQ Import — realitas mesin vs aktivasi
-
-- Kode BOQ import (preview/approve XLSX ke Working Draft) tersedia di `main`
-  melalui PR #35 (merge `095002b...`) dan diperkuat oleh PR #37
-  (`initiateSetup` draft-only, merge `478ce4f...`).
-- Bukti/write terakhir tetap pada `simprok_test` (proof environment PR #35:
-  `LOCAL_WORKTREE_SIMPROK_WT_IMPORTFIRST` + `simprok_test`; proof PR #37:
-  database guard `simprok_test`). Tidak ada bukti browser atau write pada
-  `simprok_db` dari kedua PR ini.
-- BOQ import pada `simprok_db` **belum diaktifkan**. Audit read-only
-  RM-01A (sesi yang sama, sebelum slice ini) menemukan permission
-  `RAB_VIEW` dan `RAB_DRAFT_EDIT` — yang menjaga endpoint BOQ import —
-  **ABSENT** dari tabel `permissions` di `simprok_db`, sehingga endpoint
-  tersebut belum bisa dijalankan siapa pun sampai permission tersebut
-  di-seed dan digrant (keputusan Owner terpisah, di luar slice ini).
-- `SIMPROK_DB_WRITE_COUNT = 0` untuk pekerjaan RM-00/PR #36 ini. Slice ini
-  tidak menyentuh `simprok_db` sama sekali (docs-only).
+- Backend: resolver permission kanonikal baru
+  (`WorkspacePermissionResolverService`), dipakai bersama oleh
+  `PermissionsGuard` dan endpoint baru `GET /auth/capabilities`. Tiga
+  route authority-matrix diperbaiki: `POST .../initiate` →
+  `RAB_DRAFT_EDIT`; `GET .../boq` dan `GET .../boq/draft` → `RAB_VIEW`.
+  Null-integrity: `saveDraftBoq`/`getDraftBoq` tidak lagi mengubah
+  `unitPrice` yang belum diisi menjadi `0`; recap RabDocument tidak
+  dipersist selagi `pricingStatus=INCOMPLETE`.
+- Frontend: `AuthContext` fail-closed capability state
+  (`permissionState`, `hasPermission`); `PermissionRoute` menggantikan
+  `RoleRoute` literal HANYA pada jalur RM-01 (`/project/new`,
+  RAB door, RAB workspace); rekap biaya menampilkan "—"/"Belum dihitung"
+  alih-alih Rp0 palsu selama ada item belum berharga.
+- Aktivasi produksi: planner PLAN/APPLY sempit (RAB_VIEW+RAB_DRAFT_EDIT,
+  satu workspace, role DIRECTOR eksplisit, additive-only), diuji hanya
+  terhadap `simprok_test`. Tidak dijalankan terhadap `simprok_db`.
+- `SIMPROK_DB_CONNECTION_COUNT=0`, `SIMPROK_DB_WRITE_COUNT=0` untuk
+  seluruh slice ini.
+- `MERGE=NO` — Draft PR adalah permukaan audit exact-SHA, bukan aktivasi.
 
 ## Soli Deo Gloria. Haleluya. Amin.

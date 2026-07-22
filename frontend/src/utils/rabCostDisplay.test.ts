@@ -7,6 +7,7 @@ import {
   computeDirectCostTotal,
   formatBoqImportMeasurement,
   invalidateRow,
+  isDraftPricingComplete,
   markRequestFailed,
   sumDecimalStrings,
   toRabCostDisplay,
@@ -179,4 +180,31 @@ test("computeDirectCostTotal sums manual rows via JS number and combines exactly
 test("computeDirectCostTotal returns zero for an all-manual-unset, all-kernel-pending board", () => {
   const rows = [{ id: "kernel-1", isKernelEligible: true, manualAmount: 0 }];
   assert.equal(computeDirectCostTotal(rows, {}), "0");
+});
+
+test("isDraftPricingComplete is true when every manual row has manualUnitPrice and every kernel row is calculated", () => {
+  const rows = [
+    { id: "manual-1", isKernelEligible: false, manualUnitPrice: true },
+    { id: "kernel-1", isKernelEligible: true, manualUnitPrice: false },
+  ];
+  const statuses: Record<string, CostRowStatus> = {
+    "kernel-1": { kind: "calculated", response: calculatedResponse },
+  };
+  assert.equal(isDraftPricingComplete(rows, statuses), true);
+});
+
+test("isDraftPricingComplete is false when a freshly-imported manual row has no price yet (never treated as Rp0)", () => {
+  const rows = [{ id: "imported-1", isKernelEligible: false, manualUnitPrice: false }];
+  assert.equal(isDraftPricingComplete(rows, {}), false);
+});
+
+test("isDraftPricingComplete is false while a kernel row is still loading/invalidated/fail-closed, not just when uncalculated", () => {
+  const rows = [{ id: "kernel-1", isKernelEligible: true, manualUnitPrice: false }];
+  assert.equal(isDraftPricingComplete(rows, { "kernel-1": { kind: "loading" } }), false);
+  assert.equal(isDraftPricingComplete(rows, { "kernel-1": { kind: "invalidated" } }), false);
+  assert.equal(isDraftPricingComplete(rows, { "kernel-1": { kind: "fail_closed", reason: "x" } }), false);
+});
+
+test("isDraftPricingComplete is vacuously true for an empty row set", () => {
+  assert.equal(isDraftPricingComplete([], {}), true);
 });

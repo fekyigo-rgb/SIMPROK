@@ -43,8 +43,10 @@ register yang terlihat bersih. Debt yang ditutup tidak dihapus; diberi
   `OWNER_BROWSER_PROOF_COMPLETE: NO`.
 
 ### UTANG-PERMISSION-08
-- STATUS: OPEN
-- CLOSURE_CONDITION: RM-01 (ROADMAP.md §16)
+- STATUS: STILL_OPEN — production `simprok_db` belum tersentuh; DILARANG
+  ditandai CLOSED sampai gate produksi terpisah (RM-01b) benar-benar PASS.
+- CLOSURE_CONDITION: RM-01 (ROADMAP.md §16); secara spesifik, `RAB_VIEW`
+  dan `RAB_DRAFT_EDIT` benar-benar ter-seed dan digrant di `simprok_db`.
 - SOURCE: ROADMAP.md §16. Dikuatkan oleh audit read-only RM-01A (sesi yang
   sama, sebelum slice ini, transaksi `READ ONLY` pada `simprok_db`):
   permission `RAB_VIEW` dan `RAB_DRAFT_EDIT` — dideklarasikan
@@ -54,6 +56,14 @@ register yang terlihat bersih. Debt yang ditutup tidak dihapus; diberi
   Tiga permission `AHSP_APPROVE`, `BASIC_PRICE_VIEW`, `BASIC_PRICE_MANAGE`
   sengaja belum diaktifkan pada RM-01 dan tetap bagian utang ini bila
   masih absen.
+- RM-01a-CODE (slice ini): menyiapkan jalur aktivasi additive/idempotent
+  yang sempit (`backend/src/auth/rm01-permission-activation-planner.ts`,
+  PLAN/APPLY, hanya `RAB_VIEW`+`RAB_DRAFT_EDIT`, hanya satu workspace +
+  role `DIRECTOR` eksplisit, tidak pernah wildcard). Diuji PLAN dan APPLY
+  hanya terhadap `simprok_test` (lihat PR body slice ini untuk hasil).
+  Jalur ini TIDAK dijalankan terhadap `simprok_db` pada slice ini —
+  `SIMPROK_DB_CONNECTION_COUNT=0`. Keputusan menjalankan APPLY terhadap
+  `simprok_db` tetap keputusan Owner/PM terpisah di gate RM-01b.
 
 ### UTANG-TSC-10
 - STATUS: OPEN — NEEDS_REVIEW (bukti tambahan tidak ditemukan pada slice
@@ -66,15 +76,39 @@ register yang terlihat bersih. Debt yang ditutup tidak dihapus; diberi
   bukan diasumsikan closed.
 
 ### UTANG-AUTHZ-11
-- STATUS: OPEN
-- CLOSURE_CONDITION: RM-01 (ROADMAP.md §16)
-- SOURCE: ROADMAP.md §16. Dikuatkan oleh audit read-only RM-01A (sesi yang
-  sama, sebelum slice ini): `frontend/src/App.tsx` route `project/new`
-  masih memakai `RoleRoute allowedRoles={['DIRECTOR','OWNER']}` (role
-  literal), sementara backend memakai permission code (`PROJECT_CREATE`,
-  `RAB_VIEW`, `RAB_DRAFT_EDIT`) di `project.controller.ts`. Frontend
-  authority != backend authority pada jalur yang sama. Tidak diperbaiki
-  pada slice ini sesuai instruksi eksplisit.
+- STATUS: CODE_READY_AWAITING_EXACT_SHA_REVIEW — bukan CLOSED. Status
+  CLOSED tidak boleh ditetapkan hanya berdasarkan laporan executor;
+  menunggu ARCHITECT_EXACT_SHA_REVIEW, GEMINI_CONSTITUTION_EXACT_SHA_REVIEW,
+  INDEPENDENT_SECURITY_AUDIT (Codex), dan OWNER_BROWSER_PROOF pada exact
+  PR_HEAD_SHA slice ini (lihat panel Merah §10.8).
+- CLOSURE_CONDITION: RM-01 (ROADMAP.md §16), plus seluruh panel Merah PASS.
+- SOURCE (temuan awal): ROADMAP.md §16. Dikuatkan oleh audit read-only
+  RM-01A (sesi yang sama, sebelum slice RM-01a-CODE ini):
+  `frontend/src/App.tsx` route `project/new` masih memakai `RoleRoute
+  allowedRoles={['DIRECTOR','OWNER']}` (role literal), sementara backend
+  memakai permission code (`PROJECT_CREATE`, `RAB_VIEW`, `RAB_DRAFT_EDIT`)
+  di `project.controller.ts`. Frontend authority != backend authority
+  pada jalur yang sama.
+- RM-01a-CODE (slice ini) — kode readiness, bukan closure:
+  - Backend: resolver kanonikal baru
+    `WorkspacePermissionResolverService` (dipakai bersama oleh
+    `PermissionsGuard` dan `GET /auth/capabilities`); `POST
+    /projects/:projectId/initiate` diubah dari `PROJECT_CREATE` menjadi
+    `RAB_DRAFT_EDIT` (endpoint menulis isi Working Draft); `GET
+    /projects/:projectId/boq` dan `GET .../boq/draft` diubah dari
+    `PROJECT_VIEW` menjadi `RAB_VIEW` — menyamakan matriks otoritas
+    dengan §5C.
+  - Frontend: `AuthContext` menambah `permissionState`
+    (IDLE/LOADING/READY/ERROR) dan `hasPermission(code)` fail-closed;
+    `PermissionRoute` baru menggantikan `RoleRoute` HANYA pada
+    `/project/new`, `/project/:id/rab`, dan `/project/:id/rab/workspace`
+    (permission `PROJECT_CREATE`, `RAB_VIEW`, `RAB_DRAFT_EDIT`); `RoleRoute`
+    literal TIDAK dihapus dari rute lain (index Observatory, `/showcase`)
+    — di luar scope RM-01.
+  - `ObservatoryPage.tsx`'s `canCreateRab` diubah dari role-literal check
+    menjadi `hasPermission('PROJECT_CREATE')`.
+- CATATAN JUJUR: perbaikan ini menutup KESENJANGAN KODE, bukan
+  KESENJANGAN status. Tidak ada klaim CLOSED sampai panel Merah PASS.
 
 ### UTANG-E2E-CLEANUP-11
 - STATUS: OPEN — NEEDS_REVIEW (remediasi kuat ditemukan, belum ada
@@ -157,6 +191,12 @@ register yang terlihat bersih. Debt yang ditutup tidak dihapus; diberi
   (`478ce4f...`, setelah RM-01A) memperbaikinya. Dicatat di sini agar
   tidak ada kesan kontradiksi antar audit — keduanya benar untuk exact
   SHA masing-masing.
+- REMAINS_CLOSED_BY_PR_37 (RM-01a-CODE non-regression proof): slice ini
+  mengubah `project.service.ts` untuk null-integrity (`saveDraftBoq`),
+  tetapi hunk `initiateSetup()` dibiarkan identik dengan baseline —
+  dibuktikan lewat `git diff` yang menunjukkan nol perubahan pada method
+  tersebut. Test `initiateSetup` (idempotency, collision guard) tetap PASS
+  tanpa modifikasi ekspektasi lifecycle.
 
 ### UTANG-ORDER-09
 - STATUS: CLOSED

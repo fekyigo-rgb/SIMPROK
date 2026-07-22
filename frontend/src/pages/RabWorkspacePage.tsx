@@ -27,6 +27,7 @@ import {
   formatBackendRupiah,
   formatBoqImportMeasurement,
   invalidateRow,
+  isDraftPricingComplete,
   markRequestFailed,
   toRabCostDisplay,
   type CostBatchResponse,
@@ -459,6 +460,22 @@ export function RabWorkspacePage() {
   const margin = subtotal * (marginPercent / 100);
   const ppn = (subtotal + margin) * (ppnPercent / 100);
   const grandTotal = subtotal + margin + ppn;
+
+  // A recap total must never present an unpriced row's contribution as if it
+  // were a real Rp0 — null-integrity law (RM-01a-CODE §5D). While any item
+  // row lacks an authoritative price, the recap footer shows "—" instead of
+  // a computed-but-partial rupiah figure.
+  const pricingComplete = useMemo(
+    () =>
+      isDraftPricingComplete(
+        rows
+          .filter((row): row is RabRow & { type: 'item' } => row.type === 'item')
+          .map((row) => ({ id: row.id, isKernelEligible: row.ahspVersionId !== null, manualUnitPrice: row.manualUnitPrice })),
+        costRowStatuses,
+      ),
+    [rows, costRowStatuses],
+  );
+
   const [showBackflowWarning, setShowBackflowWarning] = useState(false);
 
   const openPlaceholder = (action: string) => {
@@ -1009,10 +1026,15 @@ export function RabWorkspacePage() {
             </button>
             <div className="simprok-rab-recap">
               <h3 className="simprok-rab-recap__title">Rekapitulasi Biaya</h3>
+              {!pricingComplete ? (
+                <p className="simprok-rab-recap__incomplete-note" role="status">
+                  Belum dihitung — satu atau lebih item pekerjaan belum mempunyai harga.
+                </p>
+              ) : null}
               <div className="simprok-rab-recap__rows">
                 <div className="simprok-rab-recap__row simprok-rab-recap__row--plain">
                   <span className="simprok-rab-recap__label">Total / Biaya Langsung</span>
-                  <strong className="simprok-rab-recap__value">{formatBackendRupiah(directCostTotalExact)}</strong>
+                  <strong className="simprok-rab-recap__value">{pricingComplete ? formatBackendRupiah(directCostTotalExact) : 'Belum dihitung'}</strong>
                 </div>
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Margin / Profit</span>
@@ -1020,7 +1042,7 @@ export function RabWorkspacePage() {
                     <input type="number" min="0" value={marginPercent} onChange={(event) => setMarginPercent(Number(event.target.value))} aria-label="Persentase margin" />
                     <span>%</span>
                   </span>
-                  <strong className="simprok-rab-recap__value">{formatRupiah(margin)}</strong>
+                  <strong className="simprok-rab-recap__value">{pricingComplete ? formatRupiah(margin) : '—'}</strong>
                 </div>
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Pajak / PPN</span>
@@ -1028,12 +1050,12 @@ export function RabWorkspacePage() {
                     <input type="number" min="0" value={ppnPercent} onChange={(event) => setPpnPercent(Number(event.target.value))} aria-label="Persentase PPN" />
                     <span>%</span>
                   </span>
-                  <strong className="simprok-rab-recap__value">{formatRupiah(ppn)}</strong>
+                  <strong className="simprok-rab-recap__value">{pricingComplete ? formatRupiah(ppn) : '—'}</strong>
                 </div>
                 <div className="simprok-rab-recap__divider" role="presentation" />
                 <div className="simprok-rab-recap__row simprok-rab-recap__row--grand">
                   <span className="simprok-rab-recap__label">Grand Total Estimasi</span>
-                  <strong className="simprok-rab-recap__value">{formatRupiah(grandTotal)}</strong>
+                  <strong className="simprok-rab-recap__value">{pricingComplete ? formatRupiah(grandTotal) : 'Belum dihitung'}</strong>
                 </div>
               </div>
             </div>

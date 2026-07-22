@@ -91,8 +91,11 @@ export function ObservatoryPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const { token, activeWorkspaceId, activeRoles } = useAuth();
-  const canCreateRab = activeRoles.some(r => ['DIRECTOR', 'OWNER'].includes(r));
+  const { token, activeWorkspaceId, hasPermission } = useAuth();
+  // RM-01a authority matrix: the "Buat RAB" door is gated by the
+  // PROJECT_CREATE permission code, not a DIRECTOR/OWNER role literal —
+  // matching the backend's PermissionsGuard on POST /projects.
+  const canCreateRab = hasPermission('PROJECT_CREATE');
   const activeProjects = projects.filter(p => !isTestProject(p));
   const projectGroups = buildProjectGroups(activeProjects);
   const safeProjectGroupIndex = projectGroups.length > 0 ? projectGroupIndex % projectGroups.length : 0;
