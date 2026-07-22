@@ -21,6 +21,7 @@
     "verify:db:test": "tsx scripts/test-database-guard.ts",
     "test:e2e:safe": "tsx scripts/run-e2e-safe.ts",
     "test:e2e": "npm run test:e2e:safe",
+    "rm01b:permission": "tsx scripts/rm01b/permission-activation.ts",
     "test:openai:smoke": "tsx scripts/openai-smoke.ts",
     "gate:post-recovery": "npm run build && npm run test && npm run test:e2e && npm --prefix ../frontend run build"
   },

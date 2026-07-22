@@ -88,3 +88,33 @@ sumber di atas menang; laporkan gap, jangan mengoreksi sumber di sini.
   Price, schema, atau write `simprok_db` pada slice RM-00 ini.
 
 ## Soli Deo Gloria. Haleluya. Amin.
+
+### AD-PROCESS-01-R1 — RED gate sequence correction
+- STATUS: FINAL, Revision 1.
+- ROOT_CAUSE: PM_RED_GATE_SEQUENCE_FAILURE.
+- EXECUTOR_SCOPE_DEVIATION_IN_AUDIT_ACCOUNT_EVENT: NO.
+- OWNER_AUTHORIZATION: YES.
+- ARCHITECT_REVIEW_BEFORE_EXECUTION: NO.
+- CONSTITUTION_REVIEW_BEFORE_EXECUTION: NO.
+- R0: no RED execution before the complete RED review chain passes.
+- R1: the executor runs the exact frozen scope without improvisation.
+- R2: production access follows the full RED gate, not Architect-only review.
+- R3: every audit uses a Frozen Evidence Contract.
+- R4: debt may be triaged in bulk, but evidence and closure remain per debt.
+- R5: evidence already obtained is reused.
+- R6: only security, data integrity, tenant isolation, or irreversible risk
+  may block the active slice.
+- R7: one Closure Packet, one final report, one decision.
+- Questions outside the Evidence Contract do not expand the slice. Critical
+  findings are reported and fail closed; non-critical findings enter a
+  non-blocking backlog. All known blockers are reported together.
+- ROADMAP.md and CARA-KERJA.md are unchanged. Gate failure is not shifted to
+  the executor; Codex executed the mandate it was given.
+
+### AD-RM01B-01 — One phased Closure Packet
+- STATUS: FINAL.
+- DECISION: RM01B uses one Closure Packet with PHASE-0 through PHASE-4 kept
+  separate. No phase auto-advances. Every later phase needs its own exact gate
+  and authorization.
+
+## Soli Deo Gloria. Haleluya. Amin.

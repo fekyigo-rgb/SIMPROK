@@ -209,3 +209,42 @@ register yang terlihat bersih. Debt yang ditutup tidak dihapus; diberi
   audit lebih dalam.
 
 ## Soli Deo Gloria. Haleluya. Amin.
+
+### Windows tsx/esbuild service spawn EPERM
+- DEBT_CLASS: ENVIRONMENT_TOOLCHAIN
+- REPRODUCTION: 2 independent isolated environments
+- PRODUCT_DEFECT: NO_EVIDENCE
+- SAFE_E2E_IMPACT: RM01B waiver only
+- ROOT_CAUSE: UNRESOLVED
+- FOLLOW_UP_REQUIRED: YES
+- DO_NOT_GENERALIZE: Slices requiring genuine HTTP/E2E remain blocked
+- WAIVER_ID: RM01B-E2E-ENV-EXCEPTION-01
+- NOTE: The exception records a pre-assertion environment failure. Safe E2E
+  is not PASS and the environment issue is not claimed fixed.
+
+## Soli Deo Gloria. Haleluya. Amin.
+
+## RM01B current-status synchronization — 2026-07-22
+
+Historical entries above remain preserved. Where an earlier status differs,
+this section is the current operational status.
+
+- UTANG-E2E-CLEANUP-11:
+  CLOSED_BY_ARCHITECT_REVIEW_22JUL2026. Evidence is PR #16, safe E2E PR #35,
+  and residual PASS PR #37. History is not removed.
+- UTANG-AUTHZ-11:
+  CODE_MERGED_BY_PR_38_BROWSER_PROOF_PENDING. It is not CLOSED.
+- UTANG-PERMISSION-08: OPEN until the exact production grant passes.
+- UTANG-READONLY-ACCT: SOURCE_PREP_IN_PROGRESS. It remains OPEN until
+  production DCL and independent proof pass.
+- UTANG-LIFECYCLE-06: OPEN until Owner negative browser proof passes.
+- UTANG-PROOF-12: OPEN until ACC-X negative browser proof passes.
+- UTANG-TSC-10: OPEN, REFERENCE_FOUND_NON_BLOCKING. The single frozen
+  repository search found exact references in ROADMAP.md, DEBT.md,
+  SIMPROK_PROJECT_MEMORY.md section 14.5, and the existing test-only planner.
+  This is not closure.
+- UTANG-FAKE-ZERO-04: OPEN and scheduled only for its next lawful slice.
+- No contamination debt is created before a production fingerprint confirms
+  one.
+
+## Soli Deo Gloria. Haleluya. Amin.
