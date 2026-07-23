@@ -28,35 +28,37 @@ NO_RIP_AND_REPLACE=YES
 OWNER_APPROVAL_REQUIRED_FOR_REDESIGN=YES
 ```
 
-## 2. Makna domain yang wajib dipertahankan
+## 2. Empat sumbu domain yang wajib dipertahankan
 
-Agen dilarang mencampur lapisan berikut:
+Agen dilarang mencampur atau menurunkan satu sumbu dari sumbu lain:
 
-1. **Pihak / organisasi proyek**  
-   Menjawab organisasi atau pihak apa yang terlibat.
+1. **ProjectAssignment / hubungan personel ke proyek**  
+   Menjawab siapa terhubung ke proyek melalui assignment yang sah. `ProjectAssignment` tetap menjadi jembatan kanonikal antara personel dan proyek.
 
-2. **Personel proyek**  
-   Personel masuk ke proyek melalui assignment yang sah. `ProjectAssignment` tetap menjadi jembatan kanonikal antara personel dan proyek.
+2. **Peran dalam proyek**  
+   `ProjectAssignment.roleInProject` menjawab fungsi operasional orang di proyek, misalnya PM, Site Engineer, PPK, atau Pengawas. Nilai peran tidak otomatis menentukan permission.
 
-3. **Peran dalam proyek**  
-   `ProjectAssignment.roleInProject` menjawab fungsi orang di proyek, misalnya PM, Site Engineer, PPK, atau Pengawas.
-
-4. **Tingkat kewenangan keputusan**  
-   `ProjectAssignment.decisionAuthorityLevel` menggunakan kontrak:
+3. **Tingkat kewenangan keputusan**  
+   Menjawab tingkat keputusan seperti:
    - `VIEWER`
    - `RECOMMENDER`
    - `DECIDER`
    - `APPROVER`
 
-5. **Permission efektif**  
-   Aksi teknis berasal dari RBAC/effective permission backend, bukan dari tebakan frontend atau nama jabatan. Contoh permission: `PROJECT_CREATE`, `RAB_VIEW`, `RAB_DRAFT_EDIT`, `FIELD_PROGRESS_SUBMIT`.
+   **Reality lock:** pada saat directive ini ditulis, `decisionAuthorityLevel` belum terbukti tersedia pada schema/runtime repository aktif. Directive ini mengunci **sumbu maknanya**, bukan mengarang field atau tempat persistensinya. Penempatan kanonikalnya masih membutuhkan keputusan arsitektur terpisah. Sampai kontrak backend nyata tersedia, frontend wajib menampilkan locked-door/negative state yang jujur dan dilarang menurunkan tingkat keputusan dari `roleInProject`.
 
-6. **Akses saya**  
-   Harus diringkas dari identitas, assignment, `roleInProject`, `decisionAuthorityLevel`, dan effective permission pengguna aktif. Bukan teks statis dan bukan asumsi frontend.
+4. **RBAC / effective permission**  
+   Menjawab aksi teknis apa yang secara efektif boleh dilakukan. Sumbernya adalah backend RBAC/effective permission, bukan tebakan frontend, nama jabatan, label peran, atau tingkat keputusan. Contoh permission: `PROJECT_CREATE`, `RAB_VIEW`, `RAB_DRAFT_EDIT`, `FIELD_PROGRESS_SUBMIT`.
 
-`Authority` tidak sama dengan `Permission`. Nama jabatan/peran tidak boleh dipakai sebagai jalan pintas untuk menyimpulkan permission.
+`Authority` tidak sama dengan `Permission`. `roleInProject` tidak sama dengan `decision authority`. Tidak satu pun dari empat sumbu di atas boleh dipakai sebagai jalan pintas untuk menyimpulkan sumbu lain.
 
-## 3. Pintu UI existing yang dipertahankan
+## 3. Akses saya
+
+Area **Akses saya** harus diringkas dari data backend pengguna aktif yang benar-benar tersedia, termasuk identitas, assignment, peran proyek, tingkat keputusan bila kontraknya telah hidup, serta effective permission.
+
+Selama backend/RBAC belum lengkap, area ini wajib mempertahankan state jujur seperti **Menunggu RBAC/backend**, **Menunggu Assignment**, **Akses Terbatas**, atau **Tidak Berwenang**. Dilarang mengisi kekosongan dengan asumsi frontend.
+
+## 4. Pintu UI existing yang dipertahankan
 
 Tombol dan area existing dipertahankan sebagai pintu kanonikal:
 
@@ -64,7 +66,7 @@ Tombol dan area existing dipertahankan sebagai pintu kanonikal:
   Untuk pihak/stakeholder proyek setelah kontrak backend tersedia.
 
 - **Kelola Pihak & Kewenangan**  
-  Untuk assignment, `roleInProject`, `decisionAuthorityLevel`, dan hubungan kewenangan yang sah.
+  Untuk assignment, `roleInProject`, tingkat kewenangan keputusan yang sah setelah kontraknya tersedia, serta hubungan kewenangan yang sah.
 
 - **Ajukan Perubahan Data**  
   Bukan jalan pintas untuk mengubah kewenangan; harus mengikuti jalur perubahan formal yang disetujui.
@@ -74,7 +76,7 @@ Tombol dan area existing dipertahankan sebagai pintu kanonikal:
 
 Status **Menunggu RBAC** dipertahankan sebagai locked-door state yang jujur sampai mesin backend tersedia. Kelak status boleh berubah berdasarkan data nyata, misalnya `Aktif`, `Akses Terbatas`, `Menunggu Assignment`, atau `Tidak Berwenang`.
 
-## 4. Larangan permanen
+## 5. Larangan permanen
 
 Tanpa instruksi Owner yang baru dan eksplisit, dilarang:
 
@@ -82,7 +84,9 @@ Tanpa instruksi Owner yang baru dan eksplisit, dilarang:
 - membuat halaman paralel yang mengambil alih fungsi pihak/kewenangan;
 - merombak layout, wording utama, atau navigasi Section F;
 - membuat ulang komponen hanya karena backend mulai tersedia;
-- menebak permission dari nama jabatan, label peran, atau state frontend;
+- menebak permission dari nama jabatan, label peran, tingkat keputusan, atau state frontend;
+- menurunkan `decisionAuthorityLevel` dari `roleInProject`;
+- mengarang field, enum, API, atau persistence contract yang belum ada;
 - membuka tombol hanya berdasarkan frontend state;
 - mengganti locked-door state dengan data contoh yang tampak nyata;
 - menduplikasi sumber kebenaran assignment, authority, atau permission;
@@ -95,13 +99,15 @@ NO_LAYOUT_REDESIGN_WITHOUT_OWNER_APPROVAL=YES
 NO_FAKE_DATA_TO_REPLACE_LOCKED_STATE=YES
 NO_FRONTEND_GUESSED_PERMISSION=YES
 NO_ROLE_NAME_AS_PERMISSION_SHORTCUT=YES
+NO_DECISION_AUTHORITY_FROM_ROLE_INFERENCE=YES
+NO_SCHEMA_INVENTION=YES
 ```
 
-## 5. Perubahan yang diperbolehkan secara incremental
+## 6. Perubahan yang diperbolehkan secara incremental
 
 Tanpa redesign baru, pekerjaan berikut diperbolehkan bila scope dan gate-nya sah:
 
-- menghubungkan API backend ke Section F;
+- menghubungkan API backend nyata ke Section F;
 - mengganti placeholder dengan data nyata;
 - mengaktifkan atau mengunci tombol berdasarkan effective permission;
 - menambah loading, error, empty, forbidden, dan locked-door state;
@@ -111,7 +117,21 @@ Tanpa redesign baru, pekerjaan berikut diperbolehkan bila scope dan gate-nya sah
 
 Semua wiring harus fail-closed. Bila backend contract belum tersedia, UI tetap jujur sebagai **Menunggu RBAC/backend**, bukan mengarang data atau akses.
 
-## 6. Hukum implementasi
+## 7. Gap dan dependency yang wajib dilaporkan
+
+Directive ini tidak otomatis menciptakan backend contract. Setiap agen wajib memeriksa repository/runtime aktual dan melaporkan gap sebelum implementasi.
+
+Pada saat directive ini direvisi berdasarkan review Arsitek:
+
+```text
+DECISION_AUTHORITY_PERSISTENCE=OPEN_ARCHITECTURE_DECISION
+DECISION_AUTHORITY_FRONTEND_STATE=LOCKED_DOOR_UNTIL_BACKEND_EXISTS
+ACCESS_MYSELF_DEPENDS_ON_EFFECTIVE_RBAC=YES
+```
+
+Utang atau blocker runtime yang masih terbuka harus diperlakukan sebagai dependency, bukan diselesaikan dengan tebakan frontend. Secara khusus, temuan seperti `UTANG-PERMISSION-08` dan `UTANG-AUTHZ-11` harus diverifikasi terhadap register/runtime terkini sebelum pintu **Akses saya** dibuka.
+
+## 8. Hukum implementasi
 
 Setiap task yang menyentuh pihak, assignment, peran proyek, authority, decision authority, RBAC, permission, atau akses pengguna wajib:
 
@@ -119,11 +139,12 @@ Setiap task yang menyentuh pihak, assignment, peran proyek, authority, decision 
 2. menunjuk Section F sebagai muara frontend;
 3. menunjukkan sumber data backend untuk setiap elemen UI;
 4. menunjukkan guard/effective permission untuk setiap aksi;
-5. mempertahankan negative states dan fail-closed behavior;
-6. memperoleh izin Owner sebelum redesign atau relokasi fungsi;
-7. melaporkan konflik antara repository dan directive ini, bukan memperbaikinya diam-diam.
+5. membedakan ProjectAssignment, `roleInProject`, tingkat keputusan, dan effective permission;
+6. mempertahankan negative states dan fail-closed behavior;
+7. memperoleh izin Owner sebelum redesign atau relokasi fungsi;
+8. melaporkan konflik atau gap antara repository dan directive ini, bukan memperbaikinya diam-diam.
 
-## 7. Hierarki
+## 9. Hierarki
 
 Dokumen ini adalah keputusan Owner yang mengikat untuk UI governance proyek. Pointer wajib tersedia pada `AGENTS.md` dan `CLAUDE.md`.
 
