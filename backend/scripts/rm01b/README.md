@@ -20,8 +20,22 @@ them and makes zero simprok_db connections or writes.
 
 There is no automatic advance between phases.
 
-Provisioning expects psql variable audit_role and prompts invisibly for a
-password only when the role is absent. Fingerprinting uses the resulting
+Provisioning expects psql variable audit_role. When the role is absent, the
+asset creates it locked down first (NOLOGIN, PASSWORD NULL, every privilege
+attribute already frozen) inside an already-open transaction, then uses
+psql's built-in `\password` meta-command to ask for the new password twice
+with terminal echo disabled by psql itself, pinning `password_encryption`
+to `scram-sha-256` for that transaction first so the stored verifier is
+SCRAM regardless of the server's own default. Only after the stored
+verifier is confirmed to actually be a `SCRAM-SHA-256$` verifier — not
+merely non-null — does the asset promote the role to LOGIN with the same
+frozen least-privilege attributes. A failed, mismatched, or cancelled
+password entry, or one that somehow stored a non-SCRAM verifier, leaves the
+role without a qualifying password, which the asset detects and turns into
+an explicit fail-closed error, rolling the whole transaction back so no
+locked-down role is left behind. An existing formal role is never asked for
+a new password and never has its password rotated automatically; only its
+attributes and grants are re-verified. Fingerprinting uses the resulting
 formal audit credential. The permission runner accepts exactly --plan or
 --apply and reads every credential and confirmation from external environment
 variables. Never paste secrets into arguments, files, logs, or PRs.
