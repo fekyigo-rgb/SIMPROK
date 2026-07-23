@@ -22,21 +22,23 @@ NO_RIP_AND_REPLACE=YES
 NO_NEW_PARALLEL_AUTHORITY_PAGE=YES
 NO_FRONTEND_GUESSED_PERMISSION=YES
 NO_ROLE_NAME_AS_PERMISSION_SHORTCUT=YES
+NO_DECISION_AUTHORITY_FROM_ROLE_INFERENCE=YES
 OWNER_APPROVAL_REQUIRED_FOR_REDESIGN=YES
 ```
 
 Backend work must incrementally activate the existing UI. Do not replace, relocate, rename, or redesign it without explicit Owner instruction.
 
-Use:
+Keep these axes separate:
 
-- `ProjectAssignment` as the person-to-project bridge;
-- `roleInProject` for project function;
-- `decisionAuthorityLevel` for `VIEWER`, `RECOMMENDER`, `DECIDER`, `APPROVER`;
-- backend effective permissions for technical actions;
-- backend-derived identity, assignment, authority, and permission for **Akses saya**.
+- `ProjectAssignment` = person-to-project bridge;
+- `roleInProject` = project function;
+- decision authority = separate decision-level axis;
+- backend effective permission = technical action authority.
 
-If the backend contract is absent, preserve an honest locked-door state such as **Menunggu RBAC/backend**. Never invent real-looking data or enable actions from frontend assumptions.
+Repository reality rule: do not assume a `decisionAuthorityLevel` field, enum, API, or persistence contract exists merely because the conceptual axis is Owner-locked. Verify the current backend first. Until the real contract exists, keep that axis in an honest locked-door/negative state and never infer it from `roleInProject`.
 
-If any task conflicts with the canonical directive, stop and report the conflict. The Owner directive wins.
+**Akses saya** must be derived from backend identity, assignment, authority, and effective permissions that actually exist. If backend/RBAC dependencies are incomplete, preserve **Menunggu RBAC/backend** or another honest fail-closed state.
+
+If any task conflicts with the canonical directive or the repository lacks a required contract, stop and report the conflict/gap. The Owner directive wins; repository facts must not be invented.
 
 Soli Deo Gloria. Haleluya. Amin.
