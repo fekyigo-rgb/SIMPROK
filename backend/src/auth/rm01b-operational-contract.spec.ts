@@ -67,7 +67,7 @@ describe('RM01B dormant operational contract', () => {
     expect(failClosedTraps).toHaveLength(8);
     expect(auditRole).not.toMatch(/^\s*\\quit\b/gm);
     expect(auditRole).toContain('STOP_DATABASE_IDENTITY_MISMATCH');
-    expect(auditRole).toContain('STOP_AUDIT_PASSWORD_NOT_SET');
+    expect(auditRole).toContain('STOP_AUDIT_PASSWORD_NOT_SCRAM');
   });
 
   it('audit role prompts for a new password only through the secure \\password mechanism', () => {
@@ -81,19 +81,33 @@ describe('RM01B dormant operational contract', () => {
     expect(passwordCalls[0].trim()).toBe('\\password :audit_role');
   });
 
-  it('creates the new role NOLOGIN before any password is set, and only normalizes it to LOGIN afterward', () => {
+  it('creates the new role NOLOGIN before any password is set, pins SCRAM before \\password, and only normalizes it to LOGIN afterward', () => {
     const createIndex = auditRole.indexOf(
       "CREATE ROLE %I NOLOGIN PASSWORD NULL",
     );
+    const setLocalIndex = auditRole.indexOf(
+      "SET LOCAL password_encryption = 'scram-sha-256';",
+    );
     const passwordIndex = auditRole.indexOf('\\password :audit_role');
-    const verifyIndex = auditRole.indexOf('audit_password_set');
+    const verifyIndex = auditRole.indexOf('audit_password_is_scram');
     const loginIndex = auditRole.indexOf(
       "ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1",
     );
     expect(createIndex).toBeGreaterThan(-1);
-    expect(passwordIndex).toBeGreaterThan(createIndex);
+    expect(setLocalIndex).toBeGreaterThan(createIndex);
+    expect(passwordIndex).toBeGreaterThan(setLocalIndex);
     expect(verifyIndex).toBeGreaterThan(passwordIndex);
     expect(loginIndex).toBeGreaterThan(verifyIndex);
+  });
+
+  it('pins SCRAM-SHA-256 encryption exactly once and verifies the stored verifier is actually SCRAM', () => {
+    const setLocalOccurrences =
+      auditRole.match(/^\s*SET LOCAL password_encryption = 'scram-sha-256';\s*$/gm) ?? [];
+    expect(setLocalOccurrences).toHaveLength(1);
+
+    expect(auditRole).toMatch(/COALESCE\(\s*rolpassword LIKE 'SCRAM-SHA-256\$%',\s*false\s*\)/);
+    expect(auditRole).not.toMatch(/rolpassword IS NOT NULL/);
+    expect(auditRole).not.toContain('audit_password_set');
   });
 
   it('never asks for a new password when the formal role already exists (no automatic rotation)', () => {
