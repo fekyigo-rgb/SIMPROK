@@ -64,9 +64,49 @@ describe('RM01B dormant operational contract', () => {
   it('audit role exits nonzero on every explicit fail-closed branch', () => {
     const failClosedTraps =
       auditRole.match(/^\s*SELECT 1 \/ 0 AS fail_closed;\s*$/gm) ?? [];
-    expect(failClosedTraps).toHaveLength(7);
+    expect(failClosedTraps).toHaveLength(8);
     expect(auditRole).not.toMatch(/^\s*\\quit\b/gm);
     expect(auditRole).toContain('STOP_DATABASE_IDENTITY_MISMATCH');
+    expect(auditRole).toContain('STOP_AUDIT_PASSWORD_NOT_SET');
+  });
+
+  it('audit role prompts for a new password only through the secure \\password mechanism', () => {
+    expect(auditRole).not.toContain('\\prompt -s');
+    expect(auditRole).not.toMatch(/\\prompt\b/);
+    expect(auditRole).not.toMatch(/\baudit_password\b/);
+    expect(auditRole).not.toMatch(/PASSWORD\s+%L/);
+    expect(auditRole).toContain('PASSWORD NULL');
+    const passwordCalls = auditRole.match(/^\s*\\password\b.*$/gm) ?? [];
+    expect(passwordCalls).toHaveLength(1);
+    expect(passwordCalls[0].trim()).toBe('\\password :audit_role');
+  });
+
+  it('creates the new role NOLOGIN before any password is set, and only normalizes it to LOGIN afterward', () => {
+    const createIndex = auditRole.indexOf(
+      "CREATE ROLE %I NOLOGIN PASSWORD NULL",
+    );
+    const passwordIndex = auditRole.indexOf('\\password :audit_role');
+    const verifyIndex = auditRole.indexOf('audit_password_set');
+    const loginIndex = auditRole.indexOf(
+      "ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1",
+    );
+    expect(createIndex).toBeGreaterThan(-1);
+    expect(passwordIndex).toBeGreaterThan(createIndex);
+    expect(verifyIndex).toBeGreaterThan(passwordIndex);
+    expect(loginIndex).toBeGreaterThan(verifyIndex);
+  });
+
+  it('never asks for a new password when the formal role already exists (no automatic rotation)', () => {
+    const roleAbsentBranch = auditRole.match(
+      /\\if :role_exists\r?\n\\else\r?\n([\s\S]*?)\\endif/,
+    )?.[1];
+    expect(roleAbsentBranch).toBeDefined();
+    expect(roleAbsentBranch).toContain('\\password');
+    const outsideAbsentBranch = auditRole.replace(
+      /\\if :role_exists\r?\n\\else\r?\n[\s\S]*?\\endif/,
+      '',
+    );
+    expect(outsideAbsentBranch).not.toContain('\\password');
   });
 
   it('operational assets contain no embedded connection or secret literal', () => {

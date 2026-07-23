@@ -11,14 +11,17 @@ SELECT current_database() = 'simprok_db' AS database_ok \gset
   SELECT 1 / 0 AS fail_closed;
 \endif
 SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'audit_role') AS role_exists \gset
-\if :role_exists
-\else
-  \prompt -s 'Password for the new audit role: ' audit_password
-\endif
 BEGIN;
 \if :role_exists
 \else
-  SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1', :'audit_role', :'audit_password') \gexec
+  SELECT format('CREATE ROLE %I NOLOGIN PASSWORD NULL NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1', :'audit_role') \gexec
+  \password :audit_role
+  SELECT rolpassword IS NOT NULL AS audit_password_set FROM pg_authid WHERE rolname = :'audit_role' \gset
+  \if :audit_password_set
+  \else
+    \echo 'STOP_AUDIT_PASSWORD_NOT_SET'
+    SELECT 1 / 0 AS fail_closed;
+  \endif
 \endif
 SELECT format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1', :'audit_role') \gexec
 SELECT format('ALTER ROLE %I SET default_transaction_read_only = on', :'audit_role') \gexec
