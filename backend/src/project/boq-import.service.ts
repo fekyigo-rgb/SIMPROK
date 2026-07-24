@@ -64,6 +64,16 @@ export class BoqImportService {
     };
   }
 
+  // Replay semantics (RM-001 closure): a WRONG or mismatched fingerprint
+  // always fails closed with zero mutation (checked twice: before and again
+  // inside the locked transaction, see below). An EXACT replay of the same
+  // fingerprint is deliberately NOT rejected — there is no server-side
+  // preview session to consume, by design (see fingerprint() above). Two
+  // exact-replay approvals are serialized by the Working Draft row lock and
+  // each performs an idempotent full-replace, so the final item set is
+  // deterministic with no duplicate rows. One-time preview consumption is
+  // not implemented and is out of scope for this fix; it would require a
+  // stateful session/schema addition this task explicitly does not make.
   async approve(projectId: string, workspaceId: string, fingerprint: string, file?: UploadedXlsx, selectedSheet?: string) {
     this.validateFile(file);
     const knowledge = await this.parse(file, selectedSheet);
@@ -99,7 +109,20 @@ export class BoqImportService {
       `);
       const draft = locked[0];
       if (!draft || draft.projectId !== projectId || draft.status !== 'DRAFT' || draft.name !== WORKING_DRAFT_NAME) throw new NotFoundException('WORKING_DRAFT_NOT_FOUND');
-      if (await tx.boqItem.count({ where: { boqStructureId: draft.id } })) throw new ConflictException('WORKING_DRAFT_NOT_EMPTY');
+      // Re-validated here, inside the same locked transaction: the fingerprint
+      // is a pure function of (projectId, workspaceId, file, sheet, parser
+      // version) already checked above before the lock was acquired, but the
+      // actual mutation below must be bound to an explicit in-transaction
+      // assertion rather than trusting a check made before the lock existed.
+      if (this.fingerprint(projectId, workspaceId, knowledge) !== fingerprint) throw new ConflictException('IMPORT_FINGERPRINT_MISMATCH');
+
+      // Safe full-replace: bounded to this exact Working Draft only. Never
+      // scoped by projectId/workspaceId/status, which would reach other
+      // structures.
+      const replacedExistingItemCount = await tx.boqItem.count({ where: { boqStructureId: draft.id } });
+      if (replacedExistingItemCount > 0) {
+        await tx.boqItem.deleteMany({ where: { boqStructureId: draft.id } });
+      }
 
       const ids = new Map<string, string>();
       const created: Array<{ id: string }> = [];
@@ -117,7 +140,16 @@ export class BoqImportService {
         }});
         ids.set(`row:${row.sourceRowNumber}`, item.id); created.push(item);
       }
-      return { structureId: draft.id, importedRows: created.length, items: created };
+
+      const finalItemCount = await tx.boqItem.count({ where: { boqStructureId: draft.id } });
+      if (finalItemCount !== created.length) throw new ConflictException('IMPORT_REPLACE_COUNT_MISMATCH');
+
+      return {
+        structureId: draft.id, workingDraftId: draft.id,
+        importedRows: created.length, importedItemCount: created.length,
+        replacedExistingItemCount, state: draft.status,
+        importFingerprint: fingerprint, items: created,
+      };
     });
   }
 }
