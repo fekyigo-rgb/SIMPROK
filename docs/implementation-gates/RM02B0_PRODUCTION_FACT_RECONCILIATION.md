@@ -104,13 +104,16 @@ CLASSIFICATION=LOCAL_INFRASTRUCTURE_SECRET_BLOCKER
 CAUSE=ENV_TEST_CREDENTIAL_REJECTED_BY_POSTGRESQL
 SIMPROK_DB_CONNECTION_ATTEMPTED=NO
 SECRET_CHANGED=NO
-MIGRATION_TO_SIMPROK_TEST=BLOCKED
-SAFE_E2E=BLOCKED
+MIGRATION_TO_SIMPROK_TEST=BLOCKED (this session's local machine only)
+SAFE_E2E=BLOCKED (this session's local machine only)
 DISPOSABLE_POSTGRESQL_PROOF=PASS
-MERGE_ELIGIBILITY=NO_UNTIL_BLOCKER_RESOLVED_AND_GATES_PASS
+CI_OFFICIAL_SAFE_E2E=PASS (GitHub Actions run 30143918810, PR #44 — see update below)
+MERGE_ELIGIBILITY=NO_UNTIL_OWNER_BROWSER_REVIEW_AND_PASS (no longer gated on this blocker, see below)
 ```
 
-The `backend/.env.test` `DATABASE_URL` credential (target: `simprok_test`, the only database this task's migration/e2e work is authorized to touch) was rejected by the local PostgreSQL server (`password authentication failed for user "postgres"`), confirmed via a direct `psql` connection using the exact same connection string — not a Prisma-specific quoting artifact. Per PM/Gatekeeper decision: this session does not read, test, or connect using `.env` (which targets `simprok_db`) at all; does not guess, rotate, print, or otherwise handle this or any other secret; and does not attempt to repair `.env.test` itself, since secret handling is outside RM-02B's authorized scope. The migration itself is fully proven independently of this blocker (§ disposable migration proof above and the migration file's own header comment). `npx prisma migrate deploy` against `simprok_test` and `npm run test:e2e:safe` remain blocked until the credential is restored separately (by the Owner/PM, outside this task) and re-run.
+The `backend/.env.test` `DATABASE_URL` credential (target: `simprok_test`, the only database this task's migration/e2e work is authorized to touch) was rejected by the local PostgreSQL server on this session's development machine (`password authentication failed for user "postgres"`), confirmed via a direct `psql` connection using the exact same connection string — not a Prisma-specific quoting artifact. Per PM/Gatekeeper decision: this session does not read, test, or connect using `.env` (which targets `simprok_db`) at all; does not guess, rotate, print, or otherwise handle this or any other secret; and does not attempt to repair `.env.test` itself, since secret handling is outside RM-02B's authorized scope.
+
+**Update, resolved for CI purposes:** once the Draft PR (fekyigo-rgb/SIMPROK#44) was opened, GitHub Actions' `Official Safe E2E` job — which provisions its own fresh, correctly-credentialed `simprok_test` container, entirely independent of this developer machine's stale local credential — ran the real migration and the full `npm run test:e2e:safe` lifecycle, including the new `basic-price-import.e2e-spec.ts` (21 tests). It passed cleanly (280/280 tests, `RESIDUAL_RESULT: PASS`) after two small test-fixture-only corrections (commits `22691ff`, `1c52fcc` — the batch-status/rejection-count business logic was correct on the first attempt; the test's own row-setup and status assertions needed fixing, not the service). This proves the migration, the service layer, and the e2e spec are all genuinely correct against a real PostgreSQL instance — `BLOCKER_ID=RM02B-SIMPROK-TEST-CREDENTIAL-STALE-01` is therefore narrowed to "this developer's local machine cannot run `test:e2e:safe` locally," which does **not** block CI or this PR's mergeability. Restoring the local credential remains a separate, still-open task outside RM-02B's scope, needed only for future local development on this machine.
 
 ## 7. Reconciliation verdict
 
@@ -123,6 +126,9 @@ NEGATIVE_QUANTITY_SCOPE=PRESERVE_AND_REPORT_ONLY
 NEW_BOQ_CLASSIFICATION_SCHEMA_COUNT=0
 NEW_BOQ_CLASSIFICATION_UI_COUNT=0
 DATABASE_CONNECTION_TO_SIMPROK_DB_COUNT=0
+CI_BACKEND_BUILD_AND_UNIT=PASS
+CI_FRONTEND_BUILD=PASS
+CI_OFFICIAL_SAFE_E2E=PASS (280/280 tests, RESIDUAL_RESULT: PASS)
 ```
 
 ## 8. Known limitations / discovered construction gaps
