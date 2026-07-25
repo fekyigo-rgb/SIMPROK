@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PriceVerificationStatus } from '@prisma/client';
 import { BasicPriceService } from './basic-price.service';
+import { BasicPriceEligibilityPolicy } from './basic-price-eligibility.policy';
 import { PrismaService } from '../prisma/prisma.service';
 
 describe('BasicPriceService', () => {
@@ -49,6 +50,7 @@ describe('BasicPriceService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BasicPriceService,
+        BasicPriceEligibilityPolicy,
         { provide: PrismaService, useValue: prisma },
       ],
     }).compile();
