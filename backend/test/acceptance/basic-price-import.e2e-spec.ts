@@ -381,7 +381,11 @@ describe('RM02B Basic Price import (e2e)', () => {
 
       const submitPath = `/basic-price-imports/${preview.body.batchId}/submit`;
       const first = await request(app.getHttpServer()).post(submitPath).set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A).expect(201);
-      expect(first.body.status).toBe('SUBMITTED');
+      // PARTIALLY_SUBMITTED, not SUBMITTED: the other two rows in this
+      // batch were deliberately rejected above, and submitBatch's final
+      // status is PARTIALLY_SUBMITTED whenever any row in the batch is
+      // REJECTED, even though every READY_FOR_SUBMISSION row succeeded.
+      expect(first.body.status).toBe('PARTIALLY_SUBMITTED');
       expect(first.body.submittedRows).toBe(1);
 
       const submissions = await prisma.priceSubmission.findMany({ where: { resourceId: RESOURCE_LABOR_ID } });
@@ -390,9 +394,9 @@ describe('RM02B Basic Price import (e2e)', () => {
       expect(await prisma.priceSubmissionRevision.count({ where: { submissionId: submissions[0].id } })).toBe(1);
       expect(await prisma.priceSubmissionAudit.count({ where: { submissionId: submissions[0].id } })).toBe(1);
 
-      // Idempotent replay: same batch, already SUBMITTED, no duplicate submission.
+      // Idempotent replay: same batch, already PARTIALLY_SUBMITTED, no duplicate submission.
       const second = await request(app.getHttpServer()).post(submitPath).set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A).expect(201);
-      expect(second.body.status).toBe('SUBMITTED');
+      expect(second.body.status).toBe('PARTIALLY_SUBMITTED');
       expect(await prisma.priceSubmission.count({ where: { resourceId: RESOURCE_LABOR_ID } })).toBe(1);
     });
   });
