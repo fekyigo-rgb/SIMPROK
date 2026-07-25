@@ -1,0 +1,35 @@
+# RM-02C0A Canonical Resource Discovery — Source & Evidence Manifest
+# Generated read-only. No workbook is committed to this repository.
+
+## Canonical source (not committed — verified in place, bounded search location)
+SOURCE_FILE_NAME=BASIC PRICE(1).xlsx
+SOURCE_LOCATION=C:\SIMPROK\data\first-real-input\BASIC PRICE(1).xlsx
+SOURCE_BYTE_SIZE=37635
+SOURCE_SHA256=46B3F354A74A10BDB26316802D922B7D6C34AA109579FA55A3A9EA5D61504B61
+SOURCE_SELECTED_SHEET=HARGA SATUAN UPAH DAN BAHAN
+
+## Parser under discovery
+ADAPTER_FILE=backend/src/basic-price/basic-price-xlsx-intake.adapter.ts
+PARSER_CONTRACT_VERSION=RM02_BASIC_PRICE_01_V1
+ADAPTER_MODIFIED=NO
+
+## Discovery result headline
+PARSED_RESOURCE_ROWS=271
+LABOR_ROWS=17
+MATERIAL_ROWS=241
+EQUIPMENT_ROWS=13
+DETERMINISTIC_REPRODUCTION_RUNS=2
+DETERMINISTIC_REPRODUCTION_CONSISTENT=YES
+
+## Evidence artifact hashes (SHA-256, this commit's content)
+00-RM02C0-DISCOVERY-REPORT.md=F2E4FAC8FB1469A3376D664720624B95B9360FD06E892B159D4C3256A12ABFA7
+01-RM02C0-RESOURCE-INVENTORY.json=CE2B3AEBC50179FB2DF46D5EB55ED39EF68347421C8F8DE043C6D3CA00E64C46
+02-RM02C0-ANOMALY-REGISTER.json=5F838F093625113F86DDA8A00B2A939BF07978A872CD03C075D7F39DD7D3DD66
+
+## Correction record
+CORRECTION_A_APPLIED=YES (over-absolute L.01 uniqueness claim removed, see 00 section 4)
+CORRECTION_B_APPLIED=YES (code-zero classification split into true-blank vs external-reference-formula-no-cached-result, see 00 section 5 and 02 codeZeroClassification)
+CORRECTED_AFTER=independent byte-level audit + this task's own direct re-verification against the hash-verified source
+PARSED_RESOURCE_ROWS_UNCHANGED=YES (271, confirmed identical before and after correction)
+
+Soli Deo Gloria.
