@@ -326,30 +326,58 @@ describe('RM02B Basic Price import (e2e)', () => {
       const buffer = await buildBasicPriceXlsx();
       const preview = await previewFile(buffer, 'submit-preconditions').expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
+      const otherRows = preview.body.rows.filter((r: { sourceRowNumber: number }) => r.sourceRowNumber !== 9);
+
       await request(app.getHttpServer())
         .post(`/basic-price-imports/${preview.body.batchId}/rows/${row.id}/resolve`)
         .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
         .send({ version: row.version, resourceCatalogId: RESOURCE_LABOR_ID, unitDefinitionId: UNIT_ID })
         .expect(201);
+      // Every other row must also leave NEEDS_REVIEW so the batch genuinely
+      // reaches READY_FOR_REVIEW -- otherwise submit's very first check
+      // (BATCH_NOT_READY_FOR_REVIEW) would 409 before ever reaching the
+      // effectiveDate/regionId/sourceOrigin checks this test means to prove.
+      for (const other of otherRows) {
+        await request(app.getHttpServer())
+          .post(`/basic-price-imports/${preview.body.batchId}/rows/${other.id}/reject`)
+          .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
+          .send({ version: other.version, reason: 'out of scope for this precondition scenario' })
+          .expect(201);
+      }
 
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         .post(`/basic-price-imports/${preview.body.batchId}/submit`)
         .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
         .expect(409);
+      expect(response.body.message).toBe('EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION');
       expect(await prisma.priceSubmission.count({ where: { resourceId: RESOURCE_LABOR_ID } })).toBe(0);
     });
 
     it('submits every READY_FOR_SUBMISSION row as a real PriceSubmission and is idempotent on replay', async () => {
+      // The base fixture always yields three rows (LABOR row 9, MATERIAL
+      // row 33, EQUIPMENT row 316) -- recomputeBatchStatus() only advances
+      // the batch to READY_FOR_REVIEW once every row has left NEEDS_REVIEW
+      // (resolved OR rejected), so the two rows this scenario isn't
+      // exercising must be explicitly rejected, not just ignored.
       const buffer = await buildBasicPriceXlsx();
       const preview = await previewFile(buffer, 'submit-full-flow', assignedToken, {
         effectiveDate: '2026-07-25', regionId: REGION_ID, sourceOrigin: 'SUPPLIER', sourceType: 'MARKET_SURVEY',
       }).expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
+      const otherRows = preview.body.rows.filter((r: { sourceRowNumber: number }) => r.sourceRowNumber !== 9);
+
       await request(app.getHttpServer())
         .post(`/basic-price-imports/${preview.body.batchId}/rows/${row.id}/resolve`)
         .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
         .send({ version: row.version, resourceCatalogId: RESOURCE_LABOR_ID, unitDefinitionId: UNIT_ID })
         .expect(201);
+      for (const other of otherRows) {
+        await request(app.getHttpServer())
+          .post(`/basic-price-imports/${preview.body.batchId}/rows/${other.id}/reject`)
+          .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
+          .send({ version: other.version, reason: 'out of scope for this submission scenario' })
+          .expect(201);
+      }
 
       const submitPath = `/basic-price-imports/${preview.body.batchId}/submit`;
       const first = await request(app.getHttpServer()).post(submitPath).set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A).expect(201);
