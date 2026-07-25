@@ -589,6 +589,7 @@ model UnitDefinition {
   ahspSnapshots         AHSPSnapshot[]                  @relation("AHSPSnapshotOutputUnit")
   resolutionSourceUnits ProjectAhspResourceResolution[] @relation("ResolutionSourceUnit")
   resolutionTargetUnits ProjectAhspResourceResolution[] @relation("ResolutionTargetUnit")
+  basicPriceImportRows  BasicPriceImportRow[]
 
   @@map("unit_definitions")
 }
@@ -954,6 +955,7 @@ model ResourceCatalog {
   canonicalPricePoints           CanonicalPricePoint[]
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
   unitConversionRules            UnitConversionRule[]
+  basicPriceImportRows           BasicPriceImportRow[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -1023,10 +1025,12 @@ model PriceSubmission {
 
   resource        ResourceCatalog           @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   workspace       Workspace?                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  region          Region?                   @relation(fields: [regionId], references: [id], onDelete: Restrict)
   revisions       PriceSubmissionRevision[]
   audits          PriceSubmissionAudit[]
   publishedPrices BasicPrice[]
   review          PriceSubmissionReview?
+  importRow       BasicPriceImportRow?
 
   @@index([workspaceId])
   @@index([workspaceId, organizationId])
@@ -1034,6 +1038,7 @@ model PriceSubmission {
   @@index([resourceId])
   @@index([reportedByAccountId])
   @@index([status])
+  @@index([regionId])
   @@map("price_submissions")
 }
 
@@ -1366,21 +1371,221 @@ model BasicPrice {
   reportedByAccountId String?                 @db.Uuid
   reviewDate          DateTime?
   validUntil          DateTime?
-  status              String                  @default("PUBLISHED")
+  status              String                  @default("UNPUBLISHED")
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
 
   resource                       ResourceCatalog                 @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   workspace                      Workspace?                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  region                         Region?                         @relation(fields: [regionId], references: [id], onDelete: Restrict)
   sourceSubmission               PriceSubmission?                @relation(fields: [sourceSubmissionId], references: [id])
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
+  publicationAudits              BasicPricePublicationAudit[]
 
   @@index([resourceId])
   @@index([workspaceId])
   @@index([workspaceId, organizationId])
   @@index([organizationId])
   @@index([sourceSubmissionId])
+  @@index([regionId])
   @@map("basic_prices")
+}
+
+// =====================================================
+// SECTION G.2: RM-02 — BASIC PRICE IMPORT FOUNDATION
+// Region authority + import batch/row staging/provenance +
+// publication audit. See
+// docs/implementation-gates/rm02b0-design/01-RM02B0-SCHEMA-CONTRACT.md
+// for the full design contract this section implements verbatim.
+// =====================================================
+
+model Region {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  basicPrices             BasicPrice[]
+  priceSubmissions        PriceSubmission[]
+  basicPriceImportBatches BasicPriceImportBatch[]
+
+  @@map("regions")
+}
+
+enum BasicPriceImportBatchStatus {
+  PREVIEWED
+  READY_FOR_REVIEW
+  NEEDS_REVIEW
+  APPROVED_FOR_SUBMISSION
+  PARTIALLY_SUBMITTED
+  SUBMITTED
+  REJECTED
+  SUPERSEDED
+}
+
+model BasicPriceImportBatch {
+  id                  String @id @default(uuid()) @db.Uuid
+  workspaceId         String @db.Uuid
+  organizationId      String @db.Uuid
+  uploadedByAccountId String @db.Uuid
+
+  sourceFileName        String
+  sourceSha256          String
+  sourceByteLength      Int
+  selectedSheetName     String
+  parserContractVersion String
+
+  regionId                    String?   @db.Uuid
+  effectiveDate               DateTime?
+  effectiveDateSetByAccountId String?   @db.Uuid
+  effectiveDateSetAt          DateTime?
+
+  sourceType             PriceSourceType?
+  sourceOrigin           PriceSourceOrigin?
+  sourceOrganizationName String?
+  sourceVendorName       String?
+
+  priceCoverageDeclared Boolean  @default(false)
+  transportIncluded     Boolean?
+  loadingIncluded       Boolean?
+  unloadingIncluded     Boolean?
+  deliveredToProject    Boolean?
+
+  importFingerprint String
+  status            BasicPriceImportBatchStatus @default(PREVIEWED)
+
+  reviewedByAccountId String?   @db.Uuid
+  reviewedAt          DateTime?
+  rejectionReason     String?   @db.Text
+
+  version   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  region Region?               @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  rows   BasicPriceImportRow[]
+
+  @@unique([workspaceId, importFingerprint])
+  @@index([workspaceId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("basic_price_import_batches")
+}
+
+enum BasicPriceImportRowSection {
+  LABOR
+  MATERIAL
+  EQUIPMENT
+}
+
+enum BasicPriceImportRowCollisionType {
+  NONE
+  EXACT_DUPLICATE
+  SAME_IDENTITY_SAME_VALUE
+  SAME_IDENTITY_DIFFERENT_VALUE
+  CODE_COLLISION
+  NAME_COLLISION
+  UNIT_COLLISION
+}
+
+enum BasicPriceImportRowResolutionStatus {
+  UNRESOLVED
+  RESOURCE_UNKNOWN
+  RESOURCE_AMBIGUOUS
+  RESOURCE_TYPE_CONFLICT
+  UNIT_UNKNOWN
+  UNIT_AMBIGUOUS
+  UNIT_CONVERSION_REQUIRED
+  RESOLVED
+}
+
+enum BasicPriceImportRowStatus {
+  PARSED
+  NEEDS_REVIEW
+  READY_FOR_SUBMISSION
+  REJECTED
+  SUBMISSION_CREATED
+}
+
+model BasicPriceImportRow {
+  id      String @id @default(uuid()) @db.Uuid
+  batchId String @db.Uuid
+
+  sourceSection          BasicPriceImportRowSection
+  sourceRowNumber        Int
+  sourceCodeCellAddress  String
+  sourceNameCellAddress  String
+  sourceUnitCellAddress  String
+  sourcePriceCellAddress String
+
+  rawResourceCodeText String?
+  rawResourceNameText String
+  rawUnitText         String?
+
+  rawPriceCellType                    Int
+  rawPriceNumericRoundTripString      String?
+  rawPriceTextValue                   String?
+  rawPriceFormulaText                 String?
+  rawPriceCachedResultRoundTripString String?
+  rawPriceFormulaError                String?
+  rawPriceNumberFormat                String?
+  rawPriceDisplayText                 String?
+
+  proposedCanonicalPrice Decimal? @db.Decimal(18, 2)
+  canonicalRoundingMode  String?
+
+  resourceCatalogId    String?       @db.Uuid
+  resolvedResourceType ResourceType?
+  unitDefinitionId     String?       @db.Uuid
+
+  collisionType    BasicPriceImportRowCollisionType @default(NONE)
+  collisionOfRowId String?                          @db.Uuid
+
+  resolutionStatus BasicPriceImportRowResolutionStatus @default(UNRESOLVED)
+  reasonCodes      String[]
+
+  status BasicPriceImportRowStatus @default(PARSED)
+
+  resolvedByAccountId String?   @db.Uuid
+  resolvedAt          DateTime?
+
+  effectiveDateOverride DateTime?
+
+  priceSubmissionId String? @unique @db.Uuid
+
+  version   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  batch           BasicPriceImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  resourceCatalog ResourceCatalog?      @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  unitDefinition  UnitDefinition?       @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+  priceSubmission PriceSubmission?      @relation(fields: [priceSubmissionId], references: [id], onDelete: Restrict)
+  collisionOfRow  BasicPriceImportRow?  @relation("RowCollision", fields: [collisionOfRowId], references: [id], onDelete: SetNull)
+  collidingRows   BasicPriceImportRow[] @relation("RowCollision")
+
+  @@unique([batchId, sourceRowNumber])
+  @@index([batchId])
+  @@index([status])
+  @@index([resolutionStatus])
+  @@index([resourceCatalogId])
+  @@map("basic_price_import_rows")
+}
+
+model BasicPricePublicationAudit {
+  id             String   @id @default(uuid()) @db.Uuid
+  basicPriceId   String   @db.Uuid
+  action         String
+  actorAccountId String   @db.Uuid
+  reason         String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  basicPrice BasicPrice @relation(fields: [basicPriceId], references: [id], onDelete: Cascade)
+
+  @@index([basicPriceId])
+  @@map("basic_price_publication_audits")
 }
 
 // =====================================================
@@ -1515,7 +1720,7 @@ model BoqItem {
   wbsCode        String
   name           String
   itemType       BoqItemType @default(WORK_ITEM)
-  quantity       Decimal     @db.Decimal(18, 2)
+  quantity       Decimal     @db.Decimal(18, 6)
   unit           String
   unitPrice      Decimal?    @db.Decimal(18, 2)
   lineTotal      Decimal?    @db.Decimal(18, 2)

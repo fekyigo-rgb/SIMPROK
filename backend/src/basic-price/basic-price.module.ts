@@ -1,12 +1,23 @@
 import { Module } from '@nestjs/common';
 import { BasicPriceService } from './basic-price.service';
 import { BasicPriceController } from './basic-price.controller';
+import { BasicPriceEligibilityPolicy } from './basic-price-eligibility.policy';
+import { BasicPriceImportService } from './basic-price-import.service';
+import { BasicPriceRowResolutionService } from './basic-price-row-resolution.service';
+import { BasicPricePublicationService } from './basic-price-publication.service';
+import { BasicPriceImportController, BasicPricePublicationController } from './basic-price-import.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [BasicPriceController],
-  providers: [BasicPriceService],
-  exports: [BasicPriceService],
+  controllers: [BasicPriceController, BasicPriceImportController, BasicPricePublicationController],
+  providers: [
+    BasicPriceService,
+    BasicPriceEligibilityPolicy,
+    BasicPriceImportService,
+    BasicPriceRowResolutionService,
+    BasicPricePublicationService,
+  ],
+  exports: [BasicPriceService, BasicPriceEligibilityPolicy],
 })
 export class BasicPriceModule {}

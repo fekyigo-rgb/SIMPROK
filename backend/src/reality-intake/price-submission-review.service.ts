@@ -195,7 +195,11 @@ export class PriceSubmissionReviewService {
           sourceOrigin: review.submission.sourceOrigin,
           freshnessStatus: 'CURRENT',
           reportedByAccountId: review.submission.reportedByAccountId,
-          status: 'PUBLISHED',
+          // RM-02B: status is intentionally omitted here so the row takes
+          // the schema's new safe default ('UNPUBLISHED') instead of the
+          // old unsafe default ('PUBLISHED'). Accepting a review proves
+          // the price VERIFIED, never PUBLISHED — publication is a
+          // separate, human-gated action (BasicPricePublicationService).
         },
       });
 
@@ -221,7 +225,11 @@ export class PriceSubmissionReviewService {
         priceSubmissionId: review.submission.id,
         decisionId: decision.id,
         basicPriceId: basicPrice.id,
-        status: 'PUBLISHED' as const,
+        // RM-02B: reflects the BasicPrice row's actual status (now
+        // 'UNPUBLISHED' by default — see the create() call above) rather
+        // than a hardcoded 'PUBLISHED' literal, which would otherwise
+        // claim a publication that did not happen.
+        status: basicPrice.status,
       };
     });
   }

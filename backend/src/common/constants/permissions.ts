@@ -39,6 +39,19 @@ export const PERMISSIONS = {
   // Golden Path v0 — Basic Price domain
   BASIC_PRICE_VIEW: 'BASIC_PRICE_VIEW',
   BASIC_PRICE_MANAGE: 'BASIC_PRICE_MANAGE',
+
+  // RM-02 — Basic Price import foundation. Declared and enforced by new
+  // guards/controllers; not yet seeded into any Permission/RolePermission
+  // row in any environment (seed files are out of RM-02B's scope — see
+  // DECLARED_NOT_SEEDED_PERMISSION_CODES below). Every route gated by one
+  // of these codes is therefore fail-closed (403) until a separate,
+  // Owner/PM-governed seeding task grants it to a role.
+  BASIC_PRICE_IMPORT: 'BASIC_PRICE_IMPORT',
+  BASIC_PRICE_RESOLVE: 'BASIC_PRICE_RESOLVE',
+  BASIC_PRICE_SUBMIT: 'BASIC_PRICE_SUBMIT',
+  BASIC_PRICE_VERIFY: 'BASIC_PRICE_VERIFY',
+  BASIC_PRICE_PUBLISH: 'BASIC_PRICE_PUBLISH',
+  BASIC_PRICE_REVIEW_VIEW: 'BASIC_PRICE_REVIEW_VIEW',
 } as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -182,6 +195,49 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     description: 'Submit and manage basic price records within an authorized workspace.',
     note: 'Seeded in Golden Path v0 Slice B.',
   },
+  // ── RM-02 — Basic Price Import Foundation ─────────────────────────────────
+  {
+    code: PERMISSIONS.BASIC_PRICE_IMPORT,
+    domain: PERMISSION_DOMAINS.BASIC_PRICE,
+    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    description: 'Upload a Basic Price workbook and create/preview a BasicPriceImportBatch.',
+    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+  },
+  {
+    code: PERMISSIONS.BASIC_PRICE_RESOLVE,
+    domain: PERMISSION_DOMAINS.BASIC_PRICE,
+    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    description: 'Resolve an imported Basic Price row (resource/unit assignment, collision disposition).',
+    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+  },
+  {
+    code: PERMISSIONS.BASIC_PRICE_SUBMIT,
+    domain: PERMISSION_DOMAINS.BASIC_PRICE,
+    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    description: 'Approve a Basic Price import batch, creating PriceSubmission rows for resolved rows.',
+    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+  },
+  {
+    code: PERMISSIONS.BASIC_PRICE_VERIFY,
+    domain: PERMISSION_DOMAINS.BASIC_PRICE,
+    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    description: 'Accept, reject, or request correction on a submitted Basic Price review.',
+    note: 'RM-02B: declared for the future review HTTP surface (not built by this task — no controller exists yet); not yet seeded.',
+  },
+  {
+    code: PERMISSIONS.BASIC_PRICE_PUBLISH,
+    domain: PERMISSION_DOMAINS.BASIC_PRICE,
+    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    description: 'Publish a verified BasicPrice, making it publicly eligible.',
+    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+  },
+  {
+    code: PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
+    domain: PERMISSION_DOMAINS.BASIC_PRICE,
+    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    description: 'View internal (pre-publication) Basic Price batches, rows, and submissions.',
+    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+  },
 ] as const;
 
 export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
@@ -206,4 +262,11 @@ export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
 ];
 
 // Declared but not yet seeded into DB — must be seeded before endpoints are functionally accessible.
-export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [];
+export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
+  PERMISSIONS.BASIC_PRICE_IMPORT,
+  PERMISSIONS.BASIC_PRICE_RESOLVE,
+  PERMISSIONS.BASIC_PRICE_SUBMIT,
+  PERMISSIONS.BASIC_PRICE_VERIFY,
+  PERMISSIONS.BASIC_PRICE_PUBLISH,
+  PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
+];

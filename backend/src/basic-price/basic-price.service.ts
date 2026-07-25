@@ -1,7 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
-import { Prisma, PriceVerificationStatus } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import {
+  BasicPriceEligibilityPolicy,
+  PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
+} from './basic-price-eligibility.policy';
 
 /**
  * Public Basic Price eligibility — OWNER-LOCKED.
@@ -14,11 +18,21 @@ import { Prisma, PriceVerificationStatus } from '@prisma/client';
  * VERIFIED != PUBLISHED. VERIFIED berarti "terbukti valid" tetapi belum diputuskan
  * publikasi → tetap internal/kurasi dan tidak boleh keluar via API publik.
  *
+ * As of RM-02B, the two-axis predicate itself lives in
+ * BasicPriceEligibilityPolicy.publicEligibilityWhere() (single source of
+ * truth shared with any future AHSP-resolution/Cost-Kernel caller, per
+ * schema contract §10) — this service only re-exports the verification
+ * constant it still references directly below (DTO validation, etc.), and
+ * calls the policy for every eligibility where-clause it builds. Extracted
+ * behavior-preserving: the resulting where-clause shape is unchanged.
+ *
  * Catatan (controlled schema debt, TIDAK diperbaiki di slice ini): BasicPrice.status
- * ber-default 'PUBLISHED', sehingga status='PUBLISHED' sendirian tidak membuktikan
- * kelolosan kurasi — karena itu verificationStatus=PUBLISHED wajib ikut.
+ * ber-default 'PUBLISHED' pada baris lama sebelum RM-02B (default sekarang
+ * 'UNPUBLISHED' untuk baris baru) — status='PUBLISHED' sendirian tidak
+ * membuktikan kelolosan kurasi, karena itu verificationStatus=PUBLISHED
+ * wajib ikut.
  */
-const PUBLIC_BASIC_PRICE_VERIFICATION_STATUS = PriceVerificationStatus.PUBLISHED;
+export { PUBLIC_BASIC_PRICE_VERIFICATION_STATUS };
 
 /**
  * BasicPriceService — Golden Path v0 Slice A
@@ -29,7 +43,10 @@ const PUBLIC_BASIC_PRICE_VERIFICATION_STATUS = PriceVerificationStatus.PUBLISHED
  */
 @Injectable()
 export class BasicPriceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eligibility: BasicPriceEligibilityPolicy,
+  ) {}
 
   /**
    * Ambil semua harga dasar yang berlaku untuk workspace ini.
@@ -65,8 +82,7 @@ export class BasicPriceService {
     // Base eligibility (hard lock): status PUBLISHED AND verification terminal PUBLISHED.
     // The optional query param cannot widen this — it is validated above and otherwise ignored.
     const where: Prisma.BasicPriceWhereInput = {
-      status: 'PUBLISHED',
-      verificationStatus: PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
+      ...this.eligibility.publicEligibilityWhere(),
       OR: [{ workspaceId }, { workspaceId: null }],
     };
 
@@ -159,8 +175,7 @@ export class BasicPriceService {
     const price = await this.prisma.basicPrice.findFirst({
       where: {
         id,
-        status: 'PUBLISHED',
-        verificationStatus: PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
+        ...this.eligibility.publicEligibilityWhere(),
         OR: [{ workspaceId }, { workspaceId: null }],
       },
       include: {
@@ -183,8 +198,7 @@ export class BasicPriceService {
     return this.prisma.basicPrice.findMany({
       where: {
         resourceId,
-        status: 'PUBLISHED',
-        verificationStatus: PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
+        ...this.eligibility.publicEligibilityWhere(),
         OR: [{ workspaceId }, { workspaceId: null }],
       },
       include: {

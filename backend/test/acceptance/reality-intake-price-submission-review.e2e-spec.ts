@@ -352,6 +352,11 @@ describe('Reality intake price submission human review (e2e)', () => {
       where: { id: immutable.canonical.id },
     });
 
+    // RM-02B: BasicPrice.status now defaults to 'UNPUBLISHED' (the unsafe
+    // 'PUBLISHED' default was neutralized). ACCEPT proves VERIFIED, never
+    // PUBLISHED — publication is a separate, human-gated action. This
+    // result's `status` field reflects the created row's real status, not
+    // a hardcoded claim.
     await expect(
       service.acceptPriceSubmissionReview({
         workspaceId: workspaceAId,
@@ -361,7 +366,7 @@ describe('Reality intake price submission human review (e2e)', () => {
         explicitGeneralRegion: true,
         note: 'accepted',
       }),
-    ).resolves.toMatchObject({ status: 'PUBLISHED' });
+    ).resolves.toMatchObject({ status: 'UNPUBLISHED' });
 
     const decision = await prisma.priceSubmissionReviewDecision.findFirstOrThrow({
       where: { reviewId: fixture.review!.id },
@@ -386,7 +391,10 @@ describe('Reality intake price submission human review (e2e)', () => {
       organizationId: organizationAId,
       regionId: null,
       verificationStatus: 'VERIFIED',
-      status: 'PUBLISHED',
+      // RM-02B: 'UNPUBLISHED' by default — VERIFIED != PUBLISHED. Publishing
+      // is a separate, human-gated action (BasicPricePublicationService),
+      // never an automatic side effect of review acceptance.
+      status: 'UNPUBLISHED',
     });
     expect(basicPrice.value.toString()).toBe('5000');
     const submission = await prisma.priceSubmission.findUniqueOrThrow({
