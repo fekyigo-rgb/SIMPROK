@@ -324,4 +324,13 @@ this section is the current operational status.
 - No contamination debt is created before a production fingerprint confirms
   one.
 
+## RM-02C3 acceptance activation boundary — 2026-07-28
+
+- Production activation of `BASIC_PRICE_IMPORT` and
+  `BASIC_PRICE_REVIEW_VIEW` remains OPEN and Owner-gated.
+- The RM-02C3 role is acceptance-only in `simprok_test`; it does not change
+  either permission's `USED_NOT_SEEDED` canonical production status.
+- Owner browser proof remains OPEN until the Owner completes the observational
+  selection journey and reports factual evidence.
+
 ## Soli Deo Gloria. Haleluya. Amin.
