@@ -3,7 +3,11 @@ import { resolve } from 'node:path';
 
 import { Client } from 'pg';
 
-import { verifyTestDatabase } from './test-database-guard';
+import {
+  assertVerifiedE2EAuthority,
+  VerifiedE2EDestructiveAuthority,
+  verifyE2EDatabase,
+} from './database-role-guards';
 
 const ADVISORY_LOCK_KEY = 1_397_314_336;
 const VOLATILE_DATA_TYPES = [
@@ -79,7 +83,10 @@ async function requireSuccessfulCommand(
   }
 }
 
-export async function resetAndSeedTestDatabase(): Promise<void> {
+export async function resetAndSeedE2EDatabase(
+  authority: VerifiedE2EDestructiveAuthority,
+): Promise<void> {
+  assertVerifiedE2EAuthority(authority);
   await requireSuccessfulCommand('Prisma migration reset', process.execPath, [
     'node_modules/prisma/build/index.js',
     'migrate',
@@ -88,7 +95,7 @@ export async function resetAndSeedTestDatabase(): Promise<void> {
     '--skip-seed',
   ]);
 
-  await requireSuccessfulCommand('Acceptance seed', process.execPath, [
+  await requireSuccessfulCommand('E2E seed', process.execPath, [
     'node_modules/ts-node/dist/bin.js',
     'prisma/seed-acceptance.ts',
   ]);
@@ -171,14 +178,19 @@ export function compareDatabaseFingerprints(
   });
 }
 
-export async function createLockedDatabaseClient(): Promise<Client> {
+export type LockedE2EDatabaseClient = Client & {
+  destructiveAuthority: VerifiedE2EDestructiveAuthority;
+};
+
+export async function createLockedE2EDatabaseClient(): Promise<LockedE2EDatabaseClient> {
+  const authority = await verifyE2EDatabase();
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
 
   try {
-    await verifyTestDatabase(client);
+    await verifyE2EDatabase(client);
     await acquireE2EDatabaseLock(client);
-    return client;
+    return Object.assign(client, { destructiveAuthority: authority });
   } catch (error) {
     await client.end();
     throw error;

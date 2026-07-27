@@ -1,9 +1,13 @@
 import { PrismaClient } from '@prisma/client';
 import {
   RM01_ALLOWLISTED_PERMISSION_CODES,
-  applyActivation,
-  planActivation,
+  applyActivationE2E,
+  planActivationE2E,
 } from '../../src/auth/rm01-permission-activation-planner';
+
+const E2E_DATABASE_AUTHORITY = {
+  expectedDatabase: 'simprok_e2e',
+} as const;
 
 /**
  * RM-01a-CODE §6.6 — proves the narrow activation planner PLANs and APPLYs
@@ -16,7 +20,7 @@ import {
  * creates in afterAll — RAB_VIEW/RAB_DRAFT_EDIT themselves are global
  * Permission rows that already exist in simprok_test and are never deleted.
  */
-describe('RM-01a permission activation planner (e2e, simprok_test only)', () => {
+describe('RM-01a permission activation planner (isolated E2E database)', () => {
   let prisma: PrismaClient;
   let orgId: string;
   let workspaceId: string;
@@ -63,40 +67,70 @@ describe('RM-01a permission activation planner (e2e, simprok_test only)', () => 
 
   it('1. refuses a target outside the RAB_VIEW/RAB_DRAFT_EDIT allowlist', async () => {
     await expect(
-      planActivation(prisma, {
-        workspaceId,
-        roleCode: 'DIRECTOR',
-        permissionCodes: ['AHSP_MANAGE'],
-      }),
+      planActivationE2E(
+        prisma,
+        {
+          workspaceId,
+          roleCode: 'DIRECTOR',
+          permissionCodes: ['AHSP_MANAGE'],
+        },
+        E2E_DATABASE_AUTHORITY,
+      ),
     ).rejects.toThrow(/allowlist/);
   });
 
   it('2. refuses a role code other than DIRECTOR', async () => {
     await expect(
-      planActivation(prisma, {
-        workspaceId,
-        roleCode: 'FOREMAN',
-        permissionCodes: ['RAB_VIEW'],
-      }),
+      planActivationE2E(
+        prisma,
+        {
+          workspaceId,
+          roleCode: 'FOREMAN',
+          permissionCodes: ['RAB_VIEW'],
+        },
+        E2E_DATABASE_AUTHORITY,
+      ),
     ).rejects.toThrow(/DIRECTOR/);
   });
 
   it('3. refuses an empty/missing workspaceId (no wildcard target)', async () => {
     await expect(
-      planActivation(prisma, {
-        workspaceId: '',
-        roleCode: 'DIRECTOR',
-        permissionCodes: ['RAB_VIEW'],
-      }),
+      planActivationE2E(
+        prisma,
+        {
+          workspaceId: '',
+          roleCode: 'DIRECTOR',
+          permissionCodes: ['RAB_VIEW'],
+        },
+        E2E_DATABASE_AUTHORITY,
+      ),
     ).rejects.toThrow(/explicit workspace/);
   });
 
-  it('4. PLAN is read-only: reports RAB_VIEW/RAB_DRAFT_EDIT already exist, and GRANT is intended (zero DB writes)', async () => {
-    const plan = await planActivation(prisma, {
-      workspaceId,
-      roleCode: 'DIRECTOR',
-      permissionCodes: [...RM01_ALLOWLISTED_PERMISSION_CODES],
-    });
+  it('4. E2E entry point rejects forged simprok_test authority', async () => {
+    await expect(
+      planActivationE2E(
+        prisma,
+        {
+          workspaceId,
+          roleCode: 'DIRECTOR',
+          permissionCodes: ['RAB_VIEW'],
+        },
+        { expectedDatabase: 'simprok_test' } as never,
+      ),
+    ).rejects.toThrow(/explicit simprok_e2e authority/);
+  });
+
+  it('5. PLAN is read-only: reports RAB_VIEW/RAB_DRAFT_EDIT already exist, and GRANT is intended (zero DB writes)', async () => {
+    const plan = await planActivationE2E(
+      prisma,
+      {
+        workspaceId,
+        roleCode: 'DIRECTOR',
+        permissionCodes: [...RM01_ALLOWLISTED_PERMISSION_CODES],
+      },
+      E2E_DATABASE_AUTHORITY,
+    );
 
     expect(plan.ambiguous).toBe(false);
     for (const entry of plan.entries) {
@@ -112,24 +146,30 @@ describe('RM-01a permission activation planner (e2e, simprok_test only)', () => 
     expect(grantCount).toBe(0);
   });
 
-  it('5. APPLY without confirm:true is refused', async () => {
+  it('6. APPLY without confirm:true is refused', async () => {
     await expect(
-      applyActivation(
+      applyActivationE2E(
         prisma,
         { workspaceId, roleCode: 'DIRECTOR', permissionCodes: ['RAB_VIEW'] },
         {} as { confirm: true },
+        E2E_DATABASE_AUTHORITY,
       ),
     ).rejects.toThrow(/confirm/);
   });
 
-  it('6. APPLY grants exactly the allowlisted permissions and is idempotent on re-apply (delta 0)', async () => {
+  it('7. APPLY grants exactly the allowlisted permissions and is idempotent on re-apply (delta 0)', async () => {
     const target = {
       workspaceId,
       roleCode: 'DIRECTOR',
       permissionCodes: [...RM01_ALLOWLISTED_PERMISSION_CODES],
     };
 
-    const firstApply = await applyActivation(prisma, target, { confirm: true });
+    const firstApply = await applyActivationE2E(
+      prisma,
+      target,
+      { confirm: true },
+      E2E_DATABASE_AUTHORITY,
+    );
     expect(firstApply.changesApplied).toBe(
       RM01_ALLOWLISTED_PERMISSION_CODES.length,
     );
@@ -138,9 +178,12 @@ describe('RM-01a permission activation planner (e2e, simprok_test only)', () => 
       expect(entry.rolePermissionAction).toBe('NONE');
     }
 
-    const secondApply = await applyActivation(prisma, target, {
-      confirm: true,
-    });
+    const secondApply = await applyActivationE2E(
+      prisma,
+      target,
+      { confirm: true },
+      E2E_DATABASE_AUTHORITY,
+    );
     expect(secondApply.changesApplied).toBe(0);
 
     const grantedCodes = await prisma.rolePermission.findMany({
@@ -152,7 +195,7 @@ describe('RM-01a permission activation planner (e2e, simprok_test only)', () => 
     );
   });
 
-  it('7. applying to one workspace/role never grants the other untouched workspace/role', async () => {
+  it('8. applying to one workspace/role never grants the other untouched workspace/role', async () => {
     const untouchedGrantCount = await prisma.rolePermission.count({
       where: { roleId: otherRoleId },
     });

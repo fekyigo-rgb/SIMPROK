@@ -3,8 +3,10 @@ import { resolve } from 'node:path';
 
 import { PrismaClient } from '@prisma/client';
 
-import { loadTestEnv } from '../../test/load-test-env';
-import { verifyTestDatabase } from '../test-database-guard';
+import {
+  loadAcceptanceEnvironment,
+  verifyAcceptanceDatabase,
+} from '../database-role-guards';
 import {
   EXPECTED_SOURCE_SHA256,
   applyMissingUnitPlan,
@@ -45,8 +47,8 @@ async function main(): Promise<void> {
     throw new Error('Use exactly one explicit mode: --dry-run or --apply.');
   }
 
-  loadTestEnv();
-  await verifyTestDatabase();
+  loadAcceptanceEnvironment();
+  await verifyAcceptanceDatabase();
 
   const prisma = new PrismaClient();
   try {

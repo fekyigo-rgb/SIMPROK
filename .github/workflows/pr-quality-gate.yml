@@ -74,11 +74,11 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: simprok_test
+          POSTGRES_DB: simprok_e2e
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d simprok_test"
+          --health-cmd "pg_isready -U postgres -d simprok_e2e"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -87,9 +87,9 @@ jobs:
         working-directory: backend
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/simprok_test?schema=public
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/simprok_e2e?schema=public
       JWT_SECRET: ci-only-simprok-test-secret
-      SIMPROK_E2E_DESTRUCTIVE_CAPABILITY: RESET_SIMPROK_TEST_DATABASE
+      SIMPROK_E2E_DESTRUCTIVE_CAPABILITY: RESET_SIMPROK_E2E_DATABASE
       INTAKE_WORKER_ENABLED: 'false'
       INTAKE_UNDERSTANDING_WORKER_ENABLED: 'false'
       INTAKE_PUBLICATION_WORKER_ENABLED: 'false'
@@ -109,15 +109,15 @@ jobs:
         run: |
           {
             echo 'NODE_ENV=test'
-            echo 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/simprok_test?schema=public'
+            echo 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/simprok_e2e?schema=public'
             echo 'JWT_SECRET=ci-only-simprok-test-secret'
-            echo 'SIMPROK_E2E_DESTRUCTIVE_CAPABILITY=RESET_SIMPROK_TEST_DATABASE'
+            echo 'SIMPROK_E2E_DESTRUCTIVE_CAPABILITY=RESET_SIMPROK_E2E_DATABASE'
             echo 'INTAKE_WORKER_ENABLED=false'
             echo 'INTAKE_UNDERSTANDING_WORKER_ENABLED=false'
             echo 'INTAKE_PUBLICATION_WORKER_ENABLED=false'
             echo 'INTAKE_BUSINESS_SUBSCRIPTION_WORKER_ENABLED=false'
-          } > .env.test
+          } > .env.e2e
       - name: Verify isolated test database
-        run: npm run verify:db:test
+        run: npm run verify:db:e2e
       - name: Run official safe E2E lifecycle
         run: npm run test:e2e

@@ -1,14 +1,23 @@
 import type { PrismaClient } from '@prisma/client';
 
-// Intentionally not imported from scripts/test-database-guard.ts: src/ and
+// Intentionally not imported from scripts/database-role-guards.ts: src/ and
 // scripts/ are separate compilation surfaces in this repo (nest build only
 // compiles src/), and importing across that boundary pulls scripts/ into
 // this build, surfacing an unrelated pre-existing scripts/ type error
 // (UTANG-TSC-10 territory) that is out of scope for this slice. The two
 // constants are duplicated here on purpose, in sync with the values in
-// scripts/test-database-guard.ts.
+// scripts/database-role-guards.ts.
 const EXPECTED_TEST_DATABASE = 'simprok_test';
+const EXPECTED_E2E_DATABASE = 'simprok_e2e';
 const FORBIDDEN_PRODUCTION_DATABASE = 'simprok_db';
+
+interface ActivationDatabaseAuthority {
+  expectedDatabase: typeof EXPECTED_TEST_DATABASE | typeof EXPECTED_E2E_DATABASE;
+}
+
+export interface E2EActivationDatabaseAuthority {
+  expectedDatabase: typeof EXPECTED_E2E_DATABASE;
+}
 
 /**
  * RM-01a-CODE §6.6 — a narrow, targeted, test-only activation planner for
@@ -102,9 +111,16 @@ function assertNarrowTarget(target: ActivationTarget): void {
   }
 }
 
-export async function assertExpectedTestDatabase(
+export async function assertExpectedActivationDatabase(
   prisma: PrismaClient,
+  authority: ActivationDatabaseAuthority,
 ): Promise<void> {
+  if (
+    authority.expectedDatabase !== EXPECTED_TEST_DATABASE &&
+    authority.expectedDatabase !== EXPECTED_E2E_DATABASE
+  ) {
+    throw new Error('Refusing to run: explicit activation database authority is invalid.');
+  }
   const rows = await prisma.$queryRawUnsafe<
     Array<{ current_database: string }>
   >('SELECT current_database()');
@@ -114,20 +130,29 @@ export async function assertExpectedTestDatabase(
       `Refusing to run: connected database is the forbidden production database "${FORBIDDEN_PRODUCTION_DATABASE}". This planner never runs against simprok_db.`,
     );
   }
-  if (name !== EXPECTED_TEST_DATABASE) {
+  if (name !== authority.expectedDatabase) {
     throw new Error(
-      `Refusing to run: expected database "${EXPECTED_TEST_DATABASE}", found "${name}".`,
+      `Refusing to run: expected database "${authority.expectedDatabase}", found "${name}".`,
     );
   }
 }
 
-/** Read-only. Never writes. Safe to call against simprok_test freely. */
-export async function planActivation(
+/** Backward-compatible acceptance assertion; never authorizes E2E writes. */
+export async function assertExpectedTestDatabase(
+  prisma: PrismaClient,
+): Promise<void> {
+  await assertExpectedActivationDatabase(prisma, {
+    expectedDatabase: EXPECTED_TEST_DATABASE,
+  });
+}
+
+async function planActivationForDatabase(
   prisma: PrismaClient,
   target: ActivationTarget,
+  authority: ActivationDatabaseAuthority,
 ): Promise<ActivationPlan> {
   assertNarrowTarget(target);
-  await assertExpectedTestDatabase(prisma);
+  await assertExpectedActivationDatabase(prisma, authority);
 
   const roles = await prisma.role.findMany({
     where: { workspaceId: target.workspaceId, code: target.roleCode },
@@ -179,6 +204,28 @@ export async function planActivation(
   return { target, roleId: role.id, entries, ambiguous: false };
 }
 
+/** Read-only acceptance wrapper. It can target only simprok_test. */
+export async function planActivation(
+  prisma: PrismaClient,
+  target: ActivationTarget,
+): Promise<ActivationPlan> {
+  return planActivationForDatabase(prisma, target, {
+    expectedDatabase: EXPECTED_TEST_DATABASE,
+  });
+}
+
+/** E2E fixture entry point. The caller must explicitly name simprok_e2e. */
+export async function planActivationE2E(
+  prisma: PrismaClient,
+  target: ActivationTarget,
+  authority: E2EActivationDatabaseAuthority,
+): Promise<ActivationPlan> {
+  if (authority.expectedDatabase !== EXPECTED_E2E_DATABASE) {
+    throw new Error('E2E activation requires explicit simprok_e2e authority.');
+  }
+  return planActivationForDatabase(prisma, target, authority);
+}
+
 /**
  * Writes. Requires an explicit { confirm: true } flag. Additive only:
  * creates a missing Permission row (allowlisted code only) and/or a missing
@@ -186,10 +233,11 @@ export async function planActivation(
  * Transaction-safe and idempotent — re-applying an already-applied plan
  * produces changesApplied === 0.
  */
-export async function applyActivation(
+async function applyActivationForDatabase(
   prisma: PrismaClient,
   target: ActivationTarget,
   options: { confirm: true },
+  authority: ActivationDatabaseAuthority,
 ): Promise<ActivationApplyResult> {
   if (options?.confirm !== true) {
     throw new Error(
@@ -197,7 +245,7 @@ export async function applyActivation(
     );
   }
 
-  const before = await planActivation(prisma, target);
+  const before = await planActivationForDatabase(prisma, target, authority);
   if (before.ambiguous || !before.roleId) {
     throw new Error(
       before.ambiguityReason ??
@@ -240,6 +288,30 @@ export async function applyActivation(
     }
   });
 
-  const after = await planActivation(prisma, target);
+  const after = await planActivationForDatabase(prisma, target, authority);
   return { before, after, changesApplied };
+}
+
+/** Acceptance wrapper. Writes only after proving live simprok_test. */
+export async function applyActivation(
+  prisma: PrismaClient,
+  target: ActivationTarget,
+  options: { confirm: true },
+): Promise<ActivationApplyResult> {
+  return applyActivationForDatabase(prisma, target, options, {
+    expectedDatabase: EXPECTED_TEST_DATABASE,
+  });
+}
+
+/** E2E fixture entry point. The caller must explicitly name simprok_e2e. */
+export async function applyActivationE2E(
+  prisma: PrismaClient,
+  target: ActivationTarget,
+  options: { confirm: true },
+  authority: E2EActivationDatabaseAuthority,
+): Promise<ActivationApplyResult> {
+  if (authority.expectedDatabase !== EXPECTED_E2E_DATABASE) {
+    throw new Error('E2E activation requires explicit simprok_e2e authority.');
+  }
+  return applyActivationForDatabase(prisma, target, options, authority);
 }
