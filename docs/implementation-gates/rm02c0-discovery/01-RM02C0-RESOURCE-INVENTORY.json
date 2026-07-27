@@ -1,0 +1,3731 @@
+{
+  "parserContractVersion": "RM02_BASIC_PRICE_01_V1",
+  "sourceFileName": "BASIC PRICE(1).xlsx",
+  "sourceSha256": "46B3F354A74A10BDB26316802D922B7D6C34AA109579FA55A3A9EA5D61504B61",
+  "sourceByteSize": 37635,
+  "sheetName": "HARGA SATUAN UPAH DAN BAHAN",
+  "totalParsedRows": 271,
+  "sectionCounts": {
+    "LABOR": 17,
+    "MATERIAL": 241,
+    "EQUIPMENT": 13
+  },
+  "note": "Price fields intentionally omitted -- identity is section + raw code + raw name + raw unit + source cell addresses, not price. See docs/implementation-gates/RM02B0_PRODUCTION_FACT_RECONCILIATION.md for the already-public L.01 price evidence. rawResourceCodeText=null reflects the official adapter's own representation and does NOT necessarily mean a physically empty source cell: of the 227 rows with rawResourceCodeText=null, only 10 are genuinely blank code cells -- the other 217 are formula cells referencing an external/unavailable workbook with no cached result at all. See 02-RM02C0-ANOMALY-REGISTER.json's codeZeroClassification field (trueSourceCodeCellBlankRows / sourceCodeCellExternalReferenceFormulaNoCachedResultRows) to distinguish which null-code row is which by source row number.",
+  "rows": [
+    {
+      "sourceRowNumber": 9,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.01",
+      "rawResourceNameText": "Pekerja",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D9",
+      "sourceNameCellAddress": "C9",
+      "sourceUnitCellAddress": "E9",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 10,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D10",
+      "sourceNameCellAddress": "C10",
+      "sourceUnitCellAddress": "E10",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 11,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang Batu",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D11",
+      "sourceNameCellAddress": "C11",
+      "sourceUnitCellAddress": "E11",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 12,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang Besi",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D12",
+      "sourceNameCellAddress": "C12",
+      "sourceUnitCellAddress": "E12",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 13,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang Kayu",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D13",
+      "sourceNameCellAddress": "C13",
+      "sourceUnitCellAddress": "E13",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 14,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang Cat",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D14",
+      "sourceNameCellAddress": "C14",
+      "sourceUnitCellAddress": "E14",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 15,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang vibrator",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D15",
+      "sourceNameCellAddress": "C15",
+      "sourceUnitCellAddress": "E15",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 16,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang las konstruksi",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D16",
+      "sourceNameCellAddress": "C16",
+      "sourceUnitCellAddress": "E16",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 17,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang las Biasa",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D17",
+      "sourceNameCellAddress": "C17",
+      "sourceUnitCellAddress": "E17",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 18,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang ereksi",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D18",
+      "sourceNameCellAddress": "C18",
+      "sourceUnitCellAddress": "E18",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 19,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang khusus aluminium",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D19",
+      "sourceNameCellAddress": "C19",
+      "sourceUnitCellAddress": "E19",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 20,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.02",
+      "rawResourceNameText": "Tukang aluminium/kaca",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D20",
+      "sourceNameCellAddress": "C20",
+      "sourceUnitCellAddress": "E20",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 21,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.03",
+      "rawResourceNameText": "Kepala Tukang",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D21",
+      "sourceNameCellAddress": "C21",
+      "sourceUnitCellAddress": "E21",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 22,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.04",
+      "rawResourceNameText": "Mandor",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D22",
+      "sourceNameCellAddress": "C22",
+      "sourceUnitCellAddress": "E22",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 23,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "l.05",
+      "rawResourceNameText": "Operator Exsavator",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D23",
+      "sourceNameCellAddress": "C23",
+      "sourceUnitCellAddress": "E23",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 24,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.06",
+      "rawResourceNameText": "Pembantu operator Exsavator",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D24",
+      "sourceNameCellAddress": "C24",
+      "sourceUnitCellAddress": "E24",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 25,
+      "sourceSection": "LABOR",
+      "rawResourceCodeText": "L.07",
+      "rawResourceNameText": "Upah Tenaga Listrik",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D25",
+      "sourceNameCellAddress": "C25",
+      "sourceUnitCellAddress": "E25",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 33,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "01 K",
+      "rawResourceNameText": "Kawat jaring",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D33",
+      "sourceNameCellAddress": "C33",
+      "sourceUnitCellAddress": "E33",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 34,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Panel beton pracetak",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D34",
+      "sourceNameCellAddress": "C34",
+      "sourceUnitCellAddress": "E34",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 35,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kolom beton pracetak",
+      "rawUnitText": "Batang",
+      "sourceCodeCellAddress": "D35",
+      "sourceNameCellAddress": "C35",
+      "sourceUnitCellAddress": "E35",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 36,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Mortar Siap Pakai (semen instan)",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D36",
+      "sourceNameCellAddress": "C36",
+      "sourceUnitCellAddress": "E36",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 37,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Teraso Cor",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D37",
+      "sourceNameCellAddress": "C37",
+      "sourceUnitCellAddress": "E37",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 38,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Internal Cove",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D38",
+      "sourceNameCellAddress": "C38",
+      "sourceUnitCellAddress": "E38",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 39,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kawat BRC",
+      "rawUnitText": null,
+      "sourceCodeCellAddress": "D39",
+      "sourceNameCellAddress": "C39",
+      "sourceUnitCellAddress": "E39",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": [
+        "PRICE_CELL_EMPTY",
+        "UNIT_REQUIRED"
+      ]
+    },
+    {
+      "sourceRowNumber": 40,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pavingblock 6cm",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D40",
+      "sourceNameCellAddress": "C40",
+      "sourceUnitCellAddress": "E40",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 41,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Paving block 6cm berwarna",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D41",
+      "sourceNameCellAddress": "C41",
+      "sourceUnitCellAddress": "E41",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 42,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pavingblock 8cm natural",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D42",
+      "sourceNameCellAddress": "C42",
+      "sourceUnitCellAddress": "E42",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 43,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Paving block 8cm berwarna",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D43",
+      "sourceNameCellAddress": "C43",
+      "sourceUnitCellAddress": "E43",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 44,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bata merah",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D44",
+      "sourceNameCellAddress": "C44",
+      "sourceUnitCellAddress": "E44",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 45,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bata rooster",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D45",
+      "sourceNameCellAddress": "C45",
+      "sourceUnitCellAddress": "E45",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 46,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bata Terawang",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D46",
+      "sourceNameCellAddress": "C46",
+      "sourceUnitCellAddress": "E46",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 47,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bata Berongga",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D47",
+      "sourceNameCellAddress": "C47",
+      "sourceUnitCellAddress": "E47",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 48,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bata ringan tebal 7,5cm",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D48",
+      "sourceNameCellAddress": "C48",
+      "sourceUnitCellAddress": "E48",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 49,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bata ringan tebal 10cm",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D49",
+      "sourceNameCellAddress": "C49",
+      "sourceUnitCellAddress": "E49",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 50,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bata Pelapis",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D50",
+      "sourceNameCellAddress": "C50",
+      "sourceUnitCellAddress": "E50",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 51,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.04.d.4",
+      "rawResourceNameText": "Koral",
+      "rawUnitText": "M3",
+      "sourceCodeCellAddress": "D51",
+      "sourceNameCellAddress": "C51",
+      "sourceUnitCellAddress": "E51",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 52,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kerikil / Agregat",
+      "rawUnitText": "M3",
+      "sourceCodeCellAddress": "D52",
+      "sourceNameCellAddress": "C52",
+      "sourceUnitCellAddress": "E52",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 54,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Batu Belah / Batu Gunung",
+      "rawUnitText": "M3",
+      "sourceCodeCellAddress": "D54",
+      "sourceNameCellAddress": "C54",
+      "sourceUnitCellAddress": "E54",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 55,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.22",
+      "rawResourceNameText": "Semen Portland / Tonasa",
+      "rawUnitText": "Zak",
+      "sourceCodeCellAddress": "D55",
+      "sourceNameCellAddress": "C55",
+      "sourceUnitCellAddress": "E55",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 56,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.23",
+      "rawResourceNameText": "Semen Portlan",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D56",
+      "sourceNameCellAddress": "C56",
+      "sourceUnitCellAddress": "E56",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 57,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.23b",
+      "rawResourceNameText": "Semen Warna",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D57",
+      "sourceNameCellAddress": "C57",
+      "sourceUnitCellAddress": "E57",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 59,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pasir Beton",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D59",
+      "sourceNameCellAddress": "C59",
+      "sourceUnitCellAddress": "E59",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 61,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pasir pasang",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D61",
+      "sourceNameCellAddress": "C61",
+      "sourceUnitCellAddress": "E61",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 63,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pasir urug",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D63",
+      "sourceNameCellAddress": "C63",
+      "sourceUnitCellAddress": "E63",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 65,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "(M09)",
+      "rawResourceNameText": "Tanah Pilihan",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D65",
+      "sourceNameCellAddress": "C65",
+      "sourceUnitCellAddress": "E65",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 66,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.08.d.2",
+      "rawResourceNameText": "Tanah Biasa",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D66",
+      "sourceNameCellAddress": "C66",
+      "sourceUnitCellAddress": "E66",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 67,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Tanah Urug",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D67",
+      "sourceNameCellAddress": "C67",
+      "sourceUnitCellAddress": "E67",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 69,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Akustik",
+      "rawUnitText": "Lembar",
+      "sourceCodeCellAddress": "D69",
+      "sourceNameCellAddress": "C69",
+      "sourceUnitCellAddress": "E69",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 70,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Formika 120x240",
+      "rawUnitText": "Lembar",
+      "sourceCodeCellAddress": "D70",
+      "sourceNameCellAddress": "C70",
+      "sourceUnitCellAddress": "E70",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 71,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Rooflight 90x180",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D71",
+      "sourceNameCellAddress": "C71",
+      "sourceUnitCellAddress": "E71",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 72,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Teakwood 4 mm 90 x 220 cm",
+      "rawUnitText": "Lembar",
+      "sourceCodeCellAddress": "D72",
+      "sourceNameCellAddress": "C72",
+      "sourceUnitCellAddress": "E72",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 73,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plywood tebal 4 mm Ukuran (90 x 220) cm",
+      "rawUnitText": "Lembar",
+      "sourceCodeCellAddress": "D73",
+      "sourceNameCellAddress": "C73",
+      "sourceUnitCellAddress": "E73",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 74,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plywood 6mm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D74",
+      "sourceNameCellAddress": "C74",
+      "sourceUnitCellAddress": "E74",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 75,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.35.c",
+      "rawResourceNameText": "Plywood tebal 9 mm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D75",
+      "sourceNameCellAddress": "C75",
+      "sourceUnitCellAddress": "E75",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 76,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Papan Gipsum 120x240 cm",
+      "rawUnitText": "Lembar",
+      "sourceCodeCellAddress": "D76",
+      "sourceNameCellAddress": "C76",
+      "sourceUnitCellAddress": "E76",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 77,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Dolken kayu ø 8-10cm panjang 4 m",
+      "rawUnitText": "Batang",
+      "sourceCodeCellAddress": "D77",
+      "sourceNameCellAddress": "C77",
+      "sourceUnitCellAddress": "E77",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 78,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Penjaga jarak bekisting/spacer",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D78",
+      "sourceNameCellAddress": "C78",
+      "sourceUnitCellAddress": "E78",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 79,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kayu kaso 5/7 (lebar 5 cm, tinggi 7 cm)",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D79",
+      "sourceNameCellAddress": "C79",
+      "sourceUnitCellAddress": "E79",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 80,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kayu Lapis",
+      "rawUnitText": "Lembar",
+      "sourceCodeCellAddress": "D80",
+      "sourceNameCellAddress": "C80",
+      "sourceUnitCellAddress": "E80",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 81,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kayu kelas I",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D81",
+      "sourceNameCellAddress": "C81",
+      "sourceUnitCellAddress": "E81",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 82,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kayu kelas II",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D82",
+      "sourceNameCellAddress": "C82",
+      "sourceUnitCellAddress": "E82",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 83,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kayu kelas III",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D83",
+      "sourceNameCellAddress": "C83",
+      "sourceUnitCellAddress": "E83",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 84,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Papan kayu kelas 1",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D84",
+      "sourceNameCellAddress": "C84",
+      "sourceUnitCellAddress": "E84",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 85,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Papan kayu kelas 2",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D85",
+      "sourceNameCellAddress": "C85",
+      "sourceUnitCellAddress": "E85",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 86,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Papan Kayu kelas III",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D86",
+      "sourceNameCellAddress": "C86",
+      "sourceUnitCellAddress": "E86",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 87,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Balok kayu kelas I",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D87",
+      "sourceNameCellAddress": "C87",
+      "sourceUnitCellAddress": "E87",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": [
+        "PRICE_CELL_EMPTY"
+      ]
+    },
+    {
+      "sourceRowNumber": 88,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Balok kayu kelas II",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D88",
+      "sourceNameCellAddress": "C88",
+      "sourceUnitCellAddress": "E88",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 89,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Balok kayu kelas III",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D89",
+      "sourceNameCellAddress": "C89",
+      "sourceUnitCellAddress": "E89",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 90,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kayu balok borneo",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D90",
+      "sourceNameCellAddress": "C90",
+      "sourceUnitCellAddress": "E90",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 91,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kayu bekisting",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D91",
+      "sourceNameCellAddress": "C91",
+      "sourceUnitCellAddress": "E91",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 92,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kayu papan",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D92",
+      "sourceNameCellAddress": "C92",
+      "sourceUnitCellAddress": "E92",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 93,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.37.a",
+      "rawResourceNameText": "Kaso-kaso 5 x 7cm",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D93",
+      "sourceNameCellAddress": "C93",
+      "sourceUnitCellAddress": "E93",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 94,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Reng 2 x 3 cm",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D94",
+      "sourceNameCellAddress": "C94",
+      "sourceUnitCellAddress": "E94",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 95,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Reng (3 x 4) cm",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D95",
+      "sourceNameCellAddress": "C95",
+      "sourceUnitCellAddress": "E95",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 96,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "List Kayu profil",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D96",
+      "sourceNameCellAddress": "C96",
+      "sourceUnitCellAddress": "E96",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 97,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bilik bambu",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D97",
+      "sourceNameCellAddress": "C97",
+      "sourceUnitCellAddress": "E97",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 100,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Batu Tempel hitam",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D100",
+      "sourceNameCellAddress": "C100",
+      "sourceUnitCellAddress": "E100",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 101,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Batu paras",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D101",
+      "sourceNameCellAddress": "C101",
+      "sourceUnitCellAddress": "E101",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 102,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serbuk Batu Traso",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D102",
+      "sourceNameCellAddress": "C102",
+      "sourceUnitCellAddress": "E102",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 103,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serbuk Batu granit",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D103",
+      "sourceNameCellAddress": "C103",
+      "sourceUnitCellAddress": "E103",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 104,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kerikil",
+      "rawUnitText": null,
+      "sourceCodeCellAddress": "D104",
+      "sourceNameCellAddress": "C104",
+      "sourceUnitCellAddress": "E104",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": [
+        "UNIT_REQUIRED"
+      ]
+    },
+    {
+      "sourceRowNumber": 105,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Ijuk",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D105",
+      "sourceNameCellAddress": "C105",
+      "sourceUnitCellAddress": "E105",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 106,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Batu belah",
+      "rawUnitText": "M³",
+      "sourceCodeCellAddress": "D106",
+      "sourceNameCellAddress": "C106",
+      "sourceUnitCellAddress": "E106",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 108,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.02.a.3",
+      "rawResourceNameText": "Air",
+      "rawUnitText": "Liter",
+      "sourceCodeCellAddress": "D108",
+      "sourceNameCellAddress": "C108",
+      "sourceUnitCellAddress": "E108",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 109,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Strorox – 100",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D109",
+      "sourceNameCellAddress": "C109",
+      "sourceUnitCellAddress": "E109",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 110,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Jaring Anyaman Tulangan Tunggal M6-M8",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D110",
+      "sourceNameCellAddress": "C110",
+      "sourceUnitCellAddress": "E110",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 111,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.72",
+      "rawResourceNameText": "Kawat benrad",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D111",
+      "sourceNameCellAddress": "C111",
+      "sourceUnitCellAddress": "E111",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 112,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Paku Biasa Segala Ukuran",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D112",
+      "sourceNameCellAddress": "C112",
+      "sourceUnitCellAddress": "E112",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 113,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.72.b",
+      "rawResourceNameText": "Paku 5 cm – 12 cm",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D113",
+      "sourceNameCellAddress": "C113",
+      "sourceUnitCellAddress": "E113",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 114,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Paku/skrup 5cm",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D114",
+      "sourceNameCellAddress": "C114",
+      "sourceUnitCellAddress": "E114",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 115,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Paku tripleks",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D115",
+      "sourceNameCellAddress": "C115",
+      "sourceUnitCellAddress": "E115",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 116,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Paku 12cm",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D116",
+      "sourceNameCellAddress": "C116",
+      "sourceUnitCellAddress": "E116",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 117,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "Kg",
+      "rawResourceNameText": "Paku skrup 1 cm – 2,5 cm",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D117",
+      "sourceNameCellAddress": "C117",
+      "sourceUnitCellAddress": "E117",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 118,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Paku skrup 3,5”",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D118",
+      "sourceNameCellAddress": "C118",
+      "sourceUnitCellAddress": "E118",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 119,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Paku pancing 6x23",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D119",
+      "sourceNameCellAddress": "C119",
+      "sourceUnitCellAddress": "E119",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 121,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Besi hollow (50 x 50 x 3) mm",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D121",
+      "sourceNameCellAddress": "C121",
+      "sourceUnitCellAddress": "E121",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 122,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Phenol film 12mm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D122",
+      "sourceNameCellAddress": "C122",
+      "sourceUnitCellAddress": "E122",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 123,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Dinabolt Ø 12mm (10 s.d.15cm)",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D123",
+      "sourceNameCellAddress": "C123",
+      "sourceUnitCellAddress": "E123",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 124,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Baja Profil",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D124",
+      "sourceNameCellAddress": "C124",
+      "sourceUnitCellAddress": "E124",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": [
+        "PRICE_CELL_EMPTY"
+      ]
+    },
+    {
+      "sourceRowNumber": 125,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.60.a",
+      "rawResourceNameText": "Baja tulangan",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D125",
+      "sourceNameCellAddress": "C125",
+      "sourceUnitCellAddress": "E125",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 126,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Baja strip (0,2 x 2) cm",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D126",
+      "sourceNameCellAddress": "C126",
+      "sourceUnitCellAddress": "E126",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 127,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Profil Alum”T”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D127",
+      "sourceNameCellAddress": "C127",
+      "sourceUnitCellAddress": "E127",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 128,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kawat",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D128",
+      "sourceNameCellAddress": "C128",
+      "sourceUnitCellAddress": "E128",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 129,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Ramset",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D129",
+      "sourceNameCellAddress": "C129",
+      "sourceUnitCellAddress": "E129",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 131,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pengelasan",
+      "rawUnitText": "Cm",
+      "sourceCodeCellAddress": "D131",
+      "sourceNameCellAddress": "C131",
+      "sourceUnitCellAddress": "E131",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 133,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": "M.141",
+      "rawResourceNameText": "Minyak bekisting",
+      "rawUnitText": "Liter",
+      "sourceCodeCellAddress": "D133",
+      "sourceNameCellAddress": "C133",
+      "sourceUnitCellAddress": "E133",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 134,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Minyak cetakan (bekisting)",
+      "rawUnitText": "Liter",
+      "sourceCodeCellAddress": "D134",
+      "sourceNameCellAddress": "C134",
+      "sourceUnitCellAddress": "E134",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 136,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pintu gulung besi",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D136",
+      "sourceNameCellAddress": "C136",
+      "sourceUnitCellAddress": "E136",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 137,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pintu gulung besi",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D137",
+      "sourceNameCellAddress": "C137",
+      "sourceUnitCellAddress": "E137",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 138,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Rolling door aluminium",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D138",
+      "sourceNameCellAddress": "C138",
+      "sourceUnitCellAddress": "E138",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 139,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pintu lipat",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D139",
+      "sourceNameCellAddress": "C139",
+      "sourceUnitCellAddress": "E139",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 140,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Sunscreen aluminium",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D140",
+      "sourceNameCellAddress": "C140",
+      "sourceUnitCellAddress": "E140",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 141,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kawat nyamuk",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D141",
+      "sourceNameCellAddress": "C141",
+      "sourceUnitCellAddress": "E141",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 142,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Jendela nako (rangka + kaca 5 mm, lebar 15 cm)",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D142",
+      "sourceNameCellAddress": "C142",
+      "sourceUnitCellAddress": "E142",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 144,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "HB-20",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D144",
+      "sourceNameCellAddress": "C144",
+      "sourceUnitCellAddress": "E144",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 145,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Besi angker diameter 8",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D145",
+      "sourceNameCellAddress": "C145",
+      "sourceUnitCellAddress": "E145",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 147,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Seng pelat",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D147",
+      "sourceNameCellAddress": "C147",
+      "sourceUnitCellAddress": "E147",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 148,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Seng pelat 3’ x 6’ 90cmx180cm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D148",
+      "sourceNameCellAddress": "C148",
+      "sourceUnitCellAddress": "E148",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 149,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Seng gel 3”x6”",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D149",
+      "sourceNameCellAddress": "C149",
+      "sourceUnitCellAddress": "E149",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 150,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Seng pelat 3”x6”bjls28",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D150",
+      "sourceNameCellAddress": "C150",
+      "sourceUnitCellAddress": "E150",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 151,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Aluminium gel Ukuran 95cmx180cm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D151",
+      "sourceNameCellAddress": "C151",
+      "sourceUnitCellAddress": "E151",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 153,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Rangka metal hollow 40.40",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D153",
+      "sourceNameCellAddress": "C153",
+      "sourceUnitCellAddress": "E153",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 154,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Baja ringan canai dingin C75",
+      "rawUnitText": "Btg",
+      "sourceCodeCellAddress": "D154",
+      "sourceNameCellAddress": "C154",
+      "sourceUnitCellAddress": "E154",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 155,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Profil aluminium 4 inch",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D155",
+      "sourceNameCellAddress": "C155",
+      "sourceUnitCellAddress": "E155",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 156,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Skrup fixer",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D156",
+      "sourceNameCellAddress": "C156",
+      "sourceUnitCellAddress": "E156",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 157,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Sealant",
+      "rawUnitText": "Tube",
+      "sourceCodeCellAddress": "D157",
+      "sourceNameCellAddress": "C157",
+      "sourceUnitCellAddress": "E157",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 158,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Aluminium strip",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D158",
+      "sourceNameCellAddress": "C158",
+      "sourceUnitCellAddress": "E158",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 159,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pintu aluminium",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D159",
+      "sourceNameCellAddress": "C159",
+      "sourceUnitCellAddress": "E159",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 160,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Profil kaca",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D160",
+      "sourceNameCellAddress": "C160",
+      "sourceUnitCellAddress": "E160",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 161,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Sealant",
+      "rawUnitText": "Tube",
+      "sourceCodeCellAddress": "D161",
+      "sourceNameCellAddress": "C161",
+      "sourceUnitCellAddress": "E161",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 162,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Venetions blinds dan vertical blinds (tirai)",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D162",
+      "sourceNameCellAddress": "C162",
+      "sourceUnitCellAddress": "E162",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 164,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Ubin porselen 20x20cm",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D164",
+      "sourceNameCellAddress": "C164",
+      "sourceUnitCellAddress": "E164",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 165,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Ubin Abu-abu",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D165",
+      "sourceNameCellAddress": "C165",
+      "sourceUnitCellAddress": "E165",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 166,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Ubin Teraso",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D166",
+      "sourceNameCellAddress": "C166",
+      "sourceUnitCellAddress": "E166",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 167,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Ubin granit",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D167",
+      "sourceNameCellAddress": "C167",
+      "sourceUnitCellAddress": "E167",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 168,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Ubin Teralux",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D168",
+      "sourceNameCellAddress": "C168",
+      "sourceUnitCellAddress": "E168",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 169,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Ubin Teralux Marmer",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D169",
+      "sourceNameCellAddress": "C169",
+      "sourceUnitCellAddress": "E169",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 170,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Ubin Keramik",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D170",
+      "sourceNameCellAddress": "C170",
+      "sourceUnitCellAddress": "E170",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 171,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Marmer",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D171",
+      "sourceNameCellAddress": "C171",
+      "sourceUnitCellAddress": "E171",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 172,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Keramik Artistik",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D172",
+      "sourceNameCellAddress": "C172",
+      "sourceUnitCellAddress": "E172",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 173,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Keramik",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D173",
+      "sourceNameCellAddress": "C173",
+      "sourceUnitCellAddress": "E173",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 176,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plint Ubin PC",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D176",
+      "sourceNameCellAddress": "C176",
+      "sourceUnitCellAddress": "E176",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 177,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plint Ubin warna",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D177",
+      "sourceNameCellAddress": "C177",
+      "sourceUnitCellAddress": "E177",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 178,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plint Ubin teraso",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D178",
+      "sourceNameCellAddress": "C178",
+      "sourceUnitCellAddress": "E178",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 179,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plint Ubin granit",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D179",
+      "sourceNameCellAddress": "C179",
+      "sourceUnitCellAddress": "E179",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 180,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plint Teralux kerang",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D180",
+      "sourceNameCellAddress": "C180",
+      "sourceUnitCellAddress": "E180",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 181,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plint Teralux marmer",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D181",
+      "sourceNameCellAddress": "C181",
+      "sourceUnitCellAddress": "E181",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 182,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plint Keramik",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D182",
+      "sourceNameCellAddress": "C182",
+      "sourceUnitCellAddress": "E182",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 184,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Karpet",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D184",
+      "sourceNameCellAddress": "C184",
+      "sourceUnitCellAddress": "E184",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 185,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Underlayer",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D185",
+      "sourceNameCellAddress": "C185",
+      "sourceUnitCellAddress": "E185",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 186,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Parquet kayu",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D186",
+      "sourceNameCellAddress": "C186",
+      "sourceUnitCellAddress": "E186",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 187,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Parquet gymfloor",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D187",
+      "sourceNameCellAddress": "C187",
+      "sourceUnitCellAddress": "E187",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 188,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Vynil",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D188",
+      "sourceNameCellAddress": "C188",
+      "sourceUnitCellAddress": "E188",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 189,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Wallpaper",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D189",
+      "sourceNameCellAddress": "C189",
+      "sourceUnitCellAddress": "E189",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 190,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Floor harderner",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D190",
+      "sourceNameCellAddress": "C190",
+      "sourceUnitCellAddress": "E190",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 192,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Cat Tembok",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D192",
+      "sourceNameCellAddress": "C192",
+      "sourceUnitCellAddress": "E192",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 193,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Cat Minyak",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D193",
+      "sourceNameCellAddress": "C193",
+      "sourceUnitCellAddress": "E193",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 194,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Cat dasar",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D194",
+      "sourceNameCellAddress": "C194",
+      "sourceUnitCellAddress": "E194",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 195,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pengencer/Tiner",
+      "rawUnitText": "Ltr",
+      "sourceCodeCellAddress": "D195",
+      "sourceNameCellAddress": "C195",
+      "sourceUnitCellAddress": "E195",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 197,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Lem Karet",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D197",
+      "sourceNameCellAddress": "C197",
+      "sourceUnitCellAddress": "E197",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 198,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Lem kayu",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D198",
+      "sourceNameCellAddress": "C198",
+      "sourceUnitCellAddress": "E198",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 200,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Porslen",
+      "rawUnitText": "Doos",
+      "sourceCodeCellAddress": "D200",
+      "sourceNameCellAddress": "C200",
+      "sourceUnitCellAddress": "E200",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 201,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Porslen",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D201",
+      "sourceNameCellAddress": "C201",
+      "sourceUnitCellAddress": "E201",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 202,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Porselen 11x11",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D202",
+      "sourceNameCellAddress": "C202",
+      "sourceUnitCellAddress": "E202",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 203,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Closet duduk",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D203",
+      "sourceNameCellAddress": "C203",
+      "sourceUnitCellAddress": "E203",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 204,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Closet jongkok",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D204",
+      "sourceNameCellAddress": "C204",
+      "sourceUnitCellAddress": "E204",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 205,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Urinoir Lengkap",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D205",
+      "sourceNameCellAddress": "C205",
+      "sourceUnitCellAddress": "E205",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 206,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Wastafel Lengkap",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D206",
+      "sourceNameCellAddress": "C206",
+      "sourceUnitCellAddress": "E206",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 207,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bathtub",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D207",
+      "sourceNameCellAddress": "C207",
+      "sourceUnitCellAddress": "E207",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 208,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bak cuci piring",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D208",
+      "sourceNameCellAddress": "C208",
+      "sourceUnitCellAddress": "E208",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 209,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Waterdrain",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D209",
+      "sourceNameCellAddress": "C209",
+      "sourceUnitCellAddress": "E209",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 210,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kran air",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D210",
+      "sourceNameCellAddress": "C210",
+      "sourceUnitCellAddress": "E210",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 211,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Floor drain",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D211",
+      "sourceNameCellAddress": "C211",
+      "sourceUnitCellAddress": "E211",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 213,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Sealtape",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D213",
+      "sourceNameCellAddress": "C213",
+      "sourceUnitCellAddress": "E213",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 214,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bak fibreglass",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D214",
+      "sourceNameCellAddress": "C214",
+      "sourceUnitCellAddress": "E214",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 215,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bak Teraso",
+      "rawUnitText": "Unit",
+      "sourceCodeCellAddress": "D215",
+      "sourceNameCellAddress": "C215",
+      "sourceUnitCellAddress": "E215",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 217,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Genteng palentong",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D217",
+      "sourceNameCellAddress": "C217",
+      "sourceUnitCellAddress": "E217",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 218,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Genteng kodok",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D218",
+      "sourceNameCellAddress": "C218",
+      "sourceUnitCellAddress": "E218",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 219,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Genteng palentong besar ( morando)",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D219",
+      "sourceNameCellAddress": "C219",
+      "sourceUnitCellAddress": "E219",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 220,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Genteng Bubung",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D220",
+      "sourceNameCellAddress": "C220",
+      "sourceUnitCellAddress": "E220",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 221,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Genteng Beton",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D221",
+      "sourceNameCellAddress": "C221",
+      "sourceUnitCellAddress": "E221",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 222,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Genteng aspal Ukuran 0,8x1m",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D222",
+      "sourceNameCellAddress": "C222",
+      "sourceUnitCellAddress": "E222",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 224,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat semen",
+      "rawUnitText": "Kg",
+      "sourceCodeCellAddress": "D224",
+      "sourceNameCellAddress": "C224",
+      "sourceUnitCellAddress": "E224",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 225,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat semen gel 92x250",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D225",
+      "sourceNameCellAddress": "C225",
+      "sourceUnitCellAddress": "E225",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 226,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat semen gel 105x150",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D226",
+      "sourceNameCellAddress": "C226",
+      "sourceUnitCellAddress": "E226",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 227,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat Semen Gel 105x210",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D227",
+      "sourceNameCellAddress": "C227",
+      "sourceUnitCellAddress": "E227",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 228,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat semen gel 105x270",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D228",
+      "sourceNameCellAddress": "C228",
+      "sourceUnitCellAddress": "E228",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 229,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat semen gel 105x300",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D229",
+      "sourceNameCellAddress": "C229",
+      "sourceUnitCellAddress": "E229",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 230,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat semen gel 108x180",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D230",
+      "sourceNameCellAddress": "C230",
+      "sourceUnitCellAddress": "E230",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 231,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat Semen gel 108x210",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D231",
+      "sourceNameCellAddress": "C231",
+      "sourceUnitCellAddress": "E231",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 232,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat semen gel 105x240",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D232",
+      "sourceNameCellAddress": "C232",
+      "sourceUnitCellAddress": "E232",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 233,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat Semen gel 108x240",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D233",
+      "sourceNameCellAddress": "C233",
+      "sourceUnitCellAddress": "E233",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 234,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat semen gel 108x270",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D234",
+      "sourceNameCellAddress": "C234",
+      "sourceUnitCellAddress": "E234",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 235,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Serat semen gel 108x300",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D235",
+      "sourceNameCellAddress": "C235",
+      "sourceUnitCellAddress": "E235",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 237,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Bubung Setel gel.",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D237",
+      "sourceNameCellAddress": "C237",
+      "sourceUnitCellAddress": "E237",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 238,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Nok standar",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D238",
+      "sourceNameCellAddress": "C238",
+      "sourceUnitCellAddress": "E238",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 239,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Nok Paten 92cm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D239",
+      "sourceNameCellAddress": "C239",
+      "sourceUnitCellAddress": "E239",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 240,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Nok Paten 105cm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D240",
+      "sourceNameCellAddress": "C240",
+      "sourceUnitCellAddress": "E240",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 241,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Nok Paten 108cm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D241",
+      "sourceNameCellAddress": "C241",
+      "sourceUnitCellAddress": "E241",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 242,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Nok setel rata 92cm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D242",
+      "sourceNameCellAddress": "C242",
+      "sourceUnitCellAddress": "E242",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 243,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Nok Setel rata 105cm",
+      "rawUnitText": "Lbr",
+      "sourceCodeCellAddress": "D243",
+      "sourceNameCellAddress": "C243",
+      "sourceUnitCellAddress": "E243",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 244,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Nok Genteng beton",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D244",
+      "sourceNameCellAddress": "C244",
+      "sourceUnitCellAddress": "E244",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 245,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Nok genteng aspal",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D245",
+      "sourceNameCellAddress": "C245",
+      "sourceUnitCellAddress": "E245",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 246,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Nok genteng metal panjang 100cm",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D246",
+      "sourceNameCellAddress": "C246",
+      "sourceUnitCellAddress": "E246",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 249,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Aluminium foil",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D249",
+      "sourceNameCellAddress": "C249",
+      "sourceUnitCellAddress": "E249",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 250,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Plastik aerator",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D250",
+      "sourceNameCellAddress": "C250",
+      "sourceUnitCellAddress": "E250",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 251,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Sirap kayu",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D251",
+      "sourceNameCellAddress": "C251",
+      "sourceUnitCellAddress": "E251",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 254,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kunci tanam antik",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D254",
+      "sourceNameCellAddress": "C254",
+      "sourceUnitCellAddress": "E254",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 255,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kunci tanam biasa",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D255",
+      "sourceNameCellAddress": "C255",
+      "sourceUnitCellAddress": "E255",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 256,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kunci tanam KM",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D256",
+      "sourceNameCellAddress": "C256",
+      "sourceUnitCellAddress": "E256",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 257,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kunci silinder",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D257",
+      "sourceNameCellAddress": "C257",
+      "sourceUnitCellAddress": "E257",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 258,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Engsel pintu",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D258",
+      "sourceNameCellAddress": "C258",
+      "sourceUnitCellAddress": "E258",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 259,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Engsel jendela",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D259",
+      "sourceNameCellAddress": "C259",
+      "sourceUnitCellAddress": "E259",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 260,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Engsel angin",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D260",
+      "sourceNameCellAddress": "C260",
+      "sourceUnitCellAddress": "E260",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 261,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Spring knip",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D261",
+      "sourceNameCellAddress": "C261",
+      "sourceUnitCellAddress": "E261",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 262,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kait angin",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D262",
+      "sourceNameCellAddress": "C262",
+      "sourceUnitCellAddress": "E262",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 263,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Door closer",
+      "rawUnitText": "Set",
+      "sourceCodeCellAddress": "D263",
+      "sourceNameCellAddress": "C263",
+      "sourceUnitCellAddress": "E263",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 264,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kunci slot",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D264",
+      "sourceNameCellAddress": "C264",
+      "sourceUnitCellAddress": "E264",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 265,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Door holder",
+      "rawUnitText": "Set",
+      "sourceCodeCellAddress": "D265",
+      "sourceNameCellAddress": "C265",
+      "sourceUnitCellAddress": "E265",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 266,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Door stop",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D266",
+      "sourceNameCellAddress": "C266",
+      "sourceUnitCellAddress": "E266",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 267,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Rel pintu sorong",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D267",
+      "sourceNameCellAddress": "C267",
+      "sourceUnitCellAddress": "E267",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 268,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kunci lemari",
+      "rawUnitText": "Set",
+      "sourceCodeCellAddress": "D268",
+      "sourceNameCellAddress": "C268",
+      "sourceUnitCellAddress": "E268",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 270,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kaca Tebal 3mm",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D270",
+      "sourceNameCellAddress": "C270",
+      "sourceUnitCellAddress": "E270",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 271,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kaca tebal 5 mm",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D271",
+      "sourceNameCellAddress": "C271",
+      "sourceUnitCellAddress": "E271",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 272,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kaca tebal 8 mm",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D272",
+      "sourceNameCellAddress": "C272",
+      "sourceUnitCellAddress": "E272",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 273,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kaca buram 12 mm",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D273",
+      "sourceNameCellAddress": "C273",
+      "sourceUnitCellAddress": "E273",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 274,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kaca cermin 5 mm",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D274",
+      "sourceNameCellAddress": "C274",
+      "sourceUnitCellAddress": "E274",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 275,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kaca cermin 8 mm",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D275",
+      "sourceNameCellAddress": "C275",
+      "sourceUnitCellAddress": "E275",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 276,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kaca wireglassed 5 mm",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D276",
+      "sourceNameCellAddress": "C276",
+      "sourceUnitCellAddress": "E276",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 277,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kaca patri 5mm",
+      "rawUnitText": "M²",
+      "sourceCodeCellAddress": "D277",
+      "sourceNameCellAddress": "C277",
+      "sourceUnitCellAddress": "E277",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 278,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Silicone Sealant 300 ml",
+      "rawUnitText": "Tube",
+      "sourceCodeCellAddress": "D278",
+      "sourceNameCellAddress": "C278",
+      "sourceUnitCellAddress": "E278",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 280,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa galvanis ½”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D280",
+      "sourceNameCellAddress": "C280",
+      "sourceUnitCellAddress": "E280",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 281,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa galvanis 3/4”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D281",
+      "sourceNameCellAddress": "C281",
+      "sourceUnitCellAddress": "E281",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 282,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa galvanis 1”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D282",
+      "sourceNameCellAddress": "C282",
+      "sourceUnitCellAddress": "E282",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 283,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa galvanis 11/2”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D283",
+      "sourceNameCellAddress": "C283",
+      "sourceUnitCellAddress": "E283",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 284,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa galvanis 3”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D284",
+      "sourceNameCellAddress": "C284",
+      "sourceUnitCellAddress": "E284",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 285,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa galvanis 4”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D285",
+      "sourceNameCellAddress": "C285",
+      "sourceUnitCellAddress": "E285",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 287,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa PVC 1/2”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D287",
+      "sourceNameCellAddress": "C287",
+      "sourceUnitCellAddress": "E287",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 288,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa PVC ¾”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D288",
+      "sourceNameCellAddress": "C288",
+      "sourceUnitCellAddress": "E288",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 289,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa PVC 1”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D289",
+      "sourceNameCellAddress": "C289",
+      "sourceUnitCellAddress": "E289",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 290,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa PVC 11/2”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D290",
+      "sourceNameCellAddress": "C290",
+      "sourceUnitCellAddress": "E290",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 291,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa PVC 2”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D291",
+      "sourceNameCellAddress": "C291",
+      "sourceUnitCellAddress": "E291",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 292,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa PVC 21/2”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D292",
+      "sourceNameCellAddress": "C292",
+      "sourceUnitCellAddress": "E292",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 293,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa PVC 3”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D293",
+      "sourceNameCellAddress": "C293",
+      "sourceUnitCellAddress": "E293",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 294,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa PVC 4”",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D294",
+      "sourceNameCellAddress": "C294",
+      "sourceUnitCellAddress": "E294",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 296,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa Tanah",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D296",
+      "sourceNameCellAddress": "C296",
+      "sourceUnitCellAddress": "E296",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 297,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa Tanah dia 15",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D297",
+      "sourceNameCellAddress": "C297",
+      "sourceUnitCellAddress": "E297",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 299,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Pipa listrik 5/8”",
+      "rawUnitText": "Btg",
+      "sourceCodeCellAddress": "D299",
+      "sourceNameCellAddress": "C299",
+      "sourceUnitCellAddress": "E299",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 300,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Kabel",
+      "rawUnitText": "M¹",
+      "sourceCodeCellAddress": "D300",
+      "sourceNameCellAddress": "C300",
+      "sourceUnitCellAddress": "E300",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 301,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "T Dus",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D301",
+      "sourceNameCellAddress": "C301",
+      "sourceUnitCellAddress": "E301",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 302,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "L Bow",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D302",
+      "sourceNameCellAddress": "C302",
+      "sourceUnitCellAddress": "E302",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 303,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Klem biasa",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D303",
+      "sourceNameCellAddress": "C303",
+      "sourceUnitCellAddress": "E303",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 304,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "MCCB (Boks MCB)",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D304",
+      "sourceNameCellAddress": "C304",
+      "sourceUnitCellAddress": "E304",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 305,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "MCB",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D305",
+      "sourceNameCellAddress": "C305",
+      "sourceUnitCellAddress": "E305",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 306,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Las Dop",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D306",
+      "sourceNameCellAddress": "C306",
+      "sourceUnitCellAddress": "E306",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 307,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Mongkok",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D307",
+      "sourceNameCellAddress": "C307",
+      "sourceUnitCellAddress": "E307",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 308,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Saklar",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D308",
+      "sourceNameCellAddress": "C308",
+      "sourceUnitCellAddress": "E308",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 309,
+      "sourceSection": "MATERIAL",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Fitting",
+      "rawUnitText": "Buah",
+      "sourceCodeCellAddress": "D309",
+      "sourceNameCellAddress": "C309",
+      "sourceUnitCellAddress": "E309",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 316,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.12.a",
+      "rawResourceNameText": "Sewa crane",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D316",
+      "sourceNameCellAddress": "C316",
+      "sourceUnitCellAddress": "E316",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 317,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.15.c",
+      "rawResourceNameText": "Sewa Excavtor Standart",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D317",
+      "sourceNameCellAddress": "C317",
+      "sourceUnitCellAddress": "E317",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 318,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.15.d",
+      "rawResourceNameText": "Sewa Excavtor Long Arm",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D318",
+      "sourceNameCellAddress": "C318",
+      "sourceUnitCellAddress": "E318",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 319,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.16.a",
+      "rawResourceNameText": "Sewa Buldozer",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D319",
+      "sourceNameCellAddress": "C319",
+      "sourceUnitCellAddress": "E319",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 320,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.17",
+      "rawResourceNameText": "Sewa Vibrator Roller",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D320",
+      "sourceNameCellAddress": "C320",
+      "sourceUnitCellAddress": "E320",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 321,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.13.a",
+      "rawResourceNameText": "Sewa Dump Truck 3 Ton",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D321",
+      "sourceNameCellAddress": "C321",
+      "sourceUnitCellAddress": "E321",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 322,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.13.b",
+      "rawResourceNameText": "Sewa Dump Truck 7Ton",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D322",
+      "sourceNameCellAddress": "C322",
+      "sourceUnitCellAddress": "E322",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 323,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.14.a",
+      "rawResourceNameText": "Sewa Water Tank truck",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D323",
+      "sourceNameCellAddress": "C323",
+      "sourceUnitCellAddress": "E323",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 324,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.29.c",
+      "rawResourceNameText": "Sewa Molen",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D324",
+      "sourceNameCellAddress": "C324",
+      "sourceUnitCellAddress": "E324",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 325,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.32.c",
+      "rawResourceNameText": "Sewa Vibrator Beton",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D325",
+      "sourceNameCellAddress": "C325",
+      "sourceUnitCellAddress": "E325",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 326,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.149.c",
+      "rawResourceNameText": "Sewa Breaker",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D326",
+      "sourceNameCellAddress": "C326",
+      "sourceUnitCellAddress": "E326",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 327,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": "E.19.b",
+      "rawResourceNameText": "Sewa Jack Hammer",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D327",
+      "sourceNameCellAddress": "C327",
+      "sourceUnitCellAddress": "E327",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "sourceRowNumber": 328,
+      "sourceSection": "EQUIPMENT",
+      "rawResourceCodeText": null,
+      "rawResourceNameText": "Sewa pipe support",
+      "rawUnitText": "U/J",
+      "sourceCodeCellAddress": "D328",
+      "sourceNameCellAddress": "C328",
+      "sourceUnitCellAddress": "E328",
+      "warnings": [
+        "RESOURCE_CODE_MISSING"
+      ],
+      "errors": []
+    }
+  ]
+}

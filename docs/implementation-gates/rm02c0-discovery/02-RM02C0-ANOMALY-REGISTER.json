@@ -1,0 +1,2224 @@
+{
+  "parserContractVersion": "RM02_BASIC_PRICE_01_V1",
+  "sourceSha256": "46B3F354A74A10BDB26316802D922B7D6C34AA109579FA55A3A9EA5D61504B61",
+  "methodologyNotes": {
+    "duplicateExactIdentity": "Rows grouped by the byte-exact raw triple (rawResourceCodeText ?? ∅, rawResourceNameText, rawUnitText ?? ∅). Groups of size >= 2 are reported; row count = total rows across such groups.",
+    "duplicateCodeSameIdentity": "Among rows sharing the same non-blank raw code, the subset where name AND unit also match exactly across every row in the group (true redundant entries).",
+    "duplicateCodeDifferentIdentity": "Among rows sharing the same non-blank raw code, the subset where name or unit differ across the group (the code is reused across genuinely different physical resources -- code cannot be treated as a unique key for these).",
+    "duplicateNormalizedName": "Rows grouped by normalize(name) = name.trim().normalize(\"NFKC\").toLowerCase().replace(/\\s+/g,\" \"). Groups of size >= 2 reported; row count = total rows across such groups. This is a SUPERSET signal, independent of code.",
+    "sameNameDifferentCode": "Subset of duplicateNormalizedName groups where the group contains 2+ DISTINCT raw code values (blank code counts as one distinct value \"∅\"). Zero in this dataset -- every duplicate-name group shares a single blank code, not genuinely different non-blank codes.",
+    "distinctRawUnitVariants": "Count of distinct rawUnitText string values, case-sensitive, NOT normalized (raw as printed in the source).",
+    "distinctCodeValues": "Count of distinct non-blank rawResourceCodeText string values, case-sensitive, raw (not normalized).",
+    "codeZeroClassification": "CODE_LITERAL_ZERO_AFTER_ADAPTER_COUNT is computed from the adapter's own rawResourceCodeText === \"0\" (post-adapter representation) -- confirmed 0 in this source. ADAPTER_NULL_CODE_COUNT (227) splits into TRUE_SOURCE_CODE_CELL_BLANK_COUNT (10, genuinely empty cells) and SOURCE_CODE_CELL_EXTERNAL_REFERENCE_FORMULA_NO_CACHED_RESULT_COUNT (217, formula cells referencing an external/unavailable workbook with no result key present in the stored cell.value at all). Neither category is a stored zero. This split was independently verified against the raw ExcelJS cell.value/cell.type for every one of the 227 rows, not assumed from either the original discovery pass or the correcting audit."
+  },
+  "structuralTally": {
+    "blankRows": 49,
+    "markerRows": 3,
+    "markerRowDetail": [
+      {
+        "row": 5,
+        "text": "DAFTAR HARGA SATUAN UPAH",
+        "section": "LABOR"
+      },
+      {
+        "row": 28,
+        "text": "DAFTAR HARGA SATUAN BAHAN",
+        "section": "MATERIAL"
+      },
+      {
+        "row": 312,
+        "text": "DAFTAR HARGA SEWA PERALATAN",
+        "section": "EQUIPMENT"
+      }
+    ],
+    "headerRows": 3,
+    "preSectionRows": 3,
+    "contentRowsAfterSection": 278,
+    "excludedNoNameRows": 7,
+    "excludedNoNameRowNumbers": [
+      53,
+      60,
+      62,
+      331,
+      333,
+      335,
+      336
+    ],
+    "sumCheck": 336
+  },
+  "worksheetStructure": {
+    "worksheetCount": 1,
+    "worksheetNames": [
+      "HARGA SATUAN UPAH DAN BAHAN"
+    ],
+    "selectedWorksheetName": "HARGA SATUAN UPAH DAN BAHAN",
+    "selectedWorksheetRowCount": 336,
+    "selectedWorksheetColumnCount": 7
+  },
+  "reconciliation": {
+    "totalSourceRows": 278,
+    "parsedResourceRows": 271,
+    "laborRows": 17,
+    "materialRows": 241,
+    "equipmentRows": 13,
+    "sectionSumEqualsParsedTotal": true,
+    "totalSourceRowsEqualsParsedPlusExcluded": true,
+    "physicalRowSumEqualsWorksheetRowCount": true
+  },
+  "anomalies": {
+    "missingCodeCount": 227,
+    "missingCodeRows": [
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      52,
+      54,
+      59,
+      61,
+      63,
+      67,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      94,
+      95,
+      96,
+      97,
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      109,
+      110,
+      112,
+      114,
+      115,
+      116,
+      118,
+      119,
+      121,
+      122,
+      123,
+      124,
+      126,
+      127,
+      128,
+      129,
+      131,
+      134,
+      136,
+      137,
+      138,
+      139,
+      140,
+      141,
+      142,
+      144,
+      145,
+      147,
+      148,
+      149,
+      150,
+      151,
+      153,
+      154,
+      155,
+      156,
+      157,
+      158,
+      159,
+      160,
+      161,
+      162,
+      164,
+      165,
+      166,
+      167,
+      168,
+      169,
+      170,
+      171,
+      172,
+      173,
+      176,
+      177,
+      178,
+      179,
+      180,
+      181,
+      182,
+      184,
+      185,
+      186,
+      187,
+      188,
+      189,
+      190,
+      192,
+      193,
+      194,
+      195,
+      197,
+      198,
+      200,
+      201,
+      202,
+      203,
+      204,
+      205,
+      206,
+      207,
+      208,
+      209,
+      210,
+      211,
+      213,
+      214,
+      215,
+      217,
+      218,
+      219,
+      220,
+      221,
+      222,
+      224,
+      225,
+      226,
+      227,
+      228,
+      229,
+      230,
+      231,
+      232,
+      233,
+      234,
+      235,
+      237,
+      238,
+      239,
+      240,
+      241,
+      242,
+      243,
+      244,
+      245,
+      246,
+      249,
+      250,
+      251,
+      254,
+      255,
+      256,
+      257,
+      258,
+      259,
+      260,
+      261,
+      262,
+      263,
+      264,
+      265,
+      266,
+      267,
+      268,
+      270,
+      271,
+      272,
+      273,
+      274,
+      275,
+      276,
+      277,
+      278,
+      280,
+      281,
+      282,
+      283,
+      284,
+      285,
+      287,
+      288,
+      289,
+      290,
+      291,
+      292,
+      293,
+      294,
+      296,
+      297,
+      299,
+      300,
+      301,
+      302,
+      303,
+      304,
+      305,
+      306,
+      307,
+      308,
+      309,
+      328
+    ],
+    "missingUnitCount": 2,
+    "missingUnitRows": [
+      39,
+      104
+    ],
+    "missingNumericPriceCount": 3,
+    "missingNumericPriceRows": [
+      39,
+      87,
+      124
+    ],
+    "priceErrorCount": 3,
+    "priceErrorRows": [
+      {
+        "row": 39,
+        "errors": [
+          "PRICE_CELL_EMPTY",
+          "UNIT_REQUIRED"
+        ]
+      },
+      {
+        "row": 87,
+        "errors": [
+          "PRICE_CELL_EMPTY"
+        ]
+      },
+      {
+        "row": 124,
+        "errors": [
+          "PRICE_CELL_EMPTY"
+        ]
+      }
+    ],
+    "duplicateExactIdentityGroupCount": 2,
+    "duplicateExactIdentityRowCount": 4,
+    "duplicateExactIdentityDetail": [
+      {
+        "key": "∅|||Pintu gulung besi|||M²",
+        "rows": [
+          136,
+          137
+        ]
+      },
+      {
+        "key": "∅|||Sealant|||Tube",
+        "rows": [
+          157,
+          161
+        ]
+      }
+    ],
+    "duplicateCodeSameIdentityCount": 0,
+    "duplicateCodeDifferentIdentityCount": 11,
+    "duplicateCodeGroupDetail": [
+      {
+        "code": "L.02",
+        "sameIdentity": false,
+        "rows": [
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      }
+    ],
+    "duplicateNormalizedNameCount": 6,
+    "sameNameDifferentCodeCount": 0,
+    "duplicateNameGroupDetail": [
+      {
+        "normalizedName": "pintu gulung besi",
+        "distinctCodes": [
+          "∅"
+        ],
+        "rows": [
+          136,
+          137
+        ]
+      },
+      {
+        "normalizedName": "sealant",
+        "distinctCodes": [
+          "∅"
+        ],
+        "rows": [
+          157,
+          161
+        ]
+      },
+      {
+        "normalizedName": "porslen",
+        "distinctCodes": [
+          "∅"
+        ],
+        "rows": [
+          200,
+          201
+        ]
+      }
+    ],
+    "distinctRawUnitVariants": 20,
+    "distinctRawUnitValues": [
+      "Batang",
+      "Btg",
+      "Buah",
+      "Cm",
+      "Doos",
+      "Kg",
+      "Lbr",
+      "Lembar",
+      "Liter",
+      "Ltr",
+      "M3",
+      "M²",
+      "M³",
+      "M¹",
+      "Org/Hari",
+      "Set",
+      "Tube",
+      "U/J",
+      "Unit",
+      "Zak"
+    ],
+    "distinctCodeValues": 34
+  },
+  "codeZeroClassification": {
+    "adapterNullCodeCount": 227,
+    "trueSourceCodeCellBlankCount": 10,
+    "trueSourceCodeCellBlankRows": [
+      39,
+      52,
+      54,
+      59,
+      61,
+      83,
+      128,
+      192,
+      193,
+      194
+    ],
+    "sourceCodeCellExternalReferenceFormulaNoCachedResultCount": 217,
+    "sourceCodeCellExternalReferenceFormulaNoCachedResultRows": [
+      34,
+      35,
+      36,
+      37,
+      38,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      63,
+      67,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      94,
+      95,
+      96,
+      97,
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      109,
+      110,
+      112,
+      114,
+      115,
+      116,
+      118,
+      119,
+      121,
+      122,
+      123,
+      124,
+      126,
+      127,
+      129,
+      131,
+      134,
+      136,
+      137,
+      138,
+      139,
+      140,
+      141,
+      142,
+      144,
+      145,
+      147,
+      148,
+      149,
+      150,
+      151,
+      153,
+      154,
+      155,
+      156,
+      157,
+      158,
+      159,
+      160,
+      161,
+      162,
+      164,
+      165,
+      166,
+      167,
+      168,
+      169,
+      170,
+      171,
+      172,
+      173,
+      176,
+      177,
+      178,
+      179,
+      180,
+      181,
+      182,
+      184,
+      185,
+      186,
+      187,
+      188,
+      189,
+      190,
+      195,
+      197,
+      198,
+      200,
+      201,
+      202,
+      203,
+      204,
+      205,
+      206,
+      207,
+      208,
+      209,
+      210,
+      211,
+      213,
+      214,
+      215,
+      217,
+      218,
+      219,
+      220,
+      221,
+      222,
+      224,
+      225,
+      226,
+      227,
+      228,
+      229,
+      230,
+      231,
+      232,
+      233,
+      234,
+      235,
+      237,
+      238,
+      239,
+      240,
+      241,
+      242,
+      243,
+      244,
+      245,
+      246,
+      249,
+      250,
+      251,
+      254,
+      255,
+      256,
+      257,
+      258,
+      259,
+      260,
+      261,
+      262,
+      263,
+      264,
+      265,
+      266,
+      267,
+      268,
+      270,
+      271,
+      272,
+      273,
+      274,
+      275,
+      276,
+      277,
+      278,
+      280,
+      281,
+      282,
+      283,
+      284,
+      285,
+      287,
+      288,
+      289,
+      290,
+      291,
+      292,
+      293,
+      294,
+      296,
+      297,
+      299,
+      300,
+      301,
+      302,
+      303,
+      304,
+      305,
+      306,
+      307,
+      308,
+      309,
+      328
+    ],
+    "sourceCodeCellExternalReferenceFormulaNoCachedResultDetail": [
+      {
+        "sourceRowNumber": 34,
+        "cellAddress": "D34",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D124"
+        }
+      },
+      {
+        "sourceRowNumber": 35,
+        "cellAddress": "D35",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D125"
+        }
+      },
+      {
+        "sourceRowNumber": 36,
+        "cellAddress": "D36",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2513"
+        }
+      },
+      {
+        "sourceRowNumber": 37,
+        "cellAddress": "D37",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D3761"
+        }
+      },
+      {
+        "sourceRowNumber": 38,
+        "cellAddress": "D38",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4016"
+        }
+      },
+      {
+        "sourceRowNumber": 40,
+        "cellAddress": "D40",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4703"
+        }
+      },
+      {
+        "sourceRowNumber": 41,
+        "cellAddress": "D41",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4763"
+        }
+      },
+      {
+        "sourceRowNumber": 42,
+        "cellAddress": "D42",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4733"
+        }
+      },
+      {
+        "sourceRowNumber": 43,
+        "cellAddress": "D43",
+        "storedRawValue": {
+          "formula": "D42"
+        }
+      },
+      {
+        "sourceRowNumber": 44,
+        "cellAddress": "D44",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1904"
+        }
+      },
+      {
+        "sourceRowNumber": 45,
+        "cellAddress": "D45",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2415"
+        }
+      },
+      {
+        "sourceRowNumber": 46,
+        "cellAddress": "D46",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2448"
+        }
+      },
+      {
+        "sourceRowNumber": 47,
+        "cellAddress": "D47",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2479"
+        }
+      },
+      {
+        "sourceRowNumber": 48,
+        "cellAddress": "D48",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2512"
+        }
+      },
+      {
+        "sourceRowNumber": 49,
+        "cellAddress": "D49",
+        "storedRawValue": {
+          "formula": "D48"
+        }
+      },
+      {
+        "sourceRowNumber": 50,
+        "cellAddress": "D50",
+        "storedRawValue": {
+          "formula": "D49"
+        }
+      },
+      {
+        "sourceRowNumber": 63,
+        "cellAddress": "D63",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D189"
+        }
+      },
+      {
+        "sourceRowNumber": 67,
+        "cellAddress": "D67",
+        "storedRawValue": {
+          "formula": "D63"
+        }
+      },
+      {
+        "sourceRowNumber": 69,
+        "cellAddress": "D69",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4855"
+        }
+      },
+      {
+        "sourceRowNumber": 70,
+        "cellAddress": "D70",
+        "storedRawValue": {
+          "formula": "D69"
+        }
+      },
+      {
+        "sourceRowNumber": 71,
+        "cellAddress": "D71",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5278"
+        }
+      },
+      {
+        "sourceRowNumber": 72,
+        "cellAddress": "D72",
+        "storedRawValue": {
+          "formula": "D69"
+        }
+      },
+      {
+        "sourceRowNumber": 73,
+        "cellAddress": "D73",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6553"
+        }
+      },
+      {
+        "sourceRowNumber": 74,
+        "cellAddress": "D74",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5971"
+        }
+      },
+      {
+        "sourceRowNumber": 76,
+        "cellAddress": "D76",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5002"
+        }
+      },
+      {
+        "sourceRowNumber": 77,
+        "cellAddress": "D77",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D645"
+        }
+      },
+      {
+        "sourceRowNumber": 78,
+        "cellAddress": "D78",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D748"
+        }
+      },
+      {
+        "sourceRowNumber": 79,
+        "cellAddress": "D79",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D849"
+        }
+      },
+      {
+        "sourceRowNumber": 80,
+        "cellAddress": "D80",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4942"
+        }
+      },
+      {
+        "sourceRowNumber": 81,
+        "cellAddress": "D81",
+        "storedRawValue": {
+          "formula": "D84"
+        }
+      },
+      {
+        "sourceRowNumber": 82,
+        "cellAddress": "D82",
+        "storedRawValue": {
+          "formula": "D84"
+        }
+      },
+      {
+        "sourceRowNumber": 84,
+        "cellAddress": "D84",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4673"
+        }
+      },
+      {
+        "sourceRowNumber": 85,
+        "cellAddress": "D85",
+        "storedRawValue": {
+          "formula": "D84"
+        }
+      },
+      {
+        "sourceRowNumber": 86,
+        "cellAddress": "D86",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D577"
+        }
+      },
+      {
+        "sourceRowNumber": 87,
+        "cellAddress": "D87",
+        "storedRawValue": {
+          "formula": "D86"
+        }
+      },
+      {
+        "sourceRowNumber": 88,
+        "cellAddress": "D88",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D643"
+        }
+      },
+      {
+        "sourceRowNumber": 89,
+        "cellAddress": "D89",
+        "storedRawValue": {
+          "formula": "D88"
+        }
+      },
+      {
+        "sourceRowNumber": 90,
+        "cellAddress": "D90",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6067"
+        }
+      },
+      {
+        "sourceRowNumber": 91,
+        "cellAddress": "D91",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8153"
+        }
+      },
+      {
+        "sourceRowNumber": 92,
+        "cellAddress": "D92",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4972"
+        }
+      },
+      {
+        "sourceRowNumber": 94,
+        "cellAddress": "D94",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6803"
+        }
+      },
+      {
+        "sourceRowNumber": 95,
+        "cellAddress": "D95",
+        "storedRawValue": {
+          "formula": "D94"
+        }
+      },
+      {
+        "sourceRowNumber": 96,
+        "cellAddress": "D96",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5032"
+        }
+      },
+      {
+        "sourceRowNumber": 97,
+        "cellAddress": "D97",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D7137"
+        }
+      },
+      {
+        "sourceRowNumber": 100,
+        "cellAddress": "D100",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4523"
+        }
+      },
+      {
+        "sourceRowNumber": 101,
+        "cellAddress": "D101",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4492"
+        }
+      },
+      {
+        "sourceRowNumber": 102,
+        "cellAddress": "D102",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2668"
+        }
+      },
+      {
+        "sourceRowNumber": 103,
+        "cellAddress": "D103",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2638"
+        }
+      },
+      {
+        "sourceRowNumber": 104,
+        "cellAddress": "D104",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D128"
+        }
+      },
+      {
+        "sourceRowNumber": 105,
+        "cellAddress": "D105",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D157"
+        }
+      },
+      {
+        "sourceRowNumber": 106,
+        "cellAddress": "D106",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D188"
+        }
+      },
+      {
+        "sourceRowNumber": 109,
+        "cellAddress": "D109",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D516"
+        }
+      },
+      {
+        "sourceRowNumber": 110,
+        "cellAddress": "D110",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D547"
+        }
+      },
+      {
+        "sourceRowNumber": 112,
+        "cellAddress": "D112",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D578"
+        }
+      },
+      {
+        "sourceRowNumber": 114,
+        "cellAddress": "D114",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4674"
+        }
+      },
+      {
+        "sourceRowNumber": 115,
+        "cellAddress": "D115",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4826"
+        }
+      },
+      {
+        "sourceRowNumber": 116,
+        "cellAddress": "D116",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4431"
+        }
+      },
+      {
+        "sourceRowNumber": 118,
+        "cellAddress": "D118",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5731"
+        }
+      },
+      {
+        "sourceRowNumber": 119,
+        "cellAddress": "D119",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5309"
+        }
+      },
+      {
+        "sourceRowNumber": 121,
+        "cellAddress": "D121",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D848"
+        }
+      },
+      {
+        "sourceRowNumber": 122,
+        "cellAddress": "D122",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D850"
+        }
+      },
+      {
+        "sourceRowNumber": 123,
+        "cellAddress": "D123",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D852"
+        }
+      },
+      {
+        "sourceRowNumber": 124,
+        "cellAddress": "D124",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1347"
+        }
+      },
+      {
+        "sourceRowNumber": 126,
+        "cellAddress": "D126",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1531"
+        }
+      },
+      {
+        "sourceRowNumber": 127,
+        "cellAddress": "D127",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5064"
+        }
+      },
+      {
+        "sourceRowNumber": 129,
+        "cellAddress": "D129",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5066"
+        }
+      },
+      {
+        "sourceRowNumber": 131,
+        "cellAddress": "D131",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1500"
+        }
+      },
+      {
+        "sourceRowNumber": 134,
+        "cellAddress": "D134",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D851"
+        }
+      },
+      {
+        "sourceRowNumber": 136,
+        "cellAddress": "D136",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1378"
+        }
+      },
+      {
+        "sourceRowNumber": 137,
+        "cellAddress": "D137",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1378"
+        }
+      },
+      {
+        "sourceRowNumber": 138,
+        "cellAddress": "D138",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1408"
+        }
+      },
+      {
+        "sourceRowNumber": 139,
+        "cellAddress": "D139",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1438"
+        }
+      },
+      {
+        "sourceRowNumber": 140,
+        "cellAddress": "D140",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1469"
+        }
+      },
+      {
+        "sourceRowNumber": 141,
+        "cellAddress": "D141",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1529"
+        }
+      },
+      {
+        "sourceRowNumber": 142,
+        "cellAddress": "D142",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1560"
+        }
+      },
+      {
+        "sourceRowNumber": 144,
+        "cellAddress": "D144",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2218"
+        }
+      },
+      {
+        "sourceRowNumber": 145,
+        "cellAddress": "D145",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2221"
+        }
+      },
+      {
+        "sourceRowNumber": 147,
+        "cellAddress": "D147",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1591"
+        }
+      },
+      {
+        "sourceRowNumber": 148,
+        "cellAddress": "D148",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6126"
+        }
+      },
+      {
+        "sourceRowNumber": 149,
+        "cellAddress": "D149",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6156"
+        }
+      },
+      {
+        "sourceRowNumber": 150,
+        "cellAddress": "D150",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6186"
+        }
+      },
+      {
+        "sourceRowNumber": 151,
+        "cellAddress": "D151",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6216"
+        }
+      },
+      {
+        "sourceRowNumber": 153,
+        "cellAddress": "D153",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1685"
+        }
+      },
+      {
+        "sourceRowNumber": 154,
+        "cellAddress": "D154",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1747"
+        }
+      },
+      {
+        "sourceRowNumber": 155,
+        "cellAddress": "D155",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1778"
+        }
+      },
+      {
+        "sourceRowNumber": 156,
+        "cellAddress": "D156",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1779"
+        }
+      },
+      {
+        "sourceRowNumber": 157,
+        "cellAddress": "D157",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1780"
+        }
+      },
+      {
+        "sourceRowNumber": 158,
+        "cellAddress": "D158",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1811"
+        }
+      },
+      {
+        "sourceRowNumber": 159,
+        "cellAddress": "D159",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1841"
+        }
+      },
+      {
+        "sourceRowNumber": 160,
+        "cellAddress": "D160",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1842"
+        }
+      },
+      {
+        "sourceRowNumber": 161,
+        "cellAddress": "D161",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1843"
+        }
+      },
+      {
+        "sourceRowNumber": 162,
+        "cellAddress": "D162",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1872"
+        }
+      },
+      {
+        "sourceRowNumber": 164,
+        "cellAddress": "D164",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8154"
+        }
+      },
+      {
+        "sourceRowNumber": 165,
+        "cellAddress": "D165",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D2859"
+        }
+      },
+      {
+        "sourceRowNumber": 166,
+        "cellAddress": "D166",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D3025"
+        }
+      },
+      {
+        "sourceRowNumber": 167,
+        "cellAddress": "D167",
+        "storedRawValue": {
+          "formula": "D166"
+        }
+      },
+      {
+        "sourceRowNumber": 168,
+        "cellAddress": "D168",
+        "storedRawValue": {
+          "formula": "D167"
+        }
+      },
+      {
+        "sourceRowNumber": 169,
+        "cellAddress": "D169",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D3218"
+        }
+      },
+      {
+        "sourceRowNumber": 170,
+        "cellAddress": "D170",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D3791"
+        }
+      },
+      {
+        "sourceRowNumber": 171,
+        "cellAddress": "D171",
+        "storedRawValue": {
+          "formula": "D170"
+        }
+      },
+      {
+        "sourceRowNumber": 172,
+        "cellAddress": "D172",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4298"
+        }
+      },
+      {
+        "sourceRowNumber": 173,
+        "cellAddress": "D173",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4362"
+        }
+      },
+      {
+        "sourceRowNumber": 176,
+        "cellAddress": "D176",
+        "storedRawValue": {
+          "formula": "D169"
+        }
+      },
+      {
+        "sourceRowNumber": 177,
+        "cellAddress": "D177",
+        "storedRawValue": {
+          "formula": "D176",
+          "ref": "D177:E182",
+          "shareType": "shared"
+        }
+      },
+      {
+        "sourceRowNumber": 178,
+        "cellAddress": "D178",
+        "storedRawValue": {
+          "sharedFormula": "D177"
+        }
+      },
+      {
+        "sourceRowNumber": 179,
+        "cellAddress": "D179",
+        "storedRawValue": {
+          "sharedFormula": "D177"
+        }
+      },
+      {
+        "sourceRowNumber": 180,
+        "cellAddress": "D180",
+        "storedRawValue": {
+          "sharedFormula": "D177"
+        }
+      },
+      {
+        "sourceRowNumber": 181,
+        "cellAddress": "D181",
+        "storedRawValue": {
+          "sharedFormula": "D177"
+        }
+      },
+      {
+        "sourceRowNumber": 182,
+        "cellAddress": "D182",
+        "storedRawValue": {
+          "sharedFormula": "D177"
+        }
+      },
+      {
+        "sourceRowNumber": 184,
+        "cellAddress": "D184",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4081"
+        }
+      },
+      {
+        "sourceRowNumber": 185,
+        "cellAddress": "D185",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4111"
+        }
+      },
+      {
+        "sourceRowNumber": 186,
+        "cellAddress": "D186",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4141"
+        }
+      },
+      {
+        "sourceRowNumber": 187,
+        "cellAddress": "D187",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4171"
+        }
+      },
+      {
+        "sourceRowNumber": 188,
+        "cellAddress": "D188",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4554"
+        }
+      },
+      {
+        "sourceRowNumber": 189,
+        "cellAddress": "D189",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4584"
+        }
+      },
+      {
+        "sourceRowNumber": 190,
+        "cellAddress": "D190",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4614"
+        }
+      },
+      {
+        "sourceRowNumber": 195,
+        "cellAddress": "D195",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D7846"
+        }
+      },
+      {
+        "sourceRowNumber": 197,
+        "cellAddress": "D197",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4082"
+        }
+      },
+      {
+        "sourceRowNumber": 198,
+        "cellAddress": "D198",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6340"
+        }
+      },
+      {
+        "sourceRowNumber": 200,
+        "cellAddress": "D200",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4201"
+        }
+      },
+      {
+        "sourceRowNumber": 201,
+        "cellAddress": "D201",
+        "storedRawValue": {
+          "formula": "D182"
+        }
+      },
+      {
+        "sourceRowNumber": 202,
+        "cellAddress": "D202",
+        "storedRawValue": {
+          "formula": "D201"
+        }
+      },
+      {
+        "sourceRowNumber": 203,
+        "cellAddress": "D203",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D7877"
+        }
+      },
+      {
+        "sourceRowNumber": 204,
+        "cellAddress": "D204",
+        "storedRawValue": {
+          "formula": "D203",
+          "ref": "D204:E209",
+          "shareType": "shared"
+        }
+      },
+      {
+        "sourceRowNumber": 205,
+        "cellAddress": "D205",
+        "storedRawValue": {
+          "sharedFormula": "D204"
+        }
+      },
+      {
+        "sourceRowNumber": 206,
+        "cellAddress": "D206",
+        "storedRawValue": {
+          "sharedFormula": "D204"
+        }
+      },
+      {
+        "sourceRowNumber": 207,
+        "cellAddress": "D207",
+        "storedRawValue": {
+          "sharedFormula": "D204"
+        }
+      },
+      {
+        "sourceRowNumber": 208,
+        "cellAddress": "D208",
+        "storedRawValue": {
+          "sharedFormula": "D204"
+        }
+      },
+      {
+        "sourceRowNumber": 209,
+        "cellAddress": "D209",
+        "storedRawValue": {
+          "sharedFormula": "D204"
+        }
+      },
+      {
+        "sourceRowNumber": 210,
+        "cellAddress": "D210",
+        "storedRawValue": {
+          "formula": "D202"
+        }
+      },
+      {
+        "sourceRowNumber": 211,
+        "cellAddress": "D211",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8830"
+        }
+      },
+      {
+        "sourceRowNumber": 213,
+        "cellAddress": "D213",
+        "storedRawValue": {
+          "formula": "D202"
+        }
+      },
+      {
+        "sourceRowNumber": 214,
+        "cellAddress": "D214",
+        "storedRawValue": {
+          "formula": "D206"
+        }
+      },
+      {
+        "sourceRowNumber": 215,
+        "cellAddress": "D215",
+        "storedRawValue": {
+          "formula": "D206"
+        }
+      },
+      {
+        "sourceRowNumber": 217,
+        "cellAddress": "D217",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5098"
+        }
+      },
+      {
+        "sourceRowNumber": 218,
+        "cellAddress": "D218",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5127"
+        }
+      },
+      {
+        "sourceRowNumber": 219,
+        "cellAddress": "D219",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5156"
+        }
+      },
+      {
+        "sourceRowNumber": 220,
+        "cellAddress": "D220",
+        "storedRawValue": {
+          "formula": "D219"
+        }
+      },
+      {
+        "sourceRowNumber": 221,
+        "cellAddress": "D221",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5940"
+        }
+      },
+      {
+        "sourceRowNumber": 222,
+        "cellAddress": "D222",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5970"
+        }
+      },
+      {
+        "sourceRowNumber": 224,
+        "cellAddress": "D224",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D4826"
+        }
+      },
+      {
+        "sourceRowNumber": 225,
+        "cellAddress": "D225",
+        "storedRawValue": {
+          "formula": "D226"
+        }
+      },
+      {
+        "sourceRowNumber": 226,
+        "cellAddress": "D226",
+        "storedRawValue": {
+          "formula": "D227"
+        }
+      },
+      {
+        "sourceRowNumber": 227,
+        "cellAddress": "D227",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5490"
+        }
+      },
+      {
+        "sourceRowNumber": 228,
+        "cellAddress": "D228",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6306"
+        }
+      },
+      {
+        "sourceRowNumber": 229,
+        "cellAddress": "D229",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5428"
+        }
+      },
+      {
+        "sourceRowNumber": 230,
+        "cellAddress": "D230",
+        "storedRawValue": {
+          "formula": "D232"
+        }
+      },
+      {
+        "sourceRowNumber": 231,
+        "cellAddress": "D231",
+        "storedRawValue": {
+          "formula": "D229"
+        }
+      },
+      {
+        "sourceRowNumber": 232,
+        "cellAddress": "D232",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5459"
+        }
+      },
+      {
+        "sourceRowNumber": 233,
+        "cellAddress": "D233",
+        "storedRawValue": {
+          "formula": "D232"
+        }
+      },
+      {
+        "sourceRowNumber": 234,
+        "cellAddress": "D234",
+        "storedRawValue": {
+          "formula": "D232"
+        }
+      },
+      {
+        "sourceRowNumber": 235,
+        "cellAddress": "D235",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5550"
+        }
+      },
+      {
+        "sourceRowNumber": 237,
+        "cellAddress": "D237",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5700"
+        }
+      },
+      {
+        "sourceRowNumber": 238,
+        "cellAddress": "D238",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6247"
+        }
+      },
+      {
+        "sourceRowNumber": 239,
+        "cellAddress": "D239",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5790"
+        }
+      },
+      {
+        "sourceRowNumber": 240,
+        "cellAddress": "D240",
+        "storedRawValue": {
+          "formula": "D239"
+        }
+      },
+      {
+        "sourceRowNumber": 241,
+        "cellAddress": "D241",
+        "storedRawValue": {
+          "formula": "D240"
+        }
+      },
+      {
+        "sourceRowNumber": 242,
+        "cellAddress": "D242",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D5880"
+        }
+      },
+      {
+        "sourceRowNumber": 243,
+        "cellAddress": "D243",
+        "storedRawValue": {
+          "formula": "D242"
+        }
+      },
+      {
+        "sourceRowNumber": 244,
+        "cellAddress": "D244",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6032"
+        }
+      },
+      {
+        "sourceRowNumber": 245,
+        "cellAddress": "D245",
+        "storedRawValue": {
+          "formula": "D244"
+        }
+      },
+      {
+        "sourceRowNumber": 246,
+        "cellAddress": "D246",
+        "storedRawValue": {
+          "formula": "D245"
+        }
+      },
+      {
+        "sourceRowNumber": 249,
+        "cellAddress": "D249",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D6277"
+        }
+      },
+      {
+        "sourceRowNumber": 250,
+        "cellAddress": "D250",
+        "storedRawValue": {
+          "formula": "D222"
+        }
+      },
+      {
+        "sourceRowNumber": 251,
+        "cellAddress": "D251",
+        "storedRawValue": {
+          "formula": "D250"
+        }
+      },
+      {
+        "sourceRowNumber": 254,
+        "cellAddress": "D254",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D7171"
+        }
+      },
+      {
+        "sourceRowNumber": 255,
+        "cellAddress": "D255",
+        "storedRawValue": {
+          "formula": "D254",
+          "ref": "D255:E262",
+          "shareType": "shared"
+        }
+      },
+      {
+        "sourceRowNumber": 256,
+        "cellAddress": "D256",
+        "storedRawValue": {
+          "sharedFormula": "D255"
+        }
+      },
+      {
+        "sourceRowNumber": 257,
+        "cellAddress": "D257",
+        "storedRawValue": {
+          "sharedFormula": "D255"
+        }
+      },
+      {
+        "sourceRowNumber": 258,
+        "cellAddress": "D258",
+        "storedRawValue": {
+          "sharedFormula": "D255"
+        }
+      },
+      {
+        "sourceRowNumber": 259,
+        "cellAddress": "D259",
+        "storedRawValue": {
+          "sharedFormula": "D255"
+        }
+      },
+      {
+        "sourceRowNumber": 260,
+        "cellAddress": "D260",
+        "storedRawValue": {
+          "sharedFormula": "D255"
+        }
+      },
+      {
+        "sourceRowNumber": 261,
+        "cellAddress": "D261",
+        "storedRawValue": {
+          "sharedFormula": "D255"
+        }
+      },
+      {
+        "sourceRowNumber": 262,
+        "cellAddress": "D262",
+        "storedRawValue": {
+          "sharedFormula": "D255"
+        }
+      },
+      {
+        "sourceRowNumber": 263,
+        "cellAddress": "D263",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D7432"
+        }
+      },
+      {
+        "sourceRowNumber": 264,
+        "cellAddress": "D264",
+        "storedRawValue": {
+          "formula": "D262",
+          "ref": "D264:E266",
+          "shareType": "shared"
+        }
+      },
+      {
+        "sourceRowNumber": 265,
+        "cellAddress": "D265",
+        "storedRawValue": {
+          "sharedFormula": "D264"
+        }
+      },
+      {
+        "sourceRowNumber": 266,
+        "cellAddress": "D266",
+        "storedRawValue": {
+          "sharedFormula": "D264"
+        }
+      },
+      {
+        "sourceRowNumber": 267,
+        "cellAddress": "D267",
+        "storedRawValue": {
+          "formula": "D266"
+        }
+      },
+      {
+        "sourceRowNumber": 268,
+        "cellAddress": "D268",
+        "storedRawValue": {
+          "formula": "D263"
+        }
+      },
+      {
+        "sourceRowNumber": 270,
+        "cellAddress": "D270",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D7606"
+        }
+      },
+      {
+        "sourceRowNumber": 271,
+        "cellAddress": "D271",
+        "storedRawValue": {
+          "formula": "D270",
+          "ref": "D271:E277",
+          "shareType": "shared"
+        }
+      },
+      {
+        "sourceRowNumber": 272,
+        "cellAddress": "D272",
+        "storedRawValue": {
+          "sharedFormula": "D271"
+        }
+      },
+      {
+        "sourceRowNumber": 273,
+        "cellAddress": "D273",
+        "storedRawValue": {
+          "sharedFormula": "D271"
+        }
+      },
+      {
+        "sourceRowNumber": 274,
+        "cellAddress": "D274",
+        "storedRawValue": {
+          "sharedFormula": "D271"
+        }
+      },
+      {
+        "sourceRowNumber": 275,
+        "cellAddress": "D275",
+        "storedRawValue": {
+          "sharedFormula": "D271"
+        }
+      },
+      {
+        "sourceRowNumber": 276,
+        "cellAddress": "D276",
+        "storedRawValue": {
+          "sharedFormula": "D271"
+        }
+      },
+      {
+        "sourceRowNumber": 277,
+        "cellAddress": "D277",
+        "storedRawValue": {
+          "sharedFormula": "D271"
+        }
+      },
+      {
+        "sourceRowNumber": 278,
+        "cellAddress": "D278",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D7607"
+        }
+      },
+      {
+        "sourceRowNumber": 280,
+        "cellAddress": "D280",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8316"
+        }
+      },
+      {
+        "sourceRowNumber": 281,
+        "cellAddress": "D281",
+        "storedRawValue": {
+          "formula": "D280",
+          "ref": "D281:E285",
+          "shareType": "shared"
+        }
+      },
+      {
+        "sourceRowNumber": 282,
+        "cellAddress": "D282",
+        "storedRawValue": {
+          "sharedFormula": "D281"
+        }
+      },
+      {
+        "sourceRowNumber": 283,
+        "cellAddress": "D283",
+        "storedRawValue": {
+          "sharedFormula": "D281"
+        }
+      },
+      {
+        "sourceRowNumber": 284,
+        "cellAddress": "D284",
+        "storedRawValue": {
+          "sharedFormula": "D281"
+        }
+      },
+      {
+        "sourceRowNumber": 285,
+        "cellAddress": "D285",
+        "storedRawValue": {
+          "sharedFormula": "D281"
+        }
+      },
+      {
+        "sourceRowNumber": 287,
+        "cellAddress": "D287",
+        "storedRawValue": {
+          "formula": "D285"
+        }
+      },
+      {
+        "sourceRowNumber": 288,
+        "cellAddress": "D288",
+        "storedRawValue": {
+          "formula": "D287",
+          "ref": "D288:E294",
+          "shareType": "shared"
+        }
+      },
+      {
+        "sourceRowNumber": 289,
+        "cellAddress": "D289",
+        "storedRawValue": {
+          "sharedFormula": "D288"
+        }
+      },
+      {
+        "sourceRowNumber": 290,
+        "cellAddress": "D290",
+        "storedRawValue": {
+          "sharedFormula": "D288"
+        }
+      },
+      {
+        "sourceRowNumber": 291,
+        "cellAddress": "D291",
+        "storedRawValue": {
+          "sharedFormula": "D288"
+        }
+      },
+      {
+        "sourceRowNumber": 292,
+        "cellAddress": "D292",
+        "storedRawValue": {
+          "sharedFormula": "D288"
+        }
+      },
+      {
+        "sourceRowNumber": 293,
+        "cellAddress": "D293",
+        "storedRawValue": {
+          "sharedFormula": "D288"
+        }
+      },
+      {
+        "sourceRowNumber": 294,
+        "cellAddress": "D294",
+        "storedRawValue": {
+          "sharedFormula": "D288"
+        }
+      },
+      {
+        "sourceRowNumber": 296,
+        "cellAddress": "D296",
+        "storedRawValue": {
+          "formula": "D294"
+        }
+      },
+      {
+        "sourceRowNumber": 297,
+        "cellAddress": "D297",
+        "storedRawValue": {
+          "formula": "D296"
+        }
+      },
+      {
+        "sourceRowNumber": 299,
+        "cellAddress": "D299",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8988"
+        }
+      },
+      {
+        "sourceRowNumber": 300,
+        "cellAddress": "D300",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8989"
+        }
+      },
+      {
+        "sourceRowNumber": 301,
+        "cellAddress": "D301",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8990"
+        }
+      },
+      {
+        "sourceRowNumber": 302,
+        "cellAddress": "D302",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8991"
+        }
+      },
+      {
+        "sourceRowNumber": 303,
+        "cellAddress": "D303",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8992"
+        }
+      },
+      {
+        "sourceRowNumber": 304,
+        "cellAddress": "D304",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8993"
+        }
+      },
+      {
+        "sourceRowNumber": 305,
+        "cellAddress": "D305",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D8994"
+        }
+      },
+      {
+        "sourceRowNumber": 306,
+        "cellAddress": "D306",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D9026"
+        }
+      },
+      {
+        "sourceRowNumber": 307,
+        "cellAddress": "D307",
+        "storedRawValue": {
+          "formula": "D306"
+        }
+      },
+      {
+        "sourceRowNumber": 308,
+        "cellAddress": "D308",
+        "storedRawValue": {
+          "formula": "D306"
+        }
+      },
+      {
+        "sourceRowNumber": 309,
+        "cellAddress": "D309",
+        "storedRawValue": {
+          "formula": "D306"
+        }
+      },
+      {
+        "sourceRowNumber": 328,
+        "cellAddress": "D328",
+        "storedRawValue": {
+          "formula": "[1]ANALISA!D1118"
+        }
+      }
+    ],
+    "codeLiteralZeroAfterAdapterCount": 0,
+    "sourceCodeCellDirectNumericZeroCount": 0,
+    "sourceCodeCellDirectTextZeroCount": 0,
+    "usableCanonicalCodeFromZeroCount": 0,
+    "note": "Corrected after independent byte-level re-verification against the hash-verified source. The 217 external-reference rows have NO result key present in their stored cell.value at all -- ExcelJS's own derived cell.result/cell.text convenience getters independently default an absent formula result to 0/blank, which is a property of the ExcelJS library, not data stored in the source XLSX. The adapter reads cell.value.result directly (never the derived getters) and correctly produced null, never a fabricated \"0\". See 00-RM02C0-DISCOVERY-REPORT.md section 5 for full narrative."
+  },
+  "l01Reconciliation": [
+    {
+      "sourceRowNumber": 9,
+      "rawResourceCodeText": "L.01",
+      "rawResourceNameText": "Pekerja",
+      "rawUnitText": "Org/Hari",
+      "sourceCodeCellAddress": "D9",
+      "sourceNameCellAddress": "C9",
+      "sourceUnitCellAddress": "E9",
+      "unitCodePoints": "U+004F U+0072 U+0067 U+002F U+0048 U+0061 U+0072 U+0069",
+      "codeExactMatch": true,
+      "nameExactMatch": true,
+      "unitCharacterExactMatch": true,
+      "unitNormalizedMatch": true,
+      "proposedCanonicalPrice": "158333.33",
+      "rawPriceNumericRoundTripString": "158333.33333333334"
+    }
+  ]
+}
