@@ -13,6 +13,9 @@ Candidate evidence captured before final publication:
   attempt exposed an unrelated pre-existing probabilistic RM-02C1b test
   collision (its synthesized stale hash equaled the genuine hash because
   both ended in `0`); no RM-02C2 test failed and the clean rerun passed;
+- CI exposed the identical stale-hash collision in the RM-02C1c fixture.
+  Its test-only mutation now deterministically flips the final nibble so the
+  stale hash can never equal the genuine hash;
 - acceptance fingerprint before/after:
   `847041442384e91e8fd9c03ab62adad3abf0f93694b76db0aa25027295b8f529`;
 - acceptance read-only search: Pekerja, Kawat BRC, Kerikil, PERSON_DAY, and

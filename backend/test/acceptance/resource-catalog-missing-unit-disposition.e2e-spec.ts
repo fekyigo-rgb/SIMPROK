@@ -175,7 +175,7 @@ describe('RM-02C1c Missing-Unit Human Disposition (e2e)', () => {
     await expect(
       applyMissingUnitPlan(prisma, {
         ...planParams,
-        expectedPlanSha256: `${genuineHash.slice(0, -1)}0`,
+        expectedPlanSha256: `${genuineHash.slice(0, -1)}${genuineHash.endsWith('0') ? '1' : '0'}`,
         confirmationToken: 'APPLY_RM02C1C_TO_SIMPROK_TEST',
       }),
     ).rejects.toThrow(/STOP_STALE_PLAN_HASH/);
