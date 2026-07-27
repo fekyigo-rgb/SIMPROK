@@ -1,0 +1,38 @@
+{
+  "decisionAuthority": "OWNER",
+  "decisionRecord": "ACCEPTANCE-ONLY HUMAN DISPOSITION — NOT A GLOBAL OR PRODUCTION UNIT STANDARD. Owner-approved for source rows 39 (Kawat BRC -> Buah) and 104 (Kerikil -> M3) only, scoped to Workspace-A / simprok_test / this exact source workbook. Source rawUnit for both rows was empty and remains NULL in provenance; the accepted unit is recorded only on ResourceCatalog.baseUnit. No unit conversion, alias, or equivalence is inferred or authorized by this decision; a future source presenting an explicit different unit for either name is a separate, independently reviewed identity.",
+  "entries": [
+    {
+      "acceptedBaseUnit": "Buah",
+      "canonicalCode": null,
+      "conflictReason": null,
+      "disposition": "CREATE_REVIEWED_RESOURCE",
+      "sourceCodeCellAddress": "D39",
+      "sourceName": "Kawat BRC",
+      "sourceNameCellAddress": "C39",
+      "sourceRawUnit": null,
+      "sourceRowNumber": 39,
+      "sourceUnitCellAddress": "E39"
+    },
+    {
+      "acceptedBaseUnit": "M3",
+      "canonicalCode": null,
+      "conflictReason": null,
+      "disposition": "CREATE_REVIEWED_RESOURCE",
+      "sourceCodeCellAddress": "D104",
+      "sourceName": "Kerikil",
+      "sourceNameCellAddress": "C104",
+      "sourceRawUnit": null,
+      "sourceRowNumber": 104,
+      "sourceUnitCellAddress": "E104"
+    }
+  ],
+  "generatedFromGitHead": "eeb99e59863f4b37dd691dcec5406203e429cafe",
+  "inventoryPath": "docs/implementation-gates/rm02c0-discovery/01-RM02C0-RESOURCE-INVENTORY.json",
+  "inventorySha256": "CE2B3AEBC50179FB2DF46D5EB55ED39EF68347421C8F8DE043C6D3CA00E64C46",
+  "parserContractVersion": "RM02_BASIC_PRICE_01_V1",
+  "planContractVersion": "RM02C1C_MISSING_UNIT_DISPOSITION_PLAN_V1",
+  "sheetName": "HARGA SATUAN UPAH DAN BAHAN",
+  "sourceSha256": "46B3F354A74A10BDB26316802D922B7D6C34AA109579FA55A3A9EA5D61504B61",
+  "workspaceId": "10000000-0000-4000-8000-000000000004"
+}

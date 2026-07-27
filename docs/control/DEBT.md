@@ -278,6 +278,15 @@ register yang terlihat bersih. Debt yang ditutup tidak dihapus; diberi
 - CLOSURE_CONDITION: a human (Owner or a domain-knowledgeable reviewer)
   supplies the correct unit for each of these two resources; a future,
   narrowly-scoped slice (RM-02C1c) then bootstraps them individually.
+- RM-02C1c STATUS UPDATE (2026-07-27): the Owner has supplied the required
+  disposition — row 39 (Kawat BRC) -> Buah, row 104 (Kerikil) -> M3,
+  explicitly labeled ACCEPTANCE-ONLY / simprok_test-scoped, not a global or
+  production unit standard. Implementation, tests, and disposable-instance
+  proof are complete (see
+  `docs/implementation-gates/rm02c1c-missing-unit-disposition/`). STATUS
+  remains OPEN until the persistent `simprok_test` apply succeeds and is
+  proven idempotent (per this slice's own governing contract, §XIII) —
+  not closed by this commit.
 
 ## Soli Deo Gloria. Haleluya. Amin.
 

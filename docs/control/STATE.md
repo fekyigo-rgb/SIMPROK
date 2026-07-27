@@ -100,4 +100,32 @@ OWNER_DECISIONS_WAITING = Draft PR merge decision (Owner-only, per
 ACTIVE_DEBTS = see DEBT.md additions dated 2026-07-27 (RM-02C1b section)
 ```
 
+## RM-02C1c missing-unit human disposition — 2026-07-27
+
+RM-02C1b merged to `main` in the interim (PR #49 at `eeb99e5`), explicitly
+authorizing this slice to begin from `eeb99e5`.
+
+```
+BASE_MAIN_SHA = eeb99e59863f4b37dd691dcec5406203e429cafe
+CURRENT_PRODUCT_TARGET (this slice) = RM-02C1c
+ACTIVE_BRANCH = feat/rm02c1c-missing-unit-human-disposition
+ACTIVE_WORKTREE = C:\Users\asus\SIMPROK-WT-RM02C1C
+ACTIVE_SINGLE_WRITER = CLAUDE_CODE
+GOLDEN_THREAD_LIVE = NO (unchanged — no product journey touched, no endpoint,
+  no UI)
+YANG_SEDANG_DIKERJAKAN = Closes exactly the two RM-02C1b blocked rows (39
+  Kawat BRC, 104 Kerikil) via an explicit Owner acceptance-only unit
+  decision (Buah / M3, simprok_test-scoped, not a global standard). See
+  docs/implementation-gates/rm02c1c-missing-unit-disposition/.
+GATE_STATE = LOCAL_GATES_PASS_AWAITING_DRAFT_PR_AND_CI
+BROWSER_PROOF_STATE = NOT_APPLICABLE (CLI-only slice, no endpoint, no UI)
+PRODUCTION_ACTIVATION_STATE = NO
+SIMPROK_DB_CONNECTION_COUNT = 0
+SIMPROK_DB_WRITE_COUNT = 0
+OWNER_DECISIONS_WAITING = Draft PR merge decision (Owner-only, per
+  CARA-KERJA.md)
+ACTIVE_DEBTS = see DEBT.md — this slice closes RM02C1C_MISSING_UNIT_HUMAN_DISPOSITION
+  only once the persistent simprok_test apply succeeds and is proven idempotent
+```
+
 Soli Deo Gloria. Haleluya. Amin.
