@@ -34,4 +34,40 @@ Production grants for RAB_VIEW and RAB_DRAFT_EDIT are not claimed active.
 Owner browser proof remains a later, separate gate. See DEBT.md for exact
 closure conditions.
 
+## RM-02C1a schema foundation — 2026-07-27
+
+NEEDS_REVIEW: the section above (`AS_OF_DATE = 2026-07-22`, `CURRENT_PRODUCT_TARGET
+= RM-01`) was not updated across the RM-02B/RM-02C0 work that has since
+merged to `main` (PR #35 through PR #46, confirmed via `git log`). This
+executor did not reconstruct that missing history — doing so is out of this
+slice's bounded scope — and instead reports the gap plainly rather than
+silently overwriting or guessing at it.
+
+What is independently verified for this slice, by this executor, right now:
+
+```
+BASE_MAIN_SHA = 80223a5dd5256921bf7dd237afff51c30b583ded
+CURRENT_PRODUCT_TARGET (this slice) = RM-02C1a
+ACTIVE_BRANCH = feat/rm02c1a-resource-identity-schema-foundation
+ACTIVE_WORKTREE = C:\Users\asus\SIMPROK-WT-RM02C1A
+ACTIVE_SINGLE_WRITER = CLAUDE_CODE
+GOLDEN_THREAD_LIVE = NO (unchanged — no product journey touched)
+YANG_SEDANG_DIKERJAKAN = Resource identity & provenance schema foundation
+  (ResourceCatalog.code nullable, ResourceSourceIdentity model, two Postgres
+  tenancy triggers, manual partial unique index, sourceSha256 CHECK
+  constraint). See docs/implementation-gates/rm02c1a-schema-foundation/.
+GATE_STATE = LOCAL_GATES_PASS_AWAITING_DRAFT_PR_AND_CI
+BROWSER_PROOF_STATE = NOT_APPLICABLE (schema-only slice, no endpoint, no UI)
+PRODUCTION_ACTIVATION_STATE = NO
+SIMPROK_DB_CONNECTION_COUNT = 0
+SIMPROK_DB_WRITE_COUNT = 0
+OWNER_DECISIONS_WAITING = Draft PR merge decision (Owner-only, per
+  CARA-KERJA.md); RM-02C1b bootstrap remains LOCKED pending separate
+  authorization.
+ACTIVE_DEBTS = see DEBT.md additions dated 2026-07-27
+```
+
+RM-02C1b (271-resource bootstrap) remains explicitly LOCKED by this slice's
+own governing prompt and is not authorized to begin from this entry alone.
+
 Soli Deo Gloria. Haleluya. Amin.

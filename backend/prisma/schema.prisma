@@ -71,22 +71,23 @@ model Workspace {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization           Organization            @relation(fields: [organizationId], references: [id])
-  memberships            WorkspaceMembership[]
-  roles                  Role[]
-  positions              Position[]
-  approvalMatrices       ApprovalMatrix[]
-  projects               Project[]
-  stakeholderBridges     ProjectStakeholder[]
-  ahsps                  AHSP[]
-  ahspVersions           AHSPVersion[]
-  ahspSnapshots          AHSPSnapshot[]
-  resourceCatalogs       ResourceCatalog[]
-  basicPrices            BasicPrice[]
-  priceSubmissions       PriceSubmission[]
-  priceSubmissionReviews PriceSubmissionReview[]
-  intelligenceEvidence   IntelligenceEvidence[]
-  projectAhspOccurrences ProjectAhspOccurrence[]
+  organization             Organization             @relation(fields: [organizationId], references: [id])
+  memberships              WorkspaceMembership[]
+  roles                    Role[]
+  positions                Position[]
+  approvalMatrices         ApprovalMatrix[]
+  projects                 Project[]
+  stakeholderBridges       ProjectStakeholder[]
+  ahsps                    AHSP[]
+  ahspVersions             AHSPVersion[]
+  ahspSnapshots            AHSPSnapshot[]
+  resourceCatalogs         ResourceCatalog[]
+  basicPrices              BasicPrice[]
+  priceSubmissions         PriceSubmission[]
+  priceSubmissionReviews   PriceSubmissionReview[]
+  intelligenceEvidence     IntelligenceEvidence[]
+  projectAhspOccurrences   ProjectAhspOccurrence[]
+  resourceSourceIdentities ResourceSourceIdentity[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -939,7 +940,7 @@ enum ResourceType {
 model ResourceCatalog {
   id             String       @id @default(uuid()) @db.Uuid
   workspaceId    String?      @db.Uuid
-  code           String
+  code           String?
   name           String
   type           ResourceType
   baseUnit       String
@@ -956,10 +957,52 @@ model ResourceCatalog {
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
   unitConversionRules            UnitConversionRule[]
   basicPriceImportRows           BasicPriceImportRow[]
+  sourceIdentities               ResourceSourceIdentity[]
 
-  @@unique([workspaceId, code])
+  // NOTE: the former @@unique([workspaceId, code]) is replaced by a manual
+  // partial unique index in the migration SQL (RM-02C1a) because `code` is
+  // now nullable and Prisma cannot express a partial/filtered unique index
+  // in the schema DSL. See migration 20260727..._rm02c1a_resource_identity_schema_foundation.
   @@index([workspaceId])
   @@map("resource_catalogs")
+}
+
+/// RM-02C1a: provenance-only evidence of where a resource row was seen in a
+/// source workbook. This is NEVER a canonical identity by itself — it never
+/// automatically becomes ResourceCatalog.code, and multiple provenance rows
+/// may point at the same ResourceCatalog (one resource, many source sightings).
+model ResourceSourceIdentity {
+  id                String @id @default(uuid()) @db.Uuid
+  resourceCatalogId String @db.Uuid
+  workspaceId       String @db.Uuid
+
+  sourceSha256          String       @db.VarChar(64)
+  sourceFileName        String
+  parserContractVersion String
+  sheetName             String
+  sourceRowNumber       Int
+  sourceSection         ResourceType
+
+  sourceCodeCellAddress String?
+  sourceNameCellAddress String
+  sourceUnitCellAddress String?
+
+  rawCode String?
+  rawName String
+  rawUnit String?
+
+  createdAt DateTime @default(now())
+
+  resourceCatalog ResourceCatalog @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // No separate @@index([workspaceId]) — it would be a redundant prefix of
+  // the composite unique index below, which Postgres can already use for
+  // workspaceId-only lookups.
+  @@unique([workspaceId, sourceSha256, sheetName, sourceRowNumber, parserContractVersion])
+  @@index([resourceCatalogId])
+  @@index([sourceSha256])
+  @@map("resource_source_identities")
 }
 
 enum PriceSourceType {
