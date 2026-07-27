@@ -1,0 +1,29 @@
+{
+  "planContractVersion": "RM02C1B_BOOTSTRAP_PLAN_V1",
+  "followUp": "RM02C1C_MISSING_UNIT_HUMAN_DISPOSITION",
+  "note": "These two rows receive zero ResourceCatalog writes and zero ResourceSourceIdentity writes in RM-02C1b. Disposition is deferred to a named future slice, not solved here.",
+  "blockedRows": [
+    {
+      "sourceRowNumber": 39,
+      "sourceSection": "MATERIAL",
+      "rawResourceNameText": "Kawat BRC",
+      "rawResourceCodeText": null,
+      "rawUnitText": null,
+      "sourceCodeCellAddress": "D39",
+      "sourceNameCellAddress": "C39",
+      "sourceUnitCellAddress": "E39",
+      "reason": "BLOCKED_MISSING_SOURCE_UNIT — the source unit cell is genuinely empty. No unit may be inferred (Kg, M, or otherwise); writing one would fabricate a fact not present in the source."
+    },
+    {
+      "sourceRowNumber": 104,
+      "sourceSection": "MATERIAL",
+      "rawResourceNameText": "Kerikil",
+      "rawResourceCodeText": null,
+      "rawUnitText": null,
+      "sourceCodeCellAddress": "D104",
+      "sourceNameCellAddress": "C104",
+      "sourceUnitCellAddress": "E104",
+      "reason": "BLOCKED_MISSING_SOURCE_UNIT — the source unit cell is genuinely empty. No unit may be inferred (M3, or otherwise); writing one would fabricate a fact not present in the source."
+    }
+  ]
+}
