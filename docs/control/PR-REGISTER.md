@@ -160,6 +160,36 @@ activate production grants.
   (306 pre-existing + 11 new, residual PASS); frontend build PASS; frontend
   tests 46/46 PASS.
 - RM02C1C_MISSING_UNIT_DISPOSITION: LOCKED (not started by this PR)
+- NOTE (2026-07-27): merged as PR #49, mergedAt 2026-07-27T06:47:53Z, merge
+  commit eeb99e59863f4b37dd691dcec5406203e429cafe.
+
+## RM-02C1c Missing-Unit Human Disposition Draft PR
+
+- TITLE: feat(rm02c1c): resolve two reviewed missing-unit resources
+- TYPE: application logic (CLI, two-row acceptance-only disposition) — no
+  schema change, no endpoint, no UI
+- STATE: DRAFT (will be updated with exact PR number/HEAD_SHA after push)
+- BASE_BRANCH: main
+- BASE_SHA: eeb99e59863f4b37dd691dcec5406203e429cafe
+- HEAD_BRANCH: feat/rm02c1c-missing-unit-human-disposition
+- ROADMAP_ITEM: RM-02C1c
+- PRODUCTION_ACTIVATION: NO
+- SIMPROK_DB_CONNECTION_COUNT: 0
+- SIMPROK_DB_WRITE_COUNT: 0
+- MERGE: NO — Owner-only decision, per CARA-KERJA.md
+- OWNER_DECISION: row 39 Kawat BRC -> Buah; row 104 Kerikil -> M3.
+  ACCEPTANCE-ONLY, simprok_test-scoped, not a global/production unit
+  standard (see DEBT.md and
+  docs/implementation-gates/rm02c1c-missing-unit-disposition/).
+- DOES NOT MODIFY: RM-02C1b's 267 canonical identities or 269 provenance
+  rows.
+- LOCAL GATES: backend build PASS; backend unit tests 515/515 PASS
+  (500 pre-existing + 15 new); disposable-instance proof against the real
+  committed inventory 20/20 PASS; official safe E2E PASS (residual PASS;
+  one unrelated pre-existing environment timeout flake in
+  basic-price.e2e-spec.ts on the first run, confirmed unrelated to this
+  diff and clean on immediate re-run); frontend build PASS; frontend tests
+  46/46 PASS.
 
 ## RM01B SOURCE PREP Draft PR
 
