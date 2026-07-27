@@ -54,10 +54,14 @@ export class BasicPriceRowResolutionService {
       const row = await this.assertBatchRowMutable(tx, workspaceId, batchId, rowId);
       if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
 
-      const resourceCatalog = await tx.resourceCatalog.findUnique({ where: { id: dto.resourceCatalogId } });
-      if (!resourceCatalog) throw new ConflictException('RESOURCE_UNKNOWN');
-      const unitDefinition = await tx.unitDefinition.findUnique({ where: { id: dto.unitDefinitionId } });
-      if (!unitDefinition) throw new ConflictException('UNIT_UNKNOWN');
+      const resourceCatalog = await tx.resourceCatalog.findFirst({
+        where: { id: dto.resourceCatalogId, workspaceId, status: 'ACTIVE' },
+      });
+      if (!resourceCatalog) throw new ConflictException('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
+      const unitDefinition = await tx.unitDefinition.findFirst({
+        where: { id: dto.unitDefinitionId, isActive: true },
+      });
+      if (!unitDefinition) throw new ConflictException('UNIT_UNKNOWN_OR_INACTIVE');
 
       const priorSameIdentity = await tx.basicPriceImportRow.findFirst({
         where: {

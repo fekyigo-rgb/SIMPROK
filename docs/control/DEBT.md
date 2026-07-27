@@ -210,6 +210,17 @@ register yang terlihat bersih. Debt yang ditutup tidak dihapus; diberi
 
 ## Soli Deo Gloria. Haleluya. Amin.
 
+## RM-02C2 deferred boundaries — 2026-07-28
+
+- GLOBAL_RESOURCE_SEMANTICS: OPEN/DEFERRED. RM-02C2 deliberately searches
+  and resolves only resources owned by the active workspace; no NULL-workspace
+  fallback exists.
+- BASIC_PRICE_REVIEW_VIEW_ACTIVATION: OPEN under a separate Owner gate.
+  The permission remains declared but not canonically seeded; this slice does
+  not change seeds or production grants.
+- Browser acceptance remains blocked until that separate permission
+  activation is available in the acceptance environment.
+
 ### Windows tsx/esbuild service spawn EPERM
 - DEBT_CLASS: ENVIRONMENT_TOOLCHAIN
 - REPRODUCTION: 2 independent isolated environments

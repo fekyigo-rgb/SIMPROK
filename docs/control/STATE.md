@@ -129,3 +129,20 @@ ACTIVE_DEBTS = see DEBT.md — this slice closes RM02C1C_MISSING_UNIT_HUMAN_DISP
 ```
 
 Soli Deo Gloria. Haleluya. Amin.
+
+## RM-02C2 catalog search and human selection — 2026-07-28
+
+```
+BASE_MAIN_SHA = 40ff50dfb92dd80bdab6ae2f4db7720524a877ca
+CURRENT_PRODUCT_TARGET = RM-02C2
+ACTIVE_BRANCH = feat/rm02c2-catalog-search-human-selection
+ACTIVE_WORKTREE = C:\Users\asus\SIMPROK-WT-RM02C2
+ACTIVE_SINGLE_WRITER = CODEX
+YANG_SEDANG_DIKERJAKAN = Workspace-scoped, active-only ResourceCatalog and
+  UnitDefinition lookup plus explicit human selection for Basic Price review.
+GLOBAL_RESOURCE_SEMANTICS = DEFERRED
+PRODUCTION_PERMISSION_ACTIVATION = NO
+SIMPROK_DB_CONNECTION_COUNT = 0
+SIMPROK_DB_WRITE_COUNT = 0
+MERGE_AUTHORITY = OWNER_ONLY
+```

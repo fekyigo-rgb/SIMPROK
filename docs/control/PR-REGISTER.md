@@ -84,6 +84,18 @@ Mencatat PR yang relevan dengan urutan produk aktif. Sumber: GitHub
 
 ## Soli Deo Gloria. Haleluya. Amin.
 
+## RM-02C2 Catalog Search Draft PR — pending publication
+
+- TITLE: feat(rm02c2): add secure catalog search for Basic Price review
+- STATE: LOCAL_CANDIDATE_AWAITING_DRAFT_PR
+- HEAD_BRANCH: feat/rm02c2-catalog-search-human-selection
+- BASE_SHA: 40ff50dfb92dd80bdab6ae2f4db7720524a877ca
+- ROADMAP_ITEM: RM-02C2
+- PRODUCTION_PERMISSION_ACTIVATION: NO
+- SIMPROK_DB_CONNECTION_COUNT: 0
+- SIMPROK_DB_WRITE_COUNT: 0
+- MERGE: NO — Owner-only decision
+
 ## RM-01a-CODE final closure — PR #38
 
 - STATE: MERGED
