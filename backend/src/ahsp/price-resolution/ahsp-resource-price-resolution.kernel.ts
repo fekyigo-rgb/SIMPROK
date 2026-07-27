@@ -26,7 +26,7 @@
 
 export interface ResourceCatalogCandidate {
   readonly id: string;
-  readonly code: string;
+  readonly code: string | null;
   readonly name: string;
   readonly type: 'MATERIAL' | 'LABOR' | 'EQUIPMENT';
   readonly baseUnit: string;

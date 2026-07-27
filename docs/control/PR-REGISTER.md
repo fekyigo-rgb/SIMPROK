@@ -99,6 +99,30 @@ Mencatat PR yang relevan dengan urutan produk aktif. Sumber: GitHub
 This closes the earlier temporary RM-01a-CODE register entry. Merge does not
 activate production grants.
 
+## RM-02C1a Resource Identity Schema Foundation Draft PR
+
+- TITLE: feat(rm02c1a): establish resource identity and provenance schema
+- TYPE: schema/migration foundation — no bootstrap, no endpoint, no UI
+- STATE: DRAFT (will be updated with exact PR number/HEAD_SHA after push)
+- BASE_BRANCH: main
+- BASE_SHA: 80223a5dd5256921bf7dd237afff51c30b583ded
+- HEAD_BRANCH: feat/rm02c1a-resource-identity-schema-foundation
+- ROADMAP_ITEM: RM-02C1a
+- PRODUCTION_ACTIVATION: NO
+- SIMPROK_DB_CONNECTION_COUNT: 0
+- SIMPROK_DB_WRITE_COUNT: 0
+- MERGE: NO — Owner-only decision, per CARA-KERJA.md
+- DEBT RECORDED: UTANG-RESOURCE-CODE-EMPTY-STRING-GUARD,
+  UTANG-PROJECT-AHSP-FK-NAME-DRIFT (see DEBT.md)
+- COWORK REVIEW: 3/3 independent read-only reviewers (schema/domain,
+  migration/rollback, test/tenancy) — all PASS_WITH_CONDITIONS, zero
+  BLOCKING findings; all non-blocking findings addressed in the diff except
+  the two named debts above (deliberately deferred, not silently dropped).
+- LOCAL GATES: backend build PASS; backend unit tests 478/478 PASS; official
+  safe E2E 306/306 PASS (residual PASS); frontend build PASS; frontend
+  tests 46/46 PASS.
+- RM02C1B_BOOTSTRAP: LOCKED (unchanged by this PR)
+
 ## RM01B SOURCE PREP Draft PR
 
 - TITLE: chore(rm01): prepare source-controlled production activation

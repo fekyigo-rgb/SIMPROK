@@ -222,6 +222,44 @@ register yang terlihat bersih. Debt yang ditutup tidak dihapus; diberi
 - NOTE: The exception records a pre-assertion environment failure. Safe E2E
   is not PASS and the environment issue is not claimed fixed.
 
+## RM-02C1a additions — 2026-07-27
+
+### UTANG-RESOURCE-CODE-EMPTY-STRING-GUARD
+- STATUS: OPEN — NON_BLOCKING (identified by independent cowork migration
+  reviewer during RM-02C1a, PASS_WITH_CONDITIONS)
+- SOURCE: the manual partial unique index
+  `resource_catalogs_workspace_code_nonnull_key`
+  (`WHERE "workspaceId" IS NOT NULL AND "code" IS NOT NULL`) treats an
+  empty-string or whitespace-only `code` as a valid, distinct non-null value
+  consuming a workspace uniqueness slot — inconsistent with the
+  human-verified-canonical-code intent, though not literally the forbidden
+  `"0"` sentinel.
+- WHY NOT FIXED NOW: no code path in this slice (or any merged slice) writes
+  `ResourceCatalog.code` at all — there is no current call site that could
+  produce this value, so adding a CHECK constraint now would be speculative
+  hardening ahead of a proven risk (CARA-KERJA.md §14). Deferred rather than
+  silently ignored.
+- CLOSURE_CONDITION: before RM-02C1b (or any future slice) introduces a
+  write path that sets `ResourceCatalog.code`, add a CHECK constraint (or
+  extend the partial index predicate) excluding empty/whitespace codes.
+
+### UTANG-PROJECT-AHSP-FK-NAME-DRIFT
+- STATUS: OPEN — NON_BLOCKING, PRE_EXISTING (not introduced by RM-02C1a)
+- SOURCE: generating the RM-02C1a migration via `prisma migrate dev
+  --create-only` surfaced that three foreign-key constraints on
+  `project_ahsp_resource_resolutions` (`pahr_sourceUnitDefinitionId_fkey`,
+  `pahr_targetUnitDefinitionId_fkey`, `pahr_unitConversionRuleId_fkey`) were
+  manually shortened in an earlier migration and no longer match Prisma's
+  own default naming convention. Prisma's diff engine proposes renaming them
+  every time a new migration touches unrelated schema, because its DSL has
+  no way to pin a custom constraint name.
+- RM-02C1a's own migration deliberately excludes this rename to stay bounded
+  (see `docs/implementation-gates/rm02c1a-schema-foundation/00-RM02C1A-SCHEMA-CONTRACT.md`
+  §8) — it is not a regression from this slice.
+- CLOSURE_CONDITION: a future, dedicated, reviewed migration that either
+  accepts Prisma's proposed rename (cosmetic, low-risk) or otherwise pins
+  the constraint naming convention explicitly.
+
 ## Soli Deo Gloria. Haleluya. Amin.
 
 ## RM01B current-status synchronization — 2026-07-22
