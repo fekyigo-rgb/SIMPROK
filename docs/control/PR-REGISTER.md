@@ -123,6 +123,44 @@ activate production grants.
   tests 46/46 PASS.
 - RM02C1B_BOOTSTRAP: LOCKED (unchanged by this PR)
 
+## RM-02C1a docs clarification Draft PR (#48)
+
+- TITLE: docs(rm02c1a): clarify composite-FK feasibility statement
+- TYPE: docs-only correction to 00-RM02C1A-SCHEMA-CONTRACT.md §3
+- STATE: MERGED (mergedAt 2026-07-27T04:40:38Z, merge commit
+  ca74ebf0cfd67dbdeff68a5dca28b525bd4f1ead)
+- PR_NUMBER: 48
+- BASE_SHA: 85249f19c05ece02fc2db02652b6c42e1923dd7e
+- HEAD_SHA: 9470f8a56bee78f5fefb2108251f1e5d43aead15
+- ROADMAP_ITEM: RM-02C1a
+- PRODUCTION_ACTIVATION: NO
+- MERGE: Owner-executed (merge authority is Owner-only per CARA-KERJA.md;
+  this executor pushed/opened/updated metadata only, never merged)
+
+## RM-02C1b Reviewed Resource Catalog Bootstrap Draft PR
+
+- TITLE: feat(rm02c1b): bootstrap reviewed Workspace-A resource catalog
+- TYPE: application logic (CLI bootstrap) — no schema change, no endpoint,
+  no UI
+- STATE: DRAFT (will be updated with exact PR number/HEAD_SHA after push)
+- BASE_BRANCH: main
+- BASE_SHA: ca74ebf0cfd67dbdeff68a5dca28b525bd4f1ead
+- HEAD_BRANCH: feat/rm02c1b-reviewed-resource-bootstrap
+- ROADMAP_ITEM: RM-02C1b
+- PRODUCTION_ACTIVATION: NO
+- SIMPROK_DB_CONNECTION_COUNT: 0
+- SIMPROK_DB_WRITE_COUNT: 0
+- MERGE: NO — Owner-only decision, per CARA-KERJA.md
+- DEBT RECORDED: RM02C1C_MISSING_UNIT_HUMAN_DISPOSITION (see DEBT.md) —
+  rows 39/104 blocked, zero writes, deferred to a named future slice
+- LOCAL GATES: backend build PASS; backend unit tests 500/500 PASS
+  (478 pre-existing + 22 new); disposable-instance proof against the real
+  271-row inventory 27/27 PASS (267 canonical identities, 269 provenance
+  rows, 2 blocked, exact match to contract); official safe E2E 317/317 PASS
+  (306 pre-existing + 11 new, residual PASS); frontend build PASS; frontend
+  tests 46/46 PASS.
+- RM02C1C_MISSING_UNIT_DISPOSITION: LOCKED (not started by this PR)
+
 ## RM01B SOURCE PREP Draft PR
 
 - TITLE: chore(rm01): prepare source-controlled production activation

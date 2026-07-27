@@ -260,6 +260,25 @@ register yang terlihat bersih. Debt yang ditutup tidak dihapus; diberi
   accepts Prisma's proposed rename (cosmetic, low-risk) or otherwise pins
   the constraint naming convention explicitly.
 
+## RM-02C1b additions — 2026-07-27
+
+### RM02C1C_MISSING_UNIT_HUMAN_DISPOSITION
+- STATUS: OPEN (named follow-up, explicitly deferred by this slice's own
+  governing contract — not a discovered defect)
+- SOURCE: RM-02C0 canonical inventory source rows 39 (Kawat BRC) and 104
+  (Kerikil) have a genuinely empty source unit cell. RM-02C1b's bootstrap
+  classifies both `BLOCKED_MISSING_SOURCE_UNIT` and writes zero
+  `ResourceCatalog`/`ResourceSourceIdentity` rows for either — see
+  `docs/implementation-gates/rm02c1b-reviewed-bootstrap/03-RM02C1B-BLOCKED-ROW-REGISTER.json`.
+- WHY NOT FIXED NOW: no unit may be inferred without human domain knowledge
+  this task does not have and is not authorized to guess at
+  (`AUTO_UNIT_CONVERSION=FORBIDDEN`, and inferring a unit from a resource
+  name is exactly the kind of fabrication the "no auto-generated fact"
+  doctrine forbids).
+- CLOSURE_CONDITION: a human (Owner or a domain-knowledgeable reviewer)
+  supplies the correct unit for each of these two resources; a future,
+  narrowly-scoped slice (RM-02C1c) then bootstraps them individually.
+
 ## Soli Deo Gloria. Haleluya. Amin.
 
 ## RM01B current-status synchronization — 2026-07-22

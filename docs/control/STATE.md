@@ -70,4 +70,34 @@ ACTIVE_DEBTS = see DEBT.md additions dated 2026-07-27
 RM-02C1b (271-resource bootstrap) remains explicitly LOCKED by this slice's
 own governing prompt and is not authorized to begin from this entry alone.
 
+## RM-02C1b reviewed resource catalog bootstrap — 2026-07-27
+
+RM-02C1a (schema foundation) and its follow-up docs clarification both
+merged to `main` in the interim (PR #47 at `85249f1`, PR #48 at `ca74ebf`),
+explicitly authorizing this slice to begin from `ca74ebf`.
+
+```
+BASE_MAIN_SHA = ca74ebf0cfd67dbdeff68a5dca28b525bd4f1ead
+CURRENT_PRODUCT_TARGET (this slice) = RM-02C1b
+ACTIVE_BRANCH = feat/rm02c1b-reviewed-resource-bootstrap
+ACTIVE_WORKTREE = C:\Users\asus\SIMPROK-WT-RM02C1B
+ACTIVE_SINGLE_WRITER = CLAUDE_CODE
+GOLDEN_THREAD_LIVE = NO (unchanged — no product journey touched, no endpoint,
+  no UI)
+YANG_SEDANG_DIKERJAKAN = Reviewed, deterministic, transactional bootstrap of
+  Workspace-A's ResourceCatalog + ResourceSourceIdentity from the locked
+  RM-02C0 canonical inventory (267 canonical identities, 269 provenance
+  rows, 2 blocked rows deferred to RM-02C1c). See
+  docs/implementation-gates/rm02c1b-reviewed-bootstrap/.
+GATE_STATE = LOCAL_GATES_PASS_AWAITING_DRAFT_PR_AND_CI
+BROWSER_PROOF_STATE = NOT_APPLICABLE (CLI-only slice, no endpoint, no UI)
+PRODUCTION_ACTIVATION_STATE = NO
+SIMPROK_DB_CONNECTION_COUNT = 0
+SIMPROK_DB_WRITE_COUNT = 0
+OWNER_DECISIONS_WAITING = Draft PR merge decision (Owner-only, per
+  CARA-KERJA.md); RM-02C1c (missing-unit human disposition for rows 39/104)
+  remains a separate, un-started follow-up.
+ACTIVE_DEBTS = see DEBT.md additions dated 2026-07-27 (RM-02C1b section)
+```
+
 Soli Deo Gloria. Haleluya. Amin.
