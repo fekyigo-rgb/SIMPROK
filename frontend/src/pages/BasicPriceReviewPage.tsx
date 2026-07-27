@@ -35,11 +35,10 @@ const emptyDraft: RowDraft = { resource: null, unit: null, resourcePending: fals
  * Row-by-row human resolution room (state machine B). Every row starts
  * NEEDS_REVIEW and only a human resolve/reject action ever moves it —
  * there is no bulk or automatic transition here, matching the "SIMPROK
- * menghitung, manusia memutuskan" law. ResourceCatalog/UnitDefinition IDs
- * are entered as raw UUIDs: no catalog-search endpoint exists yet in this
- * foundation slice (KNOWN_LIMITATIONS — see final evidence report), so
- * candidates are searched explicitly and selected by a human; no first
- * result, unit inference, resolution, or submission is automatic.
+ * menghitung, manusia memutuskan" law. ResourceCatalog and UnitDefinition
+ * candidates are found through explicit human-operated search and selection;
+ * raw UUID entry is not exposed, and no first result, unit inference,
+ * resolution, or submission is automatic.
  */
 export function BasicPriceReviewPage() {
   const { batchId } = useParams<{ batchId: string }>();
