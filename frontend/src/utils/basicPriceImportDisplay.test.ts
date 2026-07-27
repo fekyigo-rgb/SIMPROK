@@ -11,6 +11,7 @@ import {
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
 } from "./basicPriceImportDisplay.ts";
+import { buildLookupPath, createLatestRequestGate } from "./catalogSearch.ts";
 
 const baseRow = (overrides: Partial<BasicPriceImportRowSummary> = {}): BasicPriceImportRowSummary => ({
   id: "row-1",
@@ -111,4 +112,25 @@ test("isRowMutable is true only for NEEDS_REVIEW rows", () => {
   assert.equal(isRowMutable(baseRow({ status: "READY_FOR_SUBMISSION" })), false);
   assert.equal(isRowMutable(baseRow({ status: "REJECTED" })), false);
   assert.equal(isRowMutable(baseRow({ status: "SUBMISSION_CREATED" })), false);
+});
+
+test("lookup paths target the dedicated routes and preserve explicit filters", () => {
+  assert.equal(
+    buildLookupPath("resources", { q: "Kawat BRC", type: "MATERIAL", page: 2, limit: 20 }),
+    "/basic-price-import-lookups/resources?q=Kawat+BRC&type=MATERIAL&page=2&limit=20",
+  );
+  assert.equal(
+    buildLookupPath("units", { q: "M3", dimension: "VOLUME", kind: "CANONICAL" }),
+    "/basic-price-import-lookups/units?q=M3&dimension=VOLUME&kind=CANONICAL",
+  );
+});
+
+test("latest request gate prevents an older search response from replacing a newer result", () => {
+  const gate = createLatestRequestGate();
+  const older = gate.begin();
+  const newer = gate.begin();
+  assert.equal(gate.isLatest(older), false);
+  assert.equal(gate.isLatest(newer), true);
+  gate.invalidate();
+  assert.equal(gate.isLatest(newer), false);
 });

@@ -7,16 +7,19 @@ import { BasicPriceRowResolutionService } from './basic-price-row-resolution.ser
 import { BasicPricePublicationService } from './basic-price-publication.service';
 import { BasicPriceImportController, BasicPricePublicationController } from './basic-price-import.controller';
 import { PrismaModule } from '../prisma/prisma.module';
+import { BasicPriceImportLookupController } from './basic-price-import-lookup.controller';
+import { BasicPriceImportLookupService } from './basic-price-import-lookup.service';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [BasicPriceController, BasicPriceImportController, BasicPricePublicationController],
+  controllers: [BasicPriceController, BasicPriceImportController, BasicPricePublicationController, BasicPriceImportLookupController],
   providers: [
     BasicPriceService,
     BasicPriceEligibilityPolicy,
     BasicPriceImportService,
     BasicPriceRowResolutionService,
     BasicPricePublicationService,
+    BasicPriceImportLookupService,
   ],
   exports: [BasicPriceService, BasicPriceEligibilityPolicy],
 })

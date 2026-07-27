@@ -9,8 +9,8 @@ describe('BasicPriceRowResolutionService', () => {
     $queryRaw: jest.Mock;
     basicPriceImportRow: { findFirst: jest.Mock; update: jest.Mock; count: jest.Mock };
     basicPriceImportBatch: { findUniqueOrThrow: jest.Mock; update: jest.Mock };
-    resourceCatalog: { findUnique: jest.Mock };
-    unitDefinition: { findUnique: jest.Mock };
+    resourceCatalog: { findFirst: jest.Mock };
+    unitDefinition: { findFirst: jest.Mock };
   };
   let prisma: { $transaction: jest.Mock };
 
@@ -33,8 +33,8 @@ describe('BasicPriceRowResolutionService', () => {
       $queryRaw: jest.fn(),
       basicPriceImportRow: { findFirst: jest.fn(), update: jest.fn(), count: jest.fn() },
       basicPriceImportBatch: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
-      resourceCatalog: { findUnique: jest.fn() },
-      unitDefinition: { findUnique: jest.fn() },
+      resourceCatalog: { findFirst: jest.fn() },
+      unitDefinition: { findFirst: jest.fn() },
     };
     prisma = { $transaction: jest.fn((callback: (tx: unknown) => unknown) => callback(tx)) };
 
@@ -51,8 +51,8 @@ describe('BasicPriceRowResolutionService', () => {
       if (sql.includes('basic_price_import_rows')) return Promise.resolve([baseRow]);
       return Promise.resolve([]);
     });
-    tx.resourceCatalog.findUnique.mockResolvedValue({ id: 'resource-01', type: 'MATERIAL' });
-    tx.unitDefinition.findUnique.mockResolvedValue({ id: 'unit-01' });
+    tx.resourceCatalog.findFirst.mockResolvedValue({ id: 'resource-01', type: 'MATERIAL' });
+    tx.unitDefinition.findFirst.mockResolvedValue({ id: 'unit-01' });
     tx.basicPriceImportRow.findFirst.mockResolvedValue(null); // no collision by default
     tx.basicPriceImportRow.count.mockResolvedValue(0); // no other NEEDS_REVIEW rows -> batch can advance
     tx.basicPriceImportBatch.findUniqueOrThrow.mockResolvedValue({ id: BATCH_ID, status: 'NEEDS_REVIEW' });
@@ -108,6 +108,12 @@ describe('BasicPriceRowResolutionService', () => {
       }),
     );
     expect(result.status).toBe('READY_FOR_SUBMISSION');
+    expect(tx.resourceCatalog.findFirst).toHaveBeenCalledWith({
+      where: { id: 'resource-01', workspaceId: WORKSPACE_ID, status: 'ACTIVE' },
+    });
+    expect(tx.unitDefinition.findFirst).toHaveBeenCalledWith({
+      where: { id: 'unit-01', isActive: true },
+    });
   });
 
   it('a same-identity, same-value collision with another row in the batch stays NEEDS_REVIEW, never auto-submits', async () => {
@@ -153,7 +159,7 @@ describe('BasicPriceRowResolutionService', () => {
   });
 
   it('rejects resolving to an unknown resourceCatalogId (fail closed, never a fabricated identity)', async () => {
-    tx.resourceCatalog.findUnique.mockResolvedValue(null);
+    tx.resourceCatalog.findFirst.mockResolvedValue(null);
     await expect(
       service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, { version: 0, resourceCatalogId: 'ghost', unitDefinitionId: 'unit-01' }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -161,10 +167,37 @@ describe('BasicPriceRowResolutionService', () => {
   });
 
   it('rejects resolving to an unknown unitDefinitionId', async () => {
-    tx.unitDefinition.findUnique.mockResolvedValue(null);
+    tx.unitDefinition.findFirst.mockResolvedValue(null);
     await expect(
       service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, { version: 0, resourceCatalogId: 'resource-01', unitDefinitionId: 'ghost' }),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it.each(['cross-workspace', 'global', 'inactive'])(
+    'rejects a %s resource without writing the row',
+    async () => {
+      tx.resourceCatalog.findFirst.mockResolvedValue(null);
+      await expect(
+        service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, {
+          version: 0,
+          resourceCatalogId: 'resource-blocked',
+          unitDefinitionId: 'unit-01',
+        }),
+      ).rejects.toThrow('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
+      expect(tx.basicPriceImportRow.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['inactive', 'unknown'])('rejects an %s unit without writing the row', async () => {
+    tx.unitDefinition.findFirst.mockResolvedValue(null);
+    await expect(
+      service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, {
+        version: 0,
+        resourceCatalogId: 'resource-01',
+        unitDefinitionId: 'unit-blocked',
+      }),
+    ).rejects.toThrow('UNIT_UNKNOWN_OR_INACTIVE');
+    expect(tx.basicPriceImportRow.update).not.toHaveBeenCalled();
   });
 
   it('reject() requires a version match and records the reason', async () => {

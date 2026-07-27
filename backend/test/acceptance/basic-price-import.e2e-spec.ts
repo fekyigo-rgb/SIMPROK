@@ -25,6 +25,7 @@ import { buildBasicPriceXlsx } from '../fixtures/basic-price-xlsx.fixture';
 // proves the current real-world default (foremanToken, ungranted) fails
 // closed with 403.
 const WORKSPACE_A = '10000000-0000-4000-8000-000000000004';
+const WORKSPACE_B = '10000000-0000-4000-8000-000000000005';
 const PASSWORD = 'Test1234!';
 
 const REGION_ID = '41000000-0000-4000-8000-000000000001';
@@ -32,6 +33,12 @@ const RESOURCE_MATERIAL_ID = '41000000-0000-4000-8000-000000000002';
 const RESOURCE_LABOR_ID = '41000000-0000-4000-8000-000000000003';
 const UNIT_ID = '41000000-0000-4000-8000-000000000004';
 const ROLE_ID = '41000000-0000-4000-8000-000000000005';
+const RESOURCE_WORKSPACE_B_ID = '41000000-0000-4000-8000-000000000006';
+const RESOURCE_GLOBAL_ID = '41000000-0000-4000-8000-000000000007';
+const RESOURCE_INACTIVE_ID = '41000000-0000-4000-8000-000000000008';
+const UNIT_INACTIVE_ID = '41000000-0000-4000-8000-000000000009';
+const UNIT_ALIAS_ID = '41000000-0000-4000-8000-00000000000a';
+const ROLE_B_ID = '41000000-0000-4000-8000-00000000000b';
 
 const BASIC_PRICE_PERMISSION_CODES = [
   'BASIC_PRICE_IMPORT',
@@ -67,8 +74,10 @@ describe('RM02B Basic Price import (e2e)', () => {
   let prisma: PrismaClient;
   let assignedToken: string;
   let foremanToken: string;
+  let crosstenantToken: string;
   let assignedAccountId: string;
   let membershipRoleId: string;
+  let membershipRoleBId: string;
 
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
@@ -89,6 +98,16 @@ describe('RM02B Basic Price import (e2e)', () => {
       data: permissions.map((permission) => ({ roleId: ROLE_ID, permissionId: permission.id })),
       skipDuplicates: true,
     });
+    const reviewPermission = permissions.find((permission) => permission.code === 'BASIC_PRICE_REVIEW_VIEW')!;
+    await prisma.role.upsert({
+      where: { id: ROLE_B_ID },
+      create: { id: ROLE_B_ID, workspaceId: WORKSPACE_B, code: 'RM02C2_LOOKUP_B', name: 'RM02C2 Lookup Workspace B' },
+      update: {},
+    });
+    await prisma.rolePermission.createMany({
+      data: [{ roleId: ROLE_B_ID, permissionId: reviewPermission.id }],
+      skipDuplicates: true,
+    });
 
     const assignedAccount = await prisma.account.findUniqueOrThrow({ where: { email: 'assigned@test.local' } });
     assignedAccountId = assignedAccount.id;
@@ -99,6 +118,14 @@ describe('RM02B Basic Price import (e2e)', () => {
       data: { workspaceMembershipId: assignedMembership.id, roleId: ROLE_ID, isActive: true },
     });
     membershipRoleId = membershipRole.id;
+    const crosstenantAccount = await prisma.account.findUniqueOrThrow({ where: { email: 'crosstenant@test.local' } });
+    const crosstenantMembership = await prisma.workspaceMembership.findUniqueOrThrow({
+      where: { accountId_workspaceId: { accountId: crosstenantAccount.id, workspaceId: WORKSPACE_B } },
+    });
+    const membershipRoleB = await prisma.membershipRole.create({
+      data: { workspaceMembershipId: crosstenantMembership.id, roleId: ROLE_B_ID, isActive: true },
+    });
+    membershipRoleBId = membershipRoleB.id;
 
     await prisma.region.upsert({
       where: { id: REGION_ID },
@@ -110,6 +137,14 @@ describe('RM02B Basic Price import (e2e)', () => {
       create: { id: RESOURCE_MATERIAL_ID, workspaceId: WORKSPACE_A, code: 'ACC-MAT-01', name: 'Acceptance Material', type: 'MATERIAL', baseUnit: 'Lbr' },
       update: {},
     });
+    await prisma.resourceCatalog.createMany({
+      data: [
+        { id: RESOURCE_WORKSPACE_B_ID, workspaceId: WORKSPACE_B, code: 'B-SECRET', name: 'Workspace B Secret', type: 'MATERIAL', baseUnit: 'M3' },
+        { id: RESOURCE_GLOBAL_ID, workspaceId: null, code: 'GLOBAL-HIDDEN', name: 'Global Hidden', type: 'MATERIAL', baseUnit: 'M3' },
+        { id: RESOURCE_INACTIVE_ID, workspaceId: WORKSPACE_A, code: 'INACTIVE-HIDDEN', name: 'Inactive Hidden', type: 'MATERIAL', baseUnit: 'M3', status: 'INACTIVE' },
+      ],
+      skipDuplicates: true,
+    });
     await prisma.resourceCatalog.upsert({
       where: { id: RESOURCE_LABOR_ID },
       create: { id: RESOURCE_LABOR_ID, workspaceId: WORKSPACE_A, code: 'ACC-LAB-01', name: 'Acceptance Labor', type: 'LABOR', baseUnit: 'Org/Hari' },
@@ -120,11 +155,22 @@ describe('RM02B Basic Price import (e2e)', () => {
       create: { id: UNIT_ID, code: 'ACC-UNIT-ORGHARI', displayName: 'Orang per Hari', symbol: 'Org/Hari', dimension: 'PERSON_TIME', kind: 'CANONICAL' },
       update: {},
     });
+    await prisma.unitDefinition.upsert({
+      where: { id: UNIT_INACTIVE_ID },
+      create: { id: UNIT_INACTIVE_ID, code: 'ACC-INACTIVE-UNIT', displayName: 'Inactive Unit', symbol: 'IU', dimension: 'COUNT', kind: 'CANONICAL', isActive: false },
+      update: { isActive: false },
+    });
+    await prisma.unitAlias.upsert({
+      where: { id: UNIT_ALIAS_ID },
+      create: { id: UNIT_ALIAS_ID, unitDefinitionId: UNIT_ID, rawAlias: 'orang hari', normalizedAlias: 'ORANG_HARI', isActive: true },
+      update: { isActive: true },
+    });
 
     const login = async (email: string) =>
       (await request(app.getHttpServer()).post('/auth/login').send({ email, password: PASSWORD })).body.access_token;
     assignedToken = await login('assigned@test.local');
     foremanToken = await login('foreman@test.local');
+    crosstenantToken = await login('crosstenant@test.local');
   });
 
   afterEach(async () => {
@@ -140,12 +186,16 @@ describe('RM02B Basic Price import (e2e)', () => {
     await prisma.basicPriceImportBatch.deleteMany({ where: { workspaceId: WORKSPACE_A } });
     await prisma.priceSubmission.deleteMany({ where: { resourceId: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID] } } });
     await prisma.basicPrice.deleteMany({ where: { resourceId: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID] } } });
-    await prisma.resourceCatalog.deleteMany({ where: { id: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID] } } });
-    await prisma.unitDefinition.deleteMany({ where: { id: UNIT_ID } });
+    await prisma.resourceCatalog.deleteMany({
+      where: { id: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID, RESOURCE_WORKSPACE_B_ID, RESOURCE_GLOBAL_ID, RESOURCE_INACTIVE_ID] } },
+    });
+    await prisma.unitAlias.deleteMany({ where: { id: UNIT_ALIAS_ID } });
+    await prisma.unitDefinition.deleteMany({ where: { id: { in: [UNIT_ID, UNIT_INACTIVE_ID] } } });
     await prisma.region.deleteMany({ where: { id: REGION_ID } });
     await prisma.membershipRole.deleteMany({ where: { id: membershipRoleId } });
-    await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_ID } });
-    await prisma.role.deleteMany({ where: { id: ROLE_ID } });
+    await prisma.membershipRole.deleteMany({ where: { id: membershipRoleBId } });
+    await prisma.rolePermission.deleteMany({ where: { roleId: { in: [ROLE_ID, ROLE_B_ID] } } });
+    await prisma.role.deleteMany({ where: { id: { in: [ROLE_ID, ROLE_B_ID] } } });
     await prisma.permission.deleteMany({ where: { code: { in: BASIC_PRICE_PERMISSION_CODES } } });
     await prisma.$disconnect();
     await app.close();
@@ -165,6 +215,82 @@ describe('RM02B Basic Price import (e2e)', () => {
 
   const getBatch = (batchId: string, token = assignedToken) =>
     request(app.getHttpServer()).get(`/basic-price-imports/${batchId}`).set('Authorization', `Bearer ${token}`).set('x-workspace-id', WORKSPACE_A);
+
+  const lookup = (route: 'resources' | 'units', token?: string, workspaceId = WORKSPACE_A) => {
+    let req = request(app.getHttpServer()).get(`/basic-price-import-lookups/${route}`).set('x-workspace-id', workspaceId);
+    if (token) req = req.set('Authorization', `Bearer ${token}`);
+    return req;
+  };
+
+  describe('RM-02C2 catalog lookup boundary', () => {
+    const lookupDataFingerprint = async () =>
+      JSON.stringify({
+        resources: await prisma.resourceCatalog.findMany({
+          select: { id: true, workspaceId: true, code: true, name: true, type: true, baseUnit: true, status: true },
+          orderBy: { id: 'asc' },
+        }),
+        units: await prisma.unitDefinition.findMany({
+          select: { id: true, code: true, displayName: true, symbol: true, dimension: true, kind: true, isActive: true },
+          orderBy: { id: 'asc' },
+        }),
+        aliases: await prisma.unitAlias.findMany({
+          select: { id: true, rawAlias: true, normalizedAlias: true, unitDefinitionId: true, isActive: true },
+          orderBy: { id: 'asc' },
+        }),
+      });
+
+    it('requires authentication and the bounded review permission', async () => {
+      await lookup('resources').expect(401);
+      await lookup('resources', foremanToken).expect(403);
+      await lookup('resources', assignedToken).expect(200);
+    });
+
+    it('returns only active resources owned by the active workspace', async () => {
+      const first = await lookup('resources', assignedToken).query({ q: 'Acceptance', page: 1, limit: 1 }).expect(200);
+      const second = await lookup('resources', assignedToken).query({ q: 'Acceptance', page: 2, limit: 1 }).expect(200);
+      expect(first.body).toEqual(expect.objectContaining({ page: 1, limit: 1, total: 2, hasNext: true }));
+      expect(second.body).toEqual(expect.objectContaining({ page: 2, limit: 1, total: 2, hasNext: false }));
+      expect(first.body.items).toHaveLength(1);
+      expect(second.body.items).toHaveLength(1);
+      expect(second.body.items[0].id).not.toBe(first.body.items[0].id);
+
+      const hidden = await lookup('resources', assignedToken).query({ q: 'Hidden' }).expect(200);
+      expect(hidden.body.items).toEqual([]);
+      expect(JSON.stringify(hidden.body)).not.toContain(RESOURCE_GLOBAL_ID);
+      expect(JSON.stringify(hidden.body)).not.toContain(RESOURCE_INACTIVE_ID);
+      expect(JSON.stringify(hidden.body)).not.toContain(RESOURCE_WORKSPACE_B_ID);
+    });
+
+    it('keeps Workspace-A candidates undiscoverable from authorized Workspace-B', async () => {
+      const response = await lookup('resources', crosstenantToken, WORKSPACE_B).query({ q: 'Acceptance' }).expect(200);
+      expect(response.body.items).toEqual([]);
+      const own = await lookup('resources', crosstenantToken, WORKSPACE_B).query({ q: 'Workspace B Secret' }).expect(200);
+      expect(own.body.items).toHaveLength(1);
+      expect(own.body.items[0].id).toBe(RESOURCE_WORKSPACE_B_ID);
+    });
+
+    it('finds an active alias once and returns only the bounded canonical-unit shape', async () => {
+      const response = await lookup('units', assignedToken).query({ q: 'orang hari' }).expect(200);
+      expect(response.body.items).toEqual([
+        {
+          id: UNIT_ID,
+          code: 'ACC-UNIT-ORGHARI',
+          displayName: 'Orang per Hari',
+          symbol: 'Org/Hari',
+          dimension: 'PERSON_TIME',
+          kind: 'CANONICAL',
+        },
+      ]);
+      expect(JSON.stringify(response.body)).not.toContain('conversion');
+    });
+
+    it('both GET lookup routes leave their complete source data fingerprint unchanged', async () => {
+      const before = await lookupDataFingerprint();
+      await lookup('resources', assignedToken).query({ q: 'ACC', type: 'MATERIAL', page: 1, limit: 20 }).expect(200);
+      await lookup('units', assignedToken).query({ q: 'orang hari', dimension: 'PERSON_TIME', kind: 'CANONICAL' }).expect(200);
+      expect(await lookupDataFingerprint()).toBe(before);
+    });
+  });
 
   describe('permission boundary', () => {
     it('the current default state (permission not granted) fails closed with 403, never 500', async () => {
@@ -279,6 +405,30 @@ describe('RM02B Basic Price import (e2e)', () => {
       const response = await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_ID, UNIT_ID).expect(201);
       expect(response.body.status).toBe('READY_FOR_SUBMISSION');
       expect(response.body.collisionType).toBe('NONE');
+    });
+
+    it.each([
+      ['cross-workspace', RESOURCE_WORKSPACE_B_ID],
+      ['global', RESOURCE_GLOBAL_ID],
+      ['inactive', RESOURCE_INACTIVE_ID],
+    ])('rejects direct %s resource IDs even when the UI is bypassed', async (_label, resourceId) => {
+      const preview = await previewFile(await buildBasicPriceXlsx(), `blocked-${_label}`).expect(201);
+      const row = preview.body.rows.find((candidate: { sourceRowNumber: number }) => candidate.sourceRowNumber === 9);
+      const before = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+      const response = await resolveRow(preview.body.batchId, row.id, row.version, resourceId, UNIT_ID).expect(409);
+      expect(response.body.message).toBe('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
+      const after = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+      expect(after.version).toBe(before.version);
+      expect(after.resourceCatalogId).toBe(before.resourceCatalogId);
+    });
+
+    it('rejects a direct inactive UnitDefinition ID without writing the row', async () => {
+      const preview = await previewFile(await buildBasicPriceXlsx(), 'blocked-inactive-unit').expect(201);
+      const row = preview.body.rows.find((candidate: { sourceRowNumber: number }) => candidate.sourceRowNumber === 9);
+      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_ID, UNIT_INACTIVE_ID).expect(409);
+      const after = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+      expect(after.version).toBe(row.version);
+      expect(after.unitDefinitionId).toBeNull();
     });
 
     it('a stale version is rejected with 409, never silently applied (test matrix I06)', async () => {

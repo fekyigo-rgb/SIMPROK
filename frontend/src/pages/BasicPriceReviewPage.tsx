@@ -7,6 +7,8 @@ import {
   resolveBasicPriceImportRow,
   submitBasicPriceImportBatch,
 } from '../api/basicPriceImport';
+import type { ResourceLookupItem, UnitLookupItem } from '../api/basicPriceImport';
+import { CatalogSearchSelect } from '../components/basic-price/CatalogSearchSelect';
 import {
   batchStatusLabel,
   canSubmitBatch,
@@ -20,21 +22,23 @@ import {
 } from '../utils/basicPriceImportDisplay';
 
 interface RowDraft {
-  resourceCatalogId: string;
-  unitDefinitionId: string;
+  resource: ResourceLookupItem | null;
+  unit: UnitLookupItem | null;
+  resourcePending: boolean;
+  unitPending: boolean;
   reason: string;
 }
 
-const emptyDraft: RowDraft = { resourceCatalogId: '', unitDefinitionId: '', reason: '' };
+const emptyDraft: RowDraft = { resource: null, unit: null, resourcePending: false, unitPending: false, reason: '' };
 
 /**
  * Row-by-row human resolution room (state machine B). Every row starts
  * NEEDS_REVIEW and only a human resolve/reject action ever moves it —
  * there is no bulk or automatic transition here, matching the "SIMPROK
- * menghitung, manusia memutuskan" law. ResourceCatalog/UnitDefinition IDs
- * are entered as raw UUIDs: no catalog-search endpoint exists yet in this
- * foundation slice (KNOWN_LIMITATIONS — see final evidence report), so
- * this form is honestly manual rather than faking a lookup UI.
+ * menghitung, manusia memutuskan" law. ResourceCatalog and UnitDefinition
+ * candidates are found through explicit human-operated search and selection;
+ * raw UUID entry is not exposed, and no first result, unit inference,
+ * resolution, or submission is automatic.
  */
 export function BasicPriceReviewPage() {
   const { batchId } = useParams<{ batchId: string }>();
@@ -62,19 +66,27 @@ export function BasicPriceReviewPage() {
 
   const draftFor = (rowId: string): RowDraft => drafts[rowId] ?? emptyDraft;
   const updateDraft = (rowId: string, patch: Partial<RowDraft>) => {
-    setDrafts((current) => ({ ...current, [rowId]: { ...draftFor(rowId), ...patch } }));
+    setDrafts((current) => ({
+      ...current,
+      [rowId]: { ...(current[rowId] ?? emptyDraft), ...patch },
+    }));
   };
 
   const handleResolve = async (row: BasicPriceImportRowSummary) => {
     if (!batchId) return;
     const draft = draftFor(row.id);
-    if (!draft.resourceCatalogId || !draft.unitDefinitionId) {
-      setStatusMessage('ID Resource Katalog dan ID Definisi Satuan wajib diisi sebelum menyelesaikan baris.');
+    if (!draft.resource || !draft.unit || draft.resourcePending || draft.unitPending) {
+      setStatusMessage('Pilih satu Resource Katalog dan satu Satuan Kanonik sebelum menyelesaikan baris.');
       return;
     }
     setIsBusy(true);
     try {
-      await resolveBasicPriceImportRow(batchId, row.id, row.version, draft.resourceCatalogId, draft.unitDefinitionId);
+      await resolveBasicPriceImportRow(batchId, row.id, row.version, draft.resource.id, draft.unit.id);
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
       await loadBatch();
       setStatusMessage(`Baris ${row.sourceRowNumber} diperbarui.`);
     } catch {
@@ -174,25 +186,27 @@ export function BasicPriceReviewPage() {
 
               {mutable ? (
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-end', marginTop: '8px' }}>
-                  <label>
-                    ID Resource Katalog
-                    <input
-                      type="text"
-                      placeholder="UUID ResourceCatalog"
-                      value={draft.resourceCatalogId}
-                      onChange={(event) => updateDraft(row.id, { resourceCatalogId: event.target.value })}
-                    />
-                  </label>
-                  <label>
-                    ID Definisi Satuan
-                    <input
-                      type="text"
-                      placeholder="UUID UnitDefinition"
-                      value={draft.unitDefinitionId}
-                      onChange={(event) => updateDraft(row.id, { unitDefinitionId: event.target.value })}
-                    />
-                  </label>
-                  <button onClick={() => void handleResolve(row)} disabled={isBusy}>Selesaikan</button>
+                  <CatalogSearchSelect
+                    mode="resource"
+                    initialResourceType={row.section}
+                    selected={draft.resource}
+                    disabled={isBusy}
+                    onSelect={(item) => updateDraft(row.id, { resource: item as ResourceLookupItem | null })}
+                    onPendingChange={(resourcePending) => updateDraft(row.id, { resourcePending })}
+                  />
+                  <CatalogSearchSelect
+                    mode="unit"
+                    selected={draft.unit}
+                    disabled={isBusy}
+                    onSelect={(item) => updateDraft(row.id, { unit: item as UnitLookupItem | null })}
+                    onPendingChange={(unitPending) => updateDraft(row.id, { unitPending })}
+                  />
+                  <button
+                    onClick={() => void handleResolve(row)}
+                    disabled={isBusy || draft.resourcePending || draft.unitPending || !draft.resource || !draft.unit}
+                  >
+                    Selesaikan
+                  </button>
                   <label>
                     Alasan tolak
                     <input

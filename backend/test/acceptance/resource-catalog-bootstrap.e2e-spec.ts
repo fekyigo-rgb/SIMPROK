@@ -207,14 +207,14 @@ describe('RM-02C1b Resource Catalog Bootstrap (e2e)', () => {
     await expect(
       applyBootstrapPlan(prisma, {
         ...planParams,
-        expectedPlanSha256: `${genuineHash.slice(0, -1)}0`,
+        expectedPlanSha256: `${genuineHash.slice(0, -1)}${genuineHash.endsWith('0') ? '1' : '0'}`,
         confirmationToken: 'APPLY_RM02C1B_TO_SIMPROK_TEST',
       }),
     ).rejects.toThrow(BootstrapApplyError);
     await expect(
       applyBootstrapPlan(prisma, {
         ...planParams,
-        expectedPlanSha256: `${genuineHash.slice(0, -1)}0`,
+        expectedPlanSha256: `${genuineHash.slice(0, -1)}${genuineHash.endsWith('0') ? '1' : '0'}`,
         confirmationToken: 'APPLY_RM02C1B_TO_SIMPROK_TEST',
       }),
     ).rejects.toThrow(/STOP_STALE_PLAN_HASH/);
