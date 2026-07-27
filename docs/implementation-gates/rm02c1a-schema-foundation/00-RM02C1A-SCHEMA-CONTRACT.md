@@ -92,14 +92,52 @@ resolution-status field. It is pure, permanent evidence.
 
 ## 3. Tenancy enforcement — why database triggers, not just application code
 
-The Architect's cross-tenant finding was accepted as blocking:
-`ResourceCatalog.workspaceId` stays nullable (global resources exist today
-and independently proving their production safety as NOT NULL is out of
-scope here), so Prisma's `@@unique([id, workspaceId])` trick for a
-composite-FK tenancy guarantee is not available. Two PostgreSQL trigger
-functions close the gap at the database layer instead — verified to survive
-even when the write goes through Prisma Client (not just raw SQL), per the
-committed test file.
+The Architect's cross-tenant finding was accepted as blocking.
+
+To be precise about what is and isn't possible here: the SIMPROK baseline at
+`80223a5` already has, and successfully uses, a nullable field inside a
+compound unique index — `ResourceCatalog.workspaceId String?` combined with
+`@@unique([workspaceId, code])` predates this slice entirely. RM-02C1a does
+not claim, and has never claimed, that Prisma 6.4.1 universally rejects a
+nullable field inside a compound `@@unique`. That general claim would be
+false, and the baseline itself is the counter-example.
+
+What this slice does not attempt, and has not tested, is a different and
+more specific design: a compound unique `@@unique([id, workspaceId])` on
+`ResourceCatalog` used as the **target of a composite foreign key** from
+`ResourceSourceIdentity`, e.g.
+
+```prisma
+model ResourceSourceIdentity {
+  resourceCatalogId String @db.Uuid
+  workspaceId       String @db.Uuid
+
+  resourceCatalog ResourceCatalog @relation(
+    fields:     [resourceCatalogId, workspaceId],
+    references: [id, workspaceId]
+  )
+}
+```
+
+That pattern was not built or proven in this slice — not because a nullable
+field can never appear in a compound unique, but because using it as a
+composite-FK reference target the way `resourceCatalog.workspaceId` would
+need to work here was untested ground given the schedule, and because two
+PostgreSQL trigger functions were judged the more directly verifiable path
+to the same tenancy guarantee. The triggers were chosen because they are:
+
+- proven both via raw SQL and via Prisma Client (not just one code path);
+- an explicit, named domain error rather than a generic FK/constraint error;
+- provably rejecting cross-workspace provenance and global-resource
+  provenance (see the forward proof, §-referenced test file);
+- provably locking a resource's workspace once provenance exists.
+
+The composite-FK design above may be worth revisiting as a **future
+simplification candidate** — it is not ruled out, and could plausibly
+replace Trigger 1 if built and proven in a later slice. It is not a blocker,
+not a mandatory debt, and does not change RM-02C1a's verdict: the trigger
+approach implemented and proven here is a complete, independently-verified
+tenancy guarantee on its own terms.
 
 **Trigger 1 — `check_resource_source_identity_workspace_match()`**
 Fires `BEFORE INSERT OR UPDATE OF "resourceCatalogId", "workspaceId"` on
