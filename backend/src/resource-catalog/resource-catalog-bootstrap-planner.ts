@@ -613,7 +613,7 @@ export async function applyBootstrapPlan(prisma: PrismaClient, params: ApplyPara
   // Defense-in-depth: the CLI wrapper never sets this, by convention, but a
   // future caller doing so outside a test process must not be trusted on
   // convention alone. Both this repo's Jest unit and e2e runners already set
-  // NODE_ENV=test (the same assumption scripts/test-database-guard.ts's own
+  // NODE_ENV=test (the same assumption as the explicit acceptance guard)
   // guard relies on), so this is a real, not cosmetic, runtime boundary.
   if (params.injectFailureAfterSourceRowNumber !== undefined && process.env.NODE_ENV !== 'test') {
     throw new BootstrapApplyError(

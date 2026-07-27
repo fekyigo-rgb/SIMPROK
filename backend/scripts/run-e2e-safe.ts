@@ -1,26 +1,29 @@
-import { ENV_TEST_PATH, loadTestEnv } from '../test/load-test-env';
+import {
+  E2E_ENV_PATH,
+  loadE2EEnvironment,
+} from './database-role-guards';
 import {
   captureDatabaseFingerprint,
   compareDatabaseFingerprints,
-  createLockedDatabaseClient,
+  createLockedE2EDatabaseClient,
   releaseE2EDatabaseLock,
-  resetAndSeedTestDatabase,
+  resetAndSeedE2EDatabase,
   runCommand,
   TableFingerprint,
 } from './e2e-database-lifecycle';
 
 async function main(): Promise<void> {
-  loadTestEnv();
-  console.log(`E2E safe env loaded from ${ENV_TEST_PATH}`);
+  loadE2EEnvironment();
+  console.log(`E2E safe env loaded from ${E2E_ENV_PATH}`);
 
-  const client = await createLockedDatabaseClient();
+  const client = await createLockedE2EDatabaseClient();
   let baseline: TableFingerprint[] | undefined;
   let jestExitCode = 1;
   let residualExitCode = 1;
   let infrastructureError: unknown;
 
   try {
-    await resetAndSeedTestDatabase();
+    await resetAndSeedE2EDatabase(client.destructiveAuthority);
     baseline = await captureDatabaseFingerprint(client);
     console.log(`E2E baseline fingerprint captured for ${baseline.length} tables`);
 
