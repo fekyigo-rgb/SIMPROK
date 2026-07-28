@@ -9,6 +9,7 @@ import { BasicPriceImportController, BasicPricePublicationController } from './b
 import { PrismaModule } from '../prisma/prisma.module';
 import { BasicPriceImportLookupController } from './basic-price-import-lookup.controller';
 import { BasicPriceImportLookupService } from './basic-price-import-lookup.service';
+import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping-candidates.service';
 
 @Module({
   imports: [PrismaModule],
@@ -20,6 +21,7 @@ import { BasicPriceImportLookupService } from './basic-price-import-lookup.servi
     BasicPriceRowResolutionService,
     BasicPricePublicationService,
     BasicPriceImportLookupService,
+    BasicPriceRowMappingCandidatesService,
   ],
   exports: [BasicPriceService, BasicPriceEligibilityPolicy],
 })

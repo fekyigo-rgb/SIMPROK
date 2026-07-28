@@ -7,6 +7,7 @@ import { PERMISSIONS } from '../common/constants/permissions';
 import { BasicPriceImportService, MAX_UPLOAD_BYTES } from './basic-price-import.service';
 import { BasicPriceRowResolutionService } from './basic-price-row-resolution.service';
 import { BasicPricePublicationService } from './basic-price-publication.service';
+import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping-candidates.service';
 import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto';
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import { ResolveBasicPriceImportRowDto, RejectBasicPriceImportRowDto } from './dto/resolve-basic-price-import-row.dto';
@@ -28,6 +29,7 @@ export class BasicPriceImportController {
   constructor(
     private readonly importService: BasicPriceImportService,
     private readonly resolutionService: BasicPriceRowResolutionService,
+    private readonly mappingCandidatesService: BasicPriceRowMappingCandidatesService,
   ) {}
 
   @Post('preview')
@@ -62,7 +64,20 @@ export class BasicPriceImportController {
     @Body() dto: ResolveBasicPriceImportRowDto,
   ) {
     const workspaceId: string = request.workspaceContext?.workspaceId;
-    return this.resolutionService.resolveRow(workspaceId, batchId, rowId, dto);
+    const reviewerAccountId: string = request.user.id;
+    return this.resolutionService.resolveRow(workspaceId, batchId, rowId, reviewerAccountId, dto);
+  }
+
+  /**
+   * RM-02D1 — normalized-name candidate suggestions for one unresolved row.
+   * Read-only, review-signal-only: never resolves anything, gated by the
+   * same review-view permission as GET :batchId.
+   */
+  @Get(':batchId/rows/:rowId/candidates')
+  @Permissions(PERMISSIONS.BASIC_PRICE_REVIEW_VIEW)
+  async getRowCandidates(@Req() request: any, @Param('batchId') batchId: string, @Param('rowId') rowId: string) {
+    const workspaceId: string = request.workspaceContext?.workspaceId;
+    return this.mappingCandidatesService.findCandidatesForRow(workspaceId, batchId, rowId);
   }
 
   @Post(':batchId/rows/:rowId/reject')
