@@ -31,6 +31,8 @@ const RESOURCE_PROVENANCE_ID = '43000000-0000-4000-8000-000000000001';
 const RESOURCE_NAME_MATCH_ID = '43000000-0000-4000-8000-000000000002';
 const UNIT_ID = '43000000-0000-4000-8000-000000000003';
 const ROLE_ID = '43000000-0000-4000-8000-000000000004';
+const RESOURCE_ALTERNATE_LABOR_ID = '43000000-0000-4000-8000-000000000005';
+const RESOURCE_MATERIAL_FOR_MISMATCH_ID = '43000000-0000-4000-8000-000000000006';
 
 const PERMISSION_CODES = ['BASIC_PRICE_IMPORT', 'BASIC_PRICE_RESOLVE', 'BASIC_PRICE_REVIEW_VIEW'];
 
@@ -72,8 +74,12 @@ describe('RM02D1-REMEDIATION-V3.1 Source Row Provenance (e2e)', () => {
     // there), so every other test in this file sees a clean, unambiguous
     // single-provenance-candidate world with no accidental second
     // normalized-name match.
-    await prisma.resourceCatalog.create({
-      data: { id: RESOURCE_PROVENANCE_ID, workspaceId: WORKSPACE_A, code: 'RM02D1-PROV-01', name: 'Pekerja (provenanced)', type: 'LABOR', baseUnit: 'Org/Hari' },
+    await prisma.resourceCatalog.createMany({
+      data: [
+        { id: RESOURCE_PROVENANCE_ID, workspaceId: WORKSPACE_A, code: 'RM02D1-PROV-01', name: 'Pekerja (provenanced)', type: 'LABOR', baseUnit: 'Org/Hari' },
+        { id: RESOURCE_ALTERNATE_LABOR_ID, workspaceId: WORKSPACE_A, code: 'RM02D1-ALT-LABOR-01', name: 'Mandor (alternate, not name-matched)', type: 'LABOR', baseUnit: 'Org/Hari' },
+        { id: RESOURCE_MATERIAL_FOR_MISMATCH_ID, workspaceId: WORKSPACE_A, code: 'RM02D1-MAT-MISMATCH-01', name: 'Semen (wrong type on purpose)', type: 'MATERIAL', baseUnit: 'Zak' },
+      ],
     });
     await prisma.unitDefinition.upsert({
       where: { id: UNIT_ID },
@@ -113,7 +119,9 @@ describe('RM02D1-REMEDIATION-V3.1 Source Row Provenance (e2e)', () => {
     await prisma.basicPriceImportBatch.deleteMany({ where: { workspaceId: WORKSPACE_A } });
     await prisma.basicPriceSourceEquivalence.deleteMany({ where: { workspaceId: { in: [WORKSPACE_A, WORKSPACE_B] } } });
     await prisma.resourceSourceIdentity.deleteMany({ where: { resourceCatalogId: RESOURCE_PROVENANCE_ID } });
-    await prisma.resourceCatalog.deleteMany({ where: { id: { in: [RESOURCE_PROVENANCE_ID, RESOURCE_NAME_MATCH_ID] } } });
+    await prisma.resourceCatalog.deleteMany({
+      where: { id: { in: [RESOURCE_PROVENANCE_ID, RESOURCE_NAME_MATCH_ID, RESOURCE_ALTERNATE_LABOR_ID, RESOURCE_MATERIAL_FOR_MISMATCH_ID] } },
+    });
     await prisma.unitDefinition.deleteMany({ where: { id: UNIT_ID } });
     await prisma.membershipRole.deleteMany({ where: { id: membershipRoleId } });
     await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_ID } });
@@ -275,5 +283,59 @@ describe('RM02D1-REMEDIATION-V3.1 Source Row Provenance (e2e)', () => {
     const response = await getCandidates(preview.body.batchId, row.id).expect(200);
     expect(response.body.provenanceEquivalenceFound).toBe(false);
     expect(response.body.provenanceCandidate).toBeNull();
+  });
+
+  // RM-02D1-REMEDIATION-V3.2.1 (Blocker 1) — honest audit.
+  it('honest audit: an equivalence record and provenance candidate A exist, but the reviewer resolves to a different resource B — recorded as MANUAL_SEARCH, never SOURCE_ROW_PROVENANCE just because A existed', async () => {
+    const preview = await previewFile(await buildBasicPriceXlsx(), 'd1r-honest-audit-manual').expect(201);
+    const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: preview.body.batchId } });
+    await prisma.basicPriceSourceEquivalence.create({
+      data: {
+        workspaceId: WORKSPACE_A,
+        batchSourceSha256: batch.sourceSha256,
+        canonicalSourceSha256: CANONICAL_SHA,
+        evidence: 'ROW_IDENTICAL_TEST_FIXTURE',
+        comparedFields: ['sourceSection', 'rawResourceCodeText', 'rawResourceNameText', 'rawUnitText'],
+        verifiedByAccountId: assignedAccountId,
+      },
+    });
+
+    const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
+    // Provenance candidate for this row is RESOURCE_PROVENANCE_ID (A) --
+    // confirm the signal really is present before proving it gets ignored.
+    const candidatesResponse = await getCandidates(preview.body.batchId, row.id).expect(200);
+    expect(candidatesResponse.body.provenanceCandidate.resourceCatalogId).toBe(RESOURCE_PROVENANCE_ID);
+
+    // The reviewer picks RESOURCE_ALTERNATE_LABOR_ID (B) instead -- a
+    // different, same-typed (LABOR) resource with no normalized-name
+    // relationship to "Pekerja" at all.
+    const resolveResponse = await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_ALTERNATE_LABOR_ID).expect(201);
+    expect(resolveResponse.body.status).toBe('READY_FOR_SUBMISSION');
+
+    const mapping = await prisma.basicPriceImportRowResourceMapping.findFirstOrThrow({ where: { rowId: row.id } });
+    expect(mapping.resourceCatalogId).toBe(RESOURCE_ALTERNATE_LABOR_ID);
+    expect(mapping.suggestionSource).toBe('MANUAL_SEARCH');
+    expect(mapping.suggestionSource).not.toBe('SOURCE_ROW_PROVENANCE');
+  });
+
+  // RM-02D1-REMEDIATION-V3.2.1 (Blocker 2) — resource type safety.
+  describe('RESOURCE_TYPE_MISMATCH', () => {
+    it('rejects resolving a LABOR row to a MATERIAL resource with HTTP 409 RESOURCE_TYPE_MISMATCH, leaving the row and mapping audit untouched', async () => {
+      const preview = await previewFile(await buildBasicPriceXlsx(), 'd1r-type-mismatch').expect(201);
+      const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
+      expect(row.section).toBe('LABOR');
+      const before = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+
+      const response = await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_MATERIAL_FOR_MISMATCH_ID).expect(409);
+      expect(response.body.message).toBe('RESOURCE_TYPE_MISMATCH');
+
+      const after = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+      expect(after).toEqual(before);
+      expect(after.resourceCatalogId).toBeNull();
+      expect(after.status).toBe('NEEDS_REVIEW');
+      expect(after.version).toBe(before.version);
+
+      expect(await prisma.basicPriceImportRowResourceMapping.count({ where: { rowId: row.id } })).toBe(0);
+    });
   });
 });

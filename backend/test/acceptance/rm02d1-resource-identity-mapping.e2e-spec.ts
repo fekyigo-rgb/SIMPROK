@@ -27,6 +27,12 @@ const RESOURCE_WORKSPACE_B_SAME_NAME_ID = '42000000-0000-4000-8000-000000000004'
 const UNIT_ID = '42000000-0000-4000-8000-000000000005';
 const ROLE_ID = '42000000-0000-4000-8000-000000000006';
 const ROLE_B_ID = '42000000-0000-4000-8000-000000000007';
+// RM-02D1-REMEDIATION-V3.2.1 (Blocker 2): row 316 ("Sewa crane") is
+// EQUIPMENT, so its "fully manual" resolve target must also be EQUIPMENT —
+// resolving it to a LABOR resource is now correctly rejected with
+// RESOURCE_TYPE_MISMATCH, which is a different, dedicated scenario covered
+// in rm02d1-remediation-source-provenance.e2e-spec.ts, not this test.
+const RESOURCE_EQUIPMENT_FOR_MANUAL_ID = '42000000-0000-4000-8000-000000000008';
 
 const PERMISSION_CODES = ['BASIC_PRICE_IMPORT', 'BASIC_PRICE_RESOLVE', 'BASIC_PRICE_REVIEW_VIEW'];
 
@@ -92,6 +98,7 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
         { id: RESOURCE_MATERIAL_AMBIG_A_ID, workspaceId: WORKSPACE_A, code: 'RM02D1-MAT-01', name: 'Kawat jaring', type: 'MATERIAL', baseUnit: 'Lbr' },
         { id: RESOURCE_MATERIAL_AMBIG_B_ID, workspaceId: WORKSPACE_A, code: 'RM02D1-MAT-02', name: ' kawat   JARING ', type: 'MATERIAL', baseUnit: 'Lbr' },
         { id: RESOURCE_WORKSPACE_B_SAME_NAME_ID, workspaceId: WORKSPACE_B, code: 'RM02D1-B-01', name: 'Pekerja', type: 'LABOR', baseUnit: 'Org/Hari' },
+        { id: RESOURCE_EQUIPMENT_FOR_MANUAL_ID, workspaceId: WORKSPACE_A, code: 'RM02D1-EQ-01', name: 'Alat berat (manual pick target)', type: 'EQUIPMENT', baseUnit: 'U/J' },
       ],
       skipDuplicates: true,
     });
@@ -114,7 +121,17 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
   afterAll(async () => {
     await prisma.basicPriceImportBatch.deleteMany({ where: { workspaceId: WORKSPACE_A } });
     await prisma.resourceCatalog.deleteMany({
-      where: { id: { in: [RESOURCE_LABOR_EXACT_ID, RESOURCE_MATERIAL_AMBIG_A_ID, RESOURCE_MATERIAL_AMBIG_B_ID, RESOURCE_WORKSPACE_B_SAME_NAME_ID] } },
+      where: {
+        id: {
+          in: [
+            RESOURCE_LABOR_EXACT_ID,
+            RESOURCE_MATERIAL_AMBIG_A_ID,
+            RESOURCE_MATERIAL_AMBIG_B_ID,
+            RESOURCE_WORKSPACE_B_SAME_NAME_ID,
+            RESOURCE_EQUIPMENT_FOR_MANUAL_ID,
+          ],
+        },
+      },
     });
     await prisma.unitDefinition.deleteMany({ where: { id: UNIT_ID } });
     await prisma.membershipRole.deleteMany({ where: { id: { in: [membershipRoleId, membershipRoleBId] } } });
@@ -282,8 +299,8 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
 
     it('negative: a fully manual pick with no normalized-name candidate at all records MANUAL_SEARCH with zero candidates', async () => {
       const preview = await previewFile(await buildBasicPriceXlsx(), 'd1-resolve-manual').expect(201);
-      const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 316); // "Sewa crane", no fixture candidate
-      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_EXACT_ID, UNIT_ID, 'manual pick, unrelated to the name').expect(201);
+      const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 316); // "Sewa crane" (EQUIPMENT), no fixture candidate
+      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_EQUIPMENT_FOR_MANUAL_ID, UNIT_ID, 'manual pick, unrelated to the name').expect(201);
       const mapping = await prisma.basicPriceImportRowResourceMapping.findFirstOrThrow({ where: { rowId: row.id } });
       expect(mapping.suggestionSource).toBe('MANUAL_SEARCH');
       expect(mapping.candidateCountAtDecision).toBe(0);

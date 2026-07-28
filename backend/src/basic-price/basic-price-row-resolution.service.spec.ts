@@ -466,5 +466,87 @@ describe('BasicPriceRowResolutionService', () => {
       expect(tx.basicPriceImportRow.update).not.toHaveBeenCalled();
       expect(tx.basicPriceImportRowResourceMapping.create).not.toHaveBeenCalled();
     });
+
+    // RM-02D1-REMEDIATION-V3.2.1 (Blocker 1) — honest audit: a provenance
+    // candidate merely EXISTING must never be recorded as SOURCE_ROW_PROVENANCE
+    // unless the reviewer's own chosen resourceCatalogId actually equals it.
+    it('honest audit: provenance candidate A exists, reviewer instead picks a different same-typed resource B with zero name candidates — recorded as MANUAL_SEARCH, never SOURCE_ROW_PROVENANCE', async () => {
+      candidateRows = []; // normalizedNameCandidates = []
+      tx.basicPriceSourceEquivalence.findUnique.mockResolvedValue({ canonicalSourceSha256: 'canonical-sha' });
+      tx.resourceSourceIdentity.findFirst.mockResolvedValue({ resourceCatalogId: 'resource-A' }); // provenanceCandidate = A
+      tx.resourceCatalog.findFirst.mockImplementation(({ where }: { where: { id: string } }) => Promise.resolve({ id: where.id, type: 'MATERIAL' })); // A and B share row.sourceSection's type
+
+      await service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
+        version: 0,
+        resourceCatalogId: 'resource-B', // reviewer picks B, not A
+        unitDefinitionId: 'unit-01',
+      });
+
+      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ suggestionSource: 'MANUAL_SEARCH', resourceCatalogId: 'resource-B' }),
+        }),
+      );
+      const call = tx.basicPriceImportRowResourceMapping.create.mock.calls[0][0];
+      expect(call.data.suggestionSource).not.toBe('SOURCE_ROW_PROVENANCE');
+    });
+  });
+
+  // RM-02D1-REMEDIATION-V3.2.1 (Blocker 2) — resource type safety.
+  describe('RESOURCE_TYPE_MISMATCH', () => {
+    it('rejects resolving a LABOR row to a MATERIAL resource, before any row update or mapping insert', async () => {
+      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
+        const sql = query?.strings?.join('') ?? '';
+        if (sql.includes('basic_price_import_batches')) return Promise.resolve([baseBatch]);
+        if (sql.includes('basic_price_import_rows')) return Promise.resolve([{ ...baseRow, sourceSection: 'LABOR' }]);
+        if (sql.includes('resource_catalogs')) return Promise.resolve(candidateRows);
+        return Promise.resolve([]);
+      });
+      tx.resourceCatalog.findFirst.mockResolvedValue({ id: 'resource-material', type: 'MATERIAL' });
+
+      await expect(
+        service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
+          version: 0,
+          resourceCatalogId: 'resource-material',
+          unitDefinitionId: 'unit-01',
+        }),
+      ).rejects.toThrow('RESOURCE_TYPE_MISMATCH');
+      expect(tx.basicPriceImportRow.update).not.toHaveBeenCalled();
+      expect(tx.basicPriceImportRowResourceMapping.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects resolving a MATERIAL row to an EQUIPMENT resource', async () => {
+      tx.resourceCatalog.findFirst.mockResolvedValue({ id: 'resource-equipment', type: 'EQUIPMENT' });
+      await expect(
+        service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
+          version: 0,
+          resourceCatalogId: 'resource-equipment',
+          unitDefinitionId: 'unit-01',
+        }),
+      ).rejects.toThrow('RESOURCE_TYPE_MISMATCH');
+      expect(tx.basicPriceImportRow.update).not.toHaveBeenCalled();
+      expect(tx.basicPriceImportRowResourceMapping.create).not.toHaveBeenCalled();
+    });
+
+    it('a type match at the exact row.sourceSection still resolves normally (regression guard)', async () => {
+      tx.resourceCatalog.findFirst.mockResolvedValue({ id: 'resource-01', type: 'MATERIAL' }); // baseRow.sourceSection === 'MATERIAL'
+      const result = await service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
+        version: 0,
+        resourceCatalogId: 'resource-01',
+        unitDefinitionId: 'unit-01',
+      });
+      expect(result.status).toBe('READY_FOR_SUBMISSION');
+    });
+
+    it('passes row.sourceSection through to the provenance lookup', async () => {
+      await service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
+        version: 0,
+        resourceCatalogId: 'resource-01',
+        unitDefinitionId: 'unit-01',
+      });
+      expect(tx.basicPriceSourceEquivalence.findUnique).toHaveBeenCalled();
+      // baseBatch has no equivalence by default, so resourceSourceIdentity.findFirst is never reached here;
+      // the sourceSection plumbing itself is covered directly in basic-price-source-provenance.service.spec.ts.
+    });
   });
 });

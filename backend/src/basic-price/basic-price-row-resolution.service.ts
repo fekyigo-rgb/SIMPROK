@@ -86,6 +86,13 @@ export class BasicPriceRowResolutionService {
         where: { id: dto.resourceCatalogId, workspaceId, status: 'ACTIVE' },
       });
       if (!resourceCatalog) throw new ConflictException('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
+      // RM-02D1-REMEDIATION-V3.2.1 (Blocker 2): a row's sourceSection
+      // (LABOR/MATERIAL/EQUIPMENT) is a hard type boundary — a LABOR row
+      // can never be resolved to a MATERIAL or EQUIPMENT resource, even by
+      // explicit human choice. This check runs before any row update and
+      // before any mapping-decision insert, so a type-mismatched attempt
+      // leaves zero trace in either table.
+      if (resourceCatalog.type !== row.sourceSection) throw new ConflictException('RESOURCE_TYPE_MISMATCH');
       const unitDefinition = await tx.unitDefinition.findFirst({
         where: { id: dto.unitDefinitionId, isActive: true },
       });
@@ -128,15 +135,23 @@ export class BasicPriceRowResolutionService {
         },
       });
 
-      // RM-02D1-REMEDIATION-V3.1: SOURCE_ROW_PROVENANCE > SINGLE > MULTIPLE >
-      // MANUAL_SEARCH. Provenance is fail-closed (findProvenanceCandidate
-      // returns null candidate for every row unless a human-authorized
-      // BasicPriceSourceEquivalence exists for this exact batch source
-      // hash) — never a cross-hash guess. When provenance and normalized
-      // name disagree on the identity, that is recorded as
-      // PROVENANCE_NAME_CONFLICT regardless of which side dto.resourceCatalogId
-      // matches, so the audit trail can find every row where the two
-      // signals disagreed, not just the ones where provenance "won".
+      // RM-02D1-REMEDIATION-V3.2.1 (Blocker 1) — exact decision table:
+      //   if hasConflict:                                    PROVENANCE_NAME_CONFLICT
+      //   else if selectedId == provenanceCandidateId:        SOURCE_ROW_PROVENANCE
+      //   else if selectedId matches exactly one name cand.:  NORMALIZED_NAME_SINGLE_CANDIDATE
+      //   else if selectedId matches one of several name cand.: NORMALIZED_NAME_MULTIPLE_CANDIDATES
+      //   else:                                                MANUAL_SEARCH
+      // Critically, a provenance candidate merely EXISTING is never enough
+      // for SOURCE_ROW_PROVENANCE — the reviewer's own dto.resourceCatalogId
+      // must equal it. Provenance existing but the reviewer choosing a
+      // different, same-typed resource is MANUAL_SEARCH, not
+      // SOURCE_ROW_PROVENANCE; an audit trail that claimed otherwise would
+      // misrepresent what the human actually did. hasConflict itself is
+      // independent of the reviewer's choice — it fires whenever provenance
+      // and normalized-name matching disagree, regardless of which side (or
+      // neither) dto.resourceCatalogId matches, so the audit trail can find
+      // every row where the two signals disagreed, not just the ones where
+      // provenance "won".
       const [candidates, provenance] = await Promise.all([
         findMappingCandidates(tx, workspaceId, row.sourceSection, row.rawResourceNameText),
         findProvenanceCandidate(tx, {
@@ -145,6 +160,7 @@ export class BasicPriceRowResolutionService {
           sheetName: row.batch.selectedSheetName,
           parserContractVersion: row.batch.parserContractVersion,
           sourceRowNumber: row.sourceRowNumber,
+          sourceSection: row.sourceSection,
           rawResourceCodeText: row.rawResourceCodeText,
           rawResourceNameText: row.rawResourceNameText,
           rawUnitText: row.rawUnitText,
@@ -157,7 +173,6 @@ export class BasicPriceRowResolutionService {
       // conflict, it is simply an unconfirmed (but still authoritative)
       // provenance signal.
       const hasConflict = provenanceCandidateId !== null && candidates.length > 0 && !candidates.some((c) => c.resourceCatalogId === provenanceCandidateId);
-      const matchedNameCandidate = candidates.some((c) => c.resourceCatalogId === dto.resourceCatalogId);
 
       let suggestionSource:
         | 'SOURCE_ROW_PROVENANCE'
@@ -167,11 +182,11 @@ export class BasicPriceRowResolutionService {
         | 'MANUAL_SEARCH';
       if (hasConflict) {
         suggestionSource = 'PROVENANCE_NAME_CONFLICT';
-      } else if (provenanceCandidateId !== null) {
+      } else if (dto.resourceCatalogId === provenanceCandidateId) {
         suggestionSource = 'SOURCE_ROW_PROVENANCE';
-      } else if (matchedNameCandidate && candidates.length === 1) {
+      } else if (candidates.length === 1 && candidates[0].resourceCatalogId === dto.resourceCatalogId) {
         suggestionSource = 'NORMALIZED_NAME_SINGLE_CANDIDATE';
-      } else if (matchedNameCandidate && candidates.length > 1) {
+      } else if (candidates.length > 1 && candidates.some((c) => c.resourceCatalogId === dto.resourceCatalogId)) {
         suggestionSource = 'NORMALIZED_NAME_MULTIPLE_CANDIDATES';
       } else {
         suggestionSource = 'MANUAL_SEARCH';

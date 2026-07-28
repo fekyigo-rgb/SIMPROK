@@ -107,6 +107,7 @@ export class BasicPriceRowMappingCandidatesService {
         sheetName: row.batch.selectedSheetName,
         parserContractVersion: row.batch.parserContractVersion,
         sourceRowNumber: row.sourceRowNumber,
+        sourceSection: row.sourceSection as unknown as ResourceType,
         rawResourceCodeText: row.rawResourceCodeText,
         rawResourceNameText: row.rawResourceNameText,
         rawUnitText: row.rawUnitText,

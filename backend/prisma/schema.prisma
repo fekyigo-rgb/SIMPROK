@@ -26,8 +26,10 @@ model Account {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
-  memberships          WorkspaceMembership[]
-  intelligenceEvidence IntelligenceEvidence[]
+  memberships                                 WorkspaceMembership[]
+  intelligenceEvidence                        IntelligenceEvidence[]
+  verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]        @relation("BasicPriceSourceEquivalenceVerifiedBy")
+  reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
 
   @@map("accounts")
 }
@@ -1663,10 +1665,12 @@ model BasicPriceImportRowResourceMapping {
   row             BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
   resourceCatalog ResourceCatalog     @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
   unitDefinition  UnitDefinition      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+  reviewer        Account             @relation("BasicPriceImportRowResourceMappingReviewer", fields: [reviewerAccountId], references: [id], onDelete: Restrict, map: "fk_row_mapping_reviewer")
 
   @@index([rowId])
   @@index([resourceCatalogId])
   @@index([workspaceId])
+  @@index([reviewerAccountId])
   @@map("basic_price_import_row_resource_mappings")
 }
 
@@ -1693,10 +1697,12 @@ model BasicPriceSourceEquivalence {
   verifiedByAccountId   String   @db.Uuid
   verifiedAt            DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  verifiedBy Account   @relation("BasicPriceSourceEquivalenceVerifiedBy", fields: [verifiedByAccountId], references: [id], onDelete: Restrict, map: "fk_equivalence_verified_by")
 
   @@unique([workspaceId, batchSourceSha256])
   @@index([workspaceId])
+  @@index([verifiedByAccountId])
   @@map("basic_price_source_equivalences")
 }
 

@@ -1,4 +1,4 @@
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient, ResourceType } from '@prisma/client';
 import { MappingCandidate } from './basic-price-row-mapping-candidates.service';
 
 type QueryClient = PrismaClient | Prisma.TransactionClient;
@@ -24,11 +24,18 @@ export interface ProvenanceLookupResult {
  *
  * Even once an equivalence record exists, the match against
  * ResourceSourceIdentity is exact on every raw field (code/name/unit) plus
- * sourceRowNumber/sheetName/parserContractVersion — never fuzzy, never
- * name-only. If the row's own raw fields don't exactly match what was
- * recorded under the canonical hash at that row number, this returns
- * `candidate: null` (falls through to normalized-name/manual signals),
- * never a best-effort guess.
+ * sourceRowNumber/sheetName/parserContractVersion/sourceSection — never
+ * fuzzy, never name-only. If the row's own raw fields don't exactly match
+ * what was recorded under the canonical hash at that row number, this
+ * returns `candidate: null` (falls through to normalized-name/manual
+ * signals), never a best-effort guess.
+ *
+ * RM-02D1-REMEDIATION-V3.2.1 (Blocker 2): sourceSection is now part of the
+ * exact match on both sides — the ResourceSourceIdentity lookup and the
+ * ResourceCatalog lookup are both scoped to `params.sourceSection`, so a
+ * LABOR row can never receive a MATERIAL or EQUIPMENT provenance
+ * candidate, even if some other row number under the canonical hash
+ * happens to share the same raw code/name/unit text across sections.
  */
 export async function findProvenanceCandidate(
   client: QueryClient,
@@ -38,6 +45,7 @@ export async function findProvenanceCandidate(
     sheetName: string;
     parserContractVersion: string;
     sourceRowNumber: number;
+    sourceSection: ResourceType;
     rawResourceCodeText: string | null;
     rawResourceNameText: string;
     rawUnitText: string | null;
@@ -57,6 +65,7 @@ export async function findProvenanceCandidate(
       sheetName: params.sheetName,
       parserContractVersion: params.parserContractVersion,
       sourceRowNumber: params.sourceRowNumber,
+      sourceSection: params.sourceSection,
       rawCode: params.rawResourceCodeText,
       rawName: params.rawResourceNameText,
       rawUnit: params.rawUnitText,
@@ -68,7 +77,7 @@ export async function findProvenanceCandidate(
   }
 
   const catalog = await client.resourceCatalog.findFirst({
-    where: { id: identity.resourceCatalogId, workspaceId: params.workspaceId, status: 'ACTIVE' },
+    where: { id: identity.resourceCatalogId, workspaceId: params.workspaceId, status: 'ACTIVE', type: params.sourceSection },
     select: { id: true, code: true, name: true, type: true, baseUnit: true },
   });
   if (!catalog) {
