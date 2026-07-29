@@ -50,6 +50,7 @@ describe('BasicPricePublicationService', () => {
       priceSubmission: { findFirst: jest.fn().mockResolvedValue(acceptedSubmission) },
       user: {
         findFirst: jest.fn().mockResolvedValue({
+          status: 'ACTIVE',
           workspaceMembershipId: 'membership-verifier-01',
           membership: {
             id: 'membership-verifier-01',
@@ -64,7 +65,18 @@ describe('BasicPricePublicationService', () => {
     prisma = {
       $transaction: jest.fn((callback: (tx: unknown) => unknown) => callback(tx)),
       workspaceMembership: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'membership-publisher-01', account: { status: 'ACTIVE' } }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'membership-publisher-01',
+          accountId: PUBLISHER_ACCOUNT_ID,
+          workspaceId: WORKSPACE_ID,
+          status: 'ACTIVE',
+          account: { id: PUBLISHER_ACCOUNT_ID, status: 'ACTIVE' },
+          userProfile: {
+            workspaceMembershipId: 'membership-publisher-01',
+            workspaceId: WORKSPACE_ID,
+            status: 'ACTIVE',
+          },
+        }),
       },
       workspace: { findUnique: jest.fn().mockResolvedValue({ organizationId: 'org-01' }) },
       basicPrice: {
@@ -101,6 +113,44 @@ describe('BasicPricePublicationService', () => {
   it('rejects (D-01) when the publisher Account itself is not ACTIVE', async () => {
     prisma.workspaceMembership.findFirst.mockResolvedValue({ id: 'membership-01', account: { status: 'SUSPENDED' } });
     await expect(service.publish(publishParams)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('rejects (D-01) when the publisher User is missing with zero publication writes', async () => {
+    prisma.workspaceMembership.findFirst.mockResolvedValue({
+      id: 'membership-publisher-01',
+      accountId: PUBLISHER_ACCOUNT_ID,
+      workspaceId: WORKSPACE_ID,
+      status: 'ACTIVE',
+      account: { id: PUBLISHER_ACCOUNT_ID, status: 'ACTIVE' },
+      userProfile: null,
+    });
+    await expect(service.publish(publishParams)).rejects.toThrow(
+      'PUBLISHER_NOT_ACTIVE_IN_WORKSPACE',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+    expect(tx.basicPricePublicationAudit.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects (D-01) when the publisher User is inactive with zero publication writes', async () => {
+    prisma.workspaceMembership.findFirst.mockResolvedValue({
+      id: 'membership-publisher-01',
+      accountId: PUBLISHER_ACCOUNT_ID,
+      workspaceId: WORKSPACE_ID,
+      status: 'ACTIVE',
+      account: { id: PUBLISHER_ACCOUNT_ID, status: 'ACTIVE' },
+      userProfile: {
+        workspaceMembershipId: 'membership-publisher-01',
+        workspaceId: WORKSPACE_ID,
+        status: 'INACTIVE',
+      },
+    });
+    await expect(service.publish(publishParams)).rejects.toThrow(
+      'PUBLISHER_NOT_ACTIVE_IN_WORKSPACE',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+    expect(tx.basicPricePublicationAudit.create).not.toHaveBeenCalled();
   });
 
   it('throws NotFound (D-02/D-03) when the BasicPrice row does not exist in this workspace', async () => {
@@ -152,12 +202,27 @@ describe('BasicPricePublicationService', () => {
   it('rejects (D-07) when the review has no ACCEPT decision resolvable to a User — VERIFIER_EVIDENCE_MISSING', async () => {
     mockConsistentSourceState();
     tx.user.findFirst.mockResolvedValue(null);
-    await expect(service.publish(publishParams)).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.publish(publishParams)).rejects.toThrow(
+      'VERIFIER_EVIDENCE_MISSING',
+    );
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+    expect(tx.basicPricePublicationAudit.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects inactive verifier User evidence with zero publication writes', async () => {
+    mockConsistentSourceState();
+    tx.user.findFirst.mockResolvedValue(null);
+    await expect(service.publish(publishParams)).rejects.toThrow(
+      'VERIFIER_EVIDENCE_MISSING',
+    );
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+    expect(tx.basicPricePublicationAudit.create).not.toHaveBeenCalled();
   });
 
   it('rejects (D-08) VERIFIER_CANNOT_PUBLISH when the publisher is the same human who verified it', async () => {
     mockConsistentSourceState();
     tx.user.findFirst.mockResolvedValue({
+      status: 'ACTIVE',
       workspaceMembershipId: 'membership-publisher-01',
       membership: {
         id: 'membership-publisher-01',
@@ -183,6 +248,7 @@ describe('BasicPricePublicationService', () => {
   it('rejects cross-tenant verifier membership evidence', async () => {
     mockConsistentSourceState();
     tx.user.findFirst.mockResolvedValue({
+      status: 'ACTIVE',
       workspaceMembershipId: 'membership-verifier-01',
       membership: {
         id: 'membership-verifier-01',
@@ -199,6 +265,7 @@ describe('BasicPricePublicationService', () => {
   it('rejects inactive verifier membership evidence', async () => {
     mockConsistentSourceState();
     tx.user.findFirst.mockResolvedValue({
+      status: 'ACTIVE',
       workspaceMembershipId: 'membership-verifier-01',
       membership: {
         id: 'membership-verifier-01',
@@ -215,6 +282,7 @@ describe('BasicPricePublicationService', () => {
   it('rejects inactive verifier Account evidence', async () => {
     mockConsistentSourceState();
     tx.user.findFirst.mockResolvedValue({
+      status: 'ACTIVE',
       workspaceMembershipId: 'membership-verifier-01',
       membership: {
         id: 'membership-verifier-01',

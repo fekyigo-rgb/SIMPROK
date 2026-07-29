@@ -69,6 +69,7 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
   let actor3AccountId: string;
   let actorBothAccountId: string;
   let actor2UserId: string;
+  let actor3UserId: string;
   let actorBothUserId: string;
   const membershipRoleIds: string[] = [];
   const createdPermissionIds: string[] = [];
@@ -135,6 +136,14 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
       })
     ).id;
     actor3AccountId = await grantRole(ROLE_ACTOR3_ID, 'RM02D2A1_ACTOR3_PUBLISHER', ['BASIC_PRICE_PUBLISH', 'BASIC_PRICE_VIEW'], 'foreman@test.local', WORKSPACE_A);
+    const actor3Membership = await prisma.workspaceMembership.findUniqueOrThrow({
+      where: { accountId_workspaceId: { accountId: actor3AccountId, workspaceId: WORKSPACE_A } },
+    });
+    actor3UserId = (
+      await prisma.user.findUniqueOrThrow({
+        where: { workspaceMembershipId: actor3Membership.id },
+      })
+    ).id;
     await grantRole(ROLE_CROSSTENANT_ID, 'RM02D2A1_CROSSTENANT_REVIEW_VIEW', ['BASIC_PRICE_REVIEW_VIEW'], 'crosstenant@test.local', WORKSPACE_B);
 
     // D-08 dedicated actor: a fresh Account/Membership/User created directly
@@ -271,6 +280,11 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
       },
     });
     return { ...fixture, decision, basicPrice };
+  };
+
+  const getTypedHttpServer = (): Parameters<typeof request>[0] => {
+    const server: unknown = app.getHttpServer();
+    return server as Parameters<typeof request>[0];
   };
 
   afterAll(async () => {
@@ -644,5 +658,71 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
     expect(finalPrice.status).toBe('UNPUBLISHED');
     expect(finalPrice.verificationStatus).toBe('VERIFIED');
     expect(await prisma.basicPricePublicationAudit.count({ where: { basicPriceId: accepted.basicPrice.id } })).toBe(0);
+  });
+
+  it('rejects inactive verifier User evidence and preserves both publication axes with zero audit', async () => {
+    const accepted = await createAcceptedPrice();
+    await prisma.user.update({
+      where: { id: actor2UserId },
+      data: { status: UserStatus.INACTIVE },
+    });
+    try {
+      const response = await request(getTypedHttpServer())
+        .post(`/basic-price-publications/${accepted.basicPrice.id}/publish`)
+        .set('Authorization', `Bearer ${actor3Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(409);
+      expect((response.body as unknown as { message: string }).message).toBe(
+        'VERIFIER_EVIDENCE_MISSING',
+      );
+      const finalPrice = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: accepted.basicPrice.id },
+      });
+      expect(finalPrice.status).toBe('UNPUBLISHED');
+      expect(finalPrice.verificationStatus).toBe('VERIFIED');
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: accepted.basicPrice.id },
+        }),
+      ).toBe(0);
+    } finally {
+      await prisma.user.update({
+        where: { id: actor2UserId },
+        data: { status: UserStatus.ACTIVE },
+      });
+    }
+  });
+
+  it('rejects inactive publisher User and preserves both publication axes with zero audit', async () => {
+    const accepted = await createAcceptedPrice();
+    await prisma.user.update({
+      where: { id: actor3UserId },
+      data: { status: UserStatus.INACTIVE },
+    });
+    try {
+      const response = await request(getTypedHttpServer())
+        .post(`/basic-price-publications/${accepted.basicPrice.id}/publish`)
+        .set('Authorization', `Bearer ${actor3Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(403);
+      expect((response.body as unknown as { message: string }).message).toBe(
+        'PUBLISHER_NOT_ACTIVE_IN_WORKSPACE',
+      );
+      const finalPrice = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: accepted.basicPrice.id },
+      });
+      expect(finalPrice.status).toBe('UNPUBLISHED');
+      expect(finalPrice.verificationStatus).toBe('VERIFIED');
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: accepted.basicPrice.id },
+        }),
+      ).toBe(0);
+    } finally {
+      await prisma.user.update({
+        where: { id: actor3UserId },
+        data: { status: UserStatus.ACTIVE },
+      });
+    }
   });
 });

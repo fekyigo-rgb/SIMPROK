@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -39,11 +39,48 @@ export class BasicPricePublicationService {
 
     // D-01 — publisher must be an ACTIVE Account with an ACTIVE membership
     // in the target workspace.
-    const publisherMembership = await this.prisma.workspaceMembership.findFirst({
-      where: { accountId: publisherAccountId, workspaceId, status: 'ACTIVE' },
-      include: { account: true },
-    });
-    if (!publisherMembership || publisherMembership.account.status !== 'ACTIVE') {
+    const publisherMembership = await this.prisma.workspaceMembership.findFirst(
+      {
+        where: {
+          accountId: publisherAccountId,
+          workspaceId,
+          status: 'ACTIVE',
+          account: { status: 'ACTIVE' },
+          userProfile: {
+            is: {
+              workspaceId,
+              status: UserStatus.ACTIVE,
+            },
+          },
+        },
+        select: {
+          id: true,
+          accountId: true,
+          workspaceId: true,
+          status: true,
+          account: { select: { id: true, status: true } },
+          userProfile: {
+            select: {
+              workspaceMembershipId: true,
+              workspaceId: true,
+              status: true,
+            },
+          },
+        },
+      },
+    );
+    if (
+      !publisherMembership ||
+      publisherMembership.account.id !== publisherMembership.accountId ||
+      publisherMembership.account.status !== 'ACTIVE' ||
+      publisherMembership.workspaceId !== workspaceId ||
+      publisherMembership.status !== 'ACTIVE' ||
+      !publisherMembership.userProfile ||
+      publisherMembership.userProfile.workspaceMembershipId !==
+        publisherMembership.id ||
+      publisherMembership.userProfile.workspaceId !== workspaceId ||
+      publisherMembership.userProfile.status !== UserStatus.ACTIVE
+    ) {
       throw new ForbiddenException('PUBLISHER_NOT_ACTIVE_IN_WORKSPACE');
     }
     const workspace = await this.prisma.workspace.findUnique({
@@ -130,8 +167,10 @@ export class BasicPricePublicationService {
         where: {
           id: acceptDecisions[0].decidedByUserId,
           workspaceId,
+          status: UserStatus.ACTIVE,
         },
         select: {
+          status: true,
           workspaceMembershipId: true,
           membership: {
             select: {
@@ -146,6 +185,7 @@ export class BasicPricePublicationService {
       });
       if (
         !verifierUser ||
+        verifierUser.status !== UserStatus.ACTIVE ||
         verifierUser.membership.id !== verifierUser.workspaceMembershipId ||
         verifierUser.membership.workspaceId !== workspaceId ||
         verifierUser.membership.status !== 'ACTIVE' ||

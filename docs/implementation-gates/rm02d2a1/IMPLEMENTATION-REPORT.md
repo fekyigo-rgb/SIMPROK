@@ -352,6 +352,164 @@ Soli Deo Gloria. Haleluya. Amin.
 
 ---
 
+# RM-02D2A-1 — R04 ACTIVE-HUMAN FINAL REMEDIATION
+
+```text
+EXECUTION_SPEC_ID=RM02D2A1-R04-FINAL-REMEDIATION-V2
+BEFORE_SHA=f049d6d6efffbe71fd56503b1c1374597557d125
+AFTER_SHA=THIS_COMMIT (canonical immutable SHA is recorded in Draft PR #55 after push)
+OWNER_LOCK=PRESERVED
+D2A2_UI=NOT_STARTED
+D2B=HOLD
+MERGE=NO
+```
+
+## Production remediation
+
+`BasicPricePublicationService.publish()` now closes the final two active-human
+gaps without changing its route, DTO, lifecycle, schema, permissions, or error
+contracts:
+
+- verifier lookup requires `User.status=UserStatus.ACTIVE` in addition to the
+  already-enforced exact workspace, membership, Account, and organization
+  provenance;
+- publisher lookup starts from the authenticated Account and requires the
+  exact target-workspace `WorkspaceMembership`, linked one-to-one
+  `userProfile`, and Account all ACTIVE. The returned relation IDs and
+  workspace are checked again before any transaction begins.
+
+Missing/inactive publisher User returns
+`403 PUBLISHER_NOT_ACTIVE_IN_WORKSPACE`. Missing/inactive verifier User returns
+`409 VERIFIER_EVIDENCE_MISSING`. Both paths leave BasicPrice at
+UNPUBLISHED+VERIFIED and create no publication audit.
+
+The canonical relation is proven by the existing schema:
+`WorkspaceMembership.userProfile -> User.workspaceMembershipId @unique`; no
+new FK or relation was invented. A physically deleted verifier User cannot be
+created as a persisted E2E fixture because
+`PriceSubmissionReviewDecision.decidedByUserId -> User.id` is a required FK.
+The missing-User application branch is therefore proved deterministically at
+service level, while safe E2E uses the nearest valid persisted state:
+`User.status=INACTIVE`.
+
+All existing provenance, row lock, organization scope, separation of duties,
+atomic two-axis publication, and exactly-once audit behavior remains unchanged.
+
+## R04 existing-test change register
+
+| File | Test/fixture | Old behavior | New behavior | Alasan | TEST_WEAKENING |
+|---|---|---|---|---|---|
+| `backend/src/basic-price/basic-price-publication.service.spec.ts` | suite `beforeEach` publisher/verifier fixture | Active membership+Account fixture; User status/profile was implicit | Explicit ACTIVE verifier User and exact ACTIVE publisher `userProfile` relation | Keeps all existing positive tests valid under the newly enforced production contract | NO |
+| same | `review has no ACCEPT decision resolvable to a User` | Asserted only exception class | Asserts `VERIFIER_EVIDENCE_MISSING`, no BasicPrice update, and no audit create | Adds required missing-verifier zero-write proof | NO |
+| same | `D-08 VERIFIER_CANNOT_PUBLISH` | Verifier User status implicit | Explicit ACTIVE User so the test still reaches separation-of-duties | Preserves the original D-08 branch and assertion | NO |
+| same | `cross-tenant verifier membership evidence` | Verifier User status implicit | Explicit ACTIVE User so rejection remains attributable to tenant mismatch | Prevents the new guard from masking the original tenant proof | NO |
+| same | `inactive verifier membership evidence` | Verifier User status implicit | Explicit ACTIVE User so rejection remains attributable to membership status | Prevents the new guard from masking the original membership proof | NO |
+| same | `inactive verifier Account evidence` | Verifier User status implicit | Explicit ACTIVE User so rejection remains attributable to Account status | Prevents the new guard from masking the original Account proof | NO |
+| `backend/test/acceptance/rm02d2a1-basic-price-lifecycle.e2e-spec.ts` | local actor-3 setup fixture | Publisher Account ID was retained, User ID was not | Resolves and retains the existing publisher User ID for targeted status mutation/restoration | Enables isolated inactive-publisher proof without global fixture changes | NO |
+
+```text
+R04_FINAL_EXISTING_TESTS_CHANGED_COUNT=7
+R04_FINAL_NEW_TESTS_ADDED_COUNT=5
+R04_FINAL_TEST_REGISTER_ENTRY_COUNT=7
+OUTSIDE_REGISTER_EXISTING_TEST_CHANGE_COUNT=0
+TEST_WEAKENING=NO
+```
+
+## R04 new tests
+
+Unit:
+
+1. missing publisher User -> existing 403 contract, no transaction/update/audit;
+2. inactive publisher User filter -> existing 403 contract, no
+   transaction/update/audit;
+3. inactive verifier User filter -> existing 409 contract, no update/audit.
+
+The existing missing-verifier test was hardened (and therefore registered
+above) rather than duplicated.
+
+Safe E2E:
+
+1. persisted inactive verifier User -> 409, BasicPrice remains
+   UNPUBLISHED+VERIFIED, publication audit count remains zero;
+2. persisted inactive publisher User -> 403, BasicPrice remains
+   UNPUBLISHED+VERIFIED, publication audit count remains zero.
+
+Both E2E tests restore the targeted User to ACTIVE in `finally`, and the
+official safe-E2E residual fingerprint remains the cleanup authority.
+
+## Governance normalization
+
+```text
+ORIGINAL_D2A1_EXISTING_TESTS_CHANGED_COUNT=8
+REMEDIATION_01_EXISTING_TESTS_CHANGED_COUNT=10
+R04_FINAL_EXISTING_TESTS_CHANGED_COUNT=7
+R04_FINAL_NEW_TESTS_ADDED_COUNT=5
+
+REQUEST_CORRECTION_ALLOWED_IN_D2B=NO
+UNTIL_CORRECTION_RESUBMISSION_ENTRYPOINT=PRESENT_AND_TESTED
+
+UTANG-LINT-04=OPEN
+SCOPE=TYPE_SAFETY_AND_LINT_DEBT
+ACTION_NOW=NO_BROAD_REFACTOR
+
+R04_IMPLEMENTATION_AND_LOCAL_GATES=PASS
+R04_BYTE_AUDIT=PENDING_ARCHITECT
+D2A2_UI=HOLD_PENDING_BYTE_AUDIT
+RM02_EXIT_GATE=OPEN
+MERGE=NO
+```
+
+All mandatory local gates passed before this report was staged. The Draft PR
+normalization records the pushed immutable SHA separately. This report does
+not claim architect acceptance or merge readiness.
+
+## R04 local gate evidence
+
+```text
+BACKEND_BUILD=PASS
+BACKEND_UNIT=624/624
+PRISMA_VALIDATE=PASS
+FRONTEND_BUILD=PASS
+FRONTEND_UNIT=48/48
+SAFE_E2E=370/370
+SAFE_E2E_RESIDUAL=PASS
+GIT_DIFF_CHECK=PASS
+LINT=FAIL_BASELINE_NO_NEW_FINDINGS
+LINT_BASELINE=245_ERRORS/32_WARNINGS
+LINT_CURRENT=241_ERRORS/32_WARNINGS
+```
+
+Lint comparison used the same non-mutating ESLint config and normalized
+line-ending input for the three changed TypeScript files. No `--fix` was run.
+The total error count decreased by four and warnings did not increase; the
+remaining findings stay governed by `UTANG-LINT-04`.
+
+## Scope and residual debt
+
+```text
+FRONTEND_CHANGE_COUNT=0
+PRISMA_SCHEMA_CHANGE_COUNT=0
+MIGRATION_CHANGE_COUNT=0
+DEPENDENCY_CHANGE_COUNT=0
+WORKFLOW_CHANGE_COUNT=0
+PERMISSION_SEED_CHANGE_COUNT=0
+NEW_ENDPOINT_COUNT=0
+TARGET_BATCH_271_MUTATION_COUNT=0
+SIMPROK_TEST_BUSINESS_DATA_MUTATION_COUNT=0
+SIMPROK_DB_CONNECTION_COUNT=0
+SIMPROK_DB_QUERY_COUNT=0
+SIMPROK_DB_WRITE_COUNT=0
+
+UTANG-TESTCRED-01=OPEN
+UTANG-UI-MONEY-01=OPEN
+UTANG-SNAPSHOT-02=OPEN
+UTANG-LINT-04=OPEN
+```
+
+Soli Deo Gloria. Haleluya. Amin.
+
+---
+
 # RM-02D2A-1-REMEDIATION-01-CONTINUATION
 
 ## Identity and disposition
