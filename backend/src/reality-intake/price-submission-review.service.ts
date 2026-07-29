@@ -22,7 +22,6 @@ type DecisionParams = TenantParams & {
 };
 
 type AcceptParams = DecisionParams & {
-  regionId?: string | null;
   explicitGeneralRegion?: boolean;
 };
 
@@ -155,41 +154,55 @@ export class PriceSubmissionReviewService {
    */
   async acceptPriceSubmissionReview(params: AcceptParams) {
     const review = await this.findReviewForTenant(params);
-    const revision = this.currentRevision(review.submission);
-    if (!revision) {
-      throw new NotFoundException('Current price submission revision not found');
-    }
     const actorAccountId = await this.assertHumanInWorkspace(
       params.decidedByUserId,
       params.workspaceId,
     );
+    const basicPriceBeforeLock = await this.prisma.basicPrice.findUnique({
+      where: { sourceSubmissionId: review.submission.id },
+      select: { id: true },
+    });
 
     return this.prisma.$transaction(async (tx) => {
       // Row-lock the review for the duration of the transaction so two
       // concurrent ACCEPT calls on the same review serialize instead of
       // racing to create duplicate decisions/BasicPrice rows, and so the
       // actionability check below sees the live state, not a stale read.
-      const { slaState: freshSlaState } = await this.lockReviewForUpdate(tx, review.id);
+      const { slaState: freshSlaState } = await this.lockReviewForUpdate(
+        tx,
+        review.id,
+        params.workspaceId,
+        params.organizationId,
+      );
+
+      const liveSubmission = await tx.priceSubmission.findFirst({
+        where: {
+          id: review.submission.id,
+          workspaceId: params.workspaceId,
+          organizationId: params.organizationId,
+        },
+        include: { revisions: true },
+      });
+      if (!liveSubmission) {
+        throw new NotFoundException('Price submission review not found');
+      }
 
       const existingBasicPrice = await tx.basicPrice.findUnique({
-        where: { sourceSubmissionId: review.submission.id },
+        where: { sourceSubmissionId: liveSubmission.id },
       });
       const existingAccept = await tx.priceSubmissionReviewDecision.findFirst({
         where: { reviewId: review.id, action: 'ACCEPT' },
       });
 
-      if (!existingBasicPrice && (freshSlaState === 'RESOLVED' || freshSlaState === 'EXPIRED')) {
-        // Resolved by something other than ACCEPT (REJECT/REQUEST_CORRECTION)
-        // or expired — never silently re-open it for a late ACCEPT.
-        throw new ConflictException('REVIEW_NOT_ACTIONABLE');
-      }
-
-      if (existingBasicPrice) {
+      if (existingBasicPrice && existingAccept) {
+        if (!basicPriceBeforeLock) {
+          throw new ConflictException('ACCEPT_CONCURRENTLY_COMPLETED');
+        }
         return {
           processed: true as const,
           reviewId: review.id,
           priceSubmissionId: review.submission.id,
-          decisionId: existingAccept?.id ?? null,
+          decisionId: existingAccept.id,
           basicPriceId: existingBasicPrice.id,
           status: 'ALREADY_ACTIVATED' as const,
           priceSubmissionStatus: 'VERIFIED' as const,
@@ -199,6 +212,29 @@ export class PriceSubmissionReviewService {
             existingBasicPrice.status === 'PUBLISHED' &&
             existingBasicPrice.verificationStatus === 'PUBLISHED',
         };
+      }
+      if (existingBasicPrice || existingAccept) {
+        throw new ConflictException('ACCEPT_IDEMPOTENCY_EVIDENCE_INCONSISTENT');
+      }
+      if (liveSubmission.status === 'NEEDS_CORRECTION') {
+        throw new ConflictException('CORRECTION_RESUBMISSION_REQUIRED');
+      }
+      if (liveSubmission.status !== 'UNDER_REVIEW') {
+        throw new ConflictException('SUBMISSION_NOT_UNDER_REVIEW');
+      }
+      if (freshSlaState === 'RESOLVED' || freshSlaState === 'EXPIRED') {
+        throw new ConflictException('REVIEW_NOT_ACTIONABLE');
+      }
+
+      const revision = this.currentRevision(liveSubmission);
+      if (!revision?.effectiveDate) {
+        throw new ConflictException('EFFECTIVE_DATE_REQUIRED_BEFORE_ACCEPT');
+      }
+      if (liveSubmission.regionId && params.explicitGeneralRegion === true) {
+        throw new ConflictException('REGION_DECISION_CONFLICT');
+      }
+      if (!liveSubmission.regionId && params.explicitGeneralRegion !== true) {
+        throw new ConflictException('REGION_REQUIRED_OR_EXPLICIT_GENERAL_REGION');
       }
 
       const decision =
@@ -227,29 +263,29 @@ export class PriceSubmissionReviewService {
 
       await tx.priceSubmissionAudit.create({
         data: {
-          submissionId: review.submission.id,
-          fromStatus: review.submission.status,
+          submissionId: liveSubmission.id,
+          fromStatus: liveSubmission.status,
           toStatus: 'VERIFIED',
           actorType: 'HUMAN',
           actorAccountId,
-          reason: `STEP-2.6b_HUMAN_ACCEPT; reviewId:${review.id}; decisionId:${decision.id}; decidedByUserId:${params.decidedByUserId}`,
+          reason: `STEP-2.6b_HUMAN_ACCEPT; reviewId:${review.id}; decisionId:${decision.id}; decidedByUserId:${params.decidedByUserId}${liveSubmission.regionId ? '' : '; GENERAL_REGION_EXPLICIT'}`,
         },
       });
 
       const basicPrice = await tx.basicPrice.create({
         data: {
-          sourceSubmissionId: review.submission.id,
-          resourceId: review.submission.resourceId,
-          workspaceId: review.submission.workspaceId,
-          organizationId: review.submission.organizationId,
-          regionId: params.regionId ?? null,
-          effectiveDate: revision.effectiveDate ?? new Date(),
+          sourceSubmissionId: liveSubmission.id,
+          resourceId: liveSubmission.resourceId,
+          workspaceId: liveSubmission.workspaceId,
+          organizationId: liveSubmission.organizationId,
+          regionId: liveSubmission.regionId,
+          effectiveDate: revision.effectiveDate,
           value: revision.value,
-          sourceType: review.submission.sourceType,
+          sourceType: liveSubmission.sourceType,
           verificationStatus: 'VERIFIED',
-          sourceOrigin: review.submission.sourceOrigin,
+          sourceOrigin: liveSubmission.sourceOrigin,
           freshnessStatus: 'CURRENT',
-          reportedByAccountId: review.submission.reportedByAccountId,
+          reportedByAccountId: liveSubmission.reportedByAccountId,
           // RM-02D2A-1 Owner Lock: status is intentionally omitted here so
           // the row takes the schema's default ('UNPUBLISHED'). ACCEPT
           // proves the price VERIFIED, never PUBLISHED. Publication is a
@@ -300,7 +336,12 @@ export class PriceSubmissionReviewService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      const { slaState: freshSlaState } = await this.lockReviewForUpdate(tx, review.id);
+      const { slaState: freshSlaState } = await this.lockReviewForUpdate(
+        tx,
+        review.id,
+        params.workspaceId,
+        params.organizationId,
+      );
       if (freshSlaState === 'RESOLVED' || freshSlaState === 'EXPIRED') {
         throw new ConflictException('REVIEW_NOT_ACTIONABLE');
       }
@@ -409,7 +450,12 @@ export class PriceSubmissionReviewService {
    */
   async resolveActingUserId(accountId: string, workspaceId: string): Promise<string> {
     const membership = await this.prisma.workspaceMembership.findFirst({
-      where: { accountId, workspaceId, status: 'ACTIVE' },
+      where: {
+        accountId,
+        workspaceId,
+        status: 'ACTIVE',
+        account: { status: 'ACTIVE' },
+      },
       select: { id: true },
     });
     if (!membership) {
@@ -441,7 +487,12 @@ export class PriceSubmissionReviewService {
     );
 
     return this.prisma.$transaction(async (tx) => {
-      const { slaState: freshSlaState } = await this.lockReviewForUpdate(tx, review.id);
+      const { slaState: freshSlaState } = await this.lockReviewForUpdate(
+        tx,
+        review.id,
+        params.workspaceId,
+        params.organizationId,
+      );
       if (freshSlaState === 'RESOLVED' || freshSlaState === 'EXPIRED') {
         throw new ConflictException('REVIEW_NOT_ACTIONABLE');
       }
@@ -567,9 +618,15 @@ export class PriceSubmissionReviewService {
   private async lockReviewForUpdate(
     tx: Prisma.TransactionClient,
     reviewId: string,
+    workspaceId: string,
+    organizationId: string,
   ): Promise<{ slaState: ReviewSlaState }> {
     const locked = await tx.$queryRaw<Array<{ id: string; slaState: ReviewSlaState }>>(
-      Prisma.sql`SELECT "id", "slaState" FROM "price_submission_reviews" WHERE "id" = ${reviewId}::uuid FOR UPDATE`,
+      Prisma.sql`SELECT "id", "slaState" FROM "price_submission_reviews"
+                 WHERE "id" = ${reviewId}::uuid
+                   AND "workspaceId" = ${workspaceId}::uuid
+                   AND "organizationId" = ${organizationId}::uuid
+                 FOR UPDATE`,
     );
     if (!locked[0]) throw new NotFoundException('Price submission review not found');
     return { slaState: locked[0].slaState };
@@ -594,16 +651,27 @@ export class PriceSubmissionReviewService {
       },
       select: {
         id: true,
+        workspaceMembershipId: true,
         membership: {
           select: {
+            id: true,
             accountId: true,
             workspaceId: true,
+            status: true,
+            account: { select: { id: true, status: true } },
           },
         },
       },
     });
 
-    if (!user || user.membership.workspaceId !== workspaceId) {
+    if (
+      !user ||
+      user.membership.id !== user.workspaceMembershipId ||
+      user.membership.workspaceId !== workspaceId ||
+      user.membership.status !== 'ACTIVE' ||
+      user.membership.account.id !== user.membership.accountId ||
+      user.membership.account.status !== 'ACTIVE'
+    ) {
       throw new NotFoundException('Reviewer not found');
     }
 

@@ -349,3 +349,203 @@ reflects a deliberate, Owner-Lock-mandated contract change.
 - `RM02_EXIT_GATE=OPEN`.
 
 Soli Deo Gloria. Haleluya. Amin.
+
+---
+
+# RM-02D2A-1-REMEDIATION-01-CONTINUATION
+
+## Identity and disposition
+
+```text
+EXECUTION_SPEC_ID=RM02D2A-1-REMEDIATION-01-CONTINUATION-V1
+BEFORE_SHA=99c50e449d929a39ae749e775dbaad172eed5970
+AFTER_SHA=THIS_COMMIT (the immutable value is reported in Draft PR #55 and the execution report)
+TARGET_PR=55
+OWNER_LOCK_RM02D2A=PRESERVED
+CORE_D2A1_REWRITTEN=NO
+MERGE=NO
+PRODUCTION_ACTIVATION=NO
+```
+
+The continuation preserved the dirty remediation work already present at
+session start. It hardened the existing D2A-1 lifecycle; it did not create a
+second lifecycle or publication endpoint.
+
+## Gatekeeper remediation: before and after
+
+| Finding | Before | After and proof |
+|---|---|---|
+| R-01 region provenance | ACCEPT could take `regionId` from caller params | ACCEPT DTO/controller no longer expose that parameter. The transaction rereads the tenant-scoped live submission and copies its exact `regionId`. Null region requires `explicitGeneralRegion=true`; a contradictory explicit-general choice is rejected before writes. Unit and safe-E2E provenance/zero-write cases pass. |
+| R-01 effective-date provenance | Current revision used `effectiveDate ?? new Date()` | The live current revision is authoritative. No clock fallback remains. Missing current revision/effective date yields `EFFECTIVE_DATE_REQUIRED_BEFORE_ACCEPT` before writes. Unit and safe-E2E cases pass. |
+| R-02 correction gate | `REQUEST_CORRECTION` left an OPEN review that ACCEPT could still use | Effective first ACCEPT now requires live `PriceSubmission.status=UNDER_REVIEW` inside the transaction. `NEEDS_CORRECTION` yields `CORRECTION_RESUBMISSION_REQUIRED`; persisted state proves zero ACCEPT/BasicPrice effects. |
+| R-03 verifier evidence | Publication did not tenant-check every evidence hop | The publication transaction resolves target organization server-side, locks BasicPrice by workspace+organization, and validates source submission, review, exactly one ACCEPT, verifier User, exact membership, linked Account, workspace, organization, and active states. Missing/ambiguous/cross-tenant evidence yields `VERIFIER_EVIDENCE_MISSING` before either publication-axis write. |
+| R-04 active humans | User ACTIVE was checked without the complete membership/account chain | The canonical review actor/assignee validator requires ACTIVE User, ACTIVE exact WorkspaceMembership in the target workspace, and ACTIVE linked Account. Publisher and historical verifier evidence use the corresponding exact tenant-linked chain. Negative unit/safe-E2E proof passes. |
+| R-05 concurrency/rollback/forgery | Required persisted proofs were absent | Safe E2E now proves deterministic overlapping ACCEPT and publish, exactly-once effects, transaction rollback after an injected audit-create failure, authenticated actor dominance over forged body fields, and cross-tenant evidence rejection. |
+| R-06 CI evidence | Initial SHA had no remote status | Remote checks/workflow runs are inspected only after push. Absence of an applicable run is reported as `NOT_RUN`, never PASS. |
+
+`ACCEPT` still produces `BasicPrice=UNPUBLISHED+VERIFIED` and
+`PriceSubmission=VERIFIED`. Only
+`BasicPricePublicationService.publish()` writes
+`BasicPrice=PUBLISHED+PUBLISHED`, atomically with one publication audit, and
+the publisher must be a different human from the verifier.
+
+## Live state, correction, and static trace
+
+The ACCEPT transaction locks the exact tenant-scoped review, then rereads the
+exact tenant-scoped submission and current revision. Review state, live
+submission status, region decision, effective date, and idempotency evidence
+are all validated before the first mutation.
+
+Static tracing found only initial revision creation in
+`business-subscription.service.ts` and `basic-price-import.service.ts`, and
+only canonical review creation moves a submission to `UNDER_REVIEW`. No
+writer implements a corrected revision/resubmission transition from
+`NEEDS_CORRECTION` back to `UNDER_REVIEW`.
+
+```text
+CORRECTION_RESUBMISSION_ENTRYPOINT=ABSENT_DEFERRED
+CORRECTION_DIRECT_ACCEPT=BLOCKED
+CORRECTION_ROUND_TRIP_READY=NO
+```
+
+The production consumer scan found no consumer depending on
+`PriceSubmission.status === 'PUBLISHED'`. The only hits were an explanatory
+comment and negative test assertions that PriceSubmission never becomes
+PUBLISHED. Static writer tracing found the one canonical two-axis BasicPrice
+publication update in `basic-price-publication.service.ts`; unrelated
+`publication-worker.service.ts` and constitutional-boundary occurrences use
+different domain models and were not changed.
+
+## Six previously failing safe-E2E cases
+
+The initial continuation run was `356/362`, with six failures:
+
+- four legacy publication fixtures omitted the now-required matching
+  `BasicPrice.organizationId`;
+- two legacy review fixtures remained `SUBMITTED` instead of the valid live
+  `UNDER_REVIEW` state.
+
+The fixtures were made lifecycle-valid without changing their assertions:
+publication fixtures now carry the target organization, and reviewed
+submissions enter `UNDER_REVIEW`. No guard was bypassed. A subsequent
+`368/368` run exposed three suite-created permission residuals, which were
+added to the suite's existing tracked cleanup. A later concurrency proof
+showed both requests could miss genuine overlap; the test was hardened with a
+test-only pre-lock barrier (no sleep/retry and no production flag). The final
+safe-E2E run is `368/368`, residual PASS.
+
+## Existing-test change register
+
+| Path + test/setup | Old assertion/setup | New assertion/setup | Classification | TEST_WEAKENING |
+|---|---|---|---|---|
+| `basic-price-publication.service.spec.ts` — suite publisher/evidence fixtures | User-only/partial tenant fixtures | Exact organization, membership, Account, and pre-lock state fixtures; original outcomes retained | TEST_HARDENING | NO |
+| `basic-price-publication.service.spec.ts` — idempotent terminal publish | Terminal replay fixture lacked pre-lock distinction | Terminal state exists both before and after lock; still returns the same BasicPrice with no duplicate audit | TEST_HARDENING | NO |
+| `price-submission-review.service.spec.ts` — ACCEPT happy path fixture | Region could be null implicitly | Valid region is explicit; original UNPUBLISHED+VERIFIED assertions retained and provenance assertions added | TEST_HARDENING | NO |
+| `price-submission-review.service.spec.ts` — repeated ACCEPT | Partial idempotency fixture | Exact ACCEPT+BasicPrice evidence and pre-lock state; same no-duplicate assertions retained | TEST_HARDENING | NO |
+| `price-submission-review.service.spec.ts` — missing current revision | Generic missing-revision error | Deterministic `EFFECTIVE_DATE_REQUIRED_BEFORE_ACCEPT`, with zero writes | REMEDIATION_CONTRACT_UPDATE | NO |
+| `price-submission-review.service.spec.ts` — acting user/reassign fixtures | Active User alone | Exact ACTIVE membership+Account chain; original authorized outcome retained | TEST_HARDENING | NO |
+| `basic-price-import.e2e-spec.ts` — four publication cases | BasicPrice fixture omitted organization | Fixture uses the target workspace organization; every original HTTP/state assertion is unchanged | TEST_HARDENING | NO |
+| `reality-intake-price-submission-review.e2e-spec.ts` — two review cases | Reviewed submission fixture stayed SUBMITTED | Fixture is lifecycle-valid UNDER_REVIEW; every original decision/state assertion is unchanged | TEST_HARDENING | NO |
+| `rm02d2a1-basic-price-lifecycle.e2e-spec.ts` — full lifecycle | No forged actor/region fields or exact provenance assertion | Adds forged fields and proves authenticated actor plus submission region/current-revision date win | TEST_HARDENING | NO |
+| `rm02d2a1-basic-price-lifecycle.e2e-spec.ts` — D-08 and cleanup setup | Fixture omitted required live state/region; three created permissions were not tracked | Valid UNDER_REVIEW/region fixture and permission IDs tracked for cleanup; D-08 separation assertions retained | TEST_HARDENING | NO |
+
+```text
+EXISTING_TESTS_CHANGED_COUNT=10
+EXISTING_TESTS_CHANGE_REGISTER=COMPLETE
+TEST_WEAKENING_COUNT=0
+TEST_SKIP_TODO_ONLY_COUNT=0
+```
+
+## New tests
+
+Fifteen new backend unit tests cover authoritative region/date, both
+explicit-general branches, missing provenance, correction zero-write,
+inactive actor/assignee membership and Account, tenant-safe submission and
+verifier evidence, inactive verifier membership/Account, and publication
+audit failure propagation.
+
+Six new safe-E2E tests cover:
+
+1. concurrent ACCEPT: one success, one deterministic conflict, one ACCEPT
+   decision, one BasicPrice, and one human verification audit;
+2. concurrent publish: one success, one deterministic conflict, final
+   PUBLISHED+PUBLISHED, and one publication audit;
+3. persisted audit-failure rollback using a test-only transaction-client
+   Proxy that throws only on `BasicPricePublicationAudit.create`, followed by
+   an independent database reread proving UNPUBLISHED+VERIFIED and zero audit;
+4. REQUEST_CORRECTION followed by direct ACCEPT, with NEEDS_CORRECTION and
+   zero ACCEPT/BasicPrice effects;
+5. missing authoritative region/effective date, both zero-write;
+6. deterministic cross-tenant verifier evidence, with unchanged publication
+   axes and zero publication audit.
+
+The existing full-lifecycle test additionally proves forged actor/region
+fields cannot control persisted identity or provenance.
+
+```text
+NEW_TESTS_ADDED_COUNT=21
+CONCURRENT_ACCEPT_DECISION_COUNT=1
+CONCURRENT_ACCEPT_BASIC_PRICE_COUNT=1
+CONCURRENT_ACCEPT_VERIFY_AUDIT_COUNT=1
+CONCURRENT_PUBLISH_AUDIT_COUNT=1
+PUBLICATION_STATE_AFTER_FORCED_AUDIT_FAILURE=UNPUBLISHED+VERIFIED
+```
+
+## Local quality gates
+
+```text
+backend: npm run build                                      -> PASS
+backend: npm test -- --runInBand                           -> PASS (57 suites, 621/621)
+backend: npx dotenv-cli -e .env.test -- npx prisma validate -> PASS
+frontend: npm run build                                     -> PASS
+frontend: npm test -- --runInBand                           -> PASS (48/48)
+backend: npm run test:e2e:safe                              -> PASS (32 suites, 368/368; RESIDUAL_RESULT=PASS)
+repo: git diff --check                                      -> PASS
+```
+
+The backend build and frontend build provide the repository's non-mutating
+typecheck gates. The backend's configured `lint` script uses forbidden
+`--fix`, so it was not run. A direct non-mutating full-repo ESLint diagnostic
+failed on thousands of baseline style/unsafe-any findings; a changed-file
+diagnostic likewise reported 793 findings (719 errors, 74 warnings), mostly
+Prettier and established test/controller `any` patterns. No broad formatting
+or lint rewrite was applied because that would violate the bounded remediation
+surface. This diagnostic is reported as baseline debt, not misreported PASS.
+
+## Scope and data-safety evidence
+
+```text
+FRONTEND_CHANGE_COUNT=0
+PRISMA_SCHEMA_CHANGE_COUNT=0
+MIGRATION_CHANGE_COUNT=0
+OLD_MIGRATIONS_CHANGED=NO
+DEPENDENCY_CHANGE_COUNT=0
+WORKFLOW_CHANGE_COUNT=0
+TARGET_BATCH_ID=1c9d66ff-76d1-4a01-bb19-ecb04dbe3763
+TARGET_BATCH_MUTATION_COUNT=0
+SIMPROK_TEST_BUSINESS_DATA_MUTATION=0
+SIMPROK_DB_CONNECTION_COUNT=0
+SIMPROK_DB_QUERY_COUNT=0
+SIMPROK_DB_WRITE_COUNT=0
+SECRET_EXPOSURE_COUNT=0
+```
+
+The target UUID has zero hits under `backend/src` and `backend/test`. All
+mutating proof ran only through the official guarded safe-E2E runner against
+`simprok_e2e`; its database-name guard and residual fingerprint passed. No
+`.env*` content, connection string, credential, or secret was read or printed.
+
+## Residual gates and debts
+
+- `CORRECTION_RESUBMISSION_ENTRYPOINT=ABSENT_DEFERRED`; direct ACCEPT is
+  closed, but the correction round trip is not claimed ready.
+- `UTANG-TESTCRED-01=OPEN`.
+- `UTANG-UI-MONEY-01=OPEN`.
+- `UTANG-SNAPSHOT-02=OPEN`.
+- `D2A2_UI=HOLD_PENDING_REAUDIT`.
+- `RM02_EXIT_GATE=OPEN`.
+- `RM04_LINKAGE=BLOCKED_BY_OPERATIONS`.
+- `TARGET_BATCH_271=UNTOUCHED`.
+- `MERGE=NO`.
+
+Soli Deo Gloria. Haleluya. Amin.

@@ -173,7 +173,7 @@ describe('Reality intake price submission human review (e2e)', () => {
         reportedByAccountId: null,
         sourceOrigin: PriceSourceOrigin.SUPPLIER,
         sourceType: PriceSourceType.VENDOR_QUOTE,
-        status: options.status ?? 'SUBMITTED',
+        status: options.status ?? (options.createReview ? 'UNDER_REVIEW' : 'SUBMITTED'),
       },
     });
 

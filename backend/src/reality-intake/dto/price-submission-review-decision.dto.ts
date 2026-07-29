@@ -7,7 +7,6 @@ import { IsBoolean, IsOptional, IsString, IsUUID, MinLength } from 'class-valida
  * resolveActingUserId), never accepted from client input.
  */
 export class AcceptPriceSubmissionReviewDto {
-  @IsOptional() @IsUUID() regionId?: string;
   @IsOptional() @IsBoolean() explicitGeneralRegion?: boolean;
   @IsOptional() @IsString() note?: string;
 }

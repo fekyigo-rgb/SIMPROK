@@ -62,7 +62,6 @@ export class BasicPriceReviewController {
       reviewId,
       decidedByUserId,
       note: dto.note,
-      regionId: dto.regionId ?? null,
       explicitGeneralRegion: dto.explicitGeneralRegion,
     });
   }

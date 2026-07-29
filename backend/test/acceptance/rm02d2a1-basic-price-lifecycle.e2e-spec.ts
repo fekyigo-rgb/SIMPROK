@@ -4,6 +4,8 @@ import { AccountStatus, MembershipStatus, PrismaClient, UserStatus } from '@pris
 import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
+import { BasicPricePublicationService } from '../../src/basic-price/basic-price-publication.service';
+import { PrismaService } from '../../src/prisma/prisma.service';
 import { buildBasicPriceXlsx } from '../fixtures/basic-price-xlsx.fixture';
 
 // RM-02D2A-1 Backend Runtime Lifecycle Closure — dedicated safe E2E proof
@@ -57,6 +59,7 @@ const ALL_BASIC_PRICE_PERMISSION_CODES = [
 describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct actors)', () => {
   let app: INestApplication;
   let prisma: PrismaClient;
+  let appPrisma: PrismaService;
   let actor1Token: string; // importer/resolver/submitter
   let actor2Token: string; // verifier
   let actor3Token: string; // publisher
@@ -65,19 +68,32 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
   let actor2AccountId: string;
   let actor3AccountId: string;
   let actorBothAccountId: string;
+  let actor2UserId: string;
   let actorBothUserId: string;
   const membershipRoleIds: string[] = [];
+  const createdPermissionIds: string[] = [];
   const ACTOR_BOTH_EMAIL = 'rm02d2a1-actor-both@test.local';
 
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
     await app.init();
     prisma = new PrismaClient();
+    appPrisma = app.get(PrismaService);
 
+    const permissionsBefore = await prisma.permission.findMany({
+      where: { code: { in: ALL_BASIC_PRICE_PERMISSION_CODES } },
+      select: { id: true, code: true },
+    });
+    const preexistingPermissionCodes = new Set(permissionsBefore.map((permission) => permission.code));
     const permissions = await Promise.all(
       ALL_BASIC_PRICE_PERMISSION_CODES.map((code) =>
         prisma.permission.upsert({ where: { code }, create: { code, name: code }, update: {} }),
       ),
+    );
+    createdPermissionIds.push(
+      ...permissions
+        .filter((permission) => !preexistingPermissionCodes.has(permission.code))
+        .map((permission) => permission.id),
     );
     const permByCode = (code: string) => permissions.find((p) => p.code === code)!;
 
@@ -110,6 +126,14 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
 
     await grantRole(ROLE_ACTOR1_ID, 'RM02D2A1_ACTOR1_IMPORTER', ['BASIC_PRICE_IMPORT', 'BASIC_PRICE_REVIEW_VIEW', 'BASIC_PRICE_RESOLVE', 'BASIC_PRICE_SUBMIT'], 'assigned@test.local', WORKSPACE_A);
     actor2AccountId = await grantRole(ROLE_ACTOR2_ID, 'RM02D2A1_ACTOR2_VERIFIER', ['BASIC_PRICE_REVIEW_VIEW', 'BASIC_PRICE_VERIFY'], 'nonassigned@test.local', WORKSPACE_A);
+    const actor2Membership = await prisma.workspaceMembership.findUniqueOrThrow({
+      where: { accountId_workspaceId: { accountId: actor2AccountId, workspaceId: WORKSPACE_A } },
+    });
+    actor2UserId = (
+      await prisma.user.findUniqueOrThrow({
+        where: { workspaceMembershipId: actor2Membership.id },
+      })
+    ).id;
     actor3AccountId = await grantRole(ROLE_ACTOR3_ID, 'RM02D2A1_ACTOR3_PUBLISHER', ['BASIC_PRICE_PUBLISH', 'BASIC_PRICE_VIEW'], 'foreman@test.local', WORKSPACE_A);
     await grantRole(ROLE_CROSSTENANT_ID, 'RM02D2A1_CROSSTENANT_REVIEW_VIEW', ['BASIC_PRICE_REVIEW_VIEW'], 'crosstenant@test.local', WORKSPACE_B);
 
@@ -170,6 +194,85 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
     actorBothToken = await login(ACTOR_BOTH_EMAIL);
   });
 
+  const createOpenReview = async (options: {
+    status?: 'UNDER_REVIEW' | 'NEEDS_CORRECTION';
+    regionId?: string | null;
+    effectiveDate?: Date | null;
+  } = {}) => {
+    const { organizationId } = await prisma.workspace.findUniqueOrThrow({
+      where: { id: WORKSPACE_A },
+      select: { organizationId: true },
+    });
+    const submission = await prisma.priceSubmission.create({
+      data: {
+        workspaceId: WORKSPACE_A,
+        organizationId,
+        resourceId: RESOURCE_BOTH_ID,
+        regionId: options.regionId === undefined ? REGION_ID : options.regionId,
+        sourceOrigin: 'SUPPLIER',
+        sourceType: 'MARKET_SURVEY',
+        status: options.status ?? 'UNDER_REVIEW',
+      },
+    });
+    const revision = await prisma.priceSubmissionRevision.create({
+      data: {
+        submissionId: submission.id,
+        revisionNumber: 1,
+        value: '999999.00',
+        effectiveDate:
+          options.effectiveDate === undefined
+            ? new Date('2026-07-25T00:00:00.000Z')
+            : options.effectiveDate,
+        validationPassed: true,
+      },
+    });
+    await prisma.priceSubmission.update({
+      where: { id: submission.id },
+      data: { currentRevisionId: revision.id },
+    });
+    const review = await prisma.priceSubmissionReview.create({
+      data: {
+        priceSubmissionId: submission.id,
+        workspaceId: WORKSPACE_A,
+        organizationId,
+        slaState: 'OPEN',
+        openedAt: new Date(),
+      },
+    });
+    return { organizationId, submission, revision, review };
+  };
+
+  const createAcceptedPrice = async () => {
+    const fixture = await createOpenReview();
+    const decision = await prisma.priceSubmissionReviewDecision.create({
+      data: { reviewId: fixture.review.id, decidedByUserId: actor2UserId, action: 'ACCEPT' },
+    });
+    await prisma.priceSubmissionReview.update({
+      where: { id: fixture.review.id },
+      data: { slaState: 'RESOLVED', resolvedAt: new Date() },
+    });
+    await prisma.priceSubmission.update({
+      where: { id: fixture.submission.id },
+      data: { status: 'VERIFIED' },
+    });
+    const basicPrice = await prisma.basicPrice.create({
+      data: {
+        sourceSubmissionId: fixture.submission.id,
+        resourceId: RESOURCE_BOTH_ID,
+        workspaceId: WORKSPACE_A,
+        organizationId: fixture.organizationId,
+        regionId: REGION_ID,
+        effectiveDate: fixture.revision.effectiveDate!,
+        value: fixture.revision.value,
+        sourceType: 'MARKET_SURVEY',
+        sourceOrigin: 'SUPPLIER',
+        verificationStatus: 'VERIFIED',
+        freshnessStatus: 'CURRENT',
+      },
+    });
+    return { ...fixture, decision, basicPrice };
+  };
+
   afterAll(async () => {
     await prisma.basicPriceImportBatch.deleteMany({ where: { workspaceId: WORKSPACE_A } });
     await prisma.basicPrice.deleteMany({ where: { resourceId: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID, RESOURCE_BOTH_ID] } } });
@@ -180,6 +283,7 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
     await prisma.membershipRole.deleteMany({ where: { id: { in: membershipRoleIds } } });
     await prisma.rolePermission.deleteMany({ where: { roleId: { in: [ROLE_ACTOR1_ID, ROLE_ACTOR2_ID, ROLE_ACTOR3_ID, ROLE_CROSSTENANT_ID, ROLE_ACTOR_BOTH_ID] } } });
     await prisma.role.deleteMany({ where: { id: { in: [ROLE_ACTOR1_ID, ROLE_ACTOR2_ID, ROLE_ACTOR3_ID, ROLE_CROSSTENANT_ID, ROLE_ACTOR_BOTH_ID] } } });
+    await prisma.permission.deleteMany({ where: { id: { in: createdPermissionIds } } });
     await prisma.user.deleteMany({ where: { id: actorBothUserId } });
     await prisma.workspaceMembership.deleteMany({ where: { accountId: actorBothAccountId, workspaceId: WORKSPACE_A } });
     await prisma.account.deleteMany({ where: { id: actorBothAccountId } });
@@ -265,6 +369,7 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
     const accept = await request(app.getHttpServer())
       .post(`/basic-price-reviews/${reviewId}/accept`)
       .set('Authorization', `Bearer ${actor2Token}`).set('x-workspace-id', WORKSPACE_A)
+      .send({ decidedByUserId: actorBothUserId, regionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff' })
       .expect(201);
     expect(accept.body).toEqual(
       expect.objectContaining({
@@ -275,6 +380,13 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
       }),
     );
     const basicPriceId: string = accept.body.basicPriceId;
+    const persistedAccept = await prisma.priceSubmissionReviewDecision.findFirstOrThrow({
+      where: { reviewId, action: 'ACCEPT' },
+    });
+    expect(persistedAccept.decidedByUserId).toBe(actor2UserId);
+    const acceptedPrice = await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPriceId } });
+    expect(acceptedPrice.regionId).toBe(REGION_ID);
+    expect(acceptedPrice.effectiveDate.toISOString()).toBe('2026-07-25T00:00:00.000Z');
 
     // Not yet publicly visible.
     await request(app.getHttpServer()).get(`/basic-prices/${basicPriceId}`).set('Authorization', `Bearer ${actor3Token}`).set('x-workspace-id', WORKSPACE_A).expect(404);
@@ -346,7 +458,7 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
   it('D-08: refuses publish even when the SAME human genuinely holds both BASIC_PRICE_VERIFY and BASIC_PRICE_PUBLISH', async () => {
     const { organizationId } = await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A }, select: { organizationId: true } });
     const submission = await prisma.priceSubmission.create({
-      data: { workspaceId: WORKSPACE_A, organizationId, resourceId: RESOURCE_BOTH_ID, sourceOrigin: 'SUPPLIER', sourceType: 'MARKET_SURVEY', status: 'SUBMITTED' },
+      data: { workspaceId: WORKSPACE_A, organizationId, resourceId: RESOURCE_BOTH_ID, regionId: REGION_ID, sourceOrigin: 'SUPPLIER', sourceType: 'MARKET_SURVEY', status: 'UNDER_REVIEW' },
     });
     const revision = await prisma.priceSubmissionRevision.create({
       data: { submissionId: submission.id, revisionNumber: 1, value: '999999.00', effectiveDate: new Date('2026-07-25'), validationPassed: true },
@@ -375,5 +487,162 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
 
     expect((await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPriceId } })).status).toBe('UNPUBLISHED');
     expect(await prisma.basicPricePublicationAudit.count({ where: { basicPriceId } })).toBe(0);
+  });
+
+  it('concurrent ACCEPT serializes to one success, one deterministic conflict, and exactly one side-effect chain', async () => {
+    const { submission, review } = await createOpenReview();
+    const originalFindUnique = appPrisma.basicPrice.findUnique.bind(appPrisma.basicPrice);
+    let arrivals = 0;
+    let release!: () => void;
+    const bothAtPreLockRead = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const preLockSpy = jest.spyOn(appPrisma.basicPrice, 'findUnique').mockImplementation(
+      (async (args: { where: { sourceSubmissionId?: string } }) => {
+        if (args.where.sourceSubmissionId === submission.id) {
+          arrivals += 1;
+          if (arrivals === 2) release();
+          await bothAtPreLockRead;
+        }
+        return originalFindUnique(args as never);
+      }) as never,
+    );
+    const calls = await Promise.all([
+      request(app.getHttpServer()).post(`/basic-price-reviews/${review.id}/accept`).set('Authorization', `Bearer ${actor2Token}`).set('x-workspace-id', WORKSPACE_A),
+      request(app.getHttpServer()).post(`/basic-price-reviews/${review.id}/accept`).set('Authorization', `Bearer ${actor2Token}`).set('x-workspace-id', WORKSPACE_A),
+    ]).finally(() => preLockSpy.mockRestore());
+    expect(calls.map((result) => result.status).sort()).toEqual([201, 409]);
+    expect(calls.find((result) => result.status === 409)!.body.message).toBe('ACCEPT_CONCURRENTLY_COMPLETED');
+    expect(await prisma.priceSubmissionReviewDecision.count({ where: { reviewId: review.id, action: 'ACCEPT' } })).toBe(1);
+    expect(await prisma.basicPrice.count({ where: { sourceSubmissionId: submission.id } })).toBe(1);
+    expect(await prisma.priceSubmissionAudit.count({
+      where: { submissionId: submission.id, reason: { contains: 'STEP-2.6b_HUMAN_ACCEPT' } },
+    })).toBe(1);
+    expect((await prisma.priceSubmission.findUniqueOrThrow({ where: { id: submission.id } })).status).toBe('VERIFIED');
+  });
+
+  it('concurrent publish serializes to one success, one deterministic conflict, and exactly one audit', async () => {
+    const { basicPrice } = await createAcceptedPrice();
+    const originalFindFirst = appPrisma.basicPrice.findFirst.bind(appPrisma.basicPrice);
+    let arrivals = 0;
+    let release!: () => void;
+    const bothAtPreLockRead = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const preLockSpy = jest.spyOn(appPrisma.basicPrice, 'findFirst').mockImplementation(
+      (async (args: { where?: { id?: string } }) => {
+        if (args.where?.id === basicPrice.id) {
+          arrivals += 1;
+          if (arrivals === 2) release();
+          await bothAtPreLockRead;
+        }
+        return originalFindFirst(args as never);
+      }) as never,
+    );
+    const calls = await Promise.all([
+      request(app.getHttpServer()).post(`/basic-price-publications/${basicPrice.id}/publish`).set('Authorization', `Bearer ${actor3Token}`).set('x-workspace-id', WORKSPACE_A),
+      request(app.getHttpServer()).post(`/basic-price-publications/${basicPrice.id}/publish`).set('Authorization', `Bearer ${actor3Token}`).set('x-workspace-id', WORKSPACE_A),
+    ]).finally(() => preLockSpy.mockRestore());
+    expect(calls.map((result) => result.status).sort()).toEqual([201, 409]);
+    expect(calls.find((result) => result.status === 409)!.body.message).toBe('PUBLICATION_CONCURRENTLY_COMPLETED');
+    const finalPrice = await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPrice.id } });
+    expect(finalPrice.status).toBe('PUBLISHED');
+    expect(finalPrice.verificationStatus).toBe('PUBLISHED');
+    expect(await prisma.basicPricePublicationAudit.count({ where: { basicPriceId: basicPrice.id } })).toBe(1);
+  });
+
+  it('rolls back both publication axes when publication-audit persistence fails', async () => {
+    const { basicPrice } = await createAcceptedPrice();
+    const faultingPrisma = {
+      workspaceMembership: prisma.workspaceMembership,
+      workspace: prisma.workspace,
+      basicPrice: prisma.basicPrice,
+      $transaction: (callback: (tx: unknown) => unknown) =>
+        prisma.$transaction((realTx) =>
+          callback(
+            new Proxy(realTx as object, {
+              get(target, property, receiver) {
+                if (property === 'basicPricePublicationAudit') {
+                  return {
+                    create: async () => {
+                      throw new Error('FORCED_PUBLICATION_AUDIT_FAILURE');
+                    },
+                  };
+                }
+                return Reflect.get(target, property, receiver);
+              },
+            }),
+          ),
+        ),
+    };
+    const service = new BasicPricePublicationService(faultingPrisma as never);
+    await expect(service.publish({
+      workspaceId: WORKSPACE_A,
+      basicPriceId: basicPrice.id,
+      publisherAccountId: actor3AccountId,
+    })).rejects.toThrow('FORCED_PUBLICATION_AUDIT_FAILURE');
+    const finalPrice = await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPrice.id } });
+    expect(finalPrice.status).toBe('UNPUBLISHED');
+    expect(finalPrice.verificationStatus).toBe('VERIFIED');
+    expect(await prisma.basicPricePublicationAudit.count({ where: { basicPriceId: basicPrice.id } })).toBe(0);
+  });
+
+  it('REQUEST_CORRECTION blocks direct ACCEPT and preserves NEEDS_CORRECTION with zero ACCEPT side effects', async () => {
+    const { submission, review } = await createOpenReview();
+    await request(app.getHttpServer())
+      .post(`/basic-price-reviews/${review.id}/request-correction`)
+      .set('Authorization', `Bearer ${actor2Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .send({ note: 'correct the source evidence' })
+      .expect(201);
+    const rejected = await request(app.getHttpServer())
+      .post(`/basic-price-reviews/${review.id}/accept`)
+      .set('Authorization', `Bearer ${actor2Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(409);
+    expect(rejected.body.message).toBe('CORRECTION_RESUBMISSION_REQUIRED');
+    expect((await prisma.priceSubmission.findUniqueOrThrow({ where: { id: submission.id } })).status).toBe('NEEDS_CORRECTION');
+    expect(await prisma.priceSubmissionReviewDecision.count({ where: { reviewId: review.id, action: 'ACCEPT' } })).toBe(0);
+    expect(await prisma.basicPrice.count({ where: { sourceSubmissionId: submission.id } })).toBe(0);
+  });
+
+  it('missing authoritative region or effective date fails closed with zero ACCEPT writes', async () => {
+    const noRegion = await createOpenReview({ regionId: null });
+    const noRegionResponse = await request(app.getHttpServer())
+      .post(`/basic-price-reviews/${noRegion.review.id}/accept`)
+      .set('Authorization', `Bearer ${actor2Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(409);
+    expect(noRegionResponse.body.message).toBe('REGION_REQUIRED_OR_EXPLICIT_GENERAL_REGION');
+    expect(await prisma.basicPrice.count({ where: { sourceSubmissionId: noRegion.submission.id } })).toBe(0);
+    expect(await prisma.priceSubmissionReviewDecision.count({ where: { reviewId: noRegion.review.id } })).toBe(0);
+
+    const noDate = await createOpenReview({ effectiveDate: null });
+    const noDateResponse = await request(app.getHttpServer())
+      .post(`/basic-price-reviews/${noDate.review.id}/accept`)
+      .set('Authorization', `Bearer ${actor2Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(409);
+    expect(noDateResponse.body.message).toBe('EFFECTIVE_DATE_REQUIRED_BEFORE_ACCEPT');
+    expect(await prisma.basicPrice.count({ where: { sourceSubmissionId: noDate.submission.id } })).toBe(0);
+    expect(await prisma.priceSubmissionReviewDecision.count({ where: { reviewId: noDate.review.id } })).toBe(0);
+  });
+
+  it('rejects deterministic cross-tenant verifier evidence without changing publication state', async () => {
+    const accepted = await createAcceptedPrice();
+    await prisma.priceSubmission.update({
+      where: { id: accepted.submission.id },
+      data: { workspaceId: WORKSPACE_B },
+    });
+    const response = await request(app.getHttpServer())
+      .post(`/basic-price-publications/${accepted.basicPrice.id}/publish`)
+      .set('Authorization', `Bearer ${actor3Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(409);
+    expect(response.body.message).toBe('VERIFIER_EVIDENCE_MISSING');
+    const finalPrice = await prisma.basicPrice.findUniqueOrThrow({ where: { id: accepted.basicPrice.id } });
+    expect(finalPrice.status).toBe('UNPUBLISHED');
+    expect(finalPrice.verificationStatus).toBe('VERIFIED');
+    expect(await prisma.basicPricePublicationAudit.count({ where: { basicPriceId: accepted.basicPrice.id } })).toBe(0);
   });
 });

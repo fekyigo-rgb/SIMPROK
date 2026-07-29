@@ -46,6 +46,16 @@ export class BasicPricePublicationService {
     if (!publisherMembership || publisherMembership.account.status !== 'ACTIVE') {
       throw new ForbiddenException('PUBLISHER_NOT_ACTIVE_IN_WORKSPACE');
     }
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { organizationId: true },
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+    const organizationId = workspace.organizationId;
+    const stateBeforeLock = await this.prisma.basicPrice.findFirst({
+      where: { id: basicPriceId, workspaceId, organizationId },
+      select: { status: true, verificationStatus: true },
+    });
 
     return this.prisma.$transaction(async (tx) => {
       // D-02 — lock exact row, scoped to basicPriceId + workspaceId.
@@ -57,11 +67,14 @@ export class BasicPricePublicationService {
           status: string;
           verificationStatus: string;
           sourceSubmissionId: string | null;
+          organizationId: string | null;
         }>
       >(
-        Prisma.sql`SELECT "id", "status", "verificationStatus", "sourceSubmissionId"
+        Prisma.sql`SELECT "id", "status", "verificationStatus", "sourceSubmissionId", "organizationId"
                     FROM "basic_prices"
-                    WHERE "id" = ${basicPriceId}::uuid AND "workspaceId" = ${workspaceId}::uuid
+                    WHERE "id" = ${basicPriceId}::uuid
+                      AND "workspaceId" = ${workspaceId}::uuid
+                      AND "organizationId" = ${organizationId}::uuid
                     FOR UPDATE`,
       );
       const basicPrice = locked[0];
@@ -69,6 +82,12 @@ export class BasicPricePublicationService {
 
       // D-13 — the only idempotent terminal state: already PUBLISHED+PUBLISHED.
       if (basicPrice.status === 'PUBLISHED' && basicPrice.verificationStatus === 'PUBLISHED') {
+        if (
+          stateBeforeLock?.status !== 'PUBLISHED' ||
+          stateBeforeLock.verificationStatus !== 'PUBLISHED'
+        ) {
+          throw new ConflictException('PUBLICATION_CONCURRENTLY_COMPLETED');
+        }
         return tx.basicPrice.findUniqueOrThrow({ where: { id: basicPriceId } });
       }
 
@@ -88,10 +107,15 @@ export class BasicPricePublicationService {
       if (!basicPrice.sourceSubmissionId) {
         throw new ConflictException('VERIFIER_EVIDENCE_MISSING');
       }
-      const submission = await tx.priceSubmission.findUnique({
-        where: { id: basicPrice.sourceSubmissionId },
+      const submission = await tx.priceSubmission.findFirst({
+        where: {
+          id: basicPrice.sourceSubmissionId,
+          workspaceId,
+          organizationId,
+        },
         include: {
           review: {
+            where: { workspaceId, organizationId },
             include: {
               decisions: { where: { action: 'ACCEPT' } },
             },
@@ -102,11 +126,32 @@ export class BasicPricePublicationService {
       if (acceptDecisions.length !== 1) {
         throw new ConflictException('VERIFIER_EVIDENCE_MISSING');
       }
-      const verifierUser = await tx.user.findUnique({
-        where: { id: acceptDecisions[0].decidedByUserId },
-        select: { membership: { select: { accountId: true } } },
+      const verifierUser = await tx.user.findFirst({
+        where: {
+          id: acceptDecisions[0].decidedByUserId,
+          workspaceId,
+        },
+        select: {
+          workspaceMembershipId: true,
+          membership: {
+            select: {
+              id: true,
+              accountId: true,
+              workspaceId: true,
+              status: true,
+              account: { select: { id: true, status: true } },
+            },
+          },
+        },
       });
-      if (!verifierUser) {
+      if (
+        !verifierUser ||
+        verifierUser.membership.id !== verifierUser.workspaceMembershipId ||
+        verifierUser.membership.workspaceId !== workspaceId ||
+        verifierUser.membership.status !== 'ACTIVE' ||
+        verifierUser.membership.account.id !== verifierUser.membership.accountId ||
+        verifierUser.membership.account.status !== 'ACTIVE'
+      ) {
         throw new ConflictException('VERIFIER_EVIDENCE_MISSING');
       }
       const verifierAccountId = verifierUser.membership.accountId;

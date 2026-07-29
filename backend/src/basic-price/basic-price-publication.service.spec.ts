@@ -19,12 +19,14 @@ describe('BasicPricePublicationService', () => {
     $queryRaw: jest.Mock;
     basicPrice: { findUniqueOrThrow: jest.Mock; update: jest.Mock };
     basicPricePublicationAudit: { create: jest.Mock };
-    priceSubmission: { findUnique: jest.Mock };
-    user: { findUnique: jest.Mock };
+    priceSubmission: { findFirst: jest.Mock };
+    user: { findFirst: jest.Mock };
   };
   let prisma: {
     $transaction: jest.Mock;
     workspaceMembership: { findFirst: jest.Mock };
+    workspace: { findUnique: jest.Mock };
+    basicPrice: { findFirst: jest.Mock; findMany?: jest.Mock };
   };
 
   const WORKSPACE_ID = 'ws-01';
@@ -45,13 +47,31 @@ describe('BasicPricePublicationService', () => {
       $queryRaw: jest.fn(),
       basicPrice: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
       basicPricePublicationAudit: { create: jest.fn() },
-      priceSubmission: { findUnique: jest.fn().mockResolvedValue(acceptedSubmission) },
-      user: { findUnique: jest.fn().mockResolvedValue({ membership: { accountId: VERIFIER_ACCOUNT_ID } }) },
+      priceSubmission: { findFirst: jest.fn().mockResolvedValue(acceptedSubmission) },
+      user: {
+        findFirst: jest.fn().mockResolvedValue({
+          workspaceMembershipId: 'membership-verifier-01',
+          membership: {
+            id: 'membership-verifier-01',
+            accountId: VERIFIER_ACCOUNT_ID,
+            workspaceId: WORKSPACE_ID,
+            status: 'ACTIVE',
+            account: { id: VERIFIER_ACCOUNT_ID, status: 'ACTIVE' },
+          },
+        }),
+      },
     };
     prisma = {
       $transaction: jest.fn((callback: (tx: unknown) => unknown) => callback(tx)),
       workspaceMembership: {
         findFirst: jest.fn().mockResolvedValue({ id: 'membership-publisher-01', account: { status: 'ACTIVE' } }),
+      },
+      workspace: { findUnique: jest.fn().mockResolvedValue({ organizationId: 'org-01' }) },
+      basicPrice: {
+        findFirst: jest.fn().mockResolvedValue({
+          status: 'UNPUBLISHED',
+          verificationStatus: 'VERIFIED',
+        }),
       },
     };
 
@@ -116,14 +136,14 @@ describe('BasicPricePublicationService', () => {
 
   it('rejects (D-07) when there is no ACCEPT decision on the review — VERIFIER_EVIDENCE_MISSING', async () => {
     mockConsistentSourceState();
-    tx.priceSubmission.findUnique.mockResolvedValue({ review: { decisions: [] } });
+    tx.priceSubmission.findFirst.mockResolvedValue({ review: { decisions: [] } });
     await expect(service.publish(publishParams)).rejects.toBeInstanceOf(ConflictException);
     expect(tx.basicPrice.update).not.toHaveBeenCalled();
   });
 
   it('rejects (D-07) when there are two ACCEPT decisions (ambiguous) — VERIFIER_EVIDENCE_MISSING, never guesses', async () => {
     mockConsistentSourceState();
-    tx.priceSubmission.findUnique.mockResolvedValue({
+    tx.priceSubmission.findFirst.mockResolvedValue({
       review: { decisions: [{ decidedByUserId: 'u1' }, { decidedByUserId: 'u2' }] },
     });
     await expect(service.publish(publishParams)).rejects.toBeInstanceOf(ConflictException);
@@ -131,16 +151,92 @@ describe('BasicPricePublicationService', () => {
 
   it('rejects (D-07) when the review has no ACCEPT decision resolvable to a User — VERIFIER_EVIDENCE_MISSING', async () => {
     mockConsistentSourceState();
-    tx.user.findUnique.mockResolvedValue(null);
+    tx.user.findFirst.mockResolvedValue(null);
     await expect(service.publish(publishParams)).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('rejects (D-08) VERIFIER_CANNOT_PUBLISH when the publisher is the same human who verified it', async () => {
     mockConsistentSourceState();
-    tx.user.findUnique.mockResolvedValue({ membership: { accountId: PUBLISHER_ACCOUNT_ID } });
+    tx.user.findFirst.mockResolvedValue({
+      workspaceMembershipId: 'membership-publisher-01',
+      membership: {
+        id: 'membership-publisher-01',
+        accountId: PUBLISHER_ACCOUNT_ID,
+        workspaceId: WORKSPACE_ID,
+        status: 'ACTIVE',
+        account: { id: PUBLISHER_ACCOUNT_ID, status: 'ACTIVE' },
+      },
+    });
     await expect(service.publish(publishParams)).rejects.toBeInstanceOf(ConflictException);
     expect(tx.basicPrice.update).not.toHaveBeenCalled();
     expect(tx.basicPricePublicationAudit.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects cross-tenant submission evidence with zero publication writes', async () => {
+    mockConsistentSourceState();
+    tx.priceSubmission.findFirst.mockResolvedValue(null);
+    await expect(service.publish(publishParams)).rejects.toThrow('VERIFIER_EVIDENCE_MISSING');
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+    expect(tx.basicPricePublicationAudit.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects cross-tenant verifier membership evidence', async () => {
+    mockConsistentSourceState();
+    tx.user.findFirst.mockResolvedValue({
+      workspaceMembershipId: 'membership-verifier-01',
+      membership: {
+        id: 'membership-verifier-01',
+        accountId: VERIFIER_ACCOUNT_ID,
+        workspaceId: 'ws-other',
+        status: 'ACTIVE',
+        account: { id: VERIFIER_ACCOUNT_ID, status: 'ACTIVE' },
+      },
+    });
+    await expect(service.publish(publishParams)).rejects.toThrow('VERIFIER_EVIDENCE_MISSING');
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects inactive verifier membership evidence', async () => {
+    mockConsistentSourceState();
+    tx.user.findFirst.mockResolvedValue({
+      workspaceMembershipId: 'membership-verifier-01',
+      membership: {
+        id: 'membership-verifier-01',
+        accountId: VERIFIER_ACCOUNT_ID,
+        workspaceId: WORKSPACE_ID,
+        status: 'SUSPENDED',
+        account: { id: VERIFIER_ACCOUNT_ID, status: 'ACTIVE' },
+      },
+    });
+    await expect(service.publish(publishParams)).rejects.toThrow('VERIFIER_EVIDENCE_MISSING');
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects inactive verifier Account evidence', async () => {
+    mockConsistentSourceState();
+    tx.user.findFirst.mockResolvedValue({
+      workspaceMembershipId: 'membership-verifier-01',
+      membership: {
+        id: 'membership-verifier-01',
+        accountId: VERIFIER_ACCOUNT_ID,
+        workspaceId: WORKSPACE_ID,
+        status: 'ACTIVE',
+        account: { id: VERIFIER_ACCOUNT_ID, status: 'SUSPENDED' },
+      },
+    });
+    await expect(service.publish(publishParams)).rejects.toThrow('VERIFIER_EVIDENCE_MISSING');
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+  });
+
+  it('propagates publication-audit failure so the transaction cannot report success', async () => {
+    mockConsistentSourceState();
+    tx.basicPrice.update.mockResolvedValue({
+      id: BASIC_PRICE_ID,
+      status: 'PUBLISHED',
+      verificationStatus: 'PUBLISHED',
+    });
+    tx.basicPricePublicationAudit.create.mockRejectedValue(new Error('FORCED_AUDIT_FAILURE'));
+    await expect(service.publish(publishParams)).rejects.toThrow('FORCED_AUDIT_FAILURE');
   });
 
   it('publishes (D-09) atomically on both axes and writes exactly one audit row with the human publisher', async () => {
@@ -160,12 +256,15 @@ describe('BasicPricePublicationService', () => {
     expect(result).toEqual({ id: BASIC_PRICE_ID, status: 'PUBLISHED', verificationStatus: 'PUBLISHED' });
   });
 
-  it('is idempotent (D-13): an already-PUBLISHED+PUBLISHED price returns existing state without a duplicate audit', async () => {
+  it('is idempotent at PUBLISHED+PUBLISHED without a duplicate audit', async () => {
+    prisma.basicPrice.findFirst.mockResolvedValue({
+      status: 'PUBLISHED',
+      verificationStatus: 'PUBLISHED',
+    });
     tx.$queryRaw.mockResolvedValue([{ id: BASIC_PRICE_ID, status: 'PUBLISHED', verificationStatus: 'PUBLISHED', sourceSubmissionId: SUBMISSION_ID }]);
     tx.basicPrice.findUniqueOrThrow.mockResolvedValue({ id: BASIC_PRICE_ID, status: 'PUBLISHED', verificationStatus: 'PUBLISHED' });
 
     const result = await service.publish(publishParams);
-
     expect(tx.basicPrice.update).not.toHaveBeenCalled();
     expect(tx.basicPricePublicationAudit.create).not.toHaveBeenCalled();
     expect(result).toEqual({ id: BASIC_PRICE_ID, status: 'PUBLISHED', verificationStatus: 'PUBLISHED' });

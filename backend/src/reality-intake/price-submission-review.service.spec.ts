@@ -11,7 +11,7 @@ describe('PriceSubmissionReviewService', () => {
   let service: PriceSubmissionReviewService;
   let tx: {
     priceSubmissionReview: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock; findFirst: jest.Mock };
-    priceSubmission: { findUniqueOrThrow: jest.Mock; update: jest.Mock };
+    priceSubmission: { findUniqueOrThrow: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
     priceSubmissionAudit: { findFirst: jest.Mock; create: jest.Mock };
     priceSubmissionReviewDecision: { findFirst: jest.Mock; create: jest.Mock };
     basicPrice: { findUnique: jest.Mock; create: jest.Mock };
@@ -24,6 +24,7 @@ describe('PriceSubmissionReviewService', () => {
     workspace: { findUnique: jest.Mock };
     workspaceMembership: { findFirst: jest.Mock };
     user: { findFirst: jest.Mock };
+    basicPrice: { findUnique: jest.Mock };
   };
 
   const WORKSPACE_ID = 'ws-01';
@@ -39,7 +40,7 @@ describe('PriceSubmissionReviewService', () => {
     workspaceId: WORKSPACE_ID,
     organizationId: ORGANIZATION_ID,
     resourceId: 'resource-01',
-    regionId: null,
+    regionId: 'region-01',
     sourceType: 'MARKET_SURVEY',
     sourceOrigin: 'SUPPLIER',
     reportedByAccountId: ACCOUNT_ID,
@@ -62,7 +63,11 @@ describe('PriceSubmissionReviewService', () => {
   beforeEach(async () => {
     tx = {
       priceSubmissionReview: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), findFirst: jest.fn() },
-      priceSubmission: { findUniqueOrThrow: jest.fn().mockResolvedValue({ status: 'SUBMITTED' }), update: jest.fn() },
+      priceSubmission: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ status: 'SUBMITTED' }),
+        findFirst: jest.fn().mockResolvedValue(submissionWithRevision()),
+        update: jest.fn(),
+      },
       priceSubmissionAudit: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() },
       priceSubmissionReviewDecision: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() },
       basicPrice: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn() },
@@ -74,7 +79,20 @@ describe('PriceSubmissionReviewService', () => {
       priceSubmissionReview: { findFirst: jest.fn().mockResolvedValue(reviewRow()), findMany: jest.fn() },
       workspace: { findUnique: jest.fn().mockResolvedValue({ organizationId: ORGANIZATION_ID }) },
       workspaceMembership: { findFirst: jest.fn().mockResolvedValue({ id: 'membership-01' }) },
-      user: { findFirst: jest.fn().mockResolvedValue({ id: USER_ID, membership: { accountId: ACCOUNT_ID, workspaceId: WORKSPACE_ID } }) },
+      user: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: USER_ID,
+          workspaceMembershipId: 'membership-01',
+          membership: {
+            id: 'membership-01',
+            accountId: ACCOUNT_ID,
+            workspaceId: WORKSPACE_ID,
+            status: 'ACTIVE',
+            account: { id: ACCOUNT_ID, status: 'ACTIVE' },
+          },
+        }),
+      },
+      basicPrice: { findUnique: jest.fn().mockResolvedValue(null) },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -155,11 +173,19 @@ describe('PriceSubmissionReviewService', () => {
       expect((tx as any).basicPricePublicationAudit).toBeUndefined();
     });
 
-    it('is idempotent on repeated ACCEPT: returns the existing BasicPrice, creates no second decision/BasicPrice', async () => {
-      tx.basicPrice.findUnique.mockResolvedValue({ id: 'bp-01', status: 'UNPUBLISHED', verificationStatus: 'VERIFIED' });
-
+    it('is idempotent on repeated ACCEPT and creates no second decision/BasicPrice', async () => {
+      tx.basicPrice.findUnique.mockResolvedValue({
+        id: 'bp-01',
+        sourceSubmissionId: SUBMISSION_ID,
+        status: 'UNPUBLISHED',
+        verificationStatus: 'VERIFIED',
+      });
+      tx.priceSubmissionReviewDecision.findFirst.mockResolvedValue({
+        id: 'decision-01',
+        reviewId: REVIEW_ID,
+      });
+      prisma.basicPrice.findUnique.mockResolvedValue({ id: 'bp-01' });
       const result = await service.acceptPriceSubmissionReview(acceptParams);
-
       expect(tx.priceSubmissionReviewDecision.create).not.toHaveBeenCalled();
       expect(tx.basicPrice.create).not.toHaveBeenCalled();
       expect(result).toEqual(expect.objectContaining({ status: 'ALREADY_ACTIVATED', basicPriceId: 'bp-01' }));
@@ -174,8 +200,12 @@ describe('PriceSubmissionReviewService', () => {
     });
 
     it('rejects when the current revision is missing', async () => {
-      prisma.priceSubmissionReview.findFirst.mockResolvedValue(reviewRow({ submission: submissionWithRevision({ currentRevisionId: 'missing-revision' }) }));
-      await expect(service.acceptPriceSubmissionReview(acceptParams)).rejects.toBeInstanceOf(NotFoundException);
+      tx.priceSubmission.findFirst.mockResolvedValue(
+        submissionWithRevision({ currentRevisionId: 'missing-revision' }),
+      );
+      await expect(service.acceptPriceSubmissionReview(acceptParams)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
     });
 
     it('rejects when the reviewer is not an active human in the workspace', async () => {
@@ -183,9 +213,92 @@ describe('PriceSubmissionReviewService', () => {
       await expect(service.acceptPriceSubmissionReview(acceptParams)).rejects.toBeInstanceOf(NotFoundException);
     });
 
+    it('rejects an actor whose WorkspaceMembership is inactive with zero writes', async () => {
+      prisma.user.findFirst.mockResolvedValue({
+        id: USER_ID,
+        workspaceMembershipId: 'membership-01',
+        membership: {
+          id: 'membership-01',
+          accountId: ACCOUNT_ID,
+          workspaceId: WORKSPACE_ID,
+          status: 'SUSPENDED',
+          account: { id: ACCOUNT_ID, status: 'ACTIVE' },
+        },
+      });
+      await expect(service.acceptPriceSubmissionReview(acceptParams)).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects an actor whose Account is inactive with zero writes', async () => {
+      prisma.user.findFirst.mockResolvedValue({
+        id: USER_ID,
+        workspaceMembershipId: 'membership-01',
+        membership: {
+          id: 'membership-01',
+          accountId: ACCOUNT_ID,
+          workspaceId: WORKSPACE_ID,
+          status: 'ACTIVE',
+          account: { id: ACCOUNT_ID, status: 'SUSPENDED' },
+        },
+      });
+      await expect(service.acceptPriceSubmissionReview(acceptParams)).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it('rejects a cross-tenant reviewId with NotFound', async () => {
       prisma.priceSubmissionReview.findFirst.mockResolvedValue(null);
       await expect(service.acceptPriceSubmissionReview(acceptParams)).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('inherits authoritative region and effective date from the live submission revision', async () => {
+      tx.priceSubmissionReviewDecision.create.mockResolvedValue({ id: 'decision-01' });
+      tx.basicPrice.create.mockResolvedValue({ id: 'bp-01', status: 'UNPUBLISHED', verificationStatus: 'VERIFIED' });
+      await service.acceptPriceSubmissionReview(acceptParams);
+      expect(tx.basicPrice.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          regionId: 'region-01',
+          effectiveDate: new Date('2026-07-25'),
+        }),
+      });
+    });
+
+    it('rejects null region without explicit general before any decision write', async () => {
+      tx.priceSubmission.findFirst.mockResolvedValue(submissionWithRevision({ regionId: null }));
+      await expect(service.acceptPriceSubmissionReview(acceptParams)).rejects.toThrow('REGION_REQUIRED_OR_EXPLICIT_GENERAL_REGION');
+      expect(tx.priceSubmissionReviewDecision.create).not.toHaveBeenCalled();
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts null region only with explicit general and audits that decision', async () => {
+      tx.priceSubmission.findFirst.mockResolvedValue(submissionWithRevision({ regionId: null }));
+      tx.priceSubmissionReviewDecision.create.mockResolvedValue({ id: 'decision-01' });
+      tx.basicPrice.create.mockResolvedValue({ id: 'bp-01', status: 'UNPUBLISHED', verificationStatus: 'VERIFIED' });
+      await service.acceptPriceSubmissionReview({ ...acceptParams, explicitGeneralRegion: true });
+      expect(tx.basicPrice.create).toHaveBeenCalledWith({ data: expect.objectContaining({ regionId: null }) });
+      expect(tx.priceSubmissionAudit.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ reason: expect.stringContaining('GENERAL_REGION_EXPLICIT') }),
+      });
+    });
+
+    it('rejects explicit general when the submission already has a region', async () => {
+      await expect(service.acceptPriceSubmissionReview({ ...acceptParams, explicitGeneralRegion: true })).rejects.toThrow('REGION_DECISION_CONFLICT');
+      expect(tx.priceSubmissionReviewDecision.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects missing effective date without a clock fallback', async () => {
+      tx.priceSubmission.findFirst.mockResolvedValue(submissionWithRevision({
+        revisions: [{ id: REVISION_ID, effectiveDate: null, value: '1100000.00' }],
+      }));
+      await expect(service.acceptPriceSubmissionReview(acceptParams)).rejects.toThrow('EFFECTIVE_DATE_REQUIRED_BEFORE_ACCEPT');
+      expect(tx.priceSubmissionReviewDecision.create).not.toHaveBeenCalled();
+    });
+
+    it('blocks direct ACCEPT after REQUEST_CORRECTION with zero writes', async () => {
+      tx.priceSubmission.findFirst.mockResolvedValue(submissionWithRevision({ status: 'NEEDS_CORRECTION' }));
+      await expect(service.acceptPriceSubmissionReview(acceptParams)).rejects.toThrow('CORRECTION_RESUBMISSION_REQUIRED');
+      expect(tx.priceSubmissionReviewDecision.create).not.toHaveBeenCalled();
+      expect(tx.priceSubmissionAudit.create).not.toHaveBeenCalled();
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
     });
   });
 
@@ -237,7 +350,6 @@ describe('PriceSubmissionReviewService', () => {
     });
 
     it('reassigns an OPEN review to a different active user in the workspace', async () => {
-      prisma.user.findFirst.mockResolvedValue({ id: USER_ID, membership: { accountId: ACCOUNT_ID, workspaceId: WORKSPACE_ID } });
       tx.priceSubmissionReviewDecision.create.mockResolvedValue({ id: 'decision-01' });
       const result = await service.reassignPriceSubmissionReview({
         workspaceId: WORKSPACE_ID,
@@ -249,6 +361,56 @@ describe('PriceSubmissionReviewService', () => {
       expect(tx.priceSubmissionReview.update).toHaveBeenCalledWith({ where: { id: REVIEW_ID }, data: { assignedToUserId: 'user-02' } });
       expect(result.status).toBe('REASSIGNED');
     });
+
+    it('rejects an assignee with inactive membership before assignment writes', async () => {
+      const activeActor = prisma.user.findFirst.getMockImplementation();
+      prisma.user.findFirst
+        .mockImplementationOnce(activeActor!)
+        .mockResolvedValueOnce({
+          id: 'user-02',
+          workspaceMembershipId: 'membership-02',
+          membership: {
+            id: 'membership-02',
+            accountId: 'account-02',
+            workspaceId: WORKSPACE_ID,
+            status: 'SUSPENDED',
+            account: { id: 'account-02', status: 'ACTIVE' },
+          },
+        });
+      await expect(service.reassignPriceSubmissionReview({
+        workspaceId: WORKSPACE_ID,
+        organizationId: ORGANIZATION_ID,
+        reviewId: REVIEW_ID,
+        decidedByUserId: USER_ID,
+        assignedToUserId: 'user-02',
+      })).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects an assignee with inactive Account before assignment writes', async () => {
+      const activeActor = prisma.user.findFirst.getMockImplementation();
+      prisma.user.findFirst
+        .mockImplementationOnce(activeActor!)
+        .mockResolvedValueOnce({
+          id: 'user-02',
+          workspaceMembershipId: 'membership-02',
+          membership: {
+            id: 'membership-02',
+            accountId: 'account-02',
+            workspaceId: WORKSPACE_ID,
+            status: 'ACTIVE',
+            account: { id: 'account-02', status: 'SUSPENDED' },
+          },
+        });
+      await expect(service.reassignPriceSubmissionReview({
+        workspaceId: WORKSPACE_ID,
+        organizationId: ORGANIZATION_ID,
+        reviewId: REVIEW_ID,
+        decidedByUserId: USER_ID,
+        assignedToUserId: 'user-02',
+      })).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
   });
 
   describe('resolveActingUserId', () => {
@@ -258,7 +420,12 @@ describe('PriceSubmissionReviewService', () => {
       const result = await service.resolveActingUserId(ACCOUNT_ID, WORKSPACE_ID);
       expect(result).toBe(USER_ID);
       expect(prisma.workspaceMembership.findFirst).toHaveBeenCalledWith({
-        where: { accountId: ACCOUNT_ID, workspaceId: WORKSPACE_ID, status: 'ACTIVE' },
+        where: {
+          accountId: ACCOUNT_ID,
+          workspaceId: WORKSPACE_ID,
+          status: 'ACTIVE',
+          account: { status: 'ACTIVE' },
+        },
         select: { id: true },
       });
     });

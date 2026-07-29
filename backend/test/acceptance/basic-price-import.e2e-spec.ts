@@ -631,6 +631,7 @@ describe('RM02B Basic Price import (e2e)', () => {
         data: {
           resourceId: RESOURCE_MATERIAL_ID,
           workspaceId: WORKSPACE_A,
+          organizationId,
           effectiveDate: new Date('2026-07-25'),
           value: '1100000.00',
           verificationStatus: 'VERIFIED',
@@ -641,8 +642,9 @@ describe('RM02B Basic Price import (e2e)', () => {
     };
 
     it('rejects publishing a BasicPrice that is not yet VERIFIED', async () => {
+      const { organizationId } = await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A }, select: { organizationId: true } });
       const basicPrice = await prisma.basicPrice.create({
-        data: { resourceId: RESOURCE_MATERIAL_ID, workspaceId: WORKSPACE_A, effectiveDate: new Date('2026-07-25'), value: '158333.33', verificationStatus: 'UNVERIFIED' },
+        data: { resourceId: RESOURCE_MATERIAL_ID, workspaceId: WORKSPACE_A, organizationId, effectiveDate: new Date('2026-07-25'), value: '158333.33', verificationStatus: 'UNVERIFIED' },
       });
       const response = await request(app.getHttpServer())
         .post(`/basic-price-publications/${basicPrice.id}/publish`)
@@ -653,8 +655,9 @@ describe('RM02B Basic Price import (e2e)', () => {
     });
 
     it('rejects a VERIFIED BasicPrice with no traceable ACCEPT-decision evidence', async () => {
+      const { organizationId } = await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A }, select: { organizationId: true } });
       const basicPrice = await prisma.basicPrice.create({
-        data: { resourceId: RESOURCE_MATERIAL_ID, workspaceId: WORKSPACE_A, effectiveDate: new Date('2026-07-25'), value: '1100000.00', verificationStatus: 'VERIFIED' },
+        data: { resourceId: RESOURCE_MATERIAL_ID, workspaceId: WORKSPACE_A, organizationId, effectiveDate: new Date('2026-07-25'), value: '1100000.00', verificationStatus: 'VERIFIED' },
       });
       const response = await request(app.getHttpServer())
         .post(`/basic-price-publications/${basicPrice.id}/publish`)
