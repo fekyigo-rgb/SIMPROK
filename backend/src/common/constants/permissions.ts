@@ -40,12 +40,15 @@ export const PERMISSIONS = {
   BASIC_PRICE_VIEW: 'BASIC_PRICE_VIEW',
   BASIC_PRICE_MANAGE: 'BASIC_PRICE_MANAGE',
 
-  // RM-02 — Basic Price import foundation. Declared and enforced by new
-  // guards/controllers; not yet seeded into any Permission/RolePermission
-  // row in any environment (seed files are out of RM-02B's scope — see
-  // DECLARED_NOT_SEEDED_PERMISSION_CODES below). Every route gated by one
-  // of these codes is therefore fail-closed (403) until a separate,
-  // Owner/PM-governed seeding task grants it to a role.
+  // RM-02 — Basic Price import foundation. Declared and enforced by
+  // guards/controllers. Activation (Permission/RolePermission/RoleAssignment
+  // rows) is governed per environment and is NOT tracked here — see
+  // GOVERNED_ACTIVATION_PERMISSION_CODES below. This source file is a
+  // declarative catalog, not a live snapshot of any environment's DB: it
+  // must never be read as "seeded" or "not seeded" in a specific database.
+  // A route gated by one of these codes fail-closes (403) in any
+  // environment where the permission has not been granted to the caller's
+  // role, exactly like any other permission code.
   BASIC_PRICE_IMPORT: 'BASIC_PRICE_IMPORT',
   BASIC_PRICE_RESOLVE: 'BASIC_PRICE_RESOLVE',
   BASIC_PRICE_SUBMIT: 'BASIC_PRICE_SUBMIT',
@@ -56,10 +59,17 @@ export const PERMISSIONS = {
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
+// Catalog states describe how a permission code is declared in THIS
+// source file — never a live snapshot of any environment's database.
+// SEEDED_CURRENT = shipped with a canonical production/acceptance seed
+// task that runs in every environment by default. GOVERNED_ACTIVATION =
+// enforced by guards/controllers, but granting it to any role in any
+// specific environment is a separate, governed activation decision (e.g.
+// RM02C3 acceptance activation) — this file does not assert whether that
+// activation has happened anywhere.
 export const PERMISSION_CATALOG_STATES = {
   SEEDED_CURRENT: 'SEEDED_CURRENT',
-  USED_NOT_SEEDED: 'USED_NOT_SEEDED',
-  NEEDED_NOT_SEEDED: 'NEEDED_NOT_SEEDED',
+  GOVERNED_ACTIVATION: 'GOVERNED_ACTIVATION',
 } as const;
 
 export type PermissionCatalogState =
@@ -199,44 +209,44 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   {
     code: PERMISSIONS.BASIC_PRICE_IMPORT,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
     description: 'Upload a Basic Price workbook and create/preview a BasicPriceImportBatch.',
-    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+    note: 'RM-02B: guard-enforced. RM-02C3 activated this code for the acceptance environment only — see rm02c3-basic-price-acceptance-activation.ts. Not part of any canonical production seed.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_RESOLVE,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
     description: 'Resolve an imported Basic Price row (resource/unit assignment, collision disposition).',
-    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+    note: 'RM-02B: guard-enforced. Activation into any role is a separate, governed decision per environment.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_SUBMIT,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
     description: 'Approve a Basic Price import batch, creating PriceSubmission rows for resolved rows.',
-    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+    note: 'RM-02B: guard-enforced. Activation into any role is a separate, governed decision per environment.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_VERIFY,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
-    description: 'Accept, reject, or request correction on a submitted Basic Price review.',
-    note: 'RM-02B: declared for the future review HTTP surface (not built by this task — no controller exists yet); not yet seeded.',
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description: 'Accept, reject, request correction, or reassign a submitted Basic Price review.',
+    note: 'RM-02D2A-1: guard-enforced on /basic-price-reviews/*. Activation into any role is a separate, governed decision per environment.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_PUBLISH,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
     description: 'Publish a verified BasicPrice, making it publicly eligible.',
-    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+    note: 'RM-02D2A-1: guard-enforced on /basic-price-publications/*. Activation into any role is a separate, governed decision per environment. Owner Lock requires the publisher role to differ from the verifier role in practice.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.USED_NOT_SEEDED,
-    description: 'View internal (pre-publication) Basic Price batches, rows, and submissions.',
-    note: 'RM-02B: guard-enforced, not yet seeded — see DECLARED_NOT_SEEDED_PERMISSION_CODES.',
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description: 'View internal (pre-publication) Basic Price batches, rows, submissions, and reviews.',
+    note: 'RM-02B: guard-enforced. RM-02C3 activated this code for the acceptance environment only — see rm02c3-basic-price-acceptance-activation.ts. Not part of any canonical production seed.',
   },
 ] as const;
 
@@ -261,8 +271,14 @@ export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.BASIC_PRICE_MANAGE,
 ];
 
-// Declared but not yet seeded into DB — must be seeded before endpoints are functionally accessible.
-export const DECLARED_NOT_SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
+// Guard-enforced permission codes whose activation (granting to a role in
+// a specific environment) is a separate, governed decision — NOT a claim
+// that any particular environment's DB currently lacks them. Some of these
+// codes ARE already active in the acceptance environment via RM02C3 (see
+// rm02c3-basic-price-acceptance-activation.ts); this list does not track
+// that. Treat this as "requires governed activation before use," never as
+// "not seeded anywhere."
+export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.BASIC_PRICE_IMPORT,
   PERMISSIONS.BASIC_PRICE_RESOLVE,
   PERMISSIONS.BASIC_PRICE_SUBMIT,

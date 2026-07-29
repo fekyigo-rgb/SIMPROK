@@ -117,4 +117,24 @@ sumber di atas menang; laporkan gap, jangan mengoreksi sumber di sini.
   separate. No phase auto-advances. Every later phase needs its own exact gate
   and authorization.
 
+### AD-RM02D2A-01 — Verification and publication are separate human actions
+- STATUS: LOCKED.
+- SOURCE: `RM02D2A-1-BACKEND-RUNTIME-LIFECYCLE-CLOSURE-V2` governing prompt
+  §2, implemented verbatim in `docs/implementation-gates/rm02d2a1/OWNER-LOCK.md`
+  (full text of the lock, not copied here).
+- DECISION (summary only — OWNER-LOCK.md is binding): ACCEPT of a Basic
+  Price review creates exactly one `BasicPrice` at `UNPUBLISHED+VERIFIED`,
+  never `PUBLISHED`. Publication (`status` AND `verificationStatus` both to
+  `PUBLISHED`, atomically) is a separate action, gated by
+  `BASIC_PRICE_PUBLISH`, and is refused (`409 VERIFIER_CANNOT_PUBLISH`)
+  when the publisher is the same human who verified it. Auto-publish is
+  forbidden; no bypass/self-approval/admin-fallback path exists.
+- ACCEPTED RISK: a single-human workspace cannot publish a Basic Price
+  through this normal path. Owner has accepted this risk explicitly (see
+  OWNER-LOCK.md §2.1). A governed exception path is deferred to a separate,
+  future Owner decision — not sketched or implied by this entry.
+- IMPLEMENTED_BY: branch `feat/rm02d2a1-backend-runtime-lifecycle`, base
+  `ccb6983419b8b134d6cfc4b1dba87518af3db59a`. Not yet merged
+  (`MERGE_AUTHORITY=OWNER_ONLY`, `RM02_EXIT_GATE=OPEN` — see STATE.md).
+
 ## Soli Deo Gloria. Haleluya. Amin.

@@ -9,6 +9,7 @@ import {
 } from './basic-price-xlsx-intake.adapter';
 import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto';
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
+import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 
 export const MAX_UPLOAD_BYTES = 10_485_760;
 type UploadedXlsx = { buffer: Buffer; size: number; originalname: string; mimetype?: string };
@@ -34,7 +35,10 @@ const FINGERPRINT_METADATA_KEYS = [
 export class BasicPriceImportService {
   private readonly adapter = new BasicPriceXlsxIntakeAdapter();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reviewService: PriceSubmissionReviewService,
+  ) {}
 
   private validateFile(file: UploadedXlsx | undefined): asserts file is UploadedXlsx {
     if (!file?.buffer) throw new BadRequestException('XLSX file is required');
@@ -362,6 +366,16 @@ export class BasicPriceImportService {
             actorAccountId: null,
             reason: `RM02_IMPORT_SUBMISSION; batchId:${batch.id}; rowId:${row.id}`,
           },
+        });
+
+        // RM-02D2A-1 Work Package A: create the PriceSubmissionReview in the
+        // SAME transaction, via the one canonical helper. If review creation
+        // fails, this whole batch-submission transaction rolls back — no
+        // PriceSubmission is ever left orphaned without a review.
+        await this.reviewService.createReviewWithinTransaction(tx, {
+          id: submission.id,
+          workspaceId: batch.workspaceId,
+          organizationId: batch.organizationId,
         });
 
         await tx.basicPriceImportRow.update({

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { BasicPriceImportService } from './basic-price-import.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 import { buildBasicPriceXlsx } from '../../test/fixtures/basic-price-xlsx.fixture';
 
 describe('BasicPriceImportService', () => {
@@ -20,6 +21,7 @@ describe('BasicPriceImportService', () => {
     basicPriceImportRow: { findMany: jest.Mock };
     $transaction: jest.Mock;
   };
+  let reviewService: { createReviewWithinTransaction: jest.Mock };
 
   const WORKSPACE_ID = 'ws-01';
   const ORGANIZATION_ID = 'org-01';
@@ -45,9 +47,16 @@ describe('BasicPriceImportService', () => {
       basicPriceImportRow: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((callback: (tx: unknown) => unknown) => callback(tx)),
     };
+    reviewService = {
+      createReviewWithinTransaction: jest.fn().mockResolvedValue({ reviewId: 'review-1', status: 'CREATED' }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [BasicPriceImportService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        BasicPriceImportService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: PriceSubmissionReviewService, useValue: reviewService },
+      ],
     }).compile();
 
     service = module.get<BasicPriceImportService>(BasicPriceImportService);
@@ -214,6 +223,20 @@ describe('BasicPriceImportService', () => {
         where: { id: 'row-1' },
         data: { priceSubmissionId: 'submission-1', status: 'SUBMISSION_CREATED' },
       });
+      // RM-02D2A-1 Work Package A: submitBatch must call the ONE canonical
+      // review-creation helper, inside the SAME transaction (tx), for every
+      // new PriceSubmission — never open a second transaction, never skip it.
+      expect(reviewService.createReviewWithinTransaction).toHaveBeenCalledTimes(1);
+      expect(reviewService.createReviewWithinTransaction).toHaveBeenCalledWith(tx, {
+        id: 'submission-1',
+        workspaceId: WORKSPACE_ID,
+        organizationId: ORGANIZATION_ID,
+      });
+    });
+
+    it('rolls back the whole submission when review creation fails', async () => {
+      reviewService.createReviewWithinTransaction.mockRejectedValueOnce(new Error('REVIEW_CREATION_FAILED'));
+      await expect(service.submitBatch(WORKSPACE_ID, 'batch-01')).rejects.toThrow('REVIEW_CREATION_FAILED');
     });
 
     it('final batch status is SUBMITTED when zero rows were rejected', async () => {

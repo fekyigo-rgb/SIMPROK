@@ -1,7 +1,7 @@
 import {
   PERMISSIONS,
   PERMISSION_CATALOG,
-  DECLARED_NOT_SEEDED_PERMISSION_CODES,
+  GOVERNED_ACTIVATION_PERMISSION_CODES,
   SEEDED_PERMISSION_CODES,
 } from './permissions';
 
@@ -15,9 +15,9 @@ describe('Permissions Catalog', () => {
     });
   });
 
-  it('should categorize every permission as either seeded or declared_not_seeded', () => {
+  it('should categorize every permission as either seeded or governed_activation', () => {
     const allPermissions = Object.values(PERMISSIONS);
-    const categorized = [...SEEDED_PERMISSION_CODES, ...DECLARED_NOT_SEEDED_PERMISSION_CODES];
+    const categorized = [...SEEDED_PERMISSION_CODES, ...GOVERNED_ACTIVATION_PERMISSION_CODES];
     
     allPermissions.forEach((permissionCode) => {
       expect(categorized).toContain(permissionCode);

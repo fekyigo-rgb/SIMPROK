@@ -39,6 +39,11 @@ const RESOURCE_INACTIVE_ID = '41000000-0000-4000-8000-000000000008';
 const UNIT_INACTIVE_ID = '41000000-0000-4000-8000-000000000009';
 const UNIT_ALIAS_ID = '41000000-0000-4000-8000-00000000000a';
 const ROLE_B_ID = '41000000-0000-4000-8000-00000000000b';
+// RM-02D2A-1: a second human, distinct from `assigned@test.local` (the
+// verifier in the publication tests below), holding ONLY BASIC_PRICE_PUBLISH
+// — proves Owner Lock's VERIFIER_MUST_DIFFER_FROM_PUBLISHER against a real
+// least-privilege actor, not a superuser.
+const ROLE_PUBLISHER_ID = '41000000-0000-4000-8000-00000000000c';
 
 const BASIC_PRICE_PERMISSION_CODES = [
   'BASIC_PRICE_IMPORT',
@@ -76,8 +81,10 @@ describe('RM02B Basic Price import (e2e)', () => {
   let foremanToken: string;
   let crosstenantToken: string;
   let assignedAccountId: string;
+  let foremanAccountId: string;
   let membershipRoleId: string;
   let membershipRoleBId: string;
+  let publisherMembershipRoleId: string;
 
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
@@ -126,6 +133,31 @@ describe('RM02B Basic Price import (e2e)', () => {
       data: { workspaceMembershipId: crosstenantMembership.id, roleId: ROLE_B_ID, isActive: true },
     });
     membershipRoleBId = membershipRoleB.id;
+
+    // RM-02D2A-1: foreman@test.local becomes the dedicated publisher actor
+    // — ONLY BASIC_PRICE_PUBLISH, distinct from assigned@test.local (the
+    // verifier). Every other test in this file still relies on foreman
+    // lacking BASIC_PRICE_IMPORT/RESOLVE/SUBMIT/VERIFY/REVIEW_VIEW, which
+    // this leaves untouched.
+    const foremanAccount = await prisma.account.findUniqueOrThrow({ where: { email: 'foreman@test.local' } });
+    foremanAccountId = foremanAccount.id;
+    const foremanMembership = await prisma.workspaceMembership.findUniqueOrThrow({
+      where: { accountId_workspaceId: { accountId: foremanAccount.id, workspaceId: WORKSPACE_A } },
+    });
+    const publishPermission = permissions.find((permission) => permission.code === 'BASIC_PRICE_PUBLISH')!;
+    await prisma.role.upsert({
+      where: { id: ROLE_PUBLISHER_ID },
+      create: { id: ROLE_PUBLISHER_ID, workspaceId: WORKSPACE_A, code: 'ACCEPTANCE_BASIC_PRICE_PUBLISHER', name: 'Acceptance Basic Price Publisher' },
+      update: {},
+    });
+    await prisma.rolePermission.createMany({
+      data: [{ roleId: ROLE_PUBLISHER_ID, permissionId: publishPermission.id }],
+      skipDuplicates: true,
+    });
+    const publisherMembershipRole = await prisma.membershipRole.create({
+      data: { workspaceMembershipId: foremanMembership.id, roleId: ROLE_PUBLISHER_ID, isActive: true },
+    });
+    publisherMembershipRoleId = publisherMembershipRole.id;
 
     await prisma.region.upsert({
       where: { id: REGION_ID },
@@ -177,15 +209,21 @@ describe('RM02B Basic Price import (e2e)', () => {
     // BasicPriceImportRow cascades away with its batch (onDelete: Cascade),
     // which clears the Restrict FKs pointing at our resource/unit fixtures
     // — this must run before the resource/unit/region deletes in afterAll.
+    // BasicPrice.sourceSubmissionId -> PriceSubmission has no cascade
+    // (RM-02D2A-1 CONTRACT_UPDATE), so BasicPrice must be deleted before
+    // PriceSubmission or the delete violates that FK.
     await prisma.basicPriceImportBatch.deleteMany({ where: { workspaceId: WORKSPACE_A } });
-    await prisma.priceSubmission.deleteMany({ where: { resourceId: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID] } } });
     await prisma.basicPrice.deleteMany({ where: { resourceId: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID] } } });
+    await prisma.priceSubmission.deleteMany({ where: { resourceId: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID] } } });
   });
 
   afterAll(async () => {
     await prisma.basicPriceImportBatch.deleteMany({ where: { workspaceId: WORKSPACE_A } });
-    await prisma.priceSubmission.deleteMany({ where: { resourceId: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID] } } });
     await prisma.basicPrice.deleteMany({ where: { resourceId: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID] } } });
+    await prisma.priceSubmission.deleteMany({ where: { resourceId: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID] } } });
+    await prisma.membershipRole.deleteMany({ where: { id: publisherMembershipRoleId } });
+    await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_PUBLISHER_ID } });
+    await prisma.role.deleteMany({ where: { id: ROLE_PUBLISHER_ID } });
     await prisma.resourceCatalog.deleteMany({
       where: { id: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID, RESOURCE_WORKSPACE_B_ID, RESOURCE_GLOBAL_ID, RESOURCE_INACTIVE_ID] } },
     });
@@ -540,9 +578,20 @@ describe('RM02B Basic Price import (e2e)', () => {
 
       const submissions = await prisma.priceSubmission.findMany({ where: { resourceId: RESOURCE_LABOR_ID } });
       expect(submissions).toHaveLength(1);
-      expect(submissions[0].status).toBe('SUBMITTED');
+      // RM-02D2A-1 CONTRACT_UPDATE: submitBatch() now creates the
+      // PriceSubmissionReview in the same transaction (Work Package A), so
+      // the submission has already moved past SUBMITTED to UNDER_REVIEW by
+      // the time this response returns — it is never observably left at
+      // SUBMITTED with no review, which was the RUNTIME_HUMAN_REVIEW_
+      // ENTRYPOINT=MISSING gap this task closes.
+      expect(submissions[0].status).toBe('UNDER_REVIEW');
       expect(await prisma.priceSubmissionRevision.count({ where: { submissionId: submissions[0].id } })).toBe(1);
-      expect(await prisma.priceSubmissionAudit.count({ where: { submissionId: submissions[0].id } })).toBe(1);
+      // RM02_IMPORT_SUBMISSION (submit) + STEP-2.6b_REVIEW_CREATED (review
+      // creation, same transaction).
+      expect(await prisma.priceSubmissionAudit.count({ where: { submissionId: submissions[0].id } })).toBe(2);
+      const review = await prisma.priceSubmissionReview.findUnique({ where: { priceSubmissionId: submissions[0].id } });
+      expect(review).not.toBeNull();
+      expect(review!.slaState).toBe('OPEN');
 
       // Idempotent replay: same batch, already PARTIALLY_SUBMITTED, no duplicate submission.
       const second = await request(app.getHttpServer()).post(submitPath).set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A).expect(201);
@@ -551,32 +600,105 @@ describe('RM02B Basic Price import (e2e)', () => {
     });
   });
 
-  describe('publication', () => {
+  describe('publication (RM-02D2A-1 Owner Lock: atomic two-axis, verifier != publisher)', () => {
+    // Builds the exact real evidence chain
+    // BasicPrice.sourceSubmission -> PriceSubmission.review ->
+    // PriceSubmissionReviewDecision(ACCEPT) -> decidedByUserId that
+    // BasicPricePublicationService traces to find the verifier's Account.
+    const buildVerifiedBasicPrice = async (verifierUserId: string) => {
+      const { organizationId } = await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A }, select: { organizationId: true } });
+      const submission = await prisma.priceSubmission.create({
+        data: {
+          workspaceId: WORKSPACE_A,
+          organizationId,
+          resourceId: RESOURCE_MATERIAL_ID,
+          sourceOrigin: 'SUPPLIER',
+          sourceType: 'MARKET_SURVEY',
+          status: 'VERIFIED',
+        },
+      });
+      const revision = await prisma.priceSubmissionRevision.create({
+        data: { submissionId: submission.id, revisionNumber: 1, value: '1100000.00', effectiveDate: new Date('2026-07-25'), validationPassed: true },
+      });
+      await prisma.priceSubmission.update({ where: { id: submission.id }, data: { currentRevisionId: revision.id } });
+      const review = await prisma.priceSubmissionReview.create({
+        data: { priceSubmissionId: submission.id, workspaceId: WORKSPACE_A, organizationId, slaState: 'RESOLVED', resolvedAt: new Date() },
+      });
+      await prisma.priceSubmissionReviewDecision.create({
+        data: { reviewId: review.id, decidedByUserId: verifierUserId, action: 'ACCEPT' },
+      });
+      const basicPrice = await prisma.basicPrice.create({
+        data: {
+          resourceId: RESOURCE_MATERIAL_ID,
+          workspaceId: WORKSPACE_A,
+          effectiveDate: new Date('2026-07-25'),
+          value: '1100000.00',
+          verificationStatus: 'VERIFIED',
+          sourceSubmissionId: submission.id,
+        },
+      });
+      return basicPrice;
+    };
+
     it('rejects publishing a BasicPrice that is not yet VERIFIED', async () => {
       const basicPrice = await prisma.basicPrice.create({
-        data: { resourceId: RESOURCE_MATERIAL_ID, effectiveDate: new Date('2026-07-25'), value: '158333.33', verificationStatus: 'UNVERIFIED' },
+        data: { resourceId: RESOURCE_MATERIAL_ID, workspaceId: WORKSPACE_A, effectiveDate: new Date('2026-07-25'), value: '158333.33', verificationStatus: 'UNVERIFIED' },
       });
-      await request(app.getHttpServer())
-        .post(`/basic-prices/${basicPrice.id}/publish`)
-        .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
+      const response = await request(app.getHttpServer())
+        .post(`/basic-price-publications/${basicPrice.id}/publish`)
+        .set('Authorization', `Bearer ${foremanToken}`).set('x-workspace-id', WORKSPACE_A)
         .expect(409);
+      expect(response.body.message).toBe('INCONSISTENT_BASIC_PRICE_STATE');
       expect((await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPrice.id } })).status).toBe('UNPUBLISHED');
     });
 
-    it('publishes a VERIFIED BasicPrice, writes exactly one audit row with the human actor, and is idempotent on replay', async () => {
+    it('rejects a VERIFIED BasicPrice with no traceable ACCEPT-decision evidence', async () => {
       const basicPrice = await prisma.basicPrice.create({
-        data: { resourceId: RESOURCE_MATERIAL_ID, effectiveDate: new Date('2026-07-25'), value: '1100000.00', verificationStatus: 'VERIFIED' },
+        data: { resourceId: RESOURCE_MATERIAL_ID, workspaceId: WORKSPACE_A, effectiveDate: new Date('2026-07-25'), value: '1100000.00', verificationStatus: 'VERIFIED' },
       });
-      const publishPath = `/basic-prices/${basicPrice.id}/publish`;
-      const first = await request(app.getHttpServer()).post(publishPath).set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A).expect(201);
+      const response = await request(app.getHttpServer())
+        .post(`/basic-price-publications/${basicPrice.id}/publish`)
+        .set('Authorization', `Bearer ${foremanToken}`).set('x-workspace-id', WORKSPACE_A)
+        .expect(409);
+      expect(response.body.message).toBe('VERIFIER_EVIDENCE_MISSING');
+    });
+
+    it('rejects publish when the caller is the same human who verified it (VERIFIER_CANNOT_PUBLISH)', async () => {
+      const verifierMembership = await prisma.workspaceMembership.findUniqueOrThrow({
+        where: { accountId_workspaceId: { accountId: assignedAccountId, workspaceId: WORKSPACE_A } },
+      });
+      const verifierUser = await prisma.user.findUniqueOrThrow({ where: { workspaceMembershipId: verifierMembership.id } });
+      const basicPrice = await buildVerifiedBasicPrice(verifierUser.id);
+
+      const response = await request(app.getHttpServer())
+        .post(`/basic-price-publications/${basicPrice.id}/publish`)
+        .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
+        .expect(409);
+      expect(response.body.message).toBe('VERIFIER_CANNOT_PUBLISH');
+      expect((await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPrice.id } })).status).toBe('UNPUBLISHED');
+      expect(await prisma.basicPricePublicationAudit.count({ where: { basicPriceId: basicPrice.id } })).toBe(0);
+    });
+
+    it('publishes a VERIFIED BasicPrice when the publisher differs from the verifier, writes exactly one atomic two-axis audit row, and is idempotent on replay', async () => {
+      const verifierMembership = await prisma.workspaceMembership.findUniqueOrThrow({
+        where: { accountId_workspaceId: { accountId: assignedAccountId, workspaceId: WORKSPACE_A } },
+      });
+      const verifierUser = await prisma.user.findUniqueOrThrow({ where: { workspaceMembershipId: verifierMembership.id } });
+      const basicPrice = await buildVerifiedBasicPrice(verifierUser.id);
+
+      const publishPath = `/basic-price-publications/${basicPrice.id}/publish`;
+      const first = await request(app.getHttpServer()).post(publishPath).set('Authorization', `Bearer ${foremanToken}`).set('x-workspace-id', WORKSPACE_A).expect(201);
       expect(first.body.status).toBe('PUBLISHED');
+      expect(first.body.verificationStatus).toBe('PUBLISHED');
 
       const audits = await prisma.basicPricePublicationAudit.findMany({ where: { basicPriceId: basicPrice.id } });
       expect(audits).toHaveLength(1);
-      expect(audits[0].actorAccountId).toBe(assignedAccountId);
+      expect(audits[0].actorAccountId).toBe(foremanAccountId);
+      expect(audits[0].actorAccountId).not.toBe(assignedAccountId);
 
-      const second = await request(app.getHttpServer()).post(publishPath).set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A).expect(201);
+      const second = await request(app.getHttpServer()).post(publishPath).set('Authorization', `Bearer ${foremanToken}`).set('x-workspace-id', WORKSPACE_A).expect(201);
       expect(second.body.status).toBe('PUBLISHED');
+      expect(second.body.verificationStatus).toBe('PUBLISHED');
       expect(await prisma.basicPricePublicationAudit.count({ where: { basicPriceId: basicPrice.id } })).toBe(1);
     });
   });

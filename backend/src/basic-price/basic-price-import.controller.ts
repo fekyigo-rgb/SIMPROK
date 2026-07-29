@@ -6,7 +6,6 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 import { BasicPriceImportService, MAX_UPLOAD_BYTES } from './basic-price-import.service';
 import { BasicPriceRowResolutionService } from './basic-price-row-resolution.service';
-import { BasicPricePublicationService } from './basic-price-publication.service';
 import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping-candidates.service';
 import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto';
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
@@ -16,10 +15,11 @@ import { ResolveBasicPriceImportRowDto, RejectBasicPriceImportRowDto } from './d
  * BasicPriceImportController — RM-02 Basic Price import foundation.
  *
  * Every mutating route here is gated by a BASIC_PRICE_* permission code
- * that is declared but not yet seeded into any environment (see
- * DECLARED_NOT_SEEDED_PERMISSION_CODES in common/constants/permissions.ts)
- * — fail-closed (403) until a separate, Owner/PM-governed seeding task
- * grants them. WorkspaceId comes from PermissionsGuard's resolved
+ * whose activation into any role is a separate, per-environment governed
+ * decision (see GOVERNED_ACTIVATION_PERMISSION_CODES in
+ * common/constants/permissions.ts) — fail-closed (403) in any environment
+ * where the caller's role has not been granted it. WorkspaceId comes from
+ * PermissionsGuard's resolved
  * `request.workspaceContext` (x-workspace-id header), matching
  * BasicPriceController's existing convention exactly.
  */
@@ -97,29 +97,5 @@ export class BasicPriceImportController {
   async submitBatch(@Req() request: any, @Param('batchId') batchId: string) {
     const workspaceId: string = request.workspaceContext?.workspaceId;
     return this.importService.submitBatch(workspaceId, batchId);
-  }
-}
-
-/**
- * Publication is not an import-batch concept (a verified BasicPrice may be
- * published regardless of whether it originated from an RM-02 import), so
- * this lives under the existing `basic-prices` path prefix — a second
- * controller class sharing that prefix with the read-only
- * BasicPriceController, contributing exactly one new mutating route. Kept
- * in this file (not basic-price.controller.ts) per the allowlist's "extend
- * only" instruction for that file, which frames the extension around
- * eligibility-policy reuse in the three existing read methods, not new
- * routes.
- */
-@Controller('basic-prices')
-@UseGuards(JwtAuthGuard, PermissionsGuard)
-export class BasicPricePublicationController {
-  constructor(private readonly publicationService: BasicPricePublicationService) {}
-
-  @Post(':basicPriceId/publish')
-  @Permissions(PERMISSIONS.BASIC_PRICE_PUBLISH)
-  async publish(@Req() request: any, @Param('basicPriceId') basicPriceId: string) {
-    const actorAccountId: string = request.user.id;
-    return this.publicationService.publish(basicPriceId, actorAccountId);
   }
 }
