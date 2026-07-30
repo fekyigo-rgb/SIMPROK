@@ -24,7 +24,7 @@ const navItems = [
   { name: 'Recovery', path: '/?ruang=recovery', icon: RefreshCcw, routeLabel: 'Placeholder Recovery' },
   { name: 'Insight / War Room', path: '/?ruang=insight-war-room', icon: BarChart3, routeLabel: 'Placeholder Insight / War Room' },
   { name: 'AHSP', path: '/?ruang=ahsp', icon: BookOpen, routeLabel: 'Placeholder AHSP' },
-  { name: 'Basic Price', path: '/basic-price/import', icon: PackageSearch, routeLabel: 'Ruang impor Basic Price' },
+  { name: 'Basic Price', path: '/basic-price', icon: PackageSearch, routeLabel: 'Jelajahi Harga Dasar' },
   { name: 'Peralatan', path: '/?ruang=peralatan', icon: Pickaxe, routeLabel: 'Placeholder Peralatan' },
   { name: 'Personel', path: '/?ruang=personel', icon: Users, routeLabel: 'Placeholder Personel' },
   { name: 'Metode Pelaksanaan', path: '/?ruang=metode-pelaksanaan', icon: HardHat, routeLabel: 'Placeholder Metode Pelaksanaan' },

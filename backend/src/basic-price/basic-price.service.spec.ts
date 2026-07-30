@@ -89,14 +89,104 @@ describe('BasicPriceService', () => {
       );
     });
 
-    it('returns basic prices with pagination meta', async () => {
+    it('returns an explicit Explorer projection (never the raw entity) with pagination meta', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
       const result = await service.findAllForWorkspace(workspaceId);
 
-      expect(result.data).toEqual([mockPrice]);
-      expect(result.meta).toEqual({ total: 1, page: 1, limit: 20, totalPages: 1 });
+      expect(result.data).toEqual([
+        {
+          basicPriceId: 'bp-01',
+          resource: {
+            id: 'rc-01',
+            code: 'MAT-SEMEN-01',
+            name: 'Semen Portland 50kg',
+            type: 'MATERIAL',
+            baseUnit: 'Zak',
+          },
+          region: null,
+          price: '150000.00',
+          effectiveDate: '2026-01-01T00:00:00.000Z',
+          validUntil: null,
+          sourceType: 'MARKET_SURVEY',
+          sourceOrigin: 'GOVERNMENT',
+          sourceName: null,
+          freshnessStatus: 'CURRENT',
+          workspaceScope: 'WORKSPACE',
+        },
+      ]);
+      expect(result.meta).toEqual({
+        total: 1,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      });
+      // No raw Prisma column (status/verificationStatus/resourceId/workspaceId) leaks through.
+      expect(result.data[0]).not.toHaveProperty('status');
+      expect(result.data[0]).not.toHaveProperty('verificationStatus');
+      expect(result.data[0]).not.toHaveProperty('workspaceId');
+    });
+
+    it('projects a global row (workspaceId=null) as workspaceScope=GLOBAL', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([
+        { ...mockPrice, workspaceId: null },
+      ]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      const result = await service.findAllForWorkspace(workspaceId);
+
+      expect(result.data[0].workspaceScope).toBe('GLOBAL');
+    });
+
+    it('derives sourceName from the real import-batch provenance chain when present', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([
+        {
+          ...mockPrice,
+          sourceSubmission: {
+            importRow: {
+              batch: {
+                sourceOrganizationName: 'Dinas PU',
+                sourceVendorName: 'Toko Jaya',
+              },
+            },
+          },
+        },
+      ]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      const result = await service.findAllForWorkspace(workspaceId);
+
+      expect(result.data[0].sourceName).toBe('Toko Jaya');
+    });
+
+    it('sourceName is null (never fabricated) when the provenance chain is absent', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([
+        { ...mockPrice, sourceSubmission: null },
+      ]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      const result = await service.findAllForWorkspace(workspaceId);
+
+      expect(result.data[0].sourceName).toBeNull();
+    });
+
+    it('projects a human-readable region when the row has one', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([
+        {
+          ...mockPrice,
+          region: { id: 'reg-01', code: 'DKI', name: 'DKI Jakarta' },
+        },
+      ]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      const result = await service.findAllForWorkspace(workspaceId);
+
+      expect(result.data[0].region).toEqual({
+        id: 'reg-01',
+        code: 'DKI',
+        name: 'DKI Jakarta',
+      });
     });
 
     it('accepts verificationStatus=PUBLISHED query without widening eligibility', async () => {
@@ -124,13 +214,18 @@ describe('BasicPriceService', () => {
       PriceVerificationStatus.SUBMITTED,
       PriceVerificationStatus.UNDER_REVIEW,
       PriceVerificationStatus.REJECTED,
-    ])('rejects internal-curation verificationStatus=%s with BadRequest (defensive, not only DTO)', async (status) => {
-      await expect(
-        service.findAllForWorkspace(workspaceId, { verificationStatus: status }),
-      ).rejects.toBeInstanceOf(BadRequestException);
+    ])(
+      'rejects internal-curation verificationStatus=%s with BadRequest (defensive, not only DTO)',
+      async (status) => {
+        await expect(
+          service.findAllForWorkspace(workspaceId, {
+            verificationStatus: status,
+          }),
+        ).rejects.toBeInstanceOf(BadRequestException);
 
-      expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
-    });
+        expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
+      },
+    );
 
     it('applies search within tenant/global visibility (does not drop eligibility)', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
@@ -164,8 +259,8 @@ describe('BasicPriceService', () => {
       prisma.basicPrice.count.mockResolvedValue(1);
 
       await service.findAllForWorkspace(workspaceId, {
-        sourceOrigin: 'GOVERNMENT' as any,
-        freshnessStatus: 'EXPIRED' as any,
+        sourceOrigin: 'GOVERNMENT',
+        freshnessStatus: 'EXPIRED',
         year: 2026,
         regionId: 'reg-01',
         resourceId: 'rc-01',
@@ -189,11 +284,97 @@ describe('BasicPriceService', () => {
       );
     });
 
+    it('applies dateFrom/dateTo as an effectiveDate range', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        dateFrom: '2026-01-01',
+        dateTo: '2026-06-30',
+      });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            effectiveDate: {
+              gte: new Date('2026-01-01'),
+              lte: new Date('2026-06-30'),
+            },
+          }),
+        }),
+      );
+    });
+
+    it('applies sourceName as a real-provenance-chain filter (never fabricated)', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        sourceName: 'Toko Jaya',
+      });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            sourceSubmission: {
+              is: {
+                importRow: {
+                  is: {
+                    batch: {
+                      is: {
+                        OR: [
+                          {
+                            sourceVendorName: {
+                              contains: 'Toko Jaya',
+                              mode: 'insensitive',
+                            },
+                          },
+                          {
+                            sourceOrganizationName: {
+                              contains: 'Toko Jaya',
+                              mode: 'insensitive',
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        }),
+      );
+    });
+
+    it('rejects year combined with dateFrom/dateTo as an ambiguous time filter (400)', async () => {
+      await expect(
+        service.findAllForWorkspace(workspaceId, {
+          year: 2026,
+          dateFrom: '2026-01-01',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects dateFrom after dateTo (400)', async () => {
+      await expect(
+        service.findAllForWorkspace(workspaceId, {
+          dateFrom: '2026-06-30',
+          dateTo: '2026-01-01',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
+    });
+
     it('applies combinations of search + unit + tenant scope properly', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
-      await service.findAllForWorkspace(workspaceId, { search: 'Semen', unit: 'Zak' });
+      await service.findAllForWorkspace(workspaceId, {
+        search: 'Semen',
+        unit: 'Zak',
+      });
 
       expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -264,7 +445,10 @@ describe('BasicPriceService', () => {
     });
 
     it('returns eligible global price', async () => {
-      prisma.basicPrice.findFirst.mockResolvedValue({ ...mockPrice, workspaceId: null });
+      prisma.basicPrice.findFirst.mockResolvedValue({
+        ...mockPrice,
+        workspaceId: null,
+      });
 
       const result = await service.findOneForWorkspace('bp-01', workspaceId);
 
@@ -310,7 +494,10 @@ describe('BasicPriceService', () => {
 
   describe('healthCheck', () => {
     it('returns module status', () => {
-      expect(service.healthCheck()).toEqual({ module: 'basic-price', status: 'ok' });
+      expect(service.healthCheck()).toEqual({
+        module: 'basic-price',
+        status: 'ok',
+      });
     });
   });
 });

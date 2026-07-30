@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
 import { Prisma } from '@prisma/client';
@@ -6,6 +10,52 @@ import {
   BasicPriceEligibilityPolicy,
   PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
 } from './basic-price-eligibility.policy';
+import {
+  mapExplorerItem,
+  type BasicPriceExplorerItem,
+  type ExplorerRowSource,
+} from '../common/basic-price-workflow.projection';
+
+const EXPLORER_ROW_SELECT = {
+  id: true,
+  workspaceId: true,
+  value: true,
+  effectiveDate: true,
+  validUntil: true,
+  sourceType: true,
+  sourceOrigin: true,
+  freshnessStatus: true,
+  resource: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      type: true,
+      baseUnit: true,
+    },
+  },
+  region: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+    },
+  },
+  sourceSubmission: {
+    select: {
+      importRow: {
+        select: {
+          batch: {
+            select: {
+              sourceOrganizationName: true,
+              sourceVendorName: true,
+            },
+          },
+        },
+      },
+    },
+  },
+} satisfies Prisma.BasicPriceSelect;
 
 /**
  * Public Basic Price eligibility — OWNER-LOCKED.
@@ -52,13 +102,22 @@ export class BasicPriceService {
    * Ambil semua harga dasar yang berlaku untuk workspace ini.
    * Termasuk harga workspace-specific dan harga global (workspaceId = null, status PUBLISHED).
    */
-  async findAllForWorkspace(workspaceId: string, query: GetBasicPricesDto = {}) {
+  async findAllForWorkspace(
+    workspaceId: string,
+    query: GetBasicPricesDto = {},
+  ): Promise<{
+    data: BasicPriceExplorerItem[];
+    meta: { total: number; page: number; limit: number; totalPages: number };
+  }> {
     const {
       search,
       resourceId,
       regionId,
       year,
+      dateFrom,
+      dateTo,
       sourceOrigin,
+      sourceName,
       verificationStatus,
       freshnessStatus,
       unit,
@@ -77,6 +136,24 @@ export class BasicPriceService {
       throw new BadRequestException(
         `verificationStatus '${verificationStatus}' is not permitted on the public Basic Price API`,
       );
+    }
+
+    // `year` and an explicit dateFrom/dateTo range are two different ways of
+    // describing the same axis (effectiveDate) — combining them would be an
+    // ambiguous time interpretation, so it is rejected rather than silently
+    // merged or silently overridden.
+    if (year && (dateFrom || dateTo)) {
+      throw new BadRequestException(
+        'year cannot be combined with dateFrom/dateTo — choose one time filter',
+      );
+    }
+
+    if (
+      dateFrom &&
+      dateTo &&
+      new Date(dateFrom).getTime() > new Date(dateTo).getTime()
+    ) {
+      throw new BadRequestException('dateFrom must not be after dateTo');
     }
 
     // Base eligibility (hard lock): status PUBLISHED AND verification terminal PUBLISHED.
@@ -121,10 +198,44 @@ export class BasicPriceService {
       const startOfYear = new Date(`${year}-01-01T00:00:00.000Z`);
       const endOfYear = new Date(`${year}-12-31T23:59:59.999Z`);
       where.effectiveDate = { gte: startOfYear, lte: endOfYear };
+    } else if (dateFrom || dateTo) {
+      where.effectiveDate = {
+        ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+        ...(dateTo ? { lte: new Date(dateTo) } : {}),
+      };
     }
 
     if (sourceOrigin) {
       where.sourceOrigin = sourceOrigin;
+    }
+
+    if (sourceName) {
+      where.sourceSubmission = {
+        is: {
+          importRow: {
+            is: {
+              batch: {
+                is: {
+                  OR: [
+                    {
+                      sourceVendorName: {
+                        contains: sourceName,
+                        mode: 'insensitive',
+                      },
+                    },
+                    {
+                      sourceOrganizationName: {
+                        contains: sourceName,
+                        mode: 'insensitive',
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      };
     }
 
     if (freshnessStatus) {
@@ -133,21 +244,11 @@ export class BasicPriceService {
 
     const skip = (page - 1) * limit;
 
-    const [total, data] = await Promise.all([
+    const [total, rows] = await Promise.all([
       this.prisma.basicPrice.count({ where }),
       this.prisma.basicPrice.findMany({
         where,
-        include: {
-          resource: {
-            select: {
-              id: true,
-              code: true,
-              name: true,
-              type: true,
-              baseUnit: true,
-            },
-          },
-        },
+        select: EXPLORER_ROW_SELECT,
         orderBy: [
           { [sortBy]: sortOrder },
           { id: 'asc' }, // deterministic sorting tie-breaker
@@ -158,7 +259,9 @@ export class BasicPriceService {
     ]);
 
     return {
-      data,
+      data: (rows as ExplorerRowSource[]).map((row) =>
+        mapExplorerItem(row, workspaceId),
+      ),
       meta: {
         total,
         page,

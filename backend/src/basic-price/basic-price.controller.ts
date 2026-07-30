@@ -4,6 +4,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { BasicPriceService } from './basic-price.service';
+import { BasicPriceImportLookupService } from './basic-price-import-lookup.service';
+import { SearchRegionDto } from './dto/search-basic-price-import-lookups.dto';
 
 /**
  * BasicPriceController — Golden Path v0 Slice A
@@ -15,12 +17,31 @@ import { BasicPriceService } from './basic-price.service';
 @Controller('basic-prices')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class BasicPriceController {
-  constructor(private readonly basicPriceService: BasicPriceService) {}
+  constructor(
+    private readonly basicPriceService: BasicPriceService,
+    private readonly lookupService: BasicPriceImportLookupService,
+  ) {}
 
   @Get('health')
   @Permissions('BASIC_PRICE_VIEW')
   healthCheck() {
     return this.basicPriceService.healthCheck();
+  }
+
+  /**
+   * GET /basic-prices/lookups/regions
+   *
+   * Explorer-scoped Region lookup, gated by BASIC_PRICE_VIEW (not
+   * BASIC_PRICE_IMPORT — the import lookup at
+   * GET /basic-price-import-lookups/regions is deliberately left untouched
+   * so its permission never widens; this bounded route reuses the same
+   * service/query logic under the Explorer's own permission). Region is a
+   * canonical GLOBAL entity — no workspaceId is invented here.
+   */
+  @Get('lookups/regions')
+  @Permissions('BASIC_PRICE_VIEW')
+  searchRegions(@Query() dto: SearchRegionDto) {
+    return this.lookupService.searchRegions(dto);
   }
 
   /**

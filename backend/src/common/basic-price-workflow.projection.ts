@@ -62,14 +62,20 @@ export function mapResourceIdentity(resource: {
 export function mapRegionIdentity(
   region: { id: string; code: string; name: string } | null | undefined,
 ): RegionIdentity | null {
-  return region ? { id: region.id, code: region.code, name: region.name } : null;
+  return region
+    ? { id: region.id, code: region.code, name: region.name }
+    : null;
 }
 
 export function mapReviewerIdentity(
   reviewer: { id: string; fullName: string; email: string } | null | undefined,
 ): ReviewerIdentity | null {
   return reviewer
-    ? { userId: reviewer.id, fullName: reviewer.fullName, email: reviewer.email }
+    ? {
+        userId: reviewer.id,
+        fullName: reviewer.fullName,
+        email: reviewer.email,
+      }
     : null;
 }
 
@@ -151,11 +157,16 @@ export interface ReviewDetail extends ReviewQueueItem {
   decisions: ReviewDecisionProjection[];
 }
 
-const currentRevisionOf = (submission: SubmissionSource): RevisionSource | null =>
-  submission.revisions.find((revision) => revision.id === submission.currentRevisionId) ??
-  null;
+const currentRevisionOf = (
+  submission: SubmissionSource,
+): RevisionSource | null =>
+  submission.revisions.find(
+    (revision) => revision.id === submission.currentRevisionId,
+  ) ?? null;
 
-const reviewerOf = (source: AssignedUserSource | null): ReviewerIdentity | null =>
+const reviewerOf = (
+  source: AssignedUserSource | null,
+): ReviewerIdentity | null =>
   source
     ? mapReviewerIdentity({
         id: source.id,
@@ -229,7 +240,9 @@ export interface BasicPriceRowSource {
   region: { id: string; code: string; name: string } | null;
 }
 
-export function mapPublicationQueueItem(row: BasicPriceRowSource): PublicationQueueItem {
+export function mapPublicationQueueItem(
+  row: BasicPriceRowSource,
+): PublicationQueueItem {
   return {
     basicPriceId: row.id,
     resource: mapResourceIdentity(row.resource),
@@ -239,5 +252,120 @@ export function mapPublicationQueueItem(row: BasicPriceRowSource): PublicationQu
     status: row.status,
     verificationStatus: row.verificationStatus,
     createdAt: toIso(row.createdAt),
+  };
+}
+
+// ── Basic Price Explorer projection (RM02D2A2 remediation) ──────────────────
+//
+// The Explorer is the primary, public-facing Basic Price door (Owner Lock:
+// PRIMARY_BASIC_PRICE_DOOR=EXPLORER). Its contract never returns a raw Prisma
+// BasicPrice row — every field is an explicit, human-readable projection, and
+// money is always the exact two-digit decimal string produced by
+// toDecimalString2 (never Number()/parseFloat()/float math).
+
+/** A resource identity that also carries its base unit, for the Explorer list. */
+export interface ExplorerResourceIdentity extends ResourceIdentity {
+  baseUnit: string;
+}
+
+export function mapExplorerResourceIdentity(resource: {
+  id: string;
+  code: string | null;
+  name: string;
+  type: string;
+  baseUnit: string;
+}): ExplorerResourceIdentity {
+  return { ...mapResourceIdentity(resource), baseUnit: resource.baseUnit };
+}
+
+/** WORKSPACE = belongs to the caller's own workspace; GLOBAL = workspaceId is null. */
+export type BasicPriceWorkspaceScope = 'WORKSPACE' | 'GLOBAL';
+
+export interface BasicPriceExplorerItem {
+  basicPriceId: string;
+  resource: ExplorerResourceIdentity;
+  region: RegionIdentity | null;
+  /** Exact decimal string, two digits. */
+  price: string;
+  effectiveDate: string;
+  validUntil: string | null;
+  sourceType: string;
+  sourceOrigin: string;
+  /**
+   * Human-readable source name derived ONLY from real provenance (the import
+   * batch's vendor/organization name, via
+   * BasicPrice.sourceSubmission -> PriceSubmission.importRow ->
+   * BasicPriceImportRow.batch). Never fabricated: null when that provenance
+   * chain is absent (e.g. no sourceSubmission), so the UI can show an honest
+   * "Sumber tidak tersedia" instead of a placeholder presented as fact.
+   */
+  sourceName: string | null;
+  freshnessStatus: string;
+  workspaceScope: BasicPriceWorkspaceScope;
+}
+
+/** Structural subset of the Prisma-included BasicPrice row for the Explorer. */
+export interface ExplorerRowSource {
+  id: string;
+  workspaceId: string | null;
+  value: Prisma.Decimal | string;
+  effectiveDate: DateLike;
+  validUntil: DateLike | null;
+  sourceType: string;
+  sourceOrigin: string;
+  freshnessStatus: string;
+  resource: {
+    id: string;
+    code: string | null;
+    name: string;
+    type: string;
+    baseUnit: string;
+  };
+  region: { id: string; code: string; name: string } | null;
+  sourceSubmission?: {
+    importRow?: {
+      batch?: {
+        sourceOrganizationName: string | null;
+        sourceVendorName: string | null;
+      } | null;
+    } | null;
+  } | null;
+}
+
+/**
+ * Derives a human-readable source name ONLY from a real, traceable provenance
+ * chain (import batch vendor/organization name). Returns null — never a
+ * fabricated placeholder — when no such chain exists for this row.
+ */
+export function deriveExplorerSourceName(
+  row: ExplorerRowSource,
+): string | null {
+  const batch = row.sourceSubmission?.importRow?.batch;
+  if (!batch) return null;
+  return batch.sourceVendorName ?? batch.sourceOrganizationName ?? null;
+}
+
+export function mapExplorerItem(
+  row: ExplorerRowSource,
+  currentWorkspaceId: string,
+): BasicPriceExplorerItem {
+  return {
+    basicPriceId: row.id,
+    resource: mapExplorerResourceIdentity(row.resource),
+    region: mapRegionIdentity(row.region),
+    price: toDecimalString2(row.value),
+    effectiveDate: toIso(row.effectiveDate),
+    validUntil: toIsoOrNull(row.validUntil),
+    sourceType: row.sourceType,
+    sourceOrigin: row.sourceOrigin,
+    sourceName: deriveExplorerSourceName(row),
+    freshnessStatus: row.freshnessStatus,
+    // The eligibility query only ever returns rows where workspaceId is the
+    // caller's own workspace or null; this equality check is the honest
+    // expression of that contract rather than a bare null check, so a future
+    // caller that forgets the eligibility/tenant filter fails safe to GLOBAL
+    // instead of mislabeling a foreign workspace's row as the caller's own.
+    workspaceScope:
+      row.workspaceId === currentWorkspaceId ? 'WORKSPACE' : 'GLOBAL',
   };
 }

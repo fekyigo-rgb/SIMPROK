@@ -1,6 +1,21 @@
-import { IsOptional, IsString, IsInt, Min, Max, IsIn, IsUUID, IsEnum } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsInt,
+  Min,
+  Max,
+  IsIn,
+  IsUUID,
+  IsEnum,
+  IsISO8601,
+  MaxLength,
+} from 'class-validator';
 import { Type } from 'class-transformer';
-import { PriceSourceOrigin, PriceVerificationStatus, PriceFreshnessStatus } from '@prisma/client';
+import {
+  PriceSourceOrigin,
+  PriceVerificationStatus,
+  PriceFreshnessStatus,
+} from '@prisma/client';
 
 export class GetBasicPricesDto {
   @IsOptional()
@@ -25,6 +40,25 @@ export class GetBasicPricesDto {
   @IsOptional()
   @IsEnum(PriceSourceOrigin)
   sourceOrigin?: PriceSourceOrigin;
+
+  // Explorer date-range filter (Explorer minimum: "tanggal awal", "tanggal akhir").
+  // Mutually exclusive with `year` — combining both is an ambiguous time
+  // interpretation and is rejected by the service (400), not silently merged.
+  @IsOptional()
+  @IsISO8601()
+  dateFrom?: string;
+
+  @IsOptional()
+  @IsISO8601()
+  dateTo?: string;
+
+  // Source name filter — only meaningful when the row's provenance chain
+  // actually carries a vendor/organization name (see basic-price-workflow
+  // projection's deriveExplorerSourceName). Never widens eligibility.
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  sourceName?: string;
 
   // Public API hard lock: only the terminal PUBLISHED verification is queryable.
   // Internal-curation statuses (UNVERIFIED/SUBMITTED/UNDER_REVIEW/VERIFIED/REJECTED)
