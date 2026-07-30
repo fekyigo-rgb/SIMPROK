@@ -53,9 +53,11 @@ export interface ExplorerFilters {
   dateFrom?: string;
   dateTo?: string;
   sourceOrigin?: string;
+  sourceFamily?: string;
   sourceName?: string;
   unit?: string;
   freshnessStatus?: string;
+  resourceType?: string;
   page?: number;
   limit?: number;
   sortBy?: 'effectiveDate' | 'createdAt' | 'updatedAt';
@@ -76,9 +78,11 @@ export function buildExplorerQueryParams(filters: ExplorerFilters): Record<strin
   put('dateFrom', filters.dateFrom);
   put('dateTo', filters.dateTo);
   put('sourceOrigin', filters.sourceOrigin);
+  put('sourceFamily', filters.sourceFamily);
   put('sourceName', filters.sourceName);
   put('unit', filters.unit);
   put('freshnessStatus', filters.freshnessStatus);
+  put('resourceType', filters.resourceType);
   put('page', filters.page);
   put('limit', filters.limit);
   put('sortBy', filters.sortBy);
@@ -148,6 +152,24 @@ export const freshnessLabel = (status: string): string => FRESHNESS_LABELS[statu
 export const workspaceScopeLabel = (scope: BasicPriceWorkspaceScope): string =>
   scope === 'WORKSPACE' ? 'Workspace Anda' : 'Umum (Global)';
 
+// Category filter — canonical ResourceCatalog.type, human label only.
+export const RESOURCE_TYPE_OPTIONS = ['MATERIAL', 'LABOR', 'EQUIPMENT'] as const;
+const RESOURCE_TYPE_LABELS: Record<string, string> = {
+  MATERIAL: 'Material/Bahan',
+  LABOR: 'Upah/Tenaga Kerja',
+  EQUIPMENT: 'Peralatan',
+};
+export const resourceTypeLabel = (type: string): string => RESOURCE_TYPE_LABELS[type] ?? type;
+
+// Owner-locked human source-family grouping over sourceOrigin (no new enum).
+export const SOURCE_FAMILY_OPTIONS = ['GOVERNMENT', 'STORE_SUPPLIER', 'FIELD_PRICE'] as const;
+const SOURCE_FAMILY_LABELS: Record<string, string> = {
+  GOVERNMENT: 'Harga Pemerintah',
+  STORE_SUPPLIER: 'Harga Toko/Supplier',
+  FIELD_PRICE: 'Harga Lapangan',
+};
+export const sourceFamilyLabel = (family: string): string => SOURCE_FAMILY_LABELS[family] ?? family;
+
 // ── Honest UI states (loading / empty / forbidden / invalid-filter / error) ──
 
 export type ExplorerErrorState = 'FORBIDDEN' | 'NOT_FOUND' | 'INVALID_FILTER' | 'SERVER_ERROR' | 'ERROR';
@@ -171,7 +193,7 @@ export const EXPLORER_ERROR_MESSAGES: Record<ExplorerErrorState, string> = {
 export const explorerErrorMessageFromStatus = (status: number): string =>
   EXPLORER_ERROR_MESSAGES[explorerErrorStateFromStatus(status)];
 
-export const EXPLORER_EMPTY_STATE_TITLE = 'Belum ada harga dasar yang dipublikasikan.';
+export const EXPLORER_EMPTY_STATE_TITLE = 'Belum ada Basic Price yang dipublikasikan.';
 export const EXPLORER_EMPTY_STATE_BODY =
   'Harga yang telah melewati proses verifikasi dan publikasi akan tampil di sini.';
 

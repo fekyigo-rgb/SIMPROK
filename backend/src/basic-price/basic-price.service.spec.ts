@@ -284,6 +284,103 @@ describe('BasicPriceService', () => {
       );
     });
 
+    it('applies resourceType (category) filter using the canonical ResourceCatalog.type field', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        resourceType: 'LABOR',
+      });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            resource: expect.objectContaining({ type: 'LABOR' }),
+          }),
+        }),
+      );
+    });
+
+    it('sourceFamily=STORE_SUPPLIER maps to sourceOrigin IN [SUPPLIER, STORE, DISTRIBUTOR]', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        sourceFamily: 'STORE_SUPPLIER',
+      });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            sourceOrigin: { in: ['SUPPLIER', 'STORE', 'DISTRIBUTOR'] },
+          }),
+        }),
+      );
+    });
+
+    it('sourceFamily=GOVERNMENT maps to the single exact sourceOrigin GOVERNMENT (not wrapped in `in`)', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        sourceFamily: 'GOVERNMENT',
+      });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ sourceOrigin: 'GOVERNMENT' }),
+        }),
+      );
+    });
+
+    it('sourceFamily=FIELD_PRICE maps to sourceOrigin IN [FIELD_REPORT, COMMUNITY_REPORT]', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        sourceFamily: 'FIELD_PRICE',
+      });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            sourceOrigin: { in: ['FIELD_REPORT', 'COMMUNITY_REPORT'] },
+          }),
+        }),
+      );
+    });
+
+    it('an exact sourceOrigin outside the requested sourceFamily narrows to an empty, never-matching set (fail-closed intersection, not widened)', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([]);
+      prisma.basicPrice.count.mockResolvedValue(0);
+
+      await service.findAllForWorkspace(workspaceId, {
+        sourceFamily: 'GOVERNMENT',
+        sourceOrigin: 'STORE',
+      });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ sourceOrigin: { in: [] } }),
+        }),
+      );
+    });
+
+    it('backward compatibility: exact sourceOrigin alone (no sourceFamily) keeps working unchanged', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        sourceOrigin: 'DISTRIBUTOR',
+      });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ sourceOrigin: 'DISTRIBUTOR' }),
+        }),
+      );
+    });
+
     it('applies dateFrom inclusive and dateTo exclusive-next-day (final day fully included)', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);

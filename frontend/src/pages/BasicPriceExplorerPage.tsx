@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileInput, RefreshCw } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
 import {
   BasicPriceExplorerError,
   fetchBasicPriceExplorer,
@@ -11,11 +10,12 @@ import {
   type RegionLookupItem,
 } from '../api/basicPriceExplorer';
 import { ExplorerRegionFilterSelect } from '../components/basic-price/ExplorerRegionFilterSelect';
-import { computeBasicPriceSpaceViewModel } from '../utils/basicPriceSpaceViewModel';
 import {
   EXPLORER_EMPTY_STATE_BODY,
   EXPLORER_EMPTY_STATE_TITLE,
   EXPLORER_NO_MATCH_TITLE,
+  RESOURCE_TYPE_OPTIONS,
+  SOURCE_FAMILY_OPTIONS,
   explorerErrorMessageFromStatus,
   explorerErrorStateFromStatus,
   explorerSourceNameLabel,
@@ -25,21 +25,14 @@ import {
   isInvalidDateRange,
   regionLabel,
   resourceLabel,
+  resourceTypeLabel,
+  sourceFamilyLabel,
   sourceOriginLabel,
   sourceTypeLabel,
   workspaceScopeLabel,
   type ExplorerErrorState,
 } from '../utils/basicPriceExplorerDisplay';
 import { createLatestRequestGate } from '../utils/catalogSearch';
-
-const SOURCE_ORIGIN_OPTIONS = [
-  'GOVERNMENT',
-  'SUPPLIER',
-  'STORE',
-  'DISTRIBUTOR',
-  'FIELD_REPORT',
-  'COMMUNITY_REPORT',
-] as const;
 
 const FRESHNESS_OPTIONS = ['CURRENT', 'EXPIRING', 'EXPIRED'] as const;
 
@@ -49,7 +42,8 @@ interface DraftFilters {
   year: string;
   dateFrom: string;
   dateTo: string;
-  sourceOrigin: string;
+  resourceType: string;
+  sourceFamily: string;
   sourceName: string;
   unit: string;
   freshnessStatus: string;
@@ -62,7 +56,8 @@ const EMPTY_DRAFT: DraftFilters = {
   year: '',
   dateFrom: '',
   dateTo: '',
-  sourceOrigin: '',
+  resourceType: '',
+  sourceFamily: '',
   sourceName: '',
   unit: '',
   freshnessStatus: '',
@@ -78,23 +73,17 @@ const formatDate = (value: string): string =>
   new Date(value).toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
 
 /**
- * RM02D2A2 remediation — the Basic Price Explorer: the PRIMARY, public-facing
- * Basic Price door (Owner Lock) for any user with BASIC_PRICE_VIEW. Import is
- * a secondary CTA. Review and Publication are secondary, permission-gated
- * management actions surfaced here via the "Manajemen Basic Price" link
- * cluster (BASIC_PRICE_REVIEW_VIEW / BASIC_PRICE_PUBLISH) — neither has a
- * main Sidebar menu of its own. Calls only the canonical GET /basic-prices —
- * no parallel explorer endpoint.
+ * Basic Price Explorer — the ONE and only Basic Price product experience
+ * (Owner Decision: ONE SIMPROK BASIC PRICE PRODUCT MODEL). Any account with
+ * an active workspace membership lands here directly at /basic-price: there
+ * is no capability-space landing, no role-based variant, and no combination
+ * of VIEW/IMPORT/REVIEW/PUBLISH decides what renders. Import is always the
+ * primary secondary action; internal Review/Publication are back-office
+ * curation and are never linked from here. Calls only the canonical
+ * GET /basic-prices — no parallel explorer endpoint.
  */
 export function BasicPriceExplorerPage() {
   const navigate = useNavigate();
-  const { hasPermission } = useAuth();
-  const basicPriceSpace = computeBasicPriceSpaceViewModel({
-    hasView: hasPermission('BASIC_PRICE_VIEW'),
-    hasImport: hasPermission('BASIC_PRICE_IMPORT'),
-    hasReviewView: hasPermission('BASIC_PRICE_REVIEW_VIEW'),
-    hasPublish: hasPermission('BASIC_PRICE_PUBLISH'),
-  });
   const [draft, setDraft] = useState<DraftFilters>(EMPTY_DRAFT);
   const [page, setPage] = useState(1);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -132,7 +121,8 @@ export function BasicPriceExplorerPage() {
         year: draft.year || undefined,
         dateFrom: draft.dateFrom || undefined,
         dateTo: draft.dateTo || undefined,
-        sourceOrigin: draft.sourceOrigin || undefined,
+        resourceType: draft.resourceType || undefined,
+        sourceFamily: draft.sourceFamily || undefined,
         sourceName: draft.sourceName || undefined,
         unit: draft.unit || undefined,
         freshnessStatus: draft.freshnessStatus || undefined,
@@ -155,7 +145,7 @@ export function BasicPriceExplorerPage() {
               message: explorerErrorMessageFromStatus(error.status),
             });
           } else {
-            setState({ kind: 'ERROR', message: 'Gagal memuat Harga Dasar. Coba lagi.' });
+            setState({ kind: 'ERROR', message: 'Gagal memuat Basic Price. Coba lagi.' });
           }
         }
       })();
@@ -187,53 +177,21 @@ export function BasicPriceExplorerPage() {
       <header className="simprok-rab-workspace__header">
         <div>
           <div className="simprok-rab-workspace__eyebrow">SIMPROK / Basic Price</div>
-          <h1>Jelajahi Harga Dasar</h1>
-          <p>
-            Cari dan lihat harga dasar yang telah dipublikasikan — menurut wilayah, waktu, dan
-            sumber.
-          </p>
+          <h1>Basic Price</h1>
+          <p>Daftar harga upah, bahan, dan peralatan yang tersedia di SIMPROK.</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button onClick={reload} title="Muat ulang" aria-label="Muat ulang">
             <RefreshCw size={16} /> Muat ulang
           </button>
-          {basicPriceSpace.showImportDoor ? (
-            <button
-              onClick={() => navigate('/basic-price/import')}
-              title="Impor atau kontribusikan harga dasar"
-            >
-              <FileInput size={16} /> Impor / Kontribusikan Harga
-            </button>
-          ) : null}
+          <button
+            onClick={() => navigate('/basic-price/import')}
+            title="Impor atau masukkan harga dasar"
+          >
+            <FileInput size={16} /> Impor / Masukkan Harga
+          </button>
         </div>
       </header>
-
-      {basicPriceSpace.showManagementArea ? (
-        <div
-          style={{ display: 'flex', gap: '16px', fontSize: 'var(--text-sm)', marginBottom: '4px' }}
-          aria-label="Manajemen Basic Price"
-        >
-          <span>Manajemen Basic Price:</span>
-          {basicPriceSpace.showReviewDoor ? (
-            <button
-              type="button"
-              onClick={() => navigate('/basic-price/reviews')}
-              style={{ padding: 0, border: 'none', background: 'none', textDecoration: 'underline', cursor: 'pointer' }}
-            >
-              Antrean Review
-            </button>
-          ) : null}
-          {basicPriceSpace.showPublicationDoor ? (
-            <button
-              type="button"
-              onClick={() => navigate('/basic-price/publications')}
-              style={{ padding: 0, border: 'none', background: 'none', textDecoration: 'underline', cursor: 'pointer' }}
-            >
-              Antrean Publikasi
-            </button>
-          ) : null}
-        </div>
-      ) : null}
 
       <section
         className="simprok-rab-toolbar"
@@ -248,6 +206,20 @@ export function BasicPriceExplorerPage() {
             onChange={(event) => updateDraft('search', event.target.value)}
             placeholder="Ketik kode atau nama resource"
           />
+        </label>
+        <label>
+          Kategori
+          <select
+            value={draft.resourceType}
+            onChange={(event) => updateDraft('resourceType', event.target.value)}
+          >
+            <option value="">Semua kategori</option>
+            {RESOURCE_TYPE_OPTIONS.map((type) => (
+              <option key={type} value={type}>
+                {resourceTypeLabel(type)}
+              </option>
+            ))}
+          </select>
         </label>
         <ExplorerRegionFilterSelect
           selected={draft.region}
@@ -281,21 +253,21 @@ export function BasicPriceExplorerPage() {
           />
         </label>
         <label>
-          Asal sumber
+          Keluarga sumber
           <select
-            value={draft.sourceOrigin}
-            onChange={(event) => updateDraft('sourceOrigin', event.target.value)}
+            value={draft.sourceFamily}
+            onChange={(event) => updateDraft('sourceFamily', event.target.value)}
           >
-            <option value="">Semua asal sumber</option>
-            {SOURCE_ORIGIN_OPTIONS.map((origin) => (
-              <option key={origin} value={origin}>
-                {sourceOriginLabel(origin)}
+            <option value="">Semua sumber</option>
+            {SOURCE_FAMILY_OPTIONS.map((family) => (
+              <option key={family} value={family}>
+                {sourceFamilyLabel(family)}
               </option>
             ))}
           </select>
         </label>
         <label>
-          Nama sumber
+          Nama toko/supplier/sumber
           <input
             type="search"
             value={draft.sourceName}
@@ -341,13 +313,15 @@ export function BasicPriceExplorerPage() {
         </button>
       </section>
 
+      <h2>Daftar Harga</h2>
+
       {clientInvalidMessage ? (
         <p role="alert" style={{ marginTop: '16px' }}>
           {clientInvalidMessage}
         </p>
       ) : (
         <>
-          {state.kind === 'loading' ? <p role="status">Memuat harga dasar...</p> : null}
+          {state.kind === 'loading' ? <p role="status">Memuat Basic Price...</p> : null}
 
           {state.kind === 'FORBIDDEN' ||
           state.kind === 'INVALID_FILTER' ||

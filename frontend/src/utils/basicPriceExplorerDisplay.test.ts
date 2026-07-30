@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  RESOURCE_TYPE_OPTIONS,
+  SOURCE_FAMILY_OPTIONS,
   buildExplorerQueryParams,
   explorerErrorMessageFromStatus,
   explorerErrorStateFromStatus,
@@ -11,6 +13,8 @@ import {
   isInvalidDateRange,
   regionLabel,
   resourceLabel,
+  resourceTypeLabel,
+  sourceFamilyLabel,
   sourceOriginLabel,
   sourceTypeLabel,
   workspaceScopeLabel,
@@ -84,6 +88,35 @@ test('sourceOriginLabel / sourceTypeLabel / freshnessLabel — known codes map, 
 test('workspaceScopeLabel — human copy for WORKSPACE vs GLOBAL', () => {
   assert.equal(workspaceScopeLabel('WORKSPACE'), 'Workspace Anda');
   assert.equal(workspaceScopeLabel('GLOBAL'), 'Umum (Global)');
+});
+
+test('resourceTypeLabel — canonical MATERIAL/LABOR/EQUIPMENT map to human category labels', () => {
+  assert.equal(resourceTypeLabel('MATERIAL'), 'Material/Bahan');
+  assert.equal(resourceTypeLabel('LABOR'), 'Upah/Tenaga Kerja');
+  assert.equal(resourceTypeLabel('EQUIPMENT'), 'Peralatan');
+  assert.equal(resourceTypeLabel('SOMETHING_NEW'), 'SOMETHING_NEW');
+  assert.deepEqual(RESOURCE_TYPE_OPTIONS, ['MATERIAL', 'LABOR', 'EQUIPMENT']);
+});
+
+test('sourceFamilyLabel — owner-locked GOVERNMENT/STORE_SUPPLIER/FIELD_PRICE map to human family labels', () => {
+  assert.equal(sourceFamilyLabel('GOVERNMENT'), 'Harga Pemerintah');
+  assert.equal(sourceFamilyLabel('STORE_SUPPLIER'), 'Harga Toko/Supplier');
+  assert.equal(sourceFamilyLabel('FIELD_PRICE'), 'Harga Lapangan');
+  assert.equal(sourceFamilyLabel('SOMETHING_NEW'), 'SOMETHING_NEW');
+  assert.deepEqual(SOURCE_FAMILY_OPTIONS, ['GOVERNMENT', 'STORE_SUPPLIER', 'FIELD_PRICE']);
+});
+
+test('buildExplorerQueryParams — carries resourceType and sourceFamily through untouched, alongside sourceOrigin', () => {
+  const params = buildExplorerQueryParams({
+    resourceType: 'LABOR',
+    sourceFamily: 'STORE_SUPPLIER',
+    sourceOrigin: 'STORE',
+  });
+  assert.deepEqual(params, {
+    resourceType: 'LABOR',
+    sourceFamily: 'STORE_SUPPLIER',
+    sourceOrigin: 'STORE',
+  });
 });
 
 test('explorerErrorStateFromStatus / explorerErrorMessageFromStatus — honest states per HTTP status', () => {

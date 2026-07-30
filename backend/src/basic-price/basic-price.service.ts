@@ -16,6 +16,7 @@ import {
   type ExplorerRowSource,
 } from '../common/basic-price-workflow.projection';
 import { nextUtcDayStart, parseDateOnlyUtc } from '../common/date-only.util';
+import { sourceOriginsForFamily } from './basic-price-source-family.util';
 
 const EXPLORER_ROW_SELECT = {
   id: true,
@@ -118,10 +119,12 @@ export class BasicPriceService {
       dateFrom,
       dateTo,
       sourceOrigin,
+      sourceFamily,
       sourceName,
       verificationStatus,
       freshnessStatus,
       unit,
+      resourceType,
       page = 1,
       limit = 20,
       sortBy = 'effectiveDate',
@@ -196,6 +199,10 @@ export class BasicPriceService {
       resourceFilter.baseUnit = unit;
     }
 
+    if (resourceType) {
+      resourceFilter.type = resourceType;
+    }
+
     if (Object.keys(resourceFilter).length > 0) {
       where.resource = resourceFilter;
     }
@@ -225,7 +232,21 @@ export class BasicPriceService {
       };
     }
 
-    if (sourceOrigin) {
+    // sourceFamily is a coarser grouping over sourceOrigin (never a new
+    // schema field). Both filters narrow the same axis: if both are given,
+    // the effective set is their intersection (exact sourceOrigin values
+    // outside the requested family are dropped, never added back) — this
+    // can never widen eligibility, only narrow it further or to empty.
+    if (sourceFamily) {
+      const familyOrigins = sourceOriginsForFamily(sourceFamily);
+      const allowedOrigins = sourceOrigin
+        ? familyOrigins.filter((origin) => origin === sourceOrigin)
+        : familyOrigins;
+      where.sourceOrigin =
+        allowedOrigins.length === 1
+          ? allowedOrigins[0]
+          : { in: allowedOrigins };
+    } else if (sourceOrigin) {
       where.sourceOrigin = sourceOrigin;
     }
 

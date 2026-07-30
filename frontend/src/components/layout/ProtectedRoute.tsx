@@ -2,13 +2,12 @@ import type { ReactNode } from 'react';
 import { Navigate, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatRoleLabel } from '../../utils/roleLabels';
-import { computeBasicPriceSpaceViewModel } from '../../utils/basicPriceSpaceViewModel';
 
 /**
- * Shared "Access Denied" panel for the permission-code route gates below
- * (PermissionRoute, BasicPriceSpaceRoute). Kept as one component so the two
- * gates cannot silently diverge in copy or Color Lock — the logout button
- * uses the locked critical-red token, never a hardcoded hex.
+ * Shared "Access Denied" panel for the permission-code route gate below
+ * (PermissionRoute). Kept as its own component so Color Lock cannot
+ * silently drift — the logout button uses the locked critical-red token,
+ * never a hardcoded hex.
  */
 function AccessDeniedPanel({ message, onLogout }: { message: string; onLogout: () => void }) {
   return (
@@ -62,48 +61,6 @@ export function PermissionRoute({ permission, children }: { permission: string; 
   }
 
   if (hasPermission(permission)) {
-    return <>{children}</>;
-  }
-
-  return (
-    <AccessDeniedPanel
-      message={accessDeniedMessage(permissionState === 'ERROR' ? 'ERROR' : 'READY')}
-      onLogout={() => {
-        logout();
-        navigate('/login');
-      }}
-    />
-  );
-}
-
-/**
- * RM02D2A2-REMEDIATION-02 — Basic-Price-specific route gate: `/basic-price`
- * is a capability-aware space, not an Explorer-only route gated by a single
- * permission. Entry is allowed with ANY of BASIC_PRICE_VIEW, _IMPORT,
- * _REVIEW_VIEW, or _PUBLISH (BASIC_PRICE_VERIFY alone is deliberately not
- * enough — see basicPriceSpaceViewModel). Deliberately a separate, narrow
- * gate rather than widening the generic single-permission PermissionRoute.
- */
-export function BasicPriceSpaceRoute({ children }: { children: ReactNode }) {
-  const { permissionState, hasPermission, logout } = useAuth();
-  const navigate = useNavigate();
-
-  if (permissionState === 'IDLE' || permissionState === 'LOADING') {
-    return (
-      <div style={{ padding: 'var(--space-8)', textAlign: 'center' }}>
-        Memeriksa kewenangan...
-      </div>
-    );
-  }
-
-  const canEnter = computeBasicPriceSpaceViewModel({
-    hasView: hasPermission('BASIC_PRICE_VIEW'),
-    hasImport: hasPermission('BASIC_PRICE_IMPORT'),
-    hasReviewView: hasPermission('BASIC_PRICE_REVIEW_VIEW'),
-    hasPublish: hasPermission('BASIC_PRICE_PUBLISH'),
-  }).canEnterBasicPriceSpace;
-
-  if (canEnter) {
     return <>{children}</>;
   }
 

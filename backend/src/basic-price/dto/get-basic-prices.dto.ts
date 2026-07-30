@@ -15,7 +15,12 @@ import {
   PriceSourceOrigin,
   PriceVerificationStatus,
   PriceFreshnessStatus,
+  ResourceType,
 } from '@prisma/client';
+import {
+  SOURCE_FAMILIES,
+  type SourceFamily,
+} from '../basic-price-source-family.util';
 
 export class GetBasicPricesDto {
   @IsOptional()
@@ -40,6 +45,21 @@ export class GetBasicPricesDto {
   @IsOptional()
   @IsEnum(PriceSourceOrigin)
   sourceOrigin?: PriceSourceOrigin;
+
+  // Category filter — canonical existing ResourceCatalog.type, no new
+  // field/enum. Public category labels: MATERIAL -> Material/Bahan,
+  // LABOR -> Upah/Tenaga Kerja, EQUIPMENT -> Peralatan.
+  @IsOptional()
+  @IsEnum(ResourceType)
+  resourceType?: ResourceType;
+
+  // Human source-family filter — a coarser grouping over the existing
+  // sourceOrigin values (see basic-price-source-family.util.ts). Combines
+  // with `sourceOrigin` as a narrowing AND, never widening eligibility;
+  // `sourceOrigin` alone keeps working unchanged for backward compatibility.
+  @IsOptional()
+  @IsIn(SOURCE_FAMILIES)
+  sourceFamily?: SourceFamily;
 
   // Explorer date-range filter (Explorer minimum: "tanggal awal", "tanggal akhir").
   // Mutually exclusive with `year` — combining both is an ambiguous time
