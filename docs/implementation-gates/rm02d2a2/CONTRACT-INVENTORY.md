@@ -707,11 +707,30 @@ FRONTEND_UNIT=PASS (86/86 node:test, 0 failures). Net effect on the suite:
   params). package.json's `test` script updated to drop the deleted file.
 FRONTEND_LINT=PASS on every changed file (zero errors/warnings)
 
-SAFE_E2E=PENDING (attempted after this section is written — see below)
-VISUAL_ACCEPTANCE_FIXTURE=PENDING
-BROWSER_ACCEPTANCE=STOP_FOR_OWNER_VISUAL_DECISION
-COWORK_PRODUCT_REVIEW=PENDING
-COWORK_SECURITY_REVIEW=PENDING
+SAFE_E2E=PASS — 386/386 tests, 32/32 suites, RESIDUAL_RESULT=PASS (zero
+  database residue after cleanup). First run (fix commit
+  90732dc/a95c42f-era source) surfaced exactly 5 real, expected failures
+  across 3 files (see LEGACY_TEST_CHANGE_REGISTER items 8-10); fixed in
+  commit 21194f8; second run 386/386 clean. Run via the repo's own guarded
+  `npm run test:e2e:safe` (backend/.env.e2e, DATABASE=simprok_e2e,
+  official database-name guard, advisory lock, full reset+seed via
+  prisma/seed-acceptance.ts, fingerprint-diff residue check).
+VISUAL_ACCEPTANCE_FIXTURE=APPLIED — backend/scripts/rm02d2a2/
+  visual-acceptance-fixture.ts --apply: 3 GLOBAL (workspaceId=null),
+  PUBLISHED+PUBLISHED BasicPrice rows tagged RM02D2A2-VISUAL-{MATERIAL,
+  LABOR,EQUIPMENT}-01, region DKI Jakarta, decimal-string values, verified
+  reachable through the real GET /basic-prices API (not only Prisma) with
+  assigned@test.local's token. --cleanup mode removes exactly these rows
+  (ResourceCatalog delete cascades BasicPrice); the shared Region row is
+  left in place as reference data.
+BROWSER_ACCEPTANCE=STOP_FOR_OWNER_VISUAL_DECISION — backend (port 3000,
+  simprok_e2e via .env.e2e) and frontend (port 5173) both restarted from
+  exact final SHA cb7e80d849f56ff9c8fb46db765a68824db2f62c and confirmed
+  live (health/login/list smoke-checked via curl). Not claimed as browser
+  -verified by this executor — Owner's own visual decision is required per
+  the governing prompt's Doktrin Cermin.
+COWORK_PRODUCT_REVIEW=PENDING (not yet run against this exact SHA)
+COWORK_SECURITY_REVIEW=PENDING (not yet run against this exact SHA)
 MERGE_READY=NO
 PRODUCT_LIVE=NO
 ```
