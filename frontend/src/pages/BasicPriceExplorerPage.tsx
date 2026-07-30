@@ -79,10 +79,12 @@ const formatDate = (value: string): string =>
 
 /**
  * RM02D2A2 remediation — the Basic Price Explorer: the PRIMARY, public-facing
- * Basic Price door (Owner Lock). Any user with BASIC_PRICE_VIEW lands here
- * first; import is a secondary CTA, and review/publication management is a
- * separate, permission-gated area entirely (not linked from here). Calls only
- * the canonical GET /basic-prices — no parallel explorer endpoint.
+ * Basic Price door (Owner Lock) for any user with BASIC_PRICE_VIEW. Import is
+ * a secondary CTA. Review and Publication are secondary, permission-gated
+ * management actions surfaced here via the "Manajemen Basic Price" link
+ * cluster (BASIC_PRICE_REVIEW_VIEW / BASIC_PRICE_PUBLISH) — neither has a
+ * main Sidebar menu of its own. Calls only the canonical GET /basic-prices —
+ * no parallel explorer endpoint.
  */
 export function BasicPriceExplorerPage() {
   const navigate = useNavigate();

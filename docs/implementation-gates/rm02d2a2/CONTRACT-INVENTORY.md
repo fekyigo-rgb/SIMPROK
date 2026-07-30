@@ -355,9 +355,12 @@ STRUCTURAL_COMPONENT_USAGE_PROOF=AVAILABLE (computeBasicPriceSpaceViewModel
   BasicPriceReviewDetailPage.tsx — confirmed by grep, not by trusting a
   comment)
 
-WITHOUT_VIEW_EXPLORER_RENDERED=NO (BasicPriceSpacePage branches on
-  mayReachExplorerFetch before ever importing/mounting
-  BasicPriceExplorerPage; that import exists in exactly one file)
+WITHOUT_VIEW_EXPLORER_COMPONENT_IMPORTED_STATICALLY=YES (BasicPriceSpacePage
+  statically imports BasicPriceExplorerPage — that import exists in exactly
+  one file)
+WITHOUT_VIEW_EXPLORER_COMPONENT_MOUNTED=NO (BasicPriceSpacePage branches on
+  mayReachExplorerFetch before ever mounting it — a static import is not a
+  mount)
 WITHOUT_VIEW_EXPLORER_FETCH_STRUCTURALLY_REACHABLE=NO
 
 VIEW_ONLY_REVIEW_MODE=UNCHANGED_FROM_PRIOR_REMEDIATION (now sourced from
@@ -373,12 +376,16 @@ REASSIGN_COLOR_LOCK=FIXED (same swap as Accept)
 VIEW_ONLY_MESSAGE_COLOR_LOCK=UNCHANGED_CORRECT (already neutral
   .simprok-rab-card since the prior remediation)
 
-SOURCE_FAMILY_MAP=LOCKED_EXISTING (docs/project-memory/
+SOURCE_FAMILY_MAP=OWNER_LOCKED_FOR_CURRENT_SCOPE (docs/project-memory/
   SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT.md §5/§6.5 — PEMERINTAH/
   TOKO_SUPPLIER/USULAN_USER families, "Harga Pemerintah"/"Harga Toko,
-  Supplier"/"Harga Lapangan" public labels; unratified project-memory, not
-  DECISIONS.md-locked, but not contradicted or re-guessed by this slice —
-  no source-family mapping code was touched)
+  Supplier"/"Harga Lapangan" public labels — governing this slice's own
+  prompt as the Owner-supplied mapping for THIS scope, not re-guessed or
+  contradicted; no source-family mapping code was touched)
+CANONICAL_REPOSITORY_RATIFICATION=PENDING (this project-memory blueprint is
+  not registered in docs/control/DECISIONS.md as an OD-xx/AD-xx; canonical
+  ratification is a separate, future decision — not claimed here)
+SOURCE_MAPPING_CODE_CHANGE=NO
 SOURCE_REPORTER_SEPARATION=PRESERVED (no import/reporting write-path
   touched this slice)
 SOURCE_EVIDENCE_POLICY=NON_REGRESSION_ONLY (untouched)
