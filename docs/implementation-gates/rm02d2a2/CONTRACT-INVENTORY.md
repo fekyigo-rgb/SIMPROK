@@ -312,3 +312,108 @@ MERGE=NO
 PRODUCTION_ACTIVATION=NO
 ```
 
+---
+
+## RM02D2A2-REMEDIATION-02-V2.3-FINAL — date-only semantics + unified capability-aware space
+
+Commits `81f2f51` (Checkpoint 1) → `f8c08d1` (Cowork remediation), on top of
+`ae29af7` above.
+
+```text
+DATE_ONLY_FORMAT=YYYY-MM-DD (exact regex + year/month/day round-trip,
+  backend/src/common/date-only.util.ts — new, reusable)
+DATE_FROM_SEMANTICS=INCLUSIVE_UTC_DAY_START
+DATE_TO_SEMANTICS=EXCLUSIVE_NEXT_UTC_DAY_START (was a real bug: the prior
+  slice's `lte` on a midnight instant silently excluded any non-midnight
+  time on the dateTo day itself — BasicPrice.effectiveDate is a
+  DateTime(3) column, not a bare date, so this was reachable in practice.
+  Confirmed by an e2e fixture at 2026-06-01T18:30:00Z that the OLD code
+  would have excluded and the fix includes.)
+
+BASIC_PRICE_DOOR_VISIBILITY=VISIBLE_WITH_VIEW_OR_IMPORT_OR_REVIEW_VIEW_OR_PUBLISH
+  (BASIC_PRICE_VERIFY alone insufficient — not one of the view-model's
+  four capability inputs)
+CAPABILITY_AWARE_BASIC_PRICE_SPACE=IMPLEMENTED (BasicPriceSpaceRoute +
+  BasicPriceSpacePage; Explorer for BASIC_PRICE_VIEW holders, a
+  permission-aware capability landing — only the actor's own sanctioned
+  doors, no Explorer, no GET /basic-prices call — for everyone else)
+SIDEBAR_FILTER_SCOPE=BASIC_PRICE_ITEM_ONLY (diff-verified: navItems array
+  itself has zero added/removed lines; only the render-time filter and the
+  Basic Price item's routeLabel changed)
+
+EXPLORER_REQUIRES_VIEW=YES
+IMPORT_DOOR_REQUIRES_IMPORT=YES
+REVIEW_DOOR_REQUIRES_REVIEW_VIEW=YES
+PUBLICATION_DOOR_REQUIRES_PUBLISH=YES
+
+PROOF_MODE=PRODUCTION_USED_VIEW_MODEL
+JSX_RENDER_PROOF=HOLD_FOR_OWNER_BROWSER (no JSX/DOM render harness in this
+  repo's current node --test infrastructure; not added, per bounded scope)
+STRUCTURAL_COMPONENT_USAGE_PROOF=AVAILABLE (computeBasicPriceSpaceViewModel
+  called from ProtectedRoute.tsx, Sidebar.tsx, BasicPriceSpacePage.tsx,
+  BasicPriceExplorerPage.tsx; computeReviewActionViewModel called from
+  BasicPriceReviewDetailPage.tsx — confirmed by grep, not by trusting a
+  comment)
+
+WITHOUT_VIEW_EXPLORER_RENDERED=NO (BasicPriceSpacePage branches on
+  mayReachExplorerFetch before ever importing/mounting
+  BasicPriceExplorerPage; that import exists in exactly one file)
+WITHOUT_VIEW_EXPLORER_FETCH_STRUCTURALLY_REACHABLE=NO
+
+VIEW_ONLY_REVIEW_MODE=UNCHANGED_FROM_PRIOR_REMEDIATION (now sourced from
+  reviewActionViewModel instead of inline branching)
+VIEW_ONLY_REVIEWER_COMPONENT_MOUNTED=NO
+VIEW_ONLY_REVIEWER_CALL_STRUCTURALLY_REACHABLE=NO
+RUNTIME_REVIEWER_NETWORK_PROOF=HOLD_FOR_SAFE_E2E_OR_OWNER_BROWSER
+
+ACCEPT_COLOR_LOCK=FIXED (was .simprok-rab-validation-alert, critical-red;
+  now .simprok-rab-card, neutral engineering-blue-bordered)
+REJECT_COLOR_LOCK=UNCHANGED_CORRECT (critical-red permitted for rejection)
+REASSIGN_COLOR_LOCK=FIXED (same swap as Accept)
+VIEW_ONLY_MESSAGE_COLOR_LOCK=UNCHANGED_CORRECT (already neutral
+  .simprok-rab-card since the prior remediation)
+
+SOURCE_FAMILY_MAP=LOCKED_EXISTING (docs/project-memory/
+  SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT.md §5/§6.5 — PEMERINTAH/
+  TOKO_SUPPLIER/USULAN_USER families, "Harga Pemerintah"/"Harga Toko,
+  Supplier"/"Harga Lapangan" public labels; unratified project-memory, not
+  DECISIONS.md-locked, but not contradicted or re-guessed by this slice —
+  no source-family mapping code was touched)
+SOURCE_REPORTER_SEPARATION=PRESERVED (no import/reporting write-path
+  touched this slice)
+SOURCE_EVIDENCE_POLICY=NON_REGRESSION_ONLY (untouched)
+
+PRIVATE_BASIC_PRICE_OWNER_PRINCIPLE=PRESERVED (docs/control/DECISIONS.md,
+  "Basic Price Parallel Curation Pattern", BELUM_DIRATIFIKASI — this
+  slice's new capability-landing copy was checked and makes no claim that
+  Basic Price must be published before use)
+PRIVATE_BASIC_PRICE_IMPLEMENTATION=NOT_IN_THIS_SLICE
+
+OTHER_NAV_ITEM_CHANGE_COUNT=0 (verified: Sidebar.tsx's navItems array has
+  zero added/removed lines in this slice's diff)
+
+COWORK_PRODUCT_REVIEW=PASS (0 blockers; 5 sharpenings — 4 fixed:
+  mayReachExplorerFetch now the actual gate, shared AccessDeniedPanel
+  replacing duplicated Access-Denied JSX incl. an off-palette #dc2626,
+  capability-neutral Sidebar tooltip, icons on landing doors. 1 deferred:
+  the pre-existing publication-centric Explorer empty-state copy predates
+  this slice.)
+COWORK_SECURITY_REVIEW=PASS_WITH_CONDITIONS (0 blockers; re-derived the
+  date round-trip logic independently via `node -e` against the actual
+  parseDateOnlyUtc/nextUtcDayStart code, ran both executable spec files for
+  real — 50/50 backend, 94/94 frontend — confirmed zero backend
+  @Permissions/@UseGuards diff, zero schema/migration/seed/dependency
+  change. 3 sharpenings — 1 fixed: the same-day e2e test's fixture was at
+  exact midnight and did not actually discriminate the bug, now uses a
+  dedicated non-midnight fixture. 2 disclosed, not fixed: pre-existing tsc
+  errors in 6 untouched files; a second hardcoded #dc2626 the product
+  reviewer's fix already closed in the same remediation commit.)
+REMEDIATION_LOOP_COUNT=1 (of maximum 2 authorized)
+
+SAFE_E2E=HOLD_MISSING_SAFE_LOCAL_ENV (unchanged — still no .env.e2e/
+  .env.test in this worktree)
+BROWSER_ACCEPTANCE=HOLD_FOR_OWNER_LOCAL_ACCEPTANCE
+MERGE_READY=NO
+PRODUCT_LIVE=NO
+```
+
