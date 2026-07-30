@@ -199,6 +199,33 @@ export function BasicPriceExplorerPage() {
         </div>
       </header>
 
+      {hasPermission('BASIC_PRICE_REVIEW_VIEW') || hasPermission('BASIC_PRICE_PUBLISH') ? (
+        <div
+          style={{ display: 'flex', gap: '16px', fontSize: 'var(--text-sm)', marginBottom: '4px' }}
+          aria-label="Manajemen Basic Price"
+        >
+          <span>Manajemen Basic Price:</span>
+          {hasPermission('BASIC_PRICE_REVIEW_VIEW') ? (
+            <button
+              type="button"
+              onClick={() => navigate('/basic-price/reviews')}
+              style={{ padding: 0, border: 'none', background: 'none', textDecoration: 'underline', cursor: 'pointer' }}
+            >
+              Antrean Review
+            </button>
+          ) : null}
+          {hasPermission('BASIC_PRICE_PUBLISH') ? (
+            <button
+              type="button"
+              onClick={() => navigate('/basic-price/publications')}
+              style={{ padding: 0, border: 'none', background: 'none', textDecoration: 'underline', cursor: 'pointer' }}
+            >
+              Antrean Publikasi
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       <section
         className="simprok-rab-toolbar"
         aria-label="Filter Harga Dasar"

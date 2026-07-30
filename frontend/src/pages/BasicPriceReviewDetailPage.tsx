@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import {
   BasicPriceWorkflowError,
   acceptReview,
@@ -41,10 +42,19 @@ type LoadState = 'loading' | 'ready' | 'error';
  * actor id. request-correction is intentionally NOT offered (the resubmission
  * path is unapproved). A success message is sticky: a follow-up refetch never
  * erases it.
+ *
+ * RM02D2A2 remediation — permission-honest mutation UI: a viewer who only has
+ * BASIC_PRICE_REVIEW_VIEW (not BASIC_PRICE_VERIFY) never sees the accept/
+ * reject/reassign controls, and — critically — the ReviewerSearchSelect
+ * component (which calls GET /basic-price-reviews/reviewer-candidates, a
+ * BASIC_PRICE_VERIFY-gated route) is never even mounted for them, so it never
+ * fires that network call only to be met with a predictable 403.
  */
 export function BasicPriceReviewDetailPage() {
   const { reviewId } = useParams<{ reviewId: string }>();
   const navigate = useNavigate();
+  const { hasPermission } = useAuth();
+  const canVerify = hasPermission('BASIC_PRICE_VERIFY');
   const [detail, setDetail] = useState<ReviewDetail | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [loadError, setLoadError] = useState('');
@@ -167,7 +177,13 @@ export function BasicPriceReviewDetailPage() {
         ) : null}
       </header>
 
-      {actionable ? (
+      {actionable && !canVerify ? (
+        <p className="simprok-rab-card">
+          Anda memiliki akses melihat, tetapi tidak memiliki kewenangan memutuskan review ini.
+        </p>
+      ) : null}
+
+      {actionable && canVerify ? (
         <>
           <section className="simprok-rab-validation-alert" aria-label="Terima harga">
             <strong>Terima (verifikasi) harga</strong>
@@ -243,9 +259,11 @@ export function BasicPriceReviewDetailPage() {
             </button>
           </section>
         </>
-      ) : (
+      ) : null}
+
+      {!actionable ? (
         <p>Review ini sudah tidak dapat diubah ({slaStateLabel(detail.slaState)}).</p>
-      )}
+      ) : null}
 
       <section aria-label="Riwayat keputusan" style={{ marginTop: '16px' }}>
         <strong>Riwayat keputusan</strong>
