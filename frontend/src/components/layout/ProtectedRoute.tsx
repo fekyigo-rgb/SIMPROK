@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Navigate, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatRoleLabel } from '../../utils/roleLabels';
+import { computeBasicPriceSpaceViewModel } from '../../utils/basicPriceSpaceViewModel';
 
 /**
  * Permission-code-based route gate (RM-01a authority matrix), the RAB
@@ -24,6 +25,71 @@ export function PermissionRoute({ permission, children }: { permission: string; 
   }
 
   if (hasPermission(permission)) {
+    return <>{children}</>;
+  }
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  return (
+    <div style={{ padding: 'var(--space-8)', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-4)', marginTop: '80px' }}>
+      <div>
+        <h2 style={{ color: 'var(--simprok-critical-red-600)' }}>Access Denied</h2>
+        <p style={{ color: 'var(--simprok-engineering-blue-700)' }}>
+          {permissionState === 'ERROR'
+            ? 'Kewenangan tidak dapat diperiksa. Muat ulang atau login kembali.'
+            : 'Workspace aktif Anda tidak memiliki kewenangan untuk membuka ruang ini.'}
+        </p>
+      </div>
+      <button
+        onClick={handleLogout}
+        style={{
+          padding: 'var(--space-3) var(--space-6)',
+          backgroundColor: '#dc2626',
+          color: 'white',
+          border: 'none',
+          borderRadius: 'var(--radius-md)',
+          cursor: 'pointer',
+          fontSize: 'var(--text-base)',
+          fontWeight: 'var(--weight-semibold)',
+        }}
+      >
+        Logout &amp; Login with Correct Account
+      </button>
+    </div>
+  );
+}
+
+/**
+ * RM02D2A2-REMEDIATION-02 — Basic-Price-specific route gate: `/basic-price`
+ * is a capability-aware space, not an Explorer-only route gated by a single
+ * permission. Entry is allowed with ANY of BASIC_PRICE_VIEW, _IMPORT,
+ * _REVIEW_VIEW, or _PUBLISH (BASIC_PRICE_VERIFY alone is deliberately not
+ * enough — see basicPriceSpaceViewModel). Deliberately a separate, narrow
+ * gate rather than widening the generic single-permission PermissionRoute.
+ */
+export function BasicPriceSpaceRoute({ children }: { children: ReactNode }) {
+  const { permissionState, hasPermission, logout } = useAuth();
+  const navigate = useNavigate();
+
+  if (permissionState === 'IDLE' || permissionState === 'LOADING') {
+    return (
+      <div style={{ padding: 'var(--space-8)', textAlign: 'center' }}>
+        Memeriksa kewenangan...
+      </div>
+    );
+  }
+
+  const canEnter = computeBasicPriceSpaceViewModel({
+    hasView: hasPermission('BASIC_PRICE_VIEW'),
+    hasImport: hasPermission('BASIC_PRICE_IMPORT'),
+    hasReviewView: hasPermission('BASIC_PRICE_REVIEW_VIEW'),
+    hasPublish: hasPermission('BASIC_PRICE_PUBLISH'),
+  }).canEnterBasicPriceSpace;
+
+  if (canEnter) {
     return <>{children}</>;
   }
 

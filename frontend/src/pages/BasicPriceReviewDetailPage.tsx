@@ -12,6 +12,7 @@ import {
   type ReviewerIdentity,
 } from '../api/basicPriceWorkflow';
 import { ReviewerSearchSelect } from '../components/basic-price/ReviewerSearchSelect';
+import { computeReviewActionViewModel } from '../utils/reviewActionViewModel';
 import {
   acceptNeedsExplicitGeneralRegion,
   banner,
@@ -48,7 +49,9 @@ type LoadState = 'loading' | 'ready' | 'error';
  * reject/reassign controls, and — critically — the ReviewerSearchSelect
  * component (which calls GET /basic-price-reviews/reviewer-candidates, a
  * BASIC_PRICE_VERIFY-gated route) is never even mounted for them, so it never
- * fires that network call only to be met with a predictable 403.
+ * fires that network call only to be met with a predictable 403. Rendering
+ * decisions come from reviewActionViewModel (production-used, unit-tested),
+ * not ad-hoc inline branching.
  */
 export function BasicPriceReviewDetailPage() {
   const { reviewId } = useParams<{ reviewId: string }>();
@@ -145,6 +148,11 @@ export function BasicPriceReviewDetailPage() {
   const actionable =
     (detail.slaState === 'OPEN' || detail.slaState === 'ESCALATED') &&
     detail.submissionStatus === 'UNDER_REVIEW';
+  const reviewAction = computeReviewActionViewModel({
+    actionable,
+    hasReviewView: hasPermission('BASIC_PRICE_REVIEW_VIEW'),
+    hasVerify: canVerify,
+  });
   const needsGeneralRegion = acceptNeedsExplicitGeneralRegion(detail.region);
 
   return (
@@ -177,87 +185,101 @@ export function BasicPriceReviewDetailPage() {
         ) : null}
       </header>
 
-      {actionable && !canVerify ? (
+      {reviewAction.showReadOnlyMessage ? (
         <p className="simprok-rab-card">
           Anda memiliki akses melihat, tetapi tidak memiliki kewenangan memutuskan review ini.
         </p>
       ) : null}
 
-      {actionable && canVerify ? (
+      {reviewAction.showActionArea ? (
         <>
-          <section className="simprok-rab-validation-alert" aria-label="Terima harga">
-            <strong>Terima (verifikasi) harga</strong>
-            {needsGeneralRegion ? (
+          {reviewAction.showAcceptAction ? (
+            // Color Lock: Accept is a trusted/positive action, not an error —
+            // uses the neutral engineering-blue-bordered card, never the
+            // critical-red validation-alert style.
+            <section className="simprok-rab-card" aria-label="Terima harga">
+              <strong>Terima (verifikasi) harga</strong>
+              {needsGeneralRegion ? (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={explicitGeneralRegion}
+                    onChange={(event) => setExplicitGeneralRegion(event.target.checked)}
+                  />
+                  Tidak ada wilayah — verifikasi sebagai harga umum (tanpa wilayah)
+                </label>
+              ) : null}
               <label>
-                <input
-                  type="checkbox"
-                  checked={explicitGeneralRegion}
-                  onChange={(event) => setExplicitGeneralRegion(event.target.checked)}
-                />
-                Tidak ada wilayah — verifikasi sebagai harga umum (tanpa wilayah)
+                Catatan (opsional)
+                <input type="text" value={acceptNote} onChange={(event) => setAcceptNote(event.target.value)} />
               </label>
-            ) : null}
-            <label>
-              Catatan (opsional)
-              <input type="text" value={acceptNote} onChange={(event) => setAcceptNote(event.target.value)} />
-            </label>
-            <button
-              disabled={busy || (needsGeneralRegion && !explicitGeneralRegion)}
-              onClick={() =>
-                void runAction(
-                  () => acceptReview(detail.reviewId, buildAcceptBody({ explicitGeneralRegion, note: acceptNote })),
-                  'Harga diterima dan diverifikasi. Menunggu penerbitan oleh reviewer lain.',
-                )
-              }
-            >
-              Terima Harga
-            </button>
-          </section>
+              <button
+                disabled={busy || (needsGeneralRegion && !explicitGeneralRegion)}
+                onClick={() =>
+                  void runAction(
+                    () => acceptReview(detail.reviewId, buildAcceptBody({ explicitGeneralRegion, note: acceptNote })),
+                    'Harga diterima dan diverifikasi. Menunggu penerbitan oleh reviewer lain.',
+                  )
+                }
+              >
+                Terima Harga
+              </button>
+            </section>
+          ) : null}
 
-          <section className="simprok-rab-validation-alert" aria-label="Tolak harga">
-            <strong>Tolak harga</strong>
-            <label>
-              Alasan penolakan (wajib)
-              <input type="text" value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} />
-            </label>
-            <button
-              disabled={busy || !canReject(rejectNote)}
-              onClick={() =>
-                void runAction(
-                  () => rejectReview(detail.reviewId, buildRejectBody(rejectNote)),
-                  'Harga ditolak.',
-                )
-              }
-            >
-              Tolak Harga
-            </button>
-          </section>
+          {reviewAction.showRejectAction ? (
+            // Color Lock: rejection is the one action Owner's lock explicitly
+            // allows as critical-red — this is the only section that keeps it.
+            <section className="simprok-rab-validation-alert" aria-label="Tolak harga">
+              <strong>Tolak harga</strong>
+              <label>
+                Alasan penolakan (wajib)
+                <input type="text" value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} />
+              </label>
+              <button
+                disabled={busy || !canReject(rejectNote)}
+                onClick={() =>
+                  void runAction(
+                    () => rejectReview(detail.reviewId, buildRejectBody(rejectNote)),
+                    'Harga ditolak.',
+                  )
+                }
+              >
+                Tolak Harga
+              </button>
+            </section>
+          ) : null}
 
-          <section className="simprok-rab-validation-alert" aria-label="Alihkan review">
-            <strong>Alihkan ke reviewer lain</strong>
-            <ReviewerSearchSelect selected={reassignTarget} disabled={busy} onSelect={setReassignTarget} />
-            <label>
-              Catatan (opsional)
-              <input type="text" value={reassignNote} onChange={(event) => setReassignNote(event.target.value)} />
-            </label>
-            <button
-              disabled={busy}
-              onClick={() =>
-                void runAction(
-                  () =>
-                    reassignReview(
-                      detail.reviewId,
-                      buildReassignBody({ assignedToUserId: reassignTarget?.userId ?? null, note: reassignNote }),
-                    ),
-                  reassignTarget
-                    ? `Review dialihkan ke ${reviewerLabel(reassignTarget)}.`
-                    : 'Penugasan reviewer dilepas.',
-                )
-              }
-            >
-              Alihkan Review
-            </button>
-          </section>
+          {reviewAction.showReassignAction ? (
+            // Color Lock: reassignment is neutral/informational, not an error.
+            <section className="simprok-rab-card" aria-label="Alihkan review">
+              <strong>Alihkan ke reviewer lain</strong>
+              {reviewAction.showReviewerSelector ? (
+                <ReviewerSearchSelect selected={reassignTarget} disabled={busy} onSelect={setReassignTarget} />
+              ) : null}
+              <label>
+                Catatan (opsional)
+                <input type="text" value={reassignNote} onChange={(event) => setReassignNote(event.target.value)} />
+              </label>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  void runAction(
+                    () =>
+                      reassignReview(
+                        detail.reviewId,
+                        buildReassignBody({ assignedToUserId: reassignTarget?.userId ?? null, note: reassignNote }),
+                      ),
+                    reassignTarget
+                      ? `Review dialihkan ke ${reviewerLabel(reassignTarget)}.`
+                      : 'Penugasan reviewer dilepas.',
+                  )
+                }
+              >
+                Alihkan Review
+              </button>
+            </section>
+          ) : null}
         </>
       ) : null}
 

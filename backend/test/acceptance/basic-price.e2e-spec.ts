@@ -692,6 +692,18 @@ describe('Basic Price Public Eligibility (e2e)', () => {
       expect(codes).toEqual(['MAT-A-VALID']);
     });
 
+    it("dateTo is the final day fully included (dateFrom=dateTo=the row's own day still matches it)", async () => {
+      // MAT-A-VALID's effectiveDate is exactly 2026-06-01 — a same-day range
+      // proves dateTo is not excluding its own day (the exact bug this
+      // remediation closes: an `lte` on a midnight instant would have
+      // silently excluded any later time-of-day on the same calendar day).
+      const res = await listAsA(
+        `?search=${TAG}&dateFrom=2026-06-01&dateTo=2026-06-01`,
+      ).expect(200);
+      const codes = res.body.data.map((p: any) => p.resource.code);
+      expect(codes).toEqual(['MAT-A-VALID']);
+    });
+
     it('rejects dateFrom after dateTo with 400 (no silent correction)', async () => {
       await listAsA(`?dateFrom=2026-06-30&dateTo=2026-01-01`).expect(400);
     });
@@ -702,6 +714,22 @@ describe('Basic Price Public Eligibility (e2e)', () => {
 
     it('rejects a malformed dateFrom with 400', async () => {
       await listAsA(`?dateFrom=not-a-date`).expect(400);
+    });
+
+    it('rejects an ISO8601 "basic format" dateFrom (no separators) with 400', async () => {
+      await listAsA(`?dateFrom=20260601`).expect(400);
+    });
+
+    it('rejects a timestamp in the date-only dateFrom field with 400', async () => {
+      await listAsA(`?dateFrom=2026-06-01T10:00:00Z`).expect(400);
+    });
+
+    it('rejects a calendar-invalid dateTo with 400 (never silently rolled forward)', async () => {
+      await listAsA(`?dateTo=2026-02-30`).expect(400);
+    });
+
+    it('rejects a non-leap-year Feb 29 dateTo with 400', async () => {
+      await listAsA(`?dateTo=2026-02-29`).expect(400);
     });
   });
 

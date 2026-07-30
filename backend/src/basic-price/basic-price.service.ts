@@ -15,6 +15,7 @@ import {
   type BasicPriceExplorerItem,
   type ExplorerRowSource,
 } from '../common/basic-price-workflow.projection';
+import { nextUtcDayStart, parseDateOnlyUtc } from '../common/date-only.util';
 
 const EXPLORER_ROW_SELECT = {
   id: true,
@@ -148,30 +149,23 @@ export class BasicPriceService {
       );
     }
 
-    // class-validator's IsISO8601 accepts ISO8601 "basic format" strings
-    // (e.g. "20260601") that JavaScript's Date constructor cannot parse
-    // (Invalid Date) — a format that is spec-valid but unusable here. Parsing
-    // through this helper (rather than a bare `new Date(...)`) turns that
-    // straight into an honest 400, never a silent NaN reaching Prisma.
-    const parseFilterDate = (
-      value: string,
-      fieldName: 'dateFrom' | 'dateTo',
-    ): Date => {
-      const parsed = new Date(value);
-      if (Number.isNaN(parsed.getTime())) {
-        throw new BadRequestException(`${fieldName} is not a valid date`);
-      }
-      return parsed;
-    };
+    // Date-only contract: dateFrom/dateTo are exact calendar days, parsed via
+    // the shared date-only helper (exact YYYY-MM-DD + year/month/day
+    // round-trip) — never a bare `new Date(...)`, which would silently roll
+    // a calendar-invalid date forward instead of rejecting it.
     const parsedDateFrom = dateFrom
-      ? parseFilterDate(dateFrom, 'dateFrom')
+      ? parseDateOnlyUtc(dateFrom, 'dateFrom')
       : undefined;
-    const parsedDateTo = dateTo ? parseFilterDate(dateTo, 'dateTo') : undefined;
+    // Parsed as the START of the dateTo day so "dateFrom after dateTo" below
+    // compares calendar days, not the exclusive query bound derived from it.
+    const parsedDateToStart = dateTo
+      ? parseDateOnlyUtc(dateTo, 'dateTo')
+      : undefined;
 
     if (
       parsedDateFrom &&
-      parsedDateTo &&
-      parsedDateFrom.getTime() > parsedDateTo.getTime()
+      parsedDateToStart &&
+      parsedDateFrom.getTime() > parsedDateToStart.getTime()
     ) {
       throw new BadRequestException('dateFrom must not be after dateTo');
     }
@@ -218,10 +212,16 @@ export class BasicPriceService {
       const startOfYear = new Date(`${year}-01-01T00:00:00.000Z`);
       const endOfYear = new Date(`${year}-12-31T23:59:59.999Z`);
       where.effectiveDate = { gte: startOfYear, lte: endOfYear };
-    } else if (parsedDateFrom || parsedDateTo) {
+    } else if (parsedDateFrom || parsedDateToStart) {
+      // dateFrom is inclusive (>= start of that UTC day). dateTo is
+      // exclusive-next-day (< start of the day AFTER it) — using `lte` on a
+      // midnight instant would only cover the very first moment of the
+      // dateTo day and silently exclude the rest of it.
       where.effectiveDate = {
         ...(parsedDateFrom ? { gte: parsedDateFrom } : {}),
-        ...(parsedDateTo ? { lte: parsedDateTo } : {}),
+        ...(parsedDateToStart
+          ? { lt: nextUtcDayStart(parsedDateToStart) }
+          : {}),
       };
     }
 

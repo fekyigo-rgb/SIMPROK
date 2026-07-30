@@ -11,6 +11,7 @@ import {
   type RegionLookupItem,
 } from '../api/basicPriceExplorer';
 import { ExplorerRegionFilterSelect } from '../components/basic-price/ExplorerRegionFilterSelect';
+import { computeBasicPriceSpaceViewModel } from '../utils/basicPriceSpaceViewModel';
 import {
   EXPLORER_EMPTY_STATE_BODY,
   EXPLORER_EMPTY_STATE_TITLE,
@@ -86,6 +87,12 @@ const formatDate = (value: string): string =>
 export function BasicPriceExplorerPage() {
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
+  const basicPriceSpace = computeBasicPriceSpaceViewModel({
+    hasView: hasPermission('BASIC_PRICE_VIEW'),
+    hasImport: hasPermission('BASIC_PRICE_IMPORT'),
+    hasReviewView: hasPermission('BASIC_PRICE_REVIEW_VIEW'),
+    hasPublish: hasPermission('BASIC_PRICE_PUBLISH'),
+  });
   const [draft, setDraft] = useState<DraftFilters>(EMPTY_DRAFT);
   const [page, setPage] = useState(1);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -188,7 +195,7 @@ export function BasicPriceExplorerPage() {
           <button onClick={reload} title="Muat ulang" aria-label="Muat ulang">
             <RefreshCw size={16} /> Muat ulang
           </button>
-          {hasPermission('BASIC_PRICE_IMPORT') ? (
+          {basicPriceSpace.showImportDoor ? (
             <button
               onClick={() => navigate('/basic-price/import')}
               title="Impor atau kontribusikan harga dasar"
@@ -199,13 +206,13 @@ export function BasicPriceExplorerPage() {
         </div>
       </header>
 
-      {hasPermission('BASIC_PRICE_REVIEW_VIEW') || hasPermission('BASIC_PRICE_PUBLISH') ? (
+      {basicPriceSpace.showManagementArea ? (
         <div
           style={{ display: 'flex', gap: '16px', fontSize: 'var(--text-sm)', marginBottom: '4px' }}
           aria-label="Manajemen Basic Price"
         >
           <span>Manajemen Basic Price:</span>
-          {hasPermission('BASIC_PRICE_REVIEW_VIEW') ? (
+          {basicPriceSpace.showReviewDoor ? (
             <button
               type="button"
               onClick={() => navigate('/basic-price/reviews')}
@@ -214,7 +221,7 @@ export function BasicPriceExplorerPage() {
               Antrean Review
             </button>
           ) : null}
-          {hasPermission('BASIC_PRICE_PUBLISH') ? (
+          {basicPriceSpace.showPublicationDoor ? (
             <button
               type="button"
               onClick={() => navigate('/basic-price/publications')}

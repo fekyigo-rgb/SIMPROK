@@ -15,6 +15,10 @@ import {
   ShieldAlert,
   Users,
 } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
+import { computeBasicPriceSpaceViewModel } from '../../utils/basicPriceSpaceViewModel';
+
+const BASIC_PRICE_PATH = '/basic-price';
 
 const navItems = [
   { name: 'Beranda', path: '/', icon: Home, routeLabel: 'Beranda SIMPROK' },
@@ -35,6 +39,20 @@ const navItems = [
 
 export function Sidebar() {
   const location = useLocation();
+  const { hasPermission } = useAuth();
+
+  // RM02D2A2-REMEDIATION-02 — Sidebar filter scope is the Basic Price item
+  // ONLY. Every other nav item's route/label/order/icon/visibility stays
+  // exactly as declared in navItems, untouched by this permission check.
+  const basicPriceSpace = computeBasicPriceSpaceViewModel({
+    hasView: hasPermission('BASIC_PRICE_VIEW'),
+    hasImport: hasPermission('BASIC_PRICE_IMPORT'),
+    hasReviewView: hasPermission('BASIC_PRICE_REVIEW_VIEW'),
+    hasPublish: hasPermission('BASIC_PRICE_PUBLISH'),
+  });
+  const visibleNavItems = navItems.filter(
+    (item) => item.path !== BASIC_PRICE_PATH || basicPriceSpace.showBasicPriceSidebarDoor,
+  );
 
   return (
     <aside className="simprok-sidebar" aria-label="Navigasi utama SIMPROK">
@@ -55,7 +73,7 @@ export function Sidebar() {
       </div>
 
       <nav className="simprok-sidebar__nav">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon;
           const isActive = item.path === '/'
             ? location.pathname === '/' && !location.search

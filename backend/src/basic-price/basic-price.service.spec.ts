@@ -284,7 +284,7 @@ describe('BasicPriceService', () => {
       );
     });
 
-    it('applies dateFrom/dateTo as an effectiveDate range', async () => {
+    it('applies dateFrom inclusive and dateTo exclusive-next-day (final day fully included)', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
@@ -297,12 +297,86 @@ describe('BasicPriceService', () => {
         expect.objectContaining({
           where: expect.objectContaining({
             effectiveDate: {
-              gte: new Date('2026-01-01'),
-              lte: new Date('2026-06-30'),
+              gte: new Date('2026-01-01T00:00:00.000Z'),
+              lt: new Date('2026-07-01T00:00:00.000Z'),
             },
           }),
         }),
       );
+    });
+
+    it('dateTo month rollover: 2026-04-30 excludes at 2026-05-01, not before', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, { dateTo: '2026-04-30' });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            effectiveDate: { lt: new Date('2026-05-01T00:00:00.000Z') },
+          }),
+        }),
+      );
+    });
+
+    it('dateTo year rollover: 2026-12-31 excludes at 2027-01-01, not before', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, { dateTo: '2026-12-31' });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            effectiveDate: { lt: new Date('2027-01-01T00:00:00.000Z') },
+          }),
+        }),
+      );
+    });
+
+    it('accepts a valid leap day as both dateFrom and dateTo', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        dateFrom: '2024-02-29',
+        dateTo: '2024-02-29',
+      });
+
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            effectiveDate: {
+              gte: new Date('2024-02-29T00:00:00.000Z'),
+              lt: new Date('2024-03-01T00:00:00.000Z'),
+            },
+          }),
+        }),
+      );
+    });
+
+    it('rejects a non-leap-year Feb 29 (400, never silently rolled to Mar 1)', async () => {
+      await expect(
+        service.findAllForWorkspace(workspaceId, { dateTo: '2026-02-29' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects a calendar-invalid date (400, never silently rolled forward)', async () => {
+      await expect(
+        service.findAllForWorkspace(workspaceId, { dateFrom: '2026-02-30' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects a timestamp in a date-only field (400)', async () => {
+      await expect(
+        service.findAllForWorkspace(workspaceId, {
+          dateFrom: '2026-06-30T10:00:00Z',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
     });
 
     it('applies sourceName as a real-provenance-chain filter (never fabricated)', async () => {
@@ -368,7 +442,7 @@ describe('BasicPriceService', () => {
     });
 
     it.each(['dateFrom', 'dateTo'] as const)(
-      'rejects an ISO8601 "basic format" %s that class-validator accepts but JS Date cannot parse (400, never reaches Prisma as Invalid Date)',
+      'rejects an ISO8601 "basic format" %s (no separators) — not this date-only contract\'s exact YYYY-MM-DD format (400)',
       async (field) => {
         await expect(
           service.findAllForWorkspace(workspaceId, { [field]: '20260615' }),

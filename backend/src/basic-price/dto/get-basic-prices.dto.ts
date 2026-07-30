@@ -7,7 +7,7 @@ import {
   IsIn,
   IsUUID,
   IsEnum,
-  IsISO8601,
+  Matches,
   MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -44,16 +44,21 @@ export class GetBasicPricesDto {
   // Explorer date-range filter (Explorer minimum: "tanggal awal", "tanggal akhir").
   // Mutually exclusive with `year` — combining both is an ambiguous time
   // interpretation and is rejected by the service (400), not silently merged.
-  // `strict: true` rejects a calendar-invalid date (e.g. "2026-02-30", which
-  // loose ISO8601 accepts and JS Date would silently roll over to March) —
-  // the service additionally guards against ISO8601 "basic format" strings
-  // (e.g. "20260601") that are format-valid but unparseable by JS Date.
+  // Date-only contract: an exact YYYY-MM-DD calendar date, never a free-form
+  // timestamp. This is a cheap format gate only — the service does the full
+  // parse (exact regex + year/month/day round-trip, via date-only.util),
+  // which is what actually rejects a calendar-invalid date (e.g.
+  // "2026-02-30") instead of silently rolling it forward.
   @IsOptional()
-  @IsISO8601({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'dateFrom must be an exact YYYY-MM-DD calendar date',
+  })
   dateFrom?: string;
 
   @IsOptional()
-  @IsISO8601({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'dateTo must be an exact YYYY-MM-DD calendar date',
+  })
   dateTo?: string;
 
   // Source name filter — only meaningful when the row's provenance chain
