@@ -503,12 +503,22 @@ describe('Basic Price Public Eligibility (e2e)', () => {
     return request(app.getHttpServer()).get('/basic-prices').expect(401);
   });
 
-  it('rejects 403 without BASIC_PRICE_VIEW', () => {
-    return request(app.getHttpServer())
+  // LEGACY_TEST_CHANGE_REGISTER (Amendment A2): OLD_EXPECTATION was that an
+  // ACTIVE membership with zero role grants is denied BASIC_PRICE_VIEW
+  // (403). Owner Decision ONE SIMPROK BASIC PRICE PRODUCT MODEL makes
+  // BASIC_PRICE_VIEW an active-membership baseline, granted structurally by
+  // WorkspacePermissionResolverService regardless of role — memberNoRole IS
+  // an ACTIVE membership (just with no MembershipRole rows), so it now
+  // succeeds. TEST_WEAKENING=NO: a genuinely unauthenticated request still
+  // 401s (test above), and cross-tenant/internal-only eligibility is
+  // unaffected (see the eligibility tests below).
+  it('an ACTIVE membership with zero role grants still sees the public catalog (active-membership baseline)', async () => {
+    const response = await request(app.getHttpServer())
       .get('/basic-prices')
       .set('Authorization', `Bearer ${tokenNoRole}`)
       .set('X-Workspace-ID', workspaceAId)
-      .expect(403);
+      .expect(200);
+    expect(response.body.data).toBeDefined();
   });
 
   it('list: only eligible (PUBLISHED/PUBLISHED) global + own tenant; no internal, no cross-tenant', async () => {
@@ -776,12 +786,16 @@ describe('Basic Price Public Eligibility (e2e)', () => {
         .expect(401);
     });
 
-    it('rejects 403 without BASIC_PRICE_VIEW', () => {
-      return request(app.getHttpServer())
+    // LEGACY_TEST_CHANGE_REGISTER (Amendment A2): see the identical note on
+    // the GET /basic-prices test above — memberNoRole is an ACTIVE
+    // membership with zero role grants, and BASIC_PRICE_VIEW is now an
+    // active-membership baseline permission, so this now succeeds (200).
+    it('an ACTIVE membership with zero role grants can still list active regions (active-membership baseline)', async () => {
+      await request(app.getHttpServer())
         .get('/basic-prices/lookups/regions')
         .set('Authorization', `Bearer ${tokenNoRole}`)
         .set('X-Workspace-ID', workspaceAId)
-        .expect(403);
+        .expect(200);
     });
 
     it('a BASIC_PRICE_VIEW-only actor (no BASIC_PRICE_IMPORT) can list active regions', async () => {

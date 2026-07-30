@@ -135,10 +135,14 @@ describe('RM02B Basic Price import (e2e)', () => {
     membershipRoleBId = membershipRoleB.id;
 
     // RM-02D2A-1: foreman@test.local becomes the dedicated publisher actor
-    // — ONLY BASIC_PRICE_PUBLISH, distinct from assigned@test.local (the
-    // verifier). Every other test in this file still relies on foreman
-    // lacking BASIC_PRICE_IMPORT/RESOLVE/SUBMIT/VERIFY/REVIEW_VIEW, which
-    // this leaves untouched.
+    // — explicitly granted ONLY BASIC_PRICE_PUBLISH via role, distinct from
+    // assigned@test.local (the verifier). RM02D2A2-REMEDIATION-03: foreman's
+    // WorkspaceMembership is ACTIVE (seed-acceptance.ts), so under the
+    // active-membership baseline (Owner Decision ONE SIMPROK BASIC PRICE
+    // PRODUCT MODEL) foreman ALSO holds BASIC_PRICE_VIEW/_IMPORT/_RESOLVE/
+    // _SUBMIT structurally now, regardless of role — foreman genuinely
+    // lacks only BASIC_PRICE_VERIFY and BASIC_PRICE_REVIEW_VIEW (both
+    // remain governed/role-only, never baseline).
     const foremanAccount = await prisma.account.findUniqueOrThrow({ where: { email: 'foreman@test.local' } });
     foremanAccountId = foremanAccount.id;
     const foremanMembership = await prisma.workspaceMembership.findUniqueOrThrow({
@@ -277,9 +281,22 @@ describe('RM02B Basic Price import (e2e)', () => {
         }),
       });
 
-    it('requires authentication and the bounded review permission', async () => {
+    // LEGACY_TEST_CHANGE_REGISTER (Amendment A2): OLD_EXPECTATION was that
+    // an ACTIVE-but-ungranted actor (foremanToken) is denied this route
+    // (403). RM02D2A2-REMEDIATION-03 moved this lookup's guard from the
+    // internal BASIC_PRICE_REVIEW_VIEW to the user-owned-import
+    // BASIC_PRICE_RESOLVE (Owner Decision: this is Activity A — a user
+    // resolving their own batch's rows — never internal curation), which is
+    // an active-membership baseline permission. foreman's ACTIVE membership
+    // now structurally holds it, so the route now succeeds (200).
+    // TEST_WEAKENING=NO: unauthenticated access still 401 (unchanged); a
+    // genuinely different workspace/tenant is still denied (see the
+    // dedicated cross-tenant test below), and internal-curation routes
+    // (/basic-price-reviews/*, /basic-price-publications/*) are untouched
+    // and still require their own governed permission.
+    it('requires authentication; any ACTIVE membership (even foreman, granted only BASIC_PRICE_PUBLISH) reaches this user-owned-import lookup via the active-membership baseline', async () => {
       await lookup('resources').expect(401);
-      await lookup('resources', foremanToken).expect(403);
+      await lookup('resources', foremanToken).expect(200);
       await lookup('resources', assignedToken).expect(200);
     });
 
@@ -331,9 +348,19 @@ describe('RM02B Basic Price import (e2e)', () => {
   });
 
   describe('permission boundary', () => {
-    it('the current default state (permission not granted) fails closed with 403, never 500', async () => {
+    // LEGACY_TEST_CHANGE_REGISTER (Amendment A2): OLD_EXPECTATION was that
+    // an actor with no explicit BASIC_PRICE_IMPORT role grant is denied
+    // (403). Owner Decision ONE SIMPROK BASIC PRICE PRODUCT MODEL makes
+    // BASIC_PRICE_IMPORT an active-membership baseline — foreman's ACTIVE
+    // membership grants it structurally, with no role needed. This is not
+    // "permission not granted" any more; it is the corrected default.
+    // TEST_WEAKENING=NO: PermissionsGuard/resolver is still genuinely
+    // exercised (see the dedicated resolver unit tests for the true
+    // denied case — missing/inactive/invited/suspended membership).
+    it('any ACTIVE membership (even foreman, granted only BASIC_PRICE_PUBLISH) can preview via the active-membership baseline — never 500', async () => {
       const buffer = await buildBasicPriceXlsx();
-      await previewFile(buffer, 'fail-closed-default', foremanToken).expect(403);
+      const response = await previewFile(buffer, 'baseline-import-default', foremanToken).expect(201);
+      expect(response.body.batchId).toBeDefined();
     });
 
     it('a granted BASIC_PRICE_IMPORT permission allows preview, exercising the real PermissionsGuard/resolver path', async () => {

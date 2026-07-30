@@ -230,14 +230,29 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
       expect(response.body.candidates.map((c: { resourceCatalogId: string }) => c.resourceCatalogId)).not.toContain(RESOURCE_WORKSPACE_B_SAME_NAME_ID);
     });
 
-    it('requires authentication and the bounded review permission', async () => {
+    // LEGACY_TEST_CHANGE_REGISTER (Amendment A2): OLD_EXPECTATION was that
+    // foremanToken is denied with 403 for lacking BASIC_PRICE_REVIEW_VIEW.
+    // RM02D2A2-REMEDIATION-03 (a) moved this route's guard to
+    // BASIC_PRICE_RESOLVE, an active-membership baseline foreman's ACTIVE
+    // membership now holds structurally, so it clears the permission guard;
+    // and (b) added the user-owned import boundary — this batch was
+    // uploaded by assignedToken's account, and foreman is a different
+    // account, so the service layer now denies it as 404 (the same
+    // "not found" used for a workspace mismatch — ownership denial is never
+    // distinguishable from non-existence). TEST_WEAKENING=NO: this is a
+    // *stronger*, ownership-scoped denial than the old permission-only
+    // check, not a widened one — even a foreman explicitly granted
+    // BASIC_PRICE_REVIEW_VIEW today would still be denied, because
+    // reviewing/resolving this route is now about batch ownership, not
+    // just holding a capability code.
+    it('requires authentication; a same-workspace ACTIVE account that did not upload this batch is denied by the user-owned import boundary (404), even though it holds the resolve permission via the active-membership baseline', async () => {
       const preview = await previewFile(await buildBasicPriceXlsx(), 'd1-candidates-permission').expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
       await request(app.getHttpServer())
         .get(`/basic-price-imports/${preview.body.batchId}/rows/${row.id}/candidates`)
         .set('x-workspace-id', WORKSPACE_A)
         .expect(401);
-      await getCandidates(preview.body.batchId, row.id, foremanToken).expect(403);
+      await getCandidates(preview.body.batchId, row.id, foremanToken).expect(404);
       await getCandidates(preview.body.batchId, row.id, assignedToken).expect(200);
     });
 
