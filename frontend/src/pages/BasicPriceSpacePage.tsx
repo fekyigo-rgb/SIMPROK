@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { FileInput } from 'lucide-react';
+import { ClipboardCheck, FileInput, Send } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { computeBasicPriceSpaceViewModel } from '../utils/basicPriceSpaceViewModel';
 import { BasicPriceExplorerPage } from './BasicPriceExplorerPage';
@@ -25,7 +25,10 @@ export function BasicPriceSpacePage() {
     hasPublish: hasPermission('BASIC_PRICE_PUBLISH'),
   });
 
-  if (basicPriceSpace.showExplorer) {
+  // Gated on mayReachExplorerFetch (not showExplorer directly) so the field
+  // that actually names "is the Explorer's GET /basic-prices fetch
+  // structurally reachable" is the one deciding whether it mounts.
+  if (basicPriceSpace.mayReachExplorerFetch) {
     return <BasicPriceExplorerPage />;
   }
 
@@ -47,12 +50,12 @@ export function BasicPriceSpacePage() {
         ) : null}
         {basicPriceSpace.showReviewDoor ? (
           <button onClick={() => navigate('/basic-price/reviews')} title="Buka antrean review Basic Price">
-            Antrean Review
+            <ClipboardCheck size={16} /> Antrean Review
           </button>
         ) : null}
         {basicPriceSpace.showPublicationDoor ? (
           <button onClick={() => navigate('/basic-price/publications')} title="Buka antrean penerbitan Basic Price">
-            Antrean Publikasi
+            <Send size={16} /> Antrean Publikasi
           </button>
         ) : null}
       </div>

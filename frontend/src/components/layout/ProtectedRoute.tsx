@@ -5,6 +5,43 @@ import { formatRoleLabel } from '../../utils/roleLabels';
 import { computeBasicPriceSpaceViewModel } from '../../utils/basicPriceSpaceViewModel';
 
 /**
+ * Shared "Access Denied" panel for the permission-code route gates below
+ * (PermissionRoute, BasicPriceSpaceRoute). Kept as one component so the two
+ * gates cannot silently diverge in copy or Color Lock — the logout button
+ * uses the locked critical-red token, never a hardcoded hex.
+ */
+function AccessDeniedPanel({ message, onLogout }: { message: string; onLogout: () => void }) {
+  return (
+    <div style={{ padding: 'var(--space-8)', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-4)', marginTop: '80px' }}>
+      <div>
+        <h2 style={{ color: 'var(--simprok-critical-red-600)' }}>Access Denied</h2>
+        <p style={{ color: 'var(--simprok-engineering-blue-700)' }}>{message}</p>
+      </div>
+      <button
+        onClick={onLogout}
+        style={{
+          padding: 'var(--space-3) var(--space-6)',
+          backgroundColor: 'var(--simprok-critical-red-600)',
+          color: 'white',
+          border: 'none',
+          borderRadius: 'var(--radius-md)',
+          cursor: 'pointer',
+          fontSize: 'var(--text-base)',
+          fontWeight: 'var(--weight-semibold)',
+        }}
+      >
+        Logout &amp; Login with Correct Account
+      </button>
+    </div>
+  );
+}
+
+const accessDeniedMessage = (permissionState: 'ERROR' | 'READY'): string =>
+  permissionState === 'ERROR'
+    ? 'Kewenangan tidak dapat diperiksa. Muat ulang atau login kembali.'
+    : 'Workspace aktif Anda tidak memiliki kewenangan untuk membuka ruang ini.';
+
+/**
  * Permission-code-based route gate (RM-01a authority matrix), the RAB
  * journey's replacement for role-literal RoleRoute. Fail-closed while the
  * capability fetch is IDLE/LOADING/ERROR — never renders children or an
@@ -28,37 +65,14 @@ export function PermissionRoute({ permission, children }: { permission: string; 
     return <>{children}</>;
   }
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
-
   return (
-    <div style={{ padding: 'var(--space-8)', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-4)', marginTop: '80px' }}>
-      <div>
-        <h2 style={{ color: 'var(--simprok-critical-red-600)' }}>Access Denied</h2>
-        <p style={{ color: 'var(--simprok-engineering-blue-700)' }}>
-          {permissionState === 'ERROR'
-            ? 'Kewenangan tidak dapat diperiksa. Muat ulang atau login kembali.'
-            : 'Workspace aktif Anda tidak memiliki kewenangan untuk membuka ruang ini.'}
-        </p>
-      </div>
-      <button
-        onClick={handleLogout}
-        style={{
-          padding: 'var(--space-3) var(--space-6)',
-          backgroundColor: '#dc2626',
-          color: 'white',
-          border: 'none',
-          borderRadius: 'var(--radius-md)',
-          cursor: 'pointer',
-          fontSize: 'var(--text-base)',
-          fontWeight: 'var(--weight-semibold)',
-        }}
-      >
-        Logout &amp; Login with Correct Account
-      </button>
-    </div>
+    <AccessDeniedPanel
+      message={accessDeniedMessage(permissionState === 'ERROR' ? 'ERROR' : 'READY')}
+      onLogout={() => {
+        logout();
+        navigate('/login');
+      }}
+    />
   );
 }
 
@@ -93,37 +107,14 @@ export function BasicPriceSpaceRoute({ children }: { children: ReactNode }) {
     return <>{children}</>;
   }
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
-
   return (
-    <div style={{ padding: 'var(--space-8)', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-4)', marginTop: '80px' }}>
-      <div>
-        <h2 style={{ color: 'var(--simprok-critical-red-600)' }}>Access Denied</h2>
-        <p style={{ color: 'var(--simprok-engineering-blue-700)' }}>
-          {permissionState === 'ERROR'
-            ? 'Kewenangan tidak dapat diperiksa. Muat ulang atau login kembali.'
-            : 'Workspace aktif Anda tidak memiliki kewenangan untuk membuka ruang ini.'}
-        </p>
-      </div>
-      <button
-        onClick={handleLogout}
-        style={{
-          padding: 'var(--space-3) var(--space-6)',
-          backgroundColor: '#dc2626',
-          color: 'white',
-          border: 'none',
-          borderRadius: 'var(--radius-md)',
-          cursor: 'pointer',
-          fontSize: 'var(--text-base)',
-          fontWeight: 'var(--weight-semibold)',
-        }}
-      >
-        Logout &amp; Login with Correct Account
-      </button>
-    </div>
+    <AccessDeniedPanel
+      message={accessDeniedMessage(permissionState === 'ERROR' ? 'ERROR' : 'READY')}
+      onLogout={() => {
+        logout();
+        navigate('/login');
+      }}
+    />
   );
 }
 

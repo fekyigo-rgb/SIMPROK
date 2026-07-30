@@ -42,6 +42,7 @@ describe('Basic Price Public Eligibility (e2e)', () => {
   let tenantBEligiblePriceId: string; // tenant B, PUBLISHED/PUBLISHED (cross-tenant to A)
   let resTenantAValidId: string; // by-resource → eligible
   let resTenantAVerifiedId: string; // by-resource → empty (internal)
+  let resTenantALateDayId: string; // non-midnight effectiveDate, deliberately outside the TAG search namespace
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -251,6 +252,39 @@ describe('Basic Price Public Eligibility (e2e)', () => {
         sourceType: 'SYSTEM_ESTIMATE',
         verificationStatus: 'PUBLISHED',
         freshnessStatus: 'EXPIRED',
+      },
+    });
+
+    // Tenant A eligible, with a genuinely non-midnight effectiveDate — the
+    // one fixture that actually discriminates the dateTo-exclusive-next-day
+    // fix. MAT-A-VALID's effectiveDate is exact midnight, so an old buggy
+    // `lte` on a midnight instant would coincidentally still have matched
+    // it; this row (18:30 UTC on the same calendar day) would NOT have
+    // matched the old `lte` bound and only passes under the corrected `lt
+    // nextUtcDayStart` bound. Deliberately named WITHOUT the ${TAG} prefix
+    // (and queried by exact resourceId, not `search=${TAG}`) so it never
+    // perturbs the other tests' exact eligible-count assertions.
+    const resALateDay = await prisma.resourceCatalog.create({
+      data: {
+        workspaceId: workspaceAId,
+        code: 'MAT-A-LATEDAY',
+        name: 'Tenant A Late-Day Timestamp Fixture (non-TAG)',
+        type: 'MATERIAL',
+        baseUnit: 'Zak',
+      },
+    });
+    resTenantALateDayId = resALateDay.id;
+    await prisma.basicPrice.create({
+      data: {
+        workspaceId: workspaceAId,
+        resourceId: resALateDay.id,
+        status: 'PUBLISHED',
+        value: 150500,
+        effectiveDate: new Date('2026-06-01T18:30:00.000Z'),
+        sourceOrigin: 'SUPPLIER',
+        sourceType: 'SYSTEM_ESTIMATE',
+        verificationStatus: 'PUBLISHED',
+        freshnessStatus: 'CURRENT',
       },
     });
 
@@ -692,16 +726,18 @@ describe('Basic Price Public Eligibility (e2e)', () => {
       expect(codes).toEqual(['MAT-A-VALID']);
     });
 
-    it("dateTo is the final day fully included (dateFrom=dateTo=the row's own day still matches it)", async () => {
-      // MAT-A-VALID's effectiveDate is exactly 2026-06-01 — a same-day range
-      // proves dateTo is not excluding its own day (the exact bug this
-      // remediation closes: an `lte` on a midnight instant would have
-      // silently excluded any later time-of-day on the same calendar day).
+    it("dateTo is the final day fully included, even for a non-midnight time on that day (dateFrom=dateTo=the row's own day still matches it)", async () => {
+      // MAT-A-LATEDAY's effectiveDate is 2026-06-01T18:30:00Z — genuinely
+      // discriminating: the old buggy `lte` on a midnight instant would have
+      // silently excluded this row (18:30 > 00:00 on the same day), while
+      // the corrected `lt` exclusive-next-day bound correctly includes it.
+      // Scoped by exact resourceId (not `search=${TAG}`) so this fixture
+      // never perturbs the other exact eligible-count assertions.
       const res = await listAsA(
-        `?search=${TAG}&dateFrom=2026-06-01&dateTo=2026-06-01`,
+        `?resourceId=${resTenantALateDayId}&dateFrom=2026-06-01&dateTo=2026-06-01`,
       ).expect(200);
-      const codes = res.body.data.map((p: any) => p.resource.code);
-      expect(codes).toEqual(['MAT-A-VALID']);
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0].resource.code).toBe('MAT-A-LATEDAY');
     });
 
     it('rejects dateFrom after dateTo with 400 (no silent correction)', async () => {
