@@ -152,3 +152,74 @@ FABRICATED_DATA=NO
 D2A2_CODING=NO
 STOP_AND_REPORT=YES
 ```
+
+---
+
+## RM02D2A2 V2 — re-implementation status (this branch)
+
+Everything above is the byte-accurate BASELINE at the parent SHA
+(`fb7f89aaa6d2de9418c4839e0d957402db02fc2b`). Under the V2 execution
+(`RM02D2A2-REIMPLEMENTATION-FROM-LOCKED-CONTRACT-V2`) the contract gaps it
+documented are now CLOSED in source on
+`feat/rm02d2a2-basic-price-review-publication-ui`. This is a fresh
+re-implementation from the locked contract — NOT a byte recovery of any old
+SHA. Only statuses actually exercised by an available gate are marked proven;
+browser and safe-E2E proof are held for Owner local acceptance.
+
+```text
+CONTRACT_GAP_AT_PARENT=YES
+PARENT_D2A2_CODING=NO
+REIMPLEMENTATION_FROM_LOCKED_CONTRACT=YES
+OLD_REPORTED_SHA_RECOVERED=NO
+BYTE_EQUIVALENCE_TO_OLD_SHA=NOT_CLAIMED
+
+SCHEMA_CHANGE=NO
+MIGRATION_CHANGE=NO
+
+# Closed in source and proven by available (non-browser) unit gates:
+RESOURCE_HUMAN_READABLE_IDENTITY=IMPLEMENTED_UNIT_PROVEN
+REGION_HUMAN_READABLE_NAME=IMPLEMENTED_UNIT_PROVEN
+ACTIVE_REVIEWER_SELECTOR=IMPLEMENTED_UNIT_PROVEN
+EXACT_DECIMAL_STRING_TWO_DIGITS=IMPLEMENTED_UNIT_PROVEN
+
+# Real source, build green, pure-helper unit tests — NOT browser-proven:
+REVIEW_UI=IMPLEMENTED_SOURCE_BUILD_GREEN
+PUBLICATION_UI=IMPLEMENTED_SOURCE_BUILD_GREEN
+
+# Deliberately absent (resubmission path unapproved/untested):
+REQUEST_CORRECTION_UI=ABSENT_BY_DESIGN
+
+# Held for Owner local acceptance:
+SAFE_E2E=HOLD_MISSING_SAFE_LOCAL_ENV
+BROWSER_THREE_ACTOR_JOURNEY=HOLD_FOR_OWNER_LOCAL_ACCEPTANCE
+
+MERGE=NO
+PRODUCTION_ACTIVATION=NO
+```
+
+### Contracts closed in source
+
+- **Resource human-readable identity** (code/name/type) — projected in the
+  review queue, review detail, and publication queue; backend + frontend unit
+  tests.
+- **Region human-readable name** (`code — name`) — projections, new
+  `GET /basic-price-import-lookups/regions`, and the import Region selector
+  (the raw-UUID text field is removed); unit tests.
+- **Active reviewer selector** — new
+  `GET /basic-price-reviews/reviewer-candidates` restricted to the active
+  User→Membership→Account chain, tenant-scoped from server context; reassign
+  selector; cross-tenant / inactive-Account / inactive-membership /
+  inactive-User / dangling negative unit tests.
+- **Exact two-digit decimal price string** — `toDecimalString2` (backend) and
+  the reused string-based `formatBackendRupiah` (frontend); no
+  `Number`/`parseFloat`/float math; backend + frontend unit tests (including a
+  beyond-IEEE-754 case).
+- **Review & publication UI** — real pages with honest LOADING / EMPTY /
+  FORBIDDEN / NOT_FOUND / CONFLICT / SERVER_ERROR / SUCCESS states; a success
+  message is sticky across refetch.
+
+### Deliberately still ABSENT
+
+- request-correction UI / button / frontend API wrapper / menu — the backend
+  route is untouched and NOT exposed to any user journey.
+```

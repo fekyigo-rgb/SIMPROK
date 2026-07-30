@@ -13,6 +13,8 @@ import {
   formatBatchProgress,
   type BasicPriceImportBatchSummary,
 } from '../utils/basicPriceImportDisplay';
+import { RegionSearchSelect } from '../components/basic-price/RegionSearchSelect';
+import type { RegionLookupItem } from '../api/basicPriceWorkflow';
 
 const SOURCE_TYPE_OPTIONS: { value: PriceSourceType; label: string }[] = [
   { value: 'VENDOR_QUOTE', label: 'Penawaran Vendor' },
@@ -43,6 +45,7 @@ export function BasicPriceImportPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState<BasicPriceImportMetadata>({});
   const [batch, setBatch] = useState<BasicPriceImportBatchSummary | null>(null);
+  const [region, setRegion] = useState<RegionLookupItem | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('Pilih file XLSX Basic Price untuk memulai.');
 
@@ -137,10 +140,16 @@ export function BasicPriceImportPage() {
               Tanggal Berlaku
               <input type="date" value={metadata.effectiveDate ?? ''} onChange={(event) => updateMetadataField('effectiveDate', event.target.value || undefined)} />
             </label>
-            <label>
-              ID Wilayah (Region)
-              <input type="text" placeholder="UUID Region" value={metadata.regionId ?? ''} onChange={(event) => updateMetadataField('regionId', event.target.value || undefined)} />
-            </label>
+            <div>
+              <RegionSearchSelect
+                selected={region}
+                disabled={isBusy}
+                onSelect={(next) => {
+                  setRegion(next);
+                  updateMetadataField('regionId', next?.id ?? undefined);
+                }}
+              />
+            </div>
           </div>
 
           <button onClick={() => void handleSaveMetadata()} disabled={isBusy} style={{ marginTop: '12px' }}>

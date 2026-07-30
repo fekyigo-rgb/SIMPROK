@@ -11,6 +11,9 @@ import { ProjectNotesPage } from './pages/ProjectNotesPage';
 import { ProjectListPage } from './pages/ProjectListPage';
 import { BasicPriceImportPage } from './pages/BasicPriceImportPage';
 import { BasicPriceReviewPage } from './pages/BasicPriceReviewPage';
+import { BasicPriceReviewQueuePage } from './pages/BasicPriceReviewQueuePage';
+import { BasicPriceReviewDetailPage } from './pages/BasicPriceReviewDetailPage';
+import { BasicPricePublicationQueuePage } from './pages/BasicPricePublicationQueuePage';
 import { ShowcasePage } from './pages/ShowcasePage';
 import { FirstRealInputPreviewPage } from './pages/FirstRealInputPreviewPage';
 import { AuthProvider } from './contexts/AuthContext';
@@ -41,6 +44,9 @@ function App() {
               <Route path="project/:projectId/rab/ahsp-snapshot" element={<ProjectAhspSnapshotPage />} />
               <Route path="basic-price/import" element={<PermissionRoute permission="BASIC_PRICE_IMPORT"><BasicPriceImportPage /></PermissionRoute>} />
               <Route path="basic-price/import/:batchId/review" element={<PermissionRoute permission="BASIC_PRICE_REVIEW_VIEW"><BasicPriceReviewPage /></PermissionRoute>} />
+              <Route path="basic-price/reviews" element={<PermissionRoute permission="BASIC_PRICE_REVIEW_VIEW"><BasicPriceReviewQueuePage /></PermissionRoute>} />
+              <Route path="basic-price/reviews/:reviewId" element={<PermissionRoute permission="BASIC_PRICE_REVIEW_VIEW"><BasicPriceReviewDetailPage /></PermissionRoute>} />
+              <Route path="basic-price/publications" element={<PermissionRoute permission="BASIC_PRICE_PUBLISH"><BasicPricePublicationQueuePage /></PermissionRoute>} />
               <Route path="project/:projectId/detail" element={<ProjectDetailDoorPage />} />
               <Route path="project/:projectId/catatan" element={<ProjectNotesPage />} />
               <Route path="project/:id" element={<ProjectWarRoomPage />} />
