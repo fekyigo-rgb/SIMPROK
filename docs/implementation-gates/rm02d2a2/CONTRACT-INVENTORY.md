@@ -222,4 +222,93 @@ PRODUCTION_ACTIVATION=NO
 
 - request-correction UI / button / frontend API wrapper / menu — the backend
   route is untouched and NOT exposed to any user journey.
+
+---
+
+## RM02D2A2-REMEDIATION-01-V2.1-FINAL — Basic Price product mental model
+
+Owner Lock (this remediation, implemented in source on the same branch,
+commits `c0ace38` (Checkpoint 1) → `dab91cf` (Cowork remediation) →
+`9ad1813` (Checkpoint 2)):
+
+```text
+PRIMARY_BASIC_PRICE_DOOR=EXPLORER
+SECONDARY_BASIC_PRICE_DOOR=IMPORT_CONTRIBUTION
+REVIEW_PUBLICATION_MAIN_SIDEBAR=ABSENT
+MANAGEMENT_WORKFLOW=PERMISSION_GATED_SECONDARY_AREA
+
+PUBLIC_API_CANONICAL_ROUTE=GET_/basic-prices
+PARALLEL_EXPLORER_ENDPOINT=NO
+PUBLIC_ELIGIBILITY=PUBLISHED_PLUS_PUBLISHED (unchanged, byte-identical
+  basic-price-eligibility.policy.ts — confirmed via `git show` diff, empty)
+CROSS_TENANT_PRIVATE_PRICE_LEAK_COUNT=0
+DECIMAL_STRING_TWO_DIGITS=IMPLEMENTED_UNIT_PROVEN
+SOURCE_NAME_HONESTY=IMPLEMENTED_UNIT_PROVEN (null when provenance absent;
+  blank/whitespace-only stored name also treated as absent, never "")
+EXPECTED_CURRENT_EXPLORER_STATE=UNVERIFIED_NO_LOCAL_DB (no simprok_test/
+  simprok_e2e connection available in this worktree; not assumed either way)
+
+BASIC_PRICE_VIEW_E2E_FIXTURE=REUSED_EXISTING (no new fixture-only grant
+  needed — new Explorer/lookup e2e assertions reuse the existing
+  BASIC_PRICE_VIEW-holding tokenA fixture already present in
+  basic-price.e2e-spec.ts)
+PERSISTENT_ACCEPTANCE_BASIC_PRICE_VIEW_ACTIVATION=NOT_PERFORMED (separate
+  Owner gate, unchanged)
+PRODUCTION_PERMISSION_SEED_CHANGE=NO
+
+VIEW_ONLY_REVIEW_MODE=IMPLEMENTED_SOURCE_BUILD_GREEN (BasicPriceReviewDetailPage:
+  accept/reject/reassign controls hidden without BASIC_PRICE_VERIFY; honest
+  "Anda memiliki akses melihat, tetapi tidak memiliki kewenangan memutuskan
+  review ini." message shown instead)
+VERIFY_ACTION_MODE=IMPLEMENTED_SOURCE_BUILD_GREEN
+REVIEWER_ENDPOINT_VIEW_ONLY_NETWORK_CALL_COUNT=0 (ReviewerSearchSelect is
+  nested inside the BASIC_PRICE_VERIFY-gated block, never mounted for a
+  view-only actor, so it is structurally incapable of calling
+  reviewer-candidates)
+
+DIRECT_URL_NEGATIVE_MATRIX (rm02d2a1-basic-price-lifecycle.e2e-spec.ts,
+  reusing the existing three-actor safe-E2E fixture, source-only — not
+  executed here, no local DB):
+  VERIFY_WITHOUT_REVIEW_VIEW_LIST=403 (new dedicated actor)
+  VERIFY_WITHOUT_REVIEW_VIEW_DETAIL=403 (new dedicated actor)
+  REVIEW_VIEW_WITHOUT_VERIFY_REVIEWER_CANDIDATES=403 (existing Actor 1)
+  NO_PUBLISH_PERMISSION_QUEUE_AND_PUBLISH=403 (existing Actor 1 + Actor 2)
+  NO_IMPORT_PERMISSION=403 (pre-existing test, basic-price-import.e2e-spec.ts)
+  EXPLORER_CROSS_TENANT=0 (basic-price.e2e-spec.ts, existing + extended)
+
+COWORK_PRODUCT_REVIEW=REVISI_THEN_FIXED (1 blocker: Color Lock violation —
+  Explorer price cards/empty-states used the critical-red
+  .simprok-rab-validation-alert with a nonexistent --info modifier; fixed
+  to the neutral .simprok-rab-card. Non-blocking sharpenings also applied:
+  stale-page dead-end fallback, year input min/max, removed dead
+  EXPLORER_DEFAULT_FILTERS constant and pass-through label wrappers, fixed
+  doubled "Sumber:" copy. NOT fixed, disclosed as pre-existing debt outside
+  this bounded slice: the identical red-box misuse already present in
+  BasicPriceReviewQueuePage/BasicPricePublicationQueuePage/
+  BasicPriceImportPage/RabWorkspacePage predates this branch; the
+  ExplorerRegionFilterSelect/RegionSearchSelect near-duplication is
+  intentional — reusing RegionSearchSelect would call the
+  BASIC_PRICE_IMPORT-gated lookup for Explorer viewers who may lack that
+  permission; unstyled filter <input>/<select> elements would require
+  editing the protected frontend/src/index.css.)
+COWORK_SECURITY_REVIEW=PASS_WITH_CONDITIONS_THEN_FIXED (0 blockers. Two
+  sharpenings fixed: class-validator's IsISO8601 accepted a
+  calendar-invalid date that JS Date silently rolls forward, and an
+  ISO8601 "basic format" string JS Date cannot parse — both independently
+  reproduced by this executor via `node -e` against the installed
+  class-validator, then closed with `{strict:true}` at the DTO plus an
+  explicit isNaN(getTime()) guard in the service, both failing closed with
+  400. Two sharpenings NOT fixed, disclosed as pre-existing/out-of-bounded-
+  scope: global ValidationPipe lacks whitelist/forbidNonWhitelisted
+  (app-wide config, reviewer confirmed harmless here); GET /basic-prices/:id
+  has no ParseUUIDPipe, pre-existing on a route this slice did not create.)
+REMEDIATION_LOOP_COUNT=1 (of maximum 2 authorized)
+
+SAFE_E2E=HOLD_MISSING_SAFE_LOCAL_ENV (only .env.test.example present in
+  this worktree; no .env.e2e, no .env.test — SAFE_E2E_PASS_CLAIM=NO)
+BROWSER_ACCEPTANCE=HOLD_FOR_OWNER_LOCAL_ACCEPTANCE
+
+MERGE=NO
+PRODUCTION_ACTIVATION=NO
 ```
+
