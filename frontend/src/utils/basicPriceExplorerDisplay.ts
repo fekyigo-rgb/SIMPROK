@@ -62,13 +62,6 @@ export interface ExplorerFilters {
   sortOrder?: 'asc' | 'desc';
 }
 
-export const EXPLORER_DEFAULT_FILTERS: ExplorerFilters = {
-  page: 1,
-  limit: 20,
-  sortBy: 'effectiveDate',
-  sortOrder: 'desc',
-};
-
 /** Only the non-empty, defined fields become query params — never a literal "undefined". */
 export function buildExplorerQueryParams(filters: ExplorerFilters): Record<string, string> {
   const params: Record<string, string> = {};
@@ -110,11 +103,10 @@ export const isInvalidDateRange = (dateFrom?: string, dateTo?: string): boolean 
 };
 
 // ── Human-readable labels (never a raw UUID) ─────────────────────────────────
-
-export const explorerResourceLabel = (resource: ExplorerResourceIdentity): string =>
-  resourceLabel(resource);
-
-export const explorerRegionLabel = (region: RegionIdentity | null): string => regionLabel(region);
+// resourceLabel/regionLabel/regionOptionLabel are re-exported above, unchanged
+// from the review/publication journey — an ExplorerResourceIdentity is
+// structurally a superset of ResourceIdentity (adds baseUnit), so the same
+// function applies without a wrapper.
 
 /**
  * Formats a decimal-string price for display. The value stays a string the

@@ -342,7 +342,13 @@ export function deriveExplorerSourceName(
 ): string | null {
   const batch = row.sourceSubmission?.importRow?.batch;
   if (!batch) return null;
-  return batch.sourceVendorName ?? batch.sourceOrganizationName ?? null;
+  // A blank/whitespace-only stored name is not a real human-facing source
+  // name either — treat it the same as absent rather than rendering "".
+  const vendorName = batch.sourceVendorName?.trim();
+  if (vendorName) return vendorName;
+  const organizationName = batch.sourceOrganizationName?.trim();
+  if (organizationName) return organizationName;
+  return null;
 }
 
 export function mapExplorerItem(

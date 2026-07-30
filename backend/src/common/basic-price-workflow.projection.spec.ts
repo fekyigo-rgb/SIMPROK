@@ -305,6 +305,33 @@ describe('basic-price workflow projections (RM-02D2A2)', () => {
         } as unknown as ExplorerRowSource),
       ).toBeNull();
     });
+
+    it('treats a blank/whitespace-only vendor name as absent, falling through to organization name', () => {
+      expect(
+        deriveExplorerSourceName({
+          sourceSubmission: {
+            importRow: {
+              batch: {
+                sourceVendorName: '   ',
+                sourceOrganizationName: 'Dinas PU',
+              },
+            },
+          },
+        } as unknown as ExplorerRowSource),
+      ).toBe('Dinas PU');
+    });
+
+    it('is null (never an empty string) when both names are blank/whitespace-only', () => {
+      expect(
+        deriveExplorerSourceName({
+          sourceSubmission: {
+            importRow: {
+              batch: { sourceVendorName: '', sourceOrganizationName: '   ' },
+            },
+          },
+        } as unknown as ExplorerRowSource),
+      ).toBeNull();
+    });
   });
 
   describe('mapExplorerItem — Basic Price Explorer public projection', () => {

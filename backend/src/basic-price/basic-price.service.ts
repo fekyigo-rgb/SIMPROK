@@ -148,10 +148,30 @@ export class BasicPriceService {
       );
     }
 
+    // class-validator's IsISO8601 accepts ISO8601 "basic format" strings
+    // (e.g. "20260601") that JavaScript's Date constructor cannot parse
+    // (Invalid Date) — a format that is spec-valid but unusable here. Parsing
+    // through this helper (rather than a bare `new Date(...)`) turns that
+    // straight into an honest 400, never a silent NaN reaching Prisma.
+    const parseFilterDate = (
+      value: string,
+      fieldName: 'dateFrom' | 'dateTo',
+    ): Date => {
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException(`${fieldName} is not a valid date`);
+      }
+      return parsed;
+    };
+    const parsedDateFrom = dateFrom
+      ? parseFilterDate(dateFrom, 'dateFrom')
+      : undefined;
+    const parsedDateTo = dateTo ? parseFilterDate(dateTo, 'dateTo') : undefined;
+
     if (
-      dateFrom &&
-      dateTo &&
-      new Date(dateFrom).getTime() > new Date(dateTo).getTime()
+      parsedDateFrom &&
+      parsedDateTo &&
+      parsedDateFrom.getTime() > parsedDateTo.getTime()
     ) {
       throw new BadRequestException('dateFrom must not be after dateTo');
     }
@@ -198,10 +218,10 @@ export class BasicPriceService {
       const startOfYear = new Date(`${year}-01-01T00:00:00.000Z`);
       const endOfYear = new Date(`${year}-12-31T23:59:59.999Z`);
       where.effectiveDate = { gte: startOfYear, lte: endOfYear };
-    } else if (dateFrom || dateTo) {
+    } else if (parsedDateFrom || parsedDateTo) {
       where.effectiveDate = {
-        ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-        ...(dateTo ? { lte: new Date(dateTo) } : {}),
+        ...(parsedDateFrom ? { gte: parsedDateFrom } : {}),
+        ...(parsedDateTo ? { lte: parsedDateTo } : {}),
       };
     }
 

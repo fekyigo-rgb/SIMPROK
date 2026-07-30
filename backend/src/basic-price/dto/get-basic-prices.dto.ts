@@ -44,12 +44,16 @@ export class GetBasicPricesDto {
   // Explorer date-range filter (Explorer minimum: "tanggal awal", "tanggal akhir").
   // Mutually exclusive with `year` — combining both is an ambiguous time
   // interpretation and is rejected by the service (400), not silently merged.
+  // `strict: true` rejects a calendar-invalid date (e.g. "2026-02-30", which
+  // loose ISO8601 accepts and JS Date would silently roll over to March) —
+  // the service additionally guards against ISO8601 "basic format" strings
+  // (e.g. "20260601") that are format-valid but unparseable by JS Date.
   @IsOptional()
-  @IsISO8601()
+  @IsISO8601({ strict: true })
   dateFrom?: string;
 
   @IsOptional()
-  @IsISO8601()
+  @IsISO8601({ strict: true })
   dateTo?: string;
 
   // Source name filter — only meaningful when the row's provenance chain

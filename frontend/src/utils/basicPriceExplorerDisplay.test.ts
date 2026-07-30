@@ -4,13 +4,13 @@ import {
   buildExplorerQueryParams,
   explorerErrorMessageFromStatus,
   explorerErrorStateFromStatus,
-  explorerRegionLabel,
-  explorerResourceLabel,
   explorerSourceNameLabel,
   formatExplorerPrice,
   freshnessLabel,
   isAmbiguousTimeFilter,
   isInvalidDateRange,
+  regionLabel,
+  resourceLabel,
   sourceOriginLabel,
   sourceTypeLabel,
   workspaceScopeLabel,
@@ -55,20 +55,13 @@ test('isInvalidDateRange — true only when dateFrom is strictly after dateTo', 
   assert.equal(isInvalidDateRange('2026-01-01', undefined), false);
 });
 
-test('explorerResourceLabel — "code — name", falls back to name when code is null', () => {
+test('resourceLabel/regionLabel are re-exported and apply to the Explorer identity shape (baseUnit is a superset field)', () => {
   assert.equal(
-    explorerResourceLabel({ id: 'r1', code: 'MAT-01', name: 'Semen', type: 'MATERIAL', baseUnit: 'Zak' }),
+    resourceLabel({ id: 'r1', code: 'MAT-01', name: 'Semen', type: 'MATERIAL', baseUnit: 'Zak' }),
     'MAT-01 — Semen',
   );
-  assert.equal(
-    explorerResourceLabel({ id: 'r1', code: null, name: 'Kerikil', type: 'MATERIAL', baseUnit: 'M3' }),
-    'Kerikil',
-  );
-});
-
-test('explorerRegionLabel — "code — name", honest "Umum" copy when no region', () => {
-  assert.equal(explorerRegionLabel({ id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' }), 'ID-JK — DKI Jakarta');
-  assert.equal(explorerRegionLabel(null), 'Umum (tanpa wilayah)');
+  assert.equal(regionLabel({ id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' }), 'ID-JK — DKI Jakarta');
+  assert.equal(regionLabel(null), 'Umum (tanpa wilayah)');
 });
 
 test('formatExplorerPrice — exact string formatting, no float math', () => {

@@ -17,13 +17,13 @@ import {
   EXPLORER_NO_MATCH_TITLE,
   explorerErrorMessageFromStatus,
   explorerErrorStateFromStatus,
-  explorerRegionLabel,
-  explorerResourceLabel,
   explorerSourceNameLabel,
   formatExplorerPrice,
   freshnessLabel,
   isAmbiguousTimeFilter,
   isInvalidDateRange,
+  regionLabel,
+  resourceLabel,
   sourceOriginLabel,
   sourceTypeLabel,
   workspaceScopeLabel,
@@ -221,6 +221,8 @@ export function BasicPriceExplorerPage() {
           Tahun
           <input
             type="number"
+            min={2000}
+            max={2100}
             value={draft.year}
             onChange={(event) => updateDraft('year', event.target.value)}
             placeholder="mis. 2026"
@@ -322,17 +324,27 @@ export function BasicPriceExplorerPage() {
           ) : null}
 
           {state.kind === 'ready' && state.meta.total === 0 && !filtersActive ? (
-            <div className="simprok-rab-validation-alert" style={{ marginTop: '16px' }}>
+            <div className="simprok-rab-card" style={{ marginTop: '16px' }}>
               <strong>{EXPLORER_EMPTY_STATE_TITLE}</strong>
               <p>{EXPLORER_EMPTY_STATE_BODY}</p>
             </div>
           ) : null}
 
           {state.kind === 'ready' && state.meta.total === 0 && filtersActive ? (
-            <div className="simprok-rab-validation-alert" style={{ marginTop: '16px' }}>
+            <div className="simprok-rab-card" style={{ marginTop: '16px' }}>
               <strong>{EXPLORER_NO_MATCH_TITLE}</strong>
               <button type="button" onClick={resetFilters}>
                 Bersihkan filter
+              </button>
+            </div>
+          ) : null}
+
+          {state.kind === 'ready' && state.meta.total > 0 && state.items.length === 0 ? (
+            <div className="simprok-rab-card" style={{ marginTop: '16px' }}>
+              <strong>Halaman ini tidak memiliki hasil.</strong>
+              <p>Total {state.meta.total} hasil ditemukan pada halaman lain.</p>
+              <button type="button" onClick={() => setPage(1)}>
+                Kembali ke halaman 1
               </button>
             </div>
           ) : null}
@@ -345,13 +357,13 @@ export function BasicPriceExplorerPage() {
                 {state.items.map((item) => (
                   <section
                     key={item.basicPriceId}
-                    className="simprok-rab-validation-alert simprok-rab-validation-alert--info"
-                    aria-label={explorerResourceLabel(item.resource)}
+                    className="simprok-rab-card"
+                    aria-label={resourceLabel(item.resource)}
                   >
-                    <strong>{explorerResourceLabel(item.resource)}</strong>
+                    <strong>{resourceLabel(item.resource)}</strong>
                     <p>
                       {formatExplorerPrice(item.price)} / {item.resource.baseUnit} ·{' '}
-                      {explorerRegionLabel(item.region)} · {workspaceScopeLabel(item.workspaceScope)}
+                      {regionLabel(item.region)} · {workspaceScopeLabel(item.workspaceScope)}
                     </p>
                     <p>
                       Berlaku sejak {formatDate(item.effectiveDate)}
@@ -359,8 +371,8 @@ export function BasicPriceExplorerPage() {
                       {freshnessLabel(item.freshnessStatus)}
                     </p>
                     <p>
-                      Sumber: {explorerSourceNameLabel(item.sourceName)} (
-                      {sourceTypeLabel(item.sourceType)}, {sourceOriginLabel(item.sourceOrigin)})
+                      {explorerSourceNameLabel(item.sourceName)} ({sourceTypeLabel(item.sourceType)},{' '}
+                      {sourceOriginLabel(item.sourceOrigin)})
                     </p>
                   </section>
                 ))}

@@ -367,6 +367,16 @@ describe('BasicPriceService', () => {
       expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
     });
 
+    it.each(['dateFrom', 'dateTo'] as const)(
+      'rejects an ISO8601 "basic format" %s that class-validator accepts but JS Date cannot parse (400, never reaches Prisma as Invalid Date)',
+      async (field) => {
+        await expect(
+          service.findAllForWorkspace(workspaceId, { [field]: '20260615' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
+      },
+    );
+
     it('applies combinations of search + unit + tenant scope properly', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
