@@ -424,3 +424,295 @@ MERGE_READY=NO
 PRODUCT_LIVE=NO
 ```
 
+## RM02D2A2-REMEDIATION-03-FINAL — ONE SIMPROK BASIC PRICE PRODUCT MODEL
+
+```
+EXECUTION_SPEC_ID=RM02D2A2-REMEDIATION-03-FINAL
+OWNER_DECISION=docs/control/DECISIONS.md AD-RM02D2A2-01
+ROOT_CAUSE_CORRECTED=PM/reviewer treated Basic Price as a role/permission
+  -dependent capability space instead of one universal product
+
+CHECKPOINT_1_COMMIT=90732dc21e03042d279d670fdf74ffb0b0d4f002
+  (align basic price access and import ownership)
+CHECKPOINT_2_COMMIT=a95c42fe165ee7b6a366d2398b1c193df0e91a0a
+  (restore the owner basic price product model)
+BASE_HEAD_SHA=922bde84f6512f654dd89e72f6a9c173276db4fa
+
+ACTIVE_MEMBERSHIP_BASELINE_CAPABILITIES=BASIC_PRICE_VIEW,BASIC_PRICE_IMPORT,
+  BASIC_PRICE_RESOLVE,BASIC_PRICE_SUBMIT (granted structurally by
+  WorkspacePermissionResolverService.resolve() to every ACTIVE
+  WorkspaceMembership; no role-by-role/email-literal grant; unioned with
+  role-derived permissions, unique+sorted)
+INTERNAL_CAPABILITIES_NOT_BASELINE=BASIC_PRICE_REVIEW_VIEW,BASIC_PRICE_VERIFY,
+  BASIC_PRICE_PUBLISH (unchanged: governed/role-granted only)
+PERMISSION_SEED_CHANGE=NO
+SCHEMA_CHANGE=NO
+MIGRATION_CHANGE=NO
+
+USER_OWNED_IMPORT_BOUNDARY=ENFORCED via
+  basic-price-import-ownership.util.ts (assertBatchOwnedByCaller), applied
+  in getBatch/updateBatchMetadata/submitBatch
+  (basic-price-import.service.ts), assertBatchRowMutable
+  (basic-price-row-resolution.service.ts, shared by resolveRow/rejectRow),
+  and findCandidatesForRow (basic-price-row-mapping-candidates.service.ts).
+  Fails closed as the same 404 "Batch/Row not found" already used for a
+  workspace mismatch — ownership denial is never distinguishable from
+  non-existence.
+IMPORT_PERMISSION_CODE_CORRECTION=basic-price-import.controller.ts GET
+  :batchId and GET rows/:rowId/candidates moved from BASIC_PRICE_REVIEW_VIEW
+  to BASIC_PRICE_IMPORT/BASIC_PRICE_RESOLVE respectively;
+  basic-price-import-lookup.controller.ts resources/units moved from
+  BASIC_PRICE_REVIEW_VIEW to BASIC_PRICE_RESOLVE. Frontend
+  basic-price/import/:batchId/review route permission corrected to match
+  (App.tsx).
+
+OBSOLETE_CAPABILITY_SPACE_REMOVED=YES — deleted
+  frontend/src/pages/BasicPriceSpacePage.tsx,
+  frontend/src/utils/basicPriceSpaceViewModel.ts (+ its .test.ts),
+  BasicPriceSpaceRoute (components/layout/ProtectedRoute.tsx). Sidebar.tsx
+  and BasicPriceExplorerPage.tsx no longer compute or branch on the
+  capability-space view model.
+EXPECTED_OBSOLETE_CAPABILITY_SPACE_ARTIFACT_COUNT=0 (verified: zero
+  remaining references to basicPriceSpaceViewModel/BasicPriceSpacePage/
+  BasicPriceSpaceRoute anywhere in frontend/src — grep confirmed)
+
+PUBLIC_BASIC_PRICE_ROUTE=DIRECT_EXPLORER (App.tsx: `basic-price` ->
+  <BasicPriceExplorerPage /> directly, no wrapper gate beyond the existing
+  outer ProtectedRoute)
+SIDEBAR_BASIC_PRICE_UNIVERSAL=YES (Sidebar.tsx renders navItems
+  unconditionally; Basic Price is no longer filtered by any capability)
+PUBLIC_IMPORT_DOOR_VISIBLE=YES (BasicPriceExplorerPage always renders
+  "Impor / Masukkan Harga", no permission gate)
+PUBLIC_REVIEW_LINK_VISIBLE=NO
+PUBLIC_PUBLICATION_LINK_VISIBLE=NO
+CAPABILITY_LANDING_REMOVED=YES
+EXPECTED_PRODUCT_PAGE_INTERNAL_LINK_MATCH_COUNT=0 (grepped
+  BasicPriceExplorerPage.tsx and Sidebar.tsx for "/basic-price/reviews",
+  "/basic-price/publications", "Antrean Review", "Antrean Publikasi",
+  "Manajemen Basic Price" — zero hits; the only remaining hits repo-wide
+  are BasicPriceReviewQueuePage.tsx's own heading/aria-label and its
+  internal queue<->detail navigation, i.e. internal-to-internal, never
+  linked from a product page)
+INTERNAL_ROUTES_STILL_FAIL_CLOSED=YES (basic-price/reviews,
+  basic-price/reviews/:reviewId, basic-price/publications unchanged in
+  App.tsx — still PermissionRoute-gated by BASIC_PRICE_REVIEW_VIEW /
+  BASIC_PRICE_PUBLISH; backend guards on basic-price-review.controller.ts
+  and basic-price-publication.controller.ts untouched)
+
+RESOURCE_TYPE_FILTER=IMPLEMENTED (canonical ResourceCatalog.type; DTO field
+  `resourceType`, human labels Material/Bahan, Upah/Tenaga Kerja, Peralatan;
+  no new enum/schema)
+SOURCE_FAMILY_FILTER=IMPLEMENTED (basic-price-source-family.util.ts; DTO
+  field `sourceFamily` in {GOVERNMENT, STORE_SUPPLIER, FIELD_PRICE}, maps to
+  sourceOrigin IN [...]; intersects with an exact `sourceOrigin` filter when
+  both given, never widening eligibility; existing exact `sourceOrigin`
+  filter unchanged for backward compatibility)
+SUBCATEGORY_FILTER=DEFERRED_NO_CANONICAL_FIELD (unchanged — no canonical
+  subcategory field exists; specifications JSON not used as a fake category)
+
+## LEGACY_TEST_CHANGE_REGISTER (Amendment A2)
+
+1. FILE: backend/src/auth/workspace-permission-resolver.service.spec.ts
+   TEST_NAME: cases asserting an ACTIVE membership's resolved permissions
+   (tests 1, 5, 6, 7, 9)
+   OLD_EXPECTATION: an ACTIVE membership resolved to exactly its
+   RolePermission-granted codes; zero role grants resolved to an empty
+   (non-null) array.
+   NEW_EXPECTATION: an ACTIVE membership always resolves to at least
+   ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES, unioned with role grants,
+   unique+sorted.
+   REASON: Owner Decision AD-RM02D2A2-01 — SIMPROK has no role-based Basic
+   Price product variant.
+   OWNER_LAW_REFERENCE: docs/control/DECISIONS.md AD-RM02D2A2-01.
+   SECURITY_BOUNDARY_PRESERVED: YES — missing/inactive membership still
+   resolves null (test 2, unchanged); internal curation codes still never
+   auto-granted (test 8); cross-workspace scoping unchanged (test 4).
+   TEST_WEAKENING: NO.
+
+2. FILE: backend/src/common/constants/permissions.spec.ts
+   TEST_NAME: "should categorize every permission as either seeded or
+   governed_activation"
+   OLD_EXPECTATION: every permission code categorized in
+   SEEDED_PERMISSION_CODES ∪ GOVERNED_ACTIVATION_PERMISSION_CODES (two
+   categories).
+   NEW_EXPECTATION: categorized in SEEDED ∪ GOVERNED_ACTIVATION ∪
+   ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES (three categories) — a
+   strict superset, plus two new locking tests asserting
+   REVIEW_VIEW/VERIFY/PUBLISH stay GOVERNED_ACTIVATION and out of the
+   baseline.
+   REASON: honest new catalog state for capabilities the resolver grants
+   structurally.
+   OWNER_LAW_REFERENCE: AD-RM02D2A2-01 (permission catalog honesty).
+   SECURITY_BOUNDARY_PRESERVED: YES — no code left uncategorized, no
+   governed/internal code removed from GOVERNED_ACTIVATION_PERMISSION_CODES.
+   TEST_WEAKENING: NO.
+
+3. FILE: backend/src/basic-price/basic-price-import.service.spec.ts
+   TEST_NAME: all submitBatch(...) cases; new getBatch/updateBatchMetadata
+   describe blocks
+   OLD_EXPECTATION: `service.submitBatch(workspaceId, batchId)` — no
+   ownership check; getBatch/updateBatchMetadata had zero test coverage.
+   NEW_EXPECTATION: `service.submitBatch(workspaceId, batchId,
+   currentAccountId)`; a caller who is not the batch's uploadedByAccountId
+   is denied 404. getBatch/updateBatchMetadata now covered, including an
+   ownership-denial negative case each.
+   REASON: user-owned import boundary (Owner Decision §5, Amendment A1).
+   OWNER_LAW_REFERENCE: AD-RM02D2A2-01.
+   SECURITY_BOUNDARY_PRESERVED: YES — three new ownership-negative tests
+   added; every prior positive-path assertion still holds with the correct
+   uploader account.
+   TEST_WEAKENING: NO.
+
+4. FILE: backend/src/basic-price/basic-price-row-resolution.service.spec.ts
+   TEST_NAME: baseBatch fixture; reject() cases; new
+   "USER-OWNED IMPORT BOUNDARY" describe block
+   OLD_EXPECTATION: baseBatch had no uploadedByAccountId;
+   `rejectRow(workspaceId, batchId, rowId, dto)` — 4 args, no ownership.
+   NEW_EXPECTATION: baseBatch.uploadedByAccountId = REVIEWER_ID (the acting
+   caller, since resolveRow/rejectRow are user-owned-batch actions);
+   `rejectRow(workspaceId, batchId, rowId, currentAccountId, dto)` — 5 args;
+   two new negative tests (resolveRow/rejectRow denied for a foreign
+   same-workspace account).
+   REASON: ownership enforcement added to the shared assertBatchRowMutable.
+   OWNER_LAW_REFERENCE: AD-RM02D2A2-01 §5.
+   SECURITY_BOUNDARY_PRESERVED: YES — the existing workspace-mismatch
+   negative test is unchanged; two ownership-negative tests added, none
+   removed.
+   TEST_WEAKENING: NO.
+
+5. FILE:
+   backend/src/basic-price/basic-price-row-mapping-candidates.service.spec.ts
+   TEST_NAME: baseRow.batch fixture; all findCandidatesForRow(...) call
+   sites; new ownership-negative test
+   OLD_EXPECTATION: `findCandidatesForRow(workspaceId, batchId, rowId)` — 3
+   args, no ownership.
+   NEW_EXPECTATION: `findCandidatesForRow(workspaceId, batchId, rowId,
+   currentAccountId)` — 4 args; UPLOADER_ID fixture added; one new negative
+   test for a foreign same-workspace account.
+   REASON: ownership enforcement.
+   OWNER_LAW_REFERENCE: AD-RM02D2A2-01 §5.
+   SECURITY_BOUNDARY_PRESERVED: YES — existing workspace/row-not-found
+   negative tests unchanged; one ownership-negative test added.
+   TEST_WEAKENING: NO.
+
+6. FILE: frontend/src/utils/basicPriceSpaceViewModel.ts +
+   basicPriceSpaceViewModel.test.ts (both DELETED)
+   TEST_NAME: all 13 tests in basicPriceSpaceViewModel.test.ts
+   OLD_EXPECTATION: a capability-space view model decided Explorer-vs-
+   capability-landing and door visibility from VIEW/IMPORT/REVIEW_VIEW/
+   PUBLISH combinations.
+   NEW_EXPECTATION: file removed entirely. The Explorer is the ONE product
+   experience for /basic-price, never chosen from a capability matrix;
+   Sidebar and the route show/render it universally.
+   REASON: this abstraction itself was the wrong product model the Owner
+   corrected — a role/permission-dependent Basic Price experience.
+   OWNER_LAW_REFERENCE: AD-RM02D2A2-01 §4.
+   SECURITY_BOUNDARY_PRESERVED: YES — nothing this view model gated was a
+   security boundary (only which links/landing rendered); the internal
+   routes it fed into (BasicPriceSpaceRoute) are removed along with it, and
+   the internal Review/Publication routes remain independently
+   PermissionRoute-gated and backend-guarded, untouched by this deletion.
+   TEST_WEAKENING: NO (obsolete-architecture removal, not a weakened
+   assertion of a still-live contract).
+
+7. FILE: frontend/src/App.tsx
+   TEST_NAME: n/a (route registration; no dedicated frontend test exists
+   for route-level permission strings in this repo's test infra) — recorded
+   for completeness since the route's required permission changed.
+   OLD_EXPECTATION: `basic-price/import/:batchId/review` gated by
+   `PermissionRoute permission="BASIC_PRICE_REVIEW_VIEW"`.
+   NEW_EXPECTATION: gated by `permission="BASIC_PRICE_RESOLVE"`, matching
+   the corrected backend guard on the same user-owned batch-review flow.
+   REASON: this route is Activity A (user's own batch review), never
+   internal curation — REVIEW_VIEW was the wrong permission for it.
+   OWNER_LAW_REFERENCE: AD-RM02D2A2-01 §5, §12 (governing prompt).
+   SECURITY_BOUNDARY_PRESERVED: YES — backend GET :batchId/rows/:rowId no
+   longer accepts BASIC_PRICE_REVIEW_VIEW either (see item
+   IMPORT_PERMISSION_CODE_CORRECTION above); still fails closed without
+   BASIC_PRICE_RESOLVE, and additionally now requires uploader ownership.
+   TEST_WEAKENING: NO.
+
+8. FILE: backend/test/acceptance/basic-price-import.e2e-spec.ts
+   TEST_NAME: "RM-02C2 catalog lookup boundary › requires authentication
+   and the bounded review permission"; "permission boundary › the current
+   default state (permission not granted) fails closed with 403, never
+   500" (renamed)
+   OLD_EXPECTATION: foremanToken (ACTIVE membership, granted only
+   BASIC_PRICE_PUBLISH via role) is denied 403 on
+   GET /basic-price-import-lookups/resources and
+   POST /basic-price-imports/preview.
+   NEW_EXPECTATION: both succeed (200/201) — foreman's ACTIVE membership
+   structurally holds BASIC_PRICE_IMPORT/_RESOLVE via the baseline.
+   REASON: Safe E2E run (this slice) surfaced these as real, expected
+   failures against the new resolver; confirmed foreman's WorkspaceMembership
+   is genuinely ACTIVE (seed-acceptance.ts) with no Basic-Price role beyond
+   the explicit PUBLISH grant.
+   OWNER_LAW_REFERENCE: AD-RM02D2A2-01.
+   SECURITY_BOUNDARY_PRESERVED: YES — unauthenticated still 401; foreman
+   still lacks BASIC_PRICE_VERIFY/_REVIEW_VIEW (governed-only, unaffected).
+   TEST_WEAKENING: NO.
+
+9. FILE: backend/test/acceptance/basic-price.e2e-spec.ts
+   TEST_NAME: "rejects 403 without BASIC_PRICE_VIEW" (both the
+   GET /basic-prices and GET /basic-prices/lookups/regions variants,
+   renamed)
+   OLD_EXPECTATION: tokenNoRole (an ACTIVE membership created with zero
+   MembershipRole rows at all) is denied 403.
+   NEW_EXPECTATION: both succeed (200) — this is the literal "role kosong"
+   case Owner Law names explicitly.
+   REASON: Safe E2E run surfaced these as real, expected failures.
+   OWNER_LAW_REFERENCE: AD-RM02D2A2-01, Amendment A1.
+   SECURITY_BOUNDARY_PRESERVED: YES — unauthenticated still 401 (separate,
+   unchanged test); cross-tenant eligibility tests elsewhere in the same
+   file are unaffected.
+   TEST_WEAKENING: NO.
+
+10. FILE: backend/test/acceptance/rm02d1-resource-identity-mapping.e2e-spec.ts
+    TEST_NAME: "candidate suggestions › requires authentication and the
+    bounded review permission" (renamed)
+    OLD_EXPECTATION: foremanToken (a different account than the batch
+    uploader, assignedToken) is denied 403 for lacking
+    BASIC_PRICE_REVIEW_VIEW.
+    NEW_EXPECTATION: denied 404 — foreman's baseline BASIC_PRICE_RESOLVE now
+    clears the permission guard, so the user-owned import boundary's
+    ownership check is what correctly denies it instead (a same-workspace
+    account that is not this batch's uploader).
+    REASON: Safe E2E run surfaced this as a real, expected failure; this is
+    a strictly stronger, ownership-scoped denial than the old
+    permission-only check, not a widened one.
+    OWNER_LAW_REFERENCE: AD-RM02D2A2-01 §5.
+    SECURITY_BOUNDARY_PRESERVED: YES — unauthenticated still 401; the
+    cross-workspace 404 test in the same describe block is unaffected;
+    assignedToken (the actual uploader) still succeeds 200.
+    TEST_WEAKENING: NO.
+
+LEGACY_TEST_BEHAVIOR_CHANGE_COUNT=10 (all registered above)
+TEST_WEAKENING_COUNT=0
+
+BACKEND_BUILD=PASS (nest build via tsc -p tsconfig.build.json --noEmit,
+  clean)
+BACKEND_UNIT=PASS (724/724, up from 713/713 pre-existing baseline before
+  this slice; delta = 11 new focused tests)
+PRISMA_VALIDATE=PASS (schema unchanged)
+BACKEND_LINT=PASS on every changed production file (eslint --fix applied;
+  remaining findings are the pre-existing `request: any`
+  @typescript-eslint/no-unsafe-* pattern used throughout every controller
+  in this codebase, confirmed present at HEAD before this slice — not a
+  regression)
+FRONTEND_BUILD=PASS (tsc -b && vite build, clean)
+FRONTEND_UNIT=PASS (86/86 node:test, 0 failures). Net effect on the suite:
+  basicPriceSpaceViewModel.test.ts (13 tests) deleted with its obsolete
+  source file; basicPriceExplorerDisplay.test.ts gained 3 tests
+  (resourceTypeLabel, sourceFamilyLabel, resourceType/sourceFamily query
+  params). package.json's `test` script updated to drop the deleted file.
+FRONTEND_LINT=PASS on every changed file (zero errors/warnings)
+
+SAFE_E2E=PENDING (attempted after this section is written — see below)
+VISUAL_ACCEPTANCE_FIXTURE=PENDING
+BROWSER_ACCEPTANCE=STOP_FOR_OWNER_VISUAL_DECISION
+COWORK_PRODUCT_REVIEW=PENDING
+COWORK_SECURITY_REVIEW=PENDING
+MERGE_READY=NO
+PRODUCT_LIVE=NO
+```
+

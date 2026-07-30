@@ -137,4 +137,103 @@ sumber di atas menang; laporkan gap, jangan mengoreksi sumber di sini.
   `ccb6983419b8b134d6cfc4b1dba87518af3db59a`. Not yet merged
   (`MERGE_AUTHORITY=OWNER_ONLY`, `RM02_EXIT_GATE=OPEN` — see STATE.md).
 
+### AD-RM02D2A2-01 — ONE SIMPROK BASIC PRICE PRODUCT MODEL
+- STATUS: FINAL. OWNER_AUTHORIZED=YES.
+- SOURCE: `RM02D2A2-REMEDIATION-03-FINAL` governing prompt (Owner, 2026-07-31),
+  correcting a prior misreading of the product model by PM/reviewer.
+- ROOT_CAUSE OF PRIOR MISREADING: Basic Price was implemented as a
+  capability-space with a role/permission-dependent landing page, an
+  Explorer gated behind `BASIC_PRICE_VIEW` alone, Review/Publication links
+  surfaced inside the public Explorer, and user import gated in part by the
+  internal `BASIC_PRICE_REVIEW_VIEW` curation code.
+- DECISION:
+  1. SIMPROK is one product. There is no Basic Price edition, variant, or
+     role-based product experience (`ONE_SIMPROK_PRODUCT=YES`,
+     `PRODUCT_EDITION_VARIANT=NO`).
+  2. Every account with an ACTIVE `WorkspaceMembership` on the active
+     workspace — any role, custom role, or no role — gets the same Basic
+     Price baseline: view the public catalog, search/filter it, and use
+     Impor/Masukkan Harga to manage and submit their own import batch.
+     Canonical baseline capabilities:
+     `BASIC_PRICE_VIEW, BASIC_PRICE_IMPORT, BASIC_PRICE_RESOLVE,
+     BASIC_PRICE_SUBMIT`, granted structurally by
+     `WorkspacePermissionResolverService` (backend/src/auth/
+     workspace-permission-resolver.service.ts), never by role-by-role or
+     email-literal grants. `INVITED`/`SUSPENDED`/missing/no-active-workspace
+     accounts remain fail-closed (null/deny).
+  3. Internal curation capabilities — `BASIC_PRICE_REVIEW_VIEW`,
+     `BASIC_PRICE_VERIFY`, `BASIC_PRICE_PUBLISH` — are never part of this
+     baseline and are never surfaced in the general product (no capability
+     landing, no "Antrean Review"/"Antrean Publikasi"/"Manajemen Basic
+     Price" link from a product page). Their backend routes and guards
+     stay live and fail-closed via direct protected routes, pending a
+     separate canonical back-office shell slice.
+  4. `/basic-price` renders `BasicPriceExplorerPage` directly for any
+     account reaching it — no capability-aware chooser, no role-dependent
+     variant. The Sidebar shows Basic Price universally, exactly like every
+     other nav item.
+  5. User-owned import boundary: a user's own import-batch lifecycle
+     (view/update batch, resolve/reject/candidate-lookup a row, submit
+     batch) is scoped to the uploading account
+     (`basic-price-import-ownership.util.ts`) — a same-workspace teammate
+     holding the same capability cannot read or mutate another account's
+     batch. This is separate from, and does not touch, internal
+     `PriceSubmission` curation, which begins only after a user submits.
+  6. Three Basic Price source families are locked
+     (`SOURCE_FAMILY_MAP=OWNER_LOCKED`): GOVERNMENT -> Harga Pemerintah;
+     SUPPLIER/STORE/DISTRIBUTOR -> Harga Toko/Supplier; FIELD_REPORT/
+     COMMUNITY_REPORT -> Harga Lapangan. No new enum/schema field — a pure
+     grouping over the existing `PriceSourceOrigin` values
+     (`basic-price-source-family.util.ts`), and the Explorer's new
+     Kategori (`ResourceCatalog.type`) and Keluarga Sumber filters are
+     built the same way. Exact `sourceOrigin` filtering remains available
+     for backward compatibility.
+  7. SOURCE ≠ REPORTER: source answers "whose price is this"; reporter
+     answers "who entered/reported it." A user manually entering a
+     government HSPK is still `SOURCE_FAMILY=GOVERNMENT` with that user as
+     reporter — manual input never implies Harga Lapangan by itself.
+  8. Intake direction for this slice only: government manual import is the
+     supported existing path; government website/application connectors,
+     supplier direct/automatic connectors, and any Field Evidence redesign
+     are explicitly out of scope (`*_CONNECTOR=FUTURE_NOT_IN_SCOPE`,
+     `FIELD_EVIDENCE_REDESIGN=NOT_IN_SCOPE`).
+  9. Private-use + optional-curation principle: this decision RATIFIES the
+     "Basic Price Parallel Curation Pattern" principle recorded above
+     (private/workspace Basic Price may be used without waiting for
+     national curation; curation rejection never revokes private-use
+     rights) as Owner Law. `PRIVATE_BASIC_PRICE_PRINCIPLE=RATIFIED`. Its
+     *implementation* (Harga Saya, Simpan untuk saya, Usulkan ke SIMPROK,
+     human submission status, AHSP/RAB consumption snapshot) is explicitly
+     NOT part of this decision's implementation
+     (`PRIVATE_BASIC_PRICE_IMPLEMENTATION=NO`) — it is the next roadmap
+     slice (§20 of the governing prompt; PRIVATE_BASIC_PRICE_NEXT_ROADMAP_
+     SLICE=YES). The AHSP Universal Intake & Curation Law principle above
+     remains separately `BELUM_DIRATIFIKASI` — unaffected by this entry.
+- AMENDMENT A1 — SECURITY BOUNDARY CONSEQUENCE AND PRECEDENT: every ACTIVE
+  membership, including a membership with no role, thereby gains
+  `BASIC_PRICE_VIEW/_IMPORT/_RESOLVE/_SUBMIT` — it can view the catalog,
+  upload a batch, resolve/read rows in its own batch, and submit its own
+  batch into the curation queue. The containing security boundaries are:
+  membership must be ACTIVE; workspace isolation; `uploadedByAccountId`
+  ownership; internal curation (`REVIEW_VIEW`/`VERIFY`/`PUBLISH`) staying
+  outside the baseline. `BASIC_PRICE_RESOLVE` on the baseline means
+  resolving the caller's OWN import-row mapping, never verifying or
+  curating another user's submission.
+  `MEMBERSHIP_DERIVED_CAPABILITY_PRECEDENT=YES`, scoped strictly to these
+  four codes — it may not be used to add any other permission to the
+  membership baseline without a new, separate Owner decision.
+- AMENDMENT A2 — LEGACY TEST CHANGE REGISTER: tests that previously locked
+  the incorrect model were updated, never weakened. Full per-test register
+  (file/test/old/new/reason) is in
+  `docs/implementation-gates/rm02d2a2/CONTRACT-INVENTORY.md`. No negative
+  test, cross-workspace isolation assertion, or internal REVIEW/VERIFY/
+  PUBLISH denial was removed; `TEST_WEAKENING_COUNT=0`.
+- IMPLEMENTED_BY: branch `feat/rm02d2a2-basic-price-review-publication-ui`,
+  commits `90732dc21e03042d279d670fdf74ffb0b0d4f002` (Checkpoint 1 —
+  authority/ownership foundation) and
+  `a95c42fe165ee7b6a366d2398b1c193df0e91a0a` (Checkpoint 2 — product
+  experience), base `fb7f89aaa6d2de9418c4839e0d957402db02fc2b`. Not yet
+  merged — `MERGE_READY=NO`, `PRODUCTION_ACTIVATION=NO`, Draft PR #56.
+- SCHEMA_CHANGE=NO. MIGRATION_CHANGE=NO. PERMISSION_SEED_CHANGE=NO.
+
 ## Soli Deo Gloria. Haleluya. Amin.
