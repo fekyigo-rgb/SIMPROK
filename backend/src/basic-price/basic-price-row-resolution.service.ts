@@ -1,22 +1,45 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma, ResourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { RejectBasicPriceImportRowDto, ResolveBasicPriceImportRowDto } from './dto/resolve-basic-price-import-row.dto';
+import {
+  RejectBasicPriceImportRowDto,
+  ResolveBasicPriceImportRowDto,
+} from './dto/resolve-basic-price-import-row.dto';
 import { findMappingCandidates } from './basic-price-row-mapping-candidates.service';
 import { findProvenanceCandidate } from './basic-price-source-provenance.service';
+import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 
 @Injectable()
 export class BasicPriceRowResolutionService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async assertBatchRowMutable(tx: Prisma.TransactionClient, workspaceId: string, batchId: string, rowId: string) {
+  private async assertBatchRowMutable(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    currentAccountId: string,
+  ) {
     const batchRows = await tx.$queryRaw<
-      Array<{ id: string; workspaceId: string; sourceSha256: string; selectedSheetName: string; parserContractVersion: string }>
+      Array<{
+        id: string;
+        workspaceId: string;
+        sourceSha256: string;
+        selectedSheetName: string;
+        parserContractVersion: string;
+        uploadedByAccountId: string;
+      }>
     >(
-      Prisma.sql`SELECT "id", "workspaceId", "sourceSha256", "selectedSheetName", "parserContractVersion" FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid`,
+      Prisma.sql`SELECT "id", "workspaceId", "sourceSha256", "selectedSheetName", "parserContractVersion", "uploadedByAccountId" FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid`,
     );
     const batch = batchRows[0];
-    if (!batch || batch.workspaceId !== workspaceId) throw new NotFoundException('Batch not found');
+    if (!batch || batch.workspaceId !== workspaceId)
+      throw new NotFoundException('Batch not found');
+    assertBatchOwnedByCaller(batch, currentAccountId, 'Batch not found');
 
     const rowLock = await tx.$queryRaw<
       Array<{
@@ -37,8 +60,10 @@ export class BasicPriceRowResolutionService {
       Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
     );
     const row = rowLock[0];
-    if (!row || row.batchId !== batchId) throw new NotFoundException('Row not found');
-    if (row.status !== 'NEEDS_REVIEW') throw new ConflictException('ROW_NOT_MUTABLE');
+    if (!row || row.batchId !== batchId)
+      throw new NotFoundException('Row not found');
+    if (row.status !== 'NEEDS_REVIEW')
+      throw new ConflictException('ROW_NOT_MUTABLE');
     return { ...row, batch };
   }
 
@@ -48,15 +73,24 @@ export class BasicPriceRowResolutionService {
    * explicitly rejected"). Only NEEDS_REVIEW/READY_FOR_REVIEW batches are
    * touched — a batch already past submission is never reopened here.
    */
-  private async recomputeBatchStatus(tx: Prisma.TransactionClient, batchId: string) {
+  private async recomputeBatchStatus(
+    tx: Prisma.TransactionClient,
+    batchId: string,
+  ) {
     const [pendingCount, batch] = await Promise.all([
-      tx.basicPriceImportRow.count({ where: { batchId, status: 'NEEDS_REVIEW' } }),
+      tx.basicPriceImportRow.count({
+        where: { batchId, status: 'NEEDS_REVIEW' },
+      }),
       tx.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } }),
     ]);
-    if (batch.status !== 'NEEDS_REVIEW' && batch.status !== 'READY_FOR_REVIEW') return;
+    if (batch.status !== 'NEEDS_REVIEW' && batch.status !== 'READY_FOR_REVIEW')
+      return;
     const nextStatus = pendingCount === 0 ? 'READY_FOR_REVIEW' : 'NEEDS_REVIEW';
     if (nextStatus !== batch.status) {
-      await tx.basicPriceImportBatch.update({ where: { id: batchId }, data: { status: nextStatus } });
+      await tx.basicPriceImportBatch.update({
+        where: { id: batchId },
+        data: { status: nextStatus },
+      });
     }
   }
 
@@ -77,26 +111,45 @@ export class BasicPriceRowResolutionService {
    * decision to pick this identity happened either way, and the mapping
    * table is decision history, not row-current-state.
    */
-  async resolveRow(workspaceId: string, batchId: string, rowId: string, reviewerAccountId: string, dto: ResolveBasicPriceImportRowDto) {
+  async resolveRow(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    reviewerAccountId: string,
+    dto: ResolveBasicPriceImportRowDto,
+  ) {
     return this.prisma.$transaction(async (tx) => {
-      const row = await this.assertBatchRowMutable(tx, workspaceId, batchId, rowId);
-      if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
+      // reviewerAccountId is the caller's own account id (request.user.id) —
+      // BASIC_PRICE_RESOLVE on the baseline means resolving mapping rows in
+      // the caller's OWN uploaded batch, so it doubles as the ownership check.
+      const row = await this.assertBatchRowMutable(
+        tx,
+        workspaceId,
+        batchId,
+        rowId,
+        reviewerAccountId,
+      );
+      if (row.version !== dto.version)
+        throw new ConflictException('ROW_VERSION_STALE');
 
       const resourceCatalog = await tx.resourceCatalog.findFirst({
         where: { id: dto.resourceCatalogId, workspaceId, status: 'ACTIVE' },
       });
-      if (!resourceCatalog) throw new ConflictException('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
+      if (!resourceCatalog)
+        throw new ConflictException('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
       // RM-02D1-REMEDIATION-V3.2.1 (Blocker 2): a row's sourceSection
       // (LABOR/MATERIAL/EQUIPMENT) is a hard type boundary — a LABOR row
       // can never be resolved to a MATERIAL or EQUIPMENT resource, even by
       // explicit human choice. This check runs before any row update and
       // before any mapping-decision insert, so a type-mismatched attempt
       // leaves zero trace in either table.
-      if (resourceCatalog.type !== row.sourceSection) throw new ConflictException('RESOURCE_TYPE_MISMATCH');
+      if (resourceCatalog.type !== row.sourceSection)
+        throw new ConflictException('RESOURCE_TYPE_MISMATCH');
       const unitDefinition = await tx.unitDefinition.findFirst({
         where: { id: dto.unitDefinitionId, isActive: true },
       });
-      if (!unitDefinition) throw new ConflictException('UNIT_UNKNOWN_OR_INACTIVE');
+      if (!unitDefinition)
+        throw new ConflictException('UNIT_UNKNOWN_OR_INACTIVE');
 
       const priorSameIdentity = await tx.basicPriceImportRow.findFirst({
         where: {
@@ -108,17 +161,22 @@ export class BasicPriceRowResolutionService {
         },
       });
 
-      let collisionType: 'NONE' | 'SAME_IDENTITY_SAME_VALUE' | 'SAME_IDENTITY_DIFFERENT_VALUE' = 'NONE';
+      let collisionType:
+        | 'NONE'
+        | 'SAME_IDENTITY_SAME_VALUE'
+        | 'SAME_IDENTITY_DIFFERENT_VALUE' = 'NONE';
       let collisionOfRowId: string | null = null;
       if (priorSameIdentity) {
         collisionOfRowId = priorSameIdentity.id;
         collisionType =
-          priorSameIdentity.proposedCanonicalPrice?.toString() === row.proposedCanonicalPrice?.toString()
+          priorSameIdentity.proposedCanonicalPrice?.toString() ===
+          row.proposedCanonicalPrice?.toString()
             ? 'SAME_IDENTITY_SAME_VALUE'
             : 'SAME_IDENTITY_DIFFERENT_VALUE';
       }
 
-      const canSubmit = collisionType === 'NONE' && row.proposedCanonicalPrice !== null;
+      const canSubmit =
+        collisionType === 'NONE' && row.proposedCanonicalPrice !== null;
       const updated = await tx.basicPriceImportRow.update({
         where: { id: rowId },
         data: {
@@ -127,7 +185,11 @@ export class BasicPriceRowResolutionService {
           unitDefinitionId: dto.unitDefinitionId,
           collisionType,
           collisionOfRowId,
-          resolutionStatus: canSubmit ? 'RESOLVED' : collisionType !== 'NONE' ? 'RESOURCE_AMBIGUOUS' : 'UNRESOLVED',
+          resolutionStatus: canSubmit
+            ? 'RESOLVED'
+            : collisionType !== 'NONE'
+              ? 'RESOURCE_AMBIGUOUS'
+              : 'UNRESOLVED',
           status: canSubmit ? 'READY_FOR_SUBMISSION' : 'NEEDS_REVIEW',
           resolvedByAccountId: reviewerAccountId,
           resolvedAt: new Date(),
@@ -153,7 +215,12 @@ export class BasicPriceRowResolutionService {
       // every row where the two signals disagreed, not just the ones where
       // provenance "won".
       const [candidates, provenance] = await Promise.all([
-        findMappingCandidates(tx, workspaceId, row.sourceSection, row.rawResourceNameText),
+        findMappingCandidates(
+          tx,
+          workspaceId,
+          row.sourceSection,
+          row.rawResourceNameText,
+        ),
         findProvenanceCandidate(tx, {
           workspaceId,
           batchSourceSha256: row.batch.sourceSha256,
@@ -167,12 +234,16 @@ export class BasicPriceRowResolutionService {
         }),
       ]);
 
-      const provenanceCandidateId = provenance.candidate?.resourceCatalogId ?? null;
+      const provenanceCandidateId =
+        provenance.candidate?.resourceCatalogId ?? null;
       // A conflict requires normalized-name matching to have independently
       // found something to disagree with — zero name candidates is not a
       // conflict, it is simply an unconfirmed (but still authoritative)
       // provenance signal.
-      const hasConflict = provenanceCandidateId !== null && candidates.length > 0 && !candidates.some((c) => c.resourceCatalogId === provenanceCandidateId);
+      const hasConflict =
+        provenanceCandidateId !== null &&
+        candidates.length > 0 &&
+        !candidates.some((c) => c.resourceCatalogId === provenanceCandidateId);
 
       let suggestionSource:
         | 'SOURCE_ROW_PROVENANCE'
@@ -184,9 +255,15 @@ export class BasicPriceRowResolutionService {
         suggestionSource = 'PROVENANCE_NAME_CONFLICT';
       } else if (dto.resourceCatalogId === provenanceCandidateId) {
         suggestionSource = 'SOURCE_ROW_PROVENANCE';
-      } else if (candidates.length === 1 && candidates[0].resourceCatalogId === dto.resourceCatalogId) {
+      } else if (
+        candidates.length === 1 &&
+        candidates[0].resourceCatalogId === dto.resourceCatalogId
+      ) {
         suggestionSource = 'NORMALIZED_NAME_SINGLE_CANDIDATE';
-      } else if (candidates.length > 1 && candidates.some((c) => c.resourceCatalogId === dto.resourceCatalogId)) {
+      } else if (
+        candidates.length > 1 &&
+        candidates.some((c) => c.resourceCatalogId === dto.resourceCatalogId)
+      ) {
         suggestionSource = 'NORMALIZED_NAME_MULTIPLE_CANDIDATES';
       } else {
         suggestionSource = 'MANUAL_SEARCH';
@@ -195,8 +272,11 @@ export class BasicPriceRowResolutionService {
       // "How many distinct identities did the reviewer actually see as
       // signals" — dedups provenance against an agreeing name candidate,
       // and counts both sides separately when they conflict.
-      const distinctSignalIds = new Set(candidates.map((c) => c.resourceCatalogId));
-      if (provenanceCandidateId !== null) distinctSignalIds.add(provenanceCandidateId);
+      const distinctSignalIds = new Set(
+        candidates.map((c) => c.resourceCatalogId),
+      );
+      if (provenanceCandidateId !== null)
+        distinctSignalIds.add(provenanceCandidateId);
 
       await tx.basicPriceImportRowResourceMapping.create({
         data: {
@@ -217,10 +297,23 @@ export class BasicPriceRowResolutionService {
   }
 
   /** Human rejection (state machine B, reason required, no automatic path). */
-  async rejectRow(workspaceId: string, batchId: string, rowId: string, dto: RejectBasicPriceImportRowDto) {
+  async rejectRow(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    currentAccountId: string,
+    dto: RejectBasicPriceImportRowDto,
+  ) {
     return this.prisma.$transaction(async (tx) => {
-      const row = await this.assertBatchRowMutable(tx, workspaceId, batchId, rowId);
-      if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
+      const row = await this.assertBatchRowMutable(
+        tx,
+        workspaceId,
+        batchId,
+        rowId,
+        currentAccountId,
+      );
+      if (row.version !== dto.version)
+        throw new ConflictException('ROW_VERSION_STALE');
 
       const updated = await tx.basicPriceImportRow.update({
         where: { id: rowId },

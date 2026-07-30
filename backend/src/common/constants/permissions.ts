@@ -66,10 +66,18 @@ export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 // enforced by guards/controllers, but granting it to any role in any
 // specific environment is a separate, governed activation decision (e.g.
 // RM02C3 acceptance activation) — this file does not assert whether that
-// activation has happened anywhere.
+// activation has happened anywhere. ACTIVE_MEMBERSHIP_BASELINE = granted
+// structurally, by WorkspacePermissionResolverService itself, to every
+// ACTIVE WorkspaceMembership regardless of role/custom-role/no-role —
+// never dependent on a RolePermission seed row or a per-environment
+// activation decision (Owner Decision: ONE SIMPROK BASIC PRICE PRODUCT
+// MODEL). This precedent is scoped to exactly the codes listed in
+// ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES below and must not be
+// extended to any other permission without a new Owner decision.
 export const PERMISSION_CATALOG_STATES = {
   SEEDED_CURRENT: 'SEEDED_CURRENT',
   GOVERNED_ACTIVATION: 'GOVERNED_ACTIVATION',
+  ACTIVE_MEMBERSHIP_BASELINE: 'ACTIVE_MEMBERSHIP_BASELINE',
 } as const;
 
 export type PermissionCatalogState =
@@ -102,25 +110,29 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     code: PERMISSIONS.WORKSPACE_MEMBERSHIP_VIEW,
     domain: PERMISSION_DOMAINS.WORKSPACE_MEMBERSHIP,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'View workspace membership records within an authorized workspace.',
+    description:
+      'View workspace membership records within an authorized workspace.',
   },
   {
     code: PERMISSIONS.WORKSPACE_MEMBERSHIP_MANAGE,
     domain: PERMISSION_DOMAINS.WORKSPACE_MEMBERSHIP,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'Manage workspace membership records within an authorized workspace.',
+    description:
+      'Manage workspace membership records within an authorized workspace.',
   },
   {
     code: PERMISSIONS.AUTHORITY_VIEW,
     domain: PERMISSION_DOMAINS.AUTHORITY,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'View authority positions and structure within an authorized workspace.',
+    description:
+      'View authority positions and structure within an authorized workspace.',
   },
   {
     code: PERMISSIONS.AUTHORITY_MANAGE,
     domain: PERMISSION_DOMAINS.AUTHORITY,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'Manage authority positions and structure within an authorized workspace.',
+    description:
+      'Manage authority positions and structure within an authorized workspace.',
   },
   {
     code: PERMISSIONS.AUTHORITY_ASSIGN,
@@ -159,13 +171,26 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     description: 'Create or initiate project records where authorized.',
     note: 'Seeded through RBAC seed in IDENTITY-A2. Runtime DB requires normal seed/test setup to materialize this permission.',
   },
-  { code: PERMISSIONS.RAB_VIEW, domain: PERMISSION_DOMAINS.PROJECT, state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT, description: 'View RAB drafts and import previews for an authorized project.' },
-  { code: PERMISSIONS.RAB_DRAFT_EDIT, domain: PERMISSION_DOMAINS.PROJECT, state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT, description: 'Edit an authorized project RAB draft, including approved BOQ import.' },
+  {
+    code: PERMISSIONS.RAB_VIEW,
+    domain: PERMISSION_DOMAINS.PROJECT,
+    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
+    description:
+      'View RAB drafts and import previews for an authorized project.',
+  },
+  {
+    code: PERMISSIONS.RAB_DRAFT_EDIT,
+    domain: PERMISSION_DOMAINS.PROJECT,
+    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
+    description:
+      'Edit an authorized project RAB draft, including approved BOQ import.',
+  },
   {
     code: PERMISSIONS.OBSERVATORY_VIEW,
     domain: PERMISSION_DOMAINS.OBSERVATORY,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'View workspace-scoped Observatory or portfolio intelligence data.',
+    description:
+      'View workspace-scoped Observatory or portfolio intelligence data.',
     note: 'Seeded through RBAC seed in DEBT-04-A1. Endpoint enforcement is a separate DEBT-04 slice.',
   },
   // ── Golden Path v0 — AHSP Domain ──────────────────────────────────────────
@@ -173,80 +198,97 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     code: PERMISSIONS.AHSP_VIEW,
     domain: PERMISSION_DOMAINS.AHSP,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'View AHSP records and versions within an authorized workspace.',
+    description:
+      'View AHSP records and versions within an authorized workspace.',
     note: 'Seeded in Golden Path v0 Slice B.',
   },
   {
     code: PERMISSIONS.AHSP_MANAGE,
     domain: PERMISSION_DOMAINS.AHSP,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'Create, update, archive, delete AHSP records and versions within an authorized workspace.',
+    description:
+      'Create, update, archive, delete AHSP records and versions within an authorized workspace.',
     note: 'Seeded in Golden Path v0 Slice B.',
   },
   {
     code: PERMISSIONS.AHSP_APPROVE,
     domain: PERMISSION_DOMAINS.AHSP,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'Approve AHSP records and promote them to workspace or official status.',
+    description:
+      'Approve AHSP records and promote them to workspace or official status.',
     note: 'Seeded in Golden Path v0 Slice B.',
   },
   // ── Golden Path v0 — Basic Price Domain ───────────────────────────────────
   {
     code: PERMISSIONS.BASIC_PRICE_VIEW,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'View basic price records scoped to workspace or global catalog.',
-    note: 'Seeded in Golden Path v0 Slice B.',
+    state: PERMISSION_CATALOG_STATES.ACTIVE_MEMBERSHIP_BASELINE,
+    description:
+      'View basic price records scoped to workspace or global catalog.',
+    note: 'ONE SIMPROK BASIC PRICE PRODUCT MODEL: granted structurally by WorkspacePermissionResolverService to every ACTIVE WorkspaceMembership, any role/custom-role/no-role, independent of RolePermission seeding. Also present in SEEDED_PERMISSION_CODES from Golden Path v0 Slice B — both facts hold simultaneously.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_MANAGE,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
-    description: 'Submit and manage basic price records within an authorized workspace.',
+    description:
+      'Submit and manage basic price records within an authorized workspace.',
     note: 'Seeded in Golden Path v0 Slice B.',
   },
   // ── RM-02 — Basic Price Import Foundation ─────────────────────────────────
+  // BASIC_PRICE_IMPORT / _RESOLVE / _SUBMIT are the USER-OWNED IMPORT
+  // BOUNDARY (Owner Decision: ONE SIMPROK BASIC PRICE PRODUCT MODEL): a
+  // user's own import-batch lifecycle (upload, view own batch, resolve/
+  // reject own rows, submit own batch to curation) is a baseline product
+  // capability, never a governed-per-role activation. They are no longer
+  // described as living only through governed role activation — see
+  // ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES below.
   {
     code: PERMISSIONS.BASIC_PRICE_IMPORT,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
-    description: 'Upload a Basic Price workbook and create/preview a BasicPriceImportBatch.',
-    note: 'RM-02B: guard-enforced. RM-02C3 activated this code for the acceptance environment only — see rm02c3-basic-price-acceptance-activation.ts. Not part of any canonical production seed.',
+    state: PERMISSION_CATALOG_STATES.ACTIVE_MEMBERSHIP_BASELINE,
+    description:
+      "Upload a Basic Price workbook and create/preview/view/update the caller's own BasicPriceImportBatch.",
+    note: 'Granted structurally to every ACTIVE WorkspaceMembership by WorkspacePermissionResolverService — not dependent on RolePermission seeding or per-environment activation. Batch access is further scoped to the uploading account (see basic-price-import-ownership.util.ts).',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_RESOLVE,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
-    description: 'Resolve an imported Basic Price row (resource/unit assignment, collision disposition).',
-    note: 'RM-02B: guard-enforced. Activation into any role is a separate, governed decision per environment.',
+    state: PERMISSION_CATALOG_STATES.ACTIVE_MEMBERSHIP_BASELINE,
+    description:
+      "Resolve or reject a row in the caller's own imported Basic Price batch (resource/unit assignment, collision disposition).",
+    note: "Granted structurally to every ACTIVE WorkspaceMembership. Resolving is scoped to batches the caller uploaded — this is not a curation/verification authority over other users' submissions.",
   },
   {
     code: PERMISSIONS.BASIC_PRICE_SUBMIT,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
-    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
-    description: 'Approve a Basic Price import batch, creating PriceSubmission rows for resolved rows.',
-    note: 'RM-02B: guard-enforced. Activation into any role is a separate, governed decision per environment.',
+    state: PERMISSION_CATALOG_STATES.ACTIVE_MEMBERSHIP_BASELINE,
+    description:
+      "Submit the caller's own resolved Basic Price import batch, creating PriceSubmission rows for resolved rows.",
+    note: 'Granted structurally to every ACTIVE WorkspaceMembership. Submission hands the batch to the separate, internal PriceSubmission curation queue — it does not grant any curation authority itself.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_VERIFY,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
     state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
-    description: 'Accept, reject, request correction, or reassign a submitted Basic Price review.',
-    note: 'RM-02D2A-1: guard-enforced on /basic-price-reviews/*. Activation into any role is a separate, governed decision per environment.',
+    description:
+      'Accept, reject, request correction, or reassign a submitted Basic Price review.',
+    note: 'Internal curation authority — NEVER part of the ACTIVE_MEMBERSHIP_BASELINE. RM-02D2A-1: guard-enforced on /basic-price-reviews/*. Activation into any role remains a separate, governed decision per environment.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_PUBLISH,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
     state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
     description: 'Publish a verified BasicPrice, making it publicly eligible.',
-    note: 'RM-02D2A-1: guard-enforced on /basic-price-publications/*. Activation into any role is a separate, governed decision per environment. Owner Lock requires the publisher role to differ from the verifier role in practice.',
+    note: 'Internal curation authority — NEVER part of the ACTIVE_MEMBERSHIP_BASELINE. RM-02D2A-1: guard-enforced on /basic-price-publications/*. Activation into any role remains a separate, governed decision per environment. Owner Lock requires the publisher role to differ from the verifier role in practice.',
   },
   {
     code: PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
     state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
-    description: 'View internal (pre-publication) Basic Price batches, rows, submissions, and reviews.',
-    note: 'RM-02B: guard-enforced. RM-02C3 activated this code for the acceptance environment only — see rm02c3-basic-price-acceptance-activation.ts. Not part of any canonical production seed.',
+    description:
+      'View internal (pre-publication) Basic Price submissions and curation reviews.',
+    note: "Internal curation authority — NEVER part of the ACTIVE_MEMBERSHIP_BASELINE, and no longer used to gate a user's own import batch (see basic-price-import.controller.ts, which uses BASIC_PRICE_IMPORT/_RESOLVE for that instead). RM-02C3 activated this code for the acceptance environment only — see rm02c3-basic-price-acceptance-activation.ts. Not part of any canonical production seed.",
   },
 ] as const;
 
@@ -277,12 +319,26 @@ export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
 // codes ARE already active in the acceptance environment via RM02C3 (see
 // rm02c3-basic-price-acceptance-activation.ts); this list does not track
 // that. Treat this as "requires governed activation before use," never as
-// "not seeded anywhere."
+// "not seeded anywhere." These are internal curation authorities and are
+// NEVER part of ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES below.
 export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
-  PERMISSIONS.BASIC_PRICE_IMPORT,
-  PERMISSIONS.BASIC_PRICE_RESOLVE,
-  PERMISSIONS.BASIC_PRICE_SUBMIT,
   PERMISSIONS.BASIC_PRICE_VERIFY,
   PERMISSIONS.BASIC_PRICE_PUBLISH,
   PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
 ];
+
+// Permission codes granted structurally, by WorkspacePermissionResolverService
+// itself, to every ACTIVE WorkspaceMembership — regardless of role,
+// custom role, or missing role, and independent of any RolePermission seed
+// row (Owner Decision: ONE SIMPROK BASIC PRICE PRODUCT MODEL). This is the
+// "One SIMPROK" baseline: SIMPROK has no role-based product variant for
+// Basic Price. Scoped to exactly these four codes — extending this
+// precedent to any other permission requires a new Owner decision (see
+// Amendment A1, docs/control/DECISIONS.md).
+export const ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES: readonly PermissionCode[] =
+  [
+    PERMISSIONS.BASIC_PRICE_VIEW,
+    PERMISSIONS.BASIC_PRICE_IMPORT,
+    PERMISSIONS.BASIC_PRICE_RESOLVE,
+    PERMISSIONS.BASIC_PRICE_SUBMIT,
+  ];

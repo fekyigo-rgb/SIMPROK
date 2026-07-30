@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, PrismaClient, ResourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { findProvenanceCandidate } from './basic-price-source-provenance.service';
+import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 
 export interface MappingCandidate {
   resourceCatalogId: string;
@@ -84,7 +85,12 @@ export async function findMappingCandidates(
 export class BasicPriceRowMappingCandidatesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findCandidatesForRow(workspaceId: string, batchId: string, rowId: string): Promise<RowMappingCandidates> {
+  async findCandidatesForRow(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    currentAccountId: string,
+  ): Promise<RowMappingCandidates> {
     const row = await this.prisma.basicPriceImportRow.findFirst({
       where: { id: rowId, batchId },
       select: {
@@ -94,20 +100,35 @@ export class BasicPriceRowMappingCandidatesService {
         rawResourceCodeText: true,
         rawResourceNameText: true,
         rawUnitText: true,
-        batch: { select: { workspaceId: true, sourceSha256: true, selectedSheetName: true, parserContractVersion: true } },
+        batch: {
+          select: {
+            workspaceId: true,
+            sourceSha256: true,
+            selectedSheetName: true,
+            parserContractVersion: true,
+            uploadedByAccountId: true,
+          },
+        },
       },
     });
-    if (!row || row.batch.workspaceId !== workspaceId) throw new NotFoundException('Row not found');
+    if (!row || row.batch.workspaceId !== workspaceId)
+      throw new NotFoundException('Row not found');
+    assertBatchOwnedByCaller(row.batch, currentAccountId, 'Row not found');
 
     const [candidates, provenance] = await Promise.all([
-      findMappingCandidates(this.prisma, workspaceId, row.sourceSection as unknown as ResourceType, row.rawResourceNameText),
+      findMappingCandidates(
+        this.prisma,
+        workspaceId,
+        row.sourceSection,
+        row.rawResourceNameText,
+      ),
       findProvenanceCandidate(this.prisma, {
         workspaceId,
         batchSourceSha256: row.batch.sourceSha256,
         sheetName: row.batch.selectedSheetName,
         parserContractVersion: row.batch.parserContractVersion,
         sourceRowNumber: row.sourceRowNumber,
-        sourceSection: row.sourceSection as unknown as ResourceType,
+        sourceSection: row.sourceSection,
         rawResourceCodeText: row.rawResourceCodeText,
         rawResourceNameText: row.rawResourceNameText,
         rawUnitText: row.rawUnitText,
@@ -115,7 +136,11 @@ export class BasicPriceRowMappingCandidatesService {
     ]);
 
     const conflict =
-      provenance.candidate !== null && candidates.length > 0 && !candidates.some((c) => c.resourceCatalogId === provenance.candidate!.resourceCatalogId);
+      provenance.candidate !== null &&
+      candidates.length > 0 &&
+      !candidates.some(
+        (c) => c.resourceCatalogId === provenance.candidate!.resourceCatalogId,
+      );
 
     return {
       rowId,

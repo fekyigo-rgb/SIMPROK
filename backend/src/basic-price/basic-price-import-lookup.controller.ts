@@ -15,14 +15,22 @@ import {
 export class BasicPriceImportLookupController {
   constructor(private readonly lookupService: BasicPriceImportLookupService) {}
 
+  /**
+   * Resource/unit search used while a user resolves a row in their own
+   * import batch — gated by BASIC_PRICE_RESOLVE (user-owned import
+   * boundary), not the internal-curation BASIC_PRICE_REVIEW_VIEW.
+   */
   @Get('resources')
-  @Permissions(PERMISSIONS.BASIC_PRICE_REVIEW_VIEW)
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
   searchResources(@Req() request: any, @Query() dto: SearchResourceCatalogDto) {
-    return this.lookupService.searchResources(request.workspaceContext.workspaceId, dto);
+    return this.lookupService.searchResources(
+      request.workspaceContext.workspaceId,
+      dto,
+    );
   }
 
   @Get('units')
-  @Permissions(PERMISSIONS.BASIC_PRICE_REVIEW_VIEW)
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
   searchUnits(@Query() dto: SearchUnitDefinitionDto) {
     return this.lookupService.searchUnits(dto);
   }
