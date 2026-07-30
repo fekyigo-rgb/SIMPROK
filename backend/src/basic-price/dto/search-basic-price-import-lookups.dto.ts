@@ -37,3 +37,10 @@ export class SearchUnitDefinitionDto extends SearchBasicPriceImportLookupPageDto
   @IsEnum(UnitKind)
   kind?: UnitKind;
 }
+
+/**
+ * RM-02D2A2 — Region is a canonical GLOBAL entity (no workspaceId). The only
+ * filter beyond the optional `q` (code or name) is the always-on active-list
+ * scope applied in the service; the DTO carries no workspace or scope input.
+ */
+export class SearchRegionDto extends SearchBasicPriceImportLookupPageDto {}

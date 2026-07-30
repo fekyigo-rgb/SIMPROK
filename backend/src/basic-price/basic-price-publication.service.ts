@@ -1,6 +1,10 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  mapPublicationQueueItem,
+  type PublicationQueueItem,
+} from '../common/basic-price-workflow.projection';
 
 /**
  * RM-02D2A-1 Owner Lock (docs/implementation-gates/rm02d2a1/OWNER-LOCK.md) —
@@ -22,11 +26,19 @@ import { PrismaService } from '../prisma/prisma.service';
 export class BasicPricePublicationService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getPublicationQueue(workspaceId: string) {
-    return this.prisma.basicPrice.findMany({
+  /**
+   * RM-02D2A2 — the publication queue is projected, never a raw BasicPrice
+   * row: a publisher must see a human-readable resource identity, region, and
+   * an exact two-digit decimal price string before publishing. Same
+   * workspace-scoped UNPUBLISHED+VERIFIED source set as before.
+   */
+  async getPublicationQueue(workspaceId: string): Promise<PublicationQueueItem[]> {
+    const rows = await this.prisma.basicPrice.findMany({
       where: { workspaceId, status: 'UNPUBLISHED', verificationStatus: 'VERIFIED' },
       orderBy: { createdAt: 'asc' },
+      include: { resource: true, region: true },
     });
+    return rows.map((row) => mapPublicationQueueItem(row));
   }
 
   async publish(params: {

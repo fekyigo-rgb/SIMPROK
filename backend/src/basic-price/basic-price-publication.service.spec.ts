@@ -338,8 +338,19 @@ describe('BasicPricePublicationService', () => {
     expect(result).toEqual({ id: BASIC_PRICE_ID, status: 'PUBLISHED', verificationStatus: 'PUBLISHED' });
   });
 
-  it('exposes a workspace-scoped publication queue of UNPUBLISHED+VERIFIED prices only', async () => {
-    const findMany = jest.fn().mockResolvedValue([{ id: BASIC_PRICE_ID }]);
+  it('exposes a workspace-scoped, human-readable publication queue of UNPUBLISHED+VERIFIED prices only', async () => {
+    const findMany = jest.fn().mockResolvedValue([
+      {
+        id: BASIC_PRICE_ID,
+        value: '125000.00',
+        effectiveDate: new Date('2026-07-19T00:00:00.000Z'),
+        status: 'UNPUBLISHED',
+        verificationStatus: 'VERIFIED',
+        createdAt: new Date('2026-07-20T00:00:00.000Z'),
+        resource: { id: 'r1', code: 'M.01', name: 'Semen', type: 'MATERIAL' },
+        region: { id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' },
+      },
+    ]);
     (prisma as unknown as { basicPrice: { findMany: jest.Mock } }).basicPrice = { findMany };
 
     const result = await service.getPublicationQueue(WORKSPACE_ID);
@@ -347,7 +358,21 @@ describe('BasicPricePublicationService', () => {
     expect(findMany).toHaveBeenCalledWith({
       where: { workspaceId: WORKSPACE_ID, status: 'UNPUBLISHED', verificationStatus: 'VERIFIED' },
       orderBy: { createdAt: 'asc' },
+      include: { resource: true, region: true },
     });
-    expect(result).toEqual([{ id: BASIC_PRICE_ID }]);
+    // Projected, not raw: human-readable identity + exact two-digit price string.
+    expect(result).toEqual([
+      {
+        basicPriceId: BASIC_PRICE_ID,
+        resource: { id: 'r1', code: 'M.01', name: 'Semen', type: 'MATERIAL' },
+        region: { id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' },
+        price: '125000.00',
+        effectiveDate: '2026-07-19T00:00:00.000Z',
+        status: 'UNPUBLISHED',
+        verificationStatus: 'VERIFIED',
+        createdAt: '2026-07-20T00:00:00.000Z',
+      },
+    ]);
+    expect(typeof result[0].price).toBe('string');
   });
 });

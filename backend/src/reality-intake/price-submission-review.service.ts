@@ -9,11 +9,29 @@ import {
   UserStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  mapReviewDetail,
+  mapReviewQueueItem,
+  type ReviewDetail,
+  type ReviewerIdentity,
+  type ReviewQueueItem,
+} from '../common/basic-price-workflow.projection';
 
 type TenantParams = {
   workspaceId: string;
   organizationId: string;
 };
+
+/**
+ * RM-02D2A2 — the relations every review-read API contract needs to project a
+ * human-readable identity (resource code/name/type, region code/name, current
+ * price, assigned reviewer). Shared verbatim by the queue and detail reads so
+ * both always carry the same identity payload.
+ */
+const REVIEW_API_INCLUDE = {
+  submission: { include: { resource: true, region: true, revisions: true } },
+  assignedTo: { include: { membership: { include: { account: true } } } },
+} satisfies Prisma.PriceSubmissionReviewInclude;
 
 type DecisionParams = TenantParams & {
   reviewId: string;
@@ -415,19 +433,134 @@ export class PriceSubmissionReviewService {
    * Tenant-scoped by workspaceId + organizationId server-resolved by the
    * caller; never accepts them from client input.
    */
-  async listReviewQueue(params: TenantParams & { slaState?: ReviewSlaState }) {
-    return this.prisma.priceSubmissionReview.findMany({
+  async listReviewQueue(
+    params: TenantParams & { slaState?: ReviewSlaState },
+  ): Promise<ReviewQueueItem[]> {
+    const reviews = await this.prisma.priceSubmissionReview.findMany({
       where: {
         workspaceId: params.workspaceId,
         organizationId: params.organizationId,
         ...(params.slaState ? { slaState: params.slaState } : {}),
       },
       orderBy: { openedAt: 'asc' },
+      include: REVIEW_API_INCLUDE,
     });
+    return reviews.map((review) => mapReviewQueueItem(review));
   }
 
-  async getReviewDetailForApi(params: TenantParams & { reviewId: string }) {
-    return this.findReviewForTenant(params);
+  async getReviewDetailForApi(
+    params: TenantParams & { reviewId: string },
+  ): Promise<ReviewDetail> {
+    const review = await this.prisma.priceSubmissionReview.findFirst({
+      where: {
+        id: params.reviewId,
+        workspaceId: params.workspaceId,
+        organizationId: params.organizationId,
+      },
+      include: {
+        ...REVIEW_API_INCLUDE,
+        decisions: {
+          orderBy: { decidedAt: 'asc' },
+          include: {
+            decidedBy: { include: { membership: { include: { account: true } } } },
+          },
+        },
+      },
+    });
+
+    if (
+      !review ||
+      !review.submission ||
+      review.submission.workspaceId !== params.workspaceId ||
+      review.submission.organizationId !== params.organizationId
+    ) {
+      throw new NotFoundException('Price submission review not found');
+    }
+
+    return mapReviewDetail(review);
+  }
+
+  /**
+   * RM-02D2A2 — the ONE tenant-scoped active-reviewer directory backing the
+   * reassign selector. workspaceId is always server-resolved from
+   * request.workspaceContext; the client never supplies it. A candidate only
+   * surfaces when the ENTIRE identity chain is sound and ACTIVE:
+   *   User(ACTIVE, workspaceId) -> WorkspaceMembership(ACTIVE, workspaceId,
+   *   id === User.workspaceMembershipId) -> Account(ACTIVE).
+   * Cross-tenant, inactive, or dangling rows never appear — both the query
+   * filter AND isActiveReviewerCandidate() enforce it. This is deliberately
+   * NOT the account-self-scoped GET /workspace-membership/workspace/:id
+   * endpoint, whose meaning is unchanged.
+   */
+  async listReviewerCandidates(params: {
+    workspaceId: string;
+    q?: string;
+  }): Promise<ReviewerIdentity[]> {
+    const q = params.q?.trim();
+    const users = await this.prisma.user.findMany({
+      where: {
+        workspaceId: params.workspaceId,
+        status: UserStatus.ACTIVE,
+        membership: {
+          is: {
+            workspaceId: params.workspaceId,
+            status: 'ACTIVE',
+            account: { is: { status: 'ACTIVE' } },
+          },
+        },
+        ...(q
+          ? {
+              OR: [
+                { fullName: { contains: q, mode: Prisma.QueryMode.insensitive } },
+                {
+                  membership: {
+                    is: {
+                      account: {
+                        is: { email: { contains: q, mode: Prisma.QueryMode.insensitive } },
+                      },
+                    },
+                  },
+                },
+              ],
+            }
+          : {}),
+      },
+      include: { membership: { include: { account: true } } },
+      orderBy: [{ fullName: 'asc' }],
+    });
+
+    return users
+      .filter((user) => this.isActiveReviewerCandidate(user, params.workspaceId))
+      .map((user) => ({
+        userId: user.id,
+        fullName: user.fullName,
+        email: user.membership.account.email,
+      }));
+  }
+
+  /**
+   * Defense-in-depth re-check of the full active-reviewer chain after the DB
+   * query, so a candidate only ever surfaces when EVERY link is ACTIVE and
+   * belongs to the target workspace. Even if a query filter ever regressed, an
+   * inactive Account, inactive membership, inactive User, or cross-tenant row
+   * can never leak into a reviewer selector.
+   */
+  private isActiveReviewerCandidate(
+    user: Prisma.UserGetPayload<{
+      include: { membership: { include: { account: true } } };
+    }>,
+    workspaceId: string,
+  ): boolean {
+    return (
+      user.status === UserStatus.ACTIVE &&
+      user.workspaceId === workspaceId &&
+      user.membership.id === user.workspaceMembershipId &&
+      user.membership.workspaceId === workspaceId &&
+      user.membership.status === 'ACTIVE' &&
+      user.membership.account.status === 'ACTIVE' &&
+      typeof user.membership.account.email === 'string' &&
+      user.membership.account.email.length > 0
+    );
   }
 
   /** Server-side workspaceId -> organizationId lookup; never trusts client input. */

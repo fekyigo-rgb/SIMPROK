@@ -356,7 +356,13 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
 
     // --- Actor 2 (verifier): sees the queue, accepts ---
     const queue = await request(app.getHttpServer()).get('/basic-price-reviews').set('Authorization', `Bearer ${actor2Token}`).set('x-workspace-id', WORKSPACE_A).expect(200);
-    expect(queue.body.map((r: { id: string }) => r.id)).toContain(reviewId);
+    // RM-02D2A2: the queue is now a projection keyed by reviewId (not a raw
+    // PriceSubmissionReview.id), and each row carries a human-readable resource
+    // identity plus an exact two-digit price string.
+    const queued = queue.body.find((r: { reviewId: string }) => r.reviewId === reviewId);
+    expect(queued).toBeDefined();
+    expect(queued.resource).toEqual(expect.objectContaining({ name: expect.any(String) }));
+    expect(queued.currentPrice).toMatch(/^\d+\.\d{2}$/);
 
     // 404 cross-tenant: Workspace-B's crosstenant actor has REVIEW_VIEW in
     // ITS OWN workspace, but this reviewId belongs to Workspace-A.
@@ -440,7 +446,11 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
 
     // --- Actor 3 (a genuinely different human): publish succeeds ---
     const publishQueue = await request(app.getHttpServer()).get('/basic-price-publications').set('Authorization', `Bearer ${actor3Token}`).set('x-workspace-id', WORKSPACE_A).expect(200);
-    expect(publishQueue.body.map((bp: { id: string }) => bp.id)).toContain(basicPriceId);
+    // RM-02D2A2: the publication queue is now a projection keyed by
+    // basicPriceId, carrying human-readable identity + a two-digit price string.
+    const queuedForPublish = publishQueue.body.find((bp: { basicPriceId: string }) => bp.basicPriceId === basicPriceId);
+    expect(queuedForPublish).toBeDefined();
+    expect(queuedForPublish.price).toMatch(/^\d+\.\d{2}$/);
 
     const publish = await request(app.getHttpServer())
       .post(`/basic-price-publications/${basicPriceId}/publish`)

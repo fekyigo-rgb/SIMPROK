@@ -37,6 +37,18 @@ export class BasicPriceReviewController {
     return this.reviewService.listReviewQueue({ workspaceId, organizationId, slaState });
   }
 
+  /**
+   * Declared BEFORE the ':reviewId' route so the static 'reviewer-candidates'
+   * segment is never captured as a reviewId. Gated by BASIC_PRICE_VERIFY (the
+   * reassign actor's permission), workspace always from server context.
+   */
+  @Get('reviewer-candidates')
+  @Permissions(PERMISSIONS.BASIC_PRICE_VERIFY)
+  async reviewerCandidates(@Req() request: any, @Query('q') q?: string) {
+    const workspaceId: string = request.workspaceContext?.workspaceId;
+    return this.reviewService.listReviewerCandidates({ workspaceId, q });
+  }
+
   @Get(':reviewId')
   @Permissions(PERMISSIONS.BASIC_PRICE_REVIEW_VIEW)
   async getDetail(@Req() request: any, @Param('reviewId') reviewId: string) {

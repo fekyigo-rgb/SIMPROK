@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, ResourceType, UnitDimension, UnitKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { SearchResourceCatalogDto, SearchUnitDefinitionDto } from './dto/search-basic-price-import-lookups.dto';
+import {
+  SearchRegionDto,
+  SearchResourceCatalogDto,
+  SearchUnitDefinitionDto,
+} from './dto/search-basic-price-import-lookups.dto';
 
 interface CountRow {
   count: bigint;
@@ -81,6 +85,45 @@ export class BasicPriceImportLookupService {
     ]);
 
     const total = Number(countRows[0]?.count ?? 0);
+    return { items, page, limit, total, hasNext: offset + items.length < total };
+  }
+
+  /**
+   * RM-02D2A2 — canonical GLOBAL active Region list for the import Region
+   * selector. Region has no workspaceId, so this is intentionally not
+   * workspace-scoped; access is still gated by JwtAuthGuard + PermissionsGuard
+   * (BASIC_PRICE_IMPORT) at the controller. Returns only id/code/name — never
+   * a bare UUID label — filtered to isActive=true. Optional `q` matches code
+   * OR name, case-insensitive.
+   */
+  async searchRegions(dto: SearchRegionDto) {
+    const q = dto.q?.trim() ?? '';
+    const page = dto.page ?? 1;
+    const limit = dto.limit ?? 20;
+    const offset = (page - 1) * limit;
+    const where: Prisma.RegionWhereInput = {
+      isActive: true,
+      ...(q
+        ? {
+            OR: [
+              { code: { contains: q, mode: Prisma.QueryMode.insensitive } },
+              { name: { contains: q, mode: Prisma.QueryMode.insensitive } },
+            ],
+          }
+        : {}),
+    };
+
+    const [items, total] = await Promise.all([
+      this.prisma.region.findMany({
+        where,
+        orderBy: [{ code: 'asc' }],
+        skip: offset,
+        take: limit,
+        select: { id: true, code: true, name: true },
+      }),
+      this.prisma.region.count({ where }),
+    ]);
+
     return { items, page, limit, total, hasNext: offset + items.length < total };
   }
 
