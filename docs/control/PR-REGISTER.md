@@ -234,3 +234,35 @@ activate production grants.
 - MERGE: NO — Owner-only decision
 
 ## Soli Deo Gloria. Haleluya. Amin.
+
+## RM-02 stack integration and canonical closeout — 2026-08-01
+
+```text
+REGISTER_ENTRY_ID=PR-REGISTER-RM02-PR58-PR59-2026-08-01
+PRODUCT_CODE_ANCHOR=30132237de782d06043cdca3cfbc064781e8042a
+INTEGRATION_HEAD=37cdf762202b9f140f520591566db2f4223138c3
+
+PR58_STATE=MERGED
+PR58_MERGE_METHOD=MERGE_COMMIT
+PR58_MERGE_COMMIT=8aba41208229d3901693238747c5fa2e06ebb614
+
+PR53_TO_PR57_INTEGRATED_BY_PR58=YES
+SEQUENTIAL_STACKED_MERGE_PERFORMED=NO
+
+PR59_STATE_AT_REGISTER_WRITE=OPEN_DRAFT
+PR59_HEAD_REF=docs/pr58-canonical-closeout-20260801
+PR59_FINAL_CHANGED_DOCUMENT_COUNT=5
+PR59_MERGE_AT_REGISTER_WRITE=NO
+
+MIGRATION_EXECUTION=NO
+PRODUCTION_ACTIVATION=NO
+SIMPROK_DB_WRITE=NO
+```
+
+- PR #53 through PR #57 are contained in `main` through PR #58.
+- PR #54 through PR #57 were closed after integration; their product
+  work was not rejected.
+- PR #59 is the bounded documentation-closeout review container.
+- PR #59 does not authorize migration or production activation.
+
+Soli Deo Gloria.
