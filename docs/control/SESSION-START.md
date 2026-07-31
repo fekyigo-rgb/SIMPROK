@@ -5,15 +5,18 @@ Status: MUTABLE OPERATIONAL POINTER. Baca ini di awal setiap sesi agen.
 1. Baca `AGENTS.md` pada root repository.
 2. Baca utuh `docs/control/CARA-KERJA.md` dan `docs/control/ROADMAP.md`.
 3. Baca `docs/control/STATE.md` utuh.
-4. Nyatakan posisi/kursi kamu (Eksekutor / Arsitek / Penjaga Konstitusi /
+4. Bila target aktif menyentuh Basic Price, baca utuh
+   `docs/control/BASIC-PRICE-MASTER-DECISION.md`. Dokumen itu saat ini
+   berstatus DRAFT/NOT_LOCKED; patuhi STOP dan pending decision di dalamnya.
+5. Nyatakan posisi/kursi kamu (Eksekutor / Arsitek / Penjaga Konstitusi /
    PM / Auditor independen) sebelum bertindak.
-5. Verifikasi realitas repo exact — jangan percaya memori sesi lama:
+6. Verifikasi realitas repo exact — jangan percaya memori sesi lama:
    - `git status --short` dan `git diff --cached --name-only`;
    - branch dan HEAD saat ini vs `STATE.md`;
    - open PR dan Draft PR via `gh pr list` / `gh pr view`;
    - active worktree via `git worktree list --porcelain`;
    - active debt via `docs/control/DEBT.md`.
-6. Lanjutkan hanya pada `CURRENT_PRODUCT_TARGET` di `STATE.md` dan hanya
+7. Lanjutkan hanya pada `CURRENT_PRODUCT_TARGET` di `STATE.md` dan hanya
    dalam kewenangan kursi yang berlaku. Jangan membuka roadmap item lain.
 
 Bila bukti, status, atau konflik dokumen belum jelas: laporkan
