@@ -22,6 +22,8 @@ import {
   hasIncompletePricing,
   incompletePricingRecap,
   serializeDraftRecap,
+  RAB_DRAFT_DEFAULT_MARGIN_PERCENT,
+  RAB_DRAFT_DEFAULT_TAX_PERCENT,
 } from './rab-draft-recap';
 import { SERVER_ROW_PROTECTION_REASON } from './rab-kernel-persistence.contracts';
 
@@ -326,30 +328,37 @@ export class ProjectService {
       orderBy: { versionNumber: 'desc' },
     });
 
-    // ACTIVE_BASELINE_RAB_TOTAL_NULL_IS_NOT_ZERO: an ACTIVE baseline whose
-    // RabDocument is missing or whose totalBaseCost is not yet authoritative
+    // NO_BASELINE_FALSE_ZERO / ACTIVE_BASELINE_RAB_TOTAL_NULL_IS_NOT_ZERO: no
+    // ACTIVE ProjectBaseline at all, a baseline whose RabDocument is
+    // missing, or a RabDocument whose totalBaseCost is not yet authoritative
     // (NULL — an incomplete draft, per the GATE-2A truth constraint) must
-    // never be reported as a planned cost of 0. Number(null) is 0 in
-    // JavaScript, which would silently fabricate a real-looking zero here —
-    // fail closed instead, reusing this method's existing UNAVAILABLE shape.
-    let overallPlannedCost = 0;
-    if (baseline) {
-      const rab = baseline.rabDocumentId
-        ? await this.prisma.rabDocument.findUnique({
-            where: { id: baseline.rabDocumentId },
-          })
-        : null;
-      if (!rab || rab.totalBaseCost === null) {
-        return {
-          available: false,
-          status: 'UNAVAILABLE',
-          message:
-            'Total RAB baseline aktif belum tersedia atau belum otoritatif',
-          data: null,
-        };
-      }
-      overallPlannedCost = Number(rab.totalBaseCost);
+    // never be reported as a planned cost of 0. `let overallPlannedCost = 0`
+    // followed by a conditional skip is exactly how JavaScript silently
+    // fabricates a real-looking zero — fail closed in every one of these
+    // three cases instead, reusing this method's existing UNAVAILABLE shape.
+    if (!baseline) {
+      return {
+        available: false,
+        status: 'UNAVAILABLE',
+        message: 'Baseline aktif belum tersedia',
+        data: null,
+      };
     }
+    const rab = baseline.rabDocumentId
+      ? await this.prisma.rabDocument.findUnique({
+          where: { id: baseline.rabDocumentId },
+        })
+      : null;
+    if (!rab || rab.totalBaseCost === null) {
+      return {
+        available: false,
+        status: 'UNAVAILABLE',
+        message:
+          'Total RAB baseline aktif belum tersedia atau belum otoritatif',
+        data: null,
+      };
+    }
+    const overallPlannedCost = Number(rab.totalBaseCost);
 
     // Calculate Actual Progress and Cost
     let totalActualProgressPct = 0;
@@ -690,6 +699,33 @@ export class ProjectService {
       });
       const existingById = new Map(existingItems.map((row) => [row.id, row]));
 
+      // GATE-2A §C — one canonical recap policy: read the existing DRAFT
+      // RabDocument's margin/tax settings before the destructive replacement
+      // below, so a save that omits marginPercent/taxPercent preserves a
+      // deliberately-set value instead of silently resetting it. Priority:
+      // explicit DTO value > existing persisted setting > canonical default
+      // (RAB_DRAFT_DEFAULT_MARGIN_PERCENT/_TAX_PERCENT — the same constants
+      // buildDraftRecap itself falls back to). The exact same effective
+      // percentages are used below for the incomplete recap response, the
+      // complete recap calculation, and RabDocument persistence — never a
+      // second, divergent formula.
+      const existingRabDocument = await tx.rabDocument.findFirst({
+        where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
+        orderBy: { updatedAt: 'desc' },
+      });
+      const effectiveMarginPercent =
+        dto.marginPercent !== undefined
+          ? dto.marginPercent
+          : (existingRabDocument?.profitPercent ??
+            RAB_DRAFT_DEFAULT_MARGIN_PERCENT);
+      const effectiveTaxPercent =
+        dto.taxPercent !== undefined
+          ? dto.taxPercent
+          : dto.ppnPercent !== undefined
+            ? dto.ppnPercent
+            : (existingRabDocument?.taxPercent ??
+              RAB_DRAFT_DEFAULT_TAX_PERCENT);
+
       // §4.1: every incoming tempId must be unique, full stop — before any
       // other check, before any mutation.
       const tempIdCounts = new Map<string, number>();
@@ -869,17 +905,16 @@ export class ProjectService {
           structureId: structure.id,
           items: insertedItems,
           recap: this.incompletePricingRecap(
-            dto.marginPercent,
-            dto.taxPercent ?? dto.ppnPercent,
+            effectiveMarginPercent,
+            effectiveTaxPercent,
           ),
         };
       }
 
-      const taxPercent = dto.taxPercent ?? dto.ppnPercent ?? 0;
       const recap = this.buildDraftRecap(
         subtotal,
-        dto.marginPercent ?? 0,
-        taxPercent,
+        effectiveMarginPercent,
+        effectiveTaxPercent,
       );
       const rabData = {
         overheadPercent: new Prisma.Decimal(0),

@@ -6,6 +6,10 @@ import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { ProjectService } from './project.service';
 import { RabLifecyclePolicyService } from './rab-lifecycle-policy.service';
+import {
+  RAB_DRAFT_DEFAULT_MARGIN_PERCENT,
+  RAB_DRAFT_DEFAULT_TAX_PERCENT,
+} from './rab-draft-recap';
 
 describe('ProjectService P7C intake contract', () => {
   function createPrismaMock() {
@@ -698,6 +702,128 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
   });
 });
 
+describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy', () => {
+  const STRUCTURE_ID = 'structure-1';
+
+  function createRecapHarness(options: {
+    existingRabDocument?: { profitPercent: Prisma.Decimal | number; taxPercent: Prisma.Decimal | number } | null;
+    persistedRab?: { totalBaseCost: Prisma.Decimal; profitPercent: Prisma.Decimal | number; taxPercent: Prisma.Decimal | number } | null;
+  } = {}) {
+    const rabDocumentUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const rabDocumentCreate = jest.fn().mockResolvedValue({});
+    const rabDocumentFindFirst = jest
+      .fn()
+      .mockResolvedValueOnce(options.existingRabDocument ?? null)
+      .mockResolvedValueOnce(
+        options.persistedRab === undefined ? null : options.persistedRab,
+      );
+    let nextId = 0;
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'project-1', status: 'PLANNED' }]),
+      projectBaseline: { count: jest.fn().mockResolvedValue(0) },
+      rabDocument: {
+        count: jest.fn().mockResolvedValue(0),
+        findFirst: rabDocumentFindFirst,
+        updateMany: rabDocumentUpdateMany,
+        create: rabDocumentCreate,
+      },
+      boqStructure: {
+        count: jest.fn().mockResolvedValue(1),
+        findFirst: jest.fn().mockResolvedValue({
+          id: STRUCTURE_ID,
+          projectId: 'project-1',
+          name: 'Working Draft',
+          status: 'DRAFT',
+        }),
+      },
+      boqItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        create: jest.fn(({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve({ id: `new-row-${nextId++}`, ...data }),
+        ),
+      },
+    };
+    const prisma = { $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(tx)) };
+    const service = new ProjectService(
+      prisma as any,
+      {} as any,
+      new RabLifecyclePolicyService({} as any),
+    );
+    return { service, rabDocumentUpdateMany, rabDocumentCreate };
+  }
+
+  const ONE_PRICED_WORK_ITEM = [
+    { tempId: 'r1', itemType: 'WORK_ITEM', name: 'A', quantity: 5, unit: 'M1', unitPrice: 200000 },
+  ];
+  const ONE_UNPRICED_WORK_ITEM = [
+    { tempId: 'r1', itemType: 'WORK_ITEM', name: 'A', quantity: 5, unit: 'M1' },
+  ];
+
+  it('C-01: no existing DRAFT RabDocument and omitted percentages resolve to the canonical default 10/11', async () => {
+    const { service } = createRecapHarness();
+
+    const result = await service.saveDraftBoq('project-1', { rows: ONE_PRICED_WORK_ITEM } as any, ONE_PRICED_WORK_ITEM);
+
+    const recap = result.recap as any;
+    expect(recap.marginPercent).toBe(10);
+    expect(recap.taxPercent).toBe(11);
+    expect(recap.subtotal).toBe(1000000);
+    expect(recap.grandTotal).toBe(1221000);
+  });
+
+  it('C-02: a deliberately-set 5%/12% on the existing DRAFT is preserved when a later save omits the fields', async () => {
+    const { service } = createRecapHarness({
+      existingRabDocument: { profitPercent: new Prisma.Decimal(5), taxPercent: new Prisma.Decimal(12) },
+    });
+
+    const result = await service.saveDraftBoq('project-1', { rows: ONE_PRICED_WORK_ITEM } as any, ONE_PRICED_WORK_ITEM);
+
+    const recap = result.recap as any;
+    expect(recap.marginPercent).toBe(5);
+    expect(recap.taxPercent).toBe(12);
+    expect(recap.grandTotal).toBe(1176000);
+  });
+
+  it('C-03: an explicit DTO percentage overrides both the existing DRAFT setting and the canonical default', async () => {
+    const { service } = createRecapHarness({
+      existingRabDocument: { profitPercent: new Prisma.Decimal(5), taxPercent: new Prisma.Decimal(12) },
+    });
+
+    const result = await service.saveDraftBoq(
+      'project-1',
+      { rows: ONE_PRICED_WORK_ITEM, marginPercent: 7, taxPercent: 15 } as any,
+      ONE_PRICED_WORK_ITEM,
+    );
+
+    const recap = result.recap as any;
+    expect(recap.marginPercent).toBe(7);
+    expect(recap.taxPercent).toBe(15);
+    expect(recap.grandTotal).toBe(1230500);
+  });
+
+  it('C-04: an incomplete draft retains the effective percentages (not reset to default, not null) while totals stay null', async () => {
+    const { service } = createRecapHarness({
+      existingRabDocument: { profitPercent: new Prisma.Decimal(5), taxPercent: new Prisma.Decimal(12) },
+    });
+
+    const result = await service.saveDraftBoq('project-1', { rows: ONE_UNPRICED_WORK_ITEM } as any, ONE_UNPRICED_WORK_ITEM);
+
+    const recap = result.recap as any;
+    expect(recap.pricingStatus).toBe('INCOMPLETE');
+    expect(recap.marginPercent).toBe(5);
+    expect(recap.taxPercent).toBe(12);
+    expect(recap.subtotal).toBeNull();
+    expect(recap.grandTotal).toBeNull();
+  });
+
+  it('C-06: saveDraftBoq and RabKernelPersistenceService resolve the exact same canonical default constants (single source, not two hardcoded pairs)', () => {
+    expect(RAB_DRAFT_DEFAULT_MARGIN_PERCENT).toBe(10);
+    expect(RAB_DRAFT_DEFAULT_TAX_PERCENT).toBe(11);
+  });
+});
+
 describe('ProjectService getReality GATE-2A active-baseline total truth', () => {
   function createHarness(options: {
     hasReport?: boolean;
@@ -757,6 +883,21 @@ describe('ProjectService getReality GATE-2A active-baseline total truth', () => 
 
     expect(result.status).toBe('UNAVAILABLE');
     expect(result.data).toBeNull();
+  });
+
+  it('§PR57 Gap D-01: returns UNAVAILABLE — never planned cost 0 — when a progress report exists but no ACTIVE ProjectBaseline exists at all', async () => {
+    const { service, prisma } = createHarness({});
+
+    const result = await service.getReality('project-1');
+
+    expect(prisma.projectBaseline.findFirst).toHaveBeenCalled();
+    expect(result).toEqual({
+      available: false,
+      status: 'UNAVAILABLE',
+      message: expect.any(String),
+      data: null,
+    });
+    expect(result).not.toHaveProperty('overallPlannedCost');
   });
 
   it('returns UNAVAILABLE when the active baseline itself carries no rabDocumentId', async () => {

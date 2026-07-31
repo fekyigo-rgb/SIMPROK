@@ -193,6 +193,16 @@ export class RabKernelPersistenceService {
           );
         }
 
+        // §PR57 Gap A: a RESOLVED resolution must carry the exact
+        // ResourceCatalog identity it was resolved against — checked before
+        // the BasicPrice is even re-read, since a null identity can never
+        // legitimately match anything.
+        if (!resolution.resourceCatalogId) {
+          throw new ConflictException(
+            RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_RESOURCE_IDENTITY_MISMATCH,
+          );
+        }
+
         const basicPrice = await tx.basicPrice.findFirst({
           where: {
             id: resolution.selectedBasicPriceId,
@@ -205,11 +215,22 @@ export class RabKernelPersistenceService {
             effectiveDate: true,
             validUntil: true,
             sourceSubmissionId: true,
+            resourceId: true,
+            workspaceId: true,
+            organizationId: true,
           },
         });
         if (!basicPrice) {
           throw new ConflictException(
             RAB_KERNEL_PERSISTENCE_REASON.SELECTED_BASIC_PRICE_NOT_ELIGIBLE,
+          );
+        }
+        // §PR57 Gap A: exact id equality only — never a name/fuzzy match,
+        // never a remap. A resolution may only ever consume a price
+        // actually priced for the same ResourceCatalog row.
+        if (basicPrice.resourceId !== resolution.resourceCatalogId) {
+          throw new ConflictException(
+            RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_RESOURCE_IDENTITY_MISMATCH,
           );
         }
         if (basicPrice.effectiveDate.getTime() > calculationAsOfDate.getTime()) {
@@ -385,16 +406,28 @@ export class RabKernelPersistenceService {
   }
 
   /**
-   * §3.3 — reuses the exact relations BasicPricePublicationService.publish()
-   * already relies on (PriceSubmission -> PriceSubmissionReview -> an ACCEPT
-   * PriceSubmissionReviewDecision -> User -> WorkspaceMembership for the
-   * verifier; BasicPricePublicationAudit for the publisher). No second
-   * lifecycle implementation, no inference from status fields alone. Any
-   * missing link fails closed with one stable reason.
+   * §3.3 / §PR57 Gap B — reuses the exact relations
+   * BasicPricePublicationService.publish() already relies on (PriceSubmission
+   * -> PriceSubmissionReview -> an ACCEPT PriceSubmissionReviewDecision ->
+   * User -> WorkspaceMembership for the verifier; BasicPricePublicationAudit
+   * for the publisher). No second lifecycle implementation, no inference
+   * from status fields alone, and no re-authorization of a historical
+   * actor's CURRENT status — authorization was enforced once, at
+   * publication time; a publisher/verifier who has since been suspended or
+   * deactivated does not retroactively invalidate a valid past publication.
+   * Every link in the chain is bound by exact id/workspace/organization
+   * equality, never inferred. Any missing or mismatched link fails closed
+   * with one stable reason.
    */
   private async assertTraceableProvenance(
     tx: Prisma.TransactionClient,
-    basicPrice: { id: string; sourceSubmissionId: string | null },
+    basicPrice: {
+      id: string;
+      sourceSubmissionId: string | null;
+      resourceId: string;
+      workspaceId: string | null;
+      organizationId: string | null;
+    },
   ): Promise<void> {
     const INCOMPLETE = RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE;
 
@@ -411,20 +444,52 @@ export class RabKernelPersistenceService {
         },
       },
     });
-    const acceptDecisions = submission?.review?.decisions ?? [];
+    if (!submission) {
+      throw new ConflictException(INCOMPLETE);
+    }
+    // Source-chain binding: the submission must genuinely be FOR this exact
+    // resource, workspace, and organization — matching ids alone is not
+    // enough to prove the chain, since an id match says nothing about
+    // whether the submission was ever actually for the same resource/tenant.
+    if (
+      submission.resourceId !== basicPrice.resourceId ||
+      submission.workspaceId !== basicPrice.workspaceId ||
+      submission.organizationId !== basicPrice.organizationId
+    ) {
+      throw new ConflictException(INCOMPLETE);
+    }
+
+    const review = submission.review;
+    if (
+      !review ||
+      review.workspaceId !== basicPrice.workspaceId ||
+      review.organizationId !== basicPrice.organizationId
+    ) {
+      throw new ConflictException(INCOMPLETE);
+    }
+
+    const acceptDecisions = review.decisions ?? [];
     if (acceptDecisions.length !== 1) {
       throw new ConflictException(INCOMPLETE);
     }
 
     const verifierUser = await tx.user.findFirst({
       where: { id: acceptDecisions[0].decidedByUserId },
-      select: { membership: { select: { accountId: true } } },
+      select: { membership: { select: { accountId: true, workspaceId: true } } },
     });
     const verifierAccountId = verifierUser?.membership?.accountId;
-    if (!verifierAccountId) {
+    if (
+      !verifierAccountId ||
+      verifierUser.membership.workspaceId !== submission.workspaceId
+    ) {
       throw new ConflictException(INCOMPLETE);
     }
 
+    // Publication audit + its Account FK (schema-enforced — see the Gate-2A
+    // migration's fk_basic_price_publication_audit_actor) belongs to this
+    // exact BasicPrice. No re-check of the publisher Account's CURRENT
+    // status: that was BasicPricePublicationService's job at publish time,
+    // not this consumption-time read's job to re-litigate.
     const publicationAudit = await tx.basicPricePublicationAudit.findFirst({
       where: { basicPriceId: basicPrice.id, action: 'PUBLISH' },
       orderBy: { createdAt: 'desc' },

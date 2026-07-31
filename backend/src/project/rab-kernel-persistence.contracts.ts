@@ -21,6 +21,15 @@ export const RAB_KERNEL_PERSISTENCE_REASON = {
   BASIC_PRICE_EXPIRED: 'BASIC_PRICE_EXPIRED',
   BASIC_PRICE_VALUE_DRIFTED: 'BASIC_PRICE_VALUE_DRIFTED',
   /**
+   * §PR57 Gap A: the resolution's own resourceCatalogId is null, or the
+   * freshly re-read BasicPrice's resourceId does not equal it. A RESOLVED
+   * resolution must never consume a price belonging to a different
+   * resource, even when every other check (eligibility, date, drift,
+   * traceability) passes. Checked by exact id equality only — no name
+   * matching, no fuzzy matching, no remap.
+   */
+  BASIC_PRICE_RESOURCE_IDENTITY_MISMATCH: 'BASIC_PRICE_RESOURCE_IDENTITY_MISMATCH',
+  /**
    * §3.3 traceable Basic Price runtime gate: the selected BasicPrice cannot
    * be traced end-to-end through PriceSubmission -> PriceSubmissionReview ->
    * an ACCEPT decision with a resolvable verifier identity -> a PUBLISH

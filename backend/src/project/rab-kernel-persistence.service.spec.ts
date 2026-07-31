@@ -8,12 +8,17 @@ import { COST_CALCULATION_REASON } from './cost-kernel.contracts';
 
 const PROJECT_ID = 'project-fixture';
 const WORKSPACE_ID = 'workspace-fixture';
+const OTHER_WORKSPACE_ID = 'other-workspace-fixture';
+const ORGANIZATION_ID = 'organization-fixture';
+const OTHER_ORGANIZATION_ID = 'other-organization-fixture';
 const STRUCTURE_ID = 'structure-fixture';
 const BOQ_ITEM_ID = 'boq-item-fixture';
 const AHSP_VERSION_ID = 'ahsp-version-fixture';
 const OCCURRENCE_ID = 'occurrence-fixture';
 const RESOLUTION_ID = 'resolution-fixture';
 const BASIC_PRICE_ID = 'basic-price-fixture';
+const RESOURCE_CATALOG_ID = 'resource-catalog-fixture';
+const OTHER_RESOURCE_CATALOG_ID = 'other-resource-catalog-fixture';
 const SUBMISSION_ID = 'submission-fixture';
 const REVIEW_ID = 'review-fixture';
 const VERIFIER_USER_ID = 'verifier-user-fixture';
@@ -27,6 +32,7 @@ function buildResolution(overrides: Partial<Record<string, unknown>> = {}) {
     id: RESOLUTION_ID,
     ahspResourceId: 'ahsp-resource-fixture',
     status: 'RESOLVED',
+    resourceCatalogId: RESOURCE_CATALOG_ID,
     selectedBasicPriceId: BASIC_PRICE_ID,
     sourcePriceValue: new Prisma.Decimal('100000.00'),
     adaptedPriceValue: new Prisma.Decimal('100000.00'),
@@ -67,16 +73,29 @@ function buildBasicPrice(overrides: Partial<Record<string, unknown>> = {}) {
     effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
     validUntil: null as Date | null,
     sourceSubmissionId: SUBMISSION_ID,
+    resourceId: RESOURCE_CATALOG_ID,
+    workspaceId: WORKSPACE_ID,
+    organizationId: ORGANIZATION_ID,
     ...overrides,
   };
 }
 
-/** Full traceable chain: submission -> review -> ACCEPT decision (verifier). Publisher identity comes from the separate publication-audit mock. */
+/**
+ * Full traceable chain: submission (bound to the exact resource/workspace/
+ * organization) -> review (same workspace/organization) -> ACCEPT decision
+ * (verifier). Publisher identity comes from the separate publication-audit
+ * mock.
+ */
 function buildTraceableSubmission(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: SUBMISSION_ID,
+    resourceId: RESOURCE_CATALOG_ID,
+    workspaceId: WORKSPACE_ID,
+    organizationId: ORGANIZATION_ID,
     review: {
       id: REVIEW_ID,
+      workspaceId: WORKSPACE_ID,
+      organizationId: ORGANIZATION_ID,
       decisions: [{ decidedByUserId: VERIFIER_USER_ID }],
     },
     ...overrides,
@@ -89,7 +108,7 @@ interface Fixture {
   boqItem?: ReturnType<typeof buildBoqItem> | null;
   basicPrice?: ReturnType<typeof buildBasicPrice> | null;
   submission?: ReturnType<typeof buildTraceableSubmission> | null;
-  verifierUser?: { membership: { accountId: string } | null } | null;
+  verifierUser?: { membership: { accountId: string; workspaceId: string } | null } | null;
   publicationAudit?: { actorAccountId: string } | null;
   allItemsAfterUpdate?: unknown[];
   otherItems?: unknown[];
@@ -192,7 +211,7 @@ function createHarness(fixture: Fixture) {
         .fn()
         .mockResolvedValue(
           fixture.verifierUser === undefined
-            ? { membership: { accountId: VERIFIER_ACCOUNT_ID } }
+            ? { membership: { accountId: VERIFIER_ACCOUNT_ID, workspaceId: WORKSPACE_ID } }
             : fixture.verifierUser,
         ),
     },
@@ -313,7 +332,9 @@ describe('RabKernelPersistenceService', () => {
   it('rejects an untraceable BasicPrice: submission exists but no ACCEPT review decision', async () => {
     const { service } = createHarness(
       withNoOtherItems({
-        submission: buildTraceableSubmission({ review: { id: REVIEW_ID, decisions: [] } }),
+        submission: buildTraceableSubmission({
+          review: { id: REVIEW_ID, workspaceId: WORKSPACE_ID, organizationId: ORGANIZATION_ID, decisions: [] },
+        }),
       }),
     );
     await expect(call(service)).rejects.toMatchObject({
@@ -335,13 +356,28 @@ describe('RabKernelPersistenceService', () => {
     });
   });
 
-  it('rejects a PUBLISHED/PUBLISHED price whose verifier and publisher are the same identity', async () => {
+  it('B-06: rejects a PUBLISHED/PUBLISHED price whose verifier and publisher are the same identity', async () => {
     const { service } = createHarness(
       withNoOtherItems({ publicationAudit: { actorAccountId: VERIFIER_ACCOUNT_ID } }),
     );
     await expect(call(service)).rejects.toMatchObject({
       message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
     });
+  });
+
+  it('B-07: a legitimate historical publisher/verifier Account is valid provenance even though this read never checks their CURRENT status', async () => {
+    // Neither the verifierUser nor publicationAudit mocks below carry any
+    // ACTIVE/status field at all — assertTraceableProvenance only proves
+    // the Account ids resolve and differ, exactly as required. If this
+    // method ever started re-authorizing historical actors, a suspended
+    // fixture would need a status flag to pass; it does not.
+    const { service } = createHarness(
+      withNoOtherItems({
+        verifierUser: { membership: { accountId: VERIFIER_ACCOUNT_ID, workspaceId: WORKSPACE_ID } },
+        publicationAudit: { actorAccountId: PUBLISHER_ACCOUNT_ID },
+      }),
+    );
+    await expect(call(service)).resolves.toBeDefined();
   });
 
   it('fails closed on an unresolved resource without touching money', async () => {
@@ -421,7 +457,7 @@ describe('RabKernelPersistenceService', () => {
     await expect(call(service)).resolves.toBeDefined();
   });
 
-  it('writes exact complete RAB totals once the one-line draft is complete', async () => {
+  it('writes exact complete RAB totals once the one-line draft is complete (C-05)', async () => {
     const { service, rabDocumentCreate } = createHarness(
       withNoOtherItems({
         allItemsAfterUpdate: [
@@ -463,6 +499,109 @@ describe('RabKernelPersistenceService', () => {
     );
     await expect(call(service)).rejects.toMatchObject({
       message: COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH,
+    });
+  });
+
+  describe('§PR57 Gap A — resource identity must match', () => {
+    it('A-01: resolution.resourceCatalogId=null fails closed with zero mutation', async () => {
+      const { service, boqItemUpdate, rabDocumentUpdateMany, rabDocumentCreate } = createHarness(
+        withNoOtherItems({
+          occurrence: buildOccurrence([buildResolution({ resourceCatalogId: null })]),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_RESOURCE_IDENTITY_MISMATCH,
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+      expect(rabDocumentUpdateMany).not.toHaveBeenCalled();
+      expect(rabDocumentCreate).not.toHaveBeenCalled();
+    });
+
+    it('A-02: BasicPrice.resourceId != resolution.resourceCatalogId fails closed with zero mutation', async () => {
+      const { service, boqItemUpdate, rabDocumentUpdateMany, rabDocumentCreate } = createHarness(
+        withNoOtherItems({
+          basicPrice: buildBasicPrice({ resourceId: OTHER_RESOURCE_CATALOG_ID }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_RESOURCE_IDENTITY_MISMATCH,
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+      expect(rabDocumentUpdateMany).not.toHaveBeenCalled();
+      expect(rabDocumentCreate).not.toHaveBeenCalled();
+    });
+
+    it('A-03: PriceSubmission.resourceId != BasicPrice.resourceId fails closed before money mutation', async () => {
+      const { service, boqItemUpdate } = createHarness(
+        withNoOtherItems({
+          submission: buildTraceableSubmission({ resourceId: OTHER_RESOURCE_CATALOG_ID }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+    });
+
+    it('A-04: a positive matching resourceCatalogId/resourceId/submission chain still succeeds', async () => {
+      const { service } = createHarness(withNoOtherItems());
+      const result = await call(service);
+      expect(result.unitPrice).toBe('200000.00');
+    });
+  });
+
+  describe('§PR57 Gap B — publication audit provenance binding', () => {
+    it('B-02: submission workspace mismatch fails closed', async () => {
+      const { service, boqItemUpdate } = createHarness(
+        withNoOtherItems({
+          submission: buildTraceableSubmission({ workspaceId: OTHER_WORKSPACE_ID }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+    });
+
+    it('B-03: submission organization mismatch fails closed', async () => {
+      const { service, boqItemUpdate } = createHarness(
+        withNoOtherItems({
+          submission: buildTraceableSubmission({ organizationId: OTHER_ORGANIZATION_ID }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+    });
+
+    it('B-04: review workspace/organization mismatch fails closed', async () => {
+      const { service } = createHarness(
+        withNoOtherItems({
+          submission: buildTraceableSubmission({
+            review: {
+              id: REVIEW_ID,
+              workspaceId: OTHER_WORKSPACE_ID,
+              organizationId: ORGANIZATION_ID,
+              decisions: [{ decidedByUserId: VERIFIER_USER_ID }],
+            },
+          }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+    });
+
+    it('B-05: verifier User/membership belongs to another workspace fails closed', async () => {
+      const { service } = createHarness(
+        withNoOtherItems({
+          verifierUser: { membership: { accountId: VERIFIER_ACCOUNT_ID, workspaceId: OTHER_WORKSPACE_ID } },
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
     });
   });
 });

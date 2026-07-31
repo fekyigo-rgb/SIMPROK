@@ -95,3 +95,18 @@ ALTER TABLE "boq_items" ADD CONSTRAINT "boq_items_price_origin_truth_check" CHEC
 -- unaffected by dropping NOT NULL.
 ALTER TABLE "rab_documents" ALTER COLUMN "totalBaseCost" DROP NOT NULL;
 ALTER TABLE "rab_documents" ALTER COLUMN "totalFinalCost" DROP NOT NULL;
+
+-- PR57 Gap B: BasicPricePublicationAudit.actorAccountId gets real Account
+-- referential integrity. RESTRICT on delete — an Account that has ever
+-- published a price may never be deleted out from under its historical
+-- audit trail (and the audit row is never silently cascaded away either).
+-- This is schema-level proof of existence only; it makes no claim about
+-- whether that Account is still ACTIVE today, and does not change
+-- BasicPricePublicationService's publish-time authorization rules, which
+-- are unmodified by this migration.
+
+-- CreateIndex
+CREATE INDEX "basic_price_publication_audits_actorAccountId_idx" ON "basic_price_publication_audits"("actorAccountId");
+
+-- AddForeignKey
+ALTER TABLE "basic_price_publication_audits" ADD CONSTRAINT "fk_basic_price_publication_audit_actor" FOREIGN KEY ("actorAccountId") REFERENCES "accounts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

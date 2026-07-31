@@ -30,6 +30,7 @@ model Account {
   intelligenceEvidence                        IntelligenceEvidence[]
   verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]        @relation("BasicPriceSourceEquivalenceVerifiedBy")
   reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
+  basicPricePublicationAudits                 BasicPricePublicationAudit[]         @relation("BasicPricePublicationAuditActor")
 
   @@map("accounts")
 }
@@ -1706,6 +1707,15 @@ model BasicPriceSourceEquivalence {
   @@map("basic_price_source_equivalences")
 }
 
+/// PR57 Gap B: actorAccountId has real Account referential integrity — the
+/// FK is RESTRICT on delete (a historical publication audit row may never
+/// be silently orphaned or cascaded away by deleting the Account that once
+/// acted) and the relation is named explicitly (BasicPricePublicationAuditActor)
+/// so it is unambiguous from every other Account relation. Suspending or
+/// deactivating the Account after publication does not touch this row —
+/// the FK only proves the Account still EXISTS, never that it is still
+/// ACTIVE; re-authorizing a historical actor is deliberately not this
+/// constraint's job.
 model BasicPricePublicationAudit {
   id             String   @id @default(uuid()) @db.Uuid
   basicPriceId   String   @db.Uuid
@@ -1715,8 +1725,10 @@ model BasicPricePublicationAudit {
   createdAt      DateTime @default(now())
 
   basicPrice BasicPrice @relation(fields: [basicPriceId], references: [id], onDelete: Cascade)
+  actor      Account    @relation("BasicPricePublicationAuditActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "fk_basic_price_publication_audit_actor")
 
   @@index([basicPriceId])
+  @@index([actorAccountId])
   @@map("basic_price_publication_audits")
 }
 

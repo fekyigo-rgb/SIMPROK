@@ -60,6 +60,17 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   let negativeResourceCatalogId: string;
   let negativeBasicPriceId: string;
 
+  // §PR57 Gap A negative fixture: resolution.resourceCatalogId points to a
+  // DIFFERENT ResourceCatalog than the one the selected BasicPrice actually
+  // belongs to.
+  let mismatchProjectId: string;
+  let mismatchBoqItemId: string;
+  let mismatchBoqStructureId: string;
+  let mismatchAhspId: string;
+  let mismatchResourceCatalogAId: string;
+  let mismatchResourceCatalogBId: string;
+  let mismatchBasicPriceId: string;
+
   const createdPermissionIds: string[] = [];
   const accountIds: string[] = [];
   const membershipIds: string[] = [];
@@ -133,6 +144,8 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     resourceName: string;
     selectedBasicPriceId: string;
     sourcePriceValue: string;
+    /** §PR57 Gap A: the ResourceCatalog id this RESOLVED resolution truthfully identifies. */
+    resourceCatalogId: string;
   }) => {
     const ahsp = await prisma.aHSP.create({
       data: {
@@ -177,6 +190,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
               ahspUnit: 'Kg',
               status: 'RESOLVED',
               selectionMode: 'AUTO_SELECTED',
+              resourceCatalogId: params.resourceCatalogId,
               selectedBasicPriceId: params.selectedBasicPriceId,
               canonicalUnit: 'Kg',
               sourcePriceValue: params.sourcePriceValue,
@@ -233,8 +247,16 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       data: { workspaceId, organizationId: orgId, code: `${tag}-NEG`, name: `${tag} Negative Project`, status: 'PLANNED' },
     });
     negativeProjectId = negativeProject.id;
+    const mismatchProject = await prisma.project.create({
+      data: { workspaceId, organizationId: orgId, code: `${tag}-MISMATCH`, name: `${tag} Mismatch Project`, status: 'PLANNED' },
+    });
+    mismatchProjectId = mismatchProject.id;
 
-    const rabEditor = await createActor('editor', ['RAB_DRAFT_EDIT'], [projectId, negativeProjectId]);
+    const rabEditor = await createActor(
+      'editor',
+      ['RAB_DRAFT_EDIT'],
+      [projectId, negativeProjectId, mismatchProjectId],
+    );
     const verifier = await createActor('verifier', ['BASIC_PRICE_VERIFY'], []);
     const publisher = await createActor('publisher', ['BASIC_PRICE_PUBLISH'], []);
     rabEditorToken = await login(rabEditor.email);
@@ -304,6 +326,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       resourceName: `${tag} Besi Beton`,
       selectedBasicPriceId: basicPriceId,
       sourcePriceValue: '100000.00',
+      resourceCatalogId,
     });
     ahspId = positiveFixture.ahspId;
     boqStructureId = positiveFixture.structureId;
@@ -336,27 +359,79 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       resourceName: `${tag} Pasir Untraceable`,
       selectedBasicPriceId: negativeBasicPriceId,
       sourcePriceValue: '100000.00',
+      resourceCatalogId: negativeResourceCatalogId,
     });
     negativeAhspId = negativeFixture.ahspId;
     negativeBoqStructureId = negativeFixture.structureId;
     negativeBoqItemId = negativeFixture.itemId;
+
+    // ---- §PR57 Gap A negative: resolution.resourceCatalogId names a
+    // DIFFERENT ResourceCatalog than the one the selected BasicPrice
+    // actually belongs to (two genuinely distinct ResourceCatalog rows). ----
+    const mismatchResourceCatalogA = await prisma.resourceCatalog.create({
+      data: { workspaceId, name: `${tag} Semen A`, type: 'MATERIAL', baseUnit: 'Kg' },
+    });
+    mismatchResourceCatalogAId = mismatchResourceCatalogA.id;
+    const mismatchResourceCatalogB = await prisma.resourceCatalog.create({
+      data: { workspaceId, name: `${tag} Semen B`, type: 'MATERIAL', baseUnit: 'Kg' },
+    });
+    mismatchResourceCatalogBId = mismatchResourceCatalogB.id;
+    // This BasicPrice genuinely belongs to resource A.
+    const mismatchBasicPrice = await prisma.basicPrice.create({
+      data: {
+        resourceId: mismatchResourceCatalogAId,
+        workspaceId,
+        effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+        validUntil: null,
+        value: '100000.00',
+        sourceType: 'MARKET_SURVEY',
+        sourceOrigin: 'SUPPLIER',
+        status: 'PUBLISHED',
+        verificationStatus: 'PUBLISHED',
+      },
+    });
+    mismatchBasicPriceId = mismatchBasicPrice.id;
+
+    // ...but the resolution claims resource B — the exact identity mismatch
+    // Gap A's BASIC_PRICE_RESOURCE_IDENTITY_MISMATCH must catch.
+    const mismatchFixture = await buildAhspAndBoqFixture({
+      projectId: mismatchProjectId,
+      resourceName: `${tag} Semen Mismatch`,
+      selectedBasicPriceId: mismatchBasicPriceId,
+      sourcePriceValue: '100000.00',
+      resourceCatalogId: mismatchResourceCatalogBId,
+    });
+    mismatchAhspId = mismatchFixture.ahspId;
+    mismatchBoqStructureId = mismatchFixture.structureId;
+    mismatchBoqItemId = mismatchFixture.itemId;
   }, 60_000);
 
   afterAll(async () => {
-    await prisma.rabDocument.deleteMany({ where: { projectId: { in: [projectId, negativeProjectId] } } });
-    await prisma.boqItem.deleteMany({ where: { boqStructureId: { in: [boqStructureId, negativeBoqStructureId] } } });
-    await prisma.boqStructure.deleteMany({ where: { projectId: { in: [projectId, negativeProjectId] } } });
+    const allProjectIds = [projectId, negativeProjectId, mismatchProjectId];
+    const allStructureIds = [boqStructureId, negativeBoqStructureId, mismatchBoqStructureId];
+    const allAhspIds = [ahspId, negativeAhspId, mismatchAhspId];
+    const allBasicPriceIds = [basicPriceId, negativeBasicPriceId, mismatchBasicPriceId];
+    const allResourceCatalogIds = [
+      resourceCatalogId,
+      negativeResourceCatalogId,
+      mismatchResourceCatalogAId,
+      mismatchResourceCatalogBId,
+    ];
+
+    await prisma.rabDocument.deleteMany({ where: { projectId: { in: allProjectIds } } });
+    await prisma.boqItem.deleteMany({ where: { boqStructureId: { in: allStructureIds } } });
+    await prisma.boqStructure.deleteMany({ where: { projectId: { in: allProjectIds } } });
     await prisma.projectAhspResourceResolution.deleteMany({
-      where: { occurrence: { projectId: { in: [projectId, negativeProjectId] } } },
+      where: { occurrence: { projectId: { in: allProjectIds } } },
     });
-    await prisma.projectAhspOccurrence.deleteMany({ where: { projectId: { in: [projectId, negativeProjectId] } } });
-    await prisma.aHSPResource.deleteMany({ where: { ahspVersion: { ahspId: { in: [ahspId, negativeAhspId] } } } });
-    await prisma.aHSPVersion.deleteMany({ where: { ahspId: { in: [ahspId, negativeAhspId] } } });
-    await prisma.aHSP.deleteMany({ where: { id: { in: [ahspId, negativeAhspId] } } });
+    await prisma.projectAhspOccurrence.deleteMany({ where: { projectId: { in: allProjectIds } } });
+    await prisma.aHSPResource.deleteMany({ where: { ahspVersion: { ahspId: { in: allAhspIds } } } });
+    await prisma.aHSPVersion.deleteMany({ where: { ahspId: { in: allAhspIds } } });
+    await prisma.aHSP.deleteMany({ where: { id: { in: allAhspIds } } });
 
     await prisma.basicPricePublicationAudit.deleteMany({ where: { basicPriceId } });
-    await prisma.basicPrice.deleteMany({ where: { id: { in: [basicPriceId, negativeBasicPriceId] } } });
-    await prisma.resourceCatalog.deleteMany({ where: { id: { in: [resourceCatalogId, negativeResourceCatalogId] } } });
+    await prisma.basicPrice.deleteMany({ where: { id: { in: allBasicPriceIds } } });
+    await prisma.resourceCatalog.deleteMany({ where: { id: { in: allResourceCatalogIds } } });
     await prisma.priceSubmissionReviewDecision.deleteMany({ where: { reviewId } });
     await prisma.priceSubmissionReview.deleteMany({ where: { id: reviewId } });
     await prisma.priceSubmissionAudit.deleteMany({ where: { submissionId } });
@@ -369,7 +444,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     await prisma.role.deleteMany({ where: { code: { startsWith: tag } } });
     await prisma.permission.deleteMany({ where: { id: { in: createdPermissionIds } } });
     await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
-    await prisma.project.deleteMany({ where: { id: { in: [projectId, negativeProjectId] } } });
+    await prisma.project.deleteMany({ where: { id: { in: allProjectIds } } });
     await prisma.workspace.deleteMany({ where: { id: workspaceId } });
     await prisma.organization.deleteMany({ where: { id: orgId } });
     await app.close();
@@ -465,6 +540,24 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     expect(untouchedItem.calculationOccurrenceId).toBeNull();
 
     const rab = await prisma.rabDocument.findFirst({ where: { projectId: negativeProjectId } });
+    expect(rab).toBeNull();
+  });
+
+  it('§PR57 Gap A: rejects a resolution whose resourceCatalogId names a different ResourceCatalog than the selected BasicPrice actually belongs to, with BASIC_PRICE_RESOURCE_IDENTITY_MISMATCH and zero mutation', async () => {
+    const response = await request(app.getHttpServer())
+      .post(`/projects/${mismatchProjectId}/boq/items/${mismatchBoqItemId}/cost-calculation/persist`)
+      .set('Authorization', `Bearer ${rabEditorToken}`)
+      .send({ calculationAsOfDate: '2026-07-31' })
+      .expect(409);
+
+    expect(response.body.message).toBe('BASIC_PRICE_RESOURCE_IDENTITY_MISMATCH');
+
+    const untouchedItem = await prisma.boqItem.findUniqueOrThrow({ where: { id: mismatchBoqItemId } });
+    expect(untouchedItem.unitPrice).toBeNull();
+    expect(untouchedItem.priceOrigin).toBeNull();
+    expect(untouchedItem.calculationOccurrenceId).toBeNull();
+
+    const rab = await prisma.rabDocument.findFirst({ where: { projectId: mismatchProjectId } });
     expect(rab).toBeNull();
   });
 
