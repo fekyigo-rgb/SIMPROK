@@ -24,7 +24,7 @@ const navItems = [
   { name: 'Recovery', path: '/?ruang=recovery', icon: RefreshCcw, routeLabel: 'Placeholder Recovery' },
   { name: 'Insight / War Room', path: '/?ruang=insight-war-room', icon: BarChart3, routeLabel: 'Placeholder Insight / War Room' },
   { name: 'AHSP', path: '/?ruang=ahsp', icon: BookOpen, routeLabel: 'Placeholder AHSP' },
-  { name: 'Basic Price', path: '/basic-price/import', icon: PackageSearch, routeLabel: 'Ruang impor Basic Price' },
+  { name: 'Basic Price', path: '/basic-price', icon: PackageSearch, routeLabel: 'Ruang Basic Price' },
   { name: 'Peralatan', path: '/?ruang=peralatan', icon: Pickaxe, routeLabel: 'Placeholder Peralatan' },
   { name: 'Personel', path: '/?ruang=personel', icon: Users, routeLabel: 'Placeholder Personel' },
   { name: 'Metode Pelaksanaan', path: '/?ruang=metode-pelaksanaan', icon: HardHat, routeLabel: 'Placeholder Metode Pelaksanaan' },
@@ -35,6 +35,13 @@ const navItems = [
 
 export function Sidebar() {
   const location = useLocation();
+
+  // ONE SIMPROK BASIC PRICE PRODUCT MODEL — Basic Price is a universal nav
+  // item for any account with an active workspace, exactly like every other
+  // entry below. No capability gate here: reaching this Sidebar already
+  // implies ProtectedRoute resolved an active workspace, and every active
+  // membership holds the Basic Price baseline (see
+  // ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES on the backend).
 
   return (
     <aside className="simprok-sidebar" aria-label="Navigasi utama SIMPROK">

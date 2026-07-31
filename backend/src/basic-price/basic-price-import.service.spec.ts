@@ -1,14 +1,29 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { BasicPriceImportService } from './basic-price-import.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 import { buildBasicPriceXlsx } from '../../test/fixtures/basic-price-xlsx.fixture';
 
 describe('BasicPriceImportService', () => {
   let service: BasicPriceImportService;
   let tx: {
-    basicPriceImportBatch: { create: jest.Mock; update: jest.Mock; findUniqueOrThrow: jest.Mock };
-    basicPriceImportRow: { create: jest.Mock; count: jest.Mock; findMany: jest.Mock; findUniqueOrThrow: jest.Mock; update: jest.Mock };
+    basicPriceImportBatch: {
+      create: jest.Mock;
+      update: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
+    };
+    basicPriceImportRow: {
+      create: jest.Mock;
+      count: jest.Mock;
+      findMany: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
+      update: jest.Mock;
+    };
     priceSubmission: { create: jest.Mock; update: jest.Mock };
     priceSubmissionRevision: { create: jest.Mock };
     priceSubmissionAudit: { create: jest.Mock };
@@ -16,10 +31,14 @@ describe('BasicPriceImportService', () => {
   };
   let prisma: {
     workspace: { findUnique: jest.Mock };
-    basicPriceImportBatch: { findUnique: jest.Mock; findUniqueOrThrow: jest.Mock };
+    basicPriceImportBatch: {
+      findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
+    };
     basicPriceImportRow: { findMany: jest.Mock };
     $transaction: jest.Mock;
   };
+  let reviewService: { createReviewWithinTransaction: jest.Mock };
 
   const WORKSPACE_ID = 'ws-01';
   const ORGANIZATION_ID = 'org-01';
@@ -32,52 +51,108 @@ describe('BasicPriceImportService', () => {
 
   beforeEach(async () => {
     tx = {
-      basicPriceImportBatch: { create: jest.fn(), update: jest.fn(), findUniqueOrThrow: jest.fn() },
-      basicPriceImportRow: { create: jest.fn(), count: jest.fn(), findMany: jest.fn(), findUniqueOrThrow: jest.fn(), update: jest.fn() },
+      basicPriceImportBatch: {
+        create: jest.fn(),
+        update: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+      },
+      basicPriceImportRow: {
+        create: jest.fn(),
+        count: jest.fn(),
+        findMany: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+        update: jest.fn(),
+      },
       priceSubmission: { create: jest.fn(), update: jest.fn() },
       priceSubmissionRevision: { create: jest.fn() },
       priceSubmissionAudit: { create: jest.fn() },
       $queryRaw: jest.fn(),
     };
     prisma = {
-      workspace: { findUnique: jest.fn().mockResolvedValue({ organizationId: ORGANIZATION_ID }) },
-      basicPriceImportBatch: { findUnique: jest.fn().mockResolvedValue(null), findUniqueOrThrow: jest.fn() },
+      workspace: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ organizationId: ORGANIZATION_ID }),
+      },
+      basicPriceImportBatch: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findUniqueOrThrow: jest.fn(),
+      },
       basicPriceImportRow: { findMany: jest.fn().mockResolvedValue([]) },
-      $transaction: jest.fn((callback: (tx: unknown) => unknown) => callback(tx)),
+      $transaction: jest.fn((callback: (tx: unknown) => unknown) =>
+        callback(tx),
+      ),
+    };
+    reviewService = {
+      createReviewWithinTransaction: jest
+        .fn()
+        .mockResolvedValue({ reviewId: 'review-1', status: 'CREATED' }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [BasicPriceImportService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        BasicPriceImportService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: PriceSubmissionReviewService, useValue: reviewService },
+      ],
     }).compile();
 
     service = module.get<BasicPriceImportService>(BasicPriceImportService);
 
     let counter = 0;
     let batchCounter = 0;
-    tx.basicPriceImportBatch.create.mockImplementation(({ data }: { data: Record<string, unknown> }) => ({ id: `batch-${++batchCounter}`, version: 0, ...data }));
-    tx.basicPriceImportRow.create.mockImplementation(({ data }: { data: Record<string, unknown> }) => ({ id: `row-${++counter}`, version: 0, ...data }));
+    tx.basicPriceImportBatch.create.mockImplementation(
+      ({ data }: { data: Record<string, unknown> }) => ({
+        id: `batch-${++batchCounter}`,
+        version: 0,
+        ...data,
+      }),
+    );
+    tx.basicPriceImportRow.create.mockImplementation(
+      ({ data }: { data: Record<string, unknown> }) => ({
+        id: `row-${++counter}`,
+        version: 0,
+        ...data,
+      }),
+    );
     // Scoped per-batch (by counting create() calls for that exact batchId)
     // so a test that calls preview() more than once still sees an accurate
     // count for each individual batch, matching real Prisma semantics.
-    tx.basicPriceImportRow.count.mockImplementation(({ where }: { where: { batchId: string } }) =>
-      Promise.resolve(tx.basicPriceImportRow.create.mock.calls.filter(([arg]: [{ data: Record<string, unknown> }]) => arg.data.batchId === where.batchId).length),
+    tx.basicPriceImportRow.count.mockImplementation(
+      ({ where }: { where: { batchId: string } }) =>
+        Promise.resolve(
+          tx.basicPriceImportRow.create.mock.calls.filter(
+            ([arg]: [{ data: Record<string, unknown> }]) =>
+              arg.data.batchId === where.batchId,
+          ).length,
+        ),
     );
   });
 
   describe('preview', () => {
     it('rejects a missing file', async () => {
-      await expect(service.preview(WORKSPACE_ID, ACCOUNT_ID, undefined as any, {})).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        service.preview(WORKSPACE_ID, ACCOUNT_ID, undefined as any, {}),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('rejects a non-.xlsx filename', async () => {
-      const file = { buffer: Buffer.from('x'), size: 1, originalname: 'basic-price.csv' };
-      await expect(service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {})).rejects.toBeInstanceOf(BadRequestException);
+      const file = {
+        buffer: Buffer.from('x'),
+        size: 1,
+        originalname: 'basic-price.csv',
+      };
+      await expect(
+        service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {}),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('throws NotFound when the workspace does not resolve to an organization', async () => {
       prisma.workspace.findUnique.mockResolvedValue(null);
       const file = await uploadFile();
-      await expect(service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {})).rejects.toBeInstanceOf(NotFoundException);
+      await expect(
+        service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {}),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('creates a persisted batch and rows, every row starting NEEDS_REVIEW (no row can be RESOLVED at parse time)', async () => {
@@ -86,21 +161,47 @@ describe('BasicPriceImportService', () => {
 
       expect(tx.basicPriceImportBatch.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ workspaceId: WORKSPACE_ID, organizationId: ORGANIZATION_ID, uploadedByAccountId: ACCOUNT_ID, status: 'NEEDS_REVIEW' }),
+          data: expect.objectContaining({
+            workspaceId: WORKSPACE_ID,
+            organizationId: ORGANIZATION_ID,
+            uploadedByAccountId: ACCOUNT_ID,
+            status: 'NEEDS_REVIEW',
+          }),
         }),
       );
       expect(tx.basicPriceImportRow.create).toHaveBeenCalled();
       const allRowCreateCalls = tx.basicPriceImportRow.create.mock.calls;
-      expect(allRowCreateCalls.every(([arg]: [{ data: Record<string, unknown> }]) => arg.data.status === 'NEEDS_REVIEW' && arg.data.resolutionStatus === 'UNRESOLVED')).toBe(true);
+      expect(
+        allRowCreateCalls.every(
+          ([arg]: [{ data: Record<string, unknown> }]) =>
+            arg.data.status === 'NEEDS_REVIEW' &&
+            arg.data.resolutionStatus === 'UNRESOLVED',
+        ),
+      ).toBe(true);
       expect(result.status).toBe('NEEDS_REVIEW');
       expect(result.totalRows).toBeGreaterThan(0);
     });
 
     it('REPLAY (I01): the exact same file + same metadata returns the existing batch, never re-parses into new rows', async () => {
       const file = await uploadFile();
-      const existingBatch = { id: 'existing-batch', workspaceId: WORKSPACE_ID, importFingerprint: 'X', status: 'NEEDS_REVIEW', version: 0 };
+      const existingBatch = {
+        id: 'existing-batch',
+        workspaceId: WORKSPACE_ID,
+        importFingerprint: 'X',
+        status: 'NEEDS_REVIEW',
+        version: 0,
+      };
       prisma.basicPriceImportBatch.findUnique.mockResolvedValue(existingBatch);
-      prisma.basicPriceImportRow.findMany.mockResolvedValue([{ id: 'r1', status: 'NEEDS_REVIEW', resolutionStatus: 'UNRESOLVED', rawResourceNameText: 'X', sourceSection: 'LABOR', sourceRowNumber: 9 }]);
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([
+        {
+          id: 'r1',
+          status: 'NEEDS_REVIEW',
+          resolutionStatus: 'UNRESOLVED',
+          rawResourceNameText: 'X',
+          sourceSection: 'LABOR',
+          sourceRowNumber: 9,
+        },
+      ]);
 
       const result = await service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {});
 
@@ -111,11 +212,15 @@ describe('BasicPriceImportService', () => {
     it('I02: identical file with different metadata (e.g. a different regionId) produces a different fingerprint than an empty-metadata preview', async () => {
       const file = await uploadFile();
       await service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {});
-      const fingerprintA = tx.basicPriceImportBatch.create.mock.calls[0][0].data.importFingerprint;
+      const fingerprintA =
+        tx.basicPriceImportBatch.create.mock.calls[0][0].data.importFingerprint;
 
       tx.basicPriceImportBatch.create.mockClear();
-      await service.preview(WORKSPACE_ID, ACCOUNT_ID, file, { regionId: '10000000-0000-4000-8000-000000000099' });
-      const fingerprintB = tx.basicPriceImportBatch.create.mock.calls[0][0].data.importFingerprint;
+      await service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {
+        regionId: '10000000-0000-4000-8000-000000000099',
+      });
+      const fingerprintB =
+        tx.basicPriceImportBatch.create.mock.calls[0][0].data.importFingerprint;
 
       expect(fingerprintA).not.toBe(fingerprintB);
     });
@@ -135,12 +240,16 @@ describe('BasicPriceImportService', () => {
     };
 
     beforeEach(() => {
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
-        const sql = query?.strings?.join('') ?? '';
-        if (sql.includes('basic_price_import_batches')) return Promise.resolve([lockedBatch]);
-        if (sql.includes("\"status\" = 'READY_FOR_SUBMISSION'")) return Promise.resolve([{ id: 'row-1' }]);
-        return Promise.resolve([]);
-      });
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([lockedBatch]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-1' }]);
+          return Promise.resolve([]);
+        },
+      );
       tx.basicPriceImportRow.findUniqueOrThrow.mockResolvedValue({
         id: 'row-1',
         resourceCatalogId: 'resource-01',
@@ -150,48 +259,77 @@ describe('BasicPriceImportService', () => {
       tx.priceSubmission.create.mockResolvedValue({ id: 'submission-1' });
       tx.priceSubmissionRevision.create.mockResolvedValue({ id: 'revision-1' });
       tx.basicPriceImportRow.count.mockResolvedValue(0); // no REJECTED rows
-      tx.basicPriceImportRow.findMany.mockResolvedValue([{ id: 'row-1', status: 'SUBMISSION_CREATED' }]);
-      tx.basicPriceImportBatch.update.mockImplementation(({ data }: { data: Record<string, unknown> }) => ({ ...lockedBatch, ...data }));
+      tx.basicPriceImportRow.findMany.mockResolvedValue([
+        { id: 'row-1', status: 'SUBMISSION_CREATED' },
+      ]);
+      tx.basicPriceImportBatch.update.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) => ({
+          ...lockedBatch,
+          ...data,
+        }),
+      );
     });
 
     it('rejects when effectiveDate is missing', async () => {
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
-        const sql = query?.strings?.join('') ?? '';
-        if (sql.includes('basic_price_import_batches')) return Promise.resolve([{ ...lockedBatch, effectiveDate: null }]);
-        return Promise.resolve([]);
-      });
-      await expect(service.submitBatch(WORKSPACE_ID, 'batch-01')).rejects.toBeInstanceOf(ConflictException);
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([{ ...lockedBatch, effectiveDate: null }]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('rejects when regionId is missing', async () => {
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
-        const sql = query?.strings?.join('') ?? '';
-        if (sql.includes('basic_price_import_batches')) return Promise.resolve([{ ...lockedBatch, regionId: null }]);
-        return Promise.resolve([]);
-      });
-      await expect(service.submitBatch(WORKSPACE_ID, 'batch-01')).rejects.toBeInstanceOf(ConflictException);
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([{ ...lockedBatch, regionId: null }]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('rejects when sourceOrigin is missing (structural PriceSubmission requirement, never fabricated)', async () => {
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
-        const sql = query?.strings?.join('') ?? '';
-        if (sql.includes('basic_price_import_batches')) return Promise.resolve([{ ...lockedBatch, sourceOrigin: null }]);
-        return Promise.resolve([]);
-      });
-      await expect(service.submitBatch(WORKSPACE_ID, 'batch-01')).rejects.toBeInstanceOf(ConflictException);
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([{ ...lockedBatch, sourceOrigin: null }]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('rejects a batch not in READY_FOR_REVIEW', async () => {
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
-        const sql = query?.strings?.join('') ?? '';
-        if (sql.includes('basic_price_import_batches')) return Promise.resolve([{ ...lockedBatch, status: 'NEEDS_REVIEW' }]);
-        return Promise.resolve([]);
-      });
-      await expect(service.submitBatch(WORKSPACE_ID, 'batch-01')).rejects.toBeInstanceOf(ConflictException);
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              { ...lockedBatch, status: 'NEEDS_REVIEW' },
+            ]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('creates exactly one PriceSubmission + Revision + Audit per READY_FOR_SUBMISSION row, links it back to the row', async () => {
-      await service.submitBatch(WORKSPACE_ID, 'batch-01');
+      await service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID);
 
       expect(tx.priceSubmission.create).toHaveBeenCalledTimes(1);
       expect(tx.priceSubmission.create).toHaveBeenCalledWith(
@@ -207,36 +345,180 @@ describe('BasicPriceImportService', () => {
         }),
       );
       expect(tx.priceSubmissionRevision.create).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ submissionId: 'submission-1', revisionNumber: 1 }) }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            submissionId: 'submission-1',
+            revisionNumber: 1,
+          }),
+        }),
       );
       expect(tx.priceSubmissionAudit.create).toHaveBeenCalledTimes(1);
       expect(tx.basicPriceImportRow.update).toHaveBeenCalledWith({
         where: { id: 'row-1' },
-        data: { priceSubmissionId: 'submission-1', status: 'SUBMISSION_CREATED' },
+        data: {
+          priceSubmissionId: 'submission-1',
+          status: 'SUBMISSION_CREATED',
+        },
       });
+      // RM-02D2A-1 Work Package A: submitBatch must call the ONE canonical
+      // review-creation helper, inside the SAME transaction (tx), for every
+      // new PriceSubmission — never open a second transaction, never skip it.
+      expect(reviewService.createReviewWithinTransaction).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(reviewService.createReviewWithinTransaction).toHaveBeenCalledWith(
+        tx,
+        {
+          id: 'submission-1',
+          workspaceId: WORKSPACE_ID,
+          organizationId: ORGANIZATION_ID,
+        },
+      );
+    });
+
+    it('rolls back the whole submission when review creation fails', async () => {
+      reviewService.createReviewWithinTransaction.mockRejectedValueOnce(
+        new Error('REVIEW_CREATION_FAILED'),
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toThrow('REVIEW_CREATION_FAILED');
     });
 
     it('final batch status is SUBMITTED when zero rows were rejected', async () => {
       tx.basicPriceImportRow.count.mockResolvedValue(0);
-      const result = await service.submitBatch(WORKSPACE_ID, 'batch-01');
+      const result = await service.submitBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
       expect(result.status).toBe('SUBMITTED');
     });
 
     it('final batch status is PARTIALLY_SUBMITTED when some rows were rejected', async () => {
       tx.basicPriceImportRow.count.mockResolvedValue(1); // one REJECTED row exists
-      const result = await service.submitBatch(WORKSPACE_ID, 'batch-01');
+      const result = await service.submitBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
       expect(result.status).toBe('PARTIALLY_SUBMITTED');
     });
 
     it('is idempotent: an already-SUBMITTED batch returns existing state without re-creating submissions', async () => {
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
-        const sql = query?.strings?.join('') ?? '';
-        if (sql.includes('basic_price_import_batches')) return Promise.resolve([{ ...lockedBatch, status: 'SUBMITTED' }]);
-        return Promise.resolve([]);
-      });
-      const result = await service.submitBatch(WORKSPACE_ID, 'batch-01');
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([{ ...lockedBatch, status: 'SUBMITTED' }]);
+          return Promise.resolve([]);
+        },
+      );
+      const result = await service.submitBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
       expect(tx.priceSubmission.create).not.toHaveBeenCalled();
       expect(result.status).toBe('SUBMITTED');
+    });
+
+    it("USER-OWNED IMPORT BOUNDARY: a same-workspace account that did not upload this batch is denied (404), never submitting on someone else's behalf", async () => {
+      await expect(
+        service.submitBatch(
+          WORKSPACE_ID,
+          'batch-01',
+          'another-account-in-same-workspace',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getBatch', () => {
+    const storedBatch = {
+      id: 'batch-01',
+      workspaceId: WORKSPACE_ID,
+      status: 'NEEDS_REVIEW',
+      uploadedByAccountId: ACCOUNT_ID,
+    };
+
+    beforeEach(() => {
+      prisma.basicPriceImportBatch.findUnique.mockResolvedValue(storedBatch);
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([]);
+    });
+
+    it('positive: the uploader can read their own batch', async () => {
+      const result = await service.getBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
+      expect(result.batchId).toBe('batch-01');
+    });
+
+    it('negative: a different workspace is denied (404)', async () => {
+      prisma.basicPriceImportBatch.findUnique.mockResolvedValue({
+        ...storedBatch,
+        workspaceId: 'other-workspace',
+      });
+      await expect(
+        service.getBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('USER-OWNED IMPORT BOUNDARY negative: a same-workspace account that did not upload this batch cannot read it (404)', async () => {
+      await expect(
+        service.getBatch(
+          WORKSPACE_ID,
+          'batch-01',
+          'another-account-in-same-workspace',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('updateBatchMetadata', () => {
+    const storedBatch = {
+      id: 'batch-01',
+      workspaceId: WORKSPACE_ID,
+      status: 'NEEDS_REVIEW',
+      version: 0,
+      uploadedByAccountId: ACCOUNT_ID,
+    };
+
+    beforeEach(() => {
+      tx.$queryRaw.mockResolvedValue([storedBatch]);
+      tx.basicPriceImportBatch.update.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) => ({
+          ...storedBatch,
+          ...data,
+        }),
+      );
+      tx.basicPriceImportRow.findMany.mockResolvedValue([]);
+    });
+
+    it('positive: the uploader can update their own batch metadata', async () => {
+      const result = await service.updateBatchMetadata(
+        WORKSPACE_ID,
+        'batch-01',
+        { version: 0 },
+        ACCOUNT_ID,
+      );
+      expect(result.batchId).toBe('batch-01');
+      expect(tx.basicPriceImportBatch.update).toHaveBeenCalled();
+    });
+
+    it('USER-OWNED IMPORT BOUNDARY negative: a same-workspace account that did not upload this batch cannot update it (404), and no write occurs', async () => {
+      await expect(
+        service.updateBatchMetadata(
+          WORKSPACE_ID,
+          'batch-01',
+          { version: 0 } as any,
+          'another-account-in-same-workspace',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
     });
   });
 });

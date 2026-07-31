@@ -17,6 +17,15 @@ import {
   RabLifecyclePolicyService,
   WORKING_DRAFT_STRUCTURE_NAME,
 } from './rab-lifecycle-policy.service';
+import {
+  buildDraftRecap,
+  hasIncompletePricing,
+  incompletePricingRecap,
+  serializeDraftRecap,
+  RAB_DRAFT_DEFAULT_MARGIN_PERCENT,
+  RAB_DRAFT_DEFAULT_TAX_PERCENT,
+} from './rab-draft-recap';
+import { SERVER_ROW_PROTECTION_REASON } from './rab-kernel-persistence.contracts';
 
 @Injectable()
 export class ProjectService {
@@ -26,81 +35,10 @@ export class ProjectService {
     private rabLifecyclePolicy: RabLifecyclePolicyService,
   ) {}
 
-  private buildDraftRecap(
-    subtotal: Prisma.Decimal,
-    marginPercentInput?: number | Prisma.Decimal | null,
-    taxPercentInput?: number | Prisma.Decimal | null,
-  ) {
-    const marginPercent = new Prisma.Decimal(marginPercentInput ?? 10);
-    const taxPercent = new Prisma.Decimal(taxPercentInput ?? 11);
-    const marginAmount = subtotal.mul(marginPercent).div(100);
-    const taxAmount = subtotal.add(marginAmount).mul(taxPercent).div(100);
-    const grandTotal = subtotal.add(marginAmount).add(taxAmount);
-
-    return {
-      subtotal,
-      marginPercent,
-      marginAmount,
-      taxPercent,
-      taxAmount,
-      grandTotal,
-    };
-  }
-
-  private serializeDraftRecap(
-    recap: ReturnType<ProjectService['buildDraftRecap']>,
-    pricingStatus: 'COMPLETE' | 'INCOMPLETE' = 'COMPLETE',
-  ) {
-    return {
-      pricingStatus,
-      subtotal: Number(recap.subtotal),
-      marginPercent: Number(recap.marginPercent),
-      marginAmount: Number(recap.marginAmount),
-      taxPercent: Number(recap.taxPercent),
-      ppnPercent: Number(recap.taxPercent),
-      taxAmount: Number(recap.taxAmount),
-      grandTotal: Number(recap.grandTotal),
-    };
-  }
-
-  /**
-   * Honest "no authoritative total yet" recap. Used whenever one or more
-   * WORK_ITEM rows lack a priced unitPrice — never fabricate a Rp0/partial
-   * grand total from rows that are still unpriced (5D null-integrity law).
-   */
-  private incompletePricingRecap(
-    marginPercentInput?: number | Prisma.Decimal | null,
-    taxPercentInput?: number | Prisma.Decimal | null,
-  ) {
-    return {
-      pricingStatus: 'INCOMPLETE' as const,
-      subtotal: null,
-      marginPercent:
-        marginPercentInput === null || marginPercentInput === undefined
-          ? null
-          : Number(marginPercentInput),
-      marginAmount: null,
-      taxPercent:
-        taxPercentInput === null || taxPercentInput === undefined
-          ? null
-          : Number(taxPercentInput),
-      ppnPercent:
-        taxPercentInput === null || taxPercentInput === undefined
-          ? null
-          : Number(taxPercentInput),
-      taxAmount: null,
-      grandTotal: null,
-    };
-  }
-
-  /** Any WORK_ITEM row without a priced unitPrice makes the whole draft's monetary recap non-authoritative. */
-  private hasIncompletePricing(
-    items: readonly { itemType: string; unitPrice: Prisma.Decimal | null }[],
-  ): boolean {
-    return items.some(
-      (item) => item.itemType === 'WORK_ITEM' && item.unitPrice === null,
-    );
-  }
+  private buildDraftRecap = buildDraftRecap;
+  private serializeDraftRecap = serializeDraftRecap;
+  private incompletePricingRecap = incompletePricingRecap;
+  private hasIncompletePricing = hasIncompletePricing;
 
   private serializeDecimalString(
     value: Prisma.Decimal | number | string | null | undefined,
@@ -294,8 +232,16 @@ export class ProjectService {
 
         if (!isFolder && !isNote) {
           quantity = new Prisma.Decimal(item.quantity || 0);
-          unitPrice = new Prisma.Decimal(item.unitPrice || 0);
-          lineTotal = quantity.mul(unitPrice);
+          // Omitted (undefined) or explicit null unitPrice means "not priced
+          // yet" and must stay null — never collapse an unsupplied price
+          // into a fabricated 0 (5D null-integrity law / GATE-2A truth
+          // constraint). An explicit 0 is a real human-entered price and
+          // must round-trip as 0, distinct from "not priced".
+          unitPrice =
+            item.unitPrice !== undefined && item.unitPrice !== null
+              ? new Prisma.Decimal(item.unitPrice)
+              : null;
+          lineTotal = unitPrice !== null ? quantity.mul(unitPrice) : null;
           unit = item.unit || '';
         }
 
@@ -311,6 +257,11 @@ export class ProjectService {
             unitPrice,
             lineTotal,
             sortOrder: item.sortOrder ?? orderCounter++,
+            // GATE-2A truth constraint: priceOrigin must exactly mirror
+            // whether this row actually carries a human-supplied price —
+            // never fabricated, never assumed present. FOLDER/NOTE rows and
+            // an unpriced WORK_ITEM both stay null here.
+            priceOrigin: unitPrice !== null ? 'MANUAL_CLIENT' : null,
           },
         });
 
@@ -377,15 +328,37 @@ export class ProjectService {
       orderBy: { versionNumber: 'desc' },
     });
 
-    let overallPlannedCost = 0;
-    if (baseline && baseline.rabDocumentId) {
-      const rab = await this.prisma.rabDocument.findUnique({
-        where: { id: baseline.rabDocumentId },
-      });
-      if (rab) {
-        overallPlannedCost = Number(rab.totalBaseCost) || 0;
-      }
+    // NO_BASELINE_FALSE_ZERO / ACTIVE_BASELINE_RAB_TOTAL_NULL_IS_NOT_ZERO: no
+    // ACTIVE ProjectBaseline at all, a baseline whose RabDocument is
+    // missing, or a RabDocument whose totalBaseCost is not yet authoritative
+    // (NULL — an incomplete draft, per the GATE-2A truth constraint) must
+    // never be reported as a planned cost of 0. `let overallPlannedCost = 0`
+    // followed by a conditional skip is exactly how JavaScript silently
+    // fabricates a real-looking zero — fail closed in every one of these
+    // three cases instead, reusing this method's existing UNAVAILABLE shape.
+    if (!baseline) {
+      return {
+        available: false,
+        status: 'UNAVAILABLE',
+        message: 'Baseline aktif belum tersedia',
+        data: null,
+      };
     }
+    const rab = baseline.rabDocumentId
+      ? await this.prisma.rabDocument.findUnique({
+          where: { id: baseline.rabDocumentId },
+        })
+      : null;
+    if (!rab || rab.totalBaseCost === null) {
+      return {
+        available: false,
+        status: 'UNAVAILABLE',
+        message:
+          'Total RAB baseline aktif belum tersedia atau belum otoritatif',
+        data: null,
+      };
+    }
+    const overallPlannedCost = Number(rab.totalBaseCost);
 
     // Calculate Actual Progress and Cost
     let totalActualProgressPct = 0;
@@ -644,7 +617,7 @@ export class ProjectService {
       where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
       orderBy: { updatedAt: 'desc' },
     });
-    const subtotal = rab
+    const subtotal = rab && rab.totalBaseCost !== null
       ? new Prisma.Decimal(rab.totalBaseCost)
       : items.reduce(
           (sum, item) =>
@@ -671,7 +644,15 @@ export class ProjectService {
   async saveDraftBoq(
     projectId: string,
     dto: SaveDraftBoqDto,
+    rawRows: unknown[] = [],
   ): Promise<{ structureId: string; items: object[]; recap: object }> {
+    const rawRowAt = (index: number): Record<string, unknown> | undefined => {
+      const candidate = rawRows[index];
+      return candidate && typeof candidate === 'object'
+        ? (candidate as Record<string, unknown>)
+        : undefined;
+    };
+
     return await this.prisma.$transaction(async (tx) => {
       const lockedProject = await tx.$queryRaw<
         Array<{ id: string; status: string }>
@@ -709,6 +690,109 @@ export class ProjectService {
         });
       }
 
+      // GATE-2A protection: read the current rows BEFORE the full-replace so a
+      // SERVER_COST_KERNEL row's authority can be validated and its frozen
+      // values carried forward. A row survives a save by VALUE, not by id —
+      // the full-replace below always mints new ids, kernel or manual alike.
+      const existingItems = await tx.boqItem.findMany({
+        where: { boqStructureId: structure.id },
+      });
+      const existingById = new Map(existingItems.map((row) => [row.id, row]));
+
+      // GATE-2A §C — one canonical recap policy: read the existing DRAFT
+      // RabDocument's margin/tax settings before the destructive replacement
+      // below, so a save that omits marginPercent/taxPercent preserves a
+      // deliberately-set value instead of silently resetting it. Priority:
+      // explicit DTO value > existing persisted setting > canonical default
+      // (RAB_DRAFT_DEFAULT_MARGIN_PERCENT/_TAX_PERCENT — the same constants
+      // buildDraftRecap itself falls back to). The exact same effective
+      // percentages are used below for the incomplete recap response, the
+      // complete recap calculation, and RabDocument persistence — never a
+      // second, divergent formula.
+      const existingRabDocument = await tx.rabDocument.findFirst({
+        where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
+        orderBy: { updatedAt: 'desc' },
+      });
+      const effectiveMarginPercent =
+        dto.marginPercent !== undefined
+          ? dto.marginPercent
+          : (existingRabDocument?.profitPercent ??
+            RAB_DRAFT_DEFAULT_MARGIN_PERCENT);
+      const effectiveTaxPercent =
+        dto.taxPercent !== undefined
+          ? dto.taxPercent
+          : dto.ppnPercent !== undefined
+            ? dto.ppnPercent
+            : (existingRabDocument?.taxPercent ??
+              RAB_DRAFT_DEFAULT_TAX_PERCENT);
+
+      // §4.1: every incoming tempId must be unique, full stop — before any
+      // other check, before any mutation.
+      const tempIdCounts = new Map<string, number>();
+      for (const row of dto.rows) {
+        tempIdCounts.set(row.tempId, (tempIdCounts.get(row.tempId) ?? 0) + 1);
+      }
+      if ([...tempIdCounts.values()].some((count) => count > 1)) {
+        throw new ConflictException(SERVER_ROW_PROTECTION_REASON.DUPLICATE_TEMP_ID);
+      }
+
+      // §4.1: every existing SERVER_COST_KERNEL row must be referenced by
+      // the incoming payload exactly once — zero appearances silently
+      // deletes it, more than one duplicates/double-counts one kernel
+      // calculation. Both fail closed.
+      for (const existing of existingItems) {
+        if (existing.priceOrigin !== 'SERVER_COST_KERNEL') continue;
+        const appearances = tempIdCounts.get(existing.id) ?? 0;
+        if (appearances === 0) {
+          throw new ConflictException(
+            SERVER_ROW_PROTECTION_REASON.SERVER_ROW_OMISSION_REQUIRES_EXPLICIT_COMMAND,
+          );
+        }
+        if (appearances > 1) {
+          throw new ConflictException(
+            SERVER_ROW_PROTECTION_REASON.SERVER_ROW_DUPLICATE_REFERENCE_FORBIDDEN,
+          );
+        }
+      }
+
+      // Fail-closed BEFORE any delete: if any incoming row would silently
+      // overwrite or invalidate a server-authored calculation, reject the
+      // whole request now so the transaction rolls back with zero mutation,
+      // rather than deleting first and discovering the conflict mid-replace.
+      dto.rows.forEach((row, index) => {
+        const existing = existingById.get(row.tempId);
+        if (!existing || existing.priceOrigin !== 'SERVER_COST_KERNEL') {
+          return;
+        }
+        // §4.2: an explicit "unitPrice" key in the raw request — including
+        // an explicit null — is an overwrite attempt on a protected row.
+        // Only a key that is genuinely absent from the payload means
+        // "don't touch this field." class-transformer's DTO instance
+        // cannot make this distinction (every declared field becomes an
+        // own property regardless of input), so the pre-transform raw row
+        // is required here.
+        const rawRow = rawRowAt(index);
+        const unitPriceKeyPresent = rawRow
+          ? Object.prototype.hasOwnProperty.call(rawRow, 'unitPrice')
+          : false;
+        if (unitPriceKeyPresent) {
+          throw new ConflictException(
+            SERVER_ROW_PROTECTION_REASON.SERVER_ROW_UNIT_PRICE_OVERWRITE_FORBIDDEN,
+          );
+        }
+        const quantityChanged =
+          row.quantity !== undefined &&
+          !new Prisma.Decimal(row.quantity).equals(existing.quantity);
+        const unitChanged =
+          row.unit !== undefined && row.unit !== existing.unit;
+        const itemTypeChanged = row.itemType !== existing.itemType;
+        if (quantityChanged || unitChanged || itemTypeChanged) {
+          throw new ConflictException(
+            SERVER_ROW_PROTECTION_REASON.SERVER_ROW_INPUT_CHANGED_REQUIRES_RECALCULATION,
+          );
+        }
+      });
+
       // Safe full-replace: nullify parent refs first to avoid self-FK conflict, then delete.
       await tx.boqItem.updateMany({
         where: { boqStructureId: structure.id },
@@ -735,6 +819,11 @@ export class ProjectService {
           !isFolder && !isNote
             ? new Prisma.Decimal(row.quantity ?? 0)
             : new Prisma.Decimal(0);
+
+        const existing = existingById.get(row.tempId);
+        const isServerRow =
+          !isFolder && !isNote && existing?.priceOrigin === 'SERVER_COST_KERNEL';
+
         // null/undefined unitPrice means "not priced yet" and must stay null —
         // never collapse an unknown price into a fabricated 0 (5D null-integrity law).
         const hasExplicitPrice =
@@ -742,14 +831,30 @@ export class ProjectService {
           !isNote &&
           row.unitPrice !== null &&
           row.unitPrice !== undefined;
-        const unitPrice = hasExplicitPrice
-          ? new Prisma.Decimal(row.unitPrice as number)
-          : null;
-        const lineTotal = unitPrice !== null ? quantity.mul(unitPrice) : null;
+        const unitPrice = isServerRow
+          ? existing!.unitPrice
+          : hasExplicitPrice
+            ? new Prisma.Decimal(row.unitPrice as number)
+            : null;
+        const lineTotal = isServerRow
+          ? existing!.lineTotal
+          : unitPrice !== null
+            ? quantity.mul(unitPrice)
+            : null;
         if (row.itemType === 'WORK_ITEM' && lineTotal !== null) {
           subtotal = subtotal.add(lineTotal);
         }
 
+        // §3.1: an unpriced manual row must store priceOrigin=NULL, never
+        // MANUAL_CLIENT — MANUAL_CLIENT is reserved for a row that actually
+        // carries a human-entered money pair.
+        //
+        // GATE-2A: ahspVersionId/ahspSnapshotId are not part of this DTO's
+        // writable surface — they only ever carry forward from the row they
+        // replace, never invented from client input. This preserves a
+        // server-authored row's kernel eligibility and provenance
+        // (priceOrigin, calculationOccurrenceId, calculationAsOfDate,
+        // calculatedAt, calculationPolicyVersion) across an unrelated save.
         const created = await tx.boqItem.create({
           data: {
             boqStructureId: structure.id,
@@ -762,6 +867,23 @@ export class ProjectService {
             unitPrice,
             lineTotal,
             sortOrder: row.sortOrder ?? index,
+            ahspVersionId: existing?.ahspVersionId ?? null,
+            ahspSnapshotId: existing?.ahspSnapshotId ?? null,
+            priceOrigin: isServerRow
+              ? 'SERVER_COST_KERNEL'
+              : unitPrice !== null
+                ? 'MANUAL_CLIENT'
+                : null,
+            calculationOccurrenceId: isServerRow
+              ? existing!.calculationOccurrenceId
+              : null,
+            calculationAsOfDate: isServerRow
+              ? existing!.calculationAsOfDate
+              : null,
+            calculatedAt: isServerRow ? existing!.calculatedAt : null,
+            calculationPolicyVersion: isServerRow
+              ? existing!.calculationPolicyVersion
+              : null,
           },
         });
         tempIdMap.set(row.tempId, created.id);
@@ -771,27 +893,28 @@ export class ProjectService {
       const pricingIncomplete = this.hasIncompletePricing(insertedItems);
 
       if (pricingIncomplete) {
-        // Do not persist a synthetic RabDocument recap while pricing is
-        // incomplete — an existing DRAFT RabDocument row (from before this
-        // save, when the draft may have been fully priced) is left as-is on
-        // disk, but never served as authoritative: getDraftBoq() re-derives
-        // pricingStatus from live items on every read, independent of this
-        // row's stored numbers.
+        // §4.5: never leave a stale, no-longer-truthful total visible while
+        // the draft is incomplete — null out any existing DRAFT
+        // RabDocument's totals within this same transaction. Margin/tax
+        // settings are left exactly as stored, not deleted.
+        await tx.rabDocument.updateMany({
+          where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
+          data: { totalBaseCost: null, totalFinalCost: null },
+        });
         return {
           structureId: structure.id,
           items: insertedItems,
           recap: this.incompletePricingRecap(
-            dto.marginPercent,
-            dto.taxPercent ?? dto.ppnPercent,
+            effectiveMarginPercent,
+            effectiveTaxPercent,
           ),
         };
       }
 
-      const taxPercent = dto.taxPercent ?? dto.ppnPercent ?? 0;
       const recap = this.buildDraftRecap(
         subtotal,
-        dto.marginPercent ?? 0,
-        taxPercent,
+        effectiveMarginPercent,
+        effectiveTaxPercent,
       );
       const rabData = {
         overheadPercent: new Prisma.Decimal(0),
@@ -823,13 +946,14 @@ export class ProjectService {
         where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
         orderBy: { updatedAt: 'desc' },
       });
-      const persistedRecap = persistedRab
-        ? this.buildDraftRecap(
-            new Prisma.Decimal(persistedRab.totalBaseCost),
-            persistedRab.profitPercent,
-            persistedRab.taxPercent,
-          )
-        : recap;
+      const persistedRecap =
+        persistedRab && persistedRab.totalBaseCost !== null
+          ? this.buildDraftRecap(
+              new Prisma.Decimal(persistedRab.totalBaseCost),
+              persistedRab.profitPercent,
+              persistedRab.taxPercent,
+            )
+          : recap;
 
       return {
         structureId: structure.id,

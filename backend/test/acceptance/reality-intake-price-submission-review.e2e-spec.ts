@@ -173,7 +173,7 @@ describe('Reality intake price submission human review (e2e)', () => {
         reportedByAccountId: null,
         sourceOrigin: PriceSourceOrigin.SUPPLIER,
         sourceType: PriceSourceType.VENDOR_QUOTE,
-        status: options.status ?? 'SUBMITTED',
+        status: options.status ?? (options.createReview ? 'UNDER_REVIEW' : 'SUBMITTED'),
       },
     });
 
@@ -352,11 +352,15 @@ describe('Reality intake price submission human review (e2e)', () => {
       where: { id: immutable.canonical.id },
     });
 
-    // RM-02B: BasicPrice.status now defaults to 'UNPUBLISHED' (the unsafe
-    // 'PUBLISHED' default was neutralized). ACCEPT proves VERIFIED, never
-    // PUBLISHED — publication is a separate, human-gated action. This
-    // result's `status` field reflects the created row's real status, not
-    // a hardcoded claim.
+    // RM-02D2A-1 CONTRACT_UPDATE: `status` on this return value is now the
+    // DECISION outcome ('ACCEPTED' | 'ALREADY_ACTIVATED'), consistent with
+    // every sibling decision method (reject -> 'REJECTED', reassign ->
+    // 'REASSIGNED') — it is no longer an echo of the created row's own
+    // status field. The row's actual two-axis state is now its own named
+    // fields: basicPriceStatus ('UNPUBLISHED' — the unsafe 'PUBLISHED'
+    // default is neutralized) and basicPriceVerificationStatus ('VERIFIED').
+    // ACCEPT proves VERIFIED, never PUBLISHED — publication is a separate,
+    // human-gated action performed by a different human.
     await expect(
       service.acceptPriceSubmissionReview({
         workspaceId: workspaceAId,
@@ -366,7 +370,13 @@ describe('Reality intake price submission human review (e2e)', () => {
         explicitGeneralRegion: true,
         note: 'accepted',
       }),
-    ).resolves.toMatchObject({ status: 'UNPUBLISHED' });
+    ).resolves.toMatchObject({
+      status: 'ACCEPTED',
+      priceSubmissionStatus: 'VERIFIED',
+      basicPriceStatus: 'UNPUBLISHED',
+      basicPriceVerificationStatus: 'VERIFIED',
+      publiclyEligible: false,
+    });
 
     const decision = await prisma.priceSubmissionReviewDecision.findFirstOrThrow({
       where: { reviewId: fixture.review!.id },
@@ -400,7 +410,16 @@ describe('Reality intake price submission human review (e2e)', () => {
     const submission = await prisma.priceSubmission.findUniqueOrThrow({
       where: { id: fixture.submission.id },
     });
-    expect(submission.status).toBe('PUBLISHED');
+    // RM-02D2A-1 CONTRACT_UPDATE / Owner Lock §2: ACCEPT proves VERIFIED
+    // only. The legacy auto-publish writer that advanced
+    // PriceSubmission.status from VERIFIED to PUBLISHED as a side effect of
+    // ACCEPT (static-trace-confirmed at the pre-D2A-1 SHA) has been
+    // removed — publication is a separate, human-gated action performed by
+    // a DIFFERENT human via BasicPricePublicationService, never triggered
+    // here. PriceSubmission.status is also not the public source of truth
+    // for eligibility (BasicPrice.status + verificationStatus are) — see
+    // BasicPriceEligibilityPolicy.
+    expect(submission.status).toBe('VERIFIED');
 
     const acceptAudit = await prisma.priceSubmissionAudit.findFirstOrThrow({
       where: {
@@ -412,18 +431,18 @@ describe('Reality intake price submission human review (e2e)', () => {
     });
     expect(acceptAudit.actorAccountId).toBe(reviewerAAccountId);
     expect(acceptAudit.fromStatus).toBe(fixture.submission.status);
-    const publishAudit = await prisma.priceSubmissionAudit.findFirstOrThrow({
+    // The legacy 'STEP-2.6b_BASIC_PRICE_ACTIVATED' audit (which claimed a
+    // publication that never happened) must never be written by ACCEPT.
+    const legacyPublishAudit = await prisma.priceSubmissionAudit.findFirst({
       where: {
         submissionId: fixture.submission.id,
         reason: { contains: 'STEP-2.6b_BASIC_PRICE_ACTIVATED' },
       },
     });
-    expect(publishAudit).toMatchObject({
-      fromStatus: 'VERIFIED',
-      toStatus: 'PUBLISHED',
-      actorType: 'SYSTEM',
-      actorAccountId: null,
-    });
+    expect(legacyPublishAudit).toBeNull();
+    // ACCEPT never creates a publication audit — that only exists after a
+    // separate, different human calls BasicPricePublicationService.publish().
+    expect(await prisma.basicPricePublicationAudit.count({ where: { basicPriceId: basicPrice.id } })).toBe(0);
 
     await expect(
       prisma.knowledgeEvent.findUniqueOrThrow({ where: { id: immutable.event.id } }),

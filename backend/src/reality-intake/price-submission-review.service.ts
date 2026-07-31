@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import {
+  Prisma,
   PriceReviewActionType,
   PriceSubmission,
   PriceSubmissionReview,
@@ -8,11 +9,29 @@ import {
   UserStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  mapReviewDetail,
+  mapReviewQueueItem,
+  type ReviewDetail,
+  type ReviewerIdentity,
+  type ReviewQueueItem,
+} from '../common/basic-price-workflow.projection';
 
 type TenantParams = {
   workspaceId: string;
   organizationId: string;
 };
+
+/**
+ * RM-02D2A2 — the relations every review-read API contract needs to project a
+ * human-readable identity (resource code/name/type, region code/name, current
+ * price, assigned reviewer). Shared verbatim by the queue and detail reads so
+ * both always carry the same identity payload.
+ */
+const REVIEW_API_INCLUDE = {
+  submission: { include: { resource: true, region: true, revisions: true } },
+  assignedTo: { include: { membership: { include: { account: true } } } },
+} satisfies Prisma.PriceSubmissionReviewInclude;
 
 type DecisionParams = TenantParams & {
   reviewId: string;
@@ -21,7 +40,6 @@ type DecisionParams = TenantParams & {
 };
 
 type AcceptParams = DecisionParams & {
-  regionId?: string | null;
   explicitGeneralRegion?: boolean;
 };
 
@@ -35,10 +53,84 @@ type ReviewWithSubmission = PriceSubmissionReview & {
   };
 };
 
+/** Minimal submission shape the canonical review-creation helper needs — it
+ * never re-derives workspaceId/organizationId itself, it only ever accepts
+ * server-resolved values already validated by the caller. */
+type SubmissionForReviewCreation = {
+  id: string;
+  workspaceId: string;
+  organizationId: string;
+};
+
 @Injectable()
 export class PriceSubmissionReviewService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * RM-02D2A-1 Work Package A — the ONE canonical, idempotent path that
+   * creates a PriceSubmissionReview for a SUBMITTED PriceSubmission. Must
+   * run inside the CALLER's own Prisma transaction (never opens its own),
+   * so a review-creation failure rolls back the caller's whole unit of
+   * work (e.g. RM-02 import batch submission never leaves an orphan
+   * PriceSubmission without a review). Safe to call more than once for the
+   * same submission — returns the existing review rather than creating a
+   * second one, and never double-writes the UNDER_REVIEW audit trail.
+   */
+  async createReviewWithinTransaction(
+    tx: Prisma.TransactionClient,
+    submission: SubmissionForReviewCreation,
+  ): Promise<{ reviewId: string; status: 'CREATED' | 'ALREADY_EXISTS' }> {
+    const existingReview = await tx.priceSubmissionReview.findUnique({
+      where: { priceSubmissionId: submission.id },
+    });
+    if (existingReview) {
+      return { reviewId: existingReview.id, status: 'ALREADY_EXISTS' };
+    }
+
+    const review = await tx.priceSubmissionReview.create({
+      data: {
+        priceSubmissionId: submission.id,
+        workspaceId: submission.workspaceId,
+        organizationId: submission.organizationId,
+        slaState: 'OPEN',
+        openedAt: new Date(),
+      },
+    });
+
+    const current = await tx.priceSubmission.findUniqueOrThrow({ where: { id: submission.id } });
+    await tx.priceSubmission.update({
+      where: { id: submission.id },
+      data: { status: 'UNDER_REVIEW' },
+    });
+
+    const alreadyAudited = await tx.priceSubmissionAudit.findFirst({
+      where: {
+        submissionId: submission.id,
+        reason: { contains: 'STEP-2.6b_REVIEW_CREATED' },
+      },
+    });
+    if (!alreadyAudited) {
+      await tx.priceSubmissionAudit.create({
+        data: {
+          submissionId: submission.id,
+          fromStatus: current.status,
+          toStatus: 'UNDER_REVIEW',
+          actorType: 'SYSTEM',
+          actorAccountId: null,
+          reason: `STEP-2.6b_REVIEW_CREATED; reviewId:${review.id}`,
+        },
+      });
+    }
+
+    return { reviewId: review.id, status: 'CREATED' };
+  }
+
+  /**
+   * Recovery/service path for a SUBMITTED PriceSubmission that somehow has
+   * no review yet (e.g. non-import submission flows outside RM-02).
+   * Delegates to the same canonical helper used by the RM-02 import path —
+   * there is exactly one review-creation implementation, never two.
+   */
   async processSubmittedPriceSubmissionReviewOnce(params: TenantParams) {
     const submission = await this.prisma.priceSubmission.findFirst({
       where: {
@@ -49,101 +141,118 @@ export class PriceSubmissionReviewService {
         review: null,
       },
       orderBy: { createdAt: 'asc' },
-      include: { revisions: true },
     });
 
     if (!submission || !submission.workspaceId || !submission.organizationId) {
       return { processed: false as const, reason: 'NO_SUBMITTED_PRICE_SUBMISSION' };
     }
 
-    const currentRevision = this.currentRevision(submission);
-    if (!currentRevision) {
-      return { processed: false as const, reason: 'CURRENT_REVISION_MISSING' };
-    }
-
     return this.prisma.$transaction(async (tx) => {
-      const existingReview = await tx.priceSubmissionReview.findUnique({
-        where: { priceSubmissionId: submission.id },
+      const result = await this.createReviewWithinTransaction(tx, {
+        id: submission.id,
+        workspaceId: submission.workspaceId!,
+        organizationId: submission.organizationId!,
       });
-      if (existingReview) {
-        return {
-          processed: true as const,
-          reviewId: existingReview.id,
-          priceSubmissionId: submission.id,
-          status: 'ALREADY_EXISTS' as const,
-        };
-      }
-
-      const review = await tx.priceSubmissionReview.create({
-        data: {
-          priceSubmissionId: submission.id,
-          workspaceId: submission.workspaceId!,
-          organizationId: submission.organizationId!,
-          slaState: 'OPEN',
-          openedAt: new Date(),
-        },
-      });
-
-      await tx.priceSubmission.update({
-        where: { id: submission.id },
-        data: { status: 'UNDER_REVIEW' },
-      });
-
-      const alreadyAudited = await tx.priceSubmissionAudit.findFirst({
-        where: {
-          submissionId: submission.id,
-          reason: { contains: 'STEP-2.6b_REVIEW_CREATED' },
-        },
-      });
-      if (!alreadyAudited) {
-        await tx.priceSubmissionAudit.create({
-          data: {
-            submissionId: submission.id,
-            fromStatus: 'SUBMITTED',
-            toStatus: 'UNDER_REVIEW',
-            actorType: 'SYSTEM',
-            actorAccountId: null,
-            reason: `STEP-2.6b_REVIEW_CREATED; reviewId:${review.id}`,
-          },
-        });
-      }
-
       return {
         processed: true as const,
-        reviewId: review.id,
+        reviewId: result.reviewId,
         priceSubmissionId: submission.id,
-        status: 'CREATED' as const,
+        status: result.status === 'CREATED' ? ('CREATED' as const) : ('ALREADY_EXISTS' as const),
       };
     });
   }
 
+  /**
+   * RM-02D2A-1 Owner Lock — ACCEPT is the "verified" half of the two
+   * separate human actions (§2). It proves the price VERIFIED and creates
+   * exactly one BasicPrice at UNPUBLISHED+VERIFIED. It NEVER publishes:
+   * publication is BasicPricePublicationService.publish()'s job alone, run
+   * later by a DIFFERENT human. No code path here ever writes
+   * BasicPrice.status/PriceSubmission.status to PUBLISHED.
+   */
   async acceptPriceSubmissionReview(params: AcceptParams) {
     const review = await this.findReviewForTenant(params);
-    const revision = this.currentRevision(review.submission);
-    if (!revision) {
-      throw new NotFoundException('Current price submission revision not found');
-    }
     const actorAccountId = await this.assertHumanInWorkspace(
       params.decidedByUserId,
       params.workspaceId,
     );
+    const basicPriceBeforeLock = await this.prisma.basicPrice.findUnique({
+      where: { sourceSubmissionId: review.submission.id },
+      select: { id: true },
+    });
 
     return this.prisma.$transaction(async (tx) => {
+      // Row-lock the review for the duration of the transaction so two
+      // concurrent ACCEPT calls on the same review serialize instead of
+      // racing to create duplicate decisions/BasicPrice rows, and so the
+      // actionability check below sees the live state, not a stale read.
+      const { slaState: freshSlaState } = await this.lockReviewForUpdate(
+        tx,
+        review.id,
+        params.workspaceId,
+        params.organizationId,
+      );
+
+      const liveSubmission = await tx.priceSubmission.findFirst({
+        where: {
+          id: review.submission.id,
+          workspaceId: params.workspaceId,
+          organizationId: params.organizationId,
+        },
+        include: { revisions: true },
+      });
+      if (!liveSubmission) {
+        throw new NotFoundException('Price submission review not found');
+      }
+
       const existingBasicPrice = await tx.basicPrice.findUnique({
-        where: { sourceSubmissionId: review.submission.id },
+        where: { sourceSubmissionId: liveSubmission.id },
       });
       const existingAccept = await tx.priceSubmissionReviewDecision.findFirst({
         where: { reviewId: review.id, action: 'ACCEPT' },
       });
 
-      if (existingBasicPrice) {
+      if (existingBasicPrice && existingAccept) {
+        if (!basicPriceBeforeLock) {
+          throw new ConflictException('ACCEPT_CONCURRENTLY_COMPLETED');
+        }
         return {
           processed: true as const,
           reviewId: review.id,
           priceSubmissionId: review.submission.id,
+          decisionId: existingAccept.id,
           basicPriceId: existingBasicPrice.id,
           status: 'ALREADY_ACTIVATED' as const,
+          priceSubmissionStatus: 'VERIFIED' as const,
+          basicPriceStatus: existingBasicPrice.status,
+          basicPriceVerificationStatus: existingBasicPrice.verificationStatus,
+          publiclyEligible:
+            existingBasicPrice.status === 'PUBLISHED' &&
+            existingBasicPrice.verificationStatus === 'PUBLISHED',
         };
+      }
+      if (existingBasicPrice || existingAccept) {
+        throw new ConflictException('ACCEPT_IDEMPOTENCY_EVIDENCE_INCONSISTENT');
+      }
+      if (liveSubmission.status === 'NEEDS_CORRECTION') {
+        throw new ConflictException('CORRECTION_RESUBMISSION_REQUIRED');
+      }
+      if (liveSubmission.status !== 'UNDER_REVIEW') {
+        throw new ConflictException('SUBMISSION_NOT_UNDER_REVIEW');
+      }
+      if (freshSlaState === 'RESOLVED' || freshSlaState === 'EXPIRED') {
+        throw new ConflictException('REVIEW_NOT_ACTIONABLE');
+      }
+
+      const revision = this.currentRevision(liveSubmission);
+      if (!revision?.effectiveDate) {
+        throw new ConflictException('EFFECTIVE_DATE_REQUIRED_BEFORE_ACCEPT');
+      }
+      if (liveSubmission.regionId && params.explicitGeneralRegion === true) {
+        throw new ConflictException('REGION_DECISION_CONFLICT');
+      }
+      if (!liveSubmission.regionId && params.explicitGeneralRegion !== true) {
+        throw new ConflictException('REGION_REQUIRED_OR_EXPLICIT_GENERAL_REGION');
       }
 
       const decision =
@@ -172,50 +281,37 @@ export class PriceSubmissionReviewService {
 
       await tx.priceSubmissionAudit.create({
         data: {
-          submissionId: review.submission.id,
-          fromStatus: review.submission.status,
+          submissionId: liveSubmission.id,
+          fromStatus: liveSubmission.status,
           toStatus: 'VERIFIED',
           actorType: 'HUMAN',
           actorAccountId,
-          reason: `STEP-2.6b_HUMAN_ACCEPT; reviewId:${review.id}; decisionId:${decision.id}; decidedByUserId:${params.decidedByUserId}`,
+          reason: `STEP-2.6b_HUMAN_ACCEPT; reviewId:${review.id}; decisionId:${decision.id}; decidedByUserId:${params.decidedByUserId}${liveSubmission.regionId ? '' : '; GENERAL_REGION_EXPLICIT'}`,
         },
       });
 
       const basicPrice = await tx.basicPrice.create({
         data: {
-          sourceSubmissionId: review.submission.id,
-          resourceId: review.submission.resourceId,
-          workspaceId: review.submission.workspaceId,
-          organizationId: review.submission.organizationId,
-          regionId: params.regionId ?? null,
-          effectiveDate: revision.effectiveDate ?? new Date(),
+          sourceSubmissionId: liveSubmission.id,
+          resourceId: liveSubmission.resourceId,
+          workspaceId: liveSubmission.workspaceId,
+          organizationId: liveSubmission.organizationId,
+          regionId: liveSubmission.regionId,
+          effectiveDate: revision.effectiveDate,
           value: revision.value,
-          sourceType: review.submission.sourceType,
+          sourceType: liveSubmission.sourceType,
           verificationStatus: 'VERIFIED',
-          sourceOrigin: review.submission.sourceOrigin,
+          sourceOrigin: liveSubmission.sourceOrigin,
           freshnessStatus: 'CURRENT',
-          reportedByAccountId: review.submission.reportedByAccountId,
-          // RM-02B: status is intentionally omitted here so the row takes
-          // the schema's new safe default ('UNPUBLISHED') instead of the
-          // old unsafe default ('PUBLISHED'). Accepting a review proves
-          // the price VERIFIED, never PUBLISHED — publication is a
-          // separate, human-gated action (BasicPricePublicationService).
-        },
-      });
-
-      await tx.priceSubmission.update({
-        where: { id: review.submission.id },
-        data: { status: 'PUBLISHED' },
-      });
-
-      await tx.priceSubmissionAudit.create({
-        data: {
-          submissionId: review.submission.id,
-          fromStatus: 'VERIFIED',
-          toStatus: 'PUBLISHED',
-          actorType: 'SYSTEM',
-          actorAccountId: null,
-          reason: `STEP-2.6b_BASIC_PRICE_ACTIVATED; reviewId:${review.id}; basicPriceId:${basicPrice.id}; sourceSubmissionId:${review.submission.id}`,
+          reportedByAccountId: liveSubmission.reportedByAccountId,
+          // RM-02D2A-1 Owner Lock: status is intentionally omitted here so
+          // the row takes the schema's default ('UNPUBLISHED'). ACCEPT
+          // proves the price VERIFIED, never PUBLISHED. Publication is a
+          // separate, human-gated action performed by a DIFFERENT human
+          // via BasicPricePublicationService — never auto-triggered from
+          // here. There is no writer anywhere in this method (or anywhere
+          // else in the codebase) that advances PriceSubmission.status or
+          // BasicPrice.status to PUBLISHED as a side effect of ACCEPT.
         },
       });
 
@@ -225,11 +321,11 @@ export class PriceSubmissionReviewService {
         priceSubmissionId: review.submission.id,
         decisionId: decision.id,
         basicPriceId: basicPrice.id,
-        // RM-02B: reflects the BasicPrice row's actual status (now
-        // 'UNPUBLISHED' by default — see the create() call above) rather
-        // than a hardcoded 'PUBLISHED' literal, which would otherwise
-        // claim a publication that did not happen.
-        status: basicPrice.status,
+        status: 'ACCEPTED' as const,
+        priceSubmissionStatus: 'VERIFIED' as const,
+        basicPriceStatus: basicPrice.status,
+        basicPriceVerificationStatus: basicPrice.verificationStatus,
+        publiclyEligible: false as const,
       };
     });
   }
@@ -258,6 +354,16 @@ export class PriceSubmissionReviewService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      const { slaState: freshSlaState } = await this.lockReviewForUpdate(
+        tx,
+        review.id,
+        params.workspaceId,
+        params.organizationId,
+      );
+      if (freshSlaState === 'RESOLVED' || freshSlaState === 'EXPIRED') {
+        throw new ConflictException('REVIEW_NOT_ACTIONABLE');
+      }
+
       const decision = await tx.priceSubmissionReviewDecision.create({
         data: {
           reviewId: review.id,
@@ -322,12 +428,191 @@ export class PriceSubmissionReviewService {
     };
   }
 
+  /**
+   * RM-02D2A-1 Work Package B — read-only queue for BASIC_PRICE_REVIEW_VIEW.
+   * Tenant-scoped by workspaceId + organizationId server-resolved by the
+   * caller; never accepts them from client input.
+   */
+  async listReviewQueue(
+    params: TenantParams & { slaState?: ReviewSlaState },
+  ): Promise<ReviewQueueItem[]> {
+    const reviews = await this.prisma.priceSubmissionReview.findMany({
+      where: {
+        workspaceId: params.workspaceId,
+        organizationId: params.organizationId,
+        ...(params.slaState ? { slaState: params.slaState } : {}),
+      },
+      orderBy: { openedAt: 'asc' },
+      include: REVIEW_API_INCLUDE,
+    });
+    return reviews.map((review) => mapReviewQueueItem(review));
+  }
+
+  async getReviewDetailForApi(
+    params: TenantParams & { reviewId: string },
+  ): Promise<ReviewDetail> {
+    const review = await this.prisma.priceSubmissionReview.findFirst({
+      where: {
+        id: params.reviewId,
+        workspaceId: params.workspaceId,
+        organizationId: params.organizationId,
+      },
+      include: {
+        ...REVIEW_API_INCLUDE,
+        decisions: {
+          orderBy: { decidedAt: 'asc' },
+          include: {
+            decidedBy: { include: { membership: { include: { account: true } } } },
+          },
+        },
+      },
+    });
+
+    if (
+      !review ||
+      !review.submission ||
+      review.submission.workspaceId !== params.workspaceId ||
+      review.submission.organizationId !== params.organizationId
+    ) {
+      throw new NotFoundException('Price submission review not found');
+    }
+
+    return mapReviewDetail(review);
+  }
+
+  /**
+   * RM-02D2A2 — the ONE tenant-scoped active-reviewer directory backing the
+   * reassign selector. workspaceId is always server-resolved from
+   * request.workspaceContext; the client never supplies it. A candidate only
+   * surfaces when the ENTIRE identity chain is sound and ACTIVE:
+   *   User(ACTIVE, workspaceId) -> WorkspaceMembership(ACTIVE, workspaceId,
+   *   id === User.workspaceMembershipId) -> Account(ACTIVE).
+   * Cross-tenant, inactive, or dangling rows never appear — both the query
+   * filter AND isActiveReviewerCandidate() enforce it. This is deliberately
+   * NOT the account-self-scoped GET /workspace-membership/workspace/:id
+   * endpoint, whose meaning is unchanged.
+   */
+  async listReviewerCandidates(params: {
+    workspaceId: string;
+    q?: string;
+  }): Promise<ReviewerIdentity[]> {
+    const q = params.q?.trim();
+    const users = await this.prisma.user.findMany({
+      where: {
+        workspaceId: params.workspaceId,
+        status: UserStatus.ACTIVE,
+        membership: {
+          is: {
+            workspaceId: params.workspaceId,
+            status: 'ACTIVE',
+            account: { is: { status: 'ACTIVE' } },
+          },
+        },
+        ...(q
+          ? {
+              OR: [
+                { fullName: { contains: q, mode: Prisma.QueryMode.insensitive } },
+                {
+                  membership: {
+                    is: {
+                      account: {
+                        is: { email: { contains: q, mode: Prisma.QueryMode.insensitive } },
+                      },
+                    },
+                  },
+                },
+              ],
+            }
+          : {}),
+      },
+      include: { membership: { include: { account: true } } },
+      orderBy: [{ fullName: 'asc' }],
+    });
+
+    return users
+      .filter((user) => this.isActiveReviewerCandidate(user, params.workspaceId))
+      .map((user) => ({
+        userId: user.id,
+        fullName: user.fullName,
+        email: user.membership.account.email,
+      }));
+  }
+
+  /**
+   * Defense-in-depth re-check of the full active-reviewer chain after the DB
+   * query, so a candidate only ever surfaces when EVERY link is ACTIVE and
+   * belongs to the target workspace. Even if a query filter ever regressed, an
+   * inactive Account, inactive membership, inactive User, or cross-tenant row
+   * can never leak into a reviewer selector.
+   */
+  private isActiveReviewerCandidate(
+    user: Prisma.UserGetPayload<{
+      include: { membership: { include: { account: true } } };
+    }>,
+    workspaceId: string,
+  ): boolean {
+    return (
+      user.status === UserStatus.ACTIVE &&
+      user.workspaceId === workspaceId &&
+      user.membership.id === user.workspaceMembershipId &&
+      user.membership.workspaceId === workspaceId &&
+      user.membership.status === 'ACTIVE' &&
+      user.membership.account.status === 'ACTIVE' &&
+      typeof user.membership.account.email === 'string' &&
+      user.membership.account.email.length > 0
+    );
+  }
+
+  /** Server-side workspaceId -> organizationId lookup; never trusts client input. */
+  async resolveOrganizationId(workspaceId: string): Promise<string> {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { organizationId: true },
+    });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+    return workspace.organizationId;
+  }
+
+  /**
+   * Resolves the acting User.id for an authenticated Account within a
+   * workspace. request.user.id from JwtAuthGuard is always an Account.id
+   * (see JwtStrategy) — decidedByUserId on PriceSubmissionReviewDecision is
+   * a User.id, so every controller entry point must resolve through this
+   * before calling any decision method. Never accepts a userId from the
+   * request body.
+   */
+  async resolveActingUserId(accountId: string, workspaceId: string): Promise<string> {
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: {
+        accountId,
+        workspaceId,
+        status: 'ACTIVE',
+        account: { status: 'ACTIVE' },
+      },
+      select: { id: true },
+    });
+    if (!membership) {
+      throw new NotFoundException('Active workspace membership not found for this account');
+    }
+    const user = await this.prisma.user.findFirst({
+      where: { workspaceMembershipId: membership.id, workspaceId, status: UserStatus.ACTIVE },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException('Active user profile not found for this account in this workspace');
+    }
+    return user.id;
+  }
+
   private async resolveWithoutBasicPrice(
     params: DecisionParams,
     action: Exclude<PriceReviewActionType, 'ACCEPT' | 'REASSIGN'>,
     status: 'REJECTED' | 'NEEDS_CORRECTION',
     resolveReview: boolean,
   ) {
+    if (!params.note || !params.note.trim()) {
+      throw new ConflictException('DECISION_NOTE_REQUIRED');
+    }
     const review = await this.findReviewForTenant(params);
     const actorAccountId = await this.assertHumanInWorkspace(
       params.decidedByUserId,
@@ -335,6 +620,16 @@ export class PriceSubmissionReviewService {
     );
 
     return this.prisma.$transaction(async (tx) => {
+      const { slaState: freshSlaState } = await this.lockReviewForUpdate(
+        tx,
+        review.id,
+        params.workspaceId,
+        params.organizationId,
+      );
+      if (freshSlaState === 'RESOLVED' || freshSlaState === 'EXPIRED') {
+        throw new ConflictException('REVIEW_NOT_ACTIONABLE');
+      }
+
       const decision = await tx.priceSubmissionReviewDecision.create({
         data: {
           reviewId: review.id,
@@ -447,6 +742,29 @@ export class PriceSubmissionReviewService {
     return review;
   }
 
+  /**
+   * Row-locks the review and returns its live slaState from inside the
+   * transaction — the pre-transaction findReviewForTenant() read can be
+   * stale under concurrency, so every decision method must re-check
+   * actionability against this fresh value, not the outer read.
+   */
+  private async lockReviewForUpdate(
+    tx: Prisma.TransactionClient,
+    reviewId: string,
+    workspaceId: string,
+    organizationId: string,
+  ): Promise<{ slaState: ReviewSlaState }> {
+    const locked = await tx.$queryRaw<Array<{ id: string; slaState: ReviewSlaState }>>(
+      Prisma.sql`SELECT "id", "slaState" FROM "price_submission_reviews"
+                 WHERE "id" = ${reviewId}::uuid
+                   AND "workspaceId" = ${workspaceId}::uuid
+                   AND "organizationId" = ${organizationId}::uuid
+                 FOR UPDATE`,
+    );
+    if (!locked[0]) throw new NotFoundException('Price submission review not found');
+    return { slaState: locked[0].slaState };
+  }
+
   private currentRevision(
     submission: PriceSubmission & { revisions: PriceSubmissionRevision[] },
   ) {
@@ -466,16 +784,27 @@ export class PriceSubmissionReviewService {
       },
       select: {
         id: true,
+        workspaceMembershipId: true,
         membership: {
           select: {
+            id: true,
             accountId: true,
             workspaceId: true,
+            status: true,
+            account: { select: { id: true, status: true } },
           },
         },
       },
     });
 
-    if (!user || user.membership.workspaceId !== workspaceId) {
+    if (
+      !user ||
+      user.membership.id !== user.workspaceMembershipId ||
+      user.membership.workspaceId !== workspaceId ||
+      user.membership.status !== 'ACTIVE' ||
+      user.membership.account.id !== user.membership.accountId ||
+      user.membership.account.status !== 'ACTIVE'
+    ) {
       throw new NotFoundException('Reviewer not found');
     }
 

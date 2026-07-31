@@ -1,4 +1,10 @@
 import { WorkspacePermissionResolverService } from './workspace-permission-resolver.service';
+import {
+  PERMISSIONS,
+  ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES,
+} from '../common/constants/permissions';
+
+const BASELINE = [...ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES].sort();
 
 describe('WorkspacePermissionResolverService', () => {
   let findFirst: jest.Mock;
@@ -20,16 +26,35 @@ describe('WorkspacePermissionResolverService', () => {
     })),
   });
 
-  it('1. ACTIVE membership + active unexpired role resolves the granted permission codes', async () => {
-    findFirst.mockResolvedValue(
-      membership([{ codes: ['PROJECT_VIEW', 'RAB_VIEW'] }]),
-    );
+  // LEGACY_TEST_CHANGE_REGISTER (Amendment A2):
+  // FILE: workspace-permission-resolver.service.spec.ts
+  // TEST_NAME: every case below that asserts an ACTIVE membership's resolved
+  //   permissions.
+  // OLD_EXPECTATION: an ACTIVE membership resolved to exactly its
+  //   RolePermission-granted codes; a membership with zero role grants
+  //   resolved to an empty (but non-null) permissions array.
+  // NEW_EXPECTATION: an ACTIVE membership always resolves to at least
+  //   ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES (BASIC_PRICE_VIEW/_IMPORT/
+  //   _RESOLVE/_SUBMIT), unioned with whatever RolePermission grants.
+  // REASON: Owner Decision ONE SIMPROK BASIC PRICE PRODUCT MODEL — SIMPROK
+  //   has no role-based product variant; every ACTIVE membership gets the
+  //   same Basic Price baseline regardless of role.
+  // OWNER_LAW_REFERENCE: docs/control/DECISIONS.md — ONE SIMPROK BASIC PRICE
+  //   PRODUCT MODEL; Amendment A1 (security boundary consequence).
+  // SECURITY_BOUNDARY_PRESERVED: YES — missing/inactive membership still
+  //   resolves null (test 2 below, unchanged); internal curation codes
+  //   (REVIEW_VIEW/VERIFY/PUBLISH) are still never part of the baseline
+  //   (test 8 below); cross-workspace scoping unchanged (test 4).
+  // TEST_WEAKENING: NO.
+
+  it('1. ACTIVE membership without any role grant still resolves the active-membership baseline (VIEW/IMPORT/RESOLVE/SUBMIT)', async () => {
+    findFirst.mockResolvedValue(membership([]));
 
     const result = await resolver.resolve('account-1', 'workspace-a');
 
     expect(result).toEqual({
       membershipId: 'membership-1',
-      permissions: ['PROJECT_VIEW', 'RAB_VIEW'],
+      permissions: BASELINE,
     });
   });
 
@@ -77,10 +102,25 @@ describe('WorkspacePermissionResolverService', () => {
     );
   });
 
-  it('5. duplicate RolePermission/grant across multiple roles collapses to one code', async () => {
+  it('5. ACTIVE membership with a role: baseline UNION role permissions, unique, sorted', async () => {
+    findFirst.mockResolvedValue(
+      membership([{ codes: ['PROJECT_VIEW', 'RAB_VIEW'] }]),
+    );
+
+    const result = await resolver.resolve('account-1', 'workspace-a');
+
+    expect(result).toEqual({
+      membershipId: 'membership-1',
+      permissions: Array.from(
+        new Set([...BASELINE, 'PROJECT_VIEW', 'RAB_VIEW']),
+      ).sort(),
+    });
+  });
+
+  it('6. duplicate RolePermission grant across multiple roles, and duplicate overlap with the baseline itself, collapses to one code each', async () => {
     findFirst.mockResolvedValue(
       membership([
-        { codes: ['PROJECT_VIEW', 'RAB_VIEW'] },
+        { codes: ['PROJECT_VIEW', 'RAB_VIEW', PERMISSIONS.BASIC_PRICE_VIEW] },
         { codes: ['RAB_VIEW'] },
       ]),
     );
@@ -90,27 +130,60 @@ describe('WorkspacePermissionResolverService', () => {
     expect(
       result?.permissions.filter((code) => code === 'RAB_VIEW'),
     ).toHaveLength(1);
+    expect(
+      result?.permissions.filter(
+        (code) => code === PERMISSIONS.BASIC_PRICE_VIEW,
+      ),
+    ).toHaveLength(1);
   });
 
-  it('6. result is deterministically sorted', async () => {
+  it('7. result is deterministically sorted', async () => {
     findFirst.mockResolvedValue(
       membership([{ codes: ['RAB_VIEW', 'PROJECT_CREATE', 'PROJECT_VIEW'] }]),
     );
 
     const result = await resolver.resolve('account-1', 'workspace-a');
 
-    expect(result?.permissions).toEqual([
-      'PROJECT_CREATE',
-      'PROJECT_VIEW',
-      'RAB_VIEW',
-    ]);
+    const expected = Array.from(
+      new Set([...BASELINE, 'RAB_VIEW', 'PROJECT_CREATE', 'PROJECT_VIEW']),
+    ).sort();
+    expect(result?.permissions).toEqual(expected);
   });
 
-  it('7. a membership with zero granted permissions resolves an empty, non-null array (membership itself is real)', async () => {
+  it('8. ACTIVE membership never automatically receives internal curation codes (REVIEW_VIEW/VERIFY/PUBLISH) absent an explicit role grant', async () => {
     findFirst.mockResolvedValue(membership([]));
 
     const result = await resolver.resolve('account-1', 'workspace-a');
 
-    expect(result).toEqual({ membershipId: 'membership-1', permissions: [] });
+    expect(result?.permissions).not.toContain(
+      PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
+    );
+    expect(result?.permissions).not.toContain(PERMISSIONS.BASIC_PRICE_VERIFY);
+    expect(result?.permissions).not.toContain(PERMISSIONS.BASIC_PRICE_PUBLISH);
+  });
+
+  it('9. an explicit role grant of an internal curation code is still honored (role-derived, not baseline-derived)', async () => {
+    findFirst.mockResolvedValue(
+      membership([
+        {
+          codes: [
+            PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
+            PERMISSIONS.BASIC_PRICE_VERIFY,
+          ],
+        },
+      ]),
+    );
+
+    const result = await resolver.resolve('account-1', 'workspace-a');
+
+    expect(result?.permissions).toEqual(
+      Array.from(
+        new Set([
+          ...BASELINE,
+          PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
+          PERMISSIONS.BASIC_PRICE_VERIFY,
+        ]),
+      ).sort(),
+    );
   });
 });

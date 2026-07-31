@@ -218,4 +218,19 @@ activate production grants.
 - SIMPROK_DB_WRITE_COUNT: 0
 - MERGE: NO
 
+## RM-02C3 Acceptance Permission Draft PR
+
+- TITLE: feat(rm02c3): activate Basic Price browser acceptance permissions
+- STATE: DRAFT TO BE CREATED
+- HEAD_BRANCH: feat/rm02c3-acceptance-permission
+- BASE_SHA: 83f1dcbcfa4e21ac2c2d67e4a6bdde4975d27c24
+- ROADMAP_ITEM: RM-02C3
+- TARGET_DATABASE: simprok_test
+- PERMISSION_ALLOWLIST: BASIC_PRICE_IMPORT, BASIC_PRICE_REVIEW_VIEW
+- PRODUCTION_ACTIVATION: NO
+- SIMPROK_DB_CONNECTION_COUNT: 0
+- SIMPROK_DB_WRITE_COUNT: 0
+- OWNER_BROWSER_PROOF: NOT_STARTED
+- MERGE: NO — Owner-only decision
+
 ## Soli Deo Gloria. Haleluya. Amin.

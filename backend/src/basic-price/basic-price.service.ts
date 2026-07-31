@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
 import { Prisma } from '@prisma/client';
@@ -6,6 +10,54 @@ import {
   BasicPriceEligibilityPolicy,
   PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
 } from './basic-price-eligibility.policy';
+import {
+  mapExplorerItem,
+  type BasicPriceExplorerItem,
+  type ExplorerRowSource,
+} from '../common/basic-price-workflow.projection';
+import { nextUtcDayStart, parseDateOnlyUtc } from '../common/date-only.util';
+import { sourceOriginsForFamily } from './basic-price-source-family.util';
+
+const EXPLORER_ROW_SELECT = {
+  id: true,
+  workspaceId: true,
+  value: true,
+  effectiveDate: true,
+  validUntil: true,
+  sourceType: true,
+  sourceOrigin: true,
+  freshnessStatus: true,
+  resource: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      type: true,
+      baseUnit: true,
+    },
+  },
+  region: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+    },
+  },
+  sourceSubmission: {
+    select: {
+      importRow: {
+        select: {
+          batch: {
+            select: {
+              sourceOrganizationName: true,
+              sourceVendorName: true,
+            },
+          },
+        },
+      },
+    },
+  },
+} satisfies Prisma.BasicPriceSelect;
 
 /**
  * Public Basic Price eligibility — OWNER-LOCKED.
@@ -52,16 +104,27 @@ export class BasicPriceService {
    * Ambil semua harga dasar yang berlaku untuk workspace ini.
    * Termasuk harga workspace-specific dan harga global (workspaceId = null, status PUBLISHED).
    */
-  async findAllForWorkspace(workspaceId: string, query: GetBasicPricesDto = {}) {
+  async findAllForWorkspace(
+    workspaceId: string,
+    query: GetBasicPricesDto = {},
+  ): Promise<{
+    data: BasicPriceExplorerItem[];
+    meta: { total: number; page: number; limit: number; totalPages: number };
+  }> {
     const {
       search,
       resourceId,
       regionId,
       year,
+      dateFrom,
+      dateTo,
       sourceOrigin,
+      sourceFamily,
+      sourceName,
       verificationStatus,
       freshnessStatus,
       unit,
+      resourceType,
       page = 1,
       limit = 20,
       sortBy = 'effectiveDate',
@@ -77,6 +140,37 @@ export class BasicPriceService {
       throw new BadRequestException(
         `verificationStatus '${verificationStatus}' is not permitted on the public Basic Price API`,
       );
+    }
+
+    // `year` and an explicit dateFrom/dateTo range are two different ways of
+    // describing the same axis (effectiveDate) — combining them would be an
+    // ambiguous time interpretation, so it is rejected rather than silently
+    // merged or silently overridden.
+    if (year && (dateFrom || dateTo)) {
+      throw new BadRequestException(
+        'year cannot be combined with dateFrom/dateTo — choose one time filter',
+      );
+    }
+
+    // Date-only contract: dateFrom/dateTo are exact calendar days, parsed via
+    // the shared date-only helper (exact YYYY-MM-DD + year/month/day
+    // round-trip) — never a bare `new Date(...)`, which would silently roll
+    // a calendar-invalid date forward instead of rejecting it.
+    const parsedDateFrom = dateFrom
+      ? parseDateOnlyUtc(dateFrom, 'dateFrom')
+      : undefined;
+    // Parsed as the START of the dateTo day so "dateFrom after dateTo" below
+    // compares calendar days, not the exclusive query bound derived from it.
+    const parsedDateToStart = dateTo
+      ? parseDateOnlyUtc(dateTo, 'dateTo')
+      : undefined;
+
+    if (
+      parsedDateFrom &&
+      parsedDateToStart &&
+      parsedDateFrom.getTime() > parsedDateToStart.getTime()
+    ) {
+      throw new BadRequestException('dateFrom must not be after dateTo');
     }
 
     // Base eligibility (hard lock): status PUBLISHED AND verification terminal PUBLISHED.
@@ -105,6 +199,10 @@ export class BasicPriceService {
       resourceFilter.baseUnit = unit;
     }
 
+    if (resourceType) {
+      resourceFilter.type = resourceType;
+    }
+
     if (Object.keys(resourceFilter).length > 0) {
       where.resource = resourceFilter;
     }
@@ -121,10 +219,64 @@ export class BasicPriceService {
       const startOfYear = new Date(`${year}-01-01T00:00:00.000Z`);
       const endOfYear = new Date(`${year}-12-31T23:59:59.999Z`);
       where.effectiveDate = { gte: startOfYear, lte: endOfYear };
+    } else if (parsedDateFrom || parsedDateToStart) {
+      // dateFrom is inclusive (>= start of that UTC day). dateTo is
+      // exclusive-next-day (< start of the day AFTER it) — using `lte` on a
+      // midnight instant would only cover the very first moment of the
+      // dateTo day and silently exclude the rest of it.
+      where.effectiveDate = {
+        ...(parsedDateFrom ? { gte: parsedDateFrom } : {}),
+        ...(parsedDateToStart
+          ? { lt: nextUtcDayStart(parsedDateToStart) }
+          : {}),
+      };
     }
 
-    if (sourceOrigin) {
+    // sourceFamily is a coarser grouping over sourceOrigin (never a new
+    // schema field). Both filters narrow the same axis: if both are given,
+    // the effective set is their intersection (exact sourceOrigin values
+    // outside the requested family are dropped, never added back) — this
+    // can never widen eligibility, only narrow it further or to empty.
+    if (sourceFamily) {
+      const familyOrigins = sourceOriginsForFamily(sourceFamily);
+      const allowedOrigins = sourceOrigin
+        ? familyOrigins.filter((origin) => origin === sourceOrigin)
+        : familyOrigins;
+      where.sourceOrigin =
+        allowedOrigins.length === 1
+          ? allowedOrigins[0]
+          : { in: allowedOrigins };
+    } else if (sourceOrigin) {
       where.sourceOrigin = sourceOrigin;
+    }
+
+    if (sourceName) {
+      where.sourceSubmission = {
+        is: {
+          importRow: {
+            is: {
+              batch: {
+                is: {
+                  OR: [
+                    {
+                      sourceVendorName: {
+                        contains: sourceName,
+                        mode: 'insensitive',
+                      },
+                    },
+                    {
+                      sourceOrganizationName: {
+                        contains: sourceName,
+                        mode: 'insensitive',
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      };
     }
 
     if (freshnessStatus) {
@@ -133,21 +285,11 @@ export class BasicPriceService {
 
     const skip = (page - 1) * limit;
 
-    const [total, data] = await Promise.all([
+    const [total, rows] = await Promise.all([
       this.prisma.basicPrice.count({ where }),
       this.prisma.basicPrice.findMany({
         where,
-        include: {
-          resource: {
-            select: {
-              id: true,
-              code: true,
-              name: true,
-              type: true,
-              baseUnit: true,
-            },
-          },
-        },
+        select: EXPLORER_ROW_SELECT,
         orderBy: [
           { [sortBy]: sortOrder },
           { id: 'asc' }, // deterministic sorting tie-breaker
@@ -158,7 +300,9 @@ export class BasicPriceService {
     ]);
 
     return {
-      data,
+      data: (rows as ExplorerRowSource[]).map((row) =>
+        mapExplorerItem(row, workspaceId),
+      ),
       meta: {
         total,
         page,

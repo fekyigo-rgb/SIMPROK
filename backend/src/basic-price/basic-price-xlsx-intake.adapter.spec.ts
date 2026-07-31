@@ -130,12 +130,19 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
   });
 
   it('sourceSha256 is deterministic for identical bytes and changes for different content', async () => {
-    const bufferA = await buildBasicPriceXlsx();
-    const bufferB = await buildBasicPriceXlsx();
+    // Two independent buildBasicPriceXlsx() calls are NOT "identical bytes"
+    // by construction: ExcelJS stamps each generated workbook with
+    // workbook.created/modified = new Date() at write time, so two
+    // separately generated buffers legitimately differ byte-for-byte
+    // whenever any wall-clock time elapses between the two calls (as
+    // reliably happens under parallel test-suite load). The contract this
+    // test actually owes is "hashing the exact same byte buffer twice
+    // yields the same hash" — parse the one buffer twice for A/B.
+    const buffer = await buildBasicPriceXlsx();
     const bufferC = await buildBasicPriceXlsx({ includeMissingUnit: true });
 
-    const resultA = await adapter.parse(bufferA, 'fixture.xlsx');
-    const resultB = await adapter.parse(bufferB, 'fixture.xlsx');
+    const resultA = await adapter.parse(buffer, 'fixture.xlsx');
+    const resultB = await adapter.parse(buffer, 'fixture.xlsx');
     const resultC = await adapter.parse(bufferC, 'fixture.xlsx');
 
     expect(resultA.sourceSha256).toBe(resultB.sourceSha256);

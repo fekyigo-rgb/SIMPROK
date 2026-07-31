@@ -146,3 +146,89 @@ SIMPROK_DB_CONNECTION_COUNT = 0
 SIMPROK_DB_WRITE_COUNT = 0
 MERGE_AUTHORITY = OWNER_ONLY
 ```
+
+## RM-02C3 acceptance permission activation — 2026-07-28
+
+```
+BASE_MAIN_SHA = 83f1dcbcfa4e21ac2c2d67e4a6bdde4975d27c24
+CURRENT_PRODUCT_TARGET = RM-02C3
+ACTIVE_BRANCH = feat/rm02c3-acceptance-permission
+ACTIVE_WORKTREE = C:\Users\asus\SIMPROK-WT-RM02C3
+ACTIVE_SINGLE_WRITER = CODEX
+YANG_SEDANG_DIKERJAKAN = Acceptance-only PLAN/APPLY for the exact
+  BASIC_PRICE_IMPORT,BASIC_PRICE_REVIEW_VIEW allowlist on the dedicated
+  Workspace-A RM02C3_BROWSER_ACCEPTANCE role.
+PRODUCTION_PERMISSION_ACTIVATION = NO
+SIMPROK_DB_CONNECTION_COUNT = 0
+SIMPROK_DB_WRITE_COUNT = 0
+OWNER_BROWSER_PROOF = NOT_STARTED
+MERGE_AUTHORITY = OWNER_ONLY
+```
+
+## RM-02D2A-1 backend runtime lifecycle closure — 2026-07-29
+
+```
+BASE_HEAD_SHA = ccb6983419b8b134d6cfc4b1dba87518af3db59a
+CURRENT_PRODUCT_TARGET (this slice) = RM-02D2A-1
+ACTIVE_BRANCH = feat/rm02d2a1-backend-runtime-lifecycle
+NEW_PR_BASE = feat/rm02d1-resource-identity-mapping
+ACTIVE_WORKTREE = C:\Users\asus\SIMPROK-WT-RM02D1
+ACTIVE_SINGLE_WRITER = CLAUDE_CODE
+YANG_SEDANG_DIKERJAKAN = Backend-only closure of the Basic Price runtime
+  lifecycle: submit->review (same transaction), a new /basic-price-reviews
+  human-review API (ACCEPT creates BasicPrice UNPUBLISHED+VERIFIED only,
+  never auto-publishes), and a new atomic two-axis /basic-price-publications
+  publish API enforcing verifier != publisher. See
+  docs/implementation-gates/rm02d2a1/OWNER-LOCK.md and
+  IMPLEMENTATION-REPORT.md.
+GOLDEN_THREAD_LIVE = NO (backend machinery only; no UI, batch 271 untouched)
+BROWSER_PROOF_STATE = DEFERRED_TO_D2A-2 (no frontend file changed)
+PRODUCTION_ACTIVATION_STATE = NO
+SIMPROK_TEST_CONNECTION_COUNT = 0
+SIMPROK_DB_CONNECTION_COUNT = 0
+SIMPROK_DB_WRITE_COUNT = 0
+TARGET_BATCH_271_MUTATION_COUNT = 0
+GATE_STATE = LOCAL_GATES_PASS_AWAITING_DRAFT_PR_AND_CI
+OWNER_DECISIONS_WAITING = Draft PR merge decision (Owner-only); D2A-2 (UI)
+  and D2B (real 271-row batch operation) remain separate, un-started work.
+BASIC_PRICE_IMPORT_100_PERCENT = NO
+RM02_EXIT_GATE = OPEN
+MERGE_AUTHORITY = OWNER_ONLY
+```
+
+## RM-02D2A2 remediation 03 — one SIMPROK basic price product model — 2026-07-31
+
+```
+BASE_HEAD_SHA = 922bde84f6512f654dd89e72f6a9c173276db4fa
+CURRENT_PRODUCT_TARGET (this slice) = RM02D2A2-REMEDIATION-03-FINAL
+ACTIVE_BRANCH = feat/rm02d2a2-basic-price-review-publication-ui
+BASE_BRANCH = feat/rm02d2a1-backend-runtime-lifecycle
+ACTIVE_WORKTREE = C:\Users\asus\SIMPROK-WT-RM02D2A2
+ACTIVE_SINGLE_WRITER = CLAUDE_CODE
+YANG_SEDANG_DIKERJAKAN = Owner-directed correction of a prior product-model
+  misreading: Basic Price is one universal product, not a role/permission
+  -dependent capability space. WorkspacePermissionResolverService now
+  grants BASIC_PRICE_VIEW/_IMPORT/_RESOLVE/_SUBMIT to every ACTIVE
+  WorkspaceMembership as a structural baseline; user import-batch
+  read/write is scoped to the uploading account; the capability-space
+  frontend abstraction (BasicPriceSpacePage/basicPriceSpaceViewModel/
+  BasicPriceSpaceRoute) is removed so /basic-price renders the Explorer
+  directly and the Sidebar shows Basic Price universally; Explorer gained
+  Kategori (ResourceCatalog.type) and Keluarga Sumber (source-family)
+  filters. See docs/control/DECISIONS.md AD-RM02D2A2-01 and
+  docs/implementation-gates/rm02d2a2/CONTRACT-INVENTORY.md.
+CHECKPOINT_1_SHA = 90732dc21e03042d279d670fdf74ffb0b0d4f002
+CHECKPOINT_2_SHA = a95c42fe165ee7b6a366d2398b1c193df0e91a0a
+GOLDEN_THREAD_LIVE = PENDING_SAFE_E2E_AND_OWNER_BROWSER_ACCEPTANCE
+BROWSER_PROOF_STATE = STOP_FOR_OWNER_VISUAL_DECISION
+PRODUCTION_ACTIVATION_STATE = NO
+SCHEMA_CHANGE_COUNT = 0
+MIGRATION_CHANGE_COUNT = 0
+PERMISSION_SEED_CHANGE_COUNT = 0
+TARGET_BATCH_271_MUTATION_COUNT = 0
+GATE_STATE = LOCAL_GATES_PASS_AWAITING_SAFE_E2E_AND_OWNER_BROWSER_ACCEPTANCE
+OWNER_DECISIONS_WAITING = Owner browser acceptance + PM exact-SHA audit;
+  Draft PR #56 merge decision (Owner-only).
+DRAFT_PR = 56
+MERGE_AUTHORITY = OWNER_ONLY
+```

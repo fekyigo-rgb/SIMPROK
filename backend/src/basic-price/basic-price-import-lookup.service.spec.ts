@@ -5,13 +5,20 @@ import { PrismaService } from '../prisma/prisma.service';
 describe('BasicPriceImportLookupService', () => {
   let service: BasicPriceImportLookupService;
   let queryRaw: jest.Mock;
+  let regionFindMany: jest.Mock;
+  let regionCount: jest.Mock;
 
   beforeEach(async () => {
     queryRaw = jest.fn();
+    regionFindMany = jest.fn();
+    regionCount = jest.fn();
     const module = await Test.createTestingModule({
       providers: [
         BasicPriceImportLookupService,
-        { provide: PrismaService, useValue: { $queryRaw: queryRaw } },
+        {
+          provide: PrismaService,
+          useValue: { $queryRaw: queryRaw, region: { findMany: regionFindMany, count: regionCount } },
+        },
       ],
     }).compile();
     service = module.get(BasicPriceImportLookupService);
@@ -113,5 +120,39 @@ describe('BasicPriceImportLookupService', () => {
       hasNext: false,
     });
     expect(sqlText(queryRaw.mock.calls[0][0])).toContain('lower(unit."displayName") ASC');
+  });
+
+  describe('searchRegions (RM-02D2A2)', () => {
+    it('returns only id/code/name for active regions and derives total/hasNext', async () => {
+      regionFindMany.mockResolvedValue([{ id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' }]);
+      regionCount.mockResolvedValue(3);
+
+      await expect(service.searchRegions({ q: '', page: 1, limit: 1 })).resolves.toEqual({
+        items: [{ id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' }],
+        page: 1,
+        limit: 1,
+        total: 3,
+        hasNext: true,
+      });
+
+      const args = regionFindMany.mock.calls[0][0];
+      expect(args.where).toEqual({ isActive: true });
+      expect(args.select).toEqual({ id: true, code: true, name: true });
+      expect(args.take).toBe(1);
+      expect(args.skip).toBe(0);
+    });
+
+    it('adds a case-insensitive code-or-name filter when q is present, still active-only', async () => {
+      regionFindMany.mockResolvedValue([]);
+      regionCount.mockResolvedValue(0);
+
+      await service.searchRegions({ q: 'jak', page: 2, limit: 20 });
+
+      const args = regionFindMany.mock.calls[0][0];
+      expect(args.where.isActive).toBe(true);
+      expect(JSON.stringify(args.where.OR)).toContain('insensitive');
+      expect(JSON.stringify(args.where.OR)).toContain('jak');
+      expect(args.skip).toBe(20);
+    });
   });
 });

@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  PayloadTooLargeException,
+} from '@nestjs/common';
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,9 +15,16 @@ import {
 } from './basic-price-xlsx-intake.adapter';
 import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto';
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
+import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
+import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 
 export const MAX_UPLOAD_BYTES = 10_485_760;
-type UploadedXlsx = { buffer: Buffer; size: number; originalname: string; mimetype?: string };
+type UploadedXlsx = {
+  buffer: Buffer;
+  size: number;
+  originalname: string;
+  mimetype?: string;
+};
 
 // Every mutable batch field is a fingerprint input (schema contract §5):
 // same workbook + different region/date/source/coverage MUST produce a
@@ -34,20 +47,35 @@ const FINGERPRINT_METADATA_KEYS = [
 export class BasicPriceImportService {
   private readonly adapter = new BasicPriceXlsxIntakeAdapter();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reviewService: PriceSubmissionReviewService,
+  ) {}
 
-  private validateFile(file: UploadedXlsx | undefined): asserts file is UploadedXlsx {
+  private validateFile(
+    file: UploadedXlsx | undefined,
+  ): asserts file is UploadedXlsx {
     if (!file?.buffer) throw new BadRequestException('XLSX file is required');
-    if (file.size > MAX_UPLOAD_BYTES) throw new PayloadTooLargeException('XLSX file exceeds 10 MiB');
-    if (!file.originalname.toLowerCase().endsWith('.xlsx')) throw new BadRequestException('Only XLSX files are accepted');
+    if (file.size > MAX_UPLOAD_BYTES)
+      throw new PayloadTooLargeException('XLSX file exceeds 10 MiB');
+    if (!file.originalname.toLowerCase().endsWith('.xlsx'))
+      throw new BadRequestException('Only XLSX files are accepted');
   }
 
-  private async parse(file: UploadedXlsx, selectedSheet?: string): Promise<BasicPriceImportKnowledgeObject> {
+  private async parse(
+    file: UploadedXlsx,
+    selectedSheet?: string,
+  ): Promise<BasicPriceImportKnowledgeObject> {
     try {
-      return await this.adapter.parse(file.buffer, file.originalname, selectedSheet);
+      return await this.adapter.parse(
+        file.buffer,
+        file.originalname,
+        selectedSheet,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'INVALID_XLSX';
-      if (message === 'SOURCE_ROW_LIMIT_EXCEEDED') throw new PayloadTooLargeException(message);
+      if (message === 'SOURCE_ROW_LIMIT_EXCEEDED')
+        throw new PayloadTooLargeException(message);
       throw new BadRequestException(message);
     }
   }
@@ -58,21 +86,42 @@ export class BasicPriceImportService {
     knowledge: BasicPriceImportKnowledgeObject,
     metadata: PreviewBasicPriceImportDto,
   ): string {
-    const metadataPart = FINGERPRINT_METADATA_KEYS.map((key) => `${key}:${(metadata as Record<string, unknown>)[key] ?? ''}`).join('|');
+    const metadataPart = FINGERPRINT_METADATA_KEYS.map(
+      (key) => `${key}:${(metadata as Record<string, unknown>)[key] ?? ''}`,
+    ).join('|');
     return createHash('sha256')
-      .update([workspaceId, organizationId, knowledge.sourceSha256, knowledge.sheetName, BASIC_PRICE_PARSER_CONTRACT_VERSION, metadataPart].join('|'))
+      .update(
+        [
+          workspaceId,
+          organizationId,
+          knowledge.sourceSha256,
+          knowledge.sheetName,
+          BASIC_PRICE_PARSER_CONTRACT_VERSION,
+          metadataPart,
+        ].join('|'),
+      )
       .digest('hex')
       .toUpperCase();
   }
 
   private async resolveOrganizationId(workspaceId: string): Promise<string> {
-    const workspace = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { organizationId: true } });
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { organizationId: true },
+    });
     if (!workspace) throw new NotFoundException('Workspace not found');
     return workspace.organizationId;
   }
 
   private summarize(
-    batch: { id: string; status: string; importFingerprint: string; effectiveDate: Date | null; regionId: string | null; version: number },
+    batch: {
+      id: string;
+      status: string;
+      importFingerprint: string;
+      effectiveDate: Date | null;
+      regionId: string | null;
+      version: number;
+    },
     rows: Array<{
       id: string;
       status: string;
@@ -101,9 +150,12 @@ export class BasicPriceImportService {
       version: batch.version,
       totalRows: rows.length,
       needsReviewRows: rows.filter((r) => r.status === 'NEEDS_REVIEW').length,
-      readyForSubmissionRows: rows.filter((r) => r.status === 'READY_FOR_SUBMISSION').length,
+      readyForSubmissionRows: rows.filter(
+        (r) => r.status === 'READY_FOR_SUBMISSION',
+      ).length,
       rejectedRows: rows.filter((r) => r.status === 'REJECTED').length,
-      submittedRows: rows.filter((r) => r.status === 'SUBMISSION_CREATED').length,
+      submittedRows: rows.filter((r) => r.status === 'SUBMISSION_CREATED')
+        .length,
       // Every field a human needs to actually resolve a row (assign
       // resource/unit identity, judge a collision) — not just a status
       // label — since this projection is the only row data the review UI
@@ -116,7 +168,9 @@ export class BasicPriceImportService {
         name: r.rawResourceNameText,
         unit: r.rawUnitText ?? null,
         rawPriceDisplayText: r.rawPriceDisplayText ?? null,
-        proposedCanonicalPrice: r.proposedCanonicalPrice ? r.proposedCanonicalPrice.toString() : null,
+        proposedCanonicalPrice: r.proposedCanonicalPrice
+          ? r.proposedCanonicalPrice.toString()
+          : null,
         section: r.sourceSection,
         sourceRowNumber: r.sourceRowNumber,
         collisionType: r.collisionType ?? 'NONE',
@@ -139,17 +193,34 @@ export class BasicPriceImportService {
    * REPLAY_POLICY (§12.1): an exact fingerprint replay returns the
    * existing batch, never duplicate rows.
    */
-  async preview(workspaceId: string, uploadedByAccountId: string, file: UploadedXlsx | undefined, metadata: PreviewBasicPriceImportDto) {
+  async preview(
+    workspaceId: string,
+    uploadedByAccountId: string,
+    file: UploadedXlsx | undefined,
+    metadata: PreviewBasicPriceImportDto,
+  ) {
     this.validateFile(file);
     const knowledge = await this.parse(file, metadata.selectedSheet);
     const organizationId = await this.resolveOrganizationId(workspaceId);
-    const fingerprint = this.fingerprint(workspaceId, organizationId, knowledge, metadata);
+    const fingerprint = this.fingerprint(
+      workspaceId,
+      organizationId,
+      knowledge,
+      metadata,
+    );
 
     const existing = await this.prisma.basicPriceImportBatch.findUnique({
-      where: { workspaceId_importFingerprint: { workspaceId, importFingerprint: fingerprint } },
+      where: {
+        workspaceId_importFingerprint: {
+          workspaceId,
+          importFingerprint: fingerprint,
+        },
+      },
     });
     if (existing) {
-      const rows = await this.prisma.basicPriceImportRow.findMany({ where: { batchId: existing.id } });
+      const rows = await this.prisma.basicPriceImportRow.findMany({
+        where: { batchId: existing.id },
+      });
       return this.summarize(existing, rows);
     }
 
@@ -166,7 +237,9 @@ export class BasicPriceImportService {
             selectedSheetName: knowledge.sheetName,
             parserContractVersion: knowledge.parserContractVersion,
             regionId: metadata.regionId ?? null,
-            effectiveDate: metadata.effectiveDate ? new Date(metadata.effectiveDate) : null,
+            effectiveDate: metadata.effectiveDate
+              ? new Date(metadata.effectiveDate)
+              : null,
             sourceType: metadata.sourceType ?? null,
             sourceOrigin: metadata.sourceOrigin ?? null,
             sourceOrganizationName: metadata.sourceOrganizationName ?? null,
@@ -184,7 +257,9 @@ export class BasicPriceImportService {
           },
         });
 
-        const createdRows: Prisma.BasicPriceImportRowGetPayload<Record<string, never>>[] = [];
+        const createdRows: Prisma.BasicPriceImportRowGetPayload<
+          Record<string, never>
+        >[] = [];
         for (const row of knowledge.rows) {
           const created = await tx.basicPriceImportRow.create({
             data: {
@@ -199,10 +274,12 @@ export class BasicPriceImportService {
               rawResourceNameText: row.rawResourceNameText,
               rawUnitText: row.rawUnitText,
               rawPriceCellType: row.rawPriceCellType,
-              rawPriceNumericRoundTripString: row.rawPriceNumericRoundTripString,
+              rawPriceNumericRoundTripString:
+                row.rawPriceNumericRoundTripString,
               rawPriceTextValue: row.rawPriceTextValue,
               rawPriceFormulaText: row.rawPriceFormulaText,
-              rawPriceCachedResultRoundTripString: row.rawPriceCachedResultRoundTripString,
+              rawPriceCachedResultRoundTripString:
+                row.rawPriceCachedResultRoundTripString,
               rawPriceFormulaError: row.rawPriceFormulaError,
               rawPriceNumberFormat: row.rawPriceNumberFormat,
               rawPriceDisplayText: row.rawPriceDisplayText,
@@ -216,19 +293,33 @@ export class BasicPriceImportService {
           createdRows.push(created);
         }
 
-        const finalItemCount = await tx.basicPriceImportRow.count({ where: { batchId: batch.id } });
-        if (finalItemCount !== createdRows.length) throw new ConflictException('IMPORT_ROW_COUNT_MISMATCH');
+        const finalItemCount = await tx.basicPriceImportRow.count({
+          where: { batchId: batch.id },
+        });
+        if (finalItemCount !== createdRows.length)
+          throw new ConflictException('IMPORT_ROW_COUNT_MISMATCH');
 
         return this.summarize(batch, createdRows);
       });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
         // Concurrent identical request already created it (I04/I05) --
         // re-read the winner rather than error or duplicate.
-        const winner = await this.prisma.basicPriceImportBatch.findUniqueOrThrow({
-          where: { workspaceId_importFingerprint: { workspaceId, importFingerprint: fingerprint } },
+        const winner =
+          await this.prisma.basicPriceImportBatch.findUniqueOrThrow({
+            where: {
+              workspaceId_importFingerprint: {
+                workspaceId,
+                importFingerprint: fingerprint,
+              },
+            },
+          });
+        const winnerRows = await this.prisma.basicPriceImportRow.findMany({
+          where: { batchId: winner.id },
         });
-        const winnerRows = await this.prisma.basicPriceImportRow.findMany({ where: { batchId: winner.id } });
         return this.summarize(winner, winnerRows);
       }
       throw error;
@@ -240,15 +331,34 @@ export class BasicPriceImportService {
    * batch is still mutable (NEEDS_REVIEW/READY_FOR_REVIEW). Optimistic
    * `version` check fails closed on staleness (test matrix I06).
    */
-  async updateBatchMetadata(workspaceId: string, batchId: string, dto: UpdateBasicPriceImportBatchDto) {
+  async updateBatchMetadata(
+    workspaceId: string,
+    batchId: string,
+    dto: UpdateBasicPriceImportBatchDto,
+    currentAccountId: string,
+  ) {
     return this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<Array<{ id: string; workspaceId: string; status: string; version: number }>>(
-        Prisma.sql`SELECT "id", "workspaceId", "status", "version" FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
+      const locked = await tx.$queryRaw<
+        Array<{
+          id: string;
+          workspaceId: string;
+          status: string;
+          version: number;
+          uploadedByAccountId: string;
+        }>
+      >(
+        Prisma.sql`SELECT "id", "workspaceId", "status", "version", "uploadedByAccountId" FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
       );
       const batch = locked[0];
-      if (!batch || batch.workspaceId !== workspaceId) throw new NotFoundException('Batch not found');
-      if (batch.version !== dto.version) throw new ConflictException('BATCH_VERSION_STALE');
-      if (batch.status !== 'NEEDS_REVIEW' && batch.status !== 'READY_FOR_REVIEW') {
+      if (!batch || batch.workspaceId !== workspaceId)
+        throw new NotFoundException('Batch not found');
+      assertBatchOwnedByCaller(batch, currentAccountId, 'Batch not found');
+      if (batch.version !== dto.version)
+        throw new ConflictException('BATCH_VERSION_STALE');
+      if (
+        batch.status !== 'NEEDS_REVIEW' &&
+        batch.status !== 'READY_FOR_REVIEW'
+      ) {
         throw new ConflictException('BATCH_NOT_MUTABLE');
       }
 
@@ -256,7 +366,9 @@ export class BasicPriceImportService {
         where: { id: batchId },
         data: {
           regionId: dto.regionId ?? undefined,
-          effectiveDate: dto.effectiveDate ? new Date(dto.effectiveDate) : undefined,
+          effectiveDate: dto.effectiveDate
+            ? new Date(dto.effectiveDate)
+            : undefined,
           sourceType: dto.sourceType ?? undefined,
           sourceOrigin: dto.sourceOrigin ?? undefined,
           sourceOrganizationName: dto.sourceOrganizationName ?? undefined,
@@ -269,15 +381,28 @@ export class BasicPriceImportService {
           version: { increment: 1 },
         },
       });
-      const rows = await tx.basicPriceImportRow.findMany({ where: { batchId } });
+      const rows = await tx.basicPriceImportRow.findMany({
+        where: { batchId },
+      });
       return this.summarize(updated, rows);
     });
   }
 
-  async getBatch(workspaceId: string, batchId: string) {
-    const batch = await this.prisma.basicPriceImportBatch.findUnique({ where: { id: batchId } });
-    if (!batch || batch.workspaceId !== workspaceId) throw new NotFoundException('Batch not found');
-    const rows = await this.prisma.basicPriceImportRow.findMany({ where: { batchId }, orderBy: { sourceRowNumber: 'asc' } });
+  async getBatch(
+    workspaceId: string,
+    batchId: string,
+    currentAccountId: string,
+  ) {
+    const batch = await this.prisma.basicPriceImportBatch.findUnique({
+      where: { id: batchId },
+    });
+    if (!batch || batch.workspaceId !== workspaceId)
+      throw new NotFoundException('Batch not found');
+    assertBatchOwnedByCaller(batch, currentAccountId, 'Batch not found');
+    const rows = await this.prisma.basicPriceImportRow.findMany({
+      where: { batchId },
+      orderBy: { sourceRowNumber: 'asc' },
+    });
     return this.summarize(batch, rows);
   }
 
@@ -290,7 +415,11 @@ export class BasicPriceImportService {
    * fabricated. Idempotent: already-submitted batches return their
    * existing state, never re-process.
    */
-  async submitBatch(workspaceId: string, batchId: string) {
+  async submitBatch(
+    workspaceId: string,
+    batchId: string,
+    currentAccountId: string,
+  ) {
     return this.prisma.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<
         Array<{
@@ -304,29 +433,54 @@ export class BasicPriceImportService {
           sourceOrigin: string | null;
           uploadedByAccountId: string;
         }>
-      >(Prisma.sql`SELECT * FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`);
+      >(
+        Prisma.sql`SELECT * FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
+      );
       const batch = locked[0];
-      if (!batch || batch.workspaceId !== workspaceId) throw new NotFoundException('Batch not found');
+      if (!batch || batch.workspaceId !== workspaceId)
+        throw new NotFoundException('Batch not found');
+      assertBatchOwnedByCaller(batch, currentAccountId, 'Batch not found');
 
-      if (['APPROVED_FOR_SUBMISSION', 'PARTIALLY_SUBMITTED', 'SUBMITTED'].includes(batch.status)) {
-        const rows = await tx.basicPriceImportRow.findMany({ where: { batchId } });
+      if (
+        [
+          'APPROVED_FOR_SUBMISSION',
+          'PARTIALLY_SUBMITTED',
+          'SUBMITTED',
+        ].includes(batch.status)
+      ) {
+        const rows = await tx.basicPriceImportRow.findMany({
+          where: { batchId },
+        });
         return this.summarize(batch as any, rows);
       }
-      if (batch.status !== 'READY_FOR_REVIEW') throw new ConflictException('BATCH_NOT_READY_FOR_REVIEW');
-      if (!batch.effectiveDate) throw new ConflictException('EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION');
-      if (!batch.regionId) throw new ConflictException('REGION_REQUIRED_BEFORE_SUBMISSION');
-      if (!batch.sourceOrigin) throw new ConflictException('SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION');
+      if (batch.status !== 'READY_FOR_REVIEW')
+        throw new ConflictException('BATCH_NOT_READY_FOR_REVIEW');
+      if (!batch.effectiveDate)
+        throw new ConflictException(
+          'EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION',
+        );
+      if (!batch.regionId)
+        throw new ConflictException('REGION_REQUIRED_BEFORE_SUBMISSION');
+      if (!batch.sourceOrigin)
+        throw new ConflictException('SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION');
 
       const readyRows = await tx.$queryRaw<Array<{ id: string }>>(
         Prisma.sql`SELECT "id" FROM "basic_price_import_rows" WHERE "batchId" = ${batchId}::uuid AND "status" = 'READY_FOR_SUBMISSION' FOR UPDATE`,
       );
-      if (readyRows.length === 0) throw new ConflictException('NO_ROWS_READY_FOR_SUBMISSION');
+      if (readyRows.length === 0)
+        throw new ConflictException('NO_ROWS_READY_FOR_SUBMISSION');
 
-      await tx.basicPriceImportBatch.update({ where: { id: batchId }, data: { status: 'APPROVED_FOR_SUBMISSION' } });
+      await tx.basicPriceImportBatch.update({
+        where: { id: batchId },
+        data: { status: 'APPROVED_FOR_SUBMISSION' },
+      });
 
       for (const { id: rowId } of readyRows) {
-        const row = await tx.basicPriceImportRow.findUniqueOrThrow({ where: { id: rowId } });
-        if (!row.resourceCatalogId || !row.proposedCanonicalPrice) throw new ConflictException('ROW_NOT_RESOLVED');
+        const row = await tx.basicPriceImportRow.findUniqueOrThrow({
+          where: { id: rowId },
+        });
+        if (!row.resourceCatalogId || !row.proposedCanonicalPrice)
+          throw new ConflictException('ROW_NOT_RESOLVED');
 
         const submission = await tx.priceSubmission.create({
           data: {
@@ -351,7 +505,10 @@ export class BasicPriceImportService {
           },
         });
 
-        await tx.priceSubmission.update({ where: { id: submission.id }, data: { currentRevisionId: revision.id } });
+        await tx.priceSubmission.update({
+          where: { id: submission.id },
+          data: { currentRevisionId: revision.id },
+        });
 
         await tx.priceSubmissionAudit.create({
           data: {
@@ -364,22 +521,43 @@ export class BasicPriceImportService {
           },
         });
 
+        // RM-02D2A-1 Work Package A: create the PriceSubmissionReview in the
+        // SAME transaction, via the one canonical helper. If review creation
+        // fails, this whole batch-submission transaction rolls back — no
+        // PriceSubmission is ever left orphaned without a review.
+        await this.reviewService.createReviewWithinTransaction(tx, {
+          id: submission.id,
+          workspaceId: batch.workspaceId,
+          organizationId: batch.organizationId,
+        });
+
         await tx.basicPriceImportRow.update({
           where: { id: row.id },
-          data: { priceSubmissionId: submission.id, status: 'SUBMISSION_CREATED' },
+          data: {
+            priceSubmissionId: submission.id,
+            status: 'SUBMISSION_CREATED',
+          },
         });
       }
 
-      const rejectedCount = await tx.basicPriceImportRow.count({ where: { batchId, status: 'REJECTED' } });
-      const finalStatus = rejectedCount > 0 ? 'PARTIALLY_SUBMITTED' : 'SUBMITTED';
+      const rejectedCount = await tx.basicPriceImportRow.count({
+        where: { batchId, status: 'REJECTED' },
+      });
+      const finalStatus =
+        rejectedCount > 0 ? 'PARTIALLY_SUBMITTED' : 'SUBMITTED';
       const finalBatch = await tx.basicPriceImportBatch.update({
         where: { id: batchId },
         data: { status: finalStatus, reviewedAt: new Date() },
       });
 
-      const finalRows = await tx.basicPriceImportRow.findMany({ where: { batchId } });
-      const finalSubmittedCount = finalRows.filter((r) => r.status === 'SUBMISSION_CREATED').length;
-      if (finalSubmittedCount !== readyRows.length) throw new ConflictException('ROW_SUBMISSION_COUNT_MISMATCH');
+      const finalRows = await tx.basicPriceImportRow.findMany({
+        where: { batchId },
+      });
+      const finalSubmittedCount = finalRows.filter(
+        (r) => r.status === 'SUBMISSION_CREATED',
+      ).length;
+      if (finalSubmittedCount !== readyRows.length)
+        throw new ConflictException('ROW_SUBMISSION_COUNT_MISMATCH');
 
       return this.summarize(finalBatch, finalRows);
     });

@@ -26,8 +26,11 @@ model Account {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
-  memberships          WorkspaceMembership[]
-  intelligenceEvidence IntelligenceEvidence[]
+  memberships                                 WorkspaceMembership[]
+  intelligenceEvidence                        IntelligenceEvidence[]
+  verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]        @relation("BasicPriceSourceEquivalenceVerifiedBy")
+  reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
+  basicPricePublicationAudits                 BasicPricePublicationAudit[]         @relation("BasicPricePublicationAuditActor")
 
   @@map("accounts")
 }
@@ -71,23 +74,24 @@ model Workspace {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization             Organization             @relation(fields: [organizationId], references: [id])
-  memberships              WorkspaceMembership[]
-  roles                    Role[]
-  positions                Position[]
-  approvalMatrices         ApprovalMatrix[]
-  projects                 Project[]
-  stakeholderBridges       ProjectStakeholder[]
-  ahsps                    AHSP[]
-  ahspVersions             AHSPVersion[]
-  ahspSnapshots            AHSPSnapshot[]
-  resourceCatalogs         ResourceCatalog[]
-  basicPrices              BasicPrice[]
-  priceSubmissions         PriceSubmission[]
-  priceSubmissionReviews   PriceSubmissionReview[]
-  intelligenceEvidence     IntelligenceEvidence[]
-  projectAhspOccurrences   ProjectAhspOccurrence[]
-  resourceSourceIdentities ResourceSourceIdentity[]
+  organization                 Organization                  @relation(fields: [organizationId], references: [id])
+  memberships                  WorkspaceMembership[]
+  roles                        Role[]
+  positions                    Position[]
+  approvalMatrices             ApprovalMatrix[]
+  projects                     Project[]
+  stakeholderBridges           ProjectStakeholder[]
+  ahsps                        AHSP[]
+  ahspVersions                 AHSPVersion[]
+  ahspSnapshots                AHSPSnapshot[]
+  resourceCatalogs             ResourceCatalog[]
+  basicPrices                  BasicPrice[]
+  priceSubmissions             PriceSubmission[]
+  priceSubmissionReviews       PriceSubmissionReview[]
+  intelligenceEvidence         IntelligenceEvidence[]
+  projectAhspOccurrences       ProjectAhspOccurrence[]
+  resourceSourceIdentities     ResourceSourceIdentity[]
+  basicPriceSourceEquivalences BasicPriceSourceEquivalence[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -583,14 +587,15 @@ model UnitDefinition {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  aliases               UnitAlias[]
-  sourceConversionRules UnitConversionRule[]            @relation("UnitRuleSource")
-  targetConversionRules UnitConversionRule[]            @relation("UnitRuleTarget")
-  ahspVersions          AHSPVersion[]                   @relation("AHSPVersionOutputUnit")
-  ahspSnapshots         AHSPSnapshot[]                  @relation("AHSPSnapshotOutputUnit")
-  resolutionSourceUnits ProjectAhspResourceResolution[] @relation("ResolutionSourceUnit")
-  resolutionTargetUnits ProjectAhspResourceResolution[] @relation("ResolutionTargetUnit")
-  basicPriceImportRows  BasicPriceImportRow[]
+  aliases                   UnitAlias[]
+  sourceConversionRules     UnitConversionRule[]                 @relation("UnitRuleSource")
+  targetConversionRules     UnitConversionRule[]                 @relation("UnitRuleTarget")
+  ahspVersions              AHSPVersion[]                        @relation("AHSPVersionOutputUnit")
+  ahspSnapshots             AHSPSnapshot[]                       @relation("AHSPSnapshotOutputUnit")
+  resolutionSourceUnits     ProjectAhspResourceResolution[]      @relation("ResolutionSourceUnit")
+  resolutionTargetUnits     ProjectAhspResourceResolution[]      @relation("ResolutionTargetUnit")
+  basicPriceImportRows      BasicPriceImportRow[]
+  importRowResourceMappings BasicPriceImportRowResourceMapping[]
 
   @@map("unit_definitions")
 }
@@ -951,13 +956,14 @@ model ResourceCatalog {
   updatedAt      DateTime     @updatedAt
 
   basicPrices                    BasicPrice[]
-  workspace                      Workspace?                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace                      Workspace?                           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   priceSubmissions               PriceSubmission[]
   canonicalPricePoints           CanonicalPricePoint[]
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
   unitConversionRules            UnitConversionRule[]
   basicPriceImportRows           BasicPriceImportRow[]
   sourceIdentities               ResourceSourceIdentity[]
+  importRowResourceMappings      BasicPriceImportRowResourceMapping[]
 
   // NOTE: the former @@unique([workspaceId, code]) is replaced by a manual
   // partial unique index in the migration SQL (RM-02C1a) because `code` is
@@ -1602,12 +1608,13 @@ model BasicPriceImportRow {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  batch           BasicPriceImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  resourceCatalog ResourceCatalog?      @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
-  unitDefinition  UnitDefinition?       @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
-  priceSubmission PriceSubmission?      @relation(fields: [priceSubmissionId], references: [id], onDelete: Restrict)
-  collisionOfRow  BasicPriceImportRow?  @relation("RowCollision", fields: [collisionOfRowId], references: [id], onDelete: SetNull)
-  collidingRows   BasicPriceImportRow[] @relation("RowCollision")
+  batch            BasicPriceImportBatch                @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  resourceCatalog  ResourceCatalog?                     @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  unitDefinition   UnitDefinition?                      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+  priceSubmission  PriceSubmission?                     @relation(fields: [priceSubmissionId], references: [id], onDelete: Restrict)
+  collisionOfRow   BasicPriceImportRow?                 @relation("RowCollision", fields: [collisionOfRowId], references: [id], onDelete: SetNull)
+  collidingRows    BasicPriceImportRow[]                @relation("RowCollision")
+  resourceMappings BasicPriceImportRowResourceMapping[]
 
   @@unique([batchId, sourceRowNumber])
   @@index([batchId])
@@ -1617,6 +1624,98 @@ model BasicPriceImportRow {
   @@map("basic_price_import_rows")
 }
 
+/// RM-02D1: append-only audit trail of every human "resource identity
+/// mapping" decision made on a BasicPriceImportRow — who mapped it to which
+/// ResourceCatalog/UnitDefinition, when, why, and whether a normalized-name
+/// candidate suggestion informed the pick. This is NEVER the row's current
+/// state (that stays on BasicPriceImportRow itself, mutable, one row per
+/// row) — it is history: a row can accumulate more than one entry if a
+/// resolve attempt collides and is retried. Never updated after creation.
+/// Priority order (highest confidence first, enforced in
+/// BasicPriceRowResolutionService, never by this enum's declaration order
+/// alone): SOURCE_ROW_PROVENANCE > NORMALIZED_NAME_SINGLE_CANDIDATE >
+/// NORMALIZED_NAME_MULTIPLE_CANDIDATES > MANUAL_SEARCH.
+/// PROVENANCE_NAME_CONFLICT is a distinct case, not a priority level: it
+/// means the row-identity-provenance signal and the normalized-name signal
+/// pointed at two DIFFERENT ResourceCatalog rows. When that happens both
+/// are surfaced to the reviewer (never silently reconciled), and any
+/// resolve decided while that conflict was live is tagged
+/// PROVENANCE_NAME_CONFLICT regardless of which side the human picked, so
+/// the audit trail can always find every row where the two signals
+/// disagreed.
+enum BasicPriceImportRowMappingSuggestionSource {
+  MANUAL_SEARCH
+  NORMALIZED_NAME_SINGLE_CANDIDATE
+  NORMALIZED_NAME_MULTIPLE_CANDIDATES
+  SOURCE_ROW_PROVENANCE
+  PROVENANCE_NAME_CONFLICT
+}
+
+model BasicPriceImportRowResourceMapping {
+  id                       String                                     @id @default(uuid()) @db.Uuid
+  workspaceId              String                                     @db.Uuid
+  rowId                    String                                     @db.Uuid
+  resourceCatalogId        String                                     @db.Uuid
+  unitDefinitionId         String                                     @db.Uuid
+  reviewerAccountId        String                                     @db.Uuid
+  reason                   String?                                    @db.Text
+  suggestionSource         BasicPriceImportRowMappingSuggestionSource
+  candidateCountAtDecision Int
+  decidedAt                DateTime                                   @default(now())
+
+  row             BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  resourceCatalog ResourceCatalog     @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  unitDefinition  UnitDefinition      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+  reviewer        Account             @relation("BasicPriceImportRowResourceMappingReviewer", fields: [reviewerAccountId], references: [id], onDelete: Restrict, map: "fk_row_mapping_reviewer")
+
+  @@index([rowId])
+  @@index([resourceCatalogId])
+  @@index([workspaceId])
+  @@index([reviewerAccountId])
+  @@map("basic_price_import_row_resource_mappings")
+}
+
+/// RM-02D1-REMEDIATION-V3.1: the ONLY authority that lets
+/// SOURCE_ROW_PROVENANCE cross from one source workbook hash to another. A
+/// batch's own sourceSha256 (e.g. the Owner's real upload) never
+/// automatically inherits ResourceSourceIdentity provenance recorded under
+/// a different sourceSha256 (e.g. the RM-02C0 canonical bootstrap workbook)
+/// — that would be exactly the auto-merge this project forbids. This
+/// record is the explicit, human-verified, evidence-backed exception: it
+/// says "a human compared these two source hashes' parsed content and
+/// confirmed <evidence>," and only once such a record exists for a given
+/// (workspaceId, batchSourceSha256) does BasicPriceRowResolutionService's
+/// provenance lookup do anything at all. Zero records for a given batch
+/// hash means zero provenance candidates for that hash — fail-closed, not
+/// fail-open.
+model BasicPriceSourceEquivalence {
+  id                    String   @id @default(uuid()) @db.Uuid
+  workspaceId           String   @db.Uuid
+  batchSourceSha256     String   @db.VarChar(64)
+  canonicalSourceSha256 String   @db.VarChar(64)
+  evidence              String
+  comparedFields        String[]
+  verifiedByAccountId   String   @db.Uuid
+  verifiedAt            DateTime @default(now())
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  verifiedBy Account   @relation("BasicPriceSourceEquivalenceVerifiedBy", fields: [verifiedByAccountId], references: [id], onDelete: Restrict, map: "fk_equivalence_verified_by")
+
+  @@unique([workspaceId, batchSourceSha256])
+  @@index([workspaceId])
+  @@index([verifiedByAccountId])
+  @@map("basic_price_source_equivalences")
+}
+
+/// PR57 Gap B: actorAccountId has real Account referential integrity — the
+/// FK is RESTRICT on delete (a historical publication audit row may never
+/// be silently orphaned or cascaded away by deleting the Account that once
+/// acted) and the relation is named explicitly (BasicPricePublicationAuditActor)
+/// so it is unambiguous from every other Account relation. Suspending or
+/// deactivating the Account after publication does not touch this row —
+/// the FK only proves the Account still EXISTS, never that it is still
+/// ACTIVE; re-authorizing a historical actor is deliberately not this
+/// constraint's job.
 model BasicPricePublicationAudit {
   id             String   @id @default(uuid()) @db.Uuid
   basicPriceId   String   @db.Uuid
@@ -1626,8 +1725,10 @@ model BasicPricePublicationAudit {
   createdAt      DateTime @default(now())
 
   basicPrice BasicPrice @relation(fields: [basicPriceId], references: [id], onDelete: Cascade)
+  actor      Account    @relation("BasicPricePublicationAuditActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "fk_basic_price_publication_audit_actor")
 
   @@index([basicPriceId])
+  @@index([actorAccountId])
   @@map("basic_price_publication_audits")
 }
 
@@ -1668,6 +1769,9 @@ model ProjectAhspOccurrence {
   project             Project                         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   ahspVersion         AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Restrict)
   resourceResolutions ProjectAhspResourceResolution[]
+  // GATE-2A: BoqItem rows whose server-computed line cites this occurrence
+  // as its price provenance (BoqItem.calculationOccurrenceId).
+  calculatedBoqItems  BoqItem[]
 
   @@unique([projectId, idempotencyKey])
   @@index([workspaceId])
@@ -1712,9 +1816,9 @@ model ProjectAhspResourceResolution {
   originalResource     AHSPResource          @relation(fields: [ahspResourceId], references: [id], onDelete: Restrict)
   resolvedCatalog      ResourceCatalog?      @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
   selectedBasicPrice   BasicPrice?           @relation(fields: [selectedBasicPriceId], references: [id], onDelete: Restrict)
-  sourceUnitDefinition UnitDefinition?       @relation("ResolutionSourceUnit", fields: [sourceUnitDefinitionId], references: [id], onDelete: Restrict)
-  targetUnitDefinition UnitDefinition?       @relation("ResolutionTargetUnit", fields: [targetUnitDefinitionId], references: [id], onDelete: Restrict)
-  unitConversionRule   UnitConversionRule?   @relation(fields: [unitConversionRuleId], references: [id], onDelete: Restrict)
+  sourceUnitDefinition UnitDefinition?       @relation("ResolutionSourceUnit", fields: [sourceUnitDefinitionId], references: [id], onDelete: Restrict, map: "pahr_sourceUnitDefinitionId_fkey")
+  targetUnitDefinition UnitDefinition?       @relation("ResolutionTargetUnit", fields: [targetUnitDefinitionId], references: [id], onDelete: Restrict, map: "pahr_targetUnitDefinitionId_fkey")
+  unitConversionRule   UnitConversionRule?   @relation(fields: [unitConversionRuleId], references: [id], onDelete: Restrict, map: "pahr_unitConversionRuleId_fkey")
 
   @@unique([occurrenceId, ahspResourceId], map: "pahr_occurrence_ahsp_resource_key")
   @@index([occurrenceId])
@@ -1755,6 +1859,20 @@ enum BoqItemType {
   NOTE
 }
 
+/// GATE-2A: who is authoritative for BoqItem.unitPrice/lineTotal on this row.
+/// NULL = unpriced (no money, no provenance — the only legal state for a
+/// fresh row). MANUAL_CLIENT = human-typed price via saveDraftBoq, with
+/// every kernel provenance field NULL. SERVER_COST_KERNEL = written only by
+/// RabKernelPersistenceService's atomic persist command, with every
+/// provenance field required NOT NULL. The exact three shapes are enforced
+/// at the database boundary by boq_item_price_origin_truth_check — see the
+/// Gate-2A migration. saveDraftBoq must never move a row from
+/// SERVER_COST_KERNEL back to MANUAL_CLIENT or NULL.
+enum BoqItemPriceOrigin {
+  MANUAL_CLIENT
+  SERVER_COST_KERNEL
+}
+
 model BoqItem {
   id             String      @id @default(uuid()) @db.Uuid
   boqStructureId String      @db.Uuid
@@ -1770,20 +1888,32 @@ model BoqItem {
   sortOrder      Int         @default(0)
   ahspVersionId  String?     @db.Uuid
   ahspSnapshotId String?     @db.Uuid
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
 
-  boqStructure    BoqStructure    @relation(fields: [boqStructureId], references: [id], onDelete: Cascade)
-  parent          BoqItem?        @relation("BoqItemToParent", fields: [parentId], references: [id])
-  children        BoqItem[]       @relation("BoqItemToParent")
-  wbsNode         WbsNode?        @relation(fields: [wbsNodeId], references: [id])
-  ahspVersion     AHSPVersion?    @relation(fields: [ahspVersionId], references: [id])
-  ahspSnapshot    AHSPSnapshot?   @relation(fields: [ahspSnapshotId], references: [id])
-  progressEntries ProgressEntry[]
+  // GATE-2A provenance — minimum snapshot fields for a server-computed line.
+  // All four are meaningful only when priceOrigin = SERVER_COST_KERNEL; they
+  // stay at their defaults/null for every manual or not-yet-calculated row.
+  priceOrigin              BoqItemPriceOrigin?
+  calculationOccurrenceId  String?             @db.Uuid
+  calculationAsOfDate      DateTime?           @db.Date
+  calculatedAt             DateTime?
+  calculationPolicyVersion String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  boqStructure          BoqStructure           @relation(fields: [boqStructureId], references: [id], onDelete: Cascade)
+  parent                BoqItem?               @relation("BoqItemToParent", fields: [parentId], references: [id])
+  children              BoqItem[]              @relation("BoqItemToParent")
+  wbsNode               WbsNode?               @relation(fields: [wbsNodeId], references: [id])
+  ahspVersion           AHSPVersion?           @relation(fields: [ahspVersionId], references: [id])
+  ahspSnapshot          AHSPSnapshot?          @relation(fields: [ahspSnapshotId], references: [id])
+  calculationOccurrence ProjectAhspOccurrence? @relation(fields: [calculationOccurrenceId], references: [id], onDelete: Restrict)
+  progressEntries       ProgressEntry[]
 
   @@index([boqStructureId])
   @@index([parentId])
   @@index([wbsNodeId])
+  @@index([calculationOccurrenceId])
   @@map("boq_items")
 }
 
@@ -1798,8 +1928,8 @@ model RabDocument {
   overheadPercent Decimal  @default(0) @db.Decimal(5, 2)
   profitPercent   Decimal  @default(0) @db.Decimal(5, 2)
   taxPercent      Decimal  @default(0) @db.Decimal(5, 2)
-  totalBaseCost   Decimal  @db.Decimal(18, 2)
-  totalFinalCost  Decimal  @db.Decimal(18, 2)
+  totalBaseCost   Decimal? @db.Decimal(18, 2)
+  totalFinalCost  Decimal? @db.Decimal(18, 2)
   status          String   @default("DRAFT")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

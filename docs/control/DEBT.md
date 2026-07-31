@@ -324,4 +324,56 @@ this section is the current operational status.
 - No contamination debt is created before a production fingerprint confirms
   one.
 
+## RM-02C3 acceptance activation boundary — 2026-07-28
+
+- Production activation of `BASIC_PRICE_IMPORT` and
+  `BASIC_PRICE_REVIEW_VIEW` remains OPEN and Owner-gated.
+- The RM-02C3 role is acceptance-only in `simprok_test`; it does not change
+  either permission's `USED_NOT_SEEDED` canonical production status.
+- Owner browser proof remains OPEN until the Owner completes the observational
+  selection journey and reports factual evidence.
+
+## RM-02D2A-1 backend runtime lifecycle closure — 2026-07-29
+
+### UTANG-PERMISSION-DRIFT-03
+- STATUS: CLOSED
+- CLOSED_BY: this slice, branch `feat/rm02d2a1-backend-runtime-lifecycle`
+  (base `ccb6983419b8b134d6cfc4b1dba87518af3db59a`), Work Package E.
+- TANGGAL: 2026-07-29
+- SOURCE: the RM02D2A-1 governing prompt's own closure condition —
+  "UTANG-PERMISSION-DRIFT-03 boleh CLOSED hanya jika source catalog menjadi
+  environment-agnostic dan tidak lagi mengklaim keadaan DB runtime." Cross-
+  reference: the RM-02C3 entry above still refers to the pre-close state
+  name `USED_NOT_SEEDED` and is left unmodified per this register's own
+  no-rewrite rule.
+- BUKTI: `backend/src/common/constants/permissions.ts` — the catalog state
+  enum `PERMISSION_CATALOG_STATES.USED_NOT_SEEDED` was renamed
+  `GOVERNED_ACTIVATION` and its own doc comment now states explicitly that
+  it "is enforced by guards/controllers, but granting it to any role in any
+  specific environment is a separate, governed activation decision... this
+  file does not assert whether that activation has happened anywhere."
+  `DECLARED_NOT_SEEDED_PERMISSION_CODES` (which asserted "not yet seeded
+  into DB — must be seeded before endpoints are functionally accessible",
+  no longer true for `BASIC_PRICE_IMPORT`/`BASIC_PRICE_REVIEW_VIEW` since
+  RM-02C3's acceptance activation) was renamed
+  `GOVERNED_ACTIVATION_PERMISSION_CODES`, and each of the six RM-02 catalog
+  entries' `note` field was rewritten to name the actual governed
+  activation source (RM02C3 for the two it applies to) rather than
+  asserting a blanket "not yet seeded" claim. `backend/src/common/constants/permissions.spec.ts`
+  updated to the renamed export; test still passes.
+- SCOPE NOTE: this closes the *source-catalog-honesty* debt only. It does
+  not itself activate any permission in any environment — production
+  activation of any `BASIC_PRICE_*` code remains a separate, Owner-gated
+  decision, unchanged by this slice.
+
+Other debts referenced by the RM02D2A-1 prompt, explicitly left OPEN and
+untouched by this slice (no file relevant to any of them was changed):
+`UTANG-TESTCRED-01`, `UTANG-UI-MONEY-01`, `UTANG-SNAPSHOT-02`. The latter
+two do not yet have a dedicated register entry above this line in this
+file as of 2026-07-29; recorded here per this register's own law ("Utang
+yang hanya bersumber verdict/percakapan tetap dicatat dengan sumbernya dan
+ditandai NEEDS_REVIEW") — SOURCE: RM02D2A-1 governing prompt §5.3 (an
+Owner/PM-authored instruction, not this executor's own finding);
+NEEDS_REVIEW for their exact closure conditions and originating SHA/PR.
+
 ## Soli Deo Gloria. Haleluya. Amin.

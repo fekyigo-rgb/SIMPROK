@@ -1,0 +1,377 @@
+import { Prisma } from '@prisma/client';
+import { toDecimalString2 } from './money';
+
+/**
+ * RM-02D2A2 — the single canonical projection layer for the Basic Price
+ * review & publication user journey. Controllers/services MUST return these
+ * explicit projections, never a raw Prisma entity: a raw entity leaks
+ * internal columns, exposes a UUID where a human needs a human-readable
+ * identity, and (for money) does not lock the exact decimal-string contract.
+ *
+ * Every function here is pure and structurally typed so it is unit-testable
+ * with plain objects and shared identically across the review queue, review
+ * detail, publication queue, and reviewer-candidate contracts.
+ */
+
+type DateLike = Date | string;
+
+const toIso = (value: DateLike): string =>
+  value instanceof Date ? value.toISOString() : value;
+
+const toIsoOrNull = (value: DateLike | null | undefined): string | null =>
+  value === null || value === undefined ? null : toIso(value);
+
+// ── Shared human-readable identities ────────────────────────────────────────
+
+/** A resource a human can recognize — never a bare UUID. */
+export interface ResourceIdentity {
+  id: string;
+  code: string | null;
+  name: string;
+  type: string;
+}
+
+/** A region a human can recognize — always "code — name" on screen. */
+export interface RegionIdentity {
+  id: string;
+  code: string;
+  name: string;
+}
+
+/** A person a human can recognize — full name + email, never a raw UUID label. */
+export interface ReviewerIdentity {
+  userId: string;
+  fullName: string;
+  email: string;
+}
+
+export function mapResourceIdentity(resource: {
+  id: string;
+  code: string | null;
+  name: string;
+  type: string;
+}): ResourceIdentity {
+  return {
+    id: resource.id,
+    code: resource.code ?? null,
+    name: resource.name,
+    type: resource.type,
+  };
+}
+
+export function mapRegionIdentity(
+  region: { id: string; code: string; name: string } | null | undefined,
+): RegionIdentity | null {
+  return region
+    ? { id: region.id, code: region.code, name: region.name }
+    : null;
+}
+
+export function mapReviewerIdentity(
+  reviewer: { id: string; fullName: string; email: string } | null | undefined,
+): ReviewerIdentity | null {
+  return reviewer
+    ? {
+        userId: reviewer.id,
+        fullName: reviewer.fullName,
+        email: reviewer.email,
+      }
+    : null;
+}
+
+// ── Structural input shapes (subset of the Prisma-included rows) ─────────────
+
+interface AssignedUserSource {
+  id: string;
+  fullName: string;
+  membership: { account: { email: string } };
+}
+
+interface RevisionSource {
+  id: string;
+  value: Prisma.Decimal | string;
+  effectiveDate: DateLike | null;
+}
+
+interface SubmissionSource {
+  status: string;
+  sourceType: string;
+  sourceOrigin: string;
+  currentRevisionId: string | null;
+  resource: { id: string; code: string | null; name: string; type: string };
+  region: { id: string; code: string; name: string } | null;
+  revisions: RevisionSource[];
+}
+
+interface ReviewDecisionSource {
+  id: string;
+  action: string;
+  note: string | null;
+  decidedAt: DateLike;
+  decidedBy: AssignedUserSource | null;
+}
+
+export interface ReviewRowSource {
+  id: string;
+  priceSubmissionId: string;
+  slaState: string;
+  openedAt: DateLike;
+  escalatedAt: DateLike | null;
+  expiredAt: DateLike | null;
+  resolvedAt: DateLike | null;
+  submission: SubmissionSource;
+  assignedTo: AssignedUserSource | null;
+  decisions?: ReviewDecisionSource[];
+}
+
+// ── Review queue / detail projections ────────────────────────────────────────
+
+export interface ReviewQueueItem {
+  reviewId: string;
+  priceSubmissionId: string;
+  slaState: string;
+  openedAt: string;
+  escalatedAt: string | null;
+  expiredAt: string | null;
+  resolvedAt: string | null;
+  submissionStatus: string;
+  resource: ResourceIdentity;
+  region: RegionIdentity | null;
+  /** Exact decimal string, two digits, or null when no current revision. */
+  currentPrice: string | null;
+  effectiveDate: string | null;
+  assignedReviewer: ReviewerIdentity | null;
+}
+
+export interface ReviewDecisionProjection {
+  id: string;
+  action: string;
+  note: string | null;
+  decidedAt: string;
+  decidedBy: ReviewerIdentity | null;
+}
+
+export interface ReviewDetail extends ReviewQueueItem {
+  sourceType: string;
+  sourceOrigin: string;
+  decisions: ReviewDecisionProjection[];
+}
+
+const currentRevisionOf = (
+  submission: SubmissionSource,
+): RevisionSource | null =>
+  submission.revisions.find(
+    (revision) => revision.id === submission.currentRevisionId,
+  ) ?? null;
+
+const reviewerOf = (
+  source: AssignedUserSource | null,
+): ReviewerIdentity | null =>
+  source
+    ? mapReviewerIdentity({
+        id: source.id,
+        fullName: source.fullName,
+        email: source.membership.account.email,
+      })
+    : null;
+
+export function mapReviewQueueItem(review: ReviewRowSource): ReviewQueueItem {
+  const revision = currentRevisionOf(review.submission);
+  return {
+    reviewId: review.id,
+    priceSubmissionId: review.priceSubmissionId,
+    slaState: review.slaState,
+    openedAt: toIso(review.openedAt),
+    escalatedAt: toIsoOrNull(review.escalatedAt),
+    expiredAt: toIsoOrNull(review.expiredAt),
+    resolvedAt: toIsoOrNull(review.resolvedAt),
+    submissionStatus: review.submission.status,
+    resource: mapResourceIdentity(review.submission.resource),
+    region: mapRegionIdentity(review.submission.region),
+    currentPrice: revision ? toDecimalString2(revision.value) : null,
+    effectiveDate: revision ? toIsoOrNull(revision.effectiveDate) : null,
+    assignedReviewer: reviewerOf(review.assignedTo),
+  };
+}
+
+export function mapReviewDecision(
+  decision: ReviewDecisionSource,
+): ReviewDecisionProjection {
+  return {
+    id: decision.id,
+    action: decision.action,
+    note: decision.note ?? null,
+    decidedAt: toIso(decision.decidedAt),
+    decidedBy: reviewerOf(decision.decidedBy),
+  };
+}
+
+export function mapReviewDetail(review: ReviewRowSource): ReviewDetail {
+  return {
+    ...mapReviewQueueItem(review),
+    sourceType: review.submission.sourceType,
+    sourceOrigin: review.submission.sourceOrigin,
+    decisions: (review.decisions ?? []).map(mapReviewDecision),
+  };
+}
+
+// ── Publication queue projection ─────────────────────────────────────────────
+
+export interface PublicationQueueItem {
+  basicPriceId: string;
+  resource: ResourceIdentity;
+  region: RegionIdentity | null;
+  /** Exact decimal string, two digits. */
+  price: string;
+  effectiveDate: string;
+  status: string;
+  verificationStatus: string;
+  createdAt: string;
+}
+
+export interface BasicPriceRowSource {
+  id: string;
+  value: Prisma.Decimal | string;
+  effectiveDate: DateLike;
+  status: string;
+  verificationStatus: string;
+  createdAt: DateLike;
+  resource: { id: string; code: string | null; name: string; type: string };
+  region: { id: string; code: string; name: string } | null;
+}
+
+export function mapPublicationQueueItem(
+  row: BasicPriceRowSource,
+): PublicationQueueItem {
+  return {
+    basicPriceId: row.id,
+    resource: mapResourceIdentity(row.resource),
+    region: mapRegionIdentity(row.region),
+    price: toDecimalString2(row.value),
+    effectiveDate: toIso(row.effectiveDate),
+    status: row.status,
+    verificationStatus: row.verificationStatus,
+    createdAt: toIso(row.createdAt),
+  };
+}
+
+// ── Basic Price Explorer projection (RM02D2A2 remediation) ──────────────────
+//
+// The Explorer is the primary, public-facing Basic Price door (Owner Lock:
+// PRIMARY_BASIC_PRICE_DOOR=EXPLORER). Its contract never returns a raw Prisma
+// BasicPrice row — every field is an explicit, human-readable projection, and
+// money is always the exact two-digit decimal string produced by
+// toDecimalString2 (never Number()/parseFloat()/float math).
+
+/** A resource identity that also carries its base unit, for the Explorer list. */
+export interface ExplorerResourceIdentity extends ResourceIdentity {
+  baseUnit: string;
+}
+
+export function mapExplorerResourceIdentity(resource: {
+  id: string;
+  code: string | null;
+  name: string;
+  type: string;
+  baseUnit: string;
+}): ExplorerResourceIdentity {
+  return { ...mapResourceIdentity(resource), baseUnit: resource.baseUnit };
+}
+
+/** WORKSPACE = belongs to the caller's own workspace; GLOBAL = workspaceId is null. */
+export type BasicPriceWorkspaceScope = 'WORKSPACE' | 'GLOBAL';
+
+export interface BasicPriceExplorerItem {
+  basicPriceId: string;
+  resource: ExplorerResourceIdentity;
+  region: RegionIdentity | null;
+  /** Exact decimal string, two digits. */
+  price: string;
+  effectiveDate: string;
+  validUntil: string | null;
+  sourceType: string;
+  sourceOrigin: string;
+  /**
+   * Human-readable source name derived ONLY from real provenance (the import
+   * batch's vendor/organization name, via
+   * BasicPrice.sourceSubmission -> PriceSubmission.importRow ->
+   * BasicPriceImportRow.batch). Never fabricated: null when that provenance
+   * chain is absent (e.g. no sourceSubmission), so the UI can show an honest
+   * "Sumber tidak tersedia" instead of a placeholder presented as fact.
+   */
+  sourceName: string | null;
+  freshnessStatus: string;
+  workspaceScope: BasicPriceWorkspaceScope;
+}
+
+/** Structural subset of the Prisma-included BasicPrice row for the Explorer. */
+export interface ExplorerRowSource {
+  id: string;
+  workspaceId: string | null;
+  value: Prisma.Decimal | string;
+  effectiveDate: DateLike;
+  validUntil: DateLike | null;
+  sourceType: string;
+  sourceOrigin: string;
+  freshnessStatus: string;
+  resource: {
+    id: string;
+    code: string | null;
+    name: string;
+    type: string;
+    baseUnit: string;
+  };
+  region: { id: string; code: string; name: string } | null;
+  sourceSubmission?: {
+    importRow?: {
+      batch?: {
+        sourceOrganizationName: string | null;
+        sourceVendorName: string | null;
+      } | null;
+    } | null;
+  } | null;
+}
+
+/**
+ * Derives a human-readable source name ONLY from a real, traceable provenance
+ * chain (import batch vendor/organization name). Returns null — never a
+ * fabricated placeholder — when no such chain exists for this row.
+ */
+export function deriveExplorerSourceName(
+  row: ExplorerRowSource,
+): string | null {
+  const batch = row.sourceSubmission?.importRow?.batch;
+  if (!batch) return null;
+  // A blank/whitespace-only stored name is not a real human-facing source
+  // name either — treat it the same as absent rather than rendering "".
+  const vendorName = batch.sourceVendorName?.trim();
+  if (vendorName) return vendorName;
+  const organizationName = batch.sourceOrganizationName?.trim();
+  if (organizationName) return organizationName;
+  return null;
+}
+
+export function mapExplorerItem(
+  row: ExplorerRowSource,
+  currentWorkspaceId: string,
+): BasicPriceExplorerItem {
+  return {
+    basicPriceId: row.id,
+    resource: mapExplorerResourceIdentity(row.resource),
+    region: mapRegionIdentity(row.region),
+    price: toDecimalString2(row.value),
+    effectiveDate: toIso(row.effectiveDate),
+    validUntil: toIsoOrNull(row.validUntil),
+    sourceType: row.sourceType,
+    sourceOrigin: row.sourceOrigin,
+    sourceName: deriveExplorerSourceName(row),
+    freshnessStatus: row.freshnessStatus,
+    // The eligibility query only ever returns rows where workspaceId is the
+    // caller's own workspace or null; this equality check is the honest
+    // expression of that contract rather than a bare null check, so a future
+    // caller that forgets the eligibility/tenant filter fails safe to GLOBAL
+    // instead of mislabeling a foreign workspace's row as the caller's own.
+    workspaceScope:
+      row.workspaceId === currentWorkspaceId ? 'WORKSPACE' : 'GLOBAL',
+  };
+}
