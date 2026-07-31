@@ -20,13 +20,27 @@ sumber di atas menang; laporkan gap, jangan mengoreksi sumber di sini.
 ## Register
 
 ### OD-04 — DECIMAL PRECISION POLICY
-- STATUS: OPEN (belum Owner-Locked)
-- SOURCE: `docs/control/ROADMAP.md` §16 ("OD-04 DECIMAL PRECISION, Closure
-  = RM-02, Entry blocker RM-04") dan §6 RM-02 ("OD-04 PRECISION POLICY
-  wajib Owner-Locked sebelum RM-02 selesai").
-- CLOSURE_CONDITION: dikunci Owner sebelum RM-02 (Import Basic Price)
-  dinyatakan selesai; menjadi entry blocker untuk RM-04.
+- STATUS: LOCKED.
+- OWNER_LOCK_DATE: 2026-07-30.
+- REGISTER_SYNC_DATE: 2026-08-01.
+- OWNER_RE_RATIFICATION_REQUIRED: NO.
+- CANONICAL_POLICY:
 
+```text
+CANONICAL_MONEY_SCALE=2
+BOQ_QUANTITY_SCALE=6
+INTERMEDIATE_ROUNDING=NONE
+ROUNDING_MODE=ROUND_HALF_UP
+ROUNDING_AUTHORITY=BACKEND_EXACT_DECIMAL
+RAW_SOURCE_NUMERIC_EVIDENCE=RETAINED
+```
+
+- INTERPRETATION: setiap nilai kanonik yang dipersist dibulatkan pada
+  canonical boundary; kalkulasi di antara boundary tidak dibulatkan ulang.
+- ROADMAP_EFFECT: OD-04 bukan lagi blocker terbuka karena keputusan Owner
+  telah dikunci. Implementasi tetap harus mengikuti policy di atas.
+- CORRECTION_NOTE: status OPEN sebelumnya adalah stale operational-register
+  entry, bukan pencabutan atau ketiadaan keputusan Owner.
 ### OD-IMPORT-01 — BOQ XLSX bounded intake ke Working Draft kosong
 - STATUS: IMPLEMENTED (scope PR #35), belum ada catatan ratifikasi formal
   terpisah di repository selain PR itu sendiri — NEEDS_REVIEW untuk asal
