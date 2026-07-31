@@ -31,6 +31,9 @@ sesuai kejadian nyata di repository/GitHub, bukan dinarasikan dari memori:
 - `docs/control/STATE.md` — satu halaman keadaan SIMPROK hari ini.
 - `docs/control/DECISIONS.md` — register OD-xx/AD-xx dan prinsip Owner
   yang belum diratifikasi, append-only.
+- `docs/control/BASIC-PRICE-MASTER-DECISION.md` — baseline keputusan dan
+  audit domain Basic Price yang wajib dibaca semua agen saat target aktif
+  menyentuh Basic Price; status saat ini DRAFT, belum Owner-Locked.
 - `docs/control/DEBT.md` — register UTANG-xx bernama, status per bukti.
 - `docs/control/PR-REGISTER.md` — status PR yang relevan dengan roadmap aktif.
 - `docs/control/SESSION-START.md` — pembuka sesi 5–10 baris.
@@ -47,8 +50,11 @@ verdict untuk SIMPROK:
 3. baca `docs/control/ROADMAP.md` secara utuh;
 4. baca `docs/control/STATE.md` secara utuh — dokumen ini sudah tersedia,
    membacanya adalah kewajiban, bukan langkah kondisional lagi;
-5. bekerja hanya pada target roadmap dan kewenangan kursi yang berlaku;
-6. jika bukti, status, atau konflik dokumen belum jelas, laporkan
+5. jika target aktif menyentuh Basic Price, baca
+   `docs/control/BASIC-PRICE-MASTER-DECISION.md` secara utuh sebelum audit,
+   desain, prompt, coding, atau verdict;
+6. bekerja hanya pada target roadmap dan kewenangan kursi yang berlaku;
+7. jika bukti, status, atau konflik dokumen belum jelas, laporkan
    `NEEDS_REVIEW` atau `FAIL_CLOSED`; jangan mengarang.
 
 Dokumen ini hanya indeks dan protokol akses. Dokumen ini tidak menggantikan,
