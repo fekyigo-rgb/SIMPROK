@@ -16,3 +16,20 @@ import { Prisma } from '@prisma/client';
 export function toDecimalString2(value: Prisma.Decimal | string): string {
   return new Prisma.Decimal(value).toFixed(2);
 }
+
+/**
+ * OD-04 canonical persistence-boundary rounding: CANONICAL_MONEY_SCALE=2,
+ * ROUNDING_MODE=ROUND_HALF_UP, ROUNDING_AUTHORITY=BACKEND_EXACT_DECIMAL.
+ * Rounds ONLY at the point a value is about to be written into a
+ * Decimal(18,2) money column — every calculation upstream of this call
+ * (e.g. the Cost Kernel) must stay exact-decimal with no intermediate
+ * rounding. The explicit rounding mode is passed rather than relied on as
+ * decimal.js global config, so this call is correct regardless of any
+ * other module's Prisma.Decimal.set() state.
+ */
+export function toMoneyDecimal2(value: Prisma.Decimal | string): Prisma.Decimal {
+  return new Prisma.Decimal(value).toDecimalPlaces(
+    2,
+    Prisma.Decimal.ROUND_HALF_UP,
+  );
+}

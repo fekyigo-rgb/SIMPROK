@@ -9,6 +9,8 @@ import {
   Query,
   Req,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
   ForbiddenException,
   BadRequestException,
   InternalServerErrorException,
@@ -21,6 +23,7 @@ import { RabIntelligenceProposalService } from './rab-intelligence-proposal.serv
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
 import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
+import { PersistBoqItemCalculationDto } from './dto/persist-boq-item-calculation.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { CreateRabIntelligenceProposalDto } from './dto/create-rab-intelligence-proposal.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -33,6 +36,7 @@ import { CostKernelService } from './cost-kernel.service';
 import { BoqImportService, MAX_UPLOAD_BYTES } from './boq-import.service';
 import { RabLifecyclePolicyService } from './rab-lifecycle-policy.service';
 import { RabEditableLifecycleGuard } from './rab-editable-lifecycle.guard';
+import { RabKernelPersistenceService } from './rab-kernel-persistence.service';
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -44,6 +48,7 @@ export class ProjectController {
     private readonly costKernelService: CostKernelService,
     private readonly boqImportService: BoqImportService,
     private readonly rabLifecyclePolicy: RabLifecyclePolicyService,
+    private readonly rabKernelPersistenceService: RabKernelPersistenceService,
   ) {}
 
   @Post(':projectId/boq/import/preview')
@@ -292,6 +297,41 @@ export class ProjectController {
     );
   }
 
+  /**
+   * GATE-2A — the one server-authoritative command that may persist a Cost
+   * Kernel result. Distinct from, and never replacing, the read-only GET
+   * above: this route always performs a real, atomic write and requires
+   * RAB_DRAFT_EDIT, not PROJECT_VIEW.
+   */
+  @Post(':projectId/boq/items/:boqItemId/cost-calculation/persist')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.RAB_DRAFT_EDIT)
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: false },
+    }),
+  )
+  async persistBoqItemCostCalculation(
+    @Req() request: any,
+    @Param('projectId') projectId: string,
+    @Param('boqItemId') boqItemId: string,
+    @Body() dto: PersistBoqItemCalculationDto,
+  ) {
+    const workspaceId = request.projectAccess?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('Trusted project workspace is required');
+    }
+    return this.rabKernelPersistenceService.persistBoqItemCalculation({
+      projectId,
+      boqItemId,
+      workspaceId,
+      calculationAsOfDateRaw: dto.calculationAsOfDate,
+    });
+  }
+
   @Get(':projectId/boq/cost-calculations')
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   @Permissions(PERMISSIONS.PROJECT_VIEW)
@@ -319,10 +359,19 @@ export class ProjectController {
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   @Permissions(PERMISSIONS.RAB_DRAFT_EDIT)
   async saveDraftBoq(
+    @Req() request: any,
     @Param('projectId') projectId: string,
     @Body() dto: SaveDraftBoqDto,
   ) {
-    return this.projectService.saveDraftBoq(projectId, dto);
+    // GATE-2A §4.2: distinguishing "client sent unitPrice:null" from "client
+    // omitted unitPrice entirely" requires the pre-transform raw body —
+    // class-transformer's plainToInstance (useDefineForClassFields target)
+    // makes every declared DTO field an own property regardless of what the
+    // client actually sent, so that distinction cannot survive on `dto`.
+    const rawRows: unknown[] = Array.isArray(request.body?.rows)
+      ? request.body.rows
+      : [];
+    return this.projectService.saveDraftBoq(projectId, dto, rawRows);
   }
 
   @Get(':projectId/ahsp-snapshot')

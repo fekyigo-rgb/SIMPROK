@@ -124,7 +124,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   it('safely full-replaces an already non-empty Working Draft (RM-001)', async () => {
     await prisma.boqItem.createMany({ data: [
       { boqStructureId: DRAFT_A, wbsCode: 'OLD-1', name: 'Old folder', itemType: 'FOLDER', quantity: '0', unit: '', sortOrder: 0 },
-      { boqStructureId: DRAFT_A, wbsCode: 'OLD-2', name: 'Old work item', itemType: 'WORK_ITEM', quantity: '5', unit: 'm2', unitPrice: '10000', lineTotal: '50000', sortOrder: 1 },
+      { boqStructureId: DRAFT_A, wbsCode: 'OLD-2', name: 'Old work item', itemType: 'WORK_ITEM', quantity: '5', unit: 'm2', unitPrice: '10000', lineTotal: '50000', priceOrigin: 'MANUAL_CLIENT', sortOrder: 1 },
     ] });
     expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(2);
 

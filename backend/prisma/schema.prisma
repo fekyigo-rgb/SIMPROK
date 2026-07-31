@@ -1757,6 +1757,9 @@ model ProjectAhspOccurrence {
   project             Project                         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   ahspVersion         AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Restrict)
   resourceResolutions ProjectAhspResourceResolution[]
+  // GATE-2A: BoqItem rows whose server-computed line cites this occurrence
+  // as its price provenance (BoqItem.calculationOccurrenceId).
+  calculatedBoqItems  BoqItem[]
 
   @@unique([projectId, idempotencyKey])
   @@index([workspaceId])
@@ -1844,6 +1847,20 @@ enum BoqItemType {
   NOTE
 }
 
+/// GATE-2A: who is authoritative for BoqItem.unitPrice/lineTotal on this row.
+/// NULL = unpriced (no money, no provenance — the only legal state for a
+/// fresh row). MANUAL_CLIENT = human-typed price via saveDraftBoq, with
+/// every kernel provenance field NULL. SERVER_COST_KERNEL = written only by
+/// RabKernelPersistenceService's atomic persist command, with every
+/// provenance field required NOT NULL. The exact three shapes are enforced
+/// at the database boundary by boq_item_price_origin_truth_check — see the
+/// Gate-2A migration. saveDraftBoq must never move a row from
+/// SERVER_COST_KERNEL back to MANUAL_CLIENT or NULL.
+enum BoqItemPriceOrigin {
+  MANUAL_CLIENT
+  SERVER_COST_KERNEL
+}
+
 model BoqItem {
   id             String      @id @default(uuid()) @db.Uuid
   boqStructureId String      @db.Uuid
@@ -1859,20 +1876,32 @@ model BoqItem {
   sortOrder      Int         @default(0)
   ahspVersionId  String?     @db.Uuid
   ahspSnapshotId String?     @db.Uuid
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
 
-  boqStructure    BoqStructure    @relation(fields: [boqStructureId], references: [id], onDelete: Cascade)
-  parent          BoqItem?        @relation("BoqItemToParent", fields: [parentId], references: [id])
-  children        BoqItem[]       @relation("BoqItemToParent")
-  wbsNode         WbsNode?        @relation(fields: [wbsNodeId], references: [id])
-  ahspVersion     AHSPVersion?    @relation(fields: [ahspVersionId], references: [id])
-  ahspSnapshot    AHSPSnapshot?   @relation(fields: [ahspSnapshotId], references: [id])
-  progressEntries ProgressEntry[]
+  // GATE-2A provenance — minimum snapshot fields for a server-computed line.
+  // All four are meaningful only when priceOrigin = SERVER_COST_KERNEL; they
+  // stay at their defaults/null for every manual or not-yet-calculated row.
+  priceOrigin              BoqItemPriceOrigin?
+  calculationOccurrenceId  String?             @db.Uuid
+  calculationAsOfDate      DateTime?           @db.Date
+  calculatedAt             DateTime?
+  calculationPolicyVersion String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  boqStructure          BoqStructure           @relation(fields: [boqStructureId], references: [id], onDelete: Cascade)
+  parent                BoqItem?               @relation("BoqItemToParent", fields: [parentId], references: [id])
+  children              BoqItem[]              @relation("BoqItemToParent")
+  wbsNode               WbsNode?               @relation(fields: [wbsNodeId], references: [id])
+  ahspVersion           AHSPVersion?           @relation(fields: [ahspVersionId], references: [id])
+  ahspSnapshot          AHSPSnapshot?          @relation(fields: [ahspSnapshotId], references: [id])
+  calculationOccurrence ProjectAhspOccurrence? @relation(fields: [calculationOccurrenceId], references: [id], onDelete: Restrict)
+  progressEntries       ProgressEntry[]
 
   @@index([boqStructureId])
   @@index([parentId])
   @@index([wbsNodeId])
+  @@index([calculationOccurrenceId])
   @@map("boq_items")
 }
 
@@ -1887,8 +1916,8 @@ model RabDocument {
   overheadPercent Decimal  @default(0) @db.Decimal(5, 2)
   profitPercent   Decimal  @default(0) @db.Decimal(5, 2)
   taxPercent      Decimal  @default(0) @db.Decimal(5, 2)
-  totalBaseCost   Decimal  @db.Decimal(18, 2)
-  totalFinalCost  Decimal  @db.Decimal(18, 2)
+  totalBaseCost   Decimal? @db.Decimal(18, 2)
+  totalFinalCost  Decimal? @db.Decimal(18, 2)
   status          String   @default("DRAFT")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
