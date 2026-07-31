@@ -46,6 +46,25 @@ sumber di atas menang; laporkan gap, jangan mengoreksi sumber di sini.
   `478ce4f76960e4e557d7f32a15b20df3c7639905`).
 - Lihat `docs/control/DEBT.md` untuk status debt terkait.
 
+### OD-BASIC-PRICE-MASTER-01 — Shared Basic Price Decision Baseline
+- STATUS: DRAFT_NOT_OWNER_LOCKED
+- SOURCE: Explicit Owner directive, 31 Juli 2026; checkpoint
+  `CKPT-BASIC-PRICE-MASTER-2026-07-31`, Master Decision Version 3.1;
+  Architect verdict 31 Juli 2026.
+- CANONICAL_AGENT_PATH:
+  `docs/control/BASIC-PRICE-MASTER-DECISION.md`.
+- OWNER_DIRECTIVE: dokumen keputusan Basic Price harus disimpan pada jalur
+  repository yang dapat dijangkau semua agen IA, termasuk executor.
+- CURRENT_ARCHITECT_VERDICT: NOT_READY_TO_LOCK.
+- CURRENT_NEXT: Owner decision atas blockers 1–5; Detail mockup tetap antre,
+  belum diotorisasi coding; publikasi satu harga nyata adalah usulan Arsitek,
+  belum izin eksekusi.
+- HARD_STOPS: `CODING_AUTHORIZATION=NO`, `PR56_MERGE=NO`,
+  `PRODUCTION_ACTIVATION=NO`, `PROMPT_EXECUTOR=NO`.
+- NOTE: Entry ini tidak meratifikasi seluruh isi Master Decision. Ia
+  menetapkan lokasi bersama dan status audit agar semua agen membaca sumber
+  yang sama dan tidak bekerja dari memori/prompt terpisah.
+
 ## Prinsip Owner — belum diratifikasi (dicatat, bukan hukum aktif)
 
 ### ID=UNASSIGNED — AHSP Universal Intake & Curation Law
