@@ -33,12 +33,49 @@ export type CostRowStatus =
   | { kind: "invalidated" }
   | { kind: "request_failed" };
 
+/**
+ * The one shared shape/parse/grouping rule for every exact-decimal string
+ * formatter in this codebase (money and quantity alike) — extracted so a
+ * second adapter (rabPersistedDraftDisplay.ts) can group thousands for a
+ * quantity without a "Rp" prefix, without re-implementing the regex or the
+ * grouping rule. Rejects anything that isn't plain fixed-point notation, so
+ * scientific notation ("1e5") is refused rather than silently formatted.
+ */
+export interface ParsedDecimalString {
+  negative: boolean;
+  intPart: string;
+  fracPart: string;
+}
+
+export const DECIMAL_STRING_PATTERN = /^(-?)(\d+)(?:\.(\d+))?$/;
+
+/**
+ * GATE2A-AB-RUNTIME-WIRE-TYPE-01: `value` is typed `unknown`, not `string`,
+ * because the canonical wire contract (exact decimal string) is a runtime
+ * promise the JSON payload can violate even though TypeScript's static types
+ * say otherwise. RegExp.prototype.exec coerces any non-string argument to a
+ * string first — a JSON number like 9007199254740993.01 would already have
+ * lost precision as a JS double (and re-stringify to a different digit
+ * string) before the regex ever saw it. The explicit `typeof` check rejects
+ * every non-string runtime value up front, so that silent coercion path
+ * never executes.
+ */
+export const parseCanonicalDecimalString = (value: unknown): ParsedDecimalString | null => {
+  if (typeof value !== "string") return null;
+  const match = DECIMAL_STRING_PATTERN.exec(value);
+  if (!match) return null;
+  return { negative: match[1] === "-", intPart: match[2], fracPart: match[3] ?? "" };
+};
+
+/** Thousands-grouping on a digit-only integer string — never touches the fraction. */
+export const groupThousands = (intPart: string): string =>
+  intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+
 export const formatBackendRupiah = (value: string) => {
-  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
-  if (!match) return "Nilai tidak valid";
-  const grouped = match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  const fraction = match[3] ? `,${match[3]}` : "";
-  return `Rp ${match[1]}${grouped}${fraction}`;
+  const parsed = parseCanonicalDecimalString(value);
+  if (!parsed) return "Nilai tidak valid";
+  const fraction = parsed.fracPart ? `,${parsed.fracPart}` : "";
+  return `Rp ${parsed.negative ? "-" : ""}${groupThousands(parsed.intPart)}${fraction}`;
 };
 
 export const toRabCostDisplay = (status: CostRowStatus) => {

@@ -2,6 +2,14 @@ import { useMemo, useState, useEffect, useRef, type CSSProperties } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 import { Archive, ChevronLeft, ChevronRight, Download, FileText, Lock, Maximize2, Minimize2, Printer, RotateCcw, Upload, ZoomIn, ZoomOut, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
+import {
+  toPersistedRowDisplay,
+  toRecapDisplay,
+  type PersistedBoqItem,
+  type PersistedDraftRecap,
+  type PersistedPriceOrigin,
+  type PersistedRowDisplay,
+} from '../utils/rabPersistedDraftDisplay';
 
 type RabStatus = 'Draft' | 'Terkunci' | 'Approved' | 'Selesai';
 type PanelMode = 'compact' | 'wide' | 'collapsed';
@@ -19,23 +27,15 @@ interface RabProject {
   rawStatus: string;
 }
 
-interface RabRow {
-  code: string;
-  description: string;
-  unit: string;
-  volume: string;
-  unitPrice: string;
-  total: string;
-}
-
-interface DraftRecap {
-  subtotal?: number | string | null;
-  marginPercent?: number | string | null;
-  marginAmount?: number | string | null;
-  taxPercent?: number | string | null;
-  ppnPercent?: number | string | null;
-  taxAmount?: number | string | null;
-  grandTotal?: number | string | null;
+/**
+ * GET /projects/:projectId/boq/draft response shape (canonical persisted
+ * read path). `items` and `recap` are typed via rabPersistedDraftDisplay.ts
+ * so `unitPrice`/`lineTotal`/recap money fields stay exact decimal strings
+ * end to end — no `any[]` on this path.
+ */
+interface DraftBoqApiResponse {
+  items: PersistedBoqItem[];
+  recap?: PersistedDraftRecap | null;
 }
 
 const defaultProject: RabProject = {
@@ -52,26 +52,13 @@ const defaultProject: RabProject = {
 /** Mirrors RAB_EDITABLE_PROJECT_STATUSES on the backend — the only status under which a Working Draft may exist to fall back to. */
 const RAB_EDITABLE_PROJECT_STATUSES = ['PLANNED'];
 
+/**
+ * Project.budgetBaseline hero display only — a different field on a
+ * different endpoint (GET /projects/:projectId) than the BoqItem/recap
+ * canonical persisted contract this viewer proves out. Left as-is,
+ * deliberately out of this slice's ALLOWED_WRITE_SCOPE-bounded claim.
+ */
 const formatRupiah = (value: number) => `Rp ${Math.round(value).toLocaleString('id-ID')}`;
-
-const toFiniteNumber = (value: unknown) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mapBoqRowsToRabRows = (items: any[]): RabRow[] => items.map((item, idx) => {
-  const qty = Number(item.quantity) || 0;
-  const up = Number(item.unitPrice) || 0;
-  return {
-    code: item.wbsCode || String(idx + 1),
-    description: item.name || 'Belum tersedia',
-    unit: item.unit || '-',
-    volume: qty > 0 ? qty.toLocaleString('id-ID') : '-',
-    unitPrice: up > 0 ? formatRupiah(up) : '-',
-    total: qty > 0 && up > 0 ? formatRupiah(qty * up) : '-',
-  };
-});
 
 const supportDocuments = [
   'Spesifikasi Teknis',
@@ -91,6 +78,45 @@ function isReadOnly(status: RabStatus) {
   return status === 'Terkunci' || status === 'Approved' || status === 'Selesai';
 }
 
+/** Right-aligned, tabular-numeral cell — canonical money/quantity columns only. */
+const numericCellStyle: CSSProperties = { textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+
+const recapLineStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: '1rem' };
+
+const priceOriginBadgeBaseStyle: CSSProperties = {
+  display: 'inline-block',
+  padding: '0.1875rem 0.5rem',
+  borderRadius: '999px',
+  fontSize: '0.75rem',
+  fontWeight: 600,
+  lineHeight: 1.3,
+};
+
+/** Color Lock: Navy = server authority/persisted, neutral grey = manual or not-yet-priced — text label always carries the distinction, color is secondary. */
+const priceOriginBadgeStyle = (priceOrigin: PersistedPriceOrigin): CSSProperties => {
+  if (priceOrigin === 'SERVER_COST_KERNEL') {
+    return { color: '#16294B', background: '#EAF0FB', border: '1px solid #C7D5EC' };
+  }
+  if (priceOrigin === 'MANUAL_CLIENT') {
+    return { color: '#475569', background: '#F1F5F9', border: '1px solid #E2E8F0' };
+  }
+  return { color: '#98A2B3', background: '#F8FAFC', border: '1px solid #EAECEF' };
+};
+
+const provenanceListStyle: CSSProperties = {
+  margin: '0.375rem 0 0',
+  padding: '0.5rem 0.625rem',
+  background: '#F8FAFC',
+  border: '1px solid #EAECEF',
+  borderRadius: '6px',
+  fontSize: '0.75rem',
+  color: '#475569',
+  display: 'grid',
+  gridTemplateColumns: 'auto 1fr',
+  columnGap: '0.5rem',
+  rowGap: '0.1875rem',
+};
+
 export function ProjectRabDoorPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
@@ -98,9 +124,9 @@ export function ProjectRabDoorPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [project, setProject] = useState<RabProject>(defaultProject);
-  const [rabRows, setRabRows] = useState<RabRow[]>([]);
+  const [rabRows, setRabRows] = useState<PersistedRowDisplay[]>([]);
   const [rabSource, setRabSource] = useState<RabSource>('empty');
-  const [draftRecap, setDraftRecap] = useState<DraftRecap | null>(null);
+  const [draftRecap, setDraftRecap] = useState<PersistedDraftRecap | null>(null);
   
   const [zoom, setZoom] = useState(100);
   const [panelMode, setPanelMode] = useState<PanelMode>('compact');
@@ -148,10 +174,9 @@ export function ProjectRabDoorPage() {
           if (!boqResponse.ok) {
             throw new Error('Baseline RAB response is not OK');
           }
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const boqData = await boqResponse.json() as any;
+          const boqData = await boqResponse.json() as PersistedBoqItem[];
           if (Array.isArray(boqData) && boqData.length > 0) {
-            setRabRows(mapBoqRowsToRabRows(boqData));
+            setRabRows(boqData.map(toPersistedRowDisplay));
             setRabSource('baseline');
             setDraftRecap(null);
           } else {
@@ -170,12 +195,11 @@ export function ProjectRabDoorPage() {
         if (shouldLoadDraft && isPlannedProject) {
           try {
             const draftResponse = await apiFetch(`/projects/${projectId}/boq/draft`);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const draftData = await draftResponse.json() as any;
+            const draftData = await draftResponse.json() as DraftBoqApiResponse;
             const draftItems = draftResponse.ok && Array.isArray(draftData?.items) ? draftData.items : [];
 
             if (draftItems.length > 0) {
-              setRabRows(mapBoqRowsToRabRows(draftItems));
+              setRabRows(draftItems.map(toPersistedRowDisplay));
               setRabSource('draft');
               setDraftRecap(draftData?.recap ?? null);
             } else {
@@ -211,7 +235,10 @@ export function ProjectRabDoorPage() {
   const isDraftPreview = rabSource === 'draft';
   const zoomScale = zoom / 100;
   const hasRabRows = rabRows.length > 0;
-  const draftTaxPercent = draftRecap?.ppnPercent ?? draftRecap?.taxPercent ?? 0;
+  // RECAP DISPLAY AUTHORITY: COMPLETE renders recap.subtotal/marginAmount/
+  // taxAmount/grandTotal exactly as persisted; INCOMPLETE never fabricates a
+  // partial total. See rabPersistedDraftDisplay.ts — no formula lives here.
+  const recapDisplay = useMemo(() => toRecapDisplay(draftRecap), [draftRecap]);
 
   useEffect(() => {
     const node = rabDocumentRef.current;
@@ -416,32 +443,60 @@ export function ProjectRabDoorPage() {
                         <th>Kode</th>
                         <th>Uraian Pekerjaan</th>
                         <th>Satuan</th>
-                        <th>Volume</th>
-                        <th>Harga Satuan</th>
-                        <th>Jumlah</th>
+                        <th style={{ textAlign: 'right' }}>Volume</th>
+                        <th style={{ textAlign: 'right' }}>Harga Satuan</th>
+                        <th style={{ textAlign: 'right' }}>Jumlah</th>
+                        <th>Asal Harga</th>
                         <th>Status</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {rabRows.map((row) => (
-                        <tr key={row.code}>
-                          <td>{row.code}</td>
-                          <td>{row.description}</td>
-                          <td>{row.unit}</td>
-                          <td>{row.volume}</td>
-                          <td>{row.unitPrice}</td>
-                          <td>{row.total}</td>
+                      {rabRows.map((row, index) => (
+                        <tr key={row.id}>
+                          <td>{row.code || String(index + 1)}</td>
+                          <td>{row.description || 'Belum tersedia'}</td>
+                          <td>{row.unit || '-'}</td>
+                          <td style={numericCellStyle}>{row.quantityDisplay || '-'}</td>
+                          <td style={numericCellStyle}>{row.unitPriceDisplay || '-'}</td>
+                          <td style={numericCellStyle}>{row.lineTotalDisplay || '-'}</td>
+                          <td>
+                            {row.originBadge ? (
+                              <span style={{ ...priceOriginBadgeBaseStyle, ...priceOriginBadgeStyle(row.priceOrigin) }}>
+                                {row.originBadge}
+                              </span>
+                            ) : null}
+                            {row.provenance ? (
+                              <details style={{ marginTop: '0.3rem' }}>
+                                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#1DA1F2' }}>
+                                  Detail provenance
+                                </summary>
+                                <dl style={provenanceListStyle}>
+                                  <dt>Kebijakan kalkulasi</dt>
+                                  <dd>{row.provenance.calculationPolicyVersion}</dd>
+                                  <dt>Per tanggal</dt>
+                                  <dd>{row.provenance.calculationAsOfDate}</dd>
+                                  <dt>Dihitung pada</dt>
+                                  <dd>{row.provenance.calculatedAt}</dd>
+                                  <dt>Occurrence</dt>
+                                  <dd style={{ wordBreak: 'break-all' }}>{row.provenance.calculationOccurrenceId}</dd>
+                                </dl>
+                              </details>
+                            ) : null}
+                          </td>
                           <td>{isDraftPreview ? 'Draft Preview' : readOnly ? 'Read-only' : 'Draft RAB'}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                  {isDraftPreview && draftRecap ? (
-                    <div style={{ marginTop: '0.875rem', display: 'grid', gap: '0.4rem', maxWidth: '360px', color: '#16294B' }}>
-                      <span>Subtotal: <strong>{formatRupiah(toFiniteNumber(draftRecap.subtotal))}</strong></span>
-                      <span>Margin {toFiniteNumber(draftRecap.marginPercent).toLocaleString('id-ID')}%: <strong>{formatRupiah(toFiniteNumber(draftRecap.marginAmount))}</strong></span>
-                      <span>PPN {toFiniteNumber(draftTaxPercent).toLocaleString('id-ID')}%: <strong>{formatRupiah(toFiniteNumber(draftRecap.taxAmount))}</strong></span>
-                      <span>Grand Total Draft: <strong>{formatRupiah(toFiniteNumber(draftRecap.grandTotal))}</strong></span>
+                  {isDraftPreview ? (
+                    <div style={{ marginTop: '0.875rem', display: 'grid', gap: '0.4rem', maxWidth: '360px', color: '#16294B', fontVariantNumeric: 'tabular-nums' }}>
+                      {recapDisplay.incomplete ? (
+                        <p role="status" style={{ margin: '0 0 0.125rem', color: '#98A2B3' }}>{recapDisplay.incompleteLabel}</p>
+                      ) : null}
+                      <span style={recapLineStyle}>Subtotal<strong>{recapDisplay.subtotalDisplay}</strong></span>
+                      <span style={recapLineStyle}>Margin {recapDisplay.marginPercentDisplay}%<strong>{recapDisplay.marginAmountDisplay}</strong></span>
+                      <span style={recapLineStyle}>PPN {recapDisplay.taxPercentDisplay}%<strong>{recapDisplay.taxAmountDisplay}</strong></span>
+                      <span style={recapLineStyle}>Grand Total Draft<strong>{recapDisplay.grandTotalDisplay}</strong></span>
                     </div>
                   ) : null}
                 </>

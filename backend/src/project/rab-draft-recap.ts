@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { toMoneyDecimal2 } from '../common/money';
 
 /**
  * The one canonical default recap policy — RabWorkspacePage's initial UI
@@ -44,19 +45,39 @@ export function buildDraftRecap(
 
 export type DraftRecap = ReturnType<typeof buildDraftRecap>;
 
+/**
+ * UTANG-API-MONEY-05 / OD-04 canonical wire-scale for every recap
+ * money/percent field: exactly two fraction digits, an explicit
+ * ROUND_HALF_UP, fixed-point notation only — never a JavaScript Number
+ * round-trip and never a silent dependency on decimal.js's ambient default
+ * rounding mode. Reuses the same persistence-boundary rounding
+ * (`toMoneyDecimal2`) RabKernelPersistenceService already writes to the DB
+ * with, then renders it with `toFixed`, which decimal.js guarantees is
+ * always fixed-point (no scientific notation) regardless of magnitude.
+ */
+const toExactDecimalString = (value: Prisma.Decimal): string =>
+  toMoneyDecimal2(value).toFixed(2, Prisma.Decimal.ROUND_HALF_UP);
+
+const toExactDecimalStringOrNull = (
+  value?: number | Prisma.Decimal | null,
+): string | null =>
+  value === null || value === undefined
+    ? null
+    : toExactDecimalString(new Prisma.Decimal(value));
+
 export function serializeDraftRecap(
   recap: DraftRecap,
   pricingStatus: 'COMPLETE' | 'INCOMPLETE' = 'COMPLETE',
 ) {
   return {
     pricingStatus,
-    subtotal: Number(recap.subtotal),
-    marginPercent: Number(recap.marginPercent),
-    marginAmount: Number(recap.marginAmount),
-    taxPercent: Number(recap.taxPercent),
-    ppnPercent: Number(recap.taxPercent),
-    taxAmount: Number(recap.taxAmount),
-    grandTotal: Number(recap.grandTotal),
+    subtotal: toExactDecimalString(recap.subtotal),
+    marginPercent: toExactDecimalString(recap.marginPercent),
+    marginAmount: toExactDecimalString(recap.marginAmount),
+    taxPercent: toExactDecimalString(recap.taxPercent),
+    ppnPercent: toExactDecimalString(recap.taxPercent),
+    taxAmount: toExactDecimalString(recap.taxAmount),
+    grandTotal: toExactDecimalString(recap.grandTotal),
   };
 }
 
@@ -72,19 +93,10 @@ export function incompletePricingRecap(
   return {
     pricingStatus: 'INCOMPLETE' as const,
     subtotal: null,
-    marginPercent:
-      marginPercentInput === null || marginPercentInput === undefined
-        ? null
-        : Number(marginPercentInput),
+    marginPercent: toExactDecimalStringOrNull(marginPercentInput),
     marginAmount: null,
-    taxPercent:
-      taxPercentInput === null || taxPercentInput === undefined
-        ? null
-        : Number(taxPercentInput),
-    ppnPercent:
-      taxPercentInput === null || taxPercentInput === undefined
-        ? null
-        : Number(taxPercentInput),
+    taxPercent: toExactDecimalStringOrNull(taxPercentInput),
+    ppnPercent: toExactDecimalStringOrNull(taxPercentInput),
     taxAmount: null,
     grandTotal: null,
   };

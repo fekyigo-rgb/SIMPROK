@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --test --test-isolation=none src/utils/rabCostDisplay.test.ts src/utils/projectCardAction.test.ts src/utils/capability.test.ts src/utils/basicPriceImportDisplay.test.ts src/utils/basicPriceWorkflowDisplay.test.ts src/utils/basicPriceExplorerDisplay.test.ts src/utils/reviewActionViewModel.test.ts"
+    "test": "tsc -p tsconfig.test.json --noEmit && node --test --test-isolation=none \"src/**/*.test.ts\""
   },
   "dependencies": {
     "lucide-react": "^1.21.0",

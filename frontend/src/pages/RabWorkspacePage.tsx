@@ -67,14 +67,21 @@ interface BoqItemResponse {
   ahspSnapshotId?: string | null;
 }
 
+/**
+ * UTANG-API-MONEY-05: the backend recap serializer (rab-draft-recap.ts) now
+ * emits exact decimal strings, never a JSON number, for every recap money/
+ * percent field — narrowed here to match the true wire contract. Type-only;
+ * this page's still-recomputes-locally behavior (UTANG-UI-MONEY-01) is
+ * unchanged and untouched by this slice.
+ */
 interface DraftRecapResponse {
-  subtotal?: string | number | null;
-  marginPercent?: string | number | null;
-  marginAmount?: string | number | null;
-  ppnPercent?: string | number | null;
-  taxPercent?: string | number | null;
-  taxAmount?: string | number | null;
-  grandTotal?: string | number | null;
+  subtotal?: string | null;
+  marginPercent?: string | null;
+  marginAmount?: string | null;
+  ppnPercent?: string | null;
+  taxPercent?: string | null;
+  taxAmount?: string | null;
+  grandTotal?: string | null;
 }
 
 interface RabLifecycleCapability {

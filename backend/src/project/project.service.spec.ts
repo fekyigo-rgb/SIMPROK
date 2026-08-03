@@ -767,10 +767,10 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
     const result = await service.saveDraftBoq('project-1', { rows: ONE_PRICED_WORK_ITEM } as any, ONE_PRICED_WORK_ITEM);
 
     const recap = result.recap as any;
-    expect(recap.marginPercent).toBe(10);
-    expect(recap.taxPercent).toBe(11);
-    expect(recap.subtotal).toBe(1000000);
-    expect(recap.grandTotal).toBe(1221000);
+    expect(recap.marginPercent).toBe('10.00');
+    expect(recap.taxPercent).toBe('11.00');
+    expect(recap.subtotal).toBe('1000000.00');
+    expect(recap.grandTotal).toBe('1221000.00');
   });
 
   it('C-02: a deliberately-set 5%/12% on the existing DRAFT is preserved when a later save omits the fields', async () => {
@@ -781,9 +781,9 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
     const result = await service.saveDraftBoq('project-1', { rows: ONE_PRICED_WORK_ITEM } as any, ONE_PRICED_WORK_ITEM);
 
     const recap = result.recap as any;
-    expect(recap.marginPercent).toBe(5);
-    expect(recap.taxPercent).toBe(12);
-    expect(recap.grandTotal).toBe(1176000);
+    expect(recap.marginPercent).toBe('5.00');
+    expect(recap.taxPercent).toBe('12.00');
+    expect(recap.grandTotal).toBe('1176000.00');
   });
 
   it('C-03: an explicit DTO percentage overrides both the existing DRAFT setting and the canonical default', async () => {
@@ -798,9 +798,9 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
     );
 
     const recap = result.recap as any;
-    expect(recap.marginPercent).toBe(7);
-    expect(recap.taxPercent).toBe(15);
-    expect(recap.grandTotal).toBe(1230500);
+    expect(recap.marginPercent).toBe('7.00');
+    expect(recap.taxPercent).toBe('15.00');
+    expect(recap.grandTotal).toBe('1230500.00');
   });
 
   it('C-04: an incomplete draft retains the effective percentages (not reset to default, not null) while totals stay null', async () => {
@@ -812,8 +812,8 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
 
     const recap = result.recap as any;
     expect(recap.pricingStatus).toBe('INCOMPLETE');
-    expect(recap.marginPercent).toBe(5);
-    expect(recap.taxPercent).toBe(12);
+    expect(recap.marginPercent).toBe('5.00');
+    expect(recap.taxPercent).toBe('12.00');
     expect(recap.subtotal).toBeNull();
     expect(recap.grandTotal).toBeNull();
   });
