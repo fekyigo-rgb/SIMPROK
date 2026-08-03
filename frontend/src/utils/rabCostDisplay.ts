@@ -244,3 +244,383 @@ export const formatBoqImportMeasurement = (
   quantity: string | null,
   unit: string | null,
 ): string => itemType === 'WORK_ITEM' ? ` — ${quantity ?? '—'} ${unit ?? ''}` : '';
+
+/**
+ * GATE2A-PRODUCTIZATION-C: pure UX reachability for the "Hitung & Simpan
+ * Harga SIMPROK" persist action in RabWorkspacePage. NOT_BACKEND_ELIGIBILITY_
+ * AUTHORITY=YES — this never decides whether a calculation is actually
+ * allowed to persist. RabKernelPersistenceService remains the sole authority
+ * for AHSP presence, occurrence uniqueness, Basic Price eligibility, and
+ * every other business rule; this function only decides whether the button
+ * is reachable from state already visible on screen.
+ */
+export type PersistActionReachability =
+  | 'READY'
+  | 'NO_PROJECT'
+  | 'DRAFT_NOT_EDITABLE'
+  | 'NO_SELECTED_WORK_ITEM'
+  | 'AHSP_NOT_SELECTED'
+  | 'COST_RESULT_LOADING'
+  | 'COST_RESULT_INVALIDATED'
+  | 'COST_RESULT_FAIL_CLOSED'
+  | 'COST_REQUEST_FAILED'
+  | 'COST_RESULT_MISSING'
+  | 'INVALID_CALCULATION_DATE'
+  | 'UNSAVED_DRAFT_CHANGES'
+  | 'PERSIST_IN_FLIGHT';
+
+export interface PersistActionSelectedItem {
+  id: string;
+  ahspVersionId: string | null;
+}
+
+export interface PersistActionReachabilityInput {
+  projectId: string | null;
+  canEditDraft: boolean;
+  selectedItem: PersistActionSelectedItem | null;
+  costRowStatus: CostRowStatus | undefined;
+  calculationAsOfDate: string;
+  draftDirty: boolean;
+  persistInFlight: boolean;
+}
+
+const CALCULATION_DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+
+export const evaluatePersistActionReachability = (
+  input: PersistActionReachabilityInput,
+): PersistActionReachability => {
+  if (!input.projectId) return 'NO_PROJECT';
+  if (!input.canEditDraft) return 'DRAFT_NOT_EDITABLE';
+  if (!input.selectedItem) return 'NO_SELECTED_WORK_ITEM';
+  if (!input.selectedItem.ahspVersionId) return 'AHSP_NOT_SELECTED';
+  const status = input.costRowStatus;
+  if (!status) return 'COST_RESULT_MISSING';
+  if (status.kind === 'loading') return 'COST_RESULT_LOADING';
+  if (status.kind === 'invalidated') return 'COST_RESULT_INVALIDATED';
+  if (status.kind === 'fail_closed') return 'COST_RESULT_FAIL_CLOSED';
+  if (status.kind === 'request_failed') return 'COST_REQUEST_FAILED';
+  // Only "calculated" remains here — a real calendar check (e.g. rejecting
+  // 2026-02-30) is intentionally NOT duplicated here; it stays
+  // backend-authoritative. This is a UI-format gate only.
+  if (!CALCULATION_DATE_SHAPE.test(input.calculationAsOfDate)) return 'INVALID_CALCULATION_DATE';
+  if (input.draftDirty) return 'UNSAVED_DRAFT_CHANGES';
+  if (input.persistInFlight) return 'PERSIST_IN_FLIGHT';
+  return 'READY';
+};
+
+/**
+ * Gate-2A locked contract (see backend PersistBoqItemCalculationDto): the
+ * persist request body may carry calculationAsOfDate and nothing else.
+ */
+export interface PersistCalculationRequestBody {
+  calculationAsOfDate: string;
+}
+
+export const buildPersistCalculationRequestBody = (
+  calculationAsOfDate: string,
+): PersistCalculationRequestBody => ({ calculationAsOfDate });
+
+/**
+ * Local calendar YYYY-MM-DD — deliberately NOT `date.toISOString().slice(0, 10)`,
+ * which reads UTC fields and can silently shift to the wrong calendar day for
+ * a user whose local time zone sits far enough from UTC (e.g. 00:30 local in
+ * UTC+9 is still the previous day in UTC).
+ */
+export const toLocalDateOnlyString = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export type PersistOutcomeState =
+  | 'IDLE'
+  | 'PERSISTING'
+  | 'RELOADING'
+  | 'SUCCESS'
+  | 'FAILED_CONFIRMED'
+  | 'OUTCOME_UNKNOWN';
+
+export type PersistPostOutcome = { kind: 'network_error' } | { kind: 'response'; ok: boolean };
+
+export type PersistReloadOutcome =
+  | { kind: 'not_attempted' }
+  | { kind: 'success' }
+  | { kind: 'error' };
+
+/**
+ * A response is only ever reported SUCCESS once the persist POST returned
+ * 2xx AND the follow-up reloadDraft() confirmed it. A network failure (the
+ * response may have been lost after the server already committed) or a
+ * post-2xx reload failure both resolve to OUTCOME_UNKNOWN — never silently
+ * downgraded to "not saved", and never auto-retried by the caller.
+ */
+export const classifyPersistOutcome = (
+  post: PersistPostOutcome,
+  reload: PersistReloadOutcome,
+): Extract<PersistOutcomeState, 'SUCCESS' | 'FAILED_CONFIRMED' | 'OUTCOME_UNKNOWN'> => {
+  if (post.kind === 'network_error') return 'OUTCOME_UNKNOWN';
+  if (!post.ok) return 'FAILED_CONFIRMED';
+  if (reload.kind === 'success') return 'SUCCESS';
+  return 'OUTCOME_UNKNOWN';
+};
+
+export const GENERIC_PERSIST_FAILURE_REASON = 'Gagal memproses permintaan. Coba lagi.';
+
+/**
+ * Defensively reads a NestJS error body's `message` (string | string[] |
+ * anything else) into one honest, bounded display string. Never fabricates
+ * a specific reason when the body doesn't have one.
+ */
+export const derivePersistFailureReason = (body: unknown): string => {
+  const message =
+    body && typeof body === 'object' ? (body as { message?: unknown }).message : undefined;
+  if (typeof message === 'string' && message.trim().length > 0) return message;
+  if (Array.isArray(message)) {
+    const safeEntries = message.filter(
+      (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0,
+    );
+    if (safeEntries.length > 0) return safeEntries.join('; ');
+  }
+  return GENERIC_PERSIST_FAILURE_REASON;
+};
+
+export type BoqRowsSource = 'WORKING_DRAFT' | 'BASELINE_SEED';
+
+/**
+ * C-BLOCKER-03: a baseline seed (rows shown only as a starting point before
+ * any Save Draft) must never be treated as an already-persisted Working
+ * Draft — it stays dirty, and the persist action stays blocked through the
+ * existing UNSAVED_DRAFT_CHANGES reachability state, until the user
+ * explicitly saves it.
+ */
+export const isDraftDirtyForSource = (source: BoqRowsSource): boolean => source === 'BASELINE_SEED';
+
+/**
+ * C-BLOCKER-02: exact equality only — no truthy/falsy coercion. A caller
+ * must never skip this comparison just because a revision number happens
+ * to be 0.
+ */
+export const isDraftRevisionCurrent = (capturedRevision: number, currentRevision: number): boolean =>
+  capturedRevision === currentRevision;
+
+export interface ReloadRequestIdentity {
+  projectId: string | null;
+  generation: number;
+  draftRevision: number;
+}
+
+/**
+ * C-20-CROSS-PROJECT-RELOAD-ISOLATION: the one authority for whether a
+ * reloadDraft() response is still safe to apply. `captured` is the identity
+ * a request was made for — project, persist generation, and draft revision,
+ * all snapshotted at request start; `current` is the live identity read the
+ * instant the response resolves. Any mismatch means a newer project, a newer
+ * persist attempt, or a newer draft edit has already superseded this
+ * response — it must be discarded outright (recap/rows/selection/draftDirty/
+ * cost-calculation state all left untouched), never partially applied.
+ * Exact equality only, matching isDraftRevisionCurrent's rule that a
+ * revision of 0 is a real, comparable value.
+ */
+export const isReloadContextCurrent = (
+  captured: ReloadRequestIdentity,
+  current: ReloadRequestIdentity,
+): boolean =>
+  captured.projectId === current.projectId &&
+  captured.generation === current.generation &&
+  captured.draftRevision === current.draftRevision;
+
+export interface ReloadApplyCallbacks {
+  applyRecap: () => void;
+  applyRows: () => void;
+  loadCostCalculations: () => void;
+}
+
+/**
+ * C-20-R2-PASSIVE-EFFECT-WINDOW-AND-WIRING-PROOF: the one orchestration
+ * point through which reloadDraft()'s three-part state application
+ * (recap, rows, cost-calculation load) is allowed to run. isReloadContextCurrent
+ * is the single identity authority — this helper never re-implements or
+ * duplicates that comparison, it only gates on it. All three callbacks fire
+ * together, exactly once, or none of them fire at all: there is no
+ * partially-applied state, and no second call site anywhere is allowed to
+ * invoke applyRecap/applyRows/loadCostCalculations directly for a reload —
+ * every reload response is routed through here.
+ */
+export const applyReloadIfCurrent = (
+  captured: ReloadRequestIdentity,
+  current: ReloadRequestIdentity,
+  callbacks: ReloadApplyCallbacks,
+): boolean => {
+  if (!isReloadContextCurrent(captured, current)) return false;
+  callbacks.applyRecap();
+  callbacks.applyRows();
+  callbacks.loadCostCalculations();
+  return true;
+};
+
+export interface PersistedRowConfirmationTarget {
+  boqItemId: string;
+  calculationAsOfDate: string;
+}
+
+export interface ConfirmedPersistedRow {
+  unitPrice: string;
+  lineTotal: string;
+  calculationOccurrenceId: string;
+}
+
+/**
+ * C-BLOCKER-01: the reloaded Working Draft read model — never the raw POST
+ * response body — is the sole authority for whether a persist attempt
+ * really succeeded. Reuses the existing canonical decimal parser rather
+ * than a second regex/formatter; fails closed on a malformed value, a
+ * wrong item, a wrong date, a non-SERVER_COST_KERNEL origin, a JSON-number
+ * money field, or an empty occurrence id.
+ */
+export const confirmPersistedRow = (
+  value: unknown,
+  target: PersistedRowConfirmationTarget,
+): ConfirmedPersistedRow | null => {
+  if (!value || typeof value !== 'object') return null;
+  const row = value as {
+    id?: unknown;
+    priceOrigin?: unknown;
+    calculationAsOfDate?: unknown;
+    unitPrice?: unknown;
+    lineTotal?: unknown;
+    calculationOccurrenceId?: unknown;
+  };
+  if (row.id !== target.boqItemId) return null;
+  if (row.priceOrigin !== 'SERVER_COST_KERNEL') return null;
+  if (row.calculationAsOfDate !== target.calculationAsOfDate) return null;
+  if (!parseCanonicalDecimalString(row.unitPrice)) return null;
+  if (!parseCanonicalDecimalString(row.lineTotal)) return null;
+  if (typeof row.calculationOccurrenceId !== 'string' || row.calculationOccurrenceId.length === 0) return null;
+  return {
+    unitPrice: row.unitPrice as string,
+    lineTotal: row.lineTotal as string,
+    calculationOccurrenceId: row.calculationOccurrenceId,
+  };
+};
+
+export interface PersistResultIdentity {
+  projectId: string;
+  boqItemId: string;
+  calculationAsOfDate: string;
+  draftRevision: number;
+  /**
+   * FINAL-TERMINAL-STATE-INVALIDATION: monotonic, never decremented, never
+   * reset — the permanent tiebreaker. projectId/boqItemId/calculationAsOfDate/
+   * draftRevision are all reversible (a date can be changed back, an item
+   * re-selected, a project re-visited) — persistContextRevision is the one
+   * field that can never coincidentally return to an old value once it has
+   * moved past it, so a stale terminal result can never reappear merely
+   * because every *other* value happened to round-trip back to what it was.
+   */
+  persistContextRevision: number;
+}
+
+/**
+ * C-BLOCKER-04 / FINAL-TERMINAL-STATE-INVALIDATION: a terminal SUCCESS/
+ * FAILED_CONFIRMED result stays displayable only while the current UI
+ * identity still matches exactly the identity it was produced against. Any
+ * drift — a different project, a different selected item, an edited
+ * calculation date, a newer draft revision, or a newer persist-context
+ * revision — makes the result stale; it must not resurface even if every
+ * reversible value later returns to what it was. OUTCOME_UNKNOWN is
+ * intentionally exempt from this check (see RabWorkspacePage) — it must
+ * remain visible as a warning for the affected item regardless of the very
+ * revision change that produced it.
+ */
+export const isPersistResultFresh = (
+  target: PersistResultIdentity,
+  current: PersistResultIdentity,
+): boolean =>
+  target.projectId === current.projectId &&
+  target.boqItemId === current.boqItemId &&
+  target.calculationAsOfDate === current.calculationAsOfDate &&
+  target.draftRevision === current.draftRevision &&
+  target.persistContextRevision === current.persistContextRevision;
+
+/**
+ * FINAL-TERMINAL-STATE-INVALIDATION: the one and only definition of which
+ * terminal persist states must be invalidated on a context change
+ * (item/date/project) vs preserved. success/failed_confirmed are confirmed
+ * claims tied to the old context and must be dropped; idle/persisting/
+ * reloading have nothing confirmed to lose; outcome_unknown is an honest
+ * warning that must survive a same-project context drift (see
+ * RabWorkspacePage's markPersistContextChanged / project-change handling).
+ */
+export const shouldInvalidateTerminalPersistResult = (
+  kind: 'idle' | 'persisting' | 'reloading' | 'success' | 'failed_confirmed' | 'outcome_unknown',
+): boolean => kind === 'success' || kind === 'failed_confirmed';
+
+/**
+ * SELECTED-ITEM-RELOAD-STABILITY: a post-reload selection must prefer the
+ * row the user already had selected, if it still exists — never
+ * unconditionally jump to the first WORK_ITEM (that would move the drawer
+ * away from a just-persisted, non-first item right when its success result
+ * becomes visible). Falls back to the first WORK_ITEM only when the current
+ * selection is gone, and to an empty selection only when there is no
+ * WORK_ITEM at all. Never depends on array index and never fabricates an id.
+ */
+export const resolveSelectedRowIdAfterReload = (
+  currentSelectedRowId: string,
+  availableRows: readonly { id: string; type: string }[],
+): string => {
+  if (currentSelectedRowId && availableRows.some((row) => row.id === currentSelectedRowId)) {
+    return currentSelectedRowId;
+  }
+  return availableRows.find((row) => row.type === 'item')?.id ?? '';
+};
+
+export interface CostEngineCopy {
+  statusLabel: string;
+  sourceLabel: string;
+  frameBadge: string;
+  frameMessage: string;
+}
+
+const AHSP_ENGINE_INACTIVE_FRAME_MESSAGE =
+  'Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine AHSP tersambung. Angka detail tidak dibuat palsu.';
+
+/**
+ * Drawer copy coherence: reuses toRabCostDisplay (the existing display
+ * adapter) rather than inventing a second status vocabulary. The drawer
+ * must never say "Engine belum aktif" / "Belum tersambung" while a real
+ * Cost Kernel result is available for an AHSP-linked item — those two
+ * honest placeholders are reserved strictly for "no AHSP associated yet".
+ */
+export const describeCostEngineStatus = (
+  ahspCodePresent: boolean,
+  costRowStatus: CostRowStatus | undefined,
+): CostEngineCopy => {
+  if (!ahspCodePresent) {
+    return {
+      statusLabel: 'Engine belum aktif',
+      sourceLabel: 'Belum tersambung',
+      frameBadge: 'Engine belum aktif',
+      frameMessage: AHSP_ENGINE_INACTIVE_FRAME_MESSAGE,
+    };
+  }
+  if (!costRowStatus) {
+    return {
+      statusLabel: 'Standby',
+      sourceLabel: 'Belum tersambung',
+      frameBadge: 'Standby',
+      frameMessage: AHSP_ENGINE_INACTIVE_FRAME_MESSAGE,
+    };
+  }
+  const display = toRabCostDisplay(costRowStatus);
+  const frameMessage =
+    costRowStatus.kind === 'calculated'
+      ? 'Harga satuan dan jumlah dihitung oleh Cost Kernel SIMPROK. Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine analisa AHSP tersambung.'
+      : AHSP_ENGINE_INACTIVE_FRAME_MESSAGE;
+  return {
+    statusLabel: display.badge,
+    sourceLabel: 'Cost Kernel SIMPROK',
+    frameBadge: display.badge,
+    frameMessage,
+  };
+};

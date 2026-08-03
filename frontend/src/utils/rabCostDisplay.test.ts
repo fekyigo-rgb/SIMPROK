@@ -3,16 +3,35 @@ import test from "node:test";
 import {
   addDecimalStrings,
   applyBatchResults,
+  applyReloadIfCurrent,
   beginLoadingRows,
+  buildPersistCalculationRequestBody,
+  classifyPersistOutcome,
   computeDirectCostTotal,
+  confirmPersistedRow,
+  derivePersistFailureReason,
+  describeCostEngineStatus,
+  evaluatePersistActionReachability,
   formatBoqImportMeasurement,
+  GENERIC_PERSIST_FAILURE_REASON,
   invalidateRow,
+  isDraftDirtyForSource,
   isDraftPricingComplete,
+  isDraftRevisionCurrent,
+  isPersistResultFresh,
   markRequestFailed,
+  resolveSelectedRowIdAfterReload,
+  shouldInvalidateTerminalPersistResult,
   sumDecimalStrings,
+  toLocalDateOnlyString,
   toRabCostDisplay,
   type CostCalculationResponse,
   type CostRowStatus,
+  type PersistActionReachabilityInput,
+  type PersistedRowConfirmationTarget,
+  type PersistResultIdentity,
+  type ReloadApplyCallbacks,
+  type ReloadRequestIdentity,
 } from "./rabCostDisplay.ts";
 
 test('structural import rows never render quantity-zero or unit sentinels', () => {
@@ -207,4 +226,423 @@ test("isDraftPricingComplete is false while a kernel row is still loading/invali
 
 test("isDraftPricingComplete is vacuously true for an empty row set", () => {
   assert.equal(isDraftPricingComplete([], {}), true);
+});
+
+const readyReachabilityInput: PersistActionReachabilityInput = {
+  projectId: "project-1",
+  canEditDraft: true,
+  selectedItem: { id: "item-1", ahspVersionId: "ahsp-1" },
+  costRowStatus: { kind: "calculated", response: calculatedResponse },
+  calculationAsOfDate: "2026-08-03",
+  draftDirty: false,
+  persistInFlight: false,
+};
+
+test("C-01: READY only for an editable, AHSP-linked WORK_ITEM with a calculated result and a valid date", () => {
+  assert.equal(evaluatePersistActionReachability(readyReachabilityInput), "READY");
+});
+
+test("C-02: no active project or a non-editable draft blocks the action", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, projectId: null }),
+    "NO_PROJECT",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, canEditDraft: false }),
+    "DRAFT_NOT_EDITABLE",
+  );
+});
+
+test("C-03: a missing selected item or a missing AHSP link blocks the action", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, selectedItem: null }),
+    "NO_SELECTED_WORK_ITEM",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      selectedItem: { id: "item-1", ahspVersionId: null },
+    }),
+    "AHSP_NOT_SELECTED",
+  );
+});
+
+test("C-04: every non-calculated Cost Kernel status blocks the action — no manual-price fallback for a kernel row", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, costRowStatus: { kind: "loading" } }),
+    "COST_RESULT_LOADING",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, costRowStatus: { kind: "invalidated" } }),
+    "COST_RESULT_INVALIDATED",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      costRowStatus: { kind: "fail_closed", reason: "MISSING_ADAPTED_PRICE" },
+    }),
+    "COST_RESULT_FAIL_CLOSED",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, costRowStatus: { kind: "request_failed" } }),
+    "COST_REQUEST_FAILED",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, costRowStatus: undefined }),
+    "COST_RESULT_MISSING",
+  );
+});
+
+test("C-05: only an exact YYYY-MM-DD shape passes the UI-format gate; real calendar validity stays backend-authoritative", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, calculationAsOfDate: "" }),
+    "INVALID_CALCULATION_DATE",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      calculationAsOfDate: "2026-08-03T10:00:00.000Z",
+    }),
+    "INVALID_CALCULATION_DATE",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, calculationAsOfDate: "2026-8-3" }),
+    "INVALID_CALCULATION_DATE",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, calculationAsOfDate: "not-a-date" }),
+    "INVALID_CALCULATION_DATE",
+  );
+  // "2026-02-30" has the exact right shape but is not a real calendar date —
+  // the UI gate accepts it (shape only); the backend's parseDateOnlyUtc is
+  // the one and only real-calendar-validity authority.
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, calculationAsOfDate: "2026-02-30" }),
+    "READY",
+  );
+});
+
+test("C-06: the request-body builder returns exactly one own key, calculationAsOfDate — never price/total/occurrence/workspace/project/item fields", () => {
+  const body = buildPersistCalculationRequestBody("2026-08-03");
+  assert.deepEqual(Object.keys(body), ["calculationAsOfDate"]);
+  assert.equal(body.calculationAsOfDate, "2026-08-03");
+});
+
+test("C-07: unsaved local draft edits block the action even when everything else is ready (dirty-state gate)", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, draftDirty: true }),
+    "UNSAVED_DRAFT_CHANGES",
+  );
+});
+
+test("C-08: a persist request already in flight blocks a duplicate submission", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, persistInFlight: true }),
+    "PERSIST_IN_FLIGHT",
+  );
+});
+
+test("C-09: classifyPersistOutcome — a network failure and a post-2xx reload failure both resolve to OUTCOME_UNKNOWN, never a confirmed state", () => {
+  assert.equal(classifyPersistOutcome({ kind: "network_error" }, { kind: "not_attempted" }), "OUTCOME_UNKNOWN");
+  assert.equal(classifyPersistOutcome({ kind: "response", ok: true }, { kind: "error" }), "OUTCOME_UNKNOWN");
+  assert.equal(
+    classifyPersistOutcome({ kind: "response", ok: true }, { kind: "not_attempted" }),
+    "OUTCOME_UNKNOWN",
+  );
+});
+
+test("C-10: classifyPersistOutcome — SUCCESS requires a 2xx POST plus a confirmed reload; a non-2xx POST is FAILED_CONFIRMED", () => {
+  assert.equal(classifyPersistOutcome({ kind: "response", ok: true }, { kind: "success" }), "SUCCESS");
+  assert.equal(
+    classifyPersistOutcome({ kind: "response", ok: false }, { kind: "not_attempted" }),
+    "FAILED_CONFIRMED",
+  );
+});
+
+test("C-11: toLocalDateOnlyString reads local calendar fields (never a UTC slice) and round-trips near month/year boundaries", () => {
+  assert.equal(toLocalDateOnlyString(new Date(2026, 0, 1)), "2026-01-01");
+  assert.equal(toLocalDateOnlyString(new Date(2026, 6, 9, 23, 59, 59)), "2026-07-09");
+  assert.equal(toLocalDateOnlyString(new Date(2026, 11, 31, 0, 0, 1)), "2026-12-31");
+});
+
+test("C-12: derivePersistFailureReason prefers a string message, joins a safe string array, and falls back honestly for anything else", () => {
+  assert.equal(derivePersistFailureReason({ message: "RAB_NOT_FULLY_PRICED" }), "RAB_NOT_FULLY_PRICED");
+  assert.equal(
+    derivePersistFailureReason({ message: ["field1 invalid", "field2 invalid"] }),
+    "field1 invalid; field2 invalid",
+  );
+  assert.equal(derivePersistFailureReason({ message: [123, null, "ok"] }), "ok");
+  assert.equal(derivePersistFailureReason({}), GENERIC_PERSIST_FAILURE_REASON);
+  assert.equal(derivePersistFailureReason(null), GENERIC_PERSIST_FAILURE_REASON);
+  assert.equal(derivePersistFailureReason("not-an-object"), GENERIC_PERSIST_FAILURE_REASON);
+  assert.equal(derivePersistFailureReason({ message: [123, null] }), GENERIC_PERSIST_FAILURE_REASON);
+});
+
+const confirmationTarget: PersistedRowConfirmationTarget = {
+  boqItemId: "item-1",
+  calculationAsOfDate: "2026-08-03",
+};
+
+const validConfirmedRow = {
+  id: "item-1",
+  priceOrigin: "SERVER_COST_KERNEL",
+  calculationAsOfDate: "2026-08-03",
+  unitPrice: "2004055.00",
+  lineTotal: "20040550.00",
+  calculationOccurrenceId: "occurrence-1",
+};
+
+test("C-13: reloaded persisted-row confirmation is fail-closed against every malformed/mismatched shape, and accepts one valid SERVER_COST_KERNEL row", () => {
+  assert.equal(confirmPersistedRow(null, confirmationTarget), null);
+  assert.equal(confirmPersistedRow(undefined, confirmationTarget), null);
+  assert.equal(confirmPersistedRow({}, confirmationTarget), null);
+  assert.equal(confirmPersistedRow({ ...validConfirmedRow, id: "wrong-item" }, confirmationTarget), null);
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, calculationAsOfDate: "2026-08-04" }, confirmationTarget),
+    null,
+  );
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, priceOrigin: "MANUAL_CLIENT" }, confirmationTarget),
+    null,
+  );
+  assert.equal(confirmPersistedRow({ ...validConfirmedRow, priceOrigin: null }, confirmationTarget), null);
+  // Runtime JSON numbers, not source literals — see B-15's identical rationale (no-loss-of-precision lint).
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, unitPrice: Number("2004055.00") }, confirmationTarget),
+    null,
+  );
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, lineTotal: Number("20040550.00") }, confirmationTarget),
+    null,
+  );
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, unitPrice: "not-a-decimal" }, confirmationTarget),
+    null,
+  );
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, calculationOccurrenceId: "" }, confirmationTarget),
+    null,
+  );
+
+  const confirmed = confirmPersistedRow(validConfirmedRow, confirmationTarget);
+  assert.deepEqual(confirmed, {
+    unitPrice: "2004055.00",
+    lineTotal: "20040550.00",
+    calculationOccurrenceId: "occurrence-1",
+  });
+});
+
+test("C-14: isDraftRevisionCurrent is exact equality only — no truthy/falsy coercion, revision 0 is a real, comparable value", () => {
+  assert.equal(isDraftRevisionCurrent(5, 5), true);
+  assert.equal(isDraftRevisionCurrent(5, 6), false);
+  assert.equal(isDraftRevisionCurrent(0, 0), true);
+  assert.equal(isDraftRevisionCurrent(0, 1), false);
+  assert.equal(isDraftRevisionCurrent(1, 0), false);
+});
+
+test("C-15: BASELINE_SEED is dirty (a starting point, never an already-saved Working Draft) and blocks reachability through the existing UNSAVED_DRAFT_CHANGES state; WORKING_DRAFT stays clean and READY", () => {
+  assert.equal(isDraftDirtyForSource("WORKING_DRAFT"), false);
+  assert.equal(isDraftDirtyForSource("BASELINE_SEED"), true);
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      draftDirty: isDraftDirtyForSource("BASELINE_SEED"),
+    }),
+    "UNSAVED_DRAFT_CHANGES",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      draftDirty: isDraftDirtyForSource("WORKING_DRAFT"),
+    }),
+    "READY",
+  );
+});
+
+const baseResultIdentity: PersistResultIdentity = {
+  projectId: "project-1",
+  boqItemId: "item-1",
+  calculationAsOfDate: "2026-08-03",
+  draftRevision: 3,
+  persistContextRevision: 0,
+};
+
+test("C-16: a persist result becomes stale when project, item, calculation date, or draft revision differs; the exact same identity remains current", () => {
+  assert.equal(isPersistResultFresh(baseResultIdentity, baseResultIdentity), true);
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, { ...baseResultIdentity, projectId: "project-2" }),
+    false,
+  );
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, { ...baseResultIdentity, boqItemId: "item-2" }),
+    false,
+  );
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, { ...baseResultIdentity, calculationAsOfDate: "2026-08-04" }),
+    false,
+  );
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, { ...baseResultIdentity, draftRevision: 4 }),
+    false,
+  );
+  // A structurally identical but distinct object must compare fresh by value, not by reference.
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, {
+      projectId: "project-1",
+      boqItemId: "item-1",
+      calculationAsOfDate: "2026-08-03",
+      draftRevision: 3,
+      persistContextRevision: 0,
+    }),
+    true,
+  );
+});
+
+test("C-17: describeCostEngineStatus never claims Engine belum aktif / Belum tersambung while a real Cost Kernel result exists for an AHSP-linked item", () => {
+  const noAhsp = describeCostEngineStatus(false, undefined);
+  assert.equal(noAhsp.statusLabel, "Engine belum aktif");
+  assert.equal(noAhsp.sourceLabel, "Belum tersambung");
+
+  const calculated = describeCostEngineStatus(true, { kind: "calculated", response: calculatedResponse });
+  assert.notEqual(calculated.statusLabel, "Engine belum aktif");
+  assert.notEqual(calculated.sourceLabel, "Belum tersambung");
+  assert.notEqual(calculated.frameBadge, "Engine belum aktif");
+  assert.equal(calculated.sourceLabel, "Cost Kernel SIMPROK");
+  assert.equal(calculated.statusLabel, "Dihitung SIMPROK");
+
+  const loading = describeCostEngineStatus(true, { kind: "loading" });
+  assert.notEqual(loading.statusLabel, "Engine belum aktif");
+  assert.equal(loading.statusLabel, "Menghitung SIMPROK...");
+
+  const failClosed = describeCostEngineStatus(true, { kind: "fail_closed", reason: "MISSING_ADAPTED_PRICE" });
+  assert.equal(failClosed.statusLabel, "MISSING_ADAPTED_PRICE");
+
+  const invalidated = describeCostEngineStatus(true, { kind: "invalidated" });
+  assert.equal(invalidated.statusLabel, "Perlu dihitung ulang");
+
+  const requestFailed = describeCostEngineStatus(true, { kind: "request_failed" });
+  assert.equal(requestFailed.statusLabel, "Gagal memuat kalkulasi");
+
+  // ahspCodePresent=true but no CostRowStatus at all (e.g. snapshot-only association) — matches the pre-existing "Standby" behavior, still never "Engine belum aktif".
+  const standby = describeCostEngineStatus(true, undefined);
+  assert.equal(standby.statusLabel, "Standby");
+  assert.notEqual(standby.statusLabel, "Engine belum aktif");
+});
+
+test("C-18: a terminal result cannot reappear after every reversible context value (project/item/date/draftRevision) returns to its original value — persistContextRevision is the permanent tiebreaker", () => {
+  const original: PersistResultIdentity = {
+    projectId: "project-A",
+    boqItemId: "item-A",
+    calculationAsOfDate: "2026-08-03",
+    draftRevision: 5,
+    persistContextRevision: 0,
+  };
+  assert.equal(isPersistResultFresh(original, original), true);
+
+  // Context changes (e.g. the user switched items, edited the calculation
+  // date, or switched projects and back) — persistContextRevision moves to 1.
+  const afterContextChange: PersistResultIdentity = { ...original, persistContextRevision: 1 };
+  assert.equal(isPersistResultFresh(original, afterContextChange), false);
+
+  // Every reversible value is restored EXACTLY to its original value; only
+  // persistContextRevision — which never decreases and never resets — stays
+  // at 1. The old SUCCESS/FAILED_CONFIRMED must remain permanently invalid.
+  const revertedButContextStillNew: PersistResultIdentity = {
+    projectId: "project-A",
+    boqItemId: "item-A",
+    calculationAsOfDate: "2026-08-03",
+    draftRevision: 5,
+    persistContextRevision: 1,
+  };
+  assert.equal(isPersistResultFresh(original, revertedButContextStillNew), false);
+
+  assert.equal(shouldInvalidateTerminalPersistResult("success"), true);
+  assert.equal(shouldInvalidateTerminalPersistResult("failed_confirmed"), true);
+  assert.equal(shouldInvalidateTerminalPersistResult("idle"), false);
+  assert.equal(shouldInvalidateTerminalPersistResult("persisting"), false);
+  assert.equal(shouldInvalidateTerminalPersistResult("reloading"), false);
+  assert.equal(shouldInvalidateTerminalPersistResult("outcome_unknown"), false);
+});
+
+test("C-19: resolveSelectedRowIdAfterReload preserves the current selection when still present, falls back to the first WORK_ITEM, never depends on index, and never fabricates a selection", () => {
+  const rows = [
+    { id: "folder-1", type: "folder" },
+    { id: "item-1", type: "item" },
+    { id: "item-2", type: "item" },
+    { id: "note-1", type: "note" },
+  ];
+  // The current selection (the second item, not the first row of any type) still exists — preserved exactly.
+  assert.equal(resolveSelectedRowIdAfterReload("item-2", rows), "item-2");
+  // The current selection no longer exists — falls back to the first WORK_ITEM (never the first row overall — folder-1 is at index 0).
+  assert.equal(resolveSelectedRowIdAfterReload("item-gone", rows), "item-1");
+  // Only FOLDER/NOTE rows exist — no WORK_ITEM to fall back to.
+  const noWorkItems = [{ id: "folder-1", type: "folder" }, { id: "note-1", type: "note" }];
+  assert.equal(resolveSelectedRowIdAfterReload("item-gone", noWorkItems), "");
+  // Empty rows.
+  assert.equal(resolveSelectedRowIdAfterReload("anything", []), "");
+  assert.equal(resolveSelectedRowIdAfterReload("", []), "");
+  // A blank current selection with rows available still falls back to the first WORK_ITEM, not preserved as blank.
+  assert.equal(resolveSelectedRowIdAfterReload("", rows), "item-1");
+});
+
+const baseReloadIdentity: ReloadRequestIdentity = {
+  projectId: "project-A",
+  generation: 1,
+  draftRevision: 3,
+};
+
+/**
+ * C-20-R2: exercises the exact helper reloadDraft() wires all three of its
+ * state-application callbacks through (applyReloadIfCurrent) — not the
+ * underlying identity predicate in isolation — so a wiring regression (e.g.
+ * a call site skipping the helper) would be caught here.
+ */
+const makeReloadApplyCounters = () => {
+  const counts = { applyRecap: 0, applyRows: 0, loadCostCalculations: 0 };
+  const callbacks: ReloadApplyCallbacks = {
+    applyRecap: () => { counts.applyRecap += 1; },
+    applyRows: () => { counts.applyRows += 1; },
+    loadCostCalculations: () => { counts.loadCostCalculations += 1; },
+  };
+  return { counts, callbacks };
+};
+
+test("C-20: applyReloadIfCurrent — Project A's captured identity resolving against a live Project B applies zero of the three callbacks", () => {
+  const { counts, callbacks } = makeReloadApplyCounters();
+  const applied = applyReloadIfCurrent(
+    baseReloadIdentity,
+    { ...baseReloadIdentity, projectId: "project-B" },
+    callbacks,
+  );
+  assert.equal(applied, false);
+  assert.deepEqual(counts, { applyRecap: 0, applyRows: 0, loadCostCalculations: 0 });
+});
+
+test("C-20: applyReloadIfCurrent — a stale persist generation (superseded by a newer attempt on the same project) applies zero of the three callbacks", () => {
+  const { counts, callbacks } = makeReloadApplyCounters();
+  const applied = applyReloadIfCurrent(
+    baseReloadIdentity,
+    { ...baseReloadIdentity, generation: 2 },
+    callbacks,
+  );
+  assert.equal(applied, false);
+  assert.deepEqual(counts, { applyRecap: 0, applyRows: 0, loadCostCalculations: 0 });
+});
+
+test("C-20: applyReloadIfCurrent — a stale draft revision (a local edit made while the request was in flight) applies zero of the three callbacks", () => {
+  const { counts, callbacks } = makeReloadApplyCounters();
+  const applied = applyReloadIfCurrent(
+    baseReloadIdentity,
+    { ...baseReloadIdentity, draftRevision: 4 },
+    callbacks,
+  );
+  assert.equal(applied, false);
+  assert.deepEqual(counts, { applyRecap: 0, applyRows: 0, loadCostCalculations: 0 });
+});
+
+test("C-20: applyReloadIfCurrent — project, generation, and draft revision all matching applies each of the three callbacks exactly once", () => {
+  const { counts, callbacks } = makeReloadApplyCounters();
+  const applied = applyReloadIfCurrent(baseReloadIdentity, baseReloadIdentity, callbacks);
+  assert.equal(applied, true);
+  assert.deepEqual(counts, { applyRecap: 1, applyRows: 1, loadCostCalculations: 1 });
 });
