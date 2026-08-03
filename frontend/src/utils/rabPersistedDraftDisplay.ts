@@ -6,6 +6,15 @@ import { groupThousands, parseCanonicalDecimalString } from './rabCostDisplay.ts
  * multiplies, sums, rounds, or otherwise recomputes a canonical money field.
  * Formatting reuses the one shared decimal parse/grouping rule from
  * rabCostDisplay.ts rather than a second regex/grouping implementation.
+ *
+ * GATE2A-AB-RUNTIME-WIRE-TYPE-01: formatExactMoney/formatExactPercent/
+ * formatExactQuantity below keep their typed signature (`string | null`) —
+ * that is the TypeScript contract, not the runtime defense. The actual
+ * runtime guard against a JSON payload that violates that contract (e.g. a
+ * JSON number where an exact decimal string was promised) lives once, in
+ * parseCanonicalDecimalString (rabCostDisplay.ts), which every formatter
+ * here calls before ever touching the value. Fixing it there fixes it for
+ * all three formatters — no second `typeof` check is duplicated here.
  */
 
 export const NULL_DISPLAY = '—';
@@ -154,10 +163,17 @@ export interface RecapDisplay {
  * taxAmount/grandTotal exactly as the server sent them — never a frontend
  * formula. INCOMPLETE never shows a partial total as if it were authoritative
  * (null stays "—", not Rp0).
+ *
+ * GATE2A-AB-RUNTIME-WIRE-TYPE-01: the authoritative branch requires an exact
+ * `pricingStatus === 'COMPLETE'` match — never merely "not INCOMPLETE". The
+ * static type says pricingStatus is 'COMPLETE' | 'INCOMPLETE', but that is a
+ * compile-time promise only; an unknown, missing, or malformed runtime value
+ * must fail closed into the same honest incomplete display, not be silently
+ * treated as authoritative.
  */
 export const toRecapDisplay = (recap: PersistedDraftRecap | null): RecapDisplay => {
   const taxPercentValue = recap ? (recap.ppnPercent ?? recap.taxPercent) : null;
-  if (!recap || recap.pricingStatus === 'INCOMPLETE') {
+  if (!recap || recap.pricingStatus !== 'COMPLETE') {
     return {
       incomplete: true,
       incompleteLabel: INCOMPLETE_RECAP_LABEL,

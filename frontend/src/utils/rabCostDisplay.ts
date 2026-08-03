@@ -49,7 +49,19 @@ export interface ParsedDecimalString {
 
 export const DECIMAL_STRING_PATTERN = /^(-?)(\d+)(?:\.(\d+))?$/;
 
-export const parseCanonicalDecimalString = (value: string): ParsedDecimalString | null => {
+/**
+ * GATE2A-AB-RUNTIME-WIRE-TYPE-01: `value` is typed `unknown`, not `string`,
+ * because the canonical wire contract (exact decimal string) is a runtime
+ * promise the JSON payload can violate even though TypeScript's static types
+ * say otherwise. RegExp.prototype.exec coerces any non-string argument to a
+ * string first — a JSON number like 9007199254740993.01 would already have
+ * lost precision as a JS double (and re-stringify to a different digit
+ * string) before the regex ever saw it. The explicit `typeof` check rejects
+ * every non-string runtime value up front, so that silent coercion path
+ * never executes.
+ */
+export const parseCanonicalDecimalString = (value: unknown): ParsedDecimalString | null => {
+  if (typeof value !== "string") return null;
   const match = DECIMAL_STRING_PATTERN.exec(value);
   if (!match) return null;
   return { negative: match[1] === "-", intPart: match[2], fracPart: match[3] ?? "" };
