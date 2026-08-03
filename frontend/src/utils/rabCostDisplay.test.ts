@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   addDecimalStrings,
   applyBatchResults,
+  applyReloadIfCurrent,
   beginLoadingRows,
   buildPersistCalculationRequestBody,
   classifyPersistOutcome,
@@ -18,7 +19,6 @@ import {
   isDraftPricingComplete,
   isDraftRevisionCurrent,
   isPersistResultFresh,
-  isReloadContextCurrent,
   markRequestFailed,
   resolveSelectedRowIdAfterReload,
   shouldInvalidateTerminalPersistResult,
@@ -30,6 +30,7 @@ import {
   type PersistActionReachabilityInput,
   type PersistedRowConfirmationTarget,
   type PersistResultIdentity,
+  type ReloadApplyCallbacks,
   type ReloadRequestIdentity,
 } from "./rabCostDisplay.ts";
 
@@ -590,46 +591,58 @@ const baseReloadIdentity: ReloadRequestIdentity = {
   draftRevision: 3,
 };
 
-test("C-20: isReloadContextCurrent rejects a reload whose captured project no longer matches the live project — the exact cross-project contamination reloadDraft() must never apply", () => {
-  // Project A request resolves after the user has already navigated to Project B — must not be applied.
-  assert.equal(
-    isReloadContextCurrent(baseReloadIdentity, { ...baseReloadIdentity, projectId: "project-B" }),
-    false,
+/**
+ * C-20-R2: exercises the exact helper reloadDraft() wires all three of its
+ * state-application callbacks through (applyReloadIfCurrent) — not the
+ * underlying identity predicate in isolation — so a wiring regression (e.g.
+ * a call site skipping the helper) would be caught here.
+ */
+const makeReloadApplyCounters = () => {
+  const counts = { applyRecap: 0, applyRows: 0, loadCostCalculations: 0 };
+  const callbacks: ReloadApplyCallbacks = {
+    applyRecap: () => { counts.applyRecap += 1; },
+    applyRows: () => { counts.applyRows += 1; },
+    loadCostCalculations: () => { counts.loadCostCalculations += 1; },
+  };
+  return { counts, callbacks };
+};
+
+test("C-20: applyReloadIfCurrent — Project A's captured identity resolving against a live Project B applies zero of the three callbacks", () => {
+  const { counts, callbacks } = makeReloadApplyCounters();
+  const applied = applyReloadIfCurrent(
+    baseReloadIdentity,
+    { ...baseReloadIdentity, projectId: "project-B" },
+    callbacks,
   );
+  assert.equal(applied, false);
+  assert.deepEqual(counts, { applyRecap: 0, applyRows: 0, loadCostCalculations: 0 });
 });
 
-test("C-20: isReloadContextCurrent rejects a reload whose captured persist generation is stale — a superseded persist attempt on the same project must never apply", () => {
-  // The persist attempt this response belongs to (generation 1) has already been superseded by a newer attempt (generation 2).
-  assert.equal(
-    isReloadContextCurrent(baseReloadIdentity, { ...baseReloadIdentity, generation: 2 }),
-    false,
+test("C-20: applyReloadIfCurrent — a stale persist generation (superseded by a newer attempt on the same project) applies zero of the three callbacks", () => {
+  const { counts, callbacks } = makeReloadApplyCounters();
+  const applied = applyReloadIfCurrent(
+    baseReloadIdentity,
+    { ...baseReloadIdentity, generation: 2 },
+    callbacks,
   );
+  assert.equal(applied, false);
+  assert.deepEqual(counts, { applyRecap: 0, applyRows: 0, loadCostCalculations: 0 });
 });
 
-test("C-20: isReloadContextCurrent rejects a reload whose captured draft revision is stale — a local edit made while the request was in flight must never be overwritten", () => {
-  assert.equal(
-    isReloadContextCurrent(baseReloadIdentity, { ...baseReloadIdentity, draftRevision: 4 }),
-    false,
+test("C-20: applyReloadIfCurrent — a stale draft revision (a local edit made while the request was in flight) applies zero of the three callbacks", () => {
+  const { counts, callbacks } = makeReloadApplyCounters();
+  const applied = applyReloadIfCurrent(
+    baseReloadIdentity,
+    { ...baseReloadIdentity, draftRevision: 4 },
+    callbacks,
   );
+  assert.equal(applied, false);
+  assert.deepEqual(counts, { applyRecap: 0, applyRows: 0, loadCostCalculations: 0 });
 });
 
-test("C-20: isReloadContextCurrent accepts a reload only when project, generation, and draft revision all still match — the one legitimate same-project, same-attempt, same-revision reload/retry", () => {
-  assert.equal(isReloadContextCurrent(baseReloadIdentity, baseReloadIdentity), true);
-  // A structurally identical but distinct object must compare current by value, not by reference.
-  assert.equal(
-    isReloadContextCurrent(baseReloadIdentity, {
-      projectId: "project-A",
-      generation: 1,
-      draftRevision: 3,
-    }),
-    true,
-  );
-  // Revision 0 is a real, comparable value — never coerced to falsy-equals-mismatch.
-  assert.equal(
-    isReloadContextCurrent(
-      { projectId: "project-A", generation: 0, draftRevision: 0 },
-      { projectId: "project-A", generation: 0, draftRevision: 0 },
-    ),
-    true,
-  );
+test("C-20: applyReloadIfCurrent — project, generation, and draft revision all matching applies each of the three callbacks exactly once", () => {
+  const { counts, callbacks } = makeReloadApplyCounters();
+  const applied = applyReloadIfCurrent(baseReloadIdentity, baseReloadIdentity, callbacks);
+  assert.equal(applied, true);
+  assert.deepEqual(counts, { applyRecap: 1, applyRows: 1, loadCostCalculations: 1 });
 });

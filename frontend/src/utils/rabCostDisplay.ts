@@ -430,6 +430,35 @@ export const isReloadContextCurrent = (
   captured.generation === current.generation &&
   captured.draftRevision === current.draftRevision;
 
+export interface ReloadApplyCallbacks {
+  applyRecap: () => void;
+  applyRows: () => void;
+  loadCostCalculations: () => void;
+}
+
+/**
+ * C-20-R2-PASSIVE-EFFECT-WINDOW-AND-WIRING-PROOF: the one orchestration
+ * point through which reloadDraft()'s three-part state application
+ * (recap, rows, cost-calculation load) is allowed to run. isReloadContextCurrent
+ * is the single identity authority — this helper never re-implements or
+ * duplicates that comparison, it only gates on it. All three callbacks fire
+ * together, exactly once, or none of them fire at all: there is no
+ * partially-applied state, and no second call site anywhere is allowed to
+ * invoke applyRecap/applyRows/loadCostCalculations directly for a reload —
+ * every reload response is routed through here.
+ */
+export const applyReloadIfCurrent = (
+  captured: ReloadRequestIdentity,
+  current: ReloadRequestIdentity,
+  callbacks: ReloadApplyCallbacks,
+): boolean => {
+  if (!isReloadContextCurrent(captured, current)) return false;
+  callbacks.applyRecap();
+  callbacks.applyRows();
+  callbacks.loadCostCalculations();
+  return true;
+};
+
 export interface PersistedRowConfirmationTarget {
   boqItemId: string;
   calculationAsOfDate: string;

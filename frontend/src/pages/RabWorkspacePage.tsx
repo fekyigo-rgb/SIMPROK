@@ -1,4 +1,4 @@
-import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowDown,
@@ -22,6 +22,7 @@ import {
 import { apiFetch } from '../utils/apiClient';
 import {
   applyBatchResults,
+  applyReloadIfCurrent,
   beginLoadingRows,
   buildPersistCalculationRequestBody,
   classifyPersistOutcome,
@@ -38,7 +39,6 @@ import {
   isDraftPricingComplete,
   isDraftRevisionCurrent,
   isPersistResultFresh,
-  isReloadContextCurrent,
   markRequestFailed,
   resolveSelectedRowIdAfterReload,
   shouldInvalidateTerminalPersistResult,
@@ -392,18 +392,31 @@ export function RabWorkspacePage() {
   /** FINAL-TERMINAL-STATE-INVALIDATION: distinguishes an actual project change from a same-project retryToken-driven re-run of the load effect. */
   const previousProjectIdRef = useRef<string | null>(null);
   /**
-   * C-20-CROSS-PROJECT-RELOAD-ISOLATION: mirrors the current projectId.
-   * reloadDraft() is a plain closure re-created each render, so a long-lived
-   * call still in flight from an older render only ever sees that older
-   * render's projectId — this ref is the one place such a call can read the
-   * true, live project id once its response resolves. Synced via its own
-   * effect (never mutated directly in the render body) immediately after
-   * every commit where projectId changed — long before any network response
-   * could possibly resolve.
+   * C-20-CROSS-PROJECT-RELOAD-ISOLATION / C-20-R2: mirrors the current
+   * projectId. reloadDraft() is a plain closure re-created each render, so a
+   * long-lived call still in flight from an older render only ever sees
+   * that older render's projectId — this ref is the one place such a call
+   * can read the true, live project id once its response resolves.
+   *
+   * Synced via useLayoutEffect, not a passive useEffect: a passive effect is
+   * scheduled asynchronously and gives no ordering guarantee relative to a
+   * pending fetch continuation, so a claim that it "runs before any network
+   * response resolves" would not actually be enforced by React — only
+   * observed to usually hold. useLayoutEffect runs synchronously within the
+   * same commit, before the browser can yield to any queued microtask or
+   * timer, so a project switch is guaranteed to be visible here (and in
+   * persistGenerationRef below) before any in-flight request's continuation
+   * — including one that resolves near-instantly — can run.
+   *
+   * persistGenerationRef.current is bumped in this same effect, not in the
+   * passive project-load effect below, so there is exactly one authority for
+   * "did the project change" generation invalidation — see that effect's
+   * comment for why it no longer touches persistGenerationRef itself.
    */
   const currentProjectIdRef = useRef<string | null>(projectId);
-  useEffect(() => {
+  useLayoutEffect(() => {
     currentProjectIdRef.current = projectId;
+    persistGenerationRef.current += 1;
   }, [projectId]);
 
   /**
@@ -500,15 +513,18 @@ export function RabWorkspacePage() {
     // FINAL-TERMINAL-STATE-INVALIDATION §7C: previousProjectIdRef
     // distinguishes an actual project change from a same-project
     // retryToken-driven re-run of this same effect. On a real project
-    // change: retire every in-flight persist response from the old project
-    // (persistGenerationRef), advance the persist-context revision, and
-    // unconditionally reset persistState to idle — including
-    // OUTCOME_UNKNOWN, which must never follow the user from one project
-    // into another. No new request is made to perform this invalidation.
+    // change: advance the persist-context revision, and unconditionally
+    // reset persistState to idle — including OUTCOME_UNKNOWN, which must
+    // never follow the user from one project into another. No new request
+    // is made to perform this invalidation.
+    // C-20-R2: persistGenerationRef is NOT bumped here. This is a passive
+    // effect with no ordering guarantee against an in-flight request's
+    // continuation; the currentProjectIdRef useLayoutEffect above is the one
+    // and only authority that retires an in-flight persist response from the
+    // old project, and it runs synchronously, strictly before this effect.
     const projectChanged = previousProjectIdRef.current !== projectId;
     previousProjectIdRef.current = projectId;
     if (projectChanged) {
-      persistGenerationRef.current += 1;
       markPersistContextChanged();
       setPersistState({ kind: 'idle' });
     }
@@ -857,19 +873,23 @@ export function RabWorkspacePage() {
   };
 
   /**
-   * C-BLOCKER-02 / C-20-CROSS-PROJECT-RELOAD-ISOLATION: `expected`, when
-   * passed, is the persist generation and draft revision captured at the
-   * moment the persist attempt started — verified via isReloadContextCurrent
-   * against the live refs once the fetch resolves, and BEFORE any state is
-   * touched. The project-identity check runs unconditionally, even for
-   * `approveImport`'s argument-less call, because a project switch
-   * invalidates any in-flight reloadDraft response no matter which caller
-   * made it — this request's own projectId is captured once at call start
-   * (requestProjectId) so it can be compared to the live currentProjectIdRef
-   * once the response comes back, never to a stale closure value. Any
-   * mismatch (project, generation, or revision) means this response belongs
-   * to a project/attempt/edit the user has already left — it is discarded
-   * outright, never partially applied.
+   * C-BLOCKER-02 / C-20-CROSS-PROJECT-RELOAD-ISOLATION / C-20-R2: `expected`,
+   * when passed, is the persist generation and draft revision captured at
+   * the moment the persist attempt started. The project-identity check runs
+   * unconditionally, even for `approveImport`'s argument-less call, because
+   * a project switch invalidates any in-flight reloadDraft response no
+   * matter which caller made it — this request's own projectId is captured
+   * once at call start (requestProjectId) so it can be compared to the live
+   * currentProjectIdRef once the response comes back, never to a stale
+   * closure value.
+   *
+   * The three-part state application (recap, rows, cost-calculation load)
+   * is never inlined here — it is always routed through
+   * applyReloadIfCurrent, the one orchestration point that gates all three
+   * callbacks behind isReloadContextCurrent, so there is exactly one place
+   * in this codebase where "is this response still safe to apply" is
+   * decided and exactly one place where the three callbacks fire together
+   * or not at all.
    */
   const reloadDraft = async (
     expected?: { generation: number; draftRevision: number },
@@ -890,13 +910,13 @@ export function RabWorkspacePage() {
       generation: expected?.generation ?? current.generation,
       draftRevision: expected?.draftRevision ?? current.draftRevision,
     };
-    if (!isReloadContextCurrent(captured, current)) {
-      return { kind: 'superseded' };
-    }
 
-    applyRecap(draft.recap);
-    applyRows(draft.items, 'WORKING_DRAFT');
-    loadCostCalculations(draft.items);
+    const applied = applyReloadIfCurrent(captured, current, {
+      applyRecap: () => applyRecap(draft.recap),
+      applyRows: () => applyRows(draft.items, 'WORKING_DRAFT'),
+      loadCostCalculations: () => loadCostCalculations(draft.items),
+    });
+    if (!applied) return { kind: 'superseded' };
     return { kind: 'applied', items: draft.items };
   };
 
