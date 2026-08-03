@@ -19,6 +19,7 @@ import {
   sourceTypeLabel,
   workspaceScopeLabel,
 } from './basicPriceExplorerDisplay.ts';
+import type { ExplorerResourceIdentity } from './basicPriceExplorerDisplay.ts';
 
 test('buildExplorerQueryParams — only non-empty fields become query params', () => {
   const params = buildExplorerQueryParams({ search: '  Semen  ', page: 2, limit: undefined });
@@ -60,10 +61,14 @@ test('isInvalidDateRange — true only when dateFrom is strictly after dateTo', 
 });
 
 test('resourceLabel/regionLabel are re-exported and apply to the Explorer identity shape (baseUnit is a superset field)', () => {
-  assert.equal(
-    resourceLabel({ id: 'r1', code: 'MAT-01', name: 'Semen', type: 'MATERIAL', baseUnit: 'Zak' }),
-    'MAT-01 — Semen',
-  );
+  const explorerResource: ExplorerResourceIdentity = {
+    id: 'r1',
+    code: 'MAT-01',
+    name: 'Semen',
+    type: 'MATERIAL',
+    baseUnit: 'Zak',
+  };
+  assert.equal(resourceLabel(explorerResource), 'MAT-01 — Semen');
   assert.equal(regionLabel({ id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' }), 'ID-JK — DKI Jakarta');
   assert.equal(regionLabel(null), 'Umum (tanpa wilayah)');
 });

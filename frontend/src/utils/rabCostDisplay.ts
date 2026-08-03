@@ -33,12 +33,37 @@ export type CostRowStatus =
   | { kind: "invalidated" }
   | { kind: "request_failed" };
 
+/**
+ * The one shared shape/parse/grouping rule for every exact-decimal string
+ * formatter in this codebase (money and quantity alike) — extracted so a
+ * second adapter (rabPersistedDraftDisplay.ts) can group thousands for a
+ * quantity without a "Rp" prefix, without re-implementing the regex or the
+ * grouping rule. Rejects anything that isn't plain fixed-point notation, so
+ * scientific notation ("1e5") is refused rather than silently formatted.
+ */
+export interface ParsedDecimalString {
+  negative: boolean;
+  intPart: string;
+  fracPart: string;
+}
+
+export const DECIMAL_STRING_PATTERN = /^(-?)(\d+)(?:\.(\d+))?$/;
+
+export const parseCanonicalDecimalString = (value: string): ParsedDecimalString | null => {
+  const match = DECIMAL_STRING_PATTERN.exec(value);
+  if (!match) return null;
+  return { negative: match[1] === "-", intPart: match[2], fracPart: match[3] ?? "" };
+};
+
+/** Thousands-grouping on a digit-only integer string — never touches the fraction. */
+export const groupThousands = (intPart: string): string =>
+  intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+
 export const formatBackendRupiah = (value: string) => {
-  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
-  if (!match) return "Nilai tidak valid";
-  const grouped = match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  const fraction = match[3] ? `,${match[3]}` : "";
-  return `Rp ${match[1]}${grouped}${fraction}`;
+  const parsed = parseCanonicalDecimalString(value);
+  if (!parsed) return "Nilai tidak valid";
+  const fraction = parsed.fracPart ? `,${parsed.fracPart}` : "";
+  return `Rp ${parsed.negative ? "-" : ""}${groupThousands(parsed.intPart)}${fraction}`;
 };
 
 export const toRabCostDisplay = (status: CostRowStatus) => {
