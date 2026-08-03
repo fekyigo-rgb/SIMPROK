@@ -19,6 +19,8 @@ import {
   isDraftRevisionCurrent,
   isPersistResultFresh,
   markRequestFailed,
+  resolveSelectedRowIdAfterReload,
+  shouldInvalidateTerminalPersistResult,
   sumDecimalStrings,
   toLocalDateOnlyString,
   toRabCostDisplay,
@@ -459,6 +461,7 @@ const baseResultIdentity: PersistResultIdentity = {
   boqItemId: "item-1",
   calculationAsOfDate: "2026-08-03",
   draftRevision: 3,
+  persistContextRevision: 0,
 };
 
 test("C-16: a persist result becomes stale when project, item, calculation date, or draft revision differs; the exact same identity remains current", () => {
@@ -486,6 +489,7 @@ test("C-16: a persist result becomes stale when project, item, calculation date,
       boqItemId: "item-1",
       calculationAsOfDate: "2026-08-03",
       draftRevision: 3,
+      persistContextRevision: 0,
     }),
     true,
   );
@@ -520,4 +524,60 @@ test("C-17: describeCostEngineStatus never claims Engine belum aktif / Belum ter
   const standby = describeCostEngineStatus(true, undefined);
   assert.equal(standby.statusLabel, "Standby");
   assert.notEqual(standby.statusLabel, "Engine belum aktif");
+});
+
+test("C-18: a terminal result cannot reappear after every reversible context value (project/item/date/draftRevision) returns to its original value — persistContextRevision is the permanent tiebreaker", () => {
+  const original: PersistResultIdentity = {
+    projectId: "project-A",
+    boqItemId: "item-A",
+    calculationAsOfDate: "2026-08-03",
+    draftRevision: 5,
+    persistContextRevision: 0,
+  };
+  assert.equal(isPersistResultFresh(original, original), true);
+
+  // Context changes (e.g. the user switched items, edited the calculation
+  // date, or switched projects and back) — persistContextRevision moves to 1.
+  const afterContextChange: PersistResultIdentity = { ...original, persistContextRevision: 1 };
+  assert.equal(isPersistResultFresh(original, afterContextChange), false);
+
+  // Every reversible value is restored EXACTLY to its original value; only
+  // persistContextRevision — which never decreases and never resets — stays
+  // at 1. The old SUCCESS/FAILED_CONFIRMED must remain permanently invalid.
+  const revertedButContextStillNew: PersistResultIdentity = {
+    projectId: "project-A",
+    boqItemId: "item-A",
+    calculationAsOfDate: "2026-08-03",
+    draftRevision: 5,
+    persistContextRevision: 1,
+  };
+  assert.equal(isPersistResultFresh(original, revertedButContextStillNew), false);
+
+  assert.equal(shouldInvalidateTerminalPersistResult("success"), true);
+  assert.equal(shouldInvalidateTerminalPersistResult("failed_confirmed"), true);
+  assert.equal(shouldInvalidateTerminalPersistResult("idle"), false);
+  assert.equal(shouldInvalidateTerminalPersistResult("persisting"), false);
+  assert.equal(shouldInvalidateTerminalPersistResult("reloading"), false);
+  assert.equal(shouldInvalidateTerminalPersistResult("outcome_unknown"), false);
+});
+
+test("C-19: resolveSelectedRowIdAfterReload preserves the current selection when still present, falls back to the first WORK_ITEM, never depends on index, and never fabricates a selection", () => {
+  const rows = [
+    { id: "folder-1", type: "folder" },
+    { id: "item-1", type: "item" },
+    { id: "item-2", type: "item" },
+    { id: "note-1", type: "note" },
+  ];
+  // The current selection (the second item, not the first row of any type) still exists — preserved exactly.
+  assert.equal(resolveSelectedRowIdAfterReload("item-2", rows), "item-2");
+  // The current selection no longer exists — falls back to the first WORK_ITEM (never the first row overall — folder-1 is at index 0).
+  assert.equal(resolveSelectedRowIdAfterReload("item-gone", rows), "item-1");
+  // Only FOLDER/NOTE rows exist — no WORK_ITEM to fall back to.
+  const noWorkItems = [{ id: "folder-1", type: "folder" }, { id: "note-1", type: "note" }];
+  assert.equal(resolveSelectedRowIdAfterReload("item-gone", noWorkItems), "");
+  // Empty rows.
+  assert.equal(resolveSelectedRowIdAfterReload("anything", []), "");
+  assert.equal(resolveSelectedRowIdAfterReload("", []), "");
+  // A blank current selection with rows available still falls back to the first WORK_ITEM, not preserved as blank.
+  assert.equal(resolveSelectedRowIdAfterReload("", rows), "item-1");
 });

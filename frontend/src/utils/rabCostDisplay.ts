@@ -454,18 +454,29 @@ export interface PersistResultIdentity {
   boqItemId: string;
   calculationAsOfDate: string;
   draftRevision: number;
+  /**
+   * FINAL-TERMINAL-STATE-INVALIDATION: monotonic, never decremented, never
+   * reset — the permanent tiebreaker. projectId/boqItemId/calculationAsOfDate/
+   * draftRevision are all reversible (a date can be changed back, an item
+   * re-selected, a project re-visited) — persistContextRevision is the one
+   * field that can never coincidentally return to an old value once it has
+   * moved past it, so a stale terminal result can never reappear merely
+   * because every *other* value happened to round-trip back to what it was.
+   */
+  persistContextRevision: number;
 }
 
 /**
- * C-BLOCKER-04: a terminal SUCCESS/FAILED_CONFIRMED result stays displayable
- * only while the current UI identity still matches exactly the identity it
- * was produced against. Any drift — a different project, a different
- * selected item, an edited calculation date, or a newer draft revision —
- * makes the result stale; it must not resurface even if the user later
- * re-selects the exact same item. OUTCOME_UNKNOWN is intentionally exempt
- * from this check (see RabWorkspacePage) — it must remain visible as a
- * warning for the affected item regardless of the very revision change
- * that produced it.
+ * C-BLOCKER-04 / FINAL-TERMINAL-STATE-INVALIDATION: a terminal SUCCESS/
+ * FAILED_CONFIRMED result stays displayable only while the current UI
+ * identity still matches exactly the identity it was produced against. Any
+ * drift — a different project, a different selected item, an edited
+ * calculation date, a newer draft revision, or a newer persist-context
+ * revision — makes the result stale; it must not resurface even if every
+ * reversible value later returns to what it was. OUTCOME_UNKNOWN is
+ * intentionally exempt from this check (see RabWorkspacePage) — it must
+ * remain visible as a warning for the affected item regardless of the very
+ * revision change that produced it.
  */
 export const isPersistResultFresh = (
   target: PersistResultIdentity,
@@ -474,7 +485,40 @@ export const isPersistResultFresh = (
   target.projectId === current.projectId &&
   target.boqItemId === current.boqItemId &&
   target.calculationAsOfDate === current.calculationAsOfDate &&
-  target.draftRevision === current.draftRevision;
+  target.draftRevision === current.draftRevision &&
+  target.persistContextRevision === current.persistContextRevision;
+
+/**
+ * FINAL-TERMINAL-STATE-INVALIDATION: the one and only definition of which
+ * terminal persist states must be invalidated on a context change
+ * (item/date/project) vs preserved. success/failed_confirmed are confirmed
+ * claims tied to the old context and must be dropped; idle/persisting/
+ * reloading have nothing confirmed to lose; outcome_unknown is an honest
+ * warning that must survive a same-project context drift (see
+ * RabWorkspacePage's markPersistContextChanged / project-change handling).
+ */
+export const shouldInvalidateTerminalPersistResult = (
+  kind: 'idle' | 'persisting' | 'reloading' | 'success' | 'failed_confirmed' | 'outcome_unknown',
+): boolean => kind === 'success' || kind === 'failed_confirmed';
+
+/**
+ * SELECTED-ITEM-RELOAD-STABILITY: a post-reload selection must prefer the
+ * row the user already had selected, if it still exists — never
+ * unconditionally jump to the first WORK_ITEM (that would move the drawer
+ * away from a just-persisted, non-first item right when its success result
+ * becomes visible). Falls back to the first WORK_ITEM only when the current
+ * selection is gone, and to an empty selection only when there is no
+ * WORK_ITEM at all. Never depends on array index and never fabricates an id.
+ */
+export const resolveSelectedRowIdAfterReload = (
+  currentSelectedRowId: string,
+  availableRows: readonly { id: string; type: string }[],
+): string => {
+  if (currentSelectedRowId && availableRows.some((row) => row.id === currentSelectedRowId)) {
+    return currentSelectedRowId;
+  }
+  return availableRows.find((row) => row.type === 'item')?.id ?? '';
+};
 
 export interface CostEngineCopy {
   statusLabel: string;

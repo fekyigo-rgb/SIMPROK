@@ -39,6 +39,8 @@ import {
   isDraftRevisionCurrent,
   isPersistResultFresh,
   markRequestFailed,
+  resolveSelectedRowIdAfterReload,
+  shouldInvalidateTerminalPersistResult,
   toLocalDateOnlyString,
   toRabCostDisplay,
   type BoqRowsSource,
@@ -292,6 +294,8 @@ interface PersistTarget {
   calculationAsOfDate: string;
   /** C-BLOCKER-02/04: the draft revision captured at request start — see draftRevisionRef. */
   draftRevision: number;
+  /** FINAL-TERMINAL-STATE-INVALIDATION: the persist-context revision captured at request start — see persistContextRevisionRef. */
+  persistContextRevision: number;
 }
 
 /**
@@ -366,6 +370,39 @@ export function RabWorkspacePage() {
    */
   const draftRevisionRef = useRef(0);
   const [draftRevisionSnapshot, setDraftRevisionSnapshot] = useState(0);
+  /**
+   * FINAL-TERMINAL-STATE-INVALIDATION: monotonic, synchronous, never
+   * decremented or reset — the permanent tiebreaker for terminal-result
+   * freshness (see isPersistResultFresh). Unlike draftRevisionRef (which
+   * only tracks Working Draft edits), this ref also advances on an item
+   * selection change, a calculation-date change, or a project change, so a
+   * stale SUCCESS/FAILED_CONFIRMED can never reappear merely because every
+   * *other* reversible value later returns to what it was. persistContext
+   * RevisionSnapshot is the same-tick render-safe mirror — every write to
+   * the ref is paired with a write here; the ref itself is never read
+   * during render.
+   */
+  const persistContextRevisionRef = useRef(0);
+  const [persistContextRevisionSnapshot, setPersistContextRevisionSnapshot] = useState(0);
+  /** FINAL-TERMINAL-STATE-INVALIDATION: distinguishes an actual project change from a same-project retryToken-driven re-run of the load effect. */
+  const previousProjectIdRef = useRef<string | null>(null);
+
+  /**
+   * FINAL-TERMINAL-STATE-INVALIDATION: the one path that advances the
+   * persist-context revision for an item/date change. success/
+   * failed_confirmed are dropped (shouldInvalidateTerminalPersistResult is
+   * the one and only definition of that rule); idle/persisting/reloading/
+   * outcome_unknown are left alone — an in-flight request must not be
+   * silently erased, and an honest OUTCOME_UNKNOWN warning must survive a
+   * same-project context drift.
+   */
+  const markPersistContextChanged = () => {
+    persistContextRevisionRef.current += 1;
+    setPersistContextRevisionSnapshot(persistContextRevisionRef.current);
+    setPersistState((current) =>
+      shouldInvalidateTerminalPersistResult(current.kind) ? { kind: 'idle' } : current,
+    );
+  };
 
   const applyRecap = (recap?: DraftRecapResponse | null) => {
     if (!recap) return;
@@ -398,7 +435,12 @@ export function RabWorkspacePage() {
     setRows(mappedRows);
     setVolumes(nextVolumes);
     setUnitPrices(nextUnitPrices);
-    setSelectedRowId(mappedRows.find((row) => row.type === 'item')?.id || '');
+    // SELECTED-ITEM-RELOAD-STABILITY: functional update so the decision uses
+    // the actual selectedRowId at the moment this update is applied, not a
+    // value possibly captured by a stale async closure — if the user
+    // selected a different item while this reload was in flight, that
+    // newer selection must win, never be forced back to an older target.
+    setSelectedRowId((currentSelectedRowId) => resolveSelectedRowIdAfterReload(currentSelectedRowId, mappedRows));
     const dirty = isDraftDirtyForSource(source);
     if (dirty) {
       draftRevisionRef.current += 1;
@@ -436,6 +478,22 @@ export function RabWorkspacePage() {
   };
 
   useEffect(() => {
+    // FINAL-TERMINAL-STATE-INVALIDATION §7C: previousProjectIdRef
+    // distinguishes an actual project change from a same-project
+    // retryToken-driven re-run of this same effect. On a real project
+    // change: retire every in-flight persist response from the old project
+    // (persistGenerationRef), advance the persist-context revision, and
+    // unconditionally reset persistState to idle — including
+    // OUTCOME_UNKNOWN, which must never follow the user from one project
+    // into another. No new request is made to perform this invalidation.
+    const projectChanged = previousProjectIdRef.current !== projectId;
+    previousProjectIdRef.current = projectId;
+    if (projectChanged) {
+      persistGenerationRef.current += 1;
+      markPersistContextChanged();
+      setPersistState({ kind: 'idle' });
+    }
+
     if (!projectId) {
       costLoadGenerationRef.current += 1;
       setRows([]);
@@ -600,7 +658,14 @@ export function RabWorkspacePage() {
     setStatusMessage('Pemilihan AHSP belum tersambung. Ruang pilihan AHSP sudah disiapkan.');
   };
 
+  /**
+   * FINAL-TERMINAL-STATE-INVALIDATION §7A: the one choke point for every
+   * selectedRowId change. Re-selecting the row already selected is not a
+   * context change (no invalidation); switching to a different row — or to
+   * no row at all — advances the persist-context revision exactly once.
+   */
   const activateRow = (rowId: string) => {
+    if (rowId !== selectedRowId) markPersistContextChanged();
     setSelectedRowId(rowId);
   };
 
@@ -608,6 +673,12 @@ export function RabWorkspacePage() {
     const target = event.target as HTMLElement;
     if (target.closest('button, input, textarea, a')) return;
     activateRow(rowId);
+  };
+
+  /** FINAL-TERMINAL-STATE-INVALIDATION §7B: mirrors activateRow's same-value/different-value distinction for the calculation date. */
+  const handleCalculationAsOfDateChange = (value: string) => {
+    if (value !== calculationAsOfDate) markPersistContextChanged();
+    setCalculationAsOfDate(value);
   };
 
   const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft;
@@ -622,12 +693,13 @@ export function RabWorkspacePage() {
     draftDirty,
     persistInFlight: isPersistBusy,
   });
-  /** C-BLOCKER-04: current identity a terminal success/failed_confirmed result is compared against — see isPersistResultFresh below. Uses draftRevisionSnapshot, never the ref, since this runs during render. */
+  /** C-BLOCKER-04: current identity a terminal success/failed_confirmed result is compared against — see isPersistResultFresh below. Uses draftRevisionSnapshot/persistContextRevisionSnapshot, never the refs, since this runs during render. */
   const currentPersistIdentity: PersistResultIdentity = {
     projectId: projectId ?? '',
     boqItemId: selectedItem?.id ?? '',
     calculationAsOfDate,
     draftRevision: draftRevisionSnapshot,
+    persistContextRevision: persistContextRevisionSnapshot,
   };
 
   const handleSaveDraft = () => {
@@ -720,7 +792,7 @@ export function RabWorkspacePage() {
     setPersistState((current) => {
       const busy = current.kind === 'persisting' || current.kind === 'reloading';
       if (busy) return current;
-      return current.kind === 'success' || current.kind === 'failed_confirmed' ? { kind: 'idle' } : current;
+      return shouldInvalidateTerminalPersistResult(current.kind) ? { kind: 'idle' } : current;
     });
   };
 
@@ -811,6 +883,7 @@ export function RabWorkspacePage() {
       itemLabel: selectedItem.name,
       calculationAsOfDate,
       draftRevision: draftRevisionRef.current,
+      persistContextRevision: persistContextRevisionRef.current,
     };
     const generation = ++persistGenerationRef.current;
     setPersistState({ kind: 'persisting', target });
@@ -843,7 +916,15 @@ export function RabWorkspacePage() {
           // Non-JSON error body — keep the generic honest reason.
         }
         if (generation === persistGenerationRef.current) {
-          setPersistState({ kind: 'failed_confirmed', target, reason });
+          // FINAL-TERMINAL-STATE-INVALIDATION §7D: never commit a confirmed
+          // failure against a context (item/date/project) the user has
+          // already left — resolve as idle instead, never as a hidden
+          // terminal result that could later reappear.
+          setPersistState(
+            isDraftRevisionCurrent(target.persistContextRevision, persistContextRevisionRef.current)
+              ? { kind: 'failed_confirmed', target, reason }
+              : { kind: 'idle' },
+          );
         }
         return;
       }
@@ -871,14 +952,25 @@ export function RabWorkspacePage() {
           boqItemId: target.boqItemId,
           calculationAsOfDate: target.calculationAsOfDate,
         });
+        // FINAL-TERMINAL-STATE-INVALIDATION §7D: a confirmed row is only
+        // ever committed as SUCCESS if the persist context (item/date/
+        // project) the user is currently looking at is still the exact one
+        // this request was made for — otherwise resolve as idle, never as a
+        // hidden terminal result that could later reappear.
+        const contextStillCurrent = isDraftRevisionCurrent(
+          target.persistContextRevision,
+          persistContextRevisionRef.current,
+        );
         setPersistState(
           confirmed
-            ? {
-                kind: 'success',
-                target,
-                unitPriceDisplay: formatBackendRupiah(confirmed.unitPrice),
-                lineTotalDisplay: formatBackendRupiah(confirmed.lineTotal),
-              }
+            ? contextStillCurrent
+              ? {
+                  kind: 'success',
+                  target,
+                  unitPriceDisplay: formatBackendRupiah(confirmed.unitPrice),
+                  lineTotalDisplay: formatBackendRupiah(confirmed.lineTotal),
+                }
+              : { kind: 'idle' }
             : { kind: 'outcome_unknown', target },
         );
       } else {
@@ -1282,7 +1374,7 @@ export function RabWorkspacePage() {
                               </button>
                             </>
                           ) : row.type === 'item' ? (
-                            <button className="simprok-rab-table-action" onClick={() => setSelectedRowId(row.id)} title="Buka Detail Analisa AHSP" aria-label="Buka Detail Analisa AHSP" data-route={`/?ruang=detail-ahsp-${row.id}`}>
+                            <button className="simprok-rab-table-action" onClick={() => activateRow(row.id)} title="Buka Detail Analisa AHSP" aria-label="Buka Detail Analisa AHSP" data-route={`/?ruang=detail-ahsp-${row.id}`}>
                               Detail
                             </button>
                           ) : null}
@@ -1347,7 +1439,7 @@ export function RabWorkspacePage() {
               <div>
                 <h2>Detail Analisa AHSP</h2>
               </div>
-              <button onClick={() => setSelectedRowId('')} title="Tutup panel" aria-label="Tutup panel">
+              <button onClick={() => activateRow('')} title="Tutup panel" aria-label="Tutup panel">
                 <X size={17} />
               </button>
             </div>
@@ -1396,7 +1488,7 @@ export function RabWorkspacePage() {
                 id="simprok-calculation-as-of-date"
                 type="date"
                 value={calculationAsOfDate}
-                onChange={(event) => setCalculationAsOfDate(event.target.value)}
+                onChange={(event) => handleCalculationAsOfDateChange(event.target.value)}
                 disabled={isPersistBusy}
                 aria-label="Tanggal perhitungan harga"
               />
