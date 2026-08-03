@@ -244,3 +244,143 @@ export const formatBoqImportMeasurement = (
   quantity: string | null,
   unit: string | null,
 ): string => itemType === 'WORK_ITEM' ? ` — ${quantity ?? '—'} ${unit ?? ''}` : '';
+
+/**
+ * GATE2A-PRODUCTIZATION-C: pure UX reachability for the "Hitung & Simpan
+ * Harga SIMPROK" persist action in RabWorkspacePage. NOT_BACKEND_ELIGIBILITY_
+ * AUTHORITY=YES — this never decides whether a calculation is actually
+ * allowed to persist. RabKernelPersistenceService remains the sole authority
+ * for AHSP presence, occurrence uniqueness, Basic Price eligibility, and
+ * every other business rule; this function only decides whether the button
+ * is reachable from state already visible on screen.
+ */
+export type PersistActionReachability =
+  | 'READY'
+  | 'NO_PROJECT'
+  | 'DRAFT_NOT_EDITABLE'
+  | 'NO_SELECTED_WORK_ITEM'
+  | 'AHSP_NOT_SELECTED'
+  | 'COST_RESULT_LOADING'
+  | 'COST_RESULT_INVALIDATED'
+  | 'COST_RESULT_FAIL_CLOSED'
+  | 'COST_REQUEST_FAILED'
+  | 'COST_RESULT_MISSING'
+  | 'INVALID_CALCULATION_DATE'
+  | 'UNSAVED_DRAFT_CHANGES'
+  | 'PERSIST_IN_FLIGHT';
+
+export interface PersistActionSelectedItem {
+  id: string;
+  ahspVersionId: string | null;
+}
+
+export interface PersistActionReachabilityInput {
+  projectId: string | null;
+  canEditDraft: boolean;
+  selectedItem: PersistActionSelectedItem | null;
+  costRowStatus: CostRowStatus | undefined;
+  calculationAsOfDate: string;
+  draftDirty: boolean;
+  persistInFlight: boolean;
+}
+
+const CALCULATION_DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+
+export const evaluatePersistActionReachability = (
+  input: PersistActionReachabilityInput,
+): PersistActionReachability => {
+  if (!input.projectId) return 'NO_PROJECT';
+  if (!input.canEditDraft) return 'DRAFT_NOT_EDITABLE';
+  if (!input.selectedItem) return 'NO_SELECTED_WORK_ITEM';
+  if (!input.selectedItem.ahspVersionId) return 'AHSP_NOT_SELECTED';
+  const status = input.costRowStatus;
+  if (!status) return 'COST_RESULT_MISSING';
+  if (status.kind === 'loading') return 'COST_RESULT_LOADING';
+  if (status.kind === 'invalidated') return 'COST_RESULT_INVALIDATED';
+  if (status.kind === 'fail_closed') return 'COST_RESULT_FAIL_CLOSED';
+  if (status.kind === 'request_failed') return 'COST_REQUEST_FAILED';
+  // Only "calculated" remains here — a real calendar check (e.g. rejecting
+  // 2026-02-30) is intentionally NOT duplicated here; it stays
+  // backend-authoritative. This is a UI-format gate only.
+  if (!CALCULATION_DATE_SHAPE.test(input.calculationAsOfDate)) return 'INVALID_CALCULATION_DATE';
+  if (input.draftDirty) return 'UNSAVED_DRAFT_CHANGES';
+  if (input.persistInFlight) return 'PERSIST_IN_FLIGHT';
+  return 'READY';
+};
+
+/**
+ * Gate-2A locked contract (see backend PersistBoqItemCalculationDto): the
+ * persist request body may carry calculationAsOfDate and nothing else.
+ */
+export interface PersistCalculationRequestBody {
+  calculationAsOfDate: string;
+}
+
+export const buildPersistCalculationRequestBody = (
+  calculationAsOfDate: string,
+): PersistCalculationRequestBody => ({ calculationAsOfDate });
+
+/**
+ * Local calendar YYYY-MM-DD — deliberately NOT `date.toISOString().slice(0, 10)`,
+ * which reads UTC fields and can silently shift to the wrong calendar day for
+ * a user whose local time zone sits far enough from UTC (e.g. 00:30 local in
+ * UTC+9 is still the previous day in UTC).
+ */
+export const toLocalDateOnlyString = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export type PersistOutcomeState =
+  | 'IDLE'
+  | 'PERSISTING'
+  | 'RELOADING'
+  | 'SUCCESS'
+  | 'FAILED_CONFIRMED'
+  | 'OUTCOME_UNKNOWN';
+
+export type PersistPostOutcome = { kind: 'network_error' } | { kind: 'response'; ok: boolean };
+
+export type PersistReloadOutcome =
+  | { kind: 'not_attempted' }
+  | { kind: 'success' }
+  | { kind: 'error' };
+
+/**
+ * A response is only ever reported SUCCESS once the persist POST returned
+ * 2xx AND the follow-up reloadDraft() confirmed it. A network failure (the
+ * response may have been lost after the server already committed) or a
+ * post-2xx reload failure both resolve to OUTCOME_UNKNOWN — never silently
+ * downgraded to "not saved", and never auto-retried by the caller.
+ */
+export const classifyPersistOutcome = (
+  post: PersistPostOutcome,
+  reload: PersistReloadOutcome,
+): Extract<PersistOutcomeState, 'SUCCESS' | 'FAILED_CONFIRMED' | 'OUTCOME_UNKNOWN'> => {
+  if (post.kind === 'network_error') return 'OUTCOME_UNKNOWN';
+  if (!post.ok) return 'FAILED_CONFIRMED';
+  if (reload.kind === 'success') return 'SUCCESS';
+  return 'OUTCOME_UNKNOWN';
+};
+
+export const GENERIC_PERSIST_FAILURE_REASON = 'Gagal memproses permintaan. Coba lagi.';
+
+/**
+ * Defensively reads a NestJS error body's `message` (string | string[] |
+ * anything else) into one honest, bounded display string. Never fabricates
+ * a specific reason when the body doesn't have one.
+ */
+export const derivePersistFailureReason = (body: unknown): string => {
+  const message =
+    body && typeof body === 'object' ? (body as { message?: unknown }).message : undefined;
+  if (typeof message === 'string' && message.trim().length > 0) return message;
+  if (Array.isArray(message)) {
+    const safeEntries = message.filter(
+      (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0,
+    );
+    if (safeEntries.length > 0) return safeEntries.join('; ');
+  }
+  return GENERIC_PERSIST_FAILURE_REASON;
+};

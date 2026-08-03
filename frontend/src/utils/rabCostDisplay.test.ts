@@ -4,15 +4,22 @@ import {
   addDecimalStrings,
   applyBatchResults,
   beginLoadingRows,
+  buildPersistCalculationRequestBody,
+  classifyPersistOutcome,
   computeDirectCostTotal,
+  derivePersistFailureReason,
+  evaluatePersistActionReachability,
   formatBoqImportMeasurement,
+  GENERIC_PERSIST_FAILURE_REASON,
   invalidateRow,
   isDraftPricingComplete,
   markRequestFailed,
   sumDecimalStrings,
+  toLocalDateOnlyString,
   toRabCostDisplay,
   type CostCalculationResponse,
   type CostRowStatus,
+  type PersistActionReachabilityInput,
 } from "./rabCostDisplay.ts";
 
 test('structural import rows never render quantity-zero or unit sentinels', () => {
@@ -207,4 +214,154 @@ test("isDraftPricingComplete is false while a kernel row is still loading/invali
 
 test("isDraftPricingComplete is vacuously true for an empty row set", () => {
   assert.equal(isDraftPricingComplete([], {}), true);
+});
+
+const readyReachabilityInput: PersistActionReachabilityInput = {
+  projectId: "project-1",
+  canEditDraft: true,
+  selectedItem: { id: "item-1", ahspVersionId: "ahsp-1" },
+  costRowStatus: { kind: "calculated", response: calculatedResponse },
+  calculationAsOfDate: "2026-08-03",
+  draftDirty: false,
+  persistInFlight: false,
+};
+
+test("C-01: READY only for an editable, AHSP-linked WORK_ITEM with a calculated result and a valid date", () => {
+  assert.equal(evaluatePersistActionReachability(readyReachabilityInput), "READY");
+});
+
+test("C-02: no active project or a non-editable draft blocks the action", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, projectId: null }),
+    "NO_PROJECT",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, canEditDraft: false }),
+    "DRAFT_NOT_EDITABLE",
+  );
+});
+
+test("C-03: a missing selected item or a missing AHSP link blocks the action", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, selectedItem: null }),
+    "NO_SELECTED_WORK_ITEM",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      selectedItem: { id: "item-1", ahspVersionId: null },
+    }),
+    "AHSP_NOT_SELECTED",
+  );
+});
+
+test("C-04: every non-calculated Cost Kernel status blocks the action — no manual-price fallback for a kernel row", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, costRowStatus: { kind: "loading" } }),
+    "COST_RESULT_LOADING",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, costRowStatus: { kind: "invalidated" } }),
+    "COST_RESULT_INVALIDATED",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      costRowStatus: { kind: "fail_closed", reason: "MISSING_ADAPTED_PRICE" },
+    }),
+    "COST_RESULT_FAIL_CLOSED",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, costRowStatus: { kind: "request_failed" } }),
+    "COST_REQUEST_FAILED",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, costRowStatus: undefined }),
+    "COST_RESULT_MISSING",
+  );
+});
+
+test("C-05: only an exact YYYY-MM-DD shape passes the UI-format gate; real calendar validity stays backend-authoritative", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, calculationAsOfDate: "" }),
+    "INVALID_CALCULATION_DATE",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      calculationAsOfDate: "2026-08-03T10:00:00.000Z",
+    }),
+    "INVALID_CALCULATION_DATE",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, calculationAsOfDate: "2026-8-3" }),
+    "INVALID_CALCULATION_DATE",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, calculationAsOfDate: "not-a-date" }),
+    "INVALID_CALCULATION_DATE",
+  );
+  // "2026-02-30" has the exact right shape but is not a real calendar date —
+  // the UI gate accepts it (shape only); the backend's parseDateOnlyUtc is
+  // the one and only real-calendar-validity authority.
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, calculationAsOfDate: "2026-02-30" }),
+    "READY",
+  );
+});
+
+test("C-06: the request-body builder returns exactly one own key, calculationAsOfDate — never price/total/occurrence/workspace/project/item fields", () => {
+  const body = buildPersistCalculationRequestBody("2026-08-03");
+  assert.deepEqual(Object.keys(body), ["calculationAsOfDate"]);
+  assert.equal(body.calculationAsOfDate, "2026-08-03");
+});
+
+test("C-07: unsaved local draft edits block the action even when everything else is ready (dirty-state gate)", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, draftDirty: true }),
+    "UNSAVED_DRAFT_CHANGES",
+  );
+});
+
+test("C-08: a persist request already in flight blocks a duplicate submission", () => {
+  assert.equal(
+    evaluatePersistActionReachability({ ...readyReachabilityInput, persistInFlight: true }),
+    "PERSIST_IN_FLIGHT",
+  );
+});
+
+test("C-09: classifyPersistOutcome — a network failure and a post-2xx reload failure both resolve to OUTCOME_UNKNOWN, never a confirmed state", () => {
+  assert.equal(classifyPersistOutcome({ kind: "network_error" }, { kind: "not_attempted" }), "OUTCOME_UNKNOWN");
+  assert.equal(classifyPersistOutcome({ kind: "response", ok: true }, { kind: "error" }), "OUTCOME_UNKNOWN");
+  assert.equal(
+    classifyPersistOutcome({ kind: "response", ok: true }, { kind: "not_attempted" }),
+    "OUTCOME_UNKNOWN",
+  );
+});
+
+test("C-10: classifyPersistOutcome — SUCCESS requires a 2xx POST plus a confirmed reload; a non-2xx POST is FAILED_CONFIRMED", () => {
+  assert.equal(classifyPersistOutcome({ kind: "response", ok: true }, { kind: "success" }), "SUCCESS");
+  assert.equal(
+    classifyPersistOutcome({ kind: "response", ok: false }, { kind: "not_attempted" }),
+    "FAILED_CONFIRMED",
+  );
+});
+
+test("C-11: toLocalDateOnlyString reads local calendar fields (never a UTC slice) and round-trips near month/year boundaries", () => {
+  assert.equal(toLocalDateOnlyString(new Date(2026, 0, 1)), "2026-01-01");
+  assert.equal(toLocalDateOnlyString(new Date(2026, 6, 9, 23, 59, 59)), "2026-07-09");
+  assert.equal(toLocalDateOnlyString(new Date(2026, 11, 31, 0, 0, 1)), "2026-12-31");
+});
+
+test("C-12: derivePersistFailureReason prefers a string message, joins a safe string array, and falls back honestly for anything else", () => {
+  assert.equal(derivePersistFailureReason({ message: "RAB_NOT_FULLY_PRICED" }), "RAB_NOT_FULLY_PRICED");
+  assert.equal(
+    derivePersistFailureReason({ message: ["field1 invalid", "field2 invalid"] }),
+    "field1 invalid; field2 invalid",
+  );
+  assert.equal(derivePersistFailureReason({ message: [123, null, "ok"] }), "ok");
+  assert.equal(derivePersistFailureReason({}), GENERIC_PERSIST_FAILURE_REASON);
+  assert.equal(derivePersistFailureReason(null), GENERIC_PERSIST_FAILURE_REASON);
+  assert.equal(derivePersistFailureReason("not-an-object"), GENERIC_PERSIST_FAILURE_REASON);
+  assert.equal(derivePersistFailureReason({ message: [123, null] }), GENERIC_PERSIST_FAILURE_REASON);
 });

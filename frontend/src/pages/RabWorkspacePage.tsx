@@ -23,15 +23,23 @@ import { apiFetch } from '../utils/apiClient';
 import {
   applyBatchResults,
   beginLoadingRows,
+  buildPersistCalculationRequestBody,
+  classifyPersistOutcome,
   computeDirectCostTotal,
+  derivePersistFailureReason,
+  evaluatePersistActionReachability,
   formatBackendRupiah,
   formatBoqImportMeasurement,
+  GENERIC_PERSIST_FAILURE_REASON,
   invalidateRow,
   isDraftPricingComplete,
   markRequestFailed,
+  toLocalDateOnlyString,
   toRabCostDisplay,
   type CostBatchResponse,
   type CostRowStatus,
+  type PersistActionReachability,
+  type PersistReloadOutcome,
 } from '../utils/rabCostDisplay';
 import type { DashboardOutletContext } from '../components/layout/DashboardLayout';
 
@@ -254,6 +262,58 @@ const createRow = (type: RabRowType, parentId: string | null, sortOrder: number)
   sortOrder,
 });
 
+interface PersistTarget {
+  projectId: string;
+  boqItemId: string;
+  itemLabel: string;
+  calculationAsOfDate: string;
+}
+
+/**
+ * GATE2A-PRODUCTIZATION-C: mirrors RabKernelPersistenceService's
+ * PersistBoqItemCalculationResult exactly — this page never invents its own
+ * shape for the persisted result, it only reads what the server returns.
+ */
+interface PersistBoqItemCalculationResponse {
+  boqItemId: string;
+  unitPrice: string;
+  lineTotal: string;
+  priceOrigin: 'SERVER_COST_KERNEL';
+  calculationOccurrenceId: string;
+  calculationAsOfDate: string;
+  calculatedAt: string;
+  calculationPolicyVersion: string;
+  rabTotals: {
+    pricingStatus: 'COMPLETE';
+    totalBaseCost: string;
+    totalFinalCost: string;
+  };
+}
+
+type PersistUiState =
+  | { kind: 'idle' }
+  | { kind: 'persisting'; target: PersistTarget }
+  | { kind: 'reloading'; target: PersistTarget }
+  | { kind: 'success'; target: PersistTarget; unitPriceDisplay: string; lineTotalDisplay: string }
+  | { kind: 'failed_confirmed'; target: PersistTarget; reason: string }
+  | { kind: 'outcome_unknown'; target: PersistTarget };
+
+const PERSIST_REACHABILITY_TITLE: Record<PersistActionReachability, string> = {
+  READY: 'Hitung & Simpan Harga SIMPROK',
+  NO_PROJECT: 'Tidak ada project aktif',
+  DRAFT_NOT_EDITABLE: 'Ruang kerja ini belum siap diedit',
+  NO_SELECTED_WORK_ITEM: 'Pilih item pekerjaan terlebih dahulu',
+  AHSP_NOT_SELECTED: 'Item ini belum memiliki AHSP',
+  COST_RESULT_LOADING: 'Sedang menghitung harga SIMPROK...',
+  COST_RESULT_INVALIDATED: 'Perlu dihitung ulang setelah perubahan data',
+  COST_RESULT_FAIL_CLOSED: 'Perhitungan SIMPROK belum berhasil',
+  COST_REQUEST_FAILED: 'Gagal memuat perhitungan SIMPROK',
+  COST_RESULT_MISSING: 'Belum ada hasil perhitungan SIMPROK',
+  INVALID_CALCULATION_DATE: 'Tanggal perhitungan belum valid',
+  UNSAVED_DRAFT_CHANGES: 'Simpan perubahan draft terlebih dahulu',
+  PERSIST_IN_FLIGHT: 'Menghitung & menyimpan...',
+};
+
 export function RabWorkspacePage() {
   const navigate = useNavigate();
   const { projectId: routeProjectId } = useParams();
@@ -276,6 +336,10 @@ export function RabWorkspacePage() {
   const [importPreview, setImportPreview] = useState<BoqImportPreview | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [calculationAsOfDate, setCalculationAsOfDate] = useState(() => toLocalDateOnlyString(new Date()));
+  const [persistState, setPersistState] = useState<PersistUiState>({ kind: 'idle' });
+  const persistGenerationRef = useRef(0);
 
   const applyRecap = (recap?: DraftRecapResponse | null) => {
     if (!recap) return;
@@ -302,6 +366,7 @@ export function RabWorkspacePage() {
     setVolumes(nextVolumes);
     setUnitPrices(nextUnitPrices);
     setSelectedRowId(mappedRows.find((row) => row.type === 'item')?.id || '');
+    setDraftDirty(false);
   };
 
   const loadCostCalculations = (items: BoqItemResponse[]) => {
@@ -340,6 +405,7 @@ export function RabWorkspacePage() {
       setUnitPrices({});
       setCostRowStatuses({});
       setSelectedRowId('');
+      setDraftDirty(false);
       setStatusMessage('Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.');
       setCapabilityState({ kind: 'no-project' });
       return;
@@ -505,6 +571,17 @@ export function RabWorkspacePage() {
 
   const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft;
 
+  const isPersistBusy = persistState.kind === 'persisting' || persistState.kind === 'reloading';
+  const persistReachability: PersistActionReachability = evaluatePersistActionReachability({
+    projectId,
+    canEditDraft,
+    selectedItem: selectedItem ? { id: selectedItem.id, ahspVersionId: selectedItem.ahspVersionId } : null,
+    costRowStatus: selectedCostStatus,
+    calculationAsOfDate,
+    draftDirty,
+    persistInFlight: isPersistBusy,
+  });
+
   const handleSaveDraft = () => {
     if (!canEditDraft) {
       setStatusMessage('Simpan diblokir: ruang kerja ini belum siap diedit.');
@@ -562,6 +639,7 @@ export function RabWorkspacePage() {
         setRows(mappedRows);
         setVolumes(nextVolumes);
         setUnitPrices(nextUnitPrices);
+        setDraftDirty(false);
         setSelectedRowId(
           mappedRows.find((r) => r.id === currentSelected)?.id ||
           mappedRows.find((r) => r.type === 'item')?.id ||
@@ -577,15 +655,26 @@ export function RabWorkspacePage() {
       });
   };
 
+  /**
+   * Every local-only row edit funnels through here so draftDirty stays a
+   * single, bounded, honest flag — cleared only by applyRows (a real server
+   * sync), never by a local mutation. GATE2A-PRODUCTIZATION-C: the persist
+   * action's reload would otherwise silently overwrite unsaved local edits.
+   */
+  const mutateRows = (updater: (current: RabRow[]) => RabRow[]) => {
+    setDraftDirty(true);
+    setRows(updater);
+  };
+
   const addChild = (parentId: string | null, type: RabRowType) => {
     const newRow = createRow(type, parentId, Math.max(0, ...rows.map((row) => row.sortOrder)) + 1);
-    setRows((current) => [...current, newRow]);
+    mutateRows((current) => [...current, newRow]);
     if (type === 'item') setUnitPrices((current) => ({ ...current, [newRow.id]: 0 }));
     setStatusMessage(`${type === 'folder' ? 'Sub Judul' : type === 'note' ? 'Catatan' : 'Item'} ditambahkan. Klik Simpan Draft untuk menyimpan.`);
   };
 
   const removeRow = (rowId: string) => {
-    setRows((current) => {
+    mutateRows((current) => {
       const idsToRemove = new Set<string>([rowId]);
       let changed = true;
       while (changed) {
@@ -604,11 +693,11 @@ export function RabWorkspacePage() {
   };
 
   const updateRowName = (rowId: string, name: string) => {
-    setRows((current) => current.map((row) => (row.id === rowId ? { ...row, name } : row)));
+    mutateRows((current) => current.map((row) => (row.id === rowId ? { ...row, name } : row)));
   };
 
   const updateRowUnit = (rowId: string, unit: string) => {
-    setRows((current) => current.map((row) => (row.id === rowId ? { ...row, unit } : row)));
+    mutateRows((current) => current.map((row) => (row.id === rowId ? { ...row, unit } : row)));
     setCostRowStatuses((current) => invalidateRow(current, rowId));
   };
 
@@ -618,6 +707,89 @@ export function RabWorkspacePage() {
     if (!response.ok) throw new Error('draft-reload-failed');
     const draft = await response.json() as DraftBoqResponse;
     applyRecap(draft.recap); applyRows(draft.items); loadCostCalculations(draft.items);
+  };
+
+  /**
+   * GATE2A-PRODUCTIZATION-C — the one minimal persist action. Sends only
+   * calculationAsOfDate to the existing Gate-2A persist route; the backend
+   * (RabKernelPersistenceService) remains sole authority for eligibility,
+   * calculation, persistence, provenance, and the whole-RAB total. The
+   * request target (project/item/date) is captured once at click time so a
+   * later selection change can never cause this response to be displayed
+   * against a different item — combined with persistGenerationRef, a stale
+   * response for a superseded attempt is dropped outright.
+   */
+  const handlePersistCalculation = () => {
+    if (!projectId || !selectedItem || persistReachability !== 'READY') return;
+    const target: PersistTarget = {
+      projectId,
+      boqItemId: selectedItem.id,
+      itemLabel: selectedItem.name,
+      calculationAsOfDate,
+    };
+    const generation = ++persistGenerationRef.current;
+    setPersistState({ kind: 'persisting', target });
+
+    void (async () => {
+      let response: Response;
+      try {
+        response = await apiFetch(
+          `/projects/${target.projectId}/boq/items/${target.boqItemId}/cost-calculation/persist`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildPersistCalculationRequestBody(target.calculationAsOfDate)),
+          },
+        );
+      } catch {
+        if (generation === persistGenerationRef.current) {
+          setPersistState({ kind: 'outcome_unknown', target });
+        }
+        return;
+      }
+
+      if (generation !== persistGenerationRef.current) return;
+
+      if (!response.ok) {
+        let reason = GENERIC_PERSIST_FAILURE_REASON;
+        try {
+          reason = derivePersistFailureReason(await response.json());
+        } catch {
+          // Non-JSON error body — keep the generic honest reason.
+        }
+        if (generation === persistGenerationRef.current) {
+          setPersistState({ kind: 'failed_confirmed', target, reason });
+        }
+        return;
+      }
+
+      setPersistState({ kind: 'reloading', target });
+      let reloadOutcome: PersistReloadOutcome;
+      let result: PersistBoqItemCalculationResponse | undefined;
+      try {
+        result = (await response.json()) as PersistBoqItemCalculationResponse;
+        await reloadDraft();
+        reloadOutcome = { kind: 'success' };
+      } catch {
+        reloadOutcome = { kind: 'error' };
+      }
+
+      if (generation !== persistGenerationRef.current) return;
+
+      const outcome = classifyPersistOutcome({ kind: 'response', ok: true }, reloadOutcome);
+      if (outcome === 'SUCCESS' && result) {
+        setPersistState({
+          kind: 'success',
+          target,
+          unitPriceDisplay: formatBackendRupiah(result.unitPrice),
+          lineTotalDisplay: formatBackendRupiah(result.lineTotal),
+        });
+      } else {
+        // Covers both a malformed 2xx body and a reload failure after a
+        // confirmed 2xx — never a false SUCCESS, never claimed "not saved".
+        setPersistState({ kind: 'outcome_unknown', target });
+      }
+    })();
   };
 
   const previewImport = async (file: File) => {
@@ -868,16 +1040,16 @@ export function RabWorkspacePage() {
                       <tr key={row.id} className="simprok-rab-row simprok-rab-row--note">
                         <td>
                           <div className="simprok-rab-row-move">
-                            <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
+                            <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
                               <ArrowUp size={14} />
                             </button>
-                            <button onClick={() => setRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
+                            <button onClick={() => mutateRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
                               <ArrowRight size={14} />
                             </button>
-                            <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
+                            <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
                               <ArrowDown size={14} />
                             </button>
-                            <button onClick={() => setRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
+                            <button onClick={() => mutateRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
                               <ArrowLeft size={14} />
                             </button>
                           </div>
@@ -900,16 +1072,16 @@ export function RabWorkspacePage() {
                     <tr key={row.id} className={['simprok-rab-row', row.type === 'folder' ? 'simprok-rab-row--folder' : '', selected ? 'simprok-rab-row--selected' : '', hasNegativeRowValue ? 'simprok-rab-row--invalid' : ''].filter(Boolean).join(' ')} onClick={(event) => handleRowClick(row.id, event)}>
                       <td>
                         <div className="simprok-rab-row-move">
-                          <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
+                          <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
                             <ArrowUp size={14} />
                           </button>
-                          <button onClick={() => setRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
+                          <button onClick={() => mutateRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
                             <ArrowRight size={14} />
                           </button>
-                          <button onClick={() => setRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
+                          <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
                             <ArrowDown size={14} />
                           </button>
-                          <button onClick={() => setRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
+                          <button onClick={() => mutateRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
                             <ArrowLeft size={14} />
                           </button>
                         </div>
@@ -948,6 +1120,7 @@ export function RabWorkspacePage() {
                             step="0.01"
                             value={volumes[row.id] || 0}
                             onChange={(event) => {
+                              setDraftDirty(true);
                               setVolumes((current) => ({
                                 ...current,
                                 [row.id]: Number(event.target.value),
@@ -975,12 +1148,13 @@ export function RabWorkspacePage() {
                                   type="text"
                                   inputMode="numeric"
                                   value={formatDraftNumber(unitPrices[row.id] ?? row.unitPrice)}
-                                  onChange={(event) =>
+                                  onChange={(event) => {
+                                    setDraftDirty(true);
                                     setUnitPrices((current) => ({
                                       ...current,
                                       [row.id]: parseDraftNumber(event.target.value),
-                                    }))
-                                  }
+                                    }));
+                                  }}
                                   aria-label={`Harga satuan ${row.name}`}
                                 />
                                 <span className="simprok-rab-manual-chip">MANUAL</span>
@@ -1046,7 +1220,7 @@ export function RabWorkspacePage() {
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Margin / Profit</span>
                   <span className="simprok-rab-recap__input-wrap">
-                    <input type="number" min="0" value={marginPercent} onChange={(event) => setMarginPercent(Number(event.target.value))} aria-label="Persentase margin" />
+                    <input type="number" min="0" value={marginPercent} onChange={(event) => { setDraftDirty(true); setMarginPercent(Number(event.target.value)); }} aria-label="Persentase margin" />
                     <span>%</span>
                   </span>
                   <strong className="simprok-rab-recap__value">{pricingComplete ? formatRupiah(margin) : '—'}</strong>
@@ -1054,7 +1228,7 @@ export function RabWorkspacePage() {
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Pajak / PPN</span>
                   <span className="simprok-rab-recap__input-wrap">
-                    <input type="number" min="0" value={ppnPercent} onChange={(event) => setPpnPercent(Number(event.target.value))} aria-label="Persentase PPN" />
+                    <input type="number" min="0" value={ppnPercent} onChange={(event) => { setDraftDirty(true); setPpnPercent(Number(event.target.value)); }} aria-label="Persentase PPN" />
                     <span>%</span>
                   </span>
                   <strong className="simprok-rab-recap__value">{pricingComplete ? formatRupiah(ppn) : '—'}</strong>
@@ -1117,6 +1291,52 @@ export function RabWorkspacePage() {
             <div className="simprok-ahsp-total">
               <span>Total Harga Satuan</span>
               <strong>{selectedCostDisplay?.unitPrice ?? formatRupiah(unitPrices[selectedItem.id] ?? selectedItem.unitPrice)}</strong>
+            </div>
+            <div className="simprok-persist-action" aria-label="Hitung dan Simpan Harga SIMPROK">
+              <label htmlFor="simprok-calculation-as-of-date">Tanggal perhitungan harga</label>
+              <input
+                id="simprok-calculation-as-of-date"
+                type="date"
+                value={calculationAsOfDate}
+                onChange={(event) => setCalculationAsOfDate(event.target.value)}
+                aria-label="Tanggal perhitungan harga"
+              />
+              {draftDirty ? (
+                <p className="simprok-rab-recap__incomplete-note" role="status">
+                  Simpan perubahan draft terlebih dahulu bila Anda baru mengubah data item.
+                </p>
+              ) : null}
+              <button
+                className="simprok-ahsp-drawer__primary"
+                onClick={handlePersistCalculation}
+                disabled={persistReachability !== 'READY'}
+                title={PERSIST_REACHABILITY_TITLE[persistReachability]}
+                aria-label="Hitung & Simpan Harga SIMPROK"
+              >
+                <Save size={17} /> {isPersistBusy ? 'Menghitung & menyimpan...' : 'Hitung & Simpan Harga SIMPROK'}
+              </button>
+              {persistState.kind === 'success' && persistState.target.boqItemId === selectedItem.id ? (
+                <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="status">
+                  <p>Harga SIMPROK berhasil dihitung dan disimpan.</p>
+                  <p>{persistState.target.itemLabel}: {persistState.unitPriceDisplay} / {persistState.lineTotalDisplay}</p>
+                  <button
+                    className="simprok-rab-action simprok-rab-action--secondary"
+                    onClick={() => navigate(`/project/${projectId}/rab`)}
+                  >
+                    Lihat hasil tersimpan
+                  </button>
+                </div>
+              ) : null}
+              {persistState.kind === 'failed_confirmed' && persistState.target.boqItemId === selectedItem.id ? (
+                <div className="simprok-rab-validation-alert" role="alert">
+                  Harga belum dapat disimpan: {persistState.reason}
+                </div>
+              ) : null}
+              {persistState.kind === 'outcome_unknown' && persistState.target.boqItemId === selectedItem.id ? (
+                <div className="simprok-rab-validation-alert" role="alert">
+                  Status penyimpanan tidak dapat dipastikan. Muat ulang draft untuk memastikan status harga sebelum mencoba lagi.
+                </div>
+              ) : null}
             </div>
             <button className="simprok-ahsp-drawer__primary" onClick={handlePickAhsp} title="Pilih / Ganti AHSP - belum tersambung" aria-label="Pilih / Ganti AHSP - belum tersambung" data-route="/?ruang=pilih-ganti-ahsp">
               <ListChecks size={17} /> Pilih / Ganti AHSP
