@@ -26,20 +26,27 @@ import {
   buildPersistCalculationRequestBody,
   classifyPersistOutcome,
   computeDirectCostTotal,
+  confirmPersistedRow,
   derivePersistFailureReason,
+  describeCostEngineStatus,
   evaluatePersistActionReachability,
   formatBackendRupiah,
   formatBoqImportMeasurement,
   GENERIC_PERSIST_FAILURE_REASON,
   invalidateRow,
+  isDraftDirtyForSource,
   isDraftPricingComplete,
+  isDraftRevisionCurrent,
+  isPersistResultFresh,
   markRequestFailed,
   toLocalDateOnlyString,
   toRabCostDisplay,
+  type BoqRowsSource,
   type CostBatchResponse,
   type CostRowStatus,
   type PersistActionReachability,
   type PersistReloadOutcome,
+  type PersistResultIdentity,
 } from '../utils/rabCostDisplay';
 import type { DashboardOutletContext } from '../components/layout/DashboardLayout';
 
@@ -61,6 +68,16 @@ interface RabRow {
   sortOrder: number;
 }
 
+/**
+ * GATE2A-PRODUCTIZATION-C-ASYNC-INTEGRITY: lineTotal/priceOrigin/
+ * calculationOccurrenceId/calculationAsOfDate/calculatedAt/
+ * calculationPolicyVersion are fields the existing GET
+ * /projects/:projectId/boq/draft read model already returns per item (see
+ * rabPersistedDraftDisplay.ts's PersistedBoqItem, used by the canonical
+ * ProjectRabDoorPage against this exact same endpoint) — declared here only
+ * so this page can read them back for post-persist confirmation, not a new
+ * contract.
+ */
 interface BoqItemResponse {
   id: string;
   parentId?: string | null;
@@ -73,6 +90,12 @@ interface BoqItemResponse {
   sortOrder?: number | null;
   ahspVersionId?: string | null;
   ahspSnapshotId?: string | null;
+  lineTotal?: string | null;
+  priceOrigin?: 'MANUAL_CLIENT' | 'SERVER_COST_KERNEL' | null;
+  calculationOccurrenceId?: string | null;
+  calculationAsOfDate?: string | null;
+  calculatedAt?: string | null;
+  calculationPolicyVersion?: string | null;
 }
 
 /**
@@ -267,28 +290,20 @@ interface PersistTarget {
   boqItemId: string;
   itemLabel: string;
   calculationAsOfDate: string;
+  /** C-BLOCKER-02/04: the draft revision captured at request start — see draftRevisionRef. */
+  draftRevision: number;
 }
 
 /**
- * GATE2A-PRODUCTIZATION-C: mirrors RabKernelPersistenceService's
- * PersistBoqItemCalculationResult exactly — this page never invents its own
- * shape for the persisted result, it only reads what the server returns.
+ * C-BLOCKER-02: the outcome of a reloadDraft() attempt. 'revision_changed'
+ * means the local draft was edited while the request was in flight — the
+ * fetched server draft is intentionally discarded rather than silently
+ * overwriting the newer local edits.
  */
-interface PersistBoqItemCalculationResponse {
-  boqItemId: string;
-  unitPrice: string;
-  lineTotal: string;
-  priceOrigin: 'SERVER_COST_KERNEL';
-  calculationOccurrenceId: string;
-  calculationAsOfDate: string;
-  calculatedAt: string;
-  calculationPolicyVersion: string;
-  rabTotals: {
-    pricingStatus: 'COMPLETE';
-    totalBaseCost: string;
-    totalFinalCost: string;
-  };
-}
+type ReloadDraftOutcome =
+  | { kind: 'applied'; items: BoqItemResponse[] }
+  | { kind: 'revision_changed' }
+  | { kind: 'no_project' };
 
 type PersistUiState =
   | { kind: 'idle' }
@@ -340,6 +355,17 @@ export function RabWorkspacePage() {
   const [calculationAsOfDate, setCalculationAsOfDate] = useState(() => toLocalDateOnlyString(new Date()));
   const [persistState, setPersistState] = useState<PersistUiState>({ kind: 'idle' });
   const persistGenerationRef = useRef(0);
+  /**
+   * C-BLOCKER-02: monotonic, synchronous — never coerced, never reset
+   * backward. This ref (not state) is the sole authority reloadDraft
+   * compares against once a fetch resolves, so an in-flight request always
+   * sees the true current value, never a value captured by a stale closure.
+   * draftRevisionSnapshot below is a same-tick mirror kept only so a render
+   * can read the current revision safely (reading a ref during render is
+   * disallowed) — every write to the ref is paired with a write here.
+   */
+  const draftRevisionRef = useRef(0);
+  const [draftRevisionSnapshot, setDraftRevisionSnapshot] = useState(0);
 
   const applyRecap = (recap?: DraftRecapResponse | null) => {
     if (!recap) return;
@@ -352,7 +378,14 @@ export function RabWorkspacePage() {
     }
   };
 
-  const applyRows = (items: BoqItemResponse[]) => {
+  /**
+   * C-BLOCKER-03: `source` distinguishes a persisted Working Draft from a
+   * baseline seed shown only as a starting point. A baseline seed is never
+   * marked clean — it stays dirty (persist blocked, Save Draft required)
+   * until the user explicitly saves it, exactly like any other unsaved
+   * local edit.
+   */
+  const applyRows = (items: BoqItemResponse[], source: BoqRowsSource) => {
     const mappedRows = mapBoqToRows(items);
     const nextVolumes = items.reduce<Record<string, number>>((acc, item) => {
       if (item.itemType === 'WORK_ITEM') acc[item.id] = toNumber(item.quantity);
@@ -366,7 +399,12 @@ export function RabWorkspacePage() {
     setVolumes(nextVolumes);
     setUnitPrices(nextUnitPrices);
     setSelectedRowId(mappedRows.find((row) => row.type === 'item')?.id || '');
-    setDraftDirty(false);
+    const dirty = isDraftDirtyForSource(source);
+    if (dirty) {
+      draftRevisionRef.current += 1;
+      setDraftRevisionSnapshot(draftRevisionRef.current);
+    }
+    setDraftDirty(dirty);
   };
 
   const loadCostCalculations = (items: BoqItemResponse[]) => {
@@ -406,6 +444,7 @@ export function RabWorkspacePage() {
       setCostRowStatuses({});
       setSelectedRowId('');
       setDraftDirty(false);
+      setPersistState({ kind: 'idle' });
       setStatusMessage('Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.');
       setCapabilityState({ kind: 'no-project' });
       return;
@@ -453,7 +492,7 @@ export function RabWorkspacePage() {
 
       applyRecap(data.recap);
       if (data.items.length > 0) {
-        applyRows(data.items);
+        applyRows(data.items, 'WORKING_DRAFT');
         loadCostCalculations(data.items);
         setStatusMessage('Draft tersimpan dimuat. Ruang kerja siap.');
         return;
@@ -465,7 +504,7 @@ export function RabWorkspacePage() {
       const baseline = baselineResponse && baselineResponse.ok ? await baselineResponse.json() : [];
       const baselineItems = Array.isArray(baseline) ? (baseline as BoqItemResponse[]) : [];
       if (baselineItems.length > 0) {
-        applyRows(baselineItems);
+        applyRows(baselineItems, 'BASELINE_SEED');
         loadCostCalculations(baselineItems);
         setStatusMessage('Draft kosong. Data baseline dimuat sebagai titik awal — klik Simpan Draft untuk menyimpan perubahan.');
       } else {
@@ -493,6 +532,8 @@ export function RabWorkspacePage() {
   }, [numberedRows, selectedRowId]);
   const selectedCostStatus = selectedItem ? costRowStatuses[selectedItem.id] : undefined;
   const selectedCostDisplay = selectedCostStatus ? toRabCostDisplay(selectedCostStatus) : null;
+  /** Drawer copy coherence: never says "Engine belum aktif" while selectedCostDisplay shows a real Cost Kernel result. */
+  const costEngineStatus = describeCostEngineStatus(Boolean(selectedItem?.ahspCode), selectedCostStatus);
   const negativeRows = useMemo(() => new Set(rows
     .filter((row) => row.type === 'item' && ((volumes[row.id] || 0) < 0 || (unitPrices[row.id] ?? row.unitPrice) < 0))
     .map((row) => row.id)), [rows, unitPrices, volumes]);
@@ -581,6 +622,13 @@ export function RabWorkspacePage() {
     draftDirty,
     persistInFlight: isPersistBusy,
   });
+  /** C-BLOCKER-04: current identity a terminal success/failed_confirmed result is compared against — see isPersistResultFresh below. Uses draftRevisionSnapshot, never the ref, since this runs during render. */
+  const currentPersistIdentity: PersistResultIdentity = {
+    projectId: projectId ?? '',
+    boqItemId: selectedItem?.id ?? '',
+    calculationAsOfDate,
+    draftRevision: draftRevisionSnapshot,
+  };
 
   const handleSaveDraft = () => {
     if (!canEditDraft) {
@@ -656,13 +704,29 @@ export function RabWorkspacePage() {
   };
 
   /**
-   * Every local-only row edit funnels through here so draftDirty stays a
-   * single, bounded, honest flag — cleared only by applyRows (a real server
-   * sync), never by a local mutation. GATE2A-PRODUCTIZATION-C: the persist
-   * action's reload would otherwise silently overwrite unsaved local edits.
+   * C-BLOCKER-02: the one bounded mutation marker for every local-only
+   * persisted-draft edit. Bumps draftRevisionRef synchronously (so an
+   * in-flight reload can detect the draft moved under it), keeps draftDirty
+   * a single honest flag (cleared only by applyRows — a real server sync),
+   * and drops a now-stale terminal success/failure result rather than
+   * leaving it displayed against data that has since changed. A request
+   * already in flight is left alone here — the revision guard, not this
+   * marker, is what protects it (see reloadDraft/handlePersistCalculation).
    */
-  const mutateRows = (updater: (current: RabRow[]) => RabRow[]) => {
+  const markDraftMutated = () => {
+    draftRevisionRef.current += 1;
+    setDraftRevisionSnapshot(draftRevisionRef.current);
     setDraftDirty(true);
+    setPersistState((current) => {
+      const busy = current.kind === 'persisting' || current.kind === 'reloading';
+      if (busy) return current;
+      return current.kind === 'success' || current.kind === 'failed_confirmed' ? { kind: 'idle' } : current;
+    });
+  };
+
+  /** Every local-only row edit funnels through here so markDraftMutated always runs alongside it. */
+  const mutateRows = (updater: (current: RabRow[]) => RabRow[]) => {
+    markDraftMutated();
     setRows(updater);
   };
 
@@ -701,12 +765,26 @@ export function RabWorkspacePage() {
     setCostRowStatuses((current) => invalidateRow(current, rowId));
   };
 
-  const reloadDraft = async () => {
-    if (!projectId) return;
+  /**
+   * C-BLOCKER-02: `expectedDraftRevision`, when passed, must still match
+   * draftRevisionRef.current once the fetch resolves — otherwise the local
+   * draft moved (a mutation) while this request was in flight, and the
+   * fetched server draft is discarded rather than silently overwriting
+   * newer local edits. `approveImport`'s existing unconditional call (no
+   * argument) is unaffected — its behavior is unchanged.
+   */
+  const reloadDraft = async (expectedDraftRevision?: number): Promise<ReloadDraftOutcome> => {
+    if (!projectId) return { kind: 'no_project' };
     const response = await apiFetch(`/projects/${projectId}/boq/draft`);
     if (!response.ok) throw new Error('draft-reload-failed');
     const draft = await response.json() as DraftBoqResponse;
-    applyRecap(draft.recap); applyRows(draft.items); loadCostCalculations(draft.items);
+    if (expectedDraftRevision !== undefined && !isDraftRevisionCurrent(expectedDraftRevision, draftRevisionRef.current)) {
+      return { kind: 'revision_changed' };
+    }
+    applyRecap(draft.recap);
+    applyRows(draft.items, 'WORKING_DRAFT');
+    loadCostCalculations(draft.items);
+    return { kind: 'applied', items: draft.items };
   };
 
   /**
@@ -714,10 +792,16 @@ export function RabWorkspacePage() {
    * calculationAsOfDate to the existing Gate-2A persist route; the backend
    * (RabKernelPersistenceService) remains sole authority for eligibility,
    * calculation, persistence, provenance, and the whole-RAB total. The
-   * request target (project/item/date) is captured once at click time so a
-   * later selection change can never cause this response to be displayed
-   * against a different item — combined with persistGenerationRef, a stale
-   * response for a superseded attempt is dropped outright.
+   * request target (project/item/date/draftRevision) is captured once at
+   * click time so a later selection, date, or draft change can never cause
+   * this response to be displayed against different data — combined with
+   * persistGenerationRef, a stale response for a superseded attempt is
+   * dropped outright.
+   *
+   * C-BLOCKER-01: the POST response body is never read as success
+   * authority — only reloadDraft's freshly re-fetched Working Draft row is,
+   * confirmed field-by-field via confirmPersistedRow before SUCCESS is ever
+   * declared.
    */
   const handlePersistCalculation = () => {
     if (!projectId || !selectedItem || persistReachability !== 'READY') return;
@@ -726,6 +810,7 @@ export function RabWorkspacePage() {
       boqItemId: selectedItem.id,
       itemLabel: selectedItem.name,
       calculationAsOfDate,
+      draftRevision: draftRevisionRef.current,
     };
     const generation = ++persistGenerationRef.current;
     setPersistState({ kind: 'persisting', target });
@@ -765,11 +850,14 @@ export function RabWorkspacePage() {
 
       setPersistState({ kind: 'reloading', target });
       let reloadOutcome: PersistReloadOutcome;
-      let result: PersistBoqItemCalculationResponse | undefined;
+      let reloadResult: ReloadDraftOutcome | undefined;
       try {
-        result = (await response.json()) as PersistBoqItemCalculationResponse;
-        await reloadDraft();
-        reloadOutcome = { kind: 'success' };
+        reloadResult = await reloadDraft(target.draftRevision);
+        // A revision change is not a mechanical error, but from this
+        // classifier's narrow "did reload cleanly apply" question it is
+        // treated the same way — both funnel to OUTCOME_UNKNOWN below,
+        // which is the exact required resolution for a revision change.
+        reloadOutcome = reloadResult.kind === 'applied' ? { kind: 'success' } : { kind: 'error' };
       } catch {
         reloadOutcome = { kind: 'error' };
       }
@@ -777,16 +865,26 @@ export function RabWorkspacePage() {
       if (generation !== persistGenerationRef.current) return;
 
       const outcome = classifyPersistOutcome({ kind: 'response', ok: true }, reloadOutcome);
-      if (outcome === 'SUCCESS' && result) {
-        setPersistState({
-          kind: 'success',
-          target,
-          unitPriceDisplay: formatBackendRupiah(result.unitPrice),
-          lineTotalDisplay: formatBackendRupiah(result.lineTotal),
+      if (outcome === 'SUCCESS' && reloadResult?.kind === 'applied') {
+        const reloadedRow = reloadResult.items.find((item) => item.id === target.boqItemId);
+        const confirmed = confirmPersistedRow(reloadedRow, {
+          boqItemId: target.boqItemId,
+          calculationAsOfDate: target.calculationAsOfDate,
         });
+        setPersistState(
+          confirmed
+            ? {
+                kind: 'success',
+                target,
+                unitPriceDisplay: formatBackendRupiah(confirmed.unitPrice),
+                lineTotalDisplay: formatBackendRupiah(confirmed.lineTotal),
+              }
+            : { kind: 'outcome_unknown', target },
+        );
       } else {
-        // Covers both a malformed 2xx body and a reload failure after a
-        // confirmed 2xx — never a false SUCCESS, never claimed "not saved".
+        // Covers a malformed/absent reloaded row, a revision change, and a
+        // reload failure after a confirmed 2xx — never a false SUCCESS,
+        // never claimed "not saved".
         setPersistState({ kind: 'outcome_unknown', target });
       }
     })();
@@ -1120,7 +1218,7 @@ export function RabWorkspacePage() {
                             step="0.01"
                             value={volumes[row.id] || 0}
                             onChange={(event) => {
-                              setDraftDirty(true);
+                              markDraftMutated();
                               setVolumes((current) => ({
                                 ...current,
                                 [row.id]: Number(event.target.value),
@@ -1149,7 +1247,7 @@ export function RabWorkspacePage() {
                                   inputMode="numeric"
                                   value={formatDraftNumber(unitPrices[row.id] ?? row.unitPrice)}
                                   onChange={(event) => {
-                                    setDraftDirty(true);
+                                    markDraftMutated();
                                     setUnitPrices((current) => ({
                                       ...current,
                                       [row.id]: parseDraftNumber(event.target.value),
@@ -1220,7 +1318,7 @@ export function RabWorkspacePage() {
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Margin / Profit</span>
                   <span className="simprok-rab-recap__input-wrap">
-                    <input type="number" min="0" value={marginPercent} onChange={(event) => { setDraftDirty(true); setMarginPercent(Number(event.target.value)); }} aria-label="Persentase margin" />
+                    <input type="number" min="0" value={marginPercent} onChange={(event) => { markDraftMutated(); setMarginPercent(Number(event.target.value)); }} aria-label="Persentase margin" />
                     <span>%</span>
                   </span>
                   <strong className="simprok-rab-recap__value">{pricingComplete ? formatRupiah(margin) : '—'}</strong>
@@ -1228,7 +1326,7 @@ export function RabWorkspacePage() {
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Pajak / PPN</span>
                   <span className="simprok-rab-recap__input-wrap">
-                    <input type="number" min="0" value={ppnPercent} onChange={(event) => { setDraftDirty(true); setPpnPercent(Number(event.target.value)); }} aria-label="Persentase PPN" />
+                    <input type="number" min="0" value={ppnPercent} onChange={(event) => { markDraftMutated(); setPpnPercent(Number(event.target.value)); }} aria-label="Persentase PPN" />
                     <span>%</span>
                   </span>
                   <strong className="simprok-rab-recap__value">{pricingComplete ? formatRupiah(ppn) : '—'}</strong>
@@ -1266,11 +1364,11 @@ export function RabWorkspacePage() {
               </div>
               <div>
                 <span>Status AHSP</span>
-                <strong>{selectedItem.ahspCode ? 'Standby' : 'Engine belum aktif'}</strong>
+                <strong>{costEngineStatus.statusLabel}</strong>
               </div>
               <div>
                 <span>Sumber Harga</span>
-                <strong>Belum tersambung</strong>
+                <strong>{costEngineStatus.sourceLabel}</strong>
               </div>
               <div>
                 <span>Persistensi</span>
@@ -1278,8 +1376,8 @@ export function RabWorkspacePage() {
               </div>
             </div>
             <div className="simprok-ahsp-drawer__frame">
-              <span className="simprok-honest-frame__badge">Engine belum aktif</span>
-              <p>Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine AHSP tersambung. Angka detail tidak dibuat palsu.</p>
+              <span className="simprok-honest-frame__badge">{costEngineStatus.frameBadge}</span>
+              <p>{costEngineStatus.frameMessage}</p>
             </div>
             <button className="simprok-execution-factor" onClick={() => openPlaceholder('Atur Execution Factor')} title="Atur Execution Factor - engine belum aktif" aria-label="Atur Execution Factor - engine belum aktif" data-route="/?ruang=execution-factor">
               <Sparkles size={18} />
@@ -1299,6 +1397,7 @@ export function RabWorkspacePage() {
                 type="date"
                 value={calculationAsOfDate}
                 onChange={(event) => setCalculationAsOfDate(event.target.value)}
+                disabled={isPersistBusy}
                 aria-label="Tanggal perhitungan harga"
               />
               {draftDirty ? (
@@ -1315,7 +1414,7 @@ export function RabWorkspacePage() {
               >
                 <Save size={17} /> {isPersistBusy ? 'Menghitung & menyimpan...' : 'Hitung & Simpan Harga SIMPROK'}
               </button>
-              {persistState.kind === 'success' && persistState.target.boqItemId === selectedItem.id ? (
+              {persistState.kind === 'success' && isPersistResultFresh(persistState.target, currentPersistIdentity) ? (
                 <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="status">
                   <p>Harga SIMPROK berhasil dihitung dan disimpan.</p>
                   <p>{persistState.target.itemLabel}: {persistState.unitPriceDisplay} / {persistState.lineTotalDisplay}</p>
@@ -1327,12 +1426,12 @@ export function RabWorkspacePage() {
                   </button>
                 </div>
               ) : null}
-              {persistState.kind === 'failed_confirmed' && persistState.target.boqItemId === selectedItem.id ? (
+              {persistState.kind === 'failed_confirmed' && isPersistResultFresh(persistState.target, currentPersistIdentity) ? (
                 <div className="simprok-rab-validation-alert" role="alert">
                   Harga belum dapat disimpan: {persistState.reason}
                 </div>
               ) : null}
-              {persistState.kind === 'outcome_unknown' && persistState.target.boqItemId === selectedItem.id ? (
+              {persistState.kind === 'outcome_unknown' && persistState.target.projectId === projectId && persistState.target.boqItemId === selectedItem.id ? (
                 <div className="simprok-rab-validation-alert" role="alert">
                   Status penyimpanan tidak dapat dipastikan. Muat ulang draft untuk memastikan status harga sebelum mencoba lagi.
                 </div>

@@ -7,12 +7,17 @@ import {
   buildPersistCalculationRequestBody,
   classifyPersistOutcome,
   computeDirectCostTotal,
+  confirmPersistedRow,
   derivePersistFailureReason,
+  describeCostEngineStatus,
   evaluatePersistActionReachability,
   formatBoqImportMeasurement,
   GENERIC_PERSIST_FAILURE_REASON,
   invalidateRow,
+  isDraftDirtyForSource,
   isDraftPricingComplete,
+  isDraftRevisionCurrent,
+  isPersistResultFresh,
   markRequestFailed,
   sumDecimalStrings,
   toLocalDateOnlyString,
@@ -20,6 +25,8 @@ import {
   type CostCalculationResponse,
   type CostRowStatus,
   type PersistActionReachabilityInput,
+  type PersistedRowConfirmationTarget,
+  type PersistResultIdentity,
 } from "./rabCostDisplay.ts";
 
 test('structural import rows never render quantity-zero or unit sentinels', () => {
@@ -364,4 +371,153 @@ test("C-12: derivePersistFailureReason prefers a string message, joins a safe st
   assert.equal(derivePersistFailureReason(null), GENERIC_PERSIST_FAILURE_REASON);
   assert.equal(derivePersistFailureReason("not-an-object"), GENERIC_PERSIST_FAILURE_REASON);
   assert.equal(derivePersistFailureReason({ message: [123, null] }), GENERIC_PERSIST_FAILURE_REASON);
+});
+
+const confirmationTarget: PersistedRowConfirmationTarget = {
+  boqItemId: "item-1",
+  calculationAsOfDate: "2026-08-03",
+};
+
+const validConfirmedRow = {
+  id: "item-1",
+  priceOrigin: "SERVER_COST_KERNEL",
+  calculationAsOfDate: "2026-08-03",
+  unitPrice: "2004055.00",
+  lineTotal: "20040550.00",
+  calculationOccurrenceId: "occurrence-1",
+};
+
+test("C-13: reloaded persisted-row confirmation is fail-closed against every malformed/mismatched shape, and accepts one valid SERVER_COST_KERNEL row", () => {
+  assert.equal(confirmPersistedRow(null, confirmationTarget), null);
+  assert.equal(confirmPersistedRow(undefined, confirmationTarget), null);
+  assert.equal(confirmPersistedRow({}, confirmationTarget), null);
+  assert.equal(confirmPersistedRow({ ...validConfirmedRow, id: "wrong-item" }, confirmationTarget), null);
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, calculationAsOfDate: "2026-08-04" }, confirmationTarget),
+    null,
+  );
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, priceOrigin: "MANUAL_CLIENT" }, confirmationTarget),
+    null,
+  );
+  assert.equal(confirmPersistedRow({ ...validConfirmedRow, priceOrigin: null }, confirmationTarget), null);
+  // Runtime JSON numbers, not source literals — see B-15's identical rationale (no-loss-of-precision lint).
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, unitPrice: Number("2004055.00") }, confirmationTarget),
+    null,
+  );
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, lineTotal: Number("20040550.00") }, confirmationTarget),
+    null,
+  );
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, unitPrice: "not-a-decimal" }, confirmationTarget),
+    null,
+  );
+  assert.equal(
+    confirmPersistedRow({ ...validConfirmedRow, calculationOccurrenceId: "" }, confirmationTarget),
+    null,
+  );
+
+  const confirmed = confirmPersistedRow(validConfirmedRow, confirmationTarget);
+  assert.deepEqual(confirmed, {
+    unitPrice: "2004055.00",
+    lineTotal: "20040550.00",
+    calculationOccurrenceId: "occurrence-1",
+  });
+});
+
+test("C-14: isDraftRevisionCurrent is exact equality only — no truthy/falsy coercion, revision 0 is a real, comparable value", () => {
+  assert.equal(isDraftRevisionCurrent(5, 5), true);
+  assert.equal(isDraftRevisionCurrent(5, 6), false);
+  assert.equal(isDraftRevisionCurrent(0, 0), true);
+  assert.equal(isDraftRevisionCurrent(0, 1), false);
+  assert.equal(isDraftRevisionCurrent(1, 0), false);
+});
+
+test("C-15: BASELINE_SEED is dirty (a starting point, never an already-saved Working Draft) and blocks reachability through the existing UNSAVED_DRAFT_CHANGES state; WORKING_DRAFT stays clean and READY", () => {
+  assert.equal(isDraftDirtyForSource("WORKING_DRAFT"), false);
+  assert.equal(isDraftDirtyForSource("BASELINE_SEED"), true);
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      draftDirty: isDraftDirtyForSource("BASELINE_SEED"),
+    }),
+    "UNSAVED_DRAFT_CHANGES",
+  );
+  assert.equal(
+    evaluatePersistActionReachability({
+      ...readyReachabilityInput,
+      draftDirty: isDraftDirtyForSource("WORKING_DRAFT"),
+    }),
+    "READY",
+  );
+});
+
+const baseResultIdentity: PersistResultIdentity = {
+  projectId: "project-1",
+  boqItemId: "item-1",
+  calculationAsOfDate: "2026-08-03",
+  draftRevision: 3,
+};
+
+test("C-16: a persist result becomes stale when project, item, calculation date, or draft revision differs; the exact same identity remains current", () => {
+  assert.equal(isPersistResultFresh(baseResultIdentity, baseResultIdentity), true);
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, { ...baseResultIdentity, projectId: "project-2" }),
+    false,
+  );
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, { ...baseResultIdentity, boqItemId: "item-2" }),
+    false,
+  );
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, { ...baseResultIdentity, calculationAsOfDate: "2026-08-04" }),
+    false,
+  );
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, { ...baseResultIdentity, draftRevision: 4 }),
+    false,
+  );
+  // A structurally identical but distinct object must compare fresh by value, not by reference.
+  assert.equal(
+    isPersistResultFresh(baseResultIdentity, {
+      projectId: "project-1",
+      boqItemId: "item-1",
+      calculationAsOfDate: "2026-08-03",
+      draftRevision: 3,
+    }),
+    true,
+  );
+});
+
+test("C-17: describeCostEngineStatus never claims Engine belum aktif / Belum tersambung while a real Cost Kernel result exists for an AHSP-linked item", () => {
+  const noAhsp = describeCostEngineStatus(false, undefined);
+  assert.equal(noAhsp.statusLabel, "Engine belum aktif");
+  assert.equal(noAhsp.sourceLabel, "Belum tersambung");
+
+  const calculated = describeCostEngineStatus(true, { kind: "calculated", response: calculatedResponse });
+  assert.notEqual(calculated.statusLabel, "Engine belum aktif");
+  assert.notEqual(calculated.sourceLabel, "Belum tersambung");
+  assert.notEqual(calculated.frameBadge, "Engine belum aktif");
+  assert.equal(calculated.sourceLabel, "Cost Kernel SIMPROK");
+  assert.equal(calculated.statusLabel, "Dihitung SIMPROK");
+
+  const loading = describeCostEngineStatus(true, { kind: "loading" });
+  assert.notEqual(loading.statusLabel, "Engine belum aktif");
+  assert.equal(loading.statusLabel, "Menghitung SIMPROK...");
+
+  const failClosed = describeCostEngineStatus(true, { kind: "fail_closed", reason: "MISSING_ADAPTED_PRICE" });
+  assert.equal(failClosed.statusLabel, "MISSING_ADAPTED_PRICE");
+
+  const invalidated = describeCostEngineStatus(true, { kind: "invalidated" });
+  assert.equal(invalidated.statusLabel, "Perlu dihitung ulang");
+
+  const requestFailed = describeCostEngineStatus(true, { kind: "request_failed" });
+  assert.equal(requestFailed.statusLabel, "Gagal memuat kalkulasi");
+
+  // ahspCodePresent=true but no CostRowStatus at all (e.g. snapshot-only association) — matches the pre-existing "Standby" behavior, still never "Engine belum aktif".
+  const standby = describeCostEngineStatus(true, undefined);
+  assert.equal(standby.statusLabel, "Standby");
+  assert.notEqual(standby.statusLabel, "Engine belum aktif");
 });

@@ -384,3 +384,144 @@ export const derivePersistFailureReason = (body: unknown): string => {
   }
   return GENERIC_PERSIST_FAILURE_REASON;
 };
+
+export type BoqRowsSource = 'WORKING_DRAFT' | 'BASELINE_SEED';
+
+/**
+ * C-BLOCKER-03: a baseline seed (rows shown only as a starting point before
+ * any Save Draft) must never be treated as an already-persisted Working
+ * Draft — it stays dirty, and the persist action stays blocked through the
+ * existing UNSAVED_DRAFT_CHANGES reachability state, until the user
+ * explicitly saves it.
+ */
+export const isDraftDirtyForSource = (source: BoqRowsSource): boolean => source === 'BASELINE_SEED';
+
+/**
+ * C-BLOCKER-02: exact equality only — no truthy/falsy coercion. A caller
+ * must never skip this comparison just because a revision number happens
+ * to be 0.
+ */
+export const isDraftRevisionCurrent = (capturedRevision: number, currentRevision: number): boolean =>
+  capturedRevision === currentRevision;
+
+export interface PersistedRowConfirmationTarget {
+  boqItemId: string;
+  calculationAsOfDate: string;
+}
+
+export interface ConfirmedPersistedRow {
+  unitPrice: string;
+  lineTotal: string;
+  calculationOccurrenceId: string;
+}
+
+/**
+ * C-BLOCKER-01: the reloaded Working Draft read model — never the raw POST
+ * response body — is the sole authority for whether a persist attempt
+ * really succeeded. Reuses the existing canonical decimal parser rather
+ * than a second regex/formatter; fails closed on a malformed value, a
+ * wrong item, a wrong date, a non-SERVER_COST_KERNEL origin, a JSON-number
+ * money field, or an empty occurrence id.
+ */
+export const confirmPersistedRow = (
+  value: unknown,
+  target: PersistedRowConfirmationTarget,
+): ConfirmedPersistedRow | null => {
+  if (!value || typeof value !== 'object') return null;
+  const row = value as {
+    id?: unknown;
+    priceOrigin?: unknown;
+    calculationAsOfDate?: unknown;
+    unitPrice?: unknown;
+    lineTotal?: unknown;
+    calculationOccurrenceId?: unknown;
+  };
+  if (row.id !== target.boqItemId) return null;
+  if (row.priceOrigin !== 'SERVER_COST_KERNEL') return null;
+  if (row.calculationAsOfDate !== target.calculationAsOfDate) return null;
+  if (!parseCanonicalDecimalString(row.unitPrice)) return null;
+  if (!parseCanonicalDecimalString(row.lineTotal)) return null;
+  if (typeof row.calculationOccurrenceId !== 'string' || row.calculationOccurrenceId.length === 0) return null;
+  return {
+    unitPrice: row.unitPrice as string,
+    lineTotal: row.lineTotal as string,
+    calculationOccurrenceId: row.calculationOccurrenceId,
+  };
+};
+
+export interface PersistResultIdentity {
+  projectId: string;
+  boqItemId: string;
+  calculationAsOfDate: string;
+  draftRevision: number;
+}
+
+/**
+ * C-BLOCKER-04: a terminal SUCCESS/FAILED_CONFIRMED result stays displayable
+ * only while the current UI identity still matches exactly the identity it
+ * was produced against. Any drift — a different project, a different
+ * selected item, an edited calculation date, or a newer draft revision —
+ * makes the result stale; it must not resurface even if the user later
+ * re-selects the exact same item. OUTCOME_UNKNOWN is intentionally exempt
+ * from this check (see RabWorkspacePage) — it must remain visible as a
+ * warning for the affected item regardless of the very revision change
+ * that produced it.
+ */
+export const isPersistResultFresh = (
+  target: PersistResultIdentity,
+  current: PersistResultIdentity,
+): boolean =>
+  target.projectId === current.projectId &&
+  target.boqItemId === current.boqItemId &&
+  target.calculationAsOfDate === current.calculationAsOfDate &&
+  target.draftRevision === current.draftRevision;
+
+export interface CostEngineCopy {
+  statusLabel: string;
+  sourceLabel: string;
+  frameBadge: string;
+  frameMessage: string;
+}
+
+const AHSP_ENGINE_INACTIVE_FRAME_MESSAGE =
+  'Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine AHSP tersambung. Angka detail tidak dibuat palsu.';
+
+/**
+ * Drawer copy coherence: reuses toRabCostDisplay (the existing display
+ * adapter) rather than inventing a second status vocabulary. The drawer
+ * must never say "Engine belum aktif" / "Belum tersambung" while a real
+ * Cost Kernel result is available for an AHSP-linked item — those two
+ * honest placeholders are reserved strictly for "no AHSP associated yet".
+ */
+export const describeCostEngineStatus = (
+  ahspCodePresent: boolean,
+  costRowStatus: CostRowStatus | undefined,
+): CostEngineCopy => {
+  if (!ahspCodePresent) {
+    return {
+      statusLabel: 'Engine belum aktif',
+      sourceLabel: 'Belum tersambung',
+      frameBadge: 'Engine belum aktif',
+      frameMessage: AHSP_ENGINE_INACTIVE_FRAME_MESSAGE,
+    };
+  }
+  if (!costRowStatus) {
+    return {
+      statusLabel: 'Standby',
+      sourceLabel: 'Belum tersambung',
+      frameBadge: 'Standby',
+      frameMessage: AHSP_ENGINE_INACTIVE_FRAME_MESSAGE,
+    };
+  }
+  const display = toRabCostDisplay(costRowStatus);
+  const frameMessage =
+    costRowStatus.kind === 'calculated'
+      ? 'Harga satuan dan jumlah dihitung oleh Cost Kernel SIMPROK. Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine analisa AHSP tersambung.'
+      : AHSP_ENGINE_INACTIVE_FRAME_MESSAGE;
+  return {
+    statusLabel: display.badge,
+    sourceLabel: 'Cost Kernel SIMPROK',
+    frameBadge: display.badge,
+    frameMessage,
+  };
+};
