@@ -38,6 +38,7 @@ import {
   isDraftPricingComplete,
   isDraftRevisionCurrent,
   isPersistResultFresh,
+  isReloadContextCurrent,
   markRequestFailed,
   resolveSelectedRowIdAfterReload,
   shouldInvalidateTerminalPersistResult,
@@ -49,6 +50,7 @@ import {
   type PersistActionReachability,
   type PersistReloadOutcome,
   type PersistResultIdentity,
+  type ReloadRequestIdentity,
 } from '../utils/rabCostDisplay';
 import type { DashboardOutletContext } from '../components/layout/DashboardLayout';
 
@@ -296,17 +298,20 @@ interface PersistTarget {
   draftRevision: number;
   /** FINAL-TERMINAL-STATE-INVALIDATION: the persist-context revision captured at request start — see persistContextRevisionRef. */
   persistContextRevision: number;
+  /** C-20-CROSS-PROJECT-RELOAD-ISOLATION: the persist attempt id captured at request start — see persistGenerationRef. */
+  generation: number;
 }
 
 /**
- * C-BLOCKER-02: the outcome of a reloadDraft() attempt. 'revision_changed'
- * means the local draft was edited while the request was in flight — the
+ * C-BLOCKER-02 / C-20-CROSS-PROJECT-RELOAD-ISOLATION: the outcome of a
+ * reloadDraft() attempt. 'superseded' means the project, the persist
+ * attempt, or the local draft changed while the request was in flight — the
  * fetched server draft is intentionally discarded rather than silently
- * overwriting the newer local edits.
+ * overwriting whatever project/attempt/edit is now current.
  */
 type ReloadDraftOutcome =
   | { kind: 'applied'; items: BoqItemResponse[] }
-  | { kind: 'revision_changed' }
+  | { kind: 'superseded' }
   | { kind: 'no_project' };
 
 type PersistUiState =
@@ -386,6 +391,20 @@ export function RabWorkspacePage() {
   const [persistContextRevisionSnapshot, setPersistContextRevisionSnapshot] = useState(0);
   /** FINAL-TERMINAL-STATE-INVALIDATION: distinguishes an actual project change from a same-project retryToken-driven re-run of the load effect. */
   const previousProjectIdRef = useRef<string | null>(null);
+  /**
+   * C-20-CROSS-PROJECT-RELOAD-ISOLATION: mirrors the current projectId.
+   * reloadDraft() is a plain closure re-created each render, so a long-lived
+   * call still in flight from an older render only ever sees that older
+   * render's projectId — this ref is the one place such a call can read the
+   * true, live project id once its response resolves. Synced via its own
+   * effect (never mutated directly in the render body) immediately after
+   * every commit where projectId changed — long before any network response
+   * could possibly resolve.
+   */
+  const currentProjectIdRef = useRef<string | null>(projectId);
+  useEffect(() => {
+    currentProjectIdRef.current = projectId;
+  }, [projectId]);
 
   /**
    * FINAL-TERMINAL-STATE-INVALIDATION: the one path that advances the
@@ -838,21 +857,43 @@ export function RabWorkspacePage() {
   };
 
   /**
-   * C-BLOCKER-02: `expectedDraftRevision`, when passed, must still match
-   * draftRevisionRef.current once the fetch resolves — otherwise the local
-   * draft moved (a mutation) while this request was in flight, and the
-   * fetched server draft is discarded rather than silently overwriting
-   * newer local edits. `approveImport`'s existing unconditional call (no
-   * argument) is unaffected — its behavior is unchanged.
+   * C-BLOCKER-02 / C-20-CROSS-PROJECT-RELOAD-ISOLATION: `expected`, when
+   * passed, is the persist generation and draft revision captured at the
+   * moment the persist attempt started — verified via isReloadContextCurrent
+   * against the live refs once the fetch resolves, and BEFORE any state is
+   * touched. The project-identity check runs unconditionally, even for
+   * `approveImport`'s argument-less call, because a project switch
+   * invalidates any in-flight reloadDraft response no matter which caller
+   * made it — this request's own projectId is captured once at call start
+   * (requestProjectId) so it can be compared to the live currentProjectIdRef
+   * once the response comes back, never to a stale closure value. Any
+   * mismatch (project, generation, or revision) means this response belongs
+   * to a project/attempt/edit the user has already left — it is discarded
+   * outright, never partially applied.
    */
-  const reloadDraft = async (expectedDraftRevision?: number): Promise<ReloadDraftOutcome> => {
+  const reloadDraft = async (
+    expected?: { generation: number; draftRevision: number },
+  ): Promise<ReloadDraftOutcome> => {
     if (!projectId) return { kind: 'no_project' };
-    const response = await apiFetch(`/projects/${projectId}/boq/draft`);
+    const requestProjectId = projectId;
+    const response = await apiFetch(`/projects/${requestProjectId}/boq/draft`);
     if (!response.ok) throw new Error('draft-reload-failed');
     const draft = await response.json() as DraftBoqResponse;
-    if (expectedDraftRevision !== undefined && !isDraftRevisionCurrent(expectedDraftRevision, draftRevisionRef.current)) {
-      return { kind: 'revision_changed' };
+
+    const current: ReloadRequestIdentity = {
+      projectId: currentProjectIdRef.current,
+      generation: persistGenerationRef.current,
+      draftRevision: draftRevisionRef.current,
+    };
+    const captured: ReloadRequestIdentity = {
+      projectId: requestProjectId,
+      generation: expected?.generation ?? current.generation,
+      draftRevision: expected?.draftRevision ?? current.draftRevision,
+    };
+    if (!isReloadContextCurrent(captured, current)) {
+      return { kind: 'superseded' };
     }
+
     applyRecap(draft.recap);
     applyRows(draft.items, 'WORKING_DRAFT');
     loadCostCalculations(draft.items);
@@ -877,6 +918,7 @@ export function RabWorkspacePage() {
    */
   const handlePersistCalculation = () => {
     if (!projectId || !selectedItem || persistReachability !== 'READY') return;
+    const generation = ++persistGenerationRef.current;
     const target: PersistTarget = {
       projectId,
       boqItemId: selectedItem.id,
@@ -884,8 +926,8 @@ export function RabWorkspacePage() {
       calculationAsOfDate,
       draftRevision: draftRevisionRef.current,
       persistContextRevision: persistContextRevisionRef.current,
+      generation,
     };
-    const generation = ++persistGenerationRef.current;
     setPersistState({ kind: 'persisting', target });
 
     void (async () => {
@@ -933,11 +975,11 @@ export function RabWorkspacePage() {
       let reloadOutcome: PersistReloadOutcome;
       let reloadResult: ReloadDraftOutcome | undefined;
       try {
-        reloadResult = await reloadDraft(target.draftRevision);
-        // A revision change is not a mechanical error, but from this
-        // classifier's narrow "did reload cleanly apply" question it is
-        // treated the same way — both funnel to OUTCOME_UNKNOWN below,
-        // which is the exact required resolution for a revision change.
+        reloadResult = await reloadDraft({ generation: target.generation, draftRevision: target.draftRevision });
+        // A superseded project/generation/revision is not a mechanical
+        // error, but from this classifier's narrow "did reload cleanly
+        // apply" question it is treated the same way — both funnel to
+        // OUTCOME_UNKNOWN below, which is the exact required resolution.
         reloadOutcome = reloadResult.kind === 'applied' ? { kind: 'success' } : { kind: 'error' };
       } catch {
         reloadOutcome = { kind: 'error' };

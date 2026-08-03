@@ -18,6 +18,7 @@ import {
   isDraftPricingComplete,
   isDraftRevisionCurrent,
   isPersistResultFresh,
+  isReloadContextCurrent,
   markRequestFailed,
   resolveSelectedRowIdAfterReload,
   shouldInvalidateTerminalPersistResult,
@@ -29,6 +30,7 @@ import {
   type PersistActionReachabilityInput,
   type PersistedRowConfirmationTarget,
   type PersistResultIdentity,
+  type ReloadRequestIdentity,
 } from "./rabCostDisplay.ts";
 
 test('structural import rows never render quantity-zero or unit sentinels', () => {
@@ -580,4 +582,54 @@ test("C-19: resolveSelectedRowIdAfterReload preserves the current selection when
   assert.equal(resolveSelectedRowIdAfterReload("", []), "");
   // A blank current selection with rows available still falls back to the first WORK_ITEM, not preserved as blank.
   assert.equal(resolveSelectedRowIdAfterReload("", rows), "item-1");
+});
+
+const baseReloadIdentity: ReloadRequestIdentity = {
+  projectId: "project-A",
+  generation: 1,
+  draftRevision: 3,
+};
+
+test("C-20: isReloadContextCurrent rejects a reload whose captured project no longer matches the live project — the exact cross-project contamination reloadDraft() must never apply", () => {
+  // Project A request resolves after the user has already navigated to Project B — must not be applied.
+  assert.equal(
+    isReloadContextCurrent(baseReloadIdentity, { ...baseReloadIdentity, projectId: "project-B" }),
+    false,
+  );
+});
+
+test("C-20: isReloadContextCurrent rejects a reload whose captured persist generation is stale — a superseded persist attempt on the same project must never apply", () => {
+  // The persist attempt this response belongs to (generation 1) has already been superseded by a newer attempt (generation 2).
+  assert.equal(
+    isReloadContextCurrent(baseReloadIdentity, { ...baseReloadIdentity, generation: 2 }),
+    false,
+  );
+});
+
+test("C-20: isReloadContextCurrent rejects a reload whose captured draft revision is stale — a local edit made while the request was in flight must never be overwritten", () => {
+  assert.equal(
+    isReloadContextCurrent(baseReloadIdentity, { ...baseReloadIdentity, draftRevision: 4 }),
+    false,
+  );
+});
+
+test("C-20: isReloadContextCurrent accepts a reload only when project, generation, and draft revision all still match — the one legitimate same-project, same-attempt, same-revision reload/retry", () => {
+  assert.equal(isReloadContextCurrent(baseReloadIdentity, baseReloadIdentity), true);
+  // A structurally identical but distinct object must compare current by value, not by reference.
+  assert.equal(
+    isReloadContextCurrent(baseReloadIdentity, {
+      projectId: "project-A",
+      generation: 1,
+      draftRevision: 3,
+    }),
+    true,
+  );
+  // Revision 0 is a real, comparable value — never coerced to falsy-equals-mismatch.
+  assert.equal(
+    isReloadContextCurrent(
+      { projectId: "project-A", generation: 0, draftRevision: 0 },
+      { projectId: "project-A", generation: 0, draftRevision: 0 },
+    ),
+    true,
+  );
 });

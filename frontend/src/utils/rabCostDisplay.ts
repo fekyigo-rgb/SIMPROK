@@ -404,6 +404,32 @@ export const isDraftDirtyForSource = (source: BoqRowsSource): boolean => source 
 export const isDraftRevisionCurrent = (capturedRevision: number, currentRevision: number): boolean =>
   capturedRevision === currentRevision;
 
+export interface ReloadRequestIdentity {
+  projectId: string | null;
+  generation: number;
+  draftRevision: number;
+}
+
+/**
+ * C-20-CROSS-PROJECT-RELOAD-ISOLATION: the one authority for whether a
+ * reloadDraft() response is still safe to apply. `captured` is the identity
+ * a request was made for — project, persist generation, and draft revision,
+ * all snapshotted at request start; `current` is the live identity read the
+ * instant the response resolves. Any mismatch means a newer project, a newer
+ * persist attempt, or a newer draft edit has already superseded this
+ * response — it must be discarded outright (recap/rows/selection/draftDirty/
+ * cost-calculation state all left untouched), never partially applied.
+ * Exact equality only, matching isDraftRevisionCurrent's rule that a
+ * revision of 0 is a real, comparable value.
+ */
+export const isReloadContextCurrent = (
+  captured: ReloadRequestIdentity,
+  current: ReloadRequestIdentity,
+): boolean =>
+  captured.projectId === current.projectId &&
+  captured.generation === current.generation &&
+  captured.draftRevision === current.draftRevision;
+
 export interface PersistedRowConfirmationTarget {
   boqItemId: string;
   calculationAsOfDate: string;
