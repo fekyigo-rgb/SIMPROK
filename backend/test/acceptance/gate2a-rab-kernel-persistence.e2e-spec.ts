@@ -1,9 +1,13 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
-import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
+import {
+  cleanupGate2aPositiveFixture,
+  createGate2aPositiveFixture,
+  Gate2aPositiveFixture,
+} from '../support/gate2a-productization-d.fixture';
 
 /**
  * GATE-2A deterministic Safe E2E proof.
@@ -33,9 +37,9 @@ import { AppModule } from '../../src/app.module';
 describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   const prisma = new PrismaClient();
   const tag = `GATE2A${Date.now()}`;
-  const password = 'Gate2aKernel!';
   const labels = 'TEST_FIXTURE_ONLY OWNER_SUPPLIED_EXAMPLE_NON_PRODUCTION';
   let app: INestApplication;
+  let positiveFixture: Gate2aPositiveFixture;
   let workspaceId: string;
   let orgId: string;
 
@@ -70,73 +74,6 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   let mismatchResourceCatalogAId: string;
   let mismatchResourceCatalogBId: string;
   let mismatchBasicPriceId: string;
-
-  const createdPermissionIds: string[] = [];
-  const accountIds: string[] = [];
-  const membershipIds: string[] = [];
-
-  const login = async (email: string) => {
-    const response = await request(app.getHttpServer())
-      .post('/auth/login')
-      .send({ email, password })
-      .expect(201);
-    return response.body.access_token as string;
-  };
-
-  const ensurePermission = async (code: string) => {
-    const permission =
-      (await prisma.permission.findUnique({ where: { code } })) ??
-      (await prisma.permission.create({
-        data: { code, name: `${tag} ${code}`, description: labels },
-      }));
-    if (permission.name.startsWith(tag)) createdPermissionIds.push(permission.id);
-    return permission;
-  };
-
-  const createActor = async (
-    suffix: string,
-    permissionCodes: string[],
-    projectIds: string[],
-  ) => {
-    const permissions = await Promise.all(permissionCodes.map(ensurePermission));
-    const role = await prisma.role.create({
-      data: {
-        workspaceId,
-        code: `${tag}_${suffix.toUpperCase()}`,
-        name: `${tag} ${suffix}`,
-        rolePermissions: { create: permissions.map((p) => ({ permissionId: p.id })) },
-      },
-    });
-    const email = `${tag}.${suffix}@test.local`.toLowerCase();
-    const account = await prisma.account.create({
-      data: { email, passwordHash: await bcrypt.hash(password, 10), displayName: suffix, status: 'ACTIVE' },
-    });
-    accountIds.push(account.id);
-    const membership = await prisma.workspaceMembership.create({
-      data: {
-        accountId: account.id,
-        workspaceId,
-        status: 'ACTIVE',
-        membershipRoles: { create: [{ roleId: role.id }] },
-      },
-    });
-    membershipIds.push(membership.id);
-    await prisma.user.create({
-      data: { workspaceMembershipId: membership.id, workspaceId, fullName: suffix, status: 'ACTIVE' },
-    });
-    for (const pid of projectIds) {
-      await prisma.projectAssignment.create({
-        data: {
-          workspaceMembershipId: membership.id,
-          projectId: pid,
-          roleInProject: 'MEMBER',
-          isPrimaryAssignment: true,
-          status: 'ASSIGNED',
-        },
-      });
-    }
-    return { accountId: account.id, membershipId: membership.id, email };
-  };
 
   /** One AHSP version/resource + one Working Draft WORK_ITEM occurring against `selectedBasicPriceId`. */
   const buildAhspAndBoqFixture = async (params: {
@@ -209,7 +146,12 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       },
     });
     const structure = await prisma.boqStructure.create({
-      data: { projectId: params.projectId, name: 'Working Draft', version: 1, status: 'DRAFT' },
+      data: {
+        projectId: params.projectId,
+        name: 'Working Draft',
+        version: 1,
+        status: 'DRAFT',
+      },
     });
     const item = await prisma.boqItem.create({
       data: {
@@ -228,113 +170,67 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   };
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
 
-    const org = await prisma.organization.create({ data: { name: `${tag} Org`, type: 'COMPANY' } });
-    orgId = org.id;
-    const workspace = await prisma.workspace.create({
-      data: { name: `${tag} WS`, organizationId: org.id },
-    });
-    workspaceId = workspace.id;
+    positiveFixture = await createGate2aPositiveFixture({ prisma, app, tag });
+    orgId = positiveFixture.organizationId;
+    workspaceId = positiveFixture.workspaceId;
+    projectId = positiveFixture.projectId;
+    boqItemId = positiveFixture.boqItemId;
+    boqStructureId = positiveFixture.boqStructureId;
+    ahspId = positiveFixture.ahspId;
+    resourceCatalogId = positiveFixture.resourceCatalogId;
+    basicPriceId = positiveFixture.basicPriceId;
+    submissionId = positiveFixture.submissionId;
+    reviewId = positiveFixture.reviewId;
+    rabEditorToken = positiveFixture.browserActorToken;
+    verifierToken = positiveFixture.verifierToken;
+    publisherToken = positiveFixture.publisherToken;
 
-    const project = await prisma.project.create({
-      data: { workspaceId, organizationId: orgId, code: `${tag}-P`, name: `${tag} Project`, status: 'PLANNED' },
-    });
-    projectId = project.id;
     const negativeProject = await prisma.project.create({
-      data: { workspaceId, organizationId: orgId, code: `${tag}-NEG`, name: `${tag} Negative Project`, status: 'PLANNED' },
+      data: {
+        workspaceId,
+        organizationId: orgId,
+        code: `${tag}-NEG`,
+        name: `${tag} Negative Project`,
+        status: 'PLANNED',
+      },
     });
     negativeProjectId = negativeProject.id;
     const mismatchProject = await prisma.project.create({
-      data: { workspaceId, organizationId: orgId, code: `${tag}-MISMATCH`, name: `${tag} Mismatch Project`, status: 'PLANNED' },
+      data: {
+        workspaceId,
+        organizationId: orgId,
+        code: `${tag}-MISMATCH`,
+        name: `${tag} Mismatch Project`,
+        status: 'PLANNED',
+      },
     });
     mismatchProjectId = mismatchProject.id;
-
-    const rabEditor = await createActor(
-      'editor',
-      ['RAB_DRAFT_EDIT'],
-      [projectId, negativeProjectId, mismatchProjectId],
-    );
-    const verifier = await createActor('verifier', ['BASIC_PRICE_VERIFY'], []);
-    const publisher = await createActor('publisher', ['BASIC_PRICE_PUBLISH'], []);
-    rabEditorToken = await login(rabEditor.email);
-    verifierToken = await login(verifier.email);
-    publisherToken = await login(publisher.email);
-
-    // ---- Positive: the real submission -> review -> ACCEPT -> PUBLISH chain ----
-    const resourceCatalog = await prisma.resourceCatalog.create({
-      data: { workspaceId, name: `${tag} Besi Beton`, type: 'MATERIAL', baseUnit: 'Kg' },
-    });
-    resourceCatalogId = resourceCatalog.id;
-
-    const submission = await prisma.priceSubmission.create({
-      data: {
-        workspaceId,
-        organizationId: orgId,
-        resourceId: resourceCatalogId,
-        regionId: null,
-        sourceOrigin: 'SUPPLIER',
-        sourceType: 'MARKET_SURVEY',
-        status: 'UNDER_REVIEW',
-      },
-    });
-    submissionId = submission.id;
-    const revision = await prisma.priceSubmissionRevision.create({
-      data: {
-        submissionId: submission.id,
-        revisionNumber: 1,
-        value: '100000.00',
-        effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
-        validationPassed: true,
-      },
-    });
-    await prisma.priceSubmission.update({
-      where: { id: submission.id },
-      data: { currentRevisionId: revision.id },
-    });
-    const review = await prisma.priceSubmissionReview.create({
-      data: {
-        priceSubmissionId: submission.id,
-        workspaceId,
-        organizationId: orgId,
-        slaState: 'OPEN',
-        openedAt: new Date(),
-      },
-    });
-    reviewId = review.id;
-
-    // Real transition 1: ACCEPT by verifier A.
-    const acceptResponse = await request(app.getHttpServer())
-      .post(`/basic-price-reviews/${reviewId}/accept`)
-      .set('Authorization', `Bearer ${verifierToken}`)
-      .set('x-workspace-id', workspaceId)
-      .send({ explicitGeneralRegion: true })
-      .expect(201);
-    basicPriceId = acceptResponse.body.basicPriceId;
-
-    // Real transition 2: PUBLISH by publisher B (a distinct human from the verifier).
-    await request(app.getHttpServer())
-      .post(`/basic-price-publications/${basicPriceId}/publish`)
-      .set('Authorization', `Bearer ${publisherToken}`)
-      .set('x-workspace-id', workspaceId)
-      .expect(201);
-
-    const positiveFixture = await buildAhspAndBoqFixture({
-      projectId,
-      resourceName: `${tag} Besi Beton`,
-      selectedBasicPriceId: basicPriceId,
-      sourcePriceValue: '100000.00',
-      resourceCatalogId,
-    });
-    ahspId = positiveFixture.ahspId;
-    boqStructureId = positiveFixture.structureId;
-    boqItemId = positiveFixture.itemId;
+    for (const assignedProjectId of [negativeProjectId, mismatchProjectId]) {
+      await prisma.projectAssignment.create({
+        data: {
+          workspaceMembershipId: positiveFixture.membershipIds[0],
+          projectId: assignedProjectId,
+          roleInProject: 'MEMBER',
+          isPrimaryAssignment: true,
+          status: 'ASSIGNED',
+        },
+      });
+    }
 
     // ---- Negative: a PUBLISHED/PUBLISHED price fabricated with NO submission chain ----
     const negativeResourceCatalog = await prisma.resourceCatalog.create({
-      data: { workspaceId, name: `${tag} Pasir Untraceable`, type: 'MATERIAL', baseUnit: 'Kg' },
+      data: {
+        workspaceId,
+        name: `${tag} Pasir Untraceable`,
+        type: 'MATERIAL',
+        baseUnit: 'Kg',
+      },
     });
     negativeResourceCatalogId = negativeResourceCatalog.id;
     const negativeBasicPrice = await prisma.basicPrice.create({
@@ -369,11 +265,21 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     // DIFFERENT ResourceCatalog than the one the selected BasicPrice
     // actually belongs to (two genuinely distinct ResourceCatalog rows). ----
     const mismatchResourceCatalogA = await prisma.resourceCatalog.create({
-      data: { workspaceId, name: `${tag} Semen A`, type: 'MATERIAL', baseUnit: 'Kg' },
+      data: {
+        workspaceId,
+        name: `${tag} Semen A`,
+        type: 'MATERIAL',
+        baseUnit: 'Kg',
+      },
     });
     mismatchResourceCatalogAId = mismatchResourceCatalogA.id;
     const mismatchResourceCatalogB = await prisma.resourceCatalog.create({
-      data: { workspaceId, name: `${tag} Semen B`, type: 'MATERIAL', baseUnit: 'Kg' },
+      data: {
+        workspaceId,
+        name: `${tag} Semen B`,
+        type: 'MATERIAL',
+        baseUnit: 'Kg',
+      },
     });
     mismatchResourceCatalogBId = mismatchResourceCatalogB.id;
     // This BasicPrice genuinely belongs to resource A.
@@ -407,46 +313,55 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   }, 60_000);
 
   afterAll(async () => {
-    const allProjectIds = [projectId, negativeProjectId, mismatchProjectId];
-    const allStructureIds = [boqStructureId, negativeBoqStructureId, mismatchBoqStructureId];
-    const allAhspIds = [ahspId, negativeAhspId, mismatchAhspId];
-    const allBasicPriceIds = [basicPriceId, negativeBasicPriceId, mismatchBasicPriceId];
+    const negativeProjectIds = [negativeProjectId, mismatchProjectId];
+    const negativeStructureIds = [
+      negativeBoqStructureId,
+      mismatchBoqStructureId,
+    ];
+    const negativeAhspIds = [negativeAhspId, mismatchAhspId];
+    const negativeBasicPriceIds = [negativeBasicPriceId, mismatchBasicPriceId];
     const allResourceCatalogIds = [
-      resourceCatalogId,
       negativeResourceCatalogId,
       mismatchResourceCatalogAId,
       mismatchResourceCatalogBId,
     ];
 
-    await prisma.rabDocument.deleteMany({ where: { projectId: { in: allProjectIds } } });
-    await prisma.boqItem.deleteMany({ where: { boqStructureId: { in: allStructureIds } } });
-    await prisma.boqStructure.deleteMany({ where: { projectId: { in: allProjectIds } } });
-    await prisma.projectAhspResourceResolution.deleteMany({
-      where: { occurrence: { projectId: { in: allProjectIds } } },
+    await prisma.rabDocument.deleteMany({
+      where: { projectId: { in: negativeProjectIds } },
     });
-    await prisma.projectAhspOccurrence.deleteMany({ where: { projectId: { in: allProjectIds } } });
-    await prisma.aHSPResource.deleteMany({ where: { ahspVersion: { ahspId: { in: allAhspIds } } } });
-    await prisma.aHSPVersion.deleteMany({ where: { ahspId: { in: allAhspIds } } });
-    await prisma.aHSP.deleteMany({ where: { id: { in: allAhspIds } } });
+    await prisma.boqItem.deleteMany({
+      where: { boqStructureId: { in: negativeStructureIds } },
+    });
+    await prisma.boqStructure.deleteMany({
+      where: { projectId: { in: negativeProjectIds } },
+    });
+    await prisma.projectAhspResourceResolution.deleteMany({
+      where: { occurrence: { projectId: { in: negativeProjectIds } } },
+    });
+    await prisma.projectAhspOccurrence.deleteMany({
+      where: { projectId: { in: negativeProjectIds } },
+    });
+    await prisma.aHSPResource.deleteMany({
+      where: { ahspVersion: { ahspId: { in: negativeAhspIds } } },
+    });
+    await prisma.aHSPVersion.deleteMany({
+      where: { ahspId: { in: negativeAhspIds } },
+    });
+    await prisma.aHSP.deleteMany({ where: { id: { in: negativeAhspIds } } });
 
-    await prisma.basicPricePublicationAudit.deleteMany({ where: { basicPriceId } });
-    await prisma.basicPrice.deleteMany({ where: { id: { in: allBasicPriceIds } } });
-    await prisma.resourceCatalog.deleteMany({ where: { id: { in: allResourceCatalogIds } } });
-    await prisma.priceSubmissionReviewDecision.deleteMany({ where: { reviewId } });
-    await prisma.priceSubmissionReview.deleteMany({ where: { id: reviewId } });
-    await prisma.priceSubmissionAudit.deleteMany({ where: { submissionId } });
-    await prisma.priceSubmissionRevision.deleteMany({ where: { submissionId } });
-    await prisma.priceSubmission.deleteMany({ where: { id: submissionId } });
-
-    await prisma.projectAssignment.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });
-    await prisma.user.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });
-    await prisma.workspaceMembership.deleteMany({ where: { id: { in: membershipIds } } });
-    await prisma.role.deleteMany({ where: { code: { startsWith: tag } } });
-    await prisma.permission.deleteMany({ where: { id: { in: createdPermissionIds } } });
-    await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
-    await prisma.project.deleteMany({ where: { id: { in: allProjectIds } } });
-    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
-    await prisma.organization.deleteMany({ where: { id: orgId } });
+    await prisma.basicPrice.deleteMany({
+      where: { id: { in: negativeBasicPriceIds } },
+    });
+    await prisma.resourceCatalog.deleteMany({
+      where: { id: { in: allResourceCatalogIds } },
+    });
+    await prisma.projectAssignment.deleteMany({
+      where: { projectId: { in: negativeProjectIds } },
+    });
+    await prisma.project.deleteMany({
+      where: { id: { in: negativeProjectIds } },
+    });
+    await cleanupGate2aPositiveFixture(prisma, positiveFixture);
     await app.close();
     await prisma.$disconnect();
   }, 30_000);
