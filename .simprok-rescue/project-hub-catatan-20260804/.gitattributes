@@ -1,0 +1,2 @@
+files/** -text -filter -diff -merge -working-tree-encoding
+*.patch -text -filter -diff -merge -working-tree-encoding

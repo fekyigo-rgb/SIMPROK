@@ -1,0 +1,53 @@
+﻿< 6138b3d feat(rab): add minimal Gate 2A persist action (#61)
+< 11a732a fix(rab): synchronous generation bump + single reload-apply orchestrator
+< fe6f4d8 fix(rab): isolate reloadDraft() against superseded project/generation
+< 4b811fc fix(rab): permanently invalidate stale persist results
+< 05f4f15 fix(rab): harden Gate 2A persist action state integrity
+< abff465 feat(rab): add minimal Gate 2A persist action
+< 6dce834 Merge pull request #60 from feat/gate2a-exact-money-canonical-viewer
+< e061b3c ci(frontend): run standard test gate
+< 25bb627 fix(rab): reject malformed persisted wire values
+< 61ceb45 feat(rab): render exact persisted draft money
+< b1e219e Merge pull request #59 from docs/pr58-canonical-closeout-20260801
+< 1418c30 docs(control): finalize OD-04 register status
+< d2c3da8 docs(control): close PR58 operational pointers
+< 67c4e9a docs(control): synchronize locked OD-04 precision policy
+< 872e3fd docs(control): sync Basic Price status after PR58
+< 8aba412 integration: RM-02 Basic Price stack and Gate 2A (#58)
+< 37cdf76 docs(control): separate PR57 merge and migration gates
+< 3013223 fix(rab): harden Gate 2A integrity boundaries
+< 1eeb24d feat(rab): persist traceable cost-kernel results in draft RAB
+< 092544f docs(rm02d2a2): record Safe E2E PASS, visual fixture, and server restart facts
+< cb7e80d docs(rm02d2a2): ratify ONE SIMPROK BASIC PRICE PRODUCT MODEL and record remediation-03 status
+< 21194f8 fix(rm02d2a2): correct legacy e2e assertions for the active-membership baseline
+< a95c42f fix(rm02d2a2): restore the owner basic price product model
+< 90732dc fix(rm02d2a2): align basic price access and import ownership
+< 922bde8 docs(rm02d2a2): correct final remediation audit statements
+< 77578ca docs(rm02d2a2): record date-only and capability-space remediation status
+< f8c08d1 fix(rm02d2a2): address final capability audit findings
+< 81f2f51 fix(rm02d2a2): close date capability proof and color residuals
+< ae29af7 docs(rm02d2a2): record Explorer remediation contract status
+< 9ad1813 fix(rm02d2a2): align management workflow with permission-honest UX
+< dab91cf fix(rm02d2a2): address Cowork review findings on the Explorer checkpoint
+< c0ace38 feat(rm02d2a2): make Basic Price explorer the primary product door
+< d08cdde feat(rm02d2a2): add Basic Price review and publication UI
+< e7da4e3 feat(rm02d2a2): close Basic Price workflow API contracts
+> caeaf6c chore(checkpoint): preserve project notes honesty work
+< cfc51e9 docs(rm02d2a2): add contract inventory
+< fb7f89a fix(rm02d2a1): require active users for publication
+< f049d6d fix(rm02d2a1): close lifecycle remediation gaps
+< 99c50e4 feat(rm02d2a1): close Basic Price backend lifecycle
+< ccb6983 fix(rm02d1): close audit blockers and integrity gaps
+< 9a61922 feat(rm02d1): close ranjau + provenance + secret mitigation (rotation deferred)
+< 6a11276 feat(rm02c3): activate acceptance browser permissions
+< 83f1dcb feat(rm02c2): add secure catalog search for Basic Price review
+< 40ff50d fix(test): isolate destructive E2E database (#51)
+< 50c449a Merge pull request #50 from fekyigo-rgb/feat/rm02c1c-missing-unit-human-disposition
+< 8bb2991 feat(rm02c1c): resolve two reviewed missing-unit resources
+< eeb99e5 Merge pull request #49 from fekyigo-rgb/feat/rm02c1b-reviewed-resource-bootstrap
+< d575e71 feat(rm02c1b): bootstrap reviewed Workspace-A resource catalog
+< ca74ebf Merge pull request #48 from fekyigo-rgb/docs/rm02c1a-composite-fk-clarification
+< 9470f8a docs(rm02c1a): clarify composite-FK feasibility statement
+< 85249f1 Merge pull request #47 from fekyigo-rgb/feat/rm02c1a-resource-identity-schema-foundation
+< 4c3368f feat(rm02c1a): establish resource identity and provenance schema
+< 80223a5 docs(rm02c0): record canonical 271-resource discovery evidence (#46)

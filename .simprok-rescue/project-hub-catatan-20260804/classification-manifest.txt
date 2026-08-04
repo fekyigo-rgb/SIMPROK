@@ -1,0 +1,11 @@
+﻿PATH=frontend/src/index.css
+CLASSIFICATION=PROJECT_HUB_CATATAN
+SOURCE_STATE=TRACKED
+REASON=part of local-only checkpoint commit caeaf6c "chore(checkpoint): preserve project notes honesty work" (Catatan/ProjectNotesPage honesty work), not present on origin/main
+REMOTE_FORM=FULL_BYTE_ARTIFACT
+
+PATH=frontend/src/pages/ProjectNotesPage.tsx
+CLASSIFICATION=PROJECT_HUB_CATATAN
+SOURCE_STATE=TRACKED
+REASON=part of local-only checkpoint commit caeaf6c "chore(checkpoint): preserve project notes honesty work" (Catatan/ProjectNotesPage honesty work), not present on origin/main
+REMOTE_FORM=FULL_BYTE_ARTIFACT

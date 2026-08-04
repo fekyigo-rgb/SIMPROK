@@ -1,0 +1,238 @@
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index 0add7119fed096331c0ce78027576ca44d133f51..0f2e9f1688d3cb0fe17c48c590b2c665bdbe0a35 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -3835,7 +3835,33 @@ body {
+   border-bottom: 1px solid var(--simprok-catatan-line);
+   background: var(--simprok-catatan-surface);
+ }
++.simprok-catatan-disconnected,
++.simprok-catatan-preview {
++  margin: var(--space-4) var(--space-5, 20px) 0;
++  padding: 11px 13px;
++  border: 1px dashed var(--simprok-catatan-purple);
++  border-radius: 9px;
++  background: var(--simprok-catatan-purple-surface);
++  color: var(--simprok-catatan-purple);
++  font-size: var(--text-xs);
++}
++.simprok-catatan-disconnected {
++  display: flex;
++  align-items: center;
++  gap: 9px;
++}
++.simprok-catatan-preview > strong {
++  display: block;
++  margin-bottom: var(--space-2);
++}
++.simprok-catatan-preview p {
++  margin: 0;
++  color: #1E2A3A;
++  line-height: 1.6;
++  overflow-wrap: anywhere;
++}
+ .simprok-catatan-filter {
++  min-height: 40px;
+   padding: 5px 12px;
+   border: 1px solid var(--simprok-catatan-line);
+   border-radius: var(--radius-md);
+@@ -3890,6 +3916,11 @@ body {
+   font-size: var(--text-sm);
+   padding: var(--space-2) var(--space-3);
+ }
++.simprok-catatan-form button,
++.simprok-catatan-room__new,
++.simprok-catatan-note__actions button {
++  min-height: 40px;
++}
+ .simprok-catatan-form select:focus,
+ .simprok-catatan-form textarea:focus {
+   border-color: var(--simprok-catatan-blue);
+@@ -4348,6 +4379,11 @@ body {
+   .simprok-catatan-form__row {
+     grid-template-columns: 1fr;
+   }
++  .simprok-catatan-disconnected,
++  .simprok-catatan-preview {
++    margin-right: var(--space-3);
++    margin-left: var(--space-3);
++  }
+   .simprok-catatan-reply {
+     margin-left: 0;
+   }
+diff --git a/frontend/src/pages/ProjectNotesPage.tsx b/frontend/src/pages/ProjectNotesPage.tsx
+index 5e0d5a11c9146e2e31051b7f1cc983b5d41498a9..a4287f29653c44bc147b6e7ef5d435cfea7c063a 100644
+--- a/frontend/src/pages/ProjectNotesPage.tsx
++++ b/frontend/src/pages/ProjectNotesPage.tsx
+@@ -1,7 +1,7 @@
+-import { useState } from 'react';
++import { useMemo, useState } from 'react';
+ import { useNavigate, useParams } from 'react-router-dom';
+-import { Check, CloudOff, MessageSquare, Plus, Reply } from 'lucide-react';
+-import { getProjectNotes, type NoteJenis, type NoteStatus, type NoteTertaut, type ProjectNote } from '../projectNotes';
++import { CloudOff, MessageSquare, Plus } from 'lucide-react';
++import { getProjectNotes, type NoteJenis, type NoteStatus, type NoteTertaut } from '../projectNotes';
+ 
+ type NoteFilter = 'semua' | NoteJenis | 'terbuka' | 'rab' | 'jadwal';
+ 
+@@ -59,9 +59,14 @@ function formatNoteTime(waktuISO: string) {
+ export function ProjectNotesPage() {
+   const { projectId } = useParams();
+   const navigate = useNavigate();
+-  const [notes, setNotes] = useState<ProjectNote[]>(() => getProjectNotes(projectId || ''));
++  const notes = useMemo(() => getProjectNotes(projectId || ''), [projectId]);
+   const [noteFilter, setNoteFilter] = useState<NoteFilter>('semua');
+   const [noteFormOpen, setNoteFormOpen] = useState(false);
++  const [localPreview, setLocalPreview] = useState<{
++    isi: string;
++    jenis: NoteJenis;
++    tertaut: NoteTertaut;
++  } | null>(null);
+   const [noteDraft, setNoteDraft] = useState({
+     isi: '',
+     jenis: 'rapat' as NoteJenis,
+@@ -75,53 +80,14 @@ export function ProjectNotesPage() {
+     return note.jenis === noteFilter;
+   });
+ 
+-  const addNote = () => {
++  const previewNote = () => {
+     if (!projectId || !noteDraft.isi.trim()) return;
+ 
+-    setNotes((current) => [
+-      {
+-        id: `note-local-${Date.now()}`,
+-        projectId,
+-        penulisNama: 'Saya',
+-        penulisFungsi: 'Draft frontend',
+-        waktuISO: new Date().toISOString(),
+-        jenis: noteDraft.jenis,
+-        tertaut: noteDraft.tertaut,
+-        isi: noteDraft.isi.trim(),
+-        status: 'terbuka',
+-        balasan: [],
+-      },
+-      ...current,
+-    ]);
+-    setNoteDraft({ isi: '', jenis: 'rapat', tertaut: 'umum' });
+-    setNoteFormOpen(false);
+-  };
+-
+-  const markNoteDone = (noteId: string) => {
+-    setNotes((current) => current.map((note) => (note.id === noteId ? { ...note, status: 'selesai' } : note)));
+-  };
+-
+-  const replyNote = (noteId: string) => {
+-    setNotes((current) =>
+-      current.map((note) =>
+-        note.id === noteId
+-          ? {
+-              ...note,
+-              status: note.status === 'selesai' ? note.status : 'ditanggapi',
+-              balasan: [
+-                ...note.balasan,
+-                {
+-                  id: `reply-local-${Date.now()}`,
+-                  penulisNama: 'Saya',
+-                  penulisFungsi: 'Draft frontend',
+-                  waktuISO: new Date().toISOString(),
+-                  isi: 'Tanggapan sementara dicatat di draft frontend.',
+-                },
+-              ],
+-            }
+-          : note,
+-      ),
+-    );
++    setLocalPreview({
++      isi: noteDraft.isi.trim(),
++      jenis: noteDraft.jenis,
++      tertaut: noteDraft.tertaut,
++    });
+   };
+ 
+   return (
+@@ -146,7 +112,7 @@ export function ProjectNotesPage() {
+           <div>
+             <p className="simprok-catatan-room__eyebrow">Proyek</p>
+             <h1 id="catatan-title">Catatan & Diskusi Proyek</h1>
+-            <p>Masukan personel, notulen rapat, dan catatan yang tertelusur, tertaut, tertanggapi.</p>
++            <p>Pratinjau ruang masukan, notulen rapat, dan catatan proyek.</p>
+           </div>
+           <button type="button" className="simprok-catatan-room__new" onClick={() => setNoteFormOpen((current) => !current)}>
+             <Plus size={16} aria-hidden="true" />
+@@ -154,6 +120,11 @@ export function ProjectNotesPage() {
+           </button>
+         </header>
+ 
++        <div className="simprok-catatan-disconnected" role="status">
++          <CloudOff size={17} aria-hidden="true" />
++          <strong>Data contoh — belum tersambung ke penyimpanan proyek.</strong>
++        </div>
++
+         <div className="simprok-catatan-room__filters" aria-label="Filter catatan">
+           {noteFilters.map((filter) => (
+             <button
+@@ -198,8 +169,8 @@ export function ProjectNotesPage() {
+               />
+             </label>
+             <div className="simprok-catatan-form__actions">
+-              <button type="button" className="simprok-detail-mini-button simprok-detail-mini-button--blue" onClick={addNote}>
+-                Terapkan Sementara
++              <button type="button" className="simprok-detail-mini-button simprok-detail-mini-button--blue" onClick={previewNote}>
++                Tampilkan Pratinjau Lokal
+               </button>
+               <button type="button" className="simprok-detail-mini-button" onClick={() => setNoteFormOpen(false)}>
+                 Batal
+@@ -208,11 +179,22 @@ export function ProjectNotesPage() {
+           </div>
+         ) : null}
+ 
++        {localPreview ? (
++          <div className="simprok-catatan-preview" aria-label="Pratinjau lokal catatan">
++            <strong>Pratinjau lokal — belum disimpan atau dikirim</strong>
++            <div className="simprok-catatan-note__tags">
++              <span className={`simprok-catatan-tag simprok-catatan-tag--${localPreview.jenis}`}>{noteJenisLabel[localPreview.jenis]}</span>
++              <span className="simprok-catatan-link-tag">{noteTertautLabel[localPreview.tertaut]}</span>
++            </div>
++            <p>{localPreview.isi}</p>
++          </div>
++        ) : null}
++
+         <div className="simprok-catatan-feed">
+           {notes.length === 0 ? (
+             <div className="simprok-catatan-empty">
+-              <p>Belum ada catatan tersimpan untuk proyek ini.</p>
+-              <p>Mesin catatan/diskusi belum tersambung ke backend. Ruang ini disiapkan sebagai pintu kerja proyek.</p>
++              <p>Belum ada catatan untuk proyek ini.</p>
++              <p>Sumber data Catatan belum tersambung ke penyimpanan proyek.</p>
+             </div>
+           ) : filteredNotes.length === 0 ? (
+             <div className="simprok-catatan-empty">Belum ada catatan pada filter ini.</div>
+@@ -236,18 +218,6 @@ export function ProjectNotesPage() {
+                 <p className="simprok-catatan-note__body">{note.isi}</p>
+                 <footer className="simprok-catatan-note__foot">
+                   <span className={`simprok-catatan-status simprok-catatan-status--${note.status}`}>{noteStatusLabel[note.status]}</span>
+-                  <div className="simprok-catatan-note__actions">
+-                    <button type="button" onClick={() => replyNote(note.id)}>
+-                      <Reply size={14} aria-hidden="true" />
+-                      Tanggapi
+-                    </button>
+-                    {note.status !== 'selesai' ? (
+-                      <button type="button" onClick={() => markNoteDone(note.id)}>
+-                        <Check size={14} aria-hidden="true" />
+-                        Tandai Selesai
+-                      </button>
+-                    ) : null}
+-                  </div>
+                 </footer>
+                 {note.balasan.map((reply) => (
+                   <div key={reply.id} className="simprok-catatan-reply">
+@@ -265,7 +235,7 @@ export function ProjectNotesPage() {
+ 
+         <div className="simprok-catatan-honest">
+           <CloudOff size={17} aria-hidden="true" />
+-          <span>Catatan tersimpan sementara di draft frontend. Penyimpanan resmi, notifikasi lintas-ruang, dan audit trail menunggu mesin tersambung.</span>
++          <span>Form ini hanya membuat pratinjau lokal. Tidak ada catatan yang disimpan, dikirim, atau dicatat sebagai audit trail.</span>
+         </div>
+       </section>
+     </main>
