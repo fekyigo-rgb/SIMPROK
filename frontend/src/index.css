@@ -3835,7 +3835,33 @@ body {
   border-bottom: 1px solid var(--simprok-catatan-line);
   background: var(--simprok-catatan-surface);
 }
+.simprok-catatan-disconnected,
+.simprok-catatan-preview {
+  margin: var(--space-4) var(--space-5, 20px) 0;
+  padding: 11px 13px;
+  border: 1px dashed var(--simprok-catatan-purple);
+  border-radius: 9px;
+  background: var(--simprok-catatan-purple-surface);
+  color: var(--simprok-catatan-purple);
+  font-size: var(--text-xs);
+}
+.simprok-catatan-disconnected {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.simprok-catatan-preview > strong {
+  display: block;
+  margin-bottom: var(--space-2);
+}
+.simprok-catatan-preview p {
+  margin: 0;
+  color: #1E2A3A;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 .simprok-catatan-filter {
+  min-height: 40px;
   padding: 5px 12px;
   border: 1px solid var(--simprok-catatan-line);
   border-radius: var(--radius-md);
@@ -3889,6 +3915,10 @@ body {
   font: inherit;
   font-size: var(--text-sm);
   padding: var(--space-2) var(--space-3);
+}
+.simprok-catatan-form button,
+.simprok-catatan-room__new {
+  min-height: 40px;
 }
 .simprok-catatan-form select:focus,
 .simprok-catatan-form textarea:focus {
@@ -4025,31 +4055,6 @@ body {
 .simprok-catatan-status--selesai {
   background: var(--simprok-catatan-green-surface);
   color: var(--simprok-catatan-green);
-}
-.simprok-catatan-note__actions {
-  display: flex;
-  gap: 6px;
-  margin-left: auto;
-}
-.simprok-catatan-note__actions button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 11px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: var(--simprok-catatan-gray-surface);
-  color: #5A6675;
-  cursor: pointer;
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: var(--weight-semibold);
-}
-.simprok-catatan-note__actions button:hover,
-.simprok-catatan-note__actions button:focus-visible {
-  background: var(--simprok-catatan-blue-halo);
-  color: var(--simprok-catatan-blue);
-  outline: none;
 }
 .simprok-catatan-reply {
   margin: 9px 0 0 44px;
@@ -4341,12 +4346,16 @@ body {
     align-items: flex-start;
     flex-direction: column;
   }
-  .simprok-catatan-room__new,
-  .simprok-catatan-note__actions {
+  .simprok-catatan-room__new {
     margin-left: 0;
   }
   .simprok-catatan-form__row {
     grid-template-columns: 1fr;
+  }
+  .simprok-catatan-disconnected,
+  .simprok-catatan-preview {
+    margin-right: var(--space-3);
+    margin-left: var(--space-3);
   }
   .simprok-catatan-reply {
     margin-left: 0;
