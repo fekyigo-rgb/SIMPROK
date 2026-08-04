@@ -1,0 +1,12 @@
+﻿{
+    "documentExpected":  80,
+    "documentActual":  80,
+    "pairExpected":  33,
+    "pairActual":  33,
+    "totalExpected":  113,
+    "totalActual":  113,
+    "blankValues":  0,
+    "blankEvidence":  0,
+    "duplicateKeys":  0,
+    "pass":  true
+}
