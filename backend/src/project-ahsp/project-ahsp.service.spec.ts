@@ -277,6 +277,23 @@ describe('ProjectAhspService E1A', () => {
       regionId: selectionInput.referenceRegionId,
       effectiveDate: { lte: new Date('2026-08-04T00:00:00.000Z') },
     });
+    expect(tx.basicPrice.findMany.mock.calls[0][0].where).not.toHaveProperty(
+      'freshnessStatus',
+    );
+  });
+
+  it('E1A-04 uses the real kernel to resolve one EXPIRED candidate and persists freshness as evidence', async () => {
+    const { tx, created, price } = makeSuccessTx();
+    price.freshnessStatus = 'EXPIRED';
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+    await service.selectForBoqItem(selectionInput);
+
+    expect(created.data.resourceResolutions.create[0]).toMatchObject({
+      status: 'RESOLVED',
+      selectedBasicPriceId: price.id,
+      selectedFreshnessStatus: 'EXPIRED',
+    });
   });
 
   it('O-01/O-02 successor: N resources create one occurrence with exactly N resolutions', async () => {

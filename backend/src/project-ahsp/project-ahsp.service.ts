@@ -208,7 +208,6 @@ export class ProjectAhspService {
           ...this.eligibility.publicEligibilityWhere(),
           regionId: input.referenceRegionId,
           effectiveDate: { lte: asOf },
-          freshnessStatus: { not: 'EXPIRED' },
           AND: [
             {
               OR: [
