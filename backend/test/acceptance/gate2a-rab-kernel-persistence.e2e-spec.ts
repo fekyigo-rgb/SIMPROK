@@ -38,6 +38,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   let app: INestApplication;
   let workspaceId: string;
   let orgId: string;
+  let regionId: string;
 
   // Positive fixture
   let projectId: string;
@@ -174,12 +175,15 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
         baseUnit: 'Kg',
       },
     });
-    await prisma.projectAhspOccurrence.create({
+    const occurrence = await prisma.projectAhspOccurrence.create({
       data: {
         workspaceId,
         projectId: params.projectId,
         ahspVersionId: version.id,
         idempotencyKey: `${tag}-${params.resourceName}-occurrence`,
+        businessPricingAsOfDate: new Date('2026-07-31T00:00:00.000Z'),
+        referenceRegionId: regionId,
+        resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V1',
         resourceResolutions: {
           create: [
             {
@@ -222,6 +226,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
         unitPrice: null,
         lineTotal: null,
         ahspVersionId: version.id,
+        workingOccurrenceId: occurrence.id,
       },
     });
     return { ahspId: ahsp.id, structureId: structure.id, itemId: item.id };
@@ -238,6 +243,10 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       data: { name: `${tag} WS`, organizationId: org.id },
     });
     workspaceId = workspace.id;
+    const region = await prisma.region.create({
+      data: { code: `${tag}-REG`, name: `${tag} Region`, isActive: true },
+    });
+    regionId = region.id;
 
     const project = await prisma.project.create({
       data: { workspaceId, organizationId: orgId, code: `${tag}-P`, name: `${tag} Project`, status: 'PLANNED' },
@@ -274,7 +283,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
         workspaceId,
         organizationId: orgId,
         resourceId: resourceCatalogId,
-        regionId: null,
+        regionId,
         sourceOrigin: 'SUPPLIER',
         sourceType: 'MARKET_SURVEY',
         status: 'UNDER_REVIEW',
@@ -310,7 +319,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       .post(`/basic-price-reviews/${reviewId}/accept`)
       .set('Authorization', `Bearer ${verifierToken}`)
       .set('x-workspace-id', workspaceId)
-      .send({ explicitGeneralRegion: true })
+      .send({})
       .expect(201);
     basicPriceId = acceptResponse.body.basicPriceId;
 
@@ -341,6 +350,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       data: {
         resourceId: negativeResourceCatalogId,
         workspaceId,
+        regionId,
         effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
         validUntil: null,
         value: '100000.00',
@@ -381,6 +391,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       data: {
         resourceId: mismatchResourceCatalogAId,
         workspaceId,
+        regionId,
         effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
         validUntil: null,
         value: '100000.00',
@@ -437,6 +448,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     await prisma.priceSubmissionAudit.deleteMany({ where: { submissionId } });
     await prisma.priceSubmissionRevision.deleteMany({ where: { submissionId } });
     await prisma.priceSubmission.deleteMany({ where: { id: submissionId } });
+    await prisma.region.deleteMany({ where: { id: regionId } });
 
     await prisma.projectAssignment.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });
     await prisma.user.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });

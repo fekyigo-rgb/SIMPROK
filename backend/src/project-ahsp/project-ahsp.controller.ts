@@ -55,14 +55,19 @@ export class ProjectAhspController {
   ) {
     const accountId = request.user?.id;
     if (!accountId) {
-      throw new InternalServerErrorException('Trusted account context is missing');
+      throw new InternalServerErrorException(
+        'Trusted account context is missing',
+      );
     }
     return this.service.selectForBoqItem({
       projectId,
       boqItemId,
       workspaceId: this.workspaceId(request),
       accountId,
-      ...body,
+      ahspVersionId: body.ahspVersionId,
+      businessPricingAsOfDate: body.businessPricingAsOfDate,
+      referenceRegionId: body.referenceRegionId,
+      idempotencyKey: body.idempotencyKey,
     });
   }
 

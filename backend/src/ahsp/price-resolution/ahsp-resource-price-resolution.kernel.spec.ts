@@ -580,15 +580,15 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
   });
 
   // ----------------------------------------------------------
-  // BP-AHSP-PHASE-2 Option C: Freshness-Aware Deterministic Resolution
+  // E1A: freshness is preserved as evidence and never affects cardinality.
   // Bounded, additive regression tests. Existing fixtures above remain
   // untouched and continue to carry no freshnessStatus field.
   // ----------------------------------------------------------
 
   // ----------------------------------------------------------
-  // TEST 20 (Option C): Missing freshnessStatus preserves Phase 1 behavior
+  // TEST 20: Missing freshnessStatus preserves Phase 1 behavior
   // ----------------------------------------------------------
-  it('20 (Option C). Missing freshnessStatus preserves Phase 1 behavior and remains selectable', () => {
+  it('20. Missing freshnessStatus preserves Phase 1 behavior and remains selectable', () => {
     const result = resolveAhspResourcePrice({
       ...BASE_INPUT,
       resourceCatalogCandidates: [CATALOG_PEKERJA],
@@ -604,7 +604,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
   });
 
   // ----------------------------------------------------------
-  // TEST 21 (Option C): Only expired compatible candidates → NEEDS_REVIEW
+  // TEST 21: One compatible EXPIRED candidate remains selectable.
   // ----------------------------------------------------------
   it('21 (E1A-04). One EXPIRED compatible candidate resolves because freshness is evidence only', () => {
     const priceExpiredA: BasicPriceCandidate = {
@@ -629,7 +629,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
   });
 
   // ----------------------------------------------------------
-  // TEST 22 (Option C): One CURRENT plus expired candidates → current resolves
+  // TEST 22: CURRENT and EXPIRED are two equal candidates for cardinality.
   // ----------------------------------------------------------
   it('22 (E1A-04). CURRENT plus EXPIRED compatible candidates returns NEEDS_REVIEW because cardinality is two', () => {
     const priceCurrent: BasicPriceCandidate = {
@@ -663,7 +663,7 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
   });
 
   // ----------------------------------------------------------
-  // TEST 23 (Option C): Multiple active candidates → NEEDS_REVIEW
+  // TEST 23: Multiple EXPIRED candidates remain multiple candidates.
   // ----------------------------------------------------------
   it('23 (E1A-04). Multiple EXPIRED compatible candidates return NEEDS_REVIEW because cardinality is multiple', () => {
     const priceCurrent: BasicPriceCandidate = {
@@ -706,10 +706,10 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
   });
 
   // ----------------------------------------------------------
-  // TEST 24 (Option C): Expired wrong-unit candidate preserves existing
+  // TEST 24: Freshness never masks incompatible-unit evidence.
   // unit-not-supported behavior; must not produce an expired-only result
   // ----------------------------------------------------------
-  it('24 (Option C). Expired candidate with unsupported unit preserves existing unit-not-supported outcome', () => {
+  it('24. Expired candidate with unsupported unit preserves existing unit-not-supported outcome', () => {
     const priceExpiredJam: BasicPriceCandidate = {
       id: 'price-pekerja-expired-jam-uuid-001',
       resourceId: 'catalog-pekerja-uuid-001',
