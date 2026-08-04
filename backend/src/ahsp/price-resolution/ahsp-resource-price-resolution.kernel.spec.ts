@@ -604,9 +604,9 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
   });
 
   // ----------------------------------------------------------
-  // TEST 21: One compatible EXPIRED candidate remains selectable.
+  // TEST 21: One compatible EXPIRED candidate holds auto-selection.
   // ----------------------------------------------------------
-  it('21 (E1A-04). One EXPIRED compatible candidate resolves because freshness is evidence only', () => {
+  it('21 (E1A-06). One EXPIRED compatible candidate needs review without auto-selection', () => {
     const priceExpiredA: BasicPriceCandidate = {
       id: 'price-pekerja-expired-uuid-001',
       resourceId: 'catalog-pekerja-uuid-001',
@@ -622,10 +622,13 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       eligibleBasicPriceCandidates: [priceExpiredA],
     });
 
-    expect(result.status).toBe('RESOLVED');
-    if (result.status !== 'RESOLVED') return;
-    expect(result.selectedBasicPriceId).toBe(priceExpiredA.id);
-    expect(result.sourcePriceValue).toBe(priceExpiredA.value);
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain(
+      'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES',
+    );
+    expect(result.explanation).toContain('seluruh 1 Basic Price yang kompatibel');
+    expect(result.explanation).toContain('Pemilihan otomatis ditahan');
+    expect((result as any).selectedBasicPriceId).toBeUndefined();
   });
 
   // ----------------------------------------------------------
@@ -663,9 +666,9 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
   });
 
   // ----------------------------------------------------------
-  // TEST 23: Multiple EXPIRED candidates remain multiple candidates.
+  // TEST 23: Multiple EXPIRED candidates hold auto-selection.
   // ----------------------------------------------------------
-  it('23 (E1A-04). Multiple EXPIRED compatible candidates return NEEDS_REVIEW because cardinality is multiple', () => {
+  it('23 (E1A-06). Multiple EXPIRED compatible candidates need review without becoming unresolved', () => {
     const priceCurrent: BasicPriceCandidate = {
       id: 'price-pekerja-current-uuid-002',
       resourceId: 'catalog-pekerja-uuid-001',
@@ -684,24 +687,21 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
       freshnessStatus: 'EXPIRED',
       unitResolution: VALIDATED_PERSON_DAY_PRICE_UNIT,
     };
-    const priceExpired: BasicPriceCandidate = {
-      id: 'price-pekerja-expired-uuid-004',
-      resourceId: 'catalog-pekerja-uuid-001',
-      value: '100000.00',
-      sourceOrigin: 'GOVERNMENT',
-      unit: 'Org/Hari',
-      freshnessStatus: 'EXPIRED',
-      unitResolution: VALIDATED_PERSON_DAY_PRICE_UNIT,
-    };
-
     const result = resolveAhspResourcePrice({
       ...BASE_INPUT,
       resourceCatalogCandidates: [CATALOG_PEKERJA],
-      eligibleBasicPriceCandidates: [priceCurrent, priceExpiring, priceExpired],
+      eligibleBasicPriceCandidates: [priceCurrent, priceExpiring],
     });
 
     expect(result.status).toBe('NEEDS_REVIEW');
-    expect(result.reasonCodes).toContain('MULTIPLE_BASIC_PRICE_CANDIDATES');
+    expect(result.reasonCodes).toContain(
+      'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES',
+    );
+    expect(result.reasonCodes).not.toContain(
+      'MULTIPLE_BASIC_PRICE_CANDIDATES',
+    );
+    expect(result.explanation).toContain('seluruh 2 Basic Price yang kompatibel');
+    expect(result.explanation).toContain('Pemilihan otomatis ditahan');
     expect((result as any).selectedBasicPriceId).toBeUndefined();
   });
 

@@ -104,6 +104,7 @@ export type ReasonCode =
   | 'UNIT_NOT_SUPPORTED'
   | 'NO_BASIC_PRICE_CANDIDATE'
   | 'BASIC_PRICE_UNIT_NOT_SUPPORTED'
+  | 'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES'
   | 'MULTIPLE_BASIC_PRICE_CANDIDATES';
 
 export interface ResolvedResolution {
@@ -344,6 +345,29 @@ export function resolveAhspResourcePrice(
         `(OH / Org/Hari / Orang/Hari). ` +
         `Basic Price yang tersedia memiliki unit tidak kompatibel dan tidak dapat ` +
         `digunakan tanpa konversi yang belum diizinkan di Phase 1.`,
+    };
+  }
+
+  const allCompatiblePricesAreExpired = compatiblePrices.every(
+    (price) => price.freshnessStatus === 'EXPIRED',
+  );
+
+  if (allCompatiblePricesAreExpired) {
+    return {
+      ...baseContext,
+      status: 'NEEDS_REVIEW',
+      reasonCodes: [
+        'EXACT_RESOURCE_NAME_MATCH',
+        'RESOURCE_TYPE_MATCH',
+        'LABOR_DAY_UNIT_EQUIVALENT',
+        'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES',
+      ],
+      explanation:
+        `Identitas sumber daya berhasil dipetakan dan unit labor-day cocok, ` +
+        `tetapi seluruh ${compatiblePrices.length} Basic Price yang kompatibel ` +
+        `untuk katalog "${resolvedCatalog.name}" (${resolvedCatalog.id}) ` +
+        `memiliki freshness EXPIRED. Pemilihan otomatis ditahan dan ` +
+        `diperlukan tinjauan manual.`,
     };
   }
 

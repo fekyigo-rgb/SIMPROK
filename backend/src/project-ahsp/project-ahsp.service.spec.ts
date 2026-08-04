@@ -282,7 +282,7 @@ describe('ProjectAhspService E1A', () => {
     );
   });
 
-  it('E1A-04 uses the real kernel to resolve one EXPIRED candidate and persists freshness as evidence', async () => {
+  it('E1A-06 uses the real kernel to hold one EXPIRED candidate for review without revalidation', async () => {
     const { tx, created, price } = makeSuccessTx();
     price.freshnessStatus = 'EXPIRED';
     prisma.$transaction.mockImplementation((callback: any) => callback(tx));
@@ -290,10 +290,21 @@ describe('ProjectAhspService E1A', () => {
     await service.selectForBoqItem(selectionInput);
 
     expect(created.data.resourceResolutions.create[0]).toMatchObject({
-      status: 'RESOLVED',
-      selectedBasicPriceId: price.id,
-      selectedFreshnessStatus: 'EXPIRED',
+      status: 'NEEDS_REVIEW',
+      selectedBasicPriceId: null,
+      selectedFreshnessStatus: null,
     });
+    expect(created.data.resourceResolutions.create[0].reasonCodes).toContain(
+      'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES',
+    );
+    expect(created.data.resourceResolutions.create[0].explanation).toContain(
+      'seluruh 1 Basic Price yang kompatibel',
+    );
+    expect(created.data.resourceResolutions.create[0].explanation).toContain(
+      'Pemilihan otomatis ditahan',
+    );
+    expect(tx.basicPrice.findFirst).not.toHaveBeenCalled();
+    expect(tx.projectAhspOccurrence.create).toHaveBeenCalledTimes(1);
   });
 
   it('O-01/O-02 successor: N resources create one occurrence with exactly N resolutions', async () => {

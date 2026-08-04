@@ -484,12 +484,16 @@ describe('Project AHSP whole-version selection (e2e)', () => {
         ),
       ).size,
     ).toBe(2);
-    expect(
-      response.body.resourceResolutions.every(
-        (row: { selectionMode: string }) =>
-          row.selectionMode === 'AUTO_SELECTED',
+    const selectionModeByRef = new Map(
+      response.body.resourceResolutions.map(
+        (row: { rawAhspResourceRef: string; selectionMode: string | null }) => [
+          row.rawAhspResourceRef,
+          row.selectionMode,
+        ],
       ),
-    ).toBe(true);
+    );
+    expect(selectionModeByRef.get(`${tag} Current`)).toBe('AUTO_SELECTED');
+    expect(selectionModeByRef.get(`${tag} Expired`)).toBeNull();
     const item = await prisma.boqItem.findUniqueOrThrow({
       where: { id: boqItemId },
     });
@@ -497,19 +501,23 @@ describe('Project AHSP whole-version selection (e2e)', () => {
     expect(item.ahspVersionId).toBe(wholeVersionId);
   });
 
-  it('resolves the single EXPIRED candidate and persists its freshness evidence', async () => {
+  it('holds the single EXPIRED candidate for review without auto-selecting it', async () => {
     const occurrence = await prisma.projectAhspOccurrence.findUniqueOrThrow({
       where: { id: wholeOccurrenceId },
       include: { resourceResolutions: true },
     });
     const expired = occurrence.resourceResolutions.find(
-      (row) => row.selectedBasicPriceId === expiredPriceId,
+      (row) => row.rawAhspResourceRef === `${tag} Expired`,
     );
     expect(expired).toMatchObject({
-      status: 'RESOLVED',
-      selectedBasicPriceId: expiredPriceId,
-      selectedFreshnessStatus: 'EXPIRED',
+      status: 'NEEDS_REVIEW',
+      selectedBasicPriceId: null,
+      selectedFreshnessStatus: null,
+      resourceCatalogId: null,
     });
+    expect(expired?.reasonCodes).toContain(
+      'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES',
+    );
   });
 
   it('returns NEEDS_REVIEW for CURRENT plus EXPIRED because there are multiple candidates', async () => {
