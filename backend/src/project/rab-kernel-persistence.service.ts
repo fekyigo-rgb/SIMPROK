@@ -137,32 +137,45 @@ export class RabKernelPersistenceService {
       if (!item.ahspVersionId) {
         throw new ConflictException(COST_CALCULATION_REASON.MISSING_AHSP_VERSION);
       }
+      if (!item.workingOccurrenceId) {
+        throw new ConflictException(
+          RAB_KERNEL_PERSISTENCE_REASON.OCCURRENCE_NOT_FOUND,
+        );
+      }
 
       const ahspVersion = await tx.aHSPVersion.findUnique({
         where: { id: item.ahspVersionId },
       });
+      if (!ahspVersion || ahspVersion.status === 'SUPERSEDED') {
+        throw new ConflictException('AHSP_VERSION_NOT_ELIGIBLE');
+      }
 
       // 5. Current ProjectAhspOccurrence + resource resolutions — tenant- and
       // AHSP-version-scoped exactly like CostKernelService's own read path.
-      const occurrences = await tx.projectAhspOccurrence.findMany({
+      const occurrence = await tx.projectAhspOccurrence.findFirst({
         where: {
+          id: item.workingOccurrenceId,
           projectId: params.projectId,
           workspaceId: params.workspaceId,
           ahspVersionId: item.ahspVersionId,
         },
         include: { resourceResolutions: { include: { originalResource: true } } },
       });
-      if (occurrences.length === 0) {
+      if (!occurrence) {
         throw new ConflictException(
           RAB_KERNEL_PERSISTENCE_REASON.OCCURRENCE_NOT_FOUND,
         );
       }
-      if (occurrences.length > 1) {
-        throw new ConflictException(
-          RAB_KERNEL_PERSISTENCE_REASON.AMBIGUOUS_OCCURRENCE,
-        );
+      if (!occurrence.referenceRegionId) {
+        throw new ConflictException('REFERENCE_REGION_REQUIRED');
       }
-      const occurrence = occurrences[0];
+      if (
+        !occurrence.businessPricingAsOfDate ||
+        occurrence.businessPricingAsOfDate.getTime() !==
+          calculationAsOfDate.getTime()
+      ) {
+        throw new ConflictException('OCCURRENCE_PRICING_DATE_MISMATCH');
+      }
       if (occurrence.resourceResolutions.length === 0) {
         throw new ConflictException(
           RAB_KERNEL_PERSISTENCE_REASON.EMPTY_RESOURCES,
@@ -218,12 +231,16 @@ export class RabKernelPersistenceService {
             resourceId: true,
             workspaceId: true,
             organizationId: true,
+            regionId: true,
           },
         });
         if (!basicPrice) {
           throw new ConflictException(
             RAB_KERNEL_PERSISTENCE_REASON.SELECTED_BASIC_PRICE_NOT_ELIGIBLE,
           );
+        }
+        if (basicPrice.regionId !== occurrence.referenceRegionId) {
+          throw new ConflictException('BASIC_PRICE_REGION_MISMATCH');
         }
         // §PR57 Gap A: exact id equality only — never a name/fuzzy match,
         // never a remap. A resolution may only ever consume a price
@@ -270,7 +287,7 @@ export class RabKernelPersistenceService {
         boqItemId: item.id,
         ahspVersionId: item.ahspVersionId,
         occurrenceId: occurrence.id,
-        occurrenceCount: occurrences.length,
+        occurrenceCount: 1,
         itemType: item.itemType,
         volume: item.quantity.toString(),
         boqUnit: item.unit,
@@ -316,6 +333,7 @@ export class RabKernelPersistenceService {
           calculationAsOfDate,
           calculatedAt,
           calculationPolicyVersion: RAB_KERNEL_PERSISTENCE_POLICY,
+          workingOccurrenceId: null,
         },
       });
 

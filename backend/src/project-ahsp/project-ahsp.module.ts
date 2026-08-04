@@ -5,10 +5,11 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ProjectAhspController } from './project-ahsp.controller';
 import { ProjectAhspService } from './project-ahsp.service';
 import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
+import { RabLifecyclePolicyService } from '../project/rab-lifecycle-policy.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, BasicPriceModule, UnitKernelModule],
   controllers: [ProjectAhspController],
-  providers: [ProjectAhspService],
+  providers: [ProjectAhspService, RabLifecyclePolicyService],
 })
 export class ProjectAhspModule {}

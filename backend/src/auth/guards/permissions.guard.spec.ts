@@ -6,6 +6,10 @@ import {
 import { Reflector } from '@nestjs/core';
 import { PermissionsGuard } from './permissions.guard';
 import { WorkspacePermissionResolverService } from '../workspace-permission-resolver.service';
+import {
+  PERMISSIONS_ALL_KEY,
+  PERMISSIONS_KEY,
+} from '../../common/decorators/permissions.decorator';
 
 describe('PermissionsGuard', () => {
   let reflector: { getAllAndOverride: jest.Mock };
@@ -136,5 +140,37 @@ describe('PermissionsGuard', () => {
       ForbiddenException,
     );
     expect(resolver.resolve).not.toHaveBeenCalled();
+  });
+
+  it('G-01 all-of rejects a caller holding only one required permission', async () => {
+    request.projectAccess = { workspaceId: 'workspace-a' };
+    reflector.getAllAndOverride.mockImplementation((key: string) =>
+      key === PERMISSIONS_ALL_KEY
+        ? ['RAB_DRAFT_EDIT', 'AHSP_VIEW']
+        : key === PERMISSIONS_KEY
+          ? []
+          : undefined,
+    );
+    resolver.resolve.mockResolvedValue(effectiveWith(['RAB_DRAFT_EDIT']));
+
+    await expect(guard.canActivate(createContext())).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('G-01 all-of accepts only when every permission is held', async () => {
+    request.projectAccess = { workspaceId: 'workspace-a' };
+    reflector.getAllAndOverride.mockImplementation((key: string) =>
+      key === PERMISSIONS_ALL_KEY
+        ? ['RAB_DRAFT_EDIT', 'AHSP_VIEW']
+        : key === PERMISSIONS_KEY
+          ? []
+          : undefined,
+    );
+    resolver.resolve.mockResolvedValue(
+      effectiveWith(['RAB_DRAFT_EDIT', 'AHSP_VIEW']),
+    );
+
+    await expect(guard.canActivate(createContext())).resolves.toBe(true);
   });
 });

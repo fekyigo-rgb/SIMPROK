@@ -49,15 +49,19 @@ export class CostKernelService {
       return fail(boqItemId, COST_CALCULATION_REASON.BOQ_ITEM_NOT_FOUND);
     }
 
-    const occurrenceGroups = await this.loadOccurrenceGroups(
+    const occurrences = await this.loadOccurrences(
+      item.workingOccurrenceId ? [item.workingOccurrenceId] : [],
       projectId,
       workspaceId,
-      item.ahspVersionId ? [item.ahspVersionId] : [],
     );
 
     return this.safeBuildResult(
       item,
-      occurrenceGroups.get(item.ahspVersionId ?? '') ?? [],
+      item.workingOccurrenceId
+        ? [occurrences.get(item.workingOccurrenceId)].filter(
+            (value): value is OccurrenceWithResolutions => Boolean(value),
+          )
+        : [],
       projectId,
       workspaceId,
     );
@@ -82,17 +86,17 @@ export class CostKernelService {
     });
     const itemById = new Map(items.map((item) => [item.id, item]));
 
-    const ahspVersionIds = Array.from(
+    const workingOccurrenceIds = Array.from(
       new Set(
         items
-          .map((item) => item.ahspVersionId)
+          .map((item) => item.workingOccurrenceId)
           .filter((id): id is string => id !== null),
       ),
     );
-    const occurrenceGroups = await this.loadOccurrenceGroups(
+    const occurrences = await this.loadOccurrences(
+      workingOccurrenceIds,
       projectId,
       workspaceId,
-      ahspVersionIds,
     );
 
     let directCostTotal = new Prisma.Decimal(0);
@@ -102,7 +106,11 @@ export class CostKernelService {
         ? fail(boqItemId, COST_CALCULATION_REASON.BOQ_ITEM_NOT_FOUND)
         : this.safeBuildResult(
             item,
-            occurrenceGroups.get(item.ahspVersionId ?? '') ?? [],
+            item.workingOccurrenceId
+              ? [occurrences.get(item.workingOccurrenceId)].filter(
+                  (value): value is OccurrenceWithResolutions => Boolean(value),
+                )
+              : [],
             projectId,
             workspaceId,
           );
@@ -146,8 +154,8 @@ export class CostKernelService {
       volume: item.quantity.toString(),
       boqUnit: item.unit,
       outputUnit: item.ahspVersion?.outputUnit ?? null,
-      // Occurrence rows are already scoped to {projectId, workspaceId, ahspVersionId}
-      // by the loadOccurrenceGroups query itself, so a present occurrence can never
+      // Occurrence rows are loaded exclusively through BoqItem.workingOccurrenceId
+      // and tenant ownership, so a present occurrence can never
       // belong to another tenant — checking its fields here again only misfires when
       // occurrence is legitimately absent (no AHSP version, no occurrence yet), which
       // must fail as MISSING_AHSP_VERSION/OCCURRENCE_NOT_FOUND, not OWNERSHIP_MISMATCH.
@@ -166,29 +174,24 @@ export class CostKernelService {
     });
   }
 
-  private async loadOccurrenceGroups(
+  private async loadOccurrences(
+    occurrenceIds: string[],
     projectId: string,
     workspaceId: string,
-    ahspVersionIds: string[],
-  ): Promise<Map<string, OccurrenceWithResolutions[]>> {
-    const groups = new Map<string, OccurrenceWithResolutions[]>();
-    if (ahspVersionIds.length === 0) return groups;
+  ): Promise<Map<string, OccurrenceWithResolutions>> {
+    const byId = new Map<string, OccurrenceWithResolutions>();
+    if (occurrenceIds.length === 0) return byId;
 
     const occurrences = await this.prisma.projectAhspOccurrence.findMany({
-      where: { projectId, workspaceId, ahspVersionId: { in: ahspVersionIds } },
+      where: { id: { in: occurrenceIds }, projectId, workspaceId },
       include: {
         resourceResolutions: { include: { originalResource: true } },
       },
     });
 
     for (const occurrence of occurrences) {
-      const bucket = groups.get(occurrence.ahspVersionId);
-      if (bucket) {
-        bucket.push(occurrence);
-      } else {
-        groups.set(occurrence.ahspVersionId, [occurrence]);
-      }
+      byId.set(occurrence.id, occurrence);
     }
-    return groups;
+    return byId;
   }
 }

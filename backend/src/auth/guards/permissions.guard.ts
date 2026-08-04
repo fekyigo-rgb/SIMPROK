@@ -6,7 +6,10 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { PERMISSIONS_KEY } from '../../common/decorators/permissions.decorator';
+import {
+  PERMISSIONS_ALL_KEY,
+  PERMISSIONS_KEY,
+} from '../../common/decorators/permissions.decorator';
 import { WorkspacePermissionResolverService } from '../workspace-permission-resolver.service';
 
 @Injectable()
@@ -22,8 +25,15 @@ export class PermissionsGuard implements CanActivate {
       PERMISSIONS_KEY,
       [context.getHandler(), context.getClass()],
     );
+    const requiredAllPermissions = this.reflector.getAllAndOverride<string[]>(
+      PERMISSIONS_ALL_KEY,
+      [context.getHandler(), context.getClass()],
+    );
 
-    if (!requiredPermissions || requiredPermissions.length === 0) {
+    if (
+      (!requiredPermissions || requiredPermissions.length === 0) &&
+      (!requiredAllPermissions || requiredAllPermissions.length === 0)
+    ) {
       return true;
     }
 
@@ -97,11 +107,18 @@ export class PermissionsGuard implements CanActivate {
     }
 
     // 5. Evaluasi Hak Akses
-    const hasRequiredPermission = requiredPermissions.some((permission) =>
+    const hasRequiredPermission = (requiredPermissions ?? []).some((permission) =>
       effective.permissions.includes(permission),
     );
 
-    if (!hasRequiredPermission) {
+    const hasEveryRequiredPermission = (requiredAllPermissions ?? []).every(
+      (permission) => effective.permissions.includes(permission),
+    );
+
+    if (
+      (requiredPermissions?.length > 0 && !hasRequiredPermission) ||
+      !hasEveryRequiredPermission
+    ) {
       throw new ForbiddenException(
         'Access Denied: Insufficient Permission for this Workspace',
       );
