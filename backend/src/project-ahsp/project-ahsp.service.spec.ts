@@ -1,10 +1,108 @@
 import { ConflictException } from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { createHash } from 'crypto';
+import * as kernel from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { ProjectAhspService } from './project-ahsp.service';
 
 describe('ProjectAhspService E1A', () => {
   const workspaceId = '20000000-0000-4000-8000-000000000001';
   let prisma: any;
   let service: ProjectAhspService;
+  let units: { resolve: jest.Mock };
+  let lifecycle: { evaluateInTransaction: jest.Mock };
+
+  const selectionInput = {
+    projectId: '10000000-0000-4000-8000-000000000001',
+    workspaceId,
+    accountId: '30000000-0000-4000-8000-000000000001',
+    boqItemId: '60000000-0000-4000-8000-000000000001',
+    ahspVersionId: '40000000-0000-4000-8000-000000000001',
+    businessPricingAsOfDate: '2026-08-04',
+    referenceRegionId: '50000000-0000-4000-8000-000000000001',
+    idempotencyKey: 'e1a-key',
+  };
+
+  const requestHash = (input = selectionInput) =>
+    createHash('sha256')
+      .update(
+        JSON.stringify({
+          boqItemId: input.boqItemId,
+          ahspVersionId: input.ahspVersionId,
+          businessPricingAsOfDate: input.businessPricingAsOfDate,
+          referenceRegionId: input.referenceRegionId,
+          resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V1',
+        }),
+      )
+      .digest('hex');
+
+  const resource = (id: string) => ({
+    id,
+    resourceId: `Resource ${id}`,
+    resourceType: 'LABOR',
+    coefficient: new Prisma.Decimal('1.250000'),
+    baseUnit: 'OH',
+  });
+
+  const makeSuccessTx = (resources = [resource('resource-1')]) => {
+    const catalog = {
+      id: '70000000-0000-4000-8000-000000000001',
+      code: 'LAB-1',
+      name: resources[0].resourceId,
+      type: 'LABOR',
+      baseUnit: 'OH',
+    };
+    const price = {
+      id: '80000000-0000-4000-8000-000000000001',
+      resourceId: catalog.id,
+      value: new Prisma.Decimal('1234567890123456.78'),
+      sourceOrigin: 'SUPPLIER',
+      freshnessStatus: 'CURRENT',
+      effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+      resource: catalog,
+    };
+    const created: { data?: any } = {};
+    const tx: any = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        { id: selectionInput.projectId, status: 'PLANNED', workspaceId },
+      ]),
+      projectAhspOccurrence: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn(async ({ data }: any) => {
+          created.data = data;
+          return {
+            id: 'occurrence-new',
+            ...data,
+            resourceResolutions: data.resourceResolutions.create,
+          };
+        }),
+      },
+      boqStructure: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'structure-1' }),
+      },
+      boqItem: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: selectionInput.boqItemId,
+          itemType: 'WORK_ITEM',
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      region: { findFirst: jest.fn().mockResolvedValue({ id: selectionInput.referenceRegionId }) },
+      aHSPVersion: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: selectionInput.ahspVersionId,
+          outputUnit: 'M1',
+          resources,
+        }),
+      },
+      resourceCatalog: { findMany: jest.fn().mockResolvedValue([catalog]) },
+      basicPrice: {
+        findMany: jest.fn().mockResolvedValue([price]),
+        findFirst: jest.fn().mockResolvedValue(price),
+      },
+    };
+    return { tx, created, catalog, price };
+  };
 
   beforeEach(() => {
     prisma = {
@@ -13,13 +111,33 @@ describe('ProjectAhspService E1A', () => {
       projectAhspOccurrence: { findFirst: jest.fn() },
       $transaction: jest.fn(),
     };
+    units = {
+      resolve: jest.fn().mockResolvedValue({
+        status: 'RESOLVED',
+        sourceUnitDefinition: { id: 'unit-1', code: 'PERSON_DAY' },
+        targetUnitDefinition: { id: 'unit-1', code: 'PERSON_DAY' },
+        conversionRuleId: null,
+        conversionRuleVersion: null,
+        quantityFactor: '1',
+        priceOperation: 'IDENTITY',
+        rawSourceUnit: 'OH',
+        rawTargetUnit: 'OH',
+      }),
+    };
+    lifecycle = {
+      evaluateInTransaction: jest
+        .fn()
+        .mockResolvedValue({ canEditDraft: true }),
+    };
     service = new ProjectAhspService(
       prisma,
       { publicEligibilityWhere: jest.fn(() => ({ status: 'PUBLISHED', verificationStatus: 'PUBLISHED' })) } as any,
-      { resolve: jest.fn() } as any,
-      { evaluateInTransaction: jest.fn() } as any,
+      units as any,
+      lifecycle as any,
     );
   });
+
+  afterEach(() => jest.restoreAllMocks());
 
   it('Q-01 eligible query is tenant/date/status scoped and rejects SUPERSEDED by exact PUBLISHED predicate', async () => {
     await service.listEligibleVersions(workspaceId, '2026-08-04');
@@ -101,5 +219,186 @@ describe('ProjectAhspService E1A', () => {
       where: { id: 'o', projectId: 'p', workspaceId: 'w' },
       include: { resourceResolutions: true },
     });
+  });
+
+  it('S-03 successor: same idempotency key and same hash returns the identical generation', async () => {
+    const replay = {
+      id: 'occurrence-existing',
+      requestPayloadHash: requestHash(),
+      generation: 3,
+      resourceResolutions: [{ id: 'resolution-existing' }],
+    };
+    prisma.$transaction.mockImplementation(async (callback: any) =>
+      callback({
+        $queryRaw: jest.fn().mockResolvedValue([{ id: selectionInput.projectId, status: 'PLANNED', workspaceId }]),
+        projectAhspOccurrence: { findFirst: jest.fn().mockResolvedValue(replay) },
+      }),
+    );
+    await expect(service.selectForBoqItem(selectionInput)).resolves.toBe(replay);
+    expect(lifecycle.evaluateInTransaction).not.toHaveBeenCalled();
+  });
+
+  it('Q-01 successor: invisible or ineligible selected version fails before occurrence creation', async () => {
+    const { tx } = makeSuccessTx();
+    tx.aHSPVersion.findFirst.mockResolvedValue(null);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    await expect(service.selectForBoqItem(selectionInput)).rejects.toBeInstanceOf(NotFoundException);
+    expect(tx.projectAhspOccurrence.create).not.toHaveBeenCalled();
+  });
+
+  it('O-02 successor: every stored resolution belongs to the selected Version resource set', async () => {
+    const resources = [resource('resource-1'), resource('resource-2')];
+    const { tx, created } = makeSuccessTx(resources);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({
+      ...input,
+      status: 'UNRESOLVED',
+      reasonCodes: ['NO_CATALOG_CANDIDATE'],
+      explanation: 'unresolved',
+    }));
+    await service.selectForBoqItem(selectionInput);
+    expect(created.data.resourceResolutions.create.map((row: any) => row.ahspResourceId).sort()).toEqual(resources.map((row) => row.id).sort());
+  });
+
+  it('R-02/R-03 successor: candidate query requires exact non-null region and business date', async () => {
+    const { tx } = makeSuccessTx();
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockReturnValue({
+      projectId: selectionInput.projectId,
+      ahspVersionId: selectionInput.ahspVersionId,
+      ahspResourceId: 'resource-1',
+      rawResourceRef: 'Resource resource-1',
+      status: 'UNRESOLVED',
+      reasonCodes: ['NO_ELIGIBLE_BASIC_PRICE'],
+      explanation: 'none',
+    });
+    await service.selectForBoqItem(selectionInput);
+    expect(tx.basicPrice.findMany.mock.calls[0][0].where).toMatchObject({
+      regionId: selectionInput.referenceRegionId,
+      effectiveDate: { lte: new Date('2026-08-04T00:00:00.000Z') },
+    });
+  });
+
+  it('O-01/O-02 successor: N resources create one occurrence with exactly N resolutions', async () => {
+    const resources = [resource('resource-1'), resource('resource-2'), resource('resource-3')];
+    const { tx, created } = makeSuccessTx(resources);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({ ...input, status: 'UNRESOLVED', reasonCodes: ['NO_CATALOG_CANDIDATE'], explanation: 'none' }));
+    await service.selectForBoqItem(selectionInput);
+    expect(tx.projectAhspOccurrence.create).toHaveBeenCalledTimes(1);
+    expect(created.data.resourceResolutions.create).toHaveLength(3);
+  });
+
+  it('O-01 successor: RESOLVED evidence keeps exact Decimal strings and one atomic pointer write', async () => {
+    const { tx, created, catalog, price } = makeSuccessTx();
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockReturnValue({
+      projectId: selectionInput.projectId,
+      ahspVersionId: selectionInput.ahspVersionId,
+      ahspResourceId: 'resource-1',
+      rawResourceRef: 'Resource resource-1',
+      status: 'RESOLVED',
+      resolvedResourceCatalogId: catalog.id,
+      selectedBasicPriceId: price.id,
+      canonicalUnit: 'PERSON_DAY',
+      sourcePriceValue: '1234567890123456.78',
+      adaptedPriceValue: '1234567890123456.78',
+      sourceOrigin: 'SUPPLIER',
+      reasonCodes: ['EXACT_MATCH'],
+      explanation: 'exact',
+    });
+    await service.selectForBoqItem(selectionInput);
+    expect(created.data.resourceResolutions.create[0]).toMatchObject({
+      status: 'RESOLVED',
+      sourcePriceValue: '1234567890123456.78',
+      adaptedPriceValue: '1234567890123456.78',
+    });
+    expect(tx.boqItem.update).toHaveBeenCalledWith({
+      where: { id: selectionInput.boqItemId },
+      data: { ahspVersionId: selectionInput.ahspVersionId, workingOccurrenceId: 'occurrence-new' },
+    });
+  });
+
+  it('unit-kernel successor: resolves AHSP and candidate units without a duplicate conversion implementation', async () => {
+    const { tx } = makeSuccessTx();
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({ ...input, status: 'UNRESOLVED', reasonCodes: ['NO_PRICE'], explanation: 'none' }));
+    await service.selectForBoqItem(selectionInput);
+    expect(units.resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it('O-03 successor: UNRESOLVED is persisted without selected evidence', async () => {
+    const { tx, created } = makeSuccessTx();
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({ ...input, status: 'UNRESOLVED', reasonCodes: ['INSUFFICIENT_EVIDENCE'], explanation: 'honest' }));
+    await service.selectForBoqItem(selectionInput);
+    expect(created.data.resourceResolutions.create[0]).toMatchObject({ status: 'UNRESOLVED', selectedBasicPriceId: null, selectionMode: null });
+  });
+
+  it('O-03 successor: NEEDS_REVIEW is persisted without selected evidence', async () => {
+    const { tx, created } = makeSuccessTx();
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({ ...input, status: 'NEEDS_REVIEW', reasonCodes: ['MULTIPLE_CANDIDATES'], explanation: 'review' }));
+    await service.selectForBoqItem(selectionInput);
+    expect(created.data.resourceResolutions.create[0]).toMatchObject({ status: 'NEEDS_REVIEW', selectedBasicPriceId: null, selectionMode: null });
+  });
+
+  it('revalidation successor: selected Basic Price disappearing becomes truthful UNRESOLVED', async () => {
+    const { tx, created, catalog, price } = makeSuccessTx();
+    tx.basicPrice.findFirst.mockResolvedValue(null);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockReturnValue({
+      projectId: selectionInput.projectId, ahspVersionId: selectionInput.ahspVersionId, ahspResourceId: 'resource-1', rawResourceRef: 'Resource resource-1',
+      status: 'RESOLVED', resolvedResourceCatalogId: catalog.id, selectedBasicPriceId: price.id, canonicalUnit: 'PERSON_DAY', sourcePriceValue: price.value.toString(), adaptedPriceValue: price.value.toString(), sourceOrigin: 'SUPPLIER', reasonCodes: ['EXACT_MATCH'], explanation: 'exact',
+    });
+    await service.selectForBoqItem(selectionInput);
+    expect(created.data.resourceResolutions.create[0]).toMatchObject({ status: 'UNRESOLVED', selectedBasicPriceId: null, selectionMode: null });
+  });
+
+  it('O-04/O-05 successor: retry inserts next generation and previous lineage without mutating old bytes', async () => {
+    const { tx, created } = makeSuccessTx();
+    const old = { id: 'occurrence-old', generation: 4, updatedAt: new Date('2026-08-01T00:00:00Z') };
+    const before = JSON.stringify(old);
+    tx.projectAhspOccurrence.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(old);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({ ...input, status: 'UNRESOLVED', reasonCodes: ['NO_PRICE'], explanation: 'none' }));
+    await service.selectForBoqItem(selectionInput);
+    expect(created.data).toMatchObject({ generation: 5, previousOccurrenceId: 'occurrence-old' });
+    expect(JSON.stringify(old)).toBe(before);
+    expect(Object.keys(tx.projectAhspOccurrence)).not.toContain('update');
+    expect(Object.keys(tx.projectAhspOccurrence)).not.toContain('updateMany');
+  });
+
+  it('P2002 successor: a same-payload race returns the winning generation', async () => {
+    const winner = { id: 'winner', requestPayloadHash: requestHash(), resourceResolutions: [] };
+    prisma.$transaction.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('race', { code: 'P2002', clientVersion: 'test' }));
+    prisma.projectAhspOccurrence.findFirst.mockResolvedValue(winner);
+    await expect(service.selectForBoqItem(selectionInput)).resolves.toBe(winner);
+  });
+
+  it('P2002 successor: a different-payload race returns 409 Conflict', async () => {
+    prisma.$transaction.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('race', { code: 'P2002', clientVersion: 'test' }));
+    prisma.projectAhspOccurrence.findFirst.mockResolvedValue({ requestPayloadHash: 'different', resourceResolutions: [] });
+    await expect(service.selectForBoqItem(selectionInput)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('infrastructure successor: non-P2002 errors are never swallowed', async () => {
+    const error = new Error('database unavailable');
+    prisma.$transaction.mockRejectedValue(error);
+    await expect(service.selectForBoqItem(selectionInput)).rejects.toBe(error);
+  });
+
+  it('GET mismatch successor: cross-project or missing occurrence returns 404', async () => {
+    prisma.projectAhspOccurrence.findFirst.mockResolvedValue(null);
+    await expect(service.findOne('o', 'other-project', workspaceId)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('selection-policy successor: request cannot write USER_OVERRIDDEN or a caller policy version', async () => {
+    const { tx, created } = makeSuccessTx();
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({ ...input, status: 'UNRESOLVED', reasonCodes: ['NO_PRICE'], explanation: 'none' }));
+    await service.selectForBoqItem({ ...selectionInput, ...( { selectionMode: 'USER_OVERRIDDEN', resolutionPolicyVersion: 'CALLER' } as any) });
+    expect(created.data.resolutionPolicyVersion).toBe('E1A_CONTEXTUAL_EXACT_REGION_V1');
+    expect(created.data.resourceResolutions.create[0].selectionMode).toBeNull();
   });
 });

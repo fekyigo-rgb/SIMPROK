@@ -110,7 +110,8 @@ export class ProjectAhspService {
       resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
     });
 
-    return this.prisma.$transaction(async (tx) => {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<
         Array<{ id: string; status: string; workspaceId: string | null }>
       >(Prisma.sql`SELECT "id", "status", "workspaceId" FROM "projects" WHERE "id" = ${input.projectId}::uuid FOR UPDATE`);
@@ -283,11 +284,40 @@ export class ProjectAhspService {
             rawTargetUnit: unitResolution?.rawTargetUnit ?? '',
           },
         });
-        const selected =
+        const selectedCandidate =
           result.status === 'RESOLVED'
             ? priceRows.find((row) => row.id === result.selectedBasicPriceId)
             : undefined;
-        const resolved = result.status === 'RESOLVED' && selected;
+        const selected = selectedCandidate
+          ? await tx.basicPrice.findFirst({
+              where: {
+                id: selectedCandidate.id,
+                ...this.eligibility.publicEligibilityWhere(),
+                regionId: input.referenceRegionId,
+                effectiveDate: { lte: asOf },
+                AND: [
+                  {
+                    OR: [
+                      { workspaceId: input.workspaceId },
+                      { workspaceId: null },
+                    ],
+                  },
+                  {
+                    OR: [
+                      { validUntil: null },
+                      { validUntil: { gte: asOf } },
+                    ],
+                  },
+                ],
+              },
+              include: { resource: true },
+            })
+          : null;
+        const resolved =
+          result.status === 'RESOLVED' &&
+          selected !== null &&
+          selected.resourceId === result.resolvedResourceCatalogId &&
+          selected.value.toString() === result.sourcePriceValue;
         resolutions.push({
           ahspResourceId: resource.id,
           rawAhspResourceRef: resource.resourceId,
@@ -387,8 +417,29 @@ export class ProjectAhspService {
           workingOccurrenceId: occurrence.id,
         },
       });
-      return occurrence;
-    });
+        return occurrence;
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const winner = await this.prisma.projectAhspOccurrence.findFirst({
+          where: {
+            projectId: input.projectId,
+            idempotencyKey: input.idempotencyKey,
+          },
+          include: includeOccurrence,
+        });
+        if (winner) {
+          if (winner.requestPayloadHash !== requestPayloadHash) {
+            throw new ConflictException('IDEMPOTENCY_PAYLOAD_CONFLICT');
+          }
+          return winner;
+        }
+      }
+      throw error;
+    }
   }
 
   async findOne(occurrenceId: string, projectId: string, workspaceId: string) {
