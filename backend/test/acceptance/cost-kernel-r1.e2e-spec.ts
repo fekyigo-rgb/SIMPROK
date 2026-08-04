@@ -246,7 +246,7 @@ describe('Cost Kernel Grade A R1 test certification (e2e)', () => {
         }),
       ),
     );
-    await prisma.projectAhspOccurrence.create({
+    const occurrence = await prisma.projectAhspOccurrence.create({
       data: {
         workspaceId,
         projectId,
@@ -288,6 +288,7 @@ describe('Cost Kernel Grade A R1 test certification (e2e)', () => {
         unitPrice: null,
         lineTotal: null,
         ahspVersionId: version.id,
+        workingOccurrenceId: occurrence.id,
       },
     });
     boqItemId = item.id;

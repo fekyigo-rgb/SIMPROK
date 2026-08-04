@@ -4,372 +4,438 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  AhspVersionStatus,
   Prisma,
   ProjectAhspResolutionMethod,
   ProjectAhspResolutionStatus,
   ProjectAhspSelectionMode,
+  ProjectStatus,
 } from '@prisma/client';
-import { BasicPriceService } from '../basic-price/basic-price.service';
+import { createHash } from 'crypto';
+import { resolveAhspResourcePrice } from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
+import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
+import { parseDateOnlyUtc } from '../common/date-only.util';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  AhspResourceResolutionResult,
-  resolveAhspResourcePrice,
-} from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
+import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 
-const POLICY_VERSION = 'BP_AHSP_PHASE2_NAME_EXACT_OPTION_C_V1';
-const includeResolutions = { resourceResolutions: true } as const;
+export const E1A_RESOLUTION_POLICY_VERSION = 'E1A_CONTEXTUAL_EXACT_REGION_V1';
+const includeOccurrence = { resourceResolutions: true } as const;
 
-export interface CreateProjectAhspInput {
+export interface SelectAhspForBoqItemInput {
   projectId: string;
   workspaceId: string;
-  createdByAccountId: string;
+  accountId: string;
+  boqItemId: string;
   ahspVersionId: string;
-  ahspResourceId: string;
+  businessPricingAsOfDate: string;
+  referenceRegionId: string;
   idempotencyKey: string;
 }
 
-type ResolutionCreateData =
+type ResolutionCreate =
   Prisma.ProjectAhspResourceResolutionUncheckedCreateWithoutOccurrenceInput;
+
+const sha256 = (value: unknown): string =>
+  createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 @Injectable()
 export class ProjectAhspService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly basicPrices: BasicPriceService,
+    private readonly eligibility: BasicPriceEligibilityPolicy,
     private readonly units: UnitKernelService,
+    private readonly lifecycle: RabLifecyclePolicyService,
   ) {}
 
-  private findExisting(
-    input: Pick<
-      CreateProjectAhspInput,
-      'projectId' | 'workspaceId' | 'idempotencyKey'
-    >,
-  ) {
-    return this.prisma.projectAhspOccurrence.findFirst({
+  async listEligibleVersions(workspaceId: string, asOfRaw: string) {
+    const asOf = parseDateOnlyUtc(asOfRaw, 'businessPricingAsOfDate');
+    return this.prisma.aHSPVersion.findMany({
       where: {
-        projectId: input.projectId,
-        workspaceId: input.workspaceId,
-        idempotencyKey: input.idempotencyKey,
-      },
-      include: includeResolutions,
-    });
-  }
-
-  private acceptExisting(
-    existing: Awaited<ReturnType<ProjectAhspService['findExisting']>>,
-    input: CreateProjectAhspInput,
-  ) {
-    if (!existing) return null;
-    const resolution = existing.resourceResolutions[0];
-    if (
-      existing.ahspVersionId !== input.ahspVersionId ||
-      !resolution ||
-      resolution.ahspResourceId !== input.ahspResourceId
-    ) {
-      throw new ConflictException(
-        'Idempotency key already belongs to a different payload',
-      );
-    }
-    return existing;
-  }
-
-  private async validateResource(input: CreateProjectAhspInput) {
-    const version = await this.prisma.aHSPVersion.findFirst({
-      where: {
-        id: input.ahspVersionId,
-        OR: [{ workspaceId: input.workspaceId }, { workspaceId: null }],
+        status: AhspVersionStatus.PUBLISHED,
+        effectiveDate: { lte: asOf },
+        outputUnit: { not: null },
+        resources: { some: {} },
         ahsp: {
           is: {
             deletedAt: null,
-            OR: [{ workspaceId: input.workspaceId }, { workspaceId: null }],
+            OR: [{ workspaceId }, { workspaceId: null }],
           },
         },
+        AND: [
+          { OR: [{ expiredDate: null }, { expiredDate: { gte: asOf } }] },
+          { OR: [{ workspaceId }, { workspaceId: null }] },
+        ],
       },
-    });
-    if (!version) throw new NotFoundException('AHSP version not found');
-
-    const resource = await this.prisma.aHSPResource.findUnique({
-      where: { id: input.ahspResourceId },
-    });
-    if (!resource || resource.ahspVersionId !== input.ahspVersionId) {
-      throw new NotFoundException('AHSP resource not found for version');
-    }
-    return resource;
-  }
-
-  private emptyOutcome(
-    status: ProjectAhspResolutionStatus,
-    result: AhspResourceResolutionResult,
-  ): Omit<
-    ResolutionCreateData,
-    | 'ahspResourceId'
-    | 'rawAhspResourceRef'
-    | 'rawAhspResourceType'
-    | 'ahspCoefficient'
-    | 'ahspUnit'
-  > {
-    return {
-      status,
-      selectionMode: null,
-      resourceCatalogId: null,
-      selectedBasicPriceId: null,
-      canonicalUnit: null,
-      sourcePriceValue: null,
-      sourceUnit: null,
-      adaptedPriceValue: null,
-      conversionFactor: null,
-      sourceUnitDefinitionId: null,
-      targetUnitDefinitionId: null,
-      unitConversionRuleId: null,
-      unitConversionRuleVersion: null,
-      quantityFactor: null,
-      selectedSourceOrigin: null,
-      selectedFreshnessStatus: null,
-      selectedEffectiveDate: null,
-      resolutionMethod: ProjectAhspResolutionMethod.DETERMINISTIC_ATTEMPTED,
-      reasonCodes: [...result.reasonCodes],
-      explanation: result.explanation,
-      policyVersion: POLICY_VERSION,
-    };
-  }
-
-  private noLongerEligible(): Omit<
-    ResolutionCreateData,
-    | 'ahspResourceId'
-    | 'rawAhspResourceRef'
-    | 'rawAhspResourceType'
-    | 'ahspCoefficient'
-    | 'ahspUnit'
-  > {
-    return {
-      status: ProjectAhspResolutionStatus.UNRESOLVED,
-      selectionMode: null,
-      resourceCatalogId: null,
-      selectedBasicPriceId: null,
-      canonicalUnit: null,
-      sourcePriceValue: null,
-      sourceUnit: null,
-      adaptedPriceValue: null,
-      conversionFactor: null,
-      sourceUnitDefinitionId: null,
-      targetUnitDefinitionId: null,
-      unitConversionRuleId: null,
-      unitConversionRuleVersion: null,
-      quantityFactor: null,
-      selectedSourceOrigin: null,
-      selectedFreshnessStatus: null,
-      selectedEffectiveDate: null,
-      resolutionMethod: ProjectAhspResolutionMethod.DETERMINISTIC_ATTEMPTED,
-      reasonCodes: ['SELECTED_BASIC_PRICE_NO_LONGER_ELIGIBLE'],
-      explanation:
-        'Basic Price terpilih tidak lagi memenuhi bukti kelayakan yang sama saat diperiksa kembali.',
-      policyVersion: POLICY_VERSION,
-    };
-  }
-
-  private async mapOutcome(
-    result: AhspResourceResolutionResult,
-    workspaceId: string,
-    candidateById: Map<
-      string,
-      {
-        value: string;
-        sourceOrigin: string;
-        unit: string;
-        freshnessStatus?: string;
-      }
-    >,
-  ) {
-    if (result.status !== 'RESOLVED') {
-      return this.emptyOutcome(
-        result.status === 'UNRESOLVED'
-          ? ProjectAhspResolutionStatus.UNRESOLVED
-          : ProjectAhspResolutionStatus.NEEDS_REVIEW,
-        result,
-      );
-    }
-
-    const selected = candidateById.get(result.selectedBasicPriceId);
-    try {
-      const price = await this.basicPrices.findOneForWorkspace(
-        result.selectedBasicPriceId,
-        workspaceId,
-      );
-      const currentValue = price.value.toString();
-      if (
-        !selected ||
-        price.id !== result.selectedBasicPriceId ||
-        price.resourceId !== result.resolvedResourceCatalogId ||
-        currentValue !== result.sourcePriceValue ||
-        price.sourceOrigin !== result.sourceOrigin ||
-        price.resource.baseUnit !== result.sourceUnit ||
-        price.freshnessStatus !== selected.freshnessStatus ||
-        price.freshnessStatus === 'EXPIRED'
-      )
-        return this.noLongerEligible();
-
-      return {
-        status: ProjectAhspResolutionStatus.RESOLVED,
-        selectionMode: ProjectAhspSelectionMode.AUTO_SELECTED,
-        resourceCatalogId: result.resolvedResourceCatalogId,
-        selectedBasicPriceId: result.selectedBasicPriceId,
-        canonicalUnit: result.canonicalUnit,
-        sourcePriceValue: result.sourcePriceValue,
-        sourceUnit: price.resource.baseUnit,
-        adaptedPriceValue: result.adaptedPriceValue,
-        conversionFactor: null,
-        selectedSourceOrigin: price.sourceOrigin,
-        selectedFreshnessStatus: price.freshnessStatus,
-        selectedEffectiveDate: price.effectiveDate,
-        resolutionMethod: ProjectAhspResolutionMethod.EXACT_DETERMINISTIC,
-        reasonCodes: [...result.reasonCodes],
-        explanation: result.explanation,
-        policyVersion: POLICY_VERSION,
-      } satisfies Omit<
-        ResolutionCreateData,
-        | 'ahspResourceId'
-        | 'rawAhspResourceRef'
-        | 'rawAhspResourceType'
-        | 'ahspCoefficient'
-        | 'ahspUnit'
-      >;
-    } catch (error) {
-      if (error instanceof NotFoundException) return this.noLongerEligible();
-      throw error;
-    }
-  }
-
-  async create(input: CreateProjectAhspInput) {
-    const replay = this.acceptExisting(await this.findExisting(input), input);
-    if (replay) return replay;
-
-    const resource = await this.validateResource(input);
-    const catalogs = await this.prisma.resourceCatalog.findMany({
-      where: {
-        OR: [{ workspaceId: input.workspaceId }, { workspaceId: null }],
+      select: {
+        id: true,
+        versionNumber: true,
+        outputUnit: true,
+        effectiveDate: true,
+        expiredDate: true,
+        ahsp: {
+          select: { id: true, workType: true, methodName: true },
+        },
+        _count: { select: { resources: true } },
       },
-      select: { id: true, code: true, name: true, type: true, baseUnit: true },
+      orderBy: [
+        { ahsp: { workType: 'asc' } },
+        { ahsp: { methodName: 'asc' } },
+        { versionNumber: 'desc' },
+      ],
     });
-    const priceRows = (
-      await Promise.all(
-        catalogs.map((catalog) =>
-          this.basicPrices.findByResource(catalog.id, input.workspaceId),
-        ),
-      )
-    ).flat();
-    const rawPrices = priceRows.map((price) => ({
-      id: price.id,
-      resourceId: price.resourceId,
-      value: price.value.toString(),
-      sourceOrigin: price.sourceOrigin,
-      unit: price.resource.baseUnit,
-      freshnessStatus: price.freshnessStatus,
-    }));
-    const catalogMatches = catalogs.filter(
-      (catalog) =>
-        catalog.name.trim().toLowerCase().replace(/\s+/g, ' ') ===
-          resource.resourceId.trim().toLowerCase().replace(/\s+/g, ' ') &&
-        catalog.type === resource.resourceType,
+  }
+
+  listActiveRegions() {
+    return this.prisma.region.findMany({
+      where: { isActive: true },
+      select: { id: true, code: true, name: true },
+      orderBy: [{ code: 'asc' }],
+    });
+  }
+
+  async selectForBoqItem(input: SelectAhspForBoqItemInput) {
+    if (input.boqItemId.startsWith('local-')) {
+      throw new ConflictException('UNPERSISTED_BOQ_ITEM_NOT_SELECTABLE');
+    }
+    const asOf = parseDateOnlyUtc(
+      input.businessPricingAsOfDate,
+      'businessPricingAsOfDate',
     );
-    const unitResolution =
-      catalogMatches.length === 1
-        ? await this.units.resolve(
-            resource.baseUnit,
-            catalogMatches[0].baseUnit,
-            catalogMatches[0].id,
-          )
-        : null;
-    const prices = await Promise.all(
-      rawPrices.map(async (price) => {
-        const priceUnitResolution =
-          catalogMatches.length === 1 &&
-          price.resourceId === catalogMatches[0].id
+    const requestPayloadHash = sha256({
+      boqItemId: input.boqItemId,
+      ahspVersionId: input.ahspVersionId,
+      businessPricingAsOfDate: input.businessPricingAsOfDate,
+      referenceRegionId: input.referenceRegionId,
+      resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+    });
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<
+        Array<{ id: string; status: string; workspaceId: string | null }>
+      >(Prisma.sql`SELECT "id", "status", "workspaceId" FROM "projects" WHERE "id" = ${input.projectId}::uuid FOR UPDATE`);
+      const project = locked[0];
+      if (!project || project.workspaceId !== input.workspaceId) {
+        throw new NotFoundException('PROJECT_NOT_FOUND');
+      }
+
+      const replay = await tx.projectAhspOccurrence.findFirst({
+        where: {
+          projectId: input.projectId,
+          idempotencyKey: input.idempotencyKey,
+        },
+        include: includeOccurrence,
+      });
+      if (replay) {
+        if (replay.requestPayloadHash !== requestPayloadHash) {
+          throw new ConflictException('IDEMPOTENCY_PAYLOAD_CONFLICT');
+        }
+        return replay;
+      }
+
+      const capability = await this.lifecycle.evaluateInTransaction(
+        tx,
+        input.projectId,
+        project.status as ProjectStatus,
+      );
+      if (!capability.canEditDraft) {
+        throw new ConflictException(capability.reasonCode);
+      }
+
+      const structure = await tx.boqStructure.findFirst({
+        where: {
+          projectId: input.projectId,
+          name: WORKING_DRAFT_STRUCTURE_NAME,
+          status: 'DRAFT',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!structure) throw new NotFoundException('WORKING_DRAFT_NOT_FOUND');
+
+      const item = await tx.boqItem.findFirst({
+        where: { id: input.boqItemId, boqStructureId: structure.id },
+      });
+      if (!item) throw new NotFoundException('BOQ_ITEM_NOT_FOUND');
+      if (item.itemType !== 'WORK_ITEM') {
+        throw new ConflictException('BOQ_ITEM_NOT_WORK_ITEM');
+      }
+
+      const region = await tx.region.findFirst({
+        where: { id: input.referenceRegionId, isActive: true },
+      });
+      if (!region) throw new NotFoundException('REFERENCE_REGION_NOT_FOUND');
+
+      const version = await tx.aHSPVersion.findFirst({
+        where: {
+          id: input.ahspVersionId,
+          status: AhspVersionStatus.PUBLISHED,
+          effectiveDate: { lte: asOf },
+          outputUnit: { not: null },
+          ahsp: {
+            is: {
+              deletedAt: null,
+              OR: [
+                { workspaceId: input.workspaceId },
+                { workspaceId: null },
+              ],
+            },
+          },
+          AND: [
+            { OR: [{ expiredDate: null }, { expiredDate: { gte: asOf } }] },
+            {
+              OR: [
+                { workspaceId: input.workspaceId },
+                { workspaceId: null },
+              ],
+            },
+          ],
+        },
+        include: { resources: { orderBy: { id: 'asc' } } },
+      });
+      if (!version || version.resources.length === 0) {
+        throw new NotFoundException('ELIGIBLE_AHSP_VERSION_NOT_FOUND');
+      }
+
+      const catalogs = await tx.resourceCatalog.findMany({
+        where: {
+          OR: [{ workspaceId: input.workspaceId }, { workspaceId: null }],
+        },
+        select: { id: true, code: true, name: true, type: true, baseUnit: true },
+      });
+      const priceRows = await tx.basicPrice.findMany({
+        where: {
+          ...this.eligibility.publicEligibilityWhere(),
+          regionId: input.referenceRegionId,
+          effectiveDate: { lte: asOf },
+          AND: [
+            {
+              OR: [
+                { workspaceId: input.workspaceId },
+                { workspaceId: null },
+              ],
+            },
+            { OR: [{ validUntil: null }, { validUntil: { gte: asOf } }] },
+          ],
+        },
+        include: { resource: true },
+      });
+
+      const resolutions: ResolutionCreate[] = [];
+      for (const resource of version.resources) {
+        const matches = catalogs.filter(
+          (catalog) =>
+            catalog.name.trim().toLowerCase().replace(/\s+/g, ' ') ===
+              resource.resourceId.trim().toLowerCase().replace(/\s+/g, ' ') &&
+            catalog.type === resource.resourceType,
+        );
+        const unitResolution =
+          matches.length === 1
             ? await this.units.resolve(
-                price.unit,
-                catalogMatches[0].baseUnit,
-                catalogMatches[0].id,
+                resource.baseUnit,
+                matches[0].baseUnit,
+                matches[0].id,
               )
             : null;
-        return {
-          ...price,
-          unitResolution: {
-            status: priceUnitResolution?.status ?? 'NEEDS_REVIEW',
+        const candidates = await Promise.all(
+          priceRows.map(async (price) => {
+            const resolved =
+              matches.length === 1 && price.resourceId === matches[0].id
+                ? await this.units.resolve(
+                    price.resource.baseUnit,
+                    matches[0].baseUnit,
+                    matches[0].id,
+                  )
+                : null;
+            return {
+              id: price.id,
+              resourceId: price.resourceId,
+              value: price.value.toString(),
+              sourceOrigin: price.sourceOrigin,
+              unit: price.resource.baseUnit,
+              freshnessStatus: price.freshnessStatus,
+              unitResolution: {
+                status: resolved?.status ?? 'NEEDS_REVIEW',
+                canonicalUnitCode: resolved?.targetUnitDefinition?.code ?? null,
+                quantityFactor: resolved?.quantityFactor ?? null,
+                priceOperation: resolved?.priceOperation ?? null,
+                rawSourceUnit: resolved?.rawSourceUnit ?? '',
+                rawTargetUnit: resolved?.rawTargetUnit ?? '',
+              },
+            } as const;
+          }),
+        );
+        const result = resolveAhspResourcePrice({
+          projectId: input.projectId,
+          ahspVersionId: version.id,
+          ahspResourceId: resource.id,
+          rawResourceRef: resource.resourceId,
+          resourceType: resource.resourceType,
+          ahspUnit: resource.baseUnit,
+          resourceCatalogCandidates: catalogs,
+          eligibleBasicPriceCandidates: candidates,
+          validatedUnitResolution: {
+            status: unitResolution?.status ?? 'NEEDS_REVIEW',
             canonicalUnitCode:
-              priceUnitResolution?.targetUnitDefinition?.code ?? null,
-            quantityFactor: priceUnitResolution?.quantityFactor ?? null,
-            priceOperation: priceUnitResolution?.priceOperation ?? null,
-            rawSourceUnit: priceUnitResolution?.rawSourceUnit ?? '',
-            rawTargetUnit: priceUnitResolution?.rawTargetUnit ?? '',
+              unitResolution?.targetUnitDefinition?.code ?? null,
+            quantityFactor: unitResolution?.quantityFactor ?? null,
+            rawSourceUnit: unitResolution?.rawSourceUnit ?? '',
+            rawTargetUnit: unitResolution?.rawTargetUnit ?? '',
           },
-        } as const;
-      }),
-    );
-    const candidateById = new Map(prices.map((price) => [price.id, price]));
-    const result = resolveAhspResourcePrice({
-      projectId: input.projectId,
-      ahspVersionId: input.ahspVersionId,
-      ahspResourceId: input.ahspResourceId,
-      rawResourceRef: resource.resourceId,
-      resourceType: resource.resourceType,
-      ahspUnit: resource.baseUnit,
-      resourceCatalogCandidates: catalogs,
-      eligibleBasicPriceCandidates: prices,
-      validatedUnitResolution: {
-        status: unitResolution?.status ?? 'NEEDS_REVIEW',
-        canonicalUnitCode:
-          unitResolution?.targetUnitDefinition?.code ?? null,
-        quantityFactor: unitResolution?.quantityFactor ?? null,
-        rawSourceUnit: unitResolution?.rawSourceUnit ?? '',
-        rawTargetUnit: unitResolution?.rawTargetUnit ?? '',
-      },
-    });
-    const outcome = await this.mapOutcome(
-      result,
-      input.workspaceId,
-      candidateById,
-    );
-    const resolution: ResolutionCreateData = {
-      ahspResourceId: resource.id,
-      rawAhspResourceRef: resource.resourceId,
-      rawAhspResourceType: resource.resourceType,
-      ahspCoefficient: resource.coefficient,
-      ahspUnit: resource.baseUnit,
-      ...outcome,
-      sourceUnitDefinitionId:
-        unitResolution?.sourceUnitDefinition?.id ?? null,
-      targetUnitDefinitionId:
-        unitResolution?.targetUnitDefinition?.id ?? null,
-      unitConversionRuleId: unitResolution?.conversionRuleId ?? null,
-      unitConversionRuleVersion:
-        unitResolution?.conversionRuleVersion ?? null,
-      quantityFactor: unitResolution?.quantityFactor ?? null,
-    };
+        });
+        const selectedCandidate =
+          result.status === 'RESOLVED'
+            ? priceRows.find((row) => row.id === result.selectedBasicPriceId)
+            : undefined;
+        const selected = selectedCandidate
+          ? await tx.basicPrice.findFirst({
+              where: {
+                id: selectedCandidate.id,
+                ...this.eligibility.publicEligibilityWhere(),
+                regionId: input.referenceRegionId,
+                effectiveDate: { lte: asOf },
+                AND: [
+                  {
+                    OR: [
+                      { workspaceId: input.workspaceId },
+                      { workspaceId: null },
+                    ],
+                  },
+                  {
+                    OR: [
+                      { validUntil: null },
+                      { validUntil: { gte: asOf } },
+                    ],
+                  },
+                ],
+              },
+              include: { resource: true },
+            })
+          : null;
+        const resolved =
+          result.status === 'RESOLVED' &&
+          selected !== null &&
+          selected.resourceId === result.resolvedResourceCatalogId &&
+          selected.value.toString() === result.sourcePriceValue;
+        resolutions.push({
+          ahspResourceId: resource.id,
+          rawAhspResourceRef: resource.resourceId,
+          rawAhspResourceType: resource.resourceType,
+          ahspCoefficient: resource.coefficient,
+          ahspUnit: resource.baseUnit,
+          status: resolved
+            ? ProjectAhspResolutionStatus.RESOLVED
+            : result.status === 'NEEDS_REVIEW'
+              ? ProjectAhspResolutionStatus.NEEDS_REVIEW
+              : ProjectAhspResolutionStatus.UNRESOLVED,
+          selectionMode: resolved ? ProjectAhspSelectionMode.AUTO_SELECTED : null,
+          resourceCatalogId: resolved ? result.resolvedResourceCatalogId : null,
+          selectedBasicPriceId: resolved ? result.selectedBasicPriceId : null,
+          canonicalUnit: resolved ? result.canonicalUnit : null,
+          sourcePriceValue: resolved ? result.sourcePriceValue : null,
+          sourceUnit: resolved ? selected.resource.baseUnit : null,
+          adaptedPriceValue: resolved ? result.adaptedPriceValue : null,
+          conversionFactor: null,
+          sourceUnitDefinitionId:
+            unitResolution?.sourceUnitDefinition?.id ?? null,
+          targetUnitDefinitionId:
+            unitResolution?.targetUnitDefinition?.id ?? null,
+          unitConversionRuleId: unitResolution?.conversionRuleId ?? null,
+          unitConversionRuleVersion:
+            unitResolution?.conversionRuleVersion ?? null,
+          quantityFactor: unitResolution?.quantityFactor ?? null,
+          selectedSourceOrigin: resolved ? selected.sourceOrigin : null,
+          selectedFreshnessStatus: resolved ? selected.freshnessStatus : null,
+          selectedEffectiveDate: resolved ? selected.effectiveDate : null,
+          resolutionMethod: resolved
+            ? ProjectAhspResolutionMethod.EXACT_DETERMINISTIC
+            : ProjectAhspResolutionMethod.DETERMINISTIC_ATTEMPTED,
+          reasonCodes: [...result.reasonCodes],
+          explanation: result.explanation,
+          policyVersion: E1A_RESOLUTION_POLICY_VERSION,
+        });
+      }
 
-    try {
-      return await this.prisma.$transaction((tx) =>
-        tx.projectAhspOccurrence.create({
-          data: {
-            workspaceId: input.workspaceId,
-            projectId: input.projectId,
-            ahspVersionId: input.ahspVersionId,
-            idempotencyKey: input.idempotencyKey,
-            createdByAccountId: input.createdByAccountId,
-            resourceResolutions: { create: resolution },
-          },
-          include: includeResolutions,
-        }),
+      const resourceIds = new Set(version.resources.map((row) => row.id));
+      const resolutionIds = new Set(resolutions.map((row) => row.ahspResourceId));
+      if (
+        resolutions.length !== version.resources.length ||
+        resourceIds.size !== resolutionIds.size ||
+        [...resourceIds].some((id) => !resolutionIds.has(id))
+      ) {
+        throw new ConflictException('WHOLE_VERSION_RESOURCE_SET_MISMATCH');
+      }
+
+      const previous = await tx.projectAhspOccurrence.findFirst({
+        where: {
+          workspaceId: input.workspaceId,
+          projectId: input.projectId,
+          ahspVersionId: input.ahspVersionId,
+          businessPricingAsOfDate: asOf,
+          referenceRegionId: input.referenceRegionId,
+          resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+        },
+        orderBy: { generation: 'desc' },
+      });
+      const resolutionEvaluatedAt = new Date();
+      const fingerprint = sha256(
+        resolutions.map((row) => ({
+          ahspResourceId: row.ahspResourceId,
+          status: row.status,
+          resourceCatalogId: row.resourceCatalogId,
+          selectedBasicPriceId: row.selectedBasicPriceId,
+          sourcePriceValue: row.sourcePriceValue,
+          adaptedPriceValue: row.adaptedPriceValue,
+          reasonCodes: row.reasonCodes,
+        })),
       );
+      const occurrence = await tx.projectAhspOccurrence.create({
+        data: {
+          workspaceId: input.workspaceId,
+          projectId: input.projectId,
+          ahspVersionId: input.ahspVersionId,
+          idempotencyKey: input.idempotencyKey,
+          createdByAccountId: input.accountId,
+          businessPricingAsOfDate: asOf,
+          referenceRegionId: input.referenceRegionId,
+          resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+          requestPayloadHash,
+          generation: (previous?.generation ?? 0) + 1,
+          previousOccurrenceId: previous?.id ?? null,
+          resolutionContentFingerprint: fingerprint,
+          resolutionEvaluatedAt,
+          contextCapturedByAccountId: input.accountId,
+          resourceResolutions: { create: resolutions },
+        },
+        include: includeOccurrence,
+      });
+      await tx.boqItem.update({
+        where: { id: item.id },
+        data: {
+          ahspVersionId: version.id,
+          workingOccurrenceId: occurrence.id,
+        },
+      });
+        return occurrence;
+      });
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        const winner = this.acceptExisting(
-          await this.findExisting(input),
-          input,
-        );
-        if (winner) return winner;
+        const winner = await this.prisma.projectAhspOccurrence.findFirst({
+          where: {
+            projectId: input.projectId,
+            idempotencyKey: input.idempotencyKey,
+          },
+          include: includeOccurrence,
+        });
+        if (winner) {
+          if (winner.requestPayloadHash !== requestPayloadHash) {
+            throw new ConflictException('IDEMPOTENCY_PAYLOAD_CONFLICT');
+          }
+          return winner;
+        }
       }
       throw error;
     }
@@ -378,10 +444,9 @@ export class ProjectAhspService {
   async findOne(occurrenceId: string, projectId: string, workspaceId: string) {
     const occurrence = await this.prisma.projectAhspOccurrence.findFirst({
       where: { id: occurrenceId, projectId, workspaceId },
-      include: includeResolutions,
+      include: includeOccurrence,
     });
-    if (!occurrence)
-      throw new NotFoundException('Project AHSP occurrence not found');
+    if (!occurrence) throw new NotFoundException('Project AHSP occurrence not found');
     return occurrence;
   }
 }

@@ -122,6 +122,7 @@ const buildBoqItem = () => ({
   quantity: { toString: () => '10' },
   unit: 'M1',
   ahspVersionId: AHSP_VERSION_ID,
+  workingOccurrenceId: OCCURRENCE_ID,
   ahspVersion: { outputUnit: 'M1' },
   boqStructure: {
     projectId: PROJECT_ID,
@@ -225,9 +226,9 @@ describe('CostKernelService no-resolver proof', () => {
     expect(occurrenceFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
+          id: { in: [OCCURRENCE_ID] },
           projectId: PROJECT_ID,
           workspaceId: WORKSPACE_ID,
-          ahspVersionId: { in: [AHSP_VERSION_ID] },
         },
       }),
     );

@@ -23,7 +23,9 @@ describe('BasicPriceEligibilityPolicy', () => {
 
     it('exposes the same constants used to build the where-fragment', () => {
       expect(PUBLIC_BASIC_PRICE_STATUS).toBe('PUBLISHED');
-      expect(PUBLIC_BASIC_PRICE_VERIFICATION_STATUS).toBe(PriceVerificationStatus.PUBLISHED);
+      expect(PUBLIC_BASIC_PRICE_VERIFICATION_STATUS).toBe(
+        PriceVerificationStatus.PUBLISHED,
+      );
     });
   });
 
@@ -43,7 +45,10 @@ describe('BasicPriceEligibilityPolicy', () => {
     };
 
     it('passes a fully-evidenced candidate as ELIGIBLE', () => {
-      expect(policy.evaluate(fullyEligible)).toEqual({ eligible: true, reasonCode: 'ELIGIBLE' });
+      expect(policy.evaluate(fullyEligible)).toEqual({
+        eligible: true,
+        reasonCode: 'ELIGIBLE',
+      });
     });
 
     it('unit/region/collision/rejected/import-provenance are optional dimensions — omitting them never blocks a candidate that has the mandatory fields', () => {
@@ -61,7 +66,9 @@ describe('BasicPriceEligibilityPolicy', () => {
     });
 
     it('NOT_PUBLISHED when status is not PUBLISHED', () => {
-      expect(policy.evaluate({ ...fullyEligible, status: 'UNPUBLISHED' })).toEqual({
+      expect(
+        policy.evaluate({ ...fullyEligible, status: 'UNPUBLISHED' }),
+      ).toEqual({
         eligible: false,
         reasonCode: 'NOT_PUBLISHED',
       });
@@ -69,7 +76,10 @@ describe('BasicPriceEligibilityPolicy', () => {
 
     it('NOT_VERIFICATION_TERMINAL when verificationStatus is VERIFIED, not PUBLISHED', () => {
       expect(
-        policy.evaluate({ ...fullyEligible, verificationStatus: PriceVerificationStatus.VERIFIED }),
+        policy.evaluate({
+          ...fullyEligible,
+          verificationStatus: PriceVerificationStatus.VERIFIED,
+        }),
       ).toEqual({ eligible: false, reasonCode: 'NOT_VERIFICATION_TERMINAL' });
     });
 
@@ -95,28 +105,46 @@ describe('BasicPriceEligibilityPolicy', () => {
     });
 
     it('EFFECTIVE_DATE_MISSING when effectiveDate is absent', () => {
-      expect(policy.evaluate({ ...fullyEligible, effectiveDate: null })).toEqual({
+      expect(
+        policy.evaluate({ ...fullyEligible, effectiveDate: null }),
+      ).toEqual({
         eligible: false,
         reasonCode: 'EFFECTIVE_DATE_MISSING',
       });
     });
 
     it('SOURCE_IDENTITY_MISSING when sourceOrigin is absent', () => {
-      expect(policy.evaluate({ ...fullyEligible, sourceOrigin: null })).toEqual({
-        eligible: false,
-        reasonCode: 'SOURCE_IDENTITY_MISSING',
+      expect(policy.evaluate({ ...fullyEligible, sourceOrigin: null })).toEqual(
+        {
+          eligible: false,
+          reasonCode: 'SOURCE_IDENTITY_MISSING',
+        },
+      );
+    });
+
+    it('treats EXPIRED as evidence only when every eligibility requirement is satisfied', () => {
+      expect(
+        policy.evaluate({ ...fullyEligible, freshnessStatus: 'EXPIRED' }),
+      ).toEqual({
+        eligible: true,
+        reasonCode: 'ELIGIBLE',
       });
     });
 
-    it('FRESHNESS_EXPIRED when freshnessStatus is EXPIRED', () => {
-      expect(policy.evaluate({ ...fullyEligible, freshnessStatus: 'EXPIRED' })).toEqual({
-        eligible: false,
-        reasonCode: 'FRESHNESS_EXPIRED',
-      });
+    it('freshness evidence never masks a higher-priority eligibility blocker', () => {
+      expect(
+        policy.evaluate({
+          ...fullyEligible,
+          freshnessStatus: 'EXPIRED',
+          regionId: null,
+        }),
+      ).toEqual({ eligible: false, reasonCode: 'REGION_IDENTITY_MISSING' });
     });
 
     it('UNRESOLVED_COLLISION_PRESENT when a collision flag is set', () => {
-      expect(policy.evaluate({ ...fullyEligible, hasUnresolvedCollision: true })).toEqual({
+      expect(
+        policy.evaluate({ ...fullyEligible, hasUnresolvedCollision: true }),
+      ).toEqual({
         eligible: false,
         reasonCode: 'UNRESOLVED_COLLISION_PRESENT',
       });
@@ -130,7 +158,9 @@ describe('BasicPriceEligibilityPolicy', () => {
     });
 
     it('INCOMPLETE_NEW_IMPORT_PROVENANCE when an RM-02-imported price is missing its row/batch evidence', () => {
-      expect(policy.evaluate({ ...fullyEligible, importProvenanceComplete: false })).toEqual({
+      expect(
+        policy.evaluate({ ...fullyEligible, importProvenanceComplete: false }),
+      ).toEqual({
         eligible: false,
         reasonCode: 'INCOMPLETE_NEW_IMPORT_PROVENANCE',
       });

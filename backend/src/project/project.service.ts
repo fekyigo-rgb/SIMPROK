@@ -869,6 +869,7 @@ export class ProjectService {
             sortOrder: row.sortOrder ?? index,
             ahspVersionId: existing?.ahspVersionId ?? null,
             ahspSnapshotId: existing?.ahspSnapshotId ?? null,
+            workingOccurrenceId: existing?.workingOccurrenceId ?? null,
             priceOrigin: isServerRow
               ? 'SERVER_COST_KERNEL'
               : unitPrice !== null

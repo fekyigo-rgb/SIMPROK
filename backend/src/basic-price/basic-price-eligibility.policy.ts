@@ -12,7 +12,8 @@ import { Prisma, PriceVerificationStatus } from '@prisma/client';
  * internal; PUBLISHED (both axes) is the only publicly eligible state.
  */
 export const PUBLIC_BASIC_PRICE_STATUS = 'PUBLISHED';
-export const PUBLIC_BASIC_PRICE_VERIFICATION_STATUS = PriceVerificationStatus.PUBLISHED;
+export const PUBLIC_BASIC_PRICE_VERIFICATION_STATUS =
+  PriceVerificationStatus.PUBLISHED;
 
 export type EligibilityReasonCode =
   | 'NOT_PUBLISHED'
@@ -22,7 +23,6 @@ export type EligibilityReasonCode =
   | 'REGION_IDENTITY_MISSING'
   | 'EFFECTIVE_DATE_MISSING'
   | 'SOURCE_IDENTITY_MISSING'
-  | 'FRESHNESS_EXPIRED'
   | 'UNRESOLVED_COLLISION_PRESENT'
   | 'REJECTED'
   | 'INCOMPLETE_NEW_IMPORT_PROVENANCE'
@@ -75,7 +75,10 @@ export class BasicPriceEligibilityPolicy {
    * Widening it is a policy decision for a future, separately-authorized
    * task, not this refactor.
    */
-  publicEligibilityWhere(): Pick<Prisma.BasicPriceWhereInput, 'status' | 'verificationStatus'> {
+  publicEligibilityWhere(): Pick<
+    Prisma.BasicPriceWhereInput,
+    'status' | 'verificationStatus'
+  > {
     return {
       status: PUBLIC_BASIC_PRICE_STATUS,
       verificationStatus: PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
@@ -94,7 +97,9 @@ export class BasicPriceEligibilityPolicy {
     if (candidate.status !== PUBLIC_BASIC_PRICE_STATUS) {
       return { eligible: false, reasonCode: 'NOT_PUBLISHED' };
     }
-    if (candidate.verificationStatus !== PUBLIC_BASIC_PRICE_VERIFICATION_STATUS) {
+    if (
+      candidate.verificationStatus !== PUBLIC_BASIC_PRICE_VERIFICATION_STATUS
+    ) {
       return { eligible: false, reasonCode: 'NOT_VERIFICATION_TERMINAL' };
     }
     if (!candidate.resourceId) {
@@ -112,9 +117,8 @@ export class BasicPriceEligibilityPolicy {
     if (!candidate.sourceOrigin) {
       return { eligible: false, reasonCode: 'SOURCE_IDENTITY_MISSING' };
     }
-    if (candidate.freshnessStatus === 'EXPIRED') {
-      return { eligible: false, reasonCode: 'FRESHNESS_EXPIRED' };
-    }
+    // freshnessStatus is evidence only. CURRENT / EXPIRING / EXPIRED never
+    // determines public eligibility; validity and publication remain separate.
     if (candidate.hasUnresolvedCollision) {
       return { eligible: false, reasonCode: 'UNRESOLVED_COLLISION_PRESENT' };
     }
@@ -122,7 +126,10 @@ export class BasicPriceEligibilityPolicy {
       return { eligible: false, reasonCode: 'REJECTED' };
     }
     if (candidate.importProvenanceComplete === false) {
-      return { eligible: false, reasonCode: 'INCOMPLETE_NEW_IMPORT_PROVENANCE' };
+      return {
+        eligible: false,
+        reasonCode: 'INCOMPLETE_NEW_IMPORT_PROVENANCE',
+      };
     }
     return { eligible: true, reasonCode: 'ELIGIBLE' };
   }

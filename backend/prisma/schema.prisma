@@ -31,6 +31,7 @@ model Account {
   verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]        @relation("BasicPriceSourceEquivalenceVerifiedBy")
   reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
   basicPricePublicationAudits                 BasicPricePublicationAudit[]         @relation("BasicPricePublicationAuditActor")
+  capturedProjectAhspOccurrences              ProjectAhspOccurrence[]              @relation("ProjectAhspOccurrenceContextCapturedBy")
 
   @@map("accounts")
 }
@@ -1459,6 +1460,7 @@ model Region {
   basicPrices             BasicPrice[]
   priceSubmissions        PriceSubmission[]
   basicPriceImportBatches BasicPriceImportBatch[]
+  projectAhspOccurrences  ProjectAhspOccurrence[]
 
   @@map("regions")
 }
@@ -1756,27 +1758,44 @@ enum ProjectAhspResolutionMethod {
 }
 
 model ProjectAhspOccurrence {
-  id                 String   @id @default(uuid()) @db.Uuid
-  workspaceId        String   @db.Uuid
-  projectId          String   @db.Uuid
-  ahspVersionId      String   @db.Uuid
-  idempotencyKey     String
-  createdByAccountId String?  @db.Uuid
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                           String    @id @default(uuid()) @db.Uuid
+  workspaceId                  String    @db.Uuid
+  projectId                    String    @db.Uuid
+  ahspVersionId                String    @db.Uuid
+  idempotencyKey               String
+  createdByAccountId           String?   @db.Uuid
+  businessPricingAsOfDate      DateTime? @db.Date
+  referenceRegionId            String?   @db.Uuid
+  resolutionPolicyVersion      String?
+  requestPayloadHash           String?
+  generation                   Int       @default(1)
+  previousOccurrenceId         String?   @db.Uuid
+  resolutionContentFingerprint String?
+  resolutionEvaluatedAt        DateTime?
+  contextCapturedByAccountId   String?   @db.Uuid
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
 
-  workspace           Workspace                       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project             Project                         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  ahspVersion         AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Restrict)
-  resourceResolutions ProjectAhspResourceResolution[]
+  workspace                Workspace                       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project                  Project                         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ahspVersion              AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Restrict)
+  resourceResolutions      ProjectAhspResourceResolution[]
+  referenceRegion          Region?                         @relation(fields: [referenceRegionId], references: [id], onDelete: Restrict)
+  contextCapturedByAccount Account?                        @relation("ProjectAhspOccurrenceContextCapturedBy", fields: [contextCapturedByAccountId], references: [id], onDelete: Restrict)
+  previousOccurrence       ProjectAhspOccurrence?          @relation("ProjectAhspOccurrenceLineage", fields: [previousOccurrenceId], references: [id], onDelete: Restrict)
+  nextOccurrences          ProjectAhspOccurrence[]         @relation("ProjectAhspOccurrenceLineage")
   // GATE-2A: BoqItem rows whose server-computed line cites this occurrence
   // as its price provenance (BoqItem.calculationOccurrenceId).
-  calculatedBoqItems  BoqItem[]
+  calculatedBoqItems       BoqItem[]                       @relation("BoqItemCalculationOccurrence")
+  workingBoqItems          BoqItem[]                       @relation("BoqItemWorkingOccurrence")
 
   @@unique([projectId, idempotencyKey])
   @@index([workspaceId])
   @@index([projectId])
   @@index([ahspVersionId])
+  @@index([referenceRegionId])
+  @@index([previousOccurrenceId])
+  @@index([workspaceId, projectId, ahspVersionId, businessPricingAsOfDate, referenceRegionId, resolutionPolicyVersion, generation])
   @@map("project_ahsp_occurrences")
 }
 
@@ -1874,20 +1893,21 @@ enum BoqItemPriceOrigin {
 }
 
 model BoqItem {
-  id             String      @id @default(uuid()) @db.Uuid
-  boqStructureId String      @db.Uuid
-  parentId       String?     @db.Uuid
-  wbsNodeId      String?     @db.Uuid
-  wbsCode        String
-  name           String
-  itemType       BoqItemType @default(WORK_ITEM)
-  quantity       Decimal     @db.Decimal(18, 6)
-  unit           String
-  unitPrice      Decimal?    @db.Decimal(18, 2)
-  lineTotal      Decimal?    @db.Decimal(18, 2)
-  sortOrder      Int         @default(0)
-  ahspVersionId  String?     @db.Uuid
-  ahspSnapshotId String?     @db.Uuid
+  id                  String      @id @default(uuid()) @db.Uuid
+  boqStructureId      String      @db.Uuid
+  parentId            String?     @db.Uuid
+  wbsNodeId           String?     @db.Uuid
+  wbsCode             String
+  name                String
+  itemType            BoqItemType @default(WORK_ITEM)
+  quantity            Decimal     @db.Decimal(18, 6)
+  unit                String
+  unitPrice           Decimal?    @db.Decimal(18, 2)
+  lineTotal           Decimal?    @db.Decimal(18, 2)
+  sortOrder           Int         @default(0)
+  ahspVersionId       String?     @db.Uuid
+  ahspSnapshotId      String?     @db.Uuid
+  workingOccurrenceId String?     @db.Uuid
 
   // GATE-2A provenance — minimum snapshot fields for a server-computed line.
   // All four are meaningful only when priceOrigin = SERVER_COST_KERNEL; they
@@ -1907,13 +1927,15 @@ model BoqItem {
   wbsNode               WbsNode?               @relation(fields: [wbsNodeId], references: [id])
   ahspVersion           AHSPVersion?           @relation(fields: [ahspVersionId], references: [id])
   ahspSnapshot          AHSPSnapshot?          @relation(fields: [ahspSnapshotId], references: [id])
-  calculationOccurrence ProjectAhspOccurrence? @relation(fields: [calculationOccurrenceId], references: [id], onDelete: Restrict)
+  calculationOccurrence ProjectAhspOccurrence? @relation("BoqItemCalculationOccurrence", fields: [calculationOccurrenceId], references: [id], onDelete: Restrict)
+  workingOccurrence     ProjectAhspOccurrence? @relation("BoqItemWorkingOccurrence", fields: [workingOccurrenceId], references: [id], onDelete: Restrict)
   progressEntries       ProgressEntry[]
 
   @@index([boqStructureId])
   @@index([parentId])
   @@index([wbsNodeId])
   @@index([calculationOccurrenceId])
+  @@index([workingOccurrenceId])
   @@map("boq_items")
 }
 

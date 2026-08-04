@@ -25,6 +25,7 @@ const VERIFIER_USER_ID = 'verifier-user-fixture';
 const VERIFIER_ACCOUNT_ID = 'verifier-account-fixture';
 const PUBLISHER_ACCOUNT_ID = 'publisher-account-fixture';
 const AS_OF_DATE = '2026-07-31';
+const REGION_ID = 'region-fixture';
 
 /** One-resource fixture: coefficient 2 x price 100000.00 = 200000.00 unit price; volume 5 -> lineTotal 1000000.00. */
 function buildResolution(overrides: Partial<Record<string, unknown>> = {}) {
@@ -48,6 +49,8 @@ function buildOccurrence(resolutions = [buildResolution()]) {
     projectId: PROJECT_ID,
     workspaceId: WORKSPACE_ID,
     ahspVersionId: AHSP_VERSION_ID,
+    businessPricingAsOfDate: new Date(`${AS_OF_DATE}T00:00:00.000Z`),
+    referenceRegionId: REGION_ID,
     resourceResolutions: resolutions,
   };
 }
@@ -60,6 +63,7 @@ function buildBoqItem(overrides: Partial<Record<string, unknown>> = {}) {
     quantity: new Prisma.Decimal('5'),
     unit: 'M1',
     ahspVersionId: AHSP_VERSION_ID,
+    workingOccurrenceId: OCCURRENCE_ID,
     unitPrice: null,
     lineTotal: null,
     ...overrides,
@@ -76,6 +80,7 @@ function buildBasicPrice(overrides: Partial<Record<string, unknown>> = {}) {
     resourceId: RESOURCE_CATALOG_ID,
     workspaceId: WORKSPACE_ID,
     organizationId: ORGANIZATION_ID,
+    regionId: REGION_ID,
     ...overrides,
   };
 }
@@ -177,15 +182,11 @@ function createHarness(fixture: Fixture) {
       findUnique: jest.fn().mockResolvedValue({ id: AHSP_VERSION_ID, outputUnit: 'M1' }),
     },
     projectAhspOccurrence: {
-      findMany: jest
+      findFirst: jest
         .fn()
         .mockResolvedValue(
-          fixture.occurrences ??
-            (fixture.occurrence === undefined
-              ? [buildOccurrence()]
-              : fixture.occurrence
-                ? [fixture.occurrence]
-                : []),
+          fixture.occurrences?.[0] ??
+            (fixture.occurrence === undefined ? buildOccurrence() : fixture.occurrence),
         ),
     },
     basicPrice: {

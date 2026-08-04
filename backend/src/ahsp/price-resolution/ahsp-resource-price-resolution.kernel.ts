@@ -104,8 +104,8 @@ export type ReasonCode =
   | 'UNIT_NOT_SUPPORTED'
   | 'NO_BASIC_PRICE_CANDIDATE'
   | 'BASIC_PRICE_UNIT_NOT_SUPPORTED'
-  | 'MULTIPLE_BASIC_PRICE_CANDIDATES'
-  | 'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES';
+  | 'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES'
+  | 'MULTIPLE_BASIC_PRICE_CANDIDATES';
 
 export interface ResolvedResolution {
   readonly status: 'RESOLVED';
@@ -348,18 +348,11 @@ export function resolveAhspResourcePrice(
     };
   }
 
-  // ---- Step 3c: Freshness classification (BP-AHSP-PHASE-2 Option C) ----
-  // Bounded and additive. Only applied to candidates that already passed
-  // resourceId and unit-compatibility filtering above. Missing
-  // freshnessStatus is active/selectable (Phase 1 backward compatibility).
-  // EXPIRED is inactive and is never automatically selected.
-  const activeCompatiblePrices = compatiblePrices.filter(
-    (price) => price.freshnessStatus !== 'EXPIRED',
+  const allCompatiblePricesAreExpired = compatiblePrices.every(
+    (price) => price.freshnessStatus === 'EXPIRED',
   );
 
-  if (activeCompatiblePrices.length === 0) {
-    // compatiblePrices.length > 0 here (checked above), so every
-    // unit-compatible candidate is EXPIRED.
+  if (allCompatiblePricesAreExpired) {
     return {
       ...baseContext,
       status: 'NEEDS_REVIEW',
@@ -370,16 +363,18 @@ export function resolveAhspResourcePrice(
         'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES',
       ],
       explanation:
-        `Identitas sumber daya "${rawResourceRef}" berhasil dipetakan ke katalog ` +
-        `"${resolvedCatalog.name}" (${resolvedCatalog.id}), dan ditemukan ` +
-        `${compatiblePrices.length} Basic Price dengan unit labor-day yang kompatibel. ` +
-        `Namun seluruh kandidat tersebut berstatus EXPIRED (kedaluwarsa). ` +
-        `SIMPROK tidak memilih Basic Price yang kedaluwarsa secara otomatis. ` +
-        `Diperlukan tinjauan manusia untuk memastikan kondisi harga terkini sebelum digunakan.`,
+        `Identitas sumber daya berhasil dipetakan dan unit labor-day cocok, ` +
+        `tetapi seluruh ${compatiblePrices.length} Basic Price yang kompatibel ` +
+        `untuk katalog "${resolvedCatalog.name}" (${resolvedCatalog.id}) ` +
+        `memiliki freshness EXPIRED. Pemilihan otomatis ditahan dan ` +
+        `diperlukan tinjauan manual.`,
     };
   }
 
-  if (activeCompatiblePrices.length > 1) {
+  // Freshness is evidence only. Cardinality is evaluated over every
+  // resource/unit-compatible candidate, without filtering or ranking by
+  // CURRENT / EXPIRING / EXPIRED / missing freshness evidence.
+  if (compatiblePrices.length > 1) {
     return {
       ...baseContext,
       status: 'NEEDS_REVIEW',
@@ -391,14 +386,14 @@ export function resolveAhspResourcePrice(
       ],
       explanation:
         `Identitas sumber daya berhasil dipetakan dan unit labor-day cocok, ` +
-        `tetapi ditemukan ${activeCompatiblePrices.length} Basic Price yang kompatibel ` +
+        `tetapi ditemukan ${compatiblePrices.length} Basic Price yang kompatibel ` +
         `untuk katalog "${resolvedCatalog.name}" (${resolvedCatalog.id}). ` +
         `Pemilihan otomatis multi-harga belum didukung di Phase 1. ` +
         `Diperlukan tinjauan manual.`,
     };
   }
 
-  const selectedPrice = activeCompatiblePrices[0];
+  const selectedPrice = compatiblePrices[0];
 
   // ---- Step 4: RESOLVED — factor 1, price string returned exactly ----
   return {
