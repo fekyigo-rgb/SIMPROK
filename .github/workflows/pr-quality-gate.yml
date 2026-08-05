@@ -42,6 +42,8 @@ jobs:
         run: npm run build
       - name: Run backend unit tests serially
         run: npm test -- --runInBand
+      - name: Run production Owner bootstrap focused tests
+        run: npm run test:bootstrap-owner
 
   frontend-quality:
     name: Frontend Test and Build

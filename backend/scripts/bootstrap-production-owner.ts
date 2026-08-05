@@ -1,5 +1,13 @@
 import { PrismaClient, AccountStatus, UserStatus, MembershipStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import {
+  CANONICAL_PERMISSIONS,
+  DIRECTOR_ALLOWED_PERMISSION_CODES,
+  DIRECTOR_FORBIDDEN_PERMISSION_CODES,
+  ensureCanonicalPermissions,
+  grantPermissionsToRole,
+  assertNoForbiddenPermissions,
+} from '../prisma/seed-rbac-permissions';
 
 export const EXPECTED_DATABASE = 'simprok_db';
 export const DIRECTOR_ROLE_CODE = 'DIRECTOR';
@@ -46,11 +54,18 @@ export function parseArgs(argv: string[]): { mode: BootstrapMode; input: Bootstr
   return { mode, input: { email, displayName, organizationName, workspaceName, fullName } };
 }
 
+/**
+ * Reads and immediately removes the Owner password from the given env
+ * object. Only ever called from the --apply path — dry-run must never
+ * require or touch this value.
+ */
 export function readOwnerPasswordFromEnv(env: NodeJS.ProcessEnv): string {
   const password = env[OWNER_PASSWORD_ENV_VAR];
+  delete env[OWNER_PASSWORD_ENV_VAR];
+
   if (!password) {
     throw new Error(
-      `STOP_PASSWORD_ABSENT: ${OWNER_PASSWORD_ENV_VAR} must be set in the child process environment. It is never accepted via CLI argument.`,
+      `STOP_PASSWORD_ABSENT: ${OWNER_PASSWORD_ENV_VAR} must be set in the child process environment. It is never accepted via CLI argument, and dry-run never requires it.`,
     );
   }
   if (password.length < MIN_PASSWORD_LENGTH) {
@@ -67,6 +82,10 @@ export interface FreshStateCounts {
   organizationCount: number;
   workspaceCount: number;
   membershipCount: number;
+  roleCount: number;
+  membershipRoleCount: number;
+  permissionCount: number;
+  rolePermissionCount: number;
 }
 
 export interface FreshStateClient {
@@ -75,18 +94,46 @@ export interface FreshStateClient {
   organization: { count(): Promise<number> };
   workspace: { count(): Promise<number> };
   workspaceMembership: { count(): Promise<number> };
+  role: { count(): Promise<number> };
+  membershipRole: { count(): Promise<number> };
+  permission: { count(): Promise<number> };
+  rolePermission: { count(): Promise<number> };
 }
 
 export async function assertFreshState(client: FreshStateClient): Promise<FreshStateCounts> {
-  const [accountCount, userCount, organizationCount, workspaceCount, membershipCount] = await Promise.all([
+  const [
+    accountCount,
+    userCount,
+    organizationCount,
+    workspaceCount,
+    membershipCount,
+    roleCount,
+    membershipRoleCount,
+    permissionCount,
+    rolePermissionCount,
+  ] = await Promise.all([
     client.account.count(),
     client.user.count(),
     client.organization.count(),
     client.workspace.count(),
     client.workspaceMembership.count(),
+    client.role.count(),
+    client.membershipRole.count(),
+    client.permission.count(),
+    client.rolePermission.count(),
   ]);
 
-  const counts: FreshStateCounts = { accountCount, userCount, organizationCount, workspaceCount, membershipCount };
+  const counts: FreshStateCounts = {
+    accountCount,
+    userCount,
+    organizationCount,
+    workspaceCount,
+    membershipCount,
+    roleCount,
+    membershipRoleCount,
+    permissionCount,
+    rolePermissionCount,
+  };
   const allZero = Object.values(counts).every((c) => c === 0);
 
   if (allZero) {
@@ -120,7 +167,6 @@ export async function assertDatabaseGuard(client: DatabaseGuardClient): Promise<
 
 async function main() {
   const { mode, input } = parseArgs(process.argv.slice(2));
-  const password = readOwnerPasswordFromEnv(process.env);
 
   const prisma = new PrismaClient();
 
@@ -135,6 +181,7 @@ async function main() {
     console.log(`  account displayName: ${input.displayName}`);
     console.log(`  user fullName: ${input.fullName}`);
     console.log(`  role: ${DIRECTOR_ROLE_CODE} (workspace-scoped, isSystem=true)`);
+    console.log(`  permissions to grant DIRECTOR: ${DIRECTOR_ALLOWED_PERMISSION_CODES.join(', ')}`);
     console.log('  password: [REDACTED]');
     console.log(`  preconditionCounts: ${JSON.stringify(counts)}`);
 
@@ -144,6 +191,8 @@ async function main() {
       return;
     }
 
+    // Password is only ever read on the --apply path, and only here.
+    const password = readOwnerPasswordFromEnv(process.env);
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
 
     const result = await prisma.$transaction(async (tx) => {
@@ -198,11 +247,20 @@ async function main() {
         },
       });
 
+      // ── Same transaction: canonical RBAC activation for the new DIRECTOR role.
+      // If any of this fails, the entire identity baseline above rolls back too —
+      // an Owner without permissions is not a state this script can produce.
+      const ensuredPermissions = await ensureCanonicalPermissions(tx);
+      await grantPermissionsToRole(tx, directorRole.id, ensuredPermissions, DIRECTOR_ALLOWED_PERMISSION_CODES);
+      await assertNoForbiddenPermissions(tx, directorRole.id, ensuredPermissions, DIRECTOR_FORBIDDEN_PERMISSION_CODES);
+
       return {
         organizationId: organization.id,
         workspaceId: workspace.id,
         accountId: account.id,
         roleId: directorRole.id,
+        permissionsGranted: DIRECTOR_ALLOWED_PERMISSION_CODES.length,
+        permissionsEnsuredTotal: CANONICAL_PERMISSIONS.length,
       };
     });
 
@@ -211,10 +269,8 @@ async function main() {
     console.log(`WORKSPACE_ID=${result.workspaceId}`);
     console.log(`ACCOUNT_ID=${result.accountId}`);
     console.log(`ROLE_ID=${result.roleId}`);
+    console.log(`PERMISSIONS_GRANTED=${result.permissionsGranted}`);
     console.log('PASSWORD_PRINTED=NO');
-    console.log(
-      'NEXT_STEP: run prisma/seed-rbac-permissions.ts against this database to grant DIRECTOR its canonical permissions.',
-    );
   } finally {
     await prisma.$disconnect();
   }
