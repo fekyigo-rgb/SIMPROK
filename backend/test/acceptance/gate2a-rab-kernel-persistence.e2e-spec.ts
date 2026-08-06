@@ -54,6 +54,12 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   let publisherToken: string;
   /** RM-03: reads the persisted line back with RAB_VIEW only — no edit rights. */
   let rabViewerToken: string;
+  /**
+   * RM-03: holds PROJECT_VIEW only — the permission the transient
+   * cost-calculation route requires. Kept separate from the RAB_VIEW viewer so
+   * neither actor accidentally proves the other route's authorization.
+   */
+  let costReaderToken: string;
 
   // Negative fixture
   let negativeProjectId: string;
@@ -271,10 +277,12 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     const verifier = await createActor('verifier', ['BASIC_PRICE_VERIFY'], []);
     const publisher = await createActor('publisher', ['BASIC_PRICE_PUBLISH'], []);
     const rabViewer = await createActor('viewer', ['RAB_VIEW'], [projectId]);
+    const costReader = await createActor('costreader', ['PROJECT_VIEW'], [projectId]);
     rabEditorToken = await login(rabEditor.email);
     verifierToken = await login(verifier.email);
     publisherToken = await login(publisher.email);
     rabViewerToken = await login(rabViewer.email);
+    costReaderToken = await login(costReader.email);
 
     // ---- Positive: the real submission -> review -> ACCEPT -> PUBLISH chain ----
     const resourceCatalog = await prisma.resourceCatalog.create({
@@ -594,7 +602,10 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   it('RM-03: the working-pointer route cannot serve the same persisted line — this is the gap the re-proof closes', async () => {
     const response = await request(app.getHttpServer())
       .get(`/projects/${projectId}/boq/items/${boqItemId}/cost-calculation`)
-      .set('Authorization', `Bearer ${rabEditorToken}`)
+      // PROJECT_VIEW, which is what this route requires — the RAB editor holds
+      // RAB_DRAFT_EDIT and would be refused here before ever reaching the
+      // kernel, which would prove nothing about the occurrence pointer.
+      .set('Authorization', `Bearer ${costReaderToken}`)
       .expect(200);
 
     // Not a defect in that route: after a successful persist nothing is

@@ -101,7 +101,37 @@ node --test src/utils/rabPersistedCalculationDisplay.test.ts → 12 passed
 
 ---
 
-## 4. Official Safe E2E — **NOT RUN LOCALLY (deliberate)**
+## 4. Official Safe E2E — run in CI
+
+### CI run 1 (commit `f07cf64`) — 406/407, one failure, **caused by a defect in the new test itself**
+
+```
+Backend Build and Unit      PASS
+Frontend Test and Build     PASS
+Official Safe E2E           FAIL — Tests: 1 failed, 406 passed, 407 total
+                                   RESIDUAL_RESULT: PASS
+```
+
+Four of the five new RM-03 cases passed against a real database, including the
+one that matters most — the persisted line re-proved to `VERIFIED` with exact
+stored/recomputed equality, the read-only proof, the `403` authorization
+proof, and the honest unpriced-row proof.
+
+The single failure was the **gap-proof** case, and it was my test that was
+wrong, not the code: it called `GET .../cost-calculation` (which requires
+`PROJECT_VIEW`) using the RAB editor's token, and that actor holds only
+`RAB_DRAFT_EDIT`. The route correctly answered `403` before ever reaching the
+kernel, so the test proved nothing about the occurrence pointer it was meant
+to exercise.
+
+Fixed in a follow-up commit (never an amend) by giving the case its own
+`PROJECT_VIEW`-only actor, kept separate from the `RAB_VIEW` viewer so neither
+actor accidentally proves the other route's authorization.
+
+`RESIDUAL_RESULT: PASS` on the failing run as well — the harness's
+whole-database fingerprint diff found no residue even when a test failed.
+
+### Local run — **NOT RUN (deliberate)**
 
 ### E2E database identity — reality as measured
 
@@ -239,9 +269,9 @@ LEVEL-A
   SCHEMA_CHANGE                     = NO
   MIGRATION_CHANGE                  = NO
   DEPENDENCY_CHANGE                 = NO
-  E2E_DATABASE_IDENTITY_GATE        = DELEGATED_TO_CI (not run locally, by design)
-  E2E_RESULT                        = PENDING_CI
-  E2E_RESIDUAL_COUNT                = PENDING_CI
+  E2E_DATABASE_IDENTITY_GATE        = PASS (CI, simprok_e2e container)
+  E2E_RESULT                        = see §4 — run 1: 406/407 (test-side defect, fixed)
+  E2E_RESIDUAL_COUNT                = 0 (RESIDUAL_RESULT: PASS)
   SIMPROK_DB_WRITE_COUNT            = 0
   OLD_CLUSTER_TOUCH_COUNT           = 2 read-only SELECTs, 0 writes
   PRODUCTION_REALITY_DATA_WRITTEN   = NO
@@ -265,10 +295,9 @@ PRODUCTION_ACTIVATION = NO — Owner only
 
 - **No browser was opened.** No visual verification of any kind is claimed.
   Owner's eyes remain the final verdict (Doktrin Cermin).
-- **Safe E2E was not executed locally**, for the cluster reason in §4. The
-  five new E2E cases are type-clean and syntactically valid but their runtime
-  behaviour is unproven until CI runs them. If CI fails, it will be fixed with
-  a new commit — never an amend.
+- **Safe E2E was not executed locally**, for the cluster reason in §4. It was
+  executed in CI instead; see §4 for the run-1 result and the test-side defect
+  it exposed, which was fixed by a follow-up commit rather than an amend.
 - **Nothing was verified against live production data**, by design.
 - The pre-existing 26 `tsc -p tsconfig.json` strictness errors in untouched
   files remain; they are outside the CI gate (`nest build` uses
