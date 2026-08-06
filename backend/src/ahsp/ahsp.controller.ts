@@ -56,9 +56,21 @@ export class AhspController {
       throw new BadRequestException('userId diperlukan untuk membuat AHSP');
     }
 
+    // RM-03B tenant trust: the workspace comes from the guard-verified context
+    // ONLY. This read `body.workspaceId ?? workspaceId`, so a client-supplied
+    // field OVERRODE the verified one and a member of workspace B could plant
+    // an AHSP into workspace A. That was already wrong; it becomes an
+    // exploitable pricing path the moment workspace-private AHSPs are bindable,
+    // because private eligibility is keyed on exactly this column. There is no
+    // global ValidationPipe and CreateAhspDto is a plain interface, so a forged
+    // body field is stripped nowhere else — it must be ignored here.
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
+
     return this.ahspService.create({
       ...body,
-      workspaceId: body.workspaceId ?? workspaceId,
+      workspaceId,
       userId,
     });
   }
@@ -137,9 +149,15 @@ export class AhspController {
     @Body() body: CreateAhspVersionDto,
   ) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
+    // Same trust inversion as create(), same fix. A version inherits the
+    // eligibility of its parent AHSP, so a forged workspaceId here is just as
+    // load-bearing as one on the AHSP itself.
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
     return this.ahspVersionService.createVersion(ahspId, {
       ...body,
-      workspaceId: body.workspaceId ?? workspaceId,
+      workspaceId,
     });
   }
 

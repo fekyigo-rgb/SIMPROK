@@ -29,6 +29,11 @@ import {
   getPriceOriginBadge,
 } from '../utils/rabPersistedDraftDisplay';
 import {
+  formatAhspVersionOption,
+  isWorkspacePrivateAhsp,
+  type AhspOrigin,
+} from '../utils/ahspOriginDisplay';
+import {
   applyBatchResults,
   applyReloadIfCurrent,
   beginLoadingRows,
@@ -421,7 +426,13 @@ export function RabWorkspacePage() {
   const [draftDirty, setDraftDirty] = useState(false);
   const [calculationAsOfDate, setCalculationAsOfDate] = useState(() => toLocalDateOnlyString(new Date()));
   const [persistState, setPersistState] = useState<PersistUiState>({ kind: 'idle' });
-  const [eligibleAhspVersions, setEligibleAhspVersions] = useState<Array<{ id: string; versionNumber: number; outputUnit: string; ahsp: { workType: string; methodName: string } }>>([]);
+  /**
+   * RM-03B: `origin` distinguishes a workspace's OWN AHSP from the curated
+   * SIMPROK catalog. The backend serves it — the frontend must not re-derive
+   * tenancy rules it does not own. Optional on the type so a stale payload
+   * degrades to the honest catalog label rather than crashing.
+   */
+  const [eligibleAhspVersions, setEligibleAhspVersions] = useState<Array<{ id: string; versionNumber: number; outputUnit: string; origin?: AhspOrigin; ahsp: { workType: string; methodName: string } }>>([]);
   const [activeRegions, setActiveRegions] = useState<Array<{ id: string; code: string; name: string }>>([]);
   const [selectedAhspVersionId, setSelectedAhspVersionId] = useState('');
   const [selectedRegionId, setSelectedRegionId] = useState('');
@@ -1917,10 +1928,30 @@ export function RabWorkspacePage() {
                 <option value="">Pilih AHSP Version</option>
                 {eligibleAhspVersions.map((version) => (
                   <option key={version.id} value={version.id}>
-                    {version.ahsp.workType} — {version.ahsp.methodName} · v{version.versionNumber} · {version.outputUnit}
+                    {formatAhspVersionOption(version)}
                   </option>
                 ))}
               </select>
+              {isWorkspacePrivateAhsp(
+                eligibleAhspVersions.find(
+                  (version) => version.id === selectedAhspVersionId,
+                )?.origin,
+              ) ? (
+                /**
+                 * RM-03B honesty: a private AHSP is usable immediately and needs
+                 * no publication — but the user must not mistake it for a
+                 * SIMPROK-curated analysis. It says whose analysis it is, and
+                 * claims nothing about review or verification that never happened.
+                 */
+                <p
+                  className="simprok-rab-recap__incomplete-note"
+                  role="status"
+                  style={{ color: 'var(--simprok-catatan-muted)' }}
+                >
+                  Analisa milik workspace Anda sendiri — bukan kurasi SIMPROK.
+                  Harga dasarnya tetap berasal dari Basic Price yang sah.
+                </p>
+              ) : null}
               <label htmlFor="simprok-region-selector">Region harga</label>
               <select
                 id="simprok-region-selector"

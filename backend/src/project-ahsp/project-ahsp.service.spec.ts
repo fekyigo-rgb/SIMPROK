@@ -139,13 +139,56 @@ describe('ProjectAhspService E1A', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  it('Q-01 eligible query is tenant/date/status scoped and rejects SUPERSEDED by exact PUBLISHED predicate', async () => {
+  /**
+   * RM-03B: this test previously asserted a single top-level
+   * `status: 'PUBLISHED'`, which encoded "catalog is the only way to be
+   * eligible". That is no longer the whole truth — a workspace's own private
+   * AHSP is eligible too — so the assertion is restated rather than deleted.
+   * Its original intents are all preserved and made explicit below: the
+   * CATALOG route still demands PUBLISHED, the date scope is unchanged, the
+   * query is still tenant-scoped, and SUPERSEDED is still never eligible.
+   */
+  it('Q-01 eligible query is tenant/date scoped; catalog still requires PUBLISHED', async () => {
     await service.listEligibleVersions(workspaceId, '2026-08-04');
     const where = prisma.aHSPVersion.findMany.mock.calls[0][0].where;
-    expect(where.status).toBe('PUBLISHED');
     expect(where.effectiveDate.lte).toEqual(new Date('2026-08-04T00:00:00.000Z'));
     expect(JSON.stringify(where)).toContain(workspaceId);
-    expect(JSON.stringify(where)).not.toContain('SUPERSEDED');
+
+    const [, originBranch] = where.AND;
+    const [catalog, priv] = originBranch.OR;
+    expect(catalog.status).toBe('PUBLISHED');
+    // The private branch must never accept a retired version.
+    expect(priv.status.notIn).toEqual(['SUPERSEDED', 'ARCHIVED']);
+  });
+
+  it('Q-01b the private branch is scoped to this workspace by strict equality, never to null', async () => {
+    await service.listEligibleVersions(workspaceId, '2026-08-04');
+    const where = prisma.aHSPVersion.findMany.mock.calls[0][0].where;
+    const [, originBranch] = where.AND;
+    const [, priv] = originBranch.OR;
+
+    // Both the version AND its owning AHSP must belong to this exact
+    // workspace. A null workspaceId must never satisfy the private branch —
+    // ownershipType defaults to USER_ASSET even on null-workspace catalog
+    // rows, so a `workspaceId: null` match here would expose those rows to
+    // every tenant at once.
+    expect(priv.workspaceId).toBe(workspaceId);
+    expect(priv.ahsp.is.workspaceId).toBe(workspaceId);
+    expect(priv.ahsp.is.ownershipType).toBe('USER_ASSET');
+    expect(priv.ahsp.is.deletedAt).toBeNull();
+    expect(priv.ahsp.is.archivedAt).toBeNull();
+    expect(JSON.stringify(priv)).not.toContain('null,"workspaceId"');
+  });
+
+  it('Q-01c SUPERSEDED is not eligible through either origin', async () => {
+    await service.listEligibleVersions(workspaceId, '2026-08-04');
+    const where = prisma.aHSPVersion.findMany.mock.calls[0][0].where;
+    const [, originBranch] = where.AND;
+    const [catalog, priv] = originBranch.OR;
+    // Catalog: only the exact literal PUBLISHED passes.
+    expect(catalog.status).toBe('PUBLISHED');
+    // Private: SUPERSEDED is explicitly excluded.
+    expect(priv.status.notIn).toContain('SUPERSEDED');
   });
 
   it('Q-02 requires a non-null output unit and at least one resource', async () => {
