@@ -21,6 +21,14 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import {
+  toPersistedCalculationDisplay,
+  type PersistedCalculationWire,
+} from '../utils/rabPersistedCalculationDisplay';
+import {
+  formatExactMoney,
+  getPriceOriginBadge,
+} from '../utils/rabPersistedDraftDisplay';
+import {
   applyBatchResults,
   applyReloadIfCurrent,
   beginLoadingRows,
@@ -77,6 +85,16 @@ interface RabRow {
   manualUnitPrice: boolean;
   manualAhsp: boolean;
   sortOrder: number;
+  /**
+   * RM-03 — persisted truth, carried straight from GET /boq/draft so a hard
+   * reload can render the stored line without waiting on (or depending on) a
+   * fresh recalculation. These are the exact server strings; they are never
+   * parsed into a number for display.
+   */
+  priceOrigin: 'MANUAL_CLIENT' | 'SERVER_COST_KERNEL' | null;
+  persistedUnitPrice: string | null;
+  persistedLineTotal: string | null;
+  calculationAsOfDate: string | null;
 }
 
 /**
@@ -215,9 +233,24 @@ const mapBoqToRows = (items: BoqItemResponse[]) => items
     category: item.itemType === 'FOLDER' ? 'Subjudul' : item.itemType === 'NOTE' ? 'Catatan' : 'Standby',
     unit: item.unit || '',
     unitPrice: toNumber(item.unitPrice),
-    manualUnitPrice: item.unitPrice !== null && item.unitPrice !== undefined,
+    /**
+     * RM-03: a row is "manual" only when the server says its price origin is
+     * MANUAL_CLIENT. Inferring it from "unitPrice is present" also caught
+     * every SERVER_COST_KERNEL row, which then emitted a unitPrice key on
+     * save and was rejected with SERVER_ROW_UNIT_PRICE_OVERWRITE_FORBIDDEN —
+     * so a persisted line could not be edited again after it was calculated.
+     */
+    manualUnitPrice: item.priceOrigin === 'MANUAL_CLIENT',
     manualAhsp: false,
     sortOrder: item.sortOrder ?? index,
+    priceOrigin: item.itemType === 'WORK_ITEM' ? (item.priceOrigin ?? null) : null,
+    persistedUnitPrice:
+      item.itemType === 'WORK_ITEM' && typeof item.unitPrice === 'string'
+        ? item.unitPrice
+        : null,
+    persistedLineTotal: item.itemType === 'WORK_ITEM' ? (item.lineTotal ?? null) : null,
+    calculationAsOfDate:
+      item.itemType === 'WORK_ITEM' ? (item.calculationAsOfDate ?? null) : null,
   }));
 
 const moveWithinSiblings = (rows: RabRow[], rowId: string, direction: 'up' | 'down') => {
@@ -299,6 +332,12 @@ const createRow = (type: RabRowType, parentId: string | null, sortOrder: number)
   manualUnitPrice: type === 'item',
   manualAhsp: false,
   sortOrder,
+  // A brand-new local row has never been persisted, so it carries no
+  // persisted price and no provenance — the honest unpriced state.
+  priceOrigin: null,
+  persistedUnitPrice: null,
+  persistedLineTotal: null,
+  calculationAsOfDate: null,
 });
 
 interface PersistTarget {
@@ -361,6 +400,13 @@ export function RabWorkspacePage() {
   const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
   const [costRowStatuses, setCostRowStatuses] = useState<Record<string, CostRowStatus>>({});
   const costLoadGenerationRef = useRef(0);
+  /**
+   * RM-03 — the read-only re-proof of the selected persisted line. Null means
+   * "not loaded", which the display adapter renders as an honest not-yet
+   * state rather than as an absence of provenance.
+   */
+  const [persistedProof, setPersistedProof] = useState<PersistedCalculationWire | null>(null);
+  const persistedProofGenerationRef = useRef(0);
   const [selectedRowId, setSelectedRowId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [marginPercent, setMarginPercent] = useState(10);
@@ -673,6 +719,48 @@ export function RabWorkspacePage() {
   const selectedCostDisplay = selectedCostStatus ? toRabCostDisplay(selectedCostStatus) : null;
   /** Drawer copy coherence: never says "Engine belum aktif" while selectedCostDisplay shows a real Cost Kernel result. */
   const costEngineStatus = describeCostEngineStatus(Boolean(selectedItem?.ahspCode), selectedCostStatus);
+
+  /**
+   * RM-03 — load the read-only re-proof for a persisted line.
+   *
+   * Keyed on the persisted unit price as well as the row id, so a fresh
+   * persist (which reloads the draft and changes that value) re-fetches the
+   * proof instead of showing the previous line's breakdown. A generation
+   * counter retires stale responses, matching the discipline the cost-batch
+   * loader already uses.
+   */
+  useEffect(() => {
+    if (!projectId || !selectedItem || selectedItem.priceOrigin !== 'SERVER_COST_KERNEL') {
+      setPersistedProof(null);
+      return;
+    }
+    const generation = ++persistedProofGenerationRef.current;
+    const boqItemId = selectedItem.id;
+    setPersistedProof(null);
+    apiFetch(`/projects/${projectId}/boq/items/${boqItemId}/persisted-calculation`)
+      .then((response) => {
+        if (!response.ok) throw new Error('persisted-calculation-load-failed');
+        return response.json() as Promise<PersistedCalculationWire>;
+      })
+      .then((payload) => {
+        if (generation !== persistedProofGenerationRef.current) return;
+        setPersistedProof(payload);
+      })
+      .catch(() => {
+        if (generation !== persistedProofGenerationRef.current) return;
+        // Left null: the adapter renders "belum dimuat", never a fabricated
+        // or partially-populated proof.
+        setPersistedProof(null);
+      });
+  }, [projectId, selectedItem?.id, selectedItem?.priceOrigin, selectedItem?.persistedUnitPrice]);
+
+  const persistedProofDisplay = useMemo(
+    () =>
+      selectedItem?.priceOrigin === 'SERVER_COST_KERNEL'
+        ? toPersistedCalculationDisplay(persistedProof)
+        : null,
+    [selectedItem?.priceOrigin, persistedProof],
+  );
   const negativeRows = useMemo(() => new Set(rows
     .filter((row) => row.type === 'item' && ((volumes[row.id] || 0) < 0 || (unitPrices[row.id] ?? row.unitPrice) < 0))
     .map((row) => row.id)), [rows, unitPrices, volumes]);
@@ -1421,15 +1509,27 @@ export function RabWorkspacePage() {
                               </button>
                             )}
                             {row.manualAhsp ? <span className="simprok-rab-ahsp-badge simprok-rab-ahsp-badge--manual">MANUAL</span> : null}
-                            <span className="simprok-rab-ahsp-badge">
+                            <span
+                              className="simprok-rab-ahsp-badge"
+                              title={
+                                row.priceOrigin === 'SERVER_COST_KERNEL' && row.calculationAsOfDate
+                                  ? `Harga per tanggal ${row.calculationAsOfDate}`
+                                  : undefined
+                              }
+                            >
                               {selectionStatusByRow[row.id] ??
                                 (row.workingOccurrenceId && row.calculationOccurrenceId
                                   ? 'Perhitungan ulang tertunda'
-                                  : costDisplay
-                                    ? costDisplay.badge
-                                    : row.ahspCode
-                                      ? 'Standby'
-                                      : 'Menunggu rekomendasi')}
+                                  : // RM-03: a persisted line states its own stored
+                                    // origin, which survives a reload, in preference
+                                    // to the transient recalculation badge.
+                                    row.priceOrigin === 'SERVER_COST_KERNEL'
+                                    ? getPriceOriginBadge(row.priceOrigin)
+                                    : costDisplay
+                                      ? costDisplay.badge
+                                      : row.ahspCode
+                                        ? 'Standby'
+                                        : 'Menunggu rekomendasi')}
                             </span>
                           </div>
                         ) : row.type === 'folder' ? (
@@ -1468,6 +1568,22 @@ export function RabWorkspacePage() {
                             {isKernelEligible ? (
                               costStatus?.kind === 'calculated' ? (
                                 <strong aria-label={`Harga satuan ${row.name}`}>{costDisplay?.unitPrice}</strong>
+                              ) : row.persistedUnitPrice !== null &&
+                                row.priceOrigin === 'SERVER_COST_KERNEL' ? (
+                                /**
+                                 * RM-03 hard-reload truth. The transient batch
+                                 * recalculation follows workingOccurrenceId,
+                                 * which a successful persist clears — so after
+                                 * a reload it answers OCCURRENCE_NOT_FOUND and
+                                 * this cell used to fall back to "—", making a
+                                 * saved price look lost. The persisted value is
+                                 * the authority for a persisted row; it is
+                                 * rendered as the exact server string, never
+                                 * re-derived here.
+                                 */
+                                <strong aria-label={`Harga satuan ${row.name}`}>
+                                  {formatExactMoney(row.persistedUnitPrice)}
+                                </strong>
                               ) : (
                                 <span aria-label={`Harga satuan ${row.name}`} title={costDisplay?.badge}>—</span>
                               )
@@ -1498,7 +1614,10 @@ export function RabWorkspacePage() {
                           ? isKernelEligible
                             ? costStatus?.kind === 'calculated'
                               ? costDisplay?.lineTotal
-                              : '—'
+                              : row.persistedLineTotal !== null &&
+                                  row.priceOrigin === 'SERVER_COST_KERNEL'
+                                ? formatExactMoney(row.persistedLineTotal)
+                                : '—'
                             : row.manualUnitPrice ? formatRupiah(amount) : '—'
                           : ''}
                       </td>
@@ -1669,6 +1788,124 @@ export function RabWorkspacePage() {
                 </div>
               ) : null}
             </div>
+            {persistedProofDisplay ? (
+              <div className="simprok-persist-action" aria-label="Penelusuran harga tersimpan">
+                <h4 style={{ margin: 0, color: 'var(--simprok-authority-navy-900)' }}>
+                  Penelusuran harga tersimpan
+                </h4>
+                <p
+                  role="status"
+                  style={{
+                    margin: '4px 0 0',
+                    color:
+                      persistedProofDisplay.kind === 'mismatch'
+                        ? 'var(--simprok-critical-red-600)'
+                        : persistedProofDisplay.kind === 'verified'
+                          ? 'var(--simprok-authority-navy-900)'
+                          : 'var(--simprok-catatan-muted)',
+                  }}
+                >
+                  <strong>{persistedProofDisplay.badge}</strong> — {persistedProofDisplay.message}
+                </p>
+
+                {persistedProofDisplay.provenance ? (
+                  <>
+                    <dl
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'auto 1fr',
+                        gap: '2px 12px',
+                        margin: '10px 0 0',
+                        fontSize: '12px',
+                        color: 'var(--simprok-catatan-muted)',
+                      }}
+                    >
+                      <dt>Harga satuan tersimpan</dt>
+                      <dd style={{ margin: 0, color: 'var(--simprok-authority-navy-900)' }}>
+                        {persistedProofDisplay.storedUnitPriceDisplay}
+                      </dd>
+                      <dt>Dihitung ulang</dt>
+                      <dd
+                        style={{
+                          margin: 0,
+                          color:
+                            persistedProofDisplay.kind === 'mismatch'
+                              ? 'var(--simprok-critical-red-600)'
+                              : 'var(--simprok-authority-navy-900)',
+                        }}
+                      >
+                        {persistedProofDisplay.recomputedUnitPriceDisplay}
+                      </dd>
+                      <dt>Jumlah tersimpan</dt>
+                      <dd style={{ margin: 0, color: 'var(--simprok-authority-navy-900)' }}>
+                        {persistedProofDisplay.storedLineTotalDisplay}
+                      </dd>
+                      <dt>Volume</dt>
+                      <dd style={{ margin: 0 }}>
+                        {persistedProofDisplay.volumeDisplay} {persistedProofDisplay.unit}
+                      </dd>
+                      <dt>Per tanggal</dt>
+                      <dd style={{ margin: 0 }}>{persistedProofDisplay.provenance.asOfDate}</dd>
+                      <dt>Region harga</dt>
+                      <dd style={{ margin: 0 }}>{persistedProofDisplay.provenance.regionName}</dd>
+                      <dt>Kebijakan hitung</dt>
+                      <dd style={{ margin: 0 }}>{persistedProofDisplay.provenance.policyVersion}</dd>
+                    </dl>
+
+                    <table
+                      style={{
+                        width: '100%',
+                        marginTop: '10px',
+                        borderCollapse: 'collapse',
+                        fontSize: '12px',
+                      }}
+                    >
+                      <caption
+                        style={{
+                          captionSide: 'top',
+                          textAlign: 'left',
+                          padding: '0 0 4px',
+                          color: 'var(--simprok-catatan-muted)',
+                        }}
+                      >
+                        Komponen pembentuk harga satuan
+                      </caption>
+                      <thead>
+                        <tr style={{ textAlign: 'left', color: 'var(--simprok-catatan-muted)' }}>
+                          <th scope="col">Komponen</th>
+                          <th scope="col">Koefisien</th>
+                          <th scope="col">Harga dasar</th>
+                          <th scope="col">Biaya</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {persistedProofDisplay.resources.map((resource) => (
+                          <tr
+                            key={resource.resolutionId}
+                            style={{ borderTop: '1px solid var(--simprok-catatan-line)' }}
+                          >
+                            <th
+                              scope="row"
+                              style={{ textAlign: 'left', fontWeight: 400 }}
+                              title={`${resource.type} · Basic Price ${resource.basicPriceId ?? '—'} · berlaku ${resource.effectiveDate} · ${resource.sourceOrigin}`}
+                            >
+                              {resource.name}
+                            </th>
+                            <td>
+                              {resource.coefficientDisplay} {resource.ahspUnit}
+                            </td>
+                            <td>{resource.adaptedPriceDisplay}</td>
+                            <td style={{ color: 'var(--simprok-authority-navy-900)' }}>
+                              {resource.resourceCostDisplay}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
             <div className="simprok-persist-action" aria-label="Pilihan AHSP kontekstual">
               <label htmlFor="simprok-ahsp-version-selector">AHSP Version</label>
               <select

@@ -52,6 +52,8 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   let rabEditorToken: string;
   let verifierToken: string;
   let publisherToken: string;
+  /** RM-03: reads the persisted line back with RAB_VIEW only — no edit rights. */
+  let rabViewerToken: string;
 
   // Negative fixture
   let negativeProjectId: string;
@@ -268,9 +270,11 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     );
     const verifier = await createActor('verifier', ['BASIC_PRICE_VERIFY'], []);
     const publisher = await createActor('publisher', ['BASIC_PRICE_PUBLISH'], []);
+    const rabViewer = await createActor('viewer', ['RAB_VIEW'], [projectId]);
     rabEditorToken = await login(rabEditor.email);
     verifierToken = await login(verifier.email);
     publisherToken = await login(publisher.email);
+    rabViewerToken = await login(rabViewer.email);
 
     // ---- Positive: the real submission -> review -> ACCEPT -> PUBLISH chain ----
     const resourceCatalog = await prisma.resourceCatalog.create({
@@ -535,6 +539,126 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     const stillPersisted = await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemId } });
     expect(stillPersisted.unitPrice?.toFixed(2)).toBe('200000.00');
     expect(stillPersisted.priceOrigin).toBe('SERVER_COST_KERNEL');
+  });
+
+  /**
+   * RM-03 — the last link of the Golden Thread: a persisted line must stay
+   * re-provable after the browser is closed and reopened. These run after the
+   * persist test above, so the row here is in exactly the state a hard reload
+   * lands in: priceOrigin SERVER_COST_KERNEL, workingOccurrenceId cleared,
+   * calculationOccurrenceId intact.
+   */
+  it('RM-03: re-proves the persisted line from its own frozen provenance, reproducing stored money exactly', async () => {
+    const response = await request(app.getHttpServer())
+      .get(`/projects/${projectId}/boq/items/${boqItemId}/persisted-calculation`)
+      .set('Authorization', `Bearer ${rabViewerToken}`)
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      status: 'VERIFIED',
+      boqItemId,
+      priceOrigin: 'SERVER_COST_KERNEL',
+      stored: { unitPrice: '200000.00', lineTotal: '1000000.00', unit: 'Kg' },
+      recomputed: { unitPrice: '200000.00', lineTotal: '1000000.00' },
+      integrity: {
+        unitPriceMatches: true,
+        lineTotalMatches: true,
+        allResourceCostsReproduced: true,
+      },
+      provenance: {
+        calculationAsOfDate: '2026-07-31',
+        calculationPolicyVersion: 'RAB_KERNEL_PERSISTENCE_GRADE_A_V1',
+        resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V1',
+        ahspOutputUnit: 'Kg',
+      },
+    });
+
+    // The breakdown must carry the arithmetic actually asserted:
+    // coefficient 2.000000 x adapted 100000.00 = 200000, and those component
+    // costs must sum to the stored unit price.
+    expect(response.body.resources).toHaveLength(1);
+    expect(response.body.resources[0]).toMatchObject({
+      coefficient: '2',
+      adaptedPriceValue: '100000',
+      sourcePriceValue: '100000',
+      resourceCost: '200000',
+      selectedBasicPriceId: basicPriceId,
+      status: 'RESOLVED',
+    });
+    expect(response.body.provenance.calculationOccurrenceId).toBe(
+      (await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemId } }))
+        .calculationOccurrenceId,
+    );
+  });
+
+  it('RM-03: the working-pointer route cannot serve the same persisted line — this is the gap the re-proof closes', async () => {
+    const response = await request(app.getHttpServer())
+      .get(`/projects/${projectId}/boq/items/${boqItemId}/cost-calculation`)
+      .set('Authorization', `Bearer ${rabEditorToken}`)
+      .expect(200);
+
+    // Not a defect in that route: after a successful persist nothing is
+    // staged for calculation any more, so it correctly reports there is no
+    // working occurrence. Without the re-proof route, a reloaded page had no
+    // way at all to re-derive a persisted line.
+    expect(response.body).toMatchObject({
+      status: 'FAIL_CLOSED',
+      reason: 'OCCURRENCE_NOT_FOUND',
+    });
+  });
+
+  it('RM-03: the re-proof is strictly read-only — it mutates no row it reads', async () => {
+    const before = await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemId } });
+    const occurrenceBefore = await prisma.projectAhspOccurrence.findUniqueOrThrow({
+      where: { id: before.calculationOccurrenceId as string },
+      include: { resourceResolutions: true },
+    });
+
+    await request(app.getHttpServer())
+      .get(`/projects/${projectId}/boq/items/${boqItemId}/persisted-calculation`)
+      .set('Authorization', `Bearer ${rabViewerToken}`)
+      .expect(200);
+
+    const after = await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemId } });
+    const occurrenceAfter = await prisma.projectAhspOccurrence.findUniqueOrThrow({
+      where: { id: before.calculationOccurrenceId as string },
+      include: { resourceResolutions: true },
+    });
+    expect(after).toEqual(before);
+    expect(occurrenceAfter).toEqual(occurrenceBefore);
+  });
+
+  it('RM-03: an actor without RAB_VIEW cannot read the persisted breakdown', async () => {
+    await request(app.getHttpServer())
+      .get(`/projects/${projectId}/boq/items/${boqItemId}/persisted-calculation`)
+      .set('Authorization', `Bearer ${verifierToken}`)
+      .expect(403);
+  });
+
+  it('RM-03: a never-calculated line is reported honestly, not as an error or a zero', async () => {
+    const unpriced = await prisma.boqItem.create({
+      data: {
+        boqStructureId,
+        wbsCode: '9.9',
+        name: `${tag} Belum dihitung`,
+        itemType: 'WORK_ITEM',
+        quantity: '1',
+        unit: 'Kg',
+        unitPrice: null,
+        lineTotal: null,
+      },
+    });
+
+    const response = await request(app.getHttpServer())
+      .get(`/projects/${projectId}/boq/items/${unpriced.id}/persisted-calculation`)
+      .set('Authorization', `Bearer ${rabViewerToken}`)
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      status: 'FAIL_CLOSED',
+      reason: 'NOT_CALCULATED',
+    });
+    await prisma.boqItem.delete({ where: { id: unpriced.id } });
   });
 
   it('G: rejects an untraceable PUBLISHED/PUBLISHED price with BASIC_PRICE_PROVENANCE_INCOMPLETE and writes nothing', async () => {
