@@ -37,6 +37,7 @@ import { BoqImportService, MAX_UPLOAD_BYTES } from './boq-import.service';
 import { RabLifecyclePolicyService } from './rab-lifecycle-policy.service';
 import { RabEditableLifecycleGuard } from './rab-editable-lifecycle.guard';
 import { RabKernelPersistenceService } from './rab-kernel-persistence.service';
+import { PersistedCalculationService } from './persisted-calculation.service';
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -49,6 +50,7 @@ export class ProjectController {
     private readonly boqImportService: BoqImportService,
     private readonly rabLifecyclePolicy: RabLifecyclePolicyService,
     private readonly rabKernelPersistenceService: RabKernelPersistenceService,
+    private readonly persistedCalculationService: PersistedCalculationService,
   ) {}
 
   @Post(':projectId/boq/import/preview')
@@ -330,6 +332,40 @@ export class ProjectController {
       workspaceId,
       calculationAsOfDateRaw: dto.calculationAsOfDate,
     });
+  }
+
+  /**
+   * RM-03 — read-only re-proof of an ALREADY-PERSISTED line. Never writes.
+   *
+   * Distinct from the GET above in the question it answers: that route prices
+   * a line from its *working* occurrence ("what would this cost now?"), and
+   * returns OCCURRENCE_NOT_FOUND once a line has been persisted, because the
+   * persist command clears the working pointer. This route follows the
+   * *calculation* occurrence instead, so a persisted line stays re-provable
+   * across a hard reload — which is the only way a human can confirm that the
+   * money on screen is still the money the kernel derived, and see the
+   * per-resource breakdown behind it.
+   *
+   * RAB_VIEW, matching GET :projectId/boq/draft: this exposes the same
+   * persisted RAB line, in more detail.
+   */
+  @Get(':projectId/boq/items/:boqItemId/persisted-calculation')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.RAB_VIEW)
+  async getPersistedBoqItemCalculation(
+    @Req() request: any,
+    @Param('projectId') projectId: string,
+    @Param('boqItemId') boqItemId: string,
+  ) {
+    const workspaceId = request.projectAccess?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('Trusted project workspace is required');
+    }
+    return this.persistedCalculationService.getPersistedCalculation(
+      boqItemId,
+      projectId,
+      workspaceId,
+    );
   }
 
   @Get(':projectId/boq/cost-calculations')
