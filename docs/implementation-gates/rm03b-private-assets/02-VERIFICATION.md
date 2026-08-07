@@ -131,6 +131,26 @@ E2E_DATABASE_IDENTITY_GATE / E2E_RESULT / E2E_RESIDUAL_COUNT → see §9 (CI)
 11 new E2E cases were added (**407 → 418**); their runtime behaviour is proven
 by CI, not by claim.
 
+### CI run 2 (commit `71a84a4`) — **GREEN**
+
+```
+Backend Build and Unit    PASS   56s
+Frontend Test and Build   PASS   23s
+Official Safe E2E         PASS   1m25s
+
+  E2E database guard PASS: simprok_e2e     (asserted 3x)
+  Test Suites: 33 passed, 33 total
+  Tests:       418 passed, 418 total       (baseline 407, +11)
+  RESIDUAL_RESULT: PASS - final database matches baseline
+  JEST_RESULT: PASS
+```
+
+```
+E2E_DATABASE_IDENTITY_GATE = PASS
+E2E_RESULT                 = PASS (418/418)
+E2E_RESIDUAL_COUNT         = 0
+```
+
 ### CI run 1 (commit `e41391b`) — 417/418, one failure, **caused by the test fixture**
 
 ```
@@ -243,7 +263,10 @@ COST_KERNEL_E2E               = unchanged + private-AHSP resolution asserted
 PERSISTED_RECOMPUTATION_E2E   = unchanged from PR #65
 BACKEND_TEST_COUNT            = 808 → 825
 FRONTEND_TEST_COUNT           = 145 → 150
-SAFE_E2E_COUNT                = 407 → 418 expected (CI)
+SAFE_E2E_COUNT                = 407 → 418 (CI, PASS)
+E2E_DATABASE_IDENTITY_GATE    = PASS
+E2E_RESIDUAL_COUNT            = 0
+CI_STATUS                     = ALL GREEN (backend, frontend, Official Safe E2E)
 PRODUCTION_DATA_WRITE         = NO
 MERGE                         = NO_FOR_RM03B
 ```
@@ -253,9 +276,9 @@ MERGE                         = NO_FOR_RM03B
 ## 10. What was NOT verified — stated plainly
 
 - **No browser was opened.** No visual verification is claimed.
-- **Safe E2E was not run locally** (§4). The 11 new cases are type-clean and the
-  fixtures compile, but their runtime behaviour is established by CI. Any CI
-  failure will be fixed by a new commit, never an amend.
+- **Safe E2E was not run locally** (§4). It was run in CI and passed there
+  (418/418); the run-1 fixture defect it exposed was fixed by a follow-up
+  commit, never an amend.
 - **Nothing was verified against production data**, by design.
 - **Private Basic Price was not implemented or tested** — it is stopped at the
   schema gate, not deferred silently.
