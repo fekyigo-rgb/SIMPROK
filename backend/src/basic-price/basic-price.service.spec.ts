@@ -17,6 +17,44 @@ describe('BasicPriceService', () => {
 
   const workspaceId = 'ws-golden-path-01';
 
+  /**
+   * RM-03C: the eligibility where-clause is now a two-branch OR, so the old
+   * flat `{status, verificationStatus, OR: [tenant]}` shape no longer exists
+   * to assert against. The assertions below are RESTATED, never deleted:
+   * every original intent is checked explicitly and branch by branch, which
+   * is stricter than the flat object equality it replaces.
+   *
+   *   branch 0 — SIMPROK catalog: unchanged publication predicate
+   *              (status PUBLISHED + verificationStatus PUBLISHED) with the
+   *              unchanged `this workspace OR global` tenant clause.
+   *   branch 1 — this workspace's own private assets: assetScope
+   *              WORKSPACE_PRIVATE, matched on STRICT workspaceId equality.
+   */
+  const eligibilityBranchesOf = (where: any) => {
+    expect(Array.isArray(where.OR)).toBe(true);
+    expect(where.OR).toHaveLength(2);
+    return { catalog: where.OR[0], priv: where.OR[1] };
+  };
+
+  const expectTwoBranchEligibility = (where: any) => {
+    const { catalog, priv } = eligibilityBranchesOf(where);
+
+    // Catalog branch — byte-for-byte the pre-RM-03C public predicate.
+    expect(catalog.status).toBe('PUBLISHED');
+    expect(catalog.verificationStatus).toBe(PriceVerificationStatus.PUBLISHED);
+    expect(catalog.OR).toEqual([{ workspaceId }, { workspaceId: null }]);
+    // Publication must never be widened by an ownership condition.
+    expect(catalog).not.toHaveProperty('assetScope');
+
+    // Private branch — strict ownership. Never null, never an OR, and never
+    // reachable by claiming publication.
+    expect(priv.assetScope).toBe('WORKSPACE_PRIVATE');
+    expect(priv.workspaceId).toBe(workspaceId);
+    expect(priv).not.toHaveProperty('OR');
+    expect(priv.verificationStatus).toEqual({ not: 'REJECTED' });
+    expect(JSON.stringify(priv)).not.toContain('"workspaceId":null');
+  };
+
   // Public-eligible record: lifecycle PUBLISHED + verification terminal PUBLISHED.
   const mockPrice = {
     id: 'bp-01',
@@ -63,29 +101,20 @@ describe('BasicPriceService', () => {
   });
 
   describe('findAllForWorkspace — public eligibility hard lock', () => {
-    it('base where always enforces status=PUBLISHED, verificationStatus=PUBLISHED, and tenant/global', async () => {
+    it('base where enforces the catalog publication predicate and this workspace own private assets', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
       await service.findAllForWorkspace(workspaceId);
 
-      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            status: 'PUBLISHED',
-            verificationStatus: PriceVerificationStatus.PUBLISHED,
-            OR: [{ workspaceId }, { workspaceId: null }],
-          }),
-        }),
+      expectTwoBranchEligibility(
+        prisma.basicPrice.findMany.mock.calls[0][0].where,
       );
-      // count uses the same eligibility where → meta.total only counts eligible
-      expect(prisma.basicPrice.count).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            status: 'PUBLISHED',
-            verificationStatus: PriceVerificationStatus.PUBLISHED,
-          }),
-        }),
+      // count uses the SAME eligibility where → meta.total can never count a
+      // row the page itself would not have shown.
+      expectTwoBranchEligibility(prisma.basicPrice.count.mock.calls[0][0].where);
+      expect(prisma.basicPrice.count.mock.calls[0][0].where).toEqual(
+        prisma.basicPrice.findMany.mock.calls[0][0].where,
       );
     });
 
@@ -114,6 +143,10 @@ describe('BasicPriceService', () => {
           sourceName: null,
           freshnessStatus: 'CURRENT',
           workspaceScope: 'WORKSPACE',
+          // RM-03C: which asset family this row belongs to, stated rather than
+          // left for the reader to guess from workspaceScope (a curated
+          // catalog price can be workspace-scoped too).
+          assetScope: 'SIMPROK_CATALOG',
         },
       ]);
       expect(result.meta).toEqual({
@@ -199,13 +232,12 @@ describe('BasicPriceService', () => {
         }),
       ).resolves.toBeDefined();
 
-      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            verificationStatus: PriceVerificationStatus.PUBLISHED,
-          }),
-        }),
-      );
+      // The accepted query param changes NOTHING: the where-clause is exactly
+      // the one produced with no filter at all. It cannot widen either branch,
+      // and it does not narrow them either — it is validated, then ignored.
+      const where = prisma.basicPrice.findMany.mock.calls[0][0].where;
+      expectTwoBranchEligibility(where);
+      expect(where).not.toHaveProperty('verificationStatus');
     });
 
     it.each([
@@ -233,11 +265,12 @@ describe('BasicPriceService', () => {
 
       await service.findAllForWorkspace(workspaceId, { search: 'Semen' });
 
+      expectTwoBranchEligibility(
+        prisma.basicPrice.findMany.mock.calls[0][0].where,
+      );
       expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            status: 'PUBLISHED',
-            verificationStatus: PriceVerificationStatus.PUBLISHED,
             resource: {
               OR: [{ workspaceId }, { workspaceId: null }],
               AND: [
@@ -266,11 +299,12 @@ describe('BasicPriceService', () => {
         resourceId: 'rc-01',
       });
 
+      expectTwoBranchEligibility(
+        prisma.basicPrice.findMany.mock.calls[0][0].where,
+      );
       expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            status: 'PUBLISHED',
-            verificationStatus: PriceVerificationStatus.PUBLISHED,
             sourceOrigin: 'GOVERNMENT',
             freshnessStatus: 'EXPIRED',
             regionId: 'reg-01',
@@ -557,10 +591,12 @@ describe('BasicPriceService', () => {
         unit: 'Zak',
       });
 
+      expectTwoBranchEligibility(
+        prisma.basicPrice.findMany.mock.calls[0][0].where,
+      );
       expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            OR: [{ workspaceId }, { workspaceId: null }],
             resource: {
               OR: [{ workspaceId }, { workspaceId: null }],
               baseUnit: 'Zak',
@@ -607,20 +643,18 @@ describe('BasicPriceService', () => {
   });
 
   describe('findOneForWorkspace — eligibility hard lock', () => {
-    it('where enforces status=PUBLISHED, verificationStatus=PUBLISHED, tenant/global', async () => {
+    it('where enforces the catalog publication predicate and this workspace own private assets', async () => {
       prisma.basicPrice.findFirst.mockResolvedValue(mockPrice);
 
       const result = await service.findOneForWorkspace('bp-01', workspaceId);
 
       expect(result).toEqual(mockPrice);
+      expectTwoBranchEligibility(
+        prisma.basicPrice.findFirst.mock.calls[0][0].where,
+      );
       expect(prisma.basicPrice.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({
-            id: 'bp-01',
-            status: 'PUBLISHED',
-            verificationStatus: PriceVerificationStatus.PUBLISHED,
-            OR: [{ workspaceId }, { workspaceId: null }],
-          }),
+          where: expect.objectContaining({ id: 'bp-01' }),
         }),
       );
     });
@@ -654,22 +688,34 @@ describe('BasicPriceService', () => {
   });
 
   describe('findByResource — eligibility hard lock', () => {
-    it('where enforces status=PUBLISHED, verificationStatus=PUBLISHED, tenant/global', async () => {
+    it('where enforces the catalog publication predicate and this workspace own private assets', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
 
       const result = await service.findByResource('rc-01', workspaceId);
 
       expect(result).toEqual([mockPrice]);
-      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: {
-            resourceId: 'rc-01',
-            status: 'PUBLISHED',
-            verificationStatus: PriceVerificationStatus.PUBLISHED,
-            OR: [{ workspaceId }, { workspaceId: null }],
-          },
-        }),
-      );
+      const where = prisma.basicPrice.findMany.mock.calls[0][0].where;
+      expectTwoBranchEligibility(where);
+      expect(where.resourceId).toBe('rc-01');
+      // Exactly two keys: the resource filter and the eligibility OR. Nothing
+      // else silently narrows or widens this read.
+      expect(Object.keys(where).sort()).toEqual(['OR', 'resourceId']);
+    });
+
+    it('keeps its pre-existing display order and does NOT rank by assetScope', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+
+      await service.findByResource('rc-01', workspaceId);
+
+      // PRE-EXISTING order, unchanged by RM-03C. Private-vs-catalog precedence
+      // is an OPEN OWNER DECISION: this read must not quietly become the place
+      // where it gets answered.
+      const orderBy = prisma.basicPrice.findMany.mock.calls[0][0].orderBy;
+      expect(orderBy).toEqual([
+        { workspaceId: 'desc' },
+        { effectiveDate: 'desc' },
+      ]);
+      expect(JSON.stringify(orderBy)).not.toContain('assetScope');
     });
   });
 

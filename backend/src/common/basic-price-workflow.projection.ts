@@ -255,6 +255,62 @@ export function mapPublicationQueueItem(
   };
 }
 
+// ── Workspace-private Basic Price projection (RM-03C) ───────────────────────
+
+export interface PrivateBasicPriceItem {
+  basicPriceId: string;
+  resource: ResourceIdentity;
+  region: RegionIdentity | null;
+  /** Exact decimal string, two digits. */
+  price: string;
+  effectiveDate: string;
+  /** Always WORKSPACE_PRIVATE here — stated, never assumed by the reader. */
+  assetScope: 'WORKSPACE_PRIVATE';
+  /**
+   * Where the PRICE came from, which is a different question from who owns
+   * the asset. A private price may truthfully be GOVERNMENT / SUPPLIER /
+   * STORE / DISTRIBUTOR / FIELD_REPORT — there is no "private" source.
+   */
+  sourceOrigin: string;
+  /** Publication axes, echoed so a caller can see they were NOT touched. */
+  status: string;
+  verificationStatus: string;
+  /** The import row this price was materialized from — its only evidence. */
+  sourceImportRowId: string;
+}
+
+export interface PrivateBasicPriceRowSource {
+  id: string;
+  value: Prisma.Decimal | string;
+  effectiveDate: DateLike;
+  status: string;
+  verificationStatus: string;
+  sourceOrigin: string;
+  sourceImportRowId: string | null;
+  resource: { id: string; code: string | null; name: string; type: string };
+  region: { id: string; code: string; name: string } | null;
+}
+
+export function mapPrivateBasicPriceItem(
+  row: PrivateBasicPriceRowSource,
+): PrivateBasicPriceItem {
+  return {
+    basicPriceId: row.id,
+    resource: mapResourceIdentity(row.resource),
+    region: mapRegionIdentity(row.region),
+    price: toDecimalString2(row.value),
+    effectiveDate: toIso(row.effectiveDate),
+    assetScope: 'WORKSPACE_PRIVATE',
+    sourceOrigin: row.sourceOrigin,
+    status: row.status,
+    verificationStatus: row.verificationStatus,
+    // Non-null by construction: the writer always sets it and the database
+    // refuses a private row without it. The `??` is a type narrowing, not a
+    // fallback that could ever fabricate an empty provenance reference.
+    sourceImportRowId: row.sourceImportRowId ?? '',
+  };
+}
+
 // ── Basic Price Explorer projection (RM02D2A2 remediation) ──────────────────
 //
 // The Explorer is the primary, public-facing Basic Price door (Owner Lock:
@@ -281,6 +337,14 @@ export function mapExplorerResourceIdentity(resource: {
 /** WORKSPACE = belongs to the caller's own workspace; GLOBAL = workspaceId is null. */
 export type BasicPriceWorkspaceScope = 'WORKSPACE' | 'GLOBAL';
 
+/**
+ * RM-03C — which asset family a row belongs to. This is a DIFFERENT question
+ * from `workspaceScope`, which only says whose tenancy column the row carries:
+ * a curated catalog price can legitimately be workspace-scoped too. Only
+ * `assetScope` answers "is this MY OWN price, or SIMPROK's catalog price".
+ */
+export type BasicPriceAssetScopeLabel = 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG';
+
 export interface BasicPriceExplorerItem {
   basicPriceId: string;
   resource: ExplorerResourceIdentity;
@@ -302,12 +366,26 @@ export interface BasicPriceExplorerItem {
   sourceName: string | null;
   freshnessStatus: string;
   workspaceScope: BasicPriceWorkspaceScope;
+  /**
+   * RM-03C. Read straight off the persisted column — never inferred from which
+   * eligibility branch happened to match, and never inferred from workspaceId,
+   * status or verificationStatus. A label must never claim an ownership the
+   * data does not carry.
+   */
+  assetScope: BasicPriceAssetScopeLabel;
+}
+
+/** An import batch's human-facing source identity, wherever it is reached from. */
+interface ImportBatchSourceNames {
+  sourceOrganizationName: string | null;
+  sourceVendorName: string | null;
 }
 
 /** Structural subset of the Prisma-included BasicPrice row for the Explorer. */
 export interface ExplorerRowSource {
   id: string;
   workspaceId: string | null;
+  assetScope: string;
   value: Prisma.Decimal | string;
   effectiveDate: DateLike;
   validUntil: DateLike | null;
@@ -324,11 +402,16 @@ export interface ExplorerRowSource {
   region: { id: string; code: string; name: string } | null;
   sourceSubmission?: {
     importRow?: {
-      batch?: {
-        sourceOrganizationName: string | null;
-        sourceVendorName: string | null;
-      } | null;
+      batch?: ImportBatchSourceNames | null;
     } | null;
+  } | null;
+  /**
+   * RM-03C: a WORKSPACE_PRIVATE row's direct link to the SAME import batch.
+   * One link shorter than the catalog chain because there is no
+   * PriceSubmission in between — not a second provenance subsystem.
+   */
+  sourceImportRow?: {
+    batch?: ImportBatchSourceNames | null;
   } | null;
 }
 
@@ -336,11 +419,19 @@ export interface ExplorerRowSource {
  * Derives a human-readable source name ONLY from a real, traceable provenance
  * chain (import batch vendor/organization name). Returns null — never a
  * fabricated placeholder — when no such chain exists for this row.
+ *
+ * Both chains end at the same BasicPriceImportBatch columns, so a private
+ * price shows its supplier/organization exactly as honestly as a catalog price
+ * does. The two are checked in sequence rather than merged: the database
+ * guarantees a row can only ever have one of them
+ * (basic_prices_import_row_link_private_only_check +
+ * basic_prices_private_not_submission_born_check), so this can never silently
+ * prefer one real source over another.
  */
 export function deriveExplorerSourceName(
   row: ExplorerRowSource,
 ): string | null {
-  const batch = row.sourceSubmission?.importRow?.batch;
+  const batch = row.sourceSubmission?.importRow?.batch ?? row.sourceImportRow?.batch;
   if (!batch) return null;
   // A blank/whitespace-only stored name is not a real human-facing source
   // name either — treat it the same as absent rather than rendering "".
@@ -373,5 +464,12 @@ export function mapExplorerItem(
     // instead of mislabeling a foreign workspace's row as the caller's own.
     workspaceScope:
       row.workspaceId === currentWorkspaceId ? 'WORKSPACE' : 'GLOBAL',
+    // Fail-safe direction: anything that is not exactly the private enum value
+    // reads as SIMPROK_CATALOG. An unknown/absent value must never be
+    // presented to a human as "your own private price".
+    assetScope:
+      row.assetScope === 'WORKSPACE_PRIVATE'
+        ? 'WORKSPACE_PRIVATE'
+        : 'SIMPROK_CATALOG',
   };
 }

@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, PriceVerificationStatus } from '@prisma/client';
+import {
+  BasicPriceAssetScope,
+  Prisma,
+  PriceVerificationStatus,
+} from '@prisma/client';
 
 /**
  * Single source of truth for "publicly eligible" — OWNER-LOCKED, unchanged
@@ -14,6 +18,123 @@ import { Prisma, PriceVerificationStatus } from '@prisma/client';
 export const PUBLIC_BASIC_PRICE_STATUS = 'PUBLISHED';
 export const PUBLIC_BASIC_PRICE_VERIFICATION_STATUS =
   PriceVerificationStatus.PUBLISHED;
+
+export const BASIC_PRICE_ELIGIBILITY_POLICY_VERSION =
+  'RM03C_PRIVATE_BASIC_PRICE_ELIGIBILITY_V1';
+
+/**
+ * RM-03C — which Basic Prices a workspace may actually USE.
+ *
+ * Owner law recognises two legitimate asset families, and they are NOT the
+ * same thing:
+ *
+ *   SIMPROK_CATALOG    a curated national/general price. Reaching it still
+ *                      requires the unchanged publication ladder:
+ *                      status = 'PUBLISHED' AND verificationStatus = PUBLISHED.
+ *   WORKSPACE_PRIVATE  a workspace's OWN price, imported because the catalog
+ *                      has nothing suitable. Usable by its owner immediately.
+ *                      It needs no national publication, no verifier, no
+ *                      publisher, and no second human.
+ *
+ * Private use is therefore expressed as a SEPARATE, ADDITIVE branch, exactly
+ * as RM-03B did for AHSP. A private price is never stamped PUBLISHED to make
+ * it eligible — that would call a private asset "published", which the Owner
+ * law forbids, and would make it indistinguishable from a curated one. The
+ * database refuses that lie outright
+ * (basic_prices_private_never_published_check).
+ *
+ * NO PRECEDENCE. Neither branch outranks the other. This builder only decides
+ * WHICH rows are legally eligible; it never orders, ranks, filters or
+ * tie-breaks between an eligible private price and an eligible catalog price
+ * for the same resource. The existing selection logic stays scope-blind:
+ * `resolveAhspResourcePrice` still returns NEEDS_REVIEW whenever more than one
+ * compatible candidate survives, whatever each candidate's assetScope is —
+ * SIMPROK menghitung, manusia memutuskan. Introducing a
+ * private-beats-catalog (or catalog-beats-private) rule is an OPEN OWNER
+ * DECISION and is deliberately NOT taken here.
+ *
+ * SECURITY — why the private branch uses strict equality and the catalog
+ * branch does not: the catalog branch's `OR: [{workspaceId}, {workspaceId:
+ * null}]` is correct for curated data, because a null-workspace catalog row is
+ * genuinely national. Reusing that clause for the private branch would make
+ * every null-workspace row eligible for every tenant at once — a
+ * cross-workspace leak. The private branch is keyed on OWNERSHIP OF THE ROW:
+ * `workspaceId` EXACTLY equal to the caller's trusted workspace, never null,
+ * never an OR. The database makes the null case unrepresentable as well
+ * (basic_prices_private_requires_workspace_check), so this is belt AND braces.
+ */
+export const BASIC_PRICE_ASSET_SCOPE = {
+  SIMPROK_CATALOG: BasicPriceAssetScope.SIMPROK_CATALOG,
+  WORKSPACE_PRIVATE: BasicPriceAssetScope.WORKSPACE_PRIVATE,
+} as const;
+
+/**
+ * The catalog branch — semantically identical to the pre-RM-03C predicate
+ * every workspace-scoped caller already built by hand
+ * (`{...publicEligibilityWhere(), OR: [{workspaceId}, {workspaceId: null}]}`).
+ * The text moved into a builder and now sits inside an OR, so this is NOT a
+ * byte-identical copy; what is preserved is the MEANING, and the unit spec
+ * asserts each condition individually rather than trusting the shape.
+ *
+ * `assetScope` is deliberately NOT asserted here. The catalog predicate must
+ * remain exactly the publication predicate — adding an ownership condition to
+ * it would make publication mean something it did not mean yesterday. It is
+ * also unnecessary: a WORKSPACE_PRIVATE row can never satisfy
+ * status = 'PUBLISHED' AND verificationStatus = PUBLISHED, because the
+ * database forbids that combination on a private row.
+ */
+const catalogAssetBranch = (
+  workspaceId: string,
+): Prisma.BasicPriceWhereInput => ({
+  status: PUBLIC_BASIC_PRICE_STATUS,
+  verificationStatus: PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
+  OR: [{ workspaceId }, { workspaceId: null }],
+});
+
+/**
+ * The private branch — additive, and strictly scoped to one workspace.
+ *
+ * What genuinely disqualifies a private price is NOT "nobody nationally
+ * published it" — that is the whole point of the asset family. It is a
+ * terminal REJECTED verification state. Stated as an exclusion rather than an
+ * allow-list on purpose: the private writer can only produce UNVERIFIED today,
+ * so an allow-list of UNVERIFIED would silently un-elect a workspace's own
+ * price the moment any future lifecycle touched that column.
+ *
+ * Everything else a private price needs in order to be technically usable
+ * (region, effective date, validity window, unit compatibility) is asserted by
+ * the CALLER, identically for both branches — there is no private shortcut
+ * around the technical applicability rules.
+ */
+const privateAssetBranch = (
+  workspaceId: string,
+): Prisma.BasicPriceWhereInput => ({
+  assetScope: BASIC_PRICE_ASSET_SCOPE.WORKSPACE_PRIVATE,
+  // Never null. Never an OR. Never `workspaceId OR null`.
+  workspaceId,
+  verificationStatus: { not: PriceVerificationStatus.REJECTED },
+});
+
+/**
+ * The single usable-Basic-Price predicate for one trusted workspace.
+ *
+ * Every workspace-scoped consumer builds its query from THIS function — the
+ * Explorer list, the Explorer detail, by-resource lookup, Project AHSP
+ * resource resolution, the AHSP re-verification read, and the Cost Kernel
+ * persistence re-read. Building all of them from one function is the security
+ * property, not a tidiness one: if the list could offer a price the resolver
+ * would not accept (or worse, vice versa), the gap between them would be the
+ * privilege escalation.
+ *
+ * Returns ONLY an `OR` key, so a caller may spread it alongside its own
+ * scalar filters and its own `AND` clauses without either side clobbering the
+ * other.
+ */
+export const buildUsableBasicPriceWhere = (
+  workspaceId: string,
+): Prisma.BasicPriceWhereInput => ({
+  OR: [catalogAssetBranch(workspaceId), privateAssetBranch(workspaceId)],
+});
 
 export type EligibilityReasonCode =
   | 'NOT_PUBLISHED'
@@ -83,6 +204,21 @@ export class BasicPriceEligibilityPolicy {
       status: PUBLIC_BASIC_PRICE_STATUS,
       verificationStatus: PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
     };
+  }
+
+  /**
+   * RM-03C — the predicate every WORKSPACE-SCOPED consumer must use:
+   * publicly eligible catalog prices, OR this workspace's own private
+   * prices. Injected-service wrapper over `buildUsableBasicPriceWhere` so
+   * existing DI call sites keep their shape.
+   *
+   * `publicEligibilityWhere()` above is deliberately left untouched and still
+   * means exactly what it meant before: PUBLICATION. It remains the honest
+   * answer to "is this row publicly eligible", which is a different question
+   * from "may this workspace use this row".
+   */
+  usableWhere(workspaceId: string): Prisma.BasicPriceWhereInput {
+    return buildUsableBasicPriceWhere(workspaceId);
   }
 
   /**

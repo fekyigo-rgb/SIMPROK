@@ -196,18 +196,23 @@ export class ProjectAhspService {
         },
         select: { id: true, code: true, name: true, type: true, baseUnit: true },
       });
+      // RM-03C: the eligible candidate set now legally includes this
+      // workspace's OWN private prices, alongside publicly published catalog
+      // prices — one predicate, built from the shared policy so the candidate
+      // set here and the re-verification below can never drift.
+      //
+      // The technical applicability conditions (region, effective date,
+      // validity window) are asserted OUTSIDE the branch OR, so they apply
+      // identically to both asset families: there is no private shortcut past
+      // them. Nothing here ranks the two families against each other —
+      // cardinality is still decided downstream by resolveAhspResourcePrice,
+      // which remains scope-blind.
       const priceRows = await tx.basicPrice.findMany({
         where: {
-          ...this.eligibility.publicEligibilityWhere(),
+          ...this.eligibility.usableWhere(input.workspaceId),
           regionId: input.referenceRegionId,
           effectiveDate: { lte: asOf },
           AND: [
-            {
-              OR: [
-                { workspaceId: input.workspaceId },
-                { workspaceId: null },
-              ],
-            },
             { OR: [{ validUntil: null }, { validUntil: { gte: asOf } }] },
           ],
         },
@@ -284,16 +289,13 @@ export class ProjectAhspService {
           ? await tx.basicPrice.findFirst({
               where: {
                 id: selectedCandidate.id,
-                ...this.eligibility.publicEligibilityWhere(),
+                // Same predicate the candidate query used, from the same
+                // builder — the re-read must never accept a row the offer
+                // could not have contained, nor reject one it did.
+                ...this.eligibility.usableWhere(input.workspaceId),
                 regionId: input.referenceRegionId,
                 effectiveDate: { lte: asOf },
                 AND: [
-                  {
-                    OR: [
-                      { workspaceId: input.workspaceId },
-                      { workspaceId: null },
-                    ],
-                  },
                   {
                     OR: [
                       { validUntil: null },

@@ -21,6 +21,11 @@ import { sourceOriginsForFamily } from './basic-price-source-family.util';
 const EXPLORER_ROW_SELECT = {
   id: true,
   workspaceId: true,
+  // RM-03C: the Explorer must say WHICH asset family a row belongs to. A
+  // workspace's own private price sitting silently among curated catalog rows,
+  // visually indistinguishable from them, would be exactly the kind of
+  // unlabelled claim SIMPROK does not make.
+  assetScope: true,
   value: true,
   effectiveDate: true,
   validUntil: true,
@@ -53,6 +58,19 @@ const EXPLORER_ROW_SELECT = {
               sourceVendorName: true,
             },
           },
+        },
+      },
+    },
+  },
+  // RM-03C: a WORKSPACE_PRIVATE row reaches the very same import batch
+  // directly, because it has no PriceSubmission to travel through. Same
+  // provenance subsystem, one link shorter — never a second one.
+  sourceImportRow: {
+    select: {
+      batch: {
+        select: {
+          sourceOrganizationName: true,
+          sourceVendorName: true,
         },
       },
     },
@@ -173,12 +191,17 @@ export class BasicPriceService {
       throw new BadRequestException('dateFrom must not be after dateTo');
     }
 
-    // Base eligibility (hard lock): status PUBLISHED AND verification terminal PUBLISHED.
-    // The optional query param cannot widen this — it is validated above and otherwise ignored.
-    const where: Prisma.BasicPriceWhereInput = {
-      ...this.eligibility.publicEligibilityWhere(),
-      OR: [{ workspaceId }, { workspaceId: null }],
-    };
+    // Base eligibility (hard lock). Two additive branches, never one widened
+    // predicate (RM-03C):
+    //   catalog — status PUBLISHED AND verification terminal PUBLISHED, for
+    //             this workspace or the global catalog. Unchanged.
+    //   private — this workspace's OWN assetScope=WORKSPACE_PRIVATE rows,
+    //             matched on strict workspaceId equality. Never null, never
+    //             another tenant's.
+    // The optional query param cannot widen either branch — it is validated
+    // above and otherwise ignored.
+    const where: Prisma.BasicPriceWhereInput =
+      this.eligibility.usableWhere(workspaceId);
 
     const resourceFilter: Prisma.ResourceCatalogWhereInput = {
       OR: [{ workspaceId }, { workspaceId: null }],
@@ -319,14 +342,16 @@ export class BasicPriceService {
     const price = await this.prisma.basicPrice.findFirst({
       where: {
         id,
-        ...this.eligibility.publicEligibilityWhere(),
-        OR: [{ workspaceId }, { workspaceId: null }],
+        ...this.eligibility.usableWhere(workspaceId),
       },
       include: {
         resource: true,
       },
     });
 
+    // Anti-enumeration: a foreign workspace's private price is reported as
+    // plain non-existence, exactly like an unknown id — the caller must not be
+    // able to infer that some other tenant owns a price with this id.
     if (!price) {
       throw new NotFoundException('BasicPrice not found');
     }
@@ -336,14 +361,19 @@ export class BasicPriceService {
 
   /**
    * Cari BasicPrice berdasarkan resourceId untuk workspace.
-   * Prioritas: workspace-specific > global.
+   *
+   * The `orderBy` below is a PRE-EXISTING display order (workspace-owned rows
+   * listed before global ones) and is left exactly as it was. RM-03C does NOT
+   * touch it and does NOT add assetScope to it: ordering a read is not the
+   * same thing as deciding which price wins, and private-vs-catalog precedence
+   * remains an open Owner decision. Nothing downstream selects a price from
+   * this list's order.
    */
   async findByResource(resourceId: string, workspaceId: string) {
     return this.prisma.basicPrice.findMany({
       where: {
         resourceId,
-        ...this.eligibility.publicEligibilityWhere(),
-        OR: [{ workspaceId }, { workspaceId: null }],
+        ...this.eligibility.usableWhere(workspaceId),
       },
       include: {
         resource: {

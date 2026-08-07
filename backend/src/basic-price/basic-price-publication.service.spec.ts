@@ -356,7 +356,17 @@ describe('BasicPricePublicationService', () => {
     const result = await service.getPublicationQueue(WORKSPACE_ID);
 
     expect(findMany).toHaveBeenCalledWith({
-      where: { workspaceId: WORKSPACE_ID, status: 'UNPUBLISHED', verificationStatus: 'VERIFIED' },
+      // RM-03C: assetScope is asserted POSITIVELY — a workspace-private price
+      // must never be shown to a publisher, let alone be publishable. The
+      // catalog result set is unchanged: every pre-RM-03C row is
+      // SIMPROK_CATALOG, and a private row can never reach
+      // UNPUBLISHED+VERIFIED in the first place.
+      where: {
+        workspaceId: WORKSPACE_ID,
+        assetScope: 'SIMPROK_CATALOG',
+        status: 'UNPUBLISHED',
+        verificationStatus: 'VERIFIED',
+      },
       orderBy: { createdAt: 'asc' },
       include: { resource: true, region: true },
     });

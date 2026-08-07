@@ -338,6 +338,7 @@ describe('basic-price workflow projections (RM-02D2A2)', () => {
     const baseRow: ExplorerRowSource = {
       id: 'bp-explorer-1',
       workspaceId: 'ws-1',
+      assetScope: 'SIMPROK_CATALOG',
       value: '125000.00',
       effectiveDate: new Date('2026-01-15T00:00:00.000Z'),
       validUntil: new Date('2026-12-31T00:00:00.000Z'),
@@ -381,7 +382,54 @@ describe('basic-price workflow projections (RM-02D2A2)', () => {
         sourceName: 'Toko Jaya',
         freshnessStatus: 'CURRENT',
         workspaceScope: 'WORKSPACE',
+        assetScope: 'SIMPROK_CATALOG',
       });
+    });
+
+    /**
+     * RM-03C — assetScope answers a DIFFERENT question from workspaceScope.
+     * A curated catalog price can legitimately be workspace-scoped, so
+     * "WORKSPACE" must never be read as "my own private price".
+     */
+    it('reports assetScope from the persisted column, independent of workspaceScope', () => {
+      const privateRow: ExplorerRowSource = {
+        ...baseRow,
+        assetScope: 'WORKSPACE_PRIVATE',
+        sourceSubmission: null,
+        sourceImportRow: {
+          batch: {
+            sourceVendorName: 'Toko Sendiri',
+            sourceOrganizationName: null,
+          },
+        },
+      };
+      const item = mapExplorerItem(privateRow, 'ws-1');
+      expect(item.assetScope).toBe('WORKSPACE_PRIVATE');
+      expect(item.workspaceScope).toBe('WORKSPACE');
+      // A private price shows its real supplier, through the same import
+      // batch a catalog price would — one link shorter, not less honest.
+      expect(item.sourceName).toBe('Toko Sendiri');
+
+      // A workspace-scoped CATALOG row is still catalog. Same workspaceScope,
+      // different assetScope.
+      expect(mapExplorerItem(baseRow, 'ws-1').workspaceScope).toBe('WORKSPACE');
+      expect(mapExplorerItem(baseRow, 'ws-1').assetScope).toBe(
+        'SIMPROK_CATALOG',
+      );
+    });
+
+    it('fails safe to SIMPROK_CATALOG for an unknown or absent assetScope', () => {
+      // Never present an unrecognized value to a human as "your own price".
+      expect(
+        mapExplorerItem({ ...baseRow, assetScope: 'SOMETHING_ELSE' }, 'ws-1')
+          .assetScope,
+      ).toBe('SIMPROK_CATALOG');
+      expect(
+        mapExplorerItem(
+          { ...baseRow, assetScope: undefined as unknown as string },
+          'ws-1',
+        ).assetScope,
+      ).toBe('SIMPROK_CATALOG');
     });
 
     it('uses exact two-digit decimal string money, never a JS number', () => {
@@ -415,6 +463,21 @@ describe('basic-price workflow projections (RM-02D2A2)', () => {
     it('sourceName is null (never fabricated) when provenance is absent', () => {
       const item = mapExplorerItem(
         { ...baseRow, sourceSubmission: null },
+        'ws-1',
+      );
+      expect(item.sourceName).toBeNull();
+    });
+
+    it('sourceName stays null for a private row with no import-batch source names', () => {
+      const item = mapExplorerItem(
+        {
+          ...baseRow,
+          assetScope: 'WORKSPACE_PRIVATE',
+          sourceSubmission: null,
+          sourceImportRow: {
+            batch: { sourceVendorName: '  ', sourceOrganizationName: null },
+          },
+        },
         'ws-1',
       );
       expect(item.sourceName).toBeNull();

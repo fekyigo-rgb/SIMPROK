@@ -264,8 +264,8 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     domain: PERMISSION_DOMAINS.BASIC_PRICE,
     state: PERMISSION_CATALOG_STATES.ACTIVE_MEMBERSHIP_BASELINE,
     description:
-      "Submit the caller's own resolved Basic Price import batch, creating PriceSubmission rows for resolved rows.",
-    note: 'Granted structurally to every ACTIVE WorkspaceMembership. Submission hands the batch to the separate, internal PriceSubmission curation queue — it does not grant any curation authority itself.',
+      "Materialize the caller's own resolved Basic Price import rows: submit them to SIMPROK curation as PriceSubmission rows, and/or keep them as workspace-private Basic Prices for the caller's own workspace.",
+    note: "Granted structurally to every ACTIVE WorkspaceMembership. RM-03C added the keep-private action under this SAME code rather than minting a new one: it is the identical authority (materialize my own resolved rows) held by the identical people, and it is strictly the LESS powerful of the two — a private price produces nothing outside the caller's own workspace, while submission hands the batch to the separate internal curation queue. Neither action grants any curation authority itself, and no new ACTIVE_MEMBERSHIP_BASELINE code was introduced (that would require a new Owner decision — see Amendment A1, docs/control/DECISIONS.md).",
   },
   {
     code: PERMISSIONS.BASIC_PRICE_VERIFY,
