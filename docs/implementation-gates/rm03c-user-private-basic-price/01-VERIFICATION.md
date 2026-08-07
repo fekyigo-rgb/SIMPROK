@@ -15,7 +15,7 @@ the `pull_request` event, and `actions/checkout` therefore checks out
 `refs/pull/68/merge` — the *merge result*, not the raw feature head. Wording
 that called this "exact head CI" was inaccurate and is corrected throughout to
 `PR_MERGE_REF_CI`. `RAW_HEAD_CI = NOT_SEPARATELY_PROVED`: no job checked out
-`9828ee6` by itself. See `02-CANONICAL-PREFLIGHT.md` §7 for the checkout log
+`9828ee6` by itself. See `02-CANONICAL-PREFLIGHT.md` §9 for the checkout log
 proof.
 
 ---

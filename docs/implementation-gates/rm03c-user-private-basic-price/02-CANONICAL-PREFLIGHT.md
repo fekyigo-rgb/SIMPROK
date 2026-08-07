@@ -305,7 +305,49 @@ behaviour could differ.
 
 ---
 
-## 9. Preflight matrix
+## 9. CI checkout truth (the terminology correction)
+
+```
+PR_MERGE_REF_CI = GREEN
+RAW_HEAD_CI     = NOT_SEPARATELY_PROVED
+```
+
+`pr-quality-gate.yml` triggers on the `pull_request` event, so
+`actions/checkout` checks out the **merge ref**, not the raw feature head. The
+job log states it verbatim:
+
+```
+run 31162221889  (PR head 9828ee6)
+  git fetch … origin +6d46d3ae…:refs/remotes/pull/68/merge
+  git checkout --progress --force refs/remotes/pull/68/merge
+  HEAD is now at 6d46d3a Merge 9828ee630c… into bbba3d0b4e…
+
+run 31166178589  (PR head 64e6c6a, this preflight commit)
+  git fetch … origin +9f066c95…:refs/remotes/pull/68/merge
+  git checkout --progress --force refs/remotes/pull/68/merge
+```
+
+So every green result in `01-VERIFICATION.md` was produced by building and
+testing the **merge result of this branch into current `main`** — not the raw
+head SHA. That is *stronger* than a raw-head run for merge safety, and it
+independently covers the base-movement deviation, but it is a different claim
+and is no longer described as "exact head CI". No job has checked out `9828ee6`
+or `64e6c6a` in isolation.
+
+Post-correction run `31166178589` (head `64e6c6a`, all required jobs green):
+
+| Job | Result | Evidence |
+|---|---|---|
+| Backend Build and Unit | pass 45s | `Test Suites: 71 passed` · `Tests: 911 passed, 911 total` |
+| Backend Owner-bootstrap focused | pass | `Tests: 30 passed, 30 total` |
+| Frontend Test and Build | pass 25s | 150/150 + build |
+| Official Safe E2E | pass 1m34s | `Test Suites: 34 passed` · `Tests: 450 passed, 450 total` · `RESIDUAL_RESULT: PASS` · `JEST_RESULT: PASS` |
+
+Identical to the pre-correction numbers, as a comment/docs-only change must be.
+
+---
+
+## 10. Preflight matrix
 
 ```
 PR_REALITY                                = PASS
