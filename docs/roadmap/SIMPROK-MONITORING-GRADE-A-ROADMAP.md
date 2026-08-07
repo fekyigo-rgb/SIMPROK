@@ -1,11 +1,26 @@
 # SIMPROK MONITORING — GRADE A ROADMAP
 
 **Document ID:** SIMPROK-MONITORING-GRADE-A-ROADMAP  
-**Version:** 0.1  
-**Status:** DRAFT FOR OWNER REVIEW / CANONICAL WORKING ROADMAP  
+**Version:** 1.0  
+**Status:** OWNER PASS / LOCKED / CANONICAL ROADMAP  
+**Lock Date:** 2026-08-07  
 **Repository:** fekyigo-rgb/SIMPROK  
 **Canonical Path:** `docs/roadmap/SIMPROK-MONITORING-GRADE-A-ROADMAP.md`  
-**Change Rule:** Do not silently rewrite Product Law. Any conflict with locked Product Law stops implementation and requires review.
+**Change Rule:** LOCKED means LOCKED. Do not silently rewrite Product Law or this roadmap. Any future roadmap change requires a numbered, documented Owner Amendment. Repository reality may trigger STOP/review, never silent reinterpretation.
+
+---
+
+## 0. Owner Lock Declaration
+
+Roadmap ini telah mendapat **Owner PASS** dan dikunci sebagai **roadmap kanonik eksekusi SIMPROK Monitoring Grade A**.
+
+Roadmap ini:
+- menjadi urutan kerja resmi Monitoring dari BUILD-00 menuju MON-15;
+- tunduk pada Owner-locked SIMPROK Constitution/Foundation dan Locked Monitoring Product Law v1.1;
+- tidak memberi executor kewenangan untuk mengubah prioritas, Product Law, authority, atau boundary secara independen;
+- tidak boleh dibongkar, ditulis ulang, atau diganti karena preferensi implementasi;
+- hanya dapat diubah melalui **Owner Amendment bernomor dan terdokumentasi**;
+- wajib dibaca bersama reality repository: bila implementation reality bertentangan dengan roadmap/hukum yang lebih tinggi, executor **STOP dan melapor**, bukan menambal atau mengubah roadmap diam-diam.
 
 ---
 
