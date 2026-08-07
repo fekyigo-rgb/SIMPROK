@@ -103,12 +103,15 @@ in the E2E rather than assumed.
 
 `prisma/migrations/20260807090000_rm03c_user_private_basic_price/`
 
-Purely additive: two columns, one FK, three indexes, five CHECK constraints.
-No column dropped, retyped, renamed or rewritten. No existing migration edited.
-No squash. No reset. Reversible by dropping the two columns and the enum.
+Purely additive: two columns, one FK, **two new indexes** (one unique
+provenance index on `sourceImportRowId`, one `workspaceId`+`assetScope`
+composite index), five CHECK constraints. No column dropped, retyped, renamed
+or rewritten. No existing migration edited. No squash. No reset. Reversible by
+dropping the two columns and the enum.
 
-**Backfill is proved, not assumed.** Every pre-RM-03C row is `SIMPROK_CATALOG`
-because:
+**Backfill — repository lineage supported it; canonical reality proved it.**
+
+Repository writer lineage *supports* the catalog hypothesis:
 
 1. the only production creator is `price-submission-review.service.ts` (the
    ACCEPT branch of catalog curation), and the only other production writer is
@@ -116,6 +119,15 @@ because:
    an inventory pinned byte-for-byte by `basic-price-writer-inventory.spec.ts`;
 2. before this migration there was no representation of privateness at all, so
    no row *could* have been private.
+
+That argument alone cannot prove what is actually IN canonical data — it says
+nothing about an old script, an earlier runtime, a manual SQL operation, or an
+untracked procedure. A separate **read-only canonical preflight on 2026-08-07**
+closed that gap: `public.basic_prices` held **0 rows**, and
+`pg_stat_user_tables.n_tup_ins = 0` — no row has ever been inserted into that
+table on the canonical cluster. `LEGACY_ROW_COUNT = 0`, `AMBIGUOUS_COUNT = 0`,
+so the explicit `UPDATE` is operationally vacuous on current canonical data.
+Full evidence: `02-CANONICAL-PREFLIGHT.md`.
 
 The column is added NULLABLE, backfilled by one explicit and reviewable
 `UPDATE`, and only then made `NOT NULL DEFAULT 'SIMPROK_CATALOG'` — the

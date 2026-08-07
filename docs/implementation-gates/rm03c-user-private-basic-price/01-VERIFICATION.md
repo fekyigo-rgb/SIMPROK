@@ -8,8 +8,15 @@ OWNER_MERGE_REQUIRED   = YES
 MERGE                  = NO
 ```
 
-Every number below is copied from a CI run on the exact pushed head. Nothing
-here is a report of intent.
+Every number below is copied from a CI run, not from intent.
+
+**Terminology, corrected by the pre-merge preflight.** This gate's CI runs on
+the `pull_request` event, and `actions/checkout` therefore checks out
+`refs/pull/68/merge` — the *merge result*, not the raw feature head. Wording
+that called this "exact head CI" was inaccurate and is corrected throughout to
+`PR_MERGE_REF_CI`. `RAW_HEAD_CI = NOT_SEPARATELY_PROVED`: no job checked out
+`9828ee6` by itself. See `02-CANONICAL-PREFLIGHT.md` §7 for the checkout log
+proof.
 
 ---
 
@@ -22,7 +29,8 @@ here is a report of intent.
 | Authorized baseline | `6ac58b5c002abfb8627011ac6cec51d4b04cdb3b` — checked at Stage 0, **matched** |
 | Commits | `605698d` schema + migration · `ac072e2` implementation + tests + contract |
 | Draft PR | [#68](https://github.com/fekyigo-rgb/SIMPROK/pull/68) |
-| CI run | `31161604685`, head `ac072e244a180575bd554dcaa7661a81cb32a06c` |
+| CI run | `31162221889` (event `pull_request`, PR head `9828ee6`) |
+| Actually checked out | `refs/pull/68/merge` = `6d46d3a` — "Merge `9828ee6` into `bbba3d0`" |
 
 `C:\SIMPROK` (dirty) and `C:\Users\asus\SIMPROK-RUNTIME\source-main-canonical`
 (runtime source) were never touched. Nothing was staged with `git add .`.
@@ -44,7 +52,14 @@ not name. Owner decides whether a rebase is wanted before merge.
 
 ---
 
-## 2. CI — exact head, all green
+## 2. CI — PR merge-ref, all green
+
+`PR_MERGE_REF_CI = GREEN` · `RAW_HEAD_CI = NOT_SEPARATELY_PROVED`
+
+The jobs below ran on `6d46d3a` (`9828ee6` merged into `bbba3d0`), which is
+what the `pull_request` event checks out. That is *stronger* than a raw-head
+run for merge safety — it is the merge result, tested against current `main` —
+but it is not the same claim, so it is not called one.
 
 | Job | Result | Evidence |
 |---|---|---|
@@ -85,10 +100,17 @@ PRODUCTION_DATA_WRITE      = 0
 
 - `prisma migrate deploy` was **never** run against `simprok_db`.
 - No manual SQL against any production database.
-- No production credential was used for anything.
+- No production write credential was used for anything.
 - CI's `Official Safe E2E` applies it via `prisma migrate reset --force
   --skip-seed` against a throwaway `postgres:16.4` service container, then
   seeds and fingerprints it.
+- The later pre-merge preflight touched canonical `simprok_db` **read-only**,
+  through the dedicated `simprok_readonly_audit` role (no INSERT/UPDATE/DELETE/
+  CREATE privilege) inside `BEGIN TRANSACTION READ ONLY` with
+  `default_transaction_read_only=on`. It confirmed canonical is still
+  pre-RM-03C: enum, both columns, both indexes, the FK and all five CHECKs are
+  ABSENT, and `_prisma_migrations` has no RM-03C record and zero
+  failed/unfinished migrations. See `02-CANONICAL-PREFLIGHT.md`.
 
 Name parity with the datamodel was proved offline with
 `prisma migrate diff --from-empty --to-schema-datamodel --script`: every object
@@ -116,8 +138,10 @@ The suite also creates one **valid** private row first and deletes it, so those
 six rejections are proved to be the constraints doing their job rather than a
 broken fixture failing for an unrelated reason.
 
-`ADD CONSTRAINT` validated every pre-existing row without error, which is the
-backfill's own proof: no historical row was unclassifiable.
+`ADD CONSTRAINT` validated every pre-existing row in that CI database without
+error. That is a statement about the CI database, not about canonical
+production — the canonical claim is proved separately and directly in
+`02-CANONICAL-PREFLIGHT.md` (`basic_prices` = 0 rows, `n_tup_ins = 0`).
 
 ---
 
@@ -211,7 +235,8 @@ REGRESSION                                = PASS
 SAFE_E2E                                  = PASS (450/450, residual PASS)
 
 DRAFT_PR                                  = OPEN (#68)
-CI_EXACT_HEAD                             = GREEN
+PR_MERGE_REF_CI                           = GREEN
+RAW_HEAD_CI                               = NOT_SEPARATELY_PROVED
 
 ONE_LIVE_RAB_ROW                          = NOT_YET_CLAIMED
 GOLDEN_THREAD_CLOSED                      = NO

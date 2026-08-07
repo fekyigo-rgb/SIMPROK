@@ -18,10 +18,11 @@
 -- meanings, unchanged by this migration.
 --
 -- This migration is purely ADDITIVE: two new nullable-then-defaulted columns,
--- one FK, three indexes, five CHECK constraints. No existing column is
--- dropped, retyped, renamed or rewritten; no existing constraint is altered;
--- no existing migration is edited. Reversing it (dropping the two columns and
--- the enum) restores exactly today's behaviour.
+-- one FK, TWO new indexes (one unique provenance index on sourceImportRowId
+-- and one workspaceId+assetScope composite index), and five CHECK constraints.
+-- No existing column is dropped, retyped, renamed or rewritten; no existing
+-- constraint is altered; no existing migration is edited. Reversing it
+-- (dropping the two columns and the enum) restores exactly today's behaviour.
 
 -- CreateEnum
 CREATE TYPE "BasicPriceAssetScope" AS ENUM ('WORKSPACE_PRIVATE', 'SIMPROK_CATALOG');
@@ -35,9 +36,9 @@ ALTER TABLE "basic_prices"
   ADD COLUMN "assetScope" "BasicPriceAssetScope",
   ADD COLUMN "sourceImportRowId" UUID;
 
--- Backfill: EVERY pre-RM-03C row is SIMPROK_CATALOG, and this is provable
--- rather than assumed:
+-- Backfill: classify every pre-RM-03C row as SIMPROK_CATALOG.
 --
+-- REPOSITORY LINEAGE (supporting argument, not proof of canonical data):
 --   1. The only production creator of a BasicPrice row is
 --      reality-intake/price-submission-review.service.ts (the ACCEPT branch of
 --      the curation review), which always sets sourceSubmissionId. The only
@@ -49,9 +50,23 @@ ALTER TABLE "basic_prices"
 --      all — no column, no constraint, no writer. A row that no code could
 --      mark private cannot retroactively have been private.
 --
--- So this is not a default chosen to satisfy Prisma; it is the only truthful
--- classification available for rows that came exclusively from the curation
--- pipeline. WORKSPACE_PRIVATE is never backfilled onto any historical row.
+--   Repository writer lineage alone cannot prove what is actually IN canonical
+--   data: it says nothing about an old script, an earlier runtime, a manual
+--   SQL operation, or an untracked procedure.
+--
+-- CANONICAL EVIDENCE (read-only pre-merge preflight, 2026-08-07, simprok_db):
+--   public.basic_prices contained ZERO rows, and pg_stat_user_tables reported
+--   n_tup_ins = 0 — no row has ever been inserted into this table on the
+--   canonical cluster. Every related table (price_submissions, reviews,
+--   decisions, submission audits, publication audits, import batches/rows) was
+--   likewise empty. LEGACY_ROW_COUNT = 0, AMBIGUOUS_COUNT = 0.
+--
+--   So on current canonical data this UPDATE is operationally VACUOUS: it will
+--   affect 0 rows. It is retained because it must stay correct for any
+--   environment that does hold pre-RM-03C rows, and because the classification
+--   belongs in the diff rather than hidden in a column default.
+--
+-- WORKSPACE_PRIVATE is never backfilled onto any historical row.
 UPDATE "basic_prices" SET "assetScope" = 'SIMPROK_CATALOG' WHERE "assetScope" IS NULL;
 
 -- Now enforce the column. The default is SIMPROK_CATALOG so that any writer
