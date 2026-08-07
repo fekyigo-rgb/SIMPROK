@@ -23,6 +23,15 @@ describe('Project AHSP whole-version selection (e2e)', () => {
   let rabOnlyToken: string;
   let unassignedToken: string;
   let crossToken: string;
+  /** RM-03B: holds AHSP_MANAGE, for the AHSP/version write-side tenant proofs. */
+  let manageToken: string;
+  /** RM-03B: the User row id (not the Account) — AHSP.createdByUserId is an FK to User. */
+  let manageUserId: string;
+  /**
+   * RM-03B remediation: a SECOND real User, used as the spoof target. A forged
+   * `body.userId` naming this User must never become the recorded actor.
+   */
+  let otherRealUserId: string;
   let regionId: string;
   let otherRegionId: string;
   let boqItemId: string;
@@ -34,6 +43,15 @@ describe('Project AHSP whole-version selection (e2e)', () => {
   let wholeResolutionIds: string[] = [];
   let expiredPriceId: string;
   let ahspId: string;
+  // RM-03B — workspace-private AHSP fixtures.
+  // TEST_ONLY_SYNTHETIC_FIXTURE=YES  PRODUCTION_TRUTH=NO
+  let privateVersionId: string;
+  let privateBoqItemId: string;
+  let nullWorkspacePrivateVersionId: string;
+  let archivedPrivateVersionId: string;
+  let supersededPrivateVersionId: string;
+  let foreignPrivateVersionId: string;
+  let foreignPrivateAhspId: string;
   const createdPermissionIds: string[] = [];
 
   const login = async (email: string) => {
@@ -130,7 +148,9 @@ describe('Project AHSP whole-version selection (e2e)', () => {
     });
     boqItemId = item.id;
 
-    const ensurePermission = async (code: 'RAB_DRAFT_EDIT' | 'AHSP_VIEW') => {
+    const ensurePermission = async (
+      code: 'RAB_DRAFT_EDIT' | 'AHSP_VIEW' | 'AHSP_MANAGE',
+    ) => {
       const existing = await prisma.permission.findUnique({ where: { code } });
       if (existing) return existing;
       const created = await prisma.permission.create({
@@ -141,6 +161,10 @@ describe('Project AHSP whole-version selection (e2e)', () => {
     };
     const rabPermission = await ensurePermission('RAB_DRAFT_EDIT');
     const ahspPermission = await ensurePermission('AHSP_VIEW');
+    // RM-03B: AHSP_MANAGE is kept on a SEPARATE role so the existing
+    // "requires both RAB_DRAFT_EDIT and AHSP_VIEW" fixtures keep their exact
+    // permission shape and the write-side tests cannot weaken them.
+    const ahspManagePermission = await ensurePermission('AHSP_MANAGE');
     const makeRole = (suffix: string, ws: string, permissionIds: string[]) =>
       prisma.role.create({
         data: {
@@ -152,15 +176,20 @@ describe('Project AHSP whole-version selection (e2e)', () => {
           },
         },
       });
-    const [bothRole, ahspRole, rabRole, crossRole] = await Promise.all([
-      makeRole('BOTH', workspaceId, [rabPermission.id, ahspPermission.id]),
-      makeRole('AHSP', workspaceId, [ahspPermission.id]),
-      makeRole('RAB', workspaceId, [rabPermission.id]),
-      makeRole('CROSS', otherWorkspaceId, [
-        rabPermission.id,
-        ahspPermission.id,
-      ]),
-    ]);
+    const [bothRole, ahspRole, rabRole, crossRole, manageRole] =
+      await Promise.all([
+        makeRole('BOTH', workspaceId, [rabPermission.id, ahspPermission.id]),
+        makeRole('AHSP', workspaceId, [ahspPermission.id]),
+        makeRole('RAB', workspaceId, [rabPermission.id]),
+        makeRole('CROSS', otherWorkspaceId, [
+          rabPermission.id,
+          ahspPermission.id,
+        ]),
+        makeRole('MANAGE', workspaceId, [
+          ahspPermission.id,
+          ahspManagePermission.id,
+        ]),
+      ]);
 
     const createActor = async (
       suffix: string,
@@ -180,7 +209,7 @@ describe('Project AHSP whole-version selection (e2e)', () => {
           membershipRoles: { create: [{ roleId }] },
         },
       });
-      await prisma.user.create({
+      const user = await prisma.user.create({
         data: {
           workspaceMembershipId: membership.id,
           workspaceId: ws,
@@ -199,7 +228,16 @@ describe('Project AHSP whole-version selection (e2e)', () => {
           },
         });
       }
-      return { id: account.id, email, membershipId: membership.id };
+      // `userId` is the User row, NOT the Account. AHSP.createdByUserId is an
+      // FK to User, and the /ahsp routes carry no ProjectAccessGuard, so the
+      // controller falls back to body.userId — passing an Account id there is
+      // a foreign-key violation, not an authorization question.
+      return {
+        id: account.id,
+        email,
+        membershipId: membership.id,
+        userId: user.id,
+      };
     };
 
     const actor = await createActor('actor', workspaceId, bothRole.id, true);
@@ -227,7 +265,15 @@ describe('Project AHSP whole-version selection (e2e)', () => {
       crossRole.id,
       false,
     );
+    const manager = await createActor(
+      'manage',
+      workspaceId,
+      manageRole.id,
+      true,
+    );
     accountId = actor.id;
+    manageUserId = manager.userId;
+    otherRealUserId = actor.userId;
     await prisma.projectAssignment.create({
       data: {
         workspaceMembershipId: actor.membershipId,
@@ -237,14 +283,21 @@ describe('Project AHSP whole-version selection (e2e)', () => {
         status: 'ASSIGNED',
       },
     });
-    [token, ahspOnlyToken, rabOnlyToken, unassignedToken, crossToken] =
-      await Promise.all([
-        login(actor.email),
-        login(ahspOnly.email),
-        login(rabOnly.email),
-        login(unassigned.email),
-        login(cross.email),
-      ]);
+    [
+      token,
+      ahspOnlyToken,
+      rabOnlyToken,
+      unassignedToken,
+      crossToken,
+      manageToken,
+    ] = await Promise.all([
+      login(actor.email),
+      login(ahspOnly.email),
+      login(rabOnly.email),
+      login(unassigned.email),
+      login(cross.email),
+      login(manager.email),
+    ]);
 
     const region = await prisma.region.create({
       data: { code: `${tag}-REG`, name: `${tag} Region`, isActive: true },
@@ -346,6 +399,100 @@ describe('Project AHSP whole-version selection (e2e)', () => {
         priceData(lineageCatalog.id, '400.00', 'EXPIRING'),
       ],
     });
+
+    // ---- RM-03B workspace-private AHSP fixtures ----
+    // Every one of these is DRAFT and was never nationally published. They
+    // exist to prove that a workspace can use its OWN analysis, and that the
+    // additive private route cannot be walked into another tenant's data.
+    const createPrivateAhsp = async (
+      suffix: string,
+      overrides: Record<string, unknown> = {},
+    ) =>
+      prisma.aHSP.create({
+        data: {
+          workspaceId,
+          workType: `${tag} ${suffix}`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: `${tag}-${suffix}`,
+          ownershipType: 'USER_ASSET',
+          ...overrides,
+        },
+      });
+    const createPrivateVersion = async (
+      ownerAhspId: string,
+      versionWorkspaceId: string | null,
+      status: 'DRAFT' | 'SUPERSEDED' = 'DRAFT',
+    ) =>
+      prisma.aHSPVersion.create({
+        data: {
+          ahspId: ownerAhspId,
+          workspaceId: versionWorkspaceId,
+          versionNumber: 1,
+          status,
+          effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+          outputUnit: 'M1',
+          resources: {
+            create: [
+              {
+                resourceId: `${tag} Current`,
+                resourceType: 'LABOR',
+                coefficient: '2.000000',
+                baseUnit: 'OH',
+              },
+            ],
+          },
+        },
+      });
+
+    const privateAhsp = await createPrivateAhsp('Private');
+    privateVersionId = (await createPrivateVersion(privateAhsp.id, workspaceId)).id;
+
+    // A USER_ASSET with a NULL workspace. ownershipType defaults to USER_ASSET
+    // even on the Official Repository create branch, so this row is the exact
+    // shape that a loosely-written private predicate would leak to every tenant.
+    const nullWorkspaceAhsp = await createPrivateAhsp('NullWs', {
+      workspaceId: null,
+    });
+    nullWorkspacePrivateVersionId = (
+      await createPrivateVersion(nullWorkspaceAhsp.id, null)
+    ).id;
+
+    const archivedAhsp = await createPrivateAhsp('Archived', {
+      archivedAt: new Date('2026-08-02T00:00:00.000Z'),
+    });
+    archivedPrivateVersionId = (
+      await createPrivateVersion(archivedAhsp.id, workspaceId)
+    ).id;
+
+    const supersededAhsp = await createPrivateAhsp('Superseded');
+    supersededPrivateVersionId = (
+      await createPrivateVersion(supersededAhsp.id, workspaceId, 'SUPERSEDED')
+    ).id;
+
+    const foreignAhsp = await createPrivateAhsp('Foreign', {
+      workspaceId: otherWorkspaceId,
+    });
+    foreignPrivateAhspId = foreignAhsp.id;
+    foreignPrivateVersionId = (
+      await createPrivateVersion(foreignAhsp.id, otherWorkspaceId)
+    ).id;
+
+    const privateStructure = await prisma.boqStructure.findFirstOrThrow({
+      where: { projectId, name: WORKING_DRAFT_STRUCTURE_NAME },
+    });
+    privateBoqItemId = (
+      await prisma.boqItem.create({
+        data: {
+          boqStructureId: privateStructure.id,
+          wbsCode: '9.1',
+          name: `${tag} Private Item`,
+          itemType: 'WORK_ITEM',
+          quantity: '3',
+          unit: 'M1',
+        },
+      })
+    ).id;
   }, 40_000);
 
   afterAll(async () => {
@@ -370,11 +517,17 @@ describe('Project AHSP whole-version selection (e2e)', () => {
     await prisma.resourceCatalog.deleteMany({
       where: { code: { startsWith: tag } },
     });
+    // RM-03B: scoped by tag rather than by the single `ahspId`, so the
+    // private-asset fixtures (including the null-workspace and foreign-workspace
+    // ones) are removed too. The outer Safe E2E harness fingerprints every
+    // table, so any row left behind here fails the run.
     await prisma.aHSPResource.deleteMany({
-      where: { ahspVersion: { ahspId } },
+      where: { ahspVersion: { ahsp: { workType: { startsWith: tag } } } },
     });
-    await prisma.aHSPVersion.deleteMany({ where: { ahspId } });
-    await prisma.aHSP.deleteMany({ where: { id: ahspId } });
+    await prisma.aHSPVersion.deleteMany({
+      where: { ahsp: { workType: { startsWith: tag } } },
+    });
+    await prisma.aHSP.deleteMany({ where: { workType: { startsWith: tag } } });
     await prisma.region.deleteMany({
       where: { id: { in: [regionId, otherRegionId] } },
     });
@@ -675,5 +828,248 @@ describe('Project AHSP whole-version selection (e2e)', () => {
       .get(`/projects/${projectId}/ahsp-occurrences/${wholeOccurrenceId}`)
       .set('Authorization', `Bearer ${crossToken}`)
       .expect(404);
+  });
+
+  /**
+   * RM-03B — workspace-private AHSP.
+   *
+   * Owner law: a workspace may use its OWN AHSP immediately, with no national
+   * publication, no verifier, no publisher and no second human. The catalog
+   * route is untouched, and the private route must not become a way to reach
+   * another tenant's data.
+   */
+  describe('RM-03B workspace-private AHSP', () => {
+    const listEligible = (bearer: string) =>
+      request(app.getHttpServer())
+        .get(
+          `/projects/${projectId}/ahsp-occurrences/eligible-versions?businessPricingAsOfDate=${asOfDate}`,
+        )
+        .set('Authorization', `Bearer ${bearer}`);
+
+    it('offers the workspace its own never-published AHSP, labelled as private', async () => {
+      const response = await listEligible(token).expect(200);
+      const found = response.body.find(
+        (version: any) => version.id === privateVersionId,
+      );
+      expect(found).toBeDefined();
+      expect(found.origin).toBe('WORKSPACE_PRIVATE');
+    });
+
+    it('still labels a nationally published version as catalog, not private', async () => {
+      const response = await listEligible(token).expect(200);
+      const catalog = response.body.find(
+        (version: any) => version.id === wholeVersionId,
+      );
+      expect(catalog).toBeDefined();
+      expect(catalog.origin).toBe('SIMPROK_CATALOG');
+    });
+
+    it('does NOT leak a null-workspace USER_ASSET through the private route', async () => {
+      // ownershipType defaults to USER_ASSET even for the Official Repository,
+      // so this row is the exact shape a loose private predicate would expose
+      // to every tenant at once. It is unpublished, so it must be invisible.
+      const response = await listEligible(token).expect(200);
+      expect(
+        response.body.some(
+          (version: any) => version.id === nullWorkspacePrivateVersionId,
+        ),
+      ).toBe(false);
+    });
+
+    it('excludes an archived or superseded private asset', async () => {
+      const response = await listEligible(token).expect(200);
+      const ids = response.body.map((version: any) => version.id);
+      expect(ids).not.toContain(archivedPrivateVersionId);
+      expect(ids).not.toContain(supersededPrivateVersionId);
+    });
+
+    it('does not show one workspace the private AHSP of another', async () => {
+      const response = await listEligible(token).expect(200);
+      expect(
+        response.body.some(
+          (version: any) => version.id === foreignPrivateVersionId,
+        ),
+      ).toBe(false);
+    });
+
+    it('binds the workspace own private AHSP to a BOQ item and resolves its resources', async () => {
+      const response = await request(app.getHttpServer())
+        .post(
+          `/projects/${projectId}/ahsp-occurrences/boq-items/${privateBoqItemId}/select-ahsp`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          ahspVersionId: privateVersionId,
+          businessPricingAsOfDate: asOfDate,
+          referenceRegionId: regionId,
+          idempotencyKey: `${tag}-private-bind`,
+        })
+        .expect(201);
+
+      expect(response.body.ahspVersionId).toBe(privateVersionId);
+      expect(response.body.resourceResolutions).toHaveLength(1);
+      const [resolution] = response.body.resourceResolutions;
+      expect(resolution.status).toBe('RESOLVED');
+      // Priced from a PUBLISHED catalog Basic Price — private AHSP, public price.
+      expect(resolution.adaptedPriceValue).toBe('100');
+      expect(resolution.ahspCoefficient).toBe('2');
+
+      const item = await prisma.boqItem.findUniqueOrThrow({
+        where: { id: privateBoqItemId },
+      });
+      expect(item.workingOccurrenceId).toBe(response.body.id);
+    });
+
+    it('refuses to bind another workspace private AHSP even with a valid session', async () => {
+      // The picker never offered it; the server must refuse it anyway. The
+      // list and this revalidation are built from the same predicate precisely
+      // so this cannot diverge.
+      await request(app.getHttpServer())
+        .post(
+          `/projects/${projectId}/ahsp-occurrences/boq-items/${privateBoqItemId}/select-ahsp`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          ahspVersionId: foreignPrivateVersionId,
+          businessPricingAsOfDate: asOfDate,
+          referenceRegionId: regionId,
+          idempotencyKey: `${tag}-foreign-bind`,
+        })
+        .expect(404);
+    });
+
+    it('refuses to bind a null-workspace unpublished USER_ASSET', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/projects/${projectId}/ahsp-occurrences/boq-items/${privateBoqItemId}/select-ahsp`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          ahspVersionId: nullWorkspacePrivateVersionId,
+          businessPricingAsOfDate: asOfDate,
+          referenceRegionId: regionId,
+          idempotencyKey: `${tag}-nullws-bind`,
+        })
+        .expect(404);
+    });
+
+    it('refuses to bind an archived private AHSP', async () => {
+      await request(app.getHttpServer())
+        .post(
+          `/projects/${projectId}/ahsp-occurrences/boq-items/${privateBoqItemId}/select-ahsp`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          ahspVersionId: archivedPrivateVersionId,
+          businessPricingAsOfDate: asOfDate,
+          referenceRegionId: regionId,
+          idempotencyKey: `${tag}-archived-bind`,
+        })
+        .expect(404);
+    });
+
+    it('ignores a forged workspaceId in the AHSP create body', async () => {
+      // The trusted workspace context wins. Previously the body value won, so
+      // a member of one workspace could plant an asset into another — and with
+      // private eligibility keyed on that column, plant it into their pricing.
+      const response = await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          workspaceId: otherWorkspaceId,
+          userId: manageUserId,
+          workType: `${tag} Forged`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: `${tag}-forged`,
+        })
+        .expect(201);
+
+      expect(response.body.workspaceId).toBe(workspaceId);
+      expect(response.body.workspaceId).not.toBe(otherWorkspaceId);
+    });
+
+    /**
+     * RM-03B remediation — ACTOR PROVENANCE.
+     *
+     * The workspace was already trusted, so this was never a cross-tenant
+     * leak. The damage was to the audit trail: an authenticated User A could
+     * post `userId = <User B>` and the database would record User B as the
+     * author of a fact A created. In SIMPROK provenance is load-bearing truth.
+     */
+    it('records the AUTHENTICATED user as creator, not a forged body.userId', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          // A real, existing User in this same workspace — the spoof target.
+          userId: otherRealUserId,
+          workType: `${tag} ActorSpoof`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: `${tag}-actor-spoof`,
+        })
+        .expect(201);
+
+      const created = await prisma.aHSP.findUniqueOrThrow({
+        where: { id: response.body.id },
+      });
+      expect(created.createdByUserId).toBe(manageUserId);
+      expect(created.createdByUserId).not.toBe(otherRealUserId);
+
+      // The audit row must tell the same story — no split identity where the
+      // persisted creator and the audit actor disagree.
+      const audit = await prisma.aHSPAuditLog.findFirstOrThrow({
+        where: { ahspId: created.id, action: 'AHSPCreated' },
+      });
+      expect(audit.who).toBe(manageUserId);
+      expect(audit.who).not.toBe(otherRealUserId);
+    });
+
+    it('creates successfully with NO userId in the body at all', async () => {
+      // The canonical request carries no actor field; the server supplies it.
+      const response = await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          workType: `${tag} NoActorField`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: `${tag}-no-actor-field`,
+        })
+        .expect(201);
+
+      const created = await prisma.aHSP.findUniqueOrThrow({
+        where: { id: response.body.id },
+      });
+      expect(created.createdByUserId).toBe(manageUserId);
+    });
+
+    it('refuses to append a version to another workspace AHSP', async () => {
+      // A version is what gets bound and priced, so this was a write into
+      // another tenant's pricing surface. Reported as not-found so the
+      // endpoint never confirms an id the caller may not see.
+      await request(app.getHttpServer())
+        .post(`/ahsp/${foreignPrivateAhspId}/versions`)
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          outputUnit: 'M1',
+          userId: manageUserId,
+          effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+          resources: [
+            {
+              resourceId: `${tag} Current`,
+              resourceType: 'LABOR',
+              coefficient: 1,
+              baseUnit: 'OH',
+            },
+          ],
+        })
+        .expect(404);
+    });
   });
 });

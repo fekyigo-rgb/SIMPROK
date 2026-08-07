@@ -44,6 +44,15 @@ export class AhspVersionService {
     const ahsp = await this.prisma.aHSP.findUnique({ where: { id: ahspId } });
     if (!ahsp) throw new NotFoundException('AHSP not found');
 
+    // RM-03B tenant scope: this lookup was by id ALONE, so any workspace that
+    // knew an AHSP id could append a version to it. A version is the thing that
+    // gets bound and priced, so that is a write into another tenant's pricing
+    // surface. A foreign AHSP is reported as not-found rather than forbidden,
+    // so the endpoint never confirms the existence of ids the caller cannot see.
+    if (ahsp.workspaceId !== null && ahsp.workspaceId !== data.workspaceId) {
+      throw new NotFoundException('AHSP not found');
+    }
+
     const lastVersion = await this.prisma.aHSPVersion.findFirst({
       where: { ahspId },
       orderBy: { versionNumber: 'desc' }

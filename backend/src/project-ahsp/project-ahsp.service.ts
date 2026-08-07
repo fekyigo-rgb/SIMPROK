@@ -12,6 +12,10 @@ import {
   ProjectStatus,
 } from '@prisma/client';
 import { createHash } from 'crypto';
+import {
+  buildEligibleAhspVersionWhere,
+  classifyAhspOrigin,
+} from './ahsp-eligibility.policy';
 import { resolveAhspResourcePrice } from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { parseDateOnlyUtc } from '../common/date-only.util';
@@ -50,31 +54,23 @@ export class ProjectAhspService {
 
   async listEligibleVersions(workspaceId: string, asOfRaw: string) {
     const asOf = parseDateOnlyUtc(asOfRaw, 'businessPricingAsOfDate');
-    return this.prisma.aHSPVersion.findMany({
-      where: {
-        status: AhspVersionStatus.PUBLISHED,
-        effectiveDate: { lte: asOf },
-        outputUnit: { not: null },
-        resources: { some: {} },
-        ahsp: {
-          is: {
-            deletedAt: null,
-            OR: [{ workspaceId }, { workspaceId: null }],
-          },
-        },
-        AND: [
-          { OR: [{ expiredDate: null }, { expiredDate: { gte: asOf } }] },
-          { OR: [{ workspaceId }, { workspaceId: null }] },
-        ],
-      },
+    const versions = await this.prisma.aHSPVersion.findMany({
+      where: buildEligibleAhspVersionWhere(workspaceId, asOf),
       select: {
         id: true,
         versionNumber: true,
+        status: true,
         outputUnit: true,
         effectiveDate: true,
         expiredDate: true,
         ahsp: {
-          select: { id: true, workType: true, methodName: true },
+          select: {
+            id: true,
+            workType: true,
+            methodName: true,
+            workspaceId: true,
+            ownershipType: true,
+          },
         },
         _count: { select: { resources: true } },
       },
@@ -84,6 +80,19 @@ export class ProjectAhspService {
         { versionNumber: 'desc' },
       ],
     });
+
+    // RM-03B: every row carries its own origin so the picker can tell a user
+    // "this is your own AHSP" vs "this is the SIMPROK catalog" without the
+    // frontend having to re-derive tenancy rules it should not own.
+    return versions.map(({ ahsp, ...version }) => ({
+      ...version,
+      origin: classifyAhspOrigin({ status: version.status, ahsp }, workspaceId),
+      ahsp: {
+        id: ahsp.id,
+        workType: ahsp.workType,
+        methodName: ahsp.methodName,
+      },
+    }));
   }
 
   listActiveRegions() {
@@ -166,30 +175,14 @@ export class ProjectAhspService {
       });
       if (!region) throw new NotFoundException('REFERENCE_REGION_NOT_FOUND');
 
+      // RM-03B: the SAME predicate the picker used. Building both from one
+      // function is the security property, not a tidiness one — if the list
+      // could offer a version this revalidation would not accept (or worse,
+      // vice versa), the gap between them would be the privilege escalation.
       const version = await tx.aHSPVersion.findFirst({
         where: {
+          ...buildEligibleAhspVersionWhere(input.workspaceId, asOf),
           id: input.ahspVersionId,
-          status: AhspVersionStatus.PUBLISHED,
-          effectiveDate: { lte: asOf },
-          outputUnit: { not: null },
-          ahsp: {
-            is: {
-              deletedAt: null,
-              OR: [
-                { workspaceId: input.workspaceId },
-                { workspaceId: null },
-              ],
-            },
-          },
-          AND: [
-            { OR: [{ expiredDate: null }, { expiredDate: { gte: asOf } }] },
-            {
-              OR: [
-                { workspaceId: input.workspaceId },
-                { workspaceId: null },
-              ],
-            },
-          ],
         },
         include: { resources: { orderBy: { id: 'asc' } } },
       });
