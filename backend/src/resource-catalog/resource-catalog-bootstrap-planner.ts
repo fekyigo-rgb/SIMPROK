@@ -26,7 +26,48 @@ import { Prisma, type PrismaClient, type ResourceType } from '@prisma/client';
 // ============================================================
 
 export const PLAN_CONTRACT_VERSION = 'RM02C1B_BOOTSTRAP_PLAN_V1';
+
+/**
+ * The legacy RM-02C1b acceptance token. Its literal text names simprok_test,
+ * and that is exactly right for what it authorizes. It remains the DEFAULT
+ * expectation of applyBootstrapPlan, so every pre-RM-03D0 caller — the
+ * acceptance CLI wrapper, the unit spec and the acceptance E2E — keeps its
+ * behaviour byte-for-byte, including rejecting any other string.
+ */
 export const CONFIRMATION_TOKEN = 'APPLY_RM02C1B_TO_SIMPROK_TEST';
+
+/**
+ * RM-03D0 — the canonical-reference token.
+ *
+ * WHY THIS EXISTS. The planning, identity, disposition and provenance law in
+ * this module is target-agnostic by design, and RM-03D0 reuses it verbatim
+ * against canonical `simprok_db`. What was NOT target-agnostic was the apply
+ * gate: it demanded a token whose meaning is "apply to simprok_test". Passing
+ * that string while writing to canonical would have made the audit trail say
+ * something untrue, so the coupling is removed rather than worked around.
+ *
+ * This is ADDITIVE ONLY. No planning behaviour changes, no default is
+ * loosened, and the two authorities can never substitute for one another:
+ * each caller must name the token it expects, and the supplied token must
+ * equal that exact expectation.
+ */
+export const CANONICAL_REFERENCE_CONFIRMATION_TOKEN =
+  'APPLY_RM03D0_CANONICAL_REFERENCES';
+
+/**
+ * The closed set of confirmation authorities this module recognises.
+ *
+ * A caller may only ever *select* one of these; it can never invent a token
+ * pair of its own. Without this allow-list, `expectedConfirmationToken` would
+ * be a footgun: a caller could pass the same arbitrary string as both the
+ * expectation and the supplied token and the gate would degrade into a
+ * tautology. Membership is checked before equality, so an unknown expectation
+ * fails closed even when the two strings match.
+ */
+export const KNOWN_CONFIRMATION_TOKENS: readonly string[] = [
+  CONFIRMATION_TOKEN,
+  CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
+];
 
 export const EXPECTED_SOURCE_SHA256 =
   '46B3F354A74A10BDB26316802D922B7D6C34AA109579FA55A3A9EA5D61504B61';
@@ -561,6 +602,19 @@ export function computePlanHash(plan: BootstrapPlan): string {
 export interface ApplyParams {
   expectedPlanSha256: string;
   confirmationToken: string;
+  /**
+   * RM-03D0 — which confirmation authority this call is claiming.
+   *
+   * Omitted means the legacy RM-02C1b acceptance authority, so every
+   * pre-RM-03D0 caller is unchanged and still fail-closed. A canonical caller
+   * must name CANONICAL_REFERENCE_CONFIRMATION_TOKEN explicitly; there is no
+   * permissive value, no default that widens anything, and no environment
+   * sniffing inside this planning module.
+   *
+   * Must be a member of KNOWN_CONFIRMATION_TOKENS — an unrecognised
+   * expectation is refused even if `confirmationToken` matches it.
+   */
+  expectedConfirmationToken?: string;
   workspaceId: string;
   inventory: CanonicalInventory;
   inventoryPath: string;
@@ -603,10 +657,26 @@ export class BootstrapApplyError extends Error {
 }
 
 export async function applyBootstrapPlan(prisma: PrismaClient, params: ApplyParams): Promise<ApplyResult> {
-  if (params.confirmationToken !== CONFIRMATION_TOKEN) {
+  // RM-03D0: which authority is being claimed. Defaulting to the legacy
+  // acceptance token keeps every pre-RM-03D0 caller identical — including its
+  // rejection of any other string.
+  const expectedConfirmationToken =
+    params.expectedConfirmationToken ?? CONFIRMATION_TOKEN;
+
+  // Membership first, equality second. An unrecognised expectation must fail
+  // closed even when the caller supplies a matching string, otherwise the
+  // gate would collapse into "any token equals itself".
+  if (!KNOWN_CONFIRMATION_TOKENS.includes(expectedConfirmationToken)) {
+    throw new BootstrapApplyError(
+      'STOP_UNKNOWN_CONFIRMATION_AUTHORITY',
+      'Refusing to apply: expectedConfirmationToken is not a recognised confirmation authority.',
+    );
+  }
+
+  if (params.confirmationToken !== expectedConfirmationToken) {
     throw new BootstrapApplyError(
       'STOP_MISSING_CONFIRMATION_TOKEN',
-      `Refusing to apply: confirmationToken must be exactly "${CONFIRMATION_TOKEN}".`,
+      `Refusing to apply: confirmationToken must be exactly "${expectedConfirmationToken}".`,
     );
   }
 
