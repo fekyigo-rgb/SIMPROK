@@ -18,6 +18,7 @@ import type { CreateAhspDto, UpdateAhspDto } from './services/ahsp.service';
 import { AhspVersionService } from './services/ahsp-version.service';
 import type { CreateAhspVersionDto } from './services/ahsp-version.service';
 import { AhspSnapshotService } from './services/ahsp-snapshot.service';
+import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
 import { OwnershipType } from '@prisma/client';
 
 /**
@@ -34,7 +35,24 @@ export class AhspController {
     private readonly ahspService: AhspService,
     private readonly ahspVersionService: AhspVersionService,
     private readonly ahspSnapshotService: AhspSnapshotService,
+    private readonly trustedActor: TrustedAhspActorService,
   ) {}
+
+  /**
+   * RM-03B remediation — the ONE way this controller learns who is acting.
+   *
+   * Every mutation below records provenance (createdBy/approvedBy/archivedBy/
+   * deletedBy/ownershipTransferredBy, plus an audit `who`). Each used to read
+   * `body.userId`, so an authenticated User A could attribute their own change
+   * to User B. The workspace was already trusted, so nothing leaked across
+   * tenants — but the audit trail lied, and provenance is the product here.
+   *
+   * `body.userId` is now never read for authority on any route. Where the
+   * request type still carries the field it is inert, and a test proves it.
+   */
+  private resolveActor(request: any): Promise<string> {
+    return this.trustedActor.resolveActorUserId(request.workspaceContext);
+  }
 
   // ─────────────────────────────────────────────
   // AHSP CRUD
@@ -50,11 +68,6 @@ export class AhspController {
   @Permissions('AHSP_MANAGE')
   async create(@Req() request: any, @Body() body: CreateAhspDto) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
-    const userId: string = request.projectAccess?.userId ?? body.userId;
-
-    if (!userId) {
-      throw new BadRequestException('userId diperlukan untuk membuat AHSP');
-    }
 
     // RM-03B tenant trust: the workspace comes from the guard-verified context
     // ONLY. This read `body.workspaceId ?? workspaceId`, so a client-supplied
@@ -67,9 +80,16 @@ export class AhspController {
     if (!workspaceId) {
       throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
     }
+    const userId = await this.resolveActor(request);
+
+    // Both authority fields are destructured OUT of the body before it is
+    // spread, so a forged value cannot survive even if the spread order were
+    // later changed by accident. Relying on "the explicit key wins because it
+    // comes second" is a property of this line, not of the contract.
+    const { userId: _clientActor, workspaceId: _clientWorkspace, ...safeBody } = body;
 
     return this.ahspService.create({
-      ...body,
+      ...safeBody,
       workspaceId,
       userId,
     });
@@ -87,10 +107,11 @@ export class AhspController {
   async update(
     @Req() request: any,
     @Param('id') id: string,
-    @Body() body: UpdateAhspDto & { reason: string; userId: string },
+    @Body() body: UpdateAhspDto & { reason: string; userId?: string },
   ) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
-    return this.ahspService.update(id, body, body.userId, body.reason, workspaceId);
+    const actorUserId = await this.resolveActor(request);
+    return this.ahspService.update(id, body, actorUserId, body.reason, workspaceId);
   }
 
   @Delete(':id')
@@ -98,10 +119,11 @@ export class AhspController {
   async delete(
     @Req() request: any,
     @Param('id') id: string,
-    @Body() body: { userId: string; reason: string },
+    @Body() body: { userId?: string; reason: string },
   ) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
-    return this.ahspService.delete(id, body.userId, body.reason, workspaceId);
+    const actorUserId = await this.resolveActor(request);
+    return this.ahspService.delete(id, actorUserId, body.reason, workspaceId);
   }
 
   @Post(':id/archive')
@@ -109,10 +131,11 @@ export class AhspController {
   async archive(
     @Req() request: any,
     @Param('id') id: string,
-    @Body() body: { userId: string; reason: string },
+    @Body() body: { userId?: string; reason: string },
   ) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
-    return this.ahspService.archive(id, body.userId, body.reason, workspaceId);
+    const actorUserId = await this.resolveActor(request);
+    return this.ahspService.archive(id, actorUserId, body.reason, workspaceId);
   }
 
   @Post(':id/approve')
@@ -120,10 +143,11 @@ export class AhspController {
   async approve(
     @Req() request: any,
     @Param('id') id: string,
-    @Body() body: { userId: string },
+    @Body() body: { userId?: string },
   ) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
-    return this.ahspService.approve(id, body.userId, workspaceId);
+    const actorUserId = await this.resolveActor(request);
+    return this.ahspService.approve(id, actorUserId, workspaceId);
   }
 
   @Post(':id/transfer')
@@ -131,10 +155,11 @@ export class AhspController {
   async transfer(
     @Req() request: any,
     @Param('id') id: string,
-    @Body() body: { userId: string; reason: string; targetOwnershipType: OwnershipType },
+    @Body() body: { userId?: string; reason: string; targetOwnershipType: OwnershipType },
   ) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
-    return this.ahspService.transfer(id, body.targetOwnershipType, body.userId, body.reason, workspaceId);
+    const actorUserId = await this.resolveActor(request);
+    return this.ahspService.transfer(id, body.targetOwnershipType, actorUserId, body.reason, workspaceId);
   }
 
   // ─────────────────────────────────────────────
@@ -155,9 +180,12 @@ export class AhspController {
     if (!workspaceId) {
       throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
     }
+    const userId = await this.resolveActor(request);
+    const { userId: _clientActor, workspaceId: _clientWorkspace, ...safeBody } = body;
     return this.ahspVersionService.createVersion(ahspId, {
-      ...body,
+      ...safeBody,
       workspaceId,
+      userId,
     });
   }
 
@@ -170,12 +198,13 @@ export class AhspController {
   async createSnapshot(
     @Req() request: any,
     @Param('versionId') versionId: string,
-    @Body() body: { userId: string },
+    @Body() body: { userId?: string },
   ) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
     if (!workspaceId) {
       throw new BadRequestException('workspaceId diperlukan untuk membuat AHSP Snapshot');
     }
-    return this.ahspSnapshotService.createSnapshot(versionId, workspaceId, body.userId);
+    const actorUserId = await this.resolveActor(request);
+    return this.ahspSnapshotService.createSnapshot(versionId, workspaceId, actorUserId);
   }
 }

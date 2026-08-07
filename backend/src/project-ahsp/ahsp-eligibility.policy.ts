@@ -70,10 +70,13 @@ const sharedCompleteness = (asOf: Date) => ({
 });
 
 /**
- * The catalog branch — byte-for-byte the pre-RM-03B predicate. Public/catalog
- * behaviour must not change: same PUBLISHED requirement, same
- * `deletedAt: null`, same `OR: [{workspaceId}, {workspaceId: null}]` tenant
- * clause on both the AHSP and the version.
+ * The catalog branch — semantically the pre-RM-03B predicate. The text was
+ * restructured (it now lives in a builder and sits inside an OR), so this is
+ * NOT a byte-identical copy; what is preserved is the meaning, and the unit
+ * spec asserts each condition individually rather than trusting the shape:
+ * same PUBLISHED requirement, same `deletedAt: null`, same
+ * `OR: [{workspaceId}, {workspaceId: null}]` tenant clause on both the AHSP
+ * and the version.
  */
 const catalogBranch = (
   workspaceId: string,

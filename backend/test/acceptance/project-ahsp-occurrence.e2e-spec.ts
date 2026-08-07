@@ -27,6 +27,11 @@ describe('Project AHSP whole-version selection (e2e)', () => {
   let manageToken: string;
   /** RM-03B: the User row id (not the Account) — AHSP.createdByUserId is an FK to User. */
   let manageUserId: string;
+  /**
+   * RM-03B remediation: a SECOND real User, used as the spoof target. A forged
+   * `body.userId` naming this User must never become the recorded actor.
+   */
+  let otherRealUserId: string;
   let regionId: string;
   let otherRegionId: string;
   let boqItemId: string;
@@ -268,6 +273,7 @@ describe('Project AHSP whole-version selection (e2e)', () => {
     );
     accountId = actor.id;
     manageUserId = manager.userId;
+    otherRealUserId = actor.userId;
     await prisma.projectAssignment.create({
       data: {
         workspaceMembershipId: actor.membershipId,
@@ -982,6 +988,64 @@ describe('Project AHSP whole-version selection (e2e)', () => {
 
       expect(response.body.workspaceId).toBe(workspaceId);
       expect(response.body.workspaceId).not.toBe(otherWorkspaceId);
+    });
+
+    /**
+     * RM-03B remediation — ACTOR PROVENANCE.
+     *
+     * The workspace was already trusted, so this was never a cross-tenant
+     * leak. The damage was to the audit trail: an authenticated User A could
+     * post `userId = <User B>` and the database would record User B as the
+     * author of a fact A created. In SIMPROK provenance is load-bearing truth.
+     */
+    it('records the AUTHENTICATED user as creator, not a forged body.userId', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          // A real, existing User in this same workspace — the spoof target.
+          userId: otherRealUserId,
+          workType: `${tag} ActorSpoof`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: `${tag}-actor-spoof`,
+        })
+        .expect(201);
+
+      const created = await prisma.aHSP.findUniqueOrThrow({
+        where: { id: response.body.id },
+      });
+      expect(created.createdByUserId).toBe(manageUserId);
+      expect(created.createdByUserId).not.toBe(otherRealUserId);
+
+      // The audit row must tell the same story — no split identity where the
+      // persisted creator and the audit actor disagree.
+      const audit = await prisma.aHSPAuditLog.findFirstOrThrow({
+        where: { ahspId: created.id, action: 'AHSPCreated' },
+      });
+      expect(audit.who).toBe(manageUserId);
+      expect(audit.who).not.toBe(otherRealUserId);
+    });
+
+    it('creates successfully with NO userId in the body at all', async () => {
+      // The canonical request carries no actor field; the server supplies it.
+      const response = await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          workType: `${tag} NoActorField`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: `${tag}-no-actor-field`,
+        })
+        .expect(201);
+
+      const created = await prisma.aHSP.findUniqueOrThrow({
+        where: { id: response.body.id },
+      });
+      expect(created.createdByUserId).toBe(manageUserId);
     });
 
     it('refuses to append a version to another workspace AHSP', async () => {

@@ -53,9 +53,13 @@ NEW_ORIGIN_MAIN_SHA    = 99eff0019f84fe737234bd5fe8586475fd9794ce
 | `backend/src/project-ahsp/ahsp-eligibility.policy.spec.ts` | new (test) |
 | `backend/src/project-ahsp/project-ahsp.service.ts` | modified — both predicates now share one builder; list returns `origin` |
 | `backend/src/project-ahsp/project-ahsp.service.spec.ts` | modified — Q-01 restated, Q-01b/Q-01c added |
-| `backend/src/ahsp/ahsp.controller.ts` | modified — workspace trust (create + version) |
+| `backend/src/ahsp/ahsp.controller.ts` | modified — workspace trust (create + version) **and server-derived actor on all 8 mutations** |
+| `backend/src/ahsp/ahsp.controller.spec.ts` | modified — actor-spoof proofs; one defect-locking test restated |
+| `backend/src/ahsp/ahsp.module.ts` | modified — registers the actor resolver |
+| `backend/src/ahsp/services/trusted-ahsp-actor.service.ts` | new — server-derived actor |
+| `backend/src/ahsp/services/trusted-ahsp-actor.service.spec.ts` | new (test) |
 | `backend/src/ahsp/services/ahsp-version.service.ts` | modified — parent-AHSP tenant check |
-| `backend/test/acceptance/project-ahsp-occurrence.e2e-spec.ts` | modified — private fixtures + 11 cases |
+| `backend/test/acceptance/project-ahsp-occurrence.e2e-spec.ts` | modified — private fixtures + 11 cases + 2 actor-provenance cases |
 | `frontend/src/utils/ahspOriginDisplay.ts` | new |
 | `frontend/src/utils/ahspOriginDisplay.test.ts` | new (test) |
 | `frontend/src/pages/RabWorkspacePage.tsx` | modified — origin label + honest private note |
@@ -75,14 +79,19 @@ delivered by PR #65 modified.**
 
 ```
 npm test -- --runInBand
-  Test Suites: 68 passed, 68 total
-  Tests:       825 passed, 825 total
+  Test Suites: 69 passed, 69 total
+  Tests:       845 passed, 845 total
 ```
 
 Baseline measured on this same worktree before any RM-03B edit:
-**808 (67 suites)**. → **808 → 825 (+17). Zero regressions.**
+**808 (67 suites)**.
 
-Notably the three tenant-trust fixes broke **no** existing test.
+- RM-03B private-asset slice: **808 → 825 (+17)**
+- Actor-provenance remediation: **825 → 845 (+20)**
+
+**Net 808 → 845 (+37). Zero regressions.** The tenant-trust fixes broke no
+existing test; the actor fix required restating exactly one test that had been
+asserting the defective behaviour.
 
 ### Frontend — **PASS**
 
@@ -185,6 +194,100 @@ all removed. The harness's whole-database fingerprint diff is the backstop.
 
 ---
 
+## 4b. ACTOR PROVENANCE REMEDIATION (found in final review)
+
+### The defect
+
+Every AHSP mutation persists provenance — `createdByUserId`,
+`approvedByUserId`, `archivedByUserId`, `deletedByUserId`,
+`ownershipTransferredByUserId`, plus an `AHSPAuditLog.who` row. **All of them
+took their actor from `body.userId`**, a value the browser sends.
+
+```
+Authenticated User A
+  → POST /ahsp with body.userId = <User B>
+  → AHSP created in the correct workspace (tenant scope was already trusted)
+  → createdByUserId and audit.who both say User B
+```
+
+```
+ACTOR_PROVENANCE_SPOOF   = YES   (before this remediation)
+CROSS_WORKSPACE_LEAK     = NO    (workspace was already server-derived)
+```
+
+This was never a data leak. It was worse in a different way: the audit trail
+recorded something untrue, and an untrue provenance record is indistinguishable
+from a true one afterwards.
+
+**Root cause.** `ahsp.controller.ts` read `request.projectAccess?.userId ?? body.userId`
+on create, and `body.userId` directly on update / delete / archive / approve /
+transfer / version-create / snapshot. The `/ahsp` routes carry no
+`ProjectAccessGuard`, so `request.projectAccess` is always undefined there and
+the fallback was in fact the only path. There is no global `ValidationPipe` and
+the DTOs are plain interfaces, so nothing stripped the field either.
+
+Honest note: the RM-03B tenant-trust fix had already closed the *workspace*
+inversion on two of these routes, but left the *actor* on all of them. The
+earlier fixture repair even passed a `userId` in the body, which is exactly the
+shape this remediation now proves inert.
+
+### The fix
+
+`backend/src/ahsp/services/trusted-ahsp-actor.service.ts` derives the actor
+server-side, walking the canonical identity chain and nothing else:
+
+```
+JWT Account
+  → ACTIVE WorkspaceMembership for the selected workspace   (guard-verified)
+    → ACTIVE User profile belonging to that membership
+      → trusted User.id
+```
+
+Predicates asserted: `User.status = ACTIVE`, `membership.status = ACTIVE`,
+`membership.account.status = ACTIVE`, and the membership's own `workspaceId`
+re-checked against the context, so a context whose two halves disagree cannot
+resolve. `User.workspaceMembershipId` is `@unique`, so the actor is
+deterministic — never a choice among candidates.
+
+Pattern B (resolve inside the mutation path) was chosen over Pattern A
+(populate `userId` in `PermissionsGuard`) because `request.workspaceContext`
+already carries `membershipId`, and changing the guard would alter the context
+shape for every route in the application. Pattern B is bounded to the AHSP
+module.
+
+**Fail-closed.** `NO_TRUSTED_USER_PROFILE → 403`, no mutation. There is no
+fallback to `body.userId`, no attribution to the Account id, no "any User in
+the workspace", and no actorless record.
+
+Both authority fields are also destructured OUT of the body before it is
+spread, so a forged value cannot survive even if spread order were later
+changed by accident.
+
+```
+CLIENT_SUPPLIED_USER_ID_AUTHORITATIVE = NO
+PERSISTED_CREATOR_EQUALS_AUTHENTICATED_USER = YES
+AUDIT_ACTOR_EQUALS_AUTHENTICATED_USER = YES
+```
+
+### Tests
+
+- `trusted-ahsp-actor.service.spec.ts` — the ACTIVE chain, the workspace
+  cross-check, no `id:` lookup a body could steer, fail-closed on a missing
+  profile, rejection of unusable contexts, and a guarded Prisma proxy proving
+  only the `user` model is read.
+- `ahsp.controller.spec.ts` — a spoofed actor is ignored on **all eight**
+  mutations; the resolver is called with the workspace context; and when no
+  trusted actor resolves, the writer is never reached.
+- E2E — authenticated manager posts `body.userId = <another real User>`;
+  persisted `createdByUserId` **and** `AHSPAuditLog.who` both equal the
+  authenticated user. Plus a canonical create with no `userId` field at all.
+
+One existing controller test asserted the snapshot was attributed to
+`body.userId`; it was locking the defect in place and is restated. Its
+workspace assertion is preserved unchanged.
+
+---
+
 ## 5. Security / tenant verification
 
 | Check | Result | How |
@@ -196,7 +299,7 @@ all removed. The harness's whole-database fingerprint diff is the backstop.
 | Private branch excludes SUPERSEDED/ARCHIVED versions | PASS | unit |
 | Private branch never requires PUBLISHED | PASS | unit |
 | Predicate binds to the caller's workspace, not a captured one | PASS | unit (second workspace) |
-| Catalog branch byte-identical | PASS | unit |
+| `CATALOG_ELIGIBILITY_SEMANTICS_PRESERVED` | YES | unit |
 | List and revalidation share one builder | PASS | by construction + E2E |
 | Null-workspace `USER_ASSET` not listed | PASS | E2E (CI) |
 | Null-workspace `USER_ASSET` not bindable | PASS | E2E (CI) |
@@ -215,7 +318,7 @@ all removed. The harness's whole-database fingerprint diff is the backstop.
 | Claim | Result |
 |---|---|
 | `PUBLIC_ELIGIBILITY_PREDICATE_REGRESSION` | **NO** — `publicEligibilityWhere()` untouched |
-| `PUBLIC_CATALOG_VISIBILITY_REGRESSION` | **NO** — catalog branch byte-identical, asserted by unit test |
+| `PUBLIC_CATALOG_VISIBILITY_REGRESSION` | **NO** — `CATALOG_ELIGIBILITY_SEMANTICS_PRESERVED=YES`, asserted by unit test |
 | `PUBLIC_REVIEW_PUBLICATION_REGRESSION` | **NO** — no review/publication file modified |
 | Basic Price writer inventory | **UNCHANGED** — `UNREGISTERED_BASIC_PRICE_WRITER_COUNT = 0`; no writer added |
 | PR #65 persisted re-proof | **UNCHANGED** — no PR #65 file modified |
@@ -261,9 +364,15 @@ CROSS_WORKSPACE_NEGATIVE_E2E  = added (CI-proven)
 PUBLIC_PATH_REGRESSION        = NO
 COST_KERNEL_E2E               = unchanged + private-AHSP resolution asserted
 PERSISTED_RECOMPUTATION_E2E   = unchanged from PR #65
-BACKEND_TEST_COUNT            = 808 → 825
+ACTOR_PROVENANCE_FIX          = PASS
+CLIENT_SUPPLIED_USER_ID_AUTHORITATIVE = NO
+PERSISTED_CREATOR_TRUSTED     = YES
+AUDIT_ACTOR_TRUSTED           = YES
+ACTOR_SPOOF_NEGATIVE_E2E      = PASS
+CATALOG_ELIGIBILITY_SEMANTICS_PRESERVED = YES
+BACKEND_TEST_COUNT            = 808 → 845
 FRONTEND_TEST_COUNT           = 145 → 150
-SAFE_E2E_COUNT                = 407 → 418 (CI, PASS)
+SAFE_E2E_COUNT                = 407 → 420 (CI)
 E2E_DATABASE_IDENTITY_GATE    = PASS
 E2E_RESIDUAL_COUNT            = 0
 CI_STATUS                     = ALL GREEN (backend, frontend, Official Safe E2E)

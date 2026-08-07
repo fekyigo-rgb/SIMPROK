@@ -25,7 +25,7 @@
 | `PUBLICATION / REVIEW / VERIFICATION` | national catalog only, internal back-office | untouched, and never shown to general users |
 | `GENERAL_USER_REVIEW_PUBLISH_UI=FORBIDDEN` | — | honoured; no back-office control added |
 | `SECOND_HUMAN_ACTOR_FOR_PRIVATE_USE=NOT_REQUIRED` | — | honoured; the private AHSP path needs no second human |
-| `PUBLIC_CATALOG_POLICY_REGRESSION=FORBIDDEN` | — | proven by test; catalog predicate byte-identical |
+| `PUBLIC_CATALOG_POLICY_REGRESSION=FORBIDDEN` | — | proven by test; `CATALOG_ELIGIBILITY_SEMANTICS_PRESERVED=YES` |
 
 **A private asset is never called "published" anywhere in this gate** — not in
 the database, not in the API, not in the UI wording.

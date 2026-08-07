@@ -26,7 +26,13 @@ const branches = (workspaceId = WS) => {
   return { where, catalog, priv };
 };
 
-describe('buildEligibleAhspVersionWhere — catalog route is unchanged', () => {
+/**
+ * CATALOG_ELIGIBILITY_SEMANTICS_PRESERVED: the catalog predicate was moved into
+ * a builder and now sits inside an OR, so its text is not byte-identical to the
+ * pre-RM-03B version. Each condition is therefore asserted individually below,
+ * rather than the shape being trusted.
+ */
+describe('buildEligibleAhspVersionWhere — catalog route semantics are unchanged', () => {
   it('still requires the exact PUBLISHED status for a catalog version', () => {
     expect(branches().catalog.status).toBe(AhspVersionStatus.PUBLISHED);
   });
