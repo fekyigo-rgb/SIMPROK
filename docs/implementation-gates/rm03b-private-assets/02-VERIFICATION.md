@@ -128,8 +128,36 @@ OLD_CLUSTER_WRITE_COUNT = 0   (no write, no DDL, no reset)
 E2E_DATABASE_IDENTITY_GATE / E2E_RESULT / E2E_RESIDUAL_COUNT → see §9 (CI)
 ```
 
-11 new E2E cases were added (expected **407 → 418**); their runtime behaviour is
-proven by CI, not by claim.
+11 new E2E cases were added (**407 → 418**); their runtime behaviour is proven
+by CI, not by claim.
+
+### CI run 1 (commit `e41391b`) — 417/418, one failure, **caused by the test fixture**
+
+```
+Backend Build and Unit    PASS
+Frontend Test and Build   PASS
+Official Safe E2E         FAIL — Tests: 1 failed, 417 passed, 418 total
+                                 RESIDUAL_RESULT: PASS
+```
+
+**All ten tenant-isolation cases passed**, including every cross-workspace
+negative, the null-workspace leak guard, the archived/superseded exclusions, and
+the foreign-version-append refusal.
+
+The single failure was `ignores a forged workspaceId in the AHSP create body`,
+which returned **500** instead of 201 — and the fault was the fixture's, not the
+code's. The `/ahsp` routes carry no `ProjectAccessGuard`, so
+`request.projectAccess` is undefined and the controller falls back to
+`body.userId`. The test passed an **Account** id, but `AHSP.createdByUserId` is a
+foreign key to **User** — a constraint violation, not an authorization outcome.
+
+Fixed in a follow-up commit (never an amend) by having the actor factory return
+the User row id and passing that. Note this also means the assertion it makes —
+that the trusted workspace wins over a forged body field — had not yet actually
+been exercised; run 2 is the first run that proves it.
+
+`RESIDUAL_RESULT: PASS` on the failing run too: the widened tag-scoped cleanup
+removed every private, null-workspace, archived, superseded and foreign fixture.
 
 Cleanup was widened from a single `ahspId` to `workType: { startsWith: tag }` so
 the new private, null-workspace, archived, superseded and foreign fixtures are

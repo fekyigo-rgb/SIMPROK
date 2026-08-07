@@ -25,7 +25,8 @@ describe('Project AHSP whole-version selection (e2e)', () => {
   let crossToken: string;
   /** RM-03B: holds AHSP_MANAGE, for the AHSP/version write-side tenant proofs. */
   let manageToken: string;
-  let manageAccountId: string;
+  /** RM-03B: the User row id (not the Account) — AHSP.createdByUserId is an FK to User. */
+  let manageUserId: string;
   let regionId: string;
   let otherRegionId: string;
   let boqItemId: string;
@@ -203,7 +204,7 @@ describe('Project AHSP whole-version selection (e2e)', () => {
           membershipRoles: { create: [{ roleId }] },
         },
       });
-      await prisma.user.create({
+      const user = await prisma.user.create({
         data: {
           workspaceMembershipId: membership.id,
           workspaceId: ws,
@@ -222,7 +223,16 @@ describe('Project AHSP whole-version selection (e2e)', () => {
           },
         });
       }
-      return { id: account.id, email, membershipId: membership.id };
+      // `userId` is the User row, NOT the Account. AHSP.createdByUserId is an
+      // FK to User, and the /ahsp routes carry no ProjectAccessGuard, so the
+      // controller falls back to body.userId — passing an Account id there is
+      // a foreign-key violation, not an authorization question.
+      return {
+        id: account.id,
+        email,
+        membershipId: membership.id,
+        userId: user.id,
+      };
     };
 
     const actor = await createActor('actor', workspaceId, bothRole.id, true);
@@ -257,7 +267,7 @@ describe('Project AHSP whole-version selection (e2e)', () => {
       true,
     );
     accountId = actor.id;
-    manageAccountId = manager.id;
+    manageUserId = manager.userId;
     await prisma.projectAssignment.create({
       data: {
         workspaceMembershipId: actor.membershipId,
@@ -962,7 +972,7 @@ describe('Project AHSP whole-version selection (e2e)', () => {
         .set('x-workspace-id', workspaceId)
         .send({
           workspaceId: otherWorkspaceId,
-          userId: manageAccountId,
+          userId: manageUserId,
           workType: `${tag} Forged`,
           methodType: 'MANUAL',
           locationType: 'GENERAL',
@@ -984,7 +994,7 @@ describe('Project AHSP whole-version selection (e2e)', () => {
         .set('x-workspace-id', workspaceId)
         .send({
           outputUnit: 'M1',
-          userId: manageAccountId,
+          userId: manageUserId,
           effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
           resources: [
             {
