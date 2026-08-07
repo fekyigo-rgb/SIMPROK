@@ -34,7 +34,20 @@ export class BasicPricePublicationService {
    */
   async getPublicationQueue(workspaceId: string): Promise<PublicationQueueItem[]> {
     const rows = await this.prisma.basicPrice.findMany({
-      where: { workspaceId, status: 'UNPUBLISHED', verificationStatus: 'VERIFIED' },
+      // RM-03C: assetScope is asserted POSITIVELY so a workspace-private price
+      // can never appear in a publication queue. The result set for catalog
+      // rows is provably unchanged — every pre-RM-03C row is SIMPROK_CATALOG,
+      // and a private row can never reach UNPUBLISHED+VERIFIED anyway (it is
+      // never submission-born, so it never passes through the ACCEPT branch
+      // that writes VERIFIED). This is the belt to that structural brace:
+      // a publisher must never be shown, let alone asked about, an asset whose
+      // owner never asked for national publication.
+      where: {
+        workspaceId,
+        assetScope: 'SIMPROK_CATALOG',
+        status: 'UNPUBLISHED',
+        verificationStatus: 'VERIFIED',
+      },
       orderBy: { createdAt: 'asc' },
       include: { resource: true, region: true },
     });

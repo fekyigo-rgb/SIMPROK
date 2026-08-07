@@ -1,5 +1,10 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, ProjectStatus } from '@prisma/client';
+import {
+  BasicPriceAssetScope,
+  BasicPriceImportRowResolutionStatus,
+  Prisma,
+  ProjectStatus,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   RabLifecyclePolicyService,
@@ -219,15 +224,19 @@ export class RabKernelPersistenceService {
         const basicPrice = await tx.basicPrice.findFirst({
           where: {
             id: resolution.selectedBasicPriceId,
-            ...this.eligibility.publicEligibilityWhere(),
-            OR: [{ workspaceId: params.workspaceId }, { workspaceId: null }],
+            // RM-03C: same shared predicate as the picker and the AHSP
+            // re-verification — publicly published catalog price, OR this
+            // workspace's own private price. Never a widened single predicate.
+            ...this.eligibility.usableWhere(params.workspaceId),
           },
           select: {
             id: true,
             value: true,
             effectiveDate: true,
             validUntil: true,
+            assetScope: true,
             sourceSubmissionId: true,
+            sourceImportRowId: true,
             resourceId: true,
             workspaceId: true,
             organizationId: true,
@@ -269,7 +278,7 @@ export class RabKernelPersistenceService {
           );
         }
 
-        await this.assertTraceableProvenance(tx, basicPrice);
+        await this.assertTraceableProvenance(tx, basicPrice, params.workspaceId);
 
         resources.push({
           ahspResourceId: resolution.ahspResourceId,
@@ -441,13 +450,28 @@ export class RabKernelPersistenceService {
     tx: Prisma.TransactionClient,
     basicPrice: {
       id: string;
+      assetScope: BasicPriceAssetScope;
       sourceSubmissionId: string | null;
+      sourceImportRowId: string | null;
       resourceId: string;
       workspaceId: string | null;
       organizationId: string | null;
+      regionId: string | null;
     },
+    trustedWorkspaceId: string,
   ): Promise<void> {
     const INCOMPLETE = RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE;
+
+    // RM-03C: which chain must be proved is decided by the row's OWN
+    // ownership column — never by the absence of a submission id, which would
+    // be an inference from a hole rather than from a fact.
+    if (basicPrice.assetScope === BasicPriceAssetScope.WORKSPACE_PRIVATE) {
+      return this.assertTraceablePrivateProvenance(
+        tx,
+        basicPrice,
+        trustedWorkspaceId,
+      );
+    }
 
     if (basicPrice.sourceSubmissionId === null) {
       throw new ConflictException(INCOMPLETE);
@@ -518,6 +542,114 @@ export class RabKernelPersistenceService {
     }
 
     if (verifierAccountId === publisherAccountId) {
+      throw new ConflictException(INCOMPLETE);
+    }
+  }
+
+  /**
+   * RM-03C §3.3 for WORKSPACE_PRIVATE prices.
+   *
+   * A private price is usable WITHOUT a verifier, a publisher, or a second
+   * human — so demanding the catalog chain here would make the Owner law
+   * unimplementable. What it must still prove is that the number is TRACEABLE:
+   * every private price is materialized from a human-resolved
+   * BasicPriceImportRow, which carries the real workbook evidence
+   * (SHA-256, sheet, row, cell addresses, raw cell value) and belongs to a
+   * batch that carries the real source identity (vendor/organization, region,
+   * effective date). Same provenance subsystem as the catalog chain, one link
+   * shorter, because there is no PriceSubmission in between.
+   *
+   * Every link is bound by exact id/workspace/organization/region equality,
+   * never inferred, and the whole chain fails closed with the SAME single
+   * reason code as the catalog chain — a consumer must not be able to tell
+   * from the failure which asset family a price belonged to.
+   *
+   * No re-authorization of the resolving human's CURRENT status: authority was
+   * exercised once, when the row was resolved and kept private. A member who
+   * has since left does not retroactively unmake a price their workspace has
+   * been using — the same principle the catalog chain applies to a historical
+   * verifier/publisher.
+   */
+  private async assertTraceablePrivateProvenance(
+    tx: Prisma.TransactionClient,
+    basicPrice: {
+      id: string;
+      sourceSubmissionId: string | null;
+      sourceImportRowId: string | null;
+      resourceId: string;
+      workspaceId: string | null;
+      organizationId: string | null;
+      regionId: string | null;
+    },
+    trustedWorkspaceId: string,
+  ): Promise<void> {
+    const INCOMPLETE = RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE;
+
+    // Ownership, re-proved at consumption time against the trusted server
+    // context rather than trusted from the row that the query just returned.
+    if (
+      basicPrice.workspaceId === null ||
+      basicPrice.workspaceId !== trustedWorkspaceId
+    ) {
+      throw new ConflictException(INCOMPLETE);
+    }
+    // A private asset is never submission-born. If it carried one it would be
+    // sitting in the national curation queue, which is precisely what
+    // "private" must not mean.
+    if (basicPrice.sourceSubmissionId !== null) {
+      throw new ConflictException(INCOMPLETE);
+    }
+    if (basicPrice.sourceImportRowId === null) {
+      throw new ConflictException(INCOMPLETE);
+    }
+
+    const importRow = await tx.basicPriceImportRow.findFirst({
+      where: { id: basicPrice.sourceImportRowId },
+      select: {
+        resourceCatalogId: true,
+        resolutionStatus: true,
+        batch: {
+          select: {
+            workspaceId: true,
+            organizationId: true,
+            regionId: true,
+            effectiveDate: true,
+            sourceOrigin: true,
+            sourceSha256: true,
+          },
+        },
+      },
+    });
+    if (!importRow) {
+      throw new ConflictException(INCOMPLETE);
+    }
+
+    // The evidence must genuinely be evidence FOR THIS price: same resource
+    // identity, same tenant, same region. An id match alone says nothing about
+    // whether the row was ever about the same thing.
+    if (importRow.resourceCatalogId !== basicPrice.resourceId) {
+      throw new ConflictException(INCOMPLETE);
+    }
+    if (
+      importRow.resolutionStatus !== BasicPriceImportRowResolutionStatus.RESOLVED
+    ) {
+      throw new ConflictException(INCOMPLETE);
+    }
+    if (
+      importRow.batch.workspaceId !== basicPrice.workspaceId ||
+      importRow.batch.organizationId !== basicPrice.organizationId ||
+      importRow.batch.regionId !== basicPrice.regionId
+    ) {
+      throw new ConflictException(INCOMPLETE);
+    }
+    // The batch must carry the real workbook and the real source identity.
+    // SIMPROK never invents a source, a region, or an effective date; an
+    // evidence record missing any of them is not evidence.
+    if (
+      !importRow.batch.sourceSha256 ||
+      !importRow.batch.sourceOrigin ||
+      importRow.batch.effectiveDate === null
+    ) {
       throw new ConflictException(INCOMPLETE);
     }
   }

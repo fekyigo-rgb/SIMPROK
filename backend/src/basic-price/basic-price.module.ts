@@ -12,6 +12,8 @@ import { RealityIntakeModule } from '../reality-intake/reality-intake.module';
 import { BasicPriceImportLookupController } from './basic-price-import-lookup.controller';
 import { BasicPriceImportLookupService } from './basic-price-import-lookup.service';
 import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping-candidates.service';
+import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
+import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.service';
 
 @Module({
   imports: [PrismaModule, RealityIntakeModule],
@@ -24,6 +26,8 @@ import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping
     BasicPricePublicationService,
     BasicPriceImportLookupService,
     BasicPriceRowMappingCandidatesService,
+    BasicPricePrivateAssetService,
+    TrustedBasicPriceActorService,
   ],
   exports: [BasicPriceService, BasicPriceEligibilityPolicy],
 })

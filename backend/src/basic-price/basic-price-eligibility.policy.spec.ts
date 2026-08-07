@@ -1,6 +1,8 @@
-import { PriceVerificationStatus } from '@prisma/client';
+import { Prisma, PriceVerificationStatus } from '@prisma/client';
 import {
+  BASIC_PRICE_ELIGIBILITY_POLICY_VERSION,
   BasicPriceEligibilityPolicy,
+  buildUsableBasicPriceWhere,
   PUBLIC_BASIC_PRICE_STATUS,
   PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
   EligibilityCandidate,
@@ -25,6 +27,118 @@ describe('BasicPriceEligibilityPolicy', () => {
       expect(PUBLIC_BASIC_PRICE_STATUS).toBe('PUBLISHED');
       expect(PUBLIC_BASIC_PRICE_VERIFICATION_STATUS).toBe(
         PriceVerificationStatus.PUBLISHED,
+      );
+    });
+
+    /**
+     * RM-03C REGRESSION LOCK. `publicEligibilityWhere` is the answer to "is
+     * this row PUBLICLY eligible" — a question about PUBLICATION. RM-03C adds
+     * a second, separate question ("may THIS workspace use this row") and must
+     * not have changed the first one by so much as a key.
+     */
+    it('is untouched by RM-03C: no ownership condition leaked into publication', () => {
+      const where = policy.publicEligibilityWhere();
+      expect(Object.keys(where).sort()).toEqual([
+        'status',
+        'verificationStatus',
+      ]);
+      expect(where).not.toHaveProperty('assetScope');
+      expect(where).not.toHaveProperty('workspaceId');
+      expect(where).not.toHaveProperty('OR');
+    });
+  });
+
+  /**
+   * RM-03C — usable-by-this-workspace: catalog OR own private, two additive
+   * branches, never one widened predicate.
+   */
+  describe('usableWhere / buildUsableBasicPriceWhere', () => {
+    const workspaceId = '20000000-0000-4000-8000-000000000001';
+    const branches = () => {
+      const where = policy.usableWhere(workspaceId);
+      expect(Object.keys(where)).toEqual(['OR']);
+      const or = where.OR as Prisma.BasicPriceWhereInput[];
+      expect(or).toHaveLength(2);
+      return { catalog: or[0] as any, priv: or[1] as any };
+    };
+
+    it('is the same predicate whether built via the class or the pure function', () => {
+      expect(policy.usableWhere(workspaceId)).toEqual(
+        buildUsableBasicPriceWhere(workspaceId),
+      );
+    });
+
+    it('catalog branch preserves the publication predicate and the tenant/global clause exactly', () => {
+      const { catalog } = branches();
+      expect(catalog.status).toBe(PUBLIC_BASIC_PRICE_STATUS);
+      expect(catalog.verificationStatus).toBe(
+        PUBLIC_BASIC_PRICE_VERIFICATION_STATUS,
+      );
+      expect(catalog.OR).toEqual([{ workspaceId }, { workspaceId: null }]);
+      // Publication must not acquire an ownership condition. Narrowing the
+      // catalog by assetScope would change what "published" means.
+      expect(catalog).not.toHaveProperty('assetScope');
+      expect(Object.keys(catalog).sort()).toEqual([
+        'OR',
+        'status',
+        'verificationStatus',
+      ]);
+    });
+
+    it('private branch requires WORKSPACE_PRIVATE and STRICT workspace equality', () => {
+      const { priv } = branches();
+      expect(priv.assetScope).toBe('WORKSPACE_PRIVATE');
+      expect(priv.workspaceId).toBe(workspaceId);
+    });
+
+    it('private branch never matches a null workspace — the cross-tenant leak shape', () => {
+      const { priv } = branches();
+      // Not `OR: [{workspaceId}, {workspaceId: null}]`, which would have made
+      // every null-workspace row eligible for every tenant at once.
+      expect(priv).not.toHaveProperty('OR');
+      expect(JSON.stringify(priv)).not.toContain('"workspaceId":null');
+      expect(priv.workspaceId).not.toBeNull();
+      expect(typeof priv.workspaceId).toBe('string');
+    });
+
+    it('private branch never requires — and never grants — publication', () => {
+      const { priv } = branches();
+      // A private price is usable WITHOUT publication...
+      expect(priv).not.toHaveProperty('status');
+      // ...and a REJECTED verification is still terminal for it.
+      expect(priv.verificationStatus).toEqual({
+        not: PriceVerificationStatus.REJECTED,
+      });
+    });
+
+    it('introduces NO private-vs-catalog precedence', () => {
+      const where = policy.usableWhere(workspaceId);
+      // An OR of two branches states eligibility only. There is no orderBy,
+      // no ranking key, no priority field, and no tie-breaker anywhere in the
+      // predicate — deciding which of two eligible prices wins is an OPEN
+      // OWNER DECISION and is deliberately not answered here.
+      const serialized = JSON.stringify(where);
+      expect(serialized).not.toContain('orderBy');
+      expect(serialized).not.toContain('priority');
+      expect(serialized).not.toContain('rank');
+      expect(Object.keys(where)).toEqual(['OR']);
+    });
+
+    it('the two branches are scoped to the SAME workspace and nothing else', () => {
+      const { catalog, priv } = branches();
+      const other = '20000000-0000-4000-8000-0000000000ff';
+      expect(JSON.stringify({ catalog, priv })).not.toContain(other);
+    });
+
+    it('is deterministic and free of hidden state', () => {
+      expect(policy.usableWhere(workspaceId)).toEqual(
+        policy.usableWhere(workspaceId),
+      );
+    });
+
+    it('carries a stated policy version', () => {
+      expect(BASIC_PRICE_ELIGIBILITY_POLICY_VERSION).toBe(
+        'RM03C_PRIVATE_BASIC_PRICE_ELIGIBILITY_V1',
       );
     });
   });

@@ -3,6 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import * as kernel from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
+import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { ProjectAhspService } from './project-ahsp.service';
 
 describe('ProjectAhspService E1A', () => {
@@ -129,9 +130,13 @@ describe('ProjectAhspService E1A', () => {
         .fn()
         .mockResolvedValue({ canEditDraft: true }),
     };
+    // RM-03C: the REAL policy, not a stub. A hand-written stub could only ever
+    // assert the predicate this spec already believed in — the point of these
+    // tests is that the candidate query and the re-verification query are both
+    // built from the one shipped predicate, so the stub is the wrong tool.
     service = new ProjectAhspService(
       prisma,
-      { publicEligibilityWhere: jest.fn(() => ({ status: 'PUBLISHED', verificationStatus: 'PUBLISHED' })) } as any,
+      new BasicPriceEligibilityPolicy(),
       units as any,
       lifecycle as any,
     );
@@ -323,6 +328,64 @@ describe('ProjectAhspService E1A', () => {
     expect(tx.basicPrice.findMany.mock.calls[0][0].where).not.toHaveProperty(
       'freshnessStatus',
     );
+  });
+
+  /**
+   * RM-03C: the Basic Price candidate set is now two additive branches —
+   * publicly published catalog prices, OR this workspace's own private ones.
+   * The catalog branch is restated here rather than deleted: it still demands
+   * the full publication predicate, and it still carries the tenant/global
+   * clause it always had.
+   */
+  it('RM-03C the candidate query offers catalog-published prices OR this workspace own private prices', async () => {
+    const { tx } = makeSuccessTx();
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    jest.spyOn(kernel, 'resolveAhspResourcePrice').mockReturnValue({
+      projectId: selectionInput.projectId,
+      ahspVersionId: selectionInput.ahspVersionId,
+      ahspResourceId: 'r1',
+      rawResourceRef: 'Resource resource-1',
+      status: 'UNRESOLVED',
+      reasonCodes: ['NO_ELIGIBLE_BASIC_PRICE'],
+      explanation: 'none',
+    });
+
+    await service.selectForBoqItem(selectionInput);
+
+    const where = tx.basicPrice.findMany.mock.calls[0][0].where;
+    const [catalog, priv] = where.OR;
+    expect(catalog.status).toBe('PUBLISHED');
+    expect(catalog.verificationStatus).toBe('PUBLISHED');
+    expect(catalog.OR).toEqual([{ workspaceId }, { workspaceId: null }]);
+    expect(priv.assetScope).toBe('WORKSPACE_PRIVATE');
+    expect(priv.workspaceId).toBe(workspaceId);
+    // Strict equality only — a null-workspace row is never a private candidate.
+    expect(priv).not.toHaveProperty('OR');
+
+    // Technical applicability is asserted OUTSIDE the branch OR, so it binds
+    // both asset families identically. There is no private shortcut past
+    // region, effective date or the validity window.
+    expect(where.regionId).toBe(selectionInput.referenceRegionId);
+    expect(where.effectiveDate).toEqual({
+      lte: new Date('2026-08-04T00:00:00.000Z'),
+    });
+    expect(where.AND).toEqual([
+      { OR: [{ validUntil: null }, { validUntil: { gte: new Date('2026-08-04T00:00:00.000Z') } }] },
+    ]);
+  });
+
+  it('RM-03C introduces no private-vs-catalog precedence in the candidate read', async () => {
+    const { tx } = makeSuccessTx();
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+    await service.selectForBoqItem(selectionInput);
+
+    const call = tx.basicPrice.findMany.mock.calls[0][0];
+    // No ordering at all on the candidate read: cardinality is decided by the
+    // scope-blind kernel (>1 compatible candidate -> NEEDS_REVIEW, a human
+    // decides), never by an implicit "private wins" or "catalog wins".
+    expect(call).not.toHaveProperty('orderBy');
+    expect(JSON.stringify(call.where)).not.toContain('orderBy');
   });
 
   it('E1A-06 uses the real kernel to hold one EXPIRED candidate for review without revalidation', async () => {

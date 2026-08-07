@@ -1043,6 +1043,37 @@ enum PriceFreshnessStatus {
   EXPIRED
 }
 
+/// RM-03C — OWNERSHIP / ASSET SCOPE of a Basic Price. This is the answer to
+/// "WHO OWNS THIS PRICE AND WHERE MAY IT BE USED", and it is the ONLY axis
+/// that answers it.
+///
+/// It is deliberately NOT any of the following, all of which already exist as
+/// their own independent columns and must never be collapsed into this one:
+///   - publication status        -> BasicPrice.status
+///   - verification status       -> BasicPrice.verificationStatus
+///   - where the number came from -> BasicPrice.sourceOrigin / sourceType
+///   - temporal validity          -> effectiveDate / validUntil / freshnessStatus
+///
+/// WORKSPACE_PRIVATE  a workspace's OWN price, made or imported because the
+///                    catalog has nothing suitable. Usable by its owning
+///                    workspace immediately once technically valid. It needs no
+///                    national publication, no verifier, no publisher, and no
+///                    second human. It is NEVER called PUBLISHED, and it never
+///                    enters the SIMPROK catalog review/publication queue.
+/// SIMPROK_CATALOG    a curated national/general price. Reaching public
+///                    eligibility still requires the unchanged internal ladder
+///                    (submission -> review -> ACCEPT -> publication), i.e.
+///                    status = 'PUBLISHED' AND verificationStatus = PUBLISHED.
+///
+/// PRIVATE_USABLE != PUBLISHED. Orthogonality is load-bearing: a
+/// WORKSPACE_PRIVATE price may truthfully carry sourceOrigin = GOVERNMENT,
+/// SUPPLIER, STORE, DISTRIBUTOR or FIELD_REPORT — SOURCE != REPORTER and
+/// OWNERSHIP != SOURCE. There is deliberately no "PRIVATE" source family.
+enum BasicPriceAssetScope {
+  WORKSPACE_PRIVATE
+  SIMPROK_CATALOG
+}
+
 enum PriceSubmissionStatus {
   SUBMITTED
   NEEDS_CORRECTION
@@ -1422,6 +1453,19 @@ model BasicPrice {
   reviewDate          DateTime?
   validUntil          DateTime?
   status              String                  @default("UNPUBLISHED")
+  /// RM-03C. Defaults to SIMPROK_CATALOG so a writer that has not been taught
+  /// about private assets can never accidentally mint one — the fail-closed
+  /// direction is "this belongs to the curated catalog", never "this is
+  /// privately usable".
+  assetScope          BasicPriceAssetScope    @default(SIMPROK_CATALOG)
+  /// RM-03C — the ONLY provenance channel a WORKSPACE_PRIVATE price may have,
+  /// and a channel a SIMPROK_CATALOG price may never use (catalog rows reach
+  /// their import row through sourceSubmission -> PriceSubmission.importRow
+  /// instead). Both directions are enforced by CHECK constraints in the
+  /// migration, so "a private price with no traceable evidence" and "a catalog
+  /// price wearing a private evidence link" are both unrepresentable states,
+  /// not merely unwritten ones.
+  sourceImportRowId   String?                 @unique @db.Uuid
   createdAt           DateTime                @default(now())
   updatedAt           DateTime                @updatedAt
 
@@ -1429,12 +1473,16 @@ model BasicPrice {
   workspace                      Workspace?                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   region                         Region?                         @relation(fields: [regionId], references: [id], onDelete: Restrict)
   sourceSubmission               PriceSubmission?                @relation(fields: [sourceSubmissionId], references: [id])
+  sourceImportRow                BasicPriceImportRow?            @relation("PrivateBasicPriceProvenance", fields: [sourceImportRowId], references: [id], onDelete: Restrict)
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
   publicationAudits              BasicPricePublicationAudit[]
 
   @@index([resourceId])
   @@index([workspaceId])
   @@index([workspaceId, organizationId])
+  // RM-03C: the private eligibility branch always filters on BOTH columns
+  // (strict workspace equality AND assetScope), never on either alone.
+  @@index([workspaceId, assetScope])
   @@index([organizationId])
   @@index([sourceSubmissionId])
   @@index([regionId])
@@ -1614,6 +1662,12 @@ model BasicPriceImportRow {
   resourceCatalog  ResourceCatalog?                     @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
   unitDefinition   UnitDefinition?                      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
   priceSubmission  PriceSubmission?                     @relation(fields: [priceSubmissionId], references: [id], onDelete: Restrict)
+  /// RM-03C: at most one workspace-private BasicPrice may ever be materialized
+  /// from a given import row (enforced by the @unique on the owning side), so
+  /// re-running the private writer is idempotent rather than duplicating a fact.
+  /// This is INDEPENDENT of priceSubmissionId — a row may be kept private AND
+  /// later proposed to the SIMPROK catalog; neither invalidates the other.
+  privateBasicPrice BasicPrice?                         @relation("PrivateBasicPriceProvenance")
   collisionOfRow   BasicPriceImportRow?                 @relation("RowCollision", fields: [collisionOfRowId], references: [id], onDelete: SetNull)
   collidingRows    BasicPriceImportRow[]                @relation("RowCollision")
   resourceMappings BasicPriceImportRowResourceMapping[]

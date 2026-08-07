@@ -20,6 +20,7 @@ const BASIC_PRICE_ID = 'basic-price-fixture';
 const RESOURCE_CATALOG_ID = 'resource-catalog-fixture';
 const OTHER_RESOURCE_CATALOG_ID = 'other-resource-catalog-fixture';
 const SUBMISSION_ID = 'submission-fixture';
+const IMPORT_ROW_ID = 'import-row-fixture';
 const REVIEW_ID = 'review-fixture';
 const VERIFIER_USER_ID = 'verifier-user-fixture';
 const VERIFIER_ACCOUNT_ID = 'verifier-account-fixture';
@@ -76,11 +77,47 @@ function buildBasicPrice(overrides: Partial<Record<string, unknown>> = {}) {
     value: new Prisma.Decimal('100000.00'),
     effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
     validUntil: null as Date | null,
+    assetScope: 'SIMPROK_CATALOG',
     sourceSubmissionId: SUBMISSION_ID,
+    sourceImportRowId: null as string | null,
     resourceId: RESOURCE_CATALOG_ID,
     workspaceId: WORKSPACE_ID,
     organizationId: ORGANIZATION_ID,
     regionId: REGION_ID,
+    ...overrides,
+  };
+}
+
+/**
+ * RM-03C — the same price, owned privately by this workspace. It has NO
+ * submission (and must not), and its only evidence is the import row.
+ */
+function buildPrivateBasicPrice(overrides: Partial<Record<string, unknown>> = {}) {
+  return buildBasicPrice({
+    assetScope: 'WORKSPACE_PRIVATE',
+    sourceSubmissionId: null,
+    sourceImportRowId: IMPORT_ROW_ID,
+    ...overrides,
+  });
+}
+
+/**
+ * RM-03C — the private provenance chain: a human-resolved import row bound to
+ * the same resource, inside a batch bound to the same tenant and region, with
+ * the real workbook hash, source origin and effective date on it.
+ */
+function buildTraceableImportRow(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    resourceCatalogId: RESOURCE_CATALOG_ID,
+    resolutionStatus: 'RESOLVED',
+    batch: {
+      workspaceId: WORKSPACE_ID,
+      organizationId: ORGANIZATION_ID,
+      regionId: REGION_ID,
+      effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+      sourceOrigin: 'STORE',
+      sourceSha256: 'a'.repeat(64),
+    },
     ...overrides,
   };
 }
@@ -113,6 +150,7 @@ interface Fixture {
   boqItem?: ReturnType<typeof buildBoqItem> | null;
   basicPrice?: ReturnType<typeof buildBasicPrice> | null;
   submission?: ReturnType<typeof buildTraceableSubmission> | null;
+  importRow?: ReturnType<typeof buildTraceableImportRow> | null;
   verifierUser?: { membership: { accountId: string; workspaceId: string } | null } | null;
   publicationAudit?: { actorAccountId: string } | null;
   allItemsAfterUpdate?: unknown[];
@@ -205,6 +243,15 @@ function createHarness(fixture: Fixture) {
           fixture.submission === undefined
             ? buildTraceableSubmission()
             : fixture.submission,
+        ),
+    },
+    basicPriceImportRow: {
+      findFirst: jest
+        .fn()
+        .mockResolvedValue(
+          fixture.importRow === undefined
+            ? buildTraceableImportRow()
+            : fixture.importRow,
         ),
     },
     user: {
@@ -603,6 +650,177 @@ describe('RabKernelPersistenceService', () => {
       await expect(call(service)).rejects.toMatchObject({
         message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
       });
+    });
+  });
+
+  /**
+   * RM-03C — a workspace-private Basic Price flows through the SAME Cost
+   * Kernel, with the SAME arithmetic, and proves a DIFFERENT but equally
+   * exacting provenance chain: not "who verified and who published", which a
+   * private asset legitimately has neither of, but "which human-resolved
+   * import row, in which workbook, is this number".
+   */
+  describe('RM-03C — workspace-private Basic Price through the Cost Kernel', () => {
+    const privateFixture = (overrides: Fixture = {}): Fixture =>
+      withNoOtherItems({
+        basicPrice: buildPrivateBasicPrice(),
+        // Deliberately removed: a private price has NO submission chain, and
+        // must not need one. If the private branch ever fell back to the
+        // catalog chain, these nulls would make it fail.
+        submission: null,
+        verifierUser: null,
+        publicationAudit: null,
+        ...overrides,
+      });
+
+    it('persists the same exact result: coefficient 2 x 100000.00, volume 5', async () => {
+      const { service, boqItemUpdate } = createHarness(privateFixture());
+
+      const result = await call(service);
+
+      // Byte-identical to the catalog case at the top of this file. Private
+      // ownership changes WHICH prices are eligible, never HOW they are
+      // calculated — no kernel fork, no convenience conversion.
+      expect(result.unitPrice).toBe('200000.00');
+      expect(result.lineTotal).toBe('1000000.00');
+      expect(result.priceOrigin).toBe('SERVER_COST_KERNEL');
+      expect(boqItemUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('needs no verifier, no publisher, and no publication audit', async () => {
+      const { service, tx } = createHarness(privateFixture());
+      await call(service);
+
+      // Nothing in the catalog chain is even consulted for a private price.
+      expect(tx.priceSubmission.findFirst).not.toHaveBeenCalled();
+      expect(tx.user.findFirst).not.toHaveBeenCalled();
+      expect(tx.basicPricePublicationAudit.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('proves the import-row chain instead, bound by exact id', async () => {
+      const { service, tx } = createHarness(privateFixture());
+      await call(service);
+
+      expect(tx.basicPriceImportRow.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: IMPORT_ROW_ID } }),
+      );
+    });
+
+    it('fails closed when the private price carries no import-row evidence', async () => {
+      const { service, boqItemUpdate } = createHarness(
+        privateFixture({
+          basicPrice: buildPrivateBasicPrice({ sourceImportRowId: null }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the evidence row does not exist', async () => {
+      const { service } = createHarness(privateFixture({ importRow: null }));
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+    });
+
+    it('fails closed when the evidence row is about a DIFFERENT resource', async () => {
+      const { service } = createHarness(
+        privateFixture({
+          importRow: buildTraceableImportRow({
+            resourceCatalogId: OTHER_RESOURCE_CATALOG_ID,
+          }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+    });
+
+    it('fails closed when the evidence row was never resolved by a human', async () => {
+      const { service } = createHarness(
+        privateFixture({
+          importRow: buildTraceableImportRow({ resolutionStatus: 'UNRESOLVED' }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+    });
+
+    it.each([
+      ['workspaceId', OTHER_WORKSPACE_ID],
+      ['organizationId', OTHER_ORGANIZATION_ID],
+      ['regionId', 'other-region-fixture'],
+    ])('fails closed when the evidence batch %s does not match the price', async (field, value) => {
+      const { service } = createHarness(
+        privateFixture({
+          importRow: buildTraceableImportRow({
+            batch: { ...buildTraceableImportRow().batch, [field]: value },
+          }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+    });
+
+    it.each(['sourceSha256', 'sourceOrigin', 'effectiveDate'])(
+      'fails closed when the evidence batch has no %s — evidence must be evidence',
+      async (field) => {
+        const { service } = createHarness(
+          privateFixture({
+            importRow: buildTraceableImportRow({
+              batch: { ...buildTraceableImportRow().batch, [field]: null },
+            }),
+          }),
+        );
+        await expect(call(service)).rejects.toMatchObject({
+          message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+        });
+      },
+    );
+
+    it('fails closed when a private price claims a submission it must not have', async () => {
+      const { service } = createHarness(
+        privateFixture({
+          basicPrice: buildPrivateBasicPrice({ sourceSubmissionId: SUBMISSION_ID }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+    });
+
+    it.each([
+      ['a foreign workspace', OTHER_WORKSPACE_ID],
+      ['a null workspace', null],
+    ])('fails closed when the private price belongs to %s', async (_label, workspaceId) => {
+      const { service, boqItemUpdate } = createHarness(
+        privateFixture({
+          basicPrice: buildPrivateBasicPrice({ workspaceId }),
+        }),
+      );
+      await expect(call(service)).rejects.toMatchObject({
+        message: RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_PROVENANCE_INCOMPLETE,
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+    });
+
+    it('re-reads the selected price under the two-branch eligibility predicate', async () => {
+      const { service, tx } = createHarness(privateFixture());
+      await call(service);
+
+      const where = tx.basicPrice.findFirst.mock.calls[0][0].where;
+      expect(where.id).toBe(BASIC_PRICE_ID);
+      const [catalog, priv] = where.OR;
+      expect(catalog.status).toBe('PUBLISHED');
+      expect(catalog.verificationStatus).toBe('PUBLISHED');
+      expect(priv.assetScope).toBe('WORKSPACE_PRIVATE');
+      expect(priv.workspaceId).toBe(WORKSPACE_ID);
+      // The re-read must never be the place a null-workspace row slips in.
+      expect(priv).not.toHaveProperty('OR');
     });
   });
 });

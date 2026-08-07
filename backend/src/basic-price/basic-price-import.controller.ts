@@ -21,6 +21,8 @@ import {
 } from './basic-price-import.service';
 import { BasicPriceRowResolutionService } from './basic-price-row-resolution.service';
 import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping-candidates.service';
+import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
+import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.service';
 import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto';
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import {
@@ -54,6 +56,8 @@ export class BasicPriceImportController {
     private readonly importService: BasicPriceImportService,
     private readonly resolutionService: BasicPriceRowResolutionService,
     private readonly mappingCandidatesService: BasicPriceRowMappingCandidatesService,
+    private readonly privateAssetService: BasicPricePrivateAssetService,
+    private readonly trustedActor: TrustedBasicPriceActorService,
   ) {}
 
   @Post('preview')
@@ -172,5 +176,45 @@ export class BasicPriceImportController {
       batchId,
       currentAccountId,
     );
+  }
+
+  /**
+   * RM-03C — keep the caller's OWN resolved rows as workspace-private Basic
+   * Prices, usable by this workspace immediately.
+   *
+   * This is the sibling of `submit` above, not a replacement for it, and the
+   * two are not exclusive: `submit` hands the rows to SIMPROK's curation
+   * queue, this one keeps them for the workspace. A batch may later do both;
+   * a curation rejection never invalidates the private asset.
+   *
+   * PERMISSION — deliberately the SAME BASIC_PRICE_SUBMIT code as `submit`,
+   * and deliberately NOT a new one. Both are the identical authority
+   * ("materialize my own resolved import rows"), held by exactly the same
+   * people: BASIC_PRICE_SUBMIT is an ACTIVE_MEMBERSHIP_BASELINE code, so every
+   * ACTIVE membership already holds it. Keeping rows private is strictly the
+   * LESS powerful of the two — it produces nothing outside the caller's own
+   * workspace. Minting a new permission code would either need it added to the
+   * baseline (an Owner decision this task has no authority to take) or leave
+   * the capability 403 everywhere until a per-environment activation — which
+   * would contradict "usable immediately, no second human".
+   *
+   * No verifier control, no publisher control, no review queue, no publication
+   * queue is exposed here or anywhere else to a general user.
+   */
+  @Post(':batchId/keep-private')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async keepBatchPrivate(
+    @Req() request: any,
+    @Param('batchId') batchId: string,
+  ) {
+    // Both halves of the identity come from the server: the workspace from
+    // PermissionsGuard's resolved context, the account from the verified JWT.
+    // Neither is read from the body or the query, so a forged workspaceId
+    // cannot steer this write.
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user?.id,
+    );
+    return this.privateAssetService.keepBatchPrivate({ batchId, actor });
   }
 }
