@@ -1,4 +1,6 @@
 import {
+  KNOWN_REGION_CONFIRMATION_TOKENS,
+  REGION_CONFIRMATION_TOKEN,
   REGION_PLAN_CONTRACT_VERSION,
   RegionProvisionError,
   applyRegionPlan,
@@ -6,13 +8,12 @@ import {
   buildRegionPlan,
   canonicalRegionPlanJson,
   computeRegionPlanHash,
-  regionAdvisoryLockKey,
+  regionProvisioningAdvisoryLockKey,
   type RegionPrismaLike,
   type RegionQueryClient,
   type RegionRow,
   type RegionTransactionClient,
 } from './region-provisioner';
-import { KNOWN_CONFIRMATION_TOKENS } from '../resource-catalog/resource-catalog-bootstrap-planner';
 
 /**
  * RM-03D0 — Region provisioner.
@@ -201,11 +202,107 @@ describe('RM-03D0 Region provisioner', () => {
     });
 
     it('produces a non-negative lock key that fits Postgres bigint', () => {
-      const key = regionAdvisoryLockKey(CODE);
+      const key = regionProvisioningAdvisoryLockKey();
       expect(key >= 0n).toBe(true);
       expect(key < 2n ** 63n).toBe(true);
-      expect(regionAdvisoryLockKey(CODE)).toBe(key);
-      expect(regionAdvisoryLockKey('OTHER')).not.toBe(key);
+      expect(regionProvisioningAdvisoryLockKey()).toBe(key);
+    });
+  });
+
+  /**
+   * CONCURRENCY. The same-name/different-code rule compares a designation
+   * against rows it does NOT share a code with, so the conflict domain is the
+   * whole Region table, not one code. A per-code lock would let
+   * {A,"Kota X"} and {B,"Kota X"} run concurrently, each see no match, each
+   * plan CREATE, and both commit — one real place, recorded twice.
+   */
+  describe('the conflict domain is serialized globally, not per code', () => {
+    it('uses ONE lock key for every designation', () => {
+      // Same key regardless of code: that is the property, not an accident.
+      const key = regionProvisioningAdvisoryLockKey();
+      expect(regionProvisioningAdvisoryLockKey()).toBe(key);
+      expect(String(key)).not.toContain('NaN');
+    });
+
+    it('takes the lock BEFORE reading, so the deciding read cannot interleave', async () => {
+      const order: string[] = [];
+      const tx: RegionTransactionClient = {
+        region: {
+          findMany: async () => {
+            order.push('read');
+            return [];
+          },
+          create: async ({ data }) => {
+            order.push('create');
+            return { id: 'r', code: data.code, name: data.name, isActive: true };
+          },
+        },
+        $executeRawUnsafe: async (sql: string) => {
+          order.push(sql.includes('pg_advisory_xact_lock') ? 'lock' : 'other');
+          return 0;
+        },
+      };
+      const plan = await buildRegionPlan(readClient([]), {
+        regionCode: CODE,
+        regionName: NAME,
+      });
+      await applyRegionPlan({ $transaction: async (fn) => fn(tx) }, {
+        regionCode: CODE,
+        regionName: NAME,
+        expectedPlanSha256: computeRegionPlanHash(plan),
+        confirmationToken: CANONICAL_TOKEN,
+        expectedConfirmationToken: CANONICAL_TOKEN,
+      });
+      expect(order).toEqual(['lock', 'read', 'create']);
+    });
+
+    it('serializes two designations that share a name under different codes', async () => {
+      // Simulates the interleaving a per-code lock would have permitted: the
+      // second apply runs AFTER the first committed, so it now sees the row
+      // and refuses instead of creating a duplicate place.
+      const committed: RegionRow[] = [];
+      const makeTx = (): RegionTransactionClient => ({
+        region: {
+          findMany: async () => [...committed],
+          create: async ({ data }) => {
+            const row = {
+              id: `region-${committed.length + 1}`,
+              code: data.code,
+              name: data.name,
+              isActive: true,
+            };
+            committed.push(row);
+            return row;
+          },
+        },
+        $executeRawUnsafe: async () => 0,
+      });
+
+      const firstPlan = await buildRegionPlan(readClient(committed), {
+        regionCode: 'CODE-A',
+        regionName: NAME,
+      });
+      await applyRegionPlan({ $transaction: async (fn) => fn(makeTx()) }, {
+        regionCode: 'CODE-A',
+        regionName: NAME,
+        expectedPlanSha256: computeRegionPlanHash(firstPlan),
+        confirmationToken: CANONICAL_TOKEN,
+        expectedConfirmationToken: CANONICAL_TOKEN,
+      });
+      expect(committed).toHaveLength(1);
+
+      // Second designation: same name, different code. Planned before the
+      // first committed, applied after — the in-transaction rebuild catches it.
+      await expect(
+        applyRegionPlan({ $transaction: async (fn) => fn(makeTx()) }, {
+          regionCode: 'CODE-B',
+          regionName: NAME,
+          expectedPlanSha256: 'ANY',
+          confirmationToken: CANONICAL_TOKEN,
+          expectedConfirmationToken: CANONICAL_TOKEN,
+        }),
+      ).rejects.toThrow(/STOP_REGION_NAME_CONFLICT/);
+      expect(committed).toHaveLength(1);
     });
   });
 
@@ -229,7 +326,6 @@ describe('RM-03D0 Region provisioner', () => {
           expectedConfirmationToken: CANONICAL_TOKEN,
           ...over,
         },
-        KNOWN_CONFIRMATION_TOKENS,
       );
       return { result, h };
     };
@@ -268,7 +364,6 @@ describe('RM-03D0 Region provisioner', () => {
             confirmationToken: CANONICAL_TOKEN,
             expectedConfirmationToken: CANONICAL_TOKEN,
           },
-          KNOWN_CONFIRMATION_TOKENS,
         ),
       ).rejects.toThrow(/STOP_PLAN_HASH_MISMATCH/);
       expect(h.created).toEqual([]);
@@ -286,7 +381,6 @@ describe('RM-03D0 Region provisioner', () => {
             confirmationToken: CANONICAL_TOKEN,
             expectedConfirmationToken: CANONICAL_TOKEN,
           },
-          KNOWN_CONFIRMATION_TOKENS,
         ),
       ).rejects.toThrow(/STOP_MISSING_EXPECTED_PLAN_HASH/);
       expect(h.created).toEqual([]);
@@ -304,7 +398,6 @@ describe('RM-03D0 Region provisioner', () => {
             confirmationToken: 'APPLY_RM02C1B_TO_SIMPROK_TEST',
             expectedConfirmationToken: CANONICAL_TOKEN,
           },
-          KNOWN_CONFIRMATION_TOKENS,
         ),
       ).rejects.toThrow(/STOP_MISSING_CONFIRMATION_TOKEN/);
       expect(h.created).toEqual([]);
@@ -322,10 +415,42 @@ describe('RM-03D0 Region provisioner', () => {
             confirmationToken: 'INVENTED',
             expectedConfirmationToken: 'INVENTED',
           },
-          KNOWN_CONFIRMATION_TOKENS,
         ),
       ).rejects.toThrow(/STOP_UNKNOWN_CONFIRMATION_AUTHORITY/);
       expect(h.created).toEqual([]);
+    });
+
+    /**
+     * CLOSED AUTHORITY. The allow-list is owned by the module, not handed in.
+     * A caller-supplied list would have meant the gate trusted the very party
+     * it defends against.
+     */
+    describe('the caller cannot widen the recognised authority', () => {
+      it('exposes exactly one Region authority, and it is the canonical token', () => {
+        expect(KNOWN_REGION_CONFIRMATION_TOKENS).toEqual([
+          'APPLY_RM03D0_CANONICAL_REFERENCES',
+        ]);
+        expect(REGION_CONFIRMATION_TOKEN).toBe('APPLY_RM03D0_CANONICAL_REFERENCES');
+      });
+
+      it('takes no allow-list argument at all', () => {
+        // Arity is the proof: there is no third parameter to pass a list into.
+        expect(applyRegionPlan.length).toBe(2);
+      });
+
+      it('refuses the RM-02C1b acceptance token — Region has no acceptance path', async () => {
+        const h = harness([]);
+        await expect(
+          applyRegionPlan(h.prisma, {
+            regionCode: CODE,
+            regionName: NAME,
+            expectedPlanSha256: 'x',
+            confirmationToken: 'APPLY_RM02C1B_TO_SIMPROK_TEST',
+            expectedConfirmationToken: 'APPLY_RM02C1B_TO_SIMPROK_TEST',
+          }),
+        ).rejects.toThrow(/STOP_UNKNOWN_CONFIRMATION_AUTHORITY/);
+        expect(h.created).toEqual([]);
+      });
     });
 
     it('fails closed if the database stored something other than the designation', async () => {
@@ -344,7 +469,6 @@ describe('RM-03D0 Region provisioner', () => {
             confirmationToken: CANONICAL_TOKEN,
             expectedConfirmationToken: CANONICAL_TOKEN,
           },
-          KNOWN_CONFIRMATION_TOKENS,
         ),
       ).rejects.toThrow(/STOP_REGION_WRITE_READBACK_MISMATCH/);
     });

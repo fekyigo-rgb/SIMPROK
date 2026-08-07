@@ -5,7 +5,6 @@ import { PrismaClient } from '@prisma/client';
 
 import {
   CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
-  KNOWN_CONFIRMATION_TOKENS,
   applyBootstrapPlan,
   buildPlan,
   canonicalPlanJson,
@@ -17,11 +16,13 @@ import {
   verifyCanonicalReferenceAuthority,
 } from '../../src/canonical-reference/canonical-reference-target';
 import {
+  REGION_CONFIRMATION_TOKEN,
   applyRegionPlan,
   buildRegionPlan,
   canonicalRegionPlanJson,
   computeRegionPlanHash,
 } from '../../src/canonical-reference/region-provisioner';
+import { provisionCanonicalReferences } from '../../src/canonical-reference/reference-provisioning-sequence';
 
 /**
  * RM-03D0 — the canonical-safe entry point for reference-data provisioning.
@@ -99,9 +100,12 @@ async function main(): Promise<void> {
   try {
     // Prove the target before reading or writing anything: DSN coordinates,
     // then the live connection itself, then the authorized workspace.
+    // The writer role is enforced on APPLY only: a dry-run writes nothing, so
+    // it may legitimately run as the read-only audit role.
     const authority = await verifyCanonicalReferenceAuthority({
       databaseUrl: process.env.DATABASE_URL,
       workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+      requireWriterRole: hasApply,
       client: {
         query: async (sql: string) => ({
           rows: (await prisma.$queryRawUnsafe(sql)) as never[],
@@ -109,7 +113,7 @@ async function main(): Promise<void> {
       },
     });
     process.stderr.write(
-      `CANONICAL_TARGET_GUARD=PASS db=${authority.target.databaseName} host=${authority.target.host} port=${authority.target.port}\n`,
+      `CANONICAL_TARGET_GUARD=PASS db=${authority.target.databaseName} host=${authority.target.host} port=${authority.target.port} role=${authority.currentRole ?? 'UNKNOWN'} writerRoleEnforced=${authority.writerRoleEnforced}\n`,
     );
 
     const { inventory, inventorySha256 } = loadCanonicalInventory(
@@ -151,32 +155,35 @@ async function main(): Promise<void> {
       );
     }
 
-    // 1. Region.
-    const regionResult = await applyRegionPlan(
-      prisma,
-      {
-        regionCode,
-        regionName,
-        expectedPlanSha256: expectedRegionPlanSha256,
-        confirmationToken,
-        expectedConfirmationToken: CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
-      },
-      KNOWN_CONFIRMATION_TOKENS,
-    );
-
-    // 2. ResourceCatalog, through the existing reviewed planner — same
-    // transaction/advisory-lock/provenance/idempotency law as RM-02C1b, only
-    // the confirmation authority differs.
-    const catalogResult = await applyBootstrapPlan(prisma, {
-      expectedPlanSha256: expectedCatalogPlanSha256,
-      confirmationToken,
-      expectedConfirmationToken: CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
-      workspaceId: authority.workspaceId,
-      inventory,
-      inventoryPath: INVENTORY_PATH,
-      inventorySha256,
-      generatedFromGitHead,
-    });
+    // Region first, then ResourceCatalog. They are two transactions; if the
+    // Region commits and the catalog then fails, the sequence raises
+    // STOP_PARTIAL_REFERENCE_STATE naming the committed Region rather than
+    // cleaning anything up.
+    const { region: regionResult, catalog: catalogResult } =
+      await provisionCanonicalReferences({
+        applyRegion: () =>
+          applyRegionPlan(prisma, {
+            regionCode,
+            regionName,
+            expectedPlanSha256: expectedRegionPlanSha256,
+            confirmationToken,
+            expectedConfirmationToken: REGION_CONFIRMATION_TOKEN,
+          }),
+        // The existing reviewed planner — same transaction, advisory lock,
+        // provenance and idempotency law as RM-02C1b; only the confirmation
+        // authority differs.
+        applyResourceCatalog: () =>
+          applyBootstrapPlan(prisma, {
+            expectedPlanSha256: expectedCatalogPlanSha256,
+            confirmationToken,
+            expectedConfirmationToken: CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
+            workspaceId: authority.workspaceId,
+            inventory,
+            inventoryPath: INVENTORY_PATH,
+            inventorySha256,
+            generatedFromGitHead,
+          }),
+      });
 
     process.stdout.write(
       `${JSON.stringify(

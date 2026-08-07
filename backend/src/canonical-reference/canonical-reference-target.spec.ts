@@ -3,10 +3,12 @@ import {
   CANONICAL_REFERENCE_HOST,
   CANONICAL_REFERENCE_PORT,
   CANONICAL_REFERENCE_WORKSPACE_ID,
+  CANONICAL_REFERENCE_WRITER_ROLE,
   CANONICAL_TARGET_PROBE_SQL,
   CanonicalReferenceTargetError,
   assertCanonicalReferenceTarget,
   assertCanonicalReferenceWorkspace,
+  assertCanonicalReferenceWriterRole,
   assertLiveCanonicalReferenceTarget,
   parseCanonicalTargetFromUrl,
   verifyCanonicalReferenceAuthority,
@@ -40,6 +42,7 @@ describe('RM-03D0 canonical reference target guard', () => {
     current_database: CANONICAL_REFERENCE_DATABASE,
     server_host: CANONICAL_REFERENCE_HOST,
     server_port: CANONICAL_REFERENCE_PORT,
+    current_role: CANONICAL_REFERENCE_WRITER_ROLE,
   };
 
   describe('the exact canonical target is accepted', () => {
@@ -72,6 +75,7 @@ describe('RM-03D0 canonical reference target guard', () => {
         verifyCanonicalReferenceAuthority({
           databaseUrl: CANONICAL_URL,
           workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+          requireWriterRole: true,
           client: probe([canonicalRow]),
         }),
       ).resolves.toEqual({
@@ -81,7 +85,113 @@ describe('RM-03D0 canonical reference target guard', () => {
           port: CANONICAL_REFERENCE_PORT,
         },
         workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+        currentRole: CANONICAL_REFERENCE_WRITER_ROLE,
+        writerRoleEnforced: true,
       });
+    });
+  });
+
+  /**
+   * APPLY ROLE. A write must run as the least-privileged role that already
+   * holds INSERT on these tables — not as the schema owner, not as superuser.
+   * A dry-run writes nothing, so forcing it to hold a writer credential would
+   * push operators toward using the writer role for everything.
+   */
+  describe('the writer role is enforced on APPLY, and only on APPLY', () => {
+    const roleRow = (current_role: unknown) => ({ ...canonicalRow, current_role });
+
+    it('names simprok_app as the one writer role', () => {
+      expect(CANONICAL_REFERENCE_WRITER_ROLE).toBe('simprok_app');
+    });
+
+    it('accepts simprok_app for apply', async () => {
+      await expect(
+        verifyCanonicalReferenceAuthority({
+          databaseUrl: CANONICAL_URL,
+          workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+          requireWriterRole: true,
+          client: probe([roleRow('simprok_app')]),
+        }),
+      ).resolves.toMatchObject({
+        currentRole: 'simprok_app',
+        writerRoleEnforced: true,
+      });
+    });
+
+    it.each(['simprok_migrator', 'simprok_cluster_admin', 'postgres', 'simprok_readonly_audit'])(
+      'refuses %s for apply',
+      async (role) => {
+        await expect(
+          verifyCanonicalReferenceAuthority({
+            databaseUrl: CANONICAL_URL,
+            workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+            requireWriterRole: true,
+            client: probe([roleRow(role)]),
+          }),
+        ).rejects.toThrow(/STOP_REFERENCE_WRITE_ROLE_MISMATCH/);
+      },
+    );
+
+    it.each([null, '', undefined, 7])(
+      'refuses an unknown reported role (%p) for apply',
+      async (role) => {
+        await expect(
+          verifyCanonicalReferenceAuthority({
+            databaseUrl: CANONICAL_URL,
+            workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+            requireWriterRole: true,
+            client: probe([roleRow(role)]),
+          }),
+        ).rejects.toThrow(/STOP_REFERENCE_WRITE_ROLE_UNKNOWN/);
+      },
+    );
+
+    it('does NOT enforce the writer role on a dry-run', async () => {
+      // The read-only audit role must remain a legitimate way to rehearse.
+      await expect(
+        verifyCanonicalReferenceAuthority({
+          databaseUrl: CANONICAL_URL,
+          workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+          requireWriterRole: false,
+          client: probe([roleRow('simprok_readonly_audit')]),
+        }),
+      ).resolves.toMatchObject({
+        currentRole: 'simprok_readonly_audit',
+        writerRoleEnforced: false,
+      });
+    });
+
+    it('still reports the role on a dry-run, so an operator can see it', async () => {
+      const authority = await verifyCanonicalReferenceAuthority({
+        databaseUrl: CANONICAL_URL,
+        workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+        requireWriterRole: false,
+        client: probe([roleRow('simprok_migrator')]),
+      });
+      expect(authority.currentRole).toBe('simprok_migrator');
+      expect(authority.writerRoleEnforced).toBe(false);
+    });
+
+    it('still enforces db/host/port on a dry-run — only the ROLE check is relaxed', async () => {
+      await expect(
+        verifyCanonicalReferenceAuthority({
+          databaseUrl: CANONICAL_URL,
+          workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+          requireWriterRole: false,
+          client: probe([{ ...roleRow('simprok_readonly_audit'), server_port: 5432 }]),
+        }),
+      ).rejects.toThrow(/STOP_CANONICAL_PORT_MISMATCH/);
+    });
+
+    it('exposes the assertion directly, and it never echoes the role of a secret', () => {
+      expect(() => assertCanonicalReferenceWriterRole('simprok_app')).not.toThrow();
+      expect(() => assertCanonicalReferenceWriterRole('simprok_migrator')).toThrow(
+        /STOP_REFERENCE_WRITE_ROLE_MISMATCH/,
+      );
+    });
+
+    it('probes the role in the same read-only statement', () => {
+      expect(CANONICAL_TARGET_PROBE_SQL).toContain('current_user');
     });
   });
 
@@ -206,6 +316,7 @@ describe('RM-03D0 canonical reference target guard', () => {
         verifyCanonicalReferenceAuthority({
           databaseUrl: CANONICAL_URL,
           workspaceId: CANONICAL_REFERENCE_WORKSPACE_ID,
+          requireWriterRole: true,
           client: probe([
             { ...canonicalRow, current_database: 'simprok_test' },
           ]),
@@ -241,6 +352,7 @@ describe('RM-03D0 canonical reference target guard', () => {
         databaseName: CANONICAL_REFERENCE_DATABASE,
         host: CANONICAL_REFERENCE_HOST,
         port: CANONICAL_REFERENCE_PORT,
+        currentRole: CANONICAL_REFERENCE_WRITER_ROLE,
       });
     });
   });

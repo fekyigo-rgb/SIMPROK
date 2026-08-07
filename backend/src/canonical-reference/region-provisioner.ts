@@ -20,6 +20,25 @@ import { createHash } from 'node:crypto';
 
 export const REGION_PLAN_CONTRACT_VERSION = 'RM03D0_REGION_PLAN_V1';
 
+/**
+ * The ONE authority that may apply a Region plan — owned by this module, not
+ * supplied by the caller.
+ *
+ * A caller-supplied allow-list would have meant the gate trusted whoever it
+ * was defending against: a caller could widen the set to include a token it
+ * had just invented. The closed set lives here so `applyRegionPlan` cannot be
+ * talked into recognising anything else.
+ *
+ * It contains only the canonical token. There is no acceptance Region path —
+ * Region provisioning is an RM-03D0 canonical concept — so the RM-02C1b
+ * acceptance token is deliberately NOT a member and can never authorize a
+ * Region write.
+ */
+export const REGION_CONFIRMATION_TOKEN = 'APPLY_RM03D0_CANONICAL_REFERENCES';
+export const KNOWN_REGION_CONFIRMATION_TOKENS: readonly string[] = [
+  REGION_CONFIRMATION_TOKEN,
+];
+
 export type RegionDisposition = 'CREATE_REGION' | 'REUSE_EXACT_REGION';
 
 export class RegionProvisionError extends Error {
@@ -214,10 +233,27 @@ export interface RegionPrismaLike {
   $transaction<T>(fn: (tx: RegionTransactionClient) => Promise<T>): Promise<T>;
 }
 
-/** Deterministic advisory-lock key, mirroring the RM-02C1b planner's approach. */
-export function regionAdvisoryLockKey(regionCode: string): bigint {
+/**
+ * ONE global lock for the whole Region provisioning domain — deliberately NOT
+ * keyed on the region code.
+ *
+ * A per-code key looked tidier and was wrong. The conflict domain is not a
+ * single code: the same-name/different-code rule compares a designation
+ * against rows it does NOT share a code with. Two concurrent applies of
+ * `{A, "Kota X"}` and `{B, "Kota X"}` would take two different per-code locks,
+ * both read a table with no match, both plan CREATE, and both commit — leaving
+ * one real place recorded twice under two codes, which is exactly the
+ * invariant this module exists to hold.
+ *
+ * Serializing the whole domain is cheap and bounded: Region is governed
+ * reference data provisioned rarely, by an operator, a handful of rows at a
+ * time. There is no throughput to trade away.
+ */
+export const REGION_PROVISIONING_LOCK_DOMAIN = 'rm03d0-region-provisioning';
+
+export function regionProvisioningAdvisoryLockKey(): bigint {
   const digest = createHash('sha256')
-    .update(`rm03d0-region|${regionCode}`)
+    .update(REGION_PROVISIONING_LOCK_DOMAIN)
     .digest('hex');
   // First 60 bits: always non-negative, fits Postgres bigint and JS BigInt.
   return BigInt(`0x${digest.slice(0, 15)}`);
@@ -233,9 +269,10 @@ export function regionAdvisoryLockKey(regionCode: string): bigint {
 export async function applyRegionPlan(
   prisma: RegionPrismaLike,
   params: RegionApplyParams,
-  knownConfirmationTokens: readonly string[],
 ): Promise<RegionApplyResult> {
-  if (!knownConfirmationTokens.includes(params.expectedConfirmationToken)) {
+  // The allow-list is this module's own. A caller cannot widen it, so it
+  // cannot authorize a token it invented.
+  if (!KNOWN_REGION_CONFIRMATION_TOKENS.includes(params.expectedConfirmationToken)) {
     throw new RegionProvisionError(
       'STOP_UNKNOWN_CONFIRMATION_AUTHORITY',
       'expectedConfirmationToken is not a recognised confirmation authority.',
@@ -255,7 +292,9 @@ export async function applyRegionPlan(
   }
 
   return prisma.$transaction(async (tx) => {
-    const lockKey = regionAdvisoryLockKey(params.regionCode);
+    // Domain-wide, taken BEFORE the plan is rebuilt, so the read that decides
+    // CREATE vs conflict cannot interleave with another provisioning run.
+    const lockKey = regionProvisioningAdvisoryLockKey();
     await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${lockKey})`);
 
     const plan = await buildRegionPlan(tx, {

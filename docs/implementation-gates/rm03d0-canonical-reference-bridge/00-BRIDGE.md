@@ -25,10 +25,12 @@ Base: `9a23ff45e6a1c498574f1dc611125ce9e9695d03`.
 | File | Kind | Purpose |
 |---|---|---|
 | `backend/src/resource-catalog/resource-catalog-bootstrap-planner.ts` | **modified** | additive confirmation-authority generalization |
-| `backend/src/canonical-reference/canonical-reference-target.ts` | new | canonical target guard |
+| `backend/src/canonical-reference/canonical-reference-target.ts` | new | canonical target + writer-role guard |
 | `backend/src/canonical-reference/region-provisioner.ts` | new | governed Region provisioner |
+| `backend/src/canonical-reference/reference-provisioning-sequence.ts` | new | partial-state law |
 | `backend/src/canonical-reference/canonical-reference-target.spec.ts` | new | guard tests + old-law preservation |
 | `backend/src/canonical-reference/region-provisioner.spec.ts` | new | Region tests |
+| `backend/src/canonical-reference/reference-provisioning-sequence.spec.ts` | new | partial-state tests |
 | `backend/src/resource-catalog/confirmation-authority.spec.ts` | new | authority tests |
 | `backend/scripts/rm03d0/canonical-reference-provisioning.ts` | new | canonical-safe CLI wiring |
 | this document | new | bounded gate record |
@@ -207,11 +209,23 @@ is `src`, so law placed in `scripts/` would sit outside the standard CI gate.
 | Gate | Result |
 |---|---|
 | Backend build | PASS |
-| Backend unit (`npm test`) | **979 / 979**, 74 suites — baseline 911/71, so **+68 tests, 0 regressions** |
-| New focused suites | 58 canonical-reference + 47 planner/authority |
+| Backend unit (`npm test`) | **1016 / 1016**, 75 suites — baseline 911 / 71, so **+105 tests, 0 regressions** |
 | Legacy RM-02C1b planner spec | PASS, unmodified |
 | Typecheck of new files | clean |
 | Frontend delta | **0 files** |
+| CI | `PR_MERGE_REF_CI = GREEN` · `RAW_HEAD_CI = NOT_SEPARATELY_PROVED` |
+
+**CI terminology.** The workflow triggers on `pull_request`, so
+`actions/checkout` checks out `refs/pull/69/merge` — the merge result, not the
+raw feature head. That is stronger than a raw-head run for merge safety, but it
+is a different claim and is not called one.
+
+*(The first push of this branch measured 984/984 across 74 suites at head
+`05de5a9`. The remediation commit adds the fourth suite and the four gap
+proofs. The 979/979 figure that appeared in the original gate doc and PR body
+was measured locally before the last five guard-independence assertions were
+added and was superseded before CI ever ran; it is corrected here rather than
+left standing.)*
 
 Test matrix coverage: legacy preservation · acceptance/E2E cannot target
 canonical · canonical guard accepts exact target and rejects wrong
@@ -221,6 +235,49 @@ silently authorize acceptance · invented authority refused even when both
 strings match · Region dry-run zero-write, create, reuse, conflict, idempotent,
 stale-hash refused, readback mismatch refused · plan-hash determinism and
 sensitivity · secret never in an error message · probe SQL is read-only.
+
+### Remediation of the four PM byte-audit findings
+
+**1. Apply role enforcement.** The probe now also reads `current_user`, and on
+APPLY it must be exactly `simprok_app` — `simprok_migrator`,
+`simprok_cluster_admin`, `postgres` and `simprok_readonly_audit` are all
+refused with `STOP_REFERENCE_WRITE_ROLE_MISMATCH`, and an unreported role with
+`STOP_REFERENCE_WRITE_ROLE_UNKNOWN`. Enforcement is keyed on an explicit
+`requireWriterRole` flag that the CLI sets from the mode, so a **dry-run is
+still allowed to run as the read-only audit role** — forcing a rehearsal to
+hold a writer credential would push operators toward using the writer role for
+everything. The role is *reported* in both modes. Db/host/port remain enforced
+in both. No privilege was changed, granted or created.
+
+**2. Closed Region confirmation authority.** `applyRegionPlan` no longer accepts
+an allow-list argument — its arity is 2, asserted by test. The closed set lives
+in the module and contains only `APPLY_RM03D0_CANONICAL_REFERENCES`. A
+caller-supplied list meant the gate trusted the party it defends against. The
+RM-02C1b acceptance token is deliberately not a member: there is no acceptance
+Region path.
+
+**3. Partial state law.** Region and ResourceCatalog remain two transactions —
+merging them would mean reaching inside the reviewed planner's transaction, a
+far larger change than the problem warrants. Instead
+`provisionCanonicalReferences` raises `STOP_PARTIAL_REFERENCE_STATE` when the
+Region step commits (or reuses) and the catalog step then fails, carrying the
+exact Region id, `created`/`reused` deltas, the region plan hash, and the
+original catalog failure as both message text and `cause`. **No cleanup, no
+delete, no compensating write, no fake rollback** — a silent rollback would
+destroy a legitimately committed reference row to make a report look tidy. A
+Region-step failure is *not* wrapped: nothing was committed, so the original
+error is the whole truth.
+
+**4. Region concurrency.** The advisory lock is now ONE global key for the
+Region provisioning domain, not a per-code key. The per-code key was wrong
+because the conflict domain is not a single code: the same-name/different-code
+rule compares a designation against rows it does not share a code with. Two
+concurrent applies of `{A, "Kota X"}` and `{B, "Kota X"}` would have taken two
+different locks, both seen no match, both planned CREATE, and both committed —
+one real place recorded twice. The lock is taken *before* the deciding read
+(asserted by ordering test). Serializing the whole domain is cheap: Region is
+governed reference data provisioned rarely, so there is no throughput to trade
+away. No schema, no migration.
 
 ---
 

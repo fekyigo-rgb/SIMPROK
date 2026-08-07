@@ -36,6 +36,23 @@ export const CANONICAL_REFERENCE_WORKSPACE_ID =
   'a9978fab-d1fc-4bb3-9beb-5d8b89d973e3';
 
 /**
+ * The ONE database role permitted to perform a canonical reference WRITE.
+ *
+ * `simprok_app` is the existing least-privileged role that already holds
+ * INSERT on the bounded reference tables. `simprok_migrator` owns every table
+ * and `simprok_cluster_admin` is superuser — either would work and both are
+ * far too much authority for adding a Region and a resource catalog. Writing
+ * as them would also make the audit trail attribute reference data to a
+ * schema-owner rather than to the application identity that owns it.
+ *
+ * Enforced on APPLY only. A dry-run reads nothing it may not read, so it is
+ * deliberately allowed to run as `simprok_readonly_audit` — forcing a
+ * read-only rehearsal to hold a writer credential would be the opposite of
+ * least privilege.
+ */
+export const CANONICAL_REFERENCE_WRITER_ROLE = 'simprok_app';
+
+/**
  * The acceptance/E2E databases, named here ONLY so this guard can refuse them
  * with a precise reason instead of a generic mismatch. This module never
  * grants anything to them.
@@ -182,10 +199,33 @@ interface LiveTargetRow extends Record<string, unknown> {
   current_database: string;
   server_host: string | null;
   server_port: number | string | null;
+  current_role: string | null;
 }
 
 export const CANONICAL_TARGET_PROBE_SQL =
-  "select current_database() as current_database, host(inet_server_addr()) as server_host, inet_server_port() as server_port";
+  "select current_database() as current_database, host(inet_server_addr()) as server_host, inet_server_port() as server_port, current_user as current_role";
+
+/**
+ * The role is always PROBED, but only ENFORCED on apply — see
+ * CANONICAL_REFERENCE_WRITER_ROLE. Reporting it even on a dry-run means an
+ * operator can see which identity a rehearsal ran as without being forced to
+ * hold a writer credential to rehearse.
+ */
+export function assertCanonicalReferenceWriterRole(currentRole: unknown): string {
+  if (typeof currentRole !== 'string' || currentRole.length === 0) {
+    throw new CanonicalReferenceTargetError(
+      'STOP_REFERENCE_WRITE_ROLE_UNKNOWN',
+      'The live connection did not report a current role.',
+    );
+  }
+  if (currentRole !== CANONICAL_REFERENCE_WRITER_ROLE) {
+    throw new CanonicalReferenceTargetError(
+      'STOP_REFERENCE_WRITE_ROLE_MISMATCH',
+      `Canonical reference writes must run as exactly ${CANONICAL_REFERENCE_WRITER_ROLE}.`,
+    );
+  }
+  return currentRole;
+}
 
 /**
  * Re-proves the target against the SERVER, not against the DSN we were handed.
@@ -197,7 +237,7 @@ export const CANONICAL_TARGET_PROBE_SQL =
  */
 export async function assertLiveCanonicalReferenceTarget(
   client: CanonicalProbeClient,
-): Promise<CanonicalTarget> {
+): Promise<CanonicalTarget & { currentRole: string | null }> {
   const result = await client.query<LiveTargetRow>(CANONICAL_TARGET_PROBE_SQL);
   const row = result.rows[0];
   if (!row) {
@@ -219,12 +259,15 @@ export async function assertLiveCanonicalReferenceTarget(
     port: Number(row.server_port),
   };
   assertCanonicalReferenceTarget(live);
-  return live;
+  return { ...live, currentRole: row.current_role ?? null };
 }
 
 export interface CanonicalReferenceAuthority {
   readonly target: CanonicalTarget;
   readonly workspaceId: string;
+  /** Observed on every mode; enforced only when writing. */
+  readonly currentRole: string | null;
+  readonly writerRoleEnforced: boolean;
 }
 
 /**
@@ -236,10 +279,27 @@ export async function verifyCanonicalReferenceAuthority(params: {
   databaseUrl: string | undefined;
   workspaceId: unknown;
   client: CanonicalProbeClient;
+  /**
+   * True only for APPLY. A dry-run writes nothing, so it must not be forced to
+   * hold the writer credential — requiring one to rehearse would push
+   * operators toward using the writer role for everything.
+   */
+  requireWriterRole: boolean;
 }): Promise<CanonicalReferenceAuthority> {
   const declared = parseCanonicalTargetFromUrl(params.databaseUrl ?? '');
   assertCanonicalReferenceTarget(declared);
   const workspaceId = assertCanonicalReferenceWorkspace(params.workspaceId);
   const live = await assertLiveCanonicalReferenceTarget(params.client);
-  return { target: live, workspaceId };
+
+  if (params.requireWriterRole) {
+    assertCanonicalReferenceWriterRole(live.currentRole);
+  }
+
+  const { currentRole, ...target } = live;
+  return {
+    target,
+    workspaceId,
+    currentRole,
+    writerRoleEnforced: params.requireWriterRole,
+  };
 }
