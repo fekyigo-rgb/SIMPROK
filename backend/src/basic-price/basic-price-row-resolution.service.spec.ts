@@ -1241,20 +1241,31 @@ describe('BasicPriceRowResolutionService', () => {
       nothingWasCreated();
     });
 
-    it('19. the serialization key is deterministic for the same workspace, type and normalized name', async () => {
-      const keysFor = async (name: string) => {
-        rowsFrom({ rawResourceNameText: name });
+    it('19. THE SERIALIZATION DOMAIN DOES NOT DEPEND ON THE RESOURCE NAME — two spellings take the SAME lock', async () => {
+      const keysFor = async (row: Record<string, unknown>) => {
+        rowsFrom(row);
         tx.$executeRaw.mockClear();
-        await admit();
+        await admit().catch(() => undefined);
         return tx.$executeRaw.mock.calls
           .map(([query]: any) => query)
           .filter((q: any) => (q?.strings?.join('') ?? '').includes('pg_advisory_xact_lock'))
           .map((q: any) => q.values);
       };
 
-      // Same identity written two different ways must take the SAME lock,
-      // otherwise two spellings of one name could race each other.
-      expect(await keysFor('Semen Portland')).toEqual(await keysFor('  SEMEN   portland '));
+      const portland = await keysFor({ rawResourceNameText: 'Semen Portland' });
+      expect(portland).toHaveLength(1);
+
+      // A name-derived key would put these two in different domains, let them
+      // run in parallel, and let each re-prove against a catalog that did not
+      // yet contain the other — two canonical cements. Keying on the name
+      // assumes the very thing this slice denies.
+      expect(await keysFor({ rawResourceNameText: 'Semen Portlan' })).toEqual(portland);
+      expect(await keysFor({ rawResourceNameText: 'Sesuatu Yang Lain Sekali' })).toEqual(portland);
+      expect(await keysFor({ rawResourceNameText: '  SEMEN   portland ' })).toEqual(portland);
+
+      // Tenant and class still separate the domains, so admissions that cannot
+      // possibly be the same identity never queue behind each other.
+      expect(await keysFor({ sourceSection: 'LABOR' })).not.toEqual(portland);
     });
 
     it('20. a downstream failure after the catalog write propagates, so the whole transaction rolls back', async () => {

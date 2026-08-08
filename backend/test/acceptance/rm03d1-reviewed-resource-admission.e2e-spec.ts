@@ -350,6 +350,80 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
   });
 
   // ============================================================
+  // F2. CONCURRENT DIFFERENT-SPELLING, ONE PLAUSIBLE IDENTITY
+  //     (the hardest race, and the one a name-keyed lock loses)
+  // ============================================================
+  it('F2: two concurrent requests spelling one plausible identity two ways still produce exactly ONE canonical resource', async () => {
+    // Neither spelling may exist beforehand, or the race would be won by a
+    // trivial refusal instead of by the serialization boundary.
+    await prisma.resourceCatalog.deleteMany({ where: { id: RESOURCE_DIFFERENT_SPELLING_ID } });
+    const namesInPlay = [ADMISSION_ROWS.DIFFERENT_SPELLING.name, ADMISSION_ROWS.CONCURRENT_SPELLING.name];
+    expect(
+      await prisma.resourceCatalog.count({ where: { type: 'MATERIAL', name: { in: namesInPlay } } }),
+    ).toBe(0);
+
+    const preview = await previewFile('d1-admit-concurrent-spelling');
+    const rowPortland = preview.body.rows.find(
+      (r: { sourceRowNumber: number }) => r.sourceRowNumber === ADMISSION_ROWS.DIFFERENT_SPELLING.row,
+    );
+    const rowPortlan = preview.body.rows.find(
+      (r: { sourceRowNumber: number }) => r.sourceRowNumber === ADMISSION_ROWS.CONCURRENT_SPELLING.row,
+    );
+    expect(rowPortland.name).toBe('Semen Portland');
+    expect(rowPortlan.name).toBe('Semen Portlan');
+    expect(rowPortland.name).not.toBe(rowPortlan.name);
+
+    const [a, b] = await Promise.all([
+      admit(preview.body.batchId, rowPortland.id, rowPortland.version),
+      admit(preview.body.batchId, rowPortlan.id, rowPortlan.version),
+    ]);
+
+    // EXACTLY ONE canonical resource, whichever spelling got there first.
+    expect(
+      await prisma.resourceCatalog.count({ where: { workspaceId: WORKSPACE_A, name: { in: namesInPlay } } }),
+    ).toBe(1);
+    expect([a.status, b.status].sort()).toEqual([201, 409]);
+
+    const winner = a.status === 201 ? a : b;
+    const loser = a.status === 201 ? b : a;
+    const winnerRow = a.status === 201 ? rowPortland : rowPortlan;
+    const loserRow = a.status === 201 ? rowPortlan : rowPortland;
+    const admittedId = winner.body.admittedResource.id;
+
+    // The loser did not merely lose a lock — after the post-lock re-proof it
+    // was shown the identity the winner had just created, by the SAME identity
+    // authority, as a candidate for a name spelled differently from it.
+    expect(loser.body.message).toBe('RESOURCE_IDENTITY_NOT_EXHAUSTED');
+    const identity = loser.body.resourceIdentity;
+    const surfaced = [
+      identity.resolvedResourceCatalogId,
+      ...identity.candidates.map((c: { resourceCatalogId: string }) => c.resourceCatalogId),
+    ];
+    expect(surfaced).toContain(admittedId);
+
+    // Nothing of the loser survives: no second resource, no provenance, no
+    // mapping decision, no row transition.
+    expect(await prisma.resourceSourceIdentity.count({ where: { workspaceId: WORKSPACE_A } })).toBe(1);
+    expect(
+      (await prisma.resourceSourceIdentity.findFirstOrThrow({ where: { workspaceId: WORKSPACE_A } })).resourceCatalogId,
+    ).toBe(admittedId);
+    expect(await prisma.basicPriceImportRowResourceMapping.count({ where: { rowId: loserRow.id } })).toBe(0);
+    const untouched = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: loserRow.id } });
+    expect(untouched.status).toBe('NEEDS_REVIEW');
+    expect(untouched.resourceCatalogId).toBeNull();
+
+    // The winner is whole, and still tenant-scoped.
+    const admitted = await prisma.resourceCatalog.findUniqueOrThrow({ where: { id: admittedId } });
+    expect(admitted.workspaceId).toBe(WORKSPACE_A);
+    expect(admitted.name).toBe(winnerRow.name);
+    expect(await prisma.basicPriceImportRowResourceMapping.count({ where: { rowId: winnerRow.id } })).toBe(1);
+
+    // Identity only — no price, no submission, no publication.
+    expect(await prisma.basicPrice.count({ where: { resourceId: admittedId } })).toBe(0);
+    expect(await prisma.priceSubmission.count({ where: { resourceId: admittedId } })).toBe(0);
+  });
+
+  // ============================================================
   // G. TRANSACTION FAILURE
   // ============================================================
   it('G: a downstream provenance conflict leaves no residue — no catalog row, no provenance, no mapping, no row transition', async () => {

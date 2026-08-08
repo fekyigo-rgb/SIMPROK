@@ -14,10 +14,7 @@ import { findMappingCandidates } from './basic-price-row-mapping-candidates.serv
 import { findProvenanceCandidate } from './basic-price-source-provenance.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
-import {
-  ResourceIdentityResolution,
-  normalizeResourceName,
-} from '../resource-catalog/resource-identity-resolution.kernel';
+import { ResourceIdentityResolution } from '../resource-catalog/resource-identity-resolution.kernel';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
 
@@ -25,10 +22,10 @@ import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
  * FNV-1a 32-bit, narrowed to a signed int4 because that is what
  * `pg_advisory_xact_lock(int4, int4)` accepts.
  *
- * Deterministic and dependency-free on purpose: the same workspace + type +
- * normalized name must produce the same lock in every process and every
- * replica, and a hash collision only ever over-serializes two unrelated
- * admissions, which is safe.
+ * Deterministic and dependency-free on purpose: the same workspace and resource
+ * type must produce the same lock in every process and every replica, and a
+ * hash collision only ever over-serializes two unrelated admissions, which is
+ * safe.
  */
 export function advisoryLockKey(value: string): number {
   let hash = 0x811c9dc5;
@@ -556,15 +553,29 @@ export class BasicPriceRowResolutionService {
 
         // SERIALIZATION. The row lock above protects one row, which is not
         // enough: two DIFFERENT rows — or two different batches — can each ask
-        // for the same genuinely-new resource, both read "not found" before
-        // either commits, and both create one. A transaction-scoped advisory
-        // lock keyed on (workspace, type, normalized name) makes that
-        // impossible. It is deterministic, held only for this transaction,
-        // released automatically on commit or rollback, and needs no schema,
+        // for a genuinely-new resource, both read "not found" before either
+        // commits, and both create one.
+        //
+        // THE DOMAIN IS (workspace, resource type) AND DELIBERATELY NOT THE
+        // RESOURCE NAME. Keying on the name looks tighter and is wrong, because
+        // it assumes what this whole slice exists to deny: that two spellings
+        // are two resources. "Semen Portland" and "Semen Portlan" would hash to
+        // two different locks, run in parallel, and each re-prove against a
+        // catalog that did not yet contain the other — so both would be
+        // admitted, and the identity authority would afterwards nominate each
+        // as a candidate for the other. RESOURCE NAME != RESOURCE IDENTITY has
+        // to hold in the serialization boundary too, and the only boundary that
+        // can honour it without a second matcher is one wider than any name.
+        //
+        // Deriving a cleverer key from stems, codes or similarity would be
+        // exactly the duplicate intelligence law this must not grow. Admission
+        // is a rare human exception path, so a workspace-and-type domain costs
+        // nothing real and fails safe.
+        //
+        // Transaction-scoped: deterministic, held only for this transaction,
+        // released automatically on commit or rollback, and needing no schema,
         // no application mutex and no external infrastructure.
-        const lockKey = advisoryLockKey(
-          `${workspaceId}|${row.sourceSection}|${normalizeResourceName(row.rawResourceNameText)}`,
-        );
+        const lockKey = advisoryLockKey(`${workspaceId}|${row.sourceSection}`);
         // $executeRaw, not $queryRaw: the function returns SQL `void`, which
         // has no Prisma type to deserialize into.
         await tx.$executeRaw(

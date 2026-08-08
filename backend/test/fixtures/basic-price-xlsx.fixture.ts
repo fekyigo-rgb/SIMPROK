@@ -27,6 +27,9 @@ export const ADMISSION_ROWS = {
   ROLLBACK: { row: 44, name: 'Pasir Rollback', unit: 'M3', price: 310000 },
   CONCURRENT_A: { row: 45, name: 'Kerikil Konkuren', unit: 'M3', price: 410000 },
   CONCURRENT_B: { row: 46, name: 'Kerikil Konkuren', unit: 'M3', price: 420000 },
+  // The harder race: two SPELLINGS, one plausible identity. Row 42 supplies
+  // "Semen Portland"; this is the other half of that pair.
+  CONCURRENT_SPELLING: { row: 47, name: 'Semen Portlan', unit: 'M3', price: 1400000 },
 } as const;
 
 const CURRENCY_NUMFMT = '_-* #,##0.00_-;-* #,##0.00_-;_-* "-"??_-;_-@_-';
