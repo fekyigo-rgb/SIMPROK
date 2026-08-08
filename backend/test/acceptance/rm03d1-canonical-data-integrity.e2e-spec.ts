@@ -44,6 +44,13 @@ const PUBLISHED_VERSION_ID = '44000000-0000-4000-8000-000000000009';
 // authority as creating a version.
 const PERMISSION_CODES = ['AHSP_VIEW', 'AHSP_MANAGE', 'RAB_DRAFT_EDIT', 'PROJECT_VIEW'];
 
+// Some of the codes above are part of the seeded catalog other suites rely on.
+// This suite may GRANT them to its own role, but it must never DELETE one it
+// did not create — doing so removed PROJECT_VIEW/RAB_DRAFT_EDIT from the shared
+// database and broke twelve unrelated suites. Only codes this suite actually
+// brought into existence are cleaned up.
+let permissionCodesCreatedHere: string[] = [];
+
 const AS_OF = '2026-08-08';
 
 describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', () => {
@@ -65,6 +72,15 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
       await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A } })
     ).organizationId;
 
+    const preexisting = new Set(
+      (
+        await prisma.permission.findMany({
+          where: { code: { in: PERMISSION_CODES } },
+          select: { code: true },
+        })
+      ).map((p) => p.code),
+    );
+    permissionCodesCreatedHere = PERMISSION_CODES.filter((code) => !preexisting.has(code));
     const permissions = await Promise.all(
       PERMISSION_CODES.map((code) =>
         prisma.permission.upsert({ where: { code }, create: { code, name: code }, update: {} }),
@@ -224,7 +240,8 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     await prisma.membershipRole.deleteMany({ where: { id: membershipRoleId } });
     await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_ID } });
     await prisma.role.deleteMany({ where: { id: ROLE_ID } });
-    await prisma.permission.deleteMany({ where: { code: { in: PERMISSION_CODES } } });
+    // Only the ones this suite created. A seeded permission is shared state.
+    await prisma.permission.deleteMany({ where: { code: { in: permissionCodesCreatedHere } } });
     await prisma.$disconnect();
     await app.close();
   });
