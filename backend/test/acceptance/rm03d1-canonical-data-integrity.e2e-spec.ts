@@ -253,14 +253,30 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     await seedVersions();
   });
 
+  /**
+   * Binding a version creates an occurrence, and the BOQ item points at it, so
+   * the teardown has to unwind in dependency order: release the item's pointers,
+   * drop the occurrences, then the versions. Deleting versions first hits
+   * project_ahsp_occurrences_ahspVersionId_fkey and takes every later test with
+   * it.
+   */
+  const releaseOccurrences = async () => {
+    await prisma.boqItem.updateMany({
+      where: { boqStructureId: STRUCTURE_ID },
+      data: { calculationOccurrenceId: null, workingOccurrenceId: null, ahspVersionId: null },
+    });
+    await prisma.projectAhspOccurrence.deleteMany({ where: { projectId: PROJECT_ID } });
+  };
+
   afterEach(async () => {
+    await releaseOccurrences();
     await prisma.aHSPAuditLog.deleteMany({ where: { ahspId: AHSP_ID } });
     await prisma.aHSPVersion.deleteMany({ where: { ahspId: AHSP_ID } });
   });
 
   afterAll(async () => {
+    await releaseOccurrences();
     await prisma.aHSPAuditLog.deleteMany({ where: { ahspId: AHSP_ID } });
-    await prisma.projectAhspOccurrence.deleteMany({ where: { projectId: PROJECT_ID } });
     await prisma.aHSPVersion.deleteMany({ where: { ahspId: AHSP_ID } });
     await prisma.aHSP.deleteMany({ where: { id: AHSP_ID } });
     await prisma.boqItem.deleteMany({ where: { boqStructureId: STRUCTURE_ID } });
