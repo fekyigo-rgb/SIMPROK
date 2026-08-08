@@ -9,6 +9,7 @@ import {
   RejectBasicPriceImportRowDto,
   ResolveBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
+import { AdmitResourceForImportRowDto } from './dto/admit-resource-for-import-row.dto';
 import { findMappingCandidates } from './basic-price-row-mapping-candidates.service';
 import { findProvenanceCandidate } from './basic-price-source-provenance.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
@@ -118,7 +119,37 @@ export class BasicPriceRowResolutionService {
     reviewerAccountId: string,
     dto: ResolveBasicPriceImportRowDto,
   ) {
-    return this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction((tx) =>
+      this.resolveWithinTransaction(
+        tx,
+        workspaceId,
+        batchId,
+        rowId,
+        reviewerAccountId,
+        dto,
+      ),
+    );
+  }
+
+  /**
+   * The whole of a human resolution, minus the transaction boundary.
+   *
+   * Lifted out unchanged so REVIEWED RESOURCE ADMISSION can run it inside its
+   * own atomic transaction. A row resolved against a just-admitted resource
+   * must produce exactly the same transition and the same append-only mapping
+   * decision as one resolved against an existing resource — copying this body
+   * would let those two meanings drift apart, which is precisely what the
+   * mapping table must never allow.
+   */
+  private async resolveWithinTransaction(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    reviewerAccountId: string,
+    dto: ResolveBasicPriceImportRowDto,
+  ) {
+    {
       // reviewerAccountId is the caller's own account id (request.user.id) —
       // BASIC_PRICE_RESOLVE on the baseline means resolving mapping rows in
       // the caller's OWN uploaded batch, so it doubles as the ownership check.
@@ -293,6 +324,137 @@ export class BasicPriceRowResolutionService {
 
       await this.recomputeBatchStatus(tx, batchId);
       return updated;
+    }
+  }
+
+  /**
+   * RM-03D1 — REVIEWED RESOURCE ADMISSION.
+   *
+   * SIMPROK must not be permanently blind to a resource its own source
+   * documents contain. But it must never invent one either, so admission is
+   * available only when every one of these is true at once:
+   *
+   *   - a real imported source row exists and is still mutable;
+   *   - the batch belongs to this workspace and this caller;
+   *   - the resource TYPE comes from the row's own source section, never a
+   *     client claim;
+   *   - the reviewer names an EXISTING UnitDefinition for it;
+   *   - normalized-name discovery finds NOTHING of that type to choose
+   *     instead — if any candidate exists, this refuses and the reviewer must
+   *     resolve against it;
+   *   - an authenticated reviewer explicitly asks, and says why.
+   *
+   * There is no fuzzy create, no fallback-name create, and no "matching
+   * failed so make one" path. Everything lands in ONE transaction: catalog,
+   * provenance, and the row's own resolution — so a half-admitted resource
+   * with no evidence behind it is unrepresentable rather than merely unlikely.
+   */
+  async admitResourceForRow(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    reviewerAccountId: string,
+    dto: AdmitResourceForImportRowDto,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await this.assertBatchRowMutable(
+        tx,
+        workspaceId,
+        batchId,
+        rowId,
+        reviewerAccountId,
+      );
+      if (row.version !== dto.version)
+        throw new ConflictException('ROW_VERSION_STALE');
+
+      // Admission never mints unit vocabulary — the reviewer picks one that
+      // already exists, and it becomes the resource's baseUnit so the
+      // UnitKernel can always prove it later.
+      const unitDefinition = await tx.unitDefinition.findFirst({
+        where: { id: dto.unitDefinitionId, isActive: true },
+      });
+      if (!unitDefinition)
+        throw new ConflictException('UNIT_UNKNOWN_OR_INACTIVE');
+
+      // The same normalized-name lookup the review UI already shows the
+      // reviewer. Anything found here is a resource they must choose instead:
+      // creating a second row for a name this workspace already knows is how
+      // duplicate canonical identities are born.
+      const existingCandidates = await findMappingCandidates(
+        tx,
+        workspaceId,
+        row.sourceSection,
+        row.rawResourceNameText,
+      );
+      if (existingCandidates.length > 0)
+        throw new ConflictException('RESOURCE_CANDIDATE_EXISTS');
+
+      // Full provenance needs two facts the mutability check does not carry:
+      // the row's own cell addresses, and the batch's file name.
+      const evidence = await tx.basicPriceImportRow.findUniqueOrThrow({
+        where: { id: rowId },
+        select: {
+          sourceCodeCellAddress: true,
+          sourceNameCellAddress: true,
+          sourceUnitCellAddress: true,
+          batch: { select: { sourceFileName: true } },
+        },
+      });
+
+      const catalog = await tx.resourceCatalog.create({
+        data: {
+          workspaceId,
+          // Exactly what the source says. Not normalized, not tidied.
+          name: row.rawResourceNameText,
+          // The source's own section decides the class, so a LABOR row can
+          // never admit a MATERIAL, whatever anyone asks for.
+          type: row.sourceSection,
+          baseUnit: unitDefinition.code,
+          // Only if the source genuinely supplies one. No code is invented,
+          // and none is borrowed from a lookalike.
+          code: row.rawResourceCodeText ?? null,
+          // No specification is asserted: the source stated none.
+        },
+      });
+
+      await tx.resourceSourceIdentity.create({
+        data: {
+          resourceCatalogId: catalog.id,
+          workspaceId,
+          sourceSha256: row.batch.sourceSha256,
+          sourceFileName: evidence.batch.sourceFileName,
+          parserContractVersion: row.batch.parserContractVersion,
+          sheetName: row.batch.selectedSheetName,
+          sourceRowNumber: row.sourceRowNumber,
+          sourceSection: row.sourceSection,
+          sourceCodeCellAddress: evidence.sourceCodeCellAddress,
+          sourceNameCellAddress: evidence.sourceNameCellAddress,
+          sourceUnitCellAddress: evidence.sourceUnitCellAddress,
+          rawCode: row.rawResourceCodeText,
+          rawName: row.rawResourceNameText,
+          rawUnit: row.rawUnitText,
+        },
+      });
+
+      // Same path a chosen resource takes, so the mapping decision reads the
+      // same way. With zero candidates and no provenance signal it records
+      // MANUAL_SEARCH at candidateCountAtDecision 0, which is the honest
+      // description: nothing suggested this identity, a human supplied it.
+      const resolved = await this.resolveWithinTransaction(
+        tx,
+        workspaceId,
+        batchId,
+        rowId,
+        reviewerAccountId,
+        {
+          version: dto.version,
+          resourceCatalogId: catalog.id,
+          unitDefinitionId: dto.unitDefinitionId,
+          reason: dto.reason,
+        },
+      );
+
+      return { admittedResource: catalog, row: resolved };
     });
   }
 

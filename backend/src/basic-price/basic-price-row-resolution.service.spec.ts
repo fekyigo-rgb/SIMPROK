@@ -854,4 +854,223 @@ describe('BasicPriceRowResolutionService', () => {
       // the sourceSection plumbing itself is covered directly in basic-price-source-provenance.service.spec.ts.
     });
   });
+
+  // ==========================================================
+  // RM-03D1 — REVIEWED RESOURCE ADMISSION
+  //
+  // SIMPROK must not stay permanently blind to a resource its own source
+  // documents contain — and must never invent one either. These prove both
+  // halves: an authorised human can admit a genuinely new row, and every path
+  // that would let a resource appear by accident is closed.
+  // ==========================================================
+  describe('admitResourceForRow', () => {
+    const ADMIT = {
+      version: 0,
+      unitDefinitionId: 'unit-01',
+      reason: 'Tidak ada resource kanonik yang sepadan di workspace ini.',
+    };
+
+    beforeEach(() => {
+      // Model reality: once the resource is admitted, the re-read inside the
+      // shared resolution body finds exactly that row — including its type,
+      // which the source section decided.
+      let admitted: Record<string, unknown> | null = null;
+      (tx as any).resourceCatalog.create = jest.fn(({ data }: any) => {
+        admitted = { id: 'new-resource-01', ...data };
+        return admitted;
+      });
+      tx.resourceCatalog.findFirst.mockImplementation(async () => admitted);
+      (tx as any).resourceSourceIdentity.create = jest.fn(async () => ({ id: 'prov-01' }));
+      (tx as any).basicPriceImportRow.findUniqueOrThrow = jest.fn(async () => ({
+        sourceCodeCellAddress: 'D33',
+        sourceNameCellAddress: 'C33',
+        sourceUnitCellAddress: 'E33',
+        batch: { sourceFileName: 'DERIVED_EVIDENCE.xlsx' },
+      }));
+      tx.unitDefinition.findFirst.mockResolvedValue({ id: 'unit-01', code: 'M3' });
+    });
+
+    const admit = () =>
+      service.admitResourceForRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, ADMIT as any);
+
+    const rowsFrom = (row: Record<string, unknown>) =>
+      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
+        const sql = query?.strings?.join('') ?? '';
+        if (sql.includes('basic_price_import_batches')) return Promise.resolve([baseBatch]);
+        if (sql.includes('basic_price_import_rows')) return Promise.resolve([{ ...baseRow, ...row }]);
+        if (sql.includes('resource_catalogs')) return Promise.resolve(candidateRows);
+        return Promise.resolve([]);
+      });
+
+    it('1. admits exactly one canonical resource from a reviewed row with no candidates', async () => {
+      const result = await admit();
+
+      expect((tx as any).resourceCatalog.create).toHaveBeenCalledTimes(1);
+      const created = (tx as any).resourceCatalog.create.mock.calls[0][0].data;
+      expect(created.workspaceId).toBe(WORKSPACE_ID);
+      // Exactly what the source says — not normalized, not tidied.
+      expect(created.name).toBe('Semen Portland');
+      expect(result.admittedResource.id).toBe('new-resource-01');
+    });
+
+    it('2. records source provenance bound to that exact source row', async () => {
+      await admit();
+
+      expect((tx as any).resourceSourceIdentity.create).toHaveBeenCalledTimes(1);
+      expect((tx as any).resourceSourceIdentity.create.mock.calls[0][0].data).toMatchObject({
+        resourceCatalogId: 'new-resource-01',
+        workspaceId: WORKSPACE_ID,
+        sourceSha256: 'batch-sha',
+        sourceFileName: 'DERIVED_EVIDENCE.xlsx',
+        parserContractVersion: 'RM02_BASIC_PRICE_01_V1',
+        sheetName: 'HARGA SATUAN UPAH DAN BAHAN',
+        sourceRowNumber: 33,
+        sourceSection: 'MATERIAL',
+        sourceNameCellAddress: 'C33',
+        rawName: 'Semen Portland',
+        rawUnit: 'Zak',
+      });
+    });
+
+    it('3. records the row-scoped mapping decision in the same shape a chosen resource produces', async () => {
+      await admit();
+
+      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledTimes(1);
+      expect(tx.basicPriceImportRowResourceMapping.create.mock.calls[0][0].data).toMatchObject({
+        workspaceId: WORKSPACE_ID,
+        rowId: ROW_ID,
+        resourceCatalogId: 'new-resource-01',
+        unitDefinitionId: 'unit-01',
+        reviewerAccountId: REVIEWER_ID,
+        reason: ADMIT.reason,
+        // Nothing suggested this identity; a human supplied it.
+        suggestionSource: 'MANUAL_SEARCH',
+        candidateCountAtDecision: 0,
+      });
+    });
+
+    it('4. a stale version cannot replay the decision, so no duplicate resource is born', async () => {
+      await expect(
+        service.admitResourceForRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
+          ...ADMIT,
+          version: 99,
+        } as any),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
+    });
+
+    it('5. an existing same-name same-type resource blocks admission outright', async () => {
+      candidateRows = [
+        { resourceCatalogId: 'existing-01', code: null, name: 'Semen Portland', type: 'MATERIAL', baseUnit: 'Zak' },
+      ];
+
+      await expect(admit()).rejects.toThrow('RESOURCE_CANDIDATE_EXISTS');
+      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
+      expect((tx as any).resourceSourceIdentity.create).not.toHaveBeenCalled();
+    });
+
+    it('6. several plausible candidates are never settled by creating yet another one', async () => {
+      candidateRows = [
+        { resourceCatalogId: 'existing-01', code: null, name: 'Semen Portland', type: 'MATERIAL', baseUnit: 'Zak' },
+        { resourceCatalogId: 'existing-02', code: null, name: 'Semen Portland', type: 'MATERIAL', baseUnit: 'Kg' },
+      ];
+
+      await expect(admit()).rejects.toThrow('RESOURCE_CANDIDATE_EXISTS');
+      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
+    });
+
+    it('7. a batch outside the caller workspace admits nothing', async () => {
+      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
+        const sql = query?.strings?.join('') ?? '';
+        if (sql.includes('basic_price_import_batches'))
+          return Promise.resolve([{ ...baseBatch, workspaceId: 'other-ws' }]);
+        if (sql.includes('basic_price_import_rows')) return Promise.resolve([baseRow]);
+        return Promise.resolve([]);
+      });
+
+      await expect(admit()).rejects.toBeInstanceOf(NotFoundException);
+      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
+    });
+
+    it('8. a batch uploaded by someone else admits nothing', async () => {
+      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
+        const sql = query?.strings?.join('') ?? '';
+        if (sql.includes('basic_price_import_batches'))
+          return Promise.resolve([{ ...baseBatch, uploadedByAccountId: 'someone-else' }]);
+        if (sql.includes('basic_price_import_rows')) return Promise.resolve([baseRow]);
+        return Promise.resolve([]);
+      });
+
+      await expect(admit()).rejects.toBeInstanceOf(NotFoundException);
+      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
+    });
+
+    it('9. an unknown or inactive unit admits nothing — admission never mints unit vocabulary', async () => {
+      tx.unitDefinition.findFirst.mockResolvedValue(null);
+
+      await expect(admit()).rejects.toThrow('UNIT_UNKNOWN_OR_INACTIVE');
+      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
+    });
+
+    it('10. an absent source code stays null, and no specification is invented', async () => {
+      await admit();
+
+      const created = (tx as any).resourceCatalog.create.mock.calls[0][0].data;
+      expect(created.code).toBeNull();
+      expect(created.specifications).toBeUndefined();
+    });
+
+    it('11. a source code the row genuinely carries is preserved verbatim', async () => {
+      rowsFrom({ rawResourceCodeText: 'M.23' });
+
+      await admit();
+
+      expect((tx as any).resourceCatalog.create.mock.calls[0][0].data.code).toBe('M.23');
+    });
+
+    it('12. the resource type comes from the source section, never from the caller', async () => {
+      rowsFrom({ sourceSection: 'LABOR' });
+
+      await admit();
+
+      expect((tx as any).resourceCatalog.create.mock.calls[0][0].data.type).toBe('LABOR');
+    });
+
+    it('13. baseUnit is the canonical UnitDefinition code, so the UnitKernel can always prove it later', async () => {
+      await admit();
+
+      expect((tx as any).resourceCatalog.create.mock.calls[0][0].data.baseUnit).toBe('M3');
+    });
+
+    it('14. a failure after the catalog write propagates, so the whole transaction rolls back', async () => {
+      (tx as any).resourceSourceIdentity.create = jest.fn(async () => {
+        throw new Error('PROVENANCE_WRITE_FAILED');
+      });
+
+      await expect(admit()).rejects.toThrow('PROVENANCE_WRITE_FAILED');
+      expect(tx.basicPriceImportRowResourceMapping.create).not.toHaveBeenCalled();
+    });
+
+    it('15. a row that is no longer mutable admits nothing', async () => {
+      rowsFrom({ status: 'READY_FOR_SUBMISSION' });
+
+      await expect(admit()).rejects.toThrow('ROW_NOT_MUTABLE');
+      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
+    });
+
+    it('16. the admitted row lands READY_FOR_SUBMISSION bound to the new resource', async () => {
+      const result = await admit();
+
+      expect(tx.basicPriceImportRow.update).toHaveBeenCalledTimes(1);
+      expect(tx.basicPriceImportRow.update.mock.calls[0][0].data).toMatchObject({
+        resourceCatalogId: 'new-resource-01',
+        resolvedResourceType: 'MATERIAL',
+        unitDefinitionId: 'unit-01',
+        resolutionStatus: 'RESOLVED',
+        status: 'READY_FOR_SUBMISSION',
+        resolvedByAccountId: REVIEWER_ID,
+      });
+      expect(result.row.status).toBe('READY_FOR_SUBMISSION');
+    });
+  });
 });

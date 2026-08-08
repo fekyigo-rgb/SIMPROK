@@ -29,6 +29,7 @@ import {
   ResolveBasicPriceImportRowDto,
   RejectBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
+import { AdmitResourceForImportRowDto } from './dto/admit-resource-for-import-row.dto';
 
 /**
  * BasicPriceImportController — user-owned import boundary (Owner Decision:
@@ -144,6 +145,42 @@ export class BasicPriceImportController {
       batchId,
       rowId,
       currentAccountId,
+    );
+  }
+
+  /**
+   * RM-03D1 — admit a genuinely new canonical resource from one reviewed row.
+   *
+   * PERMISSION — deliberately the SAME BASIC_PRICE_RESOLVE code as resolve,
+   * and deliberately NOT a new one. This is the identity half of the identical
+   * authority ("say what this row of MY batch means"), held by exactly the
+   * same people, on exactly the same batch-ownership boundary. Minting a new
+   * permission would either need it added to the ACTIVE_MEMBERSHIP baseline —
+   * an Owner decision this slice has no authority to take — or leave the
+   * capability 403 everywhere behind a per-environment activation.
+   *
+   * It is strictly narrower than resolve, not wider: resolve accepts any
+   * existing resource the reviewer names, while this one refuses outright the
+   * moment any same-name, same-type candidate exists.
+   */
+  @Post(':batchId/rows/:rowId/admit-resource')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async admitResourceForRow(
+    @Req() request: any,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() dto: AdmitResourceForImportRowDto,
+  ) {
+    // Both halves of the identity are server-derived: the workspace from
+    // PermissionsGuard's resolved context, the reviewer from the verified JWT.
+    const workspaceId: string = request.workspaceContext?.workspaceId;
+    const reviewerAccountId: string = request.user.id;
+    return this.resolutionService.admitResourceForRow(
+      workspaceId,
+      batchId,
+      rowId,
+      reviewerAccountId,
+      dto,
     );
   }
 
