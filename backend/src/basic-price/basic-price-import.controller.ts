@@ -160,8 +160,11 @@ export class BasicPriceImportController {
    * capability 403 everywhere behind a per-environment activation.
    *
    * It is strictly narrower than resolve, not wider: resolve accepts any
-   * existing resource the reviewer names, while this one refuses outright the
-   * moment any same-name, same-type candidate exists.
+   * existing resource the reviewer names, while this one refuses outright
+   * unless ResourceIdentityResolutionService — the same authority the Golden
+   * Thread uses, over this workspace's catalog AND the global one — has
+   * exhausted every defensible candidate. A differently-spelled resource
+   * SIMPROK already knows is never duplicated here.
    */
   @Post(':batchId/rows/:rowId/admit-resource')
   @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)

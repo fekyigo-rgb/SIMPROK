@@ -1,7 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { BasicPriceRowResolutionService } from './basic-price-row-resolution.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 
 describe('BasicPriceRowResolutionService', () => {
   let service: BasicPriceRowResolutionService;
@@ -13,13 +16,24 @@ describe('BasicPriceRowResolutionService', () => {
       count: jest.Mock;
     };
     basicPriceImportBatch: { findUniqueOrThrow: jest.Mock; update: jest.Mock };
-    resourceCatalog: { findFirst: jest.Mock };
+    resourceCatalog: { findFirst: jest.Mock; findMany: jest.Mock };
     unitDefinition: { findFirst: jest.Mock };
-    basicPriceImportRowResourceMapping: { create: jest.Mock };
+    basicPriceImportRowResourceMapping: { create: jest.Mock; findMany: jest.Mock };
     basicPriceSourceEquivalence: { findUnique: jest.Mock };
-    resourceSourceIdentity: { findFirst: jest.Mock };
+    resourceSourceIdentity: { findFirst: jest.Mock; findMany: jest.Mock };
   };
   let prisma: { $transaction: jest.Mock };
+  let unitKernel: { resolve: jest.Mock };
+
+  /**
+   * Evidence the REAL ResourceIdentityResolutionService loads. These tests use
+   * the genuine authority — not a stub of it — so "admission is forbidden when
+   * SIMPROK already knows this resource" is proved by the same kernel the
+   * Golden Thread runs, and can never drift from it.
+   */
+  let identityCatalogRows: Array<Record<string, unknown>> = [];
+  let identitySightingRows: Array<Record<string, unknown>> = [];
+  let identityMappingRows: Array<Record<string, unknown>> = [];
 
   const WORKSPACE_ID = 'ws-01';
   const BATCH_ID = 'batch-01';
@@ -64,6 +78,9 @@ describe('BasicPriceRowResolutionService', () => {
 
   beforeEach(async () => {
     candidateRows = [];
+    identityCatalogRows = [];
+    identitySightingRows = [];
+    identityMappingRows = [];
     tx = {
       $queryRaw: jest.fn(),
       basicPriceImportRow: {
@@ -75,22 +92,44 @@ describe('BasicPriceRowResolutionService', () => {
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
       },
-      resourceCatalog: { findFirst: jest.fn() },
+      resourceCatalog: {
+        findFirst: jest.fn(),
+        findMany: jest.fn(async () => identityCatalogRows),
+      },
       unitDefinition: { findFirst: jest.fn() },
-      basicPriceImportRowResourceMapping: { create: jest.fn() },
+      basicPriceImportRowResourceMapping: {
+        create: jest.fn(),
+        findMany: jest.fn(async () => identityMappingRows),
+      },
       basicPriceSourceEquivalence: { findUnique: jest.fn() },
-      resourceSourceIdentity: { findFirst: jest.fn() },
+      resourceSourceIdentity: {
+        findFirst: jest.fn(),
+        findMany: jest.fn(async () => identitySightingRows),
+      },
     };
     prisma = {
       $transaction: jest.fn((callback: (tx: unknown) => unknown) =>
         callback(tx),
       ),
     };
+    // Default: the unit authority CAN represent the chosen canonical unit.
+    // Test 10 flips this to prove admission is refused when it cannot.
+    unitKernel = {
+      resolve: jest.fn(async () => ({
+        status: 'RESOLVED',
+        reasonCodes: ['EXACT_UNIT_ALIAS_EQUIVALENCE', 'EXACT_UNIT_IDENTITY'],
+        explanation: 'Kedua alias menunjuk identitas unit canonical yang sama.',
+      })),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BasicPriceRowResolutionService,
         { provide: PrismaService, useValue: prisma },
+        // The REAL identity authority over mocked evidence — never a stub of
+        // the decision itself.
+        ResourceIdentityResolutionService,
+        { provide: UnitKernelService, useValue: unitKernel },
       ],
     }).compile();
 
@@ -859,9 +898,15 @@ describe('BasicPriceRowResolutionService', () => {
   // RM-03D1 — REVIEWED RESOURCE ADMISSION
   //
   // SIMPROK must not stay permanently blind to a resource its own source
-  // documents contain — and must never invent one either. These prove both
-  // halves: an authorised human can admit a genuinely new row, and every path
-  // that would let a resource appear by accident is closed.
+  // documents contain — and must never invent one either.
+  //
+  // The load-bearing law here is that ADMISSION DOES NOT DEFINE WHAT SIMPROK
+  // DOES NOT KNOW. ResourceIdentityResolutionService does, and admission may
+  // act only after that authority has exhausted every defensible avenue it
+  // has: exact canonical identity, source codes, provenance sightings, prior
+  // human decisions, token containment and shared stems, over this workspace's
+  // catalog AND the global one. These tests run the REAL authority, so a
+  // differently-spelled resource cannot slip past into a duplicate.
   // ==========================================================
   describe('admitResourceForRow', () => {
     const ADMIT = {
@@ -869,6 +914,18 @@ describe('BasicPriceRowResolutionService', () => {
       unitDefinitionId: 'unit-01',
       reason: 'Tidak ada resource kanonik yang sepadan di workspace ini.',
     };
+
+    /** A catalog row exactly as ResourceIdentityResolutionService loads it. */
+    const catalogRow = (over: Record<string, unknown> = {}) => ({
+      id: 'existing-01',
+      code: null,
+      name: 'Semen Portlan',
+      type: 'MATERIAL',
+      baseUnit: 'Zak',
+      status: 'ACTIVE',
+      specifications: null,
+      ...over,
+    });
 
     beforeEach(() => {
       // Model reality: once the resource is admitted, the re-read inside the
@@ -902,18 +959,231 @@ describe('BasicPriceRowResolutionService', () => {
         return Promise.resolve([]);
       });
 
-    it('1. admits exactly one canonical resource from a reviewed row with no candidates', async () => {
+    const created = () => (tx as any).resourceCatalog.create.mock.calls[0][0].data;
+    const nothingWasCreated = () => {
+      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
+      expect((tx as any).resourceSourceIdentity.create).not.toHaveBeenCalled();
+      expect(tx.basicPriceImportRowResourceMapping.create).not.toHaveBeenCalled();
+      expect(tx.basicPriceImportRow.update).not.toHaveBeenCalled();
+    };
+
+    // ---------- ADMISSION IS ALLOWED ONLY WHEN THE AUTHORITY IS EXHAUSTED ----------
+
+    it('1. authoritative RESOURCE_NOT_FOUND with zero candidates is the one condition that admits', async () => {
       const result = await admit();
 
       expect((tx as any).resourceCatalog.create).toHaveBeenCalledTimes(1);
-      const created = (tx as any).resourceCatalog.create.mock.calls[0][0].data;
-      expect(created.workspaceId).toBe(WORKSPACE_ID);
+      expect(created().workspaceId).toBe(WORKSPACE_ID);
       // Exactly what the source says — not normalized, not tidied.
-      expect(created.name).toBe('Semen Portland');
+      expect(created().name).toBe('Semen Portland');
       expect(result.admittedResource.id).toBe('new-resource-01');
     });
 
-    it('2. records source provenance bound to that exact source row', async () => {
+    it('2. an exact canonical candidate forbids admission, and the authoritative verdict is handed back verbatim', async () => {
+      identityCatalogRows = [catalogRow({ name: 'Semen Portland' })];
+
+      const error = await admit().catch((e) => e);
+      expect(error).toBeInstanceOf(ConflictException);
+      expect(error.getResponse()).toMatchObject({
+        message: 'RESOURCE_IDENTITY_NOT_EXHAUSTED',
+        resourceIdentity: {
+          status: 'RESOLVED',
+          authority: 'EXACT_CANONICAL_MATCH',
+          resolvedResourceCatalogId: 'existing-01',
+        },
+      });
+      nothingWasCreated();
+    });
+
+    it('3. A DIFFERENT SPELLING IS NOT A DIFFERENT RESOURCE — "Semen Portlan" against "Semen Portland" forbids admission', async () => {
+      // This is the whole blocker this remediation closes: the previous
+      // exact-name lookup saw zero candidates here and would have created a
+      // second canonical cement.
+      identityCatalogRows = [catalogRow({ name: 'Semen Portlan' })];
+
+      const error = await admit().catch((e) => e);
+      expect(error.getResponse().resourceIdentity).toMatchObject({
+        status: 'NEEDS_REVIEW',
+        authority: 'EVIDENCE_CANDIDATE',
+      });
+      expect(error.getResponse().resourceIdentity.candidates[0]).toMatchObject({
+        resourceCatalogId: 'existing-01',
+        name: 'Semen Portlan',
+      });
+      nothingWasCreated();
+    });
+
+    it('4. a source-code sighting nominating a differently-named catalog row forbids admission', async () => {
+      rowsFrom({ rawResourceCodeText: 'M.23' });
+      identityCatalogRows = [catalogRow({ id: 'coded-01', name: 'Bahan pengikat tipe satu' })];
+      identitySightingRows = [
+        {
+          resourceCatalogId: 'coded-01',
+          rawName: 'sesuatu yang lain sama sekali',
+          rawCode: 'M.23',
+          rawUnit: 'Zak',
+          sourceSection: 'MATERIAL',
+          sourceSha256: 'other-sha',
+          sheetName: 'S',
+          sourceRowNumber: 7,
+        },
+      ];
+
+      const error = await admit().catch((e) => e);
+      expect(error.getResponse().resourceIdentity.candidates[0]).toMatchObject({
+        resourceCatalogId: 'coded-01',
+        evidence: ['SOURCE_CODE_MATCH'],
+      });
+      nothingWasCreated();
+    });
+
+    it('5. a ResourceSourceIdentity name sighting forbids admission', async () => {
+      identityCatalogRows = [catalogRow({ id: 'seen-01', name: 'Bahan pengikat tipe satu' })];
+      identitySightingRows = [
+        {
+          resourceCatalogId: 'seen-01',
+          rawName: 'Semen Portland',
+          rawCode: null,
+          rawUnit: 'Zak',
+          sourceSection: 'MATERIAL',
+          sourceSha256: 'other-sha',
+          sheetName: 'S',
+          sourceRowNumber: 7,
+        },
+      ];
+
+      const error = await admit().catch((e) => e);
+      expect(error.getResponse().resourceIdentity.candidates[0]).toMatchObject({
+        resourceCatalogId: 'seen-01',
+        evidence: ['SOURCE_SIGHTING_NAME_MATCH'],
+      });
+      nothingWasCreated();
+    });
+
+    it('6. a prior human mapping decision forbids admission and is surfaced as the evidence it is', async () => {
+      identityCatalogRows = [catalogRow({ id: 'mapped-01', name: 'Bahan pengikat tipe satu' })];
+      identityMappingRows = [
+        {
+          resourceCatalogId: 'mapped-01',
+          reviewerAccountId: 'someone-earlier',
+          decidedAt: new Date('2026-01-01T00:00:00.000Z'),
+          reason: 'sudah pernah diputuskan untuk baris impor lain',
+          row: {
+            rawResourceNameText: 'Semen Portland',
+            rawResourceCodeText: null,
+            resolvedResourceType: 'MATERIAL',
+            sourceSection: 'MATERIAL',
+          },
+        },
+      ];
+
+      const error = await admit().catch((e) => e);
+      const candidate = error.getResponse().resourceIdentity.candidates[0];
+      expect(candidate).toMatchObject({
+        resourceCatalogId: 'mapped-01',
+        evidence: ['REVIEWED_MAPPING_NAME_MATCH'],
+      });
+      // Row-scoped evidence, never a global alias — the human still decides.
+      expect(candidate.priorHumanDecision).toMatchObject({ reviewerAccountId: 'someone-earlier' });
+      nothingWasCreated();
+    });
+
+    it('7. a GLOBAL catalog candidate forbids a workspace-local duplicate, and the loader really does look at global rows', async () => {
+      // workspaceId null in the database — the loader's own tenant predicate is
+      // what brings it into view, so that predicate is asserted here directly.
+      identityCatalogRows = [catalogRow({ id: 'global-01', name: 'Semen Portland' })];
+
+      const error = await admit().catch((e) => e);
+      expect(error.getResponse().resourceIdentity.resolvedResourceCatalogId).toBe('global-01');
+      expect(tx.resourceCatalog.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { OR: [{ workspaceId: WORKSPACE_ID }, { workspaceId: null }] },
+        }),
+      );
+      nothingWasCreated();
+    });
+
+    it('8. a candidate whose specification the source never proved forbids admission — unknown is not agreement', async () => {
+      identityCatalogRows = [
+        catalogRow({ name: 'Semen Portland', specifications: { mutu: 'BjTS 420B' } }),
+      ];
+
+      const error = await admit().catch((e) => e);
+      expect(error.getResponse().resourceIdentity).toMatchObject({
+        status: 'NEEDS_REVIEW',
+        reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW', 'SPECIFICATION_UNPROVED'],
+      });
+      nothingWasCreated();
+    });
+
+    it('9. a same-name row of the WRONG type is reported as a type mismatch, and still forbids admission', async () => {
+      identityCatalogRows = [catalogRow({ name: 'Semen Portland', type: 'LABOR' })];
+
+      const error = await admit().catch((e) => e);
+      expect(error.getResponse().resourceIdentity).toMatchObject({
+        status: 'UNRESOLVED',
+        reasonCodes: ['RESOURCE_TYPE_MISMATCH'],
+      });
+      nothingWasCreated();
+    });
+
+    // ---------- UNIT AUTHORITY ----------
+
+    it('10. a UnitDefinition the unit authority cannot represent forbids admission, and returns the truthful unit outcome', async () => {
+      unitKernel.resolve.mockResolvedValue({
+        status: 'NEEDS_REVIEW',
+        reasonCodes: ['UNKNOWN_UNIT_ALIAS'],
+        explanation: 'Satu atau lebih alias unit tidak dikenal.',
+      });
+
+      const error = await admit().catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        message: 'UNIT_NOT_REPRESENTABLE_BY_UNIT_AUTHORITY',
+        unitResolution: { status: 'NEEDS_REVIEW', reasonCodes: ['UNKNOWN_UNIT_ALIAS'] },
+      });
+      nothingWasCreated();
+    });
+
+    it('11. the canonical unit is proved through the EXISTING UnitKernel, asked about its own code', async () => {
+      await admit();
+
+      expect(unitKernel.resolve).toHaveBeenCalledWith('M3', 'M3');
+      expect(created().baseUnit).toBe('M3');
+    });
+
+    it('12. an unknown or inactive unit admits nothing — admission never mints unit vocabulary', async () => {
+      tx.unitDefinition.findFirst.mockResolvedValue(null);
+
+      await expect(admit()).rejects.toThrow('UNIT_UNKNOWN_OR_INACTIVE');
+      nothingWasCreated();
+    });
+
+    // ---------- WHAT IS WRITTEN COMES ONLY FROM THE SOURCE ----------
+
+    it('13. an absent source code stays null, and no specification is invented', async () => {
+      await admit();
+
+      expect(created().code).toBeNull();
+      expect(created().specifications).toBeUndefined();
+    });
+
+    it('14. a source code the row genuinely carries is preserved verbatim', async () => {
+      rowsFrom({ rawResourceCodeText: 'M.23' });
+
+      await admit();
+
+      expect(created().code).toBe('M.23');
+    });
+
+    it('15. the resource type comes from the source section, never from the caller', async () => {
+      rowsFrom({ sourceSection: 'LABOR' });
+
+      await admit();
+
+      expect(created().type).toBe('LABOR');
+    });
+
+    it('16. records source provenance bound to that exact source row', async () => {
       await admit();
 
       expect((tx as any).resourceSourceIdentity.create).toHaveBeenCalledTimes(1);
@@ -932,7 +1202,138 @@ describe('BasicPriceRowResolutionService', () => {
       });
     });
 
-    it('3. records the row-scoped mapping decision in the same shape a chosen resource produces', async () => {
+    // ---------- SERIALIZATION, RE-PROOF, ATOMICITY ----------
+
+    it('17. the authority is re-proved AFTER a deterministic serialization lock, and it is the second verdict that authorizes', async () => {
+      const order: string[] = [];
+      tx.resourceCatalog.findMany.mockImplementation(async () => {
+        order.push('identity');
+        return identityCatalogRows;
+      });
+      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
+        const sql = query?.strings?.join('') ?? '';
+        if (sql.includes('pg_advisory_xact_lock')) order.push('lock');
+        if (sql.includes('basic_price_import_batches')) return Promise.resolve([baseBatch]);
+        if (sql.includes('basic_price_import_rows')) return Promise.resolve([baseRow]);
+        if (sql.includes('resource_catalogs')) return Promise.resolve(candidateRows);
+        return Promise.resolve([]);
+      });
+
+      await admit();
+
+      // Pre-lock pass refuses cheaply; the lock serializes; the post-lock pass
+      // is the only one that may authorize a create.
+      expect(order).toEqual(['identity', 'lock', 'identity']);
+    });
+
+    it('18. CONCURRENCY: a resource admitted by another transaction while this one waited is found on re-proof, and is never duplicated', async () => {
+      // Before the lock this workspace knew nothing; by the time the lock was
+      // granted, a concurrent admission had committed the very same identity.
+      let pass = 0;
+      tx.resourceCatalog.findMany.mockImplementation(async () => {
+        pass += 1;
+        return pass === 1 ? [] : [catalogRow({ id: 'won-the-race-01', name: 'Semen Portland' })];
+      });
+
+      const error = await admit().catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        message: 'RESOURCE_IDENTITY_NOT_EXHAUSTED',
+        resourceIdentity: { resolvedResourceCatalogId: 'won-the-race-01' },
+      });
+      nothingWasCreated();
+    });
+
+    it('19. the serialization key is deterministic for the same workspace, type and normalized name', async () => {
+      const keysFor = async (name: string) => {
+        rowsFrom({ rawResourceNameText: name });
+        tx.$queryRaw.mockClear();
+        await admit();
+        return tx.$queryRaw.mock.calls
+          .map(([query]: any) => query)
+          .filter((q: any) => (q?.strings?.join('') ?? '').includes('pg_advisory_xact_lock'))
+          .map((q: any) => q.values);
+      };
+
+      // Same identity written two different ways must take the SAME lock,
+      // otherwise two spellings of one name could race each other.
+      expect(await keysFor('Semen Portland')).toEqual(await keysFor('  SEMEN   portland '));
+    });
+
+    it('20. a downstream failure after the catalog write propagates, so the whole transaction rolls back', async () => {
+      (tx as any).resourceSourceIdentity.create = jest.fn(async () => {
+        throw new Error('PROVENANCE_WRITE_FAILED');
+      });
+
+      await expect(admit()).rejects.toThrow('PROVENANCE_WRITE_FAILED');
+      expect(tx.basicPriceImportRowResourceMapping.create).not.toHaveBeenCalled();
+      expect(tx.basicPriceImportRow.update).not.toHaveBeenCalled();
+    });
+
+    it('21. a source row already bound to another resource refuses truthfully instead of stealing the binding', async () => {
+      (tx as any).resourceSourceIdentity.create = jest.fn(async () => {
+        throw new Prisma.PrismaClientKnownRequestError('unique violation', {
+          code: 'P2002',
+          clientVersion: 'test',
+        });
+      });
+
+      await expect(admit()).rejects.toThrow('RESOURCE_PROVENANCE_ALREADY_BOUND');
+      expect(tx.basicPriceImportRowResourceMapping.create).not.toHaveBeenCalled();
+    });
+
+    // ---------- IDEMPOTENCY, OWNERSHIP, OUTCOME ----------
+
+    it('22. a stale version cannot replay the decision, so no duplicate resource is born', async () => {
+      await expect(
+        service.admitResourceForRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
+          ...ADMIT,
+          version: 99,
+        } as any),
+      ).rejects.toBeInstanceOf(ConflictException);
+      nothingWasCreated();
+    });
+
+    it('23. a row that is no longer mutable admits nothing', async () => {
+      rowsFrom({ status: 'READY_FOR_SUBMISSION' });
+
+      await expect(admit()).rejects.toThrow('ROW_NOT_MUTABLE');
+      nothingWasCreated();
+    });
+
+    it('24. a batch outside the caller workspace admits nothing', async () => {
+      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
+        const sql = query?.strings?.join('') ?? '';
+        if (sql.includes('basic_price_import_batches'))
+          return Promise.resolve([{ ...baseBatch, workspaceId: 'other-ws' }]);
+        if (sql.includes('basic_price_import_rows')) return Promise.resolve([baseRow]);
+        return Promise.resolve([]);
+      });
+
+      await expect(admit()).rejects.toBeInstanceOf(NotFoundException);
+      nothingWasCreated();
+    });
+
+    it('25. a batch uploaded by someone else admits nothing', async () => {
+      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
+        const sql = query?.strings?.join('') ?? '';
+        if (sql.includes('basic_price_import_batches'))
+          return Promise.resolve([{ ...baseBatch, uploadedByAccountId: 'someone-else' }]);
+        if (sql.includes('basic_price_import_rows')) return Promise.resolve([baseRow]);
+        return Promise.resolve([]);
+      });
+
+      await expect(admit()).rejects.toBeInstanceOf(NotFoundException);
+      nothingWasCreated();
+    });
+
+    it('26. the mapping decision records what the human actually saw: nothing suggested this identity', async () => {
+      // The just-created row is excluded from the decision-time signal set. It
+      // exists by the time the audit is written, and counting it would make the
+      // record claim the reviewer picked a candidate their own decision created.
+      candidateRows = [
+        { resourceCatalogId: 'new-resource-01', code: null, name: 'Semen Portland', type: 'MATERIAL', baseUnit: 'M3' },
+      ];
+
       await admit();
 
       expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledTimes(1);
@@ -943,122 +1344,12 @@ describe('BasicPriceRowResolutionService', () => {
         unitDefinitionId: 'unit-01',
         reviewerAccountId: REVIEWER_ID,
         reason: ADMIT.reason,
-        // Nothing suggested this identity; a human supplied it.
         suggestionSource: 'MANUAL_SEARCH',
         candidateCountAtDecision: 0,
       });
     });
 
-    it('4. a stale version cannot replay the decision, so no duplicate resource is born', async () => {
-      await expect(
-        service.admitResourceForRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
-          ...ADMIT,
-          version: 99,
-        } as any),
-      ).rejects.toBeInstanceOf(ConflictException);
-      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
-    });
-
-    it('5. an existing same-name same-type resource blocks admission outright', async () => {
-      candidateRows = [
-        { resourceCatalogId: 'existing-01', code: null, name: 'Semen Portland', type: 'MATERIAL', baseUnit: 'Zak' },
-      ];
-
-      await expect(admit()).rejects.toThrow('RESOURCE_CANDIDATE_EXISTS');
-      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
-      expect((tx as any).resourceSourceIdentity.create).not.toHaveBeenCalled();
-    });
-
-    it('6. several plausible candidates are never settled by creating yet another one', async () => {
-      candidateRows = [
-        { resourceCatalogId: 'existing-01', code: null, name: 'Semen Portland', type: 'MATERIAL', baseUnit: 'Zak' },
-        { resourceCatalogId: 'existing-02', code: null, name: 'Semen Portland', type: 'MATERIAL', baseUnit: 'Kg' },
-      ];
-
-      await expect(admit()).rejects.toThrow('RESOURCE_CANDIDATE_EXISTS');
-      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
-    });
-
-    it('7. a batch outside the caller workspace admits nothing', async () => {
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
-        const sql = query?.strings?.join('') ?? '';
-        if (sql.includes('basic_price_import_batches'))
-          return Promise.resolve([{ ...baseBatch, workspaceId: 'other-ws' }]);
-        if (sql.includes('basic_price_import_rows')) return Promise.resolve([baseRow]);
-        return Promise.resolve([]);
-      });
-
-      await expect(admit()).rejects.toBeInstanceOf(NotFoundException);
-      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
-    });
-
-    it('8. a batch uploaded by someone else admits nothing', async () => {
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
-        const sql = query?.strings?.join('') ?? '';
-        if (sql.includes('basic_price_import_batches'))
-          return Promise.resolve([{ ...baseBatch, uploadedByAccountId: 'someone-else' }]);
-        if (sql.includes('basic_price_import_rows')) return Promise.resolve([baseRow]);
-        return Promise.resolve([]);
-      });
-
-      await expect(admit()).rejects.toBeInstanceOf(NotFoundException);
-      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
-    });
-
-    it('9. an unknown or inactive unit admits nothing — admission never mints unit vocabulary', async () => {
-      tx.unitDefinition.findFirst.mockResolvedValue(null);
-
-      await expect(admit()).rejects.toThrow('UNIT_UNKNOWN_OR_INACTIVE');
-      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
-    });
-
-    it('10. an absent source code stays null, and no specification is invented', async () => {
-      await admit();
-
-      const created = (tx as any).resourceCatalog.create.mock.calls[0][0].data;
-      expect(created.code).toBeNull();
-      expect(created.specifications).toBeUndefined();
-    });
-
-    it('11. a source code the row genuinely carries is preserved verbatim', async () => {
-      rowsFrom({ rawResourceCodeText: 'M.23' });
-
-      await admit();
-
-      expect((tx as any).resourceCatalog.create.mock.calls[0][0].data.code).toBe('M.23');
-    });
-
-    it('12. the resource type comes from the source section, never from the caller', async () => {
-      rowsFrom({ sourceSection: 'LABOR' });
-
-      await admit();
-
-      expect((tx as any).resourceCatalog.create.mock.calls[0][0].data.type).toBe('LABOR');
-    });
-
-    it('13. baseUnit is the canonical UnitDefinition code, so the UnitKernel can always prove it later', async () => {
-      await admit();
-
-      expect((tx as any).resourceCatalog.create.mock.calls[0][0].data.baseUnit).toBe('M3');
-    });
-
-    it('14. a failure after the catalog write propagates, so the whole transaction rolls back', async () => {
-      (tx as any).resourceSourceIdentity.create = jest.fn(async () => {
-        throw new Error('PROVENANCE_WRITE_FAILED');
-      });
-
-      await expect(admit()).rejects.toThrow('PROVENANCE_WRITE_FAILED');
-      expect(tx.basicPriceImportRowResourceMapping.create).not.toHaveBeenCalled();
-    });
-
-    it('15. a row that is no longer mutable admits nothing', async () => {
-      rowsFrom({ status: 'READY_FOR_SUBMISSION' });
-
-      await expect(admit()).rejects.toThrow('ROW_NOT_MUTABLE');
-      expect((tx as any).resourceCatalog.create).not.toHaveBeenCalled();
-    });
-
-    it('16. the admitted row lands READY_FOR_SUBMISSION bound to the new resource', async () => {
+    it('27. the admitted row lands READY_FOR_SUBMISSION bound to the new resource', async () => {
       const result = await admit();
 
       expect(tx.basicPriceImportRow.update).toHaveBeenCalledTimes(1);

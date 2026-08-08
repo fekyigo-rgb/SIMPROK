@@ -14,9 +14,14 @@ import { BasicPriceImportLookupService } from './basic-price-import-lookup.servi
 import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping-candidates.service';
 import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
 import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.service';
+import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 
 @Module({
-  imports: [PrismaModule, RealityIntakeModule],
+  // UnitKernelModule: admission asks the EXISTING unit authority whether the
+  // canonical base unit it is about to write is representable. No unit law is
+  // re-implemented here.
+  imports: [PrismaModule, RealityIntakeModule, UnitKernelModule],
   controllers: [BasicPriceController, BasicPriceImportController, BasicPricePublicationController, BasicPriceImportLookupController],
   providers: [
     BasicPriceService,
@@ -28,6 +33,11 @@ import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.servi
     BasicPriceRowMappingCandidatesService,
     BasicPricePrivateAssetService,
     TrustedBasicPriceActorService,
+    // THE resource identity authority, listed exactly as ProjectAhspModule
+    // already lists it. It is a stateless loader/delegator over PrismaModule,
+    // so both consumers judge identity with one kernel and one evidence law —
+    // there is no second matcher anywhere in this module.
+    ResourceIdentityResolutionService,
   ],
   exports: [BasicPriceService, BasicPriceEligibilityPolicy],
 })
