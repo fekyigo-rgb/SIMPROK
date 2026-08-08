@@ -18,37 +18,80 @@
 -- ── how an exact effectiveDate came to exist ─────────────────────────────────
 CREATE TYPE "PriceEffectiveDateProvenance" AS ENUM ('SOURCE_STATED', 'DERIVED_FROM_SOURCE_PERIOD');
 
+-- How coarse the source's period is, machine-readable. The label is verbatim
+-- source text and no code can reason over it; this is what makes a derived date
+-- checkable rather than merely described. Only YEAR exists because YEAR is the
+-- only granularity the evidence in hand demonstrates.
+CREATE TYPE "PriceSourcePeriodGranularity" AS ENUM ('YEAR');
+
 -- ── the import batch records what the source said about its period ───────────
 ALTER TABLE "basic_price_import_batches"
   ADD COLUMN "sourcePeriodLabel"           TEXT,
+  ADD COLUMN "sourcePeriodGranularity"     "PriceSourcePeriodGranularity",
   ADD COLUMN "effectiveDateProvenance"     "PriceEffectiveDateProvenance",
   ADD COLUMN "effectiveDateDerivationRule" TEXT;
 
--- ── every price the batch materializes carries the same three facts ──────────
+-- ── every price the batch materializes carries the same facts ────────────────
 ALTER TABLE "basic_prices"
   ADD COLUMN "sourcePeriodLabel"           TEXT,
+  ADD COLUMN "sourcePeriodGranularity"     "PriceSourcePeriodGranularity",
   ADD COLUMN "effectiveDateProvenance"     "PriceEffectiveDateProvenance",
   ADD COLUMN "effectiveDateDerivationRule" TEXT;
 
--- A derivation rule only means something for a DERIVED date. Asserting a rule
--- while claiming the source stated the date, or claiming a derived date with no
--- rule to re-derive it by, are both incoherent provenance — so both are
--- unrepresentable rather than merely discouraged. NULL provenance stays legal
--- for every row that predates this distinction.
+-- COHERENT PROVENANCE, OR NONE.
+--
+-- A DERIVED date is only honest if it can be re-derived, which needs all three:
+-- the period the source stated, how coarse that period is, and the named rule
+-- that turned it into a day. A blank string satisfies NOT NULL and proves
+-- nothing, so the constraint tests for non-blank rather than merely present.
+--
+-- A SOURCE_STATED date carries no derivation rule — there was no derivation. It
+-- MAY still carry a period label: a document can truthfully print both
+-- "TA 2024" and an exact date, and forbidding that would force a different lie.
+--
+-- NULL provenance stays legal and means UNKNOWN. Every row that predates this
+-- distinction keeps its exact current meaning, and unknown is never upgraded to
+-- "the source stated this".
 ALTER TABLE "basic_prices"
-  ADD CONSTRAINT "basic_prices_effective_date_derivation_rule_coherence_check"
+  ADD CONSTRAINT "basic_prices_effective_date_provenance_coherence_check"
   CHECK (
-    ("effectiveDateProvenance" IS NULL AND "effectiveDateDerivationRule" IS NULL)
-    OR ("effectiveDateProvenance" = 'SOURCE_STATED' AND "effectiveDateDerivationRule" IS NULL)
-    OR ("effectiveDateProvenance" = 'DERIVED_FROM_SOURCE_PERIOD' AND "effectiveDateDerivationRule" IS NOT NULL)
+    (
+      "effectiveDateProvenance" IS NULL
+      AND "effectiveDateDerivationRule" IS NULL
+    )
+    OR (
+      "effectiveDateProvenance" = 'SOURCE_STATED'
+      AND "effectiveDateDerivationRule" IS NULL
+    )
+    OR (
+      "effectiveDateProvenance" = 'DERIVED_FROM_SOURCE_PERIOD'
+      AND "sourcePeriodLabel" IS NOT NULL
+      AND btrim("sourcePeriodLabel") <> ''
+      AND "sourcePeriodGranularity" IS NOT NULL
+      AND "effectiveDateDerivationRule" IS NOT NULL
+      AND btrim("effectiveDateDerivationRule") <> ''
+    )
   );
 
 ALTER TABLE "basic_price_import_batches"
-  ADD CONSTRAINT "basic_price_batches_effective_date_derivation_rule_coherence_check"
+  ADD CONSTRAINT "basic_price_batches_effective_date_provenance_coherence_check"
   CHECK (
-    ("effectiveDateProvenance" IS NULL AND "effectiveDateDerivationRule" IS NULL)
-    OR ("effectiveDateProvenance" = 'SOURCE_STATED' AND "effectiveDateDerivationRule" IS NULL)
-    OR ("effectiveDateProvenance" = 'DERIVED_FROM_SOURCE_PERIOD' AND "effectiveDateDerivationRule" IS NOT NULL)
+    (
+      "effectiveDateProvenance" IS NULL
+      AND "effectiveDateDerivationRule" IS NULL
+    )
+    OR (
+      "effectiveDateProvenance" = 'SOURCE_STATED'
+      AND "effectiveDateDerivationRule" IS NULL
+    )
+    OR (
+      "effectiveDateProvenance" = 'DERIVED_FROM_SOURCE_PERIOD'
+      AND "sourcePeriodLabel" IS NOT NULL
+      AND btrim("sourcePeriodLabel") <> ''
+      AND "sourcePeriodGranularity" IS NOT NULL
+      AND "effectiveDateDerivationRule" IS NOT NULL
+      AND btrim("effectiveDateDerivationRule") <> ''
+    )
   );
 
 -- ── append-only history for an in-place provenance correction ────────────────

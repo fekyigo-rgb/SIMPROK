@@ -1033,6 +1033,23 @@ enum PriceEffectiveDateProvenance {
   DERIVED_FROM_SOURCE_PERIOD
 }
 
+/// RM-03D1 — how coarse the source's stated period actually is, machine-readable.
+///
+/// `sourcePeriodLabel` is verbatim source text ("TA 2024") and therefore not
+/// something code may reason over: a reader cannot tell from the string alone
+/// whether the period is a year, a quarter or a fortnight. This column answers
+/// that, so a derived date is re-derivable by machine and not only by a human
+/// reading prose.
+///
+/// Only YEAR exists today because YEAR is the only granularity the evidence in
+/// hand actually demonstrates. Inventing MONTH/QUARTER/SEMESTER now would be
+/// vocabulary with no proven referent — the same false-certainty habit this
+/// slice exists to close. A later migration adds a value when a source demands
+/// one.
+enum PriceSourcePeriodGranularity {
+  YEAR
+}
+
 enum PriceSourceType {
   VENDOR_QUOTE
   MARKET_SURVEY
@@ -1469,6 +1486,10 @@ model BasicPrice {
   /// Kept as text on purpose: normalizing it into a date is precisely the
   /// false precision `effectiveDateProvenance` exists to prevent.
   sourcePeriodLabel           String?
+  /// RM-03D1 — the machine-readable granularity of that period. Required
+  /// whenever the date was DERIVED, so the derivation is checkable by code and
+  /// not only by a human reading the label text.
+  sourcePeriodGranularity     PriceSourcePeriodGranularity?
   /// RM-03D1 — whether `effectiveDate` was stated by the source or derived by
   /// SIMPROK from a coarser period. NULL = unknown, never "stated".
   effectiveDateProvenance     PriceEffectiveDateProvenance?
@@ -1580,6 +1601,7 @@ model BasicPriceImportBatch {
   /// materializes, so a price is self-describing rather than requiring a reader
   /// to walk back to the import row to learn what the source actually said.
   sourcePeriodLabel           String?
+  sourcePeriodGranularity     PriceSourcePeriodGranularity?
   effectiveDateProvenance     PriceEffectiveDateProvenance?
   effectiveDateDerivationRule String?
 

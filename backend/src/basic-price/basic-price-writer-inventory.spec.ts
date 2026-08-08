@@ -123,6 +123,7 @@ describe('W-01 permanent BasicPrice writer inventory', () => {
       'sourceOrigin',
       'effectiveDate',
       'sourcePeriodLabel',
+      'sourcePeriodGranularity',
       'effectiveDateProvenance',
       'effectiveDateDerivationRule',
     ]) {

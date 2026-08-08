@@ -7,6 +7,105 @@ import {
   type PrivateBasicPriceItem,
 } from '../common/basic-price-workflow.projection';
 import type { TrustedBasicPriceActor } from './trusted-basic-price-actor.service';
+import {
+  expectedSourceTypeFor,
+  isCoherentSourcePair,
+} from '../common/price-source-coherence';
+
+/**
+ * The batch facts every private-price write depends on. Read once, asserted
+ * once, used by both the create path and the correction path so the two can
+ * never disagree about what "truthful enough to write" means.
+ */
+interface BatchProvenanceFacts {
+  sourceOrigin: string | null;
+  sourceType: string | null;
+  sourcePeriodLabel: string | null;
+  sourcePeriodGranularity: string | null;
+  effectiveDateProvenance: string | null;
+  effectiveDateDerivationRule: string | null;
+}
+
+const isBlank = (value: string | null | undefined): boolean =>
+  value === null || value === undefined || value.trim().length === 0;
+
+/**
+ * RM-03D1 — a private price may never carry an unstated or incoherent source
+ * classification.
+ *
+ * The writer used to fall back to MARKET_SURVEY when the batch said nothing,
+ * which could mint the very falsehood this slice exists to correct: a
+ * government standard price list recorded as a market survey. There is no
+ * fallback now, and the pair is checked against the ONE shared origin→type
+ * authority rather than a second opinion local to this file.
+ */
+export function assertSourceClassificationCoherent(
+  sourceOrigin: string | null,
+  sourceType: string | null,
+): void {
+  if (!sourceOrigin) {
+    throw new ConflictException('SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE');
+  }
+  if (!sourceType) {
+    throw new ConflictException('SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE');
+  }
+  if (!isCoherentSourcePair(sourceOrigin as any, sourceType as any)) {
+    throw new ConflictException({
+      statusCode: 409,
+      error: 'Conflict',
+      message: 'SOURCE_ORIGIN_TYPE_INCOHERENT',
+      sourceOrigin,
+      sourceType,
+      expectedSourceType: expectedSourceTypeFor(sourceOrigin as any) ?? null,
+    });
+  }
+}
+
+/**
+ * RM-03D1 — a DERIVED date must be re-derivable, and a stated date must not
+ * pretend to have been derived.
+ *
+ * The database enforces the same shape, and deliberately so: this gives a
+ * caller a named error instead of a constraint violation, while the constraint
+ * makes the incoherent row unrepresentable even to a writer that forgets to
+ * ask. Whitespace is rejected here because `'   '` is not a period label, and a
+ * NOT NULL column would happily accept it.
+ */
+export function assertTemporalProvenanceCoherent(
+  batch: BatchProvenanceFacts,
+): void {
+  const provenance = batch.effectiveDateProvenance;
+  if (!provenance) {
+    // Unknown provenance stays legal — it reads as "we do not claim", which is
+    // honest for anything imported before this distinction existed.
+    if (!isBlank(batch.effectiveDateDerivationRule)) {
+      throw new ConflictException('DERIVATION_RULE_REQUIRES_PROVENANCE');
+    }
+    return;
+  }
+  if (provenance === 'DERIVED_FROM_SOURCE_PERIOD') {
+    if (isBlank(batch.sourcePeriodLabel)) {
+      throw new ConflictException('SOURCE_PERIOD_LABEL_REQUIRED_FOR_DERIVED_DATE');
+    }
+    if (!batch.sourcePeriodGranularity) {
+      throw new ConflictException(
+        'SOURCE_PERIOD_GRANULARITY_REQUIRED_FOR_DERIVED_DATE',
+      );
+    }
+    if (isBlank(batch.effectiveDateDerivationRule)) {
+      throw new ConflictException(
+        'DERIVATION_RULE_REQUIRED_FOR_DERIVED_DATE',
+      );
+    }
+    return;
+  }
+  // SOURCE_STATED: the source printed the date, so there is no rule to carry.
+  // A period LABEL may still be present — a document can truthfully state both
+  // "TA 2024" and an exact date — so only the rule is forbidden.
+  if (!isBlank(batch.effectiveDateDerivationRule)) {
+    throw new ConflictException('DERIVATION_RULE_FORBIDDEN_FOR_SOURCE_STATED');
+  }
+}
 
 export interface KeepBatchPrivateResult {
   batchId: string;
@@ -23,6 +122,7 @@ export interface ProvenanceFacts {
   sourceOrigin: string | null;
   effectiveDate: string;
   sourcePeriodLabel: string | null;
+  sourcePeriodGranularity: string | null;
   effectiveDateProvenance: string | null;
   effectiveDateDerivationRule: string | null;
 }
@@ -117,13 +217,14 @@ export class BasicPricePrivateAssetService {
           sourceOrigin: string | null;
           uploadedByAccountId: string;
           sourcePeriodLabel: string | null;
+          sourcePeriodGranularity: string | null;
           effectiveDateProvenance: string | null;
           effectiveDateDerivationRule: string | null;
         }>
       >(
         Prisma.sql`SELECT "id", "workspaceId", "organizationId", "status", "effectiveDate",
                           "regionId", "sourceType", "sourceOrigin", "uploadedByAccountId",
-                          "sourcePeriodLabel", "effectiveDateProvenance", "effectiveDateDerivationRule"
+                          "sourcePeriodLabel", "sourcePeriodGranularity", "effectiveDateProvenance", "effectiveDateDerivationRule"
                      FROM "basic_price_import_batches"
                     WHERE "id" = ${batchId}::uuid
                     FOR UPDATE`,
@@ -163,6 +264,13 @@ export class BasicPricePrivateAssetService {
       if (!batch.sourceOrigin) {
         throw new ConflictException('SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE');
       }
+      // RM-03D1 — sourceType is now a REQUIRED truth, not a defaulted one. This
+      // writer previously wrote `batch.sourceType ?? 'MARKET_SURVEY'`, which
+      // could mint exactly the falsehood this slice exists to correct: a
+      // government price list silently classified as a market survey. There is
+      // no default any more; an unstated source type fails closed.
+      assertSourceClassificationCoherent(batch.sourceOrigin, batch.sourceType);
+      assertTemporalProvenanceCoherent(batch);
 
       const readyRows = await tx.$queryRaw<Array<{ id: string }>>(
         Prisma.sql`SELECT "id" FROM "basic_price_import_rows"
@@ -220,7 +328,10 @@ export class BasicPricePrivateAssetService {
             // come from a government list, a supplier, a store, a distributor
             // or a field report; the batch says which, and this writer copies
             // it verbatim rather than substituting a "private" source family.
-            sourceType: (batch.sourceType as any) ?? 'MARKET_SURVEY',
+            // No fallback. The coherence assertion above already refused an
+            // absent or incoherent classification, so this is the batch's
+            // stated truth or the write never happened.
+            sourceType: batch.sourceType as any,
             sourceOrigin: batch.sourceOrigin as any,
             freshnessStatus: 'CURRENT',
             // RM-03D1 — TEMPORAL PROVENANCE, carried verbatim from the batch.
@@ -232,6 +343,7 @@ export class BasicPricePrivateAssetService {
             // says nothing leaves all three null, which reads as "unknown" and
             // never as "the source stated this".
             sourcePeriodLabel: batch.sourcePeriodLabel,
+            sourcePeriodGranularity: batch.sourcePeriodGranularity as any,
             effectiveDateProvenance: batch.effectiveDateProvenance as any,
             effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
             // The reporter is the trusted, server-derived actor — never a
@@ -311,13 +423,14 @@ export class BasicPricePrivateAssetService {
           sourceOrigin: string | null;
           uploadedByAccountId: string;
           sourcePeriodLabel: string | null;
+          sourcePeriodGranularity: string | null;
           effectiveDateProvenance: string | null;
           effectiveDateDerivationRule: string | null;
         }>
       >(
         Prisma.sql`SELECT "id", "workspaceId", "organizationId", "status", "effectiveDate",
                           "sourceType", "sourceOrigin", "uploadedByAccountId",
-                          "sourcePeriodLabel", "effectiveDateProvenance", "effectiveDateDerivationRule"
+                          "sourcePeriodLabel", "sourcePeriodGranularity", "effectiveDateProvenance", "effectiveDateDerivationRule"
                      FROM "basic_price_import_batches"
                     WHERE "id" = ${batchId}::uuid
                     FOR UPDATE`,
@@ -344,12 +457,12 @@ export class BasicPricePrivateAssetService {
       if (!batch.effectiveDate) {
         throw new ConflictException('EFFECTIVE_DATE_REQUIRED_BEFORE_PRIVATE_USE');
       }
-      if (!batch.sourceOrigin) {
-        throw new ConflictException('SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE');
-      }
-      if (!batch.sourceType) {
-        throw new ConflictException('SOURCE_TYPE_REQUIRED_BEFORE_PROVENANCE_CORRECTION');
-      }
+      // The correction propagates the SAME facts the create path writes, so it
+      // is held to the SAME coherence rules. Anything less would let a
+      // correction reintroduce the incoherent classification the create path
+      // now refuses.
+      assertSourceClassificationCoherent(batch.sourceOrigin, batch.sourceType);
+      assertTemporalProvenanceCoherent(batch);
 
       const targets = await tx.basicPrice.findMany({
         where: {
@@ -392,6 +505,7 @@ export class BasicPricePrivateAssetService {
           sourceOrigin: price.sourceOrigin,
           effectiveDate: price.effectiveDate.toISOString(),
           sourcePeriodLabel: price.sourcePeriodLabel,
+          sourcePeriodGranularity: price.sourcePeriodGranularity,
           effectiveDateProvenance: price.effectiveDateProvenance,
           effectiveDateDerivationRule: price.effectiveDateDerivationRule,
         };
@@ -400,6 +514,7 @@ export class BasicPricePrivateAssetService {
           sourceOrigin: batch.sourceOrigin,
           effectiveDate: nextEffectiveDate.toISOString(),
           sourcePeriodLabel: batch.sourcePeriodLabel,
+          sourcePeriodGranularity: batch.sourcePeriodGranularity,
           effectiveDateProvenance: batch.effectiveDateProvenance,
           effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
         };
@@ -418,6 +533,7 @@ export class BasicPricePrivateAssetService {
             sourceOrigin: batch.sourceOrigin as any,
             effectiveDate: nextEffectiveDate,
             sourcePeriodLabel: batch.sourcePeriodLabel,
+            sourcePeriodGranularity: batch.sourcePeriodGranularity as any,
             effectiveDateProvenance: batch.effectiveDateProvenance as any,
             effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
             // value / status / verificationStatus / assetScope / regionId /

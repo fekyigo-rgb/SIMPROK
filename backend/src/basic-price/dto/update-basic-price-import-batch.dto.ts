@@ -1,6 +1,19 @@
-import { IsOptional, IsString, IsUUID, IsEnum, IsBoolean, IsDateString, IsInt } from 'class-validator';
+import { IsOptional, IsString, IsUUID, IsEnum, IsBoolean, IsDateString, IsInt, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';
-import { PriceSourceType, PriceSourceOrigin, PriceEffectiveDateProvenance } from '@prisma/client';
+import {
+  PriceSourceType,
+  PriceSourceOrigin,
+  PriceEffectiveDateProvenance,
+  PriceSourcePeriodGranularity,
+} from '@prisma/client';
+
+/**
+ * RM-03D1 — a provenance string must actually say something. `@IsString()`
+ * happily accepts "   ", and a NOT NULL column would store it, so a blank
+ * period label or derivation rule would satisfy every check while proving
+ * nothing. At least one non-whitespace character is required.
+ */
+const NON_BLANK = /\S/;
 
 const toBoolean = ({ value }: { value: unknown }) => {
   if (typeof value === 'boolean') return value;
@@ -45,13 +58,14 @@ export class UpdateBasicPriceImportBatchDto {
    */
 
 
-  @IsOptional() @IsString() sourcePeriodLabel?: string;
+  @IsOptional() @IsString() @Matches(NON_BLANK) sourcePeriodLabel?: string;
+  @IsOptional() @IsEnum(PriceSourcePeriodGranularity) sourcePeriodGranularity?: PriceSourcePeriodGranularity;
 
 
   @IsOptional() @IsEnum(PriceEffectiveDateProvenance) effectiveDateProvenance?: PriceEffectiveDateProvenance;
 
 
-  @IsOptional() @IsString() effectiveDateDerivationRule?: string;
+  @IsOptional() @IsString() @Matches(NON_BLANK) effectiveDateDerivationRule?: string;
 
 
 

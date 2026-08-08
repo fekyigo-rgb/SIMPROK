@@ -41,6 +41,7 @@ const FINGERPRINT_METADATA_KEYS = [
   // with a different provenance claim is a different batch, never a silent reuse
   // of one that claimed something else.
   'sourcePeriodLabel',
+  'sourcePeriodGranularity',
   'effectiveDateProvenance',
   'effectiveDateDerivationRule',
   'priceCoverageDeclared',
@@ -254,6 +255,7 @@ export class BasicPriceImportService {
             // RM-03D1 — temporal provenance. Null means unknown, which never
             // reads as "the source stated this date".
             sourcePeriodLabel: metadata.sourcePeriodLabel ?? null,
+            sourcePeriodGranularity: metadata.sourcePeriodGranularity ?? null,
             effectiveDateProvenance: metadata.effectiveDateProvenance ?? null,
             effectiveDateDerivationRule:
               metadata.effectiveDateDerivationRule ?? null,
@@ -389,6 +391,7 @@ export class BasicPriceImportService {
           // RM-03D1 — temporal provenance, under the same
           // omitted-means-unchanged rule as every other field here.
           sourcePeriodLabel: dto.sourcePeriodLabel ?? undefined,
+          sourcePeriodGranularity: dto.sourcePeriodGranularity ?? undefined,
           effectiveDateProvenance: dto.effectiveDateProvenance ?? undefined,
           effectiveDateDerivationRule:
             dto.effectiveDateDerivationRule ?? undefined,

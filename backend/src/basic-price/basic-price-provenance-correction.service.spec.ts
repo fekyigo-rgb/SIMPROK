@@ -1,6 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException, NotFoundException } from '@nestjs/common';
-import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
+import {
+  BasicPricePrivateAssetService,
+  assertSourceClassificationCoherent,
+  assertTemporalProvenanceCoherent,
+} from './basic-price-private-asset.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -38,6 +42,7 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     sourceOrigin: 'GOVERNMENT',
     uploadedByAccountId: ACTOR.accountId,
     sourcePeriodLabel: 'TA 2024',
+    sourcePeriodGranularity: 'YEAR',
     effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
     effectiveDateDerivationRule: 'RM03D1_DOCUMENT_ISSUE_DATE',
     ...over,
@@ -53,6 +58,7 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     sourceType: 'MARKET_SURVEY',
     sourceOrigin: 'GOVERNMENT',
     sourcePeriodLabel: null,
+    sourcePeriodGranularity: null,
     effectiveDateProvenance: null,
     effectiveDateDerivationRule: null,
     sourceImportRowId: 'row-01',
@@ -105,6 +111,7 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     expect(tx.basicPrice.update.mock.calls[0][0].data).toMatchObject({
       sourceType: 'REGULATION',
       sourcePeriodLabel: 'TA 2024',
+      sourcePeriodGranularity: 'YEAR',
       effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
       effectiveDateDerivationRule: 'RM03D1_DOCUMENT_ISSUE_DATE',
     });
@@ -167,6 +174,7 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
         sourceType: 'REGULATION',
         effectiveDate: new Date('2024-04-01T00:00:00.000Z'),
         sourcePeriodLabel: 'TA 2024',
+        sourcePeriodGranularity: 'YEAR',
         effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
         effectiveDateDerivationRule: 'RM03D1_DOCUMENT_ISSUE_DATE',
       }),
@@ -207,7 +215,27 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
   it('10. FAILS CLOSED when the batch cannot supply the facts — never defaults, never fabricates', async () => {
     batch = batchRow({ sourceType: null });
 
-    await expect(correct()).rejects.toThrow('SOURCE_TYPE_REQUIRED_BEFORE_PROVENANCE_CORRECTION');
+    // The same error code the create path raises: correction and creation now
+    // share ONE coherence authority, so they cannot disagree about what
+    // "truthful enough to write" means.
+    await expect(correct()).rejects.toThrow('SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE');
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+  });
+
+  it('10b. a correction can never REINTRODUCE an incoherent classification', async () => {
+    batch = batchRow({ sourceType: 'MARKET_SURVEY' });
+
+    await expect(correct()).rejects.toThrow('SOURCE_ORIGIN_TYPE_INCOHERENT');
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+    expect(tx.basicPriceProvenanceCorrection.create).not.toHaveBeenCalled();
+  });
+
+  it('10c. a correction can never propagate an incomplete derived provenance', async () => {
+    batch = batchRow({ sourcePeriodGranularity: null });
+
+    await expect(correct()).rejects.toThrow(
+      'SOURCE_PERIOD_GRANULARITY_REQUIRED_FOR_DERIVED_DATE',
+    );
     expect(tx.basicPrice.update).not.toHaveBeenCalled();
   });
 
@@ -234,5 +262,159 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     prices = [];
 
     await expect(correct()).rejects.toThrow('NO_PRIVATE_PRICE_TO_CORRECT');
+  });
+});
+
+/**
+ * RM-03D1 GAP-1 / GAP-2 — the two coherence rules, exercised directly.
+ *
+ * These are the guards that stop the corrected system from re-creating the
+ * falsehood it was built to remove: a government price list classified as a
+ * market survey, and a derived date with nothing to derive it from.
+ */
+describe('provenance coherence guards (RM-03D1)', () => {
+  const derived = (over: Record<string, unknown> = {}) => ({
+    sourceOrigin: 'GOVERNMENT',
+    sourceType: 'REGULATION',
+    sourcePeriodLabel: 'TA 2024',
+    sourcePeriodGranularity: 'YEAR',
+    effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
+    effectiveDateDerivationRule: 'PERIOD_START',
+    ...over,
+  });
+
+  describe('source classification', () => {
+    it('GOVERNMENT + REGULATION is the coherent government pair', () => {
+      expect(() =>
+        assertSourceClassificationCoherent('GOVERNMENT', 'REGULATION'),
+      ).not.toThrow();
+    });
+
+    it('GOVERNMENT + MARKET_SURVEY is refused — the exact falsehood this slice removes', () => {
+      const error = (() => {
+        try {
+          assertSourceClassificationCoherent('GOVERNMENT', 'MARKET_SURVEY');
+          return null;
+        } catch (e) {
+          return e as any;
+        }
+      })();
+      expect(error).toBeInstanceOf(ConflictException);
+      expect(error.getResponse()).toMatchObject({
+        message: 'SOURCE_ORIGIN_TYPE_INCOHERENT',
+        sourceOrigin: 'GOVERNMENT',
+        sourceType: 'MARKET_SURVEY',
+        expectedSourceType: 'REGULATION',
+      });
+    });
+
+    it('a MISSING sourceType fails closed — there is no default any more', () => {
+      expect(() =>
+        assertSourceClassificationCoherent('GOVERNMENT', null),
+      ).toThrow('SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE');
+    });
+
+    it('a missing origin fails closed too', () => {
+      expect(() =>
+        assertSourceClassificationCoherent(null, 'REGULATION'),
+      ).toThrow('SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE');
+    });
+
+    it('every other origin keeps its own coherent type', () => {
+      expect(() => assertSourceClassificationCoherent('SUPPLIER', 'VENDOR_QUOTE')).not.toThrow();
+      expect(() => assertSourceClassificationCoherent('FIELD_REPORT', 'MARKET_SURVEY')).not.toThrow();
+      expect(() => assertSourceClassificationCoherent('SUPPLIER', 'REGULATION')).toThrow(
+        'SOURCE_ORIGIN_TYPE_INCOHERENT',
+      );
+    });
+  });
+
+  describe('temporal provenance', () => {
+    it('a fully-formed derived provenance is accepted', () => {
+      expect(() => assertTemporalProvenanceCoherent(derived() as any)).not.toThrow();
+    });
+
+    it('DERIVED requires a period label', () => {
+      expect(() =>
+        assertTemporalProvenanceCoherent(derived({ sourcePeriodLabel: null }) as any),
+      ).toThrow('SOURCE_PERIOD_LABEL_REQUIRED_FOR_DERIVED_DATE');
+    });
+
+    it('DERIVED requires a machine-readable granularity — a label alone is not one', () => {
+      expect(() =>
+        assertTemporalProvenanceCoherent(derived({ sourcePeriodGranularity: null }) as any),
+      ).toThrow('SOURCE_PERIOD_GRANULARITY_REQUIRED_FOR_DERIVED_DATE');
+    });
+
+    it('DERIVED requires a named derivation rule', () => {
+      expect(() =>
+        assertTemporalProvenanceCoherent(derived({ effectiveDateDerivationRule: null }) as any),
+      ).toThrow('DERIVATION_RULE_REQUIRED_FOR_DERIVED_DATE');
+    });
+
+    it('whitespace is not a period label, and not a rule', () => {
+      expect(() =>
+        assertTemporalProvenanceCoherent(derived({ sourcePeriodLabel: '   ' }) as any),
+      ).toThrow('SOURCE_PERIOD_LABEL_REQUIRED_FOR_DERIVED_DATE');
+      expect(() =>
+        assertTemporalProvenanceCoherent(derived({ effectiveDateDerivationRule: '  \t ' }) as any),
+      ).toThrow('DERIVATION_RULE_REQUIRED_FOR_DERIVED_DATE');
+    });
+
+    it('SOURCE_STATED forbids a derivation rule — nothing was derived', () => {
+      expect(() =>
+        assertTemporalProvenanceCoherent(
+          derived({ effectiveDateProvenance: 'SOURCE_STATED' }) as any,
+        ),
+      ).toThrow('DERIVATION_RULE_FORBIDDEN_FOR_SOURCE_STATED');
+    });
+
+    it('SOURCE_STATED may still carry a period label — a document can print both', () => {
+      expect(() =>
+        assertTemporalProvenanceCoherent(
+          derived({
+            effectiveDateProvenance: 'SOURCE_STATED',
+            effectiveDateDerivationRule: null,
+          }) as any,
+        ),
+      ).not.toThrow();
+    });
+
+    it('UNKNOWN provenance stays legal, and is never read as SOURCE_STATED', () => {
+      expect(() =>
+        assertTemporalProvenanceCoherent({
+          sourceOrigin: 'GOVERNMENT',
+          sourceType: 'REGULATION',
+          sourcePeriodLabel: null,
+          sourcePeriodGranularity: null,
+          effectiveDateProvenance: null,
+          effectiveDateDerivationRule: null,
+        } as any),
+      ).not.toThrow();
+    });
+
+    it('a rule with no provenance claim is incoherent', () => {
+      expect(() =>
+        assertTemporalProvenanceCoherent(
+          derived({ effectiveDateProvenance: null }) as any,
+        ),
+      ).toThrow('DERIVATION_RULE_REQUIRES_PROVENANCE');
+    });
+
+    it('THE LOCKED TA 2024 REPRESENTATION is exactly what the law prescribes', () => {
+      // sourcePeriodLabel "TA 2024" · granularity YEAR · PERIOD_START ·
+      // DERIVED_FROM_SOURCE_PERIOD. 2024-01-01 is SIMPROK's operational date,
+      // never a date the workbook printed.
+      expect(() =>
+        assertTemporalProvenanceCoherent({
+          sourceOrigin: 'GOVERNMENT',
+          sourceType: 'REGULATION',
+          sourcePeriodLabel: 'TA 2024',
+          sourcePeriodGranularity: 'YEAR',
+          effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
+          effectiveDateDerivationRule: 'PERIOD_START',
+        } as any),
+      ).not.toThrow();
+    });
   });
 });
