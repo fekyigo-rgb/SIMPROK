@@ -565,7 +565,9 @@ export class BasicPriceRowResolutionService {
         const lockKey = advisoryLockKey(
           `${workspaceId}|${row.sourceSection}|${normalizeResourceName(row.rawResourceNameText)}`,
         );
-        await tx.$queryRaw(
+        // $executeRaw, not $queryRaw: the function returns SQL `void`, which
+        // has no Prisma type to deserialize into.
+        await tx.$executeRaw(
           Prisma.sql`SELECT pg_advisory_xact_lock(${RESOURCE_ADMISSION_LOCK_NAMESPACE}::int4, ${lockKey}::int4)`,
         );
 

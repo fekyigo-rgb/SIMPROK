@@ -10,6 +10,7 @@ describe('BasicPriceRowResolutionService', () => {
   let service: BasicPriceRowResolutionService;
   let tx: {
     $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
     basicPriceImportRow: {
       findFirst: jest.Mock;
       update: jest.Mock;
@@ -83,6 +84,7 @@ describe('BasicPriceRowResolutionService', () => {
     identityMappingRows = [];
     tx = {
       $queryRaw: jest.fn(),
+      $executeRaw: jest.fn(async () => 1),
       basicPriceImportRow: {
         findFirst: jest.fn(),
         update: jest.fn(),
@@ -1210,13 +1212,9 @@ describe('BasicPriceRowResolutionService', () => {
         order.push('identity');
         return identityCatalogRows;
       });
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
-        const sql = query?.strings?.join('') ?? '';
-        if (sql.includes('pg_advisory_xact_lock')) order.push('lock');
-        if (sql.includes('basic_price_import_batches')) return Promise.resolve([baseBatch]);
-        if (sql.includes('basic_price_import_rows')) return Promise.resolve([baseRow]);
-        if (sql.includes('resource_catalogs')) return Promise.resolve(candidateRows);
-        return Promise.resolve([]);
+      tx.$executeRaw.mockImplementation(async (query: { strings?: readonly string[] }) => {
+        if ((query?.strings?.join('') ?? '').includes('pg_advisory_xact_lock')) order.push('lock');
+        return 1;
       });
 
       await admit();
@@ -1246,9 +1244,9 @@ describe('BasicPriceRowResolutionService', () => {
     it('19. the serialization key is deterministic for the same workspace, type and normalized name', async () => {
       const keysFor = async (name: string) => {
         rowsFrom({ rawResourceNameText: name });
-        tx.$queryRaw.mockClear();
+        tx.$executeRaw.mockClear();
         await admit();
-        return tx.$queryRaw.mock.calls
+        return tx.$executeRaw.mock.calls
           .map(([query]: any) => query)
           .filter((q: any) => (q?.strings?.join('') ?? '').includes('pg_advisory_xact_lock'))
           .map((q: any) => q.values);
