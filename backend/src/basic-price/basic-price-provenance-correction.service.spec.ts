@@ -4,6 +4,7 @@ import {
   BasicPricePrivateAssetService,
   assertSourceClassificationCoherent,
   assertTemporalProvenanceCoherent,
+  resolvePriceTemporalFacts,
 } from './basic-price-private-asset.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -416,5 +417,77 @@ describe('provenance coherence guards (RM-03D1)', () => {
         } as any),
       ).not.toThrow();
     });
+  });
+});
+
+/**
+ * RM-03D1 FINAL CLOSURE — provenance must describe THE DATE THE PRICE CARRIES.
+ *
+ * `effectiveDate` follows a row-level override when one exists, but the
+ * provenance columns were copied from the batch unconditionally. A row
+ * overriding the date would still inherit "DERIVED_FROM_SOURCE_PERIOD by
+ * PERIOD_START from TA 2024" — a derivation that does not produce that date.
+ * Provenance for a DIFFERENT date is worse than no provenance at all.
+ */
+describe('resolvePriceTemporalFacts (RM-03D1)', () => {
+  const batch = {
+    effectiveDate: new Date('2024-01-01T00:00:00.000Z'),
+    sourcePeriodLabel: 'TA 2024',
+    sourcePeriodGranularity: 'YEAR',
+    effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
+    effectiveDateDerivationRule: 'PERIOD_START',
+  };
+
+  it('without an override, the batch derivation explains the date and travels intact', () => {
+    expect(resolvePriceTemporalFacts(batch, null)).toEqual({
+      effectiveDate: batch.effectiveDate,
+      sourcePeriodLabel: 'TA 2024',
+      sourcePeriodGranularity: 'YEAR',
+      effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
+      effectiveDateDerivationRule: 'PERIOD_START',
+    });
+  });
+
+  it('WITH an override, the derivation no longer explains the date and is DROPPED', () => {
+    const override = new Date('2024-06-15T00:00:00.000Z');
+    const facts = resolvePriceTemporalFacts(batch, override);
+
+    expect(facts.effectiveDate).toEqual(override);
+    // The claim that would have been a lie.
+    expect(facts.effectiveDateProvenance).toBeNull();
+    expect(facts.effectiveDateDerivationRule).toBeNull();
+  });
+
+  it('but the SOURCE PERIOD survives an override — it is still what the document says', () => {
+    const facts = resolvePriceTemporalFacts(batch, new Date('2024-06-15T00:00:00.000Z'));
+
+    expect(facts.sourcePeriodLabel).toBe('TA 2024');
+    expect(facts.sourcePeriodGranularity).toBe('YEAR');
+  });
+
+  it('a PERIOD_START derivation can never accompany a date that is not the period start', () => {
+    // The invariant stated directly: if a rule is present, it came from the
+    // batch, and the batch's own date is the one it explains.
+    for (const override of [null, new Date('2024-06-15T00:00:00.000Z')]) {
+      const facts = resolvePriceTemporalFacts(batch, override);
+      if (facts.effectiveDateDerivationRule !== null) {
+        expect(facts.effectiveDate).toEqual(batch.effectiveDate);
+      }
+    }
+  });
+
+  it('an UNKNOWN batch stays UNKNOWN either way — nothing is invented by resolving', () => {
+    const unknown = {
+      effectiveDate: new Date('2024-01-01T00:00:00.000Z'),
+      sourcePeriodLabel: null,
+      sourcePeriodGranularity: null,
+      effectiveDateProvenance: null,
+      effectiveDateDerivationRule: null,
+    };
+    expect(resolvePriceTemporalFacts(unknown, null).effectiveDateProvenance).toBeNull();
+    expect(
+      resolvePriceTemporalFacts(unknown, new Date('2024-06-15T00:00:00.000Z'))
+        .effectiveDateProvenance,
+    ).toBeNull();
   });
 });

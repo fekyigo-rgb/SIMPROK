@@ -277,6 +277,19 @@ export interface PrivateBasicPriceItem {
   verificationStatus: string;
   /** The import row this price was materialized from — its only evidence. */
   sourceImportRowId: string;
+  /**
+   * RM-03D1 — TEMPORAL PROVENANCE, surfaced rather than left in the database.
+   *
+   * `effectiveDate` above is a single day, and a caller cannot tell from it
+   * alone whether the source printed that day or SIMPROK derived it. These four
+   * answer that: what the source's own period wording was, how coarse it is,
+   * whether the date is stated or derived, and by which named rule. A null
+   * provenance means UNKNOWN — never "the source stated this".
+   */
+  sourcePeriodLabel: string | null;
+  sourcePeriodGranularity: string | null;
+  effectiveDateProvenance: string | null;
+  effectiveDateDerivationRule: string | null;
 }
 
 export interface PrivateBasicPriceRowSource {
@@ -287,6 +300,10 @@ export interface PrivateBasicPriceRowSource {
   verificationStatus: string;
   sourceOrigin: string;
   sourceImportRowId: string | null;
+  sourcePeriodLabel?: string | null;
+  sourcePeriodGranularity?: string | null;
+  effectiveDateProvenance?: string | null;
+  effectiveDateDerivationRule?: string | null;
   resource: { id: string; code: string | null; name: string; type: string };
   region: { id: string; code: string; name: string } | null;
 }
@@ -308,6 +325,13 @@ export function mapPrivateBasicPriceItem(
     // refuses a private row without it. The `??` is a type narrowing, not a
     // fallback that could ever fabricate an empty provenance reference.
     sourceImportRowId: row.sourceImportRowId ?? '',
+    // `?? null` is a narrowing for callers that do not select these columns —
+    // never a fabricated claim. Absent reads as UNKNOWN, which is the honest
+    // answer when the projection was not given the facts.
+    sourcePeriodLabel: row.sourcePeriodLabel ?? null,
+    sourcePeriodGranularity: row.sourcePeriodGranularity ?? null,
+    effectiveDateProvenance: row.effectiveDateProvenance ?? null,
+    effectiveDateDerivationRule: row.effectiveDateDerivationRule ?? null,
   };
 }
 

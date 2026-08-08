@@ -1,4 +1,11 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsString, Matches, MinLength } from 'class-validator';
+
+/**
+ * A reason must actually say something. `@MinLength(1)` accepts "   ", which
+ * satisfies every check while explaining nothing — and an audit trail whose
+ * stated reason is whitespace is not an audit trail.
+ */
+const NON_BLANK = /\S/;
 
 /**
  * RM-03D1 — re-apply this batch's corrected provenance to the private prices it
@@ -14,5 +21,5 @@ import { IsString, MinLength } from 'class-validator';
  * never self-evident, and the append-only correction record must carry why.
  */
 export class CorrectPrivateProvenanceDto {
-  @IsString() @MinLength(1) reason!: string;
+  @IsString() @MinLength(1) @Matches(NON_BLANK) reason!: string;
 }

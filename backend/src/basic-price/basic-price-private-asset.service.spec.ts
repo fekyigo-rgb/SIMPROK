@@ -355,6 +355,13 @@ describe('BasicPricePrivateAssetService', () => {
         status: 'UNPUBLISHED',
         verificationStatus: 'UNVERIFIED',
         sourceImportRowId: rowId,
+        // RM-03D1 — temporal provenance is STATED, not left for the reader to
+        // assume. This fixture's batch claims none, and null reads as UNKNOWN,
+        // which is pointedly not SOURCE_STATED.
+        sourcePeriodLabel: null,
+        sourcePeriodGranularity: null,
+        effectiveDateProvenance: null,
+        effectiveDateDerivationRule: null,
       });
       expect(typeof result.prices[0].price).toBe('string');
     });

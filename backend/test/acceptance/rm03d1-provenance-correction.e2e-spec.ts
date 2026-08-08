@@ -354,4 +354,121 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
       .send({})
       .expect(400);
   });
+
+  it('J: DERIVED → SOURCE_STATED is reachable — an explicit null CLEARS the obsolete rule', async () => {
+    const { batchId, basicPriceId } = await materializeUnprovenancedPrivatePrice('prov-clear-stated');
+    let batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    await patchBatchToTruth(batchId, batch.version).expect(200);
+    await correct(batchId).expect(201);
+
+    // The source turned out to state the date after all. Becoming SOURCE_STATED
+    // REQUIRES dropping the derivation rule — with "?? undefined" semantics an
+    // explicit null was swallowed as "unchanged" and this transition was simply
+    // unreachable: the batch could never stop claiming a derivation it no
+    // longer had.
+    batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    await request(app.getHttpServer())
+      .patch(`/basic-price-imports/${batchId}`)
+      .set(hdr())
+      .send({
+        version: batch.version,
+        effectiveDateProvenance: 'SOURCE_STATED',
+        effectiveDateDerivationRule: null,
+      })
+      .expect(200);
+
+    const afterPatch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    expect(afterPatch.effectiveDateProvenance).toBe('SOURCE_STATED');
+    expect(afterPatch.effectiveDateDerivationRule).toBeNull();
+    // The period label is NOT cleared: a document may truthfully print both.
+    expect(afterPatch.sourcePeriodLabel).toBe('TA 2024');
+
+    await correct(batchId, 'the source states the exact date after all').expect(201);
+    const price = await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPriceId } });
+    expect(price.effectiveDateProvenance).toBe('SOURCE_STATED');
+    expect(price.effectiveDateDerivationRule).toBeNull();
+  });
+
+  it('K: DERIVED → UNKNOWN is reachable — clearing the claim is not the same as keeping it', async () => {
+    const { batchId, basicPriceId } = await materializeUnprovenancedPrivatePrice('prov-clear-unknown');
+    let batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    await patchBatchToTruth(batchId, batch.version).expect(200);
+    await correct(batchId).expect(201);
+
+    batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    await request(app.getHttpServer())
+      .patch(`/basic-price-imports/${batchId}`)
+      .set(hdr())
+      .send({
+        version: batch.version,
+        effectiveDateProvenance: null,
+        effectiveDateDerivationRule: null,
+      })
+      .expect(200);
+
+    await correct(batchId, 'the derivation was withdrawn; provenance is unknown').expect(201);
+    const price = await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPriceId } });
+    // UNKNOWN, and pointedly not SOURCE_STATED.
+    expect(price.effectiveDateProvenance).toBeNull();
+    expect(price.effectiveDateDerivationRule).toBeNull();
+  });
+
+  it('L: OMITTING a field still means unchanged — clearing requires saying null', async () => {
+    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-omit-unchanged');
+    let batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    await patchBatchToTruth(batchId, batch.version).expect(200);
+
+    batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    await request(app.getHttpServer())
+      .patch(`/basic-price-imports/${batchId}`)
+      .set(hdr())
+      .send({ version: batch.version, sourceVendorName: 'unrelated edit' })
+      .expect(200);
+
+    const after = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    expect(after.effectiveDateProvenance).toBe('DERIVED_FROM_SOURCE_PERIOD');
+    expect(after.effectiveDateDerivationRule).toBe('PERIOD_START');
+    expect(after.sourcePeriodLabel).toBe('TA 2024');
+  });
+
+  it('M: clearing the provenance while KEEPING the rule is refused — incoherence is unrepresentable', async () => {
+    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-clear-incoherent');
+    let batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    await patchBatchToTruth(batchId, batch.version).expect(200);
+
+    batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    const response = await request(app.getHttpServer())
+      .patch(`/basic-price-imports/${batchId}`)
+      .set(hdr())
+      .send({ version: batch.version, effectiveDateProvenance: null })
+      .expect(409);
+    expect(response.body.message).toBe('DERIVATION_RULE_REQUIRES_PROVENANCE');
+  });
+
+  it('N: a whitespace-only reason is refused — an audit trail must say something', async () => {
+    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-blank-reason');
+    const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    await patchBatchToTruth(batchId, batch.version).expect(200);
+
+    await request(app.getHttpServer())
+      .post(`/basic-price-imports/${batchId}/correct-private-provenance`)
+      .set(hdr())
+      .send({ reason: '   ' })
+      .expect(400);
+    expect(await prisma.basicPriceProvenanceCorrection.count({ where: { workspaceId: WORKSPACE_A } })).toBe(0);
+  });
+
+  it('O: the response STATES the provenance it applied, rather than leaving the caller to assume', async () => {
+    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-response-shape');
+    const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    await patchBatchToTruth(batchId, batch.version).expect(200);
+
+    const response = await correct(batchId).expect(201);
+    expect(response.body.corrections[0].price).toMatchObject({
+      sourcePeriodLabel: 'TA 2024',
+      sourcePeriodGranularity: 'YEAR',
+      effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
+      effectiveDateDerivationRule: 'PERIOD_START',
+    });
+  });
 });

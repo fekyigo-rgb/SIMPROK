@@ -99,11 +99,19 @@ export class BasicPriceImportController {
   ) {
     const workspaceId: string = request.workspaceContext?.workspaceId;
     const currentAccountId: string = request.user.id;
+    // Distinguishing "client sent effectiveDateProvenance: null" (CLEAR the
+    // claim) from "client omitted it" (leave it alone) requires the
+    // pre-transform raw body — the global ValidationPipe runs with
+    // transform: true, and class-transformer materializes every declared DTO
+    // field as an own property regardless of what the client actually sent.
+    // Same technique the BOQ persist route already uses for unitPrice.
+    const providedKeys = Object.keys(request.body ?? {});
     return this.importService.updateBatchMetadata(
       workspaceId,
       batchId,
       dto,
       currentAccountId,
+      providedKeys,
     );
   }
 

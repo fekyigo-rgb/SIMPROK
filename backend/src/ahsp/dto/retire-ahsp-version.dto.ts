@@ -1,4 +1,7 @@
-import { IsEnum, IsString, MinLength } from 'class-validator';
+import { IsEnum, IsString, Matches, MinLength } from 'class-validator';
+
+/** Whitespace is not a reason; see the correction DTO for the same guard. */
+const NON_BLANK = /\S/;
 
 /**
  * RM-03D1 — the two retirement outcomes the domain already defines.
@@ -29,5 +32,6 @@ export class RetireAhspVersionDto {
    */
   @IsString()
   @MinLength(1)
+  @Matches(NON_BLANK)
   reason!: string;
 }

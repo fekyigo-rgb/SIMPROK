@@ -468,6 +468,18 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
       .send({ status: 'ARCHIVED', reason: '' })
       .expect(400);
 
+    // Whitespace is not a reason. MinLength(1) accepts "   ", which would put a
+    // blank explanation on a permanent withdrawal record.
+    await request(app.getHttpServer())
+      .post(`/ahsp/versions/${VERSION_RETIRE_ID}/retire`)
+      .set(hdr())
+      .send({ status: 'ARCHIVED', reason: '   ' })
+      .expect(400);
+
+    const stillDraft = await prisma.aHSPVersion.findUniqueOrThrow({ where: { id: VERSION_RETIRE_ID } });
+    expect(stillDraft.status).toBe('DRAFT');
+    expect(await auditCount()).toBe(0);
+
     await request(app.getHttpServer())
       .post(`/ahsp/versions/${VERSION_RETIRE_ID}/retire`)
       .set('x-workspace-id', WORKSPACE_A)

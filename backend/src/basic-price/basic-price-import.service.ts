@@ -352,7 +352,26 @@ export class BasicPriceImportService {
     batchId: string,
     dto: UpdateBasicPriceImportBatchDto,
     currentAccountId: string,
+    /**
+     * Keys the client ACTUALLY sent, from the pre-transform raw body.
+     *
+     * Provenance corrections must be able to CLEAR an obsolete claim: moving a
+     * batch from DERIVED_FROM_SOURCE_PERIOD to SOURCE_STATED requires removing
+     * the derivation rule, and moving it to UNKNOWN requires removing both. With
+     * `dto.x ?? undefined` an explicit null collapsed into "unchanged", so those
+     * transitions were unreachable — the batch could never stop claiming a
+     * derivation it no longer had. Omitted for callers that do not need clearing;
+     * they keep the previous omitted-means-unchanged behaviour exactly.
+     */
+    providedKeys?: string[],
   ) {
+    const provided = providedKeys ? new Set(providedKeys) : null;
+    /** ABSENT = unchanged (undefined) · NULL = clear · VALUE = replace. */
+    const patch = <T>(key: keyof UpdateBasicPriceImportBatchDto, value: T) => {
+      if (!provided) return value ?? undefined;
+      if (!provided.has(key as string)) return undefined;
+      return value === undefined ? undefined : value;
+    };
     return this.prisma.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<
         Array<{
@@ -390,16 +409,39 @@ export class BasicPriceImportService {
       // constraint stays as the last word for any writer that never asks; this
       // just gives the human at the boundary a usable answer. Merged state, not
       // the patch alone: a field the caller omitted keeps its stored value.
+      // Exactly the state the update below will produce: a cleared field is
+      // validated as cleared, not as its stale stored value.
+      const merged = <T>(
+        key: keyof UpdateBasicPriceImportBatchDto,
+        next: T | null | undefined,
+        stored: T | null,
+      ): T | null => {
+        const patched = patch(key, next);
+        return patched === undefined ? stored : (patched as T | null);
+      };
       assertTemporalProvenanceCoherent({
         sourceOrigin: null,
         sourceType: null,
-        sourcePeriodLabel: dto.sourcePeriodLabel ?? batch.sourcePeriodLabel,
-        sourcePeriodGranularity:
-          dto.sourcePeriodGranularity ?? batch.sourcePeriodGranularity,
-        effectiveDateProvenance:
-          dto.effectiveDateProvenance ?? batch.effectiveDateProvenance,
-        effectiveDateDerivationRule:
-          dto.effectiveDateDerivationRule ?? batch.effectiveDateDerivationRule,
+        sourcePeriodLabel: merged(
+          'sourcePeriodLabel',
+          dto.sourcePeriodLabel,
+          batch.sourcePeriodLabel,
+        ),
+        sourcePeriodGranularity: merged(
+          'sourcePeriodGranularity',
+          dto.sourcePeriodGranularity,
+          batch.sourcePeriodGranularity,
+        ) as any,
+        effectiveDateProvenance: merged(
+          'effectiveDateProvenance',
+          dto.effectiveDateProvenance,
+          batch.effectiveDateProvenance,
+        ) as any,
+        effectiveDateDerivationRule: merged(
+          'effectiveDateDerivationRule',
+          dto.effectiveDateDerivationRule,
+          batch.effectiveDateDerivationRule,
+        ),
       });
 
       const updated = await tx.basicPriceImportBatch.update({
@@ -415,11 +457,19 @@ export class BasicPriceImportService {
           sourceVendorName: dto.sourceVendorName ?? undefined,
           // RM-03D1 — temporal provenance, under the same
           // omitted-means-unchanged rule as every other field here.
-          sourcePeriodLabel: dto.sourcePeriodLabel ?? undefined,
-          sourcePeriodGranularity: dto.sourcePeriodGranularity ?? undefined,
-          effectiveDateProvenance: dto.effectiveDateProvenance ?? undefined,
-          effectiveDateDerivationRule:
-            dto.effectiveDateDerivationRule ?? undefined,
+          sourcePeriodLabel: patch('sourcePeriodLabel', dto.sourcePeriodLabel),
+          sourcePeriodGranularity: patch(
+            'sourcePeriodGranularity',
+            dto.sourcePeriodGranularity,
+          ),
+          effectiveDateProvenance: patch(
+            'effectiveDateProvenance',
+            dto.effectiveDateProvenance,
+          ),
+          effectiveDateDerivationRule: patch(
+            'effectiveDateDerivationRule',
+            dto.effectiveDateDerivationRule,
+          ),
           priceCoverageDeclared: dto.priceCoverageDeclared ?? undefined,
           transportIncluded: dto.transportIncluded ?? undefined,
           loadingIncluded: dto.loadingIncluded ?? undefined,

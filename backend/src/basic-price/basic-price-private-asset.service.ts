@@ -61,6 +61,66 @@ export function assertSourceClassificationCoherent(
   }
 }
 
+/** The temporal facts one PRICE carries, resolved from batch + row evidence. */
+export interface ResolvedPriceTemporalFacts {
+  effectiveDate: Date;
+  sourcePeriodLabel: string | null;
+  sourcePeriodGranularity: string | null;
+  effectiveDateProvenance: string | null;
+  effectiveDateDerivationRule: string | null;
+}
+
+/**
+ * RM-03D1 — resolve ONE price's temporal facts from the batch and its row.
+ *
+ * THE DEFECT THIS EXISTS TO PREVENT. `effectiveDate` follows a row-level
+ * override when there is one, but the provenance columns were copied from the
+ * batch unconditionally. A row overriding the date to 2024-06-15 would still
+ * inherit the batch's claim of "DERIVED_FROM_SOURCE_PERIOD by PERIOD_START from
+ * TA 2024" — a derivation that does not produce 2024-06-15. That is provenance
+ * describing a DIFFERENT date, exactly the kind of lie this slice exists to
+ * remove, and worse than saying nothing at all.
+ *
+ * So when the row overrides the date, the batch's derivation no longer explains
+ * it and is dropped: provenance and rule become NULL, which reads as UNKNOWN —
+ * "SIMPROK does not claim how this date arose". The period LABEL and its
+ * GRANULARITY are kept, because they remain true statements about the SOURCE
+ * DOCUMENT whichever date this row ended up with; discarding them would throw
+ * away a fact that is still correct.
+ *
+ * Both the create path and the correction path resolve through here, so they
+ * cannot drift into disagreeing about what a price's date means.
+ */
+export function resolvePriceTemporalFacts(
+  batch: {
+    effectiveDate: Date;
+    sourcePeriodLabel: string | null;
+    sourcePeriodGranularity: string | null;
+    effectiveDateProvenance: string | null;
+    effectiveDateDerivationRule: string | null;
+  },
+  rowEffectiveDateOverride: Date | null | undefined,
+): ResolvedPriceTemporalFacts {
+  if (!rowEffectiveDateOverride) {
+    return {
+      effectiveDate: batch.effectiveDate,
+      sourcePeriodLabel: batch.sourcePeriodLabel,
+      sourcePeriodGranularity: batch.sourcePeriodGranularity,
+      effectiveDateProvenance: batch.effectiveDateProvenance,
+      effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
+    };
+  }
+  return {
+    effectiveDate: rowEffectiveDateOverride,
+    // Still true of the source document.
+    sourcePeriodLabel: batch.sourcePeriodLabel,
+    sourcePeriodGranularity: batch.sourcePeriodGranularity,
+    // No longer true of THIS date.
+    effectiveDateProvenance: null,
+    effectiveDateDerivationRule: null,
+  };
+}
+
 /**
  * RM-03D1 — a DERIVED date must be re-derivable, and a stated date must not
  * pretend to have been derived.
@@ -153,6 +213,12 @@ const PRIVATE_PRICE_SELECT = {
   verificationStatus: true,
   sourceOrigin: true,
   sourceImportRowId: true,
+  // RM-03D1 — selected so the response can state how the date came to be,
+  // rather than leaving the caller to assume.
+  sourcePeriodLabel: true,
+  sourcePeriodGranularity: true,
+  effectiveDateProvenance: true,
+  effectiveDateDerivationRule: true,
   resource: { select: { id: true, code: true, name: true, type: true } },
   region: { select: { id: true, code: true, name: true } },
 } satisfies Prisma.BasicPriceSelect;
@@ -309,6 +375,13 @@ export class BasicPricePrivateAssetService {
           throw new ConflictException('ROW_NOT_RESOLVED');
         }
 
+        // ONE resolver for the price's temporal facts, so a row-level date
+        // override can never inherit a batch derivation that does not explain it.
+        const temporal = resolvePriceTemporalFacts(
+          { ...batch, effectiveDate: batch.effectiveDate as Date },
+          row.effectiveDateOverride,
+        );
+
         const created = await tx.basicPrice.create({
           data: {
             // OWNERSHIP — the axis this whole slice exists for.
@@ -321,7 +394,7 @@ export class BasicPricePrivateAssetService {
             // resolved or set on the batch. Never inferred here.
             resourceId: row.resourceCatalogId,
             regionId: batch.regionId,
-            effectiveDate: row.effectiveDateOverride ?? batch.effectiveDate,
+            effectiveDate: temporal.effectiveDate,
             // EXACT money. Prisma.Decimal, never Number()/parseFloat().
             value: new Prisma.Decimal(row.proposedCanonicalPrice),
             // SOURCE — orthogonal to ownership. A private asset may truthfully
@@ -342,10 +415,10 @@ export class BasicPricePrivateAssetService {
             // named rule it was derived. Copied, never inferred — a batch that
             // says nothing leaves all three null, which reads as "unknown" and
             // never as "the source stated this".
-            sourcePeriodLabel: batch.sourcePeriodLabel,
-            sourcePeriodGranularity: batch.sourcePeriodGranularity as any,
-            effectiveDateProvenance: batch.effectiveDateProvenance as any,
-            effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
+            sourcePeriodLabel: temporal.sourcePeriodLabel,
+            sourcePeriodGranularity: temporal.sourcePeriodGranularity as any,
+            effectiveDateProvenance: temporal.effectiveDateProvenance as any,
+            effectiveDateDerivationRule: temporal.effectiveDateDerivationRule,
             // The reporter is the trusted, server-derived actor — never a
             // client-supplied id, and never the batch's stored uploader taken
             // on faith.
@@ -495,10 +568,13 @@ export class BasicPricePrivateAssetService {
               select: { effectiveDateOverride: true },
             })
           : null;
-        // Exactly the precedence keepBatchPrivate used, so a corrected price
-        // lands on the same date the writer would have produced today.
-        const nextEffectiveDate =
-          rowOverride?.effectiveDateOverride ?? batch.effectiveDate;
+        // The SAME resolver the writer uses, so a corrected price lands on
+        // exactly the facts keepBatchPrivate would produce today — including
+        // dropping a derivation the row's own date does not follow from.
+        const temporal = resolvePriceTemporalFacts(
+          { ...batch, effectiveDate: batch.effectiveDate as Date },
+          rowOverride?.effectiveDateOverride,
+        );
 
         const before = {
           sourceType: price.sourceType,
@@ -512,11 +588,11 @@ export class BasicPricePrivateAssetService {
         const after = {
           sourceType: batch.sourceType,
           sourceOrigin: batch.sourceOrigin,
-          effectiveDate: nextEffectiveDate.toISOString(),
-          sourcePeriodLabel: batch.sourcePeriodLabel,
-          sourcePeriodGranularity: batch.sourcePeriodGranularity,
-          effectiveDateProvenance: batch.effectiveDateProvenance,
-          effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
+          effectiveDate: temporal.effectiveDate.toISOString(),
+          sourcePeriodLabel: temporal.sourcePeriodLabel,
+          sourcePeriodGranularity: temporal.sourcePeriodGranularity,
+          effectiveDateProvenance: temporal.effectiveDateProvenance,
+          effectiveDateDerivationRule: temporal.effectiveDateDerivationRule,
         };
 
         // Idempotency is decided by comparing the correctable fields, not by a
@@ -531,11 +607,11 @@ export class BasicPricePrivateAssetService {
           data: {
             sourceType: batch.sourceType as any,
             sourceOrigin: batch.sourceOrigin as any,
-            effectiveDate: nextEffectiveDate,
-            sourcePeriodLabel: batch.sourcePeriodLabel,
-            sourcePeriodGranularity: batch.sourcePeriodGranularity as any,
-            effectiveDateProvenance: batch.effectiveDateProvenance as any,
-            effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
+            effectiveDate: temporal.effectiveDate,
+            sourcePeriodLabel: temporal.sourcePeriodLabel,
+            sourcePeriodGranularity: temporal.sourcePeriodGranularity as any,
+            effectiveDateProvenance: temporal.effectiveDateProvenance as any,
+            effectiveDateDerivationRule: temporal.effectiveDateDerivationRule,
             // value / status / verificationStatus / assetScope / regionId /
             // resourceId / sourceImportRowId are absent on purpose.
           },
