@@ -248,7 +248,13 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
 
     expect(result.status).toBe('UNRESOLVED');
     expect(result.reasonCodes).toContain('UNIT_NOT_SUPPORTED');
-    expect(result.explanation).toContain('labor-day');
+    // RM-03D1: the refusal is no longer phrased as "not a labor-day unit" —
+    // that wording was the old resource-class restriction talking. What the
+    // human must be told is which two units could not be proved, and by whom.
+    expect(result.explanation).toContain('OH');
+    expect(result.explanation).toContain('Jam');
+    expect(result.explanation).toContain('Kamus Unit');
+    expect(result.explanation).not.toContain('labor-day');
   });
 
   // ----------------------------------------------------------
@@ -490,7 +496,12 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
     expect(result.reasonCodes).toContain('LABOR_DAY_UNIT_EQUIVALENT');
     // Must NOT have selectedBasicPriceId
     expect((result as any).selectedBasicPriceId).toBeUndefined();
-    expect(result.explanation).toContain('labor-day');
+    // RM-03D1: an unprovable price unit is reported as exactly that. The
+    // resource here IS labor, so LABOR_DAY_UNIT_EQUIVALENT above still holds;
+    // the price-side refusal simply no longer borrows labor vocabulary.
+    expect(result.explanation).toContain('Org/Hari');
+    expect(result.explanation).toContain('Kamus Unit');
+    expect(result.explanation).not.toContain('labor-day');
   });
 
   // ----------------------------------------------------------
@@ -729,5 +740,367 @@ describe('resolveAhspResourcePrice — Phase 1 Deterministic Kernel', () => {
     expect(result.status).toBe('UNRESOLVED');
     expect(result.reasonCodes).toContain('BASIC_PRICE_UNIT_NOT_SUPPORTED');
     expect((result as any).selectedBasicPriceId).toBeUndefined();
+  });
+});
+
+// ============================================================
+// RM-03D1 — the resource CLASS no longer decides unit eligibility
+//
+// Every unitResolution below is a verdict the UnitKernel would have produced;
+// none of these tests invents a unit, an alias, or a conversion rule. What is
+// under test is whether this kernel HONOURS that verdict for material and
+// equipment exactly as it always has for labor — and whether it still refuses,
+// closed, everything the verdict does not actually prove.
+// ============================================================
+
+type AhspLegVerdict = AhspResourceResolutionInput['validatedUnitResolution'];
+type PriceLegVerdict = BasicPriceCandidate['unitResolution'];
+type ResolutionContext = Omit<
+  AhspResourceResolutionInput,
+  'resourceCatalogCandidates' | 'eligibleBasicPriceCandidates'
+>;
+
+const CATALOG_SEMEN: ResourceCatalogCandidate = {
+  id: 'catalog-semen-uuid-010',
+  code: 'M.23',
+  name: 'Portland Cement',
+  type: 'MATERIAL',
+  baseUnit: 'Kg',
+};
+
+const CATALOG_EXCAVATOR: ResourceCatalogCandidate = {
+  id: 'catalog-excavator-uuid-011',
+  code: 'E.15.c',
+  name: 'Sewa Excavator Standar',
+  type: 'EQUIPMENT',
+  baseUnit: 'Jam',
+};
+
+const MATERIAL_AHSP_LEG: AhspLegVerdict = {
+  status: 'RESOLVED',
+  canonicalUnitCode: 'KG',
+  quantityFactor: '1',
+  rawSourceUnit: 'Kg',
+  rawTargetUnit: 'Kg',
+};
+
+const MATERIAL_PRICE_LEG: PriceLegVerdict = {
+  status: 'RESOLVED',
+  canonicalUnitCode: 'KG',
+  quantityFactor: '1',
+  priceOperation: 'IDENTITY',
+  rawSourceUnit: 'Kg',
+  rawTargetUnit: 'Kg',
+};
+
+const EQUIPMENT_AHSP_LEG: AhspLegVerdict = {
+  status: 'RESOLVED',
+  canonicalUnitCode: 'HOUR',
+  quantityFactor: '1',
+  rawSourceUnit: 'Jam',
+  rawTargetUnit: 'Jam',
+};
+
+const EQUIPMENT_PRICE_LEG: PriceLegVerdict = {
+  status: 'RESOLVED',
+  canonicalUnitCode: 'HOUR',
+  quantityFactor: '1',
+  priceOperation: 'IDENTITY',
+  rawSourceUnit: 'Jam',
+  rawTargetUnit: 'Jam',
+};
+
+const MATERIAL_CONTEXT: ResolutionContext = {
+  ...BASE_INPUT,
+  rawResourceRef: 'Portland Cement',
+  resourceType: 'MATERIAL',
+  ahspUnit: 'Kg',
+  validatedUnitResolution: MATERIAL_AHSP_LEG,
+};
+
+const EQUIPMENT_CONTEXT: ResolutionContext = {
+  ...BASE_INPUT,
+  rawResourceRef: 'Sewa Excavator Standar',
+  resourceType: 'EQUIPMENT',
+  ahspUnit: 'Jam',
+  validatedUnitResolution: EQUIPMENT_AHSP_LEG,
+};
+
+const PRICE_SEMEN: BasicPriceCandidate = {
+  id: 'price-semen-uuid-010',
+  resourceId: CATALOG_SEMEN.id,
+  value: '2100.00',
+  sourceOrigin: 'GOVERNMENT',
+  unit: 'Kg',
+  unitResolution: MATERIAL_PRICE_LEG,
+};
+
+const PRICE_EXCAVATOR: BasicPriceCandidate = {
+  id: 'price-excavator-uuid-011',
+  resourceId: CATALOG_EXCAVATOR.id,
+  value: '1214490.25',
+  sourceOrigin: 'SUPPLIER',
+  unit: 'Jam',
+  unitResolution: EQUIPMENT_PRICE_LEG,
+};
+
+describe('resolveAhspResourcePrice — RM-03D1 generalized unit resolution', () => {
+  // ---------- B. MATERIAL, exact unit identity ----------
+  it('B. a MATERIAL whose unit identity the UnitKernel proved resolves, exactly as labor always did', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [CATALOG_SEMEN],
+      eligibleBasicPriceCandidates: [PRICE_SEMEN],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    if (result.status !== 'RESOLVED') return;
+    expect(result.resolvedResourceCatalogId).toBe(CATALOG_SEMEN.id);
+    expect(result.selectedBasicPriceId).toBe(PRICE_SEMEN.id);
+    expect(result.canonicalUnit).toBe('KG');
+    expect(result.conversionFactor).toBe('1');
+    expect(result.adaptedPriceValue).toBe('2100.00');
+    expect(result.sourcePriceValue).toBe('2100.00');
+    expect(result.reasonCodes).toContain('EXACT_UNIT_IDENTITY');
+    // §13: a material must never borrow labor vocabulary in its audit trail.
+    expect(result.reasonCodes).not.toContain('LABOR_DAY_UNIT_EQUIVALENT');
+  });
+
+  // ---------- C. EQUIPMENT, exact unit identity ----------
+  it('C. an EQUIPMENT whose unit identity the UnitKernel proved resolves too', () => {
+    const result = resolveAhspResourcePrice({
+      ...EQUIPMENT_CONTEXT,
+      resourceCatalogCandidates: [CATALOG_EXCAVATOR],
+      eligibleBasicPriceCandidates: [PRICE_EXCAVATOR],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    if (result.status !== 'RESOLVED') return;
+    expect(result.canonicalUnit).toBe('HOUR');
+    expect(result.adaptedPriceValue).toBe('1214490.25');
+    expect(result.reasonCodes).toContain('EXACT_UNIT_IDENTITY');
+    expect(result.reasonCodes).not.toContain('LABOR_DAY_UNIT_EQUIVALENT');
+  });
+
+  // ---------- A. legacy labor is untouched ----------
+  it('A. labor still reports LABOR_DAY_UNIT_EQUIVALENT and never the generic code', () => {
+    const result = resolveAhspResourcePrice({
+      ...BASE_INPUT,
+      resourceCatalogCandidates: [CATALOG_PEKERJA],
+      eligibleBasicPriceCandidates: [PRICE_PEKERJA_STANDARD],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    if (result.status !== 'RESOLVED') return;
+    expect(result.reasonCodes).toContain('LABOR_DAY_UNIT_EQUIVALENT');
+    expect(result.reasonCodes).not.toContain('EXACT_UNIT_IDENTITY');
+    expect(result.canonicalUnit).toBe('PERSON_DAY');
+  });
+
+  // ---------- D. wrong resource type ----------
+  it('D. a MATERIAL reference never binds to a same-named LABOR catalog row', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [{ ...CATALOG_SEMEN, type: 'LABOR' }],
+      eligibleBasicPriceCandidates: [PRICE_SEMEN],
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toContain('RESOURCE_TYPE_MISMATCH');
+  });
+
+  // ---------- E. no catalog identity ----------
+  it('E. a MATERIAL with no catalog identity stays UNRESOLVED', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [CATALOG_EXCAVATOR],
+      eligibleBasicPriceCandidates: [PRICE_SEMEN],
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toContain('NO_CATALOG_CANDIDATE');
+  });
+
+  // ---------- F. multiple catalog candidates ----------
+  it('F. two exact MATERIAL catalog rows are a human decision, not an auto-pick', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [
+        CATALOG_SEMEN,
+        { ...CATALOG_SEMEN, id: 'catalog-semen-uuid-012' },
+      ],
+      eligibleBasicPriceCandidates: [PRICE_SEMEN],
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('MULTIPLE_CATALOG_CANDIDATES');
+  });
+
+  // ---------- G / H / I / J. every unit verdict short of RESOLVED fails closed ----------
+  const failClosedAhspVerdicts: ReadonlyArray<[string, AhspLegVerdict]> = [
+    [
+      'G. unknown unit alias',
+      { ...MATERIAL_AHSP_LEG, status: 'NEEDS_REVIEW', canonicalUnitCode: null, quantityFactor: null },
+    ],
+    [
+      'H. ambiguous unit alias',
+      { ...MATERIAL_AHSP_LEG, status: 'NEEDS_REVIEW', canonicalUnitCode: 'KG', quantityFactor: null },
+    ],
+    [
+      'I. explicitly NOT_CONVERTIBLE',
+      { ...MATERIAL_AHSP_LEG, status: 'NOT_CONVERTIBLE' },
+    ],
+    [
+      'J. conversion rule not found',
+      { ...MATERIAL_AHSP_LEG, status: 'NEEDS_REVIEW', quantityFactor: null },
+    ],
+  ];
+
+  it.each(failClosedAhspVerdicts)(
+    '%s → UNRESOLVED / UNIT_NOT_SUPPORTED, never a guessed price',
+    (_label, verdict) => {
+      const result = resolveAhspResourcePrice({
+        ...MATERIAL_CONTEXT,
+        validatedUnitResolution: verdict,
+        resourceCatalogCandidates: [CATALOG_SEMEN],
+        eligibleBasicPriceCandidates: [PRICE_SEMEN],
+      });
+
+      expect(result.status).toBe('UNRESOLVED');
+      expect(result.reasonCodes).toContain('UNIT_NOT_SUPPORTED');
+      expect((result as any).selectedBasicPriceId).toBeUndefined();
+      expect((result as any).adaptedPriceValue).toBeUndefined();
+    },
+  );
+
+  it('a certified AHSP unit verdict for a different raw pair cannot be replayed here', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      validatedUnitResolution: { ...MATERIAL_AHSP_LEG, rawTargetUnit: 'Zak' },
+      resourceCatalogCandidates: [CATALOG_SEMEN],
+      eligibleBasicPriceCandidates: [PRICE_SEMEN],
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toContain('UNIT_NOT_SUPPORTED');
+  });
+
+  // ---------- K. a real conversion is never inverted into existence ----------
+  it('K1. a commensurable AHSP/catalog pair needing a factor is NEEDS_REVIEW, not a multiplied guess', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      ahspUnit: 'Zak',
+      validatedUnitResolution: {
+        status: 'RESOLVED',
+        canonicalUnitCode: 'KG',
+        quantityFactor: '40',
+        rawSourceUnit: 'Zak',
+        rawTargetUnit: 'Kg',
+      },
+      resourceCatalogCandidates: [CATALOG_SEMEN],
+      eligibleBasicPriceCandidates: [PRICE_SEMEN],
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('UNIT_CONVERSION_UNPROVED');
+    expect((result as any).adaptedPriceValue).toBeUndefined();
+  });
+
+  it('K2. a Basic Price needing a divide operation is NEEDS_REVIEW, not silently divided', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [CATALOG_SEMEN],
+      eligibleBasicPriceCandidates: [
+        {
+          ...PRICE_SEMEN,
+          unit: 'Zak',
+          value: '84000.00',
+          unitResolution: {
+            status: 'RESOLVED',
+            canonicalUnitCode: 'KG',
+            quantityFactor: '40',
+            priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+            rawSourceUnit: 'Zak',
+            rawTargetUnit: 'Kg',
+          },
+        },
+      ],
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('UNIT_CONVERSION_UNPROVED');
+    // The honest distinction: this is NOT "unit not supported".
+    expect(result.reasonCodes).not.toContain('BASIC_PRICE_UNIT_NOT_SUPPORTED');
+    expect((result as any).adaptedPriceValue).toBeUndefined();
+  });
+
+  // ---------- L. price cardinality and freshness, for a material ----------
+  it('L1. zero Basic Prices for a resolved MATERIAL is UNRESOLVED, never zero rupiah', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [CATALOG_SEMEN],
+      eligibleBasicPriceCandidates: [],
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toContain('NO_BASIC_PRICE_CANDIDATE');
+    expect(result.reasonCodes).toContain('EXACT_UNIT_IDENTITY');
+    expect(result.reasonCodes).not.toContain('LABOR_DAY_UNIT_EQUIVALENT');
+  });
+
+  it('L2. two compatible MATERIAL prices stay a human decision', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [CATALOG_SEMEN],
+      eligibleBasicPriceCandidates: [
+        PRICE_SEMEN,
+        { ...PRICE_SEMEN, id: 'price-semen-uuid-013', value: '2250.00' },
+      ],
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('MULTIPLE_BASIC_PRICE_CANDIDATES');
+    expect((result as any).selectedBasicPriceId).toBeUndefined();
+  });
+
+  it('L3. an expired-only MATERIAL price is held for review, not spent', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [CATALOG_SEMEN],
+      eligibleBasicPriceCandidates: [
+        { ...PRICE_SEMEN, freshnessStatus: 'EXPIRED' },
+      ],
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('ONLY_EXPIRED_BASIC_PRICE_CANDIDATES');
+  });
+
+  it('L4. a price belonging to another catalog row is never borrowed', () => {
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [CATALOG_SEMEN],
+      eligibleBasicPriceCandidates: [PRICE_EXCAVATOR],
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toContain('NO_BASIC_PRICE_CANDIDATE');
+  });
+
+  // ---------- N. exact decimal ----------
+  it('N. a material price beyond IEEE-754 safe range round-trips digit for digit', () => {
+    const exact = '9007199254740993.99';
+    const result = resolveAhspResourcePrice({
+      ...MATERIAL_CONTEXT,
+      resourceCatalogCandidates: [CATALOG_SEMEN],
+      eligibleBasicPriceCandidates: [{ ...PRICE_SEMEN, value: exact }],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    if (result.status !== 'RESOLVED') return;
+    expect(result.sourcePriceValue).toBe(exact);
+    expect(result.adaptedPriceValue).toBe(exact);
+    // Proof it never went through a JS number on the way.
+    expect(String(Number(exact))).not.toBe(exact);
   });
 });

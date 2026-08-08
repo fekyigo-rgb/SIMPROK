@@ -13,11 +13,20 @@
  * Receives already-tenant-visible and already-eligible candidates as input.
  * Does NOT define publication or tenant eligibility.
  *
- * Phase 1 bounded scope:
- * - Proves one deterministic chain: Pekerja / LABOR / OH → Pekerja / LABOR / Org/Hari → BasicPrice
+ * RM-03D1 — the resource CLASS no longer decides whether a unit may resolve.
+ * LABOR, MATERIAL and EQUIPMENT are treated identically at the level of
+ * resolution law; what differs is only the evidence each one happens to carry.
+ * The kernel does not know any unit names: it consumes a verdict the
+ * UnitKernel already produced (see UnitKernelService, the single unit
+ * authority) and never re-derives, widens or second-guesses it.
+ *
+ * Bounded scope — still true after RM-03D1:
  * - Does NOT persist an occurrence, create a snapshot, calculate resource cost,
  *   calculate AHSP unit price, or update RAB.
- * - Does NOT contain a universal unit engine.
+ * - Does NOT contain a unit engine, a unit dictionary, or any unit alias.
+ * - Applies ONLY the price adaptation the UnitKernel itself proved for the
+ *   direction actually needed. It never inverts a factor, never multiplies by
+ *   one it was not given, and never invents a rounding policy for a quotient.
  */
 
 // ============================================================
@@ -96,7 +105,28 @@ export type ResolutionStatus =
 export type ReasonCode =
   | 'EXACT_RESOURCE_NAME_MATCH'
   | 'RESOURCE_TYPE_MATCH'
+  /**
+   * Preserved verbatim, and still emitted for exactly the case it has always
+   * described: a LABOR resource whose canonical unit is the labor day. It is
+   * never reused for MATERIAL or EQUIPMENT — a material priced per kilogram
+   * has nothing to do with labor-day equivalence, and saying so would be a
+   * lie in the audit trail.
+   */
   | 'LABOR_DAY_UNIT_EQUIVALENT'
+  /**
+   * RM-03D1, additive. The UnitKernel proved both sides denote the SAME
+   * canonical unit, so the price needs no arithmetic at all. This is the
+   * generic sibling of LABOR_DAY_UNIT_EQUIVALENT for every non-labor class.
+   */
+  | 'EXACT_UNIT_IDENTITY'
+  /**
+   * RM-03D1, additive. Units are commensurable and the UnitKernel said so,
+   * but reaching the unit this resolution actually needs would require a
+   * conversion this kernel was not handed for that direction. Inverting the
+   * factor it DOES have would be inventing conversion law, so the resolution
+   * stops and asks for a human instead of guessing.
+   */
+  | 'UNIT_CONVERSION_UNPROVED'
   | 'SINGLE_ELIGIBLE_BASIC_PRICE'
   | 'NO_CATALOG_CANDIDATE'
   | 'MULTIPLE_CATALOG_CANDIDATES'
@@ -120,9 +150,20 @@ export interface ResolvedResolution {
   readonly sourcePriceValue: string;
   readonly sourceUnit: string;
   readonly ahspUnit: string;
-  readonly canonicalUnit: 'PERSON_DAY';
-  /** Exact string "1" for labor-day equivalence. */
-  readonly conversionFactor: '1';
+  /**
+   * The canonical unit code the UnitKernel actually proved — reported as
+   * evidence, not asserted as a constant. Before RM-03D1 this was hardcoded
+   * to 'PERSON_DAY', which made the field a restatement of the restriction
+   * rather than a fact about this resource.
+   */
+  readonly canonicalUnit: string;
+  /**
+   * The quantity factor the UnitKernel proved. Always "1" today, because a
+   * RESOLVED result is only ever produced for exact unit identity — but it is
+   * echoed from the verdict rather than written as a literal, so it can never
+   * claim a factor the evidence did not contain.
+   */
+  readonly conversionFactor: string;
   /** Same exact decimal string as sourcePriceValue — factor 1 means no numeric change. */
   readonly adaptedPriceValue: string;
   readonly selectionStatus: 'AUTO_SELECTED';
@@ -170,16 +211,23 @@ function normalizeResourceName(raw: string): string {
 }
 
 /**
- * Canonical labor-day unit set.
+ * There is deliberately NO unit list, unit alias, or unit dictionary in this
+ * file — and adding one would be a defect, not a feature.
  *
- * NOTE: This equivalence list is DELIBERATELY BOUNDED to labor-day units only.
- * It is NOT a universal unit dictionary. Do not add material, equipment,
- * package, weight, volume, or time conversions here.
- * Future unit classes (Class B package conversion, Class C contextual) require
- * a separate authorized gate before addition.
+ * Unit truth has exactly one authority: UnitKernelService. It owns alias
+ * equivalence, canonical identity, ambiguity detection, unknown-alias
+ * detection, evidence-bound directional rules, quantityFactor and
+ * priceOperation. This kernel's whole job is to consume that verdict and
+ * decide whether the resource may proceed — never to re-decide the unit.
  *
- * Supported canonical equivalence (case-insensitive, trimmed):
- *   OH == Org/Hari == Orang/Hari == PERSON_DAY
+ * The one rule this kernel adds on top of the verdict is a NON-INVERSION
+ * guard: it will only ever apply a price adaptation the UnitKernel proved for
+ * the direction being asked for. Concretely, both certified legs are proven
+ * against ResourceCatalog.baseUnit as the pivot, so the price can only be
+ * carried to the AHSP unit without inventing law when the AHSP unit and the
+ * catalog unit are the SAME canonical unit (quantityFactor "1"). Anything
+ * else would mean multiplying by the inverse of a factor that was only proved
+ * one way round — so it returns UNIT_CONVERSION_UNPROVED and stops.
  */
 // ============================================================
 // KERNEL ENTRY POINT
@@ -194,10 +242,14 @@ function normalizeResourceName(raw: string): string {
  * Does not throw for ordinary domain outcomes (unresolved/ambiguous).
  * Throws only for malformed programmer input (null/undefined context fields).
  *
- * Phase 1 scope limitations:
- * - Only LABOR resource type supported with labor-day unit equivalence.
- * - MATERIAL and EQUIPMENT may match catalog by name/type but unit equivalence
- *   for those classes is not yet supported (returns UNRESOLVED on unit check).
+ * Scope limitations that remain after RM-03D1:
+ * - Resource identity is still exact normalized name + type. Evidence-backed
+ *   equivalence (a differently-spelled source name proven by an existing
+ *   ResourceSourceIdentity or a reviewed import mapping) is NOT decided here
+ *   and is deliberately out of this slice.
+ * - Only a proven exact unit identity reaches RESOLVED. A commensurable pair
+ *   needing a real conversion returns UNIT_CONVERSION_UNPROVED rather than
+ *   inverting a one-way factor.
  * - Multi-price ranking is not implemented; multiple candidates → NEEDS_REVIEW.
  */
 export function resolveAhspResourcePrice(
@@ -270,24 +322,58 @@ export function resolveAhspResourcePrice(
   const resolvedCatalog = exactCatalogMatches[0];
 
   // ---- Step 2: Unit equivalence check ----
+  //
+  // RM-03D1: the resource CLASS is not consulted here at all. What decides is
+  // the UnitKernel verdict, and only that. The raw pair is still re-bound to
+  // this exact resolution so a verdict certified for some other unit pair can
+  // never be replayed into this one.
+  const ahspUnitCanonicalCode = validatedUnitResolution.canonicalUnitCode;
+  const ahspUnitQuantityFactor = validatedUnitResolution.quantityFactor;
+
   if (
     validatedUnitResolution.status !== 'RESOLVED' ||
     validatedUnitResolution.rawSourceUnit !== ahspUnit ||
     validatedUnitResolution.rawTargetUnit !== resolvedCatalog.baseUnit ||
-    validatedUnitResolution.canonicalUnitCode !== 'PERSON_DAY' ||
-    validatedUnitResolution.quantityFactor !== '1'
+    ahspUnitCanonicalCode === null
   ) {
     return {
       ...baseContext,
       status: 'UNRESOLVED',
       reasonCodes: ['UNIT_NOT_SUPPORTED'],
       explanation:
-        `Unit AHSP "${ahspUnit}" atau unit katalog "${resolvedCatalog.baseUnit}" ` +
-        `tidak termasuk dalam equivalensi labor-day yang didukung di Phase 1 ` +
-        `(OH / Org/Hari / Orang/Hari). ` +
-        `Konversi unit lain belum diizinkan pada tahap ini.`,
+        `Unit AHSP "${ahspUnit}" terhadap unit katalog "${resolvedCatalog.baseUnit}" ` +
+        `belum dapat dibuktikan oleh Kamus Unit: alias tidak dikenal, ambigu, ` +
+        `atau bukti untuk pasangan unit ini tidak berlaku bagi resolusi ini. ` +
+        `Resolusi dihentikan tanpa menebak.`,
     };
   }
+
+  // The UnitKernel understood both sides, but they are not the SAME canonical
+  // unit — carrying the price across would need the inverse of a factor that
+  // was only proved one way round. Inventing that inverse is exactly what this
+  // kernel must never do, so it hands the decision to a human instead.
+  if (ahspUnitQuantityFactor !== '1') {
+    return {
+      ...baseContext,
+      status: 'NEEDS_REVIEW',
+      reasonCodes: ['UNIT_CONVERSION_UNPROVED'],
+      explanation:
+        `Unit AHSP "${ahspUnit}" dan unit katalog "${resolvedCatalog.baseUnit}" ` +
+        `terbukti sepadan, tetapi memerlukan konversi (faktor ` +
+        `${ahspUnitQuantityFactor ?? 'tidak tersedia'}) yang belum ` +
+        `dibuktikan untuk arah yang dibutuhkan resolusi ini. ` +
+        `SIMPROK tidak membalik faktor konversi. Diperlukan tinjauan manusia.`,
+    };
+  }
+
+  // From here on the AHSP unit and the catalog unit ARE the same canonical
+  // unit, so "price per catalog unit" and "price per AHSP unit" are the same
+  // quantity and the price leg below needs no inversion either.
+  const unitReason: ReasonCode =
+    resourceType.toUpperCase() === 'LABOR' &&
+    ahspUnitCanonicalCode === 'PERSON_DAY'
+      ? 'LABOR_DAY_UNIT_EQUIVALENT'
+      : 'EXACT_UNIT_IDENTITY';
 
   // ---- Step 3: Basic Price candidate filtering ----
   // 3a. Filter by resourceId (catalog identity match).
@@ -302,7 +388,7 @@ export function resolveAhspResourcePrice(
       reasonCodes: [
         'EXACT_RESOURCE_NAME_MATCH',
         'RESOURCE_TYPE_MATCH',
-        'LABOR_DAY_UNIT_EQUIVALENT',
+        unitReason,
         'NO_BASIC_PRICE_CANDIDATE',
       ],
       explanation:
@@ -314,37 +400,65 @@ export function resolveAhspResourcePrice(
     };
   }
 
-  // 3b. Among resource-matching prices, retain only those whose unit is
-  //     a supported labor-day equivalent. Other units (e.g. Jam) are not
-  //     candidates for Phase 1 and must not resolve with factor 1.
-  //     No hour-to-day or other conversion is added here.
-  const compatiblePrices = resourceMatchingPrices.filter(
+  // 3b. Among resource-matching prices, keep only those whose own unit the
+  //     UnitKernel proved against this same catalog unit. Class is irrelevant
+  //     here too — a price in an alias of the catalog unit qualifies whether
+  //     the resource is labor, material or equipment; a price in a genuinely
+  //     different unit (e.g. Jam against Org/Hari) does not.
+  const unitProvedPrices = resourceMatchingPrices.filter(
     (price) =>
       price.unitResolution.status === 'RESOLVED' &&
       price.unitResolution.rawSourceUnit === price.unit &&
       price.unitResolution.rawTargetUnit === resolvedCatalog.baseUnit &&
-      price.unitResolution.canonicalUnitCode === 'PERSON_DAY' &&
+      price.unitResolution.canonicalUnitCode !== null,
+  );
+
+  // Of those, only an IDENTITY operation can be applied without inventing
+  // arithmetic: the adapted price is the source price, unchanged, exact.
+  const compatiblePrices = unitProvedPrices.filter(
+    (price) =>
       price.unitResolution.quantityFactor === '1' &&
       price.unitResolution.priceOperation === 'IDENTITY',
   );
 
   if (compatiblePrices.length === 0) {
+    // A price whose unit WAS proved but needs a real conversion is a different
+    // fact from a price whose unit could not be proved at all, and the audit
+    // trail must not blur the two.
+    if (unitProvedPrices.length > 0) {
+      return {
+        ...baseContext,
+        status: 'NEEDS_REVIEW',
+        reasonCodes: [
+          'EXACT_RESOURCE_NAME_MATCH',
+          'RESOURCE_TYPE_MATCH',
+          unitReason,
+          'UNIT_CONVERSION_UNPROVED',
+        ],
+        explanation:
+          `Identitas sumber daya "${rawResourceRef}" berhasil dipetakan ke katalog ` +
+          `"${resolvedCatalog.name}" (${resolvedCatalog.id}), dan unit Basic Price ` +
+          `terbukti sepadan, tetapi mengadaptasi harganya ke unit AHSP "${ahspUnit}" ` +
+          `memerlukan konversi yang belum dibuktikan untuk arah tersebut. ` +
+          `SIMPROK tidak mengarang faktor konversi. Diperlukan tinjauan manusia.`,
+      };
+    }
     return {
       ...baseContext,
       status: 'UNRESOLVED',
       reasonCodes: [
         'EXACT_RESOURCE_NAME_MATCH',
         'RESOURCE_TYPE_MATCH',
-        'LABOR_DAY_UNIT_EQUIVALENT',
+        unitReason,
         'BASIC_PRICE_UNIT_NOT_SUPPORTED',
       ],
       explanation:
         `Identitas sumber daya "${rawResourceRef}" berhasil dipetakan ke katalog ` +
         `"${resolvedCatalog.name}" (${resolvedCatalog.id}), ` +
-        `tetapi tidak ada Basic Price dengan unit labor-day yang didukung ` +
-        `(OH / Org/Hari / Orang/Hari). ` +
-        `Basic Price yang tersedia memiliki unit tidak kompatibel dan tidak dapat ` +
-        `digunakan tanpa konversi yang belum diizinkan di Phase 1.`,
+        `tetapi tidak ada Basic Price yang unitnya terbukti sepadan dengan ` +
+        `"${resolvedCatalog.baseUnit}" menurut Kamus Unit. ` +
+        `Harga yang tersedia memiliki unit yang belum dapat dibuktikan dan ` +
+        `tidak digunakan.`,
     };
   }
 
@@ -359,11 +473,11 @@ export function resolveAhspResourcePrice(
       reasonCodes: [
         'EXACT_RESOURCE_NAME_MATCH',
         'RESOURCE_TYPE_MATCH',
-        'LABOR_DAY_UNIT_EQUIVALENT',
+        unitReason,
         'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES',
       ],
       explanation:
-        `Identitas sumber daya berhasil dipetakan dan unit labor-day cocok, ` +
+        `Identitas sumber daya berhasil dipetakan dan unit terbukti sepadan, ` +
         `tetapi seluruh ${compatiblePrices.length} Basic Price yang kompatibel ` +
         `untuk katalog "${resolvedCatalog.name}" (${resolvedCatalog.id}) ` +
         `memiliki freshness EXPIRED. Pemilihan otomatis ditahan dan ` +
@@ -381,11 +495,11 @@ export function resolveAhspResourcePrice(
       reasonCodes: [
         'EXACT_RESOURCE_NAME_MATCH',
         'RESOURCE_TYPE_MATCH',
-        'LABOR_DAY_UNIT_EQUIVALENT',
+        unitReason,
         'MULTIPLE_BASIC_PRICE_CANDIDATES',
       ],
       explanation:
-        `Identitas sumber daya berhasil dipetakan dan unit labor-day cocok, ` +
+        `Identitas sumber daya berhasil dipetakan dan unit terbukti sepadan, ` +
         `tetapi ditemukan ${compatiblePrices.length} Basic Price yang kompatibel ` +
         `untuk katalog "${resolvedCatalog.name}" (${resolvedCatalog.id}). ` +
         `Pemilihan otomatis multi-harga belum didukung di Phase 1. ` +
@@ -395,7 +509,7 @@ export function resolveAhspResourcePrice(
 
   const selectedPrice = compatiblePrices[0];
 
-  // ---- Step 4: RESOLVED — factor 1, price string returned exactly ----
+  // ---- Step 4: RESOLVED — proven identity, price string returned exactly ----
   return {
     ...baseContext,
     status: 'RESOLVED',
@@ -405,22 +519,26 @@ export function resolveAhspResourcePrice(
     sourcePriceValue: selectedPrice.value,
     sourceUnit: selectedPrice.unit,
     ahspUnit,
-    canonicalUnit: 'PERSON_DAY',
-    conversionFactor: '1',
-    // Factor 1 → adapted price equals source price exactly (same string, no arithmetic).
+    // Echoed from the UnitKernel verdict, never asserted as a constant.
+    canonicalUnit: ahspUnitCanonicalCode,
+    conversionFactor: ahspUnitQuantityFactor,
+    // IDENTITY → the adapted price IS the source price: the same string is
+    // handed back, so no arithmetic and no rounding can touch the money here.
     adaptedPriceValue: selectedPrice.value,
     selectionStatus: 'AUTO_SELECTED',
     reasonCodes: [
       'EXACT_RESOURCE_NAME_MATCH',
       'RESOURCE_TYPE_MATCH',
-      'LABOR_DAY_UNIT_EQUIVALENT',
+      unitReason,
       'SINGLE_ELIGIBLE_BASIC_PRICE',
     ],
     explanation:
       `Sumber daya AHSP "${rawResourceRef}" (${resourceType}, unit: ${ahspUnit}) ` +
       `berhasil dipetakan ke ResourceCatalog "${resolvedCatalog.name}" ` +
       `(${resolvedCatalog.id}, baseUnit: ${resolvedCatalog.baseUnit}) ` +
-      `melalui kecocokan nama tepat dan equivalensi unit labor-day (OH = Org/Hari, faktor: 1). ` +
+      `melalui kecocokan nama tepat, dan Kamus Unit membuktikan kedua unit ` +
+      `menunjuk identitas canonical yang sama (${ahspUnitCanonicalCode}, faktor: ` +
+      `${ahspUnitQuantityFactor}). ` +
       `Basic Price dipilih otomatis: ${selectedPrice.value} per ${selectedPrice.unit} ` +
       `dari sumber ${selectedPrice.sourceOrigin} (ID: ${selectedPrice.id}). ` +
       `Harga yang diadaptasi ke unit AHSP: ${selectedPrice.value} per ${ahspUnit}. ` +
