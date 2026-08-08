@@ -17,6 +17,7 @@ import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
+import { assertTemporalProvenanceCoherent } from './basic-price-private-asset.service';
 
 export const MAX_UPLOAD_BYTES = 10_485_760;
 type UploadedXlsx = {
@@ -360,9 +361,16 @@ export class BasicPriceImportService {
           status: string;
           version: number;
           uploadedByAccountId: string;
+          sourcePeriodLabel: string | null;
+          sourcePeriodGranularity: string | null;
+          effectiveDateProvenance: string | null;
+          effectiveDateDerivationRule: string | null;
         }>
       >(
-        Prisma.sql`SELECT "id", "workspaceId", "status", "version", "uploadedByAccountId" FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
+        Prisma.sql`SELECT "id", "workspaceId", "status", "version", "uploadedByAccountId",
+                          "sourcePeriodLabel", "sourcePeriodGranularity",
+                          "effectiveDateProvenance", "effectiveDateDerivationRule"
+                     FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
       );
       const batch = locked[0];
       if (!batch || batch.workspaceId !== workspaceId)
@@ -376,6 +384,23 @@ export class BasicPriceImportService {
       ) {
         throw new ConflictException('BATCH_NOT_MUTABLE');
       }
+
+      // RM-03D1 — an incomplete DERIVED provenance is refused here with a named
+      // error rather than reaching the CHECK constraint as a raw 500. The
+      // constraint stays as the last word for any writer that never asks; this
+      // just gives the human at the boundary a usable answer. Merged state, not
+      // the patch alone: a field the caller omitted keeps its stored value.
+      assertTemporalProvenanceCoherent({
+        sourceOrigin: null,
+        sourceType: null,
+        sourcePeriodLabel: dto.sourcePeriodLabel ?? batch.sourcePeriodLabel,
+        sourcePeriodGranularity:
+          dto.sourcePeriodGranularity ?? batch.sourcePeriodGranularity,
+        effectiveDateProvenance:
+          dto.effectiveDateProvenance ?? batch.effectiveDateProvenance,
+        effectiveDateDerivationRule:
+          dto.effectiveDateDerivationRule ?? batch.effectiveDateDerivationRule,
+      });
 
       const updated = await tx.basicPriceImportBatch.update({
         where: { id: batchId },

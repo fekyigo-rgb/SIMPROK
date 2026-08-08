@@ -66,6 +66,8 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
   let m3UnitId: string;
   let regionId: string;
   let membershipRoleId: string;
+  let membershipId: string;
+  let assignmentId: string;
   let organizationId: string;
 
   beforeAll(async () => {
@@ -111,6 +113,7 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     const membership = await prisma.workspaceMembership.findUniqueOrThrow({
       where: { accountId_workspaceId: { accountId: account.id, workspaceId: WORKSPACE_A } },
     });
+    membershipId = membership.id;
     membershipRoleId = (
       await prisma.membershipRole.create({
         data: { workspaceMembershipId: membership.id, roleId: ROLE_ID, isActive: true },
@@ -138,6 +141,26 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
       },
       update: {},
     });
+    // ProjectAccessGuard grants access from an active ProjectAssignment, not
+    // from workspace membership alone. A self-owned project needs a self-owned
+    // assignment or every project-scoped route answers 403.
+    assignmentId = (
+      await prisma.projectAssignment.upsert({
+        where: {
+          workspaceMembershipId_projectId: {
+            workspaceMembershipId: membershipId,
+            projectId: PROJECT_ID,
+          },
+        },
+        create: {
+          workspaceMembershipId: membershipId,
+          projectId: PROJECT_ID,
+          roleInProject: 'RM03D1 integrity fixture',
+          status: 'ASSIGNED',
+        },
+        update: {},
+      })
+    ).id;
     await prisma.boqStructure.upsert({
       where: { id: STRUCTURE_ID },
       create: {
@@ -242,6 +265,9 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     await prisma.aHSP.deleteMany({ where: { id: AHSP_ID } });
     await prisma.boqItem.deleteMany({ where: { boqStructureId: STRUCTURE_ID } });
     await prisma.boqStructure.deleteMany({ where: { id: STRUCTURE_ID } });
+    if (assignmentId) {
+      await prisma.projectAssignment.deleteMany({ where: { id: assignmentId } });
+    }
     await prisma.project.deleteMany({ where: { id: PROJECT_ID } });
     await prisma.resourceCatalog.deleteMany({ where: { id: RESOURCE_ID } });
     if (membershipRoleId) {

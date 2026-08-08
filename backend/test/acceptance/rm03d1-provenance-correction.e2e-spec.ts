@@ -282,8 +282,11 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   it('E: a DERIVED date with no granularity is refused — a label alone is not machine-readable', async () => {
     const { batchId } = await materializeUnprovenancedPrivatePrice('prov-correct-nogran');
     const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
-    // PATCH sets everything EXCEPT the granularity.
-    await request(app.getHttpServer())
+
+    // Everything EXCEPT the granularity. The batch itself refuses to hold an
+    // incomplete derived provenance, so the incoherent state never even reaches
+    // the correction — a stronger guarantee than refusing to propagate it.
+    const response = await request(app.getHttpServer())
       .patch(`/basic-price-imports/${batchId}`)
       .set(hdr())
       .send({
@@ -292,11 +295,12 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
         sourcePeriodLabel: 'TA 2024',
         effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
         effectiveDateDerivationRule: 'PERIOD_START',
-      })
-      .expect(200);
-
-    const response = await correct(batchId).expect(409);
+      });
+    expect(response.status).toBe(409);
     expect(response.body.message).toBe('SOURCE_PERIOD_GRANULARITY_REQUIRED_FOR_DERIVED_DATE');
+
+    const unchanged = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    expect(unchanged.effectiveDateProvenance).toBeNull();
   });
 
   it('F: a whitespace-only period label is rejected at the boundary, never stored', async () => {
@@ -328,12 +332,18 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   });
 
   it('H: a batch from another workspace corrects nothing', async () => {
-    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-correct-foreign');
-    await request(app.getHttpServer())
+    const { batchId, basicPriceId } = await materializeUnprovenancedPrivatePrice('prov-correct-foreign');
+    const response = await request(app.getHttpServer())
       .post(`/basic-price-imports/${batchId}/correct-private-provenance`)
       .set({ Authorization: `Bearer ${token}`, 'x-workspace-id': '10000000-0000-4000-8000-000000000005' })
-      .send({ reason: 'foreign workspace' })
-      .expect(404);
+      .send({ reason: 'foreign workspace' });
+
+    // Denied at the workspace boundary. Whether that denial is the permission
+    // guard (403, the caller holds nothing in workspace B) or the service's
+    // ownership check (404) is not the claim under test — the claim is that
+    // nothing crossed the boundary.
+    expect([403, 404]).toContain(response.status);
+    expect(await prisma.basicPriceProvenanceCorrection.count({ where: { basicPriceId } })).toBe(0);
   });
 
   it('I: a reason is required', async () => {
