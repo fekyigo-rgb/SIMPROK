@@ -5,6 +5,7 @@ import { createHash } from 'crypto';
 import * as kernel from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { ProjectAhspService } from './project-ahsp.service';
+import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
 describe('ProjectAhspService E1A', () => {
   const workspaceId = '20000000-0000-4000-8000-000000000001';
@@ -97,6 +98,14 @@ describe('ProjectAhspService E1A', () => {
         }),
       },
       resourceCatalog: { findMany: jest.fn().mockResolvedValue([catalog]) },
+      // RM-03D1: the identity evidence the resolver may now consult. Empty by
+      // default, so every case below still resolves purely on exact canonical
+      // name exactly as it did before — a recorded human mapping must never be
+      // what makes a previously-passing assertion pass.
+      resourceSourceIdentity: { findMany: jest.fn().mockResolvedValue([]) },
+      basicPriceImportRowResourceMapping: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       basicPrice: {
         findMany: jest.fn().mockResolvedValue([price]),
         findFirst: jest.fn().mockResolvedValue(price),
@@ -134,11 +143,16 @@ describe('ProjectAhspService E1A', () => {
     // assert the predicate this spec already believed in — the point of these
     // tests is that the candidate query and the re-verification query are both
     // built from the one shipped predicate, so the stub is the wrong tool.
+    // RM-03D1: the REAL identity service too, for the same reason the real
+    // eligibility policy is used above — a stub could only assert the identity
+    // rule this spec already believed in, whereas the shipped loader + kernel
+    // are exactly what must run against the transaction client.
     service = new ProjectAhspService(
       prisma,
       new BasicPriceEligibilityPolicy(),
       units as any,
       lifecycle as any,
+      new ResourceIdentityResolutionService(prisma),
     );
   });
 
@@ -534,5 +548,102 @@ describe('ProjectAhspService E1A', () => {
     await service.selectForBoqItem({ ...selectionInput, ...( { selectionMode: 'USER_OVERRIDDEN', resolutionPolicyVersion: 'CALLER' } as any) });
     expect(created.data.resolutionPolicyVersion).toBe('E1A_CONTEXTUAL_EXACT_REGION_V1');
     expect(created.data.resourceResolutions.create[0].selectionMode).toBeNull();
+  });
+
+  // ==========================================================
+  // RM-03D1 — resource identity reaches the persisted occurrence
+  // ==========================================================
+
+  it('RM03D1: a differently-spelled AHSP resource resolves through the workspace own recorded decision', async () => {
+    const { tx, created, catalog, price } = makeSuccessTx();
+    // The AHSP says one thing, the catalog is spelled another — the exact-name
+    // path alone could never join these two.
+    tx.aHSPVersion.findFirst.mockResolvedValue({
+      id: selectionInput.ahspVersionId,
+      outputUnit: 'M1',
+      resources: [{ ...resource('resource-1'), resourceId: 'Kawat bendrat' }],
+    });
+    tx.resourceCatalog.findMany.mockResolvedValue([
+      { ...catalog, name: 'Kawat benrad' },
+    ]);
+    tx.basicPriceImportRowResourceMapping.findMany.mockResolvedValue([
+      {
+        resourceCatalogId: catalog.id,
+        reviewerAccountId: selectionInput.accountId,
+        decidedAt: new Date('2026-08-07T00:00:00.000Z'),
+        reason: 'Ejaan sumber berbeda, barang sama.',
+        row: {
+          rawResourceNameText: 'Kawat bendrat',
+          rawResourceCodeText: 'M.72',
+          resolvedResourceType: 'LABOR',
+          sourceSection: 'LABOR',
+        },
+      },
+    ]);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+    await service.selectForBoqItem(selectionInput);
+
+    const persisted = created.data.resourceResolutions.create[0];
+    expect(persisted.status).toBe('RESOLVED');
+    expect(persisted.resourceCatalogId).toBe(catalog.id);
+    expect(persisted.selectedBasicPriceId).toBe(price.id);
+    // The audit trail must say WHY it resolved — and must not claim the names
+    // matched, because they plainly did not.
+    expect(persisted.reasonCodes).toContain('VERIFIED_MAPPING_REUSED');
+    expect(persisted.reasonCodes).not.toContain('EXACT_RESOURCE_NAME_MATCH');
+    // The raw AHSP reference is preserved verbatim, never overwritten.
+    expect(persisted.rawAhspResourceRef).toBe('Kawat bendrat');
+  });
+
+  it('RM03D1: an unproven identity is persisted as a reviewable exception, never as "not found"', async () => {
+    const { tx, created, catalog } = makeSuccessTx();
+    tx.aHSPVersion.findFirst.mockResolvedValue({
+      id: selectionInput.ahspVersionId,
+      outputUnit: 'M1',
+      resources: [{ ...resource('resource-1'), resourceId: 'Portland Cement' }],
+    });
+    // Two plausible cements and no recorded human decision between them.
+    tx.resourceCatalog.findMany.mockResolvedValue([
+      { ...catalog, id: 'cat-a', name: 'Semen Portlan' },
+      { ...catalog, id: 'cat-b', name: 'Semen Portland / Tonasa' },
+    ]);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+    await service.selectForBoqItem(selectionInput);
+
+    const persisted = created.data.resourceResolutions.create[0];
+    expect(persisted.status).toBe('NEEDS_REVIEW');
+    expect(persisted.reasonCodes).toContain('MULTIPLE_CANDIDATES_NEEDS_REVIEW');
+    expect(persisted.reasonCodes).not.toContain('RESOURCE_NOT_FOUND');
+    // Both candidates, with their ids, survive into the stored explanation so
+    // the exception can be closed later without re-running discovery.
+    expect(persisted.explanation).toContain('Semen Portlan');
+    expect(persisted.explanation).toContain('Semen Portland / Tonasa');
+    expect(persisted.explanation).toContain('cat-a');
+    // Nothing was priced off an unproven identity.
+    expect(persisted.resourceCatalogId).toBeNull();
+    expect(persisted.selectedBasicPriceId).toBeNull();
+    expect(persisted.adaptedPriceValue).toBeNull();
+  });
+
+  it('RM03D1: a genuinely unknown resource is still reported as not found, with no candidates', async () => {
+    const { tx, created, catalog } = makeSuccessTx();
+    tx.aHSPVersion.findFirst.mockResolvedValue({
+      id: selectionInput.ahspVersionId,
+      outputUnit: 'M1',
+      resources: [{ ...resource('resource-1'), resourceId: 'Geotextile Woven' }],
+    });
+    tx.resourceCatalog.findMany.mockResolvedValue([
+      { ...catalog, name: 'Kawat benrad' },
+    ]);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+    await service.selectForBoqItem(selectionInput);
+
+    const persisted = created.data.resourceResolutions.create[0];
+    expect(persisted.status).toBe('UNRESOLVED');
+    expect(persisted.reasonCodes).toContain('RESOURCE_NOT_FOUND');
+    expect(persisted.selectedBasicPriceId).toBeNull();
   });
 });

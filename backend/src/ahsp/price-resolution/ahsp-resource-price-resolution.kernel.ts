@@ -91,6 +91,24 @@ export interface AhspResourceResolutionInput {
     readonly rawSourceUnit: string;
     readonly rawTargetUnit: string;
   };
+  /**
+   * RM-03D1 identity slice, OPTIONAL and additive.
+   *
+   * When present, the catalog identity has already been settled upstream by
+   * the Resource Identity Resolution kernel — either an exact canonical match
+   * or a human decision this workspace already recorded — and Step 1 below is
+   * skipped entirely rather than re-litigated. That matters because a verified
+   * mapping legitimately binds names that are NOT spelled the same, which
+   * Step 1's exact-name test would reject.
+   *
+   * When absent, Step 1 runs exactly as it always has. Every pre-existing
+   * caller and test therefore behaves identically, byte for byte.
+   */
+  readonly resolvedIdentity?: {
+    readonly catalog: ResourceCatalogCandidate;
+    /** The authority that settled it — reported honestly, never assumed. */
+    readonly identityReason: 'EXACT_RESOURCE_NAME_MATCH' | 'VERIFIED_MAPPING_REUSED';
+  };
 }
 
 // ============================================================
@@ -104,6 +122,14 @@ export type ResolutionStatus =
 
 export type ReasonCode =
   | 'EXACT_RESOURCE_NAME_MATCH'
+  /**
+   * RM-03D1 identity slice, additive. The catalog identity was settled upstream
+   * by a human decision this workspace already recorded, not by the names being
+   * spelled the same. Emitted INSTEAD of EXACT_RESOURCE_NAME_MATCH in that
+   * case, because claiming an exact name match when the names differ would put
+   * a false statement in the audit trail.
+   */
+  | 'VERIFIED_MAPPING_REUSED'
   | 'RESOURCE_TYPE_MATCH'
   /**
    * Preserved verbatim, and still emitted for exactly the case it has always
@@ -270,7 +296,21 @@ export function resolveAhspResourcePrice(
   // Shared context for all result variants
   const baseContext = { projectId, ahspVersionId, ahspResourceId, rawResourceRef };
 
-  // ---- Step 1: Resource catalog identity match ----
+  // ---- Step 1: Resource catalog identity ----
+  //
+  // RM-03D1: if identity was already settled upstream, consume that verdict —
+  // exactly as this kernel consumes the UnitKernel's. Re-deriving it here from
+  // the name would both duplicate the authority and reject the legitimate case
+  // where a human bound two differently-spelled names to one catalog row.
+  if (input.resolvedIdentity) {
+    return priceAgainstCatalog(
+      input,
+      baseContext,
+      input.resolvedIdentity.catalog,
+      input.resolvedIdentity.identityReason,
+    );
+  }
+
   const normalizedRef = normalizeResourceName(rawResourceRef);
 
   const exactCatalogMatches = resourceCatalogCandidates.filter((candidate) => {
@@ -319,7 +359,40 @@ export function resolveAhspResourcePrice(
     };
   }
 
-  const resolvedCatalog = exactCatalogMatches[0];
+  return priceAgainstCatalog(
+    input,
+    baseContext,
+    exactCatalogMatches[0],
+    'EXACT_RESOURCE_NAME_MATCH',
+  );
+}
+
+/**
+ * Steps 2-4: unit proof, Basic Price selection, and the priced result — for a
+ * catalog identity that is already settled, however it was settled.
+ *
+ * Extracted so the exact-name path and the upstream-identity path run the
+ * SAME code rather than two branches that could drift apart. Which authority
+ * settled the identity travels in as `identityReason` and is reported as-is.
+ */
+function priceAgainstCatalog(
+  input: AhspResourceResolutionInput,
+  baseContext: {
+    projectId: string;
+    ahspVersionId: string;
+    ahspResourceId: string;
+    rawResourceRef: string;
+  },
+  resolvedCatalog: ResourceCatalogCandidate,
+  identityReason: 'EXACT_RESOURCE_NAME_MATCH' | 'VERIFIED_MAPPING_REUSED',
+): AhspResourceResolutionResult {
+  const {
+    rawResourceRef,
+    resourceType,
+    ahspUnit,
+    eligibleBasicPriceCandidates,
+    validatedUnitResolution,
+  } = input;
 
   // ---- Step 2: Unit equivalence check ----
   //
@@ -386,7 +459,7 @@ export function resolveAhspResourcePrice(
       ...baseContext,
       status: 'UNRESOLVED',
       reasonCodes: [
-        'EXACT_RESOURCE_NAME_MATCH',
+        identityReason,
         'RESOURCE_TYPE_MATCH',
         unitReason,
         'NO_BASIC_PRICE_CANDIDATE',
@@ -447,7 +520,7 @@ export function resolveAhspResourcePrice(
       ...baseContext,
       status: 'UNRESOLVED',
       reasonCodes: [
-        'EXACT_RESOURCE_NAME_MATCH',
+        identityReason,
         'RESOURCE_TYPE_MATCH',
         unitReason,
         'BASIC_PRICE_UNIT_NOT_SUPPORTED',
@@ -471,7 +544,7 @@ export function resolveAhspResourcePrice(
       ...baseContext,
       status: 'NEEDS_REVIEW',
       reasonCodes: [
-        'EXACT_RESOURCE_NAME_MATCH',
+        identityReason,
         'RESOURCE_TYPE_MATCH',
         unitReason,
         'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES',
@@ -493,7 +566,7 @@ export function resolveAhspResourcePrice(
       ...baseContext,
       status: 'NEEDS_REVIEW',
       reasonCodes: [
-        'EXACT_RESOURCE_NAME_MATCH',
+        identityReason,
         'RESOURCE_TYPE_MATCH',
         unitReason,
         'MULTIPLE_BASIC_PRICE_CANDIDATES',
@@ -527,7 +600,7 @@ export function resolveAhspResourcePrice(
     adaptedPriceValue: selectedPrice.value,
     selectionStatus: 'AUTO_SELECTED',
     reasonCodes: [
-      'EXACT_RESOURCE_NAME_MATCH',
+      identityReason,
       'RESOURCE_TYPE_MATCH',
       unitReason,
       'SINGLE_ELIGIBLE_BASIC_PRICE',
