@@ -145,8 +145,14 @@ describe('resolveResourceIdentity — authority hierarchy', () => {
     expect(result.resolvedResourceCatalogId).toBe(CATALOG_PEKERJA.id);
   });
 
-  // ---------- B / I. VERIFIED MAPPING REUSE ----------
-  it('B. a different name backed by the workspace own recorded decision resolves', () => {
+  // ---------- REVIEWED MAPPING: EVIDENCE, NEVER AUTHORITY ----------
+  //
+  // BasicPriceImportRowResourceMapping binds one decision to one Basic Price
+  // import row. What the human settled is "THIS row means that catalog entry".
+  // Nobody ever asked them whether every AHSP line spelled the same way means
+  // it too, so nothing here may answer on their behalf.
+
+  it('a row-scoped human decision surfaces as evidence and never becomes the verdict', () => {
     const result = run({
       reference: { rawName: 'BjTP atau BjTS', rawCode: 'M.60.a', rawUnit: 'Kg', resourceType: 'MATERIAL' },
       reviewedMappings: [
@@ -154,23 +160,85 @@ describe('resolveResourceIdentity — authority hierarchy', () => {
       ],
     });
 
-    expect(result.status).toBe('RESOLVED');
-    expect(result.authority).toBe('VERIFIED_MAPPING_REUSED');
-    expect(result.resolvedResourceCatalogId).toBe(CATALOG_BAJA_TULANGAN.id);
-    expect(result.reasonCodes).toEqual(['VERIFIED_MAPPING_REUSED']);
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.authority).not.toBe('VERIFIED_MAPPING_REUSED');
+    // The human's work is NOT thrown away — it surfaces the right row first.
+    expect(result.candidates.map((c) => c.resourceCatalogId)).toContain(
+      CATALOG_BAJA_TULANGAN.id,
+    );
+    expect(result.candidates[0].evidence).toContain('REVIEWED_MAPPING_NAME_MATCH');
+    expect(result.candidates[0].priorHumanDecision).not.toBeNull();
+    expect(result.reasonCodes).not.toContain('RESOURCE_NOT_FOUND');
   });
 
-  it('I. the same settled fact is never put to the human twice', () => {
-    const input = {
-      reference: { rawName: 'Kawat bendrat', rawCode: 'M.72', rawUnit: 'Kg', resourceType: 'MATERIAL' } as const,
-      reviewedMappings: [
-        mapping({ resourceCatalogId: CATALOG_KAWAT_BENRAD.id, rawName: 'Kawat bendrat', rawCode: 'M.72' }),
-      ],
+  it('same raw name plus same type is NOT enough to inherit another context decision', () => {
+    // A supplier price list row spelled "Pasir" was mapped by a human. An AHSP
+    // line also spelled "Pasir" is a different fact from a different source.
+    const catalogPasirBeton: IdentityCatalogCandidate = {
+      id: 'cat-pasir-beton',
+      code: null,
+      name: 'Pasir Beton',
+      type: 'MATERIAL',
+      baseUnit: 'M³',
+      status: 'ACTIVE',
     };
+    const result = run({
+      reference: { rawName: 'Pasir', rawCode: null, rawUnit: 'm3', resourceType: 'MATERIAL' },
+      catalogCandidates: [catalogPasirBeton],
+      reviewedMappings: [
+        mapping({ resourceCatalogId: catalogPasirBeton.id, rawName: 'Pasir' }),
+      ],
+    });
 
-    expect(run(input).status).toBe('RESOLVED');
-    expect(run(input).status).toBe('RESOLVED');
-    expect(run(input).authority).toBe('VERIFIED_MAPPING_REUSED');
+    expect(result.status).not.toBe('RESOLVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+  });
+
+  it('VERIFIED_MAPPING_REUSED is never emitted, because no model binds a decision to an AHSP fact', () => {
+    // Exhaustive over every fixture combination this spec can build: the
+    // authority exists in the contract but has no production path today, and
+    // claiming it would assert something nobody granted.
+    const permutations = [
+      run({
+        reference: { rawName: 'Kawat bendrat', rawCode: 'M.72', rawUnit: 'Kg', resourceType: 'MATERIAL' },
+        reviewedMappings: [
+          mapping({ resourceCatalogId: CATALOG_KAWAT_BENRAD.id, rawName: 'Kawat bendrat', rawCode: 'M.72' }),
+        ],
+      }),
+      run({
+        reference: { rawName: 'Baja tulangan', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
+        reviewedMappings: [
+          mapping({ resourceCatalogId: CATALOG_BAJA_TULANGAN.id, rawName: 'Baja tulangan' }),
+        ],
+      }),
+      run({
+        reference: { rawName: 'Portland Cement', rawCode: 'M.23', rawUnit: 'Kg', resourceType: 'MATERIAL' },
+        reviewedMappings: [
+          mapping({ resourceCatalogId: CATALOG_SEMEN_PORTLAN.id, rawName: 'Portland Cement', rawCode: 'M.23' }),
+        ],
+      }),
+    ];
+
+    for (const result of permutations) {
+      expect(result.authority).not.toBe('VERIFIED_MAPPING_REUSED');
+      expect(result.reasonCodes).not.toContain('VERIFIED_MAPPING_REUSED');
+    }
+  });
+
+  it('an exact canonical match still resolves even when a row-scoped decision exists', () => {
+    // The mapping must neither grant nor withdraw authority — exactness alone
+    // decides, exactly as it did before.
+    const result = run({
+      reference: { rawName: 'Baja tulangan', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
+      reviewedMappings: [
+        mapping({ resourceCatalogId: CATALOG_SEMEN_PORTLAN.id, rawName: 'Baja tulangan' }),
+      ],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    expect(result.authority).toBe('EXACT_CANONICAL_MATCH');
+    expect(result.resolvedResourceCatalogId).toBe(CATALOG_BAJA_TULANGAN.id);
   });
 
   it('J. a recorded decision about a DIFFERENT raw name is never stretched to cover this one', () => {
@@ -350,6 +418,115 @@ describe('resolveResourceIdentity — authority hierarchy', () => {
 
     expect(result.status).toBe('RESOLVED');
     expect(result.authority).toBe('EXACT_CANONICAL_MATCH');
+  });
+
+  // ---------- structured ResourceCatalog.specifications ----------
+  //
+  // The column is opaque JSON with no identity contract in this repository, so
+  // the kernel reads VALUES and never key names. What it must not do is ignore
+  // it: a row stating a grade and a diameter must not be auto-resolved against
+  // a source that stated neither.
+
+  it('D. a structured specification that contradicts the source blocks the match', () => {
+    const angker: IdentityCatalogCandidate = {
+      id: 'cat-angker',
+      code: null,
+      name: 'Besi angker',
+      type: 'MATERIAL',
+      baseUnit: 'Kg',
+      status: 'ACTIVE',
+      specifications: { diameter: 10 },
+    };
+    const result = run({
+      reference: { rawName: 'Besi angker', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
+      catalogCandidates: [angker],
+    });
+    // The names are identical; only the structured spec disagrees with the
+    // source, and that alone must be enough to stop the assertion.
+    const withSourceDesignation = run({
+      reference: { rawName: 'Besi angker diameter 8', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
+      catalogCandidates: [angker],
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+    expect(withSourceDesignation.status).toBe('UNRESOLVED');
+    expect(withSourceDesignation.reasonCodes).toContain('SPECIFICATION_CONFLICT');
+    expect(withSourceDesignation.resolvedResourceCatalogId).toBeNull();
+  });
+
+  it('E. an exact name whose catalog row is materially more specific is unproven, not asserted', () => {
+    const bjts: IdentityCatalogCandidate = {
+      id: 'cat-bjts-structured',
+      code: null,
+      name: 'Baja tulangan',
+      type: 'MATERIAL',
+      baseUnit: 'Kg',
+      status: 'ACTIVE',
+      specifications: { grade: 'BjTS 420B', diameter: 13 },
+    };
+    const result = run({
+      reference: { rawName: 'Baja tulangan', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
+      catalogCandidates: [bjts],
+    });
+
+    // Before this fix the identical name auto-resolved and the grade/diameter
+    // were silently assumed to be what the source meant.
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.candidates[0].specificationUnproved).toBe(true);
+    // The reviewer sees exactly what the row claims about itself.
+    expect(result.candidates[0].specifications).toEqual({
+      grade: 'BjTS 420B',
+      diameter: 13,
+    });
+  });
+
+  it('F. opaque, non-identity metadata never becomes a false blocker', () => {
+    const pekerjaWithMetadata: IdentityCatalogCandidate = {
+      ...CATALOG_PEKERJA,
+      // Exactly the shapes this repository actually writes: a test-only marker
+      // and an unrelated string. Neither states a designation.
+      specifications: { rm02bTestOnly: true, keepMe: 'unrelated-value' },
+    };
+    const result = run({
+      reference: { rawName: 'Pekerja', rawCode: null, rawUnit: 'OH', resourceType: 'LABOR' },
+      catalogCandidates: [pekerjaWithMetadata],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    expect(result.authority).toBe('EXACT_CANONICAL_MATCH');
+    expect(result.reasonCodes).not.toContain('SPECIFICATION_UNPROVED');
+  });
+
+  it('F2. a null specifications column behaves exactly as before', () => {
+    const result = run({
+      reference: { rawName: 'Pekerja', rawCode: null, rawUnit: 'OH', resourceType: 'LABOR' },
+      catalogCandidates: [{ ...CATALOG_PEKERJA, specifications: null }],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    expect(result.candidates[0].specifications).toBeNull();
+  });
+
+  it('nested specification values are read, and booleans still state nothing', () => {
+    const nested: IdentityCatalogCandidate = {
+      id: 'cat-nested',
+      code: null,
+      name: 'Pipa',
+      type: 'MATERIAL',
+      baseUnit: 'M¹',
+      status: 'ACTIVE',
+      specifications: { dims: { outer: 'Ø 15' }, certified: true },
+    };
+    const conflicting = run({
+      reference: { rawName: 'Pipa 20', rawCode: null, rawUnit: 'M¹', resourceType: 'MATERIAL' },
+      catalogCandidates: [nested],
+    });
+
+    expect(conflicting.status).toBe('UNRESOLVED');
+    expect(conflicting.reasonCodes).toContain('SPECIFICATION_CONFLICT');
   });
 
   // ---------- H. HONEST NOT FOUND ----------

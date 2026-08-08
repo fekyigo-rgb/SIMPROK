@@ -60,6 +60,11 @@ export class ResourceIdentityResolutionService {
           type: true,
           baseUnit: true,
           status: true,
+          // Loaded because ignoring it was a false-certainty bug: a catalog row
+          // could state a grade and a diameter and still be auto-resolved
+          // against a source that stated neither. The kernel reads only the
+          // VALUES here and never the key names.
+          specifications: true,
         },
       }),
       client.resourceSourceIdentity.findMany({
@@ -103,6 +108,7 @@ export class ResourceIdentityResolutionService {
         type: row.type,
         baseUnit: row.baseUnit,
         status: row.status,
+        specifications: row.specifications,
       })),
       sourceSightings: sightingRows.map((row) => ({
         resourceCatalogId: row.resourceCatalogId,

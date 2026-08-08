@@ -554,8 +554,8 @@ describe('ProjectAhspService E1A', () => {
   // RM-03D1 — resource identity reaches the persisted occurrence
   // ==========================================================
 
-  it('RM03D1: a differently-spelled AHSP resource resolves through the workspace own recorded decision', async () => {
-    const { tx, created, catalog, price } = makeSuccessTx();
+  it('RM03D1: a row-scoped human decision enriches the exception and never prices the line', async () => {
+    const { tx, created, catalog } = makeSuccessTx();
     // The AHSP says one thing, the catalog is spelled another — the exact-name
     // path alone could never join these two.
     tx.aHSPVersion.findFirst.mockResolvedValue({
@@ -585,13 +585,18 @@ describe('ProjectAhspService E1A', () => {
     await service.selectForBoqItem(selectionInput);
 
     const persisted = created.data.resourceResolutions.create[0];
-    expect(persisted.status).toBe('RESOLVED');
-    expect(persisted.resourceCatalogId).toBe(catalog.id);
-    expect(persisted.selectedBasicPriceId).toBe(price.id);
-    // The audit trail must say WHY it resolved — and must not claim the names
-    // matched, because they plainly did not.
-    expect(persisted.reasonCodes).toContain('VERIFIED_MAPPING_REUSED');
-    expect(persisted.reasonCodes).not.toContain('EXACT_RESOURCE_NAME_MATCH');
+    // The human settled what one Basic Price import row meant. Nobody asked
+    // them about this AHSP line, so nothing here answers for them.
+    expect(persisted.status).toBe('NEEDS_REVIEW');
+    expect(persisted.reasonCodes).not.toContain('VERIFIED_MAPPING_REUSED');
+    expect(persisted.reasonCodes).not.toContain('RESOURCE_NOT_FOUND');
+    // Their work is still not wasted: the right row is named in the exception.
+    expect(persisted.explanation).toContain('Kawat benrad');
+    expect(persisted.explanation).toContain(catalog.id);
+    // And no money was derived from an unproven identity.
+    expect(persisted.resourceCatalogId).toBeNull();
+    expect(persisted.selectedBasicPriceId).toBeNull();
+    expect(persisted.adaptedPriceValue).toBeNull();
     // The raw AHSP reference is preserved verbatim, never overwritten.
     expect(persisted.rawAhspResourceRef).toBe('Kawat bendrat');
   });
@@ -625,6 +630,32 @@ describe('ProjectAhspService E1A', () => {
     expect(persisted.resourceCatalogId).toBeNull();
     expect(persisted.selectedBasicPriceId).toBeNull();
     expect(persisted.adaptedPriceValue).toBeNull();
+  });
+
+  it('RM03D1: the AHSP source code channel is empty, never back-filled from the catalog', async () => {
+    // AHSPResource carries no source-code column, and no existing model binds
+    // one to a resource. Taking the code from the candidate catalog row would
+    // make the evidence prove itself, so the channel is passed through empty.
+    const { tx, catalog } = makeSuccessTx();
+    tx.aHSPVersion.findFirst.mockResolvedValue({
+      id: selectionInput.ahspVersionId,
+      outputUnit: 'M1',
+      resources: [{ ...resource('resource-1'), resourceId: 'Kawat bendrat' }],
+    });
+    tx.resourceCatalog.findMany.mockResolvedValue([
+      { ...catalog, name: 'Kawat benrad', code: 'M.72' },
+    ]);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+    const identityService = (service as any).identity;
+    const resolveSpy = jest.spyOn(identityService, 'resolve');
+
+    await service.selectForBoqItem(selectionInput);
+
+    expect(resolveSpy).toHaveBeenCalled();
+    const reference = resolveSpy.mock.calls[0][1] as { rawCode: unknown; rawName: string };
+    expect(reference.rawCode).toBeNull();
+    expect(reference.rawName).toBe('Kawat bendrat');
   });
 
   it('RM03D1: a genuinely unknown resource is still reported as not found, with no candidates', async () => {

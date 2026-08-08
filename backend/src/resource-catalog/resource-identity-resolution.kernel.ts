@@ -56,6 +56,14 @@ export interface IdentityCatalogCandidate {
   readonly type: string;
   readonly baseUnit: string;
   readonly status?: string;
+  /**
+   * ResourceCatalog.specifications — opaque JSON. The repository defines no
+   * identity contract for its keys today (the only key any shipped code ever
+   * writes is a test-only marker), so this kernel reads VALUES and never key
+   * names, and never asserts that a key means anything. See
+   * `specificationDesignationTokens` for exactly how little is inferred.
+   */
+  readonly specifications?: unknown;
 }
 
 /**
@@ -79,16 +87,26 @@ export interface SourceSightingEvidence {
 
 /**
  * A BasicPriceImportRowResourceMapping: a human, in this workspace, already
- * looked at a raw row and chose a canonical resource for it.
+ * looked at ONE Basic Price import row and chose a canonical resource for it.
  *
- * SCOPE MATTERS AND IS NOT NEGOTIABLE. The model binds one decision to one
- * import row. It is NOT a global alias table, and this kernel must not turn it
- * into one. Reuse is therefore allowed only for the IDENTICAL fact — the same
- * normalized raw name, the same resource type, the same workspace — which is
- * not an extension of the human's decision but a restatement of it. Asking the
- * same person the same question twice is the thing Issue #71 forbids; asking
- * them a DIFFERENT question and pretending they already answered it would be
- * far worse.
+ * SCOPE MATTERS AND IS NOT NEGOTIABLE, AND IT IS NARROWER THAN IT LOOKS.
+ *
+ * The model binds the decision to a `rowId` — one row, of one batch, of one
+ * workbook. What the human actually settled was "THIS import row means that
+ * catalog entry". They were never asked, and never answered, "every future
+ * AHSP line that happens to be spelled the same means it too".
+ *
+ * Treating a same-name match as authority would silently widen a row-scoped
+ * decision into a workspace-wide alias table, which is exactly the global
+ * alias this project forbids. Two independent sources can spell two different
+ * things identically; "Pasir" in a supplier's price list and "Pasir" in an
+ * AHSP are not guaranteed to be the same material, and no record here says
+ * they are.
+ *
+ * So a reviewed mapping is STRONG CANDIDATE EVIDENCE and never an assertion.
+ * It keeps SIMPROK's memory — the human's work still surfaces the right row
+ * instead of being forgotten — while leaving the one question they were never
+ * asked to them.
  */
 export interface ReviewedMappingEvidence {
   readonly resourceCatalogId: string;
@@ -120,6 +138,17 @@ export type ResourceIdentityStatus = 'RESOLVED' | 'NEEDS_REVIEW' | 'UNRESOLVED';
  */
 export type ResourceIdentityAuthority =
   | 'EXACT_CANONICAL_MATCH'
+  /**
+   * Reserved, and deliberately NOT reachable from any production path today.
+   *
+   * It describes reusing a human decision that is genuinely bound to the same
+   * AHSP fact being resolved. No model in this repository records such a
+   * decision yet — the only reviewed mapping that exists is scoped to a Basic
+   * Price import row — so emitting it would be claiming an authority nobody
+   * ever granted. The name stays in the contract so the concept has somewhere
+   * to land when a properly-scoped record exists; until then, nothing produces
+   * it, and a test proves that.
+   */
   | 'VERIFIED_MAPPING_REUSED'
   | 'EVIDENCE_CANDIDATE'
   | 'HUMAN_REVIEW_REQUIRED';
@@ -140,8 +169,19 @@ export type CandidateEvidenceKind =
   | 'SOURCE_CODE_MATCH'
   | 'SOURCE_SIGHTING_NAME_MATCH'
   | 'REVIEWED_MAPPING_CODE_MATCH'
+  | 'REVIEWED_MAPPING_NAME_MATCH'
   | 'NAME_TOKEN_CONTAINMENT'
   | 'NAME_TOKEN_STEM_SHARED';
+
+/**
+ * A human's earlier decision, carried so the reviewer closing this exception
+ * can see it was already settled once — for a different fact — and by whom.
+ */
+export interface PriorHumanDecision {
+  readonly reviewerAccountId: string;
+  readonly decidedAt: string;
+  readonly reason: string | null;
+}
 
 export interface ResourceIdentityCandidate {
   readonly resourceCatalogId: string;
@@ -150,8 +190,14 @@ export interface ResourceIdentityCandidate {
   readonly type: string;
   readonly baseUnit: string;
   readonly evidence: ReadonlyArray<CandidateEvidenceKind>;
-  /** True when the catalog row carries a designation the raw reference does not. */
+  /** True when the catalog row states a designation the raw reference does not. */
   readonly specificationUnproved: boolean;
+  /**
+   * Surfaced, never interpreted. The reviewer sees exactly what the catalog
+   * row claims about itself; this kernel reads only its values, never its keys.
+   */
+  readonly specifications: unknown;
+  readonly priorHumanDecision: PriorHumanDecision | null;
 }
 
 export interface ResourceIdentityResolution {
@@ -210,23 +256,89 @@ function isDisjoint(a: Set<string>, b: Set<string>): boolean {
 }
 
 /**
+ * Designations a catalog row states in its structured `specifications` JSON.
+ *
+ * ResourceCatalog.specifications is opaque: the schema gives it no shape and
+ * the repository defines no identity contract for its keys. So this reads
+ * VALUES ONLY and never key names — it never decides that a key called
+ * "diameter" means a diameter, because nothing in the repository says so.
+ *
+ * The same digit-bearing test used on names applies here, which is what keeps
+ * non-identity metadata harmless: `{rm02bTestOnly: true}` is a boolean and
+ * contributes nothing, `{keepMe: 'unrelated-value'}` carries no digits and
+ * contributes nothing, while `{grade: 'BjTS 420B', diameter: 13}` contributes
+ * exactly the designations a human would read off it.
+ *
+ * Ignoring this field entirely — as this kernel did before — meant a catalog
+ * row could state a grade and a diameter and still be auto-resolved against a
+ * source that stated neither. That is a false certainty, so the field is now
+ * read. It is still never invented: no values, no designations, no effect.
+ */
+function specificationDesignationTokens(specifications: unknown): Set<string> {
+  const found = new Set<string>();
+  const walk = (value: unknown, depth: number): void => {
+    if (depth > 4 || value === null || value === undefined) return;
+    if (typeof value === 'string' || typeof value === 'number') {
+      for (const token of tokenize(String(value))) {
+        if (/\p{N}/u.test(token)) found.add(token);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) walk(entry, depth + 1);
+      return;
+    }
+    if (typeof value === 'object') {
+      for (const entry of Object.values(value as Record<string, unknown>)) {
+        walk(entry, depth + 1);
+      }
+    }
+    // Booleans and anything else state no designation and are ignored.
+  };
+  walk(specifications, 0);
+  return found;
+}
+
+/** Everything the catalog row states about itself, name and structured spec alike. */
+function candidateDesignations(candidate: IdentityCatalogCandidate): Set<string> {
+  const combined = designationTokens(candidate.name);
+  for (const token of specificationDesignationTokens(candidate.specifications)) {
+    combined.add(token);
+  }
+  return combined;
+}
+
+/**
  * A real specification contradiction: BOTH sides state a designation and they
  * share none. "Besi angker diameter 8" against "Besi angker diameter 10" is a
  * contradiction. "Baja tulangan" against "BjTS 420B Ø13" is NOT — one side
  * simply says nothing, which is unproven, not contradicted.
  */
-function contradictsSpecification(rawName: string, candidateName: string): boolean {
+function contradictsSpecification(
+  rawName: string,
+  candidate: IdentityCatalogCandidate,
+): boolean {
   const rawDesignations = designationTokens(rawName);
-  const candidateDesignations = designationTokens(candidateName);
-  if (rawDesignations.size === 0 || candidateDesignations.size === 0) return false;
-  return isDisjoint(rawDesignations, candidateDesignations);
+  const stated = candidateDesignations(candidate);
+  if (rawDesignations.size === 0 || stated.size === 0) return false;
+  return isDisjoint(rawDesignations, stated);
 }
 
-/** The candidate states a designation the raw reference never made. */
-function specificationUnproved(rawName: string, candidateName: string): boolean {
+/**
+ * The candidate states a designation the raw reference never made — a grade, a
+ * diameter, a class the source is simply silent about.
+ *
+ * That is UNPROVEN, not contradicted, and the difference matters: unknown must
+ * never be treated as wrong. It blocks the automatic assertion and asks a
+ * human, rather than either inventing agreement or declaring a conflict.
+ */
+function specificationUnproved(
+  rawName: string,
+  candidate: IdentityCatalogCandidate,
+): boolean {
   return (
     designationTokens(rawName).size === 0 &&
-    designationTokens(candidateName).size > 0
+    candidateDesignations(candidate).size > 0
   );
 }
 
@@ -285,12 +397,18 @@ function isActive(candidate: IdentityCatalogCandidate): boolean {
  * Resolve one raw resource reference to a canonical ResourceCatalog identity.
  *
  * Authority hierarchy, first decisive level wins:
- *   1. Exact canonical match, one row, no specification contradiction → RESOLVED
- *   2. A reviewed human decision for the identical raw fact           → RESOLVED
- *   3. Evidence-nominated candidates (code, provenance, tokens)       → NEEDS_REVIEW
- *   4. Several plausible candidates                                   → NEEDS_REVIEW
- *   5. Type or specification contradiction                            → UNRESOLVED
- *   6. Nothing defensible, after all of the above                     → UNRESOLVED
+ *   1. Exact canonical match, one row, specification neither contradicted
+ *      nor left unproven                                              → RESOLVED
+ *   2. Evidence-nominated candidates — source code, provenance sightings,
+ *      reviewed human decisions from other contexts, name tokens      → NEEDS_REVIEW
+ *   3. Several plausible candidates                                   → NEEDS_REVIEW
+ *   4. Type or specification contradiction                            → UNRESOLVED
+ *   5. Nothing defensible, after all of the above                     → UNRESOLVED
+ *
+ * EXACT MATCH IS CURRENTLY THE ONLY ROAD TO RESOLVED, and that is deliberate.
+ * The one kind of recorded human decision this repository has is bound to a
+ * Basic Price import row, which is a different fact from an AHSP reference —
+ * so it enriches the evidence and never carries the assertion.
  */
 export function resolveResourceIdentity(
   input: ResourceIdentityResolutionInput,
@@ -304,6 +422,22 @@ export function resolveResourceIdentity(
   const usable = catalogCandidates.filter(isActive);
   const byId = new Map(usable.map((candidate) => [candidate.id, candidate]));
 
+  /** The most recent decision a human made about this catalog row, if any. */
+  const priorDecisionFor = (catalogId: string): PriorHumanDecision | null => {
+    const matching = reviewedMappings.filter(
+      (mapping) => mapping.resourceCatalogId === catalogId,
+    );
+    if (matching.length === 0) return null;
+    const latest = matching.reduce((newest, mapping) =>
+      mapping.decidedAt > newest.decidedAt ? mapping : newest,
+    );
+    return {
+      reviewerAccountId: latest.reviewerAccountId,
+      decidedAt: latest.decidedAt,
+      reason: latest.reason,
+    };
+  };
+
   const describeCandidate = (
     candidate: IdentityCatalogCandidate,
     evidence: ReadonlyArray<CandidateEvidenceKind>,
@@ -314,7 +448,9 @@ export function resolveResourceIdentity(
     type: candidate.type,
     baseUnit: candidate.baseUnit,
     evidence,
-    specificationUnproved: specificationUnproved(rawName, candidate.name),
+    specificationUnproved: specificationUnproved(rawName, candidate),
+    specifications: candidate.specifications ?? null,
+    priorHumanDecision: priorDecisionFor(candidate.id),
   });
 
   // ---- LEVEL 1: exact canonical match ----
@@ -327,7 +463,7 @@ export function resolveResourceIdentity(
 
   if (exactRows.length === 1) {
     const only = exactRows[0];
-    if (contradictsSpecification(rawName, only.name)) {
+    if (contradictsSpecification(rawName, only)) {
       return {
         status: 'UNRESOLVED',
         authority: null,
@@ -336,8 +472,28 @@ export function resolveResourceIdentity(
         reasonCodes: ['SPECIFICATION_CONFLICT'],
         explanation:
           `Nama "${rawName}" cocok persis dengan katalog "${only.name}", tetapi ` +
-          `spesifikasi yang tertulis pada keduanya bertentangan. Identitas tidak ` +
-          `ditetapkan.`,
+          `spesifikasi yang dinyatakan kedua belah pihak bertentangan. Identitas ` +
+          `tidak ditetapkan.`,
+      };
+    }
+    // The names agree, but the catalog row states a grade/diameter/class the
+    // source never mentioned. An exact name is not licence to assume the
+    // source meant that specification — unknown is not agreement.
+    if (specificationUnproved(rawName, only)) {
+      return {
+        status: 'NEEDS_REVIEW',
+        authority: 'EVIDENCE_CANDIDATE',
+        resolvedResourceCatalogId: null,
+        candidates: [describeCandidate(only, [])],
+        reasonCodes: [
+          'STRONG_CANDIDATE_NEEDS_REVIEW',
+          'SPECIFICATION_UNPROVED',
+        ],
+        explanation:
+          `Nama "${rawName}" cocok persis dengan katalog "${only.name}" ` +
+          `(${only.id}), tetapi entri katalog menyatakan spesifikasi yang tidak ` +
+          `disebut oleh sumber AHSP. SIMPROK tidak menganggap sumber pasti ` +
+          `memaksudkan spesifikasi tersebut. Diperlukan penegasan manusia.`,
       };
     }
     return {
@@ -367,85 +523,46 @@ export function resolveResourceIdentity(
     };
   }
 
-  // ---- LEVEL 2: a reviewed human decision for the IDENTICAL raw fact ----
-  const reusableMappings = reviewedMappings.filter(
-    (mapping) =>
-      normalizeResourceName(mapping.rawName) === normalizedName &&
-      typeMatches(mapping.resourceType, type) &&
-      byId.has(mapping.resourceCatalogId),
-  );
-  const reusableTargets = new Set(
-    reusableMappings.map((mapping) => mapping.resourceCatalogId),
-  );
-
-  if (reusableTargets.size === 1) {
-    const targetId = [...reusableTargets][0];
-    const target = byId.get(targetId)!;
-    const decision = reusableMappings[0];
-    if (!typeMatches(target.type, type)) {
-      // The recorded decision points at a row of the wrong class — never reuse.
-      return {
-        status: 'UNRESOLVED',
-        authority: null,
-        resolvedResourceCatalogId: null,
-        candidates: [describeCandidate(target, [])],
-        reasonCodes: ['RESOURCE_TYPE_MISMATCH'],
-        explanation:
-          `Keputusan manusia yang tercatat untuk "${rawName}" menunjuk katalog ` +
-          `"${target.name}" bertipe ${target.type}, sedangkan AHSP meminta ${type}.`,
-      };
-    }
-    if (contradictsSpecification(rawName, target.name)) {
-      return {
-        status: 'UNRESOLVED',
-        authority: null,
-        resolvedResourceCatalogId: null,
-        candidates: [describeCandidate(target, [])],
-        reasonCodes: ['SPECIFICATION_CONFLICT'],
-        explanation:
-          `Keputusan manusia yang tercatat menunjuk "${target.name}", tetapi ` +
-          `spesifikasinya bertentangan dengan "${rawName}".`,
-      };
-    }
-    return {
-      status: 'RESOLVED',
-      authority: 'VERIFIED_MAPPING_REUSED',
-      resolvedResourceCatalogId: target.id,
-      candidates: [describeCandidate(target, [])],
-      reasonCodes: ['VERIFIED_MAPPING_REUSED'],
-      explanation:
-        `Identitas "${rawName}" (${type}) sudah pernah ditetapkan oleh manusia di ` +
-        `workspace ini ke ResourceCatalog "${target.name}" (${target.id}) pada ` +
-        `${decision.decidedAt}. Fakta yang sama tidak ditanyakan ulang.`,
-    };
-  }
-
-  if (reusableTargets.size > 1) {
-    return {
-      status: 'NEEDS_REVIEW',
-      authority: 'HUMAN_REVIEW_REQUIRED',
-      resolvedResourceCatalogId: null,
-      candidates: [...reusableTargets].map((id) =>
-        describeCandidate(byId.get(id)!, ['REVIEWED_MAPPING_CODE_MATCH']),
-      ),
-      reasonCodes: ['REVIEWED_MAPPING_CONFLICT'],
-      explanation:
-        `Terdapat keputusan manusia yang saling bertentangan untuk "${rawName}": ` +
-        `${reusableTargets.size} katalog berbeda pernah dipilih. Diperlukan ` +
-        `penegasan ulang.`,
-    };
-  }
-
-  // ---- LEVEL 3: evidence-driven candidate discovery ----
+  // ---- LEVEL 2: evidence-driven candidate discovery ----
+  //
+  // Reviewed human decisions participate HERE, as evidence, and not above as
+  // authority. See ReviewedMappingEvidence: the decision is bound to a Basic
+  // Price import row, so it proves what that row meant and nothing about what
+  // an AHSP line means. Same spelling is not the same fact.
   const evidenceById = new Map<string, Set<CandidateEvidenceKind>>();
+  /**
+   * Rows the evidence DID nominate but a stated specification ruled out.
+   *
+   * Kept separately so the refusal can be reported as what it is. Letting these
+   * fall through to "no defensible candidate" would report a specification
+   * mismatch as a name mismatch — two different facts, and the audit trail must
+   * not blur them.
+   */
+  const specificationConflicted = new Set<string>();
   const note = (catalogId: string, kind: CandidateEvidenceKind) => {
     const candidate = byId.get(catalogId);
     if (!candidate || !typeMatches(candidate.type, type)) return;
-    if (contradictsSpecification(rawName, candidate.name)) return;
+    if (contradictsSpecification(rawName, candidate)) {
+      specificationConflicted.add(catalogId);
+      return;
+    }
     const existing = evidenceById.get(catalogId) ?? new Set<CandidateEvidenceKind>();
     existing.add(kind);
     evidenceById.set(catalogId, existing);
   };
+
+  // A human already chose this catalog row for a row spelled the same way.
+  // Strong evidence, worth surfacing first — never a verdict.
+  const sameNameMappings = reviewedMappings.filter(
+    (mapping) =>
+      normalizeResourceName(mapping.rawName) === normalizedName &&
+      typeMatches(mapping.resourceType, type),
+  );
+  for (const mapping of sameNameMappings) {
+    note(mapping.resourceCatalogId, 'REVIEWED_MAPPING_NAME_MATCH');
+  }
+  const conflictingPriorDecisions =
+    new Set(sameNameMappings.map((mapping) => mapping.resourceCatalogId)).size > 1;
 
   if (normalizedCode !== null) {
     for (const sighting of sourceSightings) {
@@ -492,8 +609,9 @@ export function resolveResourceIdentity(
       .map(([id, kinds]) => ({ id, kinds }))
       .sort((a, b) => {
         const strength = (kinds: Set<CandidateEvidenceKind>) =>
-          (kinds.has('SOURCE_CODE_MATCH') ? 4 : 0) +
-          (kinds.has('REVIEWED_MAPPING_CODE_MATCH') ? 3 : 0) +
+          (kinds.has('SOURCE_CODE_MATCH') ? 8 : 0) +
+          (kinds.has('REVIEWED_MAPPING_CODE_MATCH') ? 4 : 0) +
+          (kinds.has('REVIEWED_MAPPING_NAME_MATCH') ? 3 : 0) +
           (kinds.has('SOURCE_SIGHTING_NAME_MATCH') ? 2 : 0) +
           (kinds.has('NAME_TOKEN_CONTAINMENT') ? 1 : 0);
         const delta = strength(b.kinds) - strength(a.kinds);
@@ -515,6 +633,13 @@ export function resolveResourceIdentity(
         : 'STRONG_CANDIDATE_NEEDS_REVIEW',
     ];
     if (anyUnproved) reasonCodes.push('SPECIFICATION_UNPROVED');
+    // Two humans (or one human twice) pointed the same spelling at different
+    // catalog rows. That is itself worth saying out loud.
+    if (conflictingPriorDecisions) reasonCodes.push('REVIEWED_MAPPING_CONFLICT');
+
+    const priorDecisionCount = candidates.filter(
+      (candidate) => candidate.priorHumanDecision !== null,
+    ).length;
 
     return {
       status: 'NEEDS_REVIEW',
@@ -527,12 +652,35 @@ export function resolveResourceIdentity(
         `tetapi SIMPROK menemukan ${candidates.length} kandidat dari bukti nyata ` +
         `(${[...new Set(candidates.flatMap((c) => c.evidence))].join(', ')}): ` +
         `${candidates.map((c) => `"${c.name}" (${c.resourceCatalogId})`).join(', ')}. ` +
+        (priorDecisionCount > 0
+          ? `${priorDecisionCount} di antaranya pernah dipilih manusia untuk baris ` +
+            `impor Basic Price — bukti kuat, tetapi keputusan itu terikat pada baris ` +
+            `tersebut, bukan pada baris AHSP ini. `
+          : '') +
         `Kesetaraan belum terbukti, jadi identitas belum ditetapkan — ini bukan ` +
         `"tidak ditemukan", melainkan satu keputusan manusia yang masih terbuka.`,
     };
   }
 
-  // ---- LEVEL 5: name matched but the class is wrong ----
+  // ---- LEVEL 4a: rows were found, but a stated specification ruled them out ----
+  if (specificationConflicted.size > 0) {
+    return {
+      status: 'UNRESOLVED',
+      authority: null,
+      resolvedResourceCatalogId: null,
+      candidates: [...specificationConflicted].map((id) =>
+        describeCandidate(byId.get(id)!, []),
+      ),
+      reasonCodes: ['SPECIFICATION_CONFLICT'],
+      explanation:
+        `SIMPROK menemukan ${specificationConflicted.size} entri ResourceCatalog ` +
+        `yang namanya berdekatan dengan "${rawName}", tetapi spesifikasi yang ` +
+        `dinyatakan masing-masing bertentangan dengan yang dinyatakan sumber. ` +
+        `Ini bukan "tidak ditemukan" — ini ketidakcocokan spesifikasi.`,
+    };
+  }
+
+  // ---- LEVEL 4b: name matched but the class is wrong ----
   if (exactNameRows.length > 0) {
     return {
       status: 'UNRESOLVED',
@@ -547,7 +695,7 @@ export function resolveResourceIdentity(
     };
   }
 
-  // ---- LEVEL 6: genuinely nothing, and only now may we say so ----
+  // ---- LEVEL 5: genuinely nothing, and only now may we say so ----
   return {
     status: 'UNRESOLVED',
     authority: null,
