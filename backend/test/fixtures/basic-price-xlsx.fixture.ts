@@ -7,7 +7,30 @@ export interface BasicPriceFixtureOptions {
   includeFormulaCachedResult?: boolean;
   includeExactTieRounding?: boolean;
   includeLongRoundTripDecimal?: boolean;
+  /** RM-03D1 — MATERIAL rows the Reviewed Resource Admission matrix needs. */
+  includeAdmissionRows?: boolean;
 }
+
+/**
+ * RM-03D1 — the MATERIAL rows the admission acceptance matrix drives, kept
+ * here so the spec asserts against names it did not also invent inline.
+ *
+ * Each one exists to prove a different refusal or the single permission:
+ * genuinely unknown, known under a different spelling, known globally, already
+ * bound to another resource's provenance, and a same-name pair that two
+ * concurrent requests race for.
+ */
+export const ADMISSION_ROWS = {
+  UNKNOWN: { row: 41, name: 'Sirtu Admisi', unit: 'M3', price: 133800 },
+  DIFFERENT_SPELLING: { row: 42, name: 'Semen Portland', unit: 'M3', price: 1500000 },
+  GLOBAL_KNOWN: { row: 43, name: 'Batu Kali Kanonik Global', unit: 'M3', price: 250000 },
+  ROLLBACK: { row: 44, name: 'Pasir Rollback', unit: 'M3', price: 310000 },
+  CONCURRENT_A: { row: 45, name: 'Kerikil Konkuren', unit: 'M3', price: 410000 },
+  CONCURRENT_B: { row: 46, name: 'Kerikil Konkuren', unit: 'M3', price: 420000 },
+  // The harder race: two SPELLINGS, one plausible identity. Row 42 supplies
+  // "Semen Portland"; this is the other half of that pair.
+  CONCURRENT_SPELLING: { row: 47, name: 'Semen Portlan', unit: 'M3', price: 1400000 },
+} as const;
 
 const CURRENCY_NUMFMT = '_-* #,##0.00_-;-* #,##0.00_-;_-* "-"??_-;_-@_-';
 
@@ -84,6 +107,17 @@ export async function buildBasicPriceXlsx(options: BasicPriceFixtureOptions = {}
     sheet.getCell('D40').value = 'M.10';
     sheet.getCell('E40').value = 'M3';
     // F40 intentionally left empty.
+  }
+
+  if (options.includeAdmissionRows) {
+    for (const entry of Object.values(ADMISSION_ROWS)) {
+      sheet.getCell(`C${entry.row}`).value = entry.name;
+      // No code cell: these rows carry no source code, so admission must
+      // store null rather than borrow one.
+      sheet.getCell(`E${entry.row}`).value = entry.unit;
+      sheet.getCell(`F${entry.row}`).value = entry.price;
+      sheet.getCell(`F${entry.row}`).numFmt = CURRENCY_NUMFMT;
+    }
   }
 
   // --- EQUIPMENT section ---
