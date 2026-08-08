@@ -18,15 +18,22 @@
  * statement, and it is the one this kernel removes.
  *
  * The correction is deliberately asymmetric:
- *   HIGH RECALL when FINDING candidates — code, provenance, tokens, reviewed
- *   decisions, prefix overlap. Look everywhere.
- *   HIGH PRECISION when ASSERTING identity — only an exact canonical match or
- *   a human's own reviewed decision may auto-resolve. Everything else becomes
- *   a named candidate a human closes once.
+ *   HIGH RECALL when FINDING candidates — source code, provenance sightings,
+ *   reviewed decisions from other contexts, name tokens. Look everywhere.
+ *   HIGH PRECISION when ASSERTING identity — ONLY an exact canonical match,
+ *   and only when the row claims nothing the source did not. Everything else
+ *   becomes a named candidate a human closes once.
  *
- * So a false positive is very hard to produce (nothing but exactness or a
- * recorded human decision can assert), while a false negative caused merely by
- * spelling is impossible (discovery keeps looking after exact match fails).
+ * So a false positive is very hard to produce: exactness is currently the sole
+ * road to RESOLVED, because it is the only evidence that binds to the fact
+ * being resolved.
+ *
+ * Spelling-driven false negatives are REDUCED, not eliminated, and that
+ * distinction is deliberate. Exact-name-only is no longer the sole DISCOVERY
+ * path, so recall is materially better — but discovery is still heuristic, and
+ * AHSPResource carries no source-code column, so "BjTP atau BjTS" against
+ * "Baja tulangan" remains a known blind spot. This kernel does not claim
+ * otherwise.
  *
  * Scope: PURE — no I/O, no database, no clock, no randomness. Every piece of
  * evidence is handed in already tenant-scoped by the caller. This kernel
@@ -190,8 +197,14 @@ export interface ResourceIdentityCandidate {
   readonly type: string;
   readonly baseUnit: string;
   readonly evidence: ReadonlyArray<CandidateEvidenceKind>;
-  /** True when the catalog row states a designation the raw reference does not. */
+  /** True when the catalog row claims anything the source did not state. */
   readonly specificationUnproved: boolean;
+  /**
+   * Exactly which claims are unsupported — a diameter, a grade, a finish the
+   * source never mentioned. Named so the reviewer can settle the one open
+   * question instead of re-deriving why the row was held back.
+   */
+  readonly unprovedSpecificationFacts: ReadonlyArray<string>;
   /**
    * Surfaced, never interpreted. The reviewer sees exactly what the catalog
    * row claims about itself; this kernel reads only its values, never its keys.
@@ -256,32 +269,53 @@ function isDisjoint(a: Set<string>, b: Set<string>): boolean {
 }
 
 /**
- * Designations a catalog row states in its structured `specifications` JSON.
+ * A REAL specification contradiction, and the only kind this kernel will ever
+ * claim: both NAMES state a designation and they share none. "Besi angker
+ * diameter 8" against "Besi angker diameter 10" contradicts. "Baja tulangan"
+ * against "BjTS 420B Ø13" does not — one side is simply silent, which is
+ * unproven, not contradicted.
  *
- * ResourceCatalog.specifications is opaque: the schema gives it no shape and
- * the repository defines no identity contract for its keys. So this reads
- * VALUES ONLY and never key names — it never decides that a key called
- * "diameter" means a diameter, because nothing in the repository says so.
- *
- * The same digit-bearing test used on names applies here, which is what keeps
- * non-identity metadata harmless: `{rm02bTestOnly: true}` is a boolean and
- * contributes nothing, `{keepMe: 'unrelated-value'}` carries no digits and
- * contributes nothing, while `{grade: 'BjTS 420B', diameter: 13}` contributes
- * exactly the designations a human would read off it.
- *
- * Ignoring this field entirely — as this kernel did before — meant a catalog
- * row could state a grade and a diameter and still be auto-resolved against a
- * source that stated neither. That is a false certainty, so the field is now
- * read. It is still never invented: no values, no designations, no effect.
+ * Names are compared against names because that is like against like. The
+ * structured `specifications` column is deliberately NOT consulted here: its
+ * keys have no locked meaning in this repository, so a value of 16 sitting
+ * next to a source that said 420B proves nothing about whether they describe
+ * the same property. Calling that a conflict would be inventing the taxonomy
+ * this kernel refuses to invent — so an unprovable structured fact is always
+ * UNPROVED, never CONFLICT. Honest in both directions.
  */
-function specificationDesignationTokens(specifications: unknown): Set<string> {
-  const found = new Set<string>();
+function contradictsSpecification(
+  rawName: string,
+  candidate: IdentityCatalogCandidate,
+): boolean {
+  const rawDesignations = designationTokens(rawName);
+  const candidateNameDesignations = designationTokens(candidate.name);
+  if (rawDesignations.size === 0 || candidateNameDesignations.size === 0) {
+    return false;
+  }
+  return isDisjoint(rawDesignations, candidateNameDesignations);
+}
+
+/**
+ * Concrete facts a catalog row states in its structured `specifications` JSON.
+ *
+ * ResourceCatalog.specifications is opaque — the schema gives it no shape and
+ * the repository locks no meaning to its keys. So this reads VALUES ONLY and
+ * never key names: it never decides that a key called "diameter" means a
+ * diameter, because nothing in the repository says so.
+ *
+ * A string or a number IS a stated fact ("Galvanis", 16, "BjTS 420B"). A
+ * boolean is a flag with no value to compare and states nothing — which is
+ * also why the one shape this repository provably treats as non-product
+ * metadata, `{rm02bTestOnly: true}`, needs no ignore-list to stay harmless. No
+ * key is ever special-cased here, and no vocabulary is introduced.
+ */
+function structuredSpecificationFacts(specifications: unknown): string[] {
+  const facts: string[] = [];
   const walk = (value: unknown, depth: number): void => {
     if (depth > 4 || value === null || value === undefined) return;
     if (typeof value === 'string' || typeof value === 'number') {
-      for (const token of tokenize(String(value))) {
-        if (/\p{N}/u.test(token)) found.add(token);
-      }
+      const text = String(value).trim();
+      if (text.length > 0) facts.push(text);
       return;
     }
     if (Array.isArray(value)) {
@@ -293,53 +327,60 @@ function specificationDesignationTokens(specifications: unknown): Set<string> {
         walk(entry, depth + 1);
       }
     }
-    // Booleans and anything else state no designation and are ignored.
+    // Booleans state no value and are ignored.
   };
   walk(specifications, 0);
-  return found;
-}
-
-/** Everything the catalog row states about itself, name and structured spec alike. */
-function candidateDesignations(candidate: IdentityCatalogCandidate): Set<string> {
-  const combined = designationTokens(candidate.name);
-  for (const token of specificationDesignationTokens(candidate.specifications)) {
-    combined.add(token);
-  }
-  return combined;
+  return facts;
 }
 
 /**
- * A real specification contradiction: BOTH sides state a designation and they
- * share none. "Besi angker diameter 8" against "Besi angker diameter 10" is a
- * contradiction. "Baja tulangan" against "BjTS 420B Ø13" is NOT — one side
- * simply says nothing, which is unproven, not contradicted.
+ * Everything the candidate claims about itself that the source never said.
+ *
+ * This is the fail-closed guard, and it is deliberately blunt rather than
+ * clever. The previous version compared digit tokens as SETS, so a catalog row
+ * stating `{diameter: 16}` slipped through whenever the source happened to
+ * share some other designation — "Baja tulangan 420B" and a row claiming both
+ * 420B and 16 intersected on 420B and auto-resolved, silently adopting a
+ * diameter the source never mentioned. It also discarded non-numeric facts
+ * entirely, so `{finish: "Galvanis"}` vanished: "no digit" was being treated
+ * as "not a specification", which is not true.
+ *
+ * The rule now: EVERY stated fact must be supported by the source, or the
+ * identity is not asserted. A structured fact counts as supported only when
+ * all of its tokens appear in the source text — deterministic evidence, never
+ * guessed key semantics. Anything left over blocks the automatic assertion and
+ * asks a human.
  */
-function contradictsSpecification(
+function unprovedSpecificationFacts(
   rawName: string,
   candidate: IdentityCatalogCandidate,
-): boolean {
+): string[] {
+  const sourceTokens = new Set(tokenize(rawName));
   const rawDesignations = designationTokens(rawName);
-  const stated = candidateDesignations(candidate);
-  if (rawDesignations.size === 0 || stated.size === 0) return false;
-  return isDisjoint(rawDesignations, stated);
+  const unproved: string[] = [];
+
+  // Designations the catalog NAME states that the source does not.
+  for (const designation of designationTokens(candidate.name)) {
+    if (!rawDesignations.has(designation)) unproved.push(designation);
+  }
+
+  // Facts the structured column states that the source does not.
+  for (const fact of structuredSpecificationFacts(candidate.specifications)) {
+    const factTokens = tokenize(fact);
+    const supported =
+      factTokens.length > 0 &&
+      factTokens.every((token) => sourceTokens.has(token));
+    if (!supported) unproved.push(fact);
+  }
+
+  return unproved;
 }
 
-/**
- * The candidate states a designation the raw reference never made — a grade, a
- * diameter, a class the source is simply silent about.
- *
- * That is UNPROVEN, not contradicted, and the difference matters: unknown must
- * never be treated as wrong. It blocks the automatic assertion and asks a
- * human, rather than either inventing agreement or declaring a conflict.
- */
 function specificationUnproved(
   rawName: string,
   candidate: IdentityCatalogCandidate,
 ): boolean {
-  return (
-    designationTokens(rawName).size === 0 &&
-    candidateDesignations(candidate).size > 0
-  );
+  return unprovedSpecificationFacts(rawName, candidate).length > 0;
 }
 
 /** Every token of the shorter name appears in the longer one. */
@@ -449,6 +490,7 @@ export function resolveResourceIdentity(
     baseUnit: candidate.baseUnit,
     evidence,
     specificationUnproved: specificationUnproved(rawName, candidate),
+    unprovedSpecificationFacts: unprovedSpecificationFacts(rawName, candidate),
     specifications: candidate.specifications ?? null,
     priorHumanDecision: priorDecisionFor(candidate.id),
   });
@@ -476,10 +518,11 @@ export function resolveResourceIdentity(
           `tidak ditetapkan.`,
       };
     }
-    // The names agree, but the catalog row states a grade/diameter/class the
-    // source never mentioned. An exact name is not licence to assume the
-    // source meant that specification — unknown is not agreement.
-    if (specificationUnproved(rawName, only)) {
+    // The names agree, but the catalog row claims something the source never
+    // said — a diameter, a grade, a finish. An exact name is not licence to
+    // assume the source meant it. Unknown is not agreement.
+    const unproved = unprovedSpecificationFacts(rawName, only);
+    if (unproved.length > 0) {
       return {
         status: 'NEEDS_REVIEW',
         authority: 'EVIDENCE_CANDIDATE',
@@ -491,9 +534,11 @@ export function resolveResourceIdentity(
         ],
         explanation:
           `Nama "${rawName}" cocok persis dengan katalog "${only.name}" ` +
-          `(${only.id}), tetapi entri katalog menyatakan spesifikasi yang tidak ` +
-          `disebut oleh sumber AHSP. SIMPROK tidak menganggap sumber pasti ` +
-          `memaksudkan spesifikasi tersebut. Diperlukan penegasan manusia.`,
+          `(${only.id}), tetapi entri katalog menyatakan hal yang tidak disebut ` +
+          `oleh sumber AHSP: ${unproved.map((fact) => `"${fact}"`).join(', ')}. ` +
+          `SIMPROK tidak menganggap sumber pasti memaksudkannya, dan juga tidak ` +
+          `menyebutnya bertentangan — arti kunci spesifikasi belum dibakukan. ` +
+          `Diperlukan penegasan manusia.`,
       };
     }
     return {

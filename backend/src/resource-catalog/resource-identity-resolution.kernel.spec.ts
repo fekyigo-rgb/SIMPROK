@@ -422,14 +422,153 @@ describe('resolveResourceIdentity — authority hierarchy', () => {
 
   // ---------- structured ResourceCatalog.specifications ----------
   //
-  // The column is opaque JSON with no identity contract in this repository, so
-  // the kernel reads VALUES and never key names. What it must not do is ignore
-  // it: a row stating a grade and a diameter must not be auto-resolved against
-  // a source that stated neither.
+  // The column is opaque JSON and this repository locks no meaning to its keys.
+  // So the kernel reads VALUES and never key names, and it is FAIL-CLOSED: any
+  // fact the row states that the source did not is enough to withhold the
+  // assertion. It never upgrades an unprovable difference into a conflict,
+  // because it cannot prove two opaque values describe the same property.
 
-  it('D. a structured specification that contradicts the source blocks the match', () => {
+  const bajaTulangan420: IdentityCatalogCandidate = {
+    id: 'cat-baja-420',
+    code: null,
+    name: 'Baja tulangan 420B',
+    type: 'MATERIAL',
+    baseUnit: 'Kg',
+    status: 'ACTIVE',
+    specifications: { diameter: 16 },
+  };
+
+  it('A. a partial designation overlap must not authorise the identity', () => {
+    // Source says 420B. The row says 420B AND 16. Sharing 420B is not proof
+    // that the source meant diameter 16 — the old set-intersection let this
+    // resolve.
+    const result = run({
+      reference: { rawName: 'Baja tulangan 420B', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
+      catalogCandidates: [bajaTulangan420],
+    });
+
+    expect(result.status).not.toBe('RESOLVED');
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.candidates[0].unprovedSpecificationFacts).toContain('16');
+  });
+
+  it('B. shared tokens must not hide an extra unproved structured fact', () => {
+    const result = run({
+      reference: { rawName: 'Baja tulangan 420B Ø13', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
+      catalogCandidates: [{ ...bajaTulangan420, name: 'Baja tulangan 420B Ø13' }],
+    });
+
+    expect(result.status).not.toBe('RESOLVED');
+    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+    // 420B and 13 agreeing does not make 16 disappear.
+    expect(result.candidates[0].unprovedSpecificationFacts).toContain('16');
+  });
+
+  it('C. a non-numeric structured value is a specification too', () => {
+    const galvanis: IdentityCatalogCandidate = {
+      id: 'cat-baja-galvanis',
+      code: null,
+      name: 'Baja tulangan',
+      type: 'MATERIAL',
+      baseUnit: 'Kg',
+      status: 'ACTIVE',
+      specifications: { finish: 'Galvanis' },
+    };
+    const result = run({
+      reference: { rawName: 'Baja tulangan', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
+      catalogCandidates: [galvanis],
+    });
+
+    // "No digit" never proved "not a specification". The old rule discarded
+    // this value entirely and auto-resolved.
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+    expect(result.candidates[0].unprovedSpecificationFacts).toContain('Galvanis');
+  });
+
+  it('C2. a structured fact the source DOES state is supported and does not block', () => {
+    const galvanis: IdentityCatalogCandidate = {
+      id: 'cat-baja-galvanis-2',
+      code: null,
+      name: 'Baja tulangan galvanis',
+      type: 'MATERIAL',
+      baseUnit: 'Kg',
+      status: 'ACTIVE',
+      specifications: { finish: 'Galvanis' },
+    };
+    const result = run({
+      reference: { rawName: 'Baja tulangan galvanis', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
+      catalogCandidates: [galvanis],
+    });
+
+    // Deterministic evidence, not guessed key semantics: every token of the
+    // stated fact appears in the source itself.
+    expect(result.status).toBe('RESOLVED');
+    expect(result.authority).toBe('EXACT_CANONICAL_MATCH');
+  });
+
+  it('D. no structured specification behaves exactly as before', () => {
+    const result = run({
+      reference: { rawName: 'Pekerja', rawCode: null, rawUnit: 'OH', resourceType: 'LABOR' },
+      catalogCandidates: [{ ...CATALOG_PEKERJA, specifications: null }],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    expect(result.authority).toBe('EXACT_CANONICAL_MATCH');
+    expect(result.candidates[0].specifications).toBeNull();
+  });
+
+  it('E. an empty structured specification is the same as none', () => {
+    const empty = run({
+      reference: { rawName: 'Pekerja', rawCode: null, rawUnit: 'OH', resourceType: 'LABOR' },
+      catalogCandidates: [{ ...CATALOG_PEKERJA, specifications: {} }],
+    });
+    const absent = run({
+      reference: { rawName: 'Pekerja', rawCode: null, rawUnit: 'OH', resourceType: 'LABOR' },
+      catalogCandidates: [CATALOG_PEKERJA],
+    });
+
+    expect(empty.status).toBe('RESOLVED');
+    expect(empty.status).toBe(absent.status);
+    expect(empty.candidates[0].specificationUnproved).toBe(false);
+  });
+
+  it('F. the one metadata shape this repository provably strips is not a blocker', () => {
+    // resource-catalog-bootstrap-planner strips `rm02bTestOnly`, which is the
+    // only key the repository proves is non-product metadata. It is a boolean:
+    // it states no value, so it is harmless without any ignore-list. No other
+    // key is special-cased, and nothing broader is assumed.
+    const result = run({
+      reference: { rawName: 'Pekerja', rawCode: null, rawUnit: 'OH', resourceType: 'LABOR' },
+      catalogCandidates: [{ ...CATALOG_PEKERJA, specifications: { rm02bTestOnly: true } }],
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    expect(result.reasonCodes).not.toContain('SPECIFICATION_UNPROVED');
+  });
+
+  it('F2. an unrelated STRING value is still withheld — no broad ignore-list is invented', () => {
+    const result = run({
+      reference: { rawName: 'Pekerja', rawCode: null, rawUnit: 'OH', resourceType: 'LABOR' },
+      catalogCandidates: [
+        { ...CATALOG_PEKERJA, specifications: { keepMe: 'unrelated-value' } },
+      ],
+    });
+
+    // The repository never proved this key is non-semantic, so SIMPROK does
+    // not decide it is. Fail-closed beats a guessed exemption.
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+  });
+
+  it('an opaque structured difference is UNPROVED, never upgraded to CONFLICT', () => {
+    // The source says 8; the row's opaque JSON says 10. Nothing proves those
+    // two numbers describe the same property, so claiming a contradiction
+    // would invent the taxonomy this kernel refuses to invent.
     const angker: IdentityCatalogCandidate = {
-      id: 'cat-angker',
+      id: 'cat-angker-json',
       code: null,
       name: 'Besi angker',
       type: 'MATERIAL',
@@ -441,76 +580,35 @@ describe('resolveResourceIdentity — authority hierarchy', () => {
       reference: { rawName: 'Besi angker', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
       catalogCandidates: [angker],
     });
-    // The names are identical; only the structured spec disagrees with the
-    // source, and that alone must be enough to stop the assertion.
-    const withSourceDesignation = run({
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+    expect(result.reasonCodes).not.toContain('SPECIFICATION_CONFLICT');
+  });
+
+  it('a NAME-vs-NAME designation clash is still a genuine conflict', () => {
+    // Like compared with like: both sides state the designation in the same
+    // kind of statement, so a contradiction here is provable.
+    const result = run({
       reference: { rawName: 'Besi angker diameter 8', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
-      catalogCandidates: [angker],
+      catalogCandidates: [
+        {
+          id: 'cat-angker-10',
+          code: null,
+          name: 'Besi angker diameter 10',
+          type: 'MATERIAL',
+          baseUnit: 'Kg',
+          status: 'ACTIVE',
+        },
+      ],
     });
 
-    expect(result.status).toBe('NEEDS_REVIEW');
-    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
-    expect(withSourceDesignation.status).toBe('UNRESOLVED');
-    expect(withSourceDesignation.reasonCodes).toContain('SPECIFICATION_CONFLICT');
-    expect(withSourceDesignation.resolvedResourceCatalogId).toBeNull();
-  });
-
-  it('E. an exact name whose catalog row is materially more specific is unproven, not asserted', () => {
-    const bjts: IdentityCatalogCandidate = {
-      id: 'cat-bjts-structured',
-      code: null,
-      name: 'Baja tulangan',
-      type: 'MATERIAL',
-      baseUnit: 'Kg',
-      status: 'ACTIVE',
-      specifications: { grade: 'BjTS 420B', diameter: 13 },
-    };
-    const result = run({
-      reference: { rawName: 'Baja tulangan', rawCode: null, rawUnit: 'Kg', resourceType: 'MATERIAL' },
-      catalogCandidates: [bjts],
-    });
-
-    // Before this fix the identical name auto-resolved and the grade/diameter
-    // were silently assumed to be what the source meant.
-    expect(result.status).toBe('NEEDS_REVIEW');
-    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toContain('SPECIFICATION_CONFLICT');
     expect(result.resolvedResourceCatalogId).toBeNull();
-    expect(result.candidates[0].specificationUnproved).toBe(true);
-    // The reviewer sees exactly what the row claims about itself.
-    expect(result.candidates[0].specifications).toEqual({
-      grade: 'BjTS 420B',
-      diameter: 13,
-    });
   });
 
-  it('F. opaque, non-identity metadata never becomes a false blocker', () => {
-    const pekerjaWithMetadata: IdentityCatalogCandidate = {
-      ...CATALOG_PEKERJA,
-      // Exactly the shapes this repository actually writes: a test-only marker
-      // and an unrelated string. Neither states a designation.
-      specifications: { rm02bTestOnly: true, keepMe: 'unrelated-value' },
-    };
-    const result = run({
-      reference: { rawName: 'Pekerja', rawCode: null, rawUnit: 'OH', resourceType: 'LABOR' },
-      catalogCandidates: [pekerjaWithMetadata],
-    });
-
-    expect(result.status).toBe('RESOLVED');
-    expect(result.authority).toBe('EXACT_CANONICAL_MATCH');
-    expect(result.reasonCodes).not.toContain('SPECIFICATION_UNPROVED');
-  });
-
-  it('F2. a null specifications column behaves exactly as before', () => {
-    const result = run({
-      reference: { rawName: 'Pekerja', rawCode: null, rawUnit: 'OH', resourceType: 'LABOR' },
-      catalogCandidates: [{ ...CATALOG_PEKERJA, specifications: null }],
-    });
-
-    expect(result.status).toBe('RESOLVED');
-    expect(result.candidates[0].specifications).toBeNull();
-  });
-
-  it('nested specification values are read, and booleans still state nothing', () => {
+  it('nested structured values are read at depth, and booleans still state nothing', () => {
     const nested: IdentityCatalogCandidate = {
       id: 'cat-nested',
       code: null,
@@ -520,13 +618,15 @@ describe('resolveResourceIdentity — authority hierarchy', () => {
       status: 'ACTIVE',
       specifications: { dims: { outer: 'Ø 15' }, certified: true },
     };
-    const conflicting = run({
-      reference: { rawName: 'Pipa 20', rawCode: null, rawUnit: 'M¹', resourceType: 'MATERIAL' },
+    const result = run({
+      reference: { rawName: 'Pipa', rawCode: null, rawUnit: 'M¹', resourceType: 'MATERIAL' },
       catalogCandidates: [nested],
     });
 
-    expect(conflicting.status).toBe('UNRESOLVED');
-    expect(conflicting.reasonCodes).toContain('SPECIFICATION_CONFLICT');
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.candidates[0].unprovedSpecificationFacts).toContain('Ø 15');
+    // `certified: true` is a flag with no value and contributes nothing.
+    expect(result.candidates[0].unprovedSpecificationFacts).toHaveLength(1);
   });
 
   // ---------- H. HONEST NOT FOUND ----------

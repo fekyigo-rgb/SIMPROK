@@ -95,11 +95,14 @@ export interface AhspResourceResolutionInput {
    * RM-03D1 identity slice, OPTIONAL and additive.
    *
    * When present, the catalog identity has already been settled upstream by
-   * the Resource Identity Resolution kernel — either an exact canonical match
-   * or a human decision this workspace already recorded — and Step 1 below is
-   * skipped entirely rather than re-litigated. That matters because a verified
-   * mapping legitimately binds names that are NOT spelled the same, which
-   * Step 1's exact-name test would reject.
+   * the Resource Identity Resolution kernel, and Step 1 below is skipped
+   * rather than re-litigated — identity has one authority, not two.
+   *
+   * Today that upstream verdict can only be an exact canonical match. The
+   * seam nonetheless carries WHICH authority settled it, so that if a record
+   * ever binds a human decision to an AHSP fact, the reason travelling into
+   * the audit trail stays truthful instead of defaulting to a name match that
+   * did not happen.
    *
    * When absent, Step 1 runs exactly as it always has. Every pre-existing
    * caller and test therefore behaves identically, byte for byte.
@@ -123,11 +126,15 @@ export type ResolutionStatus =
 export type ReasonCode =
   | 'EXACT_RESOURCE_NAME_MATCH'
   /**
-   * RM-03D1 identity slice, additive. The catalog identity was settled upstream
-   * by a human decision this workspace already recorded, not by the names being
-   * spelled the same. Emitted INSTEAD of EXACT_RESOURCE_NAME_MATCH in that
-   * case, because claiming an exact name match when the names differ would put
-   * a false statement in the audit trail.
+   * RM-03D1 identity slice, additive and currently UNREACHABLE by design.
+   *
+   * It describes an identity settled by a human decision bound to this same
+   * AHSP fact, rather than by the names being spelled alike. No model in this
+   * repository records such a decision yet — the only reviewed mapping that
+   * exists is scoped to a Basic Price import row — so nothing emits it. The
+   * name is reserved so that, when such a record exists, the audit trail can
+   * say what actually happened instead of claiming an exact name match that
+   * never occurred.
    */
   | 'VERIFIED_MAPPING_REUSED'
   | 'RESOURCE_TYPE_MATCH'

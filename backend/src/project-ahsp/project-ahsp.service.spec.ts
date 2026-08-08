@@ -632,6 +632,38 @@ describe('ProjectAhspService E1A', () => {
     expect(persisted.adaptedPriceValue).toBeNull();
   });
 
+  it('RM03D1: an exact name whose catalog row claims more than the source lets no money through', async () => {
+    const { tx, created, catalog } = makeSuccessTx();
+    tx.aHSPVersion.findFirst.mockResolvedValue({
+      id: selectionInput.ahspVersionId,
+      outputUnit: 'M1',
+      resources: [{ ...resource('resource-1'), resourceId: 'Baja tulangan' }],
+    });
+    // Names match exactly; the row additionally claims a grade and a diameter
+    // the AHSP never mentioned.
+    tx.resourceCatalog.findMany.mockResolvedValue([
+      {
+        ...catalog,
+        name: 'Baja tulangan',
+        specifications: { grade: 'BjTS 420B', diameter: 13 },
+      },
+    ]);
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+    await service.selectForBoqItem(selectionInput);
+
+    const persisted = created.data.resourceResolutions.create[0];
+    expect(persisted.status).toBe('NEEDS_REVIEW');
+    expect(persisted.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+    // Money safety: an unproven specification must stop every monetary field.
+    expect(persisted.resourceCatalogId).toBeNull();
+    expect(persisted.selectedBasicPriceId).toBeNull();
+    expect(persisted.adaptedPriceValue).toBeNull();
+    expect(persisted.sourcePriceValue).toBeNull();
+    // And the reviewer is told exactly which claims are unsupported.
+    expect(persisted.explanation).toContain('BjTS 420B');
+  });
+
   it('RM03D1: the AHSP source code channel is empty, never back-filled from the catalog', async () => {
     // AHSPResource carries no source-code column, and no existing model binds
     // one to a resource. Taking the code from the candidate catalog row would
