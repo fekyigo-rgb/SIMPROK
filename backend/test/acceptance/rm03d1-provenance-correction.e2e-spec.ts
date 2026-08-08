@@ -99,11 +99,12 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   const hdr = () => ({ Authorization: `Bearer ${token}`, 'x-workspace-id': WORKSPACE_A });
 
   /**
-   * Import → resolve the one LABOR row → keep it private. The batch starts
-   * describing itself the OLD, mis-described way, which is the state the
-   * correction exists to repair.
+   * Import → resolve the one LABOR row → keep it private. The batch starts with
+   * a coherent classification but NO temporal provenance, which is the state the
+   * correction exists to repair — and the only mis-described state that is
+   * lawfully reachable now that an incoherent pair is refused at the writer.
    */
-  const materializeMisdescribedPrivatePrice = async (vendor: string) => {
+  const materializeUnprovenancedPrivatePrice = async (vendor: string) => {
     const preview = await request(app.getHttpServer())
       .post('/basic-price-imports/preview')
       .set(hdr())
@@ -117,9 +118,10 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
       .field('regionId', regionId)
       .field('effectiveDate', '2024-01-01')
       .field('sourceOrigin', 'GOVERNMENT')
-      // The original mistake: a government list classified as a market survey,
-      // with no period provenance at all.
-      .field('sourceType', 'MARKET_SURVEY')
+      .field('sourceType', 'REGULATION')
+      // No sourcePeriodLabel, no granularity, no derivation rule. This is the
+      // defect the correction repairs: an exact date with NOTHING recording
+      // that it was derived from "TA 2024" rather than printed by the source.
       .expect(201);
 
     const batchId: string = preview.body.batchId;
@@ -172,10 +174,13 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
       .send({ reason });
 
   it('A: corrects the stored price to the batch truth, leaving money, identity and publication untouched', async () => {
-    const { batchId, basicPriceId } = await materializeMisdescribedPrivatePrice('prov-correct-happy');
+    const { batchId, basicPriceId } = await materializeUnprovenancedPrivatePrice('prov-correct-happy');
     const before = await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPriceId } });
-    expect(before.sourceType).toBe('MARKET_SURVEY');
+    expect(before.sourceType).toBe('REGULATION');
+    // The defect: a real date with no record of where it came from.
     expect(before.effectiveDateProvenance).toBeNull();
+    expect(before.sourcePeriodLabel).toBeNull();
+    expect(before.sourcePeriodGranularity).toBeNull();
 
     const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
     await patchBatchToTruth(batchId, batch.version).expect(200);
@@ -205,21 +210,22 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   });
 
   it('B: writes exactly ONE correction record carrying before, after, actor and reason', async () => {
-    const { batchId, basicPriceId } = await materializeMisdescribedPrivatePrice('prov-correct-audit');
+    const { batchId, basicPriceId } = await materializeUnprovenancedPrivatePrice('prov-correct-audit');
     const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
     await patchBatchToTruth(batchId, batch.version).expect(200);
 
-    await correct(batchId, 'restating a government price list that was recorded as a market survey').expect(201);
+    await correct(batchId, 'recording that 2024-01-01 was derived from TA 2024, not printed by the source').expect(201);
 
     const records = await prisma.basicPriceProvenanceCorrection.findMany({
       where: { basicPriceId },
     });
     expect(records).toHaveLength(1);
     expect(records[0].actorAccountId).toBe(accountId);
-    expect(records[0].reason).toContain('market survey');
+    expect(records[0].reason).toContain('derived from TA 2024');
     expect(records[0].before).toMatchObject({
-      sourceType: 'MARKET_SURVEY',
       effectiveDateProvenance: null,
+      sourcePeriodLabel: null,
+      sourcePeriodGranularity: null,
     });
     expect(records[0].after).toMatchObject({
       sourceType: 'REGULATION',
@@ -231,7 +237,7 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   });
 
   it('C: IDEMPOTENT — a second correction with an unchanged batch changes nothing and adds no record', async () => {
-    const { batchId, basicPriceId } = await materializeMisdescribedPrivatePrice('prov-correct-idem');
+    const { batchId, basicPriceId } = await materializeUnprovenancedPrivatePrice('prov-correct-idem');
     const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
     await patchBatchToTruth(batchId, batch.version).expect(200);
 
@@ -243,21 +249,28 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
     expect(await prisma.basicPriceProvenanceCorrection.count({ where: { basicPriceId } })).toBe(1);
   });
 
-  it('D: an incoherent GOVERNMENT + MARKET_SURVEY batch cannot be propagated to a price', async () => {
-    const { batchId, basicPriceId } = await materializeMisdescribedPrivatePrice('prov-correct-incoherent');
-    // The batch is still describing itself the wrong way; correcting from it
-    // must refuse rather than faithfully propagate a falsehood.
+  it('D: an incoherent GOVERNMENT + MARKET_SURVEY batch is never propagated to a price', async () => {
+    const { batchId, basicPriceId } = await materializeUnprovenancedPrivatePrice('prov-correct-incoherent');
+    const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    // Make the BATCH incoherent, then try to propagate it. The correction must
+    // refuse rather than faithfully copy a falsehood onto a price.
+    await request(app.getHttpServer())
+      .patch(`/basic-price-imports/${batchId}`)
+      .set(hdr())
+      .send({ version: batch.version, sourceType: 'MARKET_SURVEY' })
+      .expect(200);
+
     const response = await correct(batchId).expect(409);
     expect(response.body.message).toBe('SOURCE_ORIGIN_TYPE_INCOHERENT');
     expect(response.body.expectedSourceType).toBe('REGULATION');
 
     const untouched = await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPriceId } });
-    expect(untouched.sourceType).toBe('MARKET_SURVEY');
+    expect(untouched.sourceType).toBe('REGULATION');
     expect(await prisma.basicPriceProvenanceCorrection.count({ where: { basicPriceId } })).toBe(0);
   });
 
   it('E: a DERIVED date with no granularity is refused — a label alone is not machine-readable', async () => {
-    const { batchId } = await materializeMisdescribedPrivatePrice('prov-correct-nogran');
+    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-correct-nogran');
     const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
     // PATCH sets everything EXCEPT the granularity.
     await request(app.getHttpServer())
@@ -277,7 +290,7 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   });
 
   it('F: a whitespace-only period label is rejected at the boundary, never stored', async () => {
-    const { batchId } = await materializeMisdescribedPrivatePrice('prov-correct-blank');
+    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-correct-blank');
     const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
 
     await patchBatchToTruth(batchId, batch.version, { sourcePeriodLabel: '   ' }).expect(400);
@@ -290,7 +303,7 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   it('G: the database itself refuses an incoherent derived provenance, even for a writer that never asked', async () => {
     // Belt and braces: the service raises a named error, and the CHECK
     // constraint makes the row unrepresentable regardless of which writer tries.
-    const { batchId } = await materializeMisdescribedPrivatePrice('prov-correct-constraint');
+    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-correct-constraint');
     await expect(
       prisma.basicPriceImportBatch.update({
         where: { id: batchId },
@@ -305,7 +318,7 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   });
 
   it('H: a batch from another workspace corrects nothing', async () => {
-    const { batchId } = await materializeMisdescribedPrivatePrice('prov-correct-foreign');
+    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-correct-foreign');
     await request(app.getHttpServer())
       .post(`/basic-price-imports/${batchId}/correct-private-provenance`)
       .set({ Authorization: `Bearer ${token}`, 'x-workspace-id': '10000000-0000-4000-8000-000000000005' })
@@ -314,7 +327,7 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   });
 
   it('I: a reason is required', async () => {
-    const { batchId } = await materializeMisdescribedPrivatePrice('prov-correct-noreason');
+    const { batchId } = await materializeUnprovenancedPrivatePrice('prov-correct-noreason');
     await request(app.getHttpServer())
       .post(`/basic-price-imports/${batchId}/correct-private-provenance`)
       .set(hdr())

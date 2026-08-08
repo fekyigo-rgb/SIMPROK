@@ -42,14 +42,16 @@ const PUBLISHED_VERSION_ID = '44000000-0000-4000-8000-000000000009';
 // rm02d1-resource-identity-mapping uses. Testing against a real grant rather
 // than a widened baseline is the point: retirement must require the same
 // authority as creating a version.
-const PERMISSION_CODES = ['AHSP_VIEW', 'AHSP_MANAGE', 'RAB_DRAFT_EDIT', 'PROJECT_VIEW'];
+// Codes this suite OWNS: not part of the seeded catalog, so it creates and
+// removes them itself.
+const OWNED_PERMISSION_CODES = ['AHSP_VIEW', 'AHSP_MANAGE'];
 
-// Some of the codes above are part of the seeded catalog other suites rely on.
-// This suite may GRANT them to its own role, but it must never DELETE one it
-// did not create — doing so removed PROJECT_VIEW/RAB_DRAFT_EDIT from the shared
-// database and broke twelve unrelated suites. Only codes this suite actually
-// brought into existence are cleaned up.
-let permissionCodesCreatedHere: string[] = [];
+// Codes the suite merely NEEDS in order to drive select-ahsp. These belong to
+// the shared catalog other suites depend on, so they are granted to this
+// suite's own role if present and NEVER created or deleted here. Creating and
+// then deleting them took PROJECT_VIEW/RAB_DRAFT_EDIT out from under twelve
+// unrelated suites and left the database short of its baseline.
+const BORROWED_PERMISSION_CODES = ['RAB_DRAFT_EDIT', 'PROJECT_VIEW'];
 
 const AS_OF = '2026-08-08';
 
@@ -72,20 +74,15 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
       await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A } })
     ).organizationId;
 
-    const preexisting = new Set(
-      (
-        await prisma.permission.findMany({
-          where: { code: { in: PERMISSION_CODES } },
-          select: { code: true },
-        })
-      ).map((p) => p.code),
-    );
-    permissionCodesCreatedHere = PERMISSION_CODES.filter((code) => !preexisting.has(code));
-    const permissions = await Promise.all(
-      PERMISSION_CODES.map((code) =>
+    const owned = await Promise.all(
+      OWNED_PERMISSION_CODES.map((code) =>
         prisma.permission.upsert({ where: { code }, create: { code, name: code }, update: {} }),
       ),
     );
+    const borrowed = await prisma.permission.findMany({
+      where: { code: { in: BORROWED_PERMISSION_CODES } },
+    });
+    const permissions = [...owned, ...borrowed];
     await prisma.role.upsert({
       where: { id: ROLE_ID },
       create: {
@@ -240,8 +237,9 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     await prisma.membershipRole.deleteMany({ where: { id: membershipRoleId } });
     await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_ID } });
     await prisma.role.deleteMany({ where: { id: ROLE_ID } });
-    // Only the ones this suite created. A seeded permission is shared state.
-    await prisma.permission.deleteMany({ where: { code: { in: permissionCodesCreatedHere } } });
+    // Only the codes this suite owns. A seeded permission is shared state and is
+    // never removed from here.
+    await prisma.permission.deleteMany({ where: { code: { in: OWNED_PERMISSION_CODES } } });
     await prisma.$disconnect();
     await app.close();
   });
