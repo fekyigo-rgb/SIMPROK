@@ -686,18 +686,46 @@ describe('Project AHSP whole-version selection (e2e)', () => {
     );
   });
 
-  it('persists UNRESOLVED without invented evidence when no exact catalog exists', async () => {
+  /**
+   * RM-03D1: what this test protects is unchanged — when no exact catalog row
+   * exists, NOTHING may be invented. Every "invented evidence" assertion below
+   * is kept exactly as it was.
+   *
+   * What did change is the status, and it changed because the system now knows
+   * more. This fixture's resource is `<tag> Missing` while the catalog holds
+   * `<tag> Current` / `Expired` / `Multiple` / `Lineage`, so those rows share a
+   * substantial name stem with it. Under the old exact-name-only rule the
+   * server said UNRESOLVED — effectively "no such resource" — while sitting on
+   * four near-identically named rows it could see. That was the false
+   * statement RM-03D1 exists to remove: NOT_FOUND is now reachable only after
+   * discovery has actually come up empty.
+   *
+   * So the honest verdict here is NEEDS_REVIEW with candidates attached, and
+   * the assertions are tightened rather than relaxed: still nothing invented,
+   * and additionally proof that no candidate was quietly auto-selected.
+   */
+  it('persists a reviewable exception, with no invented evidence, when no exact catalog exists', async () => {
     const response = await select(
       `${tag}-unresolved`,
       unresolvedVersionId,
     ).expect(201);
-    expect(response.body.resourceResolutions[0]).toMatchObject({
-      status: 'UNRESOLVED',
+    const resolution = response.body.resourceResolutions[0];
+
+    expect(resolution).toMatchObject({
+      status: 'NEEDS_REVIEW',
+      // Unchanged guarantee: not one field of evidence was fabricated.
       resourceCatalogId: null,
       selectedBasicPriceId: null,
       sourcePriceValue: null,
       selectedFreshnessStatus: null,
     });
+    expect(resolution.adaptedPriceValue).toBeNull();
+    expect(resolution.selectionMode).toBeNull();
+    // The raw AHSP reference survives verbatim for the human who will close this.
+    expect(resolution.rawAhspResourceRef).toBe(`${tag} Missing`);
+    // Candidates were genuinely found, so "not found" would have been a lie.
+    expect(resolution.reasonCodes).not.toContain('RESOURCE_NOT_FOUND');
+    expect(resolution.explanation.length).toBeGreaterThan(0);
   });
 
   it('enforces exact Region and forbids null or cross-region fallback', async () => {

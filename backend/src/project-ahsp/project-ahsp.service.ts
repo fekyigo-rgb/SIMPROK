@@ -22,6 +22,7 @@ import { parseDateOnlyUtc } from '../common/date-only.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
 export const E1A_RESOLUTION_POLICY_VERSION = 'E1A_CONTEXTUAL_EXACT_REGION_V1';
 const includeOccurrence = { resourceResolutions: true } as const;
@@ -50,6 +51,7 @@ export class ProjectAhspService {
     private readonly eligibility: BasicPriceEligibilityPolicy,
     private readonly units: UnitKernelService,
     private readonly lifecycle: RabLifecyclePolicyService,
+    private readonly identity: ResourceIdentityResolutionService,
   ) {}
 
   async listEligibleVersions(workspaceId: string, asOfRaw: string) {
@@ -190,12 +192,14 @@ export class ProjectAhspService {
         throw new NotFoundException('ELIGIBLE_AHSP_VERSION_NOT_FOUND');
       }
 
-      const catalogs = await tx.resourceCatalog.findMany({
-        where: {
-          OR: [{ workspaceId: input.workspaceId }, { workspaceId: null }],
-        },
-        select: { id: true, code: true, name: true, type: true, baseUnit: true },
-      });
+      // RM-03D1 identity slice: the catalog rows, this workspace's source
+      // sightings, and the human decisions it has already recorded — loaded
+      // ONCE for the whole AHSP version rather than per resource, and tenant-
+      // scoped inside the loader so this orchestrator never widens it.
+      const identityEvidence = await this.identity.loadEvidence(
+        tx,
+        input.workspaceId,
+      );
       // RM-03C: the eligible candidate set now legally includes this
       // workspace's OWN private prices, alongside publicly published catalog
       // prices — one predicate, built from the shared policy so the candidate
@@ -221,28 +225,93 @@ export class ProjectAhspService {
 
       const resolutions: ResolutionCreate[] = [];
       for (const resource of version.resources) {
-        const matches = catalogs.filter(
-          (catalog) =>
-            catalog.name.trim().toLowerCase().replace(/\s+/g, ' ') ===
-              resource.resourceId.trim().toLowerCase().replace(/\s+/g, ' ') &&
-            catalog.type === resource.resourceType,
-        );
-        const unitResolution =
-          matches.length === 1
-            ? await this.units.resolve(
-                resource.baseUnit,
-                matches[0].baseUnit,
-                matches[0].id,
-              )
+        // RM-03D1: identity is decided FIRST, by its own authority, and the
+        // raw AHSP reference is passed through untouched so the audit trail
+        // keeps saying what the source said. AHSPResource has no source-code
+        // column today, so the code channel is genuinely empty here rather
+        // than back-filled from the catalog — which would make the evidence
+        // agree with itself by construction.
+        const identity = this.identity.resolve(identityEvidence, {
+          rawName: resource.resourceId,
+          rawCode: null,
+          rawUnit: resource.baseUnit,
+          resourceType: resource.resourceType,
+        });
+
+        const identifiedCatalog =
+          identity.status === 'RESOLVED' && identity.resolvedResourceCatalogId
+            ? identityEvidence.catalogCandidates.find(
+                (candidate) =>
+                  candidate.id === identity.resolvedResourceCatalogId,
+              ) ?? null
             : null;
+
+        // Identity unproven → the row records exactly that, with the candidates
+        // and evidence the kernel found. It is NOT pushed through the price
+        // path only to come back as a name-match failure, because "we found two
+        // plausible cements" and "no such resource" are different facts and the
+        // audit trail must not blur them.
+        if (identifiedCatalog === null) {
+          resolutions.push({
+            ahspResourceId: resource.id,
+            rawAhspResourceRef: resource.resourceId,
+            rawAhspResourceType: resource.resourceType,
+            ahspCoefficient: resource.coefficient,
+            ahspUnit: resource.baseUnit,
+            status:
+              identity.status === 'NEEDS_REVIEW'
+                ? ProjectAhspResolutionStatus.NEEDS_REVIEW
+                : ProjectAhspResolutionStatus.UNRESOLVED,
+            selectionMode: null,
+            resourceCatalogId: null,
+            selectedBasicPriceId: null,
+            canonicalUnit: null,
+            sourcePriceValue: null,
+            sourceUnit: null,
+            adaptedPriceValue: null,
+            conversionFactor: null,
+            sourceUnitDefinitionId: null,
+            targetUnitDefinitionId: null,
+            unitConversionRuleId: null,
+            unitConversionRuleVersion: null,
+            quantityFactor: null,
+            selectedSourceOrigin: null,
+            selectedFreshnessStatus: null,
+            selectedEffectiveDate: null,
+            resolutionMethod:
+              ProjectAhspResolutionMethod.DETERMINISTIC_ATTEMPTED,
+            reasonCodes: [...identity.reasonCodes],
+            explanation: identity.explanation,
+            policyVersion: E1A_RESOLUTION_POLICY_VERSION,
+          });
+          continue;
+        }
+
+        // The one catalog row identity settled on, in the price kernel's shape.
+        // `type` is narrowed rather than re-validated: it comes straight from
+        // the ResourceType database enum, which admits no other value.
+        const matches = [
+          {
+            id: identifiedCatalog.id,
+            code: identifiedCatalog.code,
+            name: identifiedCatalog.name,
+            type: identifiedCatalog.type as 'MATERIAL' | 'LABOR' | 'EQUIPMENT',
+            baseUnit: identifiedCatalog.baseUnit,
+          },
+        ];
+        const unitResolution = await this.units.resolve(
+          resource.baseUnit,
+          identifiedCatalog.baseUnit,
+          identifiedCatalog.id,
+        );
         const candidates = await Promise.all(
           priceRows.map(async (price) => {
             const resolved =
-              matches.length === 1 && price.resourceId === matches[0].id
+              price.resourceId === identifiedCatalog.id
                 ? await this.units.resolve(
                     price.resource.baseUnit,
-                    matches[0].baseUnit,
-                    matches[0].id,
+                    identifiedCatalog.baseUnit,
+                    identifiedCatalog.id,
                   )
                 : null;
             return {
@@ -270,8 +339,20 @@ export class ProjectAhspService {
           rawResourceRef: resource.resourceId,
           resourceType: resource.resourceType,
           ahspUnit: resource.baseUnit,
-          resourceCatalogCandidates: catalogs,
+          resourceCatalogCandidates: matches,
           eligibleBasicPriceCandidates: candidates,
+          // Identity already settled above, by its own authority. The price
+          // kernel consumes that verdict exactly as it consumes the UnitKernel's
+          // instead of re-deriving it from the name — which is the only way a
+          // human-verified mapping between two DIFFERENT spellings can survive
+          // this far without being rejected as a name mismatch.
+          resolvedIdentity: {
+            catalog: matches[0],
+            identityReason:
+              identity.authority === 'VERIFIED_MAPPING_REUSED'
+                ? 'VERIFIED_MAPPING_REUSED'
+                : 'EXACT_RESOURCE_NAME_MATCH',
+          },
           validatedUnitResolution: {
             status: unitResolution?.status ?? 'NEEDS_REVIEW',
             canonicalUnitCode:
