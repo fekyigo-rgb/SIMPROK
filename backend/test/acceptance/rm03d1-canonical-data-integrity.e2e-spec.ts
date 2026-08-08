@@ -27,6 +27,14 @@ const AHSP_ID = '44000000-0000-4000-8000-000000000001';
 const VERSION_KEEP_ID = '44000000-0000-4000-8000-000000000002';
 const VERSION_RETIRE_ID = '44000000-0000-4000-8000-000000000003';
 const RESOURCE_ID = '44000000-0000-4000-8000-000000000004';
+const ROLE_ID = '44000000-0000-4000-8000-000000000005';
+
+// AHSP_VIEW/AHSP_MANAGE are deliberately NOT active-membership baseline codes
+// (see ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES), so this suite grants them
+// explicitly — the same pattern rm02d1-resource-identity-mapping uses. Testing
+// against a real grant rather than a widened baseline is the point: retirement
+// must require the same authority as creating a version.
+const PERMISSION_CODES = ['AHSP_VIEW', 'AHSP_MANAGE'];
 
 const AS_OF = '2026-08-08';
 
@@ -35,12 +43,43 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
   let prisma: PrismaClient;
   let token: string;
   let m3UnitId: string;
+  let membershipRoleId: string;
 
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
     await app.init();
     prisma = new PrismaClient();
     m3UnitId = (await prisma.unitDefinition.findFirstOrThrow({ where: { code: 'M3' } })).id;
+
+    const permissions = await Promise.all(
+      PERMISSION_CODES.map((code) =>
+        prisma.permission.upsert({ where: { code }, create: { code, name: code }, update: {} }),
+      ),
+    );
+    await prisma.role.upsert({
+      where: { id: ROLE_ID },
+      create: {
+        id: ROLE_ID,
+        workspaceId: WORKSPACE_A,
+        code: 'ACCEPTANCE_RM03D1_INTEGRITY',
+        name: 'Acceptance RM-03D1 Integrity',
+      },
+      update: {},
+    });
+    await prisma.rolePermission.createMany({
+      data: permissions.map((permission) => ({ roleId: ROLE_ID, permissionId: permission.id })),
+      skipDuplicates: true,
+    });
+    const account = await prisma.account.findUniqueOrThrow({ where: { email: 'assigned@test.local' } });
+    const membership = await prisma.workspaceMembership.findUniqueOrThrow({
+      where: { accountId_workspaceId: { accountId: account.id, workspaceId: WORKSPACE_A } },
+    });
+    membershipRoleId = (
+      await prisma.membershipRole.create({
+        data: { workspaceMembershipId: membership.id, roleId: ROLE_ID, isActive: true },
+      })
+    ).id;
+
     token = (
       await request(app.getHttpServer())
         .post('/auth/login')
@@ -110,6 +149,10 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     await prisma.aHSPVersion.deleteMany({ where: { ahspId: AHSP_ID } });
     await prisma.aHSP.deleteMany({ where: { id: AHSP_ID } });
     await prisma.resourceCatalog.deleteMany({ where: { id: RESOURCE_ID } });
+    await prisma.membershipRole.deleteMany({ where: { id: membershipRoleId } });
+    await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_ID } });
+    await prisma.role.deleteMany({ where: { id: ROLE_ID } });
+    await prisma.permission.deleteMany({ where: { code: { in: PERMISSION_CODES } } });
     await prisma.$disconnect();
     await app.close();
   });
@@ -126,7 +169,12 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     const res = await request(app.getHttpServer())
       .get(`/projects/${projectId}/ahsp-occurrences/eligible-versions?businessPricingAsOfDate=${AS_OF}`)
       .set(hdr());
-    return (res.body ?? []).map((v: { id: string }) => v.id);
+    // Assert the shape rather than coercing it: a 403 body silently becoming an
+    // empty list would make every "not eligible" assertion below pass for the
+    // wrong reason.
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    return (res.body as Array<{ id: string }>).map((v) => v.id);
   };
 
   const anyProjectId = async () =>
