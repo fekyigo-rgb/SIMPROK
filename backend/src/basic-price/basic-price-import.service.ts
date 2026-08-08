@@ -36,6 +36,13 @@ const FINGERPRINT_METADATA_KEYS = [
   'sourceOrigin',
   'sourceOrganizationName',
   'sourceVendorName',
+  // RM-03D1: temporal provenance is a mutable batch fact, so it belongs in the
+  // fingerprint for the same reason the date does — the same workbook described
+  // with a different provenance claim is a different batch, never a silent reuse
+  // of one that claimed something else.
+  'sourcePeriodLabel',
+  'effectiveDateProvenance',
+  'effectiveDateDerivationRule',
   'priceCoverageDeclared',
   'transportIncluded',
   'loadingIncluded',
@@ -244,6 +251,12 @@ export class BasicPriceImportService {
             sourceOrigin: metadata.sourceOrigin ?? null,
             sourceOrganizationName: metadata.sourceOrganizationName ?? null,
             sourceVendorName: metadata.sourceVendorName ?? null,
+            // RM-03D1 — temporal provenance. Null means unknown, which never
+            // reads as "the source stated this date".
+            sourcePeriodLabel: metadata.sourcePeriodLabel ?? null,
+            effectiveDateProvenance: metadata.effectiveDateProvenance ?? null,
+            effectiveDateDerivationRule:
+              metadata.effectiveDateDerivationRule ?? null,
             priceCoverageDeclared: metadata.priceCoverageDeclared ?? false,
             transportIncluded: metadata.transportIncluded ?? null,
             loadingIncluded: metadata.loadingIncluded ?? null,
@@ -373,6 +386,12 @@ export class BasicPriceImportService {
           sourceOrigin: dto.sourceOrigin ?? undefined,
           sourceOrganizationName: dto.sourceOrganizationName ?? undefined,
           sourceVendorName: dto.sourceVendorName ?? undefined,
+          // RM-03D1 — temporal provenance, under the same
+          // omitted-means-unchanged rule as every other field here.
+          sourcePeriodLabel: dto.sourcePeriodLabel ?? undefined,
+          effectiveDateProvenance: dto.effectiveDateProvenance ?? undefined,
+          effectiveDateDerivationRule:
+            dto.effectiveDateDerivationRule ?? undefined,
           priceCoverageDeclared: dto.priceCoverageDeclared ?? undefined,
           transportIncluded: dto.transportIncluded ?? undefined,
           loadingIncluded: dto.loadingIncluded ?? undefined,

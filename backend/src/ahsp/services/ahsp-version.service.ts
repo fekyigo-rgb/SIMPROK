@@ -97,4 +97,68 @@ export class AhspVersionService {
     await this.audit.logAction({ ahspId: version.ahspId, ahspVersionId: version.id, action: `AHSPVersion${newStatus}`, who: userId, before: version, after: updated, reason });
     return updated;
   }
+
+  /**
+   * RM-03D1 — RETIRE one AHSP version so it stops being selectable, while every
+   * historical trace of it survives.
+   *
+   * WHY THIS EXISTS. A version's composition and effectiveDate are immutable in
+   * practice: nothing in this codebase mutates either, and `createVersion` only
+   * ever appends a new numbered version. That is the right model — a version an
+   * occurrence priced against must not change under its feet. But it left an
+   * erroneous version permanently eligible: `updateStatus` above shipped with
+   * ZERO callers, so no route could withdraw one, and the only reachable
+   * alternative was `POST /ahsp/:id/archive`, which archives the whole PARENT and
+   * takes the correct versions down with it.
+   *
+   * WHAT IT DOES NOT DO. It never deletes the version, its resources, its audit
+   * log, or any occurrence that priced against it — all remain readable history.
+   * It cannot promote a version: only SUPERSEDED/ARCHIVED reach it, enforced at
+   * the DTO boundary. And it introduces NO new eligibility rule — both statuses
+   * are already in `PRIVATE_UNUSABLE_VERSION_STATUSES`, and neither can satisfy
+   * the catalog branch's PUBLISHED requirement, so the SAME predicate that feeds
+   * the picker and `selectForBoqItem` excludes a retired version automatically.
+   *
+   * TENANT SCOPE. The version AND its parent AHSP must both belong to the
+   * caller's trusted workspace, by strict equality — never an OR with null. A
+   * null-workspace (Official Repository) version is therefore not retirable
+   * here: withdrawing national reference data is not one workspace's decision.
+   * A foreign version reads as not-found, so the endpoint never confirms the
+   * existence of ids the caller cannot see.
+   *
+   * IDEMPOTENT. Retiring to the status a version already holds returns it
+   * unchanged and writes no second audit entry, so a retried call is a no-op
+   * rather than a duplicate record of a decision taken once.
+   */
+  async retireVersion(params: {
+    versionId: string;
+    workspaceId: string;
+    // The two retirement outcomes, and only those. Written as literals because
+    // the generated AhspVersionStatus is a type alias, not a namespace.
+    status: 'SUPERSEDED' | 'ARCHIVED';
+    userId: string;
+    reason: string;
+  }) {
+    const { versionId, workspaceId, status, userId, reason } = params;
+
+    const version = await this.prisma.aHSPVersion.findFirst({
+      where: { id: versionId, workspaceId },
+      include: { ahsp: { select: { workspaceId: true, deletedAt: true } } },
+    });
+    if (
+      !version ||
+      version.ahsp.workspaceId !== workspaceId ||
+      version.ahsp.deletedAt !== null
+    ) {
+      throw new NotFoundException('Version not found');
+    }
+
+    if (version.status === status) {
+      const { ahsp: _parent, ...unchanged } = version;
+      return { version: unchanged, changed: false };
+    }
+
+    const updated = await this.updateStatus(versionId, status, userId, reason);
+    return { version: updated, changed: true };
+  }
 }

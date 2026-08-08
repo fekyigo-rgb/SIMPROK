@@ -17,6 +17,34 @@ export interface KeepBatchPrivateResult {
   prices: PrivateBasicPriceItem[];
 }
 
+/** The exact provenance facts a correction may alter, before and after. */
+export interface ProvenanceFacts {
+  sourceType: string | null;
+  sourceOrigin: string | null;
+  effectiveDate: string;
+  sourcePeriodLabel: string | null;
+  effectiveDateProvenance: string | null;
+  effectiveDateDerivationRule: string | null;
+}
+
+export interface ProvenanceCorrectionItem {
+  basicPriceId: string;
+  before: ProvenanceFacts;
+  after: ProvenanceFacts;
+  price: PrivateBasicPriceItem;
+}
+
+export interface CorrectPrivateProvenanceResult {
+  batchId: string;
+  /** Private prices from this batch that were considered. */
+  examinedCount: number;
+  /** Prices whose provenance actually changed. */
+  correctedCount: number;
+  /** Already correct — a re-run is a no-op, not a duplicate. */
+  unchangedCount: number;
+  corrections: ProvenanceCorrectionItem[];
+}
+
 const PRIVATE_PRICE_SELECT = {
   id: true,
   value: true,
@@ -88,10 +116,14 @@ export class BasicPricePrivateAssetService {
           sourceType: string | null;
           sourceOrigin: string | null;
           uploadedByAccountId: string;
+          sourcePeriodLabel: string | null;
+          effectiveDateProvenance: string | null;
+          effectiveDateDerivationRule: string | null;
         }>
       >(
         Prisma.sql`SELECT "id", "workspaceId", "organizationId", "status", "effectiveDate",
-                          "regionId", "sourceType", "sourceOrigin", "uploadedByAccountId"
+                          "regionId", "sourceType", "sourceOrigin", "uploadedByAccountId",
+                          "sourcePeriodLabel", "effectiveDateProvenance", "effectiveDateDerivationRule"
                      FROM "basic_price_import_batches"
                     WHERE "id" = ${batchId}::uuid
                     FOR UPDATE`,
@@ -191,6 +223,17 @@ export class BasicPricePrivateAssetService {
             sourceType: (batch.sourceType as any) ?? 'MARKET_SURVEY',
             sourceOrigin: batch.sourceOrigin as any,
             freshnessStatus: 'CURRENT',
+            // RM-03D1 — TEMPORAL PROVENANCE, carried verbatim from the batch.
+            // `effectiveDate` above is a single calendar day, but a source that
+            // states only "TA 2024" never printed one. These three keep the
+            // difference visible on the price itself: what the source actually
+            // said, whether the date is the source's or SIMPROK's, and by which
+            // named rule it was derived. Copied, never inferred — a batch that
+            // says nothing leaves all three null, which reads as "unknown" and
+            // never as "the source stated this".
+            sourcePeriodLabel: batch.sourcePeriodLabel,
+            effectiveDateProvenance: batch.effectiveDateProvenance as any,
+            effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
             // The reporter is the trusted, server-derived actor — never a
             // client-supplied id, and never the batch's stored uploader taken
             // on faith.
@@ -214,6 +257,200 @@ export class BasicPricePrivateAssetService {
         createdCount,
         alreadyPrivateCount,
         prices,
+      };
+    });
+  }
+
+  /**
+   * RM-03D1 — re-apply the batch's CURRENT provenance metadata to the private
+   * prices that batch already materialized.
+   *
+   * WHY THIS EXISTS. `keepBatchPrivate` copies the batch's metadata at write
+   * time and is deliberately idempotent, so a later correction to the batch —
+   * which `updateBatchMetadata` already permits while the batch is still
+   * NEEDS_REVIEW/READY_FOR_REVIEW — reached the batch and nothing else. A price
+   * born from a mis-stated `sourceType`, or from an effectiveDate whose derived
+   * nature was unrecordable, stayed wrong with no lawful way to fix it: the only
+   * other writer of a BasicPrice is the publication ladder, and using that would
+   * stamp a private asset PUBLISHED. So the choice was a permanent falsehood or
+   * an unlawful write. This is the missing third option.
+   *
+   * WHAT IT MAY TOUCH, AND NOTHING ELSE:
+   *   sourceType · sourceOrigin · effectiveDate · sourcePeriodLabel ·
+   *   effectiveDateProvenance · effectiveDateDerivationRule
+   *
+   * `value` is untouched — this corrects how a price is DESCRIBED, never what it
+   * costs, so no correction can move money. `status`, `verificationStatus`,
+   * `assetScope`, `regionId`, `resourceId` and `sourceImportRowId` are untouched
+   * — a correction can never publish, verify, re-scope, re-region or re-identify
+   * a price. Publication law is not reachable from here.
+   *
+   * HISTORY IS NOT OVERWRITTEN. Every change writes an append-only
+   * BasicPriceProvenanceCorrection carrying before, after, the reason and the
+   * trusted actor, so the claim SIMPROK made yesterday remains readable.
+   *
+   * IDEMPOTENT. A second call with the batch unchanged finds nothing to change,
+   * writes no audit row, and reports zero corrections.
+   */
+  async correctPrivateProvenanceFromBatch(params: {
+    batchId: string;
+    actor: TrustedBasicPriceActor;
+    reason: string;
+  }): Promise<CorrectPrivateProvenanceResult> {
+    const { batchId, actor, reason } = params;
+
+    return this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<
+        Array<{
+          id: string;
+          workspaceId: string;
+          organizationId: string;
+          status: string;
+          effectiveDate: Date | null;
+          sourceType: string | null;
+          sourceOrigin: string | null;
+          uploadedByAccountId: string;
+          sourcePeriodLabel: string | null;
+          effectiveDateProvenance: string | null;
+          effectiveDateDerivationRule: string | null;
+        }>
+      >(
+        Prisma.sql`SELECT "id", "workspaceId", "organizationId", "status", "effectiveDate",
+                          "sourceType", "sourceOrigin", "uploadedByAccountId",
+                          "sourcePeriodLabel", "effectiveDateProvenance", "effectiveDateDerivationRule"
+                     FROM "basic_price_import_batches"
+                    WHERE "id" = ${batchId}::uuid
+                    FOR UPDATE`,
+      );
+      const batch = locked[0];
+      // Same ownership boundary as keepBatchPrivate, and the same server-derived
+      // workspace. A foreign batch is "not found", never "forbidden".
+      if (!batch || batch.workspaceId !== actor.workspaceId) {
+        throw new NotFoundException('Batch not found');
+      }
+      assertBatchOwnedByCaller(batch, actor.accountId, 'Batch not found');
+
+      const workspace = await tx.workspace.findUnique({
+        where: { id: actor.workspaceId },
+        select: { organizationId: true },
+      });
+      if (!workspace || workspace.organizationId !== batch.organizationId) {
+        throw new NotFoundException('Batch not found');
+      }
+
+      // A correction propagates FACTS, so the batch must still hold them. This
+      // is the same fail-closed rule keepBatchPrivate applies: never default,
+      // never fabricate.
+      if (!batch.effectiveDate) {
+        throw new ConflictException('EFFECTIVE_DATE_REQUIRED_BEFORE_PRIVATE_USE');
+      }
+      if (!batch.sourceOrigin) {
+        throw new ConflictException('SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE');
+      }
+      if (!batch.sourceType) {
+        throw new ConflictException('SOURCE_TYPE_REQUIRED_BEFORE_PROVENANCE_CORRECTION');
+      }
+
+      const targets = await tx.basicPrice.findMany({
+        where: {
+          // Strictly this workspace's OWN private prices, born from THIS batch.
+          // Never null workspaceId, never an OR — the same shape the private
+          // eligibility branch uses, for the same reason.
+          assetScope: BasicPriceAssetScope.WORKSPACE_PRIVATE,
+          workspaceId: actor.workspaceId,
+          sourceImportRow: { batchId },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (targets.length === 0) {
+        throw new ConflictException('NO_PRIVATE_PRICE_TO_CORRECT');
+      }
+
+      const corrections: ProvenanceCorrectionItem[] = [];
+
+      for (const price of targets) {
+        // A correction must never be the thing that publishes or verifies a
+        // private price. If either axis has somehow left its private state,
+        // refuse rather than write into a curated row.
+        if (price.status !== 'UNPUBLISHED' || price.verificationStatus === 'PUBLISHED') {
+          throw new ConflictException('PRICE_NOT_PRIVATE_CORRECTABLE');
+        }
+
+        const rowOverride = price.sourceImportRowId
+          ? await tx.basicPriceImportRow.findUnique({
+              where: { id: price.sourceImportRowId },
+              select: { effectiveDateOverride: true },
+            })
+          : null;
+        // Exactly the precedence keepBatchPrivate used, so a corrected price
+        // lands on the same date the writer would have produced today.
+        const nextEffectiveDate =
+          rowOverride?.effectiveDateOverride ?? batch.effectiveDate;
+
+        const before = {
+          sourceType: price.sourceType,
+          sourceOrigin: price.sourceOrigin,
+          effectiveDate: price.effectiveDate.toISOString(),
+          sourcePeriodLabel: price.sourcePeriodLabel,
+          effectiveDateProvenance: price.effectiveDateProvenance,
+          effectiveDateDerivationRule: price.effectiveDateDerivationRule,
+        };
+        const after = {
+          sourceType: batch.sourceType,
+          sourceOrigin: batch.sourceOrigin,
+          effectiveDate: nextEffectiveDate.toISOString(),
+          sourcePeriodLabel: batch.sourcePeriodLabel,
+          effectiveDateProvenance: batch.effectiveDateProvenance,
+          effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
+        };
+
+        // Idempotency is decided by comparing the correctable fields, not by a
+        // flag: a second call with an unchanged batch is a no-op that leaves no
+        // audit row behind, so the history stays a record of real changes only.
+        if (JSON.stringify(before) === JSON.stringify(after)) {
+          continue;
+        }
+
+        const updated = await tx.basicPrice.update({
+          where: { id: price.id },
+          data: {
+            sourceType: batch.sourceType as any,
+            sourceOrigin: batch.sourceOrigin as any,
+            effectiveDate: nextEffectiveDate,
+            sourcePeriodLabel: batch.sourcePeriodLabel,
+            effectiveDateProvenance: batch.effectiveDateProvenance as any,
+            effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
+            // value / status / verificationStatus / assetScope / regionId /
+            // resourceId / sourceImportRowId are absent on purpose.
+          },
+          select: PRIVATE_PRICE_SELECT,
+        });
+
+        await tx.basicPriceProvenanceCorrection.create({
+          data: {
+            basicPriceId: price.id,
+            workspaceId: actor.workspaceId,
+            actorAccountId: actor.accountId,
+            reason,
+            before,
+            after,
+          },
+        });
+
+        corrections.push({
+          basicPriceId: price.id,
+          before,
+          after,
+          price: mapPrivateBasicPriceItem(updated),
+        });
+      }
+
+      return {
+        batchId: batch.id,
+        examinedCount: targets.length,
+        correctedCount: corrections.length,
+        unchangedCount: targets.length - corrections.length,
+        corrections,
       };
     });
   }

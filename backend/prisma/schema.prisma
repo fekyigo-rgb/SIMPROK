@@ -31,6 +31,7 @@ model Account {
   verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]        @relation("BasicPriceSourceEquivalenceVerifiedBy")
   reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
   basicPricePublicationAudits                 BasicPricePublicationAudit[]         @relation("BasicPricePublicationAuditActor")
+  basicPriceProvenanceCorrections             BasicPriceProvenanceCorrection[]     @relation("BasicPriceProvenanceCorrectionActor")
   capturedProjectAhspOccurrences              ProjectAhspOccurrence[]              @relation("ProjectAhspOccurrenceContextCapturedBy")
 
   @@map("accounts")
@@ -75,24 +76,25 @@ model Workspace {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization                 Organization                  @relation(fields: [organizationId], references: [id])
-  memberships                  WorkspaceMembership[]
-  roles                        Role[]
-  positions                    Position[]
-  approvalMatrices             ApprovalMatrix[]
-  projects                     Project[]
-  stakeholderBridges           ProjectStakeholder[]
-  ahsps                        AHSP[]
-  ahspVersions                 AHSPVersion[]
-  ahspSnapshots                AHSPSnapshot[]
-  resourceCatalogs             ResourceCatalog[]
-  basicPrices                  BasicPrice[]
-  priceSubmissions             PriceSubmission[]
-  priceSubmissionReviews       PriceSubmissionReview[]
-  intelligenceEvidence         IntelligenceEvidence[]
-  projectAhspOccurrences       ProjectAhspOccurrence[]
-  resourceSourceIdentities     ResourceSourceIdentity[]
-  basicPriceSourceEquivalences BasicPriceSourceEquivalence[]
+  organization                    Organization                     @relation(fields: [organizationId], references: [id])
+  memberships                     WorkspaceMembership[]
+  roles                           Role[]
+  positions                       Position[]
+  approvalMatrices                ApprovalMatrix[]
+  projects                        Project[]
+  stakeholderBridges              ProjectStakeholder[]
+  ahsps                           AHSP[]
+  ahspVersions                    AHSPVersion[]
+  ahspSnapshots                   AHSPSnapshot[]
+  resourceCatalogs                ResourceCatalog[]
+  basicPrices                     BasicPrice[]
+  priceSubmissions                PriceSubmission[]
+  priceSubmissionReviews          PriceSubmissionReview[]
+  intelligenceEvidence            IntelligenceEvidence[]
+  projectAhspOccurrences          ProjectAhspOccurrence[]
+  resourceSourceIdentities        ResourceSourceIdentity[]
+  basicPriceSourceEquivalences    BasicPriceSourceEquivalence[]
+  basicPriceProvenanceCorrections BasicPriceProvenanceCorrection[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -1012,6 +1014,25 @@ model ResourceSourceIdentity {
   @@map("resource_source_identities")
 }
 
+/// RM-03D1 — HOW an exact effectiveDate came to exist, which is a different
+/// fact from the date itself.
+///
+/// A source that states only a PERIOD states no date. The Ambon Basic Price
+/// evidence gives `Period = 2024` / `TA 2024` and nowhere prints a day, yet
+/// BasicPrice.effectiveDate is NOT NULL because every downstream applicability
+/// rule needs one. SIMPROK must therefore DERIVE an operational date — and a
+/// derived date must never be readable as something the source printed.
+///
+/// NULL means the row predates this distinction: provenance unknown, which is
+/// honest and is deliberately NOT the same as SOURCE_STATED. The absence of a
+/// claim fails closed.
+enum PriceEffectiveDateProvenance {
+  /// The source document itself states this exact calendar date.
+  SOURCE_STATED
+  /// SIMPROK derived this date from a coarser source period, by a named rule.
+  DERIVED_FROM_SOURCE_PERIOD
+}
+
 enum PriceSourceType {
   VENDOR_QUOTE
   MARKET_SURVEY
@@ -1437,27 +1458,38 @@ model KnowledgeEvent {
 }
 
 model BasicPrice {
-  id                  String                  @id @default(uuid()) @db.Uuid
-  resourceId          String                  @db.Uuid
-  workspaceId         String?                 @db.Uuid
-  organizationId      String?                 @db.Uuid
-  regionId            String?                 @db.Uuid
-  sourceSubmissionId  String?                 @unique @db.Uuid
-  effectiveDate       DateTime
-  value               Decimal                 @db.Decimal(18, 2)
-  sourceType          PriceSourceType         @default(SYSTEM_ESTIMATE)
-  verificationStatus  PriceVerificationStatus @default(UNVERIFIED)
-  sourceOrigin        PriceSourceOrigin       @default(SUPPLIER)
-  freshnessStatus     PriceFreshnessStatus    @default(CURRENT)
-  reportedByAccountId String?                 @db.Uuid
-  reviewDate          DateTime?
-  validUntil          DateTime?
-  status              String                  @default("UNPUBLISHED")
+  id                          String                        @id @default(uuid()) @db.Uuid
+  resourceId                  String                        @db.Uuid
+  workspaceId                 String?                       @db.Uuid
+  organizationId              String?                       @db.Uuid
+  regionId                    String?                       @db.Uuid
+  sourceSubmissionId          String?                       @unique @db.Uuid
+  effectiveDate               DateTime
+  /// RM-03D1 — the source's own period wording, verbatim (e.g. "TA 2024").
+  /// Kept as text on purpose: normalizing it into a date is precisely the
+  /// false precision `effectiveDateProvenance` exists to prevent.
+  sourcePeriodLabel           String?
+  /// RM-03D1 — whether `effectiveDate` was stated by the source or derived by
+  /// SIMPROK from a coarser period. NULL = unknown, never "stated".
+  effectiveDateProvenance     PriceEffectiveDateProvenance?
+  /// RM-03D1 — the NAMED rule that produced `effectiveDate` when it was
+  /// DERIVED_FROM_SOURCE_PERIOD, so a reader can re-derive it rather than
+  /// trust it. Meaningless for SOURCE_STATED.
+  effectiveDateDerivationRule String?
+  value                       Decimal                       @db.Decimal(18, 2)
+  sourceType                  PriceSourceType               @default(SYSTEM_ESTIMATE)
+  verificationStatus          PriceVerificationStatus       @default(UNVERIFIED)
+  sourceOrigin                PriceSourceOrigin             @default(SUPPLIER)
+  freshnessStatus             PriceFreshnessStatus          @default(CURRENT)
+  reportedByAccountId         String?                       @db.Uuid
+  reviewDate                  DateTime?
+  validUntil                  DateTime?
+  status                      String                        @default("UNPUBLISHED")
   /// RM-03C. Defaults to SIMPROK_CATALOG so a writer that has not been taught
   /// about private assets can never accidentally mint one — the fail-closed
   /// direction is "this belongs to the curated catalog", never "this is
   /// privately usable".
-  assetScope          BasicPriceAssetScope    @default(SIMPROK_CATALOG)
+  assetScope                  BasicPriceAssetScope          @default(SIMPROK_CATALOG)
   /// RM-03C — the ONLY provenance channel a WORKSPACE_PRIVATE price may have,
   /// and a channel a SIMPROK_CATALOG price may never use (catalog rows reach
   /// their import row through sourceSubmission -> PriceSubmission.importRow
@@ -1465,17 +1497,18 @@ model BasicPrice {
   /// migration, so "a private price with no traceable evidence" and "a catalog
   /// price wearing a private evidence link" are both unrepresentable states,
   /// not merely unwritten ones.
-  sourceImportRowId   String?                 @unique @db.Uuid
-  createdAt           DateTime                @default(now())
-  updatedAt           DateTime                @updatedAt
+  sourceImportRowId           String?                       @unique @db.Uuid
+  createdAt                   DateTime                      @default(now())
+  updatedAt                   DateTime                      @updatedAt
 
-  resource                       ResourceCatalog                 @relation(fields: [resourceId], references: [id], onDelete: Cascade)
-  workspace                      Workspace?                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  region                         Region?                         @relation(fields: [regionId], references: [id], onDelete: Restrict)
-  sourceSubmission               PriceSubmission?                @relation(fields: [sourceSubmissionId], references: [id])
-  sourceImportRow                BasicPriceImportRow?            @relation("PrivateBasicPriceProvenance", fields: [sourceImportRowId], references: [id], onDelete: Restrict)
+  resource                       ResourceCatalog                  @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  workspace                      Workspace?                       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  region                         Region?                          @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  sourceSubmission               PriceSubmission?                 @relation(fields: [sourceSubmissionId], references: [id])
+  sourceImportRow                BasicPriceImportRow?             @relation("PrivateBasicPriceProvenance", fields: [sourceImportRowId], references: [id], onDelete: Restrict)
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
   publicationAudits              BasicPricePublicationAudit[]
+  provenanceCorrections          BasicPriceProvenanceCorrection[]
 
   @@index([resourceId])
   @@index([workspaceId])
@@ -1540,6 +1573,15 @@ model BasicPriceImportBatch {
   effectiveDate               DateTime?
   effectiveDateSetByAccountId String?   @db.Uuid
   effectiveDateSetAt          DateTime?
+
+  /// RM-03D1 — the source's own period wording, verbatim (e.g. "TA 2024"), and
+  /// whether `effectiveDate` was stated by the source or derived from that
+  /// period by a named rule. These three travel to every BasicPrice the batch
+  /// materializes, so a price is self-describing rather than requiring a reader
+  /// to walk back to the import row to learn what the source actually said.
+  sourcePeriodLabel           String?
+  effectiveDateProvenance     PriceEffectiveDateProvenance?
+  effectiveDateDerivationRule String?
 
   sourceType             PriceSourceType?
   sourceOrigin           PriceSourceOrigin?
@@ -1658,19 +1700,19 @@ model BasicPriceImportRow {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  batch            BasicPriceImportBatch                @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  resourceCatalog  ResourceCatalog?                     @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
-  unitDefinition   UnitDefinition?                      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
-  priceSubmission  PriceSubmission?                     @relation(fields: [priceSubmissionId], references: [id], onDelete: Restrict)
+  batch             BasicPriceImportBatch                @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  resourceCatalog   ResourceCatalog?                     @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  unitDefinition    UnitDefinition?                      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+  priceSubmission   PriceSubmission?                     @relation(fields: [priceSubmissionId], references: [id], onDelete: Restrict)
   /// RM-03C: at most one workspace-private BasicPrice may ever be materialized
   /// from a given import row (enforced by the @unique on the owning side), so
   /// re-running the private writer is idempotent rather than duplicating a fact.
   /// This is INDEPENDENT of priceSubmissionId — a row may be kept private AND
   /// later proposed to the SIMPROK catalog; neither invalidates the other.
-  privateBasicPrice BasicPrice?                         @relation("PrivateBasicPriceProvenance")
-  collisionOfRow   BasicPriceImportRow?                 @relation("RowCollision", fields: [collisionOfRowId], references: [id], onDelete: SetNull)
-  collidingRows    BasicPriceImportRow[]                @relation("RowCollision")
-  resourceMappings BasicPriceImportRowResourceMapping[]
+  privateBasicPrice BasicPrice?                          @relation("PrivateBasicPriceProvenance")
+  collisionOfRow    BasicPriceImportRow?                 @relation("RowCollision", fields: [collisionOfRowId], references: [id], onDelete: SetNull)
+  collidingRows     BasicPriceImportRow[]                @relation("RowCollision")
+  resourceMappings  BasicPriceImportRowResourceMapping[]
 
   @@unique([batchId, sourceRowNumber])
   @@index([batchId])
@@ -1772,6 +1814,44 @@ model BasicPriceSourceEquivalence {
 /// the FK only proves the Account still EXISTS, never that it is still
 /// ACTIVE; re-authorizing a historical actor is deliberately not this
 /// constraint's job.
+/// RM-03D1 — append-only record of a provenance correction applied to an
+/// already-existing WORKSPACE_PRIVATE BasicPrice.
+///
+/// WHY A TABLE AND NOT A SILENT UPDATE. Correcting `sourceType` from a guess to
+/// the evidence-supported value, or restating an effectiveDate as explicitly
+/// derived, changes what a persisted business fact claims. Overwriting it in
+/// place would erase the claim SIMPROK previously made, and "history preserved"
+/// is not satisfied by a newer value alone — a reader must be able to see that
+/// the row once said something else, who changed it, and why.
+///
+/// This is NOT a publication record and never touches the publication ladder:
+/// `status`, `verificationStatus` and `assetScope` are outside what a
+/// correction may alter, so a correction can never make a private price look
+/// published or verified.
+model BasicPriceProvenanceCorrection {
+  id             String   @id @default(uuid()) @db.Uuid
+  basicPriceId   String   @db.Uuid
+  workspaceId    String   @db.Uuid
+  actorAccountId String   @db.Uuid
+  /// Required. A correction to a money-adjacent provenance fact is never
+  /// self-evident, and the audit trail must carry the human's stated reason.
+  reason         String   @db.Text
+  /// Exactly the correctable fields as they stood before and after, so the
+  /// change is re-readable without diffing against a guess.
+  before         Json
+  after          Json
+  createdAt      DateTime @default(now())
+
+  basicPrice BasicPrice @relation(fields: [basicPriceId], references: [id], onDelete: Cascade)
+  workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor      Account    @relation("BasicPriceProvenanceCorrectionActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "fk_basic_price_provenance_correction_actor")
+
+  @@index([basicPriceId])
+  @@index([workspaceId])
+  @@index([actorAccountId])
+  @@map("basic_price_provenance_corrections")
+}
+
 model BasicPricePublicationAudit {
   id             String   @id @default(uuid()) @db.Uuid
   basicPriceId   String   @db.Uuid
