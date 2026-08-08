@@ -170,8 +170,23 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
     return { batchId: preview.body.batchId as string, row };
   };
 
+  /**
+   * How many resources ADMISSION brought into being.
+   *
+   * The seeded fixtures are preconditions, not products — and one of them
+   * ("Semen Portlan") deliberately shares a name with a source row, because
+   * that pair is what the different-spelling cases are built on. Counting by
+   * name alone would count the precondition too, so the fixtures are excluded
+   * by id.
+   */
   const catalogCount = () =>
-    prisma.resourceCatalog.count({ where: { workspaceId: WORKSPACE_A, name: { in: ADMITTED_NAMES } } });
+    prisma.resourceCatalog.count({
+      where: {
+        workspaceId: WORKSPACE_A,
+        name: { in: ADMITTED_NAMES },
+        id: { notIn: [RESOURCE_DIFFERENT_SPELLING_ID, RESOURCE_GLOBAL_ID, RESOURCE_RETIRED_ID] },
+      },
+    });
 
   // ============================================================
   // A. HAPPY PATH
