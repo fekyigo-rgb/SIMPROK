@@ -471,4 +471,75 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
       effectiveDateDerivationRule: 'PERIOD_START',
     });
   });
+
+  it('P: a ROW-OVERRIDDEN date never inherits a batch derivation that does not explain it', async () => {
+    // effectiveDateOverride has no application writer today, so the state is
+    // seeded directly. The two READERS are live production code, and a latent
+    // lie in a provenance system is still a lie — this proves the stored row,
+    // not just the pure resolver.
+    const preview = await request(app.getHttpServer())
+      .post('/basic-price-imports/preview')
+      .set(hdr())
+      .attach('file', await buildBasicPriceXlsx(), {
+        filename: 'basic-price.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      .field('selectedSheet', 'HARGA SATUAN UPAH DAN BAHAN')
+      .field('sourceVendorName', 'prov-row-override')
+      .field('regionId', regionId)
+      .field('effectiveDate', '2024-01-01')
+      .field('sourceOrigin', 'GOVERNMENT')
+      .field('sourceType', 'REGULATION')
+      .field('sourcePeriodLabel', 'TA 2024')
+      .field('sourcePeriodGranularity', 'YEAR')
+      .field('effectiveDateProvenance', 'DERIVED_FROM_SOURCE_PERIOD')
+      .field('effectiveDateDerivationRule', 'PERIOD_START')
+      .expect(201);
+
+    const batchId: string = preview.body.batchId;
+    const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
+
+    await request(app.getHttpServer())
+      .post(`/basic-price-imports/${batchId}/rows/${row.id}/resolve`)
+      .set(hdr())
+      .send({ version: row.version, resourceCatalogId: RESOURCE_ID, unitDefinitionId: UNIT_ID })
+      .expect(201);
+    for (const other of preview.body.rows.filter((r: { id: string }) => r.id !== row.id)) {
+      await request(app.getHttpServer())
+        .post(`/basic-price-imports/${batchId}/rows/${other.id}/reject`)
+        .set(hdr())
+        .send({ version: other.version, reason: 'not needed by this suite' })
+        .expect(201);
+    }
+
+    // This row's date is NOT the batch's derived date.
+    await prisma.basicPriceImportRow.update({
+      where: { id: row.id },
+      data: { effectiveDateOverride: new Date('2024-06-15T00:00:00.000Z') },
+    });
+
+    const kept = await request(app.getHttpServer())
+      .post(`/basic-price-imports/${batchId}/keep-private`)
+      .set(hdr())
+      .expect(201);
+    const price = await prisma.basicPrice.findUniqueOrThrow({
+      where: { id: kept.body.prices[0].basicPriceId },
+    });
+
+    expect(price.effectiveDate.toISOString()).toBe('2024-06-15T00:00:00.000Z');
+    // PERIOD_START of TA 2024 is 2024-01-01, so it cannot explain 2024-06-15.
+    expect(price.effectiveDateProvenance).toBeNull();
+    expect(price.effectiveDateDerivationRule).toBeNull();
+    // But what the SOURCE says about its period is still true.
+    expect(price.sourcePeriodLabel).toBe('TA 2024');
+    expect(price.sourcePeriodGranularity).toBe('YEAR');
+
+    // And a correction re-derives the same honest facts, never re-attaching the
+    // derivation the date does not follow from.
+    await correct(batchId, 're-applying batch provenance to an overridden row').expect(201);
+    const after = await prisma.basicPrice.findUniqueOrThrow({ where: { id: price.id } });
+    expect(after.effectiveDate.toISOString()).toBe('2024-06-15T00:00:00.000Z');
+    expect(after.effectiveDateProvenance).toBeNull();
+    expect(after.effectiveDateDerivationRule).toBeNull();
+  });
 });
