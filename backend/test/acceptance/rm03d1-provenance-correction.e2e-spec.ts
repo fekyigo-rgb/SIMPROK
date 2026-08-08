@@ -29,6 +29,9 @@ const PASSWORD = 'Test1234!';
 
 const RESOURCE_ID = '45000000-0000-4000-8000-000000000001';
 const UNIT_ID = '45000000-0000-4000-8000-000000000002';
+// Owned, not borrowed: depending on whatever region another suite left behind
+// made this suite fail whenever it ran first.
+const REGION_ID = '45000000-0000-4000-8000-000000000003';
 
 describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   let app: INestApplication;
@@ -41,7 +44,13 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
     await app.init();
     prisma = new PrismaClient();
-    regionId = (await prisma.region.findFirstOrThrow({ where: { isActive: true } })).id;
+    regionId = (
+      await prisma.region.upsert({
+        where: { id: REGION_ID },
+        create: { id: REGION_ID, code: 'RM03D1-PROV-REGION', name: 'RM03D1 Provenance Region', isActive: true },
+        update: {},
+      })
+    ).id;
     accountId = (
       await prisma.account.findUniqueOrThrow({ where: { email: 'assigned@test.local' } })
     ).id;
@@ -92,6 +101,7 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
     await prisma.basicPriceImportBatch.deleteMany({ where: { workspaceId: WORKSPACE_A } });
     await prisma.resourceCatalog.deleteMany({ where: { id: RESOURCE_ID } });
     await prisma.unitDefinition.deleteMany({ where: { id: UNIT_ID } });
+    await prisma.region.deleteMany({ where: { id: REGION_ID } });
     await prisma.$disconnect();
     await app.close();
   });

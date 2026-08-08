@@ -36,6 +36,10 @@ const PROJECT_ID = '44000000-0000-4000-8000-000000000006';
 const STRUCTURE_ID = '44000000-0000-4000-8000-000000000007';
 const BOQ_ITEM_ID = '44000000-0000-4000-8000-000000000008';
 const PUBLISHED_VERSION_ID = '44000000-0000-4000-8000-000000000009';
+// This suite owns its region too. Borrowing whatever region happened to be in
+// the database made it depend on another suite's fixtures still existing, and
+// when none did, beforeAll threw before its cleanup ids were assigned.
+const REGION_ID = '44000000-0000-4000-8000-00000000000a';
 
 // AHSP_VIEW/AHSP_MANAGE are deliberately NOT active-membership baseline codes,
 // so this suite grants them through a real role — the same pattern
@@ -69,7 +73,13 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     await app.init();
     prisma = new PrismaClient();
     m3UnitId = (await prisma.unitDefinition.findFirstOrThrow({ where: { code: 'M3' } })).id;
-    regionId = (await prisma.region.findFirstOrThrow({ where: { isActive: true } })).id;
+    regionId = (
+      await prisma.region.upsert({
+        where: { id: REGION_ID },
+        create: { id: REGION_ID, code: 'RM03D1-INTEGRITY-REGION', name: 'RM03D1 Integrity Region', isActive: true },
+        update: {},
+      })
+    ).id;
     organizationId = (
       await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A } })
     ).organizationId;
@@ -234,12 +244,15 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     await prisma.boqStructure.deleteMany({ where: { id: STRUCTURE_ID } });
     await prisma.project.deleteMany({ where: { id: PROJECT_ID } });
     await prisma.resourceCatalog.deleteMany({ where: { id: RESOURCE_ID } });
-    await prisma.membershipRole.deleteMany({ where: { id: membershipRoleId } });
+    if (membershipRoleId) {
+      await prisma.membershipRole.deleteMany({ where: { id: membershipRoleId } });
+    }
     await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_ID } });
     await prisma.role.deleteMany({ where: { id: ROLE_ID } });
     // Only the codes this suite owns. A seeded permission is shared state and is
     // never removed from here.
     await prisma.permission.deleteMany({ where: { code: { in: OWNED_PERMISSION_CODES } } });
+    await prisma.region.deleteMany({ where: { id: REGION_ID } });
     await prisma.$disconnect();
     await app.close();
   });
