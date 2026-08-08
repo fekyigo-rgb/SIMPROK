@@ -296,7 +296,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
         effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
         // Ownership will be WORKSPACE_PRIVATE; the SOURCE is a real store.
         // These are different axes and the writer must keep them so.
-        sourceType: 'MARKET_SURVEY',
+        sourceType: 'VENDOR_QUOTE',
         sourceOrigin: 'STORE',
         sourceVendorName: `${tag} Toko Bangunan Jaya`,
         importFingerprint: `${tag}-fingerprint`,
@@ -399,7 +399,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
         regionId,
         effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
         value: '82500.00',
-        sourceType: 'MARKET_SURVEY',
+        sourceType: 'REGULATION',
         sourceOrigin: 'GOVERNMENT',
         status: 'PUBLISHED',
         verificationStatus: 'PUBLISHED',
@@ -524,7 +524,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
       // SOURCE != REPORTER. The workspace reported it; the STORE is where the
       // price actually came from, and that is what the row says.
       expect(price.sourceOrigin).toBe('STORE');
-      expect(price.sourceType).toBe('MARKET_SURVEY');
+      expect(price.sourceType).toBe('VENDOR_QUOTE');
       expect(price.assetScope).toBe('WORKSPACE_PRIVATE');
     });
 

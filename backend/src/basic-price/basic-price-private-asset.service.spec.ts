@@ -33,7 +33,7 @@ describe('BasicPricePrivateAssetService', () => {
     status: 'READY_FOR_REVIEW',
     effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
     regionId,
-    sourceType: 'MARKET_SURVEY',
+    sourceType: 'VENDOR_QUOTE',
     sourceOrigin: 'STORE',
     uploadedByAccountId: accountId,
   });
@@ -143,10 +143,16 @@ describe('BasicPricePrivateAssetService', () => {
   });
 
   describe('ownership is independent of source (SOURCE != REPORTER)', () => {
-    it.each(['GOVERNMENT', 'SUPPLIER', 'STORE', 'DISTRIBUTOR', 'FIELD_REPORT'])(
+    it.each([
+      ['GOVERNMENT', 'REGULATION'],
+      ['SUPPLIER', 'VENDOR_QUOTE'],
+      ['STORE', 'VENDOR_QUOTE'],
+      ['DISTRIBUTOR', 'VENDOR_QUOTE'],
+      ['FIELD_REPORT', 'MARKET_SURVEY'],
+    ])(
       'keeps sourceOrigin=%s verbatim on a WORKSPACE_PRIVATE price',
-      async (sourceOrigin) => {
-        makeTx({ batch: { ...baseBatch(), sourceOrigin } });
+      async (sourceOrigin, sourceType) => {
+        makeTx({ batch: { ...baseBatch(), sourceOrigin, sourceType } });
 
         await service.keepBatchPrivate({ batchId, actor });
 
@@ -159,12 +165,32 @@ describe('BasicPricePrivateAssetService', () => {
       },
     );
 
-    it('copies sourceType from the batch, defaulting only where the import path already did', async () => {
-      makeTx({ batch: { ...baseBatch(), sourceType: null } });
+    // LEGACY_TEST_CHANGE_REGISTER (RM-03D1). OLD_EXPECTATION: a batch with no
+    // sourceType silently produced a MARKET_SURVEY price, "defaulting only where
+    // the import path already did". That default is exactly how a government
+    // standard price list came to be recorded as a market survey, so it is gone.
+    // TEST_WEAKENING=NO: this asserts a STRICTER outcome than before — the write
+    // is refused rather than completed with an invented classification.
+    it('copies sourceType from the batch verbatim, and FAILS CLOSED when the batch never stated one', async () => {
+      makeTx({ batch: { ...baseBatch(), sourceType: 'VENDOR_QUOTE' } });
       await service.keepBatchPrivate({ batchId, actor });
       expect(tx.basicPrice.create.mock.calls[0][0].data.sourceType).toBe(
-        'MARKET_SURVEY',
+        'VENDOR_QUOTE',
       );
+
+      makeTx({ batch: { ...baseBatch(), sourceType: null } });
+      await expect(service.keepBatchPrivate({ batchId, actor })).rejects.toThrow(
+        'SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE',
+      );
+    });
+
+    it('refuses an INCOHERENT origin/type pair outright', async () => {
+      // The precise defect RM-03D1 closes: government origin, market-survey type.
+      makeTx({ batch: { ...baseBatch(), sourceOrigin: 'GOVERNMENT', sourceType: 'MARKET_SURVEY' } });
+      await expect(service.keepBatchPrivate({ batchId, actor })).rejects.toThrow(
+        'SOURCE_ORIGIN_TYPE_INCOHERENT',
+      );
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
     });
   });
 
@@ -329,6 +355,13 @@ describe('BasicPricePrivateAssetService', () => {
         status: 'UNPUBLISHED',
         verificationStatus: 'UNVERIFIED',
         sourceImportRowId: rowId,
+        // RM-03D1 — temporal provenance is STATED, not left for the reader to
+        // assume. This fixture's batch claims none, and null reads as UNKNOWN,
+        // which is pointedly not SOURCE_STATED.
+        sourcePeriodLabel: null,
+        sourcePeriodGranularity: null,
+        effectiveDateProvenance: null,
+        effectiveDateDerivationRule: null,
       });
       expect(typeof result.prices[0].price).toBe('string');
     });
