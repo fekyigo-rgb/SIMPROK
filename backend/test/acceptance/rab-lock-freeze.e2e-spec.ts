@@ -322,6 +322,110 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
     };
   };
 
+  /**
+   * A SECOND priced WORK_ITEM inside an existing project, with its own AHSP,
+   * its own occurrence and its own Basic Price — so the two rows can drift
+   * independently and the binding can be told apart from a latest-occurrence
+   * lookup.
+   */
+  const addPricedRowToProject = async (targetProjectId: string, suffix: string) => {
+    const structure = await prisma.boqStructure.findFirstOrThrow({
+      where: { projectId: targetProjectId, name: 'Working Draft', status: 'DRAFT' },
+    });
+    const catalog = await prisma.resourceCatalog.create({
+      data: { workspaceId, name: `${tag} ${suffix} Semen`, type: 'MATERIAL', baseUnit: 'Kg' },
+    });
+    const price = await createPrice({
+      resourceCatalogId: catalog.id,
+      value: '100000.00',
+      effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const ahsp = await prisma.aHSP.create({
+      data: {
+        workspaceId,
+        workType: `${tag} ${suffix}`,
+        methodType: 'MANUAL',
+        locationType: 'GENERAL',
+        methodName: `${tag} ${suffix} method`,
+      },
+    });
+    const version = await prisma.aHSPVersion.create({
+      data: {
+        ahspId: ahsp.id,
+        workspaceId,
+        versionNumber: 1,
+        outputUnit: 'Kg',
+        effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+        regulationReference: `${tag} ${labels}`,
+      },
+    });
+    const resource = await prisma.aHSPResource.create({
+      data: {
+        ahspVersionId: version.id,
+        resourceId: catalog.name,
+        resourceType: 'MATERIAL',
+        coefficient: '2.000000',
+        baseUnit: 'Kg',
+      },
+    });
+    const occurrence = await prisma.projectAhspOccurrence.create({
+      data: {
+        workspaceId,
+        projectId: targetProjectId,
+        ahspVersionId: version.id,
+        idempotencyKey: `${tag}-${suffix}-occ`,
+        businessPricingAsOfDate: asOfDate,
+        referenceRegionId: regionId,
+        resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V1',
+        resourceResolutions: {
+          create: [
+            {
+              ahspResourceId: resource.id,
+              rawAhspResourceRef: resource.resourceId,
+              rawAhspResourceType: 'MATERIAL',
+              ahspCoefficient: '2.000000',
+              ahspUnit: 'Kg',
+              status: 'RESOLVED',
+              selectionMode: 'AUTO_SELECTED',
+              resourceCatalogId: catalog.id,
+              selectedBasicPriceId: price.id,
+              canonicalUnit: 'Kg',
+              sourcePriceValue: price.value.toString(),
+              sourceUnit: 'Kg',
+              adaptedPriceValue: price.value.toString(),
+              selectedSourceOrigin: 'SUPPLIER',
+              selectedFreshnessStatus: 'CURRENT',
+              selectedEffectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+              resolutionMethod: 'EXACT_DETERMINISTIC',
+              reasonCodes: ['TEST_FIXTURE_ONLY'],
+              explanation: labels,
+              policyVersion: labels,
+            },
+          ],
+        },
+      },
+    });
+    const item = await prisma.boqItem.create({
+      data: {
+        boqStructureId: structure.id,
+        wbsCode: '1.2',
+        name: `${tag} ${suffix} item`,
+        itemType: 'WORK_ITEM',
+        quantity: '5',
+        unit: 'Kg',
+        ahspVersionId: version.id,
+        workingOccurrenceId: occurrence.id,
+        sortOrder: 2,
+      },
+    });
+    await request(app.getHttpServer())
+      .post(`/projects/${targetProjectId}/boq/items/${item.id}/cost-calculation/persist`)
+      .set('Authorization', `Bearer ${editorToken}`)
+      .send({ calculationAsOfDate: asOf })
+      .expect(201);
+    return { itemId: item.id, catalogId: catalog.id, priceId: price.id, versionId: version.id };
+  };
+
   const lock = (projectId: string, token = editorToken) =>
     request(app.getHttpServer())
       .post(`/projects/${projectId}/rab/lock`)
@@ -609,38 +713,95 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
     expect(rows[0].lockedFromStatus).toBe('DRAFT');
   }, 120_000);
 
-  // ── E12 — REAL LOCK vs MUTATION RACE ──────────────────────────────────────
-  it('E12: lock racing a real mutation leaves one serially legal history — nothing commits after LOCK wins', async () => {
-    const f = await buildLockableProject({ suffix: 'mutrace' });
-    const before = await prisma.boqItem.findUniqueOrThrow({ where: { id: f.itemId } });
+  // ── BOLT 1 — EXACT OCCURRENCE BINDING, MULTI-ROW ──────────────────────────
+  it('BOLT1 (real DB): with two priced rows on two occurrences, only the drifted row is found', async () => {
+    const a = await buildLockableProject({ suffix: 'multiA' });
+    // A second priced WORK_ITEM in the SAME project, with its OWN AHSP,
+    // its OWN occurrence and its OWN Basic Price.
+    const b = await addPricedRowToProject(a.projectId, 'multiB');
 
-    const [lockRes, persistRes] = await Promise.all([
+    const itemA = await prisma.boqItem.findUniqueOrThrow({ where: { id: a.itemId } });
+    const itemB = await prisma.boqItem.findUniqueOrThrow({ where: { id: b.itemId } });
+    expect(itemA.calculationOccurrenceId).not.toBe(itemB.calculationOccurrenceId);
+
+    // Drift ONLY row B: its frozen price stops applying and another takes over.
+    await prisma.basicPrice.update({
+      where: { id: b.priceId },
+      data: { validUntil: new Date('2026-06-30T00:00:00.000Z') },
+    });
+    await createPrice({
+      resourceCatalogId: b.catalogId,
+      value: '140000.00',
+      effectiveDate: new Date('2026-07-01T00:00:00.000Z'),
+    });
+
+    const response = await lock(a.projectId).expect(201);
+
+    expect(response.body.status).toBe('REFUSED');
+    const findings = response.body.findings as any[];
+    // Row B is reported...
+    expect(findings.some((f) => f.boqItemId === b.itemId)).toBe(true);
+    // ...and row A is NOT — it was checked against its OWN occurrence, whose
+    // price basis never moved. A latest-occurrence lookup would have judged
+    // row A with row B's occurrence and reported it too.
+    expect(findings.some((f) => f.boqItemId === a.itemId)).toBe(false);
+
+    const rab = await prisma.rabDocument.findFirstOrThrow({ where: { projectId: a.projectId } });
+    expect(rab.status).toBe('DRAFT');
+  }, 180_000);
+
+  // ── E12 — REAL LOCK vs A GENUINELY WRITABLE MUTATION ──────────────────────
+  it('E12: lock racing a lawful, writable mutation leaves one serially legal history', async () => {
+    const f = await buildLockableProject({ suffix: 'mutrace' });
+    const occurrencesBefore = await prisma.projectAhspOccurrence.count({
+      where: { projectId: f.projectId },
+    });
+
+    // select-ahsp is the smallest real mutation that is BOTH lawful while the
+    // RAB is DRAFT and able to write: it creates a new occurrence generation.
+    // (Re-persisting is not a valid racer — a persisted row has no working
+    // occurrence left, so it would refuse for its own reason, not the lock's.)
+    const [lockRes, mutationRes] = await Promise.all([
       lock(f.projectId),
       request(app.getHttpServer())
-        .post(`/projects/${f.projectId}/boq/items/${f.itemId}/cost-calculation/persist`)
+        .post(`/projects/${f.projectId}/ahsp-occurrences/boq-items/${f.itemId}/select-ahsp`)
         .set('Authorization', `Bearer ${editorToken}`)
-        .send({ calculationAsOfDate: asOf }),
+        .send({
+          ahspVersionId: f.versionId,
+          businessPricingAsOfDate: asOf,
+          referenceRegionId: regionId,
+          idempotencyKey: `${tag}-race-${Date.now()}`,
+        }),
     ]);
 
-    const row = await prisma.rabDocument.findFirstOrThrow({ where: { projectId: f.projectId } });
-    const after = await prisma.boqItem.findUniqueOrThrow({ where: { id: f.itemId } });
+    const rab = await prisma.rabDocument.findFirstOrThrow({ where: { projectId: f.projectId } });
+    const occurrencesAfter = await prisma.projectAhspOccurrence.count({
+      where: { projectId: f.projectId },
+    });
 
-    // The winner is serialization-dependent and NOT asserted. The invariant is.
-    if (row.status === 'LOCKED') {
-      // LOCK won: the frozen line must be exactly what was frozen. A mutation
-      // committing after the freeze is the one outcome that is never legal.
-      expect(after.unitPrice?.toString()).toBe(before.unitPrice?.toString());
-      expect(after.lineTotal?.toString()).toBe(before.lineTotal?.toString());
-      expect(row.lockedFromStatus).toBe('DRAFT');
-      expect(row.lockedAt).not.toBeNull();
+    // Neither caller may fail merely because they raced.
+    expect(lockRes.status).toBeLessThan(500);
+    expect(mutationRes.status).toBeLessThan(500);
+
+    const mutationCommitted = mutationRes.status < 400;
+    if (mutationCommitted) {
+      // The mutation won the row lock: its write landed, and the lock then
+      // revalidated whatever truth it found.
+      expect(occurrencesAfter).toBe(occurrencesBefore + 1);
     } else {
-      // The mutation won: the RAB stayed a live draft and the lock refused or
-      // validated against the mutated truth. Either way it is not frozen.
-      expect(row.status).toBe('DRAFT');
+      // The mutation was refused. THE invariant: a refused mutation must not
+      // have written anything — nothing commits after LOCK wins.
+      expect(occurrencesAfter).toBe(occurrencesBefore);
+      expect(rab.status).toBe('LOCKED');
     }
-    // Whatever the order, exactly one RAB document exists and no second lock
-    // fact was written.
+
+    // Exactly one RAB document, and if frozen it carries exactly one lawful
+    // lock fact — never two, never a partial one.
     expect(await prisma.rabDocument.count({ where: { projectId: f.projectId } })).toBe(1);
-    expect([lockRes.status, persistRes.status].every((s) => s < 500)).toBe(true);
-  }, 120_000);
+    if (rab.status === 'LOCKED') {
+      expect(rab.lockedFromStatus).toBe('DRAFT');
+      expect(rab.lockedAt).not.toBeNull();
+      expect(rab.lockedByAccountId).not.toBeNull();
+    }
+  }, 180_000);
 });

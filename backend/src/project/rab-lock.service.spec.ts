@@ -52,6 +52,7 @@ describe('RabLockService', () => {
     lineTotal: new Prisma.Decimal('129826295.00'),
     ahspVersionId,
     calculationAsOfDate: asOfDate,
+    calculationOccurrenceId: 'occ-1',
     ...overrides,
   });
 
@@ -98,6 +99,9 @@ describe('RabLockService', () => {
         findFirst: jest.fn().mockResolvedValue(
           opts.occurrence === undefined
             ? {
+                id: 'occ-1',
+                ahspVersionId,
+                businessPricingAsOfDate: asOfDate,
                 referenceRegionId: 'region-1',
                 ahspVersion: { id: ahspVersionId, resources: [{ id: 'res-1' }] },
                 resourceResolutions: [
@@ -472,6 +476,63 @@ describe('RabLockService', () => {
     );
     // and on the SAME transaction client that holds the project row lock
     expect(resolution.resolveVersionResources.mock.calls[0][0]).toBe(tx);
+  });
+
+  // ── BOLT 1: EXACT OCCURRENCE BINDING ───────────────────────────────────────
+  // A RAB with several priced rows has several occurrences. Revalidating a row
+  // against anything but ITS OWN is a confident answer to the wrong question.
+
+  it('BOLT1: the occurrence is fetched by the row own pointer, scoped to its project and workspace', async () => {
+    arrange();
+    await lock();
+    const query = tx.projectAhspOccurrence.findFirst.mock.calls[0][0];
+    expect(query.where).toMatchObject({ id: 'occ-1', projectId, workspaceId });
+    // never "the latest occurrence"
+    expect(query.orderBy).toBeUndefined();
+  });
+
+  it('BOLT1: a row with no calculation occurrence fails closed', async () => {
+    arrange({ workItems: [pricedWorkItem({ calculationOccurrenceId: null })] });
+    const result: any = await lock();
+    expect(result.status).toBe('REFUSED');
+    expect(result.findings[0].finding).toBe(PRELOCK_FINDING.CALCULATION_OCCURRENCE_MISMATCH);
+    expect(tx.rabDocument.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('BOLT1: an occurrence not found in this project/workspace fails closed', async () => {
+    arrange({ occurrence: null });
+    const result: any = await lock();
+    expect(result.findings[0].finding).toBe(PRELOCK_FINDING.CALCULATION_OCCURRENCE_MISMATCH);
+  });
+
+  it('BOLT1: an occurrence describing a DIFFERENT AHSP version fails closed', async () => {
+    arrange({
+      occurrence: {
+        id: 'occ-1',
+        ahspVersionId: 'some-other-version',
+        businessPricingAsOfDate: asOfDate,
+        referenceRegionId: 'region-1',
+        ahspVersion: { id: 'some-other-version', resources: [{ id: 'res-1' }] },
+        resourceResolutions: [],
+      },
+    });
+    const result: any = await lock();
+    expect(result.findings[0].finding).toBe(PRELOCK_FINDING.CALCULATION_OCCURRENCE_MISMATCH);
+  });
+
+  it('BOLT1: an occurrence describing a DIFFERENT pricing date fails closed', async () => {
+    arrange({
+      occurrence: {
+        id: 'occ-1',
+        ahspVersionId,
+        businessPricingAsOfDate: new Date('2026-01-01T00:00:00.000Z'),
+        referenceRegionId: 'region-1',
+        ahspVersion: { id: ahspVersionId, resources: [{ id: 'res-1' }] },
+        resourceResolutions: [],
+      },
+    });
+    const result: any = await lock();
+    expect(result.findings[0].finding).toBe(PRELOCK_FINDING.CALCULATION_OCCURRENCE_MISMATCH);
   });
 
   it('more than one Working Draft is ambiguous, so nothing is frozen', async () => {

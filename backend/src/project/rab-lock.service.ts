@@ -128,23 +128,54 @@ export class RabLockService {
       wbsCode: string;
       name: string;
       asOf: Date | null;
+      /** The row own calculation occurrence — the ONLY basis it may be revalidated against. */
+      calculationOccurrenceId: string | null;
+      ahspVersionId: string | null;
     },
   ): Promise<PrelockLineFinding[]> {
     const where = { boqItemId: line.boqItemId, wbsCode: line.wbsCode, name: line.name };
     if (line.asOf === null) return [];
 
+    // EXACT BINDING. This line is revalidated against ITS OWN occurrence,
+    // fetched by the pointer the row itself carries — never "the project's
+    // latest occurrence". A RAB with several priced rows has several
+    // occurrences, and picking the newest would check row A's price basis
+    // against row B's AHSP and date: a comparison that is wrong in both
+    // directions, and quietly so, because it still produces a confident
+    // verdict. Every mismatch below therefore fails closed rather than
+    // falling back to some other occurrence.
+    if (line.calculationOccurrenceId === null) {
+      return [{ ...where, finding: PRELOCK_FINDING.CALCULATION_OCCURRENCE_MISMATCH }];
+    }
+
     const occurrence = await tx.projectAhspOccurrence.findFirst({
-      where: { projectId: line.projectId, workspaceId: line.workspaceId },
+      where: {
+        id: line.calculationOccurrenceId,
+        // Tenancy asserted in the query, not after it — a foreign occurrence
+        // must never be read at all, let alone compared against.
+        projectId: line.projectId,
+        workspaceId: line.workspaceId,
+      },
       include: {
         ahspVersion: { include: { resources: { orderBy: { id: 'asc' } } } },
         resourceResolutions: { orderBy: { id: 'asc' } },
       },
-      orderBy: { createdAt: 'desc' },
     });
-    // No occurrence to compare against is not this gate's finding to raise —
-    // the snapshot re-proof above already refuses a line whose provenance is
-    // missing, and duplicating that refusal here would report one defect twice.
-    if (!occurrence || occurrence.ahspVersion === null) return [];
+    if (!occurrence || occurrence.ahspVersion === null) {
+      return [{ ...where, finding: PRELOCK_FINDING.CALCULATION_OCCURRENCE_MISMATCH }];
+    }
+
+    // The occurrence must describe THIS line: same AHSP version, same pricing
+    // date. If either disagrees, the row's provenance and the occurrence have
+    // drifted apart and there is no honest basis for a comparison.
+    const sameVersion =
+      line.ahspVersionId !== null && occurrence.ahspVersionId === line.ahspVersionId;
+    const occurrenceAsOf = occurrence.businessPricingAsOfDate;
+    const sameAsOf =
+      occurrenceAsOf instanceof Date && occurrenceAsOf.getTime() === line.asOf.getTime();
+    if (!sameVersion || !sameAsOf) {
+      return [{ ...where, finding: PRELOCK_FINDING.CALCULATION_OCCURRENCE_MISMATCH }];
+    }
 
     const current: ResolutionCreate[] = await this.resolution.resolveVersionResources(tx, {
       workspaceId: line.workspaceId,
@@ -278,6 +309,7 @@ export class RabLockService {
           lineTotal: true,
           ahspVersionId: true,
           calculationAsOfDate: true,
+          calculationOccurrenceId: true,
         },
         orderBy: { sortOrder: 'asc' },
       });
@@ -405,6 +437,8 @@ export class RabLockService {
           wbsCode: item.wbsCode,
           name: item.name,
           asOf: item.calculationAsOfDate,
+          calculationOccurrenceId: item.calculationOccurrenceId,
+          ahspVersionId: item.ahspVersionId,
         });
         if (driftFindings.length > 0) {
           findings.push(...driftFindings);
