@@ -1492,9 +1492,23 @@ export function RabWorkspacePage() {
         <button onClick={() => openPlaceholder('Print')} title="Print - belum tersambung" aria-label="Print - belum tersambung" data-route="/?ruang=print-rab">
           <Printer size={17} /> Print
         </button>
-        <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId || !canEditDraft}>
-          <Save size={17} /> {isSaving ? 'Menyimpan...' : 'Simpan Draft'}
-        </button>
+        {/*
+          A frozen RAB has nothing to save, so the command is not offered. It
+          used to carry aria-disabled alone: focusable, clickable, still saying
+          "Simpan Draft", and refused only once handleSaveDraft ran. Leaving it
+          visible would also have the locked screen speaking of drafts again.
+          Saving is genuinely outside what a locked RAB permits, so the control
+          is absent rather than dressed up as disabled.
+
+          While the draft is editable this is exactly the control it always
+          was — same handler, same aria-disabled conditions for the states
+          that are momentary rather than lifecycle.
+        */}
+        {canEditDraft ? (
+          <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId}>
+            <Save size={17} /> {isSaving ? 'Menyimpan...' : 'Simpan Draft'}
+          </button>
+        ) : null}
         {/*
           RM-03D1 — the lock door is live. It is offered only while the draft
           is still editable and its pricing is complete: locking an incomplete
@@ -1730,9 +1744,18 @@ export function RabWorkspacePage() {
                                 {row.ahspCode}
                               </button>
                             ) : (
-                              <button className="simprok-rab-ahsp-pick" onClick={() => activateRow(row.id)} title="Pilih AHSP" aria-label="Pilih AHSP" data-route={`/?ruang=pilih-ahsp-${row.id}`}>
-                                Pilih AHSP
-                              </button>
+                              canEditDraft ? (
+                                <button className="simprok-rab-ahsp-pick" onClick={() => activateRow(row.id)} title="Pilih AHSP" aria-label="Pilih AHSP" data-route={`/?ruang=pilih-ahsp-${row.id}`}>
+                                  Pilih AHSP
+                                </button>
+                              ) : (
+                                /* Choosing is a write. On a frozen row there is
+                                   also nothing behind it to read — a row with no
+                                   AHSP has no analysis to trace — so the invitation
+                                   becomes the plain fact instead. The Detail control
+                                   in the Aksi column still opens this row. */
+                                <span className="simprok-rab-ahsp-badge" aria-label="Tanpa AHSP">Tanpa AHSP</span>
+                              )
                             )}
                             {row.manualAhsp ? <span className="simprok-rab-ahsp-badge simprok-rab-ahsp-badge--manual">MANUAL</span> : null}
                             <span

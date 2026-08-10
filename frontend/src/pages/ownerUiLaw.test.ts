@@ -316,3 +316,95 @@ test("VI. read-only traces stay reachable while frozen", () => {
   const lockTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-toolbar__lock"')));
   assert.match(lockTag, /disabled=\{rabLocked \? false :/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FROZEN AFFORDANCES — a control must not fire and then be refused
+//
+// Two write controls still advertised themselves while the RAB was frozen.
+// Save carried aria-disabled but no native gate, so it stayed focusable,
+// clickable and still said "Simpan Draft" until handleSaveDraft refused it.
+// "Pilih AHSP" invited a choice on a row that cannot be changed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The JSX region beginning at `anchor`, `length` characters wide. */
+const regionAt = (anchor: string, length: number) => {
+  const hit = workspace.indexOf(anchor);
+  assert.notEqual(hit, -1, `region not found: ${anchor}`);
+  return workspace.slice(Math.max(0, hit - length), hit + length);
+};
+
+test("AFF-A. Save is non-actionable at render level while LOCKED", () => {
+  // Present only when the draft can actually be saved — there is no frozen
+  // variant of this control to focus, click, or read as an offer.
+  assert.match(workspace, /\{canEditDraft \? \(\s*<button className="simprok-rab-toolbar__save"/);
+
+  // The old shape — a permanently rendered button leaning on aria-disabled —
+  // must not come back.
+  const saveTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-toolbar__save"')));
+  assert.doesNotMatch(saveTag, /aria-disabled=\{[^}]*!canEditDraft/);
+});
+
+test("AFF-B. Save keeps its exact behaviour while the draft is editable", () => {
+  const saveTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-toolbar__save"')));
+
+  assert.match(saveTag, /onClick=\{handleSaveDraft\}/);
+  assert.match(saveTag, /aria-disabled=\{hasNegativeValue \|\| isSaving \|\| !projectId\}/);
+  assert.match(saveTag, /data-route="\/\?ruang=simpan-draft"/);
+  // The command still refuses independently, so the screen is not the only guard.
+  assert.match(functionBody(workspace, "handleSaveDraft"), /if \(!canEditDraft\) \{/);
+});
+
+test("AFF-C. no reachable control claims Simpan Draft while LOCKED", () => {
+  // Exactly one control is labelled Simpan Draft, and it lives inside the
+  // editable-only branch.
+  const labels = workspace.match(/aria-label="Simpan Draft"/g) ?? [];
+  assert.equal(labels.length, 1);
+
+  const region = regionAt('className="simprok-rab-toolbar__save"', 700);
+  assert.match(region, /\{canEditDraft \? \(/);
+  assert.match(region, /aria-label="Simpan Draft"/);
+
+  // The phrase also appears in status messages that instruct a user to save.
+  // Each must be unreachable while frozen: either gated on the lifecycle at
+  // load, or set only after a row mutation the freeze already refuses.
+  const guardedMutators = [functionBody(workspace, "addChild"), functionBody(workspace, "removeRow")];
+  for (const line of workspace.split("\n")) {
+    if (!line.includes("setStatusMessage") || !line.includes("Simpan Draft")) continue;
+    const gatedOnLoad = /frozen \?/.test(line);
+    const insideGuardedMutator = guardedMutators.some((body) => body.includes(line.trim()));
+    assert.equal(
+      gatedOnLoad || insideGuardedMutator,
+      true,
+      `a Simpan Draft instruction is reachable while frozen: ${line.trim()}`,
+    );
+  }
+});
+
+test("AFF-D. Pilih AHSP presents no write affordance while LOCKED", () => {
+  // Editable: a real button. Frozen: a plain fact, not a control.
+  assert.match(workspace, /canEditDraft \? \(\s*<button className="simprok-rab-ahsp-pick"/);
+
+  const pick = workspace.indexOf('className="simprok-rab-ahsp-pick"');
+  assert.notEqual(pick, -1);
+  const frozenBranchStart = workspace.indexOf(") : (", pick);
+  assert.notEqual(frozenBranchStart, -1, "the frozen branch is missing");
+  const frozenBranch = workspace.slice(frozenBranchStart, workspace.indexOf("</div>", frozenBranchStart));
+
+  assert.doesNotMatch(frozenBranch, /<button/, "the frozen branch must not render a control");
+  assert.doesNotMatch(frozenBranch, /onClick/);
+  assert.doesNotMatch(frozenBranch, /Pilih AHSP/, "the frozen branch must not invite a choice");
+  assert.match(frozenBranch, /<span className="simprok-rab-ahsp-badge"/);
+});
+
+test("AFF-E. reading an existing AHSP stays reachable while LOCKED", () => {
+  // The trace is read-only, so freezing writes must not close it.
+  const codeTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-ahsp-code"')));
+  assert.match(codeTag, /onClick=\{\(\) => activateRow\(row\.id\)\}/);
+  assert.doesNotMatch(codeTag, /disabled/);
+  assert.doesNotMatch(codeTag, /canEditDraft/);
+
+  // And so does the Aksi-column Detail control, which opens any item row.
+  for (const tag of tagsContaining('aria-label="Buka Detail Analisa AHSP"')) {
+    assert.doesNotMatch(tag, /disabled/);
+  }
+});
