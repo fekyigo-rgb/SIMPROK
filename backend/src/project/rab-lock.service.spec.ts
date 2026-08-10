@@ -173,7 +173,11 @@ describe('RabLockService', () => {
   });
 
   // ── T8 ─────────────────────────────────────────────────────────────────────
-  it('T8: a stored/recomputed money mismatch refuses the lock and leaves the RAB DRAFT', async () => {
+  // UNIT PROOF, not a Basic Price drift proof. This mocks the re-proof
+  // authority to return MISMATCH; it says nothing about whether a NEWLY
+  // eligible Basic Price would be detected. That question is answered only by
+  // a real-database test against the real Basic Price authority.
+  it('T8 (unit): a stored/recomputed money MISMATCH refuses the lock and leaves the RAB DRAFT', async () => {
     arrange();
     persisted.getPersistedCalculation.mockResolvedValue({
       ...verifiedProof(),
@@ -263,17 +267,65 @@ describe('RabLockService', () => {
     expect(result.reason).toBe(RAB_LOCK_REASON.RAB_HAS_NO_WORK_ITEM);
   });
 
-  it('a MANUAL_CLIENT line is frozen as given — there is no kernel to re-run for a human price', async () => {
+  // ── HARDENING C ────────────────────────────────────────────────────────────
+  it('C: a MANUAL_CLIENT line cannot be frozen by LOCK v1 — a hand-entered price needs a confirmation law that does not exist yet', async () => {
     arrange({ workItems: [pricedWorkItem({ priceOrigin: 'MANUAL_CLIENT' })] });
 
     const result: any = await lock();
 
-    expect(result.status).toBe(RAB_STATUS.LOCKED);
+    expect(result.status).toBe('REFUSED');
+    expect(result.reason).toBe(RAB_LOCK_REASON.PRELOCK_REVALIDATION_REQUIRED);
+    expect(result.findings[0].finding).toBe(PRELOCK_FINDING.MANUAL_PRICE_REQUIRES_CONFIRMATION);
+    // the RAB is left exactly as it was
+    expect(tx.rabDocument.updateMany).not.toHaveBeenCalled();
+    // and manual pricing is still not something the kernel is asked to re-prove
     expect(persisted.getPersistedCalculation).not.toHaveBeenCalled();
   });
 
+  // ── HARDENING D ────────────────────────────────────────────────────────────
+  it('D: a LOCKED row with an incomplete lock fact fails closed — the actor and timestamp are never invented', async () => {
+    for (const corrupt of [
+      { lockedAt: null, lockedByAccountId: 'a', lockedFromStatus: 'DRAFT' },
+      { lockedAt: new Date(), lockedByAccountId: null, lockedFromStatus: 'DRAFT' },
+      { lockedAt: new Date(), lockedByAccountId: 'a', lockedFromStatus: null },
+      // a freeze claiming an origin v1 never performs
+      { lockedAt: new Date(), lockedByAccountId: 'a', lockedFromStatus: 'APPROVED' },
+    ]) {
+      arrange({ rab: draftRab({ status: RAB_STATUS.LOCKED, ...corrupt }) });
+      const result: any = await lock();
+      expect(result.status).toBe('REFUSED');
+      expect(result.reason).toBe(RAB_LOCK_REASON.RAB_LOCK_PROVENANCE_CORRUPT);
+    }
+  });
+
+  it('D: the settled-race path also proves the winner before describing it', async () => {
+    arrange({
+      updateCount: 0,
+      settledRab: draftRab({
+        status: RAB_STATUS.LOCKED,
+        lockedAt: null, // winner's row is not a whole lock fact
+        lockedByAccountId: null,
+        lockedFromStatus: null,
+      }),
+    });
+
+    const result: any = await lock();
+
+    expect(result.status).toBe('REFUSED');
+    expect(result.reason).toBe(RAB_LOCK_REASON.RAB_LOCK_PROVENANCE_CORRUPT);
+  });
+
+  it('D: a settled row that is not LOCKED at all is never reported as a successful freeze', async () => {
+    arrange({ updateCount: 0, settledRab: draftRab({ status: RAB_STATUS.DRAFT }) });
+    const result: any = await lock();
+    expect(result.status).toBe('REFUSED');
+  });
+
   // ── T11 / T12 ──────────────────────────────────────────────────────────────
-  it('T11: when a concurrent caller already transitioned the row, the loser reports the settled truth instead of freezing twice', async () => {
+  // UNIT PROOF of the compare-and-set branch, NOT evidence of real concurrency.
+  // updateCount is mocked to 0; no two transactions ever contend here. Real
+  // concurrency has to be proven against a real PostgreSQL row lock.
+  it('T11 (unit): when compare-and-set matches zero rows, the loser reports the settled truth instead of freezing twice', async () => {
     // updateMany matches zero rows because the winner already moved it out of DRAFT
     arrange({
       updateCount: 0,

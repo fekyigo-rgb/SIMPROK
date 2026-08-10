@@ -51,11 +51,17 @@ ALTER TABLE "rab_documents"
     )
   );
 
--- A frozen RAB must carry its lock provenance.
+-- A frozen RAB must carry its lock provenance, and must have come from DRAFT.
 --
--- Deliberately one-directional: LOCKED requires the lock fact, but the lock
--- fact is NOT erased when a RAB later becomes APPROVED — who froze it stays
--- true after approval. DRAFT rows are untouched by this rule.
+-- v1 performs exactly one transition, DRAFT -> LOCKED, so the database is not
+-- allowed to represent a LOCKED row that claims to have come from anywhere
+-- else. Pinning the origin here means a wrong transition cannot be written at
+-- all, rather than being caught only by whichever code path happens to look.
+--
+-- Deliberately one-directional in two ways. It constrains LOCKED only, so
+-- legacy DRAFT and future APPROVED rows are untouched and no backfill is
+-- needed; and the lock fact is NOT erased when a RAB later becomes APPROVED —
+-- who froze it stays true after approval.
 ALTER TABLE "rab_documents"
   ADD CONSTRAINT "rab_documents_locked_requires_lock_provenance_check"
   CHECK (
@@ -63,6 +69,6 @@ ALTER TABLE "rab_documents"
     OR (
       "lockedAt" IS NOT NULL
       AND "lockedByAccountId" IS NOT NULL
-      AND "lockedFromStatus" IS NOT NULL
+      AND "lockedFromStatus" = 'DRAFT'
     )
   );

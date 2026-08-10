@@ -16,6 +16,13 @@ export const RAB_LOCK_REASON = {
   RAB_ALREADY_APPROVED: 'RAB_ALREADY_APPROVED',
   /** Some other status this slice does not know how to freeze. */
   RAB_NOT_IN_LOCKABLE_STATE: 'RAB_NOT_IN_LOCKABLE_STATE',
+  /**
+   * A row says LOCKED but does not carry a whole lock fact. SIMPROK refuses to
+   * describe it rather than inventing who froze it, when, or from what — an
+   * unprovable freeze is an integrity failure, never something to paper over
+   * with the current actor and `now()`.
+   */
+  RAB_LOCK_PROVENANCE_CORRUPT: 'RAB_LOCK_PROVENANCE_CORRUPT',
   /** Nothing to freeze: a RAB with no work item is not a RAB anyone can be held to. */
   RAB_HAS_NO_WORK_ITEM: 'RAB_HAS_NO_WORK_ITEM',
   /**
@@ -46,6 +53,27 @@ export const PRELOCK_FINDING = {
   AHSP_VERSION_NO_LONGER_ELIGIBLE: 'AHSP_VERSION_NO_LONGER_ELIGIBLE',
   /** The draft recap itself is not complete, so the total is not authoritative. */
   RAB_PRICING_INCOMPLETE: 'RAB_PRICING_INCOMPLETE',
+  /**
+   * LOCK v1 refuses to freeze a hand-entered price. A manual price has no
+   * kernel provenance to re-prove and no explicit human-confirmation contract
+   * yet, so freezing it would put a number into a Grade-A frozen RAB that
+   * SIMPROK cannot stand behind. This does not remove manual pricing from the
+   * product — it says LOCK v1 is not the act that blesses one.
+   */
+  MANUAL_PRICE_REQUIRES_CONFIRMATION: 'MANUAL_PRICE_REQUIRES_CONFIRMATION',
+  /**
+   * The frozen line still reproduces itself, but the Basic Price authority,
+   * asked again for the line's OWN calculation as-of date, would now select a
+   * different eligible price. Snapshot integrity and current relevance are two
+   * different questions; this is the second one failing.
+   */
+  BASIC_PRICE_SELECTION_CHANGED: 'BASIC_PRICE_SELECTION_CHANGED',
+  /** The frozen Basic Price is no longer an eligible candidate at all. */
+  BASIC_PRICE_NO_LONGER_ELIGIBLE: 'BASIC_PRICE_NO_LONGER_ELIGIBLE',
+  /** More than one candidate now qualifies. SIMPROK does not choose for the Owner. */
+  BASIC_PRICE_AMBIGUOUS: 'BASIC_PRICE_AMBIGUOUS',
+  /** No eligible price remains for this resource at that date. */
+  BASIC_PRICE_MISSING: 'BASIC_PRICE_MISSING',
 } as const;
 
 export type PrelockFinding = (typeof PRELOCK_FINDING)[keyof typeof PRELOCK_FINDING];

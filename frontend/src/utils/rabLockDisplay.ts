@@ -72,6 +72,14 @@ const FINDING_COPY: Record<string, string> = {
   RESOURCE_COST_NOT_REPRODUCED: 'Salah satu komponen biaya tidak dapat dihitung ulang.',
   AHSP_VERSION_NO_LONGER_ELIGIBLE: 'Dasar analisa harga (AHSP) yang dipakai sudah diganti.',
   RAB_PRICING_INCOMPLETE: 'Masih ada item pekerjaan yang belum mempunyai harga.',
+  MANUAL_PRICE_REQUIRES_CONFIRMATION:
+    'Harga item ini diisi manual. SIMPROK belum dapat mengunci harga manual.',
+  BASIC_PRICE_SELECTION_CHANGED:
+    'Ada Harga Dasar lain yang kini lebih tepat untuk tanggal perhitungan item ini.',
+  BASIC_PRICE_NO_LONGER_ELIGIBLE: 'Harga Dasar yang dipakai sudah tidak berlaku.',
+  BASIC_PRICE_AMBIGUOUS:
+    'Ada lebih dari satu Harga Dasar yang memenuhi syarat. SIMPROK tidak memilih untuk Anda.',
+  BASIC_PRICE_MISSING: 'Tidak ada Harga Dasar yang memenuhi syarat untuk item ini.',
 };
 
 export interface PrelockFindingWire {

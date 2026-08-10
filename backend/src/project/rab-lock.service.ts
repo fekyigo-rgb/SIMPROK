@@ -25,6 +25,53 @@ export interface LockRabDraftInput {
   actorAccountId: string;
 }
 
+/** The three columns that together are one lock fact — all or nothing. */
+interface LockFactColumns {
+  lockedAt: Date | null;
+  lockedByAccountId: string | null;
+  lockedFromStatus: string | null;
+}
+
+/**
+ * A lock fact is whole only if it can answer all three questions AND the
+ * transition it claims is one v1 can actually perform. LOCK v1 only ever
+ * transitions from DRAFT, so a row claiming any other origin is not a freeze
+ * this code produced and is not one it will vouch for.
+ */
+const isWholeLockFact = (row: LockFactColumns): boolean =>
+  row.lockedAt !== null &&
+  row.lockedByAccountId !== null &&
+  row.lockedFromStatus === RAB_STATUS.DRAFT;
+
+/**
+ * Describe an already-frozen RAB from the row itself. Callers must have proved
+ * `isWholeLockFact` first; the non-null assertions below are safe precisely
+ * because nothing here is allowed to substitute a value of its own.
+ */
+const describeLockedRab = (
+  row: LockFactColumns & {
+    id: string;
+    totalBaseCost: Prisma.Decimal | null;
+    totalFinalCost: Prisma.Decimal | null;
+  },
+  projectId: string,
+  workItemCount: number,
+): RabLockResult => ({
+  status: RAB_STATUS.LOCKED,
+  changed: false,
+  rabDocumentId: row.id,
+  projectId,
+  lockedAt: row.lockedAt!.toISOString(),
+  lockedByAccountId: row.lockedByAccountId!,
+  lockedFromStatus: row.lockedFromStatus!,
+  frozen: {
+    workItemCount,
+    totalBaseCost: row.totalBaseCost === null ? null : toDecimalString2(row.totalBaseCost),
+    totalFinalCost: row.totalFinalCost === null ? null : toDecimalString2(row.totalFinalCost),
+  },
+  lockPolicy: RAB_LOCK_POLICY,
+});
+
 /**
  * RM-03D1 — DRAFT → LOCKED, on the SAME RabDocument.
  *
@@ -121,21 +168,18 @@ export class RabLockService {
       //    audit fact. Re-running a completed step must never look like a
       //    failure, and must never rewrite who froze it.
       if (rab.status === RAB_STATUS.LOCKED) {
-        return {
-          status: RAB_STATUS.LOCKED,
-          changed: false,
-          rabDocumentId: rab.id,
-          projectId,
-          lockedAt: (rab.lockedAt ?? rab.updatedAt).toISOString(),
-          lockedByAccountId: rab.lockedByAccountId ?? actorAccountId,
-          lockedFromStatus: rab.lockedFromStatus ?? RAB_STATUS.DRAFT,
-          frozen: {
-            workItemCount: workItems.length,
-            totalBaseCost: rab.totalBaseCost === null ? null : toDecimalString2(rab.totalBaseCost),
-            totalFinalCost: rab.totalFinalCost === null ? null : toDecimalString2(rab.totalFinalCost),
-          },
-          lockPolicy: RAB_LOCK_POLICY,
-        };
+        // NEVER FABRICATE A FREEZE. There is deliberately no
+        // `lockedAt ?? updatedAt` or `lockedBy ?? currentActor` here: a LOCKED
+        // row that cannot say who froze it, when, and from what is an
+        // integrity failure, and answering with the current caller and the
+        // row's last touch would manufacture a provenance nobody performed.
+        // The database CHECK makes this state unreachable; this refuses it
+        // anyway, because a constraint proves what the database will accept,
+        // not what this process actually read back.
+        if (!isWholeLockFact(rab)) {
+          return refuse(RAB_LOCK_REASON.RAB_LOCK_PROVENANCE_CORRUPT);
+        }
+        return describeLockedRab(rab, projectId, workItems.length);
       }
 
       // Approval is downstream of lock and is never walked back into it.
@@ -160,9 +204,20 @@ export class RabLockService {
           continue;
         }
 
-        // A manual price has no kernel to re-run; it is a human's number and
-        // is frozen as given. Only server-priced lines are re-proved.
-        if (item.priceOrigin !== 'SERVER_COST_KERNEL') continue;
+        // LOCK v1 will not freeze a hand-entered price. There is no kernel
+        // provenance to re-prove and no explicit human-confirmation contract
+        // yet, so "freeze it as given" would put a number SIMPROK cannot
+        // stand behind into a Grade-A frozen RAB. Manual pricing keeps
+        // working everywhere else; it just cannot be blessed by this act.
+        if (item.priceOrigin !== 'SERVER_COST_KERNEL') {
+          findings.push({
+            ...where,
+            finding: PRELOCK_FINDING.MANUAL_PRICE_REQUIRES_CONFIRMATION,
+            storedUnitPrice: item.unitPrice === null ? null : toDecimalString2(item.unitPrice),
+            storedLineTotal: item.lineTotal === null ? null : toDecimalString2(item.lineTotal),
+          });
+          continue;
+        }
 
         // 4a. Is the money still exactly what its own frozen provenance says?
         //     THE existing re-proof authority, run on this transaction.
@@ -266,24 +321,15 @@ export class RabLockService {
       });
 
       if (transitioned.count === 0) {
-        // Someone else won the race inside the same lock generation. Report
-        // the settled truth rather than inventing a second freeze.
+        // Someone else won the race. Report the SETTLED truth — and prove it
+        // is a whole, valid freeze first. The loser never invents the winner's
+        // identity or timestamp, and never assumes the row it lost to is
+        // lawfully LOCKED just because its own update matched nothing.
         const settled = await tx.rabDocument.findUniqueOrThrow({ where: { id: rab.id } });
-        return {
-          status: RAB_STATUS.LOCKED,
-          changed: false,
-          rabDocumentId: settled.id,
-          projectId,
-          lockedAt: (settled.lockedAt ?? lockedAt).toISOString(),
-          lockedByAccountId: settled.lockedByAccountId ?? actorAccountId,
-          lockedFromStatus: settled.lockedFromStatus ?? RAB_STATUS.DRAFT,
-          frozen: {
-            workItemCount: workItems.length,
-            totalBaseCost: settled.totalBaseCost === null ? null : toDecimalString2(settled.totalBaseCost),
-            totalFinalCost: settled.totalFinalCost === null ? null : toDecimalString2(settled.totalFinalCost),
-          },
-          lockPolicy: RAB_LOCK_POLICY,
-        };
+        if (settled.status !== RAB_STATUS.LOCKED || !isWholeLockFact(settled)) {
+          return refuse(RAB_LOCK_REASON.RAB_LOCK_PROVENANCE_CORRUPT);
+        }
+        return describeLockedRab(settled, projectId, workItems.length);
       }
 
       return {
