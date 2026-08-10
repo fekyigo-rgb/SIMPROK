@@ -932,6 +932,9 @@ export function RabWorkspacePage() {
   };
 
   const handlePickAhsp = () => {
+    // The control is disabled while frozen; the command refuses as well, so a
+    // frozen RAB is protected by the code and not only by the screen.
+    if (!canEditDraft) return;
     if (!projectId || !selectedItem || !selectedAhspVersionId || !selectedRegionId) {
       setStatusMessage('Pilih AHSP Version dan Region terlebih dahulu.');
       return;
@@ -1106,6 +1109,19 @@ export function RabWorkspacePage() {
    * Returns whether the edit was allowed, so callers stay silent rather than
    * reporting work that did not happen.
    */
+  /**
+   * Volume, manual unit price, margin and PPN are not row mutations, so they
+   * never passed through mutateRows and a frozen RAB could still have its
+   * displayed truth changed underneath the lock. They go through here now, for
+   * the same reason and with the same contract.
+   */
+  const applyLocalEdit = (apply: () => void): boolean => {
+    if (!canEditDraft) return false;
+    markDraftMutated();
+    apply();
+    return true;
+  };
+
   const mutateRows = (updater: (current: RabRow[]) => RabRow[]): boolean => {
     if (!canEditDraft) return false;
     markDraftMutated();
@@ -1626,10 +1642,10 @@ export function RabWorkspacePage() {
                         </p>
                         {rabLocked ? null : <p>Tambahkan Sub Judul atau Item pekerjaan untuk mulai menyusun RAB.</p>}
                         <div className="simprok-rab-empty-state__actions">
-                          <button className="simprok-rab-add-sub" onClick={() => addChild(null, 'folder')} aria-label="Tambah Sub Judul ke draft">
+                          <button className="simprok-rab-add-sub" onClick={() => addChild(null, 'folder')} disabled={!canEditDraft} aria-label="Tambah Sub Judul ke draft">
                             + Sub Judul
                           </button>
-                          <button className="simprok-rab-add-item" onClick={() => addChild(null, 'item')} aria-label="Tambah Item pekerjaan ke draft">
+                          <button className="simprok-rab-add-item" onClick={() => addChild(null, 'item')} disabled={!canEditDraft} aria-label="Tambah Item pekerjaan ke draft">
                             + Item
                           </button>
                         </div>
@@ -1659,16 +1675,16 @@ export function RabWorkspacePage() {
                       <tr key={row.id} className="simprok-rab-row simprok-rab-row--note">
                         <td>
                           <div className="simprok-rab-row-move">
-                            <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
+                            <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'up'))} disabled={!canEditDraft} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
                               <ArrowUp size={14} />
                             </button>
-                            <button onClick={() => mutateRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
+                            <button onClick={() => mutateRows((current) => indentRow(current, row.id))} disabled={!canEditDraft || !canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
                               <ArrowRight size={14} />
                             </button>
-                            <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
+                            <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'down'))} disabled={!canEditDraft} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
                               <ArrowDown size={14} />
                             </button>
-                            <button onClick={() => mutateRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
+                            <button onClick={() => mutateRows((current) => outdentRow(current, row.id))} disabled={!canEditDraft || !canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
                               <ArrowLeft size={14} />
                             </button>
                           </div>
@@ -1676,10 +1692,10 @@ export function RabWorkspacePage() {
                         <td></td>
                         <td></td>
                         <td colSpan={5} style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
-                          <input className="simprok-rab-description-input" value={row.name} onChange={(event) => updateRowName(row.id, event.target.value)} aria-label="Uraian catatan" />
+                          <input className="simprok-rab-description-input" value={row.name} readOnly={!canEditDraft} aria-readonly={!canEditDraft} onChange={(event) => updateRowName(row.id, event.target.value)} aria-label="Uraian catatan" />
                         </td>
                         <td>
-                          <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} title="Hapus catatan" aria-label="Hapus catatan">
+                          <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} disabled={!canEditDraft} title="Hapus catatan" aria-label="Hapus catatan">
                             <Trash2 size={15} />
                           </button>
                         </td>
@@ -1691,16 +1707,16 @@ export function RabWorkspacePage() {
                     <tr key={row.id} className={['simprok-rab-row', row.type === 'folder' ? 'simprok-rab-row--folder' : '', selected ? 'simprok-rab-row--selected' : '', hasNegativeRowValue ? 'simprok-rab-row--invalid' : ''].filter(Boolean).join(' ')} onClick={(event) => handleRowClick(row.id, event)}>
                       <td>
                         <div className="simprok-rab-row-move">
-                          <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'up'))} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
+                          <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'up'))} disabled={!canEditDraft} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
                             <ArrowUp size={14} />
                           </button>
-                          <button onClick={() => mutateRows((current) => indentRow(current, row.id))} disabled={!canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
+                          <button onClick={() => mutateRows((current) => indentRow(current, row.id))} disabled={!canEditDraft || !canIndent} title="Jadikan sub-bagian" aria-label="Jadikan sub-bagian">
                             <ArrowRight size={14} />
                           </button>
-                          <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'down'))} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
+                          <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'down'))} disabled={!canEditDraft} title="Pindah baris ke bawah" aria-label="Pindah baris ke bawah">
                             <ArrowDown size={14} />
                           </button>
-                          <button onClick={() => mutateRows((current) => outdentRow(current, row.id))} disabled={!canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
+                          <button onClick={() => mutateRows((current) => outdentRow(current, row.id))} disabled={!canEditDraft || !canOutdent} title="Naikkan tingkat" aria-label="Naikkan tingkat">
                             <ArrowLeft size={14} />
                           </button>
                         </div>
@@ -1749,7 +1765,7 @@ export function RabWorkspacePage() {
                       <td style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
                         <span className="simprok-rab-row__name">
                           {row.type === 'folder' ? <FolderOpen size={16} /> : null}
-                          <input className="simprok-rab-description-input" value={row.name} onChange={(event) => updateRowName(row.id, event.target.value)} aria-label={`Uraian ${row.type === 'folder' ? 'sub judul' : 'item pekerjaan'}`} />
+                          <input className="simprok-rab-description-input" value={row.name} readOnly={!canEditDraft} aria-readonly={!canEditDraft} onChange={(event) => updateRowName(row.id, event.target.value)} aria-label={`Uraian ${row.type === 'folder' ? 'sub judul' : 'item pekerjaan'}`} />
                         </span>
                       </td>
                       <td>
@@ -1759,19 +1775,20 @@ export function RabWorkspacePage() {
                             type="number"
                             step="0.01"
                             value={volumes[row.id] || 0}
+                            readOnly={!canEditDraft}
+                            aria-readonly={!canEditDraft}
                             onChange={(event) => {
-                              markDraftMutated();
-                              setVolumes((current) => ({
-                                ...current,
-                                [row.id]: Number(event.target.value),
-                              }));
-                              setCostRowStatuses((current) => invalidateRow(current, row.id));
+                              const volume = Number(event.target.value);
+                              applyLocalEdit(() => {
+                                setVolumes((current) => ({ ...current, [row.id]: volume }));
+                                setCostRowStatuses((current) => invalidateRow(current, row.id));
+                              });
                             }}
                             aria-label={`Volume ${row.name}`}
                           />
                         ) : null}
                       </td>
-                      <td>{row.type === 'item' ? <input className="simprok-rab-description-input" value={row.unit} onChange={(event) => updateRowUnit(row.id, event.target.value)} aria-label={`Satuan ${row.name}`} /> : null}</td>
+                      <td>{row.type === 'item' ? <input className="simprok-rab-description-input" value={row.unit} readOnly={!canEditDraft} aria-readonly={!canEditDraft} onChange={(event) => updateRowUnit(row.id, event.target.value)} aria-label={`Satuan ${row.name}`} /> : null}</td>
                       <td className="simprok-rab-unit-price-column">
                         {row.type === 'item' ? (
                           <span className="simprok-rab-price-cell">
@@ -1804,12 +1821,13 @@ export function RabWorkspacePage() {
                                   type="text"
                                   inputMode="numeric"
                                   value={formatDraftNumber(unitPrices[row.id] ?? row.unitPrice)}
+                                  readOnly={!canEditDraft}
+                                  aria-readonly={!canEditDraft}
                                   onChange={(event) => {
-                                    markDraftMutated();
-                                    setUnitPrices((current) => ({
-                                      ...current,
-                                      [row.id]: parseDraftNumber(event.target.value),
-                                    }));
+                                    const unitPrice = parseDraftNumber(event.target.value);
+                                    applyLocalEdit(() => {
+                                      setUnitPrices((current) => ({ ...current, [row.id]: unitPrice }));
+                                    });
                                   }}
                                   aria-label={`Harga satuan ${row.name}`}
                                 />
@@ -1835,10 +1853,10 @@ export function RabWorkspacePage() {
                         <div className="simprok-rab-row-actions">
                           {row.type === 'folder' ? (
                             <>
-                              <button className="simprok-rab-add-sub" onClick={() => addChild(row.id, 'folder')} title="Tambah Sub Judul" aria-label="Tambah Sub Judul">
+                              <button className="simprok-rab-add-sub" onClick={() => addChild(row.id, 'folder')} disabled={!canEditDraft} title="Tambah Sub Judul" aria-label="Tambah Sub Judul">
                                 + Sub Judul
                               </button>
-                              <button className="simprok-rab-add-item" onClick={() => addChild(row.id, 'item')} title="Tambah Item" aria-label="Tambah Item">
+                              <button className="simprok-rab-add-item" onClick={() => addChild(row.id, 'item')} disabled={!canEditDraft} title="Tambah Item" aria-label="Tambah Item">
                                 + Item
                               </button>
                             </>
@@ -1847,7 +1865,7 @@ export function RabWorkspacePage() {
                               Detail
                             </button>
                           ) : null}
-                          <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} title="Hapus baris" aria-label="Hapus baris">
+                          <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} disabled={!canEditDraft} title="Hapus baris" aria-label="Hapus baris">
                             <Trash2 size={15} />
                           </button>
                         </div>
@@ -1879,7 +1897,7 @@ export function RabWorkspacePage() {
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Margin / Profit</span>
                   <span className="simprok-rab-recap__input-wrap">
-                    <input type="number" min="0" value={marginPercent} onChange={(event) => { markDraftMutated(); setMarginPercent(Number(event.target.value)); }} aria-label="Persentase margin" />
+                    <input type="number" min="0" value={marginPercent} readOnly={!canEditDraft} aria-readonly={!canEditDraft} onChange={(event) => { const margin = Number(event.target.value); applyLocalEdit(() => setMarginPercent(margin)); }} aria-label="Persentase margin" />
                     <span>%</span>
                   </span>
                   <strong className="simprok-rab-recap__value">{pricingComplete ? formatRupiah(margin) : '—'}</strong>
@@ -1887,7 +1905,7 @@ export function RabWorkspacePage() {
                 <div className="simprok-rab-recap__row">
                   <span className="simprok-rab-recap__label">Pajak / PPN</span>
                   <span className="simprok-rab-recap__input-wrap">
-                    <input type="number" min="0" value={ppnPercent} onChange={(event) => { markDraftMutated(); setPpnPercent(Number(event.target.value)); }} aria-label="Persentase PPN" />
+                    <input type="number" min="0" value={ppnPercent} readOnly={!canEditDraft} aria-readonly={!canEditDraft} onChange={(event) => { const ppn = Number(event.target.value); applyLocalEdit(() => setPpnPercent(ppn)); }} aria-label="Persentase PPN" />
                     <span>%</span>
                   </span>
                   <strong className="simprok-rab-recap__value">{pricingComplete ? formatRupiah(ppn) : '—'}</strong>
@@ -1957,7 +1975,9 @@ export function RabWorkspacePage() {
                 id="simprok-calculation-as-of-date"
                 type="date"
                 value={calculationAsOfDate}
-                onChange={(event) => handleCalculationAsOfDateChange(event.target.value)}
+                readOnly={!canEditDraft}
+                aria-readonly={!canEditDraft}
+                onChange={(event) => canEditDraft && handleCalculationAsOfDateChange(event.target.value)}
                 disabled={isPersistBusy}
                 aria-label="Tanggal perhitungan harga"
               />

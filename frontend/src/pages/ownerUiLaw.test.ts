@@ -185,3 +185,134 @@ test("the frozen workspace states its own truth", () => {
   assert.match(workspace, /RAB terkunci dimuat\. Mode baca\./);
   assert.match(workspace, /Tersimpan di server — dapat dibaca dan ditelusuri, tidak dapat diubah/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FROZEN MEANS READ-ONLY — every write path, not only the row mutations
+//
+// LOCKED is readable and traceable, but the RAB truth it displays cannot be
+// changed. Volume, manual unit price, margin and PPN never went through
+// mutateRows, so a frozen RAB could still have its displayed numbers moved
+// underneath the lock; and the destructive row controls were refused only
+// after the click, which is not the same as being non-actionable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Interactive controls that must be inert while the RAB is frozen. */
+const WRITE_CONTROLS = [
+  { name: 'delete row', anchor: 'aria-label="Hapus baris"' },
+  { name: 'delete note', anchor: 'aria-label="Hapus catatan"' },
+  { name: 'add sub judul (row)', anchor: 'aria-label="Tambah Sub Judul"' },
+  { name: 'add item (row)', anchor: 'aria-label="Tambah Item"' },
+  { name: 'add sub judul (empty state)', anchor: 'aria-label="Tambah Sub Judul ke draft"' },
+  { name: 'add item (empty state)', anchor: 'aria-label="Tambah Item pekerjaan ke draft"' },
+  { name: 'move up', anchor: 'aria-label="Pindah baris ke atas"' },
+  { name: 'move down', anchor: 'aria-label="Pindah baris ke bawah"' },
+  { name: 'indent', anchor: 'aria-label="Jadikan sub-bagian"' },
+  { name: 'outdent', anchor: 'aria-label="Naikkan tingkat"' },
+];
+
+/** Every opening tag in `workspace` that contains `anchor`. */
+const tagsContaining = (anchor: string) => {
+  const tags: string[] = [];
+  let from = 0;
+  for (;;) {
+    const hit = workspace.indexOf(anchor, from);
+    if (hit === -1) return tags;
+    tags.push(openingTagAt(workspace, workspace.lastIndexOf("<button", hit)));
+    from = hit + anchor.length;
+  }
+};
+
+test("I. structural row controls are disabled at the control while frozen", () => {
+  for (const control of WRITE_CONTROLS) {
+    const tags = tagsContaining(control.anchor);
+    assert.notEqual(tags.length, 0, `${control.name} not found`);
+
+    for (const tag of tags) {
+      assert.match(tag, /disabled=\{[^}]*!canEditDraft/, `${control.name} is not gated at the control`);
+    }
+  }
+});
+
+test("I2. delete is gated at render, not merely refused after the click", () => {
+  // The Owner's distinction: a control that fires and is rejected still looks
+  // and behaves like a live control.
+  for (const anchor of ['aria-label="Hapus baris"', 'aria-label="Hapus catatan"']) {
+    for (const tag of tagsContaining(anchor)) {
+      assert.match(tag, /disabled=\{!canEditDraft\}/);
+    }
+  }
+});
+
+test("II. delete stays available while the draft is editable", () => {
+  // The gate is exactly the lifecycle flag — never a permanent disable.
+  for (const anchor of ['aria-label="Hapus baris"', 'aria-label="Hapus catatan"']) {
+    for (const tag of tagsContaining(anchor)) {
+      assert.doesNotMatch(tag, /disabled=\{true\}/);
+      assert.doesNotMatch(tag, /disabled\s*(?![=])/);
+      assert.match(tag, /disabled=\{!canEditDraft\}/);
+    }
+  }
+});
+
+test("III. no local edit path bypasses a gateway", () => {
+  // markDraftMutated marks the draft dirty, so anything calling it is a write.
+  // It may be called from the two gateways and nowhere else.
+  const calls = workspace.match(/markDraftMutated\(\)/g) ?? [];
+  assert.equal(calls.length, 2, "a write path outside the gateways reappeared");
+
+  const mutate = functionBody(workspace, "mutateRows");
+  const local = functionBody(workspace, "applyLocalEdit");
+  assert.match(mutate, /if \(!canEditDraft\) return false;/);
+  assert.match(local, /if \(!canEditDraft\) return false;/);
+  assert.match(mutate, /markDraftMutated\(\);/);
+  assert.match(local, /markDraftMutated\(\);/);
+});
+
+test("IV. value fields cannot be changed or typed into while frozen", () => {
+  const valueFields = [
+    { name: 'volume', anchor: 'aria-label={`Volume ${row.name}`}' },
+    { name: 'manual unit price', anchor: 'aria-label={`Harga satuan ${row.name}`}' },
+    { name: 'margin', anchor: 'aria-label="Persentase margin"' },
+    { name: 'PPN', anchor: 'aria-label="Persentase PPN"' },
+    { name: 'row name', anchor: 'aria-label="Uraian catatan"' },
+    { name: 'unit', anchor: 'aria-label={`Satuan ${row.name}`}' },
+  ];
+
+  for (const field of valueFields) {
+    const hit = workspace.indexOf(field.anchor);
+    assert.notEqual(hit, -1, `${field.name} field not found`);
+    const tag = openingTagAt(workspace, workspace.lastIndexOf("<input", hit));
+    assert.match(tag, /readOnly=\{!canEditDraft\}/, `${field.name} is still typeable while frozen`);
+    assert.match(tag, /aria-readonly=\{!canEditDraft\}/, `${field.name} does not announce read-only`);
+  }
+
+  // And the values themselves route through the guarded gateway.
+  for (const setter of ['setVolumes', 'setUnitPrices', 'setMarginPercent', 'setPpnPercent']) {
+    const inHandlers = workspace
+      .split("\n")
+      .filter((line) => line.includes(`${setter}(`) && line.includes("onChange"));
+    for (const line of inHandlers) {
+      assert.match(line, /applyLocalEdit/, `${setter} is written outside applyLocalEdit`);
+    }
+  }
+});
+
+test("V. commands refuse as well, so the freeze is not only on the screen", () => {
+  assert.match(functionBody(workspace, "handleSaveDraft"), /if \(!canEditDraft\) \{/);
+  assert.match(functionBody(workspace, "handlePickAhsp"), /if \(!canEditDraft\) return;/);
+  // Persisting a price already derives its reachability from the same flag.
+  assert.match(workspace, /evaluatePersistActionReachability\(\{[\s\S]{0,200}canEditDraft,/);
+});
+
+test("VI. read-only traces stay reachable while frozen", () => {
+  // Freezing writes must not hide information. Opening the AHSP analysis reads
+  // and traces; it changes nothing, so it stays live.
+  for (const tag of tagsContaining('aria-label="Buka Detail Analisa AHSP"')) {
+    assert.doesNotMatch(tag, /disabled/, "the read-only AHSP trace must stay reachable");
+    assert.match(tag, /onClick=\{\(\) => activateRow\(row\.id\)\}/);
+  }
+
+  // And so does the lock disclosure, which only explains the lifecycle.
+  const lockTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-toolbar__lock"')));
+  assert.match(lockTag, /disabled=\{rabLocked \? false :/);
+});
