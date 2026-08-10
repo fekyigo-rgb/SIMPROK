@@ -6,6 +6,10 @@ import {
   PriceSourceType,
   ResourceCatalog,
 } from '@prisma/client';
+import {
+  SOURCE_TYPE_BY_ORIGIN,
+  assertSourceOriginMappingComplete,
+} from '../common/price-source-coherence';
 import { PrismaService } from '../prisma/prisma.service';
 
 type SubscriptionEvent = KnowledgeEvent & {
@@ -33,14 +37,6 @@ export type BusinessSubscriptionResult =
       priceSubmissionRevisionId?: string;
     };
 
-const SOURCE_TYPE_BY_ORIGIN: Record<PriceSourceOrigin, PriceSourceType> = {
-  GOVERNMENT: 'REGULATION',
-  SUPPLIER: 'VENDOR_QUOTE',
-  STORE: 'VENDOR_QUOTE',
-  DISTRIBUTOR: 'VENDOR_QUOTE',
-  FIELD_REPORT: 'MARKET_SURVEY',
-  COMMUNITY_REPORT: 'MARKET_SURVEY',
-};
 
 @Injectable()
 export class BusinessSubscriptionService
@@ -340,13 +336,6 @@ export class BusinessSubscriptionService
   }
 
   private assertSourceOriginMappingComplete() {
-    const unmapped = Object.values(PriceSourceOrigin).filter(
-      (origin) => !SOURCE_TYPE_BY_ORIGIN[origin],
-    );
-    if (unmapped.length > 0) {
-      throw new Error(
-        `Unmapped PriceSourceOrigin values: ${unmapped.join(', ')}`,
-      );
-    }
+    assertSourceOriginMappingComplete();
   }
 }

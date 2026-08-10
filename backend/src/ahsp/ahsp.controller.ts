@@ -19,6 +19,7 @@ import { AhspVersionService } from './services/ahsp-version.service';
 import type { CreateAhspVersionDto } from './services/ahsp-version.service';
 import { AhspSnapshotService } from './services/ahsp-snapshot.service';
 import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
+import { RetireAhspVersionDto } from './dto/retire-ahsp-version.dto';
 import { OwnershipType } from '@prisma/client';
 
 /**
@@ -206,5 +207,46 @@ export class AhspController {
     }
     const actorUserId = await this.resolveActor(request);
     return this.ahspSnapshotService.createSnapshot(versionId, workspaceId, actorUserId);
+  }
+
+  // ─────────────────────────────────────────────
+  // AHSP VERSION RETIREMENT (RM-03D1)
+  // ─────────────────────────────────────────────
+
+  /**
+   * Withdraw ONE erroneous or replaced version from all future selection.
+   *
+   * The service already had `updateStatus` with no caller, so an incorrect
+   * version stayed eligible forever and the only reachable alternative —
+   * `POST :id/archive` — archives the whole AHSP parent and takes the correct
+   * versions with it. This is the narrow, version-scoped act that was missing.
+   *
+   * PERMISSION — the SAME AHSP_MANAGE the create-version route already requires.
+   * Withdrawing a version you may create is not a broader authority than
+   * creating it, so no new permission code is minted. History is preserved: the
+   * version, its resources, its audit log and every occurrence that priced
+   * against it all survive, and only future eligibility changes.
+   */
+  @Post('versions/:versionId/retire')
+  @Permissions('AHSP_MANAGE')
+  async retireVersion(
+    @Req() request: any,
+    @Param('versionId') versionId: string,
+    @Body() body: RetireAhspVersionDto,
+  ) {
+    const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
+    // Same trusted-actor discipline as every other mutation here: the acting
+    // user is derived, never read from the body.
+    const actorUserId = await this.resolveActor(request);
+    return this.ahspVersionService.retireVersion({
+      versionId,
+      workspaceId,
+      status: body.status,
+      userId: actorUserId,
+      reason: body.reason,
+    });
   }
 }

@@ -30,6 +30,7 @@ import {
   RejectBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import { AdmitResourceForImportRowDto } from './dto/admit-resource-for-import-row.dto';
+import { CorrectPrivateProvenanceDto } from './dto/correct-private-provenance.dto';
 
 /**
  * BasicPriceImportController — user-owned import boundary (Owner Decision:
@@ -98,11 +99,19 @@ export class BasicPriceImportController {
   ) {
     const workspaceId: string = request.workspaceContext?.workspaceId;
     const currentAccountId: string = request.user.id;
+    // Distinguishing "client sent effectiveDateProvenance: null" (CLEAR the
+    // claim) from "client omitted it" (leave it alone) requires the
+    // pre-transform raw body — the global ValidationPipe runs with
+    // transform: true, and class-transformer materializes every declared DTO
+    // field as an own property regardless of what the client actually sent.
+    // Same technique the BOQ persist route already uses for unitPrice.
+    const providedKeys = Object.keys(request.body ?? {});
     return this.importService.updateBatchMetadata(
       workspaceId,
       batchId,
       dto,
       currentAccountId,
+      providedKeys,
     );
   }
 
@@ -256,5 +265,42 @@ export class BasicPriceImportController {
       request.user?.id,
     );
     return this.privateAssetService.keepBatchPrivate({ batchId, actor });
+  }
+
+  /**
+   * RM-03D1 — re-apply this batch's corrected provenance to the private prices
+   * it already produced.
+   *
+   * `keep-private` copies the batch's metadata at write time and is idempotent,
+   * so correcting the batch afterwards — which `PATCH :batchId` already allows
+   * while the batch is still mutable — reached the batch and nothing else. The
+   * only other writer of a BasicPrice is the publication ladder, which would
+   * stamp a private asset PUBLISHED. Before this route the choice was therefore
+   * a permanently mis-described price or an unlawful write.
+   *
+   * PERMISSION — the SAME BASIC_PRICE_SUBMIT as `keep-private`, deliberately not
+   * a new code. It is the identical authority ("describe my own materialized
+   * import rows truthfully"), held by exactly the same people, and strictly
+   * weaker than the write that created those rows: it can change how a price is
+   * DESCRIBED, never what it costs, and never its publication or verification
+   * state.
+   */
+  @Post(':batchId/correct-private-provenance')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async correctPrivateProvenance(
+    @Req() request: any,
+    @Param('batchId') batchId: string,
+    @Body() dto: CorrectPrivateProvenanceDto,
+  ) {
+    // Both halves of the identity are server-derived, exactly as keep-private.
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user?.id,
+    );
+    return this.privateAssetService.correctPrivateProvenanceFromBatch({
+      batchId,
+      actor,
+      reason: dto.reason,
+    });
   }
 }
