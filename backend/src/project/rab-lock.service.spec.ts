@@ -5,6 +5,7 @@ import { PERSISTED_CALCULATION_STATUS } from './persisted-calculation.contracts'
 import { PersistedCalculationService } from './persisted-calculation.service';
 import { RAB_STATUS } from './rab-lifecycle-policy.service';
 import { PRELOCK_FINDING, RAB_LOCK_REASON } from './rab-lock.contracts';
+import { AhspResourceResolutionOrchestrator } from '../project-ahsp/ahsp-resource-resolution.orchestrator';
 import { RabLockService } from './rab-lock.service';
 
 /**
@@ -27,6 +28,7 @@ describe('RabLockService', () => {
   let service: RabLockService;
   let tx: any;
   let persisted: { getPersistedCalculation: jest.Mock };
+  let resolution: { resolveVersionResources: jest.Mock };
 
   const draftRab = (overrides: Record<string, unknown> = {}) => ({
     id: rabId,
@@ -74,6 +76,7 @@ describe('RabLockService', () => {
     settledRab?: any;
     structures?: any[];
     project?: any;
+    occurrence?: any;
   } = {}) => {
     const rab = opts.rab ?? draftRab();
     tx = {
@@ -91,6 +94,24 @@ describe('RabLockService', () => {
       boqItem: {
         findMany: jest.fn().mockResolvedValue(opts.workItems ?? [pricedWorkItem()]),
       },
+      projectAhspOccurrence: {
+        findFirst: jest.fn().mockResolvedValue(
+          opts.occurrence === undefined
+            ? {
+                referenceRegionId: 'region-1',
+                ahspVersion: { id: ahspVersionId, resources: [{ id: 'res-1' }] },
+                resourceResolutions: [
+                  {
+                    ahspResourceId: 'res-1',
+                    rawAhspResourceRef: 'Pekerja',
+                    selectedBasicPriceId: 'bp-A',
+                    adaptedPriceValue: '132000.00',
+                  },
+                ],
+              }
+            : opts.occurrence,
+        ),
+      },
       aHSPVersion: {
         findFirst: jest
           .fn()
@@ -102,6 +123,12 @@ describe('RabLockService', () => {
 
   beforeEach(async () => {
     persisted = { getPersistedCalculation: jest.fn().mockResolvedValue(verifiedProof()) };
+    // Default: the authority would decide exactly what is frozen — no drift.
+    resolution = {
+      resolveVersionResources: jest.fn().mockResolvedValue([
+        { ahspResourceId: 'res-1', status: 'RESOLVED', selectedBasicPriceId: 'bp-A', adaptedPriceValue: '132000.00' },
+      ]),
+    };
 
     const prisma = {
       $transaction: jest.fn(async (fn: any) => fn(tx)),
@@ -112,6 +139,7 @@ describe('RabLockService', () => {
         RabLockService,
         { provide: PrismaService, useValue: prisma },
         { provide: PersistedCalculationService, useValue: persisted },
+        { provide: AhspResourceResolutionOrchestrator, useValue: resolution },
       ],
     }).compile();
 
@@ -383,9 +411,73 @@ describe('RabLockService', () => {
     expect(result.reason).toBe(RAB_LOCK_REASON.PROJECT_NOT_FOUND);
   });
 
+  // ── BLOCKER A (unit): CURRENT BASIC PRICE RELEVANCE ────────────────────────
+  // The snapshot proof stays VERIFIED throughout these, which is the point:
+  // drift must be caught while the frozen line reproduces itself perfectly.
+
+  it('A: a different currently-eligible Basic Price refuses the lock even though the snapshot is VERIFIED', async () => {
+    arrange();
+    resolution.resolveVersionResources.mockResolvedValue([
+      { ahspResourceId: 'res-1', status: 'RESOLVED', selectedBasicPriceId: 'bp-B', adaptedPriceValue: '140000.00' },
+    ]);
+
+    const result: any = await lock();
+
+    expect(persisted.getPersistedCalculation).toHaveBeenCalled(); // snapshot still asked
+    expect(result.status).toBe('REFUSED');
+    expect(result.reason).toBe(RAB_LOCK_REASON.PRELOCK_REVALIDATION_REQUIRED);
+    expect(result.findings[0]).toMatchObject({
+      finding: PRELOCK_FINDING.BASIC_PRICE_SELECTION_CHANGED,
+      detail: 'Pekerja',
+      storedUnitPrice: '132000.00',
+      currentUnitPrice: '140000.00',
+    });
+    expect(tx.rabDocument.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('A: the same price row whose adapted basis has moved is also refused', async () => {
+    arrange();
+    resolution.resolveVersionResources.mockResolvedValue([
+      { ahspResourceId: 'res-1', status: 'RESOLVED', selectedBasicPriceId: 'bp-A', adaptedPriceValue: '150000.00' },
+    ]);
+    const result: any = await lock();
+    expect(result.findings[0].finding).toBe(PRELOCK_FINDING.BASIC_PRICE_NO_LONGER_ELIGIBLE);
+  });
+
+  it('A: ambiguity is never resolved on the Owner behalf inside a freeze', async () => {
+    arrange();
+    resolution.resolveVersionResources.mockResolvedValue([
+      { ahspResourceId: 'res-1', status: 'NEEDS_REVIEW', selectedBasicPriceId: null, adaptedPriceValue: null },
+    ]);
+    const result: any = await lock();
+    expect(result.findings[0].finding).toBe(PRELOCK_FINDING.BASIC_PRICE_AMBIGUOUS);
+  });
+
+  it('A: a missing current price refuses the lock', async () => {
+    arrange();
+    resolution.resolveVersionResources.mockResolvedValue([
+      { ahspResourceId: 'res-1', status: 'UNRESOLVED', selectedBasicPriceId: null, adaptedPriceValue: null },
+    ]);
+    const result: any = await lock();
+    expect(result.findings[0].finding).toBe(PRELOCK_FINDING.BASIC_PRICE_MISSING);
+  });
+
+  it('A: an unchanged decision passes, and the authority is asked at the line OWN date, never today', async () => {
+    arrange();
+    const result: any = await lock();
+    expect(result.status).toBe(RAB_STATUS.LOCKED);
+    expect(resolution.resolveVersionResources).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ asOf: asOfDate }),
+    );
+    // and on the SAME transaction client that holds the project row lock
+    expect(resolution.resolveVersionResources.mock.calls[0][0]).toBe(tx);
+  });
+
   it('more than one Working Draft is ambiguous, so nothing is frozen', async () => {
     arrange({ structures: [{ id: 's1' }, { id: 's2' }] });
     const result: any = await lock();
     expect(result.reason).toBe(RAB_LOCK_REASON.AMBIGUOUS_WORKING_DRAFT);
   });
 });
+

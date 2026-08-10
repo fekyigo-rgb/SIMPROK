@@ -23,8 +23,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import {
+  AhspResourceResolutionOrchestrator,
+  E1A_RESOLUTION_POLICY_VERSION,
+} from './ahsp-resource-resolution.orchestrator';
 
-export const E1A_RESOLUTION_POLICY_VERSION = 'E1A_CONTEXTUAL_EXACT_REGION_V1';
+/** Re-exported from the resolution orchestrator, its single definition. */
+export { E1A_RESOLUTION_POLICY_VERSION };
 const includeOccurrence = { resourceResolutions: true } as const;
 
 export interface SelectAhspForBoqItemInput {
@@ -52,6 +57,7 @@ export class ProjectAhspService {
     private readonly units: UnitKernelService,
     private readonly lifecycle: RabLifecyclePolicyService,
     private readonly identity: ResourceIdentityResolutionService,
+    private readonly resolution: AhspResourceResolutionOrchestrator,
   ) {}
 
   async listEligibleVersions(workspaceId: string, asOfRaw: string) {
@@ -192,245 +198,17 @@ export class ProjectAhspService {
         throw new NotFoundException('ELIGIBLE_AHSP_VERSION_NOT_FOUND');
       }
 
-      // RM-03D1 identity slice: the catalog rows, this workspace's source
-      // sightings, and the human decisions it has already recorded — loaded
-      // ONCE for the whole AHSP version rather than per resource, and tenant-
-      // scoped inside the loader so this orchestrator never widens it.
-      const identityEvidence = await this.identity.loadEvidence(
-        tx,
-        input.workspaceId,
-      );
-      // RM-03C: the eligible candidate set now legally includes this
-      // workspace's OWN private prices, alongside publicly published catalog
-      // prices — one predicate, built from the shared policy so the candidate
-      // set here and the re-verification below can never drift.
-      //
-      // The technical applicability conditions (region, effective date,
-      // validity window) are asserted OUTSIDE the branch OR, so they apply
-      // identically to both asset families: there is no private shortcut past
-      // them. Nothing here ranks the two families against each other —
-      // cardinality is still decided downstream by resolveAhspResourcePrice,
-      // which remains scope-blind.
-      const priceRows = await tx.basicPrice.findMany({
-        where: {
-          ...this.eligibility.usableWhere(input.workspaceId),
-          regionId: input.referenceRegionId,
-          effectiveDate: { lte: asOf },
-          AND: [
-            { OR: [{ validUntil: null }, { validUntil: { gte: asOf } }] },
-          ],
-        },
-        include: { resource: true },
+      // THE shared Golden Thread resolution authority. The occurrence path and
+      // the RAB pre-lock gate call this same method on the same transaction,
+      // so the price decision a lock is validated against can never disagree
+      // with the decision that produced the occurrence in the first place.
+      const resolutions = await this.resolution.resolveVersionResources(tx, {
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        referenceRegionId: input.referenceRegionId,
+        asOf,
+        version,
       });
-
-      const resolutions: ResolutionCreate[] = [];
-      for (const resource of version.resources) {
-        // RM-03D1: identity is decided FIRST, by its own authority, and the
-        // raw AHSP reference is passed through untouched so the audit trail
-        // keeps saying what the source said. AHSPResource has no source-code
-        // column today, so the code channel is genuinely empty here rather
-        // than back-filled from the catalog — which would make the evidence
-        // agree with itself by construction.
-        const identity = this.identity.resolve(identityEvidence, {
-          rawName: resource.resourceId,
-          rawCode: null,
-          rawUnit: resource.baseUnit,
-          resourceType: resource.resourceType,
-        });
-
-        const identifiedCatalog =
-          identity.status === 'RESOLVED' && identity.resolvedResourceCatalogId
-            ? identityEvidence.catalogCandidates.find(
-                (candidate) =>
-                  candidate.id === identity.resolvedResourceCatalogId,
-              ) ?? null
-            : null;
-
-        // Identity unproven → the row records exactly that, with the candidates
-        // and evidence the kernel found. It is NOT pushed through the price
-        // path only to come back as a name-match failure, because "we found two
-        // plausible cements" and "no such resource" are different facts and the
-        // audit trail must not blur them.
-        if (identifiedCatalog === null) {
-          resolutions.push({
-            ahspResourceId: resource.id,
-            rawAhspResourceRef: resource.resourceId,
-            rawAhspResourceType: resource.resourceType,
-            ahspCoefficient: resource.coefficient,
-            ahspUnit: resource.baseUnit,
-            status:
-              identity.status === 'NEEDS_REVIEW'
-                ? ProjectAhspResolutionStatus.NEEDS_REVIEW
-                : ProjectAhspResolutionStatus.UNRESOLVED,
-            selectionMode: null,
-            resourceCatalogId: null,
-            selectedBasicPriceId: null,
-            canonicalUnit: null,
-            sourcePriceValue: null,
-            sourceUnit: null,
-            adaptedPriceValue: null,
-            conversionFactor: null,
-            sourceUnitDefinitionId: null,
-            targetUnitDefinitionId: null,
-            unitConversionRuleId: null,
-            unitConversionRuleVersion: null,
-            quantityFactor: null,
-            selectedSourceOrigin: null,
-            selectedFreshnessStatus: null,
-            selectedEffectiveDate: null,
-            resolutionMethod:
-              ProjectAhspResolutionMethod.DETERMINISTIC_ATTEMPTED,
-            reasonCodes: [...identity.reasonCodes],
-            explanation: identity.explanation,
-            policyVersion: E1A_RESOLUTION_POLICY_VERSION,
-          });
-          continue;
-        }
-
-        // The one catalog row identity settled on, in the price kernel's shape.
-        // `type` is narrowed rather than re-validated: it comes straight from
-        // the ResourceType database enum, which admits no other value.
-        const matches = [
-          {
-            id: identifiedCatalog.id,
-            code: identifiedCatalog.code,
-            name: identifiedCatalog.name,
-            type: identifiedCatalog.type as 'MATERIAL' | 'LABOR' | 'EQUIPMENT',
-            baseUnit: identifiedCatalog.baseUnit,
-          },
-        ];
-        const unitResolution = await this.units.resolve(
-          resource.baseUnit,
-          identifiedCatalog.baseUnit,
-          identifiedCatalog.id,
-        );
-        const candidates = await Promise.all(
-          priceRows.map(async (price) => {
-            const resolved =
-              price.resourceId === identifiedCatalog.id
-                ? await this.units.resolve(
-                    price.resource.baseUnit,
-                    identifiedCatalog.baseUnit,
-                    identifiedCatalog.id,
-                  )
-                : null;
-            return {
-              id: price.id,
-              resourceId: price.resourceId,
-              value: price.value.toString(),
-              sourceOrigin: price.sourceOrigin,
-              unit: price.resource.baseUnit,
-              freshnessStatus: price.freshnessStatus,
-              unitResolution: {
-                status: resolved?.status ?? 'NEEDS_REVIEW',
-                canonicalUnitCode: resolved?.targetUnitDefinition?.code ?? null,
-                quantityFactor: resolved?.quantityFactor ?? null,
-                priceOperation: resolved?.priceOperation ?? null,
-                rawSourceUnit: resolved?.rawSourceUnit ?? '',
-                rawTargetUnit: resolved?.rawTargetUnit ?? '',
-              },
-            } as const;
-          }),
-        );
-        const result = resolveAhspResourcePrice({
-          projectId: input.projectId,
-          ahspVersionId: version.id,
-          ahspResourceId: resource.id,
-          rawResourceRef: resource.resourceId,
-          resourceType: resource.resourceType,
-          ahspUnit: resource.baseUnit,
-          resourceCatalogCandidates: matches,
-          eligibleBasicPriceCandidates: candidates,
-          // Identity already settled above, by its own authority. The price
-          // kernel consumes that verdict exactly as it consumes the UnitKernel's
-          // instead of re-deriving it from the name — which is the only way a
-          // human-verified mapping between two DIFFERENT spellings can survive
-          // this far without being rejected as a name mismatch.
-          resolvedIdentity: {
-            catalog: matches[0],
-            identityReason:
-              identity.authority === 'VERIFIED_MAPPING_REUSED'
-                ? 'VERIFIED_MAPPING_REUSED'
-                : 'EXACT_RESOURCE_NAME_MATCH',
-          },
-          validatedUnitResolution: {
-            status: unitResolution?.status ?? 'NEEDS_REVIEW',
-            canonicalUnitCode:
-              unitResolution?.targetUnitDefinition?.code ?? null,
-            quantityFactor: unitResolution?.quantityFactor ?? null,
-            rawSourceUnit: unitResolution?.rawSourceUnit ?? '',
-            rawTargetUnit: unitResolution?.rawTargetUnit ?? '',
-          },
-        });
-        const selectedCandidate =
-          result.status === 'RESOLVED'
-            ? priceRows.find((row) => row.id === result.selectedBasicPriceId)
-            : undefined;
-        const selected = selectedCandidate
-          ? await tx.basicPrice.findFirst({
-              where: {
-                id: selectedCandidate.id,
-                // Same predicate the candidate query used, from the same
-                // builder — the re-read must never accept a row the offer
-                // could not have contained, nor reject one it did.
-                ...this.eligibility.usableWhere(input.workspaceId),
-                regionId: input.referenceRegionId,
-                effectiveDate: { lte: asOf },
-                AND: [
-                  {
-                    OR: [
-                      { validUntil: null },
-                      { validUntil: { gte: asOf } },
-                    ],
-                  },
-                ],
-              },
-              include: { resource: true },
-            })
-          : null;
-        const resolved =
-          result.status === 'RESOLVED' &&
-          selected !== null &&
-          selected.resourceId === result.resolvedResourceCatalogId &&
-          selected.value.toString() === result.sourcePriceValue;
-        resolutions.push({
-          ahspResourceId: resource.id,
-          rawAhspResourceRef: resource.resourceId,
-          rawAhspResourceType: resource.resourceType,
-          ahspCoefficient: resource.coefficient,
-          ahspUnit: resource.baseUnit,
-          status: resolved
-            ? ProjectAhspResolutionStatus.RESOLVED
-            : result.status === 'NEEDS_REVIEW'
-              ? ProjectAhspResolutionStatus.NEEDS_REVIEW
-              : ProjectAhspResolutionStatus.UNRESOLVED,
-          selectionMode: resolved ? ProjectAhspSelectionMode.AUTO_SELECTED : null,
-          resourceCatalogId: resolved ? result.resolvedResourceCatalogId : null,
-          selectedBasicPriceId: resolved ? result.selectedBasicPriceId : null,
-          canonicalUnit: resolved ? result.canonicalUnit : null,
-          sourcePriceValue: resolved ? result.sourcePriceValue : null,
-          sourceUnit: resolved ? selected.resource.baseUnit : null,
-          adaptedPriceValue: resolved ? result.adaptedPriceValue : null,
-          conversionFactor: null,
-          sourceUnitDefinitionId:
-            unitResolution?.sourceUnitDefinition?.id ?? null,
-          targetUnitDefinitionId:
-            unitResolution?.targetUnitDefinition?.id ?? null,
-          unitConversionRuleId: unitResolution?.conversionRuleId ?? null,
-          unitConversionRuleVersion:
-            unitResolution?.conversionRuleVersion ?? null,
-          quantityFactor: unitResolution?.quantityFactor ?? null,
-          selectedSourceOrigin: resolved ? selected.sourceOrigin : null,
-          selectedFreshnessStatus: resolved ? selected.freshnessStatus : null,
-          selectedEffectiveDate: resolved ? selected.effectiveDate : null,
-          resolutionMethod: resolved
-            ? ProjectAhspResolutionMethod.EXACT_DETERMINISTIC
-            : ProjectAhspResolutionMethod.DETERMINISTIC_ATTEMPTED,
-          reasonCodes: [...result.reasonCodes],
-          explanation: result.explanation,
-          policyVersion: E1A_RESOLUTION_POLICY_VERSION,
-        });
-      }
 
       const resourceIds = new Set(version.resources.map((row) => row.id));
       const resolutionIds = new Set(resolutions.map((row) => row.ahspResourceId));

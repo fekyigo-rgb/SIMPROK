@@ -4,6 +4,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { toDecimalString2 } from '../common/money';
 import { buildEligibleAhspVersionWhere } from '../project-ahsp/ahsp-eligibility.policy';
 import {
+  AhspResourceResolutionOrchestrator,
+  type ResolutionCreate,
+} from '../project-ahsp/ahsp-resource-resolution.orchestrator';
+import {
   PERSISTED_CALCULATION_STATUS,
 } from './persisted-calculation.contracts';
 import { PersistedCalculationService } from './persisted-calculation.service';
@@ -98,7 +102,123 @@ export class RabLockService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly persistedCalculation: PersistedCalculationService,
+    private readonly resolution: AhspResourceResolutionOrchestrator,
   ) {}
+
+  /**
+   * Ask the shared resolution authority what it would decide NOW for this
+   * line's own pricing date, and compare it to what is frozen.
+   *
+   * Compares IDENTITY first, not just the amount: a different eligible price
+   * that happens to carry the same number is still a different basis, and a
+   * frozen RAB should name the price it actually stands on. The adapted
+   * monetary basis is compared too, because the same price row can adapt
+   * differently if unit law has moved underneath it.
+   *
+   * A price that becomes effective AFTER this line's as-of date is simply not
+   * a candidate — the authority's own predicate excludes it — so a newer row
+   * in the database can never manufacture drift.
+   */
+  private async findBasicPriceDrift(
+    tx: any,
+    line: {
+      workspaceId: string;
+      projectId: string;
+      boqItemId: string;
+      wbsCode: string;
+      name: string;
+      asOf: Date | null;
+    },
+  ): Promise<PrelockLineFinding[]> {
+    const where = { boqItemId: line.boqItemId, wbsCode: line.wbsCode, name: line.name };
+    if (line.asOf === null) return [];
+
+    const occurrence = await tx.projectAhspOccurrence.findFirst({
+      where: { projectId: line.projectId, workspaceId: line.workspaceId },
+      include: {
+        ahspVersion: { include: { resources: { orderBy: { id: 'asc' } } } },
+        resourceResolutions: { orderBy: { id: 'asc' } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    // No occurrence to compare against is not this gate's finding to raise —
+    // the snapshot re-proof above already refuses a line whose provenance is
+    // missing, and duplicating that refusal here would report one defect twice.
+    if (!occurrence || occurrence.ahspVersion === null) return [];
+
+    const current: ResolutionCreate[] = await this.resolution.resolveVersionResources(tx, {
+      workspaceId: line.workspaceId,
+      projectId: line.projectId,
+      referenceRegionId: occurrence.referenceRegionId,
+      asOf: line.asOf,
+      version: occurrence.ahspVersion,
+    });
+
+    const currentByResource = new Map(
+      current.map((row) => [row.ahspResourceId, row]),
+    );
+    const findings: PrelockLineFinding[] = [];
+
+    for (const frozen of occurrence.resourceResolutions) {
+      const now = currentByResource.get(frozen.ahspResourceId);
+      const resourceLabel = frozen.rawAhspResourceRef;
+
+      // The authority can no longer decide at all — ambiguity or a missing
+      // price. SIMPROK does not choose on the Owner's behalf inside a freeze.
+      if (!now || now.status === 'NEEDS_REVIEW') {
+        findings.push({
+          ...where,
+          finding: PRELOCK_FINDING.BASIC_PRICE_AMBIGUOUS,
+          detail: resourceLabel,
+        });
+        continue;
+      }
+      if (now.status === 'UNRESOLVED' || now.selectedBasicPriceId == null) {
+        findings.push({
+          ...where,
+          finding: PRELOCK_FINDING.BASIC_PRICE_MISSING,
+          detail: resourceLabel,
+        });
+        continue;
+      }
+      if (frozen.selectedBasicPriceId === null) continue;
+
+      if (now.selectedBasicPriceId !== frozen.selectedBasicPriceId) {
+        findings.push({
+          ...where,
+          finding: PRELOCK_FINDING.BASIC_PRICE_SELECTION_CHANGED,
+          detail: resourceLabel,
+          storedUnitPrice:
+            frozen.adaptedPriceValue === null
+              ? null
+              : toDecimalString2(frozen.adaptedPriceValue),
+          currentUnitPrice:
+            now.adaptedPriceValue == null
+              ? null
+              : toDecimalString2(String(now.adaptedPriceValue)),
+        });
+        continue;
+      }
+
+      // Same row, but the money it adapts to has moved — the basis is no
+      // longer what was frozen even though its identity is unchanged.
+      const frozenAdapted =
+        frozen.adaptedPriceValue === null ? null : toDecimalString2(frozen.adaptedPriceValue);
+      const currentAdapted =
+        now.adaptedPriceValue == null ? null : toDecimalString2(String(now.adaptedPriceValue));
+      if (frozenAdapted !== currentAdapted) {
+        findings.push({
+          ...where,
+          finding: PRELOCK_FINDING.BASIC_PRICE_NO_LONGER_ELIGIBLE,
+          detail: resourceLabel,
+          storedUnitPrice: frozenAdapted,
+          currentUnitPrice: currentAdapted,
+        });
+      }
+    }
+
+    return findings;
+  }
 
   async lockWorkingDraft(input: LockRabDraftInput): Promise<RabLockResult> {
     const { projectId, workspaceId, actorAccountId } = input;
@@ -262,6 +382,32 @@ export class RabLockService {
             storedUnitPrice: proof.stored.unitPrice,
             storedLineTotal: proof.stored.lineTotal,
           });
+          continue;
+        }
+
+        // 4a-bis. CURRENT RELEVANCE — the second, different question.
+        //
+        // The re-proof above answers "can this line still reproduce itself from
+        // its OWN frozen provenance?". It deliberately never re-reads a Basic
+        // Price, so a VERIFIED snapshot says nothing about whether the price
+        // basis is still the one SIMPROK would choose. Asking only that
+        // question would freeze yesterday's decision while a better-founded
+        // price sits eligible in the database.
+        //
+        // So ask THE resolution authority — the same one that produced the
+        // occurrence — what it would decide now, for this line's OWN
+        // calculationAsOfDate. Not today's date: re-dating the line would
+        // invent drift that the business never experienced.
+        const driftFindings = await this.findBasicPriceDrift(tx, {
+          workspaceId,
+          projectId,
+          boqItemId: item.id,
+          wbsCode: item.wbsCode,
+          name: item.name,
+          asOf: item.calculationAsOfDate,
+        });
+        if (driftFindings.length > 0) {
+          findings.push(...driftFindings);
           continue;
         }
 

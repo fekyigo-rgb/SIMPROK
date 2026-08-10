@@ -14,10 +14,13 @@ import { RabLockService } from './rab-lock.service';
 import { RabKernelPersistenceService } from './rab-kernel-persistence.service';
 import { PersistedCalculationService } from './persisted-calculation.service';
 import { BasicPriceModule } from '../basic-price/basic-price.module';
+import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
+import { AhspResourceResolutionOrchestrator } from '../project-ahsp/ahsp-resource-resolution.orchestrator';
+import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
 @Module({
-  imports: [PrismaModule, IntelligenceModule, AuthModule, BasicPriceModule],
+  imports: [PrismaModule, IntelligenceModule, AuthModule, BasicPriceModule, UnitKernelModule],
   controllers: [ProjectController],
-  providers: [ProjectService, DeviationService, RabIntelligenceProposalService, CostKernelService, BoqImportService, RabLifecyclePolicyService, RabEditableLifecycleGuard, RabKernelPersistenceService, PersistedCalculationService, RabLockService],
+  providers: [ProjectService, DeviationService, RabIntelligenceProposalService, CostKernelService, BoqImportService, RabLifecyclePolicyService, RabEditableLifecycleGuard, RabKernelPersistenceService, PersistedCalculationService, RabLockService, AhspResourceResolutionOrchestrator, ResourceIdentityResolutionService],
 })
 export class ProjectModule {}
