@@ -237,29 +237,29 @@ export function ProjectListPage() {
             const noteSummary = getProjectNoteSummary(project.id);
 
             return (
-              // The card itself is not a door. Three controls, three
-              // destinations — a whole-card click would have been a fourth
-              // way into a room one of them already opens.
+              // The card itself is not a door; its three controls are.
               <article
                 key={project.id}
                 className={`simprok-project-card simprok-project-card--${presentation.chipModifier}`}
                 style={{ cursor: 'default' }}
               >
                 <div className="simprok-project-card__top">
-                  {/* Identity, not navigation. */}
-                  <h2 className="simprok-project-card__name">{project.nama}</h2>
+                  {/* The project name is the one door to Ruang Hidup RAB. */}
+                  <h2 className="simprok-project-card__name">
+                    <button
+                      type="button"
+                      className="simprok-project-card__name-button"
+                      onClick={() => openRab(project.id)}
+                    >
+                      {project.nama}
+                    </button>
+                  </h2>
 
-                  {/* Status, and the one door to Ruang Hidup RAB. Same chip
-                      styling; only the UA button defaults are neutralised. */}
-                  <button
-                    type="button"
-                    className={`simprok-project-chip simprok-project-chip--${presentation.chipModifier}`}
-                    style={{ border: 'none', font: 'inherit', fontSize: '11px', fontWeight: 600, cursor: 'pointer', lineHeight: 1.3 }}
-                    onClick={() => openRab(project.id)}
-                    aria-label={`${presentation.badgeLabel} — buka Ruang Hidup RAB ${project.nama}`}
-                  >
+                  {/* Status only. Information carries no handler — a badge
+                      that navigates is a door disguised as a fact. */}
+                  <span className={`simprok-project-chip simprok-project-chip--${presentation.chipModifier}`}>
                     {presentation.badgeLabel}
-                  </button>
+                  </span>
                 </div>
 
                 <p className="simprok-project-card__value">{project.nilai}</p>

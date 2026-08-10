@@ -678,7 +678,7 @@ export function RabWorkspacePage() {
       if (data.items.length > 0) {
         applyRows(data.items, 'WORKING_DRAFT');
         loadCostCalculations(data.items);
-        setStatusMessage('Draft tersimpan dimuat. Ruang kerja siap.');
+        setStatusMessage(frozen ? 'RAB terkunci dimuat. Mode baca.' : 'Draft tersimpan dimuat. Ruang kerja siap.');
         return;
       }
 
@@ -690,7 +690,7 @@ export function RabWorkspacePage() {
       if (baselineItems.length > 0) {
         applyRows(baselineItems, 'BASELINE_SEED');
         loadCostCalculations(baselineItems);
-        setStatusMessage('Draft kosong. Data baseline dimuat sebagai titik awal — klik Simpan Draft untuk menyimpan perubahan.');
+        setStatusMessage(frozen ? 'RAB terkunci dimuat. Mode baca.' : 'Draft kosong. Data baseline dimuat sebagai titik awal — klik Simpan Draft untuk menyimpan perubahan.');
       } else {
         costLoadGenerationRef.current += 1;
         setRows([]);
@@ -698,7 +698,7 @@ export function RabWorkspacePage() {
         setUnitPrices({});
         setCostRowStatuses({});
         setSelectedRowId('');
-        setStatusMessage('Draft kosong. Tambahkan item pekerjaan, lalu klik Simpan Draft.');
+        setStatusMessage(frozen ? 'RAB terkunci dimuat. Mode baca.' : 'Draft kosong. Tambahkan item pekerjaan, lalu klik Simpan Draft.');
       }
     };
 
@@ -890,6 +890,8 @@ export function RabWorkspacePage() {
    * hard reload shows the true state and a refused lock leaves it untouched.
    */
   const [rabLocked, setRabLocked] = useState(false);
+  /** Disclosure only. Never a lifecycle state, never sent anywhere. */
+  const [lockNoteOpen, setLockNoteOpen] = useState(false);
   const [isLocking, setIsLocking] = useState(false);
   const [lockConfirmOpen, setLockConfirmOpen] = useState(false);
   const [lockFindings, setLockFindings] = useState<PrelockFindingLine[]>([]);
@@ -1094,21 +1096,32 @@ export function RabWorkspacePage() {
     });
   };
 
-  /** Every local-only row edit funnels through here so markDraftMutated always runs alongside it. */
-  const mutateRows = (updater: (current: RabRow[]) => RabRow[]) => {
+  /**
+   * Every local-only row edit funnels through here so markDraftMutated always
+   * runs alongside it — and so the freeze is enforced in one place rather than
+   * at each of the twelve call sites. A frozen RAB used to be protected only
+   * by disabled controls: true of the screen, but not of the code behind it,
+   * and those paths then announced saving a draft that could not be saved.
+   *
+   * Returns whether the edit was allowed, so callers stay silent rather than
+   * reporting work that did not happen.
+   */
+  const mutateRows = (updater: (current: RabRow[]) => RabRow[]): boolean => {
+    if (!canEditDraft) return false;
     markDraftMutated();
     setRows(updater);
+    return true;
   };
 
   const addChild = (parentId: string | null, type: RabRowType) => {
     const newRow = createRow(type, parentId, Math.max(0, ...rows.map((row) => row.sortOrder)) + 1);
-    mutateRows((current) => [...current, newRow]);
+    if (!mutateRows((current) => [...current, newRow])) return;
     if (type === 'item') setUnitPrices((current) => ({ ...current, [newRow.id]: 0 }));
     setStatusMessage(`${type === 'folder' ? 'Sub Judul' : type === 'note' ? 'Catatan' : 'Item'} ditambahkan. Klik Simpan Draft untuk menyimpan.`);
   };
 
   const removeRow = (rowId: string) => {
-    mutateRows((current) => {
+    const removed = mutateRows((current) => {
       const idsToRemove = new Set<string>([rowId]);
       let changed = true;
       while (changed) {
@@ -1122,6 +1135,7 @@ export function RabWorkspacePage() {
       }
       return current.filter((row) => !idsToRemove.has(row.id));
     });
+    if (!removed) return;
     setUnitPrices((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== rowId)));
     setStatusMessage('Baris dihapus. Klik Simpan Draft untuk menyimpan perubahan.');
   };
@@ -1436,7 +1450,14 @@ export function RabWorkspacePage() {
         <div>
           <div className="simprok-rab-workspace__eyebrow">SIMPROK / Buat RAB / Ruang Kerja RAB</div>
           <h1>Ruang Kerja RAB</h1>
-          <p>{projectId ? `Project: ${projectId}. Ruang kerja draft RAB — edit dan simpan sebelum baseline resmi.` : 'Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.'}</p>
+          {/* The room is the same room; what may be done in it is not. */}
+          <p>
+            {!projectId
+              ? 'Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.'
+              : rabLocked
+              ? `Project: ${projectId}. Ruang kerja RAB terkunci — baca dan telusuri hasil RAB.`
+              : `Project: ${projectId}. Ruang kerja draft RAB — edit dan simpan sebelum baseline resmi.`}
+          </p>
         </div>
         <span className="simprok-rab-workspace__status">{statusMessage}</span>
       </header>
@@ -1464,16 +1485,43 @@ export function RabWorkspacePage() {
           RAB would freeze a total nobody can stand behind, and the server
           refuses it anyway, so the door tells the truth before it is pushed.
         */}
+        {/*
+          Once the RAB is frozen this same control stops being a lock command
+          and becomes the one place the freeze explains itself. It is not an
+          unlock: toggling it moves nothing but a paragraph. A second TERKUNCI
+          control elsewhere on the screen would have the Owner asking which of
+          the two is the real one.
+        */}
         <button
           className="simprok-rab-toolbar__lock"
-          onClick={() => setLockConfirmOpen(true)}
+          onClick={() => (rabLocked ? setLockNoteOpen((open) => !open) : setLockConfirmOpen(true))}
           title={rabLocked ? RAB_LOCK_COPY.lockedNote : isLocking ? 'Mengunci RAB...' : RAB_LOCK_COPY.action}
           aria-label={rabLocked ? RAB_LOCK_COPY.lockedBadge : RAB_LOCK_COPY.action}
+          aria-expanded={rabLocked ? lockNoteOpen : undefined}
+          aria-controls={rabLocked ? 'simprok-rab-lock-note' : undefined}
           data-route="/?ruang=kunci-rab"
-          disabled={rabLocked || isLocking || !projectId || !canEditDraft || !pricingComplete}
+          disabled={rabLocked ? false : isLocking || !projectId || !canEditDraft || !pricingComplete}
         >
           <LockKeyhole size={17} /> {rabLocked ? RAB_LOCK_COPY.lockedBadge : isLocking ? 'Mengunci...' : RAB_LOCK_COPY.action}
         </button>
+        {rabLocked && lockNoteOpen ? (
+          <p
+            id="simprok-rab-lock-note"
+            role="status"
+            style={{
+              flexBasis: '100%',
+              margin: '0.375rem 0 0',
+              padding: '0.375rem 0.75rem',
+              borderRadius: '8px',
+              border: '1px solid #C7D5EC',
+              background: '#EAF0FB',
+              color: '#16294B',
+              fontSize: 'var(--text-sm)',
+            }}
+          >
+            {RAB_LOCK_COPY.lockedNote}
+          </p>
+        ) : null}
       </section>
       {importPreview ? (
         <section className="simprok-rab-validation-alert simprok-rab-validation-alert--info" aria-label="Preview Import BOQ">
@@ -1525,40 +1573,6 @@ export function RabWorkspacePage() {
         </div>
       ) : null}
 
-      {/*
-        * A locked RAB is a lawful, finished state — not an error. This used to
-        * sit open and permanent in the red validation-alert style (the --info
-        * modifier it asked for does not exist in the stylesheet), so an
-        * ordinary freeze wore the colour reserved for genuine damage and could
-        * not be put away.
-        *
-        * Now it is a compact disclosure, closed by default: the fact stays on
-        * screen, the explanation is one click away. Navy, because a lock is
-        * authority. Information only — no unlock, no transition, no write.
-        */}
-      {rabLocked ? (
-        <details
-          style={{
-            margin: '0 0 0.5rem',
-            borderRadius: '10px',
-            border: '1px solid #C7D5EC',
-            background: '#EAF0FB',
-            color: '#16294B',
-            fontSize: 'var(--text-sm)',
-            padding: '0.3125rem 0.75rem',
-          }}
-        >
-          <summary
-            style={{ cursor: 'pointer', fontWeight: 600 }}
-            aria-label={`${RAB_LOCK_COPY.lockedBadge} — buka penjelasan`}
-          >
-            <LockKeyhole size={13} aria-hidden="true" style={{ verticalAlign: '-2px', marginRight: '0.25rem' }} />
-            {RAB_LOCK_COPY.lockedBadge}
-          </summary>
-          <p style={{ margin: '0.375rem 0 0.25rem', fontWeight: 400 }}>{RAB_LOCK_COPY.lockedNote}</p>
-        </details>
-      ) : null}
-
       {/* A refused lock says which rows moved, in the Owner's language. */}
       {lockFindings.length > 0 ? (
         <div className="simprok-rab-validation-alert" role="alert">
@@ -1608,9 +1622,9 @@ export function RabWorkspacePage() {
                     <td colSpan={9}>
                       <div className="simprok-rab-empty-state" role="status">
                         <p>
-                          <strong>Draft RAB masih kosong.</strong>
+                          <strong>{rabLocked ? 'RAB terkunci tidak memuat item pekerjaan.' : 'Draft RAB masih kosong.'}</strong>
                         </p>
-                        <p>Tambahkan Sub Judul atau Item pekerjaan untuk mulai menyusun RAB.</p>
+                        {rabLocked ? null : <p>Tambahkan Sub Judul atau Item pekerjaan untuk mulai menyusun RAB.</p>}
                         <div className="simprok-rab-empty-state__actions">
                           <button className="simprok-rab-add-sub" onClick={() => addChild(null, 'folder')} aria-label="Tambah Sub Judul ke draft">
                             + Sub Judul
