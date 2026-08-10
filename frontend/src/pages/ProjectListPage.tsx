@@ -272,18 +272,21 @@ export function ProjectListPage() {
                   className="simprok-project-card__actions"
                   onClick={(event) => event.stopPropagation()}
                 >
-                  {/* Only a real door gets a button. When there is nothing
-                      lawful to do, the card shows no control at all rather
-                      than a dead one. */}
-                  {action ? (
-                    <button
-                      className="simprok-project-card__primary"
-                      type="button"
-                      onClick={() => navigate(action.path)}
-                    >
-                      {action.label}
-                    </button>
-                  ) : null}
+                  {/* The RAB lifecycle action slot. It is permanent — each
+                      stage fills it with its own next step — and it is never
+                      removed just because a later capability is unbuilt. */}
+                  <button
+                    className="simprok-project-card__primary"
+                    type="button"
+                    onClick={() => {
+                      if (action.path) navigate(action.path);
+                    }}
+                    disabled={!action.path}
+                    title={action.disabledReason}
+                    aria-label={action.disabledReason ? `${action.label} - ${action.disabledReason}` : action.label}
+                  >
+                    {action.label}
+                  </button>
 
                   {presentation.status === 'DRAFT' ? (
                     <button
