@@ -43,143 +43,123 @@ export const resolveRabWorkspacePresentation = (
   return { mode: 'denied', reasonCode: capability?.reasonCode ?? null };
 };
 
+
 /* ------------------------------------------------------------------ *
- * One truth about "what state is this RAB in", for every surface.
+ * THE ONE PRESENTATION STATUS
  *
- * A project's status and its RAB's status are two different facts about
- * two different things. A project may still be in perencanaan while its
- * RAB is already frozen; freezing a RAB does not move the project on.
- * Every screen that derived "RAB status" from Project.status was reading
- * the wrong fact and could tell the Owner their RAB was an open draft
- * while it was, in the repository, locked.
+ * A user reads one lifecycle, in this order:
  *
- * So the RAB's state is read from the RAB's own lifecycle counts, here,
- * once — and every surface asks this function instead of deciding for
- * itself.
+ *   Draft → Terkunci → Approved → Berjalan → Selesai
+ *
+ * That sequence is a presentation, not a schema. Internally the two
+ * truths stay separate and untouched — RabDocument is DRAFT/LOCKED/
+ * APPROVED, and the project keeps its own lifecycle — because a status
+ * a person can read is not a reason to bend a domain enum.
+ *
+ * This function joins those truths without lying about either, and it
+ * is the ONLY place the join happens. My Projects (card and filter),
+ * Detail Proyek and Ruang Hidup RAB all ask it. When the combination it
+ * is handed is not lawful, it says so instead of guessing a status.
  * ------------------------------------------------------------------ */
 
 /**
- * Lifecycle facts as the server states them. Every count is optional on
- * purpose: an endpoint that does not send them has told us nothing, and
- * "nothing" must never be read as "zero".
+ * Lifecycle facts as the server states them, from RabLifecyclePolicyService.
+ * Every field is optional on purpose: an endpoint that did not send them has
+ * told us nothing, and "nothing" must never be read as "zero".
  */
 export interface RabLifecycleFactsWire extends RabWorkspaceCapabilityWire {
+  projectStatus?: string | null;
   workingDraftCount?: number;
   lockedRabCount?: number;
   approvedRabCount?: number;
   activeBaselineCount?: number;
 }
 
-export type RabDocumentState =
-  /** An APPROVED RAB governs this project. */
-  | 'APPROVED'
-  /** A LOCKED RAB exists: frozen, readable, not yet approved. */
-  | 'LOCKED'
-  /** Only a working draft exists. */
+export type ProjectPresentationStatus =
   | 'DRAFT'
-  /** The project has no RAB document at all yet. */
-  | 'NONE'
-  /** The surface was not given the lifecycle facts. Said plainly, never guessed. */
+  | 'TERKUNCI'
+  | 'APPROVED'
+  | 'BERJALAN'
+  | 'SELESAI'
+  /** Facts missing, or a combination no lawful project can be in. */
   | 'UNKNOWN';
 
-export interface RabLifecycleStatusView {
-  rab: RabDocumentState;
-  /** Owner-facing, and always names the RAB so it cannot be read as the project. */
-  rabLabel: string;
-  /** null means "not told" — distinct from false, which means "told: no". */
-  approved: boolean | null;
-  approvalLabel: string;
-  baseline: boolean | null;
-  baselineLabel: string;
-  /**
-   * Existing chip vocabulary only. Approved and locked both carry Navy
-   * authority; the words, not the colour, separate them. No new colour is
-   * introduced here.
-   */
-  chipModifier: 'approved' | 'terkunci' | 'draft';
+export interface ProjectPresentationView {
+  status: ProjectPresentationStatus;
+  /** Short form, for the filter. */
+  label: string;
+  /** Card and header badge. Names the RAB where the RAB is what moved. */
+  badgeLabel: string;
+  /** Existing chip vocabulary only — no new colour enters the Color Lock. */
+  chipModifier: 'draft' | 'terkunci' | 'approved' | 'berjalan' | 'selesai';
 }
 
-const RAB_STATE_LABEL: Record<RabDocumentState, string> = {
-  APPROVED: 'RAB Disetujui',
-  LOCKED: 'RAB Terkunci',
-  DRAFT: 'RAB Draft',
-  NONE: 'RAB Belum Dibuat',
-  UNKNOWN: 'Status RAB Menunggu Data',
+const PRESENTATION: Record<ProjectPresentationStatus, Omit<ProjectPresentationView, 'status'>> = {
+  DRAFT: { label: 'Draft', badgeLabel: 'RAB Draft', chipModifier: 'draft' },
+  TERKUNCI: { label: 'Terkunci', badgeLabel: 'RAB Terkunci', chipModifier: 'terkunci' },
+  APPROVED: { label: 'Approved', badgeLabel: 'RAB Approved', chipModifier: 'approved' },
+  // Once an approved RAB is being executed, the project is what moved — so
+  // these two are named for the project, not for the RAB.
+  BERJALAN: { label: 'Berjalan', badgeLabel: 'Berjalan', chipModifier: 'berjalan' },
+  SELESAI: { label: 'Selesai', badgeLabel: 'Selesai', chipModifier: 'selesai' },
+  UNKNOWN: { label: 'Menunggu Data', badgeLabel: 'Menunggu Data', chipModifier: 'draft' },
 };
 
-const RAB_STATE_CHIP: Record<RabDocumentState, RabLifecycleStatusView['chipModifier']> = {
-  APPROVED: 'approved',
-  LOCKED: 'terkunci',
-  DRAFT: 'draft',
-  NONE: 'draft',
-  UNKNOWN: 'draft',
-};
+/** Project lifecycle stages that mean execution has begun. */
+const EXECUTION_PROJECT_STATUSES = ['ACTIVE', 'ON_HOLD'];
+const FINISHED_PROJECT_STATUSES = ['COMPLETED', 'ARCHIVED'];
+const PRE_EXECUTION_PROJECT_STATUSES = ['PLANNED'];
 
-/**
- * Precedence mirrors the server's own reason priority: the most binding
- * document wins, because that is the one the Owner is held to. Approval
- * outranks a freeze, a freeze outranks a working draft.
- *
- * Baseline is reported alongside, never folded in — a project can hold an
- * active baseline and a RAB in any state, and collapsing the two would
- * hide exactly the distinction this function exists to keep.
- */
-export const resolveRabLifecycleStatus = (
+const view = (status: ProjectPresentationStatus): ProjectPresentationView => ({
+  status,
+  ...PRESENTATION[status],
+});
+
+export const resolveProjectPresentationStatus = (
   lifecycle: RabLifecycleFactsWire | null | undefined,
-): RabLifecycleStatusView => {
-  const approvedCount = lifecycle?.approvedRabCount;
-  const lockedCount = lifecycle?.lockedRabCount;
-  const draftCount = lifecycle?.workingDraftCount;
-  const baselineCount = lifecycle?.activeBaselineCount;
+): ProjectPresentationView => {
+  const approved = lifecycle?.approvedRabCount;
+  const locked = lifecycle?.lockedRabCount;
+  const draft = lifecycle?.workingDraftCount;
 
-  let rab: RabDocumentState;
-  if (approvedCount === undefined && lockedCount === undefined && draftCount === undefined) {
-    rab = 'UNKNOWN';
-  } else if ((approvedCount ?? 0) > 0) {
-    rab = 'APPROVED';
-  } else if ((lockedCount ?? 0) > 0) {
-    rab = 'LOCKED';
-  } else if ((draftCount ?? 0) > 0) {
-    rab = 'DRAFT';
-  } else {
-    rab = 'NONE';
+  // Told nothing. Said plainly, never filled in with a plausible status.
+  if (approved === undefined && locked === undefined && draft === undefined) {
+    return view('UNKNOWN');
   }
 
-  const approved = rab === 'UNKNOWN' ? null : rab === 'APPROVED';
-  const baseline = baselineCount === undefined ? null : baselineCount > 0;
+  // One RAB, one house, three states. An APPROVED and a LOCKED document on the
+  // same project means two documents claim to govern it — not a state to pick
+  // a winner from.
+  if ((approved ?? 0) > 0 && (locked ?? 0) > 0) return view('UNKNOWN');
 
-  return {
-    rab,
-    rabLabel: RAB_STATE_LABEL[rab],
-    approved,
-    approvalLabel:
-      approved === null ? 'Belum diketahui' : approved ? 'Sudah disetujui' : 'Belum disetujui',
-    baseline,
-    baselineLabel:
-      baseline === null ? 'Belum diketahui' : baseline ? 'Baseline aktif' : 'Belum ada baseline',
-    chipModifier: RAB_STATE_CHIP[rab],
-  };
+  if ((approved ?? 0) > 0) {
+    const projectStatus = (lifecycle?.projectStatus ?? '').trim().toUpperCase();
+    if (PRE_EXECUTION_PROJECT_STATUSES.includes(projectStatus)) return view('APPROVED');
+    if (EXECUTION_PROJECT_STATUSES.includes(projectStatus)) return view('BERJALAN');
+    if (FINISHED_PROJECT_STATUSES.includes(projectStatus)) return view('SELESAI');
+    // Approved against a project stage this resolver does not recognise.
+    return view('UNKNOWN');
+  }
+
+  if ((locked ?? 0) > 0) return view('TERKUNCI');
+
+  // A working draft, or no RAB document yet: both sit at the first stage of
+  // the lifecycle the user reads. "Mulai RAB" vs "Lanjutkan Draft" is what
+  // tells them which, and that is the action's job, not the badge's.
+  return view('DRAFT');
 };
 
-/**
- * The project's own status, in the project's own words. It lives beside the
- * RAB resolver deliberately: the two labels are only ever safe next to each
- * other if neither surface is free to invent its own wording. "Terkunci" in
- * particular belongs to a RAB and never to a project — a running project is
- * berjalan, not locked.
- */
-const PROJECT_STATUS_LABEL: Record<string, string> = {
-  PLANNED: 'Perencanaan',
-  ACTIVE: 'Berjalan',
-  ON_HOLD: 'Ditahan',
-  COMPLETED: 'Selesai',
-  ARCHIVED: 'Arsip',
-};
+/** The filter offers exactly the lifecycle the user reads, in its own order. */
+export const PRESENTATION_FILTER_ORDER: ProjectPresentationStatus[] = [
+  'DRAFT',
+  'TERKUNCI',
+  'APPROVED',
+  'BERJALAN',
+  'SELESAI',
+];
 
-export const resolveProjectStatusLabel = (rawStatus: unknown): string => {
-  const key = typeof rawStatus === 'string' ? rawStatus.trim().toUpperCase() : '';
-  return PROJECT_STATUS_LABEL[key] ?? 'Belum diketahui';
-};
+export const presentationLabel = (status: ProjectPresentationStatus): string =>
+  PRESENTATION[status].label;
 
 /** Human copy. No reason code is ever shown to the Owner as-is. */
 export const RAB_LOCK_COPY = {

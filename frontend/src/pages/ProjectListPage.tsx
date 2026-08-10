@@ -9,67 +9,48 @@ import {
   buildRabPath,
   primaryAction,
   type RabLifecycleProjection,
-  type RabStatus,
 } from '../utils/projectCardAction';
-import { resolveProjectStatusLabel, resolveRabLifecycleStatus } from '../utils/rabLockDisplay';
+import {
+  PRESENTATION_FILTER_ORDER,
+  presentationLabel,
+  resolveProjectPresentationStatus,
+  type ProjectPresentationStatus,
+} from '../utils/rabLockDisplay';
 
 type UserInvolvement = 'ditugaskan';
 
 interface ProjectItem {
   id: string;
   nama: string;
-  status: RabStatus;
   involvement: UserInvolvement;
   nilai: string;
   keterangan: string;
-  progress?: number;
-  /** Project.status verbatim, so the project chip states the project's own fact. */
-  rawStatus: string;
   rabLifecycle?: RabLifecycleProjection;
 }
 
 function mapProjectToItem(backendProject: Record<string, unknown>): ProjectItem {
-  // Project.status only drives informational chip text — never RAB editability.
-  let mappedStatus: RabStatus = 'draft';
-  if (backendProject.status === 'ACTIVE') mappedStatus = 'berjalan';
-  else if (backendProject.status === 'COMPLETED') mappedStatus = 'selesai';
-  else if (backendProject.status === 'ON_HOLD') mappedStatus = 'terkunci';
-  else if (backendProject.status === 'PLANNED') mappedStatus = 'draft';
-
   const budget = backendProject.budgetBaseline
     ? new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(Number(backendProject.budgetBaseline))
     : 'Belum tersedia';
 
-  const rabLifecycle = backendProject.rabLifecycle as RabLifecycleProjection | undefined;
-
   return {
     id: String(backendProject.id),
     nama: (backendProject.name as string) || 'Proyek Tanpa Nama',
-    status: mappedStatus,
     involvement: 'ditugaskan',
     nilai: budget,
     keterangan: (backendProject.description as string) || 'Belum ada keterangan',
-    progress: mappedStatus === 'berjalan' ? 0 : undefined,
-    rawStatus: typeof backendProject.status === 'string' ? backendProject.status : '',
-    rabLifecycle,
+    rabLifecycle: backendProject.rabLifecycle as RabLifecycleProjection | undefined,
   };
 }
 
 /**
- * This filter has always run over Project.status, so it is named for what it
- * actually filters. It previously announced itself as "Status RAB" — the one
- * thing it does not read.
- *
- * There is no 'approved' option because no project ever maps to it: it could
- * only ever return an empty list, and a control that always finds nothing is
- * a door onto an empty room.
+ * The filter offers the same lifecycle the cards show, resolved by the same
+ * function. It used to run over Project.status while announcing itself as a
+ * RAB filter, so picking 'Terkunci' searched a field that never holds it.
  */
-const projectStatusOptions: { value: RabStatus | 'semua'; label: string }[] = [
+const presentationStatusOptions: { value: ProjectPresentationStatus | 'semua'; label: string }[] = [
   { value: 'semua', label: 'Semua' },
-  { value: 'draft', label: 'Perencanaan' },
-  { value: 'berjalan', label: 'Berjalan' },
-  { value: 'terkunci', label: 'Ditahan' },
-  { value: 'selesai', label: 'Selesai' },
+  ...PRESENTATION_FILTER_ORDER.map((status) => ({ value: status, label: presentationLabel(status) })),
 ];
 
 const involvementOptions: { value: UserInvolvement | 'semua'; label: string }[] = [
@@ -82,7 +63,7 @@ const buildNotesPath = (id: string) => `/project/${id}/catatan`;
 export function ProjectListPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<RabStatus | 'semua'>('semua');
+  const [statusFilter, setStatusFilter] = useState<ProjectPresentationStatus | 'semua'>('semua');
   const [involvementFilter, setInvolvementFilter] = useState<UserInvolvement | 'semua'>('semua');
 
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -133,7 +114,11 @@ export function ProjectListPage() {
       const matchQuery =
         normalizedQuery.length === 0 ||
         project.nama.toLowerCase().includes(normalizedQuery);
-      const matchStatus = statusFilter === 'semua' || project.status === statusFilter;
+      // Filtered by the same resolver the card badge uses, so the list and
+      // the badge can never disagree about what 'Terkunci' means.
+      const matchStatus =
+        statusFilter === 'semua' ||
+        resolveProjectPresentationStatus(project.rabLifecycle).status === statusFilter;
       const matchInvolvement =
         involvementFilter === 'semua' || project.involvement === involvementFilter;
 
@@ -179,10 +164,10 @@ export function ProjectListPage() {
           <select
             className="simprok-projects__filter"
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as RabStatus | 'semua')}
-            aria-label="Filter Status Proyek"
+            onChange={(event) => setStatusFilter(event.target.value as ProjectPresentationStatus | 'semua')}
+            aria-label="Filter Status"
           >
-            {projectStatusOptions.map((option) => (
+            {presentationStatusOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -248,12 +233,13 @@ export function ProjectListPage() {
         <div className="simprok-projects__grid">
           {filteredProjects.map((project) => {
             const action = primaryAction(project);
+            const presentation = resolveProjectPresentationStatus(project.rabLifecycle);
             const noteSummary = getProjectNoteSummary(project.id);
 
             return (
               <article
                 key={project.id}
-                className={`simprok-project-card simprok-project-card--${project.status}`}
+                className={`simprok-project-card simprok-project-card--${presentation.chipModifier}`}
                 onClick={() => openRab(project.id)}
               >
                 <div className="simprok-project-card__top">
@@ -270,56 +256,36 @@ export function ProjectListPage() {
                     </button>
                   </h2>
 
-                  {/* The card carries the project's status and its RAB's status
-                      side by side. One chip could only ever be one of them, and
-                      it was showing the project's while being read as the RAB's. */}
-                  <span className={`simprok-project-chip simprok-project-chip--${project.status}`}>
-                    Proyek: {resolveProjectStatusLabel(project.rawStatus)}
+                  {/* One status only: the lifecycle the user actually reads. */}
+                  <span className={`simprok-project-chip simprok-project-chip--${presentation.chipModifier}`}>
+                    {presentation.badgeLabel}
                   </span>
-                  {(() => {
-                    const rabStatusView = resolveRabLifecycleStatus(project.rabLifecycle);
-                    return (
-                      <span className={`simprok-project-chip simprok-project-chip--${rabStatusView.chipModifier}`}>
-                        {rabStatusView.rabLabel}
-                      </span>
-                    );
-                  })()}
                 </div>
 
                 <p className="simprok-project-card__value">{project.nilai}</p>
                 <p className="simprok-project-card__ket">{project.keterangan}</p>
 
-                {project.status === 'berjalan' && typeof project.progress === 'number' ? (
-                  <div
-                    className="simprok-project-card__progress"
-                    role="progressbar"
-                    aria-label={`Progress ${project.progress}%`}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={project.progress}
-                  >
-                    <span style={{ width: `${project.progress}%` }} />
-                  </div>
-                ) : null}
+                {/* No progress bar: Monitoring is on HOLD, so the only number
+                    this card could draw would be one nobody measured. */}
 
                 <div
                   className="simprok-project-card__actions"
                   onClick={(event) => event.stopPropagation()}
                 >
-                  <button
-                    className="simprok-project-card__primary"
-                    type="button"
-                    onClick={() => {
-                      if (action.path) navigate(action.path);
-                    }}
-                    disabled={!action.path}
-                    title={action.disabledReason}
-                    aria-label={action.disabledReason ? `${action.label} - ${action.disabledReason}` : action.label}
-                  >
-                    {action.label}
-                  </button>
+                  {/* Only a real door gets a button. When there is nothing
+                      lawful to do, the card shows no control at all rather
+                      than a dead one. */}
+                  {action ? (
+                    <button
+                      className="simprok-project-card__primary"
+                      type="button"
+                      onClick={() => navigate(action.path)}
+                    >
+                      {action.label}
+                    </button>
+                  ) : null}
 
-                  {project.status === 'draft' ? (
+                  {presentation.status === 'DRAFT' ? (
                     <button
                       className="simprok-project-card__danger"
                       type="button"

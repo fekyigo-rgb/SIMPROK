@@ -10,6 +10,7 @@ const editableLifecycle = (workingDraftCount: number): RabLifecycleProjection =>
   canEnterEditableDraftWorkspace: true,
   canEditDraft: true,
   reasonCode: null,
+  projectStatus: 'PLANNED',
   workingDraftCount,
   activeBaselineCount: 0,
   approvedRabCount: 0,
@@ -20,6 +21,7 @@ const blockedLifecycle = (reasonCode: string): RabLifecycleProjection => ({
   canEnterEditableDraftWorkspace: false,
   canEditDraft: false,
   reasonCode,
+  projectStatus: 'PLANNED',
   workingDraftCount: 0,
   activeBaselineCount: reasonCode === 'ACTIVE_BASELINE_EXISTS' ? 1 : 0,
   approvedRabCount: reasonCode === 'APPROVED_RAB_EXISTS' ? 1 : 0,
@@ -27,86 +29,68 @@ const blockedLifecycle = (reasonCode: string): RabLifecycleProjection => ({
 });
 
 test('PLANNED project with zero Working Draft shows "Mulai RAB"', () => {
-  const project: ProjectCardActionInput = {
-    id: 'p1',
-    status: 'draft', // 'draft' is the PLANNED-status chip mapping
-    rabLifecycle: editableLifecycle(0),
-  };
+  const project: ProjectCardActionInput = { id: 'p1', rabLifecycle: editableLifecycle(0) };
+
   const action = primaryAction(project);
-  assert.equal(action.label, 'Mulai RAB');
-  assert.equal(action.path, '/project/p1/rab/workspace');
+  assert.equal(action?.label, 'Mulai RAB');
+  assert.equal(action?.path, '/project/p1/rab/workspace');
 });
 
-test('PLANNED project with exactly one Working Draft shows "Lanjutkan Draft"', () => {
-  const project: ProjectCardActionInput = {
-    id: 'p2',
-    status: 'draft',
-    rabLifecycle: editableLifecycle(1),
-  };
+test('PLANNED project with an existing Working Draft shows "Lanjutkan Draft"', () => {
+  const project: ProjectCardActionInput = { id: 'p2', rabLifecycle: editableLifecycle(1) };
+
   const action = primaryAction(project);
-  assert.equal(action.label, 'Lanjutkan Draft');
-  assert.equal(action.path, '/project/p2/rab/workspace');
+  assert.equal(action?.label, 'Lanjutkan Draft');
+  assert.equal(action?.path, '/project/p2/rab/workspace');
 });
 
-test('non-editable projects never show "Mulai RAB" or "Lanjutkan Draft", regardless of Project.status', () => {
-  const editableLabels = ['Mulai RAB', 'Lanjutkan Draft'];
-  const statuses: ProjectCardActionInput['status'][] = ['draft', 'terkunci', 'approved', 'berjalan', 'selesai'];
-  const reasonCodes = ['ACTIVE_BASELINE_EXISTS', 'APPROVED_RAB_EXISTS', 'MULTIPLE_WORKING_DRAFTS', 'PROJECT_NOT_DRAFT'];
+// ─────────────────────────────────────────────────────────────────────────────
+// OWNER PRODUCT LAW — a status badge is information, never a fake control
+// ─────────────────────────────────────────────────────────────────────────────
 
-  let checked = 0;
-  for (const status of statuses) {
-    for (const reasonCode of reasonCodes) {
-      const action = primaryAction({ id: 'blocked', status, rabLifecycle: blockedLifecycle(reasonCode) });
-      assert.equal(editableLabels.includes(action.label), false, `status=${status} reasonCode=${reasonCode} unexpectedly showed "${action.label}"`);
-      checked += 1;
-    }
+test('when nothing lawful can be done, the card offers no action at all', () => {
+  const reasonCodes = [
+    'ACTIVE_BASELINE_EXISTS',
+    'APPROVED_RAB_EXISTS',
+    'RAB_LOCKED',
+    'MULTIPLE_WORKING_DRAFTS',
+    'PROJECT_NOT_DRAFT',
+  ];
+
+  for (const reasonCode of reasonCodes) {
+    assert.equal(
+      primaryAction({ id: 'blocked', rabLifecycle: blockedLifecycle(reasonCode) }),
+      null,
+      `reasonCode=${reasonCode} should offer no action`,
+    );
   }
-  assert.equal(checked, statuses.length * reasonCodes.length);
 });
 
-test('missing rabLifecycle (e.g. backend projection absent) fails closed — no editable label, no path assumed editable', () => {
-  const action = primaryAction({ id: 'p3', status: 'draft' });
-  assert.equal(['Mulai RAB', 'Lanjutkan Draft'].includes(action.label), false);
+test('no unlock, monitoring, progress or archive control is ever offered', () => {
+  // These labels were produced from Project.status for capabilities that do
+  // not exist. Nothing may bring them back.
+  const forbidden = ['Buka Kunci', 'Monitoring HOLD', 'Progress HOLD', 'Lihat Arsip', 'RAB Terkunci'];
+  const everyLifecycle = [
+    editableLifecycle(0),
+    editableLifecycle(1),
+    ...['ACTIVE_BASELINE_EXISTS', 'APPROVED_RAB_EXISTS', 'RAB_LOCKED', 'MULTIPLE_WORKING_DRAFTS', 'PROJECT_NOT_DRAFT'].map(blockedLifecycle),
+  ];
+
+  for (const rabLifecycle of everyLifecycle) {
+    const label = primaryAction({ id: 'p', rabLifecycle })?.label;
+    if (label === undefined) continue;
+    assert.equal(forbidden.includes(label), false, `unexpectedly offered "${label}"`);
+  }
 });
 
-test('blocked project falls back to the Project.status-driven informational label, never an editable one', () => {
-  assert.equal(primaryAction({ id: 'p4', status: 'terkunci', rabLifecycle: blockedLifecycle('PROJECT_NOT_DRAFT') }).label, 'Buka Kunci');
-  assert.equal(primaryAction({ id: 'p5', status: 'berjalan', rabLifecycle: blockedLifecycle('PROJECT_NOT_DRAFT') }).label, 'Progress HOLD');
-  assert.equal(primaryAction({ id: 'p6', status: 'selesai', rabLifecycle: blockedLifecycle('PROJECT_NOT_DRAFT') }).label, 'Lihat Arsip');
+test('missing rabLifecycle fails closed — no action is assumed to be open', () => {
+  assert.equal(primaryAction({ id: 'p3' }), null);
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RAB LIFECYCLE CONSISTENCY — the card must not overstate why a draft is shut
-// ─────────────────────────────────────────────────────────────────────────────
-
-test('a LOCKED RAB is reported as locked — never as approved, never as a baseline', () => {
-  const action = primaryAction({ id: 'p7', status: 'draft', rabLifecycle: blockedLifecycle('RAB_LOCKED') });
-
-  assert.equal(action.label, 'RAB Terkunci');
-  assert.match(action.disabledReason ?? '', /dikunci/);
-  // The old copy claimed baseline-or-approved for every blocked draft.
-  assert.doesNotMatch(action.disabledReason ?? '', /baseline/i);
-  assert.doesNotMatch(action.disabledReason ?? '', /disetujui/i);
-});
-
-test('each blocking reason states its own fact, and none borrows another\'s', () => {
-  const reasonOf = (code: string) =>
-    primaryAction({ id: 'p8', status: 'draft', rabLifecycle: blockedLifecycle(code) }).disabledReason ?? '';
-
-  assert.match(reasonOf('ACTIVE_BASELINE_EXISTS'), /baseline aktif/i);
-  assert.match(reasonOf('APPROVED_RAB_EXISTS'), /disetujui/i);
-  assert.match(reasonOf('MULTIPLE_WORKING_DRAFTS'), /lebih dari satu draft/i);
-  assert.match(reasonOf('PROJECT_NOT_DRAFT'), /tidak lagi berada pada tahap perencanaan/i);
-
-  // A locked RAB must not be described with any other reason's words.
-  const locked = reasonOf('RAB_LOCKED');
-  assert.doesNotMatch(locked, /baseline/i);
-  assert.doesNotMatch(locked, /lebih dari satu/i);
-});
-
-test('an unrecognised reason code is reported honestly, not guessed into a stronger claim', () => {
-  const action = primaryAction({ id: 'p9', status: 'draft', rabLifecycle: blockedLifecycle('SOMETHING_NEW') });
-
-  assert.equal(action.label, 'RAB Belum Dapat Diubah');
-  assert.doesNotMatch(action.disabledReason ?? '', /baseline|disetujui|dikunci/i);
+test('an action, when offered, always carries a real path', () => {
+  for (const count of [0, 1, 5]) {
+    const action = primaryAction({ id: 'p4', rabLifecycle: editableLifecycle(count) });
+    assert.equal(typeof action?.path, 'string');
+    assert.notEqual(action?.path, '');
+  }
 });

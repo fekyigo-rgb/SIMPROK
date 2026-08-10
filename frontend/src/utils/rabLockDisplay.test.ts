@@ -4,8 +4,9 @@ import {
   RAB_LOCK_COPY,
   resolveRabWorkspacePresentation,
   toPrelockFindingLines,
-  resolveRabLifecycleStatus,
-  resolveProjectStatusLabel,
+  resolveProjectPresentationStatus,
+  presentationLabel,
+  PRESENTATION_FILTER_ORDER,
 } from "./rabLockDisplay.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -92,89 +93,103 @@ test("no findings is an empty list, never a fabricated one", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RAB LIFECYCLE CONSISTENCY — PROJECT STATUS is not RAB STATUS
+// OWNER PRODUCT LAW — ONE PRESENTATION STATUS
 //
-// Percobaan 1 is the case these tests exist for: a project still PLANNED whose
-// RAB is LOCKED, with no approval and no baseline. Every surface used to read
-// Project.status and announce an open draft.
+//   Draft → Terkunci → Approved → Berjalan → Selesai
+//
+// Internally RabDocument stays DRAFT/LOCKED/APPROVED and the project keeps its
+// own lifecycle. This joins them for a human without bending either, and says
+// so honestly when the combination it is handed is not lawful.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("a PLANNED project with a LOCKED RAB reports the RAB as locked", () => {
-  const view = resolveRabLifecycleStatus({
-    reasonCode: "RAB_LOCKED",
-    canEditDraft: false,
-    approvedRabCount: 0,
-    lockedRabCount: 1,
-    workingDraftCount: 1,
-    activeBaselineCount: 0,
-  });
-
-  assert.equal(view.rab, "LOCKED");
-  assert.equal(view.rabLabel, "RAB Terkunci");
-  assert.doesNotMatch(view.rabLabel, /draft/i);
-  // LOCKED is not APPROVED, and neither is a baseline.
-  assert.equal(view.approved, false);
-  assert.equal(view.approvalLabel, "Belum disetujui");
-  assert.equal(view.baseline, false);
-  assert.equal(view.baselineLabel, "Belum ada baseline");
+const facts = (over = {}) => ({
+  projectStatus: 'PLANNED',
+  workingDraftCount: 0,
+  lockedRabCount: 0,
+  approvedRabCount: 0,
+  activeBaselineCount: 0,
+  ...over,
 });
 
-test("approval outranks a freeze, and a freeze outranks a working draft", () => {
-  const approved = resolveRabLifecycleStatus({ approvedRabCount: 1, lockedRabCount: 1, workingDraftCount: 1 });
-  assert.equal(approved.rab, "APPROVED");
-  assert.equal(approved.approved, true);
+test("Percobaan 1: PLANNED project + LOCKED RAB reads Terkunci, never Draft", () => {
+  const view = resolveProjectPresentationStatus(
+    facts({ lockedRabCount: 1, workingDraftCount: 1, reasonCode: 'RAB_LOCKED' }),
+  );
 
-  const locked = resolveRabLifecycleStatus({ approvedRabCount: 0, lockedRabCount: 1, workingDraftCount: 1 });
-  assert.equal(locked.rab, "LOCKED");
-
-  const draft = resolveRabLifecycleStatus({ approvedRabCount: 0, lockedRabCount: 0, workingDraftCount: 1 });
-  assert.equal(draft.rab, "DRAFT");
+  assert.equal(view.status, 'TERKUNCI');
+  assert.equal(view.label, 'Terkunci');
+  assert.equal(view.badgeLabel, 'RAB Terkunci');
+  assert.equal(view.chipModifier, 'terkunci');
+  // The project is still PLANNED, and that must not leak into the badge.
+  assert.doesNotMatch(view.badgeLabel, /draft|perencanaan/i);
 });
 
-test("no RAB document at all is stated as such, not as a draft", () => {
-  const view = resolveRabLifecycleStatus({ approvedRabCount: 0, lockedRabCount: 0, workingDraftCount: 0 });
-  assert.equal(view.rab, "NONE");
-  assert.equal(view.rabLabel, "RAB Belum Dibuat");
+test("a working draft — or no RAB yet — sits at the first stage: Draft", () => {
+  assert.equal(resolveProjectPresentationStatus(facts({ workingDraftCount: 1 })).status, 'DRAFT');
+  assert.equal(resolveProjectPresentationStatus(facts()).status, 'DRAFT');
+  assert.equal(resolveProjectPresentationStatus(facts()).badgeLabel, 'RAB Draft');
 });
 
-test("absent lifecycle facts are reported as unknown — never defaulted to zero", () => {
+test("an APPROVED RAB reads by the project's own stage", () => {
+  const statusFor = (projectStatus: string) =>
+    resolveProjectPresentationStatus(facts({ approvedRabCount: 1, projectStatus })).status;
+
+  assert.equal(statusFor('PLANNED'), 'APPROVED');
+  assert.equal(statusFor('ACTIVE'), 'BERJALAN');
+  assert.equal(statusFor('ON_HOLD'), 'BERJALAN'); // never a separate "held" status
+  assert.equal(statusFor('COMPLETED'), 'SELESAI');
+  assert.equal(statusFor('ARCHIVED'), 'SELESAI');
+});
+
+test("an approved RAB on an unrecognised project stage fails honestly", () => {
+  const view = resolveProjectPresentationStatus(facts({ approvedRabCount: 1, projectStatus: 'SOMETHING_NEW' }));
+  assert.equal(view.status, 'UNKNOWN');
+  assert.doesNotMatch(view.badgeLabel, /draft|terkunci|approved|berjalan|selesai/i);
+});
+
+test("APPROVED and LOCKED together is not lawful — no winner is picked", () => {
+  // One RAB, one house, three states. Two governing documents is a defect,
+  // and guessing which one rules would hide it.
+  const view = resolveProjectPresentationStatus(facts({ approvedRabCount: 1, lockedRabCount: 1 }));
+  assert.equal(view.status, 'UNKNOWN');
+});
+
+test("absent facts are reported as unknown — never defaulted into Draft", () => {
   for (const absent of [undefined, null, {}]) {
-    const view = resolveRabLifecycleStatus(absent);
-    assert.equal(view.rab, "UNKNOWN", `expected UNKNOWN for ${JSON.stringify(absent)}`);
-    assert.equal(view.approved, null);
-    assert.equal(view.baseline, null);
-    assert.doesNotMatch(view.rabLabel, /terkunci|disetujui/i);
+    const view = resolveProjectPresentationStatus(absent);
+    assert.equal(view.status, 'UNKNOWN', `expected UNKNOWN for ${JSON.stringify(absent)}`);
+    assert.equal(view.badgeLabel, 'Menunggu Data');
   }
 });
 
-test("a baseline is reported beside the RAB state, never folded into it", () => {
-  const view = resolveRabLifecycleStatus({ approvedRabCount: 0, lockedRabCount: 1, workingDraftCount: 0, activeBaselineCount: 1 });
-  assert.equal(view.rab, "LOCKED");
-  assert.equal(view.baseline, true);
-  assert.equal(view.baselineLabel, "Baseline aktif");
-});
-
-test("the chip reuses the existing colour vocabulary only", () => {
-  const allowed = ["approved", "terkunci", "draft"];
+test("the badge only ever uses the existing chip vocabulary", () => {
+  const allowed = ['draft', 'terkunci', 'approved', 'berjalan', 'selesai'];
   const cases = [
-    { approvedRabCount: 1 },
-    { approvedRabCount: 0, lockedRabCount: 1 },
-    { approvedRabCount: 0, lockedRabCount: 0, workingDraftCount: 1 },
-    { approvedRabCount: 0, lockedRabCount: 0, workingDraftCount: 0 },
+    facts({ workingDraftCount: 1 }),
+    facts({ lockedRabCount: 1 }),
+    facts({ approvedRabCount: 1 }),
+    facts({ approvedRabCount: 1, projectStatus: 'ACTIVE' }),
+    facts({ approvedRabCount: 1, projectStatus: 'COMPLETED' }),
     undefined,
   ];
-  for (const facts of cases) {
-    assert.equal(allowed.includes(resolveRabLifecycleStatus(facts).chipModifier), true);
+  for (const f of cases) {
+    assert.equal(allowed.includes(resolveProjectPresentationStatus(f).chipModifier), true);
   }
 });
 
-test("a project is described in project words — 'Terkunci' belongs to a RAB", () => {
-  assert.equal(resolveProjectStatusLabel("PLANNED"), "Perencanaan");
-  assert.equal(resolveProjectStatusLabel("ACTIVE"), "Berjalan");
-  assert.equal(resolveProjectStatusLabel("ON_HOLD"), "Ditahan");
-  assert.equal(resolveProjectStatusLabel("COMPLETED"), "Selesai");
-  assert.equal(resolveProjectStatusLabel("ARCHIVED"), "Arsip");
-  // Unknown or missing is said plainly, not guessed into "Draft".
-  assert.equal(resolveProjectStatusLabel(undefined), "Belum diketahui");
-  assert.equal(resolveProjectStatusLabel("WHATEVER"), "Belum diketahui");
+test("the filter offers exactly the lifecycle the user reads, in order", () => {
+  assert.deepEqual(PRESENTATION_FILTER_ORDER, ['DRAFT', 'TERKUNCI', 'APPROVED', 'BERJALAN', 'SELESAI']);
+  assert.deepEqual(
+    PRESENTATION_FILTER_ORDER.map(presentationLabel),
+    ['Draft', 'Terkunci', 'Approved', 'Berjalan', 'Selesai'],
+  );
+});
+
+test("filtering and the badge cannot disagree — both come from this resolver", () => {
+  // A card shown as 'Terkunci' must be found by the 'Terkunci' filter.
+  const locked = facts({ lockedRabCount: 1 });
+  const view = resolveProjectPresentationStatus(locked);
+  assert.equal(view.status, 'TERKUNCI');
+  assert.equal(presentationLabel(view.status), 'Terkunci');
+  assert.equal(PRESENTATION_FILTER_ORDER.includes(view.status), true);
 });
