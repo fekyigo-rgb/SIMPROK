@@ -10,13 +10,17 @@ import { CostKernelService } from './cost-kernel.service';
 import { BoqImportService } from './boq-import.service';
 import { RabLifecyclePolicyService } from './rab-lifecycle-policy.service';
 import { RabEditableLifecycleGuard } from './rab-editable-lifecycle.guard';
+import { RabLockService } from './rab-lock.service';
 import { RabKernelPersistenceService } from './rab-kernel-persistence.service';
 import { PersistedCalculationService } from './persisted-calculation.service';
 import { BasicPriceModule } from '../basic-price/basic-price.module';
+import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
+import { AhspResourceResolutionOrchestrator } from '../project-ahsp/ahsp-resource-resolution.orchestrator';
+import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
 @Module({
-  imports: [PrismaModule, IntelligenceModule, AuthModule, BasicPriceModule],
+  imports: [PrismaModule, IntelligenceModule, AuthModule, BasicPriceModule, UnitKernelModule],
   controllers: [ProjectController],
-  providers: [ProjectService, DeviationService, RabIntelligenceProposalService, CostKernelService, BoqImportService, RabLifecyclePolicyService, RabEditableLifecycleGuard, RabKernelPersistenceService, PersistedCalculationService],
+  providers: [ProjectService, DeviationService, RabIntelligenceProposalService, CostKernelService, BoqImportService, RabLifecyclePolicyService, RabEditableLifecycleGuard, RabKernelPersistenceService, PersistedCalculationService, RabLockService, AhspResourceResolutionOrchestrator, ResourceIdentityResolutionService],
 })
 export class ProjectModule {}

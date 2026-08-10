@@ -29,6 +29,12 @@ import {
   getPriceOriginBadge,
 } from '../utils/rabPersistedDraftDisplay';
 import {
+  RAB_LOCK_COPY,
+  resolveRabWorkspacePresentation,
+  toPrelockFindingLines,
+  type PrelockFindingLine,
+} from '../utils/rabLockDisplay';
+import {
   formatAhspVersionOption,
   isWorkspacePrivateAhsp,
   type AhspOrigin,
@@ -652,12 +658,21 @@ export function RabWorkspacePage() {
       const data: DraftBoqResponse = await response.json();
       if (cancelled) return;
 
-      if (data.capability?.canEditDraft !== true) {
-        setCapabilityState({ kind: 'lifecycle-denied', reasonCode: data.capability?.reasonCode ?? null });
+      // RM-03D1 — LOCKED is frozen, not hidden. A locked RAB stays fully
+      // readable: same rows, same breakdown, same recap, every control
+      // read-only. Only a genuine denial still takes the denial screen.
+      const presentation = resolveRabWorkspacePresentation(data.capability);
+      if (presentation.mode === 'denied') {
+        setCapabilityState({ kind: 'lifecycle-denied', reasonCode: presentation.reasonCode });
         return;
       }
 
-      setCapabilityState({ kind: 'ready', canEditDraft: true });
+      const frozen = presentation.mode === 'frozen';
+      setRabLocked(frozen);
+      // `canEditDraft: false` is what every existing editing control already
+      // reads, so the whole workspace turns read-only without a second
+      // read-only code path to keep in step.
+      setCapabilityState({ kind: 'ready', canEditDraft: !frozen });
 
       applyRecap(data.recap);
       if (data.items.length > 0) {
@@ -868,6 +883,47 @@ export function RabWorkspacePage() {
   );
 
   const [showBackflowWarning, setShowBackflowWarning] = useState(false);
+
+  /**
+   * RM-03D1 LOCK. `rabLocked` mirrors the server's lifecycle, never a local
+   * guess: it is set from the capability projection on every draft read, so a
+   * hard reload shows the true state and a refused lock leaves it untouched.
+   */
+  const [rabLocked, setRabLocked] = useState(false);
+  const [isLocking, setIsLocking] = useState(false);
+  const [lockConfirmOpen, setLockConfirmOpen] = useState(false);
+  const [lockFindings, setLockFindings] = useState<PrelockFindingLine[]>([]);
+
+  const handleLockRab = async () => {
+    if (!projectId || isLocking) return;
+    setLockConfirmOpen(false);
+    setIsLocking(true);
+    setLockFindings([]);
+    try {
+      const response = await apiFetch(`/projects/${projectId}/rab/lock`, { method: 'POST' });
+      const payload = await response.json().catch(() => null);
+
+      if (response.ok && payload?.status === 'LOCKED') {
+        setRabLocked(true);
+        setCapabilityState({ kind: 'ready', canEditDraft: false });
+        setStatusMessage(RAB_LOCK_COPY.lockedNote);
+        return;
+      }
+
+      // A refusal is information, not an error to swallow: the RAB stays a
+      // live draft and the Owner is told which rows moved.
+      if (payload?.reason === 'PRELOCK_REVALIDATION_REQUIRED') {
+        setLockFindings(toPrelockFindingLines(payload.findings));
+        setStatusMessage(RAB_LOCK_COPY.revalidationRequired);
+        return;
+      }
+      setStatusMessage(RAB_LOCK_COPY.failed);
+    } catch {
+      setStatusMessage(RAB_LOCK_COPY.failed);
+    } finally {
+      setIsLocking(false);
+    }
+  };
 
   const openPlaceholder = (action: string) => {
     setStatusMessage(`${action}: fitur disiapkan, belum aktif.`);
@@ -1402,8 +1458,21 @@ export function RabWorkspacePage() {
         <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId || !canEditDraft}>
           <Save size={17} /> {isSaving ? 'Menyimpan...' : 'Simpan Draft'}
         </button>
-        <button className="simprok-rab-toolbar__lock" onClick={() => openPlaceholder('Kunci RAB')} title="Kunci RAB - menunggu mesin finalisasi" aria-label="Kunci RAB - belum aktif" data-route="/?ruang=kunci-rab" aria-disabled={true}>
-          <LockKeyhole size={17} /> Kunci RAB
+        {/*
+          RM-03D1 — the lock door is live. It is offered only while the draft
+          is still editable and its pricing is complete: locking an incomplete
+          RAB would freeze a total nobody can stand behind, and the server
+          refuses it anyway, so the door tells the truth before it is pushed.
+        */}
+        <button
+          className="simprok-rab-toolbar__lock"
+          onClick={() => setLockConfirmOpen(true)}
+          title={rabLocked ? RAB_LOCK_COPY.lockedNote : isLocking ? 'Mengunci RAB...' : RAB_LOCK_COPY.action}
+          aria-label={rabLocked ? RAB_LOCK_COPY.lockedBadge : RAB_LOCK_COPY.action}
+          data-route="/?ruang=kunci-rab"
+          disabled={rabLocked || isLocking || !projectId || !canEditDraft || !pricingComplete}
+        >
+          <LockKeyhole size={17} /> {rabLocked ? RAB_LOCK_COPY.lockedBadge : isLocking ? 'Mengunci...' : RAB_LOCK_COPY.action}
         </button>
       </section>
       {importPreview ? (
@@ -1434,6 +1503,46 @@ export function RabWorkspacePage() {
           <button onClick={() => setShowBackflowWarning(false)} className="simprok-rab-action simprok-rab-action--secondary" style={{ marginTop: '10px' }}>
             Tutup Peringatan
           </button>
+        </div>
+      ) : null}
+
+      {/*
+        RM-03D1 — the pre-lock check is announced before it runs, so the Owner
+        is never surprised by a RAB that refuses to freeze.
+      */}
+      {lockConfirmOpen ? (
+        <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="alertdialog" aria-label={RAB_LOCK_COPY.action}>
+          <strong>{RAB_LOCK_COPY.action}</strong>
+          <p>{RAB_LOCK_COPY.confirm}</p>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+            <button onClick={() => void handleLockRab()} className="simprok-rab-action" disabled={isLocking}>
+              {RAB_LOCK_COPY.confirmAccept}
+            </button>
+            <button onClick={() => setLockConfirmOpen(false)} className="simprok-rab-action simprok-rab-action--secondary">
+              {RAB_LOCK_COPY.confirmCancel}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {rabLocked ? (
+        <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="status">
+          <strong>{RAB_LOCK_COPY.lockedBadge}</strong>
+          <p>{RAB_LOCK_COPY.lockedNote}</p>
+        </div>
+      ) : null}
+
+      {/* A refused lock says which rows moved, in the Owner's language. */}
+      {lockFindings.length > 0 ? (
+        <div className="simprok-rab-validation-alert" role="alert">
+          <strong>{RAB_LOCK_COPY.revalidationRequired}</strong>
+          <ul>
+            {lockFindings.map((line) => (
+              <li key={`${line.label}-${line.message}`}>
+                <strong>{line.label}</strong> — {line.message}
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
 

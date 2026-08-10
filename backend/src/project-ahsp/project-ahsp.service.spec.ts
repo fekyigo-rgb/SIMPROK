@@ -5,6 +5,7 @@ import { createHash } from 'crypto';
 import * as kernel from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { ProjectAhspService } from './project-ahsp.service';
+import { AhspResourceResolutionOrchestrator } from './ahsp-resource-resolution.orchestrator';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
 describe('ProjectAhspService E1A', () => {
@@ -147,12 +148,20 @@ describe('ProjectAhspService E1A', () => {
     // eligibility policy is used above — a stub could only assert the identity
     // rule this spec already believed in, whereas the shipped loader + kernel
     // are exactly what must run against the transaction client.
+    // RM-03D1: the resolution loop now lives in a shared orchestrator so the
+    // RAB pre-lock gate can ask the SAME authority. The REAL orchestrator is
+    // built from the SAME real policy/units/identity instances this spec
+    // already used, so every assertion below still exercises the shipped
+    // decision path rather than a stub of it.
+    const eligibility = new BasicPriceEligibilityPolicy();
+    const identity = new ResourceIdentityResolutionService(prisma);
     service = new ProjectAhspService(
       prisma,
-      new BasicPriceEligibilityPolicy(),
+      eligibility,
       units as any,
       lifecycle as any,
-      new ResourceIdentityResolutionService(prisma),
+      identity,
+      new AhspResourceResolutionOrchestrator(eligibility, units as any, identity),
     );
   });
 

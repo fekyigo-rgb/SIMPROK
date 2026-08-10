@@ -30,9 +30,22 @@ describe('RabLifecyclePolicyService', () => {
     service = module.get<RabLifecyclePolicyService>(RabLifecyclePolicyService);
   });
 
-  const mockCounts = (activeBaselineCount: number, approvedRabCount: number, workingDraftCount: number) => {
+  /**
+   * RM-03D1: rabDocument.count is now asked twice — once for APPROVED, once
+   * for LOCKED — so the mock answers by the status it was actually asked
+   * about instead of returning one number to both. A blanket mockResolvedValue
+   * would silently make every approved-RAB case a locked-RAB case too.
+   */
+  const mockCounts = (
+    activeBaselineCount: number,
+    approvedRabCount: number,
+    workingDraftCount: number,
+    lockedRabCount = 0,
+  ) => {
     prisma.projectBaseline.count.mockResolvedValue(activeBaselineCount);
-    prisma.rabDocument.count.mockResolvedValue(approvedRabCount);
+    prisma.rabDocument.count.mockImplementation(async (args: any) =>
+      args?.where?.status === 'LOCKED' ? lockedRabCount : approvedRabCount,
+    );
     prisma.boqStructure.count.mockResolvedValue(workingDraftCount);
   };
 
@@ -46,6 +59,7 @@ describe('RabLifecyclePolicyService', () => {
       projectStatus: ProjectStatus.PLANNED,
       activeBaselineCount: 0,
       approvedRabCount: 0,
+      lockedRabCount: 0,
       workingDraftCount: 0,
     });
   });
@@ -155,7 +169,7 @@ describe('RabLifecyclePolicyService', () => {
       expect(prisma.projectBaseline.groupBy).not.toHaveBeenCalled();
     });
 
-    it('issues exactly three queries regardless of project count and projects each row independently', async () => {
+    it('issues a fixed number of queries regardless of project count and projects each row independently', async () => {
       prisma.projectBaseline.groupBy.mockResolvedValue([{ projectId: 'p1', _count: { _all: 1 } }]);
       prisma.rabDocument.groupBy.mockResolvedValue([{ projectId: 'p2', _count: { _all: 1 } }]);
       prisma.boqStructure.groupBy.mockResolvedValue([{ projectId: 'p3', _count: { _all: 1 } }]);
@@ -171,7 +185,9 @@ describe('RabLifecyclePolicyService', () => {
       const result = await service.evaluateBatch(['p1', 'p2', 'p3', 'p4', 'p5'], statusById);
 
       expect(prisma.projectBaseline.groupBy).toHaveBeenCalledTimes(1);
-      expect(prisma.rabDocument.groupBy).toHaveBeenCalledTimes(1);
+      // Two rabDocument groupBy calls (APPROVED and LOCKED), not one per project —
+      // the no-N+1 property is that the count is FIXED, not that it is 1.
+      expect(prisma.rabDocument.groupBy).toHaveBeenCalledTimes(2);
       expect(prisma.boqStructure.groupBy).toHaveBeenCalledTimes(1);
 
       expect(result.get('p1')?.reasonCode).toBe('ACTIVE_BASELINE_EXISTS');
@@ -183,6 +199,8 @@ describe('RabLifecyclePolicyService', () => {
         projectStatus: ProjectStatus.PLANNED,
         activeBaselineCount: 0,
         approvedRabCount: 0,
+        lockedRabCount: 0,
+      lockedRabCount: 0,
         workingDraftCount: 1,
       });
       expect(result.get('p4')?.workingDraftCount).toBe(0);
