@@ -237,29 +237,29 @@ export function ProjectListPage() {
             const noteSummary = getProjectNoteSummary(project.id);
 
             return (
+              // The card itself is not a door. Three controls, three
+              // destinations — a whole-card click would have been a fourth
+              // way into a room one of them already opens.
               <article
                 key={project.id}
                 className={`simprok-project-card simprok-project-card--${presentation.chipModifier}`}
-                onClick={() => openRab(project.id)}
+                style={{ cursor: 'default' }}
               >
                 <div className="simprok-project-card__top">
-                  <h2 className="simprok-project-card__name">
-                    <button
-                      type="button"
-                      className="simprok-project-card__name-button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openRab(project.id);
-                      }}
-                    >
-                      {project.nama}
-                    </button>
-                  </h2>
+                  {/* Identity, not navigation. */}
+                  <h2 className="simprok-project-card__name">{project.nama}</h2>
 
-                  {/* One status only: the lifecycle the user actually reads. */}
-                  <span className={`simprok-project-chip simprok-project-chip--${presentation.chipModifier}`}>
+                  {/* Status, and the one door to Ruang Hidup RAB. Same chip
+                      styling; only the UA button defaults are neutralised. */}
+                  <button
+                    type="button"
+                    className={`simprok-project-chip simprok-project-chip--${presentation.chipModifier}`}
+                    style={{ border: 'none', font: 'inherit', fontSize: '11px', fontWeight: 600, cursor: 'pointer', lineHeight: 1.3 }}
+                    onClick={() => openRab(project.id)}
+                    aria-label={`${presentation.badgeLabel} — buka Ruang Hidup RAB ${project.nama}`}
+                  >
                     {presentation.badgeLabel}
-                  </span>
+                  </button>
                 </div>
 
                 <p className="simprok-project-card__value">{project.nilai}</p>
@@ -268,10 +268,7 @@ export function ProjectListPage() {
                 {/* No progress bar: Monitoring is on HOLD, so the only number
                     this card could draw would be one nobody measured. */}
 
-                <div
-                  className="simprok-project-card__actions"
-                  onClick={(event) => event.stopPropagation()}
-                >
+                <div className="simprok-project-card__actions">
                   {/* The RAB lifecycle action slot. It is permanent — each
                       stage fills it with its own next step — and it is never
                       removed just because a later capability is unbuilt. */}

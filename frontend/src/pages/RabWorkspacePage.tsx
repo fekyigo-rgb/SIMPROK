@@ -1525,11 +1525,38 @@ export function RabWorkspacePage() {
         </div>
       ) : null}
 
+      {/*
+        * A locked RAB is a lawful, finished state — not an error. This used to
+        * sit open and permanent in the red validation-alert style (the --info
+        * modifier it asked for does not exist in the stylesheet), so an
+        * ordinary freeze wore the colour reserved for genuine damage and could
+        * not be put away.
+        *
+        * Now it is a compact disclosure, closed by default: the fact stays on
+        * screen, the explanation is one click away. Navy, because a lock is
+        * authority. Information only — no unlock, no transition, no write.
+        */}
       {rabLocked ? (
-        <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="status">
-          <strong>{RAB_LOCK_COPY.lockedBadge}</strong>
-          <p>{RAB_LOCK_COPY.lockedNote}</p>
-        </div>
+        <details
+          style={{
+            margin: '0 0 0.5rem',
+            borderRadius: '10px',
+            border: '1px solid #C7D5EC',
+            background: '#EAF0FB',
+            color: '#16294B',
+            fontSize: 'var(--text-sm)',
+            padding: '0.3125rem 0.75rem',
+          }}
+        >
+          <summary
+            style={{ cursor: 'pointer', fontWeight: 600 }}
+            aria-label={`${RAB_LOCK_COPY.lockedBadge} — buka penjelasan`}
+          >
+            <LockKeyhole size={13} aria-hidden="true" style={{ verticalAlign: '-2px', marginRight: '0.25rem' }} />
+            {RAB_LOCK_COPY.lockedBadge}
+          </summary>
+          <p style={{ margin: '0.375rem 0 0.25rem', fontWeight: 400 }}>{RAB_LOCK_COPY.lockedNote}</p>
+        </details>
       ) : null}
 
       {/* A refused lock says which rows moved, in the Owner's language. */}
@@ -1549,8 +1576,15 @@ export function RabWorkspacePage() {
       <main className="simprok-rab-workspace__body">
         <section className="simprok-rab-sheet" aria-label="Tabel RAB">
           <div className="simprok-rab-sheet__label">
-            <strong>Draft RAB</strong>
-            <span>{projectId ? 'Draft tersimpan di server — edit bebas, simpan kapan saja' : 'Tidak ada project aktif'}</span>
+            {/* Storage is the same either way; freedom to edit is not. */}
+            <strong>{rabLocked ? 'RAB Terkunci' : 'Draft RAB'}</strong>
+            <span>
+              {!projectId
+                ? 'Tidak ada project aktif'
+                : rabLocked
+                ? 'Tersimpan di server — dapat dibaca dan ditelusuri, tidak dapat diubah'
+                : 'Draft tersimpan di server — edit bebas, simpan kapan saja'}
+            </span>
           </div>
 
           <div className="simprok-rab-table-wrap">
@@ -1885,7 +1919,7 @@ export function RabWorkspacePage() {
               </div>
               <div>
                 <span>Persistensi</span>
-                <strong>{projectId ? 'Draft tersimpan di server' : 'Belum ada project aktif'}</strong>
+                <strong>{!projectId ? 'Belum ada project aktif' : rabLocked ? 'Terkunci, tersimpan di server' : 'Draft tersimpan di server'}</strong>
               </div>
             </div>
             <div className="simprok-ahsp-drawer__frame">
