@@ -1,4 +1,8 @@
-import { groupThousands, parseCanonicalDecimalString } from './rabCostDisplay.ts';
+import {
+  SERVER_KERNEL_PERSISTED_BADGE,
+  groupThousands,
+  parseCanonicalDecimalString,
+} from './rabCostDisplay.ts';
 
 /**
  * Canonical persisted-draft read path (Gate 2A). Every value here is
@@ -57,7 +61,7 @@ export const formatExactQuantity = (value: string | null): string => {
 export type PersistedPriceOrigin = 'MANUAL_CLIENT' | 'SERVER_COST_KERNEL' | null;
 
 const PRICE_ORIGIN_BADGE: Record<'MANUAL_CLIENT' | 'SERVER_COST_KERNEL', string> = {
-  SERVER_COST_KERNEL: 'Dihitung SIMPROK · Tersimpan',
+  SERVER_COST_KERNEL: SERVER_KERNEL_PERSISTED_BADGE,
   MANUAL_CLIENT: 'Harga manual',
 };
 

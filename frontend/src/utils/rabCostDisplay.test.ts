@@ -19,8 +19,12 @@ import {
   isDraftPricingComplete,
   isDraftRevisionCurrent,
   isPersistResultFresh,
+  isTerminalPersistedKernelRow,
   markRequestFailed,
+  PERSISTED_KERNEL_FRAME_MESSAGE,
+  resolveCostRowStatus,
   resolveSelectedRowIdAfterReload,
+  SERVER_KERNEL_PERSISTED_BADGE,
   shouldInvalidateTerminalPersistResult,
   sumDecimalStrings,
   toLocalDateOnlyString,
@@ -645,4 +649,276 @@ test("C-20: applyReloadIfCurrent — project, generation, and draft revision all
   const applied = applyReloadIfCurrent(baseReloadIdentity, baseReloadIdentity, callbacks);
   assert.equal(applied, true);
   assert.deepEqual(counts, { applyRecap: 1, applyRows: 1, loadCostCalculations: 1 });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RM-03D1 — READ CONSISTENCY FOR AN ALREADY-PERSISTED SERVER_COST_KERNEL ROW
+//
+// The defect these cover: the LIVE batch (GET /boq/cost-calculations) follows
+// workingOccurrenceId, which Gate-2A's persist deliberately clears. For a row
+// that is already persisted it therefore answers FAIL_CLOSED/
+// OCCURRENCE_NOT_FOUND — correctly, for the question it was asked. Reading
+// that as "this row has no price" made the recap say "belum dihitung" and the
+// detail panel print OCCURRENCE_NOT_FOUND, while the very same /boq/draft
+// payload already carried the stored money.
+//
+// Nothing below computes a price. Every asserted figure is a decimal string
+// the server produced.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A TERMINAL persisted row exactly as GET /boq/draft delivers it: stored money,
+ * a calculation occurrence, and no working occurrence — nothing new is being
+ * worked on.
+ */
+const persistedServerRow = {
+  priceOrigin: "SERVER_COST_KERNEL" as const,
+  persistedUnitPrice: "197005.00",
+  persistedLineTotal: "129826295.00",
+  workingOccurrenceId: null,
+  calculationOccurrenceId: "occ-calculation",
+};
+
+/**
+ * The same stored money, but a NEW calculation is currently active on the row.
+ * This is the "Perhitungan ulang tertunda" state — not a terminal row.
+ */
+const pendingRecalculationRow = {
+  ...persistedServerRow,
+  workingOccurrenceId: "occ-working",
+};
+
+/** The LIVE answer for that same row once its working pointer is cleared. */
+const liveOccurrenceNotFound: CostRowStatus = {
+  kind: "fail_closed",
+  reason: "OCCURRENCE_NOT_FOUND",
+};
+
+test("RM-03D1 T2: a persisted row whose LIVE read is OCCURRENCE_NOT_FOUND is described by its stored price, not by the live failure", () => {
+  const resolved = resolveCostRowStatus(persistedServerRow, liveOccurrenceNotFound);
+  assert.equal(resolved?.kind, "persisted");
+
+  const display = toRabCostDisplay(resolved!);
+  assert.equal(display.badge, SERVER_KERNEL_PERSISTED_BADGE);
+  assert.equal(display.unitPrice, "Rp 197.005,00");
+  assert.equal(display.lineTotal, "Rp 129.826.295,00");
+  // The contradiction the Owner saw must be gone from the description itself.
+  assert.notEqual(display.badge, "OCCURRENCE_NOT_FOUND");
+});
+
+test("RM-03D1 T5: a row with NO persisted price still reports its live failure honestly", () => {
+  const unpersisted = {
+    priceOrigin: null,
+    persistedUnitPrice: null,
+    persistedLineTotal: null,
+    workingOccurrenceId: null,
+    calculationOccurrenceId: null,
+  };
+  const resolved = resolveCostRowStatus(unpersisted, liveOccurrenceNotFound);
+  assert.deepEqual(resolved, liveOccurrenceNotFound);
+  assert.equal(toRabCostDisplay(resolved!).badge, "OCCURRENCE_NOT_FOUND");
+});
+
+test("RM-03D1: a half-persisted row (origin without both exact amounts) is NOT treated as priced", () => {
+  const missingLineTotal = { ...persistedServerRow, persistedLineTotal: null };
+  assert.deepEqual(resolveCostRowStatus(missingLineTotal, liveOccurrenceNotFound), liveOccurrenceNotFound);
+});
+
+test("RM-03D1: a MANUAL_CLIENT row never becomes a persisted kernel state", () => {
+  const manual = {
+    ...persistedServerRow,
+    priceOrigin: "MANUAL_CLIENT" as const,
+    persistedUnitPrice: "1000.00",
+    persistedLineTotal: "2000.00",
+  };
+  assert.deepEqual(resolveCostRowStatus(manual, liveOccurrenceNotFound), liveOccurrenceNotFound);
+});
+
+test("RM-03D1: an edited row keeps 'Perlu dihitung ulang' — a stale stored total never masks invalidation", () => {
+  const resolved = resolveCostRowStatus(persistedServerRow, { kind: "invalidated" });
+  assert.equal(resolved?.kind, "invalidated");
+  assert.equal(toRabCostDisplay(resolved!).badge, "Perlu dihitung ulang");
+});
+
+test("RM-03D1: a fresh LIVE calculation outranks the stored price", () => {
+  const resolved = resolveCostRowStatus(persistedServerRow, { kind: "calculated", response: calculatedResponse });
+  assert.equal(resolved?.kind, "calculated");
+});
+
+test("RM-03D1: a persisted row with no live answer at all is still described by its stored price", () => {
+  const resolved = resolveCostRowStatus(persistedServerRow, undefined);
+  assert.equal(resolved?.kind, "persisted");
+});
+
+test("RM-03D1 T4: the recap counts an already-persisted row as priced", () => {
+  const rows = [{ id: "r75", isKernelEligible: true, manualUnitPrice: false }];
+  const statuses: Record<string, CostRowStatus> = {
+    r75: resolveCostRowStatus(persistedServerRow, liveOccurrenceNotFound)!,
+  };
+  assert.equal(isDraftPricingComplete(rows, statuses), true);
+});
+
+test("RM-03D1 T3: the recap subtotal is the server's exact persisted lineTotal, never volume * unitPrice", () => {
+  const rows = [{ id: "r75", isKernelEligible: true, manualAmount: 999_999_999 }];
+  const statuses: Record<string, CostRowStatus> = {
+    r75: resolveCostRowStatus(persistedServerRow, liveOccurrenceNotFound)!,
+  };
+  // manualAmount is deliberately absurd to prove it is ignored for kernel rows.
+  assert.equal(computeDirectCostTotal(rows, statuses), "129826295.00");
+});
+
+test("RM-03D1 T6: a genuinely unpriced WORK_ITEM still makes the recap incomplete", () => {
+  const rows = [
+    { id: "r75", isKernelEligible: true, manualUnitPrice: false },
+    { id: "never-priced", isKernelEligible: true, manualUnitPrice: false },
+  ];
+  const statuses: Record<string, CostRowStatus> = {
+    r75: resolveCostRowStatus(persistedServerRow, liveOccurrenceNotFound)!,
+    "never-priced": resolveCostRowStatus(
+      {
+        priceOrigin: null,
+        persistedUnitPrice: null,
+        persistedLineTotal: null,
+        workingOccurrenceId: null,
+        calculationOccurrenceId: null,
+      },
+      liveOccurrenceNotFound,
+    )!,
+  };
+  assert.equal(isDraftPricingComplete(rows, statuses), false);
+  // and the priced row still contributes only its own exact stored total
+  assert.equal(
+    computeDirectCostTotal(
+      [
+        { id: "r75", isKernelEligible: true, manualAmount: 0 },
+        { id: "never-priced", isKernelEligible: true, manualAmount: 0 },
+      ],
+      statuses,
+    ),
+    "129826295.00",
+  );
+});
+
+test("RM-03D1: 'already persisted' is never 'ready to persist' — the persist action stays unreachable", () => {
+  const reachability = evaluatePersistActionReachability({
+    projectId: "p1",
+    canEditDraft: true,
+    selectedItem: { id: "r75", ahspVersionId: "v4" },
+    costRowStatus: { kind: "persisted", unitPrice: "197005.00", lineTotal: "129826295.00" },
+    calculationAsOfDate: "2026-08-08",
+    draftDirty: false,
+    persistInFlight: false,
+  } as PersistActionReachabilityInput);
+  assert.notEqual(reachability, "READY");
+});
+
+test("RM-03D1: the drawer never shows 'Engine belum aktif' copy for a persisted Cost Kernel row", () => {
+  const persisted: CostRowStatus = { kind: "persisted", unitPrice: "197005.00", lineTotal: "129826295.00" };
+  const copy = describeCostEngineStatus(true, persisted);
+  assert.equal(copy.statusLabel, SERVER_KERNEL_PERSISTED_BADGE);
+  assert.equal(copy.frameBadge, SERVER_KERNEL_PERSISTED_BADGE);
+  assert.equal(copy.sourceLabel, "Cost Kernel SIMPROK");
+  assert.match(copy.frameMessage, /dihitung oleh Cost Kernel SIMPROK/);
+  assert.doesNotMatch(copy.statusLabel, /OCCURRENCE_NOT_FOUND/);
+});
+
+test("RM-03D1: a fail-closed row without a persisted price still shows its honest failure in the drawer", () => {
+  const copy = describeCostEngineStatus(true, { kind: "fail_closed", reason: "OCCURRENCE_NOT_FOUND" });
+  assert.equal(copy.statusLabel, "OCCURRENCE_NOT_FOUND");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RM-03D1 ONE-BOLT — PERSISTED vs WORKING OCCURRENCE PRECISION
+//
+// "I have a valid stored calculation and nothing new is being worked on" is a
+// different state from "I have an old stored calculation, but a new
+// calculation is currently active". Money alone cannot tell them apart; the
+// occurrence pointers can.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("BOLT T1: a TERMINAL persisted row (no working occurrence) uses its stored price on the by-design live miss", () => {
+  assert.equal(isTerminalPersistedKernelRow(persistedServerRow), true);
+  const resolved = resolveCostRowStatus(persistedServerRow, liveOccurrenceNotFound);
+  assert.equal(resolved?.kind, "persisted");
+});
+
+test("BOLT T2: an OLD stored price must NOT hide a live failure while a NEW working occurrence is active", () => {
+  assert.equal(isTerminalPersistedKernelRow(pendingRecalculationRow), false);
+  const resolved = resolveCostRowStatus(pendingRecalculationRow, liveOccurrenceNotFound);
+  assert.deepEqual(resolved, liveOccurrenceNotFound);
+  assert.equal(toRabCostDisplay(resolved!).badge, "OCCURRENCE_NOT_FOUND");
+});
+
+test("BOLT T2b: a pending-recalculation row is NOT counted as priced by the recap, and contributes nothing", () => {
+  const statuses: Record<string, CostRowStatus> = {
+    pending: resolveCostRowStatus(pendingRecalculationRow, liveOccurrenceNotFound)!,
+  };
+  assert.equal(
+    isDraftPricingComplete([{ id: "pending", isKernelEligible: true, manualUnitPrice: false }], statuses),
+    false,
+  );
+  assert.equal(
+    computeDirectCostTotal([{ id: "pending", isKernelEligible: true, manualAmount: 0 }], statuses),
+    "0",
+  );
+});
+
+test("BOLT T3: a fail-closed reason OTHER than the by-design miss is never hidden behind stored money", () => {
+  const otherFailure: CostRowStatus = { kind: "fail_closed", reason: "MISSING_ADAPTED_PRICE" };
+  const resolved = resolveCostRowStatus(persistedServerRow, otherFailure);
+  assert.deepEqual(resolved, otherFailure);
+  assert.equal(toRabCostDisplay(resolved!).badge, "MISSING_ADAPTED_PRICE");
+});
+
+test("BOLT T4: an edited terminal row still shows 'Perlu dihitung ulang'", () => {
+  const resolved = resolveCostRowStatus(persistedServerRow, { kind: "invalidated" });
+  assert.equal(resolved?.kind, "invalidated");
+});
+
+test("BOLT T5: a fresh live calculation outranks the stored price, terminal or not", () => {
+  const live: CostRowStatus = { kind: "calculated", response: calculatedResponse };
+  assert.equal(resolveCostRowStatus(persistedServerRow, live)?.kind, "calculated");
+  assert.equal(resolveCostRowStatus(pendingRecalculationRow, live)?.kind, "calculated");
+});
+
+test("BOLT T6: a row with no stored truth at all still fails honestly", () => {
+  const unpriced = {
+    priceOrigin: null,
+    persistedUnitPrice: null,
+    persistedLineTotal: null,
+    workingOccurrenceId: "occ-working",
+    calculationOccurrenceId: null,
+  };
+  assert.equal(isTerminalPersistedKernelRow(unpriced), false);
+  assert.deepEqual(resolveCostRowStatus(unpriced, liveOccurrenceNotFound), liveOccurrenceNotFound);
+});
+
+test("BOLT: a terminal row without a calculationOccurrenceId is not terminal — money alone is not a lifecycle", () => {
+  const noProvenance = { ...persistedServerRow, calculationOccurrenceId: null };
+  assert.equal(isTerminalPersistedKernelRow(noProvenance), false);
+  assert.deepEqual(resolveCostRowStatus(noProvenance, liveOccurrenceNotFound), liveOccurrenceNotFound);
+});
+
+test("BOLT E: a terminal row does not look unpriced while the live read has not answered yet", () => {
+  assert.equal(resolveCostRowStatus(persistedServerRow, undefined)?.kind, "persisted");
+  assert.equal(resolveCostRowStatus(persistedServerRow, { kind: "loading" })?.kind, "persisted");
+  assert.equal(resolveCostRowStatus(persistedServerRow, { kind: "request_failed" })?.kind, "persisted");
+  // ...but a row that is NOT terminal keeps the honest transient state.
+  assert.deepEqual(resolveCostRowStatus(pendingRecalculationRow, { kind: "loading" }), { kind: "loading" });
+  assert.deepEqual(resolveCostRowStatus(pendingRecalculationRow, undefined), undefined);
+});
+
+test("BOLT T7: the persisted drawer copy points at the breakdown already on screen, and claims nothing false", () => {
+  const copy = describeCostEngineStatus(true, {
+    kind: "persisted",
+    unitPrice: "197005.00",
+    lineTotal: "129826295.00",
+  });
+  assert.equal(copy.statusLabel, SERVER_KERNEL_PERSISTED_BADGE);
+  assert.equal(copy.frameMessage, PERSISTED_KERNEL_FRAME_MESSAGE);
+  assert.doesNotMatch(copy.statusLabel, /OCCURRENCE_NOT_FOUND/);
+  assert.doesNotMatch(copy.frameBadge, /Engine belum aktif/);
+  // The calculated-state promise ("...akan tampil setelah engine ... tersambung")
+  // must not be repeated for a row whose breakdown is already rendered.
+  assert.doesNotMatch(copy.frameMessage, /akan tampil setelah/);
 });

@@ -31,7 +31,114 @@ export type CostRowStatus =
   | { kind: "calculated"; response: Extract<CostCalculationResponse, { status: "CALCULATED" }> }
   | { kind: "fail_closed"; reason: string }
   | { kind: "invalidated" }
-  | { kind: "request_failed" };
+  | { kind: "request_failed" }
+  /**
+   * RM-03D1 — the row's price as the server ALREADY PERSISTED it, read back
+   * from GET /boq/draft. Not a calculation: these are the server's own exact
+   * decimal strings being displayed, never recomputed here.
+   *
+   * Why this state has to exist: the LIVE batch (GET /boq/cost-calculations)
+   * answers "what would this row cost right now?" by following
+   * workingOccurrenceId, and Gate-2A's persist command deliberately clears
+   * that pointer. For an already-persisted SERVER_COST_KERNEL row the LIVE
+   * read therefore returns FAIL_CLOSED/OCCURRENCE_NOT_FOUND — correctly, for
+   * the question it was asked. Reading that answer as "this row has no price"
+   * is what made the recap and the detail panel contradict the stored money
+   * the very same payload was already showing.
+   */
+  | { kind: "persisted"; unitPrice: string; lineTotal: string };
+
+/**
+ * The persisted half of a row's price truth, plus the two lifecycle pointers
+ * that say WHICH truth currently applies — all exactly as GET /boq/draft
+ * already sends them. Money alone is not a lifecycle: a row can hold an old
+ * stored price AND have a new calculation in flight.
+ */
+export interface PersistedKernelRowPrice {
+  priceOrigin: "MANUAL_CLIENT" | "SERVER_COST_KERNEL" | null;
+  persistedUnitPrice: string | null;
+  persistedLineTotal: string | null;
+  workingOccurrenceId: string | null;
+  calculationOccurrenceId: string | null;
+}
+
+/**
+ * The one fail-closed reason the LIVE read is EXPECTED to give for a row that
+ * has no working occurrence. It is a by-design answer, not a defect — which is
+ * exactly why it is named once here instead of being pattern-matched loosely.
+ */
+export const TERMINAL_PERSISTED_LIVE_MISS = "OCCURRENCE_NOT_FOUND";
+
+/**
+ * "I have a valid stored calculation and nothing new is being worked on."
+ *
+ * All five conditions are load-bearing. The last one is the whole point: a row
+ * whose workingOccurrenceId is still set has a CURRENT calculation in flight,
+ * so its live state — including a live failure — is the applicable truth, and
+ * an older stored price must not speak over it. The existing row badge already
+ * calls that state "Perhitungan ulang tertunda"; this predicate is how the
+ * resolver, the recap and the drawer come to agree with it.
+ */
+export const isTerminalPersistedKernelRow = (row: PersistedKernelRowPrice): boolean =>
+  row.priceOrigin === "SERVER_COST_KERNEL" &&
+  row.persistedUnitPrice !== null &&
+  row.persistedLineTotal !== null &&
+  row.calculationOccurrenceId !== null &&
+  row.workingOccurrenceId === null;
+
+/**
+ * Which price truth should DESCRIBE this row right now.
+ *
+ * Precedence, and the reason for each step:
+ *
+ *  1. `calculated` — a live result for still-unedited data is the freshest
+ *     truth there is, and it is what the user is about to persist.
+ *  2. `invalidated` — the user changed volume/unit/AHSP, so the stored total
+ *     no longer describes the row's inputs. Showing the persisted figure here
+ *     would present a stale number as current; "Perlu dihitung ulang" must
+ *     survive.
+ *  3. `persisted` — only for a TERMINAL persisted row (see
+ *     isTerminalPersistedKernelRow), and only when the live read gave the
+ *     answer such a row is expected to give: nothing yet, or the by-design
+ *     OCCURRENCE_NOT_FOUND miss. A row with a working occurrence in flight is
+ *     NOT terminal, so its live failure is never overwritten by older money.
+ *  4. otherwise the live state is passed through unchanged, so a genuinely
+ *     unpriced row, a genuinely broken row, and a row with a real fail-closed
+ *     reason all still report their own honest state.
+ *
+ * This routes a read; it decides nothing about money. Both branches render
+ * values the server produced.
+ */
+export const resolveCostRowStatus = (
+  row: PersistedKernelRowPrice,
+  live: CostRowStatus | undefined,
+): CostRowStatus | undefined => {
+  if (live?.kind === "calculated") return live;
+  if (live?.kind === "invalidated") return live;
+
+  // Not terminal — either not a stored kernel row at all, or a NEW calculation
+  // is currently active on it. Either way the live state is the applicable
+  // truth and old money does not get to speak over it.
+  if (!isTerminalPersistedKernelRow(row)) return live;
+
+  const { persistedUnitPrice, persistedLineTotal } = row;
+  if (persistedUnitPrice === null || persistedLineTotal === null) return live;
+
+  // Terminal row: the LIVE endpoint has nothing to calculate, so "no live
+  // answer yet" and "the by-design miss" both mean the stored price is the
+  // current truth. Any OTHER fail-closed reason is a real signal about this
+  // row and is never hidden behind stored money — one proven exception is not
+  // a licence to swallow the rest.
+  const liveIsExpectedMiss =
+    live === undefined ||
+    live.kind === "loading" ||
+    live.kind === "request_failed" ||
+    (live.kind === "fail_closed" && live.reason === TERMINAL_PERSISTED_LIVE_MISS);
+
+  return liveIsExpectedMiss
+    ? { kind: "persisted", unitPrice: persistedUnitPrice, lineTotal: persistedLineTotal }
+    : live;
+};
 
 /**
  * The one shared shape/parse/grouping rule for every exact-decimal string
@@ -78,6 +185,21 @@ export const formatBackendRupiah = (value: string) => {
   return `Rp ${parsed.negative ? "-" : ""}${groupThousands(parsed.intPart)}${fraction}`;
 };
 
+/**
+ * One label for one meaning: "the Cost Kernel produced this, and the server
+ * is holding it". rabPersistedDraftDisplay's price-origin badge for
+ * SERVER_COST_KERNEL imports this rather than repeating the string, so the
+ * row badge and the cost-state badge can never drift apart.
+ */
+export const SERVER_KERNEL_PERSISTED_BADGE = "Dihitung SIMPROK · Tersimpan";
+
+/**
+ * Drawer copy for a stored row. It points at the breakdown the product is
+ * already rendering instead of promising it later.
+ */
+export const PERSISTED_KERNEL_FRAME_MESSAGE =
+  'Harga tersimpan dihitung oleh Cost Kernel SIMPROK. Rincian pembentuk harga tersedia pada Penelusuran harga tersimpan.';
+
 export const toRabCostDisplay = (status: CostRowStatus) => {
   switch (status.kind) {
     case "calculated":
@@ -85,6 +207,12 @@ export const toRabCostDisplay = (status: CostRowStatus) => {
         badge: "Dihitung SIMPROK",
         unitPrice: formatBackendRupiah(status.response.ahspUnitPrice),
         lineTotal: formatBackendRupiah(status.response.lineTotal),
+      };
+    case "persisted":
+      return {
+        badge: SERVER_KERNEL_PERSISTED_BADGE,
+        unitPrice: formatBackendRupiah(status.unitPrice),
+        lineTotal: formatBackendRupiah(status.lineTotal),
       };
     case "fail_closed":
       return { badge: status.reason, unitPrice: "—", lineTotal: "—" };
@@ -207,8 +335,13 @@ export const computeDirectCostTotal = (
   for (const row of rows) {
     if (row.isKernelEligible) {
       const status = costRowStatuses[row.id];
+      // Both branches contribute a server-produced exact decimal string: a
+      // freshly calculated lineTotal, or the one already persisted for this
+      // row. Never volume * unitPrice, and never both for the same row.
       if (status?.kind === "calculated") {
         kernelLineTotals.push(status.response.lineTotal);
+      } else if (status?.kind === "persisted") {
+        kernelLineTotals.push(status.lineTotal);
       }
     } else {
       manualTotal += row.manualAmount;
@@ -235,9 +368,14 @@ export const isDraftPricingComplete = (
   rows: readonly PricingCompletenessRow[],
   costRowStatuses: Record<string, CostRowStatus>,
 ): boolean =>
-  rows.every((row) =>
-    row.isKernelEligible ? costRowStatuses[row.id]?.kind === "calculated" : row.manualUnitPrice,
-  );
+  rows.every((row) => {
+    if (!row.isKernelEligible) return row.manualUnitPrice;
+    const kind = costRowStatuses[row.id]?.kind;
+    // A row the server has already priced IS priced. Requiring a live
+    // recalculation before the recap would admit it is what let an existing,
+    // stored, server-verified line be reported as "belum dihitung".
+    return kind === "calculated" || kind === "persisted";
+  });
 
 export const formatBoqImportMeasurement = (
   itemType: string,
@@ -299,6 +437,11 @@ export const evaluatePersistActionReachability = (
   if (status.kind === 'invalidated') return 'COST_RESULT_INVALIDATED';
   if (status.kind === 'fail_closed') return 'COST_RESULT_FAIL_CLOSED';
   if (status.kind === 'request_failed') return 'COST_REQUEST_FAILED';
+  // RM-03D1: "already persisted" is not "ready to persist". Persisting needs a
+  // LIVE calculation to store, so this route keeps receiving the raw live
+  // status; the guard is belt-and-braces against a future caller handing it a
+  // resolved one and silently falling through into the calculated branch.
+  if (status.kind === 'persisted') return 'COST_RESULT_MISSING';
   // Only "calculated" remains here — a real calendar check (e.g. rejecting
   // 2026-02-30) is intentionally NOT duplicated here; it stays
   // backend-authoritative. This is a UI-format gate only.
@@ -613,10 +756,19 @@ export const describeCostEngineStatus = (
     };
   }
   const display = toRabCostDisplay(costRowStatus);
+  // RM-03D1: a persisted row is a real Cost Kernel result too — the stored
+  // one — so it must not sit under the inactive-engine copy. It also needs its
+  // OWN sentence: the calculated copy promises the cost breakdown "after the
+  // AHSP analysis engine is connected", which for a persisted row is simply
+  // untrue — the breakdown is already on screen under "Penelusuran harga
+  // tersimpan". Claiming something is unavailable while the product is showing
+  // it is the same class of contradiction this slice exists to remove.
   const frameMessage =
-    costRowStatus.kind === 'calculated'
-      ? 'Harga satuan dan jumlah dihitung oleh Cost Kernel SIMPROK. Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine analisa AHSP tersambung.'
-      : AHSP_ENGINE_INACTIVE_FRAME_MESSAGE;
+    costRowStatus.kind === 'persisted'
+      ? PERSISTED_KERNEL_FRAME_MESSAGE
+      : costRowStatus.kind === 'calculated'
+        ? 'Harga satuan dan jumlah dihitung oleh Cost Kernel SIMPROK. Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine analisa AHSP tersambung.'
+        : AHSP_ENGINE_INACTIVE_FRAME_MESSAGE;
   return {
     statusLabel: display.badge,
     sourceLabel: 'Cost Kernel SIMPROK',
