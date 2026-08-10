@@ -11,6 +11,7 @@ import {
   type RabLifecycleProjection,
   type RabStatus,
 } from '../utils/projectCardAction';
+import { resolveProjectStatusLabel, resolveRabLifecycleStatus } from '../utils/rabLockDisplay';
 
 type UserInvolvement = 'ditugaskan';
 
@@ -22,6 +23,8 @@ interface ProjectItem {
   nilai: string;
   keterangan: string;
   progress?: number;
+  /** Project.status verbatim, so the project chip states the project's own fact. */
+  rawStatus: string;
   rabLifecycle?: RabLifecycleProjection;
 }
 
@@ -47,24 +50,25 @@ function mapProjectToItem(backendProject: Record<string, unknown>): ProjectItem 
     nilai: budget,
     keterangan: (backendProject.description as string) || 'Belum ada keterangan',
     progress: mappedStatus === 'berjalan' ? 0 : undefined,
+    rawStatus: typeof backendProject.status === 'string' ? backendProject.status : '',
     rabLifecycle,
   };
 }
 
-const statusLabel: Record<RabStatus, string> = {
-  draft: 'Draft',
-  terkunci: 'Terkunci',
-  approved: 'Approved',
-  berjalan: 'Berjalan',
-  selesai: 'Selesai',
-};
-
-const rabStatusOptions: { value: RabStatus | 'semua'; label: string }[] = [
+/**
+ * This filter has always run over Project.status, so it is named for what it
+ * actually filters. It previously announced itself as "Status RAB" — the one
+ * thing it does not read.
+ *
+ * There is no 'approved' option because no project ever maps to it: it could
+ * only ever return an empty list, and a control that always finds nothing is
+ * a door onto an empty room.
+ */
+const projectStatusOptions: { value: RabStatus | 'semua'; label: string }[] = [
   { value: 'semua', label: 'Semua' },
-  { value: 'draft', label: 'Draft' },
-  { value: 'terkunci', label: 'Terkunci' },
-  { value: 'approved', label: 'Approved' },
+  { value: 'draft', label: 'Perencanaan' },
   { value: 'berjalan', label: 'Berjalan' },
+  { value: 'terkunci', label: 'Ditahan' },
   { value: 'selesai', label: 'Selesai' },
 ];
 
@@ -176,9 +180,9 @@ export function ProjectListPage() {
             className="simprok-projects__filter"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as RabStatus | 'semua')}
-            aria-label="Filter Status RAB"
+            aria-label="Filter Status Proyek"
           >
-            {rabStatusOptions.map((option) => (
+            {projectStatusOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -266,9 +270,20 @@ export function ProjectListPage() {
                     </button>
                   </h2>
 
+                  {/* The card carries the project's status and its RAB's status
+                      side by side. One chip could only ever be one of them, and
+                      it was showing the project's while being read as the RAB's. */}
                   <span className={`simprok-project-chip simprok-project-chip--${project.status}`}>
-                    {statusLabel[project.status]}
+                    Proyek: {resolveProjectStatusLabel(project.rawStatus)}
                   </span>
+                  {(() => {
+                    const rabStatusView = resolveRabLifecycleStatus(project.rabLifecycle);
+                    return (
+                      <span className={`simprok-project-chip simprok-project-chip--${rabStatusView.chipModifier}`}>
+                        {rabStatusView.rabLabel}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 <p className="simprok-project-card__value">{project.nilai}</p>

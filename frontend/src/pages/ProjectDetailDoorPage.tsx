@@ -2,6 +2,11 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowRight, ChevronRight, FileText, Lock, X } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
+import {
+  resolveProjectStatusLabel,
+  resolveRabLifecycleStatus,
+  type RabLifecycleFactsWire,
+} from '../utils/rabLockDisplay';
 
 type ChangeType = 'identity' | 'party' | 'personnel' | 'access';
 
@@ -46,6 +51,14 @@ type ProjectDetail = typeof baseProjectDetail & {
   relation: string;
   code: string;
   dataSource?: 'fixture' | 'api';
+  /**
+   * The RAB's own lifecycle. Absent on the showcase fixtures, which have no
+   * engine behind them — and absence is reported as "menunggu data", never as
+   * a draft.
+   */
+  rabLifecycle?: RabLifecycleFactsWire;
+  /** The project's status in the project's own words, for real API data. */
+  projectStatusLabel?: string;
 };
 
 const projectDetailById: Record<string, ProjectDetail> = {
@@ -202,7 +215,11 @@ const buildFormalData = (detail?: ProjectDetail) => ({
   endDate: detail?.endDate || '',
 });
 
-const mapApiProjectToDetail = (project: Record<string, unknown>): ProjectDetail => ({
+const mapApiProjectToDetail = (project: Record<string, unknown>): ProjectDetail => {
+  const rabLifecycle = project.rabLifecycle as RabLifecycleFactsWire | undefined;
+  const rabStatusView = resolveRabLifecycleStatus(rabLifecycle);
+
+  return {
   ...baseProjectDetail,
   name: typeof project.name === 'string' && project.name.trim() ? project.name : 'Proyek Tanpa Nama',
   status: statusLabelFromApi(project.status),
@@ -213,7 +230,12 @@ const mapApiProjectToDetail = (project: Record<string, unknown>): ProjectDetail 
   location: typeof project.location === 'string' && project.location.trim() ? project.location : 'Belum tersedia',
   year: extractYear(project),
   plannedValue: formatOptionalRupiah(project.budgetBaseline),
-  lockedValue: project.status === 'PLANNED' ? 'Belum terkunci' : 'Belum tersedia',
+  // "Belum terkunci" is a claim about the RAB, so only the RAB may make it.
+  // Read off Project.status it announced an unlocked RAB on projects whose
+  // RAB was frozen.
+  lockedValue: rabStatusView.rab === 'DRAFT' || rabStatusView.rab === 'NONE'
+    ? 'Belum terkunci'
+    : 'Belum tersedia',
   fundingSource: 'Belum tersedia',
   description: typeof project.description === 'string' ? project.description : '',
   specification: typeof project.mainMaterialSpec === 'string' ? project.mainMaterialSpec : '',
@@ -223,7 +245,10 @@ const mapApiProjectToDetail = (project: Record<string, unknown>): ProjectDetail 
   myAccess: 'Akses detail tersedia; kewenangan menunggu RBAC/backend aktif.',
   relationStatus: 'Data proyek nyata dari API. Kewenangan belum ditegakkan mesin.',
   dataSource: 'api',
-});
+  rabLifecycle,
+  projectStatusLabel: resolveProjectStatusLabel(project.status),
+  };
+};
 
 function DataList({ rows }: { rows: DataRow[] }) {
   return (
@@ -388,6 +413,10 @@ export function ProjectDetailDoorPage() {
   };
 
   const manualValue = (value: string) => value.trim() || <span className="simprok-detail-empty">Belum diisi</span>;
+  // Two separate facts. Detail Proyek used to publish one "Status" and leave
+  // the reader to decide whether it described the project or its RAB.
+  const rabStatusView = resolveRabLifecycleStatus(projectDetail?.rabLifecycle);
+  const projectStatusText = projectDetail?.projectStatusLabel ?? formalData.status;
   const formalDataManagementFields = [
     { key: 'code', label: 'Kode Proyek / Kode RAB', value: formalData.code },
     { key: 'name', label: 'Nama Proyek', value: formalData.name },
@@ -395,7 +424,10 @@ export function ProjectDetailDoorPage() {
     { key: 'category', label: 'Kategori', value: formalData.category },
     { key: 'location', label: 'Lokasi', value: formalData.location },
     { key: 'year', label: 'Tahun / Periode', value: formalData.year },
-    { key: 'status', label: 'Status', value: formalData.status },
+    { key: 'status', label: 'Status Proyek', value: projectStatusText },
+    { key: 'rabStatus', label: 'Status RAB', value: rabStatusView.rabLabel },
+    { key: 'rabApproval', label: 'Persetujuan RAB', value: rabStatusView.approvalLabel },
+    { key: 'rabBaseline', label: 'Baseline', value: rabStatusView.baselineLabel },
     { key: 'plannedValue', label: 'Pagu / Nilai Rencana / Estimasi', value: formalData.plannedValue },
     { key: 'fundingSource', label: 'Sumber Dana', value: formalData.fundingSource },
     { key: 'description', label: 'Uraian Pekerjaan', value: formalData.description },
@@ -448,7 +480,8 @@ export function ProjectDetailDoorPage() {
     { label: 'Kategori *', value: manualValue(formalData.category) },
     { label: 'Lokasi *', value: manualValue(formalData.location) },
     { label: 'Tahun / Periode *', value: manualValue(formalData.year) },
-    { label: 'Status *', value: formalData.status ? <span className="simprok-detail-status-chip">{formalData.status}</span> : manualValue('') },
+    { label: 'Status Proyek *', value: projectStatusText ? <span className="simprok-detail-status-chip">{projectStatusText}</span> : manualValue('') },
+    { label: 'Status RAB', value: <span className="simprok-detail-status-chip">{rabStatusView.rabLabel}</span> },
   ];
 
   return (
@@ -465,7 +498,8 @@ export function ProjectDetailDoorPage() {
         <div className="simprok-detail-hero__main">
           <div className="simprok-detail-hero__title-row">
             <h1>{formalData.name || projectDetail.name}</h1>
-            <span className="simprok-detail-status-chip">{formalData.status || projectDetail.status}</span>
+            <span className="simprok-detail-status-chip">Proyek: {projectStatusText || projectDetail.status}</span>
+            <span className="simprok-detail-status-chip">{rabStatusView.rabLabel}</span>
           </div>
           <div className="simprok-detail-chips" aria-label="Konteks proyek">
             <span>{formalData.category || 'Belum diisi'}</span>
