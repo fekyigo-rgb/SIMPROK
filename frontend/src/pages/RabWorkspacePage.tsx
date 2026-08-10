@@ -53,6 +53,7 @@ import {
   isDraftRevisionCurrent,
   isPersistResultFresh,
   markRequestFailed,
+  resolveCostRowStatus,
   resolveSelectedRowIdAfterReload,
   shouldInvalidateTerminalPersistResult,
   toLocalDateOnlyString,
@@ -726,10 +727,23 @@ export function RabWorkspacePage() {
     const row = numberedRows.find((item) => item.id === selectedRowId);
     return row?.type === 'item' ? row : null;
   }, [numberedRows, selectedRowId]);
+  /**
+   * RAW live status — what the LIVE batch answered, nothing else. Persist
+   * reachability reads this one, because persisting stores a live result and
+   * an already-persisted row has none to store.
+   */
   const selectedCostStatus = selectedItem ? costRowStatuses[selectedItem.id] : undefined;
-  const selectedCostDisplay = selectedCostStatus ? toRabCostDisplay(selectedCostStatus) : null;
+  /**
+   * RM-03D1 — what the drawer DESCRIBES. An already-persisted row is described
+   * by its stored server price, not by the LIVE read's OCCURRENCE_NOT_FOUND,
+   * which is the correct answer to a question this panel is not asking.
+   */
+  const selectedResolvedCostStatus = selectedItem
+    ? resolveCostRowStatus(selectedItem, selectedCostStatus)
+    : undefined;
+  const selectedCostDisplay = selectedResolvedCostStatus ? toRabCostDisplay(selectedResolvedCostStatus) : null;
   /** Drawer copy coherence: never says "Engine belum aktif" while selectedCostDisplay shows a real Cost Kernel result. */
-  const costEngineStatus = describeCostEngineStatus(Boolean(selectedItem?.ahspCode), selectedCostStatus);
+  const costEngineStatus = describeCostEngineStatus(Boolean(selectedItem?.ahspCode), selectedResolvedCostStatus);
 
   /**
    * RM-03 — load the read-only re-proof for a persisted line.
@@ -790,6 +804,31 @@ export function RabWorkspacePage() {
     return map;
   }, [rows]);
 
+  /**
+   * RM-03D1 — the one place that decides which price truth DESCRIBES each row.
+   *
+   * `costRowStatuses` holds only what the LIVE batch answered. That read asks
+   * "what would this row cost right now?" and follows workingOccurrenceId,
+   * which Gate-2A's persist deliberately clears — so for an already-persisted
+   * SERVER_COST_KERNEL row it correctly reports OCCURRENCE_NOT_FOUND. Every
+   * DISPLAY and AGGREGATION below reads this resolved map instead, so the
+   * recap, the row cells and the drawer all describe the same row the same
+   * way the main table and the persisted-calculation proof already do.
+   *
+   * The raw `costRowStatuses` is still what the loader writes and what
+   * persist-reachability consults: persisting requires a live result, and
+   * "already persisted" is not "ready to persist".
+   */
+  const resolvedCostRowStatuses = useMemo(() => {
+    const resolved: Record<string, CostRowStatus> = {};
+    for (const row of rows) {
+      if (row.type !== 'item') continue;
+      const status = resolveCostRowStatus(row, costRowStatuses[row.id]);
+      if (status) resolved[row.id] = status;
+    }
+    return resolved;
+  }, [rows, costRowStatuses]);
+
   // Cost Kernel calculated lines contribute their exact backend lineTotal (decimal-string
   // addition, never re-multiplied from volume * unitPrice); manual/non-kernel lines keep the
   // existing volume * unitPrice path. See computeDirectCostTotal for the single aggregation rule.
@@ -803,9 +842,9 @@ export function RabWorkspacePage() {
             isKernelEligible: row.ahspVersionId !== null,
             manualAmount: (volumes[row.id] || 0) * (unitPrices[row.id] ?? row.unitPrice),
           })),
-        costRowStatuses,
+        resolvedCostRowStatuses,
       ),
-    [rows, unitPrices, volumes, costRowStatuses],
+    [rows, unitPrices, volumes, resolvedCostRowStatuses],
   );
   const subtotal = Number(directCostTotalExact) || 0;
 
@@ -823,9 +862,9 @@ export function RabWorkspacePage() {
         rows
           .filter((row): row is RabRow & { type: 'item' } => row.type === 'item')
           .map((row) => ({ id: row.id, isKernelEligible: row.ahspVersionId !== null, manualUnitPrice: row.manualUnitPrice })),
-        costRowStatuses,
+        resolvedCostRowStatuses,
       ),
-    [rows, costRowStatuses],
+    [rows, resolvedCostRowStatuses],
   );
 
   const [showBackflowWarning, setShowBackflowWarning] = useState(false);
@@ -1444,7 +1483,10 @@ export function RabWorkspacePage() {
                 {numberedRows.map((row) => {
                   const unitPrice = unitPrices[row.id] ?? row.unitPrice;
                   const isKernelEligible = row.ahspVersionId !== null;
-                  const costStatus = costRowStatuses[row.id];
+                  // RM-03D1: the row cell describes the row, so it reads the
+                  // resolved status — a persisted row shows its stored price,
+                  // not the LIVE read's OCCURRENCE_NOT_FOUND.
+                  const costStatus = resolvedCostRowStatuses[row.id];
                   const costDisplay = costStatus ? toRabCostDisplay(costStatus) : null;
                   const amount = row.type === 'item' ? (volumes[row.id] || 0) * unitPrice : 0;
                   const selected = row.id === selectedRowId;
