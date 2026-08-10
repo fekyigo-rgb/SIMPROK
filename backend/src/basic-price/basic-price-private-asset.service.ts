@@ -20,6 +20,12 @@ import {
 interface BatchProvenanceFacts {
   sourceOrigin: string | null;
   sourceType: string | null;
+  /**
+   * The date the provenance claim must actually explain. Optional only so
+   * callers that genuinely have no date yet can still check the structural
+   * half; when it IS supplied, a DERIVED claim is verified against it.
+   */
+  effectiveDate?: Date | null;
   sourcePeriodLabel: string | null;
   sourcePeriodGranularity: string | null;
   effectiveDateProvenance: string | null;
@@ -121,6 +127,58 @@ export function resolvePriceTemporalFacts(
   };
 }
 
+
+/**
+ * RM-03D1 — THE derivation authority. What a derivation rule actually MEANS.
+ *
+ * Before this, nothing in the repository knew what `PERIOD_START` was, so a
+ * DERIVED claim was only ever checked for STRUCTURAL completeness: label
+ * present, granularity present, rule present. That let a fully-populated claim
+ * describe a date it does not produce —
+ *
+ *     TA 2024 · YEAR · PERIOD_START · effectiveDate 2024-06-15
+ *
+ * — which is every field filled and still false. Structural completeness is not
+ * truth.
+ *
+ * Returns the date the stated derivation produces, or NULL when this authority
+ * cannot prove one. NULL means UNVERIFIABLE and the caller must fail closed: an
+ * unprovable derivation is not a derivation.
+ *
+ * Deliberately tiny. Only the locked law is implemented — YEAR + PERIOD_START —
+ * because that is the only derivation the evidence and the Owner decision
+ * establish. MONTH/QUARTER/END_OF_PERIOD and friends are NOT invented here;
+ * when a real source demands one, it arrives with its own decision.
+ */
+export const YEAR_IN_LABEL = /\b(19|20)\d{2}\b/g;
+
+export function derivedEffectiveDateFor(
+  sourcePeriodLabel: string | null,
+  sourcePeriodGranularity: string | null,
+  effectiveDateDerivationRule: string | null,
+): Date | null {
+  if (
+    sourcePeriodGranularity !== 'YEAR' ||
+    effectiveDateDerivationRule !== 'PERIOD_START' ||
+    !sourcePeriodLabel
+  ) {
+    return null;
+  }
+  // The label is verbatim source text ("TA 2024", "Tahun Anggaran 2024"), so the
+  // year is read out of it rather than assumed. Exactly one distinct year must
+  // be present: none means there is nothing to derive from, and several means
+  // the period is ambiguous — both are unprovable, not "probably fine".
+  const years = new Set(sourcePeriodLabel.match(YEAR_IN_LABEL) ?? []);
+  if (years.size !== 1) return null;
+  const year = Number([...years][0]);
+  return new Date(Date.UTC(year, 0, 1));
+}
+
+/** Same UTC calendar day? Compared by date, never by instant. */
+export function isSameUtcDay(left: Date, right: Date): boolean {
+  return left.toISOString().slice(0, 10) === right.toISOString().slice(0, 10);
+}
+
 /**
  * RM-03D1 — a DERIVED date must be re-derivable, and a stated date must not
  * pretend to have been derived.
@@ -156,6 +214,37 @@ export function assertTemporalProvenanceCoherent(
       throw new ConflictException(
         'DERIVATION_RULE_REQUIRED_FOR_DERIVED_DATE',
       );
+    }
+    // STRUCTURE IS NOT TRUTH. The claim must actually produce the date it
+    // describes, or it is a well-formed falsehood.
+    if (batch.effectiveDate) {
+      const derived = derivedEffectiveDateFor(
+        batch.sourcePeriodLabel,
+        batch.sourcePeriodGranularity,
+        batch.effectiveDateDerivationRule,
+      );
+      if (!derived) {
+        throw new ConflictException({
+          statusCode: 409,
+          error: 'Conflict',
+          message: 'DERIVATION_RULE_NOT_PROVABLE',
+          sourcePeriodLabel: batch.sourcePeriodLabel,
+          sourcePeriodGranularity: batch.sourcePeriodGranularity,
+          effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
+        });
+      }
+      if (!isSameUtcDay(derived, batch.effectiveDate)) {
+        throw new ConflictException({
+          statusCode: 409,
+          error: 'Conflict',
+          message: 'DERIVATION_DOES_NOT_EXPLAIN_EFFECTIVE_DATE',
+          effectiveDate: batch.effectiveDate.toISOString().slice(0, 10),
+          derivedEffectiveDate: derived.toISOString().slice(0, 10),
+          sourcePeriodLabel: batch.sourcePeriodLabel,
+          sourcePeriodGranularity: batch.sourcePeriodGranularity,
+          effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
+        });
+      }
     }
     return;
   }
@@ -336,7 +425,10 @@ export class BasicPricePrivateAssetService {
       // government price list silently classified as a market survey. There is
       // no default any more; an unstated source type fails closed.
       assertSourceClassificationCoherent(batch.sourceOrigin, batch.sourceType);
-      assertTemporalProvenanceCoherent(batch);
+      assertTemporalProvenanceCoherent({
+        ...batch,
+        effectiveDate: batch.effectiveDate as Date,
+      });
 
       const readyRows = await tx.$queryRaw<Array<{ id: string }>>(
         Prisma.sql`SELECT "id" FROM "basic_price_import_rows"
@@ -535,7 +627,10 @@ export class BasicPricePrivateAssetService {
       // correction reintroduce the incoherent classification the create path
       // now refuses.
       assertSourceClassificationCoherent(batch.sourceOrigin, batch.sourceType);
-      assertTemporalProvenanceCoherent(batch);
+      assertTemporalProvenanceCoherent({
+        ...batch,
+        effectiveDate: batch.effectiveDate as Date,
+      });
 
       const targets = await tx.basicPrice.findMany({
         where: {

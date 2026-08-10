@@ -5,6 +5,7 @@ import {
   assertSourceClassificationCoherent,
   assertTemporalProvenanceCoherent,
   resolvePriceTemporalFacts,
+  derivedEffectiveDateFor,
 } from './basic-price-private-asset.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -38,14 +39,14 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     workspaceId: WORKSPACE,
     organizationId: ORG,
     status: 'READY_FOR_REVIEW',
-    effectiveDate: new Date('2024-04-01T00:00:00.000Z'),
+    effectiveDate: new Date('2024-01-01T00:00:00.000Z'),
     sourceType: 'REGULATION',
     sourceOrigin: 'GOVERNMENT',
     uploadedByAccountId: ACTOR.accountId,
     sourcePeriodLabel: 'TA 2024',
     sourcePeriodGranularity: 'YEAR',
     effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
-    effectiveDateDerivationRule: 'RM03D1_DOCUMENT_ISSUE_DATE',
+    effectiveDateDerivationRule: 'PERIOD_START',
     ...over,
   });
 
@@ -114,7 +115,7 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
       sourcePeriodLabel: 'TA 2024',
       sourcePeriodGranularity: 'YEAR',
       effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
-      effectiveDateDerivationRule: 'RM03D1_DOCUMENT_ISSUE_DATE',
+      effectiveDateDerivationRule: 'PERIOD_START',
     });
 
     const audit = tx.basicPriceProvenanceCorrection.create.mock.calls[0][0].data;
@@ -128,7 +129,7 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     expect(audit.after).toMatchObject({
       sourceType: 'REGULATION',
       effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
-      effectiveDate: '2024-04-01T00:00:00.000Z',
+      effectiveDate: '2024-01-01T00:00:00.000Z',
     });
     expect(audit.reason).toContain('unsupported guess');
   });
@@ -173,11 +174,11 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     prices = [
       priceRow({
         sourceType: 'REGULATION',
-        effectiveDate: new Date('2024-04-01T00:00:00.000Z'),
+        effectiveDate: new Date('2024-01-01T00:00:00.000Z'),
         sourcePeriodLabel: 'TA 2024',
         sourcePeriodGranularity: 'YEAR',
         effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
-        effectiveDateDerivationRule: 'RM03D1_DOCUMENT_ISSUE_DATE',
+        effectiveDateDerivationRule: 'PERIOD_START',
       }),
     ];
 
@@ -489,5 +490,136 @@ describe('resolvePriceTemporalFacts (RM-03D1)', () => {
       resolvePriceTemporalFacts(unknown, new Date('2024-06-15T00:00:00.000Z'))
         .effectiveDateProvenance,
     ).toBeNull();
+  });
+});
+
+/**
+ * RM-03D1 FINAL TEMPORAL CLOSURE — STRUCTURE IS NOT TRUTH.
+ *
+ * A provenance claim with every field populated can still be false. These pin
+ * the one thing that makes it true: the stated derivation must actually produce
+ * the date it describes.
+ */
+describe('derivedEffectiveDateFor — the derivation authority (RM-03D1)', () => {
+  it('YEAR + PERIOD_START of "TA 2024" is 2024-01-01, and nothing else', () => {
+    const derived = derivedEffectiveDateFor('TA 2024', 'YEAR', 'PERIOD_START');
+    expect(derived?.toISOString()).toBe('2024-01-01T00:00:00.000Z');
+  });
+
+  it('reads the year out of the verbatim label rather than assuming it', () => {
+    for (const label of ['TA 2024', '2024', 'Tahun Anggaran 2024', 'Basic Price TA 2024']) {
+      expect(derivedEffectiveDateFor(label, 'YEAR', 'PERIOD_START')?.toISOString()).toBe(
+        '2024-01-01T00:00:00.000Z',
+      );
+    }
+  });
+
+  it('a label with NO year is unprovable — null, never a guess', () => {
+    expect(derivedEffectiveDateFor('Tahun Anggaran', 'YEAR', 'PERIOD_START')).toBeNull();
+  });
+
+  it('a label with SEVERAL years is ambiguous — null, never the first one', () => {
+    expect(derivedEffectiveDateFor('TA 2023/2024', 'YEAR', 'PERIOD_START')).toBeNull();
+  });
+
+  it('an unknown rule or granularity is unprovable — no vocabulary is invented', () => {
+    expect(derivedEffectiveDateFor('TA 2024', 'YEAR', 'END_OF_PERIOD')).toBeNull();
+    expect(derivedEffectiveDateFor('TA 2024', 'MONTH' as any, 'PERIOD_START')).toBeNull();
+  });
+});
+
+describe('assertTemporalProvenanceCoherent — derivation must explain the date', () => {
+  const derived = (over: Record<string, unknown> = {}) => ({
+    sourceOrigin: 'GOVERNMENT',
+    sourceType: 'REGULATION',
+    effectiveDate: new Date('2024-01-01T00:00:00.000Z'),
+    sourcePeriodLabel: 'TA 2024',
+    sourcePeriodGranularity: 'YEAR',
+    effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
+    effectiveDateDerivationRule: 'PERIOD_START',
+    ...over,
+  });
+
+  it('T5. the LOCKED representation is accepted: TA 2024 · YEAR · PERIOD_START · 2024-01-01', () => {
+    expect(() => assertTemporalProvenanceCoherent(derived() as any)).not.toThrow();
+  });
+
+  it('T6. the SAME claim against 2024-06-15 FAILS CLOSED — every field filled, still false', () => {
+    const error = (() => {
+      try {
+        assertTemporalProvenanceCoherent(
+          derived({ effectiveDate: new Date('2024-06-15T00:00:00.000Z') }) as any,
+        );
+        return null;
+      } catch (e) {
+        return e as any;
+      }
+    })();
+    expect(error).toBeInstanceOf(ConflictException);
+    expect(error.getResponse()).toMatchObject({
+      message: 'DERIVATION_DOES_NOT_EXPLAIN_EFFECTIVE_DATE',
+      effectiveDate: '2024-06-15',
+      derivedEffectiveDate: '2024-01-01',
+    });
+  });
+
+  it('an UNPROVABLE derivation is refused rather than trusted', () => {
+    expect(() =>
+      assertTemporalProvenanceCoherent(
+        derived({ sourcePeriodLabel: 'Tahun Anggaran' }) as any,
+      ),
+    ).toThrow('DERIVATION_RULE_NOT_PROVABLE');
+  });
+
+  it('SOURCE_STATED is never held to a derivation — it claims none', () => {
+    expect(() =>
+      assertTemporalProvenanceCoherent(
+        derived({
+          effectiveDate: new Date('2024-06-15T00:00:00.000Z'),
+          effectiveDateProvenance: 'SOURCE_STATED',
+          effectiveDateDerivationRule: null,
+        }) as any,
+      ),
+    ).not.toThrow();
+  });
+
+  it('UNKNOWN is never held to a derivation either', () => {
+    expect(() =>
+      assertTemporalProvenanceCoherent(
+        derived({
+          effectiveDate: new Date('2024-06-15T00:00:00.000Z'),
+          effectiveDateProvenance: null,
+          effectiveDateDerivationRule: null,
+        }) as any,
+      ),
+    ).not.toThrow();
+  });
+
+  it('with no date supplied the structural half still applies — an absent date proves nothing', () => {
+    expect(() =>
+      assertTemporalProvenanceCoherent(
+        derived({ effectiveDate: null, sourcePeriodLabel: null }) as any,
+      ),
+    ).toThrow('SOURCE_PERIOD_LABEL_REQUIRED_FOR_DERIVED_DATE');
+  });
+
+  it('T11/T12. every shape the resolver can emit is coherent, so create and correction agree', () => {
+    const batch = {
+      effectiveDate: new Date('2024-01-01T00:00:00.000Z'),
+      sourcePeriodLabel: 'TA 2024',
+      sourcePeriodGranularity: 'YEAR',
+      effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
+      effectiveDateDerivationRule: 'PERIOD_START',
+    };
+    for (const override of [null, new Date('2024-06-15T00:00:00.000Z')]) {
+      const facts = resolvePriceTemporalFacts(batch, override);
+      expect(() =>
+        assertTemporalProvenanceCoherent({
+          sourceOrigin: 'GOVERNMENT',
+          sourceType: 'REGULATION',
+          ...facts,
+        } as any),
+      ).not.toThrow();
+    }
   });
 });

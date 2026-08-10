@@ -542,4 +542,167 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
     expect(after.effectiveDateProvenance).toBeNull();
     expect(after.effectiveDateDerivationRule).toBeNull();
   });
+
+  /**
+   * RM-03D1 FINAL TEMPORAL CLOSURE — a provenance decision belongs to the date
+   * it explained. Changing the date must not let the old decision follow.
+   */
+  describe('date changes and provenance decisions', () => {
+    /** A batch holding the LOCKED representation, ready to be attacked. */
+    const derivedBatch = async (vendor: string) => {
+      const { batchId } = await materializeUnprovenancedPrivatePrice(vendor);
+      const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+      await patchBatchToTruth(batchId, batch.version).expect(200);
+      return batchId;
+    };
+
+    /** PATCH with the batch's current version; returns the raw response. */
+    const patchBatch = async (batchId: string, body: Record<string, unknown>) => {
+      const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+      return request(app.getHttpServer())
+        .patch(`/basic-price-imports/${batchId}`)
+        .set(hdr())
+        .send({ version: batch.version, ...body });
+    };
+
+    const storedBatch = (batchId: string) =>
+      prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+
+    it('T1: a DATE-ONLY change against an existing claim FAILS CLOSED, and writes nothing', async () => {
+      const batchId = await derivedBatch('t1-date-only');
+
+      const response = await patchBatch(batchId, { effectiveDate: '2024-06-15' });
+      expect(response.status).toBe(409);
+      expect(response.body.message).toBe('TEMPORAL_PROVENANCE_DECISION_REQUIRED');
+      expect(response.body.storedEffectiveDate).toBe('2024-01-01');
+      expect(response.body.requestedEffectiveDate).toBe('2024-06-15');
+
+      // Nothing moved: not the date, not the claim.
+      const after = await storedBatch(batchId);
+      expect(after.effectiveDate?.toISOString()).toBe('2024-01-01T00:00:00.000Z');
+      expect(after.effectiveDateProvenance).toBe('DERIVED_FROM_SOURCE_PERIOD');
+      expect(after.effectiveDateDerivationRule).toBe('PERIOD_START');
+    });
+
+    it('T2: a new date WITH an explicit UNKNOWN decision is accepted', async () => {
+      const batchId = await derivedBatch('t2-explicit-unknown');
+
+      const response = await patchBatch(batchId, {
+        effectiveDate: '2024-06-15',
+        effectiveDateProvenance: null,
+        effectiveDateDerivationRule: null,
+      });
+      expect(response.status).toBe(200);
+
+      const after = await storedBatch(batchId);
+      expect(after.effectiveDate?.toISOString()).toBe('2024-06-15T00:00:00.000Z');
+      expect(after.effectiveDateProvenance).toBeNull();
+      expect(after.effectiveDateDerivationRule).toBeNull();
+      // The period wording is not erased just because the date became unknown.
+      expect(after.sourcePeriodLabel).toBe('TA 2024');
+      expect(after.sourcePeriodGranularity).toBe('YEAR');
+    });
+
+    it('T3: a new date WITH an explicit SOURCE_STATED decision is accepted', async () => {
+      const batchId = await derivedBatch('t3-explicit-stated');
+
+      const response = await patchBatch(batchId, {
+        effectiveDate: '2024-06-15',
+        effectiveDateProvenance: 'SOURCE_STATED',
+        effectiveDateDerivationRule: null,
+      });
+      expect(response.status).toBe(200);
+
+      const after = await storedBatch(batchId);
+      expect(after.effectiveDate?.toISOString()).toBe('2024-06-15T00:00:00.000Z');
+      expect(after.effectiveDateProvenance).toBe('SOURCE_STATED');
+      expect(after.effectiveDateDerivationRule).toBeNull();
+    });
+
+    it('T6: an explicit DERIVED claim that does not explain the new date FAILS CLOSED', async () => {
+      const batchId = await derivedBatch('t6-derived-wrong-date');
+
+      const response = await patchBatch(batchId, {
+        effectiveDate: '2024-06-15',
+        sourcePeriodLabel: 'TA 2024',
+        sourcePeriodGranularity: 'YEAR',
+        effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
+        effectiveDateDerivationRule: 'PERIOD_START',
+      });
+      expect(response.status).toBe(409);
+      expect(response.body.message).toBe('DERIVATION_DOES_NOT_EXPLAIN_EFFECTIVE_DATE');
+      expect(response.body.derivedEffectiveDate).toBe('2024-01-01');
+
+      const after = await storedBatch(batchId);
+      expect(after.effectiveDate?.toISOString()).toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('T4/T7: an unrelated PATCH disturbs no temporal truth, and demands no decision', async () => {
+      const batchId = await derivedBatch('t4-unrelated');
+
+      const response = await patchBatch(batchId, { sourceVendorName: 'a totally unrelated edit' });
+      expect(response.status).toBe(200);
+
+      const after = await storedBatch(batchId);
+      expect(after.effectiveDate?.toISOString()).toBe('2024-01-01T00:00:00.000Z');
+      expect(after.effectiveDateProvenance).toBe('DERIVED_FROM_SOURCE_PERIOD');
+      expect(after.effectiveDateDerivationRule).toBe('PERIOD_START');
+      expect(after.sourcePeriodLabel).toBe('TA 2024');
+    });
+
+    it('T10: SOURCE_STATED does not survive a changed date either', async () => {
+      const batchId = await derivedBatch('t10-stated-then-moved');
+      const toStated = await patchBatch(batchId, {
+        effectiveDateProvenance: 'SOURCE_STATED',
+        effectiveDateDerivationRule: null,
+      });
+      expect(toStated.status).toBe(200);
+
+      const response = await patchBatch(batchId, { effectiveDate: '2024-09-09' });
+      expect(response.status).toBe(409);
+      expect(response.body.message).toBe('TEMPORAL_PROVENANCE_DECISION_REQUIRED');
+      expect(response.body.storedEffectiveDateProvenance).toBe('SOURCE_STATED');
+    });
+
+    it('an UNKNOWN batch may change its date freely — there is no decision to invalidate', async () => {
+      const { batchId } = await materializeUnprovenancedPrivatePrice('t-unknown-date-move');
+
+      const response = await patchBatch(batchId, { effectiveDate: '2024-06-15' });
+      expect(response.status).toBe(200);
+
+      const after = await storedBatch(batchId);
+      expect(after.effectiveDate?.toISOString()).toBe('2024-06-15T00:00:00.000Z');
+      expect(after.effectiveDateProvenance).toBeNull();
+    });
+
+    it('PREVIEW cannot mint a false claim either — the first writer obeys the same authority', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/basic-price-imports/preview')
+        .set(hdr())
+        .attach('file', await buildBasicPriceXlsx(), {
+          filename: 'basic-price.xlsx',
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        })
+        .field('selectedSheet', 'HARGA SATUAN UPAH DAN BAHAN')
+        .field('sourceVendorName', 'preview-false-claim')
+        .field('regionId', regionId)
+        // The derivation produces 2024-01-01; the date says otherwise.
+        .field('effectiveDate', '2024-06-15')
+        .field('sourceOrigin', 'GOVERNMENT')
+        .field('sourceType', 'REGULATION')
+        .field('sourcePeriodLabel', 'TA 2024')
+        .field('sourcePeriodGranularity', 'YEAR')
+        .field('effectiveDateProvenance', 'DERIVED_FROM_SOURCE_PERIOD')
+        .field('effectiveDateDerivationRule', 'PERIOD_START');
+      expect(response.status).toBe(409);
+      expect(response.body.message).toBe('DERIVATION_DOES_NOT_EXPLAIN_EFFECTIVE_DATE');
+
+      // Refused before anything was persisted.
+      expect(
+        await prisma.basicPriceImportBatch.count({
+          where: { workspaceId: WORKSPACE_A, sourceVendorName: 'preview-false-claim' },
+        }),
+      ).toBe(0);
+    });
+  });
 });

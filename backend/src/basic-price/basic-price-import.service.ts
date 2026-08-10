@@ -17,7 +17,10 @@ import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
-import { assertTemporalProvenanceCoherent } from './basic-price-private-asset.service';
+import {
+  assertTemporalProvenanceCoherent,
+  isSameUtcDay,
+} from './basic-price-private-asset.service';
 
 export const MAX_UPLOAD_BYTES = 10_485_760;
 type UploadedXlsx = {
@@ -209,6 +212,20 @@ export class BasicPriceImportService {
     metadata: PreviewBasicPriceImportDto,
   ) {
     this.validateFile(file);
+    // RM-03D1 — preview WRITES all four provenance columns, and validated none
+    // of them. The very first write could therefore mint a claim that explains
+    // a different date than the one it stores, with only the DB's structural
+    // CHECK behind it. Same authority as every other temporal writer, so no
+    // path into the system is exempt.
+    assertTemporalProvenanceCoherent({
+      sourceOrigin: null,
+      sourceType: null,
+      effectiveDate: metadata.effectiveDate ? new Date(metadata.effectiveDate) : null,
+      sourcePeriodLabel: metadata.sourcePeriodLabel ?? null,
+      sourcePeriodGranularity: metadata.sourcePeriodGranularity ?? null,
+      effectiveDateProvenance: metadata.effectiveDateProvenance ?? null,
+      effectiveDateDerivationRule: metadata.effectiveDateDerivationRule ?? null,
+    });
     const knowledge = await this.parse(file, metadata.selectedSheet);
     const organizationId = await this.resolveOrganizationId(workspaceId);
     const fingerprint = this.fingerprint(
@@ -380,6 +397,7 @@ export class BasicPriceImportService {
           status: string;
           version: number;
           uploadedByAccountId: string;
+          effectiveDate: Date | null;
           sourcePeriodLabel: string | null;
           sourcePeriodGranularity: string | null;
           effectiveDateProvenance: string | null;
@@ -387,7 +405,7 @@ export class BasicPriceImportService {
         }>
       >(
         Prisma.sql`SELECT "id", "workspaceId", "status", "version", "uploadedByAccountId",
-                          "sourcePeriodLabel", "sourcePeriodGranularity",
+                          "effectiveDate", "sourcePeriodLabel", "sourcePeriodGranularity",
                           "effectiveDateProvenance", "effectiveDateDerivationRule"
                      FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
       );
@@ -409,6 +427,55 @@ export class BasicPriceImportService {
       // constraint stays as the last word for any writer that never asks; this
       // just gives the human at the boundary a usable answer. Merged state, not
       // the patch alone: a field the caller omitted keeps its stored value.
+      // RM-03D1 — A CHANGED DATE INVALIDATES THE DECISION THAT EXPLAINED THE OLD
+      // ONE. A provenance claim belongs to the fact it described: "derived from
+      // TA 2024 by PERIOD_START" explains 2024-01-01 and nothing else. Letting a
+      // date-only PATCH slide the old claim onto a new date is exactly how a
+      // structurally perfect falsehood is born, and SIMPROK must not guess the
+      // replacement decision either. So the caller states it, or nothing moves.
+      //
+      // Unknown stays unknown: if the stored provenance is already NULL there is
+      // no decision to invalidate, and a date-only change stays honest.
+      const requestedEffectiveDate = provided?.has('effectiveDate')
+        ? dto.effectiveDate
+          ? new Date(dto.effectiveDate)
+          : null
+        : undefined;
+      const finalEffectiveDate =
+        requestedEffectiveDate === undefined
+          ? batch.effectiveDate
+          : requestedEffectiveDate;
+      const dateChanged =
+        requestedEffectiveDate !== undefined &&
+        (batch.effectiveDate === null) !== (finalEffectiveDate === null)
+          ? true
+          : requestedEffectiveDate !== undefined &&
+              batch.effectiveDate &&
+              finalEffectiveDate
+            ? !isSameUtcDay(batch.effectiveDate, finalEffectiveDate)
+            : false;
+      const provenanceDecisionSupplied = Boolean(
+        provided?.has('effectiveDateProvenance'),
+      );
+      if (
+        dateChanged &&
+        batch.effectiveDateProvenance !== null &&
+        !provenanceDecisionSupplied
+      ) {
+        throw new ConflictException({
+          statusCode: 409,
+          error: 'Conflict',
+          message: 'TEMPORAL_PROVENANCE_DECISION_REQUIRED',
+          storedEffectiveDate: batch.effectiveDate
+            ? batch.effectiveDate.toISOString().slice(0, 10)
+            : null,
+          requestedEffectiveDate: finalEffectiveDate
+            ? finalEffectiveDate.toISOString().slice(0, 10)
+            : null,
+          storedEffectiveDateProvenance: batch.effectiveDateProvenance,
+        });
+      }
+
       // Exactly the state the update below will produce: a cleared field is
       // validated as cleared, not as its stale stored value.
       const merged = <T>(
@@ -422,6 +489,7 @@ export class BasicPriceImportService {
       assertTemporalProvenanceCoherent({
         sourceOrigin: null,
         sourceType: null,
+        effectiveDate: finalEffectiveDate,
         sourcePeriodLabel: merged(
           'sourcePeriodLabel',
           dto.sourcePeriodLabel,
