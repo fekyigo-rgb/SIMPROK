@@ -39,10 +39,18 @@ const dateOnly = (value: Date): string => value.toISOString().slice(0, 10);
 export class PersistedCalculationService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * RM-03D1 LOCK v1 — the two reads this service performs, narrowed to what it
+   * actually needs. Accepting a client lets the pre-lock revalidation run this
+   * SAME authority inside the lock transaction instead of duplicating the
+   * re-proof, which is the only way §9's "no window between revalidation and
+   * freeze" can hold.
+   */
   async getPersistedCalculation(
     boqItemId: string,
     projectId: string,
     workspaceId: string,
+    client: Pick<PrismaService, 'boqItem' | 'projectAhspOccurrence'> = this.prisma,
   ): Promise<PersistedCalculationResult> {
     const fail = (
       reason: PersistedCalculationReason,
@@ -54,7 +62,7 @@ export class PersistedCalculationService {
       calculationPolicy: COST_CALCULATION_POLICY,
     });
 
-    const item = await this.prisma.boqItem.findFirst({
+    const item = await client.boqItem.findFirst({
       where: {
         id: boqItemId,
         boqStructure: { projectId, project: { workspaceId } },
@@ -92,7 +100,7 @@ export class PersistedCalculationService {
       return fail(PERSISTED_CALCULATION_REASON.STORED_MONEY_MISSING);
     }
 
-    const occurrence = await this.prisma.projectAhspOccurrence.findFirst({
+    const occurrence = await client.projectAhspOccurrence.findFirst({
       where: { id: item.calculationOccurrenceId, projectId, workspaceId },
       include: {
         referenceRegion: true,

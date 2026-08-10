@@ -32,6 +32,7 @@ model Account {
   reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
   basicPricePublicationAudits                 BasicPricePublicationAudit[]         @relation("BasicPricePublicationAuditActor")
   basicPriceProvenanceCorrections             BasicPriceProvenanceCorrection[]     @relation("BasicPriceProvenanceCorrectionActor")
+  lockedRabDocuments                          RabDocument[]                        @relation("RabDocumentLockedBy")
   capturedProjectAhspOccurrences              ProjectAhspOccurrence[]              @relation("ProjectAhspOccurrenceContextCapturedBy")
 
   @@map("accounts")
@@ -2108,15 +2109,39 @@ model RabDocument {
   taxPercent      Decimal  @default(0) @db.Decimal(5, 2)
   totalBaseCost   Decimal? @db.Decimal(18, 2)
   totalFinalCost  Decimal? @db.Decimal(18, 2)
+  /// RAB lifecycle: DRAFT -> LOCKED -> APPROVED. RAB_STATUS in
+  /// rab-lifecycle-policy.service.ts is the one authority over these values.
+  /// LOCKED is the SAME document frozen — never a copy, never an approval.
   status          String   @default("DRAFT")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  /// RM-03D1 LOCK v1 — who froze this RAB, when, and from which state.
+  ///
+  /// These sit on the document rather than in an audit table because no
+  /// existing durable mechanism can carry the fact: AHSPAuditLog,
+  /// BasicPricePublicationAudit and BasicPriceProvenanceCorrection are each
+  /// bound by a NOT NULL foreign key into their own domain, and KnowledgeEvent
+  /// is the immutable reality-intake ledger. Three nullable columns on the row
+  /// being frozen is the smallest thing that answers who/when/from-what
+  /// without inventing a governance table.
+  ///
+  /// `lockedFromStatus` records the prior state explicitly rather than being
+  /// assumed to be DRAFT, so the transition stays provable if the lifecycle
+  /// ever gains another predecessor.
+  lockedAt          DateTime?
+  lockedByAccountId String?   @db.Uuid
+  lockedFromStatus  String?
+
   project      Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   boqStructure BoqStructure      @relation(fields: [boqStructureId], references: [id])
   baselines    ProjectBaseline[]
+  /// Restrict, not cascade: deleting an account must never silently erase who
+  /// froze a RAB — the same rule the price-correction actor already follows.
+  lockedBy     Account?          @relation("RabDocumentLockedBy", fields: [lockedByAccountId], references: [id], onDelete: Restrict, map: "fk_rab_document_locked_by")
 
   @@index([projectId])
+  @@index([lockedByAccountId])
   @@map("rab_documents")
 }
 

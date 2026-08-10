@@ -38,6 +38,7 @@ import { RabLifecyclePolicyService } from './rab-lifecycle-policy.service';
 import { RabEditableLifecycleGuard } from './rab-editable-lifecycle.guard';
 import { RabKernelPersistenceService } from './rab-kernel-persistence.service';
 import { PersistedCalculationService } from './persisted-calculation.service';
+import { RabLockService } from './rab-lock.service';
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -51,7 +52,41 @@ export class ProjectController {
     private readonly rabLifecyclePolicy: RabLifecyclePolicyService,
     private readonly rabKernelPersistenceService: RabKernelPersistenceService,
     private readonly persistedCalculationService: PersistedCalculationService,
+    private readonly rabLockService: RabLockService,
   ) {}
+
+  /**
+   * RM-03D1 — DRAFT → LOCKED on the SAME RabDocument. One RAB, one house.
+   *
+   * PERMISSION — the existing RAB_DRAFT_EDIT, deliberately not a new code.
+   * Locking is the terminal act of the draft-authoring phase and belongs to
+   * exactly the people who authored the draft. APPROVAL is a different
+   * authority and is not reachable from here.
+   *
+   * NO RabEditableLifecycleGuard on purpose. That guard rejects whenever
+   * canEditDraft is false — which becomes true of this very RAB the instant
+   * this command succeeds. Mounting it here would make the second, idempotent
+   * lock attempt fail with the state the first one just produced. The service
+   * re-reads the lifecycle itself under a FOR UPDATE lock, which is the only
+   * place DRAFT→LOCKED and LOCKED→LOCKED can be told apart safely.
+   */
+  @Post(':projectId/rab/lock')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.RAB_DRAFT_EDIT)
+  async lockRab(@Req() request: any, @Param('projectId') projectId: string) {
+    const workspaceId = request.projectAccess?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('Trusted project workspace is required');
+    }
+    // Both halves of the identity are server-derived: the workspace from the
+    // guard-resolved project context, the actor from the verified JWT. Neither
+    // comes from the body or the query, so a forged id cannot steer a freeze.
+    const actorAccountId = request.user?.id;
+    if (!actorAccountId) {
+      throw new InternalServerErrorException('Trusted account context is missing');
+    }
+    return this.rabLockService.lockWorkingDraft({ projectId, workspaceId, actorAccountId });
+  }
 
   @Post(':projectId/boq/import/preview')
   @UseGuards(ProjectAccessGuard, PermissionsGuard, RabEditableLifecycleGuard)

@@ -12,9 +12,35 @@ export const WORKING_DRAFT_STRUCTURE_NAME = 'Working Draft';
  */
 export const RAB_EDITABLE_PROJECT_STATUSES: readonly ProjectStatus[] = [ProjectStatus.PLANNED];
 
+/**
+ * ONE RAB, ONE HOUSE, THREE STATES. `RabDocument.status` is the single
+ * lifecycle field; there is no second RAB entity, no snapshot copy, and no
+ * baseline involved in freezing.
+ *
+ *   DRAFT     saved and real, still alive and editable
+ *   LOCKED    the SAME RabDocument, frozen — readable, never mutable
+ *   APPROVED  a separate human-authority decision, not reachable from here
+ *
+ * Declared as string constants rather than a Prisma enum because the column
+ * is already `String @default("DRAFT")` and can hold these values today. A
+ * migration to store "LOCKED" would buy nothing; what it would cost is a
+ * schema change on the one table every RAB read already depends on.
+ */
+export const RAB_STATUS = {
+  DRAFT: 'DRAFT',
+  LOCKED: 'LOCKED',
+  APPROVED: 'APPROVED',
+} as const;
+
+export type RabStatus = (typeof RAB_STATUS)[keyof typeof RAB_STATUS];
+
+/** The named refusal every RAB mutator raises once the RAB is frozen. */
+export const RAB_LOCKED_REASON = 'RAB_LOCKED' as const;
+
 export type RabLifecycleReasonCode =
   | 'ACTIVE_BASELINE_EXISTS'
   | 'APPROVED_RAB_EXISTS'
+  | typeof RAB_LOCKED_REASON
   | 'MULTIPLE_WORKING_DRAFTS'
   | 'PROJECT_NOT_DRAFT';
 
@@ -25,6 +51,7 @@ export interface RabLifecycleProjection {
   projectStatus: ProjectStatus;
   activeBaselineCount: number;
   approvedRabCount: number;
+  lockedRabCount: number;
   workingDraftCount: number;
 }
 
@@ -33,6 +60,7 @@ type LifecycleQueryClient = Pick<PrismaService, 'projectBaseline' | 'rabDocument
 interface LifecycleCounts {
   activeBaselineCount: number;
   approvedRabCount: number;
+  lockedRabCount: number;
   workingDraftCount: number;
 }
 
@@ -45,9 +73,21 @@ interface LifecycleCounts {
  * Reason priority (first match wins):
  *   1. activeBaselineCount > 0   -> ACTIVE_BASELINE_EXISTS
  *   2. approvedRabCount > 0      -> APPROVED_RAB_EXISTS
- *   3. workingDraftCount > 1     -> MULTIPLE_WORKING_DRAFTS
- *   4. status not RAB-editable   -> PROJECT_NOT_DRAFT
- *   5. otherwise                 -> allowed
+ *   3. lockedRabCount > 0        -> RAB_LOCKED
+ *   4. workingDraftCount > 1     -> MULTIPLE_WORKING_DRAFTS
+ *   5. status not RAB-editable   -> PROJECT_NOT_DRAFT
+ *   6. otherwise                 -> allowed
+ *
+ * RAB_LOCKED sits BELOW approval and baseline on purpose: those are stronger,
+ * later facts, and a project that has both should report the stronger one.
+ *
+ * This is also the whole of the freeze enforcement. Every RAB mutator —
+ * PUT /boq/draft, BOQ import approve, select-ahsp, cost-calculation persist —
+ * already consults this projection inside its own FOR UPDATE transaction on
+ * the Project row, so teaching THIS function about LOCKED closes all of them
+ * at once. No guard is bolted onto each route one by one, and no mutator can
+ * be added later that quietly skips the freeze without also skipping the
+ * lifecycle law it already had to obey.
  *
  * Project.status is read only as an eligibility gate at priority 4. It never
  * fabricates an active baseline, an approved RAB, or Working Draft
@@ -59,11 +99,12 @@ export class RabLifecyclePolicyService {
   constructor(private readonly prisma: PrismaService) {}
 
   private project(counts: LifecycleCounts, projectStatus: ProjectStatus): RabLifecycleProjection {
-    const { activeBaselineCount, approvedRabCount, workingDraftCount } = counts;
+    const { activeBaselineCount, approvedRabCount, lockedRabCount, workingDraftCount } = counts;
 
     let reasonCode: RabLifecycleReasonCode | null = null;
     if (activeBaselineCount > 0) reasonCode = 'ACTIVE_BASELINE_EXISTS';
     else if (approvedRabCount > 0) reasonCode = 'APPROVED_RAB_EXISTS';
+    else if (lockedRabCount > 0) reasonCode = RAB_LOCKED_REASON;
     else if (workingDraftCount > 1) reasonCode = 'MULTIPLE_WORKING_DRAFTS';
     else if (!RAB_EDITABLE_PROJECT_STATUSES.includes(projectStatus)) reasonCode = 'PROJECT_NOT_DRAFT';
 
@@ -76,17 +117,19 @@ export class RabLifecyclePolicyService {
       projectStatus,
       activeBaselineCount,
       approvedRabCount,
+      lockedRabCount,
       workingDraftCount,
     };
   }
 
   private async countLifecycle(client: LifecycleQueryClient, projectId: string): Promise<LifecycleCounts> {
-    const [activeBaselineCount, approvedRabCount, workingDraftCount] = await Promise.all([
+    const [activeBaselineCount, approvedRabCount, lockedRabCount, workingDraftCount] = await Promise.all([
       client.projectBaseline.count({ where: { projectId, status: 'ACTIVE' } }),
-      client.rabDocument.count({ where: { projectId, status: 'APPROVED' } }),
+      client.rabDocument.count({ where: { projectId, status: RAB_STATUS.APPROVED } }),
+      client.rabDocument.count({ where: { projectId, status: RAB_STATUS.LOCKED } }),
       client.boqStructure.count({ where: { projectId, status: 'DRAFT', name: WORKING_DRAFT_STRUCTURE_NAME } }),
     ]);
-    return { activeBaselineCount, approvedRabCount, workingDraftCount };
+    return { activeBaselineCount, approvedRabCount, lockedRabCount, workingDraftCount };
   }
 
   /** Read-path evaluation (GET draft, import preview). `projectStatus` should come from an already-trusted context (e.g. ProjectAccessGuard). */
@@ -101,19 +144,21 @@ export class RabLifecyclePolicyService {
     return this.project(counts, projectStatus);
   }
 
-  /** Batch projection for list views. Exactly three queries regardless of project count — no N+1. */
+  /** Batch projection for list views. A fixed number of queries regardless of project count — no N+1. */
   async evaluateBatch(projectIds: string[], projectStatusById: Map<string, ProjectStatus>): Promise<Map<string, RabLifecycleProjection>> {
     const result = new Map<string, RabLifecycleProjection>();
     if (projectIds.length === 0) return result;
 
-    const [baselineGroups, approvedGroups, draftGroups] = await Promise.all([
+    const [baselineGroups, approvedGroups, lockedGroups, draftGroups] = await Promise.all([
       this.prisma.projectBaseline.groupBy({ by: ['projectId'], where: { projectId: { in: projectIds }, status: 'ACTIVE' }, _count: { _all: true } }),
-      this.prisma.rabDocument.groupBy({ by: ['projectId'], where: { projectId: { in: projectIds }, status: 'APPROVED' }, _count: { _all: true } }),
+      this.prisma.rabDocument.groupBy({ by: ['projectId'], where: { projectId: { in: projectIds }, status: RAB_STATUS.APPROVED }, _count: { _all: true } }),
+      this.prisma.rabDocument.groupBy({ by: ['projectId'], where: { projectId: { in: projectIds }, status: RAB_STATUS.LOCKED }, _count: { _all: true } }),
       this.prisma.boqStructure.groupBy({ by: ['projectId'], where: { projectId: { in: projectIds }, status: 'DRAFT', name: WORKING_DRAFT_STRUCTURE_NAME }, _count: { _all: true } }),
     ]);
 
     const baselineByProject = new Map(baselineGroups.map((row) => [row.projectId as string, row._count._all]));
     const approvedByProject = new Map(approvedGroups.map((row) => [row.projectId as string, row._count._all]));
+    const lockedByProject = new Map(lockedGroups.map((row) => [row.projectId as string, row._count._all]));
     const draftByProject = new Map(draftGroups.map((row) => [row.projectId as string, row._count._all]));
 
     for (const projectId of projectIds) {
@@ -125,6 +170,7 @@ export class RabLifecyclePolicyService {
       const counts: LifecycleCounts = {
         activeBaselineCount: baselineByProject.get(projectId) ?? 0,
         approvedRabCount: approvedByProject.get(projectId) ?? 0,
+        lockedRabCount: lockedByProject.get(projectId) ?? 0,
         workingDraftCount: draftByProject.get(projectId) ?? 0,
       };
       result.set(projectId, this.project(counts, projectStatus));
