@@ -675,6 +675,21 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
       expect(after.effectiveDateProvenance).toBeNull();
     });
 
+    it('moving the PERIOD while leaving the date also fails closed — the claim must still explain it', async () => {
+      const batchId = await derivedBatch('t-label-only-move');
+
+      // The date stays 2024-01-01; only the period moves to TA 2025. PERIOD_START
+      // of TA 2025 is 2025-01-01, so the claim no longer explains the stored date.
+      const response = await patchBatch(batchId, { sourcePeriodLabel: 'TA 2025' });
+      expect(response.status).toBe(409);
+      expect(response.body.message).toBe('DERIVATION_DOES_NOT_EXPLAIN_EFFECTIVE_DATE');
+      expect(response.body.derivedEffectiveDate).toBe('2025-01-01');
+      expect(response.body.effectiveDate).toBe('2024-01-01');
+
+      const after = await storedBatch(batchId);
+      expect(after.sourcePeriodLabel).toBe('TA 2024');
+    });
+
     it('PREVIEW cannot mint a false claim either — the first writer obeys the same authority', async () => {
       const response = await request(app.getHttpServer())
         .post('/basic-price-imports/preview')
