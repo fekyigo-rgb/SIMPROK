@@ -82,6 +82,17 @@ export const PRELOCK_FINDING = {
    * the wrong line, so this fails closed instead.
    */
   CALCULATION_OCCURRENCE_MISMATCH: 'CALCULATION_OCCURRENCE_MISMATCH',
+  /**
+   * The row carries a WORKING occurrence: a calculation or AHSP selection has
+   * been staged and not yet persisted. Freezing here would lock the OLD
+   * persisted money while a newer, unpersisted intent sits on the same row —
+   * a RAB that is frozen and already out of date at the moment it is frozen.
+   *
+   * LOCK refuses instead of resolving it: persisting the pending work is the
+   * user's decision and a normal DRAFT action, never something a freeze does
+   * on their behalf.
+   */
+  WORKING_CALCULATION_PENDING: 'WORKING_CALCULATION_PENDING',
 } as const;
 
 export type PrelockFinding = (typeof PRELOCK_FINDING)[keyof typeof PRELOCK_FINDING];

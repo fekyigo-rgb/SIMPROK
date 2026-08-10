@@ -53,6 +53,7 @@ describe('RabLockService', () => {
     ahspVersionId,
     calculationAsOfDate: asOfDate,
     calculationOccurrenceId: 'occ-1',
+    workingOccurrenceId: null,
     ...overrides,
   });
 
@@ -476,6 +477,42 @@ describe('RabLockService', () => {
     );
     // and on the SAME transaction client that holds the project row lock
     expect(resolution.resolveVersionResources.mock.calls[0][0]).toBe(tx);
+  });
+
+  // ── FINAL BOLT: NO PENDING WORK MAY BE FROZEN ─────────────────────────────
+
+  it('PENDING: a row with a staged working occurrence refuses the lock, and nothing is touched', async () => {
+    arrange({ workItems: [pricedWorkItem({ workingOccurrenceId: 'occ-working-2' })] });
+
+    const result: any = await lock();
+
+    expect(result.status).toBe('REFUSED');
+    expect(result.reason).toBe(RAB_LOCK_REASON.PRELOCK_REVALIDATION_REQUIRED);
+    expect(result.findings[0]).toMatchObject({
+      finding: PRELOCK_FINDING.WORKING_CALCULATION_PENDING,
+      detail: 'occ-working-2',
+      storedUnitPrice: '197005.00',
+      storedLineTotal: '129826295.00',
+    });
+    // no freeze, no recalculation, no persist, no occurrence deleted
+    expect(tx.rabDocument.updateMany).not.toHaveBeenCalled();
+    expect(persisted.getPersistedCalculation).not.toHaveBeenCalled();
+    expect(resolution.resolveVersionResources).not.toHaveBeenCalled();
+  });
+
+  it('PENDING: the check runs BEFORE the re-proof, so a perfectly healthy snapshot cannot mask it', async () => {
+    arrange({ workItems: [pricedWorkItem({ workingOccurrenceId: 'occ-working-2' })] });
+    // the snapshot authority would have said VERIFIED — it is never consulted
+    const result: any = await lock();
+    expect(result.findings.map((f: any) => f.finding)).toEqual([
+      PRELOCK_FINDING.WORKING_CALCULATION_PENDING,
+    ]);
+  });
+
+  it('PENDING: a clean row with no staged work still locks — the gate is not a blanket refusal', async () => {
+    arrange();
+    const result: any = await lock();
+    expect(result.status).toBe(RAB_STATUS.LOCKED);
   });
 
   // ── BOLT 1: EXACT OCCURRENCE BINDING ───────────────────────────────────────

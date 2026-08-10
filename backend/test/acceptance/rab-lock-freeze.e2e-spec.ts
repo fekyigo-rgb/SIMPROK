@@ -750,17 +750,59 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
     expect(rab.status).toBe('DRAFT');
   }, 180_000);
 
-  // ── E12 — REAL LOCK vs A GENUINELY WRITABLE MUTATION ──────────────────────
-  it('E12: lock racing a lawful, writable mutation leaves one serially legal history', async () => {
+  // ── FINAL BOLT (non-race): staged work blocks the freeze ──────────────────
+  it('PENDING (real DB): a persisted row that gains a new working occurrence cannot be frozen', async () => {
+    const f = await buildLockableProject({ suffix: 'pending' });
+    const before = await prisma.boqItem.findUniqueOrThrow({ where: { id: f.itemId } });
+    expect(before.workingOccurrenceId).toBeNull();
+
+    // A lawful, real staging action: select the AHSP again. It writes a new
+    // occurrence and points the row at it, without persisting any money.
+    await request(app.getHttpServer())
+      .post(`/projects/${f.projectId}/ahsp-occurrences/boq-items/${f.itemId}/select-ahsp`)
+      .set('Authorization', `Bearer ${editorToken}`)
+      .send({
+        ahspVersionId: f.versionId,
+        businessPricingAsOfDate: asOf,
+        referenceRegionId: regionId,
+        idempotencyKey: `${tag}-pending-${Date.now()}`,
+      })
+      .expect(201);
+
+    const staged = await prisma.boqItem.findUniqueOrThrow({ where: { id: f.itemId } });
+    expect(staged.workingOccurrenceId).not.toBeNull();
+
+    const response = await lock(f.projectId).expect(201);
+
+    expect(response.body.status).toBe('REFUSED');
+    expect(response.body.reason).toBe('PRELOCK_REVALIDATION_REQUIRED');
+    expect(response.body.findings.map((x: any) => x.finding)).toContain(
+      'WORKING_CALCULATION_PENDING',
+    );
+
+    const rab = await prisma.rabDocument.findFirstOrThrow({ where: { projectId: f.projectId } });
+    expect(rab.status).toBe('DRAFT');
+
+    // Money and provenance are untouched, and the staged occurrence survives —
+    // LOCK neither persists it nor cleans it up.
+    const after = await prisma.boqItem.findUniqueOrThrow({ where: { id: f.itemId } });
+    expect(after.unitPrice?.toString()).toBe(before.unitPrice?.toString());
+    expect(after.lineTotal?.toString()).toBe(before.lineTotal?.toString());
+    expect(after.calculationOccurrenceId).toBe(before.calculationOccurrenceId);
+    expect(after.workingOccurrenceId).toBe(staged.workingOccurrenceId);
+  }, 180_000);
+
+  // ── E12 — REAL LOCK vs A LAWFUL, WRITABLE MUTATION: BOTH SERIAL OUTCOMES ──
+  it('E12: whichever wins, the history is serially legal and a frozen RAB never carries pending work', async () => {
     const f = await buildLockableProject({ suffix: 'mutrace' });
     const occurrencesBefore = await prisma.projectAhspOccurrence.count({
       where: { projectId: f.projectId },
     });
 
-    // select-ahsp is the smallest real mutation that is BOTH lawful while the
-    // RAB is DRAFT and able to write: it creates a new occurrence generation.
-    // (Re-persisting is not a valid racer — a persisted row has no working
-    // occurrence left, so it would refuse for its own reason, not the lock's.)
+    // select-ahsp is the smallest existing mutation that is BOTH lawful while
+    // the RAB is DRAFT and genuinely able to write. (Re-persisting is not a
+    // valid racer: a persisted row has no working occurrence left, so it would
+    // refuse for its own reason rather than the lock's.)
     const [lockRes, mutationRes] = await Promise.all([
       lock(f.projectId),
       request(app.getHttpServer())
@@ -775,6 +817,7 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
     ]);
 
     const rab = await prisma.rabDocument.findFirstOrThrow({ where: { projectId: f.projectId } });
+    const item = await prisma.boqItem.findUniqueOrThrow({ where: { id: f.itemId } });
     const occurrencesAfter = await prisma.projectAhspOccurrence.count({
       where: { projectId: f.projectId },
     });
@@ -784,24 +827,35 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
     expect(mutationRes.status).toBeLessThan(500);
 
     const mutationCommitted = mutationRes.status < 400;
+
     if (mutationCommitted) {
-      // The mutation won the row lock: its write landed, and the lock then
-      // revalidated whatever truth it found.
+      // OUTCOME B — the mutation won the row lock. Its occurrence really
+      // exists, the row really points at it, and the lock MUST have refused:
+      // freezing here would lock money the user has already moved past.
       expect(occurrencesAfter).toBe(occurrencesBefore + 1);
+      expect(item.workingOccurrenceId).not.toBeNull();
+      expect(rab.status).toBe('DRAFT');
+      expect(lockRes.body.status).toBe('REFUSED');
+      expect(lockRes.body.findings.map((x: any) => x.finding)).toContain(
+        'WORKING_CALCULATION_PENDING',
+      );
     } else {
-      // The mutation was refused. THE invariant: a refused mutation must not
-      // have written anything — nothing commits after LOCK wins.
-      expect(occurrencesAfter).toBe(occurrencesBefore);
+      // OUTCOME A — the lock won. The mutation was refused by the lifecycle
+      // and, decisively, wrote NOTHING: nothing commits after LOCK wins.
       expect(rab.status).toBe('LOCKED');
+      expect(occurrencesAfter).toBe(occurrencesBefore);
+      expect(item.workingOccurrenceId).toBeNull();
+      expect(JSON.stringify(mutationRes.body)).toContain('RAB_LOCKED');
     }
 
-    // Exactly one RAB document, and if frozen it carries exactly one lawful
-    // lock fact — never two, never a partial one.
-    expect(await prisma.rabDocument.count({ where: { projectId: f.projectId } })).toBe(1);
+    // THE ABSOLUTE INVARIANT, asserted in both branches: a frozen RAB can
+    // never carry unpersisted work.
     if (rab.status === 'LOCKED') {
+      expect(item.workingOccurrenceId).toBeNull();
       expect(rab.lockedFromStatus).toBe('DRAFT');
       expect(rab.lockedAt).not.toBeNull();
       expect(rab.lockedByAccountId).not.toBeNull();
     }
+    expect(await prisma.rabDocument.count({ where: { projectId: f.projectId } })).toBe(1);
   }, 180_000);
 });

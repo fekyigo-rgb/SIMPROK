@@ -80,6 +80,8 @@ const FINDING_COPY: Record<string, string> = {
   BASIC_PRICE_AMBIGUOUS:
     'Ada lebih dari satu Harga Dasar yang memenuhi syarat. SIMPROK tidak memilih untuk Anda.',
   BASIC_PRICE_MISSING: 'Tidak ada Harga Dasar yang memenuhi syarat untuk item ini.',
+  WORKING_CALCULATION_PENDING:
+    'Masih ada perhitungan yang belum disimpan pada item ini. Simpan dulu sebelum RAB dikunci.',
   CALCULATION_OCCURRENCE_MISMATCH:
     'Dasar perhitungan tersimpan untuk item ini tidak dapat ditelusuri dengan pasti.',
 };

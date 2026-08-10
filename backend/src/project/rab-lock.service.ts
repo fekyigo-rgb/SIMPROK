@@ -310,6 +310,7 @@ export class RabLockService {
           ahspVersionId: true,
           calculationAsOfDate: true,
           calculationOccurrenceId: true,
+          workingOccurrenceId: true,
         },
         orderBy: { sortOrder: 'asc' },
       });
@@ -365,6 +366,29 @@ export class RabLockService {
           findings.push({
             ...where,
             finding: PRELOCK_FINDING.MANUAL_PRICE_REQUIRES_CONFIRMATION,
+            storedUnitPrice: item.unitPrice === null ? null : toDecimalString2(item.unitPrice),
+            storedLineTotal: item.lineTotal === null ? null : toDecimalString2(item.lineTotal),
+          });
+          continue;
+        }
+
+        // 4a-pre. IS THERE UNPERSISTED WORK ON THIS ROW?
+        //
+        // A working occurrence means a calculation or AHSP selection has been
+        // staged and not yet persisted. Gate-2A clears this pointer on a
+        // successful persist, so a non-null value is precisely "there is newer
+        // intent here than the money on the row". Freezing now would lock the
+        // OLD number while the user believes a newer one is in flight — a RAB
+        // that is out of date at the instant it becomes immutable.
+        //
+        // Checked BEFORE the re-proof and the price comparison, because both
+        // of those describe the PERSISTED truth and would happily pass while
+        // the pending work is exactly what makes freezing wrong.
+        if (item.workingOccurrenceId !== null) {
+          findings.push({
+            ...where,
+            finding: PRELOCK_FINDING.WORKING_CALCULATION_PENDING,
+            detail: item.workingOccurrenceId,
             storedUnitPrice: item.unitPrice === null ? null : toDecimalString2(item.unitPrice),
             storedLineTotal: item.lineTotal === null ? null : toDecimalString2(item.lineTotal),
           });
