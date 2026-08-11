@@ -27,6 +27,19 @@ import {
 } from './rab-draft-recap';
 import { SERVER_ROW_PROTECTION_REASON } from './rab-kernel-persistence.contracts';
 
+/**
+ * RAB-TRACE-01 — what an AHSP actually is in this domain. There is no AHSP
+ * code column anywhere; identity is work type, method and version.
+ */
+export interface AhspIdentityProjection {
+  workType: string;
+  methodName: string;
+  versionNumber: number;
+  outputUnit: string | null;
+  /** Which truth answered: the row's frozen snapshot, or the live version. */
+  source: 'SNAPSHOT' | 'LIVE';
+}
+
 @Injectable()
 export class ProjectService {
   constructor(
@@ -553,10 +566,14 @@ export class ProjectService {
 
     if (!rab || !rab.boqStructureId) return [];
 
-    return await this.prisma.boqItem.findMany({
-      where: { boqStructureId: rab.boqStructureId },
-      orderBy: { sortOrder: 'asc' },
-    });
+    // The official RAB reads through the same AHSP identity authority as the
+    // draft, so the two rooms cannot disagree about what analysis a row uses.
+    return await this.attachAhspIdentity(
+      await this.prisma.boqItem.findMany({
+        where: { boqStructureId: rab.boqStructureId },
+        orderBy: { sortOrder: 'asc' },
+      }),
+    );
   }
 
   /**
@@ -594,10 +611,18 @@ export class ProjectService {
         capability,
       };
     }
-    const items = await this.prisma.boqItem.findMany({
+    const rawItems = await this.prisma.boqItem.findMany({
       where: { boqStructureId: structure.id },
       orderBy: { sortOrder: 'asc' },
     });
+
+    // RAB-TRACE-01 — an AHSP has no code in this domain; it is identified by
+    // its work type, its method and a version. The viewer was showing wbsCode
+    // as if it were an AHSP code, which is the RAB row's own code and not an
+    // AHSP identity at all. Project the real identity so both rooms can name
+    // the analysis truthfully instead of borrowing a field that means
+    // something else. Read-only: no column is written and no schema changes.
+    const items = await this.attachAhspIdentity(rawItems);
 
     // A stale RabDocument recap from a time when every row was priced is not
     // authoritative once the live items include an unpriced WORK_ITEM — the
@@ -639,6 +664,106 @@ export class ProjectService {
       recap: this.serializeDraftRecap(recap),
       capability,
     };
+  }
+
+  /**
+   * RAB-TRACE-01 — attach canonical AHSP identity to rows that reference one.
+   *
+   * Read-only and additive: the row objects are returned unchanged apart from
+   * an `ahsp` field carrying what the AHSP itself says it is. Rows with no
+   * AHSP get null, so the reader can say "belum terhubung" rather than invent
+   * an analysis that was never linked.
+   */
+  /**
+   * RAB-TRACE-01 — the one place RAB reads learn what analysis a row uses.
+   *
+   * Every lawful RAB read goes through here: the working draft, the official
+   * baseline, and any future view of the same rows. Adding it to the draft
+   * path alone would have looked right today only because this project has no
+   * baseline yet — the moment one existed, the official RAB would have lost
+   * the identity the draft showed.
+   *
+   * Authority order follows what the row is actually bound to. A row carrying
+   * an AHSP snapshot is bound to that frozen historical truth, so the snapshot
+   * answers; otherwise the live version does. Only when neither exists is the
+   * row honestly unlinked — a legitimate snapshot is never called "belum
+   * terhubung".
+   *
+   * Read-only and additive: no column is written and no schema changes.
+   */
+  private async attachAhspIdentity<
+    T extends { ahspVersionId: string | null; ahspSnapshotId?: string | null },
+  >(items: T[]): Promise<Array<T & { ahsp: AhspIdentityProjection | null }>> {
+    const snapshotIds = Array.from(
+      new Set(items.map((item) => item.ahspSnapshotId).filter((id): id is string => !!id)),
+    );
+    const versionIds = Array.from(
+      new Set(
+        items
+          .filter((item) => !item.ahspSnapshotId)
+          .map((item) => item.ahspVersionId)
+          .filter((id): id is string => !!id),
+      ),
+    );
+
+    const [snapshots, versions] = await Promise.all([
+      snapshotIds.length
+        ? this.prisma.aHSPSnapshot.findMany({
+            where: { id: { in: snapshotIds } },
+            select: {
+              id: true,
+              workType: true,
+              methodName: true,
+              versionNumber: true,
+              outputUnit: true,
+            },
+          })
+        : Promise.resolve([]),
+      versionIds.length
+        ? this.prisma.aHSPVersion.findMany({
+            where: { id: { in: versionIds } },
+            select: {
+              id: true,
+              versionNumber: true,
+              outputUnit: true,
+              ahsp: { select: { workType: true, methodName: true } },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const bySnapshot = new Map(
+      snapshots.map((snapshot): [string, AhspIdentityProjection] => [
+        snapshot.id,
+        {
+          workType: snapshot.workType,
+          methodName: snapshot.methodName,
+          versionNumber: snapshot.versionNumber,
+          outputUnit: snapshot.outputUnit,
+          source: 'SNAPSHOT' as const,
+        },
+      ]),
+    );
+    const byVersion = new Map(
+      versions.map((version): [string, AhspIdentityProjection] => [
+        version.id,
+        {
+          workType: version.ahsp.workType,
+          methodName: version.ahsp.methodName,
+          versionNumber: version.versionNumber,
+          outputUnit: version.outputUnit,
+          source: 'LIVE' as const,
+        },
+      ]),
+    );
+
+    return items.map((item) => ({
+      ...item,
+      ahsp:
+        (item.ahspSnapshotId && bySnapshot.get(item.ahspSnapshotId)) ||
+        (item.ahspVersionId && byVersion.get(item.ahspVersionId)) ||
+        null,
+    }));
   }
 
   async saveDraftBoq(

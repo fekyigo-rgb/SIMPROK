@@ -1,15 +1,27 @@
-import { useMemo, useState, useEffect, useRef, type CSSProperties } from 'react';
+import { Fragment, useMemo, useState, useEffect, useRef, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Archive, ChevronLeft, ChevronRight, Download, FileText, Lock, Maximize2, Minimize2, Printer, RotateCcw, Upload, ZoomIn, ZoomOut, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import {
-  toPersistedRowDisplay,
+  toPersistedCalculationDisplay,
+  type PersistedCalculationDisplay,
+  type PersistedCalculationWire,
+} from '../utils/rabPersistedCalculationDisplay';
+import {
+  toPersistedRowDisplayList,
   toRecapDisplay,
   type PersistedBoqItem,
   type PersistedDraftRecap,
   type PersistedPriceOrigin,
   type PersistedRowDisplay,
 } from '../utils/rabPersistedDraftDisplay';
+import {
+  buildPriceTrace,
+  resolvePriceOrigin,
+  PRICE_TRACE_ACTION,
+  PRICE_TRACE_TITLE,
+  TECHNICAL_DETAIL_TITLE,
+} from '../utils/rabTraceDisplay';
 import {
   RAB_LOCK_COPY,
   recapTotalLabel,
@@ -133,6 +145,21 @@ export function ProjectRabDoorPage() {
   const [rabRows, setRabRows] = useState<PersistedRowDisplay[]>([]);
   const [rabSource, setRabSource] = useState<RabSource>('empty');
   const [rabLifecycle, setRabLifecycle] = useState<RabLifecycleFactsWire | null>(null);
+  /** RAB-TRACE-01 — which row's price evidence is open. Read-only view state. */
+  /** Disclosure only: whether the status card is showing its secondary facts. */
+  const [statusDetailOpen, setStatusDetailOpen] = useState(false);
+  const [evidenceRowId, setEvidenceRowId] = useState<string | null>(null);
+  /**
+   * The authoritative persisted proof, kept with the row it belongs to. Keying
+   * it this way means a proof can never be read against a different row while
+   * a fetch is in flight, and the effect never has to reset state on the way
+   * in: an id that does not match is simply "not fetched yet".
+   */
+  const [evidenceProof, setEvidenceProof] = useState<{
+    rowId: string;
+    display: PersistedCalculationDisplay | null;
+  } | null>(null);
+  const evidenceGenerationRef = useRef(0);
   const [draftRecap, setDraftRecap] = useState<PersistedDraftRecap | null>(null);
   
   const [zoom, setZoom] = useState(100);
@@ -187,7 +214,7 @@ export function ProjectRabDoorPage() {
           }
           const boqData = await boqResponse.json() as PersistedBoqItem[];
           if (Array.isArray(boqData) && boqData.length > 0) {
-            setRabRows(boqData.map(toPersistedRowDisplay));
+            setRabRows(toPersistedRowDisplayList(boqData));
             setRabSource('baseline');
             setDraftRecap(null);
           } else {
@@ -210,7 +237,7 @@ export function ProjectRabDoorPage() {
             const draftItems = draftResponse.ok && Array.isArray(draftData?.items) ? draftData.items : [];
 
             if (draftItems.length > 0) {
-              setRabRows(draftItems.map(toPersistedRowDisplay));
+              setRabRows(toPersistedRowDisplayList(draftItems));
               setRabSource('draft');
               setDraftRecap(draftData?.recap ?? null);
             } else {
@@ -259,6 +286,62 @@ export function ProjectRabDoorPage() {
   // taxAmount/grandTotal exactly as persisted; INCOMPLETE never fabricates a
   // partial total. See rabPersistedDraftDisplay.ts — no formula lives here.
   const recapDisplay = useMemo(() => toRecapDisplay(draftRecap), [draftRecap]);
+  /**
+   * Opening evidence reads the authoritative proof. A read-only GET is not a
+   * mutation: nothing is saved, recalculated, or reassigned — the row is only
+   * asked to explain itself. State is written solely in the async result, so
+   * opening the panel schedules no cascading render.
+   */
+  useEffect(() => {
+    if (!projectId || !evidenceRowId) return;
+    const row = rabRows.find((candidate) => candidate.id === evidenceRowId);
+    if (!row || row.priceOrigin !== 'SERVER_COST_KERNEL') return;
+
+    const generation = ++evidenceGenerationRef.current;
+    apiFetch(`/projects/${projectId}/boq/items/${evidenceRowId}/persisted-calculation`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('persisted-calculation-load-failed');
+        return (await response.json()) as PersistedCalculationWire;
+      })
+      .then((wire) => {
+        if (generation !== evidenceGenerationRef.current) return;
+        setEvidenceProof({ rowId: evidenceRowId, display: toPersistedCalculationDisplay(wire) });
+      })
+      .catch(() => {
+        if (generation !== evidenceGenerationRef.current) return;
+        // Fail closed: an unreadable proof is never replaced by row metadata.
+        setEvidenceProof({ rowId: evidenceRowId, display: null });
+      });
+  }, [projectId, evidenceRowId, rabRows]);
+
+  const evidenceRow = useMemo(
+    () => rabRows.find((row) => row.id === evidenceRowId) ?? null,
+    [rabRows, evidenceRowId],
+  );
+  /** Assembled from persisted values only — nothing here computes money. */
+  const evidenceTrace = useMemo(
+    () =>
+      evidenceRow
+        ? buildPriceTrace({
+            description: evidenceRow.description,
+            unit: evidenceRow.unit,
+            quantityDisplay: evidenceRow.quantityDisplay,
+            unitPriceDisplay: evidenceRow.unitPriceDisplay,
+            lineTotalDisplay: evidenceRow.lineTotalDisplay,
+            priceOrigin: evidenceRow.priceOrigin,
+            isWorkItem: evidenceRow.itemType === 'WORK_ITEM',
+            ahsp: evidenceRow.ahspWire,
+            authoritative:
+              evidenceRow.priceOrigin !== 'SERVER_COST_KERNEL'
+                ? null
+                : evidenceProof?.rowId === evidenceRow.id
+                ? evidenceProof.display
+                : undefined,
+            provenance: evidenceRow.provenance,
+          })
+        : null,
+    [evidenceRow, evidenceProof],
+  );
 
   useEffect(() => {
     const node = rabDocumentRef.current;
@@ -372,13 +455,42 @@ export function ProjectRabDoorPage() {
         <aside className="simprok-rab-mechanism" aria-label="Status dan mekanisme perubahan">
           <span className="simprok-rab-mechanism__label">Status & Mekanisme</span>
           <div className="simprok-rab-mechanism__chips">
-            {/* One status, the same one every other door shows. */}
-            <span className={`simprok-rab-status simprok-rab-status--${presentation.chipModifier}`}>
+            {/*
+              One status, the same one every other door shows — and now the way
+              to ask for more. "RAB Terkunci" already says the RAB is locked, so
+              the sentence explaining that it is locked no longer occupies the
+              card permanently. It is disclosure, never an unlock: toggling this
+              moves nothing but a paragraph.
+            */}
+            <button
+              type="button"
+              className={`simprok-rab-status simprok-rab-status--${presentation.chipModifier}`}
+              style={{ border: 'none', font: 'inherit', cursor: 'pointer' }}
+              onClick={() => setStatusDetailOpen((open) => !open)}
+              aria-expanded={statusDetailOpen}
+              aria-controls="simprok-rab-status-detail"
+              title={statusDetailOpen ? 'Sembunyikan rincian status' : 'Lihat rincian status'}
+            >
               {presentation.status === 'SELESAI' ? <Archive size={14} aria-hidden="true" /> : rabFrozen ? <Lock size={14} aria-hidden="true" /> : null}
               {presentation.badgeLabel}
-            </span>
+            </button>
           </div>
-          <p>{statusMechanismCopy}</p>
+          {statusDetailOpen ? (
+            <dl id="simprok-rab-status-detail" className="simprok-rab-mechanism__detail" style={{ margin: '0.5rem 0 0', display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: '0.75rem', rowGap: '0.25rem', fontSize: 'var(--text-sm)' }}>
+              <dt style={{ color: '#98A2B3' }}>Status RAB</dt>
+              <dd style={{ margin: 0, color: '#16294B' }}>{presentation.label}</dd>
+              {typeof rabLifecycle?.activeBaselineCount === 'number' ? (
+                <>
+                  <dt style={{ color: '#98A2B3' }}>Baseline</dt>
+                  <dd style={{ margin: 0, color: '#16294B' }}>
+                    {rabLifecycle.activeBaselineCount > 0 ? 'Baseline resmi aktif' : 'Belum menjadi baseline resmi'}
+                  </dd>
+                </>
+              ) : null}
+              <dt style={{ color: '#98A2B3' }}>Mekanisme</dt>
+              <dd style={{ margin: 0, color: '#16294B' }}>{statusMechanismCopy}</dd>
+            </dl>
+          ) : null}
           {!archived ? (
             <button type="button" className="simprok-rab-button simprok-rab-button--gold" onClick={handleAddendumAction}>
               Ajukan Perubahan / Addendum
@@ -399,11 +511,9 @@ export function ProjectRabDoorPage() {
           <header className="simprok-rab-toolbar">
             <div>
               <h2>Dokumen RAB</h2>
-              {rabFrozen ? (
-                <small>{RAB_LOCK_COPY.lockedNote}</small>
-              ) : isDraftPreview ? (
-                <small>RAB tersimpan, belum menjadi baseline resmi.</small>
-              ) : !archived ? (
+              {/* The lock sentence and the baseline sentence both live in the
+                  status card now — one meaning, one primary message. */}
+              {!rabFrozen && !isDraftPreview && !archived ? (
                 <small>Beberapa aksi resmi seperti export, cetak, dan import menunggu integrasi backend.</small>
               ) : null}
             </div>
@@ -460,18 +570,14 @@ export function ProjectRabDoorPage() {
                 </div>
               ) : (
                 <>
-                  {rabFrozen ? (
-                    <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', border: '1px solid #D0D5DD', borderRadius: '8px', color: '#16294B', background: '#F8FAFC' }}>
-                      <strong>{presentation.badgeLabel}. {RAB_LOCK_COPY.lockedNote}</strong>
-                    </div>
-                  ) : isDraftPreview ? (
-                    <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', border: '1px solid #D0D5DD', borderRadius: '8px', color: '#16294B', background: '#F8FAFC' }}>
-                      <strong>RAB tersimpan, belum menjadi baseline resmi.</strong>
-                    </div>
-                  ) : null}
+                  {/* The lock banner and the baseline banner both used to sit
+                      here as well as in Status & Mekanisme. The baseline fact is
+                      unchanged and still readable there on request; it no longer
+                      spends permanent space above the RAB. */}
                   <table className="simprok-rab-table">
                     <thead>
                       <tr>
+                        <th>No</th>
                         <th>Kode</th>
                         <th>Uraian Pekerjaan</th>
                         <th>Satuan</th>
@@ -483,37 +589,50 @@ export function ProjectRabDoorPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {rabRows.map((row, index) => (
+                      {rabRows.map((row) => (
                         <tr key={row.id}>
-                          <td>{row.code || String(index + 1)}</td>
+                          {/* The official structural position, from the same
+                              authority Ruang Kerja uses — not this row's
+                              index in the response array. */}
+                          {/* The first glance is position and code. The AHSP
+                              analysis is still known — it is read from the
+                              detail surface, not advertised in every row. */}
+                          <td>{row.number}</td>
+                          <td>{row.code}</td>
                           <td>{row.description || 'Belum tersedia'}</td>
                           <td>{row.unit || '-'}</td>
                           <td style={numericCellStyle}>{row.quantityDisplay || '-'}</td>
                           <td style={numericCellStyle}>{row.unitPriceDisplay || '-'}</td>
                           <td style={numericCellStyle}>{row.lineTotalDisplay || '-'}</td>
                           <td>
-                            {row.originBadge ? (
-                              <span style={{ ...priceOriginBadgeBaseStyle, ...priceOriginBadgeStyle(row.priceOrigin) }}>
-                                {row.originBadge}
-                              </span>
-                            ) : null}
-                            {row.provenance ? (
-                              <details style={{ marginTop: '0.3rem' }}>
-                                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#1DA1F2' }}>
-                                  Detail provenance
-                                </summary>
-                                <dl style={provenanceListStyle}>
-                                  <dt>Kebijakan kalkulasi</dt>
-                                  <dd>{row.provenance.calculationPolicyVersion}</dd>
-                                  <dt>Per tanggal</dt>
-                                  <dd>{row.provenance.calculationAsOfDate}</dd>
-                                  <dt>Dihitung pada</dt>
-                                  <dd>{row.provenance.calculatedAt}</dd>
-                                  <dt>Occurrence</dt>
-                                  <dd style={{ wordBreak: 'break-all' }}>{row.provenance.calculationOccurrenceId}</dd>
-                                </dl>
-                              </details>
-                            ) : null}
+                            {/* Asal Harga stays one short fact in the Owner's
+                                own vocabulary. The evidence behind it opens in
+                                a panel beside the document — expanding it
+                                inside the cell reflowed the whole table and
+                                made the RAB appear to jump away. */}
+                            {/* The origin fact is itself the door to its own
+                                evidence. A separate link beside it made the
+                                reader choose between a label and a link that
+                                mean the same thing. */}
+                            {(() => {
+                              const origin = resolvePriceOrigin(row.priceOrigin, { isWorkItem: row.itemType === 'WORK_ITEM' });
+                              if (!origin.label) return null;
+                              const openable = row.itemType === 'WORK_ITEM' && Boolean(row.priceOrigin);
+                              const badgeStyle = { ...priceOriginBadgeBaseStyle, ...priceOriginBadgeStyle(row.priceOrigin) };
+                              return openable ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setEvidenceRowId(row.id)}
+                                  style={{ ...badgeStyle, border: 'none', font: 'inherit', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}
+                                  title={PRICE_TRACE_ACTION}
+                                  aria-label={`${origin.label} — ${PRICE_TRACE_ACTION}: ${row.description}`}
+                                >
+                                  {origin.label}
+                                </button>
+                              ) : (
+                                <span style={badgeStyle}>{origin.label}</span>
+                              );
+                            })()}
                           </td>
                           <td>{rowStateLabel}</td>
                         </tr>
@@ -543,6 +662,73 @@ export function ProjectRabDoorPage() {
           </div>
         </section>
 
+        {/*
+          RAB-TRACE-01 — ONE right-side slot. Price evidence used to render as
+          a second aside, which added a sibling to the grid and reorganised the
+          page around the document. The slot now switches what it holds, so
+          opening evidence changes the panel and never the layout.
+        */}
+        {evidenceRow ? (
+          <aside className="simprok-rab-support" aria-label={PRICE_TRACE_TITLE}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+              <div>
+                <strong style={{ display: 'block', color: '#16294B' }}>{evidenceTrace?.title}</strong>
+                <small style={{ color: '#98A2B3' }}>{evidenceTrace?.subtitle}</small>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEvidenceRowId(null)}
+                aria-label={`Tutup ${PRICE_TRACE_TITLE}`}
+                style={{ border: 'none', background: 'none', font: 'inherit', cursor: 'pointer', color: '#16294B' }}
+              >
+                Tutup
+              </button>
+            </div>
+            {/* The verdict first: how far the evidence actually goes. */}
+            <p style={{ margin: '0.5rem 0', color: '#16294B', fontSize: '0.8125rem' }}>{evidenceTrace?.verdict}</p>
+            <dl style={provenanceListStyle}>
+              {evidenceTrace?.facts.map((fact) => (
+                <Fragment key={fact.label}>
+                  <dt>{fact.label}</dt>
+                  <dd>{fact.value}</dd>
+                </Fragment>
+              ))}
+            </dl>
+            {evidenceTrace?.unavailable.length ? (
+              <p style={{ margin: '0.5rem 0 0', color: '#98A2B3', fontSize: '0.75rem' }}>
+                {evidenceTrace.unavailable.join(' ')}
+              </p>
+            ) : null}
+            {evidenceTrace?.resources.length ? (
+              <details style={{ marginTop: '0.5rem' }}>
+                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#16294B' }}>
+                  Komponen pembentuk harga ({evidenceTrace.resources.length})
+                </summary>
+                <dl style={provenanceListStyle}>
+                  {evidenceTrace.resources.map((resource) => (
+                    <Fragment key={resource.resolutionId}>
+                      <dt>{resource.name}</dt>
+                      <dd>{resource.resourceCostDisplay}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </details>
+            ) : null}
+            {evidenceTrace?.technicalFacts.length ? (
+              <details style={{ marginTop: '0.5rem' }}>
+                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#16294B' }}>{TECHNICAL_DETAIL_TITLE}</summary>
+                <dl style={provenanceListStyle}>
+                  {evidenceTrace.technicalFacts.map((fact) => (
+                    <Fragment key={fact.label}>
+                      <dt>{fact.label}</dt>
+                      <dd style={{ wordBreak: 'break-all' }}>{fact.value}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </details>
+            ) : null}
+          </aside>
+        ) : (
         <aside className="simprok-rab-support" aria-label="Data Pendukung RAB">
           <header>
             <div>
@@ -617,6 +803,7 @@ export function ProjectRabDoorPage() {
             </>
           )}
         </aside>
+        )}
       </div>
     </main>
   );
