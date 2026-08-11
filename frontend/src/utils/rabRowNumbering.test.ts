@@ -75,12 +75,24 @@ test("N-4. a row whose parent is absent is shown, not dropped", () => {
   assert.equal(numbered[0].number, "1");
 });
 
-test("N-5. a parent cycle cannot hang the render", () => {
+test("N-5. a parent cycle terminates AND preserves every row", () => {
+  // A cycle cannot reach this surface through lawful editing — indentRow and
+  // outdentRow only ever reparent within existing siblings — but a numbering
+  // authority that silently dropped rows would hide data rather than show it.
+  // The contract is therefore explicit: terminate, and lose nobody.
   const numbered = assignStructuralNumbers([
     { id: "a", parentId: "b", sortOrder: 1, isNote: false },
     { id: "b", parentId: "a", sortOrder: 2, isNote: false },
   ]);
-  assert.equal(numbered.length <= 2, true);
+
+  assert.deepEqual(
+    numbered.map((r) => r.id).sort(),
+    ["a", "b"],
+    "a cycle must not make rows disappear",
+  );
+  for (const row of numbered) {
+    assert.notEqual(row.number, "", `${row.id} lost its number`);
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

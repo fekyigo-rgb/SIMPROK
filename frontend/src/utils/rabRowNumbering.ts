@@ -72,5 +72,25 @@ export const assignStructuralNumbers = <T extends NumberableRow>(
   };
 
   visit(null, [], 0);
+
+  // A cyclic parent chain has no root, so the walk above would reach none of
+  // it and the rows would simply vanish from the table. Lawful editing cannot
+  // produce a cycle — indent and outdent only reparent among existing
+  // siblings — but a numbering authority that silently drops rows hides data
+  // instead of showing it. Anything unreached is therefore numbered as a root
+  // after the reachable tree: deterministic, and nobody is lost.
+  let rootCount = (childrenByParent.root || []).length;
+  sorted.forEach((row) => {
+    if (visited.has(row.id)) return;
+    visited.add(row.id);
+    rootCount += 1;
+    result.push({
+      ...row,
+      number: row.isNote ? '' : String(rootCount),
+      depth: 0,
+    });
+    visit(row.id, [rootCount], 1);
+  });
+
   return result;
 };

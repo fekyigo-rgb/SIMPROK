@@ -504,6 +504,7 @@ export function ProjectRabDoorPage() {
                     <thead>
                       <tr>
                         <th>No</th>
+                        <th>Kode</th>
                         <th>AHSP</th>
                         <th>Uraian Pekerjaan</th>
                         <th>Satuan</th>
@@ -520,7 +521,11 @@ export function ProjectRabDoorPage() {
                           {/* The official structural position, from the same
                               authority Ruang Kerja uses — not this row's
                               index in the response array. */}
+                          {/* Three different facts, three columns: where the
+                              row sits, what the source called it, and which
+                              analysis it uses. */}
                           <td>{row.number}</td>
+                          <td>{row.code}</td>
                           <td title={row.ahsp.fullLabel}>{row.ahsp.shortLabel}</td>
                           <td>{row.description || 'Belum tersedia'}</td>
                           <td>{row.unit || '-'}</td>
@@ -533,24 +538,29 @@ export function ProjectRabDoorPage() {
                                 a panel beside the document — expanding it
                                 inside the cell reflowed the whole table and
                                 made the RAB appear to jump away. */}
+                            {/* The origin fact is itself the door to its own
+                                evidence. A separate link beside it made the
+                                reader choose between a label and a link that
+                                mean the same thing. */}
                             {(() => {
                               const origin = resolvePriceOrigin(row.priceOrigin, { isWorkItem: row.itemType === 'WORK_ITEM' });
-                              return origin.label ? (
-                                <span style={{ ...priceOriginBadgeBaseStyle, ...priceOriginBadgeStyle(row.priceOrigin) }}>
+                              if (!origin.label) return null;
+                              const openable = row.itemType === 'WORK_ITEM' && Boolean(row.priceOrigin);
+                              const badgeStyle = { ...priceOriginBadgeBaseStyle, ...priceOriginBadgeStyle(row.priceOrigin) };
+                              return openable ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setEvidenceRowId(row.id)}
+                                  style={{ ...badgeStyle, border: 'none', font: 'inherit', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}
+                                  title={PRICE_TRACE_ACTION}
+                                  aria-label={`${origin.label} — ${PRICE_TRACE_ACTION}: ${row.description}`}
+                                >
                                   {origin.label}
-                                </span>
-                              ) : null;
+                                </button>
+                              ) : (
+                                <span style={badgeStyle}>{origin.label}</span>
+                              );
                             })()}
-                            {row.itemType === 'WORK_ITEM' && row.priceOrigin ? (
-                              <button
-                                type="button"
-                                onClick={() => setEvidenceRowId(row.id)}
-                                style={{ display: 'block', marginTop: '0.3rem', padding: 0, border: 'none', background: 'none', font: 'inherit', fontSize: '0.75rem', color: '#1DA1F2', cursor: 'pointer' }}
-                                aria-label={`${PRICE_TRACE_ACTION}: ${row.description}`}
-                              >
-                                {PRICE_TRACE_ACTION}
-                              </button>
-                            ) : null}
                           </td>
                           <td>{rowStateLabel}</td>
                         </tr>
@@ -581,18 +591,13 @@ export function ProjectRabDoorPage() {
         </section>
 
         {/*
-          RAB-TRACE-01 — price evidence lives beside the document, never inside
-          a table cell. Expanding it in the cell reflowed the table and the RAB
-          appeared to jump away; a fixed panel leaves the document geometry
-          exactly where the reader left it. Opening it reads persisted values
-          only: no recalculation, no write, no lifecycle change.
+          RAB-TRACE-01 — ONE right-side slot. Price evidence used to render as
+          a second aside, which added a sibling to the grid and reorganised the
+          page around the document. The slot now switches what it holds, so
+          opening evidence changes the panel and never the layout.
         */}
         {evidenceRow ? (
-          <aside
-            className="simprok-rab-support"
-            aria-label={PRICE_TRACE_TITLE}
-            style={{ position: 'sticky', top: '1rem', alignSelf: 'flex-start', maxHeight: '80vh', overflowY: 'auto' }}
-          >
+          <aside className="simprok-rab-support" aria-label={PRICE_TRACE_TITLE}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
               <div>
                 <strong style={{ display: 'block', color: '#16294B' }}>{evidenceTrace?.title}</strong>
@@ -634,8 +639,7 @@ export function ProjectRabDoorPage() {
               </details>
             ) : null}
           </aside>
-        ) : null}
-
+        ) : (
         <aside className="simprok-rab-support" aria-label="Data Pendukung RAB">
           <header>
             <div>
@@ -710,6 +714,7 @@ export function ProjectRabDoorPage() {
             </>
           )}
         </aside>
+        )}
       </div>
     </main>
   );

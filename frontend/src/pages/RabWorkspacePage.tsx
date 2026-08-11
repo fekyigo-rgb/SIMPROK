@@ -1664,6 +1664,7 @@ export function RabWorkspacePage() {
                 <tr>
                   <th className="simprok-rab-col-atur">Atur</th>
                   <th className="simprok-rab-col-no">No</th>
+                  <th>Kode</th>
                   <th>AHSP / Kategori</th>
                   <th>Uraian Pekerjaan</th>
                   <th>Volume</th>
@@ -1730,6 +1731,8 @@ export function RabWorkspacePage() {
                             </button>
                           </div>
                         </td>
+                        {/* No, Kode, AHSP — a note holds none of them. */}
+                        <td></td>
                         <td></td>
                         <td></td>
                         <td colSpan={5} style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
@@ -1763,6 +1766,9 @@ export function RabWorkspacePage() {
                         </div>
                       </td>
                       <td className="simprok-rab-row__number">{row.number}</td>
+                      {/* The source/WBS code. Lawful row truth, and never an
+                          AHSP identity — they are different facts. */}
+                      <td>{row.wbsCode}</td>
                       <td>
                         {row.type === 'item' ? (
                           <div className="simprok-rab-ahsp-cell">
@@ -2044,6 +2050,13 @@ export function RabWorkspacePage() {
                 })()}
               </div>
             ) : null}
+            {/* AHSP ANALYSIS body. It answers what recipe is attached, and
+                it owns the controls that change that attachment. None of it
+                belongs to a read-only price-evidence room, so price trace
+                does not render it — a different enum over the same panel
+                would have been the same door wearing a new label. */}
+            {drawerMode === 'AHSP_ANALYSIS' ? (
+            <>
             <div className="simprok-ahsp-meta">
               <div>
                 {/* There is no AHSP code in this domain — an AHSP is its work
@@ -2305,6 +2318,8 @@ export function RabWorkspacePage() {
                 <ListChecks size={17} /> {isSelectingAhsp ? 'Memproses...' : 'Pilih / Ganti AHSP'}
               </button>
             </div>
+            </>
+            ) : null}
           </aside>
         ) : null}
       </main>

@@ -10,6 +10,7 @@ import {
   PRICE_TRACE_TITLE,
   TECHNICAL_DETAIL_TITLE,
 } from "./rabTraceDisplay.ts";
+import { toPersistedRowDisplayList } from "./rabPersistedDraftDisplay.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RAB-TRACE-01 — ORIGIN: only what the repository can prove
@@ -170,4 +171,96 @@ test("T-5. building a trace is pure — it cannot mutate what it was given", () 
   const before = JSON.stringify(input);
   buildPriceTrace(input);
   assert.equal(JSON.stringify(input), before, "buildPriceTrace mutated its input");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW IDENTITY — NO, KODE and AHSP are three different facts
+//
+// R75 is the row's own source/WBS code. It is lawful truth and stays visible,
+// but it is not an AHSP identity and must never be shown as one.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("R-1. the row's code and its AHSP identity are independent facts", () => {
+  const rows = toPersistedRowDisplayList([
+    {
+      id: "r75",
+      parentId: null,
+      sortOrder: 1,
+      wbsCode: "R75",
+      name: "Timbunan dan Pemadatan Sirtu",
+      itemType: "WORK_ITEM",
+      quantity: "659.000000",
+      unit: "m3",
+      unitPrice: "197005.00",
+      lineTotal: "129826295.00",
+      priceOrigin: "SERVER_COST_KERNEL",
+      calculationOccurrenceId: null,
+      calculationAsOfDate: null,
+      calculatedAt: null,
+      calculationPolicyVersion: null,
+      ahsp: {
+        workType: "Timbunan dan Pemadatan Sirtu",
+        methodName: "Pemadatan secara Manual",
+        versionNumber: 4,
+        outputUnit: "m3",
+      },
+    },
+  ]);
+
+  const [row] = rows;
+  // NO — structural position.
+  assert.equal(row.number, "1");
+  // KODE — preserved source truth.
+  assert.equal(row.code, "R75");
+  // AHSP — proven analysis identity, and never the row's code.
+  assert.equal(row.ahsp.linked, true);
+  assert.doesNotMatch(row.ahsp.shortLabel, /R75/);
+  assert.doesNotMatch(row.ahsp.fullLabel, /R75/);
+  assert.match(row.ahsp.shortLabel, /Pemadatan secara Manual/);
+  // Three distinct values.
+  assert.notEqual(row.number, row.code);
+  assert.notEqual(row.code, row.ahsp.shortLabel);
+});
+
+test("R-2. a row with no AHSP keeps its code and fails honestly on identity", () => {
+  const rows = toPersistedRowDisplayList([
+    {
+      id: "imported",
+      parentId: null,
+      sortOrder: 1,
+      wbsCode: "TIMB-EXT-01",
+      name: "Timbunan",
+      itemType: "WORK_ITEM",
+      quantity: "659.000000",
+      unit: "m3",
+      unitPrice: "200000.00",
+      lineTotal: "131800000.00",
+      priceOrigin: "MANUAL_CLIENT",
+      calculationOccurrenceId: null,
+      calculationAsOfDate: null,
+      calculatedAt: null,
+      calculationPolicyVersion: null,
+      ahsp: null,
+    },
+  ]);
+
+  const [row] = rows;
+  // The source code survives even with no canonical linkage — this is the
+  // shape an imported row will take.
+  assert.equal(row.code, "TIMB-EXT-01");
+  assert.equal(row.ahsp.linked, false);
+  assert.equal(row.ahsp.shortLabel, NOT_LINKED_AHSP);
+  // And no AHSP is invented from the code.
+  assert.doesNotMatch(row.ahsp.fullLabel, /TIMB/);
+});
+
+test("R-3. a snapshot-backed AHSP is a legitimate identity, not 'belum terhubung'", () => {
+  const identity = resolveAhspIdentity({
+    workType: "Timbunan dan Pemadatan Sirtu",
+    methodName: "Pemadatan secara Manual",
+    versionNumber: 4,
+    outputUnit: "m3",
+  });
+  assert.equal(identity.linked, true);
+  assert.notEqual(identity.shortLabel, NOT_LINKED_AHSP);
 });

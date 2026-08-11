@@ -561,3 +561,71 @@ test("TR-7. Asal Harga uses the Owner's locked vocabulary, from one resolver", (
   assert.equal(rabDoor.includes("'Auto SIMPROK'"), false);
   assert.equal(rabDoor.includes("'Input Pengguna'"), false);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RAB-TRACE-01 FINAL — row identity, one support slot, and two real rooms
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("TR-8. both tables carry NO, KODE and AHSP as separate columns", () => {
+  for (const [name, source] of [["Ruang Hidup", rabDoor], ["Ruang Kerja", workspace]] as const) {
+    const head = source.slice(source.indexOf("<thead"), source.indexOf("</thead>"));
+    assert.match(head, /<th[^>]*>No<\/th>/, `${name} lost the NO column`);
+    assert.match(head, /<th[^>]*>Kode<\/th>/, `${name} lost the KODE column`);
+    assert.match(head, /<th[^>]*>AHSP/, `${name} lost the AHSP column`);
+  }
+
+  // Each renders its own fact — the code cell never renders AHSP identity.
+  assert.match(rabDoor, /<td>\{row\.code\}<\/td>/);
+  assert.match(rabDoor, /<td title=\{row\.ahsp\.fullLabel\}>\{row\.ahsp\.shortLabel\}<\/td>/);
+  assert.match(workspace, /<td>\{row\.wbsCode\}<\/td>/);
+});
+
+test("TR-9. the origin badge is itself the evidence door", () => {
+  // The separate link text is gone; the fact and the door are one element.
+  assert.equal(rabDoor.includes(">{PRICE_TRACE_ACTION}<"), false, "the separate link text is back");
+  const badge = rabDoor.slice(rabDoor.indexOf("const openable ="), rabDoor.indexOf("<span style={badgeStyle}>"));
+  assert.match(badge, /onClick=\{\(\) => setEvidenceRowId\(row\.id\)\}/);
+  assert.match(badge, /\{origin\.label\}/);
+  // A row with no price is a plain fact, not a door.
+  assert.match(rabDoor, /<span style=\{badgeStyle\}>\{origin\.label\}<\/span>/);
+});
+
+test("TR-10. one right-side slot switches contents — no third grid sibling", () => {
+  // Exactly two <aside> supports exist, and they are the two branches of one
+  // conditional, so the grid never gains a child when evidence opens.
+  const supports = rabDoor.match(/<aside className="simprok-rab-support"/g) ?? [];
+  assert.equal(supports.length, 2, "the support slot was duplicated into siblings");
+
+  const slot = rabDoor.slice(rabDoor.indexOf("{evidenceRow ? ("), rabDoor.indexOf("</aside>", rabDoor.indexOf('aria-label="Data Pendukung RAB"')));
+  assert.match(slot, /aria-label=\{PRICE_TRACE_TITLE\}/);
+  assert.match(slot, /\) : \(/, "the two panels must be branches of one slot");
+  assert.match(slot, /aria-label="Data Pendukung RAB"/);
+  // Closing evidence returns the slot to Data Pendukung.
+  assert.match(rabDoor, /onClick=\{\(\) => setEvidenceRowId\(null\)\}/);
+});
+
+test("TR-11. price trace renders no AHSP write control", () => {
+  // The analysis body — which owns selection, persistence and Execution
+  // Factor — is gated to AHSP_ANALYSIS, so a read-only evidence room cannot
+  // reach a write control.
+  assert.match(workspace, /\{drawerMode === 'AHSP_ANALYSIS' \? \(/);
+
+  const priceTracePanel = workspace.slice(
+    workspace.indexOf("{drawerMode === 'PRICE_TRACE' ? ("),
+    workspace.indexOf("{drawerMode === 'AHSP_ANALYSIS' ? ("),
+  );
+  for (const control of [
+    "handlePersistCalculation",
+    "handlePickAhsp",
+    "handleSaveDraft",
+    "simprok-execution-factor",
+    "Pilih / Ganti AHSP",
+    "Hitung & Simpan Harga",
+  ]) {
+    assert.equal(
+      priceTracePanel.includes(control),
+      false,
+      `price trace must not offer "${control}"`,
+    );
+  }
+});
