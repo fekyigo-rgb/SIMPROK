@@ -688,3 +688,81 @@ test("TR-14. the viewer fails closed rather than showing row numbers as proof", 
   // An unreadable proof becomes null — which the presenter reports as unproven.
   assert.match(viewerEffect, /\.catch\(\(\) => \{[\s\S]*display: null/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ONE VISIBLE MESSAGE — the RAB stops explaining itself twice
+//
+// "RAB Terkunci" already says the RAB is locked, and the baseline sentence sat
+// permanently above the document. Both facts are still true and still readable;
+// neither spends permanent space any more.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("VD-1. the lock explanation is not rendered by default", () => {
+  // The sentence exists as copy and is still reachable, but nothing renders it
+  // unconditionally beside the status chip.
+  assert.equal(
+    rabDoor.includes("<p>{statusMechanismCopy}</p>"),
+    false,
+    "the permanent lock paragraph is back",
+  );
+  assert.equal(
+    rabDoor.includes("<small>{RAB_LOCK_COPY.lockedNote}</small>"),
+    false,
+    "the toolbar repeats the lock sentence again",
+  );
+  // It is shown only inside the disclosure the user opened.
+  const detail = rabDoor.slice(
+    rabDoor.indexOf("{statusDetailOpen ? ("),
+    rabDoor.indexOf("</dl>", rabDoor.indexOf("{statusDetailOpen ? (")),
+  );
+  assert.match(detail, /\{statusMechanismCopy\}/);
+});
+
+test("VD-2. the baseline banner is gone from the primary RAB surface", () => {
+  // No permanent banner, and no toolbar subtitle carrying the same sentence.
+  const document = rabDoor.slice(rabDoor.indexOf('aria-label="Dokumen RAB"'), rabDoor.indexOf("</table>"));
+  assert.equal(
+    document.includes("RAB tersimpan, belum menjadi baseline resmi."),
+    false,
+    "the baseline banner still occupies the document",
+  );
+});
+
+test("VD-3. the baseline fact survives, on request", () => {
+  const detail = rabDoor.slice(
+    rabDoor.indexOf("{statusDetailOpen ? ("),
+    rabDoor.indexOf("</dl>", rabDoor.indexOf("{statusDetailOpen ? (")),
+  );
+  assert.match(detail, /<dt[^>]*>Baseline<\/dt>/);
+  assert.match(detail, /Belum menjadi baseline resmi/);
+  // Read from lifecycle truth already loaded — no new authority, no new fetch.
+  assert.match(detail, /rabLifecycle\?\.activeBaselineCount/);
+  assert.match(detail, /rabLifecycle\.activeBaselineCount > 0/);
+});
+
+test("VD-4. the status chip discloses; it never unlocks", () => {
+  const index = rabDoor.indexOf('aria-controls="simprok-rab-status-detail"');
+  assert.notEqual(index, -1, "the status disclosure is missing");
+  const tag = openingTagAt(rabDoor, rabDoor.lastIndexOf("<button", index));
+
+  assert.match(tag, /onClick=\{\(\) => setStatusDetailOpen\(\(open\) => !open\)\}/);
+  assert.match(tag, /aria-expanded=\{statusDetailOpen\}/);
+  // Closed until asked for.
+  assert.match(rabDoor, /const \[statusDetailOpen, setStatusDetailOpen\] = useState\(false\)/);
+
+  // It touches no server, no lifecycle, no lock.
+  assert.doesNotMatch(tag, /apiFetch|fetch\(|handleLockRab|setRabLifecycle/);
+  for (const forbidden of ["Buka Kunci", "Reopen", "Buka Kembali", "Revisi Draft"]) {
+    assert.equal(rabDoor.includes(forbidden), false, `an unlock action appeared: ${forbidden}`);
+  }
+});
+
+test("VD-5. the primary status and the Addendum action are untouched", () => {
+  // "RAB Terkunci" still comes from the one presentation resolver...
+  assert.match(rabDoor, /\{presentation\.badgeLabel\}/);
+  assert.match(rabDoor, /simprok-rab-mechanism__label">Status & Mekanisme/);
+  // ...and the existing Addendum control is exactly as it was.
+  assert.match(rabDoor, /onClick=\{handleAddendumAction\}/);
+  assert.match(rabDoor, /Ajukan Perubahan \/ Addendum/);
+  assert.match(rabDoor, /\{!archived \? \(/);
+});

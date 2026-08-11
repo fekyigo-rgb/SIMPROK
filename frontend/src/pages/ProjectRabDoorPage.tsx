@@ -146,6 +146,8 @@ export function ProjectRabDoorPage() {
   const [rabSource, setRabSource] = useState<RabSource>('empty');
   const [rabLifecycle, setRabLifecycle] = useState<RabLifecycleFactsWire | null>(null);
   /** RAB-TRACE-01 — which row's price evidence is open. Read-only view state. */
+  /** Disclosure only: whether the status card is showing its secondary facts. */
+  const [statusDetailOpen, setStatusDetailOpen] = useState(false);
   const [evidenceRowId, setEvidenceRowId] = useState<string | null>(null);
   /**
    * The authoritative persisted proof, kept with the row it belongs to. Keying
@@ -453,13 +455,42 @@ export function ProjectRabDoorPage() {
         <aside className="simprok-rab-mechanism" aria-label="Status dan mekanisme perubahan">
           <span className="simprok-rab-mechanism__label">Status & Mekanisme</span>
           <div className="simprok-rab-mechanism__chips">
-            {/* One status, the same one every other door shows. */}
-            <span className={`simprok-rab-status simprok-rab-status--${presentation.chipModifier}`}>
+            {/*
+              One status, the same one every other door shows — and now the way
+              to ask for more. "RAB Terkunci" already says the RAB is locked, so
+              the sentence explaining that it is locked no longer occupies the
+              card permanently. It is disclosure, never an unlock: toggling this
+              moves nothing but a paragraph.
+            */}
+            <button
+              type="button"
+              className={`simprok-rab-status simprok-rab-status--${presentation.chipModifier}`}
+              style={{ border: 'none', font: 'inherit', cursor: 'pointer' }}
+              onClick={() => setStatusDetailOpen((open) => !open)}
+              aria-expanded={statusDetailOpen}
+              aria-controls="simprok-rab-status-detail"
+              title={statusDetailOpen ? 'Sembunyikan rincian status' : 'Lihat rincian status'}
+            >
               {presentation.status === 'SELESAI' ? <Archive size={14} aria-hidden="true" /> : rabFrozen ? <Lock size={14} aria-hidden="true" /> : null}
               {presentation.badgeLabel}
-            </span>
+            </button>
           </div>
-          <p>{statusMechanismCopy}</p>
+          {statusDetailOpen ? (
+            <dl id="simprok-rab-status-detail" className="simprok-rab-mechanism__detail" style={{ margin: '0.5rem 0 0', display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: '0.75rem', rowGap: '0.25rem', fontSize: 'var(--text-sm)' }}>
+              <dt style={{ color: '#98A2B3' }}>Status RAB</dt>
+              <dd style={{ margin: 0, color: '#16294B' }}>{presentation.label}</dd>
+              {typeof rabLifecycle?.activeBaselineCount === 'number' ? (
+                <>
+                  <dt style={{ color: '#98A2B3' }}>Baseline</dt>
+                  <dd style={{ margin: 0, color: '#16294B' }}>
+                    {rabLifecycle.activeBaselineCount > 0 ? 'Baseline resmi aktif' : 'Belum menjadi baseline resmi'}
+                  </dd>
+                </>
+              ) : null}
+              <dt style={{ color: '#98A2B3' }}>Mekanisme</dt>
+              <dd style={{ margin: 0, color: '#16294B' }}>{statusMechanismCopy}</dd>
+            </dl>
+          ) : null}
           {!archived ? (
             <button type="button" className="simprok-rab-button simprok-rab-button--gold" onClick={handleAddendumAction}>
               Ajukan Perubahan / Addendum
@@ -480,11 +511,9 @@ export function ProjectRabDoorPage() {
           <header className="simprok-rab-toolbar">
             <div>
               <h2>Dokumen RAB</h2>
-              {rabFrozen ? (
-                <small>{RAB_LOCK_COPY.lockedNote}</small>
-              ) : isDraftPreview ? (
-                <small>RAB tersimpan, belum menjadi baseline resmi.</small>
-              ) : !archived ? (
+              {/* The lock sentence and the baseline sentence both live in the
+                  status card now — one meaning, one primary message. */}
+              {!rabFrozen && !isDraftPreview && !archived ? (
                 <small>Beberapa aksi resmi seperti export, cetak, dan import menunggu integrasi backend.</small>
               ) : null}
             </div>
@@ -541,14 +570,10 @@ export function ProjectRabDoorPage() {
                 </div>
               ) : (
                 <>
-                  {/* The locked banner used to sit here as well as in Status &
-                      Mekanisme on the right. One meaning, one primary message —
-                      the right-side notice is the one that stays. */}
-                  {isDraftPreview ? (
-                    <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', border: '1px solid #D0D5DD', borderRadius: '8px', color: '#16294B', background: '#F8FAFC' }}>
-                      <strong>RAB tersimpan, belum menjadi baseline resmi.</strong>
-                    </div>
-                  ) : null}
+                  {/* The lock banner and the baseline banner both used to sit
+                      here as well as in Status & Mekanisme. The baseline fact is
+                      unchanged and still readable there on request; it no longer
+                      spends permanent space above the RAB. */}
                   <table className="simprok-rab-table">
                     <thead>
                       <tr>
