@@ -12,6 +12,7 @@ import {
 } from '../utils/rabPersistedDraftDisplay';
 import {
   RAB_LOCK_COPY,
+  recapTotalLabel,
   resolveProjectPresentationStatus,
   type RabLifecycleFactsWire,
 } from '../utils/rabLockDisplay';
@@ -532,7 +533,7 @@ export function ProjectRabDoorPage() {
                           stored is not what state the RAB is in. Calling this
                           total a draft told the Owner their locked RAB was still
                           open, on the same screen that says TERKUNCI. */}
-                      <span style={recapLineStyle}>{rabFrozen ? 'Grand Total RAB' : 'Grand Total Draft'}<strong>{recapDisplay.grandTotalDisplay}</strong></span>
+                      <span style={recapLineStyle}>{recapTotalLabel(presentation.status)}<strong>{recapDisplay.grandTotalDisplay}</strong></span>
                     </div>
                   ) : null}
                 </>

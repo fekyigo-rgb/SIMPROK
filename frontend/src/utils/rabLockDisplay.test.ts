@@ -6,6 +6,7 @@ import {
   toPrelockFindingLines,
   resolveProjectPresentationStatus,
   presentationLabel,
+  recapTotalLabel,
   PRESENTATION_FILTER_ORDER,
 } from "./rabLockDisplay.ts";
 
@@ -192,4 +193,59 @@ test("filtering and the badge cannot disagree — both come from this resolver",
   assert.equal(view.status, 'TERKUNCI');
   assert.equal(presentationLabel(view.status), 'Terkunci');
   assert.equal(PRESENTATION_FILTER_ORDER.includes(view.status), true);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE RECAP TOTAL MAY ONLY SAY "DRAFT" WHEN THE LIFECYCLE SAYS DRAFT
+//
+// Choosing the label by "is it frozen?" and letting every other answer fall
+// through to Draft would put the word back on a running project, a finished
+// one, and — worst — on UNKNOWN, which exists so that missing or unlawful
+// facts are never guessed into a state.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("a positively-known DRAFT calls its total a draft", () => {
+  assert.equal(recapTotalLabel("DRAFT"), "Grand Total Draft");
+});
+
+test("no other lifecycle may call its total a draft", () => {
+  for (const status of ["TERKUNCI", "APPROVED", "BERJALAN", "SELESAI", "UNKNOWN"] as const) {
+    assert.equal(recapTotalLabel(status), "Grand Total RAB", `${status} must not say Draft`);
+    assert.doesNotMatch(recapTotalLabel(status), /draft/i, `${status} must not say Draft`);
+  }
+});
+
+test("end to end from the server's own facts: a locked RAB's total is not a draft", () => {
+  // Exactly Percobaan 1: PLANNED project, one LOCKED RAB, one working draft
+  // row still present in the draft persistence structure.
+  const locked = resolveProjectPresentationStatus({
+    projectStatus: "PLANNED",
+    reasonCode: "RAB_LOCKED",
+    approvedRabCount: 0,
+    lockedRabCount: 1,
+    workingDraftCount: 1,
+    activeBaselineCount: 0,
+  });
+  assert.equal(locked.status, "TERKUNCI");
+  assert.equal(recapTotalLabel(locked.status), "Grand Total RAB");
+
+  const approved = resolveProjectPresentationStatus({ projectStatus: "PLANNED", approvedRabCount: 1 });
+  assert.equal(approved.status, "APPROVED");
+  assert.equal(recapTotalLabel(approved.status), "Grand Total RAB");
+
+  // Told nothing at all — the honest answer, and still not a draft.
+  const blind = resolveProjectPresentationStatus(undefined);
+  assert.equal(blind.status, "UNKNOWN");
+  assert.equal(recapTotalLabel(blind.status), "Grand Total RAB");
+
+  // And a genuine working draft keeps its own word.
+  const draft = resolveProjectPresentationStatus({ projectStatus: "PLANNED", workingDraftCount: 1 });
+  assert.equal(draft.status, "DRAFT");
+  assert.equal(recapTotalLabel(draft.status), "Grand Total Draft");
+});
+
+test("every presentation status has a recap label, and only one says Draft", () => {
+  const all = ["DRAFT", "TERKUNCI", "APPROVED", "BERJALAN", "SELESAI", "UNKNOWN"] as const;
+  const draftSayers = all.filter((status) => /draft/i.test(recapTotalLabel(status)));
+  assert.deepEqual(draftSayers, ["DRAFT"]);
 });

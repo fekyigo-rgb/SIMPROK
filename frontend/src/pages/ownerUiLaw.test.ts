@@ -417,39 +417,45 @@ test("AFF-E. reading an existing AHSP stays reachable while LOCKED", () => {
 // frozen. Where the numbers live is not what state the RAB is in, and the
 // total was labelled from rabSource — so a locked RAB showed "Grand Total
 // Draft" directly beneath a chip reading TERKUNCI.
+//
+// Nor is "not frozen" the same as "draft": that would put the word back on
+// BERJALAN, SELESAI and UNKNOWN. The label is chosen positively, by the one
+// presentation authority, and its per-status behaviour is proved by calling it
+// in utils/rabLockDisplay.test.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("REC-1. a frozen RAB never shows a Draft grand total", () => {
-  const line = rabDoor
-    .split("\n")
-    .find((candidate) => candidate.includes("grandTotalDisplay"));
+test("REC-1. the recap label is chosen positively from the lifecycle", () => {
+  const line = rabDoor.split("\n").find((candidate) => candidate.includes("grandTotalDisplay"));
   assert.notEqual(line, undefined, "the grand total line is missing");
 
-  // The label is chosen by lifecycle, not by which table the rows came from.
-  assert.match(line as string, /rabFrozen \? 'Grand Total RAB' : 'Grand Total Draft'/);
-  assert.doesNotMatch(line as string, /isDraftPreview \?/, "the label must not follow storage source");
-
-  // No other reachable occurrence of the draft wording exists.
-  assert.equal(rabDoor.split("Grand Total Draft").length - 1, 1);
+  assert.match(line as string, /\{recapTotalLabel\(presentation\.status\)\}/);
+  assert.match(rabDoor, /import \{[\s\S]{0,200}recapTotalLabel,/);
 });
 
-test("REC-2. an editable draft keeps its Draft grand total", () => {
-  assert.match(rabDoor, /'Grand Total Draft'/);
-  // rabFrozen is exactly the frozen lifecycle, so the false branch is the
-  // editable draft and nothing else.
-  assert.match(
-    rabDoor,
-    /const rabFrozen = presentation\.status === 'TERKUNCI' \|\| presentation\.status === 'APPROVED';/,
-  );
+test("REC-2. the page never decides the label by negation", () => {
+  const line = rabDoor.split("\n").find((candidate) => candidate.includes("grandTotalDisplay")) as string;
+
+  // No "frozen? / else draft" reasoning, and no storage-source reasoning.
+  assert.doesNotMatch(line, /rabFrozen/);
+  assert.doesNotMatch(line, /isDraftPreview/);
+  assert.doesNotMatch(line, /rabSource/);
+  // The page holds no literal of its own to drift from the authority.
+  assert.equal(rabDoor.includes("'Grand Total Draft'"), false);
+  assert.equal(rabDoor.includes("'Grand Total RAB'"), false);
 });
 
-test("REC-3. the surrounding lifecycle presentation is unchanged", () => {
-  // The single status chip still comes from the one resolver...
-  assert.match(rabDoor, /className=\{`simprok-rab-status simprok-rab-status--\$\{presentation\.chipModifier\}`\}/);
-  assert.match(rabDoor, /\{presentation\.badgeLabel\}/);
-  // ...and the per-row state still reads the same presentation, not rabSource.
-  assert.match(rabDoor, /const rowStateLabel = presentation\.label;/);
-  // The money itself is untouched: still the persisted display values.
+test("REC-3. the persisted display source is untouched", () => {
+  // The figures are still exactly what the server persisted; only the word
+  // beside them changed.
   assert.match(rabDoor, /\{recapDisplay\.grandTotalDisplay\}/);
   assert.match(rabDoor, /\{recapDisplay\.subtotalDisplay\}/);
+  assert.match(rabDoor, /\{recapDisplay\.marginAmountDisplay\}/);
+  assert.match(rabDoor, /\{recapDisplay\.taxAmountDisplay\}/);
+  assert.match(rabDoor, /const recapDisplay = useMemo\(\(\) => toRecapDisplay\(draftRecap\), \[draftRecap\]\);/);
+});
+
+test("REC-4. the surrounding lifecycle presentation is unchanged", () => {
+  assert.match(rabDoor, /className=\{`simprok-rab-status simprok-rab-status--\$\{presentation\.chipModifier\}`\}/);
+  assert.match(rabDoor, /\{presentation\.badgeLabel\}/);
+  assert.match(rabDoor, /const rowStateLabel = presentation\.label;/);
 });

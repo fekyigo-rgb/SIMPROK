@@ -161,6 +161,17 @@ export const PRESENTATION_FILTER_ORDER: ProjectPresentationStatus[] = [
 export const presentationLabel = (status: ProjectPresentationStatus): string =>
   PRESENTATION[status].label;
 
+/**
+ * What to call the recap total.
+ *
+ * Only a lifecycle positively known to be DRAFT may call its total a draft.
+ * Asking "is it frozen?" and treating every other answer as a draft would put
+ * the word back on BERJALAN, SELESAI and — worst — UNKNOWN, which exists
+ * precisely so missing or unlawful facts are never guessed into a state.
+ */
+export const recapTotalLabel = (status: ProjectPresentationStatus): string =>
+  status === 'DRAFT' ? 'Grand Total Draft' : 'Grand Total RAB';
+
 /** Human copy. No reason code is ever shown to the Owner as-is. */
 export const RAB_LOCK_COPY = {
   action: 'Kunci RAB',
