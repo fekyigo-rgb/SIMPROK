@@ -128,7 +128,7 @@ export const resolveAhspIdentity = (
 };
 
 /* ------------------------------------------------------------------ *
- * Jejak Perhitungan Harga — the price trace, assembled from persisted truth
+ * Komponen Pembentuk Harga — the price trace, assembled from persisted truth
  *
  * "Asal Harga" says where the number came from in one phrase. This says how
  * it was formed. Both rooms read this one function, so the evidence a user
@@ -137,8 +137,8 @@ export const resolveAhspIdentity = (
  * the string the server persisted.
  * ------------------------------------------------------------------ */
 
-export const PRICE_TRACE_TITLE = 'Jejak Perhitungan Harga';
-export const PRICE_TRACE_ACTION = 'Lihat Bukti Harga';
+export const PRICE_TRACE_TITLE = 'Komponen Pembentuk Harga';
+export const PRICE_TRACE_ACTION = 'Lihat Komponen Pembentuk Harga';
 export const PRICE_TRACE_ROW_ACTION = 'Rincian Harga';
 export const TECHNICAL_DETAIL_TITLE = 'Detail Teknis';
 

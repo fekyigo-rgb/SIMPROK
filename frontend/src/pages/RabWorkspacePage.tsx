@@ -26,7 +26,6 @@ import {
 } from '../utils/rabPersistedCalculationDisplay';
 import {
   formatExactMoney,
-  getPriceOriginBadge,
 } from '../utils/rabPersistedDraftDisplay';
 import {
   RAB_LOCK_COPY,
@@ -461,7 +460,6 @@ export function RabWorkspacePage() {
   const [selectedAhspVersionId, setSelectedAhspVersionId] = useState('');
   const [selectedRegionId, setSelectedRegionId] = useState('');
   const [isSelectingAhsp, setIsSelectingAhsp] = useState(false);
-  const [selectionStatusByRow, setSelectionStatusByRow] = useState<Record<string, string>>({});
   const persistGenerationRef = useRef(0);
   /**
    * C-BLOCKER-02: monotonic, synchronous — never coerced, never reset
@@ -992,7 +990,6 @@ export function RabWorkspacePage() {
       .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
       .then((occurrence: E1aOccurrenceResponse) => {
         const view = describeE1aOccurrence(occurrence);
-        setSelectionStatusByRow((current) => ({ ...current, [selectedItem.id]: view.label }));
         setStatusMessage(`AHSP dipilih. ${view.label}.`);
         setRetryToken((value) => value + 1);
       })
@@ -1685,7 +1682,6 @@ export function RabWorkspacePage() {
                   <th className="simprok-rab-col-atur">Atur</th>
                   <th className="simprok-rab-col-no">No</th>
                   <th>Kode</th>
-                  <th>AHSP</th>
                   <th>Uraian Pekerjaan</th>
                   <th>Volume</th>
                   <th>Satuan</th>
@@ -1751,8 +1747,7 @@ export function RabWorkspacePage() {
                             </button>
                           </div>
                         </td>
-                        {/* No, Kode, AHSP — a note holds none of them. */}
-                        <td></td>
+                        {/* No and Kode — a note holds neither. */}
                         <td></td>
                         <td></td>
                         <td colSpan={5} style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
@@ -1789,59 +1784,6 @@ export function RabWorkspacePage() {
                       {/* The source/WBS code. Lawful row truth, and never an
                           AHSP identity — they are different facts. */}
                       <td>{row.wbsCode}</td>
-                      <td>
-                        {row.type === 'item' ? (
-                          <div className="simprok-rab-ahsp-cell">
-                            {row.ahsp ? (
-                              /* The AHSP door: what analysis is used for one
-                                 unit of this work. It shows the AHSP's own
-                                 identity — there is no AHSP code in this
-                                 domain, and the row's wbsCode is not one. */
-                              <button className="simprok-rab-ahsp-code" onClick={() => activateRow(row.id, 'AHSP_ANALYSIS')} title={resolveAhspIdentity(row.ahsp).fullLabel} aria-label={`Buka analisa AHSP: ${resolveAhspIdentity(row.ahsp).fullLabel}`} data-route={`/?ruang=detail-ahsp-${row.id}`}>
-                                {resolveAhspIdentity(row.ahsp).shortLabel}
-                              </button>
-                            ) : (
-                              canEditDraft ? (
-                                <button className="simprok-rab-ahsp-pick" onClick={() => activateRow(row.id)} title="Pilih AHSP" aria-label="Pilih AHSP" data-route={`/?ruang=pilih-ahsp-${row.id}`}>
-                                  Pilih AHSP
-                                </button>
-                              ) : (
-                                /* Choosing is a write. On a frozen row there is
-                                   also nothing behind it to read — a row with no
-                                   AHSP has no analysis to trace — so the invitation
-                                   becomes the plain fact instead. The Detail control
-                                   in the Aksi column still opens this row. */
-                                <span className="simprok-rab-ahsp-badge" aria-label="Tanpa AHSP">Tanpa AHSP</span>
-                              )
-                            )}
-                            {row.manualAhsp ? <span className="simprok-rab-ahsp-badge simprok-rab-ahsp-badge--manual">MANUAL</span> : null}
-                            <span
-                              className="simprok-rab-ahsp-badge"
-                              title={
-                                row.priceOrigin === 'SERVER_COST_KERNEL' && row.calculationAsOfDate
-                                  ? `Harga per tanggal ${row.calculationAsOfDate}`
-                                  : undefined
-                              }
-                            >
-                              {selectionStatusByRow[row.id] ??
-                                (row.workingOccurrenceId && row.calculationOccurrenceId
-                                  ? 'Perhitungan ulang tertunda'
-                                  : // RM-03: a persisted line states its own stored
-                                    // origin, which survives a reload, in preference
-                                    // to the transient recalculation badge.
-                                    row.priceOrigin === 'SERVER_COST_KERNEL'
-                                    ? getPriceOriginBadge(row.priceOrigin)
-                                    : costDisplay
-                                      ? costDisplay.badge
-                                      : row.ahsp
-                                        ? 'Standby'
-                                        : 'Menunggu rekomendasi')}
-                            </span>
-                          </div>
-                        ) : row.type === 'folder' ? (
-                          <small>{row.category}</small>
-                        ) : null}
-                      </td>
                       <td style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
                         <span className="simprok-rab-row__name">
                           {row.type === 'folder' ? <FolderOpen size={16} /> : null}

@@ -541,11 +541,10 @@ export function ProjectRabDoorPage() {
                 </div>
               ) : (
                 <>
-                  {rabFrozen ? (
-                    <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', border: '1px solid #D0D5DD', borderRadius: '8px', color: '#16294B', background: '#F8FAFC' }}>
-                      <strong>{presentation.badgeLabel}. {RAB_LOCK_COPY.lockedNote}</strong>
-                    </div>
-                  ) : isDraftPreview ? (
+                  {/* The locked banner used to sit here as well as in Status &
+                      Mekanisme on the right. One meaning, one primary message —
+                      the right-side notice is the one that stays. */}
+                  {isDraftPreview ? (
                     <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', border: '1px solid #D0D5DD', borderRadius: '8px', color: '#16294B', background: '#F8FAFC' }}>
                       <strong>RAB tersimpan, belum menjadi baseline resmi.</strong>
                     </div>
@@ -555,7 +554,6 @@ export function ProjectRabDoorPage() {
                       <tr>
                         <th>No</th>
                         <th>Kode</th>
-                        <th>AHSP</th>
                         <th>Uraian Pekerjaan</th>
                         <th>Satuan</th>
                         <th style={{ textAlign: 'right' }}>Volume</th>
@@ -571,12 +569,11 @@ export function ProjectRabDoorPage() {
                           {/* The official structural position, from the same
                               authority Ruang Kerja uses — not this row's
                               index in the response array. */}
-                          {/* Three different facts, three columns: where the
-                              row sits, what the source called it, and which
-                              analysis it uses. */}
+                          {/* The first glance is position and code. The AHSP
+                              analysis is still known — it is read from the
+                              detail surface, not advertised in every row. */}
                           <td>{row.number}</td>
                           <td>{row.code}</td>
-                          <td title={row.ahsp.fullLabel}>{row.ahsp.shortLabel}</td>
                           <td>{row.description || 'Belum tersedia'}</td>
                           <td>{row.unit || '-'}</td>
                           <td style={numericCellStyle}>{row.quantityDisplay || '-'}</td>
@@ -656,7 +653,7 @@ export function ProjectRabDoorPage() {
               <button
                 type="button"
                 onClick={() => setEvidenceRowId(null)}
-                aria-label="Tutup Jejak Perhitungan Harga"
+                aria-label={`Tutup ${PRICE_TRACE_TITLE}`}
                 style={{ border: 'none', background: 'none', font: 'inherit', cursor: 'pointer', color: '#16294B' }}
               >
                 Tutup

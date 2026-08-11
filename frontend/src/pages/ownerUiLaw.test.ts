@@ -315,19 +315,19 @@ test("V. commands refuse as well, so the freeze is not only on the screen", () =
 });
 
 test("VI. read-only traces stay reachable while frozen", () => {
-  // Freezing writes must not hide information. Opening the AHSP analysis reads
-  // and traces; it changes nothing, so it stays live.
-  // RAB-TRACE-01 moved these to two named doors, so they are anchored by the
-  // class each one keeps rather than by a label that has since changed.
-  for (const anchor of ['className="simprok-rab-ahsp-code"', 'className="simprok-rab-table-action"']) {
-    const hit = workspace.indexOf(anchor);
-    assert.notEqual(hit, -1, `${anchor} is missing`);
-    const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", hit));
-    assert.doesNotMatch(tag, /disabled/, `${anchor} must stay reachable while frozen`);
-    assert.match(tag, /activateRow\(row\.id, '(AHSP_ANALYSIS|PRICE_TRACE)'\)/);
-  }
+  // The AHSP column was removed from the table at the Owner's instruction, so
+  // the analysis is reached the way it always also was: by selecting the row.
+  // That path stays open while frozen — freezing writes must not hide reading.
+  assert.match(workspace, /const handleRowClick = \(rowId: string[\s\S]{0,200}activateRow\(rowId\)/);
+  assert.match(workspace, /const activateRow = \(rowId: string, mode: DrawerMode = 'AHSP_ANALYSIS'\)/);
 
-  // And so does the lock disclosure, which only explains the lifecycle.
+  // And the price-trace door in the Aksi column is never disabled.
+  const hit = workspace.indexOf('className="simprok-rab-table-action"');
+  assert.notEqual(hit, -1, "the price-trace door is missing");
+  const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", hit));
+  assert.doesNotMatch(tag, /disabled/, "reading the price trace must stay reachable");
+
+  // The lock disclosure likewise only explains the lifecycle.
   const lockTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-toolbar__lock"')));
   assert.match(lockTag, /disabled=\{rabLocked \? false :/);
 });
@@ -395,33 +395,29 @@ test("AFF-C. no reachable control claims Simpan Draft while LOCKED", () => {
   }
 });
 
-test("AFF-D. Pilih AHSP presents no write affordance while LOCKED", () => {
-  // Editable: a real button. Frozen: a plain fact, not a control.
-  assert.match(workspace, /canEditDraft \? \(\s*<button className="simprok-rab-ahsp-pick"/);
-
-  const pick = workspace.indexOf('className="simprok-rab-ahsp-pick"');
-  assert.notEqual(pick, -1);
-  const frozenBranchStart = workspace.indexOf(") : (", pick);
-  assert.notEqual(frozenBranchStart, -1, "the frozen branch is missing");
-  const frozenBranch = workspace.slice(frozenBranchStart, workspace.indexOf("</div>", frozenBranchStart));
-
-  assert.doesNotMatch(frozenBranch, /<button/, "the frozen branch must not render a control");
-  assert.doesNotMatch(frozenBranch, /onClick/);
-  assert.doesNotMatch(frozenBranch, /Pilih AHSP/, "the frozen branch must not invite a choice");
-  assert.match(frozenBranch, /<span className="simprok-rab-ahsp-badge"/);
+test("AFF-D. the table row offers no AHSP write affordance at all", () => {
+  // The AHSP cell — which carried both the analysis door and the "Pilih AHSP"
+  // write invitation — is gone from the table entirely. The capability itself
+  // is not lost: choosing or changing an AHSP still lives in the drawer, where
+  // it is gated by canEditDraft.
+  assert.equal(
+    workspace.includes('className="simprok-rab-ahsp-pick"'),
+    false,
+    "the table must not invite an AHSP change",
+  );
+  assert.match(workspace, /Pilih \/ Ganti AHSP/, "the drawer keeps the capability");
+  const drawerPick = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf("Pilih / Ganti AHSP")));
+  assert.match(drawerPick, /disabled=\{!canEditDraft/);
 });
 
-test("AFF-E. reading an existing AHSP stays reachable while LOCKED", () => {
-  // The trace is read-only, so freezing writes must not close it.
-  const codeTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-ahsp-code"')));
-  assert.match(codeTag, /onClick=\{\(\) => activateRow\(row\.id, 'AHSP_ANALYSIS'\)\}/);
-  assert.doesNotMatch(codeTag, /disabled/);
-  assert.doesNotMatch(codeTag, /canEditDraft/);
-
-  // And so does the Aksi-column Detail control, which opens any item row.
-  for (const tag of tagsContaining('aria-label="Buka Detail Analisa AHSP"')) {
-    assert.doesNotMatch(tag, /disabled/);
-  }
+test("AFF-E. AHSP truth remains readable while LOCKED", () => {
+  // The identity is no longer advertised in every row, but it is still known
+  // and still shown when the user asks for the analysis.
+  assert.match(workspace, /resolveAhspIdentity\(selectedItem\.ahsp\)\.fullLabel/);
+  assert.match(workspace, /<span>Analisa AHSP<\/span>/);
+  // Nothing about that reading is gated on editability.
+  const meta = workspace.slice(workspace.indexOf("<span>Analisa AHSP</span>"), workspace.indexOf("<span>Status AHSP</span>"));
+  assert.doesNotMatch(meta, /canEditDraft|disabled/);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -482,15 +478,14 @@ test("REC-4. the surrounding lifecycle presentation is unchanged", () => {
 // price evidence opens beside the document instead of expanding a table cell.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("TR-1. the AHSP control opens AHSP-analysis mode", () => {
-  const hit = workspace.indexOf('className="simprok-rab-ahsp-code"');
-  assert.notEqual(hit, -1, "the AHSP door is missing");
-  const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", hit));
-
-  assert.match(tag, /activateRow\(row\.id, 'AHSP_ANALYSIS'\)/);
-  // It names the analysis by proven identity, never by the row's own wbsCode.
-  assert.match(tag, /resolveAhspIdentity\(row\.ahsp\)/);
-  assert.doesNotMatch(tag, /wbsCode/);
+test("TR-1. selecting a row opens AHSP-analysis mode", () => {
+  // With the AHSP column removed, row selection is the analysis door.
+  assert.match(workspace, /const activateRow = \(rowId: string, mode: DrawerMode = 'AHSP_ANALYSIS'\)/);
+  assert.match(workspace, /setDrawerMode\(mode\)/);
+  // The drawer names the analysis by proven identity, never by the row's code.
+  const meta = workspace.slice(workspace.indexOf("<span>Analisa AHSP</span>"), workspace.indexOf("<span>Status AHSP</span>"));
+  assert.match(meta, /resolveAhspIdentity/);
+  assert.doesNotMatch(meta, /wbsCode/);
 });
 
 test("TR-2. the Aksi control opens price-trace mode and is named Rincian Harga", () => {
@@ -504,19 +499,19 @@ test("TR-2. the Aksi control opens price-trace mode and is named Rincian Harga",
   assert.doesNotMatch(tag, /aria-label="Buka Detail Analisa AHSP"/);
 });
 
-test("TR-3. the two controls no longer resolve to the same mode", () => {
-  const modeOf = (anchor: string) => {
-    const hit = workspace.indexOf(anchor);
-    const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", hit));
-    return /activateRow\(row\.id, '([A-Z_]+)'\)/.exec(tag)?.[1];
-  };
+test("TR-3. the two doors resolve to different modes", () => {
+  // Row selection opens the analysis; the Aksi control opens the price trace.
+  assert.match(workspace, /activateRow\(rowId\)/, "row selection opens the default mode");
+  assert.match(workspace, /const activateRow = \(rowId: string, mode: DrawerMode = 'AHSP_ANALYSIS'\)/);
 
-  const ahspMode = modeOf('className="simprok-rab-ahsp-code"');
-  const priceMode = modeOf('className="simprok-rab-table-action"');
+  const hit = workspace.indexOf('className="simprok-rab-table-action"');
+  const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", hit));
+  assert.match(tag, /activateRow\(row\.id, 'PRICE_TRACE'\)/);
 
-  assert.equal(ahspMode, "AHSP_ANALYSIS");
-  assert.equal(priceMode, "PRICE_TRACE");
-  assert.notEqual(ahspMode, priceMode, "the two doors resolve to one mode again");
+  // Two modes exist and the drawer branches on them.
+  assert.match(workspace, /type DrawerMode = 'AHSP_ANALYSIS' \| 'PRICE_TRACE'/);
+  assert.match(workspace, /\{drawerMode === 'PRICE_TRACE' \? \(/);
+  assert.match(workspace, /\{drawerMode === 'AHSP_ANALYSIS' \? \(/);
 });
 
 test("TR-4. price evidence opens outside the table, not inside a cell", () => {
@@ -584,18 +579,22 @@ test("TR-7. Asal Harga uses the Owner's locked vocabulary, from one resolver", (
 // RAB-TRACE-01 FINAL — row identity, one support slot, and two real rooms
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("TR-8. both tables carry NO, KODE and AHSP as separate columns", () => {
+test("TR-8. both tables carry NO and KODE, and no AHSP column", () => {
   for (const [name, source] of [["Ruang Hidup", rabDoor], ["Ruang Kerja", workspace]] as const) {
     const head = source.slice(source.indexOf("<thead"), source.indexOf("</thead>"));
     assert.match(head, /<th[^>]*>No<\/th>/, `${name} lost the NO column`);
     assert.match(head, /<th[^>]*>Kode<\/th>/, `${name} lost the KODE column`);
-    assert.match(head, /<th[^>]*>AHSP/, `${name} lost the AHSP column`);
+    assert.doesNotMatch(head, /<th[^>]*>AHSP/, `${name} still advertises an AHSP column`);
   }
 
-  // Each renders its own fact — the code cell never renders AHSP identity.
+  // KODE is the row's own code, and is never relabelled as an AHSP code.
   assert.match(rabDoor, /<td>\{row\.code\}<\/td>/);
-  assert.match(rabDoor, /<td title=\{row\.ahsp\.fullLabel\}>\{row\.ahsp\.shortLabel\}<\/td>/);
   assert.match(workspace, /<td>\{row\.wbsCode\}<\/td>/);
+  assert.equal(workspace.includes("Kode AHSP"), false, "wbsCode must not be called an AHSP code");
+
+  // The AHSP truth itself is untouched — still projected, still resolved.
+  assert.match(rabDoor, /evidenceRow\.ahspWire/);
+  assert.match(workspace, /resolveAhspIdentity/);
 });
 
 test("TR-9. the origin badge is itself the evidence door", () => {

@@ -237,9 +237,9 @@ test("T-3. a manual price states what is unavailable instead of inventing it", (
 test("T-4. both rooms use this one trace — the labels are shared constants", () => {
   // Ruang Hidup's control and Ruang Kerja's row action are different words for
   // the reader, but they resolve to the same evidence surface.
-  assert.equal(PRICE_TRACE_ACTION, "Lihat Bukti Harga");
+  assert.equal(PRICE_TRACE_ACTION, "Lihat Komponen Pembentuk Harga");
   assert.equal(PRICE_TRACE_ROW_ACTION, "Rincian Harga");
-  assert.equal(PRICE_TRACE_TITLE, "Jejak Perhitungan Harga");
+  assert.equal(PRICE_TRACE_TITLE, "Komponen Pembentuk Harga");
   // And neither is the word the Owner rejected.
   assert.doesNotMatch(PRICE_TRACE_ACTION, /provenance/i);
   assert.doesNotMatch(PRICE_TRACE_TITLE, /provenance/i);
