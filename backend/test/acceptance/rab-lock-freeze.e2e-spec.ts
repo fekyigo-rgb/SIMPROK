@@ -28,6 +28,43 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
   const labels = 'TEST_FIXTURE_ONLY OWNER_SUPPLIED_EXAMPLE_NON_PRODUCTION';
   const asOf = '2026-07-31';
   const asOfDate = new Date('2026-07-31T00:00:00.000Z');
+  const ownerEngineeredRows = [
+    {
+      sourceDescription: 'Pekerjaan Galian Tanah Biasa s.d 1 m - Manual',
+      quantity: '45',
+      unit: 'm3',
+      sourceReference: 'T.06.a',
+      ownerOracleDisposition: 'POSITIVE_LIVE',
+    },
+    {
+      sourceDescription: 'Pek. Galian Tanah Biasa Sedalam >1 m s.d 2 m - Manual',
+      quantity: '30',
+      unit: 'm3',
+      sourceReference: 'T.06.b',
+      ownerOracleDisposition: 'POSITIVE_LIVE',
+    },
+    {
+      sourceDescription: 'pek. Timbunan Tanah dengan Pemadatan Manual',
+      quantity: '35',
+      unit: 'm3',
+      sourceReference: 'T.09.a',
+      ownerOracleDisposition: 'PROVISIONAL_REVIEW',
+    },
+    {
+      sourceDescription: 'Urugan Pasir dengan Pemadatan',
+      quantity: '12',
+      unit: 'm3',
+      sourceReference: 'T.10.a',
+      ownerOracleDisposition: 'NEEDS_REVIEW',
+    },
+    {
+      sourceDescription: 'Pengangkutan Tanah Hasil Galian Jarak 30m',
+      quantity: '45',
+      unit: 'm3',
+      sourceReference: 'T.15.a',
+      ownerOracleDisposition: 'POSITIVE_LIVE',
+    },
+  ] as const;
 
   let app: INestApplication;
   let workspaceId: string;
@@ -423,7 +460,233 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
       .set('Authorization', `Bearer ${editorToken}`)
       .send({ calculationAsOfDate: asOf })
       .expect(201);
-    return { itemId: item.id, catalogId: catalog.id, priceId: price.id, versionId: version.id };
+    return {
+      itemId: item.id,
+      catalogId: catalog.id,
+      priceId: price.id,
+      versionId: version.id,
+    };
+  };
+
+  /**
+   * Owner-engineered RAB-MULTIROW-01 acceptance fixture. The descriptions are
+   * deliberately preserved byte-for-byte as source evidence. This proves
+   * source-text preservation, NOT text-to-AHSP matching: the descriptions
+   * never take part in identity or price selection. The fixture binds explicit
+   * AHSP versions and Gate-2A consumes each row's own occurrence. Boundary
+   * classifications remain Owner/workbook oracle facts, not runtime verdicts.
+   */
+  const buildOwnerEngineeredMultirowProject = async (suffix: string) => {
+    const project = await prisma.project.create({
+      data: {
+        workspaceId,
+        organizationId: orgId,
+        code: `${tag}-${suffix}`,
+        name: `${tag} ${suffix}`,
+        status: 'PLANNED',
+      },
+    });
+    projectIds.push(project.id);
+    for (const membershipId of membershipBySuffix.values()) {
+      await prisma.projectAssignment.create({
+        data: {
+          workspaceMembershipId: membershipId,
+          projectId: project.id,
+          roleInProject: 'MEMBER',
+          isPrimaryAssignment: true,
+          status: 'ASSIGNED',
+        },
+      });
+    }
+
+    const worker = await prisma.resourceCatalog.create({
+      data: {
+        workspaceId,
+        name: `${tag} ${suffix} Pekerja`,
+        type: 'LABOR',
+        baseUnit: 'OH',
+      },
+    });
+    const foreman = await prisma.resourceCatalog.create({
+      data: {
+        workspaceId,
+        name: `${tag} ${suffix} Mandor`,
+        type: 'LABOR',
+        baseUnit: 'OH',
+      },
+    });
+    const workerPrice = await createPrice({
+      resourceCatalogId: worker.id,
+      value: '193000.00',
+      effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const foremanPrice = await createPrice({
+      resourceCatalogId: foreman.id,
+      value: '234000.00',
+      effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const structure = await prisma.boqStructure.create({
+      data: {
+        projectId: project.id,
+        name: 'Working Draft',
+        version: 1,
+        status: 'DRAFT',
+      },
+    });
+
+    const definitions = [
+      {
+        sourceDescription: 'Pekerjaan Galian Tanah Biasa s.d 1 m - Manual',
+        sourceReference: 'T.06.a',
+        quantity: '45',
+        expectedUnitPrice: '150600',
+        expectedLineTotal: '6777000',
+        components: [
+          { catalog: worker, price: workerPrice, coefficient: '0.750000' },
+          { catalog: foreman, price: foremanPrice, coefficient: '0.025000' },
+        ],
+      },
+      {
+        sourceDescription:
+          'Pek. Galian Tanah Biasa Sedalam >1 m s.d 2 m - Manual',
+        sourceReference: 'T.06.b',
+        quantity: '30',
+        expectedUnitPrice: '218328',
+        expectedLineTotal: '6549840',
+        components: [
+          { catalog: worker, price: workerPrice, coefficient: '1.050000' },
+          { catalog: foreman, price: foremanPrice, coefficient: '0.067000' },
+        ],
+      },
+      {
+        sourceDescription: 'Pengangkutan Tanah Hasil Galian Jarak 30m',
+        sourceReference: 'T.15.a',
+        quantity: '45',
+        expectedUnitPrice: '38600',
+        expectedLineTotal: '1737000',
+        components: [
+          { catalog: worker, price: workerPrice, coefficient: '0.200000' },
+        ],
+      },
+    ] as const;
+
+    const rows: Array<{
+      itemId: string;
+      occurrenceId: string;
+      versionId: string;
+      sourceDescription: string;
+      sourceReference: string;
+      expectedUnitPrice: string;
+      expectedLineTotal: string;
+    }> = [];
+    for (const [index, definition] of definitions.entries()) {
+      const ahsp = await prisma.aHSP.create({
+        data: {
+          workspaceId,
+          workType: `${tag} ${suffix} ${definition.sourceReference}`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: `${tag} ${suffix} method ${index + 1}`,
+        },
+      });
+      const version = await prisma.aHSPVersion.create({
+        data: {
+          ahspId: ahsp.id,
+          workspaceId,
+          versionNumber: 1,
+          outputUnit: 'm3',
+          effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+          regulationReference: `${definition.sourceReference} OWNER_ENGINEERED_ACCEPTANCE_ORACLE`,
+        },
+      });
+      const resources = [];
+      for (const component of definition.components) {
+        resources.push(
+          await prisma.aHSPResource.create({
+            data: {
+              ahspVersionId: version.id,
+              resourceId: component.catalog.name,
+              resourceType: 'LABOR',
+              coefficient: component.coefficient,
+              baseUnit: 'OH',
+            },
+          }),
+        );
+      }
+      const occurrence = await prisma.projectAhspOccurrence.create({
+        data: {
+          workspaceId,
+          projectId: project.id,
+          ahspVersionId: version.id,
+          idempotencyKey: `${tag}-${suffix}-${definition.sourceReference}`,
+          businessPricingAsOfDate: asOfDate,
+          referenceRegionId: regionId,
+          resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V1',
+          resourceResolutions: {
+            create: resources.map((resource, resourceIndex) => {
+              const component = definition.components[resourceIndex];
+              return {
+                ahspResourceId: resource.id,
+                rawAhspResourceRef: resource.resourceId,
+                rawAhspResourceType: 'LABOR',
+                ahspCoefficient: component.coefficient,
+                ahspUnit: 'OH',
+                status: 'RESOLVED' as const,
+                selectionMode: 'AUTO_SELECTED' as const,
+                resourceCatalogId: component.catalog.id,
+                selectedBasicPriceId: component.price.id,
+                canonicalUnit: 'OH',
+                sourcePriceValue: component.price.value.toString(),
+                sourceUnit: 'OH',
+                adaptedPriceValue: component.price.value.toString(),
+                selectedSourceOrigin: 'SUPPLIER',
+                selectedFreshnessStatus: 'CURRENT',
+                selectedEffectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+                resolutionMethod: 'EXACT_DETERMINISTIC',
+                reasonCodes: ['OWNER_ENGINEERED_ACCEPTANCE_FIXTURE'],
+                explanation: `${labels}; source evidence ${definition.sourceReference}`,
+                policyVersion: labels,
+              };
+            }),
+          },
+        },
+      });
+      const item = await prisma.boqItem.create({
+        data: {
+          boqStructureId: structure.id,
+          wbsCode: `1.${index + 1}`,
+          name: definition.sourceDescription,
+          itemType: 'WORK_ITEM',
+          quantity: definition.quantity,
+          unit: 'm3',
+          ahspVersionId: version.id,
+          workingOccurrenceId: occurrence.id,
+          sortOrder: index + 1,
+        },
+      });
+      await request(app.getHttpServer())
+        .post(
+          `/projects/${project.id}/boq/items/${item.id}/cost-calculation/persist`,
+        )
+        .set('Authorization', `Bearer ${editorToken}`)
+        .send({ calculationAsOfDate: asOf })
+        .expect(201);
+      rows.push({
+        itemId: item.id,
+        occurrenceId: occurrence.id,
+        versionId: version.id,
+        sourceDescription: definition.sourceDescription,
+        sourceReference: definition.sourceReference,
+        expectedUnitPrice: definition.expectedUnitPrice,
+        expectedLineTotal: definition.expectedLineTotal,
+      });
+    }
+    return {
+      projectId: project.id,
+      rows,
+      workerCatalogId: worker.id,
+      workerPriceId: workerPrice.id,
+    };
   };
 
   const lock = (projectId: string, token = editorToken) =>
@@ -777,6 +1040,86 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
   }, 180_000);
 
   // ── FINAL BOLT (non-race): staged work blocks the freeze ──────────────────
+  it('RAB-MULTIROW-01 (real DB): three Owner-engineered rows persist, re-prove, recap and lock through one architecture', async () => {
+    expect(ownerEngineeredRows.map((row) => row.sourceDescription)).toEqual([
+      'Pekerjaan Galian Tanah Biasa s.d 1 m - Manual',
+      'Pek. Galian Tanah Biasa Sedalam >1 m s.d 2 m - Manual',
+      'pek. Timbunan Tanah dengan Pemadatan Manual',
+      'Urugan Pasir dengan Pemadatan',
+      'Pengangkutan Tanah Hasil Galian Jarak 30m',
+    ]);
+    expect(ownerEngineeredRows.map((row) => row.ownerOracleDisposition)).toEqual([
+      'POSITIVE_LIVE',
+      'POSITIVE_LIVE',
+      'PROVISIONAL_REVIEW',
+      'NEEDS_REVIEW',
+      'POSITIVE_LIVE',
+    ]);
+    const fixture = await buildOwnerEngineeredMultirowProject(
+      'owner-multirow-valid',
+    );
+    const storedRows = await prisma.boqItem.findMany({
+      where: { id: { in: fixture.rows.map((row) => row.itemId) } },
+      orderBy: { sortOrder: 'asc' },
+    });
+    expect(storedRows).toHaveLength(3);
+    expect(new Set(storedRows.map((row) => row.id)).size).toBe(3);
+    expect(
+      new Set(storedRows.map((row) => row.calculationOccurrenceId)).size,
+    ).toBe(3);
+    expect(new Set(storedRows.map((row) => row.ahspVersionId)).size).toBe(3);
+    expect(storedRows.map((row) => row.name)).toEqual(
+      fixture.rows.map((row) => row.sourceDescription),
+    );
+
+    for (const [index, expected] of fixture.rows.entries()) {
+      const stored = storedRows[index];
+      expect(stored.calculationOccurrenceId).toBe(expected.occurrenceId);
+      expect(stored.ahspVersionId).toBe(expected.versionId);
+      expect(stored.unitPrice?.toString()).toBe(expected.expectedUnitPrice);
+      expect(stored.lineTotal?.toString()).toBe(expected.expectedLineTotal);
+      const proof = await request(app.getHttpServer())
+        .get(
+          `/projects/${fixture.projectId}/boq/items/${stored.id}/persisted-calculation`,
+        )
+        .set('Authorization', `Bearer ${viewerToken}`)
+        .expect(200);
+      expect(proof.body.status).toBe('VERIFIED');
+      expect(proof.body.boqItemId).toBe(stored.id);
+      expect(proof.body.provenance.calculationOccurrenceId).toBe(
+        expected.occurrenceId,
+      );
+      expect(proof.body.stored.unitPrice).toBe(`${expected.expectedUnitPrice}.00`);
+      expect(proof.body.stored.lineTotal).toBe(`${expected.expectedLineTotal}.00`);
+      expect(proof.body.integrity).toEqual({
+        unitPriceMatches: true,
+        lineTotalMatches: true,
+        allResourceCostsReproduced: true,
+      });
+    }
+
+    expect(storedRows[0].quantity.toString()).toBe('45');
+    expect(storedRows[2].quantity.toString()).toBe('45');
+    expect(storedRows[0].calculationOccurrenceId).not.toBe(
+      storedRows[2].calculationOccurrenceId,
+    );
+    expect(storedRows[0].unitPrice?.toString()).not.toBe(
+      storedRows[2].unitPrice?.toString(),
+    );
+    expect(storedRows[0].lineTotal?.toString()).not.toBe(
+      storedRows[2].lineTotal?.toString(),
+    );
+
+    const rab = await prisma.rabDocument.findFirstOrThrow({
+      where: { projectId: fixture.projectId },
+    });
+    expect(rab.totalBaseCost.toString()).toBe('15063840');
+    expect(rab.totalFinalCost.toString()).toBe('18392948.64');
+    const response = await lock(fixture.projectId).expect(201);
+    expect(response.body.status).toBe('LOCKED');
+    expect(response.body.changed).toBe(true);
+  }, 300_000);
+
   it('PENDING (real DB): a persisted row that gains a new working occurrence cannot be frozen', async () => {
     const f = await buildLockableProject({ suffix: 'pending' });
     const before = await prisma.boqItem.findUniqueOrThrow({ where: { id: f.itemId } });
