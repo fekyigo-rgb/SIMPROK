@@ -527,7 +527,12 @@ export function ProjectRabDoorPage() {
                       <span style={recapLineStyle}>Subtotal<strong>{recapDisplay.subtotalDisplay}</strong></span>
                       <span style={recapLineStyle}>Margin {recapDisplay.marginPercentDisplay}%<strong>{recapDisplay.marginAmountDisplay}</strong></span>
                       <span style={recapLineStyle}>PPN {recapDisplay.taxPercentDisplay}%<strong>{recapDisplay.taxAmountDisplay}</strong></span>
-                      <span style={recapLineStyle}>Grand Total Draft<strong>{recapDisplay.grandTotalDisplay}</strong></span>
+                      {/* The recap is read from the draft persistence structure
+                          even when the RAB is frozen, but where the numbers are
+                          stored is not what state the RAB is in. Calling this
+                          total a draft told the Owner their locked RAB was still
+                          open, on the same screen that says TERKUNCI. */}
+                      <span style={recapLineStyle}>{rabFrozen ? 'Grand Total RAB' : 'Grand Total Draft'}<strong>{recapDisplay.grandTotalDisplay}</strong></span>
                     </div>
                   ) : null}
                 </>

@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 const projectList = readFileSync("src/pages/ProjectListPage.tsx", "utf8");
 const workspace = readFileSync("src/pages/RabWorkspacePage.tsx", "utf8");
 const cardAction = readFileSync("src/utils/projectCardAction.ts", "utf8");
+const rabDoor = readFileSync("src/pages/ProjectRabDoorPage.tsx", "utf8");
 
 /**
  * The JSX opening tag starting at `index`. Scans to the closing angle bracket
@@ -407,4 +408,48 @@ test("AFF-E. reading an existing AHSP stays reachable while LOCKED", () => {
   for (const tag of tagsContaining('aria-label="Buka Detail Analisa AHSP"')) {
     assert.doesNotMatch(tag, /disabled/);
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RUANG HIDUP RAB — the recap total is not a storage report
+//
+// The recap is read from the draft persistence structure even when the RAB is
+// frozen. Where the numbers live is not what state the RAB is in, and the
+// total was labelled from rabSource — so a locked RAB showed "Grand Total
+// Draft" directly beneath a chip reading TERKUNCI.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("REC-1. a frozen RAB never shows a Draft grand total", () => {
+  const line = rabDoor
+    .split("\n")
+    .find((candidate) => candidate.includes("grandTotalDisplay"));
+  assert.notEqual(line, undefined, "the grand total line is missing");
+
+  // The label is chosen by lifecycle, not by which table the rows came from.
+  assert.match(line as string, /rabFrozen \? 'Grand Total RAB' : 'Grand Total Draft'/);
+  assert.doesNotMatch(line as string, /isDraftPreview \?/, "the label must not follow storage source");
+
+  // No other reachable occurrence of the draft wording exists.
+  assert.equal(rabDoor.split("Grand Total Draft").length - 1, 1);
+});
+
+test("REC-2. an editable draft keeps its Draft grand total", () => {
+  assert.match(rabDoor, /'Grand Total Draft'/);
+  // rabFrozen is exactly the frozen lifecycle, so the false branch is the
+  // editable draft and nothing else.
+  assert.match(
+    rabDoor,
+    /const rabFrozen = presentation\.status === 'TERKUNCI' \|\| presentation\.status === 'APPROVED';/,
+  );
+});
+
+test("REC-3. the surrounding lifecycle presentation is unchanged", () => {
+  // The single status chip still comes from the one resolver...
+  assert.match(rabDoor, /className=\{`simprok-rab-status simprok-rab-status--\$\{presentation\.chipModifier\}`\}/);
+  assert.match(rabDoor, /\{presentation\.badgeLabel\}/);
+  // ...and the per-row state still reads the same presentation, not rabSource.
+  assert.match(rabDoor, /const rowStateLabel = presentation\.label;/);
+  // The money itself is untouched: still the persisted display values.
+  assert.match(rabDoor, /\{recapDisplay\.grandTotalDisplay\}/);
+  assert.match(rabDoor, /\{recapDisplay\.subtotalDisplay\}/);
 });
