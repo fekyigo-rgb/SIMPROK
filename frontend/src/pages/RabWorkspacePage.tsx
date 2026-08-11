@@ -34,6 +34,18 @@ import {
   toPrelockFindingLines,
   type PrelockFindingLine,
 } from '../utils/rabLockDisplay';
+import { assignStructuralNumbers } from '../utils/rabRowNumbering';
+import {
+  buildPriceTrace,
+  resolveAhspIdentity,
+  PRICE_TRACE_ROW_ACTION,
+  PRICE_TRACE_TITLE,
+  TECHNICAL_DETAIL_TITLE,
+  type AhspIdentityWire,
+} from '../utils/rabTraceDisplay';
+
+/** Which question the side panel is answering. */
+type DrawerMode = 'AHSP_ANALYSIS' | 'PRICE_TRACE';
 import {
   formatAhspVersionOption,
   isWorkspacePrivateAhsp,
@@ -86,7 +98,10 @@ interface RabRow {
   parentId: string | null;
   type: RabRowType;
   name: string;
-  ahspCode: string;
+  /** RAB-TRACE-01: the row's own WBS code. Never an AHSP identity. */
+  wbsCode: string;
+  /** Canonical AHSP identity, or null when no analysis is linked. */
+  ahsp: AhspIdentityWire | null;
   /** Non-null only for WORK_ITEM rows with an AHSP association — the Cost Kernel eligibility flag. */
   ahspVersionId: string | null;
   workingOccurrenceId: string | null;
@@ -120,6 +135,8 @@ interface RabRow {
  * contract.
  */
 interface BoqItemResponse {
+  /** RAB-TRACE-01 read projection: canonical AHSP identity, null when unlinked. */
+  ahsp?: AhspIdentityWire | null;
   id: string;
   parentId?: string | null;
   itemType: 'FOLDER' | 'WORK_ITEM' | 'NOTE';
@@ -209,27 +226,25 @@ const toNumber = (value: string | number | null | undefined) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+/**
+ * RAB-TRACE-01 — the numbering rule moved to utils/rabRowNumbering so Ruang
+ * Hidup can show the same NO for the same row. This is the same walk it
+ * always was; it simply no longer lives only in this page.
+ */
 const buildNumberedRows = (rows: RabRow[]): NumberedRabRow[] => {
-  const sortedRows = [...rows].sort((a, b) => a.sortOrder - b.sortOrder);
-  const childrenByParent = sortedRows.reduce<Record<string, RabRow[]>>((acc, row) => {
-    const key = row.parentId || 'root';
-    acc[key] = [...(acc[key] || []), row];
-    return acc;
-  }, {});
-  const result: NumberedRabRow[] = [];
-
-  const visit = (parentId: string | null, prefix: number[], depth: number) => {
-    const children = childrenByParent[parentId || 'root'] || [];
-    children.forEach((row, index) => {
-      const numberParts = [...prefix, index + 1];
-      const number = row.type === 'note' ? '' : numberParts.join('.');
-      result.push({ ...row, number, depth });
-      visit(row.id, numberParts, depth + 1);
-    });
-  };
-
-  visit(null, [], 0);
-  return result;
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return assignStructuralNumbers(
+    rows.map((row) => ({
+      id: row.id,
+      parentId: row.parentId,
+      sortOrder: row.sortOrder,
+      isNote: row.type === 'note',
+    })),
+  ).map((numbered) => ({
+    ...(byId.get(numbered.id) as RabRow),
+    number: numbered.number,
+    depth: numbered.depth,
+  }));
 };
 
 const mapBoqToRows = (items: BoqItemResponse[]) => items
@@ -238,7 +253,8 @@ const mapBoqToRows = (items: BoqItemResponse[]) => items
     parentId: item.parentId || null,
     type: item.itemType === 'FOLDER' ? 'folder' : item.itemType === 'NOTE' ? 'note' : 'item',
     name: item.name,
-    ahspCode: item.ahspVersionId || item.ahspSnapshotId ? item.wbsCode.trim() : '',
+    wbsCode: item.wbsCode.trim(),
+    ahsp: item.ahsp ?? null,
     ahspVersionId: item.itemType === 'WORK_ITEM' ? (item.ahspVersionId ?? null) : null,
     workingOccurrenceId: item.itemType === 'WORK_ITEM' ? (item.workingOccurrenceId ?? null) : null,
     calculationOccurrenceId: item.itemType === 'WORK_ITEM' ? (item.calculationOccurrenceId ?? null) : null,
@@ -334,7 +350,8 @@ const createRow = (type: RabRowType, parentId: string | null, sortOrder: number)
   parentId,
   type,
   name: type === 'folder' ? 'Sub Judul Baru' : type === 'note' ? 'Catatan baru' : 'Item pekerjaan baru',
-  ahspCode: type === 'item' ? '' : '',
+  wbsCode: '',
+  ahsp: null,
   ahspVersionId: null,
   workingOccurrenceId: null,
   calculationOccurrenceId: null,
@@ -758,7 +775,7 @@ export function RabWorkspacePage() {
     : undefined;
   const selectedCostDisplay = selectedResolvedCostStatus ? toRabCostDisplay(selectedResolvedCostStatus) : null;
   /** Drawer copy coherence: never says "Engine belum aktif" while selectedCostDisplay shows a real Cost Kernel result. */
-  const costEngineStatus = describeCostEngineStatus(Boolean(selectedItem?.ahspCode), selectedResolvedCostStatus);
+  const costEngineStatus = describeCostEngineStatus(Boolean(selectedItem?.ahsp), selectedResolvedCostStatus);
 
   /**
    * RM-03 — load the read-only re-proof for a persisted line.
@@ -892,6 +909,8 @@ export function RabWorkspacePage() {
   const [rabLocked, setRabLocked] = useState(false);
   /** Disclosure only. Never a lifecycle state, never sent anywhere. */
   const [lockNoteOpen, setLockNoteOpen] = useState(false);
+  /** RAB-TRACE-01 — which of the two questions the drawer is open for. */
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>('AHSP_ANALYSIS');
   const [isLocking, setIsLocking] = useState(false);
   const [lockConfirmOpen, setLockConfirmOpen] = useState(false);
   const [lockFindings, setLockFindings] = useState<PrelockFindingLine[]>([]);
@@ -967,9 +986,17 @@ export function RabWorkspacePage() {
    * context change (no invalidation); switching to a different row — or to
    * no row at all — advances the persist-context revision exactly once.
    */
-  const activateRow = (rowId: string) => {
+  /**
+   * RAB-TRACE-01 — the drawer has two purposes and they are different
+   * questions. The AHSP door answers "what analysis is used for one unit of
+   * this work?"; Rincian Harga answers "why does this project row cost this?".
+   * Both used to open the identical AHSP panel, so the second door was not a
+   * door at all. Same panel, declared mode.
+   */
+  const activateRow = (rowId: string, mode: DrawerMode = 'AHSP_ANALYSIS') => {
     if (rowId !== selectedRowId) markPersistContextChanged();
     setSelectedRowId(rowId);
+    setDrawerMode(mode);
   };
 
   const handleRowClick = (rowId: string, event: MouseEvent<HTMLTableRowElement>) => {
@@ -1032,7 +1059,7 @@ export function RabWorkspacePage() {
         parentTempId: row.parentId,
         itemType: row.type === 'folder' ? 'FOLDER' : row.type === 'note' ? 'NOTE' : 'WORK_ITEM',
         name: row.name,
-        wbsCode: row.ahspCode || '',
+        wbsCode: row.wbsCode || '',
         quantity: row.type === 'item' ? volumes[row.id] : undefined,
         unit: row.type === 'item' ? row.unit : undefined,
         unitPrice: row.manualUnitPrice ? (unitPrices[row.id] ?? row.unitPrice) : undefined,
@@ -1739,9 +1766,13 @@ export function RabWorkspacePage() {
                       <td>
                         {row.type === 'item' ? (
                           <div className="simprok-rab-ahsp-cell">
-                            {row.ahspCode ? (
-                              <button className="simprok-rab-ahsp-code" onClick={() => activateRow(row.id)} title="Buka Detail Analisa AHSP" aria-label={`Buka AHSP ${row.ahspCode}`} data-route={`/?ruang=detail-ahsp-${row.id}`}>
-                                {row.ahspCode}
+                            {row.ahsp ? (
+                              /* The AHSP door: what analysis is used for one
+                                 unit of this work. It shows the AHSP's own
+                                 identity — there is no AHSP code in this
+                                 domain, and the row's wbsCode is not one. */
+                              <button className="simprok-rab-ahsp-code" onClick={() => activateRow(row.id, 'AHSP_ANALYSIS')} title={resolveAhspIdentity(row.ahsp).fullLabel} aria-label={`Buka analisa AHSP: ${resolveAhspIdentity(row.ahsp).fullLabel}`} data-route={`/?ruang=detail-ahsp-${row.id}`}>
+                                {resolveAhspIdentity(row.ahsp).shortLabel}
                               </button>
                             ) : (
                               canEditDraft ? (
@@ -1776,7 +1807,7 @@ export function RabWorkspacePage() {
                                     ? getPriceOriginBadge(row.priceOrigin)
                                     : costDisplay
                                       ? costDisplay.badge
-                                      : row.ahspCode
+                                      : row.ahsp
                                         ? 'Standby'
                                         : 'Menunggu rekomendasi')}
                             </span>
@@ -1884,8 +1915,12 @@ export function RabWorkspacePage() {
                               </button>
                             </>
                           ) : row.type === 'item' ? (
-                            <button className="simprok-rab-table-action" onClick={() => activateRow(row.id)} title="Buka Detail Analisa AHSP" aria-label="Buka Detail Analisa AHSP" data-route={`/?ruang=detail-ahsp-${row.id}`}>
-                              Detail
+                            /* A generic "Detail" that opened the same AHSP
+                               panel as the AHSP code was not a second door.
+                               This one answers the other question: why does
+                               THIS project row cost THIS much. */
+                            <button className="simprok-rab-table-action" onClick={() => activateRow(row.id, 'PRICE_TRACE')} title={PRICE_TRACE_TITLE} aria-label={`${PRICE_TRACE_ROW_ACTION}: ${row.name}`} data-route={`/?ruang=rincian-harga-${row.id}`}>
+                              {PRICE_TRACE_ROW_ACTION}
                             </button>
                           ) : null}
                           <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} disabled={!canEditDraft} title="Hapus baris" aria-label="Hapus baris">
@@ -1947,7 +1982,7 @@ export function RabWorkspacePage() {
           <aside className="simprok-ahsp-drawer" aria-label="Detail Analisa AHSP">
             <div className="simprok-ahsp-drawer__header">
               <div>
-                <h2>Detail Analisa AHSP</h2>
+                <h2>{drawerMode === 'PRICE_TRACE' ? PRICE_TRACE_TITLE : 'Detail Analisa AHSP'}</h2>
               </div>
               <button onClick={() => activateRow('')} title="Tutup panel" aria-label="Tutup panel">
                 <X size={17} />
@@ -1959,10 +1994,63 @@ export function RabWorkspacePage() {
                 {selectedItem.number} - {selectedItem.unit || 'satuan menunggu data'}
               </small>
             </div>
+            {drawerMode === 'PRICE_TRACE' ? (
+              /* Why THIS project row costs THIS much. Every value is the
+                 string already persisted for this row — nothing is computed
+                 here, and opening this panel writes nothing. */
+              <div className="simprok-ahsp-meta" aria-label={PRICE_TRACE_TITLE}>
+                {(() => {
+                  const trace = buildPriceTrace({
+                    description: selectedItem.name,
+                    unit: selectedItem.unit,
+                    quantityDisplay: formatDraftNumber(volumes[selectedItem.id] ?? 0),
+                    unitPriceDisplay: selectedCostDisplay?.unitPrice ?? '',
+                    lineTotalDisplay: selectedCostDisplay?.lineTotal ?? '',
+                    priceOrigin: selectedItem.priceOrigin ?? null,
+                    isWorkItem: selectedItem.type === 'item',
+                    ahsp: selectedItem.ahsp,
+                    provenance: {
+                      calculationAsOfDate: selectedItem.calculationAsOfDate ?? null,
+                      calculationOccurrenceId: selectedItem.calculationOccurrenceId ?? null,
+                    },
+                  });
+                  return (
+                    <>
+                      {trace.facts.map((fact) => (
+                        <div key={fact.label}>
+                          <span>{fact.label}</span>
+                          <strong>{fact.value}</strong>
+                        </div>
+                      ))}
+                      {trace.unavailable.map((message) => (
+                        <div key={message}>
+                          <span>Belum tersedia</span>
+                          <strong style={{ color: '#98A2B3', fontWeight: 400 }}>{message}</strong>
+                        </div>
+                      ))}
+                      {trace.technicalFacts.length > 0 ? (
+                        <details>
+                          <summary style={{ cursor: 'pointer' }}>{TECHNICAL_DETAIL_TITLE}</summary>
+                          {trace.technicalFacts.map((fact) => (
+                            <div key={fact.label}>
+                              <span>{fact.label}</span>
+                              <strong style={{ wordBreak: 'break-all' }}>{fact.value}</strong>
+                            </div>
+                          ))}
+                        </details>
+                      ) : null}
+                    </>
+                  );
+                })()}
+              </div>
+            ) : null}
             <div className="simprok-ahsp-meta">
               <div>
-                <span>Kode AHSP</span>
-                <strong>{selectedItem.ahspCode || 'Belum dipilih'}</strong>
+                {/* There is no AHSP code in this domain — an AHSP is its work
+                    type, its method and a version. This used to show the row's
+                    wbsCode under an "AHSP" label, which named the wrong thing. */}
+                <span>Analisa AHSP</span>
+                <strong>{resolveAhspIdentity(selectedItem.ahsp).fullLabel}</strong>
               </div>
               <div>
                 <span>Status AHSP</span>

@@ -1,15 +1,22 @@
-import { useMemo, useState, useEffect, useRef, type CSSProperties } from 'react';
+import { Fragment, useMemo, useState, useEffect, useRef, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Archive, ChevronLeft, ChevronRight, Download, FileText, Lock, Maximize2, Minimize2, Printer, RotateCcw, Upload, ZoomIn, ZoomOut, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import {
-  toPersistedRowDisplay,
+  toPersistedRowDisplayList,
   toRecapDisplay,
   type PersistedBoqItem,
   type PersistedDraftRecap,
   type PersistedPriceOrigin,
   type PersistedRowDisplay,
 } from '../utils/rabPersistedDraftDisplay';
+import {
+  buildPriceTrace,
+  resolvePriceOrigin,
+  PRICE_TRACE_ACTION,
+  PRICE_TRACE_TITLE,
+  TECHNICAL_DETAIL_TITLE,
+} from '../utils/rabTraceDisplay';
 import {
   RAB_LOCK_COPY,
   recapTotalLabel,
@@ -133,6 +140,8 @@ export function ProjectRabDoorPage() {
   const [rabRows, setRabRows] = useState<PersistedRowDisplay[]>([]);
   const [rabSource, setRabSource] = useState<RabSource>('empty');
   const [rabLifecycle, setRabLifecycle] = useState<RabLifecycleFactsWire | null>(null);
+  /** RAB-TRACE-01 — which row's price evidence is open. Read-only view state. */
+  const [evidenceRowId, setEvidenceRowId] = useState<string | null>(null);
   const [draftRecap, setDraftRecap] = useState<PersistedDraftRecap | null>(null);
   
   const [zoom, setZoom] = useState(100);
@@ -187,7 +196,7 @@ export function ProjectRabDoorPage() {
           }
           const boqData = await boqResponse.json() as PersistedBoqItem[];
           if (Array.isArray(boqData) && boqData.length > 0) {
-            setRabRows(boqData.map(toPersistedRowDisplay));
+            setRabRows(toPersistedRowDisplayList(boqData));
             setRabSource('baseline');
             setDraftRecap(null);
           } else {
@@ -210,7 +219,7 @@ export function ProjectRabDoorPage() {
             const draftItems = draftResponse.ok && Array.isArray(draftData?.items) ? draftData.items : [];
 
             if (draftItems.length > 0) {
-              setRabRows(draftItems.map(toPersistedRowDisplay));
+              setRabRows(toPersistedRowDisplayList(draftItems));
               setRabSource('draft');
               setDraftRecap(draftData?.recap ?? null);
             } else {
@@ -259,6 +268,28 @@ export function ProjectRabDoorPage() {
   // taxAmount/grandTotal exactly as persisted; INCOMPLETE never fabricates a
   // partial total. See rabPersistedDraftDisplay.ts — no formula lives here.
   const recapDisplay = useMemo(() => toRecapDisplay(draftRecap), [draftRecap]);
+  const evidenceRow = useMemo(
+    () => rabRows.find((row) => row.id === evidenceRowId) ?? null,
+    [rabRows, evidenceRowId],
+  );
+  /** Assembled from persisted values only — nothing here computes money. */
+  const evidenceTrace = useMemo(
+    () =>
+      evidenceRow
+        ? buildPriceTrace({
+            description: evidenceRow.description,
+            unit: evidenceRow.unit,
+            quantityDisplay: evidenceRow.quantityDisplay,
+            unitPriceDisplay: evidenceRow.unitPriceDisplay,
+            lineTotalDisplay: evidenceRow.lineTotalDisplay,
+            priceOrigin: evidenceRow.priceOrigin,
+            isWorkItem: evidenceRow.itemType === 'WORK_ITEM',
+            ahsp: evidenceRow.ahspWire,
+            provenance: evidenceRow.provenance,
+          })
+        : null,
+    [evidenceRow],
+  );
 
   useEffect(() => {
     const node = rabDocumentRef.current;
@@ -472,7 +503,8 @@ export function ProjectRabDoorPage() {
                   <table className="simprok-rab-table">
                     <thead>
                       <tr>
-                        <th>Kode</th>
+                        <th>No</th>
+                        <th>AHSP</th>
                         <th>Uraian Pekerjaan</th>
                         <th>Satuan</th>
                         <th style={{ textAlign: 'right' }}>Volume</th>
@@ -483,36 +515,41 @@ export function ProjectRabDoorPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {rabRows.map((row, index) => (
+                      {rabRows.map((row) => (
                         <tr key={row.id}>
-                          <td>{row.code || String(index + 1)}</td>
+                          {/* The official structural position, from the same
+                              authority Ruang Kerja uses — not this row's
+                              index in the response array. */}
+                          <td>{row.number}</td>
+                          <td title={row.ahsp.fullLabel}>{row.ahsp.shortLabel}</td>
                           <td>{row.description || 'Belum tersedia'}</td>
                           <td>{row.unit || '-'}</td>
                           <td style={numericCellStyle}>{row.quantityDisplay || '-'}</td>
                           <td style={numericCellStyle}>{row.unitPriceDisplay || '-'}</td>
                           <td style={numericCellStyle}>{row.lineTotalDisplay || '-'}</td>
                           <td>
-                            {row.originBadge ? (
-                              <span style={{ ...priceOriginBadgeBaseStyle, ...priceOriginBadgeStyle(row.priceOrigin) }}>
-                                {row.originBadge}
-                              </span>
-                            ) : null}
-                            {row.provenance ? (
-                              <details style={{ marginTop: '0.3rem' }}>
-                                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#1DA1F2' }}>
-                                  Detail provenance
-                                </summary>
-                                <dl style={provenanceListStyle}>
-                                  <dt>Kebijakan kalkulasi</dt>
-                                  <dd>{row.provenance.calculationPolicyVersion}</dd>
-                                  <dt>Per tanggal</dt>
-                                  <dd>{row.provenance.calculationAsOfDate}</dd>
-                                  <dt>Dihitung pada</dt>
-                                  <dd>{row.provenance.calculatedAt}</dd>
-                                  <dt>Occurrence</dt>
-                                  <dd style={{ wordBreak: 'break-all' }}>{row.provenance.calculationOccurrenceId}</dd>
-                                </dl>
-                              </details>
+                            {/* Asal Harga stays one short fact in the Owner's
+                                own vocabulary. The evidence behind it opens in
+                                a panel beside the document — expanding it
+                                inside the cell reflowed the whole table and
+                                made the RAB appear to jump away. */}
+                            {(() => {
+                              const origin = resolvePriceOrigin(row.priceOrigin, { isWorkItem: row.itemType === 'WORK_ITEM' });
+                              return origin.label ? (
+                                <span style={{ ...priceOriginBadgeBaseStyle, ...priceOriginBadgeStyle(row.priceOrigin) }}>
+                                  {origin.label}
+                                </span>
+                              ) : null;
+                            })()}
+                            {row.itemType === 'WORK_ITEM' && row.priceOrigin ? (
+                              <button
+                                type="button"
+                                onClick={() => setEvidenceRowId(row.id)}
+                                style={{ display: 'block', marginTop: '0.3rem', padding: 0, border: 'none', background: 'none', font: 'inherit', fontSize: '0.75rem', color: '#1DA1F2', cursor: 'pointer' }}
+                                aria-label={`${PRICE_TRACE_ACTION}: ${row.description}`}
+                              >
+                                {PRICE_TRACE_ACTION}
+                              </button>
                             ) : null}
                           </td>
                           <td>{rowStateLabel}</td>
@@ -542,6 +579,62 @@ export function ProjectRabDoorPage() {
             </div>
           </div>
         </section>
+
+        {/*
+          RAB-TRACE-01 — price evidence lives beside the document, never inside
+          a table cell. Expanding it in the cell reflowed the table and the RAB
+          appeared to jump away; a fixed panel leaves the document geometry
+          exactly where the reader left it. Opening it reads persisted values
+          only: no recalculation, no write, no lifecycle change.
+        */}
+        {evidenceRow ? (
+          <aside
+            className="simprok-rab-support"
+            aria-label={PRICE_TRACE_TITLE}
+            style={{ position: 'sticky', top: '1rem', alignSelf: 'flex-start', maxHeight: '80vh', overflowY: 'auto' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+              <div>
+                <strong style={{ display: 'block', color: '#16294B' }}>{evidenceTrace?.title}</strong>
+                <small style={{ color: '#98A2B3' }}>{evidenceTrace?.subtitle}</small>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEvidenceRowId(null)}
+                aria-label="Tutup Jejak Perhitungan Harga"
+                style={{ border: 'none', background: 'none', font: 'inherit', cursor: 'pointer', color: '#16294B' }}
+              >
+                Tutup
+              </button>
+            </div>
+            <dl style={provenanceListStyle}>
+              {evidenceTrace?.facts.map((fact) => (
+                <Fragment key={fact.label}>
+                  <dt>{fact.label}</dt>
+                  <dd>{fact.value}</dd>
+                </Fragment>
+              ))}
+            </dl>
+            {evidenceTrace?.unavailable.length ? (
+              <p style={{ margin: '0.5rem 0 0', color: '#98A2B3', fontSize: '0.75rem' }}>
+                {evidenceTrace.unavailable.join(' ')}
+              </p>
+            ) : null}
+            {evidenceTrace?.technicalFacts.length ? (
+              <details style={{ marginTop: '0.5rem' }}>
+                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#16294B' }}>{TECHNICAL_DETAIL_TITLE}</summary>
+                <dl style={provenanceListStyle}>
+                  {evidenceTrace.technicalFacts.map((fact) => (
+                    <Fragment key={fact.label}>
+                      <dt>{fact.label}</dt>
+                      <dd style={{ wordBreak: 'break-all' }}>{fact.value}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </details>
+            ) : null}
+          </aside>
+        ) : null}
 
         <aside className="simprok-rab-support" aria-label="Data Pendukung RAB">
           <header>

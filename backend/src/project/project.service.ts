@@ -27,6 +27,17 @@ import {
 } from './rab-draft-recap';
 import { SERVER_ROW_PROTECTION_REASON } from './rab-kernel-persistence.contracts';
 
+/**
+ * RAB-TRACE-01 — what an AHSP actually is in this domain. There is no AHSP
+ * code column anywhere; identity is work type, method and version.
+ */
+interface AhspIdentityProjection {
+  workType: string;
+  methodName: string;
+  versionNumber: number;
+  outputUnit: string | null;
+}
+
 @Injectable()
 export class ProjectService {
   constructor(
@@ -594,10 +605,18 @@ export class ProjectService {
         capability,
       };
     }
-    const items = await this.prisma.boqItem.findMany({
+    const rawItems = await this.prisma.boqItem.findMany({
       where: { boqStructureId: structure.id },
       orderBy: { sortOrder: 'asc' },
     });
+
+    // RAB-TRACE-01 — an AHSP has no code in this domain; it is identified by
+    // its work type, its method and a version. The viewer was showing wbsCode
+    // as if it were an AHSP code, which is the RAB row's own code and not an
+    // AHSP identity at all. Project the real identity so both rooms can name
+    // the analysis truthfully instead of borrowing a field that means
+    // something else. Read-only: no column is written and no schema changes.
+    const items = await this.attachAhspIdentity(rawItems);
 
     // A stale RabDocument recap from a time when every row was priced is not
     // authoritative once the live items include an unpriced WORK_ITEM — the
@@ -639,6 +658,51 @@ export class ProjectService {
       recap: this.serializeDraftRecap(recap),
       capability,
     };
+  }
+
+  /**
+   * RAB-TRACE-01 — attach canonical AHSP identity to rows that reference one.
+   *
+   * Read-only and additive: the row objects are returned unchanged apart from
+   * an `ahsp` field carrying what the AHSP itself says it is. Rows with no
+   * AHSP get null, so the reader can say "belum terhubung" rather than invent
+   * an analysis that was never linked.
+   */
+  private async attachAhspIdentity<T extends { ahspVersionId: string | null }>(
+    items: T[],
+  ): Promise<Array<T & { ahsp: AhspIdentityProjection | null }>> {
+    const versionIds = Array.from(
+      new Set(items.map((item) => item.ahspVersionId).filter((id): id is string => !!id)),
+    );
+    if (versionIds.length === 0) {
+      return items.map((item) => ({ ...item, ahsp: null }));
+    }
+
+    const versions = await this.prisma.aHSPVersion.findMany({
+      where: { id: { in: versionIds } },
+      select: {
+        id: true,
+        versionNumber: true,
+        outputUnit: true,
+        ahsp: { select: { workType: true, methodName: true } },
+      },
+    });
+    const byId = new Map(
+      versions.map((version) => [
+        version.id,
+        {
+          workType: version.ahsp.workType,
+          methodName: version.ahsp.methodName,
+          versionNumber: version.versionNumber,
+          outputUnit: version.outputUnit,
+        },
+      ]),
+    );
+
+    return items.map((item) => ({
+      ...item,
+      ahsp: (item.ahspVersionId && byId.get(item.ahspVersionId)) || null,
+    }));
   }
 
   async saveDraftBoq(

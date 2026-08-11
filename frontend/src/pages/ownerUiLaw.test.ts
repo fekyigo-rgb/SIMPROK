@@ -108,7 +108,16 @@ test("E. a locked workspace shows exactly one TERKUNCI control", () => {
   const rendered = workspace.match(/\{rabLocked \? RAB_LOCK_COPY\.lockedBadge/g) ?? [];
   assert.equal(rendered.length, 2, "expected one control (label + aria-label), found another");
 
-  assert.equal(workspace.includes("<details"), false, "the standalone disclosure must be gone");
+  // A <details> is legitimate elsewhere now — Detail Teknis on the price
+  // trace. What must never return is a second lock disclosure.
+  for (const block of workspace.split("<details").slice(1)) {
+    const body = block.slice(0, block.indexOf("</details>"));
+    assert.doesNotMatch(
+      body,
+      /lockedBadge|lockedNote/,
+      "the lock disclosure must not return as its own <details> block",
+    );
+  }
   assert.equal(
     workspace.split('className="simprok-rab-toolbar__lock"').length - 1,
     1,
@@ -308,9 +317,14 @@ test("V. commands refuse as well, so the freeze is not only on the screen", () =
 test("VI. read-only traces stay reachable while frozen", () => {
   // Freezing writes must not hide information. Opening the AHSP analysis reads
   // and traces; it changes nothing, so it stays live.
-  for (const tag of tagsContaining('aria-label="Buka Detail Analisa AHSP"')) {
-    assert.doesNotMatch(tag, /disabled/, "the read-only AHSP trace must stay reachable");
-    assert.match(tag, /onClick=\{\(\) => activateRow\(row\.id\)\}/);
+  // RAB-TRACE-01 moved these to two named doors, so they are anchored by the
+  // class each one keeps rather than by a label that has since changed.
+  for (const anchor of ['className="simprok-rab-ahsp-code"', 'className="simprok-rab-table-action"']) {
+    const hit = workspace.indexOf(anchor);
+    assert.notEqual(hit, -1, `${anchor} is missing`);
+    const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", hit));
+    assert.doesNotMatch(tag, /disabled/, `${anchor} must stay reachable while frozen`);
+    assert.match(tag, /activateRow\(row\.id, '(AHSP_ANALYSIS|PRICE_TRACE)'\)/);
   }
 
   // And so does the lock disclosure, which only explains the lifecycle.
@@ -400,7 +414,7 @@ test("AFF-D. Pilih AHSP presents no write affordance while LOCKED", () => {
 test("AFF-E. reading an existing AHSP stays reachable while LOCKED", () => {
   // The trace is read-only, so freezing writes must not close it.
   const codeTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-ahsp-code"')));
-  assert.match(codeTag, /onClick=\{\(\) => activateRow\(row\.id\)\}/);
+  assert.match(codeTag, /onClick=\{\(\) => activateRow\(row\.id, 'AHSP_ANALYSIS'\)\}/);
   assert.doesNotMatch(codeTag, /disabled/);
   assert.doesNotMatch(codeTag, /canEditDraft/);
 
@@ -458,4 +472,92 @@ test("REC-4. the surrounding lifecycle presentation is unchanged", () => {
   assert.match(rabDoor, /className=\{`simprok-rab-status simprok-rab-status--\$\{presentation\.chipModifier\}`\}/);
   assert.match(rabDoor, /\{presentation\.badgeLabel\}/);
   assert.match(rabDoor, /const rowStateLabel = presentation\.label;/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RAB-TRACE-01 — two doors, two questions, and evidence outside the table
+//
+// The AHSP code and the Aksi "Detail" button opened the identical panel, so
+// the second was not a door at all. They now answer different questions, and
+// price evidence opens beside the document instead of expanding a table cell.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("TR-1. the AHSP control opens AHSP-analysis mode", () => {
+  const hit = workspace.indexOf('className="simprok-rab-ahsp-code"');
+  assert.notEqual(hit, -1, "the AHSP door is missing");
+  const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", hit));
+
+  assert.match(tag, /activateRow\(row\.id, 'AHSP_ANALYSIS'\)/);
+  // It names the analysis by proven identity, never by the row's own wbsCode.
+  assert.match(tag, /resolveAhspIdentity\(row\.ahsp\)/);
+  assert.doesNotMatch(tag, /wbsCode/);
+});
+
+test("TR-2. the Aksi control opens price-trace mode and is named Rincian Harga", () => {
+  const hit = workspace.indexOf('className="simprok-rab-table-action"');
+  assert.notEqual(hit, -1, "the price-trace door is missing");
+  const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", hit));
+
+  assert.match(tag, /activateRow\(row\.id, 'PRICE_TRACE'\)/);
+  assert.match(workspace, /PRICE_TRACE_ROW_ACTION/);
+  // The generic word that made it a duplicate door is gone.
+  assert.doesNotMatch(tag, /aria-label="Buka Detail Analisa AHSP"/);
+});
+
+test("TR-3. the two controls no longer resolve to the same mode", () => {
+  const modeOf = (anchor: string) => {
+    const hit = workspace.indexOf(anchor);
+    const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", hit));
+    return /activateRow\(row\.id, '([A-Z_]+)'\)/.exec(tag)?.[1];
+  };
+
+  const ahspMode = modeOf('className="simprok-rab-ahsp-code"');
+  const priceMode = modeOf('className="simprok-rab-table-action"');
+
+  assert.equal(ahspMode, "AHSP_ANALYSIS");
+  assert.equal(priceMode, "PRICE_TRACE");
+  assert.notEqual(ahspMode, priceMode, "the two doors resolve to one mode again");
+});
+
+test("TR-4. price evidence opens outside the table, not inside a cell", () => {
+  // The evidence surface must not be an element expanding within a <td>.
+  const tableStart = rabDoor.indexOf("<table");
+  const tableEnd = rabDoor.indexOf("</table>", tableStart);
+  const tableBody = rabDoor.slice(tableStart, tableEnd);
+
+  assert.doesNotMatch(tableBody, /<details/, "evidence must not expand inside the table");
+  assert.doesNotMatch(tableBody, /<dl /, "the evidence list must not live in a cell");
+
+  // It is a panel beside the document, opened by a control that only sets
+  // which row is being read.
+  assert.match(rabDoor, /aria-label=\{PRICE_TRACE_TITLE\}/);
+  assert.match(rabDoor, /onClick=\{\(\) => setEvidenceRowId\(row\.id\)\}/);
+  assert.match(rabDoor, /const \[evidenceRowId, setEvidenceRowId\] = useState<string \| null>\(null\)/);
+});
+
+test("TR-5. opening a trace writes nothing and recomputes nothing", () => {
+  // The viewer's evidence panel is derived state over already-loaded rows.
+  const trace = rabDoor.slice(rabDoor.indexOf("const evidenceTrace"), rabDoor.indexOf("const rabStatusView"));
+  assert.doesNotMatch(trace, /apiFetch|fetch\(/, "opening evidence must not call the server");
+  assert.doesNotMatch(trace, /setRabRows|setDraftRecap/, "opening evidence must not mutate the RAB");
+
+  // And the price-trace panel in the workspace reads the row it was given.
+  const drawer = workspace.slice(workspace.indexOf("PRICE_TRACE' ? ("), workspace.indexOf('<div className="simprok-ahsp-meta">'));
+  assert.doesNotMatch(drawer, /apiFetch|fetch\(/);
+  assert.doesNotMatch(drawer, /handlePersistCalculation|handleSaveDraft|handlePickAhsp/);
+});
+
+test("TR-6. Ruang Hidup shows the structural NO, not a row index", () => {
+  assert.match(rabDoor, /<th>No<\/th>/);
+  assert.match(rabDoor, /<td>\{row\.number\}<\/td>/);
+  // The old index fallback is gone.
+  assert.doesNotMatch(rabDoor, /String\(index \+ 1\)/);
+  assert.match(rabDoor, /toPersistedRowDisplayList\(/);
+});
+
+test("TR-7. Asal Harga uses the Owner's locked vocabulary, from one resolver", () => {
+  assert.match(rabDoor, /resolvePriceOrigin\(row\.priceOrigin/);
+  // The page holds no origin literal of its own to drift from the authority.
+  assert.equal(rabDoor.includes("'Auto SIMPROK'"), false);
+  assert.equal(rabDoor.includes("'Input Pengguna'"), false);
 });

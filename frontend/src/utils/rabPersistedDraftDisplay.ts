@@ -3,6 +3,8 @@ import {
   groupThousands,
   parseCanonicalDecimalString,
 } from './rabCostDisplay.ts';
+import { resolveAhspIdentity, type AhspIdentityView, type AhspIdentityWire } from './rabTraceDisplay.ts';
+import { assignStructuralNumbers } from './rabRowNumbering.ts';
 
 /**
  * Canonical persisted-draft read path (Gate 2A). Every value here is
@@ -71,6 +73,11 @@ export const getPriceOriginBadge = (priceOrigin: PersistedPriceOrigin): string =
 /** GET /projects/:projectId/boq/draft — persisted BoqItem row, minimal typed contract. */
 export interface PersistedBoqItem {
   id: string;
+  /** Structural position — already sent by GET /boq/draft, now read. */
+  parentId?: string | null;
+  sortOrder?: number;
+  /** Canonical AHSP identity, null when the row references no analysis. */
+  ahsp?: AhspIdentityWire | null;
   wbsCode: string;
   name: string;
   itemType: 'FOLDER' | 'WORK_ITEM' | 'NOTE';
@@ -105,6 +112,12 @@ export interface PersistedRowProvenance {
 
 export interface PersistedRowDisplay {
   id: string;
+  /** Official structural position, from the one numbering authority. */
+  number: string;
+  depth: number;
+  ahsp: AhspIdentityView;
+  /** Raw identity, so an evidence surface can present it without re-deriving. */
+  ahspWire: AhspIdentityWire | null;
   code: string;
   description: string;
   itemType: 'FOLDER' | 'WORK_ITEM' | 'NOTE';
@@ -124,10 +137,17 @@ export interface PersistedRowDisplay {
  * directly. No quantity * unitPrice, no recomputation of any kind — the
  * persisted lineTotal always wins.
  */
-export const toPersistedRowDisplay = (item: PersistedBoqItem): PersistedRowDisplay => {
+export const toPersistedRowDisplay = (
+  item: PersistedBoqItem,
+  structural: { number: string; depth: number } = { number: '', depth: 0 },
+): PersistedRowDisplay => {
   const isWorkItem = item.itemType === 'WORK_ITEM';
   return {
     id: item.id,
+    number: structural.number,
+    depth: structural.depth,
+    ahsp: resolveAhspIdentity(isWorkItem ? item.ahsp : null),
+    ahspWire: isWorkItem ? item.ahsp ?? null : null,
     code: item.wbsCode,
     description: item.name,
     itemType: item.itemType,
@@ -199,4 +219,28 @@ export const toRecapDisplay = (recap: PersistedDraftRecap | null): RecapDisplay 
     taxAmountDisplay: formatExactMoney(recap.taxAmount),
     grandTotalDisplay: formatExactMoney(recap.grandTotal),
   };
+};
+
+/**
+ * RAB-TRACE-01 — the viewer's rows, numbered by the same authority Ruang
+ * Kerja uses. The viewer used to fall back to the row's position in the
+ * response array, so the two rooms disagreed about which row is number 1 as
+ * soon as a folder or a note existed.
+ */
+export const toPersistedRowDisplayList = (
+  items: readonly PersistedBoqItem[],
+): PersistedRowDisplay[] => {
+  const numbered = assignStructuralNumbers(
+    items.map((item, index) => ({
+      id: item.id,
+      parentId: item.parentId ?? null,
+      sortOrder: item.sortOrder ?? index,
+      isNote: item.itemType === 'NOTE',
+      item,
+    })),
+  );
+
+  return numbered.map((row) =>
+    toPersistedRowDisplay(row.item, { number: row.number, depth: row.depth }),
+  );
 };
