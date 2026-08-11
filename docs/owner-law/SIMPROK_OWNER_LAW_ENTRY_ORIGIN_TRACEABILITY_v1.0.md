@@ -3,9 +3,10 @@
 **Status:** LOCKED  
 **Authority:** Owner Decision  
 **Locked:** 2026-08-11  
+**Amended:** 2026-08-11 — Adaptive Gravity & Future Compatibility Law  
 **Law ID:** `SIMPROK-OWNER-LAW-ENTRY-ORIGIN-TRACEABILITY-v1.0`  
-**Scope:** Product / architecture / UI semantics / traceability.  
-**Important:** This law does not by itself authorize schema, enum, migration, Cost Kernel, lifecycle, or runtime changes.
+**Scope:** Product / architecture / UI semantics / traceability / future compatibility.  
+**Important:** This law does not by itself authorize schema, enum, migration, Cost Kernel, lifecycle, monitoring, recovery, import-engine, or runtime changes.
 
 ---
 
@@ -16,6 +17,10 @@ SIMPROK helps users understand project reality, prepare a realistic/appropriate 
 **SIMPROK does not require every user or every project to traverse the full lifecycle inside SIMPROK.**
 
 > **SIMPROK does not force real-world projects to follow a SIMPROK sequence. SIMPROK understands the current real-world position, preserves existing truth, and activates only capabilities supported by lawful available truth.**
+
+SIMPROK must be strong enough to become a gravitational standard, but adaptive enough to receive lawful truth that was created outside SIMPROK.
+
+> **Native SIMPROK is the richest path, not the only lawful path.**
 
 ---
 
@@ -211,6 +216,9 @@ This document is governing Product/Architecture Law. It does **not** automatical
 - R75 recalculation;
 - lifecycle redesign;
 - approval/reopen implementation;
+- import-engine implementation;
+- monitoring implementation;
+- recovery implementation;
 - runtime/operations changes.
 
 Every implementation step must begin with repository reality audit, reuse healthy existing artifacts, and close only proven gaps.
@@ -236,8 +244,174 @@ SIMPROK must not claim `Auto SIMPROK` or fabricate AHSP/Cost Kernel evidence.
 
 ---
 
-# 8. LOCK STATEMENT
+# 8. ADAPTIVE GRAVITY & FUTURE COMPATIBILITY LAW — LOCKED
+
+This section governs how current construction must remain compatible with SIMPROK's long-term role as both an adaptive intake platform and a gravitational construction-intelligence standard.
+
+## 8.1 Canonical core, adaptive boundary
+SIMPROK must have a strong canonical internal core and an adaptive boundary for lawful external truth.
+
+> **Adaptation happens at the entry boundary; canonical discipline happens inside the house.**
+
+External diversity must be absorbed through intake, mapping, adapters, normalization, linkage, and provenance — not by making the canonical core itself ambiguous or unstructured.
+
+Conversely, the boundary must not be so narrow that SIMPROK rejects lawful RAB/project truth merely because it did not originate in SIMPROK.
+
+## 8.2 Native-first experience, import-capable architecture
+The product experience may deliberately make native SIMPROK creation the richest and most seamless path.
+
+However, architecture must remain capable of accepting lawful imported/existing truth without future foundation teardown.
+
+> **Native-first experience does not authorize native-only architecture.**
+
+Current implementation slices do not have to build Import, Monitoring, or Recovery now; they must simply avoid hard-coding assumptions that would make those future capabilities require destructive redesign.
+
+## 8.3 Source identity and canonical identity must be distinguishable
+External identifiers may differ from SIMPROK canonical identifiers.
+
+Examples include:
+- source row number;
+- source WBS code;
+- source AHSP/code system;
+- source description;
+- source unit vocabulary;
+- source price/breakdown structure.
+
+SIMPROK must be able to preserve lawful source identity while separately establishing canonical linkage when available.
+
+Example:
+- source work code: `A.03`;
+- canonical AHSP linkage after lawful mapping: `R75`.
+
+Mapping/linkage must not erase or rewrite the original source identity.
+
+## 8.4 Display numbering must not become database identity
+External RABs may use numbering such as `1`, `1.1`, `A`, `A.1`, `DIV-03`, or another lawful convention.
+
+The imported/source number may be preserved as source truth, but SIMPROK's stable internal identity and hierarchy must not depend on a fragile human display number.
+
+Internal structural truth should remain based on stable identity plus lawful hierarchy/order semantics (for example parent-child/order authority already present in the repository), while presentation may expose source and/or SIMPROK numbering according to product law.
+
+A numbering difference must not make a lawful imported RAB impossible to house.
+
+## 8.5 AHSP linkage is enrichable truth, not a universal admission requirement
+Native SIMPROK RAB may naturally carry a complete Golden Thread:
+
+`BOQ -> AHSP -> Resource -> Basic Price -> Cost Kernel -> RAB`.
+
+An imported RAB may lawfully arrive with only:
+
+`item -> quantity -> unit price -> amount`.
+
+The absence of an AHSP link must be representable honestly; it must not require fabricated AHSP or rejection of the whole RAB.
+
+SIMPROK may later propose/map/link that row to canonical AHSP knowledge through lawful verification.
+
+The resulting enrichment must be additive and traceable, not a rewrite of what originally entered the system.
+
+## 8.6 Low-information truth may enter; high-information truth is the gravitational destination
+SIMPROK may accept lawful low-information project truth and progressively enrich it.
+
+A typical progression may be:
+
+`Imported row -> normalized structure -> AHSP candidate -> verified AHSP link -> Basic Price linkage -> SIMPROK re-proof -> richer intelligence`.
+
+This is a direction of increasing intelligence, not a requirement that every imported row complete every enrichment step.
+
+SIMPROK's gravity should come from the usefulness and trust gained by canonical linkage, deterministic calculation, provenance, verification, monitoring continuity, and recovery intelligence — not from coercively rewriting external truth.
+
+## 8.7 Historical truth is immutable in meaning under enrichment
+Enrichment, mapping, re-proof, or a new Auto SIMPROK result must not silently overwrite the historical meaning of the imported/original value.
+
+Examples:
+- an `Import Pengguna` contract price remains historically an imported contract price;
+- a later Auto SIMPROK re-proof is a new derived truth/evidence;
+- a canonical AHSP mapping does not pretend the imported source originally used that AHSP unless the source proves it.
+
+> **Enrichment may add intelligence; it may not falsify history.**
+
+## 8.8 Imported RAB must be able to connect to Monitoring baseline
+Monitoring must not require that its baseline/RAB was originally created by SIMPROK.
+
+A lawful imported/existing RAB may become planned/baseline truth when the required governance and minimum facts are satisfied.
+
+Monitoring may then compare lawful baseline/plan against actual/project reality even when some cost-intelligence enrichment (AHSP, Basic Price, Cost Kernel proof) is unavailable.
+
+Missing enrichment must reduce available intelligence honestly; it must not automatically invalidate the baseline.
+
+## 8.9 Enrichment must not mutate historical baseline silently
+If an imported or established RAB becomes contractual/planned/baseline truth, later AHSP linkage or Cost Kernel re-proof must not silently change that historical baseline.
+
+New calculations, forecasts, recommendations, or recovery simulations are separate derived truths unless a lawful change-control/governance action explicitly establishes a new baseline/revision.
+
+This preserves continuity for Monitoring, Reporting, Revision/Addendum, and Recovery.
+
+## 8.10 Recovery may start from imperfect existing truth
+A project may enter SIMPROK after execution has begun or after trouble has occurred.
+
+Recovery capability must be able to work from the lawful baseline, actuals, schedule/evidence, and contextual truth available at intake, while marking unavailable facts honestly.
+
+SIMPROK must never reject a recoverable real-world project merely because it did not originate from a native SIMPROK workflow.
+
+## 8.11 Gravity means convergence by value, not forced conformity
+SIMPROK should progressively become the preferred place where projects originate because native use provides richer continuity and intelligence from the beginning.
+
+Expected long-term gravity includes:
+- canonical vocabulary;
+- stable identities;
+- shared/normalized units;
+- AHSP knowledge linkage;
+- Basic Price identity and verification;
+- deterministic Cost Kernel calculation;
+- traceability/provenance;
+- governed lifecycle;
+- Monitoring continuity;
+- Recovery intelligence.
+
+But this gravity is achieved by making canonical SIMPROK truth more useful, traceable, and interoperable — not by refusing lawful external truth.
+
+## 8.12 Future-compatibility gate for every current build
+Every current implementation must be reviewed not only for the current native Golden Thread, but also for whether it preserves the future path for imported/existing truth.
+
+PM/Gatekeeper and Architecture review must ask, where relevant:
+
+1. Does this design assume every RAB was created in SIMPROK?
+2. Does it incorrectly make AHSP mandatory where imported truth may not have one?
+3. Does it bind internal identity to source/display numbering or codes?
+4. Can source identity be preserved separately from canonical linkage?
+5. Can missing provenance/breakdown be represented honestly without fabricating it?
+6. Can a lawful imported RAB later become/attach to Monitoring baseline truth?
+7. Can later enrichment occur without rewriting historical baseline/origin?
+8. Does this design keep Recovery possible for projects that enter mid-execution?
+9. Are we accidentally hard-coding the current R75 Golden Thread as a universal domain law?
+10. Would this decision predictably require destructive schema/foundation teardown when Import/Monitoring/Recovery arrive?
+
+If a current design closes a necessary future path without a constitutional reason, it must be corrected before becoming foundation.
+
+## 8.13 Future compatibility does not mean premature feature construction
+This law does **not** require every current slice to implement Import, Monitoring, Recovery, every origin type, every external AHSP format, or every numbering convention.
+
+The requirement is architectural:
+
+> **Build today's bounded capability so tomorrow's lawful capability can attach without destroying today's foundation.**
+
+Do not broaden a current task merely because future compatibility is considered. Preserve extension points and honest domain distinctions; implement future capabilities when their roadmap slice arrives.
+
+## 8.14 Locked strategic formulation
+The governing product/architecture posture is:
+
+> **Native-first experience. Import-capable architecture. Canonical core. Adaptive boundary. Progressive enrichment. Historical truth preserved. Monitoring-compatible. Recovery-compatible.**
+
+And the governing balance is:
+
+> **SIMPROK accepts real-world diversity at the boundary, then becomes gravity toward clearer canonical structure and richer intelligence inside — without erasing where the truth came from.**
+
+---
+
+# 9. LOCK STATEMENT
 
 These decisions are **LOCKED Owner Law** until explicitly superseded by a later Owner decision.
 
 All SIMPROK AI agents and human executors must treat this document as a governing constraint, not optional design advice.
+
+The Adaptive Gravity amendment is a future-compatibility gate, not permission to expand current implementation scope beyond the active roadmap slice.
