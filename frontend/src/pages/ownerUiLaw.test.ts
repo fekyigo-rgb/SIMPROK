@@ -750,11 +750,17 @@ test("VD-4. the status chip discloses; it never unlocks", () => {
   // Closed until asked for.
   assert.match(rabDoor, /const \[statusDetailOpen, setStatusDetailOpen\] = useState\(false\)/);
 
-  // It touches no server, no lifecycle, no lock.
-  assert.doesNotMatch(tag, /apiFetch|fetch\(|handleLockRab|setRabLifecycle/);
-  for (const forbidden of ["Buka Kunci", "Reopen", "Buka Kembali", "Revisi Draft"]) {
-    assert.equal(rabDoor.includes(forbidden), false, `an unlock action appeared: ${forbidden}`);
-  }
+  // This control reaches no server, no lifecycle transition, no lock command.
+  assert.doesNotMatch(
+    tag,
+    /apiFetch|fetch\(|handleLockRab|setRabLifecycle|setRabLocked|unlock|reopen/i,
+  );
+
+  // Scoped to THIS control on purpose. An earlier version of this test
+  // forbade words like "Buka Kunci" or "Reopen" anywhere on the page, which
+  // would have made a lawful future Reopen capability fail a test written
+  // about a disclosure chip. What must stay true is that this chip only opens
+  // a paragraph — not that the word may never appear in SIMPROK.
 });
 
 test("VD-5. the primary status and the Addendum action are untouched", () => {
