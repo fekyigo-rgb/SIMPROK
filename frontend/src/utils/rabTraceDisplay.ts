@@ -1,3 +1,5 @@
+import type { PersistedCalculationDisplay } from './rabPersistedCalculationDisplay.ts';
+
 /**
  * RAB-TRACE-01 — origin vocabulary and price-trace presentation, in one place.
  *
@@ -141,6 +143,16 @@ export const PRICE_TRACE_ROW_ACTION = 'Rincian Harga';
 export const TECHNICAL_DETAIL_TITLE = 'Detail Teknis';
 
 export interface PriceTraceInput {
+  /**
+   * The authoritative persisted-calculation proof for this row.
+   *
+   * For a SERVER_COST_KERNEL price this is the truth: SIMPROK already owns a
+   * service that re-proves the stored money from its own frozen provenance,
+   * and describing that price from the row's loose fields instead would be a
+   * second, thinner account of the same number. Pass `undefined` while it is
+   * still loading and `null` when it could not be read.
+   */
+  authoritative?: PersistedCalculationDisplay | null;
   description: string;
   unit: string;
   quantityDisplay: string;
@@ -162,7 +174,26 @@ export interface TraceFact {
   value: string;
 }
 
+export type PriceTraceStatus =
+  /** Authoritative proof re-proved the stored money. */
+  | 'VERIFIED'
+  /** Authoritative proof read, but stored and recomputed disagree. */
+  | 'MISMATCH'
+  /** A kernel price whose proof could not be read — never dressed up as proven. */
+  | 'UNAVAILABLE'
+  /** The proof has not been fetched yet. */
+  | 'LOADING'
+  /** A hand-entered price: lawful, with no machine proof to show. */
+  | 'MANUAL'
+  /** No price on this row at all. */
+  | 'NONE';
+
 export interface PriceTraceView {
+  status: PriceTraceStatus;
+  /** One honest sentence about how far the evidence goes. */
+  verdict: string;
+  /** Resource breakdown from the authoritative proof, never re-derived. */
+  resources: PersistedCalculationDisplay['resources'];
   title: string;
   subtitle: string;
   origin: PriceOriginView;
@@ -175,16 +206,26 @@ export interface PriceTraceView {
 }
 
 const UNAVAILABLE_AHSP = 'Analisa AHSP tidak tercatat untuk baris ini.';
+const UNPROVEN_KERNEL =
+  'Bukti perhitungan tersimpan belum dapat dibaca, sehingga harga ini belum dapat dibuktikan ulang di sini.';
 const UNAVAILABLE_BREAKDOWN =
   'Rincian pembentuk harga tidak tersedia — harga ini tidak dihitung oleh SIMPROK.';
 
 /**
- * Never fabricates. A fact that was not persisted is listed as unavailable
- * rather than filled in with a plausible value or a zero.
+ * Never fabricates, and never becomes a second account of the money.
+ *
+ * For a SERVER_COST_KERNEL price the authoritative persisted-calculation proof
+ * owns every figure and the verdict. The row's own fields are not used as a
+ * quiet fallback: a kernel price whose proof cannot be read is reported as
+ * unproven, because showing the same numbers without the proof would look
+ * exactly like a verified price while proving nothing.
+ *
+ * A hand-entered price has no machine proof to show, and is not given one.
  */
 export const buildPriceTrace = (input: PriceTraceInput): PriceTraceView => {
   const origin = resolvePriceOrigin(input.priceOrigin, { isWorkItem: input.isWorkItem });
   const ahsp = resolveAhspIdentity(input.ahsp);
+  const authoritative = input.authoritative;
 
   const facts: TraceFact[] = [];
   const technicalFacts: TraceFact[] = [];
@@ -192,31 +233,74 @@ export const buildPriceTrace = (input: PriceTraceInput): PriceTraceView => {
 
   if (origin.label) facts.push({ label: 'Asal Harga', value: origin.label });
   if (origin.categoryLabel) facts.push({ label: 'Kategori Asal', value: origin.categoryLabel });
-
   if (ahsp.linked) facts.push({ label: 'Analisa AHSP', value: ahsp.fullLabel });
-  else unavailable.push(UNAVAILABLE_AHSP);
+  else if (input.isWorkItem) unavailable.push(UNAVAILABLE_AHSP);
 
-  if (input.unit) facts.push({ label: 'Satuan', value: input.unit });
-  if (input.quantityDisplay) facts.push({ label: 'Volume', value: input.quantityDisplay });
-  if (input.unitPriceDisplay) facts.push({ label: 'Harga Satuan', value: input.unitPriceDisplay });
-  if (input.lineTotalDisplay) facts.push({ label: 'Jumlah', value: input.lineTotalDisplay });
+  const kernelPrice = input.isWorkItem && input.priceOrigin === 'SERVER_COST_KERNEL';
 
-  const asOf = input.provenance?.calculationAsOfDate?.trim();
-  const calculatedAt = input.provenance?.calculatedAt?.trim();
-  const policy = input.provenance?.calculationPolicyVersion?.trim();
-  const occurrence = input.provenance?.calculationOccurrenceId?.trim();
+  let status: PriceTraceStatus;
+  let verdict: string;
+  let resources: PersistedCalculationDisplay['resources'] = [];
 
-  if (asOf) facts.push({ label: 'Harga berlaku per tanggal', value: asOf });
-  if (calculatedAt) facts.push({ label: 'Dihitung pada', value: calculatedAt });
+  if (!input.isWorkItem || !input.priceOrigin) {
+    status = 'NONE';
+    verdict = 'Baris ini belum mempunyai harga untuk ditelusuri.';
+  } else if (kernelPrice && authoritative === undefined) {
+    status = 'LOADING';
+    verdict = 'Memuat bukti perhitungan...';
+  } else if (kernelPrice && !authoritative) {
+    status = 'UNAVAILABLE';
+    verdict = UNPROVEN_KERNEL;
+    unavailable.push(UNPROVEN_KERNEL);
+  } else if (kernelPrice && authoritative) {
+    status =
+      authoritative.kind === 'verified'
+        ? 'VERIFIED'
+        : authoritative.kind === 'mismatch'
+        ? 'MISMATCH'
+        : 'UNAVAILABLE';
+    verdict = authoritative.message;
+    resources = authoritative.resources;
 
-  if (policy) technicalFacts.push({ label: 'Kebijakan perhitungan', value: policy });
-  if (occurrence) technicalFacts.push({ label: 'ID Bukti (occurrence)', value: occurrence });
+    // Every figure below is the authoritative proof's own string.
+    facts.push({ label: 'Satuan', value: authoritative.unit });
+    facts.push({ label: 'Volume', value: authoritative.volumeDisplay });
+    facts.push({ label: 'Harga Satuan (tersimpan)', value: authoritative.storedUnitPriceDisplay });
+    facts.push({ label: 'Jumlah (tersimpan)', value: authoritative.storedLineTotalDisplay });
+    facts.push({
+      label: 'Hasil hitung ulang',
+      value: authoritative.reproduced
+        ? `Sama dengan tersimpan (${authoritative.recomputedUnitPriceDisplay})`
+        : authoritative.recomputedUnitPriceDisplay,
+    });
 
-  if (input.isWorkItem && input.priceOrigin === 'MANUAL_CLIENT') {
+    if (authoritative.provenance) {
+      facts.push({ label: 'Harga berlaku per tanggal', value: authoritative.provenance.asOfDate });
+      facts.push({ label: 'Region harga', value: authoritative.provenance.regionName });
+      facts.push({ label: 'Dihitung pada', value: authoritative.provenance.calculatedAt });
+      technicalFacts.push({ label: 'Kebijakan perhitungan', value: authoritative.provenance.policyVersion });
+      technicalFacts.push({ label: 'Kebijakan resolusi', value: authoritative.provenance.resolutionPolicyVersion });
+      technicalFacts.push({ label: 'ID Bukti (occurrence)', value: authoritative.provenance.occurrenceId });
+      technicalFacts.push({ label: 'ID Versi AHSP', value: authoritative.provenance.ahspVersionId });
+      technicalFacts.push({ label: 'Generasi occurrence', value: authoritative.provenance.generation });
+    } else {
+      unavailable.push('Rincian provenance tidak lengkap pada bukti tersimpan.');
+    }
+  } else {
+    // MANUAL_CLIENT — lawful, and honest about what it is not.
+    status = 'MANUAL';
+    verdict = origin.explanation;
+    if (input.unit) facts.push({ label: 'Satuan', value: input.unit });
+    if (input.quantityDisplay) facts.push({ label: 'Volume', value: input.quantityDisplay });
+    if (input.unitPriceDisplay) facts.push({ label: 'Harga Satuan', value: input.unitPriceDisplay });
+    if (input.lineTotalDisplay) facts.push({ label: 'Jumlah', value: input.lineTotalDisplay });
     unavailable.push(UNAVAILABLE_BREAKDOWN);
   }
 
   return {
+    status,
+    verdict,
+    resources,
     title: PRICE_TRACE_TITLE,
     subtitle: [input.description, input.unit].filter(Boolean).join(' · '),
     origin,

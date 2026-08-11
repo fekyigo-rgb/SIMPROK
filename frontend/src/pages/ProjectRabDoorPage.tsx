@@ -3,6 +3,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Archive, ChevronLeft, ChevronRight, Download, FileText, Lock, Maximize2, Minimize2, Printer, RotateCcw, Upload, ZoomIn, ZoomOut, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import {
+  toPersistedCalculationDisplay,
+  type PersistedCalculationDisplay,
+  type PersistedCalculationWire,
+} from '../utils/rabPersistedCalculationDisplay';
+import {
   toPersistedRowDisplayList,
   toRecapDisplay,
   type PersistedBoqItem,
@@ -142,6 +147,17 @@ export function ProjectRabDoorPage() {
   const [rabLifecycle, setRabLifecycle] = useState<RabLifecycleFactsWire | null>(null);
   /** RAB-TRACE-01 — which row's price evidence is open. Read-only view state. */
   const [evidenceRowId, setEvidenceRowId] = useState<string | null>(null);
+  /**
+   * The authoritative persisted proof, kept with the row it belongs to. Keying
+   * it this way means a proof can never be read against a different row while
+   * a fetch is in flight, and the effect never has to reset state on the way
+   * in: an id that does not match is simply "not fetched yet".
+   */
+  const [evidenceProof, setEvidenceProof] = useState<{
+    rowId: string;
+    display: PersistedCalculationDisplay | null;
+  } | null>(null);
+  const evidenceGenerationRef = useRef(0);
   const [draftRecap, setDraftRecap] = useState<PersistedDraftRecap | null>(null);
   
   const [zoom, setZoom] = useState(100);
@@ -268,6 +284,34 @@ export function ProjectRabDoorPage() {
   // taxAmount/grandTotal exactly as persisted; INCOMPLETE never fabricates a
   // partial total. See rabPersistedDraftDisplay.ts — no formula lives here.
   const recapDisplay = useMemo(() => toRecapDisplay(draftRecap), [draftRecap]);
+  /**
+   * Opening evidence reads the authoritative proof. A read-only GET is not a
+   * mutation: nothing is saved, recalculated, or reassigned — the row is only
+   * asked to explain itself. State is written solely in the async result, so
+   * opening the panel schedules no cascading render.
+   */
+  useEffect(() => {
+    if (!projectId || !evidenceRowId) return;
+    const row = rabRows.find((candidate) => candidate.id === evidenceRowId);
+    if (!row || row.priceOrigin !== 'SERVER_COST_KERNEL') return;
+
+    const generation = ++evidenceGenerationRef.current;
+    apiFetch(`/projects/${projectId}/boq/items/${evidenceRowId}/persisted-calculation`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('persisted-calculation-load-failed');
+        return (await response.json()) as PersistedCalculationWire;
+      })
+      .then((wire) => {
+        if (generation !== evidenceGenerationRef.current) return;
+        setEvidenceProof({ rowId: evidenceRowId, display: toPersistedCalculationDisplay(wire) });
+      })
+      .catch(() => {
+        if (generation !== evidenceGenerationRef.current) return;
+        // Fail closed: an unreadable proof is never replaced by row metadata.
+        setEvidenceProof({ rowId: evidenceRowId, display: null });
+      });
+  }, [projectId, evidenceRowId, rabRows]);
+
   const evidenceRow = useMemo(
     () => rabRows.find((row) => row.id === evidenceRowId) ?? null,
     [rabRows, evidenceRowId],
@@ -285,10 +329,16 @@ export function ProjectRabDoorPage() {
             priceOrigin: evidenceRow.priceOrigin,
             isWorkItem: evidenceRow.itemType === 'WORK_ITEM',
             ahsp: evidenceRow.ahspWire,
+            authoritative:
+              evidenceRow.priceOrigin !== 'SERVER_COST_KERNEL'
+                ? null
+                : evidenceProof?.rowId === evidenceRow.id
+                ? evidenceProof.display
+                : undefined,
             provenance: evidenceRow.provenance,
           })
         : null,
-    [evidenceRow],
+    [evidenceRow, evidenceProof],
   );
 
   useEffect(() => {
@@ -612,6 +662,8 @@ export function ProjectRabDoorPage() {
                 Tutup
               </button>
             </div>
+            {/* The verdict first: how far the evidence actually goes. */}
+            <p style={{ margin: '0.5rem 0', color: '#16294B', fontSize: '0.8125rem' }}>{evidenceTrace?.verdict}</p>
             <dl style={provenanceListStyle}>
               {evidenceTrace?.facts.map((fact) => (
                 <Fragment key={fact.label}>
@@ -624,6 +676,21 @@ export function ProjectRabDoorPage() {
               <p style={{ margin: '0.5rem 0 0', color: '#98A2B3', fontSize: '0.75rem' }}>
                 {evidenceTrace.unavailable.join(' ')}
               </p>
+            ) : null}
+            {evidenceTrace?.resources.length ? (
+              <details style={{ marginTop: '0.5rem' }}>
+                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#16294B' }}>
+                  Komponen pembentuk harga ({evidenceTrace.resources.length})
+                </summary>
+                <dl style={provenanceListStyle}>
+                  {evidenceTrace.resources.map((resource) => (
+                    <Fragment key={resource.resolutionId}>
+                      <dt>{resource.name}</dt>
+                      <dd>{resource.resourceCostDisplay}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </details>
             ) : null}
             {evidenceTrace?.technicalFacts.length ? (
               <details style={{ marginTop: '0.5rem' }}>

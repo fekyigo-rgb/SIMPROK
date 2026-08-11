@@ -535,16 +535,34 @@ test("TR-4. price evidence opens outside the table, not inside a cell", () => {
   assert.match(rabDoor, /const \[evidenceRowId, setEvidenceRowId\] = useState<string \| null>\(null\)/);
 });
 
-test("TR-5. opening a trace writes nothing and recomputes nothing", () => {
-  // The viewer's evidence panel is derived state over already-loaded rows.
-  const trace = rabDoor.slice(rabDoor.indexOf("const evidenceTrace"), rabDoor.indexOf("const rabStatusView"));
-  assert.doesNotMatch(trace, /apiFetch|fetch\(/, "opening evidence must not call the server");
-  assert.doesNotMatch(trace, /setRabRows|setDraftRecap/, "opening evidence must not mutate the RAB");
+test("TR-5. opening a trace performs no business mutation", () => {
+  // Corrected law. A read-only GET for authoritative evidence is lawful and
+  // desirable — the earlier version of this test forbade any fetch, which is
+  // what kept the viewer describing prices from row metadata instead of from
+  // the proof SIMPROK already owns. What must never happen is a write.
+  const viewerEffect = rabDoor.slice(
+    rabDoor.indexOf("Opening evidence reads the authoritative proof"),
+    rabDoor.indexOf("const evidenceRow = useMemo("),
+  );
 
-  // And the price-trace panel in the workspace reads the row it was given.
-  const drawer = workspace.slice(workspace.indexOf("PRICE_TRACE' ? ("), workspace.indexOf('<div className="simprok-ahsp-meta">'));
-  assert.doesNotMatch(drawer, /apiFetch|fetch\(/);
+  assert.match(viewerEffect, /apiFetch\(/, "evidence must read the authoritative proof");
+  assert.match(viewerEffect, /persisted-calculation/);
+  for (const verb of ["POST", "PUT", "PATCH", "DELETE"]) {
+    assert.equal(viewerEffect.includes(`method: '${verb}'`), false, `evidence must not ${verb}`);
+  }
+  for (const command of ["setRabRows", "setDraftRecap", "handleLockRab", "saveDraft"]) {
+    assert.equal(viewerEffect.includes(command), false, `evidence must not call ${command}`);
+  }
+
+  // The workspace price-trace panel renders proof; it issues no command.
+  const drawer = workspace.slice(
+    workspace.indexOf("{drawerMode === 'PRICE_TRACE' ? ("),
+    workspace.indexOf("{drawerMode === 'AHSP_ANALYSIS' ? ("),
+  );
   assert.doesNotMatch(drawer, /handlePersistCalculation|handleSaveDraft|handlePickAhsp/);
+  for (const verb of ["POST", "PUT", "PATCH", "DELETE"]) {
+    assert.equal(drawer.includes(`method: '${verb}'`), false, `price trace must not ${verb}`);
+  }
 });
 
 test("TR-6. Ruang Hidup shows the structural NO, not a row index", () => {
@@ -628,4 +646,46 @@ test("TR-11. price trace renders no AHSP write control", () => {
       `price trace must not offer "${control}"`,
     );
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SINGLE PRICE AUTHORITY — one proof, many views
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("TR-12. both rooms feed the same presenter from the authoritative proof", () => {
+  for (const [name, source] of [["Ruang Kerja", workspace], ["Ruang Hidup", rabDoor]] as const) {
+    assert.match(source, /buildPriceTrace\(\{/, `${name} must use the shared presenter`);
+    assert.match(
+      source,
+      /authoritative:[^,]*SERVER_COST_KERNEL/,
+      `${name} must pass the authoritative proof for a kernel price`,
+    );
+  }
+  // Both derive that proof through the one display authority.
+  assert.match(workspace, /toPersistedCalculationDisplay\(/);
+  assert.match(rabDoor, /toPersistedCalculationDisplay\(/);
+});
+
+test("TR-13. the rich persisted proof belongs to PRICE_TRACE, not AHSP analysis", () => {
+  const priceTrace = workspace.slice(
+    workspace.indexOf("{drawerMode === 'PRICE_TRACE' ? ("),
+    workspace.indexOf("{drawerMode === 'AHSP_ANALYSIS' ? ("),
+  );
+  const ahspAnalysis = workspace.slice(workspace.indexOf("{drawerMode === 'AHSP_ANALYSIS' ? ("));
+
+  assert.match(priceTrace, /persistedProofDisplay/, "price trace must own the persisted proof");
+  assert.equal(
+    ahspAnalysis.includes("persistedProofDisplay"),
+    false,
+    "AHSP analysis must not duplicate the project price evidence",
+  );
+});
+
+test("TR-14. the viewer fails closed rather than showing row numbers as proof", () => {
+  const viewerEffect = rabDoor.slice(
+    rabDoor.indexOf("Opening evidence reads the authoritative proof"),
+    rabDoor.indexOf("const evidenceRow = useMemo("),
+  );
+  // An unreadable proof becomes null — which the presenter reports as unproven.
+  assert.match(viewerEffect, /\.catch\(\(\) => \{[\s\S]*display: null/);
 });

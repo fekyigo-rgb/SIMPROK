@@ -108,29 +108,108 @@ const R75 = {
   },
 };
 
-test("T-1. the trace explains the price without recomputing any money", () => {
-  const trace = buildPriceTrace(R75);
+// The authoritative persisted-calculation proof, as the display authority
+// returns it. Every figure below is a server string; nothing here is computed.
+const PROOF = {
+  kind: "verified" as const,
+  badge: "Terbukti",
+  message: "Harga tersimpan berhasil dibuktikan ulang dari provenance-nya sendiri.",
+  storedUnitPriceDisplay: "Rp197.005",
+  storedLineTotalDisplay: "Rp129.826.295",
+  recomputedUnitPriceDisplay: "Rp197.005",
+  recomputedLineTotalDisplay: "Rp129.826.295",
+  volumeDisplay: "659",
+  unit: "m3",
+  reproduced: true,
+  provenance: {
+    asOfDate: "2024-06-01",
+    calculatedAt: "2026-08-06T02:00:00.000Z",
+    policyVersion: "RM03D1-KERNEL-V1",
+    resolutionPolicyVersion: "RESOLUTION-V1",
+    occurrenceId: "d116b638-0000-4000-8000-000000000000",
+    ahspVersionId: "a0000000-0000-4000-8000-000000000001",
+    ahspOutputUnit: "m3",
+    regionName: "Kota Ambon",
+    generation: "1",
+  },
+  resources: [
+    {
+      resolutionId: "res-1",
+      name: "Pekerja",
+      type: "LABOR",
+      coefficientDisplay: "0,3000",
+      ahspUnit: "OH",
+      sourcePriceDisplay: "Rp120.000",
+      adaptedPriceDisplay: "Rp120.000",
+      resourceCostDisplay: "Rp36.000",
+      basicPriceId: "bp-1",
+      effectiveDate: "2024-01-01",
+      sourceOrigin: "OFFICIAL",
+      freshness: "CURRENT",
+      status: "RESOLVED",
+      reasonCodes: [],
+    },
+  ],
+};
+
+test("T-1. a kernel price is explained by the authoritative proof, not row fields", () => {
+  const trace = buildPriceTrace({ ...R75, authoritative: PROOF });
   const value = (label: string) => trace.facts.find((f) => f.label === label)?.value;
 
-  assert.equal(trace.title, PRICE_TRACE_TITLE);
+  assert.equal(trace.status, "VERIFIED");
+  assert.equal(trace.verdict, PROOF.message);
   assert.equal(value("Asal Harga"), "Auto SIMPROK");
-  assert.equal(value("Kategori Asal"), "Dari Akun Pengguna");
-  // Persisted strings, echoed exactly.
+  // The money comes from the proof, exactly as the server serialised it.
   assert.equal(value("Volume"), "659");
-  assert.equal(value("Harga Satuan"), "Rp197.005");
-  assert.equal(value("Jumlah"), "Rp129.826.295");
+  assert.equal(value("Harga Satuan (tersimpan)"), "Rp197.005");
+  assert.equal(value("Jumlah (tersimpan)"), "Rp129.826.295");
+  assert.equal(value("Region harga"), "Kota Ambon");
   assert.equal(value("Harga berlaku per tanggal"), "2024-06-01");
-  assert.match(value("Analisa AHSP") ?? "", /Pemadatan secara Manual/);
-  assert.deepEqual(trace.unavailable, []);
+  // And the components come from the proof too — never re-derived.
+  assert.deepEqual(trace.resources, PROOF.resources);
+});
+
+test("T-1b. a kernel price with no readable proof is never shown as proven", () => {
+  // The row still carries plausible-looking numbers. Using them here would
+  // render exactly like a verified price while proving nothing.
+  const trace = buildPriceTrace({ ...R75, authoritative: null });
+
+  assert.equal(trace.status, "UNAVAILABLE");
+  assert.equal(trace.facts.some((f) => /Harga Satuan|Jumlah/.test(f.label)), false);
+  assert.equal(trace.unavailable.length >= 1, true);
+  assert.match(trace.unavailable.join(" "), /belum dapat dibuktikan/i);
+
+  // Before the fetch resolves it says so, rather than guessing.
+  const loading = buildPriceTrace({ ...R75, authoritative: undefined });
+  assert.equal(loading.status, "LOADING");
+});
+
+test("T-1c. a mismatch stays visible instead of being smoothed over", () => {
+  const trace = buildPriceTrace({
+    ...R75,
+    authoritative: {
+      ...PROOF,
+      kind: "mismatch" as const,
+      reproduced: false,
+      message: "Harga tersimpan tidak sama dengan hasil hitung ulang.",
+      recomputedUnitPriceDisplay: "Rp200.000",
+    },
+  });
+
+  assert.equal(trace.status, "MISMATCH");
+  assert.match(trace.verdict, /tidak sama/i);
+  assert.equal(
+    trace.facts.find((f) => f.label === "Hasil hitung ulang")?.value,
+    "Rp200.000",
+  );
 });
 
 test("T-2. technical identifiers stay under Detail Teknis, not in the first read", () => {
-  const trace = buildPriceTrace(R75);
+  const trace = buildPriceTrace({ ...R75, authoritative: PROOF });
   const technicalLabels = trace.technicalFacts.map((f) => f.label);
 
   assert.equal(technicalLabels.some((label) => /ID Bukti/.test(label)), true);
   assert.equal(technicalLabels.some((label) => /Kebijakan/.test(label)), true);
-  // The occurrence ID must not appear among the plain facts.
   assert.equal(
     trace.facts.some((f) => f.value.includes("d116b638")),
     false,

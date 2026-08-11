@@ -818,6 +818,26 @@ export function RabWorkspacePage() {
         : null,
     [selectedItem?.priceOrigin, persistedProof],
   );
+
+  /**
+   * One presenter over the authoritative proof, shared with Ruang Hidup, so
+   * the two rooms cannot tell two stories about one number.
+   */
+  const priceTrace = useMemo(
+    () =>
+      buildPriceTrace({
+        authoritative: selectedItem?.priceOrigin === 'SERVER_COST_KERNEL' ? persistedProofDisplay : null,
+        description: selectedItem?.name ?? '',
+        unit: selectedItem?.unit ?? '',
+        quantityDisplay: formatDraftNumber(volumes[selectedItem?.id ?? ''] ?? 0),
+        unitPriceDisplay: selectedCostDisplay?.unitPrice ?? '',
+        lineTotalDisplay: selectedCostDisplay?.lineTotal ?? '',
+        priceOrigin: selectedItem?.priceOrigin ?? null,
+        isWorkItem: selectedItem?.type === 'item',
+        ahsp: selectedItem?.ahsp,
+      }),
+    [selectedItem, persistedProofDisplay, volumes, selectedCostDisplay],
+  );
   const negativeRows = useMemo(() => new Set(rows
     .filter((row) => row.type === 'item' && ((volumes[row.id] || 0) < 0 || (unitPrices[row.id] ?? row.unitPrice) < 0))
     .map((row) => row.id)), [rows, unitPrices, volumes]);
@@ -1665,7 +1685,7 @@ export function RabWorkspacePage() {
                   <th className="simprok-rab-col-atur">Atur</th>
                   <th className="simprok-rab-col-no">No</th>
                   <th>Kode</th>
-                  <th>AHSP / Kategori</th>
+                  <th>AHSP</th>
                   <th>Uraian Pekerjaan</th>
                   <th>Volume</th>
                   <th>Satuan</th>
@@ -2001,147 +2021,32 @@ export function RabWorkspacePage() {
               </small>
             </div>
             {drawerMode === 'PRICE_TRACE' ? (
-              /* Why THIS project row costs THIS much. Every value is the
-                 string already persisted for this row — nothing is computed
-                 here, and opening this panel writes nothing. */
-              <div className="simprok-ahsp-meta" aria-label={PRICE_TRACE_TITLE}>
-                {(() => {
-                  const trace = buildPriceTrace({
-                    description: selectedItem.name,
-                    unit: selectedItem.unit,
-                    quantityDisplay: formatDraftNumber(volumes[selectedItem.id] ?? 0),
-                    unitPriceDisplay: selectedCostDisplay?.unitPrice ?? '',
-                    lineTotalDisplay: selectedCostDisplay?.lineTotal ?? '',
-                    priceOrigin: selectedItem.priceOrigin ?? null,
-                    isWorkItem: selectedItem.type === 'item',
-                    ahsp: selectedItem.ahsp,
-                    provenance: {
-                      calculationAsOfDate: selectedItem.calculationAsOfDate ?? null,
-                      calculationOccurrenceId: selectedItem.calculationOccurrenceId ?? null,
-                    },
-                  });
-                  return (
-                    <>
-                      {trace.facts.map((fact) => (
-                        <div key={fact.label}>
-                          <span>{fact.label}</span>
-                          <strong>{fact.value}</strong>
-                        </div>
-                      ))}
-                      {trace.unavailable.map((message) => (
-                        <div key={message}>
-                          <span>Belum tersedia</span>
-                          <strong style={{ color: '#98A2B3', fontWeight: 400 }}>{message}</strong>
-                        </div>
-                      ))}
-                      {trace.technicalFacts.length > 0 ? (
-                        <details>
-                          <summary style={{ cursor: 'pointer' }}>{TECHNICAL_DETAIL_TITLE}</summary>
-                          {trace.technicalFacts.map((fact) => (
-                            <div key={fact.label}>
-                              <span>{fact.label}</span>
-                              <strong style={{ wordBreak: 'break-all' }}>{fact.value}</strong>
-                            </div>
-                          ))}
-                        </details>
-                      ) : null}
-                    </>
-                  );
-                })()}
-              </div>
-            ) : null}
-            {/* AHSP ANALYSIS body. It answers what recipe is attached, and
-                it owns the controls that change that attachment. None of it
-                belongs to a read-only price-evidence room, so price trace
-                does not render it — a different enum over the same panel
-                would have been the same door wearing a new label. */}
-            {drawerMode === 'AHSP_ANALYSIS' ? (
-            <>
-            <div className="simprok-ahsp-meta">
-              <div>
-                {/* There is no AHSP code in this domain — an AHSP is its work
-                    type, its method and a version. This used to show the row's
-                    wbsCode under an "AHSP" label, which named the wrong thing. */}
-                <span>Analisa AHSP</span>
-                <strong>{resolveAhspIdentity(selectedItem.ahsp).fullLabel}</strong>
-              </div>
-              <div>
-                <span>Status AHSP</span>
-                <strong>{costEngineStatus.statusLabel}</strong>
-              </div>
-              <div>
-                <span>Sumber Harga</span>
-                <strong>{costEngineStatus.sourceLabel}</strong>
-              </div>
-              <div>
-                <span>Persistensi</span>
-                <strong>{!projectId ? 'Belum ada project aktif' : rabLocked ? 'Terkunci, tersimpan di server' : 'Draft tersimpan di server'}</strong>
-              </div>
-            </div>
-            <div className="simprok-ahsp-drawer__frame">
-              <span className="simprok-honest-frame__badge">{costEngineStatus.frameBadge}</span>
-              <p>{costEngineStatus.frameMessage}</p>
-            </div>
-            <button className="simprok-execution-factor" onClick={() => openPlaceholder('Atur Execution Factor')} title="Atur Execution Factor - engine belum aktif" aria-label="Atur Execution Factor - engine belum aktif" data-route="/?ruang=execution-factor">
-              <Sparkles size={18} />
-              <span>
-                <strong>Atur Execution Factor</strong>
-                <small>Rekomendasi kondisi lapangan menunggu mesin.</small>
-              </span>
-            </button>
-            <div className="simprok-ahsp-total">
-              <span>Total Harga Satuan</span>
-              <strong>{selectedCostDisplay?.unitPrice ?? formatRupiah(unitPrices[selectedItem.id] ?? selectedItem.unitPrice)}</strong>
-            </div>
-            <div className="simprok-persist-action" aria-label="Hitung dan Simpan Harga SIMPROK">
-              <label htmlFor="simprok-calculation-as-of-date">Tanggal perhitungan harga</label>
-              <input
-                id="simprok-calculation-as-of-date"
-                type="date"
-                value={calculationAsOfDate}
-                readOnly={!canEditDraft}
-                aria-readonly={!canEditDraft}
-                onChange={(event) => canEditDraft && handleCalculationAsOfDateChange(event.target.value)}
-                disabled={isPersistBusy}
-                aria-label="Tanggal perhitungan harga"
-              />
-              {draftDirty ? (
-                <p className="simprok-rab-recap__incomplete-note" role="status">
-                  Simpan perubahan draft terlebih dahulu bila Anda baru mengubah data item.
-                </p>
-              ) : null}
-              <button
-                className="simprok-ahsp-drawer__primary"
-                onClick={handlePersistCalculation}
-                disabled={persistReachability !== 'READY'}
-                title={PERSIST_REACHABILITY_TITLE[persistReachability]}
-                aria-label="Hitung & Simpan Harga SIMPROK"
-              >
-                <Save size={17} /> {isPersistBusy ? 'Menghitung & menyimpan...' : 'Hitung & Simpan Harga SIMPROK'}
-              </button>
-              {persistState.kind === 'success' && isPersistResultFresh(persistState.target, currentPersistIdentity) ? (
-                <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="status">
-                  <p>Harga SIMPROK berhasil dihitung dan disimpan.</p>
-                  <p>{persistState.target.itemLabel}: {persistState.unitPriceDisplay} / {persistState.lineTotalDisplay}</p>
-                  <button
-                    className="simprok-rab-action simprok-rab-action--secondary"
-                    onClick={() => navigate(`/project/${projectId}/rab`)}
-                  >
-                    Lihat hasil tersimpan
-                  </button>
+              /*
+                RINCIAN HARGA — why THIS project row has THIS stored price.
+                Every figure comes from the authoritative persisted-calculation
+                proof, which already re-proves the stored money from its own
+                frozen provenance. Describing the price from the row's loose
+                fields instead would have been a second, thinner account of the
+                same number.
+              */
+              <div className="simprok-ahsp-drawer__price-trace" aria-label={PRICE_TRACE_TITLE}>
+                <div className="simprok-ahsp-meta">
+                  {priceTrace.facts.map((fact) => (
+                    <div key={fact.label}>
+                      <span>{fact.label}</span>
+                      <strong>{fact.value}</strong>
+                    </div>
+                  ))}
                 </div>
-              ) : null}
-              {persistState.kind === 'failed_confirmed' && isPersistResultFresh(persistState.target, currentPersistIdentity) ? (
-                <div className="simprok-rab-validation-alert" role="alert">
-                  Harga belum dapat disimpan: {persistState.reason}
+                <div className="simprok-ahsp-drawer__frame">
+                  <span className="simprok-honest-frame__badge">{PRICE_TRACE_ROW_ACTION}</span>
+                  <p>{priceTrace.verdict}</p>
                 </div>
-              ) : null}
-              {persistState.kind === 'outcome_unknown' && persistState.target.projectId === projectId && persistState.target.boqItemId === selectedItem.id ? (
-                <div className="simprok-rab-validation-alert" role="alert">
-                  Status penyimpanan tidak dapat dipastikan. Muat ulang draft untuk memastikan status harga sebelum mencoba lagi.
-                </div>
-              ) : null}
-            </div>
+                {priceTrace.unavailable.length > 0 ? (
+                  <p style={{ margin: '0 0 0.5rem', color: '#98A2B3', fontSize: 'var(--text-sm)' }}>
+                    {priceTrace.unavailable.join(' ')}
+                  </p>
+                ) : null}
             {persistedProofDisplay ? (
               <div className="simprok-persist-action" aria-label="Penelusuran harga tersimpan">
                 <h4 style={{ margin: 0, color: 'var(--simprok-authority-navy-900)' }}>
@@ -2260,6 +2165,113 @@ export function RabWorkspacePage() {
                 ) : null}
               </div>
             ) : null}
+                {priceTrace.technicalFacts.length > 0 ? (
+                  <details>
+                    <summary style={{ cursor: 'pointer' }}>{TECHNICAL_DETAIL_TITLE}</summary>
+                    <div className="simprok-ahsp-meta">
+                      {priceTrace.technicalFacts.map((fact) => (
+                        <div key={fact.label}>
+                          <span>{fact.label}</span>
+                          <strong style={{ wordBreak: 'break-all' }}>{fact.value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+              </div>
+            ) : null}
+            {/* AHSP ANALYSIS body. It answers what recipe is attached, and
+                it owns the controls that change that attachment. None of it
+                belongs to a read-only price-evidence room, so price trace
+                does not render it — a different enum over the same panel
+                would have been the same door wearing a new label. */}
+            {drawerMode === 'AHSP_ANALYSIS' ? (
+            <>
+            <div className="simprok-ahsp-meta">
+              <div>
+                {/* There is no AHSP code in this domain — an AHSP is its work
+                    type, its method and a version. This used to show the row's
+                    wbsCode under an "AHSP" label, which named the wrong thing. */}
+                <span>Analisa AHSP</span>
+                <strong>{resolveAhspIdentity(selectedItem.ahsp).fullLabel}</strong>
+              </div>
+              <div>
+                <span>Status AHSP</span>
+                <strong>{costEngineStatus.statusLabel}</strong>
+              </div>
+              <div>
+                <span>Sumber Harga</span>
+                <strong>{costEngineStatus.sourceLabel}</strong>
+              </div>
+              <div>
+                <span>Persistensi</span>
+                <strong>{!projectId ? 'Belum ada project aktif' : rabLocked ? 'Terkunci, tersimpan di server' : 'Draft tersimpan di server'}</strong>
+              </div>
+            </div>
+            <div className="simprok-ahsp-drawer__frame">
+              <span className="simprok-honest-frame__badge">{costEngineStatus.frameBadge}</span>
+              <p>{costEngineStatus.frameMessage}</p>
+            </div>
+            <button className="simprok-execution-factor" onClick={() => openPlaceholder('Atur Execution Factor')} title="Atur Execution Factor - engine belum aktif" aria-label="Atur Execution Factor - engine belum aktif" data-route="/?ruang=execution-factor">
+              <Sparkles size={18} />
+              <span>
+                <strong>Atur Execution Factor</strong>
+                <small>Rekomendasi kondisi lapangan menunggu mesin.</small>
+              </span>
+            </button>
+            <div className="simprok-ahsp-total">
+              <span>Total Harga Satuan</span>
+              <strong>{selectedCostDisplay?.unitPrice ?? formatRupiah(unitPrices[selectedItem.id] ?? selectedItem.unitPrice)}</strong>
+            </div>
+            <div className="simprok-persist-action" aria-label="Hitung dan Simpan Harga SIMPROK">
+              <label htmlFor="simprok-calculation-as-of-date">Tanggal perhitungan harga</label>
+              <input
+                id="simprok-calculation-as-of-date"
+                type="date"
+                value={calculationAsOfDate}
+                readOnly={!canEditDraft}
+                aria-readonly={!canEditDraft}
+                onChange={(event) => canEditDraft && handleCalculationAsOfDateChange(event.target.value)}
+                disabled={isPersistBusy}
+                aria-label="Tanggal perhitungan harga"
+              />
+              {draftDirty ? (
+                <p className="simprok-rab-recap__incomplete-note" role="status">
+                  Simpan perubahan draft terlebih dahulu bila Anda baru mengubah data item.
+                </p>
+              ) : null}
+              <button
+                className="simprok-ahsp-drawer__primary"
+                onClick={handlePersistCalculation}
+                disabled={persistReachability !== 'READY'}
+                title={PERSIST_REACHABILITY_TITLE[persistReachability]}
+                aria-label="Hitung & Simpan Harga SIMPROK"
+              >
+                <Save size={17} /> {isPersistBusy ? 'Menghitung & menyimpan...' : 'Hitung & Simpan Harga SIMPROK'}
+              </button>
+              {persistState.kind === 'success' && isPersistResultFresh(persistState.target, currentPersistIdentity) ? (
+                <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="status">
+                  <p>Harga SIMPROK berhasil dihitung dan disimpan.</p>
+                  <p>{persistState.target.itemLabel}: {persistState.unitPriceDisplay} / {persistState.lineTotalDisplay}</p>
+                  <button
+                    className="simprok-rab-action simprok-rab-action--secondary"
+                    onClick={() => navigate(`/project/${projectId}/rab`)}
+                  >
+                    Lihat hasil tersimpan
+                  </button>
+                </div>
+              ) : null}
+              {persistState.kind === 'failed_confirmed' && isPersistResultFresh(persistState.target, currentPersistIdentity) ? (
+                <div className="simprok-rab-validation-alert" role="alert">
+                  Harga belum dapat disimpan: {persistState.reason}
+                </div>
+              ) : null}
+              {persistState.kind === 'outcome_unknown' && persistState.target.projectId === projectId && persistState.target.boqItemId === selectedItem.id ? (
+                <div className="simprok-rab-validation-alert" role="alert">
+                  Status penyimpanan tidak dapat dipastikan. Muat ulang draft untuk memastikan status harga sebelum mencoba lagi.
+                </div>
+              ) : null}
+            </div>
             <div className="simprok-persist-action" aria-label="Pilihan AHSP kontekstual">
               <label htmlFor="simprok-ahsp-version-selector">AHSP Version</label>
               <select
