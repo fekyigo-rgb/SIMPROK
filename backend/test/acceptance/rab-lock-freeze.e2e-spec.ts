@@ -555,6 +555,32 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
     // E5/E6 — locked is not approved, and no baseline was fabricated
     expect(row.status).not.toBe('APPROVED');
     expect(await prisma.projectBaseline.count({ where: { projectId: f.projectId } })).toBe(0);
+
+    // LIFECYCLE CONSISTENCY — every door states the same four facts.
+    // Detail Proyek reads GET /projects/:id and had no RAB lifecycle to read,
+    // so it described a PLANNED project's frozen RAB as an open draft.
+    const project = await request(app.getHttpServer())
+      .get(`/projects/${f.projectId}`)
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .expect(200);
+    expect(project.body.status).toBe('PLANNED'); // freezing a RAB does not move the project
+    expect(project.body.rabLifecycle).toMatchObject({
+      reasonCode: 'RAB_LOCKED',
+      canEditDraft: false,
+      lockedRabCount: 1,
+      approvedRabCount: 0,
+      activeBaselineCount: 0,
+    });
+
+    // My Projects must not disagree with Detail Proyek about the same RAB.
+    const mine = await request(app.getHttpServer())
+      .get('/projects/mine')
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .set('x-workspace-id', workspaceId)
+      .expect(200);
+    const listed = mine.body.find((p: { id: string }) => p.id === f.projectId);
+    expect(listed).toBeDefined();
+    expect(listed.rabLifecycle).toEqual(project.body.rabLifecycle);
   }, 120_000);
 
   // ── E4 ────────────────────────────────────────────────────────────────────

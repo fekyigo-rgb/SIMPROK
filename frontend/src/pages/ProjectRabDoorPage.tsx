@@ -10,6 +10,12 @@ import {
   type PersistedPriceOrigin,
   type PersistedRowDisplay,
 } from '../utils/rabPersistedDraftDisplay';
+import {
+  RAB_LOCK_COPY,
+  recapTotalLabel,
+  resolveProjectPresentationStatus,
+  type RabLifecycleFactsWire,
+} from '../utils/rabLockDisplay';
 
 type RabStatus = 'Draft' | 'Terkunci' | 'Approved' | 'Selesai';
 type PanelMode = 'compact' | 'wide' | 'collapsed';
@@ -126,6 +132,7 @@ export function ProjectRabDoorPage() {
   const [project, setProject] = useState<RabProject>(defaultProject);
   const [rabRows, setRabRows] = useState<PersistedRowDisplay[]>([]);
   const [rabSource, setRabSource] = useState<RabSource>('empty');
+  const [rabLifecycle, setRabLifecycle] = useState<RabLifecycleFactsWire | null>(null);
   const [draftRecap, setDraftRecap] = useState<PersistedDraftRecap | null>(null);
   
   const [zoom, setZoom] = useState(100);
@@ -154,6 +161,10 @@ export function ProjectRabDoorPage() {
 
         const rawStatus = typeof projData?.status === 'string' ? projData.status : '';
         const isPlannedProject = RAB_EDITABLE_PROJECT_STATUSES.includes(rawStatus);
+
+        // The RAB's own lifecycle, from the server policy. Project.status
+        // answers a different question and must not be asked this one.
+        setRabLifecycle((projData?.rabLifecycle as RabLifecycleFactsWire) ?? null);
 
         setProject({
           name: projData?.name || 'Nama proyek belum tersedia',
@@ -233,6 +244,15 @@ export function ProjectRabDoorPage() {
   const archived = project.status === 'Selesai';
   const isPlannedProject = RAB_EDITABLE_PROJECT_STATUSES.includes(project.rawStatus);
   const isDraftPreview = rabSource === 'draft';
+  const presentation = useMemo(() => resolveProjectPresentationStatus(rabLifecycle), [rabLifecycle]);
+  /**
+   * `rabSource` says which table the rows were read from, which for a frozen
+   * RAB with no baseline is still the draft structure. That is a fact about
+   * storage, not about the RAB. Shown to the Owner as a draft-state label it
+   * contradicted the lock chip on the very same screen.
+   */
+  const rabFrozen = presentation.status === 'TERKUNCI' || presentation.status === 'APPROVED';
+  const rowStateLabel = presentation.label;
   const zoomScale = zoom / 100;
   const hasRabRows = rabRows.length > 0;
   // RECAP DISPLAY AUTHORITY: COMPLETE renders recap.subtotal/marginAmount/
@@ -306,7 +326,14 @@ export function ProjectRabDoorPage() {
     showOfficialActionMessage('Jalur Addendum disiapkan. Engine perubahan resmi belum aktif.');
   };
 
-  const statusMechanismCopy = isDraftPreview
+  // A frozen or approved RAB says so first. Reading the source of the rows
+  // ("this came from the draft table") and reporting it as the RAB's state
+  // told the Owner their locked RAB was still an open draft.
+  const statusMechanismCopy = presentation.status === 'APPROVED'
+    ? 'RAB ini sudah disetujui dan menjadi acuan resmi. Perubahan isi RAB dilakukan melalui mekanisme Addendum.'
+    : presentation.status === 'TERKUNCI'
+    ? RAB_LOCK_COPY.lockedNote
+    : isDraftPreview
     ? 'RAB draft tersimpan, belum menjadi baseline resmi. Viewer ini hanya membaca draft dan tidak mengunci RAB.'
     : rabSource === 'empty'
       ? (isPlannedProject ? 'Belum ada baseline resmi atau draft tersimpan untuk proyek ini.' : 'RAB baseline belum tersedia untuk proyek ini.')
@@ -345,12 +372,11 @@ export function ProjectRabDoorPage() {
         <aside className="simprok-rab-mechanism" aria-label="Status dan mekanisme perubahan">
           <span className="simprok-rab-mechanism__label">Status & Mekanisme</span>
           <div className="simprok-rab-mechanism__chips">
-            <span className={`simprok-rab-status simprok-rab-status--${project.status.toLowerCase()}`}>
-              {archived ? <Archive size={14} aria-hidden="true" /> : readOnly && !isDraftPreview ? <Lock size={14} aria-hidden="true" /> : null}
-              {isDraftPreview ? 'Draft  Belum Dikunci' : archived ? 'Selesai  Arsip' : project.status === 'Draft' ? 'Draft' : 'RAB Terkunci'}
+            {/* One status, the same one every other door shows. */}
+            <span className={`simprok-rab-status simprok-rab-status--${presentation.chipModifier}`}>
+              {presentation.status === 'SELESAI' ? <Archive size={14} aria-hidden="true" /> : rabFrozen ? <Lock size={14} aria-hidden="true" /> : null}
+              {presentation.badgeLabel}
             </span>
-            {rabSource === 'baseline' && project.status === 'Approved' ? <span className="simprok-rab-status simprok-rab-status--approved">Approved</span> : null}
-            {rabSource === 'baseline' && readOnly && !archived ? <span className="simprok-rab-status simprok-rab-status--approved">Baseline 01</span> : null}
           </div>
           <p>{statusMechanismCopy}</p>
           {!archived ? (
@@ -373,8 +399,10 @@ export function ProjectRabDoorPage() {
           <header className="simprok-rab-toolbar">
             <div>
               <h2>Dokumen RAB</h2>
-              {isDraftPreview ? (
-                <small>Draft Preview: RAB draft tersimpan, belum menjadi baseline resmi.</small>
+              {rabFrozen ? (
+                <small>{RAB_LOCK_COPY.lockedNote}</small>
+              ) : isDraftPreview ? (
+                <small>RAB tersimpan, belum menjadi baseline resmi.</small>
               ) : !archived ? (
                 <small>Beberapa aksi resmi seperti export, cetak, dan import menunggu integrasi backend.</small>
               ) : null}
@@ -432,9 +460,13 @@ export function ProjectRabDoorPage() {
                 </div>
               ) : (
                 <>
-                  {isDraftPreview ? (
+                  {rabFrozen ? (
                     <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', border: '1px solid #D0D5DD', borderRadius: '8px', color: '#16294B', background: '#F8FAFC' }}>
-                      <strong>RAB draft tersimpan, belum menjadi baseline resmi.</strong>
+                      <strong>{presentation.badgeLabel}. {RAB_LOCK_COPY.lockedNote}</strong>
+                    </div>
+                  ) : isDraftPreview ? (
+                    <div style={{ marginBottom: '0.75rem', padding: '0.75rem 1rem', border: '1px solid #D0D5DD', borderRadius: '8px', color: '#16294B', background: '#F8FAFC' }}>
+                      <strong>RAB tersimpan, belum menjadi baseline resmi.</strong>
                     </div>
                   ) : null}
                   <table className="simprok-rab-table">
@@ -483,7 +515,7 @@ export function ProjectRabDoorPage() {
                               </details>
                             ) : null}
                           </td>
-                          <td>{isDraftPreview ? 'Draft Preview' : readOnly ? 'Read-only' : 'Draft RAB'}</td>
+                          <td>{rowStateLabel}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -496,7 +528,12 @@ export function ProjectRabDoorPage() {
                       <span style={recapLineStyle}>Subtotal<strong>{recapDisplay.subtotalDisplay}</strong></span>
                       <span style={recapLineStyle}>Margin {recapDisplay.marginPercentDisplay}%<strong>{recapDisplay.marginAmountDisplay}</strong></span>
                       <span style={recapLineStyle}>PPN {recapDisplay.taxPercentDisplay}%<strong>{recapDisplay.taxAmountDisplay}</strong></span>
-                      <span style={recapLineStyle}>Grand Total Draft<strong>{recapDisplay.grandTotalDisplay}</strong></span>
+                      {/* The recap is read from the draft persistence structure
+                          even when the RAB is frozen, but where the numbers are
+                          stored is not what state the RAB is in. Calling this
+                          total a draft told the Owner their locked RAB was still
+                          open, on the same screen that says TERKUNCI. */}
+                      <span style={recapLineStyle}>{recapTotalLabel(presentation.status)}<strong>{recapDisplay.grandTotalDisplay}</strong></span>
                     </div>
                   ) : null}
                 </>

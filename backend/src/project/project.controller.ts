@@ -18,6 +18,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ProjectStatus } from '@prisma/client';
 import { ProjectService } from './project.service';
 import { RabIntelligenceProposalService } from './rab-intelligence-proposal.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -236,7 +237,20 @@ export class ProjectController {
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   @Permissions('PROJECT_VIEW')
   async findOne(@Param('projectId') projectId: string) {
-    return this.projectService.findOne(projectId);
+    const project = await this.projectService.findOne(projectId);
+
+    // Detail Project shows a "Status" of its own. Without the RAB's lifecycle
+    // it had only Project.status to show, and read a project still in
+    // perencanaan as a RAB that was not yet locked — while the repository
+    // held it LOCKED. The same policy service that answers /projects/mine
+    // answers here, so both doors state one truth.
+    return {
+      ...project,
+      rabLifecycle: await this.rabLifecyclePolicy.evaluate(
+        project.id,
+        project.status as ProjectStatus,
+      ),
+    };
   }
 
   @Get(':projectId/reality')
