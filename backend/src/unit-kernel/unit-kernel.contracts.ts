@@ -5,9 +5,38 @@ export const UNIT_RESOLUTION_STATUS = {
 } as const;
 export type UnitResolutionStatus = typeof UNIT_RESOLUTION_STATUS[keyof typeof UNIT_RESOLUTION_STATUS];
 
+/**
+ * The trusted facts a caller may use to disambiguate one raw unit spelling that
+ * legitimately denotes more than one canonical unit.
+ *
+ * The values are exactly Prisma's `ResourceType`. That is deliberate: context
+ * must come from a governed classification the system already holds about the
+ * resource, never from reading a resource NAME. "Excavator" and "Pekerja" are
+ * text; ResourceCatalog.type is a fact.
+ *
+ * Passing no context is always legal and always fail-closed: an ambiguous raw
+ * alias stays ambiguous rather than defaulting to whichever row is found first.
+ */
+export const UNIT_ALIAS_CONTEXT = {
+  MATERIAL: 'MATERIAL',
+  LABOR: 'LABOR',
+  EQUIPMENT: 'EQUIPMENT',
+} as const;
+export type UnitAliasContext =
+  (typeof UNIT_ALIAS_CONTEXT)[keyof typeof UNIT_ALIAS_CONTEXT];
+
 export const UNIT_REASON = {
   EXACT_UNIT_IDENTITY: 'EXACT_UNIT_IDENTITY',
   EXACT_UNIT_ALIAS_EQUIVALENCE: 'EXACT_UNIT_ALIAS_EQUIVALENCE',
+  /** The resolution used a context-scoped alias, so it holds only in that context. */
+  CONTEXT_SCOPED_UNIT_ALIAS: 'CONTEXT_SCOPED_UNIT_ALIAS',
+  /**
+   * The spelling IS known, but every mapping for it is context-scoped and the
+   * caller supplied no context. Distinct from UNKNOWN_UNIT_ALIAS on purpose:
+   * "I need to be told which context" is a different fact from "I have never
+   * heard of this unit", and only the first one is fixed by passing context.
+   */
+  CONTEXT_REQUIRED_UNIT_ALIAS: 'CONTEXT_REQUIRED_UNIT_ALIAS',
   UNKNOWN_UNIT_ALIAS: 'UNKNOWN_UNIT_ALIAS',
   AMBIGUOUS_UNIT_ALIAS: 'AMBIGUOUS_UNIT_ALIAS',
   UNIQUE_EVIDENCE_BOUND_RULE: 'UNIQUE_EVIDENCE_BOUND_RULE',
