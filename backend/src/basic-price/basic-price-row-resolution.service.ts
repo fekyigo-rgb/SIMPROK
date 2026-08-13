@@ -16,7 +16,11 @@ import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { ResourceIdentityResolution } from '../resource-catalog/resource-identity-resolution.kernel';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
-import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
+import {
+  UNIT_KERNEL_POLICY_VERSION,
+  UNIT_PRICE_OPERATION,
+  UNIT_RESOLUTION_STATUS,
+} from '../unit-kernel/unit-kernel.contracts';
 
 /**
  * FNV-1a 32-bit, narrowed to a signed int4 because that is what
@@ -163,6 +167,124 @@ export class BasicPriceRowResolutionService {
   }
 
   /**
+   * TRUSTED UNIT CONTEXT PROOF — the one place Basic Price asks the Unit
+   * Kernel whether the unit a human chose is actually the unit the source
+   * document wrote.
+   *
+   * A UnitDefinition existing and being active proves only that the vocabulary
+   * exists. It says nothing about the row in front of the reviewer, so without
+   * this proof "Zak" could be stored as M3 and nothing in the system would ever
+   * notice: the price would be per-zak while every later AHSP resolution reads
+   * it as per-m3.
+   *
+   * THE CONTEXT IS THE ROW'S OWN sourceSection, NEVER THE RESOURCE NAME.
+   * `row.sourceSection` is a governed classification the intake already carried
+   * and the reviewer cannot retype — and RESOURCE_TYPE_MISMATCH above has
+   * already bound the chosen ResourceCatalog to it. That is what makes it
+   * trusted enough to disambiguate a context-scoped alias: "jam" resolves to
+   * the labour hour on a LABOR row and to the equipment hour on an EQUIPMENT
+   * row, and can never swap, because the context is not derived from text.
+   *
+   * A row whose source document carried no unit at all has nothing to prove
+   * against — so the choice is refused for THAT ROW, never accepted on trust.
+   * SIMPROK does not manufacture a fact it was never given.
+   */
+  private async assertSelectedUnitProvenBySourceUnit(
+    row: { rawUnitText: string | null; sourceSection: ResourceType },
+    unitDefinition: { code: string },
+    resourceCatalogId?: string,
+  ): Promise<void> {
+    const rawSourceUnit = row.rawUnitText?.trim() ?? '';
+
+    // NO SOURCE UNIT IS NOT A WEAKER PROOF — IT IS NO PROOF.
+    //
+    // Letting this case through was the one way a human-selected canonical unit
+    // could still become a stored fact with nothing behind it. It is the most
+    // dangerous case, not the mildest: an incompatible spelling at least fails
+    // loudly, while an absent one would have been accepted in silence.
+    //
+    // Refused HERE rather than by asking the kernel to resolve '', so that
+    // safety never depends on the catalogue happening to contain no empty
+    // alias. The kernel is not consulted, and this body says so rather than
+    // reporting a verdict nobody gave.
+    //
+    // `UNIT_REQUIRED` is the intake adapter's own existing code for exactly
+    // this fact, already carried on the row the reviewer is looking at — the
+    // precise cause, in vocabulary this architecture already speaks.
+    //
+    // This refuses ONE ROW's unproven fact. It is thrown inside that row's own
+    // transaction, so the row simply stays NEEDS_REVIEW and every other row in
+    // the batch remains resolvable: fail-closed on the fact, never on the
+    // workflow.
+    if (rawSourceUnit === '')
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution: {
+          status: UNIT_RESOLUTION_STATUS.NEEDS_REVIEW,
+          reasonCodes: ['UNIT_REQUIRED'],
+          explanation:
+            'Dokumen sumber tidak mencantumkan satuan pada baris ini, sehingga tidak ada bukti yang dapat membuktikan satuan pilihan manusia.',
+          policyVersion: UNIT_KERNEL_POLICY_VERSION,
+          // The original cell, unaltered — null stays null, blank stays blank.
+          rawSourceUnit: row.rawUnitText,
+          selectedUnitCode: unitDefinition.code,
+          resourceContext: row.sourceSection,
+          priceOperation: null,
+        },
+      });
+
+    const proof = await this.unitKernel.resolve(
+      rawSourceUnit,
+      unitDefinition.code,
+      resourceCatalogId,
+      row.sourceSection,
+    );
+    // The same shape the reviewer already gets from the admission unit proof,
+    // plus the two facts this seam exists to make visible: which context was
+    // trusted, and what would have had to happen to the price.
+    const unitResolution = {
+      status: proof.status,
+      reasonCodes: proof.reasonCodes,
+      explanation: proof.explanation,
+      policyVersion: proof.policyVersion,
+      rawSourceUnit: proof.rawSourceUnit,
+      selectedUnitCode: proof.rawTargetUnit,
+      resourceContext: row.sourceSection,
+      priceOperation: proof.priceOperation,
+    };
+
+    if (proof.status !== UNIT_RESOLUTION_STATUS.RESOLVED)
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution,
+      });
+
+    // RESOLVED but not IDENTITY means the kernel found a real, evidence-bound
+    // conversion — the quantity is convertible, and the PRICE would therefore
+    // have to be divided by the same factor to stay true. Basic Price has no
+    // such price-transformation seam today: `proposedCanonicalPrice` is the raw
+    // source price per `rawUnitText`, and it is written into BasicPrice.value
+    // untouched. Persisting the converted unit against an unconverted price
+    // would publish a mathematically false price that reads as canonical.
+    //
+    // So SIMPROK refuses and says exactly why, rather than inventing the
+    // missing arithmetic here. This is the fail-closed half of "SIMPROK
+    // menghitung, manusia memutuskan": it will not quietly decide that a
+    // per-sack price is a per-cubic-metre price.
+    if (proof.priceOperation !== UNIT_PRICE_OPERATION.IDENTITY)
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        message: 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION',
+        unitResolution,
+      });
+  }
+
+  /**
    * The whole of a human resolution, minus the transaction boundary.
    *
    * Lifted out unchanged so REVIEWED RESOURCE ADMISSION can run it inside its
@@ -224,6 +346,22 @@ export class BasicPriceRowResolutionService {
       });
       if (!unitDefinition)
         throw new ConflictException('UNIT_UNKNOWN_OR_INACTIVE');
+
+      // The chosen unit must be provably the source document's own unit, in
+      // this row's trusted resource context, before anything is written.
+      //
+      // REVIEWED RESOURCE ADMISSION reaches this same line inside its own
+      // transaction, so admission cannot admit a resource under a unit an
+      // ordinary resolve would have refused — one call site, one meaning, and
+      // no second unit resolver anywhere in Basic Price. The catalog id is
+      // passed because a resource-specific conversion rule is evidence the
+      // kernel is entitled to see; on the admission path it is the identity
+      // this transaction just created, which by construction has no rules yet.
+      await this.assertSelectedUnitProvenBySourceUnit(
+        row,
+        unitDefinition,
+        dto.resourceCatalogId,
+      );
 
       const priorSameIdentity = await tx.basicPriceImportRow.findFirst({
         where: {
@@ -538,6 +676,19 @@ export class BasicPriceRowResolutionService {
             },
           });
         }
+
+        // …and the SAME row-level proof an ordinary resolve applies, asked here
+        // rather than only in the shared body below, so an unprovable unit is
+        // refused BEFORE this request waits on the admission lock and before a
+        // ResourceCatalog is created for it. A rollback would erase the row
+        // either way; refusing first means SIMPROK never took the step at all.
+        //
+        // No catalog id: the identity does not exist yet, so there is no
+        // resource-specific conversion evidence the kernel could lawfully see.
+        // The shared body asks again with the created id — same helper, same
+        // law, and by construction the new identity carries no rules that could
+        // change the answer.
+        await this.assertSelectedUnitProvenBySourceUnit(row, unitDefinition);
 
         // First authoritative pass — cheap refusal before anyone waits on a
         // lock. It never authorizes anything on its own.

@@ -37,7 +37,6 @@ const PASSWORD = 'Test1234!';
 const REGION_ID = '42000000-0000-4000-8000-000000000001';
 const RESOURCE_MATERIAL_ID = '42000000-0000-4000-8000-000000000002';
 const RESOURCE_LABOR_ID = '42000000-0000-4000-8000-000000000003';
-const UNIT_ID = '42000000-0000-4000-8000-000000000004';
 const ROLE_ACTOR1_ID = '42000000-0000-4000-8000-000000000005';
 const ROLE_ACTOR2_ID = '42000000-0000-4000-8000-000000000006';
 const ROLE_ACTOR3_ID = '42000000-0000-4000-8000-000000000007';
@@ -83,6 +82,14 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
   let actorBothAccountId: string;
   let actorVerifyOnlyAccountId: string;
   let actorVerifyOnlyUserId: string;
+  /**
+   * The REAL canonical unit for this fixture's own source spelling: row 9 of
+   * the fixture workbook writes "Org/Hari", which the Unit Kernel already
+   * knows as PERSON_DAY. An acceptance-only UnitDefinition would be a unit no
+   * alias can reach, so nothing would prove the stored price is a price per
+   * person-day — and the trusted unit context seam refuses exactly that.
+   */
+  let personDayUnitId: string;
   let actor2UserId: string;
   let actor3UserId: string;
   let actorBothUserId: string;
@@ -371,18 +378,11 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
       },
       update: {},
     });
-    await prisma.unitDefinition.upsert({
-      where: { id: UNIT_ID },
-      create: {
-        id: UNIT_ID,
-        code: 'RM02D2A1-UNIT-ORGHARI',
-        displayName: 'Orang per Hari',
-        symbol: 'Org/Hari',
-        dimension: 'PERSON_TIME',
-        kind: 'CANONICAL',
-      },
-      update: {},
-    });
+    personDayUnitId = (
+      await prisma.unitDefinition.findFirstOrThrow({
+        where: { code: 'PERSON_DAY' },
+      })
+    ).id;
 
     const login = async (email: string) =>
       (
@@ -511,7 +511,6 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
         id: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID, RESOURCE_BOTH_ID] },
       },
     });
-    await prisma.unitDefinition.deleteMany({ where: { id: UNIT_ID } });
     await prisma.region.deleteMany({ where: { id: REGION_ID } });
     await prisma.membershipRole.deleteMany({
       where: { id: { in: membershipRoleIds } },
@@ -606,7 +605,7 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
       .send({
         version: row.version,
         resourceCatalogId: RESOURCE_LABOR_ID,
-        unitDefinitionId: UNIT_ID,
+        unitDefinitionId: personDayUnitId,
       })
       .expect(201);
     for (const other of otherRows) {

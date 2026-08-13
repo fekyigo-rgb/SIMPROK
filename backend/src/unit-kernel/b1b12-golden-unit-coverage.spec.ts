@@ -29,6 +29,17 @@ import {
 const MIGRATIONS = resolvePath(__dirname, '..', '..', 'prisma', 'migrations');
 const KAMUS_SQL = resolvePath(MIGRATIONS, '20260717010000_kamus_unit_kernel_01a', 'migration.sql');
 const GOLDEN_SQL = resolvePath(MIGRATIONS, '20260812090000_b1b12_golden_unit_coverage', 'migration.sql');
+/**
+ * Forward vocabulary added AFTER the Golden pack was recorded. It is loaded
+ * into the same catalogue because the shipped catalogue is what the product
+ * actually resolves against — but it never enters GOLDEN_ROW_CONTRACT, which
+ * stays an unedited record of what the B1-B12 evidence itself contained.
+ */
+const EQUIPMENT_VOCAB_SQL = resolvePath(
+  MIGRATIONS,
+  '20260813090000_equipment_hour_source_vocabulary',
+  'migration.sql',
+);
 
 /** Splits one SQL tuple body on top-level commas, honouring '' escapes. */
 function splitTuple(body: string): string[] {
@@ -108,7 +119,7 @@ function loadCatalogue(): { definitions: UnitDefinitionRow[]; aliases: UnitAlias
   const aliases: UnitAliasRow[] = [];
   const knownCodes = new Set<string>();
 
-  for (const file of [KAMUS_SQL, GOLDEN_SQL]) {
+  for (const file of [KAMUS_SQL, GOLDEN_SQL, EQUIPMENT_VOCAB_SQL]) {
     const sql = readFileSync(file, 'utf8');
     for (const t of tuples(sql).filter((x) => UUID.test(x[0]))) {
       if (t.length === 6) {
@@ -119,7 +130,7 @@ function loadCatalogue(): { definitions: UnitDefinitionRow[]; aliases: UnitAlias
       }
     }
   }
-  for (const file of [KAMUS_SQL, GOLDEN_SQL]) {
+  for (const file of [KAMUS_SQL, GOLDEN_SQL, EQUIPMENT_VOCAB_SQL]) {
     const sql = readFileSync(file, 'utf8');
     for (const t of tuples(sql).filter((x) => UUID.test(x[0]))) {
       if (t.length === 4 && knownCodes.has(t[3])) {
@@ -245,6 +256,101 @@ describe('B1B12 Golden unit coverage — raw source variants', () => {
     expect(r.status).toBe(UNIT_RESOLUTION_STATUS.RESOLVED);
     expect(r.sourceUnitDefinition?.code).toBe('EQUIPMENT_HOUR');
     expect(r.reasonCodes).toContain(UNIT_REASON.CONTEXT_SCOPED_UNIT_ALIAS);
+  });
+});
+
+/**
+ * FORWARD EQUIPMENT VOCABULARY — 20260813090000_equipment_hour_source_vocabulary.
+ *
+ * Indonesian rental schedules write one machine-hour as "U/J", "Jm" or "Jam".
+ * These spellings are absent from the B1-B12 evidence pack above, and that
+ * absence is a fact about the pack, not a verdict on the spellings — so they
+ * are added forward here rather than backdated into the Golden census.
+ *
+ * The whole point is that SIMPROK learns to READ the document. The source is
+ * never rewritten to suit the resolver: a schedule that says "U/J" keeps saying
+ * "U/J", and the kernel is what supplies the meaning — but only where the
+ * trusted context says EQUIPMENT. Every row is context-scoped, so a labourer's
+ * row can never pick up a machine's vocabulary, and vice versa.
+ */
+describe('B1B12 Golden unit coverage — forward EQUIPMENT hour vocabulary', () => {
+  const EQUIPMENT_HOUR_SPELLINGS = ['U/J', 'u/j', 'Jm', 'jm', 'Jam', 'jam'];
+
+  it.each(EQUIPMENT_HOUR_SPELLINGS)(
+    'reads %j as EQUIPMENT_HOUR under EQUIPMENT context, as pure identity',
+    async (raw) => {
+      const r = await identity(raw, UNIT_ALIAS_CONTEXT.EQUIPMENT);
+      expect(r.status).toBe(UNIT_RESOLUTION_STATUS.RESOLVED);
+      expect(r.sourceUnitDefinition?.code).toBe('EQUIPMENT_HOUR');
+      expect(r.targetUnitDefinition?.code).toBe('EQUIPMENT_HOUR');
+      // A spelling is not a conversion: same quantity, so the price basis is
+      // untouched and no factor may ever be applied.
+      expect(r.priceOperation).toBe('IDENTITY');
+      expect(r.quantityFactor).toBe('1');
+      expect(r.conversionRuleId).toBeNull();
+      expect(r.reasonCodes).toContain(UNIT_REASON.CONTEXT_SCOPED_UNIT_ALIAS);
+    },
+  );
+
+  it('case alone never changes the meaning — the pairs share one normalised key', () => {
+    expect(normalizeUnitAlias('U/J')).toBe(normalizeUnitAlias('u/j'));
+    expect(normalizeUnitAlias('Jm')).toBe(normalizeUnitAlias('jm'));
+    expect(normalizeUnitAlias('Jam')).toBe(normalizeUnitAlias('jam'));
+    // …and the catalogue stores ONE row per normalised key, not one per
+    // capitalisation. A duplicate would make the spelling ambiguous forever.
+    for (const key of ['u/j', 'jm']) {
+      const rows = aliases.filter((a) => a.normalizedAlias === key);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        code: 'EQUIPMENT_HOUR',
+        context: 'EQUIPMENT',
+      });
+    }
+  });
+
+  it('the LABOR hour is untouched — "jam" there is still the person hour', async () => {
+    const r = await identity('jam', UNIT_ALIAS_CONTEXT.LABOR);
+    expect(r.status).toBe(UNIT_RESOLUTION_STATUS.RESOLVED);
+    expect(r.sourceUnitDefinition?.code).toBe('PERSON_HOUR');
+  });
+
+  // The containment proof. Equipment vocabulary is equipment vocabulary: it
+  // must be unreachable from every other context, including the one that has a
+  // legitimate claim on the word "jam".
+  it.each([
+    [UNIT_ALIAS_CONTEXT.LABOR, 'U/J'],
+    [UNIT_ALIAS_CONTEXT.LABOR, 'Jm'],
+    [UNIT_ALIAS_CONTEXT.MATERIAL, 'U/J'],
+    [UNIT_ALIAS_CONTEXT.MATERIAL, 'Jm'],
+    [UNIT_ALIAS_CONTEXT.MATERIAL, 'jam'],
+  ])(
+    'fails closed for %s + %j rather than borrowing the equipment meaning',
+    async (context, raw) => {
+      const r = await identity(raw, context);
+      expect(r.status).toBe(UNIT_RESOLUTION_STATUS.NEEDS_REVIEW);
+      expect(r.reasonCodes).toEqual([UNIT_REASON.UNKNOWN_UNIT_ALIAS]);
+      expect(r.sourceUnitDefinition).toBeNull();
+    },
+  );
+
+  it.each(['U/J', 'Jm'])(
+    'with NO context, %j is context-required — never silently the equipment hour',
+    async (raw) => {
+      const r = await identity(raw);
+      expect(r.status).toBe(UNIT_RESOLUTION_STATUS.NEEDS_REVIEW);
+      expect(r.reasonCodes).toEqual([UNIT_REASON.CONTEXT_REQUIRED_UNIT_ALIAS]);
+      expect(r.sourceUnitDefinition).toBeNull();
+    },
+  );
+
+  it('adds no canonical unit — only new ways of writing one that already existed', () => {
+    expect(definitions.filter((d) => d.code === 'EQUIPMENT_HOUR')).toHaveLength(
+      1,
+    );
+    expect(byCode.get('EQUIPMENT_HOUR')).toMatchObject({
+      dimension: 'EQUIPMENT_TIME',
+      kind: 'CANONICAL',
+    });
   });
 });
 
@@ -500,16 +606,40 @@ describe('F12 generic context-scoped alias law', () => {
     expect(unknown.reasonCodes).toEqual([UNIT_REASON.UNKNOWN_UNIT_ALIAS]);
   });
 
-  it('the shipped catalogue contains no single-context alias that would need this rescue', () => {
+  /**
+   * The shipped catalogue now DOES contain single-context aliases — "u/j" and
+   * "jm", added by 20260813090000 for the equipment hour. When this suite was
+   * first written none existed, and the rescue above could only be proven
+   * synthetically through TEST_LABOR_SHIFT.
+   *
+   * That is exactly the situation the F12 law was written for. Had the kernel
+   * decided eligibility by counting rows, "u/j" would resolve without any
+   * context at all today — safe only by the accident of being catalogued once —
+   * and the first LABOR row to say "U/J" would silently receive a machine hour.
+   * Because the law is about the ALIAS and not the row count, it does not.
+   */
+  it('every contextual alias is either a real choice or a single-context row the law still rescues', async () => {
     const byNormalised = new Map<string, UnitAliasRow[]>();
     for (const a of aliases) {
       byNormalised.set(a.normalizedAlias, [...(byNormalised.get(a.normalizedAlias) ?? []), a]);
     }
+    const singleContext: string[] = [];
     for (const [normalised, rows] of byNormalised) {
       const contextual = rows.filter((r) => r.context !== null);
       if (contextual.length === 0) continue;
-      // Every contextual spelling shipped today offers a real choice.
-      expect({ normalised, contextual: contextual.length }).toEqual({ normalised, contextual: 2 });
+      expect(contextual.length).toBeGreaterThanOrEqual(1);
+      if (contextual.length === 1) singleContext.push(normalised);
+    }
+    // Named, not merely counted: a new single-context spelling must be a
+    // deliberate decision that reaches this list, never a silent arrival.
+    expect(singleContext.sort()).toEqual(['jm', 'u/j']);
+
+    // …and each of them is genuinely unreachable without trusted context.
+    for (const normalised of singleContext) {
+      const r = await identity(normalised);
+      expect(r.status).toBe(UNIT_RESOLUTION_STATUS.NEEDS_REVIEW);
+      expect(r.reasonCodes).toEqual([UNIT_REASON.CONTEXT_REQUIRED_UNIT_ALIAS]);
+      expect(r.sourceUnitDefinition).toBeNull();
     }
   });
 });
