@@ -9,6 +9,19 @@ export interface BasicPriceFixtureOptions {
   includeLongRoundTripDecimal?: boolean;
   /** RM-03D1 — MATERIAL rows the Reviewed Resource Admission matrix needs. */
   includeAdmissionRows?: boolean;
+  /**
+   * B1B12 zero-provenance matrix. A price of zero and a price that could not
+   * be read are different facts, and the three rows below are the shapes that
+   * could plausibly be confused for one another:
+   *
+   *   includeZeroPrice                 a real, stated 0 — a PRICE
+   *   includeTextPrice                 unreadable text  — NOT a price
+   *   includeFormulaWithoutCachedResult  a formula whose value was never
+   *                                    cached — NOT a price
+   */
+  includeZeroPrice?: boolean;
+  includeTextPrice?: boolean;
+  includeFormulaWithoutCachedResult?: boolean;
 }
 
 /**
@@ -107,6 +120,35 @@ export async function buildBasicPriceXlsx(options: BasicPriceFixtureOptions = {}
     sheet.getCell('D40').value = 'M.10';
     sheet.getCell('E40').value = 'M3';
     // F40 intentionally left empty.
+  }
+
+  // A REAL, STATED ZERO. The cell is genuinely numeric and its value is 0 —
+  // the same shape every AHSP "Alat Bantu" line has. This is a price.
+  if (options.includeZeroPrice) {
+    sheet.getCell('C41').value = 'Alat Bantu (stated zero price)';
+    sheet.getCell('D41').value = 'M.11';
+    sheet.getCell('E41').value = 'Ls';
+    sheet.getCell('F41').value = 0;
+    sheet.getCell('F41').numFmt = CURRENCY_NUMFMT;
+  }
+
+  // TEXT WHERE A NUMBER BELONGS. A human wrote a dash. It is not zero, not a
+  // price, and must never be read as one.
+  if (options.includeTextPrice) {
+    sheet.getCell('C42').value = 'Pasir (price written as text)';
+    sheet.getCell('D42').value = 'M.12';
+    sheet.getCell('E42').value = 'M3';
+    sheet.getCell('F42').value = 'Rp. -';
+  }
+
+  // A FORMULA WHOSE RESULT WAS NEVER CACHED. The workbook states how the
+  // number would be computed but not what it is; SIMPROK does not evaluate
+  // spreadsheets, so there is no value here to read.
+  if (options.includeFormulaWithoutCachedResult) {
+    sheet.getCell('C43').value = 'Semen (uncached formula price)';
+    sheet.getCell('D43').value = 'M.13';
+    sheet.getCell('E43').value = 'Zak';
+    sheet.getCell('F43').value = { formula: 'F33*2' } as any;
   }
 
   if (options.includeAdmissionRows) {

@@ -32,6 +32,42 @@ const parsePositiveDecimal = (value: string): Prisma.Decimal | null => {
 };
 
 /**
+ * A PRICE OF ZERO IS A PRICE. IT IS NOT A MISSING PRICE.
+ *
+ * The two facts are already separate everywhere else in this repository:
+ * `adaptedPriceValue === null` is refused below as MISSING_ADAPTED_PRICE, and
+ * SaveDraftBoqDto states the same law from the other side — "null/undefined =
+ * no authoritative price yet (never invent 0). An explicit numeric 0 is a real
+ * human-entered price and must round-trip as 0, distinct from 'not priced'."
+ *
+ * Only this kernel conflated them, by reusing `parsePositiveDecimal` for the
+ * price as well as for the volume and the coefficient. For those two, `> 0` is
+ * a real requirement — a line with no volume, or a resource used in no
+ * quantity, is a data error, and the specs assert exactly that. For the price
+ * it was incidental: an explicitly stated Rp0 came back as INVALID_DECIMAL, a
+ * parse-failure verdict about a number that parsed perfectly.
+ *
+ * Real sources state it. Every AHSP in the Bina Marga B1-B12 drainage section
+ * carries an "Alat Bantu" line whose published price is 0, and the official
+ * table carries that zero into its own component subtotals. Refusing it would
+ * be SIMPROK declaring the document unreadable because the document said
+ * "nothing to add here".
+ *
+ * Negative stays refused. A negative unit price is not a fact this kernel has
+ * been shown evidence for, and inventing a meaning for one is not its job.
+ */
+const parseNonNegativeDecimal = (value: string): Prisma.Decimal | null => {
+  try {
+    const decimal = new Prisma.Decimal(value);
+    return decimal.isFinite() && decimal.greaterThanOrEqualTo(0)
+      ? decimal
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
  * Identity comparison only (BOQ unit vs AHSP output unit), via the existing
  * canonical unit-kernel string primitive. M1/m1/M¹ normalize equal; "M" and
  * "M1" stay distinct because unit-kernel treats them as separate canonical
@@ -92,7 +128,7 @@ export function calculateCostKernel(
     const coefficient = parsePositiveDecimal(resource.coefficient);
     if (!coefficient)
       return fail(input.boqItemId, COST_CALCULATION_REASON.INVALID_COEFFICIENT);
-    const adaptedPrice = parsePositiveDecimal(resource.adaptedPriceValue);
+    const adaptedPrice = parseNonNegativeDecimal(resource.adaptedPriceValue);
     if (!adaptedPrice)
       return fail(input.boqItemId, COST_CALCULATION_REASON.INVALID_DECIMAL);
 

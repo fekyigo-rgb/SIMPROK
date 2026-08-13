@@ -150,10 +150,30 @@ for (const resource of version.resources) {
       baseUnit: identifiedCatalog.baseUnit,
     },
   ];
+  // THE TRUSTED UNIT CONTEXT for every unit question asked about this
+  // resource — see UNIT_ALIAS_CONTEXT: "context must come from a governed
+  // classification the system already holds about the resource, never from
+  // reading a resource NAME. ResourceCatalog.type is a fact."
+  //
+  // Without it, a source that writes one machine-hour or one labour-hour as
+  // "jam" is unanswerable: the alias is catalogued in BOTH the LABOR and the
+  // EQUIPMENT context, so the kernel correctly refuses with
+  // AMBIGUOUS_UNIT_ALIAS and the resource ends UNRESOLVED — not because
+  // SIMPROK cannot read the document, but because this call never told it
+  // which hour it was looking at. Basic Price row resolution already passes
+  // its own trusted context (`row.sourceSection`); the occurrence path was
+  // simply not passing the one it holds.
+  //
+  // It is the CATALOG's class, not the AHSP line's text, and the two are
+  // already proven equal: identity resolution admits a candidate only when
+  // `typeMatches(candidate.type, resource.resourceType)`. Nothing is guessed,
+  // nothing is widened, and passing no context stays fail-closed as before.
+  const trustedUnitContext = matches[0].type;
   const unitResolution = await this.units.resolve(
     resource.baseUnit,
     identifiedCatalog.baseUnit,
     identifiedCatalog.id,
+    trustedUnitContext,
   );
   const candidates = await Promise.all(
     priceRows.map(async (price) => {
@@ -163,6 +183,7 @@ for (const resource of version.resources) {
               price.resource.baseUnit,
               identifiedCatalog.baseUnit,
               identifiedCatalog.id,
+              trustedUnitContext,
             )
           : null;
       return {

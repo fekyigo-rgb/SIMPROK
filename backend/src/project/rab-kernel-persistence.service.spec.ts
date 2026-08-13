@@ -479,13 +479,63 @@ describe('RabKernelPersistenceService', () => {
     expect(new Prisma.Decimal(writtenData.lineTotal).toFixed(2)).toBe('1000000.00');
   });
 
-  it('rejects RAB_TOTAL_INCOMPLETE and mutates nothing when another WORK_ITEM in the draft is still unpriced', async () => {
-    const { service, boqItemUpdate, rabDocumentUpdateMany, rabDocumentCreate } = createHarness({
+  /**
+   * CONTINUE SAFELY ON WORKFLOW — the sibling's fact is not this line's verdict.
+   *
+   * This line's own evidence is complete, so its money is proven and is
+   * written. Another WORK_ITEM in the draft is not priced yet, so the SECTION
+   * total is not a fact anyone can state — and it is written as NULL rather
+   * than as a sum of the part that happens to be provable.
+   *
+   * The earlier law refused the whole command here. That made one genuinely
+   * unresolvable row destroy every healthy row in the section, which inverts
+   * the locked law: fail closed on the FACT, continue safely on the WORKFLOW.
+   */
+  it('persists THIS line and withholds only the SECTION total when another WORK_ITEM is still unpriced', async () => {
+    const { service, boqItemUpdate, rabDocumentUpdateMany } = createHarness({
       otherItems: [{ itemType: 'WORK_ITEM', unitPrice: null }],
     });
 
+    const result = await call(service);
+
+    // The line's own money is proven, and therefore persisted.
+    expect(result).toMatchObject({
+      unitPrice: '200000.00',
+      lineTotal: '1000000.00',
+      priceOrigin: 'SERVER_COST_KERNEL',
+    });
+    const written = boqItemUpdate.mock.calls[0][0].data;
+    expect(new Prisma.Decimal(written.unitPrice).toFixed(2)).toBe('200000.00');
+    expect(new Prisma.Decimal(written.lineTotal).toFixed(2)).toBe('1000000.00');
+    expect(written.priceOrigin).toBe('SERVER_COST_KERNEL');
+
+    // The section total is withheld — NULL, never a partial sum.
+    expect(result.rabTotals).toEqual({
+      pricingStatus: 'INCOMPLETE',
+      totalBaseCost: null,
+      totalFinalCost: null,
+    });
+    const rabData = rabDocumentUpdateMany.mock.calls[0][0].data;
+    expect(rabData.totalBaseCost).toBeNull();
+    expect(rabData.totalFinalCost).toBeNull();
+  });
+
+  /**
+   * The guarantee that must NOT move: a line whose OWN evidence is incomplete
+   * still fails closed and writes nothing. Only a SIBLING's incompleteness
+   * stopped being this line's verdict.
+   */
+  it('still fails closed, writing nothing, when THIS line’s own resource is unresolved and a sibling is unpriced too', async () => {
+    const { service, boqItemUpdate, rabDocumentUpdateMany, rabDocumentCreate } =
+      createHarness({
+        otherItems: [{ itemType: 'WORK_ITEM', unitPrice: null }],
+        occurrence: buildOccurrence([
+          buildResolution({ status: 'NEEDS_REVIEW' }),
+        ]),
+      });
+
     await expect(call(service)).rejects.toMatchObject({
-      message: RAB_KERNEL_PERSISTENCE_REASON.RAB_TOTAL_INCOMPLETE,
+      message: RAB_KERNEL_PERSISTENCE_REASON.UNRESOLVED_RESOURCE,
     });
     expect(boqItemUpdate).not.toHaveBeenCalled();
     expect(rabDocumentUpdateMany).not.toHaveBeenCalled();

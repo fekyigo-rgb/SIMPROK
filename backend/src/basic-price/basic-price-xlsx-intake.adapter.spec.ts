@@ -93,6 +93,103 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
     expect(row.errors).toEqual(['PRICE_CELL_EMPTY']);
   });
 
+  /**
+   * ZERO IS A PRICE. UNREADABLE IS NOT ZERO.
+   *
+   * This is the ONE place in SIMPROK where a source cell becomes a number:
+   * `proposedCanonicalPrice` is derived here and nowhere else, and everything
+   * downstream carries the resulting decimal STRING verbatim — the price
+   * resolution kernel sets `adaptedPriceValue = selectedPrice.value` with
+   * factor 1, and the occurrence orchestrator writes null when a resource is
+   * unresolved. So if a blank cell can never become 0 here, it can never
+   * become 0 anywhere.
+   *
+   * The Cost Kernel deliberately accepts an explicit 0 as a known price. That
+   * law is only safe while THIS boundary refuses to manufacture one, which is
+   * exactly what these cases pin. Blank is already covered above
+   * (PRICE_CELL_EMPTY, twice); what follows covers the rest of the shapes a
+   * real workbook produces.
+   */
+  describe('a price of zero and a price that cannot be read are different facts', () => {
+    it('an explicitly stated 0 IS a price, and is carried as 0.00 with its rounding provenance', async () => {
+      const buffer = await buildBasicPriceXlsx({ includeZeroPrice: true });
+      const result = await adapter.parse(buffer, 'fixture.xlsx');
+      const row = result.rows.find((r) =>
+        r.rawResourceNameText.startsWith('Alat Bantu'),
+      )!;
+
+      expect(row.rawPriceNumericRoundTripString).toBe('0');
+      expect(row.proposedCanonicalPrice).toBe('0.00');
+      expect(row.canonicalRoundingMode).toBe('ROUND_HALF_UP');
+      // A stated zero is not an error. The row is admissible.
+      expect(row.errors).toEqual([]);
+    });
+
+    it('text where a number belongs is NOT zero — no canonical price is produced', async () => {
+      const buffer = await buildBasicPriceXlsx({ includeTextPrice: true });
+      const result = await adapter.parse(buffer, 'fixture.xlsx');
+      const row = result.rows.find((r) =>
+        r.rawResourceNameText.startsWith('Pasir'),
+      )!;
+
+      expect(row.proposedCanonicalPrice).toBeNull();
+      expect(row.canonicalRoundingMode).toBeNull();
+      expect(row.errors).toEqual(['PRICE_CELL_IS_TEXT_NOT_NUMBER']);
+      // The unreadable text survives as evidence a human can inspect — it is
+      // preserved, not silently swallowed and not converted.
+      expect(row.rawPriceTextValue).toBe('Rp. -');
+    });
+
+    it('a formula whose result was never cached is NOT zero — SIMPROK does not evaluate spreadsheets', async () => {
+      const buffer = await buildBasicPriceXlsx({
+        includeFormulaWithoutCachedResult: true,
+      });
+      const result = await adapter.parse(buffer, 'fixture.xlsx');
+      const row = result.rows.find((r) =>
+        r.rawResourceNameText.startsWith('Semen'),
+      )!;
+
+      expect(row.proposedCanonicalPrice).toBeNull();
+      expect(row.canonicalRoundingMode).toBeNull();
+      expect(row.errors).toEqual(['FORMULA_NO_CACHED_RESULT']);
+      // The formula text is kept, so the gap is explainable rather than blank.
+      expect(row.rawPriceFormulaText).toBe('F33*2');
+    });
+
+    it('NO unreadable shape anywhere in one workbook ever yields a canonical price', async () => {
+      const buffer = await buildBasicPriceXlsx({
+        includeZeroPrice: true,
+        includeTextPrice: true,
+        includeFormulaWithoutCachedResult: true,
+        includeMissingPrice: true,
+        includeMissingUnit: true,
+      });
+      const result = await adapter.parse(buffer, 'fixture.xlsx');
+
+      const unreadable = result.rows.filter((r) =>
+        r.errors.some((error) =>
+          [
+            'PRICE_CELL_EMPTY',
+            'PRICE_CELL_IS_TEXT_NOT_NUMBER',
+            'FORMULA_NO_CACHED_RESULT',
+          ].includes(error),
+        ),
+      );
+      // The matrix must actually be exercised — an empty filter would pass
+      // this assertion vacuously.
+      expect(unreadable.length).toBe(4);
+      for (const row of unreadable) {
+        expect(row.proposedCanonicalPrice).toBeNull();
+      }
+
+      // …while the one row that really does state zero still states it.
+      const zero = result.rows.find((r) =>
+        r.rawResourceNameText.startsWith('Alat Bantu'),
+      )!;
+      expect(zero.proposedCanonicalPrice).toBe('0.00');
+    });
+  });
+
   it('resolves a formula cell (external-reference-shaped) name/unit via cached result text, never [object Object]', async () => {
     const buffer = await buildBasicPriceXlsx();
     const result = await adapter.parse(buffer, 'fixture.xlsx');
