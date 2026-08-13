@@ -114,14 +114,25 @@ describe('BasicPriceRowResolutionService', () => {
         callback(tx),
       ),
     };
-    // Default: the unit authority CAN represent the chosen canonical unit.
-    // Test 10 flips this to prove admission is refused when it cannot.
+    // Default: the unit authority CAN represent the chosen canonical unit, AND
+    // the chosen unit is the source document's own unit (identity — no price
+    // arithmetic implied). Test 10 flips the first; the TRUSTED UNIT CONTEXT
+    // blocks flip the second. The shape mirrors UnitResolutionResult, including
+    // `priceOperation` and the echoed spellings, because the service now reads
+    // those fields — a fixture omitting them would let a regression pass.
     unitKernel = {
-      resolve: jest.fn(async () => ({
-        status: 'RESOLVED',
-        reasonCodes: ['EXACT_UNIT_ALIAS_EQUIVALENCE', 'EXACT_UNIT_IDENTITY'],
-        explanation: 'Kedua alias menunjuk identitas unit canonical yang sama.',
-      })),
+      resolve: jest.fn((rawSourceUnit: string, rawTargetUnit: string) =>
+        Promise.resolve({
+          status: 'RESOLVED',
+          rawSourceUnit,
+          rawTargetUnit,
+          priceOperation: 'IDENTITY',
+          policyVersion: 'KAMUS_UNIT_KERNEL_01A_V1',
+          reasonCodes: ['EXACT_UNIT_ALIAS_EQUIVALENCE', 'EXACT_UNIT_IDENTITY'],
+          explanation:
+            'Kedua alias menunjuk identitas unit canonical yang sama.',
+        }),
+      ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -156,7 +167,12 @@ describe('BasicPriceRowResolutionService', () => {
       id: 'resource-01',
       type: 'MATERIAL',
     });
-    tx.unitDefinition.findFirst.mockResolvedValue({ id: 'unit-01' });
+    // The unit's `code` is load-bearing now: it is the target spelling the
+    // Unit Kernel is asked to prove the row's raw source unit against.
+    tx.unitDefinition.findFirst.mockResolvedValue({
+      id: 'unit-01',
+      code: 'ZAK',
+    });
     tx.basicPriceImportRow.findFirst.mockResolvedValue(null); // no collision by default
     tx.basicPriceImportRow.count.mockResolvedValue(0); // no other NEEDS_REVIEW rows -> batch can advance
     tx.basicPriceImportBatch.findUniqueOrThrow.mockResolvedValue({
@@ -1371,6 +1387,569 @@ describe('BasicPriceRowResolutionService', () => {
         resolvedByAccountId: REVIEWER_ID,
       });
       expect(result.row.status).toBe('READY_FOR_SUBMISSION');
+    });
+    // ---------- TRUSTED UNIT CONTEXT, ON THE ADMISSION PATH ----------
+    //
+    // Admission runs the SAME shared resolution body, so it must refuse the
+    // same unit choices an ordinary resolve refuses. If it did not, admission
+    // would be the way around the unit law: mint a resource, bind it to a
+    // canonical unit its own source row never proved, and the catalog would
+    // carry that unprovable baseUnit forever.
+
+    /** The admission refusal body, typed — and only reached by a real refusal. */
+    const admissionRefusal = async (): Promise<Record<string, unknown>> => {
+      try {
+        await admit();
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConflictException);
+        return (error as ConflictException).getResponse() as Record<
+          string,
+          unknown
+        >;
+      }
+      throw new Error('expected a refusal, but admission succeeded');
+    };
+
+    it('28. T12 — admission refuses a unit that needs a price conversion, and admits nothing', async () => {
+      unitKernel.resolve.mockImplementation(
+        (rawSourceUnit: string, rawTargetUnit: string) =>
+          Promise.resolve(
+            rawSourceUnit === rawTargetUnit
+              ? {
+                  // The vocabulary proof admission does first still succeeds…
+                  status: 'RESOLVED',
+                  rawSourceUnit,
+                  rawTargetUnit,
+                  priceOperation: 'IDENTITY',
+                  reasonCodes: ['EXACT_UNIT_IDENTITY'],
+                  explanation: 'sama',
+                }
+              : {
+                  // …and the row-level proof is what refuses.
+                  status: 'RESOLVED',
+                  rawSourceUnit,
+                  rawTargetUnit,
+                  priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+                  quantityFactor: '40',
+                  reasonCodes: ['UNIQUE_EVIDENCE_BOUND_RULE'],
+                  explanation:
+                    'Tepat satu aturan directional aktif dan berbukti ditemukan.',
+                },
+          ),
+      );
+
+      expect(await admissionRefusal()).toMatchObject({
+        message: 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION',
+        unitResolution: {
+          rawSourceUnit: 'Zak',
+          selectedUnitCode: 'M3',
+          resourceContext: 'MATERIAL',
+          priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+        },
+      });
+      nothingWasCreated();
+    });
+
+    it('29. T13 — admission refuses a unit the source unit cannot prove, and admits nothing', async () => {
+      unitKernel.resolve.mockImplementation(
+        (rawSourceUnit: string, rawTargetUnit: string) =>
+          Promise.resolve(
+            rawSourceUnit === rawTargetUnit
+              ? {
+                  status: 'RESOLVED',
+                  rawSourceUnit,
+                  rawTargetUnit,
+                  priceOperation: 'IDENTITY',
+                  reasonCodes: ['EXACT_UNIT_IDENTITY'],
+                  explanation: 'sama',
+                }
+              : {
+                  status: 'NEEDS_REVIEW',
+                  rawSourceUnit,
+                  rawTargetUnit,
+                  priceOperation: null,
+                  reasonCodes: ['CONVERSION_RULE_NOT_FOUND'],
+                  explanation:
+                    'Aturan konversi directional yang memenuhi bukti tidak ditemukan.',
+                },
+          ),
+      );
+
+      expect(await admissionRefusal()).toMatchObject({
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution: {
+          status: 'NEEDS_REVIEW',
+          reasonCodes: ['CONVERSION_RULE_NOT_FOUND'],
+        },
+      });
+      nothingWasCreated();
+    });
+  });
+
+  // ==========================================================
+  // BASIC PRICE TRUSTED UNIT CONTEXT (PRODUCT SEAM 01)
+  //
+  // A reviewer picks a ResourceCatalog and a UnitDefinition. Before this seam,
+  // SIMPROK checked only that both rows existed — so a row whose source
+  // document said "Zak" could be persisted as M3, and the price, which is the
+  // raw source price PER THAT SOURCE UNIT, would silently become a per-m3
+  // price. Nothing downstream could ever detect it: BasicPrice.value is read
+  // as being per ResourceCatalog.baseUnit, with no memory of the sack.
+  //
+  // The fix is not a new unit brain. It is asking the ONE Unit Kernel the
+  // question Basic Price always should have asked: does the unit this human
+  // chose actually denote the unit this document wrote, in this row's trusted
+  // resource context? The human still chooses. SIMPROK only refuses to write
+  // down a choice it cannot prove.
+  // ==========================================================
+  describe('trusted unit context (PRODUCT SEAM 01)', () => {
+    /** Put a row with these overrides in front of the service. */
+    /**
+     * Put a row with these overrides in front of the service — and make the
+     * update echo THAT row, not the default one.
+     *
+     * The shared `update` mock returns `{...baseRow, ...data}`, so without this
+     * a test could assert the returned row still carries its source spelling
+     * while actually reading the default fixture's spelling. Source-truth
+     * assertions have to read the row that was really under review.
+     */
+    const rowIs = (over: Record<string, unknown>) => {
+      const row = { ...baseRow, ...over };
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([baseBatch]);
+          if (sql.includes('basic_price_import_rows'))
+            return Promise.resolve([row]);
+          if (sql.includes('resource_catalogs'))
+            return Promise.resolve(candidateRows);
+          return Promise.resolve([]);
+        },
+      );
+      tx.basicPriceImportRow.update.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) => ({ ...row, ...data }),
+      );
+    };
+
+    const resolve = () =>
+      service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
+        version: 0,
+        resourceCatalogId: 'resource-01',
+        unitDefinitionId: 'unit-01',
+      });
+
+    const nothingWasWritten = () => {
+      expect(tx.basicPriceImportRow.update).not.toHaveBeenCalled();
+      expect(
+        tx.basicPriceImportRowResourceMapping.create,
+      ).not.toHaveBeenCalled();
+      expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
+    };
+
+    /**
+     * The refusal body, typed — and only ever reached by an actual refusal.
+     *
+     * `resolve().catch((e) => e)` would hand back `any`, so a test could assert
+     * against a resolution that quietly SUCCEEDED and still read as green.
+     * Throwing here makes "it was refused" part of what the test proves.
+     */
+    const refusalOf = async (
+      call: () => Promise<unknown> = resolve,
+    ): Promise<Record<string, unknown>> => {
+      try {
+        await call();
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConflictException);
+        return (error as ConflictException).getResponse() as Record<
+          string,
+          unknown
+        >;
+      }
+      throw new Error('expected a refusal, but the resolution succeeded');
+    };
+
+    const kernelAnswers = (answer: Record<string, unknown>) =>
+      unitKernel.resolve.mockImplementation(
+        (rawSourceUnit: string, rawTargetUnit: string) =>
+          Promise.resolve({
+            rawSourceUnit,
+            rawTargetUnit,
+            policyVersion: 'KAMUS_UNIT_KERNEL_01A_V1',
+            ...answer,
+          }),
+      );
+
+    it('T1 — a source unit that proves the chosen canonical unit resolves normally', async () => {
+      const result = await resolve();
+
+      expect(result.status).toBe('READY_FOR_SUBMISSION');
+      expect(unitKernel.resolve).toHaveBeenCalledWith(
+        'Zak',
+        'ZAK',
+        'resource-01',
+        'MATERIAL',
+      );
+    });
+
+    it('T2 — an unknown source unit refuses the choice and writes nothing', async () => {
+      kernelAnswers({
+        status: 'NEEDS_REVIEW',
+        priceOperation: null,
+        reasonCodes: ['UNKNOWN_UNIT_ALIAS'],
+        explanation: 'Satu atau lebih alias unit tidak dikenal.',
+      });
+
+      expect(await refusalOf()).toMatchObject({
+        statusCode: 409,
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution: {
+          status: 'NEEDS_REVIEW',
+          reasonCodes: ['UNKNOWN_UNIT_ALIAS'],
+          rawSourceUnit: 'Zak',
+          selectedUnitCode: 'ZAK',
+          resourceContext: 'MATERIAL',
+        },
+      });
+      nothingWasWritten();
+    });
+
+    it('T3 — a pair the evidence declares NOT_CONVERTIBLE refuses, with the kernel’s own reason', async () => {
+      kernelAnswers({
+        status: 'NOT_CONVERTIBLE',
+        priceOperation: null,
+        reasonCodes: ['NOT_CONVERTIBLE'],
+        explanation:
+          'Evidence menyatakan pasangan unit tidak dapat dikonversi.',
+      });
+
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution: {
+          status: 'NOT_CONVERTIBLE',
+          reasonCodes: ['NOT_CONVERTIBLE'],
+        },
+      });
+      nothingWasWritten();
+    });
+
+    it('T4 — a convertible unit whose PRICE would have to change is refused, not silently persisted', async () => {
+      // This is the whole point. The kernel is happy: "Zak" converts to M3 by a
+      // real evidence-bound rule. But `proposedCanonicalPrice` is the price PER
+      // SACK, and Basic Price has no seam that divides it by the factor. Writing
+      // the m3 unit against the sack price would publish a false canonical price.
+      kernelAnswers({
+        status: 'RESOLVED',
+        priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+        quantityFactor: '40',
+        conversionType: 'PACKAGE_CONTENT',
+        reasonCodes: ['UNIQUE_EVIDENCE_BOUND_RULE'],
+        explanation:
+          'Tepat satu aturan directional aktif dan berbukti ditemukan.',
+      });
+
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION',
+        unitResolution: {
+          status: 'RESOLVED',
+          priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+        },
+      });
+      nothingWasWritten();
+    });
+
+    it('T5 — the trusted context is the row’s own sourceSection, for a LABOR row', async () => {
+      rowIs({ sourceSection: 'LABOR', rawUnitText: 'jam' });
+      tx.resourceCatalog.findFirst.mockResolvedValue({
+        id: 'resource-01',
+        type: 'LABOR',
+      });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-01',
+        code: 'JAM_ORANG',
+      });
+
+      await resolve();
+
+      expect(unitKernel.resolve).toHaveBeenCalledWith(
+        'jam',
+        'JAM_ORANG',
+        'resource-01',
+        'LABOR',
+      );
+    });
+
+    it('T6 — and the EQUIPMENT context for an EQUIPMENT row', async () => {
+      rowIs({ sourceSection: 'EQUIPMENT', rawUnitText: 'jam' });
+      tx.resourceCatalog.findFirst.mockResolvedValue({
+        id: 'resource-01',
+        type: 'EQUIPMENT',
+      });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-01',
+        code: 'JAM_ALAT',
+      });
+
+      await resolve();
+
+      expect(unitKernel.resolve).toHaveBeenCalledWith(
+        'jam',
+        'JAM_ALAT',
+        'resource-01',
+        'EQUIPMENT',
+      );
+    });
+
+    it('T7 — "jam" can never swap: the equipment hour is unreachable from a LABOR row', async () => {
+      // A faithful stand-in for the kernel's context law: the spelling "jam" is
+      // context-scoped, so only the alias belonging to the row's own context is
+      // ever eligible. A foreign-context unit is not "the last row standing" —
+      // it is simply not a candidate.
+      const HOUR_OF: Record<string, string> = {
+        LABOR: 'JAM_ORANG',
+        EQUIPMENT: 'JAM_ALAT',
+      };
+      unitKernel.resolve.mockImplementation(
+        (
+          rawSourceUnit: string,
+          rawTargetUnit: string,
+          _resourceCatalogId?: string,
+          context?: string,
+        ) => {
+          const eligible = context ? HOUR_OF[context] : undefined;
+          if (
+            rawSourceUnit.toLowerCase() !== 'jam' ||
+            eligible !== rawTargetUnit
+          )
+            return {
+              status: 'NEEDS_REVIEW',
+              rawSourceUnit,
+              rawTargetUnit,
+              priceOperation: null,
+              reasonCodes: context
+                ? ['UNKNOWN_UNIT_ALIAS']
+                : ['CONTEXT_REQUIRED_UNIT_ALIAS'],
+              explanation: 'Alias unit terikat konteks.',
+            };
+          return {
+            status: 'RESOLVED',
+            rawSourceUnit,
+            rawTargetUnit,
+            priceOperation: 'IDENTITY',
+            reasonCodes: ['CONTEXT_SCOPED_UNIT_ALIAS', 'EXACT_UNIT_IDENTITY'],
+            explanation:
+              'Kedua alias menunjuk identitas unit canonical yang sama.',
+          };
+        },
+      );
+
+      // The reviewer of a LABOR row reaches for the equipment hour.
+      rowIs({ sourceSection: 'LABOR', rawUnitText: 'jam' });
+      tx.resourceCatalog.findFirst.mockResolvedValue({
+        id: 'resource-01',
+        type: 'LABOR',
+      });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-01',
+        code: 'JAM_ALAT',
+      });
+
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution: {
+          resourceContext: 'LABOR',
+          selectedUnitCode: 'JAM_ALAT',
+        },
+      });
+      nothingWasWritten();
+
+      // …and the labour hour, on that same row, is accepted — so the refusal
+      // above is the context law working, not the row being unresolvable.
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-01',
+        code: 'JAM_ORANG',
+      });
+
+      expect((await resolve()).status).toBe('READY_FOR_SUBMISSION');
+    });
+
+    it('T8 — a context-free unit still resolves under a context, unchanged', async () => {
+      // "m3" means the same thing on every kind of row. Passing context must
+      // not make previously-working resolutions start failing.
+      kernelAnswers({
+        status: 'RESOLVED',
+        priceOperation: 'IDENTITY',
+        reasonCodes: ['EXACT_UNIT_ALIAS_EQUIVALENCE', 'EXACT_UNIT_IDENTITY'],
+        explanation: 'Kedua alias menunjuk identitas unit canonical yang sama.',
+      });
+      rowIs({ rawUnitText: 'm3' });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-01',
+        code: 'M3',
+      });
+
+      const result = await resolve();
+
+      expect(result.status).toBe('READY_FOR_SUBMISSION');
+      expect(unitKernel.resolve).toHaveBeenCalledWith(
+        'm3',
+        'M3',
+        'resource-01',
+        'MATERIAL',
+      );
+    });
+
+    it('T9 — a row whose source document carried no unit refuses the choice, and writes nothing', async () => {
+      // The absent unit is the DANGEROUS case, not the mild one. An unknown
+      // spelling fails loudly; an absent one would have been accepted in
+      // silence, storing a canonical unit with nothing at all behind it.
+      rowIs({ rawUnitText: null });
+
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution: {
+          status: 'NEEDS_REVIEW',
+          // The intake adapter's own existing code for this exact fact — the
+          // reviewer already saw it on this row. No new reason family.
+          reasonCodes: ['UNIT_REQUIRED'],
+          // The original cell, unaltered: null is reported as null.
+          rawSourceUnit: null,
+          selectedUnitCode: 'ZAK',
+          resourceContext: 'MATERIAL',
+          priceOperation: null,
+        },
+      });
+      // The kernel is never asked to resolve an absent spelling, so safety here
+      // cannot depend on the catalogue happening to hold no empty alias.
+      expect(unitKernel.resolve).not.toHaveBeenCalled();
+      nothingWasWritten();
+    });
+
+    it('T10 — a blank-looking source unit is no proof either, and is reported exactly as written', async () => {
+      rowIs({ rawUnitText: '   ' });
+
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution: {
+          reasonCodes: ['UNIT_REQUIRED'],
+          // Whitespace is not silently rewritten to null or to '' — the cell is
+          // evidence, and it is handed back the way the document wrote it.
+          rawSourceUnit: '   ',
+        },
+      });
+      expect(unitKernel.resolve).not.toHaveBeenCalled();
+      nothingWasWritten();
+    });
+
+    it('T10b — refusing one unprovable row never touches the batch, so every other row stays resolvable', async () => {
+      // FAIL-CLOSED ON THE FACT, NOT FAIL-STOP ON THE WORKFLOW. The refusal is
+      // thrown inside THIS row's own transaction: the row stays NEEDS_REVIEW and
+      // no batch-wide state is written, so a reviewer can carry straight on with
+      // the other rows. A batch-level stop would show up here as a batch update.
+      rowIs({ rawUnitText: null });
+
+      await refusalOf();
+
+      expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
+      expect(tx.basicPriceImportRow.update).not.toHaveBeenCalled();
+    });
+
+    it('T11 — surrounding whitespace is not part of the spelling handed to the kernel', async () => {
+      rowIs({ rawUnitText: '  Zak  ' });
+
+      await resolve();
+
+      expect(unitKernel.resolve).toHaveBeenCalledWith(
+        'Zak',
+        'ZAK',
+        'resource-01',
+        'MATERIAL',
+      );
+    });
+
+    it('T14 — an accepted proof changes nothing about the human’s choice or the price', async () => {
+      const result = await resolve();
+
+      expect(tx.basicPriceImportRow.update).toHaveBeenCalledTimes(1);
+      const [[firstUpdate]] = tx.basicPriceImportRow.update.mock.calls as Array<
+        [{ data: Record<string, unknown> }]
+      >;
+      const written = firstUpdate.data;
+      expect(written).toMatchObject({
+        resourceCatalogId: 'resource-01',
+        unitDefinitionId: 'unit-01',
+        resolvedResourceType: 'MATERIAL',
+      });
+      // SIMPROK proves; it does not substitute. No canonical unit of its own
+      // choosing, and no price arithmetic, may appear in the written row.
+      expect(written).not.toHaveProperty('proposedCanonicalPrice');
+      expect(result.proposedCanonicalPrice?.toString()).toBe('100.00');
+    });
+
+    /**
+     * T15 — THE SOURCE-TRUTH CONTRACT, end to end.
+     *
+     * An equipment rental schedule writes its machine hour as "U/J". SIMPROK
+     * must be able to read that — and must NOT achieve it by tidying the
+     * document. Three things are distinct and all three survive: the raw
+     * spelling the source wrote, the normalised key the kernel looks up, and
+     * the canonical unit the reviewer chose. Only the third is SIMPROK's
+     * interpretation; the first is evidence and stays exactly as received.
+     *
+     * If this test ever passes because rawUnitText became "jam", the product
+     * has started editing its own evidence, and every audit built on that row
+     * is worthless.
+     */
+    it('T15 — "U/J" resolves to EQUIPMENT_HOUR, and the row still says "U/J" at the price it came with', async () => {
+      rowIs({
+        sourceSection: 'EQUIPMENT',
+        rawUnitText: 'U/J',
+        proposedCanonicalPrice: { toString: () => '1714285.71' },
+      });
+      tx.resourceCatalog.findFirst.mockResolvedValue({
+        id: 'resource-01',
+        type: 'EQUIPMENT',
+      });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-01',
+        code: 'EQUIPMENT_HOUR',
+      });
+      // The kernel answers as the shipped catalogue does: one machine hour,
+      // spelled differently. A spelling is not a conversion.
+      kernelAnswers({
+        status: 'RESOLVED',
+        priceOperation: 'IDENTITY',
+        quantityFactor: '1',
+        reasonCodes: ['CONTEXT_SCOPED_UNIT_ALIAS', 'EXACT_UNIT_IDENTITY'],
+        explanation: 'Kedua alias menunjuk identitas unit canonical yang sama.',
+      });
+
+      const result = await resolve();
+
+      // The raw source spelling is what was asked about — not a cleaned-up one.
+      expect(unitKernel.resolve).toHaveBeenCalledWith(
+        'U/J',
+        'EQUIPMENT_HOUR',
+        'resource-01',
+        'EQUIPMENT',
+      );
+      expect(result.status).toBe('READY_FOR_SUBMISSION');
+
+      const [[firstUpdate]] = tx.basicPriceImportRow.update.mock.calls as Array<
+        [{ data: Record<string, unknown> }]
+      >;
+      const written = firstUpdate.data;
+      // The human's canonical interpretation is stored…
+      expect(written).toMatchObject({
+        unitDefinitionId: 'unit-01',
+        resolvedResourceType: 'EQUIPMENT',
+      });
+      // …and nothing was written over the source evidence or the money.
+      expect(written).not.toHaveProperty('rawUnitText');
+      expect(written).not.toHaveProperty('sourceSection');
+      expect(written).not.toHaveProperty('proposedCanonicalPrice');
+      expect(result.rawUnitText).toBe('U/J');
+      expect(result.proposedCanonicalPrice?.toString()).toBe('1714285.71');
     });
   });
 });

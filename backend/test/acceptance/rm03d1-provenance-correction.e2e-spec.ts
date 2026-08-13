@@ -28,7 +28,6 @@ const WORKSPACE_A = '10000000-0000-4000-8000-000000000004';
 const PASSWORD = 'Test1234!';
 
 const RESOURCE_ID = '45000000-0000-4000-8000-000000000001';
-const UNIT_ID = '45000000-0000-4000-8000-000000000002';
 // Owned, not borrowed: depending on whatever region another suite left behind
 // made this suite fail whenever it ran first.
 const REGION_ID = '45000000-0000-4000-8000-000000000003';
@@ -39,6 +38,14 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
   let token: string;
   let regionId: string;
   let accountId: string;
+  /**
+   * The REAL canonical unit for this fixture's own source spelling: row 9 of
+   * the fixture workbook writes "Org/Hari", which the Unit Kernel already
+   * knows as PERSON_DAY. An acceptance-only UnitDefinition would be a unit no
+   * alias can reach, so nothing would prove the stored price is a price per
+   * person-day — and the trusted unit context seam refuses exactly that.
+   */
+  let personDayUnitId: string;
 
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
@@ -69,18 +76,11 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
       },
       update: {},
     });
-    await prisma.unitDefinition.upsert({
-      where: { id: UNIT_ID },
-      create: {
-        id: UNIT_ID,
-        code: 'RM03D1-PROV-UNIT',
-        displayName: 'Provenance suite unit',
-        symbol: 'RM03D1PU',
-        dimension: 'PERSON_TIME',
-        kind: 'CANONICAL',
-      },
-      update: {},
-    });
+    personDayUnitId = (
+      await prisma.unitDefinition.findFirstOrThrow({
+        where: { code: 'PERSON_DAY' },
+      })
+    ).id;
 
     token = (
       await request(app.getHttpServer())
@@ -100,7 +100,6 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
     await prisma.basicPrice.deleteMany({ where: { workspaceId: WORKSPACE_A } });
     await prisma.basicPriceImportBatch.deleteMany({ where: { workspaceId: WORKSPACE_A } });
     await prisma.resourceCatalog.deleteMany({ where: { id: RESOURCE_ID } });
-    await prisma.unitDefinition.deleteMany({ where: { id: UNIT_ID } });
     await prisma.region.deleteMany({ where: { id: REGION_ID } });
     await prisma.$disconnect();
     await app.close();
@@ -140,7 +139,7 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
     await request(app.getHttpServer())
       .post(`/basic-price-imports/${batchId}/rows/${row.id}/resolve`)
       .set(hdr())
-      .send({ version: row.version, resourceCatalogId: RESOURCE_ID, unitDefinitionId: UNIT_ID })
+      .send({ version: row.version, resourceCatalogId: RESOURCE_ID, unitDefinitionId: personDayUnitId })
       .expect(201);
     // Reject the other rows so the batch reaches READY_FOR_REVIEW with exactly
     // one price to correct.
@@ -502,7 +501,7 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
     await request(app.getHttpServer())
       .post(`/basic-price-imports/${batchId}/rows/${row.id}/resolve`)
       .set(hdr())
-      .send({ version: row.version, resourceCatalogId: RESOURCE_ID, unitDefinitionId: UNIT_ID })
+      .send({ version: row.version, resourceCatalogId: RESOURCE_ID, unitDefinitionId: personDayUnitId })
       .expect(201);
     for (const other of preview.body.rows.filter((r: { id: string }) => r.id !== row.id)) {
       await request(app.getHttpServer())

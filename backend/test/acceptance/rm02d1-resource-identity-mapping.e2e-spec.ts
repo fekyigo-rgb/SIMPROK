@@ -24,7 +24,6 @@ const RESOURCE_LABOR_EXACT_ID = '42000000-0000-4000-8000-000000000001';
 const RESOURCE_MATERIAL_AMBIG_A_ID = '42000000-0000-4000-8000-000000000002';
 const RESOURCE_MATERIAL_AMBIG_B_ID = '42000000-0000-4000-8000-000000000003';
 const RESOURCE_WORKSPACE_B_SAME_NAME_ID = '42000000-0000-4000-8000-000000000004';
-const UNIT_ID = '42000000-0000-4000-8000-000000000005';
 const ROLE_ID = '42000000-0000-4000-8000-000000000006';
 const ROLE_B_ID = '42000000-0000-4000-8000-000000000007';
 // RM-02D1-REMEDIATION-V3.2.1 (Blocker 2): row 316 ("Sewa crane") is
@@ -45,6 +44,18 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
   let assignedAccountId: string;
   let membershipRoleId: string;
   let membershipRoleBId: string;
+  /**
+   * REAL canonical units, one per source spelling this fixture actually
+   * writes: row 9/10 say "Org/Hari" (PERSON_DAY) and row 33 says "Lbr" (LBR).
+   *
+   * A reviewer's canonical unit has to be provably the unit the document
+   * wrote, so a single acceptance-only unit reused across every row would be
+   * refused — and should be. Naming them per spelling keeps the fixture
+   * honest about which row is being resolved.
+   */
+  let personDayUnitId: string;
+  let lembarUnitId: string;
+  let equipmentHourUnitId: string;
 
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
@@ -102,11 +113,21 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
       ],
       skipDuplicates: true,
     });
-    await prisma.unitDefinition.upsert({
-      where: { id: UNIT_ID },
-      create: { id: UNIT_ID, code: 'RM02D1-UNIT', displayName: 'Acceptance Unit', symbol: 'AU', dimension: 'PERSON_TIME', kind: 'CANONICAL' },
-      update: {},
-    });
+    personDayUnitId = (
+      await prisma.unitDefinition.findFirstOrThrow({
+        where: { code: 'PERSON_DAY' },
+      })
+    ).id;
+    lembarUnitId = (
+      await prisma.unitDefinition.findFirstOrThrow({
+        where: { code: 'LBR' },
+      })
+    ).id;
+    equipmentHourUnitId = (
+      await prisma.unitDefinition.findFirstOrThrow({
+        where: { code: 'EQUIPMENT_HOUR' },
+      })
+    ).id;
 
     const login = async (email: string) => (await request(app.getHttpServer()).post('/auth/login').send({ email, password: PASSWORD })).body.access_token;
     assignedToken = await login('assigned@test.local');
@@ -133,7 +154,6 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
         },
       },
     });
-    await prisma.unitDefinition.deleteMany({ where: { id: UNIT_ID } });
     await prisma.membershipRole.deleteMany({ where: { id: { in: [membershipRoleId, membershipRoleBId] } } });
     await prisma.rolePermission.deleteMany({ where: { roleId: { in: [ROLE_ID, ROLE_B_ID] } } });
     await prisma.role.deleteMany({ where: { id: { in: [ROLE_ID, ROLE_B_ID] } } });
@@ -269,7 +289,7 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
       const before = new Date();
 
-      const response = await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_EXACT_ID, UNIT_ID, 'matches the single suggested candidate').expect(201);
+      const response = await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_EXACT_ID, personDayUnitId, 'matches the single suggested candidate').expect(201);
       expect(response.body.status).toBe('READY_FOR_SUBMISSION');
 
       const updatedRow = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
@@ -282,7 +302,7 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
           workspaceId: WORKSPACE_A,
           rowId: row.id,
           resourceCatalogId: RESOURCE_LABOR_EXACT_ID,
-          unitDefinitionId: UNIT_ID,
+          unitDefinitionId: personDayUnitId,
           reviewerAccountId: assignedAccountId,
           reason: 'matches the single suggested candidate',
           suggestionSource: 'NORMALIZED_NAME_SINGLE_CANDIDATE',
@@ -295,7 +315,7 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
     it('stores a null reason when none is supplied, never fabricating a justification', async () => {
       const preview = await previewFile(await buildBasicPriceXlsx(), 'd1-resolve-no-reason').expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
-      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_EXACT_ID, UNIT_ID).expect(201);
+      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_EXACT_ID, personDayUnitId).expect(201);
       const mapping = await prisma.basicPriceImportRowResourceMapping.findFirstOrThrow({ where: { rowId: row.id } });
       expect(mapping.reason).toBeNull();
     });
@@ -304,7 +324,7 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
       const preview = await previewFile(await buildBasicPriceXlsx(), 'd1-resolve-ambiguous').expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 33);
 
-      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_MATERIAL_AMBIG_A_ID, UNIT_ID, 'chose the first ambiguous candidate after manual review').expect(201);
+      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_MATERIAL_AMBIG_A_ID, lembarUnitId, 'chose the first ambiguous candidate after manual review').expect(201);
 
       const mapping = await prisma.basicPriceImportRowResourceMapping.findFirstOrThrow({ where: { rowId: row.id } });
       expect(mapping.suggestionSource).toBe('NORMALIZED_NAME_MULTIPLE_CANDIDATES');
@@ -315,7 +335,7 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
     it('negative: a fully manual pick with no normalized-name candidate at all records MANUAL_SEARCH with zero candidates', async () => {
       const preview = await previewFile(await buildBasicPriceXlsx(), 'd1-resolve-manual').expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 316); // "Sewa crane" (EQUIPMENT), no fixture candidate
-      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_EQUIPMENT_FOR_MANUAL_ID, UNIT_ID, 'manual pick, unrelated to the name').expect(201);
+      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_EQUIPMENT_FOR_MANUAL_ID, equipmentHourUnitId, 'manual pick, unrelated to the name').expect(201);
       const mapping = await prisma.basicPriceImportRowResourceMapping.findFirstOrThrow({ where: { rowId: row.id } });
       expect(mapping.suggestionSource).toBe('MANUAL_SEARCH');
       expect(mapping.candidateCountAtDecision).toBe(0);
@@ -326,8 +346,8 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
       const rowA = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
       const rowB = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 10);
 
-      await resolveRow(preview.body.batchId, rowA.id, rowA.version, RESOURCE_LABOR_EXACT_ID, UNIT_ID).expect(201);
-      const second = await resolveRow(preview.body.batchId, rowB.id, rowB.version, RESOURCE_LABOR_EXACT_ID, UNIT_ID).expect(201);
+      await resolveRow(preview.body.batchId, rowA.id, rowA.version, RESOURCE_LABOR_EXACT_ID, personDayUnitId).expect(201);
+      const second = await resolveRow(preview.body.batchId, rowB.id, rowB.version, RESOURCE_LABOR_EXACT_ID, personDayUnitId).expect(201);
       expect(second.body.status).toBe('NEEDS_REVIEW');
       expect(second.body.collisionType).not.toBe('NONE');
 
@@ -339,7 +359,7 @@ describe('RM02D1 Resource Identity Mapping (e2e)', () => {
     it('never publishes and never touches Region/BasicPrice — resolving a row only ever produces READY_FOR_SUBMISSION, not a submission or a publication', async () => {
       const preview = await previewFile(await buildBasicPriceXlsx(), 'd1-resolve-no-publication').expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
-      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_EXACT_ID, UNIT_ID).expect(201);
+      await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_EXACT_ID, personDayUnitId).expect(201);
 
       expect(await prisma.priceSubmission.count({ where: { resourceId: RESOURCE_LABOR_EXACT_ID } })).toBe(0);
       expect(await prisma.basicPrice.count({ where: { resourceId: RESOURCE_LABOR_EXACT_ID } })).toBe(0);

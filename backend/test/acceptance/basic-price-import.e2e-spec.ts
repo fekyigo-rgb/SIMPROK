@@ -85,6 +85,13 @@ describe('RM02B Basic Price import (e2e)', () => {
   let membershipRoleId: string;
   let membershipRoleBId: string;
   let publisherMembershipRoleId: string;
+  /**
+   * The REAL canonical unit for row 9's own spelling "Org/Hari" (PERSON_DAY).
+   * ACC-UNIT-ORGHARI below stays: it is this suite's lookup-shape fixture, and
+   * a unit no alias can reach is exactly what a reviewer must not be able to
+   * bind a price to.
+   */
+  let personDayUnitId: string;
 
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
@@ -196,6 +203,11 @@ describe('RM02B Basic Price import (e2e)', () => {
       create: { id: UNIT_INACTIVE_ID, code: 'ACC-INACTIVE-UNIT', displayName: 'Inactive Unit', symbol: 'IU', dimension: 'COUNT', kind: 'CANONICAL', isActive: false },
       update: { isActive: false },
     });
+    personDayUnitId = (
+      await prisma.unitDefinition.findFirstOrThrow({
+        where: { code: 'PERSON_DAY' },
+      })
+    ).id;
     await prisma.unitAlias.upsert({
       where: { id: UNIT_ALIAS_ID },
       create: { id: UNIT_ALIAS_ID, unitDefinitionId: UNIT_ID, rawAlias: 'orang hari', normalizedAlias: 'ORANG_HARI', isActive: true },
@@ -467,7 +479,7 @@ describe('RM02B Basic Price import (e2e)', () => {
       const preview = await previewFile(buffer, 'resolve-clean').expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
 
-      const response = await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_ID, UNIT_ID).expect(201);
+      const response = await resolveRow(preview.body.batchId, row.id, row.version, RESOURCE_LABOR_ID, personDayUnitId).expect(201);
       expect(response.body.status).toBe('READY_FOR_SUBMISSION');
       expect(response.body.collisionType).toBe('NONE');
     });
@@ -480,7 +492,7 @@ describe('RM02B Basic Price import (e2e)', () => {
       const preview = await previewFile(await buildBasicPriceXlsx(), `blocked-${_label}`).expect(201);
       const row = preview.body.rows.find((candidate: { sourceRowNumber: number }) => candidate.sourceRowNumber === 9);
       const before = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
-      const response = await resolveRow(preview.body.batchId, row.id, row.version, resourceId, UNIT_ID).expect(409);
+      const response = await resolveRow(preview.body.batchId, row.id, row.version, resourceId, personDayUnitId).expect(409);
       expect(response.body.message).toBe('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
       const after = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
       expect(after.version).toBe(before.version);
@@ -501,7 +513,7 @@ describe('RM02B Basic Price import (e2e)', () => {
       const preview = await previewFile(buffer, 'resolve-stale-version').expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
 
-      await resolveRow(preview.body.batchId, row.id, 99, RESOURCE_LABOR_ID, UNIT_ID).expect(409);
+      await resolveRow(preview.body.batchId, row.id, 99, RESOURCE_LABOR_ID, personDayUnitId).expect(409);
     });
 
     it('two rows resolved to the same identity with the same value stay NEEDS_REVIEW, flagged as a collision, never both silently promoted', async () => {
@@ -510,10 +522,10 @@ describe('RM02B Basic Price import (e2e)', () => {
       const rowA = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
       const rowB = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 10);
 
-      const first = await resolveRow(preview.body.batchId, rowA.id, rowA.version, RESOURCE_LABOR_ID, UNIT_ID).expect(201);
+      const first = await resolveRow(preview.body.batchId, rowA.id, rowA.version, RESOURCE_LABOR_ID, personDayUnitId).expect(201);
       expect(first.body.status).toBe('READY_FOR_SUBMISSION');
 
-      const second = await resolveRow(preview.body.batchId, rowB.id, rowB.version, RESOURCE_LABOR_ID, UNIT_ID).expect(201);
+      const second = await resolveRow(preview.body.batchId, rowB.id, rowB.version, RESOURCE_LABOR_ID, personDayUnitId).expect(201);
       expect(second.body.status).toBe('NEEDS_REVIEW');
       expect(second.body.collisionType).toBe('SAME_IDENTITY_DIFFERENT_VALUE');
     });
@@ -546,7 +558,7 @@ describe('RM02B Basic Price import (e2e)', () => {
       await request(app.getHttpServer())
         .post(`/basic-price-imports/${preview.body.batchId}/rows/${row.id}/resolve`)
         .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
-        .send({ version: row.version, resourceCatalogId: RESOURCE_LABOR_ID, unitDefinitionId: UNIT_ID })
+        .send({ version: row.version, resourceCatalogId: RESOURCE_LABOR_ID, unitDefinitionId: personDayUnitId })
         .expect(201);
       // Every other row must also leave NEEDS_REVIEW so the batch genuinely
       // reaches READY_FOR_REVIEW -- otherwise submit's very first check
@@ -584,7 +596,7 @@ describe('RM02B Basic Price import (e2e)', () => {
       await request(app.getHttpServer())
         .post(`/basic-price-imports/${preview.body.batchId}/rows/${row.id}/resolve`)
         .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
-        .send({ version: row.version, resourceCatalogId: RESOURCE_LABOR_ID, unitDefinitionId: UNIT_ID })
+        .send({ version: row.version, resourceCatalogId: RESOURCE_LABOR_ID, unitDefinitionId: personDayUnitId })
         .expect(201);
       for (const other of otherRows) {
         await request(app.getHttpServer())

@@ -132,6 +132,10 @@ export async function buildBasicPriceXlsx(options: BasicPriceFixtureOptions = {}
   sheet.getCell('B316').value = '1';
   sheet.getCell('C316').value = 'Sewa crane';
   sheet.getCell('D316').value = 'E.12.a';
+  // "U/J" — unit/jam, how this document actually spells an equipment rental
+  // hour. It stays exactly as written: source evidence is never rewritten to
+  // suit the machine. The Unit Kernel is what learns to read it, and only
+  // inside EQUIPMENT context.
   sheet.getCell('E316').value = 'U/J';
   sheet.getCell('F316').value = 1714285.7142857143;
   sheet.getCell('F316').numFmt = CURRENCY_NUMFMT;

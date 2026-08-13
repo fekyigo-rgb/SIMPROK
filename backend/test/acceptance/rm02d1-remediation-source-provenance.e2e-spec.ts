@@ -29,7 +29,6 @@ const CANONICAL_SHA = 'FEE1'.repeat(16);
 
 const RESOURCE_PROVENANCE_ID = '43000000-0000-4000-8000-000000000001';
 const RESOURCE_NAME_MATCH_ID = '43000000-0000-4000-8000-000000000002';
-const UNIT_ID = '43000000-0000-4000-8000-000000000003';
 const ROLE_ID = '43000000-0000-4000-8000-000000000004';
 const RESOURCE_ALTERNATE_LABOR_ID = '43000000-0000-4000-8000-000000000005';
 const RESOURCE_MATERIAL_FOR_MISMATCH_ID = '43000000-0000-4000-8000-000000000006';
@@ -42,6 +41,18 @@ describe('RM02D1-REMEDIATION-V3.1 Source Row Provenance (e2e)', () => {
   let assignedToken: string;
   let assignedAccountId: string;
   let membershipRoleId: string;
+  /**
+   * The REAL canonical unit for this fixture's own source spelling.
+   *
+   * Row 9 of the fixture workbook writes "Org/Hari", and the Unit Kernel
+   * already knows that spelling as PERSON_DAY. Minting an acceptance-only
+   * UnitDefinition here and resolving rows to it would ask SIMPROK to accept a
+   * canonical unit that no alias can reach — which the trusted unit context
+   * seam refuses, and rightly: nothing would then prove the stored price is a
+   * price per person-day. Using the seeded unit makes the fixture say what the
+   * document says.
+   */
+  let personDayUnitId: string;
 
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
@@ -81,11 +92,7 @@ describe('RM02D1-REMEDIATION-V3.1 Source Row Provenance (e2e)', () => {
         { id: RESOURCE_MATERIAL_FOR_MISMATCH_ID, workspaceId: WORKSPACE_A, code: 'RM02D1-MAT-MISMATCH-01', name: 'Semen (wrong type on purpose)', type: 'MATERIAL', baseUnit: 'Zak' },
       ],
     });
-    await prisma.unitDefinition.upsert({
-      where: { id: UNIT_ID },
-      create: { id: UNIT_ID, code: 'RM02D1-PROV-UNIT', displayName: 'Acceptance Provenance Unit', symbol: 'APU', dimension: 'PERSON_TIME', kind: 'CANONICAL' },
-      update: {},
-    });
+    personDayUnitId = (await prisma.unitDefinition.findFirstOrThrow({ where: { code: 'PERSON_DAY' } })).id;
     // The canonical-side provenance evidence: row 9 of the fixture workbook
     // ("Pekerja"/L.01/Org-Hari) is recorded, under a distinct fabricated
     // canonical hash, as resolving to RESOURCE_PROVENANCE_ID.
@@ -122,7 +129,6 @@ describe('RM02D1-REMEDIATION-V3.1 Source Row Provenance (e2e)', () => {
     await prisma.resourceCatalog.deleteMany({
       where: { id: { in: [RESOURCE_PROVENANCE_ID, RESOURCE_NAME_MATCH_ID, RESOURCE_ALTERNATE_LABOR_ID, RESOURCE_MATERIAL_FOR_MISMATCH_ID] } },
     });
-    await prisma.unitDefinition.deleteMany({ where: { id: UNIT_ID } });
     await prisma.membershipRole.deleteMany({ where: { id: membershipRoleId } });
     await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_ID } });
     await prisma.role.deleteMany({ where: { id: ROLE_ID } });
@@ -151,7 +157,7 @@ describe('RM02D1-REMEDIATION-V3.1 Source Row Provenance (e2e)', () => {
       .post(`/basic-price-imports/${batchId}/rows/${rowId}/resolve`)
       .set('Authorization', `Bearer ${assignedToken}`)
       .set('x-workspace-id', WORKSPACE_A)
-      .send({ version, resourceCatalogId, unitDefinitionId: UNIT_ID });
+      .send({ version, resourceCatalogId, unitDefinitionId: personDayUnitId });
 
   it('negative (fail-closed): with zero equivalence record, provenanceCandidate is always null even though the row content is byte-identical to what the canonical hash has provenance for', async () => {
     const preview = await previewFile(await buildBasicPriceXlsx(), 'd1r-no-equivalence').expect(201);
