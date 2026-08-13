@@ -32,6 +32,8 @@
     "resource-catalog:bootstrap:apply": "tsx scripts/rm02c1b/resource-catalog-bootstrap.ts --apply",
     "resource-catalog:missing-unit:dry-run": "tsx scripts/rm02c1c/resource-catalog-missing-unit-disposition.ts --dry-run",
     "resource-catalog:missing-unit:apply": "tsx scripts/rm02c1c/resource-catalog-missing-unit-disposition.ts --apply",
+    "b1b12:provision:rehearsal": "ts-node --transpile-only scripts/b1b12/provision-owner-browser-rehearsal.ts",
+    "b1b12:start:backend": "tsx scripts/b1b12/start-b1b12-rehearsal-backend.ts",
     "verify:equivalence:271": "tsx scripts/verify-equivalence-271.ts",
     "test:openai:smoke": "tsx scripts/openai-smoke.ts",
     "gate:post-recovery": "npm run build && npm run test && npm run test:e2e && npm --prefix ../frontend run build"

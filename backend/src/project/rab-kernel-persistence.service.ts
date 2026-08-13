@@ -41,11 +41,23 @@ export interface PersistBoqItemCalculationResult {
   calculationAsOfDate: string;
   calculatedAt: string;
   calculationPolicyVersion: string;
-  rabTotals: {
-    pricingStatus: 'COMPLETE';
-    totalBaseCost: string;
-    totalFinalCost: string;
-  };
+  /**
+   * The SECTION's total, which is a different fact from this line's money.
+   * COMPLETE carries the exact recap; INCOMPLETE carries nulls because at
+   * least one other WORK_ITEM is still unpriced and a partial sum would be a
+   * false total, not a smaller one.
+   */
+  rabTotals:
+    | {
+        pricingStatus: 'COMPLETE';
+        totalBaseCost: string;
+        totalFinalCost: string;
+      }
+    | {
+        pricingStatus: 'INCOMPLETE';
+        totalBaseCost: null;
+        totalFinalCost: null;
+      };
 }
 
 /**
@@ -55,11 +67,26 @@ export interface PersistBoqItemCalculationResult {
  * never called by) the read-only GET cost-calculation endpoints — this is
  * the "separate server-authoritative command" the locked contract requires.
  *
- * All-or-nothing (§5.1): this command only ever succeeds when, as a result
- * of pricing this one line, every WORK_ITEM in the Working Draft is priced.
- * If any other line is still unpriced, the whole transaction rolls back —
- * this line's money/provenance is never partially persisted while the RAB
- * total stays incomplete.
+ * §5.1 — NO PARTIAL RAB TOTAL, EVER. What §5.1 protects is the TOTAL, and
+ * that protection is absolute: `totalBaseCost`/`totalFinalCost` are written
+ * only when every WORK_ITEM in the Working Draft is priced. While even one
+ * line is still unpriced they are set to NULL — the columns are nullable for
+ * exactly this, and it is the same "no authoritative total yet" fact the read
+ * path already reports through `hasIncompletePricing`/`incompletePricingRecap`.
+ *
+ * It does NOT withhold THIS line's own money, and it must not: an unpriced
+ * sibling is a fact about that sibling, not about this line. Refusing here
+ * used to make a whole section unpriceable the moment one row was genuinely
+ * unresolvable — every healthy row was destroyed by one bad fact, which is the
+ * exact inversion of the locked law:
+ *
+ *   FAIL-CLOSED ON FACT. CONTINUE SAFELY ON WORKFLOW.
+ *   resolve automatically -> isolate unresolved -> continue safely ->
+ *   consolidate attention -> human decision if needed.
+ *
+ * A row whose OWN evidence is incomplete still fails closed, loudly, above:
+ * UNRESOLVED_RESOURCE, MISSING_ADAPTED_PRICE and every Cost Kernel refusal are
+ * untouched. Only the sibling's fact stops being this line's verdict.
  */
 @Injectable()
 export class RabKernelPersistenceService {
@@ -312,10 +339,12 @@ export class RabKernelPersistenceService {
       const lineTotal = toMoneyDecimal2(kernelResult.lineTotal);
       const calculatedAt = new Date();
 
-      // §5.1 — projected completeness BEFORE any monetary write. Read every
-      // other WORK_ITEM row in the draft and check as though this line's
-      // target result were already applied; if any other line is still
-      // unpriced, throw and roll back before touching a single row.
+      // §5.1 — projected completeness, decided BEFORE any monetary write.
+      // Read every other WORK_ITEM row and judge the draft as though this
+      // line's result were already applied. The answer decides ONE thing:
+      // whether the RAB total may be stated at all. It never decides whether
+      // this line's own, independently proven money may be written — see the
+      // class comment: fail closed on the fact, continue safely on the flow.
       const otherItems = await tx.boqItem.findMany({
         where: { boqStructureId: structure.id, id: { not: item.id } },
         select: { itemType: true, unitPrice: true },
@@ -323,11 +352,6 @@ export class RabKernelPersistenceService {
       const anyOtherIncomplete = otherItems.some(
         (row) => row.itemType === 'WORK_ITEM' && row.unitPrice === null,
       );
-      if (anyOtherIncomplete) {
-        throw new ConflictException(
-          RAB_KERNEL_PERSISTENCE_REASON.RAB_TOTAL_INCOMPLETE,
-        );
-      }
 
       // 10-11. Persist server unitPrice/lineTotal + SERVER_COST_KERNEL
       // provenance. OD-04 rounding (scale 2, ROUND_HALF_UP) happens exactly
@@ -346,10 +370,17 @@ export class RabKernelPersistenceService {
         },
       });
 
-      // 12-13. Every WORK_ITEM is now complete (proven above) — re-read the
-      // full current row set (including this line's own just-written
-      // unitPrice/lineTotal) and persist the exact, complete RAB total using
-      // the same canonical recap formula saveDraftBoq already uses.
+      // 12-13. Re-read the full current row set (including this line's own
+      // just-written unitPrice/lineTotal) and state the RAB total using the
+      // same canonical recap formula saveDraftBoq already uses — but ONLY if
+      // every WORK_ITEM is now priced.
+      //
+      // If any sibling is still unpriced the total is written as NULL rather
+      // than as a number derived from part of the section. A partial sum is
+      // not a smaller truth, it is a false one: it would read as the cost of
+      // the work while silently omitting whatever could not be proven. NULL is
+      // the honest answer the read path already speaks
+      // (`incompletePricingRecap`), and the columns are nullable for it.
       const subtotal = await this.computeSubtotal(tx, structure.id);
 
       const existingRab = await tx.rabDocument.findFirst({
@@ -370,8 +401,12 @@ export class RabKernelPersistenceService {
         overheadPercent: new Prisma.Decimal(0),
         profitPercent: toMoneyDecimal2(recap.marginPercent),
         taxPercent: toMoneyDecimal2(recap.taxPercent),
-        totalBaseCost: toMoneyDecimal2(recap.subtotal),
-        totalFinalCost: toMoneyDecimal2(recap.grandTotal),
+        totalBaseCost: anyOtherIncomplete
+          ? null
+          : toMoneyDecimal2(recap.subtotal),
+        totalFinalCost: anyOtherIncomplete
+          ? null
+          : toMoneyDecimal2(recap.grandTotal),
       };
 
       const updated = await tx.rabDocument.updateMany({
@@ -407,11 +442,20 @@ export class RabKernelPersistenceService {
         calculationAsOfDate: calculationAsOfDate.toISOString().slice(0, 10),
         calculatedAt: calculatedAt.toISOString(),
         calculationPolicyVersion: RAB_KERNEL_PERSISTENCE_POLICY,
-        rabTotals: {
-          pricingStatus: 'COMPLETE',
-          totalBaseCost: rabData.totalBaseCost.toFixed(2),
-          totalFinalCost: rabData.totalFinalCost.toFixed(2),
-        },
+        rabTotals: anyOtherIncomplete
+          ? {
+              // This line IS priced and persisted; the SECTION is not yet
+              // whole. The caller is told both facts, and neither is dressed
+              // up as the other.
+              pricingStatus: 'INCOMPLETE' as const,
+              totalBaseCost: null,
+              totalFinalCost: null,
+            }
+          : {
+              pricingStatus: 'COMPLETE' as const,
+              totalBaseCost: rabData.totalBaseCost!.toFixed(2),
+              totalFinalCost: rabData.totalFinalCost!.toFixed(2),
+            },
       };
     });
   }

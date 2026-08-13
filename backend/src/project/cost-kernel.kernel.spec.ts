@@ -104,6 +104,96 @@ describe('Cost Kernel Grade A R1', () => {
     expect(JSON.stringify(reversed)).not.toContain('2004054.999');
   });
 
+  /**
+   * A STATED ZERO IS A PRICE. A MISSING PRICE IS NOT ZERO.
+   *
+   * Real AHSP tables state Rp0 — every Bina Marga B1-B12 drainage analysis
+   * carries an "Alat Bantu" line at 0, and the official table adds that zero
+   * into its own subtotals. The kernel must read what the document says.
+   */
+  describe('a stated zero adapted price', () => {
+    const withZeroLine = (): CostKernelInput => {
+      const input = makeInput();
+      return {
+        ...input,
+        resources: [
+          ...input.resources,
+          {
+            ahspResourceId: 'alat-bantu',
+            resolutionId: 'alat-bantu-resolution',
+            status: 'RESOLVED',
+            ahspVersionId: 'test-ahsp-version',
+            coefficient: '1.000000',
+            adaptedPriceValue: '0',
+          },
+        ],
+      };
+    };
+
+    it('calculates, contributing exactly nothing and changing no other figure', () => {
+      const result = calculateCostKernel(withZeroLine());
+      expect(result.status).toBe(COST_CALCULATION_STATUS.CALCULATED);
+      if (result.status !== COST_CALCULATION_STATUS.CALCULATED) return;
+      // The zero line is REPORTED — it exists in the analysis and is traceable
+      // — and it moves neither the unit price nor the line total.
+      expect(result.resources).toHaveLength(14);
+      expect(result.resources[13]).toMatchObject({
+        ahspResourceId: 'alat-bantu',
+        coefficient: '1',
+        adaptedUnitPrice: '0',
+        resourceCost: '0',
+      });
+      expect(result.ahspUnitPrice).toBe('2004055');
+      expect(result.lineTotal).toBe('20040550');
+    });
+
+    it('is not the same fact as a missing price — null still fails closed', () => {
+      const input = withZeroLine();
+      const missing = calculateCostKernel({
+        ...input,
+        resources: [
+          ...input.resources.slice(0, 13),
+          { ...input.resources[13], adaptedPriceValue: null },
+        ],
+      });
+      expect(missing).toMatchObject({
+        status: COST_CALCULATION_STATUS.FAIL_CLOSED,
+        reason: COST_CALCULATION_REASON.MISSING_ADAPTED_PRICE,
+      });
+    });
+
+    it('does not widen to a negative price, which no evidence supports', () => {
+      const input = withZeroLine();
+      const negative = calculateCostKernel({
+        ...input,
+        resources: [
+          ...input.resources.slice(0, 13),
+          { ...input.resources[13], adaptedPriceValue: '-1' },
+        ],
+      });
+      expect(negative).toMatchObject({
+        status: COST_CALCULATION_STATUS.FAIL_CLOSED,
+        reason: COST_CALCULATION_REASON.INVALID_DECIMAL,
+      });
+    });
+
+    it('leaves the volume and coefficient laws untouched — zero there is still a data error', () => {
+      const input = withZeroLine();
+      expect(calculateCostKernel({ ...input, volume: '0' })).toMatchObject({
+        reason: COST_CALCULATION_REASON.INVALID_VOLUME,
+      });
+      expect(
+        calculateCostKernel({
+          ...input,
+          resources: [
+            ...input.resources.slice(0, 13),
+            { ...input.resources[13], coefficient: '0' },
+          ],
+        }),
+      ).toMatchObject({ reason: COST_CALCULATION_REASON.INVALID_COEFFICIENT });
+    });
+  });
+
   it('does not accept manual BOQ price or total as kernel inputs', () => {
     expect(Object.keys(makeInput())).not.toEqual(
       expect.arrayContaining([

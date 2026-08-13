@@ -271,7 +271,20 @@ export class ProjectAhspService {
         },
       });
         return occurrence;
-      });
+      },
+      // An AHSP selection resolves EVERY resource of the analysis inside one
+      // transaction, and a real analysis is not small: the Bina Marga drainage
+      // section runs to 22 resources on B11/B12, each needing its own identity,
+      // unit and Basic Price decision. That work is bounded and legitimate, but
+      // Prisma's default interactive-transaction budget is 5s, which was never
+      // chosen for it — a selection was intermittently dying mid-resolution
+      // with P2028 and surfacing to the user as a missing AHSP version.
+      //
+      // This is one call site with an explicit, bounded budget, matching the
+      // precedent the resource-catalog provisioners already set. It is NOT a
+      // global timeout change, and it makes nothing wait longer than it must:
+      // the transaction still ends the moment the work does.
+      { timeout: 30_000, maxWait: 10_000 });
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
