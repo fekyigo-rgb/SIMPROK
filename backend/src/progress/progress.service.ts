@@ -6,6 +6,135 @@ import { SubmitFieldProgressDto } from './dto/create-progress.dto';
 export class ProgressService {
   constructor(private prisma: PrismaService) {}
 
+
+  /**
+   * MON-02A — read-only truth surface.
+   * Uses only the ACTIVE baseline, its governed BOQ, and SUBMITTED
+   * ProgressEntry records. No totals are inferred from repeated entries.
+   */
+  async getMonitoring(projectId: string) {
+    const unavailable = [
+      'plannedStart',
+      'plannedFinish',
+      'plannedDuration',
+      'plannedWeight',
+    ] as const;
+
+    const baseline = await this.prisma.projectBaseline.findFirst({
+      where: { projectId, status: 'ACTIVE' },
+      orderBy: { versionNumber: 'desc' },
+      include: { rabDocument: true },
+    });
+
+    if (!baseline?.rabDocument?.boqStructureId) {
+      return {
+        projectId,
+        baseline: baseline
+          ? {
+              id: baseline.id,
+              versionNumber: baseline.versionNumber,
+              approvedAt: baseline.approvedAt,
+            }
+          : null,
+        items: [],
+        unavailable,
+      };
+    }
+
+    const items = await this.prisma.boqItem.findMany({
+      where: { boqStructureId: baseline.rabDocument.boqStructureId },
+      orderBy: { sortOrder: 'asc' },
+    });
+
+    const workItemIds = items
+      .filter((item) => item.itemType === 'WORK_ITEM')
+      .map((item) => item.id);
+
+    const entries =
+      workItemIds.length === 0
+        ? []
+        : await this.prisma.progressEntry.findMany({
+            where: {
+              boqItemId: { in: workItemIds },
+              progressReport: {
+                is: {
+                  projectId,
+                  baselineId: baseline.id,
+                  status: 'SUBMITTED',
+                },
+              },
+            },
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id: true,
+              boqItemId: true,
+              installedQuantity: true,
+              workDate: true,
+              notes: true,
+              photoUrl: true,
+              createdAt: true,
+            },
+          });
+
+    const latestByBoqItem = new Map<
+      string,
+      (typeof entries)[number]
+    >();
+
+    for (const entry of entries) {
+      if (!latestByBoqItem.has(entry.boqItemId)) {
+        latestByBoqItem.set(entry.boqItemId, entry);
+      }
+    }
+
+    return {
+      projectId,
+      baseline: {
+        id: baseline.id,
+        versionNumber: baseline.versionNumber,
+        approvedAt: baseline.approvedAt,
+      },
+      items: items.map((item) => {
+        const latest = latestByBoqItem.get(item.id);
+
+        return {
+          id: item.id,
+          parentId: item.parentId,
+          wbsNodeId: item.wbsNodeId,
+          wbsCode: item.wbsCode,
+          name: item.name,
+          itemType: item.itemType,
+          sortOrder: item.sortOrder,
+          planned: {
+            quantity: item.quantity.toString(),
+            unit: item.unit,
+          },
+          actual:
+            item.itemType !== 'WORK_ITEM'
+              ? null
+              : latest
+                ? {
+                    state: 'RECORDED' as const,
+                    latestRecord: {
+                      id: latest.id,
+                      installedQuantity:
+                        latest.installedQuantity.toString(),
+                      workDate: latest.workDate,
+                      notes: latest.notes,
+                      photoUrl: latest.photoUrl,
+                      recordedAt: latest.createdAt,
+                    },
+                  }
+                : {
+                    state: 'NOT_YET_RECORDED' as const,
+                    latestRecord: null,
+                  },
+        };
+      }),
+      unavailable,
+    };
+  }
+
   async submitFieldProgress(dto: SubmitFieldProgressDto, user: any) {
     // 1. Find ACTIVE baseline for the project
     const baseline = await this.prisma.projectBaseline.findFirst({

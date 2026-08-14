@@ -8,7 +8,7 @@ type ErrorKind = 'unauthorized' | 'forbidden' | 'not-found' | 'workspace' | 'ser
 
 export function ProjectWorkPage() {
   const { projectId } = useParams();
-  const [items, setItems] = useState<any[]>([]);
+  const [monitoringData, setMonitoringData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [errorKind, setErrorKind] = useState<ErrorKind>(null);
@@ -18,7 +18,7 @@ export function ProjectWorkPage() {
   useEffect(() => {
     if (!token || !projectId) return;
 
-    apiFetch(`http://localhost:3000/projects/${projectId}/boq`)
+    apiFetch(`/projects/${projectId}/progress/monitoring`)
       .then(res => {
         if (!res.ok) {
           setErrorStatus(res.status);
@@ -34,13 +34,13 @@ export function ProjectWorkPage() {
       })
       .then(data => {
         if (data === null) return;
-        setItems(Array.isArray(data) ? data : (data.items || []));
+        setMonitoringData(data);
         setLoading(false);
       })
       .catch(err => {
-        console.error('Failed to fetch BOQ:', err);
+        console.error('Failed to fetch monitoring data:', err);
         setErrorKind('network');
-        setItems([]);
+        setMonitoringData(null);
         setLoading(false);
       });
   }, [token, projectId]);
@@ -64,17 +64,30 @@ export function ProjectWorkPage() {
       <h2 style={{ fontSize: 'var(--text-2xl)', color: 'var(--simprok-engineering-blue-900)', marginBottom: 'var(--space-6)' }}>Daftar Pekerjaan</h2>
       
       {loading ? (
-        <p>Memuat daftar pekerjaan...</p>
+        <p>Memuat monitoring...</p>
       ) : errorKind ? (
         <div style={{ padding: 'var(--space-6)', backgroundColor: '#FEE2E2', color: '#991B1B', borderRadius: 'var(--radius-lg)' }}>
           <h3 style={{ margin: '0 0 var(--space-2) 0' }}>Akses Ditolak ({errorStatus || 'Network'})</h3>
           <p style={{ margin: 0 }}>{errorMessage}</p>
         </div>
-      ) : items.length === 0 ? (
-        <p>Tidak ada pekerjaan (BOQ) yang ditemukan untuk proyek ini. Pastikan RAB Baseline sudah aktif.</p>
+      ) : !monitoringData?.baseline ? (
+        <div style={{ padding: 'var(--space-6)', backgroundColor: '#FEF3C7', color: '#92400E', borderRadius: 'var(--radius-lg)' }}>
+          <h3 style={{ margin: '0 0 var(--space-2) 0' }}>Baseline Tidak Ditemukan</h3>
+          <p style={{ margin: 0 }}>Tidak ada RAB Baseline yang aktif untuk proyek ini. Data tidak tersedia.</p>
+        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-          {items.filter(item => item.itemType === 'WORK_ITEM').map(item => (
+
+          <div style={{ backgroundColor: '#F0F9FF', padding: 'var(--space-4)', borderRadius: 'var(--radius-md)', border: '1px solid #BAE6FD' }}>
+            <h3 style={{ margin: '0 0 var(--space-2) 0', color: '#0369A1', fontSize: 'var(--text-sm)' }}>Status Baseline Proyek</h3>
+            <ul style={{ margin: 0, paddingLeft: 'var(--space-4)', color: '#0C4A6E', fontSize: 'var(--text-sm)' }}>
+              <li><strong>RAB Version:</strong> {monitoringData.baseline.versionNumber}</li>
+              {monitoringData.unavailable?.includes('plannedStart') && <li><strong>Mulai:</strong> <em>UNAVAILABLE</em></li>}
+              {monitoringData.unavailable?.includes('plannedFinish') && <li><strong>Selesai:</strong> <em>UNAVAILABLE</em></li>}
+            </ul>
+          </div>
+
+          {(monitoringData.items || []).filter((item: any) => item.itemType === 'WORK_ITEM').map((item: any) => (
             <div 
               key={item.id}
               onClick={() => navigate(`/field/project/${projectId}/progress/${item.id}`)}
@@ -96,8 +109,17 @@ export function ProjectWorkPage() {
                 </div>
               </div>
               <div style={{ marginTop: 'var(--space-4)', display: 'flex', gap: 'var(--space-6)', fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-700)' }}>
-                <div>
-                  <strong>Target:</strong> {item.quantity} {item.unit}
+                <div style={{ flex: 1, backgroundColor: 'var(--simprok-surface-light)', padding: 'var(--space-2)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--simprok-engineering-blue-500)', marginBottom: '4px' }}>Rencana (Baseline)</div>
+                  <strong>{item.planned?.quantity} {item.planned?.unit}</strong>
+                </div>
+                <div style={{ flex: 1, backgroundColor: item.actual?.state === 'RECORDED' ? '#ECFCCB' : '#FEF2F2', padding: 'var(--space-2)', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: item.actual?.state === 'RECORDED' ? '#4D7C0F' : '#B91C1C', marginBottom: '4px' }}>Realisasi (Actual)</div>
+                  {item.actual?.state === 'RECORDED' ? (
+                    <strong style={{ color: '#3F6212' }}>{item.actual.latestRecord?.installedQuantity} {item.planned?.unit}</strong>
+                  ) : (
+                    <em style={{ color: '#991B1B' }}>NOT YET RECORDED</em>
+                  )}
                 </div>
               </div>
             </div>
