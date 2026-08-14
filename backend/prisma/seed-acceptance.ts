@@ -50,6 +50,17 @@ const ids = {
   membershipRoleAssignedProjectCreator: '10000000-0000-4000-8000-000000000041',
   roleAcceptanceFrontendDoorDirector: '10000000-0000-4000-8000-000000000042',
   membershipRoleAssignedFrontendDoorDirector: '10000000-0000-4000-8000-000000000043',
+  projectMonitoringProof: '10000000-0000-4000-8000-000000000044',
+  projectAssignmentMonitoringProof: '10000000-0000-4000-8000-000000000045',
+  boqStructureMonitoringProof: '10000000-0000-4000-8000-000000000046',
+  boqItemMonitoringPositive: '10000000-0000-4000-8000-000000000047',
+  boqItemMonitoringAbsent: '10000000-0000-4000-8000-000000000048',
+  boqItemMonitoringZero: '10000000-0000-4000-8000-000000000049',
+  rabMonitoringProof: '10000000-0000-4000-8000-000000000050',
+  baselineMonitoringProof: '10000000-0000-4000-8000-000000000051',
+  progressReportMonitoringProof: '10000000-0000-4000-8000-000000000052',
+  progressEntryMonitoringPositive: '10000000-0000-4000-8000-000000000053',
+  progressEntryMonitoringZero: '10000000-0000-4000-8000-000000000054',
 };
 
 async function main() {
@@ -531,6 +542,218 @@ async function main() {
       status: 'ASSIGNED',
     },
   });
+
+  // MON-02A-BROWSER-PROOF: deterministic acceptance-only truth fixture.
+  // It preserves ACC-X as the canonical ACTIVE-without-baseline negative
+  // fixture while exercising the real guarded Monitoring read path with one
+  // positive Actual, one absent Actual, and one explicitly recorded zero.
+  const monitoringProject = await prisma.project.upsert({
+    where: {
+      workspaceId_code: {
+        workspaceId: workspaceA.id,
+        code: 'MON-02A-PROOF',
+      },
+    },
+    update: {
+      organizationId: orgA.id,
+      name: 'MON-02A Monitoring Truth Proof',
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.projectMonitoringProof,
+      workspaceId: workspaceA.id,
+      organizationId: orgA.id,
+      code: 'MON-02A-PROOF',
+      name: 'MON-02A Monitoring Truth Proof',
+      status: 'ACTIVE',
+    },
+  });
+
+  await prisma.projectAssignment.upsert({
+    where: {
+      workspaceMembershipId_projectId: {
+        workspaceMembershipId: assignedMembership.id,
+        projectId: monitoringProject.id,
+      },
+    },
+    update: {
+      roleInProject: 'PROJECT_MANAGER',
+      isPrimaryAssignment: false,
+      status: 'ASSIGNED',
+      revokedAt: null,
+    },
+    create: {
+      id: ids.projectAssignmentMonitoringProof,
+      workspaceMembershipId: assignedMembership.id,
+      projectId: monitoringProject.id,
+      roleInProject: 'PROJECT_MANAGER',
+      isPrimaryAssignment: false,
+      status: 'ASSIGNED',
+    },
+  });
+
+  const monitoringBoq = await prisma.boqStructure.upsert({
+    where: { id: ids.boqStructureMonitoringProof },
+    update: {
+      projectId: monitoringProject.id,
+      name: 'MON-02A Approved BOQ',
+      version: 1,
+      status: 'APPROVED',
+    },
+    create: {
+      id: ids.boqStructureMonitoringProof,
+      projectId: monitoringProject.id,
+      name: 'MON-02A Approved BOQ',
+      version: 1,
+      status: 'APPROVED',
+    },
+  });
+
+  const monitoringItems = [
+    {
+      id: ids.boqItemMonitoringPositive,
+      wbsCode: '1.1',
+      name: 'Recorded Positive Actual',
+      quantity: 10,
+      sortOrder: 1,
+    },
+    {
+      id: ids.boqItemMonitoringAbsent,
+      wbsCode: '1.2',
+      name: 'Not Yet Recorded Actual',
+      quantity: 8,
+      sortOrder: 2,
+    },
+    {
+      id: ids.boqItemMonitoringZero,
+      wbsCode: '1.3',
+      name: 'Recorded Zero Actual',
+      quantity: 6,
+      sortOrder: 3,
+    },
+  ] as const;
+
+  for (const item of monitoringItems) {
+    await prisma.boqItem.upsert({
+      where: { id: item.id },
+      update: {
+        boqStructureId: monitoringBoq.id,
+        wbsCode: item.wbsCode,
+        name: item.name,
+        itemType: 'WORK_ITEM',
+        quantity: item.quantity,
+        unit: 'm3',
+        sortOrder: item.sortOrder,
+      },
+      create: {
+        id: item.id,
+        boqStructureId: monitoringBoq.id,
+        wbsCode: item.wbsCode,
+        name: item.name,
+        itemType: 'WORK_ITEM',
+        quantity: item.quantity,
+        unit: 'm3',
+        sortOrder: item.sortOrder,
+      },
+    });
+  }
+
+  const monitoringRab = await prisma.rabDocument.upsert({
+    where: { id: ids.rabMonitoringProof },
+    update: {
+      projectId: monitoringProject.id,
+      boqStructureId: monitoringBoq.id,
+      version: 1,
+      name: 'MON-02A Approved RAB',
+      totalBaseCost: 1000,
+      totalFinalCost: 1000,
+      status: 'APPROVED',
+    },
+    create: {
+      id: ids.rabMonitoringProof,
+      projectId: monitoringProject.id,
+      boqStructureId: monitoringBoq.id,
+      version: 1,
+      name: 'MON-02A Approved RAB',
+      totalBaseCost: 1000,
+      totalFinalCost: 1000,
+      status: 'APPROVED',
+    },
+  });
+
+  const monitoringBaseline = await prisma.projectBaseline.upsert({
+    where: { id: ids.baselineMonitoringProof },
+    update: {
+      projectId: monitoringProject.id,
+      rabDocumentId: monitoringRab.id,
+      versionNumber: 1,
+      status: 'ACTIVE',
+      approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+    },
+    create: {
+      id: ids.baselineMonitoringProof,
+      projectId: monitoringProject.id,
+      rabDocumentId: monitoringRab.id,
+      versionNumber: 1,
+      status: 'ACTIVE',
+      approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+    },
+  });
+
+  const monitoringReport = await prisma.progressReport.upsert({
+    where: { id: ids.progressReportMonitoringProof },
+    update: {
+      projectId: monitoringProject.id,
+      baselineId: monitoringBaseline.id,
+      periodStartDate: new Date('2026-08-01T00:00:00.000Z'),
+      periodEndDate: new Date('2026-08-01T00:00:00.000Z'),
+      status: 'SUBMITTED',
+    },
+    create: {
+      id: ids.progressReportMonitoringProof,
+      projectId: monitoringProject.id,
+      baselineId: monitoringBaseline.id,
+      periodStartDate: new Date('2026-08-01T00:00:00.000Z'),
+      periodEndDate: new Date('2026-08-01T00:00:00.000Z'),
+      status: 'SUBMITTED',
+    },
+  });
+
+  const monitoringActuals = [
+    {
+      id: ids.progressEntryMonitoringPositive,
+      boqItemId: ids.boqItemMonitoringPositive,
+      installedQuantity: 2,
+    },
+    {
+      id: ids.progressEntryMonitoringZero,
+      boqItemId: ids.boqItemMonitoringZero,
+      installedQuantity: 0,
+    },
+  ] as const;
+
+  for (const actual of monitoringActuals) {
+    await prisma.progressEntry.upsert({
+      where: { id: actual.id },
+      update: {
+        progressReportId: monitoringReport.id,
+        boqItemId: actual.boqItemId,
+        installedQuantity: actual.installedQuantity,
+        actualCost: 0,
+        earnedValue: 0,
+        workDate: new Date('2026-08-01T00:00:00.000Z'),
+      },
+      create: {
+        id: actual.id,
+        progressReportId: monitoringReport.id,
+        boqItemId: actual.boqItemId,
+        installedQuantity: actual.installedQuantity,
+        actualCost: 0,
+        earnedValue: 0,
+        workDate: new Date('2026-08-01T00:00:00.000Z'),
+      },
+    });
+  }
 
 
   const roleForeman = await prisma.role.upsert({
