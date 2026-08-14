@@ -122,6 +122,25 @@ export interface PersistedCalculationSuccess {
     | typeof PERSISTED_CALCULATION_STATUS.MISMATCH;
   boqItemId: string;
   priceOrigin: 'SERVER_COST_KERNEL';
+  /**
+   * RAB-TRUTH-CLOSEOUT-01 — whose data formed this price. Running the Cost
+   * Kernel proves SIMPROK did the arithmetic; it does not prove SIMPROK stands
+   * behind the sources. These persisted facts let the reader tell "Auto
+   * SIMPROK" from "Data Pengguna" without inferring anything.
+   */
+  sourceAuthority: {
+    ahspOwnership: string | null;
+    /**
+     * THREE STATES, NOT TWO. `true` = the frozen ownership is authoritative;
+     * `false` = it is proven non-authoritative (a user asset); `null` = the
+     * historical ownership was never proven and must not be guessed either
+     * way. A plain boolean collapsed "unknown" into "user data", which is a
+     * claim the evidence does not support.
+     */
+    ahspAuthoritative: boolean | null;
+    privateBasicPriceCount: number;
+    catalogBasicPriceCount: number;
+  };
   /** What the database holds right now. */
   stored: {
     volume: string;

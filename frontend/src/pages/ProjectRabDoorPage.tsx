@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState, useEffect, useRef, type CSSProperties } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import type { DashboardOutletContext } from '../components/layout/DashboardLayout';
 import { Archive, ChevronLeft, ChevronRight, Download, FileText, Lock, Maximize2, Minimize2, Printer, RotateCcw, Upload, ZoomIn, ZoomOut, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import {
@@ -138,6 +139,13 @@ const provenanceListStyle: CSSProperties = {
 export function ProjectRabDoorPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
+  /**
+   * The shell owns both collapse dimensions (RAB-FOCUS-01); this room only
+   * reads the header one, to decide how much of its own orientation block to
+   * render. Null-safe: the page is also mounted in tests without the layout.
+   */
+  const layoutContext = useOutletContext<DashboardOutletContext | null>();
+  const headerVisible = layoutContext?.isHeaderVisible !== false;
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -279,7 +287,14 @@ export function ProjectRabDoorPage() {
    * contradicted the lock chip on the very same screen.
    */
   const rabFrozen = presentation.status === 'TERKUNCI' || presentation.status === 'APPROVED';
-  const rowStateLabel = presentation.label;
+  /**
+   * `presentation.label` is a fact about the DOCUMENT, not about a row. Printed
+   * once per row it repeated the same word twelve times and said nothing a
+   * reader could act on, while "Status RAB" in Status & Mekanisme already
+   * states it once, authoritatively. The lifecycle itself is untouched — only
+   * the redundant column was removed; `presentation` still governs rabFrozen
+   * and every read-only rule below it.
+   */
   const zoomScale = zoom / 100;
   const hasRabRows = rabRows.length > 0;
   // RECAP DISPLAY AUTHORITY: COMPLETE renders recap.subtotal/marginAmount/
@@ -428,20 +443,31 @@ export function ProjectRabDoorPage() {
 
   return (
     <main className="simprok-rab">
-      <nav className="simprok-detail__breadcrumb" aria-label="Breadcrumb">
-        <button type="button" onClick={() => navigate('/proyek')}>
-          Proyek Saya
-        </button>
-        <span>/</span>
-        <button type="button" onClick={() => navigate(projectId ? `/project/${projectId}/detail` : '/proyek')}>
-          Detail Proyek
-        </button>
-        <span>/</span>
-        <strong>RAB</strong>
-      </nav>
+      {/*
+        FULL-CANVAS READING. Collapsing the header removes orientation — the
+        breadcrumb and the identity block — and keeps the RAB itself plus the
+        status chip, which is the one thing a reader must not lose: whether
+        what they are reading is a draft, a baseline, or an archive. The
+        document below is untouched; only the chrome around it moves.
+      */}
+      {headerVisible ? (
+        <nav className="simprok-detail__breadcrumb" aria-label="Breadcrumb">
+          <button type="button" onClick={() => navigate('/proyek')}>
+            Proyek Saya
+          </button>
+          <span>/</span>
+          <button type="button" onClick={() => navigate(projectId ? `/project/${projectId}/detail` : '/proyek')}>
+            Detail Proyek
+          </button>
+          <span>/</span>
+          <strong>RAB</strong>
+        </nav>
+      ) : null}
 
-      <section className="simprok-rab-hero">
-        <div className="simprok-rab-hero__document">
+      <section
+        className={`simprok-rab-hero${headerVisible ? '' : ' simprok-rab-hero--focus'}`}
+      >
+        <div className="simprok-rab-hero__document" hidden={!headerVisible}>
           <p className="simprok-rab-eyebrow">Ruang Hidup RAB</p>
           <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#16294B', margin: '0 0 0.125rem' }}>{project.name}</h1>
           <p className="simprok-rab-module-label" style={{ fontSize: '1.0625rem', fontWeight: 600, color: '#16294B', margin: '0 0 0.5rem' }}>Rencana Anggaran Biaya (RAB)</p>
@@ -574,18 +600,24 @@ export function ProjectRabDoorPage() {
                       here as well as in Status & Mekanisme. The baseline fact is
                       unchanged and still readable there on request; it no longer
                       spends permanent space above the RAB. */}
+                  {/* One controlled horizontal canvas for the table, and only
+                      here. Without it this fixed-layout table (which is wider
+                      than a narrow workspace) pushed the whole document
+                      sideways instead of scrolling inside its own frame. */}
+                  <div className="simprok-rab-table-canvas">
                   <table className="simprok-rab-table">
                     <thead>
                       <tr>
-                        <th>No</th>
-                        <th>Kode</th>
-                        <th>Uraian Pekerjaan</th>
-                        <th>Satuan</th>
-                        <th style={{ textAlign: 'right' }}>Volume</th>
-                        <th style={{ textAlign: 'right' }}>Harga Satuan</th>
-                        <th style={{ textAlign: 'right' }}>Jumlah</th>
-                        <th>Asal Harga</th>
-                        <th>Status</th>
+                        <th className="simprok-rab-col-no">No</th>
+                        {/* Ruang Hidup answers the same question as Ruang
+                            Kerja, from the same identity authority. */}
+                        <th className="simprok-rab-col-kode">Kode AHSP</th>
+                        <th className="simprok-rab-col-uraian">Uraian Pekerjaan</th>
+                        <th className="simprok-rab-col-satuan">Satuan</th>
+                        <th className="simprok-rab-col-volume" style={{ textAlign: 'right' }}>Volume</th>
+                        <th className="simprok-rab-col-harga" style={{ textAlign: 'right' }}>Harga Satuan</th>
+                        <th className="simprok-rab-col-jumlah" style={{ textAlign: 'right' }}>Jumlah</th>
+                        <th className="simprok-rab-col-asal">Asal Harga</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -597,14 +629,27 @@ export function ProjectRabDoorPage() {
                           {/* The first glance is position and code. The AHSP
                               analysis is still known — it is read from the
                               detail surface, not advertised in every row. */}
-                          <td>{row.number}</td>
-                          <td>{row.code}</td>
-                          <td>{row.description || 'Belum tersedia'}</td>
-                          <td>{row.unit || '-'}</td>
-                          <td style={numericCellStyle}>{row.quantityDisplay || '-'}</td>
-                          <td style={numericCellStyle}>{row.unitPriceDisplay || '-'}</td>
-                          <td style={numericCellStyle}>{row.lineTotalDisplay || '-'}</td>
-                          <td>
+                          <td className="simprok-rab-col-no">{row.number}</td>
+                          {/* `row.code` is the row's own WBS code and remains
+                              on the row for identity; the column now carries
+                              the analysis, already resolved once by
+                              toPersistedRowDisplayList. */}
+                          <td className="simprok-rab-col-kode">
+                            {row.itemType === 'WORK_ITEM' ? (
+                              <span
+                                className={row.ahsp.linked ? undefined : 'simprok-rab-ahsp-code--unlinked'}
+                                title={row.ahsp.fullLabel}
+                              >
+                                {row.ahsp.shortLabel}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="simprok-rab-col-uraian">{row.description || 'Belum tersedia'}</td>
+                          <td className="simprok-rab-col-satuan">{row.unit || '-'}</td>
+                          <td className="simprok-rab-col-volume" style={numericCellStyle}>{row.quantityDisplay || '-'}</td>
+                          <td className="simprok-rab-col-harga" style={numericCellStyle}>{row.unitPriceDisplay || '-'}</td>
+                          <td className="simprok-rab-col-jumlah" style={numericCellStyle}>{row.lineTotalDisplay || '-'}</td>
+                          <td className="simprok-rab-col-asal">
                             {/* Asal Harga stays one short fact in the Owner's
                                 own vocabulary. The evidence behind it opens in
                                 a panel beside the document — expanding it
@@ -615,7 +660,7 @@ export function ProjectRabDoorPage() {
                                 reader choose between a label and a link that
                                 mean the same thing. */}
                             {(() => {
-                              const origin = resolvePriceOrigin(row.priceOrigin, { isWorkItem: row.itemType === 'WORK_ITEM' });
+                              const origin = resolvePriceOrigin(row.priceOrigin, { isWorkItem: row.itemType === 'WORK_ITEM', authority: row.sourceAuthority });
                               if (!origin.label) return null;
                               const openable = row.itemType === 'WORK_ITEM' && Boolean(row.priceOrigin);
                               const badgeStyle = { ...priceOriginBadgeBaseStyle, ...priceOriginBadgeStyle(row.priceOrigin) };
@@ -625,20 +670,20 @@ export function ProjectRabDoorPage() {
                                   onClick={() => setEvidenceRowId(row.id)}
                                   style={{ ...badgeStyle, border: 'none', font: 'inherit', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}
                                   title={PRICE_TRACE_ACTION}
-                                  aria-label={`${origin.label} — ${PRICE_TRACE_ACTION}: ${row.description}`}
+                                  aria-label={`${origin.lineageLabel} — ${PRICE_TRACE_ACTION}: ${row.description}`}
                                 >
-                                  {origin.label}
+                                  {origin.lineageLabel}
                                 </button>
                               ) : (
-                                <span style={badgeStyle}>{origin.label}</span>
+                                <span style={badgeStyle}>{origin.lineageLabel}</span>
                               );
                             })()}
                           </td>
-                          <td>{rowStateLabel}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                  </div>
                   {isDraftPreview ? (
                     <div style={{ marginTop: '0.875rem', display: 'grid', gap: '0.4rem', maxWidth: '360px', color: '#16294B', fontVariantNumeric: 'tabular-nums' }}>
                       {recapDisplay.incomplete ? (

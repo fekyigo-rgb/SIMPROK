@@ -109,7 +109,11 @@ const buildResourceResolutions = (
   });
 
 const buildOccurrence = (
-  overrides: { statuses?: string[]; adaptedPrices?: (string | null)[] } = {},
+  overrides: {
+    statuses?: string[];
+    adaptedPrices?: (string | null)[];
+    ahspOwnershipAtCalculation?: string | null;
+  } = {},
 ) => ({
   id: OCCURRENCE_ID,
   projectId: PROJECT_ID,
@@ -119,6 +123,16 @@ const buildOccurrence = (
   resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V1',
   referenceRegionId: REGION_ID,
   referenceRegion: { name: 'Kota Fixture' },
+  /**
+   * RAB-TRUTH-01H — the AHSP ownership FROZEN when this calculation context was
+   * created. The live AHSP row is deliberately never consulted by the re-proof
+   * path, which is why the guarded Prisma proxy below does not even allow an
+   * `ahsp` model read.
+   */
+  ahspOwnershipAtCalculation:
+    overrides.ahspOwnershipAtCalculation === undefined
+      ? 'USER_ASSET'
+      : overrides.ahspOwnershipAtCalculation,
   resourceResolutions: buildResourceResolutions(overrides),
 });
 
@@ -418,5 +432,95 @@ describe('PersistedCalculationService — RM-03 read-only re-proof', () => {
         },
       }),
     );
+  });
+
+  /**
+   * RAB-TRUTH-01H — HISTORICAL PRICE ORIGIN DOES NOT DRIFT.
+   *
+   * A price origin says how a price WAS FORMED, not who owns the source today.
+   * These pin the freeze end to end: the answer comes from the occurrence, the
+   * live AHSP row is never consulted, and an unproven history stays unproven
+   * rather than being filled in from the present.
+   */
+  describe('source authority is frozen at calculation time', () => {
+    it('reports the ownership recorded on the occurrence, whatever the AHSP is today', async () => {
+      const { prisma, accessedModels } = createGuardedPrisma({
+        boqItem: buildPersistedBoqItem(),
+        occurrence: buildOccurrence({ ahspOwnershipAtCalculation: 'USER_ASSET' }),
+      });
+      const service = new PersistedCalculationService(prisma as never);
+
+      const result = await service.getPersistedCalculation(
+        BOQ_ITEM_ID,
+        PROJECT_ID,
+        WORKSPACE_ID,
+      );
+
+      expect(result).toMatchObject({
+        sourceAuthority: { ahspOwnership: 'USER_ASSET', ahspAuthoritative: false },
+      });
+      // The live AHSP row is not even read — there is nothing to drift with.
+      expect(accessedModels.has('ahsp')).toBe(false);
+      expect(accessedModels.has('aHSP')).toBe(false);
+    });
+
+    it('a NEW calculation frozen after a transfer truthfully reports the new authority', async () => {
+      // Same row, same shape — only the frozen fact differs, which is exactly
+      // what a recalculation after a lawful transfer would record.
+      const { prisma } = createGuardedPrisma({
+        boqItem: buildPersistedBoqItem(),
+        occurrence: buildOccurrence({ ahspOwnershipAtCalculation: 'SIMPROK_ASSET' }),
+      });
+      const service = new PersistedCalculationService(prisma as never);
+
+      expect(
+        await service.getPersistedCalculation(BOQ_ITEM_ID, PROJECT_ID, WORKSPACE_ID),
+      ).toMatchObject({
+        sourceAuthority: { ahspOwnership: 'SIMPROK_ASSET', ahspAuthoritative: true },
+      });
+    });
+
+    it('an approved community asset is authoritative too', async () => {
+      const { prisma } = createGuardedPrisma({
+        boqItem: buildPersistedBoqItem(),
+        occurrence: buildOccurrence({
+          ahspOwnershipAtCalculation: 'APPROVED_COMMUNITY_ASSET',
+        }),
+      });
+      const service = new PersistedCalculationService(prisma as never);
+
+      expect(
+        await service.getPersistedCalculation(BOQ_ITEM_ID, PROJECT_ID, WORKSPACE_ID),
+      ).toMatchObject({ sourceAuthority: { ahspAuthoritative: true } });
+    });
+
+    /**
+     * UNKNOWN IS ITS OWN ANSWER. `false` would mean "proven user asset", which
+     * the reader turns into "Data Pengguna" — a claim about whose data formed
+     * the price. When the historical ownership was never recorded, the wire
+     * carries `null` so the reader can say so instead.
+     */
+    it('an unproven history reports null, not false — unknown is not user data', async () => {
+      const { prisma } = createGuardedPrisma({
+        boqItem: buildPersistedBoqItem(),
+        occurrence: buildOccurrence({ ahspOwnershipAtCalculation: null }),
+      });
+      const service = new PersistedCalculationService(prisma as never);
+
+      const result = await service.getPersistedCalculation(
+        BOQ_ITEM_ID,
+        PROJECT_ID,
+        WORKSPACE_ID,
+      );
+
+      expect(result).toMatchObject({
+        sourceAuthority: { ahspOwnership: null, ahspAuthoritative: null },
+      });
+      // Explicitly NOT false — that is the collapse this test exists to stop.
+      expect(
+        (result as { sourceAuthority: { ahspAuthoritative: unknown } })
+          .sourceAuthority.ahspAuthoritative,
+      ).not.toBe(false);
+    });
   });
 });

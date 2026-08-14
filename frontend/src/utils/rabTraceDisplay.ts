@@ -22,59 +22,155 @@ import type { PersistedCalculationDisplay } from './rabPersistedCalculationDispl
 
 export type PersistedPriceOriginValue = 'SERVER_COST_KERNEL' | 'MANUAL_CLIENT' | null;
 
-export type OriginCategory = 'DARI_AKUN_PENGGUNA' | 'IMPORT';
+/**
+ * THE THREE PRICE ORIGINS, and nothing else.
+ *
+ * They answer one question: how was the CURRENT amount formed?
+ *
+ *   AUTO_SIMPROK  SIMPROK computed it AND stands behind every source it used.
+ *   MANUAL_INPUT  a person typed the amount into this RAB.
+ *   USER_DATA     SIMPROK computed it, but at least one source in the chain is
+ *                 the workspace's own private data, which SIMPROK has not
+ *                 published or approved.
+ *
+ * "Belum ada harga" is deliberately NOT one of them — it is an availability
+ * state, and forcing an origin onto a row that has no price would be inventing
+ * a fact.
+ */
+export type PriceOriginKind =
+  | 'AUTO_SIMPROK'
+  | 'MANUAL_INPUT'
+  | 'USER_DATA'
+  /**
+   * NOT A FOURTH PRICE ORIGIN — nothing persists it and no enum grows.
+   *
+   * It is a TRUST state: the calculation is real, but the authority that
+   * formed it was never recorded, so neither "Auto SIMPROK" nor "Data
+   * Pengguna" can be claimed. Saying either would be inventing evidence.
+   */
+  | 'UNDETERMINED'
+  | 'NONE';
+
+/**
+ * How the row arrived in this project — an axis ORTHOGONAL to price origin.
+ * A price can be imported and still be manual; imported and still automatic.
+ * Collapsing the two into one list is what makes "Import" look like a kind of
+ * price, which it is not.
+ */
+export type TransferLineage = 'LOCAL' | 'IMPORTED';
+
+/**
+ * The authority facts behind a calculated price, exactly as the server states
+ * them. Absent (`undefined`) means "not read yet" — never "authoritative".
+ */
+export interface PriceSourceAuthorityWire {
+  /** true = authoritative · false = proven user asset · null = never proven. */
+  ahspAuthoritative?: boolean | null;
+  privateBasicPriceCount?: number | null;
+  catalogBasicPriceCount?: number | null;
+}
 
 export interface PriceOriginView {
+  kind: PriceOriginKind;
   /** '' when the row carries no price at all — a folder, a note, or unpriced work. */
   label: string;
-  categoryLabel: string;
-  category: OriginCategory | null;
+  /** Import · <origin> when the row was transferred in; otherwise the label. */
+  lineageLabel: string;
   /** How the number came to be, in one sentence, for the evidence surface. */
   explanation: string;
 }
 
 const NO_ORIGIN: PriceOriginView = {
+  kind: 'NONE',
   label: '',
-  categoryLabel: '',
-  category: null,
+  lineageLabel: '',
   explanation: '',
 };
 
 const UNPRICED: PriceOriginView = {
+  kind: 'NONE',
   label: 'Belum ada harga',
-  categoryLabel: '',
-  category: null,
+  lineageLabel: 'Belum ada harga',
   explanation: 'Item pekerjaan ini belum mempunyai harga.',
 };
 
 /**
- * Origin is where a price entered this context — never a verification, a
- * status, or an approval.
+ * WHOSE DATA FORMED A CALCULATED PRICE — decided in the order the evidence
+ * actually settles it:
+ *
+ *   1. a private Basic Price in the chain PROVES user data, whatever the AHSP
+ *      was — the part SIMPROK cannot vouch for is still inside the number;
+ *   2. otherwise a frozen ownership of USER_ASSET proves user data;
+ *   3. otherwise a frozen ownership of SIMPROK/APPROVED, with no private price
+ *      contradicting it, earns SIMPROK's own authority;
+ *   4. otherwise the historical authority was never proven — and an unproven
+ *      thing is reported as unproven, not resolved to whichever label feels
+ *      safer. "Data Pengguna" is as much a claim as "Auto SIMPROK".
+ */
+const classifyCalculatedAuthority = (
+  authority: PriceSourceAuthorityWire | null | undefined,
+): 'AUTO_SIMPROK' | 'USER_DATA' | 'UNDETERMINED' => {
+  if ((authority?.privateBasicPriceCount ?? 0) > 0) return 'USER_DATA';
+  if (authority?.ahspAuthoritative === false) return 'USER_DATA';
+  if (authority?.ahspAuthoritative === true) return 'AUTO_SIMPROK';
+  return 'UNDETERMINED';
+};
+
+/**
+ * Origin is how the CURRENT amount was formed — never a verification, a
+ * status, or an approval. A manual override makes the row manual even if it
+ * was once calculated: the earlier calculation belongs to history, not to the
+ * current price.
  */
 export const resolvePriceOrigin = (
   priceOrigin: PersistedPriceOriginValue,
-  options: { isWorkItem: boolean } = { isWorkItem: true },
+  options: {
+    isWorkItem: boolean;
+    authority?: PriceSourceAuthorityWire | null;
+    lineage?: TransferLineage;
+  } = { isWorkItem: true },
 ): PriceOriginView => {
   if (!options.isWorkItem) return NO_ORIGIN;
 
+  const withLineage = (view: Omit<PriceOriginView, 'lineageLabel'>): PriceOriginView => ({
+    ...view,
+    lineageLabel:
+      options.lineage === 'IMPORTED' ? `Import · ${view.label}` : view.label,
+  });
+
   if (priceOrigin === 'SERVER_COST_KERNEL') {
-    return {
-      label: 'Auto SIMPROK',
-      categoryLabel: 'Dari Akun Pengguna',
-      category: 'DARI_AKUN_PENGGUNA',
+    const authority = classifyCalculatedAuthority(options.authority);
+    if (authority === 'AUTO_SIMPROK') {
+      return withLineage({
+        kind: 'AUTO_SIMPROK',
+        label: 'Auto SIMPROK',
+        explanation:
+          'Harga dihitung SIMPROK dari AHSP dan Harga Dasar yang sudah menjadi sumber resmi SIMPROK.',
+      });
+    }
+    if (authority === 'USER_DATA') {
+      return withLineage({
+        kind: 'USER_DATA',
+        label: 'Data Pengguna',
+        explanation:
+          'Harga dihitung SIMPROK, tetapi sebagian sumber pembentuknya adalah data milik ruang kerja ini yang belum menjadi sumber resmi SIMPROK.',
+      });
+    }
+    return withLineage({
+      kind: 'UNDETERMINED',
+      label: 'Asal belum dapat dipastikan',
       explanation:
-        'Harga dihitung otomatis oleh SIMPROK dari AHSP dan Harga Dasar yang berlaku, di dalam ruang kerja akun ini.',
-    };
+        'Harga ini dihitung SIMPROK, tetapi kewenangan sumber pembentuknya pada saat perhitungan tidak tercatat. SIMPROK tidak menyatakan angka ini resmi maupun milik pengguna tanpa bukti.',
+    });
   }
 
   if (priceOrigin === 'MANUAL_CLIENT') {
-    return {
-      label: 'Input Pengguna',
-      categoryLabel: 'Dari Akun Pengguna',
-      category: 'DARI_AKUN_PENGGUNA',
+    return withLineage({
+      kind: 'MANUAL_INPUT',
+      label: 'Ketik Manual',
       explanation:
-        'Harga diisi langsung oleh pengguna di dalam SIMPROK. SIMPROK tidak menghitung ulang dan tidak menyimpan rincian pembentuk harganya.',
-    };
+        'Harga diketik langsung oleh pengguna di ruang kerja RAB. SIMPROK menyimpannya apa adanya dan tidak membentuk angka ini dari perhitungan AHSP.',
+    });
   }
 
   return UNPRICED;
@@ -160,6 +256,14 @@ export interface PriceTraceInput {
   lineTotalDisplay: string;
   priceOrigin: PersistedPriceOriginValue;
   isWorkItem: boolean;
+  /**
+   * Whose data formed the price, when it is known outside the authoritative
+   * proof (a draft row that has not fetched its proof yet). The proof's own
+   * facts win when both are present.
+   */
+  authority?: PriceSourceAuthorityWire | null;
+  /** How the row arrived in this project. Orthogonal to price origin. */
+  lineage?: TransferLineage;
   ahsp?: AhspIdentityWire | null;
   provenance?: {
     calculationPolicyVersion?: string | null;
@@ -223,7 +327,16 @@ const UNAVAILABLE_BREAKDOWN =
  * A hand-entered price has no machine proof to show, and is not given one.
  */
 export const buildPriceTrace = (input: PriceTraceInput): PriceTraceView => {
-  const origin = resolvePriceOrigin(input.priceOrigin, { isWorkItem: input.isWorkItem });
+  /**
+   * The authority facts travel with the authoritative proof, so the trace and
+   * the table cannot disagree about whose data formed the price: both ask the
+   * same resolver with the same evidence.
+   */
+  const origin = resolvePriceOrigin(input.priceOrigin, {
+    isWorkItem: input.isWorkItem,
+    authority: input.authoritative?.sourceAuthority ?? input.authority ?? null,
+    lineage: input.lineage,
+  });
   const ahsp = resolveAhspIdentity(input.ahsp);
   const authoritative = input.authoritative;
 
@@ -231,8 +344,16 @@ export const buildPriceTrace = (input: PriceTraceInput): PriceTraceView => {
   const technicalFacts: TraceFact[] = [];
   const unavailable: string[] = [];
 
+  /**
+   * "Kategori Asal: Dari Akun Pengguna" used to sit directly under "Asal
+   * Harga: Auto SIMPROK", and the two read as contradictory claims about the
+   * same thing — is this SIMPROK's number or the account's? The category axis
+   * added nothing the origin did not already say, so it is gone. Whose data
+   * formed the price is now carried BY the origin itself: Auto SIMPROK versus
+   * Data Pengguna.
+   */
   if (origin.label) facts.push({ label: 'Asal Harga', value: origin.label });
-  if (origin.categoryLabel) facts.push({ label: 'Kategori Asal', value: origin.categoryLabel });
+  if (origin.explanation) facts.push({ label: 'Cara Terbentuk', value: origin.explanation });
   if (ahsp.linked) facts.push({ label: 'Analisa AHSP', value: ahsp.fullLabel });
   else if (input.isWorkItem) unavailable.push(UNAVAILABLE_AHSP);
 

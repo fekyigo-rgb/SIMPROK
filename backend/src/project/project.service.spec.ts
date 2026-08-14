@@ -475,7 +475,26 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
         create: boqItemCreate,
       },
     };
-    const prisma = { $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(tx)) };
+    /**
+     * saveDraftBoq now projects the AHSP identity onto the items it returns,
+     * exactly as getDraftBoq already did — otherwise Ruang Kerja lost the
+     * analysis name the moment a draft was saved. These rows carry a real
+     * `ahspVersionId`, so the projection genuinely reads the AHSP tables and
+     * the harness has to own them. Empty results are the honest default here:
+     * these tests are about server-row protection, not about identity.
+     */
+    const prisma = {
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(tx)),
+      aHSPSnapshot: { findMany: jest.fn().mockResolvedValue([]) },
+      aHSPVersion: { findMany: jest.fn().mockResolvedValue([]) },
+      /**
+       * The read path now also projects WHOSE DATA formed each price, so a row
+       * carrying a calculation occurrence genuinely reads the AHSP ownership
+       * and Basic Price scope behind it. Empty is the honest default here —
+       * these tests are about server-row protection, not about authority.
+       */
+      projectAhspOccurrence: { findMany: jest.fn().mockResolvedValue([]) },
+    };
     return { prisma, tx, boqItemCreate, boqItemDeleteMany, rabDocumentUpdateMany };
   }
 
