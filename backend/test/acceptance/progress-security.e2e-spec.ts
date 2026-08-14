@@ -19,6 +19,9 @@ describe('Progress Security (e2e)', () => {
   let projectAId: string;
   let projectBId: string;
   let boqItemAId: string;
+  let boqItemNoActualId: string;
+  let boqItemRecordedZeroId: string;
+  let baselineAId: string;
 
   let userViewEmail = 'prog.view.sec@test.local';
   let userSubmitEmail = 'prog.submit.sec@test.local';
@@ -83,12 +86,21 @@ describe('Progress Security (e2e)', () => {
       data: { boqStructureId: boqStruct.id, wbsCode: '1.1', name: 'Item', quantity: 10, unit: 'm3' }
     });
     boqItemAId = boqItem.id;
+    const boqItemNoActual = await prisma.boqItem.create({
+      data: { boqStructureId: boqStruct.id, wbsCode: '1.2', name: 'Item Without Actual', quantity: 5, unit: 'm3', sortOrder: 1 }
+    });
+    boqItemNoActualId = boqItemNoActual.id;
+    const boqItemRecordedZero = await prisma.boqItem.create({
+      data: { boqStructureId: boqStruct.id, wbsCode: '1.3', name: 'Item With Recorded Zero', quantity: 3, unit: 'm3', sortOrder: 2 }
+    });
+    boqItemRecordedZeroId = boqItemRecordedZero.id;
     const rab = await prisma.rabDocument.create({
       data: { projectId: projectAId, boqStructureId: boqStruct.id, name: 'RAB', version: 1, totalBaseCost: 1000, totalFinalCost: 1000, status: 'APPROVED' }
     });
-    await prisma.projectBaseline.create({
+    const baseline = await prisma.projectBaseline.create({
       data: { projectId: projectAId, rabDocumentId: rab.id, versionNumber: 1, status: 'ACTIVE', approvedAt: new Date() }
     });
+    baselineAId = baseline.id;
 
     // Setup permissions
     const permView = await prisma.permission.findUniqueOrThrow({
@@ -250,6 +262,10 @@ describe('Progress Security (e2e)', () => {
           boqItemId: boqItemAId,
           installedQuantity: 2,
           workDate: new Date().toISOString()
+        }, {
+          boqItemId: boqItemRecordedZeroId,
+          installedQuantity: 0,
+          workDate: new Date().toISOString()
         }]
       })
       .expect(201);
@@ -257,7 +273,7 @@ describe('Progress Security (e2e)', () => {
     const afterReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
     const afterEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
     expect(afterReports).toBe(beforeReports + 1);
-    expect(afterEntries).toBe(beforeEntries + 1);
+    expect(afterEntries).toBe(beforeEntries + 2);
 
     // Verify relation matches the target project
     const latestReport = await prisma.progressReport.findFirst({
@@ -272,8 +288,10 @@ describe('Progress Security (e2e)', () => {
     expect(latestReport).toBeDefined();
     expect(latestReport!.projectId).toBe(projectAId);
     expect(latestReport!.project.workspaceId).toBe(workspaceAId);
-    expect(latestReport!.entries.length).toBeGreaterThan(0);
-    expect(latestReport!.entries[0].boqItemId).toBe(boqItemAId);
+    expect(latestReport!.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ boqItemId: boqItemAId }),
+      expect.objectContaining({ boqItemId: boqItemRecordedZeroId }),
+    ]));
   });
 
   it('5. cross-tenant user cannot submit progress to another workspace project', async () => {
@@ -300,5 +318,129 @@ describe('Progress Security (e2e)', () => {
     const afterEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
     expect(afterReports).toBe(beforeReports);
     expect(afterEntries).toBe(beforeEntries);
+  });
+
+  // MON-02A Truth Surface Tests
+
+  it('6. authorized assigned user -> GET /monitoring succeeds and proves truth contract (unsupported != zero, actual absent != zero)', async () => {
+    const token = await login(userViewEmail);
+    const readPlanningTruth = async () => {
+      const baseline = await prisma.projectBaseline.findUniqueOrThrow({
+        where: { id: baselineAId },
+        select: {
+          id: true,
+          projectId: true,
+          rabDocumentId: true,
+          versionNumber: true,
+          status: true,
+          approvedAt: true,
+          approvedByPositionId: true,
+          justification: true,
+          rabDocument: {
+            select: {
+              id: true,
+              boqStructureId: true,
+              version: true,
+              status: true,
+              totalBaseCost: true,
+              totalFinalCost: true,
+            },
+          },
+        },
+      });
+      const items = await prisma.boqItem.findMany({
+        where: { boqStructureId: baseline.rabDocument.boqStructureId },
+        orderBy: { id: 'asc' },
+        select: {
+          id: true,
+          parentId: true,
+          wbsNodeId: true,
+          wbsCode: true,
+          name: true,
+          itemType: true,
+          quantity: true,
+          unit: true,
+          sortOrder: true,
+        },
+      });
+
+      return {
+        baseline: {
+          ...baseline,
+          approvedAt: baseline.approvedAt.toISOString(),
+          rabDocument: {
+            ...baseline.rabDocument,
+            totalBaseCost: baseline.rabDocument.totalBaseCost?.toString() ?? null,
+            totalFinalCost: baseline.rabDocument.totalFinalCost?.toString() ?? null,
+          },
+        },
+        items: items.map((item) => ({
+          ...item,
+          quantity: item.quantity.toString(),
+        })),
+      };
+    };
+
+    const planningTruthBefore = await readPlanningTruth();
+    const res = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const planningTruthAfter = await readPlanningTruth();
+
+    const body = res.body;
+    expect(body.projectId).toBe(projectAId);
+    expect(body.baseline).toBeDefined();
+
+    expect(planningTruthAfter).toEqual(planningTruthBefore);
+
+    // Truth Contract: UNAVAILABLE != ZERO
+    expect(body.unavailable).toEqual(expect.arrayContaining([
+      'plannedStart',
+      'plannedFinish',
+    ]));
+    expect(body).not.toHaveProperty('plannedStart');
+    expect(body).not.toHaveProperty('plannedFinish');
+    expect(body.baseline).not.toHaveProperty('plannedStart');
+    expect(body.baseline).not.toHaveProperty('plannedFinish');
+
+    const recordedItem = body.items.find((i: any) => i.id === boqItemAId);
+    expect(recordedItem).toBeDefined();
+    expect(recordedItem.planned.quantity).toBe('10');
+    expect(recordedItem.actual.state).toBe('RECORDED');
+    expect(recordedItem.actual.latestRecord.installedQuantity).toBe('2');
+
+    const absentItem = body.items.find((i: any) => i.id === boqItemNoActualId);
+    expect(absentItem).toBeDefined();
+    expect(absentItem.actual).toEqual({
+      state: 'NOT_YET_RECORDED',
+      latestRecord: null,
+    });
+    expect(absentItem.actual).not.toHaveProperty('installedQuantity');
+
+    const recordedZeroItem = body.items.find((i: any) => i.id === boqItemRecordedZeroId);
+    expect(recordedZeroItem).toBeDefined();
+    expect(recordedZeroItem.actual.state).toBe('RECORDED');
+    expect(recordedZeroItem.actual.latestRecord.installedQuantity).toBe('0');
+    expect(recordedZeroItem.actual).not.toEqual(absentItem.actual);
+  });
+
+  it('7. non-assigned user -> GET /monitoring is rejected', async () => {
+    const token = await login(userNoAccessEmail);
+    await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(403);
+  });
+
+  it('8. cross-tenant user -> GET /monitoring is rejected', async () => {
+    const token = await login(userCrossEmail);
+    await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(404);
   });
 });
