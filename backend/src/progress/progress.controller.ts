@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Request, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Request, Param } from '@nestjs/common';
 import { ProgressService } from './progress.service';
 import { SubmitFieldProgressDto } from './dto/create-progress.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -10,6 +10,13 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, PermissionsGuard)
 export class ProgressController {
   constructor(private readonly progressService: ProgressService) {}
+
+
+  @Get('monitoring')
+  @Permissions('PROJECT_VIEW')
+  async getMonitoring(@Param('projectId') projectId: string) {
+    return this.progressService.getMonitoring(projectId);
+  }
 
   @Post('field')
   // This is a write action. It must strictly require FIELD_PROGRESS_SUBMIT.
