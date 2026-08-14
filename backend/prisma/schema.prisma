@@ -1930,6 +1930,26 @@ model ProjectAhspOccurrence {
   resolutionContentFingerprint String?
   resolutionEvaluatedAt        DateTime?
   contextCapturedByAccountId   String?   @db.Uuid
+  /// RAB-TRUTH-01H — the AHSP's ownership AT THE MOMENT this calculation
+  /// context was frozen. `AHSP.ownershipType` is mutable: a lawful transfer can
+  /// change it later, and reading it live made a finished calculation's origin
+  /// drift from "Data Pengguna" to "Auto SIMPROK" with nothing recalculated.
+  /// Captured once here, beside the other facts this row already freezes, and
+  /// never updated afterwards.
+  ///
+  /// NULL means the historical value is genuinely unknown — it is never filled
+  /// in from today's ownership.
+  ///
+  /// `BasicPrice.assetScope` is deliberately NOT copied alongside it: no
+  /// production writer ever updates that column, so `selectedBasicPriceId`
+  /// already points at stable evidence and duplicating it would create a
+  /// second truth to keep in step.
+  ///
+  /// Typed with the domain's own `OwnershipType` rather than free text: the
+  /// database then refuses a value that is not a real ownership, and the
+  /// column compares directly against `ahsps.ownershipType` instead of needing
+  /// a cast to be read.
+  ahspOwnershipAtCalculation   OwnershipType?
   createdAt                    DateTime  @default(now())
   updatedAt                    DateTime  @updatedAt
 

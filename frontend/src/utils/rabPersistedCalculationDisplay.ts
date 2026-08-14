@@ -1,9 +1,11 @@
 import { groupThousands, parseCanonicalDecimalString } from './rabCostDisplay.ts';
+import type { PriceSourceAuthorityWire } from './rabTraceDisplay.ts';
 import {
   INVALID_DECIMAL_DISPLAY,
   NULL_DISPLAY,
   formatExactMoney,
   formatExactQuantity,
+  formatExactVolume,
 } from './rabPersistedDraftDisplay.ts';
 
 /**
@@ -53,6 +55,8 @@ export interface PersistedCalculationWire {
   status: string;
   boqItemId: string;
   priceOrigin?: 'SERVER_COST_KERNEL';
+  /** RAB-TRUTH-CLOSEOUT-01 — whose data formed this price, as the server states it. */
+  sourceAuthority?: PriceSourceAuthorityWire | null;
   reason?: string;
   kernelReason?: string;
   stored?: {
@@ -167,6 +171,8 @@ export interface PersistedCalculationDisplay {
   recomputedLineTotalDisplay: string;
   volumeDisplay: string;
   unit: string;
+  /** Whose data formed the price — decides Auto SIMPROK vs Data Pengguna. */
+  sourceAuthority: PriceSourceAuthorityWire | null;
   /** True only when the server proved recomputed === stored on every field. */
   reproduced: boolean;
   provenance: {
@@ -193,6 +199,7 @@ const UNAVAILABLE = (message: string): PersistedCalculationDisplay => ({
   recomputedLineTotalDisplay: NULL_DISPLAY,
   volumeDisplay: NULL_DISPLAY,
   unit: '',
+  sourceAuthority: null,
   reproduced: false,
   provenance: null,
   resources: [],
@@ -250,8 +257,9 @@ export const toPersistedCalculationDisplay = (
     storedLineTotalDisplay: formatExactMoney(wire.stored.lineTotal),
     recomputedUnitPriceDisplay: formatExactMoney(wire.recomputed.unitPrice),
     recomputedLineTotalDisplay: formatExactMoney(wire.recomputed.lineTotal),
-    volumeDisplay: formatExactQuantity(wire.stored.volume),
+    volumeDisplay: formatExactVolume(wire.stored.volume),
     unit: wire.stored.unit,
+    sourceAuthority: wire.sourceAuthority ?? null,
     reproduced: isVerified,
     provenance: {
       asOfDate: wire.provenance.calculationAsOfDate,

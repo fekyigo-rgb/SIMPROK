@@ -47,7 +47,15 @@ describe('ProjectAhspService E1A', () => {
     baseUnit: 'OH',
   });
 
-  const makeSuccessTx = (resources = [resource('resource-1')]) => {
+  const makeSuccessTx = (
+    resources = [resource('resource-1')],
+    /**
+     * RAB-TRUTH-01H — the AHSP ownership as the transaction sees it right now.
+     * Varying this between two selections is exactly what a lawful ownership
+     * transfer does between two calculations.
+     */
+    ownershipType: string | null = 'USER_ASSET',
+  ) => {
     const catalog = {
       id: '70000000-0000-4000-8000-000000000001',
       code: 'LAB-1',
@@ -96,6 +104,7 @@ describe('ProjectAhspService E1A', () => {
           id: selectionInput.ahspVersionId,
           outputUnit: 'M1',
           resources,
+          ahsp: ownershipType === null ? null : { ownershipType },
         }),
       },
       resourceCatalog: { findMany: jest.fn().mockResolvedValue([catalog]) },
@@ -434,6 +443,59 @@ describe('ProjectAhspService E1A', () => {
     );
     expect(tx.basicPrice.findFirst).not.toHaveBeenCalled();
     expect(tx.projectAhspOccurrence.create).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * RAB-TRUTH-01H — A CALCULATION REMEMBERS THE AUTHORITY THAT FORMED IT.
+   *
+   * Behavioural, through the real selection path: two selections are made with
+   * a lawful ownership transfer between them, and each occurrence must record
+   * the ownership as it stood when THAT occurrence was created. The old one
+   * must not be re-interpreted by the new reality — that was the drift.
+   */
+  describe('freezes the AHSP ownership that formed each occurrence', () => {
+    const selectWithOwnership = async (ownershipType: string | null) => {
+      const { tx, created } = makeSuccessTx([resource('resource-1')], ownershipType);
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+      jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({
+        ...input,
+        status: 'UNRESOLVED',
+        reasonCodes: ['NO_CATALOG_CANDIDATE'],
+        explanation: 'none',
+      }));
+      await service.selectForBoqItem(selectionInput);
+      return created;
+    };
+
+    it('occurrence A, created while the AHSP is a user asset, freezes USER_ASSET', async () => {
+      const occurrenceA = await selectWithOwnership('USER_ASSET');
+      expect(occurrenceA.data.ahspOwnershipAtCalculation).toBe('USER_ASSET');
+    });
+
+    it('occurrence B, created after a lawful transfer, freezes the NEW authority', async () => {
+      // Same row, same input — only the AHSP's ownership changed in between,
+      // exactly as a transfer would leave it.
+      const occurrenceA = await selectWithOwnership('USER_ASSET');
+      const occurrenceB = await selectWithOwnership('SIMPROK_ASSET');
+
+      expect(occurrenceA.data.ahspOwnershipAtCalculation).toBe('USER_ASSET');
+      expect(occurrenceB.data.ahspOwnershipAtCalculation).toBe('SIMPROK_ASSET');
+      // The old capture is untouched by the new one: history and present are
+      // two different rows, each answering for its own moment.
+      expect(occurrenceA.data.ahspOwnershipAtCalculation).not.toBe(
+        occurrenceB.data.ahspOwnershipAtCalculation,
+      );
+    });
+
+    it('an approved community asset is captured verbatim, not normalised', async () => {
+      const created = await selectWithOwnership('APPROVED_COMMUNITY_ASSET');
+      expect(created.data.ahspOwnershipAtCalculation).toBe('APPROVED_COMMUNITY_ASSET');
+    });
+
+    it('an unknowable ownership is captured as null, never invented', async () => {
+      const created = await selectWithOwnership(null);
+      expect(created.data.ahspOwnershipAtCalculation).toBeNull();
+    });
   });
 
   it('O-01/O-02 successor: N resources create one occurrence with exactly N resolutions', async () => {

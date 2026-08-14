@@ -20,6 +20,11 @@ const projectList = readFileSync("src/pages/ProjectListPage.tsx", "utf8");
 const workspace = readFileSync("src/pages/RabWorkspacePage.tsx", "utf8");
 const cardAction = readFileSync("src/utils/projectCardAction.ts", "utf8");
 const rabDoor = readFileSync("src/pages/ProjectRabDoorPage.tsx", "utf8");
+/** The one stylesheet both RAB rooms share, and therefore the one place a
+ *  column-geometry regression can hide. */
+const css = readFileSync("src/index.css", "utf8");
+/** The lock control's stable identity, independent of how it is styled. */
+const LOCK_ANCHOR = 'data-route="/?ruang=kunci-rab"';
 
 /**
  * The JSX opening tag starting at `index`. Scans to the closing angle bracket
@@ -118,15 +123,39 @@ test("E. a locked workspace shows exactly one TERKUNCI control", () => {
       "the lock disclosure must not return as its own <details> block",
     );
   }
+  // Anchored on the control's own route marker rather than on its exact
+  // className string: the class now carries a state modifier (GAP-04), and the
+  // law being protected is "one lock control", not how it is styled.
   assert.equal(
-    workspace.split('className="simprok-rab-toolbar__lock"').length - 1,
+    workspace.split('data-route="/?ruang=kunci-rab"').length - 1,
     1,
     "there must be exactly one lock control",
   );
 });
 
+/**
+ * RAB-TABLE-UX-01R GAP-04 — the control must not wear the state it produces.
+ * Navy is SIMPROK's authority colour, so a solid navy chip on an UNLOCKED RAB
+ * read as "already locked". The lifecycle is untouched; only the affordance is.
+ */
+test("E2. Kunci RAB looks like an action until the RAB is actually locked", () => {
+  const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf(LOCK_ANCHOR)));
+  // The authority modifier is applied ONLY on the locked branch.
+  assert.match(tag, /simprok-rab-toolbar__lock--locked/);
+  assert.match(tag, /rabLocked \? ' simprok-rab-toolbar__lock--locked' : ''/);
+
+  // The base control is no longer painted with the locked-state fill, and the
+  // navy authority styling now belongs to the modifier alone.
+  const base = css.slice(
+    css.indexOf(".simprok-rab-toolbar__lock {"),
+    css.indexOf(".simprok-rab-toolbar__lock--locked"),
+  );
+  assert.doesNotMatch(base, /background:\s*var\(--simprok-authority-navy-900\)/);
+  assert.match(css, /\.simprok-rab-toolbar__lock--locked[\s\S]{0,200}--simprok-authority-navy-900/);
+});
+
 test("F. the lock control toggles explanation only — no write, no transition", () => {
-  const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-toolbar__lock"')));
+  const tag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf(LOCK_ANCHOR)));
 
   // Locked: toggles local disclosure state. Editable: the existing lock command.
   assert.match(tag, /rabLocked \? setLockNoteOpen\(\(open\) => !open\) : setLockConfirmOpen\(true\)/);
@@ -208,8 +237,10 @@ test("the frozen workspace states its own truth", () => {
 
 /** Interactive controls that must be inert while the RAB is frozen. */
 const WRITE_CONTROLS = [
-  { name: 'delete row', anchor: 'aria-label="Hapus baris"' },
-  { name: 'delete note', anchor: 'aria-label="Hapus catatan"' },
+  // RAB-TABLE-UX-01R-FINAL: the per-row trash icons are gone from the Aksi
+  // column. Deleting is now a STRUCTURAL act reached from the contextual
+  // control, which is gated more strongly than `disabled` — it is not rendered
+  // at all unless the draft is editable. That guarantee is asserted by I3.
   { name: 'add sub judul (row)', anchor: 'aria-label="Tambah Sub Judul"' },
   { name: 'add item (row)', anchor: 'aria-label="Tambah Item"' },
   { name: 'add sub judul (empty state)', anchor: 'aria-label="Tambah Sub Judul ke draft"' },
@@ -253,15 +284,33 @@ test("I2. delete is gated at render, not merely refused after the click", () => 
   }
 });
 
+/**
+ * RAB-TABLE-UX-01R-FINAL — the delete door moved, and got a stronger gate.
+ *
+ * The Owner removed the trash icon from the price-action column. Deletion is
+ * now reached from the contextual structural control, which is not disabled
+ * while frozen — it is not rendered at all, so there is no control to fire.
+ */
+test("I3. the structural delete door exists, and only while the draft is editable", () => {
+  // The trash icon is gone from Aksi, and no second delete icon replaced it.
+  assert.equal(workspace.includes('aria-label="Hapus baris"'), false, "the row trash icon is back");
+  assert.equal(workspace.includes('aria-label="Hapus catatan"'), false, "the note trash icon is back");
+  assert.equal(workspace.includes("Trash2"), false, "a trash icon is still imported");
+
+  // The structural controls are rendered behind the lifecycle gate itself.
+  assert.match(workspace, /\{canEditDraft \? \(\s*<div className="simprok-rab-row-structure">/);
+  // …and deletion still runs through the existing authority.
+  assert.match(workspace, /const requestRemoveRow = \(rowId: string\)/);
+  assert.match(workspace, /removeRow\(rowId\)/);
+});
+
 test("II. delete stays available while the draft is editable", () => {
-  // The gate is exactly the lifecycle flag — never a permanent disable.
-  for (const anchor of ['aria-label="Hapus baris"', 'aria-label="Hapus catatan"']) {
-    for (const tag of tagsContaining(anchor)) {
-      assert.doesNotMatch(tag, /disabled=\{true\}/);
-      assert.doesNotMatch(tag, /disabled\s*(?![=])/);
-      assert.match(tag, /disabled=\{!canEditDraft\}/);
-    }
-  }
+  // Reachable from the contextual control on every row, with a real handler.
+  assert.match(workspace, /onClick=\{\(\) => requestRemoveRow\(row\.id\)\}/);
+  // A section never disappears silently: children force a confirmation.
+  assert.match(workspace, /const children = descendantIdsOf\(rows, rowId\)/);
+  assert.match(workspace, /if \(children\.length > 0\) \{[\s\S]{0,120}setPendingDelete/);
+  assert.match(workspace, /Hapus Sub Judul beserta\s*\n?\s*isinya\?|Hapus Sub Judul beserta/);
 });
 
 test("III. no local edit path bypasses a gateway", () => {
@@ -328,7 +377,7 @@ test("VI. read-only traces stay reachable while frozen", () => {
   assert.doesNotMatch(tag, /disabled/, "reading the price trace must stay reachable");
 
   // The lock disclosure likewise only explains the lifecycle.
-  const lockTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-toolbar__lock"')));
+  const lockTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf(LOCK_ANCHOR)));
   assert.match(lockTag, /disabled=\{rabLocked \? false :/);
 });
 
@@ -467,7 +516,26 @@ test("REC-3. the persisted display source is untouched", () => {
 test("REC-4. the surrounding lifecycle presentation is unchanged", () => {
   assert.match(rabDoor, /className=\{`simprok-rab-status simprok-rab-status--\$\{presentation\.chipModifier\}`\}/);
   assert.match(rabDoor, /\{presentation\.badgeLabel\}/);
-  assert.match(rabDoor, /const rowStateLabel = presentation\.label;/);
+  // The lifecycle itself still governs the page, even though it no longer
+  // prints itself once per row — see REC-5.
+  assert.match(rabDoor, /const rabFrozen = presentation\.status === 'TERKUNCI'/);
+});
+
+/**
+ * RAB-TABLE-UX-01R GAP-02 — the row-level STATUS column was one document fact
+ * repeated on every row. The Owner removed the visible column; the lifecycle
+ * behind it is untouched and still stated once, authoritatively.
+ */
+test("REC-5. Ruang Hidup states RAB status once, not once per row", () => {
+  const head = rabDoor.slice(rabDoor.indexOf("<thead"), rabDoor.indexOf("</thead>"));
+  assert.doesNotMatch(head, /<th[^>]*>Status<\/th>/, "the row Status column is back");
+  assert.equal(rabDoor.includes("{rowStateLabel}"), false, "a row still prints the document status");
+
+  // …and the document-level status did NOT go with it.
+  assert.match(rabDoor, /Status &amp; Mekanisme|Status & Mekanisme/);
+  assert.match(rabDoor, /Status RAB/);
+  // Asal Harga, the other narrow column, is untouched.
+  assert.match(head, /<th[^>]*>Asal Harga<\/th>/);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -561,8 +629,10 @@ test("TR-5. opening a trace performs no business mutation", () => {
 });
 
 test("TR-6. Ruang Hidup shows the structural NO, not a row index", () => {
-  assert.match(rabDoor, /<th>No<\/th>/);
-  assert.match(rabDoor, /<td>\{row\.number\}<\/td>/);
+  // Attribute-tolerant: the law is which VALUE the column carries, not whether
+  // the element also carries a width class.
+  assert.match(rabDoor, /<th[^>]*>No<\/th>/);
+  assert.match(rabDoor, /<td[^>]*>\{row\.number\}<\/td>/);
   // The old index fallback is gone.
   assert.doesNotMatch(rabDoor, /String\(index \+ 1\)/);
   assert.match(rabDoor, /toPersistedRowDisplayList\(/);
@@ -579,22 +649,235 @@ test("TR-7. Asal Harga uses the Owner's locked vocabulary, from one resolver", (
 // RAB-TRACE-01 FINAL — row identity, one support slot, and two real rooms
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("TR-8. both tables carry NO and KODE, and no AHSP column", () => {
+/**
+ * RAB-TABLE-UX-01 supersedes the earlier reading of this law.
+ *
+ * TR-8 used to assert the opposite: that KODE showed the row's own WBS code
+ * and must never be called an AHSP code. That was faithful to the law as it
+ * stood. The Owner has since decided the visible code in the RAB table is the
+ * ANALYSIS the row is priced by — a BOQ/WBS identity is machine identity and
+ * no longer spends a human-facing column.
+ *
+ * What has NOT changed, and is still asserted below: there is exactly one code
+ * column, the internal identity survives untouched on the row, and the value
+ * shown comes from the single AHSP identity authority rather than from the
+ * row's position or from any code invented here.
+ */
+test("TR-8. both tables carry NO and one KODE AHSP column, sourced from the identity authority", () => {
   for (const [name, source] of [["Ruang Hidup", rabDoor], ["Ruang Kerja", workspace]] as const) {
     const head = source.slice(source.indexOf("<thead"), source.indexOf("</thead>"));
     assert.match(head, /<th[^>]*>No<\/th>/, `${name} lost the NO column`);
-    assert.match(head, /<th[^>]*>Kode<\/th>/, `${name} lost the KODE column`);
-    assert.doesNotMatch(head, /<th[^>]*>AHSP/, `${name} still advertises an AHSP column`);
+    assert.match(head, /<th[^>]*>Kode AHSP<\/th>/, `${name} lost the KODE AHSP column`);
+    // Still exactly one code column — the AHSP code replaced the WBS code in
+    // place and did not become a second identity column beside it.
+    assert.equal(
+      (head.match(/<th[^>]*>Kode/g) ?? []).length,
+      1,
+      `${name} shows more than one code column`,
+    );
   }
 
-  // KODE is the row's own code, and is never relabelled as an AHSP code.
-  assert.match(rabDoor, /<td>\{row\.code\}<\/td>/);
-  assert.match(workspace, /<td>\{row\.wbsCode\}<\/td>/);
-  assert.equal(workspace.includes("Kode AHSP"), false, "wbsCode must not be called an AHSP code");
+  // The displayed value is the resolved AHSP identity, in both rooms.
+  assert.match(workspace, /const ahspIdentity = resolveAhspIdentity\(row\.ahsp\)/);
+  assert.match(workspace, /\{ahspIdentity\.shortLabel\}/);
+  assert.match(rabDoor, /\{row\.ahsp\.shortLabel\}/);
+
+  // No room derives a code from the row's own identity or position.
+  assert.doesNotMatch(workspace, /<td[^>]*>\{row\.wbsCode\}<\/td>/, "wbsCode is back in a visible cell");
+  assert.doesNotMatch(rabDoor, /<td[^>]*>\{row\.code\}<\/td>/, "row.code is back in a visible cell");
+
+  // RICH INSIDE: the machine identity itself is untouched and still carried.
+  assert.match(workspace, /wbsCode/, "the row lost its WBS identity entirely");
+  assert.match(rabDoor, /code: item\.wbsCode|row\.code/, "the viewer lost its code identity entirely");
 
   // The AHSP truth itself is untouched — still projected, still resolved.
   assert.match(rabDoor, /evidenceRow\.ahspWire/);
   assert.match(workspace, /resolveAhspIdentity/);
+});
+
+/**
+ * The geometry law this refinement exists for: one column absorbs the room,
+ * the compact ones do not, and neither room prices its columns by position.
+ */
+test("TR-8b. column widths are named by function, not by position", () => {
+  // Position-based widths cannot be right in two tables whose column orders
+  // differ — that is what put Uraian on 160px and Harga Satuan on 80px in the
+  // viewer. They must not come back.
+  assert.doesNotMatch(css, /\.simprok-rab-table th:nth-child/);
+  assert.doesNotMatch(css, /\.simprok-rab-draft-table th:nth-child/);
+
+  // Uraian is the one flexible column.
+  assert.match(css, /\.simprok-rab-col-uraian\s*\{[^}]*width:\s*auto/);
+  assert.match(css, /\.simprok-rab-col-uraian\s*\{[^}]*min-width:/);
+
+  // Money never wraps.
+  for (const money of ["simprok-rab-col-harga", "simprok-rab-col-jumlah"]) {
+    assert.match(
+      css,
+      new RegExp(`\\.${money}\\s*\\{[^}]*white-space:\\s*nowrap`),
+      `${money} may wrap a Rupiah value`,
+    );
+  }
+
+  // Exactly one horizontal scrolling authority per room, and the viewer has
+  // one at all — it previously scrolled the whole document instead.
+  assert.match(css, /\.simprok-rab-table-canvas\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(rabDoor, /simprok-rab-table-canvas/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RAB-TABLE-UX-01R — Owner remediation laws
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GAP-05. `addChild` never broke; its only visible doors were the empty state
+ * and a folder row's own action cell, so a draft with rows and no sub-heading
+ * offered no way to add anything. The door must stay reachable from the sheet
+ * itself, independently of whether any folder exists.
+ */
+test("UX-1. the creation door is reachable without an empty draft or a folder", () => {
+  const tools = workspace.slice(
+    workspace.indexOf('className="simprok-rab-sheet__tools"'),
+    workspace.indexOf('className="simprok-rab-table-wrap"'),
+  );
+  assert.notEqual(tools.length, 0, "the sheet tools strip is gone");
+  assert.match(tools, /addChild\(null, 'folder'\)/, "+ Sub Judul door lost");
+  assert.match(tools, /addChild\(null, 'item'\)/, "+ Item door lost");
+  // It is a door, not decoration: gated by the same lifecycle as every other
+  // draft edit, never by row shape.
+  assert.match(tools, /disabled=\{!canEditDraft\}/);
+  // The existing per-folder doors are preserved, not replaced.
+  assert.match(workspace, /addChild\(row\.id, 'folder'\)/);
+  assert.match(workspace, /addChild\(row\.id, 'item'\)/);
+});
+
+/**
+ * GAP-06. One numbering authority, shared by both rooms. A second algorithm —
+ * or a decimal number written in JSX — is how hierarchy quietly becomes flat.
+ */
+test("UX-2. hierarchical numbering has exactly one authority", () => {
+  assert.match(workspace, /assignStructuralNumbers/);
+  assert.match(
+    readFileSync("src/utils/rabPersistedDraftDisplay.ts", "utf8"),
+    /assignStructuralNumbers/,
+  );
+  // Neither room composes a number itself.
+  for (const [name, source] of [["Ruang Kerja", workspace], ["Ruang Hidup", rabDoor]] as const) {
+    assert.doesNotMatch(source, /\$\{[^}]*\}\.\$\{[^}]*\}/, `${name} builds a number in JSX`);
+  }
+});
+
+/**
+ * GAP-07. Zoom belongs to the TABLE. If it ever wrapped the page, the toolbar
+ * and the detail panel would scale with it and this would be browser zoom.
+ */
+test("UX-3. zoom is scoped to the table and is session-local", () => {
+  assert.match(workspace, /simprok-rab-canvas__zoom simprok-rab-table-zoom/);
+  // The scaled box sits inside the table canvas, never around the page body.
+  const zoomAt = workspace.indexOf("simprok-rab-table-zoom");
+  const wrapAt = workspace.indexOf('className="simprok-rab-table-wrap"');
+  assert.ok(wrapAt !== -1 && wrapAt < zoomAt, "zoom must live inside the table canvas");
+  assert.ok(
+    zoomAt < workspace.indexOf('className="simprok-rab-table simprok-rab-draft-table"'),
+    "zoom must wrap the table",
+  );
+  // Bounded, and reusing Ruang Hidup's own variable rather than a new engine.
+  assert.match(workspace, /Math\.min\(140, Math\.max\(80, next\)\)/);
+  assert.match(workspace, /'--simprok-rab-zoom': zoom \/ 100/);
+  // Nothing is persisted and nothing is fetched by zooming.
+  const zoomBlock = workspace.slice(
+    workspace.indexOf("const changeZoom"),
+    workspace.indexOf("const changeZoom") + 200,
+  );
+  assert.doesNotMatch(zoomBlock, /apiFetch|localStorage|fetch\(/);
+});
+
+/**
+ * GAP-06/07 geometry. Resizing is session-local, bounded, and must never turn
+ * a pointer move into a network call or a stored preference.
+ */
+test("UX-4. the detail panel resizes locally, bounded, with no persistence", () => {
+  assert.match(workspace, /className="simprok-rab-drawer-resizer"/);
+  assert.match(workspace, /onPointerDown=\{startDrawerResize\}/);
+  // Bounded on both sides.
+  assert.match(workspace, /const DRAWER_MIN = \d+;/);
+  assert.match(workspace, /const DRAWER_MAX = \d+;/);
+  assert.match(workspace, /Math\.min\(\s*DRAWER_MAX/);
+  assert.match(workspace, /Math\.max\(DRAWER_MIN/);
+  // The drag writes a CSS variable, not React state, so the table does not
+  // re-render on every pointer move.
+  assert.match(workspace, /setProperty\('--simprok-rab-drawer-width'/);
+  const resizeStart = workspace.indexOf("const startDrawerResize");
+  const resize = workspace.slice(
+    resizeStart,
+    workspace.indexOf("'pointercancel', onUp);", resizeStart),
+  );
+  assert.doesNotMatch(resize, /apiFetch|localStorage|fetch\(/, "resize must not persist or fetch");
+  // Listeners are removed again — no leak.
+  assert.match(resize, /removeEventListener\('pointermove'/);
+  assert.match(resize, /removeEventListener\('pointerup'/);
+});
+
+/**
+ * GAP-08 (mobile). The SAME drawer, presented full-screen — not a second
+ * mobile detail component carrying its own copy of the truth.
+ */
+test("UX-5. mobile shows the same panel full-screen, and can be closed", () => {
+  assert.match(workspace, /simprok-ahsp-drawer--fullscreen/);
+  assert.match(workspace, /matchMedia\('\(max-width: 640px\)'\)/);
+  // Exactly one drawer element exists in the page.
+  assert.equal(workspace.split("<aside").length - 1, 1, "a second detail surface appeared");
+  // The resize handle is desktop-only; there is nothing to drag full-screen.
+  assert.match(workspace, /isMobileViewport \? null : \(/);
+  // The existing close control still closes it.
+  assert.match(workspace, /aria-label="Tutup panel"/);
+  assert.match(css, /\.simprok-ahsp-drawer--fullscreen[\s\S]{0,240}position:\s*fixed/);
+});
+
+/**
+ * GAP-03. The badge used to float over the sentence explaining the price. In a
+ * panel the Owner can now narrow, that collision is guaranteed unless the two
+ * share normal flow.
+ */
+test("UX-6. the drawer's explanatory text cannot be covered by its badge", () => {
+  const frame = css.slice(
+    css.indexOf(".simprok-ahsp-drawer__frame {"),
+    css.indexOf(".simprok-ahsp-drawer__primary"),
+  );
+  assert.match(frame, /position:\s*static/, "the badge still floats over the text");
+  assert.doesNotMatch(frame, /position:\s*relative/);
+  assert.match(frame, /flex-direction:\s*column/);
+  // The message itself is untouched.
+  assert.match(workspace, /\{costEngineStatus\.frameMessage\}/);
+  assert.match(workspace, /\{costEngineStatus\.frameBadge\}/);
+});
+
+/**
+ * GAP-08. The recipe is grouped EXISTING data read through an endpoint that
+ * already exists — and it must not become a second price trace.
+ */
+test("UX-7. the AHSP door shows the recipe, and Rincian Harga still owns price", () => {
+  assert.match(workspace, /groupAhspComposition/);
+  assert.match(workspace, /ahsp-occurrences\/\$\{compositionOccurrenceId\}/);
+  // Reuses the occurrence the row already has; invents no identity.
+  assert.match(
+    workspace,
+    /selectedItem\?\.calculationOccurrenceId \?\? selectedItem\?\.workingOccurrenceId/,
+  );
+  // The price-trace block has a frame of its own earlier in the file, so the
+  // recipe's slice must end at the frame that FOLLOWS it.
+  const compositionStart = workspace.indexOf('className="simprok-ahsp-composition"');
+  assert.notEqual(compositionStart, -1, "the AHSP recipe block is missing");
+  const composition = workspace.slice(
+    compositionStart,
+    workspace.indexOf('className="simprok-ahsp-drawer__frame"', compositionStart),
+  );
+  assert.match(composition, /Koefisien/);
+  // No money in the recipe: that question belongs to Rincian Harga.
+  assert.doesNotMatch(composition, /formatRupiah|unitPrice|lineTotal|Harga/);
+  // …and Rincian Harga is still its own door.
+  assert.match(workspace, /PRICE_TRACE_ROW_ACTION/);
+  assert.match(workspace, /drawerMode === 'PRICE_TRACE'/);
 });
 
 test("TR-9. the origin badge is itself the evidence door", () => {
@@ -602,9 +885,11 @@ test("TR-9. the origin badge is itself the evidence door", () => {
   assert.equal(rabDoor.includes(">{PRICE_TRACE_ACTION}<"), false, "the separate link text is back");
   const badge = rabDoor.slice(rabDoor.indexOf("const openable ="), rabDoor.indexOf("<span style={badgeStyle}>"));
   assert.match(badge, /onClick=\{\(\) => setEvidenceRowId\(row\.id\)\}/);
-  assert.match(badge, /\{origin\.label\}/);
+  // Lineage-aware label: "Import · Auto SIMPROK" when the row was transferred
+  // in, otherwise just the origin. Same single element, same door.
+  assert.match(badge, /\{origin\.lineageLabel\}/);
   // A row with no price is a plain fact, not a door.
-  assert.match(rabDoor, /<span style=\{badgeStyle\}>\{origin\.label\}<\/span>/);
+  assert.match(rabDoor, /<span style=\{badgeStyle\}>\{origin\.lineageLabel\}<\/span>/);
 });
 
 test("TR-10. one right-side slot switches contents — no third grid sibling", () => {

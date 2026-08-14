@@ -728,6 +728,10 @@ export interface CostEngineCopy {
 const AHSP_ENGINE_INACTIVE_FRAME_MESSAGE =
   'Komponen tenaga, bahan, alat, koefisien, dan Basic Price akan tampil setelah engine AHSP tersambung. Angka detail tidak dibuat palsu.';
 
+/** A manual price is complete as it stands; it simply has no breakdown to show. */
+const MANUAL_PRICE_FRAME_MESSAGE =
+  'Harga ini diketik langsung oleh pengguna, sehingga tidak mempunyai rincian pembentuk harga dari perhitungan SIMPROK. Analisa AHSP tetap dapat dilampirkan sebagai rujukan tanpa mengubah angka ini.';
+
 /**
  * Drawer copy coherence: reuses toRabCostDisplay (the existing display
  * adapter) rather than inventing a second status vocabulary. The drawer
@@ -738,7 +742,23 @@ const AHSP_ENGINE_INACTIVE_FRAME_MESSAGE =
 export const describeCostEngineStatus = (
   ahspCodePresent: boolean,
   costRowStatus: CostRowStatus | undefined,
+  /**
+   * RAB-TRUTH-CLOSEOUT-01 — typing a price is a lawful way to price a row, not
+   * a failure of anything. While the current price is manual, the drawer must
+   * not lead with "Engine belum aktif": nothing is broken, the calculation was
+   * simply not the source of this number. The engine copy stays exactly as it
+   * was for every other case.
+   */
+  currentPriceIsManual = false,
 ): CostEngineCopy => {
+  if (currentPriceIsManual) {
+    return {
+      statusLabel: 'Ketik Manual',
+      sourceLabel: 'Diisi pengguna',
+      frameBadge: 'Ketik Manual',
+      frameMessage: MANUAL_PRICE_FRAME_MESSAGE,
+    };
+  }
   if (!ahspCodePresent) {
     return {
       statusLabel: 'Engine belum aktif',

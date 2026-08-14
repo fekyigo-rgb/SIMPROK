@@ -1,4 +1,13 @@
-import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowDown,
@@ -16,10 +25,24 @@ import {
   Save,
   Search,
   Sparkles,
-  Trash2,
+  Minus,
+  Plus,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
+import {
+  groupAhspComposition,
+  hasAnyComponent,
+  type AhspResolutionWire,
+} from '../utils/ahspCompositionDisplay';
+import {
+  availableInsertPositions,
+  descendantIdsOf,
+  insertRowRelativeTo,
+  type StructuralInsertPosition,
+} from '../utils/rabStructuralInsert';
 import {
   toPersistedCalculationDisplay,
   type PersistedCalculationWire,
@@ -34,6 +57,12 @@ import {
   type PrelockFindingLine,
 } from '../utils/rabLockDisplay';
 import { assignStructuralNumbers } from '../utils/rabRowNumbering';
+import {
+  contiguousFollowingSiblings,
+  orderRowsForPersistence,
+  reparentRows,
+} from '../utils/rabStructuralReparent';
+import type { ReparentResult } from '../utils/rabStructuralReparent';
 import {
   buildPriceTrace,
   resolveAhspIdentity,
@@ -207,9 +236,34 @@ interface NumberedRabRow extends RabRow {
   depth: number;
 }
 
-const formatRupiah = (value: number) => `Rp ${Math.round(value).toLocaleString('id-ID')}`;
+/**
+ * MONEY IS MONEY, WHOEVER TYPED IT.
+ *
+ * This used to be a second, weaker money formatter: `Math.round` plus a plain
+ * locale string, so a hand-entered price rendered as `Rp 3.000.000` while a
+ * kernel price beside it rendered as `Rp 72.615,92`. The manual row looked
+ * like a lesser kind of number, which is a presentation lie — the origin is
+ * explained in Rincian Harga and must never change how the amount is written.
+ *
+ * There is now ONE money authority for both rooms: formatExactMoney. This is
+ * the thin bridge from the workspace's in-memory numbers to the canonical
+ * decimal string it expects; nothing is persisted in this shape.
+ */
+const formatRupiah = (value: number) =>
+  formatExactMoney(Number.isFinite(value) ? Number(value).toFixed(2) : '0.00');
 
-const formatDraftNumber = (value: number) => Number(value || 0).toLocaleString('id-ID');
+/**
+ * The editable presentation of a number, in Indonesian. Two decimals minimum
+ * so a volume reads `24,00` and a manual price reads `3.000.000,00`, matching
+ * the read-only cells beside them. While a field is focused the raw text the
+ * user is typing is shown instead — see `editingCell` — so formatting never
+ * fights the keyboard.
+ */
+const formatDraftNumber = (value: number) =>
+  Number(value || 0).toLocaleString('id-ID', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  });
 
 const parseDraftNumber = (value: string) => {
   const normalized = value
@@ -343,6 +397,14 @@ const outdentRow = (rows: RabRow[], rowId: string): RabRow[] => {
     ),
   );
 };
+
+/**
+ * Canonical RAB law, stated once for this page: a Sub Judul is the section, and
+ * only a section owns children. `indentRow` and the insert menu already obey
+ * it; the adoption suggestion asks the same question through this predicate, so
+ * the structural utilities never hold a second copy of the rule.
+ */
+const isSectionRow = (row: RabRow): boolean => row.type === 'folder';
 
 const createRow = (type: RabRowType, parentId: string | null, sortOrder: number): RabRow => ({
   id: `local-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -773,7 +835,14 @@ export function RabWorkspacePage() {
     : undefined;
   const selectedCostDisplay = selectedResolvedCostStatus ? toRabCostDisplay(selectedResolvedCostStatus) : null;
   /** Drawer copy coherence: never says "Engine belum aktif" while selectedCostDisplay shows a real Cost Kernel result. */
-  const costEngineStatus = describeCostEngineStatus(Boolean(selectedItem?.ahsp), selectedResolvedCostStatus);
+  const costEngineStatus = describeCostEngineStatus(
+    Boolean(selectedItem?.ahsp),
+    selectedResolvedCostStatus,
+    // A row whose CURRENT price was typed by a person is manual, whatever the
+    // engine did before — so the drawer describes it as manual, not broken.
+    selectedItem?.priceOrigin === 'MANUAL_CLIENT' ||
+      Boolean(selectedItem?.manualUnitPrice),
+  );
 
   /**
    * RM-03 — load the read-only re-proof for a persisted line.
@@ -808,6 +877,58 @@ export function RabWorkspacePage() {
         setPersistedProof(null);
       });
   }, [projectId, selectedItem?.id, selectedItem?.priceOrigin, selectedItem?.persistedUnitPrice]);
+
+  /**
+   * Load the selected row's AHSP composition from its occurrence.
+   *
+   * The calculation occurrence is preferred because it is the one the stored
+   * price was proved from; the working occurrence answers for a row that has
+   * been given an AHSP but not yet priced — which is exactly how an
+   * unresolved row (B4-B10) still shows its full recipe. Superseded responses
+   * are dropped by generation, so a fast click-through cannot leave one row
+   * showing another row's analysis.
+   */
+  /**
+   * THE AHSP RECIPE for the selected row: Tenaga, Bahan, Peralatan and their
+   * coefficients. Read from the occurrence SIMPROK already froze when the AHSP
+   * was selected, through the endpoint that already exists — no new route, no
+   * second resolver, no schema. `undefined` while loading, `null` when the row
+   * has no occurrence to read.
+   */
+  const [ahspComposition, setAhspComposition] = useState<
+    AhspResolutionWire[] | null | undefined
+  >(null);
+  const compositionGenerationRef = useRef(0);
+  const compositionOccurrenceId =
+    selectedItem?.calculationOccurrenceId ?? selectedItem?.workingOccurrenceId ?? null;
+  useEffect(() => {
+    const generation = ++compositionGenerationRef.current;
+    if (!projectId || !compositionOccurrenceId) {
+      setAhspComposition(null);
+      return;
+    }
+    setAhspComposition(undefined);
+    apiFetch(`/projects/${projectId}/ahsp-occurrences/${compositionOccurrenceId}`)
+      .then((response) => {
+        if (!response.ok) throw new Error('occurrence-load-failed');
+        return response.json() as Promise<{ resourceResolutions?: AhspResolutionWire[] }>;
+      })
+      .then((payload) => {
+        if (generation !== compositionGenerationRef.current) return;
+        setAhspComposition(payload.resourceResolutions ?? []);
+      })
+      .catch(() => {
+        if (generation !== compositionGenerationRef.current) return;
+        // Null renders an honest "not readable", never an empty recipe that
+        // would look like an analysis with no components.
+        setAhspComposition(null);
+      });
+  }, [projectId, compositionOccurrenceId]);
+
+  const ahspComponentGroups = useMemo(
+    () => groupAhspComposition(ahspComposition ?? []),
+    [ahspComposition],
+  );
 
   const persistedProofDisplay = useMemo(
     () =>
@@ -933,6 +1054,138 @@ export function RabWorkspacePage() {
   const [lockConfirmOpen, setLockConfirmOpen] = useState(false);
   const [lockFindings, setLockFindings] = useState<PrelockFindingLine[]>([]);
 
+  /**
+   * TABLE-ONLY ZOOM, session-local.
+   *
+   * The same primitive Ruang Hidup already uses (`--simprok-rab-zoom` plus a
+   * width-compensated scale on .simprok-rab-canvas__zoom), applied to the RAB
+   * table alone. The toolbar, header and detail panel are outside the scaled
+   * box and keep their real size, which is the whole point — this is not
+   * browser zoom. Nothing is persisted and nothing is fetched.
+   */
+  const [zoom, setZoom] = useState(100);
+  const changeZoom = (next: number) => setZoom(Math.min(140, Math.max(80, next)));
+
+
+  /**
+   * PANEL WIDTH, session-local, in pixels.
+   *
+   * Held in a ref during a drag and written to a CSS variable directly, so
+   * moving the pointer resizes the panel without re-rendering the RAB table on
+   * every frame. React state is updated once, when the pointer is released.
+   */
+  const DRAWER_MIN = 320;
+  const DRAWER_MAX = 720;
+  const DRAWER_DEFAULT = 420;
+  const [drawerWidth, setDrawerWidth] = useState(DRAWER_DEFAULT);
+  const workspaceBodyRef = useRef<HTMLElement | null>(null);
+  const dragWidthRef = useRef(DRAWER_DEFAULT);
+
+  /**
+   * Phone-sized viewport. Below this the table and a side panel cannot both be
+   * useful, so the SAME drawer is presented as a full-screen surface instead of
+   * being squeezed beside the table. One implementation, two presentations.
+   */
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  /** True only after the Owner actively opened the inspection. Mobile only. */
+  const [mobileInspectOpen, setMobileInspectOpen] = useState(false);
+
+  /**
+   * The contextual structural popup: which row asked for it, and where to draw
+   * it. Local state only — opening or closing it reaches no network and
+   * persists nothing. `null` when the table is at rest, which is most of the
+   * time and is how the RAB is meant to look.
+   */
+  const [structureMenu, setStructureMenu] = useState<
+    { rowId: string; x: number; y: number; canHoldChildren: boolean } | null
+  >(null);
+  /** A section delete waiting for an explicit answer. Never auto-confirmed. */
+  const [pendingDelete, setPendingDelete] = useState<
+    { rowId: string; childCount: number } | null
+  >(null);
+  /**
+   * An adopt waiting for an explicit answer. `selectedIds` opens as SIMPROK's
+   * suggestion and is edited by the Owner; nothing moves until confirmAdopt.
+   * This is a structural intent, not a second "which row is active" truth —
+   * selectedRowId still owns inspection focus and is untouched by it.
+   */
+  const [pendingAdopt, setPendingAdopt] = useState<
+    { parentId: string; selectedIds: string[] } | null
+  >(null);
+
+  /**
+   * The one numeric field currently being typed into, and the raw text in it.
+   *
+   * A canonical `24,00` is the right thing to READ and the wrong thing to type
+   * over: reformatting on every keystroke would fight the caret. So while a
+   * field has focus it shows exactly what the user typed, and on blur it
+   * returns to the canonical presentation the rest of the table uses. Only
+   * presentation is involved — the parsed number is committed on every change,
+   * exactly as before.
+   */
+  const [editingCell, setEditingCell] = useState<{ key: string; text: string } | null>(
+    null,
+  );
+  const numericFieldValue = (key: string, value: number) =>
+    editingCell?.key === key ? editingCell.text : formatDraftNumber(value);
+
+  useEffect(() => {
+    if (!structureMenu) return;
+    const close = (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.simprok-rab-structure-menu, .simprok-rab-row-structure')) return;
+      setStructureMenu(null);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setStructureMenu(null);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [structureMenu]);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const query = window.matchMedia('(max-width: 640px)');
+    const apply = () => setIsMobileViewport(query.matches);
+    apply();
+    query.addEventListener('change', apply);
+    return () => query.removeEventListener('change', apply);
+  }, []);
+
+  const startDrawerResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (isMobileViewport) return;
+    event.preventDefault();
+    const body = workspaceBodyRef.current;
+    if (!body) return;
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+
+    const onMove = (move: PointerEvent) => {
+      // Width is measured from the body's right edge, so the number means the
+      // same thing wherever the workspace sits on the page.
+      const next = Math.min(
+        DRAWER_MAX,
+        Math.max(DRAWER_MIN, body.getBoundingClientRect().right - move.clientX),
+      );
+      dragWidthRef.current = next;
+      body.style.setProperty('--simprok-rab-drawer-width', `${next}px`);
+    };
+    const onUp = () => {
+      handle.releasePointerCapture(event.pointerId);
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      setDrawerWidth(dragWidthRef.current);
+    };
+
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  };
+
   const handleLockRab = async () => {
     if (!projectId || isLocking) return;
     setLockConfirmOpen(false);
@@ -1014,6 +1267,14 @@ export function RabWorkspacePage() {
     if (rowId !== selectedRowId) markPersistContextChanged();
     setSelectedRowId(rowId);
     setDrawerMode(mode);
+    /**
+     * A row is also selected automatically when the draft loads, so "a row is
+     * selected" cannot mean "the Owner asked to inspect it". On a phone that
+     * distinction is the difference between landing on the RAB and landing on
+     * a full-screen panel covering it. Only a real activation opens the mobile
+     * inspection surface; on desktop the side panel behaves exactly as before.
+     */
+    setMobileInspectOpen(rowId !== '');
   };
 
   const handleRowClick = (rowId: string, event: MouseEvent<HTMLTableRowElement>) => {
@@ -1029,6 +1290,14 @@ export function RabWorkspacePage() {
   };
 
   const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft;
+
+  /**
+   * TRUE FOCUS. The shell owns the state (RAB-FOCUS-01); this page decides how
+   * much of its OWN chrome that state removes. Null-safe, so the page still
+   * renders in a mount without the dashboard layout — and defaults to the
+   * ordinary workspace, never to a stripped one.
+   */
+  const focusMode = layoutContext?.isHeaderVisible === false;
 
   const isPersistBusy = persistState.kind === 'persisting' || persistState.kind === 'reloading';
   const persistReachability: PersistActionReachability = evaluatePersistActionReachability({
@@ -1071,7 +1340,14 @@ export function RabWorkspacePage() {
       marginPercent,
       ppnPercent,
       taxPercent: ppnPercent,
-      rows: rows.map((row, index) => ({
+      /**
+       * PARENT BEFORE CHILD, ALWAYS. saveDraftBoq resolves `parentTempId`
+       * against a map it fills while walking this array, so a child that
+       * arrives before its parent resolves to null and is silently re-rooted.
+       * Raw array order only ever held because rows were appended in creation
+       * order; adopting existing rows breaks that, and it breaks it silently.
+       */
+      rows: orderRowsForPersistence(rows).map((row, index) => ({
         tempId: row.id,
         parentTempId: row.parentId,
         itemType: row.type === 'folder' ? 'FOLDER' : row.type === 'note' ? 'NOTE' : 'WORK_ITEM',
@@ -1178,6 +1454,94 @@ export function RabWorkspacePage() {
     if (!mutateRows((current) => [...current, newRow])) return;
     if (type === 'item') setUnitPrices((current) => ({ ...current, [newRow.id]: 0 }));
     setStatusMessage(`${type === 'folder' ? 'Sub Judul' : type === 'note' ? 'Catatan' : 'Item'} ditambahkan. Klik Simpan Draft untuk menyimpan.`);
+  };
+
+  /**
+   * The same creation authority as addChild — the same createRow, the same
+   * rows state, the same numbering — differing only in WHERE the row lands.
+   * Placement is decided among siblings by insertRowRelativeTo, so a row
+   * inserted below a Sub Judul lands after that Sub Judul's whole subtree
+   * instead of inside somebody else's section.
+   */
+  const insertRow = (
+    targetId: string,
+    position: StructuralInsertPosition,
+    type: RabRowType,
+  ) => {
+    const newRow = createRow(type, null, 0);
+    if (!mutateRows((current) => insertRowRelativeTo(current, targetId, position, newRow)))
+      return;
+    if (type === 'item') setUnitPrices((current) => ({ ...current, [newRow.id]: 0 }));
+    setStructureMenu(null);
+    setStatusMessage(
+      `${type === 'folder' ? 'Sub Judul' : 'Item'} disisipkan. Klik Simpan Draft untuk menyimpan.`,
+    );
+  };
+
+  /**
+   * "Jadikan Anak" — the other half of editing a RAB as a document.
+   *
+   * A Sub Judul written above rows that already exist must be able to adopt
+   * them without those rows being retyped. SIMPROK opens with a SUGGESTION —
+   * the rows immediately following, which is almost always what the Sub Judul
+   * was written for — but adopts nobody until the Owner confirms. Opening the
+   * panel mutates nothing (§16).
+   */
+  const requestAdopt = (parentRowId: string) => {
+    setStructureMenu(null);
+    setPendingAdopt({
+      parentId: parentRowId,
+      selectedIds: contiguousFollowingSiblings(rows, parentRowId, isSectionRow),
+    });
+  };
+
+  const confirmAdopt = () => {
+    if (!pendingAdopt) return;
+    const { parentId, selectedIds } = pendingAdopt;
+    if (selectedIds.length === 0) {
+      setPendingAdopt(null);
+      return;
+    }
+
+    let outcome: ReparentResult<RabRow> | null = null;
+    const applied = mutateRows((current) => {
+      outcome = reparentRows(current, selectedIds, parentId);
+      return outcome.rows;
+    });
+    setPendingAdopt(null);
+    if (!applied || !outcome) return;
+
+    // Report what actually happened, including anything the structural law
+    // refused — a silent partial result would be worse than a longer sentence.
+    const result: ReparentResult<RabRow> = outcome;
+    const moved = result.movedIds.length;
+    const carried = result.rejected.filter(
+      (entry) => entry.reason === 'ALREADY_CHILD_OF_MOVED',
+    ).length;
+    const parentName = rows.find((row) => row.id === parentId)?.name ?? 'Sub Judul';
+    setStatusMessage(
+      `${moved} baris menjadi anak "${parentName}"${
+        carried > 0 ? ` (${carried} baris ikut bersama induknya)` : ''
+      }. Klik Simpan Draft untuk menyimpan.`,
+    );
+  };
+
+  /**
+   * The user-facing delete door, now reached from the contextual control
+   * rather than a trash icon in the price-action column. It calls the SAME
+   * removeRow as before — which already removes a section's descendants with
+   * it — and adds the one thing that behaviour was missing: an explicit
+   * confirmation before a section takes its contents with it. Nothing cascades
+   * silently, and nothing is re-parented behind the Owner's back.
+   */
+  const requestRemoveRow = (rowId: string) => {
+    const children = descendantIdsOf(rows, rowId);
+    setStructureMenu(null);
+    if (children.length > 0) {
+      setPendingDelete({ rowId, childCount: children.length });
+      return;
+    }
+    removeRow(rowId);
   };
 
   const removeRow = (rowId: string) => {
@@ -1494,109 +1858,144 @@ export function RabWorkspacePage() {
 
   return (
     <div className="simprok-rab-workspace">
-      <div className="simprok-rab-focus-nav" aria-label="Navigasi Ruang Kerja RAB">
-        <button onClick={() => navigate('/')} title="Kembali ke Beranda" aria-label="Kembali ke Beranda" data-route="/">
-          <ArrowLeft size={17} /> Kembali
-        </button>
-        <button onClick={() => setShowBackflowWarning(!showBackflowWarning)} title="Ubah Data Pekerjaan" aria-label="Ubah Data Pekerjaan" className="simprok-rab-nav-secondary">
-          Ubah Data Pekerjaan
-        </button>
-        <button onClick={() => layoutContext?.toggleSidebar()} title="Tampilkan atau sembunyikan menu" aria-label="Tampilkan atau sembunyikan menu" data-route="/?ruang=ruang-kerja-rab">
-          {layoutContext?.isSidebarVisible ? <ChevronsLeft size={17} /> : <ChevronsRight size={17} />} Menu
-        </button>
-      </div>
-
-      <header className="simprok-rab-workspace__header">
-        <div>
-          <div className="simprok-rab-workspace__eyebrow">SIMPROK / Buat RAB / Ruang Kerja RAB</div>
-          <h1>Ruang Kerja RAB</h1>
-          {/* The room is the same room; what may be done in it is not. */}
-          <p>
-            {!projectId
-              ? 'Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.'
-              : rabLocked
-              ? `Project: ${projectId}. Ruang kerja RAB terkunci — baca dan telusuri hasil RAB.`
-              : `Project: ${projectId}. Ruang kerja draft RAB — edit dan simpan sebelum baseline resmi.`}
-          </p>
-        </div>
-        <span className="simprok-rab-workspace__status">{statusMessage}</span>
-      </header>
-
-      <section className="simprok-rab-toolbar" aria-label="Aksi Ruang Kerja RAB">
-        <input ref={importInputRef} hidden type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void previewImport(file); }} />
-        <button onClick={() => importInputRef.current?.click()} disabled={!projectId || !canEditDraft || isImporting} title="Import BOQ XLSX" aria-label="Import BOQ">
-          <FileInput size={17} /> Import BOQ
-        </button>
-        <button onClick={() => navigate('/first-real-input-preview?tab=ahsp')} title="Preview Cari AHSP (Data Contoh)" aria-label="Preview Cari AHSP" data-route="/?ruang=cari-ahsp">
-          <Search size={17} /> Cari AHSP (Preview)
-        </button>
-        <button onClick={() => openPlaceholder('Export')} title="Export - belum tersambung" aria-label="Export - belum tersambung" data-route="/?ruang=export-rab">
-          <FileDown size={17} /> Export
-        </button>
-        <button onClick={() => openPlaceholder('Print')} title="Print - belum tersambung" aria-label="Print - belum tersambung" data-route="/?ruang=print-rab">
-          <Printer size={17} /> Print
-        </button>
-        {/*
-          A frozen RAB has nothing to save, so the command is not offered. It
-          used to carry aria-disabled alone: focusable, clickable, still saying
-          "Simpan Draft", and refused only once handleSaveDraft ran. Leaving it
-          visible would also have the locked screen speaking of drafts again.
-          Saving is genuinely outside what a locked RAB permits, so the control
-          is absent rather than dressed up as disabled.
-
-          While the draft is editable this is exactly the control it always
-          was — same handler, same aria-disabled conditions for the states
-          that are momentary rather than lifecycle.
-        */}
-        {canEditDraft ? (
-          <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId}>
-            <Save size={17} /> {isSaving ? 'Menyimpan...' : 'Simpan Draft'}
+      {/*
+        TRUE FOCUS: THE TABLE IS THE WORK.
+        Ruang Kerja's three page-local chrome blocks — this navigation row, the
+        status row below it, and the action toolbar — leave the LAYOUT, not just
+        the eye. Collapsing them to zero height or transparency would keep the
+        vertical space they were holding, which is the only thing the Owner
+        actually asked to get back.
+        Rendered as `cond ? … : null` rather than removed from the tree, so the
+        RAB table keeps its sibling position and React never remounts it: an
+        Uraian being typed into survives the toggle (§24).
+      */}
+      {focusMode ? null : (
+        <div className="simprok-rab-focus-nav" aria-label="Navigasi Ruang Kerja RAB">
+          <button onClick={() => navigate('/')} title="Kembali ke Beranda" aria-label="Kembali ke Beranda" data-route="/">
+            <ArrowLeft size={17} /> Kembali
           </button>
-        ) : null}
-        {/*
-          RM-03D1 — the lock door is live. It is offered only while the draft
-          is still editable and its pricing is complete: locking an incomplete
-          RAB would freeze a total nobody can stand behind, and the server
-          refuses it anyway, so the door tells the truth before it is pushed.
-        */}
-        {/*
-          Once the RAB is frozen this same control stops being a lock command
-          and becomes the one place the freeze explains itself. It is not an
-          unlock: toggling it moves nothing but a paragraph. A second TERKUNCI
-          control elsewhere on the screen would have the Owner asking which of
-          the two is the real one.
-        */}
-        <button
-          className="simprok-rab-toolbar__lock"
-          onClick={() => (rabLocked ? setLockNoteOpen((open) => !open) : setLockConfirmOpen(true))}
-          title={rabLocked ? RAB_LOCK_COPY.lockedNote : isLocking ? 'Mengunci RAB...' : RAB_LOCK_COPY.action}
-          aria-label={rabLocked ? RAB_LOCK_COPY.lockedBadge : RAB_LOCK_COPY.action}
-          aria-expanded={rabLocked ? lockNoteOpen : undefined}
-          aria-controls={rabLocked ? 'simprok-rab-lock-note' : undefined}
-          data-route="/?ruang=kunci-rab"
-          disabled={rabLocked ? false : isLocking || !projectId || !canEditDraft || !pricingComplete}
-        >
-          <LockKeyhole size={17} /> {rabLocked ? RAB_LOCK_COPY.lockedBadge : isLocking ? 'Mengunci...' : RAB_LOCK_COPY.action}
-        </button>
-        {rabLocked && lockNoteOpen ? (
-          <p
-            id="simprok-rab-lock-note"
-            role="status"
-            style={{
-              flexBasis: '100%',
-              margin: '0.375rem 0 0',
-              padding: '0.375rem 0.75rem',
-              borderRadius: '8px',
-              border: '1px solid #C7D5EC',
-              background: '#EAF0FB',
-              color: '#16294B',
-              fontSize: 'var(--text-sm)',
-            }}
+          <button onClick={() => setShowBackflowWarning(!showBackflowWarning)} title="Ubah Data Pekerjaan" aria-label="Ubah Data Pekerjaan" className="simprok-rab-nav-secondary">
+            Ubah Data Pekerjaan
+          </button>
+          <button onClick={() => layoutContext?.toggleSidebar()} title="Tampilkan atau sembunyikan menu" aria-label="Tampilkan atau sembunyikan menu" data-route="/?ruang=ruang-kerja-rab">
+            {layoutContext?.isSidebarVisible ? <ChevronsLeft size={17} /> : <ChevronsRight size={17} />} Menu
+          </button>
+        </div>
+      )}
+
+      {/*
+        The status row goes too. Hiding it cannot make editing unsafe: what a
+        user may do here is governed by `canEditDraft`, which disables every
+        editing control at the row itself — the sentence was only ever telling
+        the user about a rule, never enforcing it. Leaving focus mode brings it
+        straight back.
+      */}
+      {focusMode ? null : (
+        <header className="simprok-rab-workspace__header">
+          <div>
+            <div className="simprok-rab-workspace__eyebrow">
+              SIMPROK / Buat RAB / Ruang Kerja RAB
+            </div>
+            <h1>Ruang Kerja RAB</h1>
+            {/* The room is the same room; what may be done in it is not. */}
+            <p>
+              {!projectId
+                ? 'Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.'
+                : rabLocked
+                ? `Project: ${projectId}. Ruang kerja RAB terkunci — baca dan telusuri hasil RAB.`
+                : `Project: ${projectId}. Ruang kerja draft RAB — edit dan simpan sebelum baseline resmi.`}
+            </p>
+          </div>
+          <span className="simprok-rab-workspace__status">{statusMessage}</span>
+        </header>
+      )}
+
+      {/*
+        The action toolbar is the third block. Import, Export, Print, Simpan
+        Draft and Kunci RAB are all still one click away — through the same
+        toolbar, the moment focus mode is left. Keeping a reduced copy of them
+        in focus mode would rebuild the clutter the Owner asked to remove.
+      */}
+      {focusMode ? null : (
+        <section className="simprok-rab-toolbar" aria-label="Aksi Ruang Kerja RAB">
+          <input ref={importInputRef} hidden type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void previewImport(file); }} />
+          <button onClick={() => importInputRef.current?.click()} disabled={!projectId || !canEditDraft || isImporting} title="Import BOQ XLSX" aria-label="Import BOQ">
+            <FileInput size={17} /> Import BOQ
+          </button>
+          <button onClick={() => navigate('/first-real-input-preview?tab=ahsp')} title="Preview Cari AHSP (Data Contoh)" aria-label="Preview Cari AHSP" data-route="/?ruang=cari-ahsp">
+            <Search size={17} /> Cari AHSP (Preview)
+          </button>
+          <button onClick={() => openPlaceholder('Export')} title="Export - belum tersambung" aria-label="Export - belum tersambung" data-route="/?ruang=export-rab">
+            <FileDown size={17} /> Export
+          </button>
+          <button onClick={() => openPlaceholder('Print')} title="Print - belum tersambung" aria-label="Print - belum tersambung" data-route="/?ruang=print-rab">
+            <Printer size={17} /> Print
+          </button>
+          {/*
+            A frozen RAB has nothing to save, so the command is not offered. It
+            used to carry aria-disabled alone: focusable, clickable, still saying
+            "Simpan Draft", and refused only once handleSaveDraft ran. Leaving it
+            visible would also have the locked screen speaking of drafts again.
+            Saving is genuinely outside what a locked RAB permits, so the control
+            is absent rather than dressed up as disabled.
+
+            While the draft is editable this is exactly the control it always
+            was — same handler, same aria-disabled conditions for the states
+            that are momentary rather than lifecycle.
+          */}
+          {canEditDraft ? (
+            <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId}>
+              <Save size={17} /> {isSaving ? 'Menyimpan...' : 'Simpan Draft'}
+            </button>
+          ) : null}
+          {/*
+            RM-03D1 — the lock door is live. It is offered only while the draft
+            is still editable and its pricing is complete: locking an incomplete
+            RAB would freeze a total nobody can stand behind, and the server
+            refuses it anyway, so the door tells the truth before it is pushed.
+          */}
+          {/*
+            Once the RAB is frozen this same control stops being a lock command
+            and becomes the one place the freeze explains itself. It is not an
+            unlock: toggling it moves nothing but a paragraph. A second TERKUNCI
+            control elsewhere on the screen would have the Owner asking which of
+            the two is the real one.
+          */}
+          <button
+            /* The modifier is the STATE, not the action: navy authority styling
+               only once the RAB is genuinely locked. Behaviour, lifecycle and
+               the lock command itself are untouched. */
+            className={`simprok-rab-toolbar__lock${rabLocked ? ' simprok-rab-toolbar__lock--locked' : ''}`}
+            onClick={() => (rabLocked ? setLockNoteOpen((open) => !open) : setLockConfirmOpen(true))}
+            title={rabLocked ? RAB_LOCK_COPY.lockedNote : isLocking ? 'Mengunci RAB...' : RAB_LOCK_COPY.action}
+            aria-label={rabLocked ? RAB_LOCK_COPY.lockedBadge : RAB_LOCK_COPY.action}
+            aria-expanded={rabLocked ? lockNoteOpen : undefined}
+            aria-controls={rabLocked ? 'simprok-rab-lock-note' : undefined}
+            data-route="/?ruang=kunci-rab"
+            disabled={rabLocked ? false : isLocking || !projectId || !canEditDraft || !pricingComplete}
           >
-            {RAB_LOCK_COPY.lockedNote}
-          </p>
-        ) : null}
-      </section>
+            <LockKeyhole size={17} /> {rabLocked ? RAB_LOCK_COPY.lockedBadge : isLocking ? 'Mengunci...' : RAB_LOCK_COPY.action}
+          </button>
+          {rabLocked && lockNoteOpen ? (
+            <p
+              id="simprok-rab-lock-note"
+              role="status"
+              style={{
+                flexBasis: '100%',
+                margin: '0.375rem 0 0',
+                padding: '0.375rem 0.75rem',
+                borderRadius: '8px',
+                border: '1px solid #C7D5EC',
+                background: '#EAF0FB',
+                color: '#16294B',
+                fontSize: 'var(--text-sm)',
+              }}
+            >
+              {RAB_LOCK_COPY.lockedNote}
+            </p>
+          ) : null}
+        </section>
+      )}
       {importPreview ? (
         <section className="simprok-rab-validation-alert simprok-rab-validation-alert--info" aria-label="Preview Import BOQ">
           <strong>{importPreview.fileName} — sheet {importPreview.sheetName}</strong>
@@ -1647,6 +2046,154 @@ export function RabWorkspacePage() {
         </div>
       ) : null}
 
+      {/* THE CONTEXTUAL INSERT POPUP.
+          Fixed-positioned at the control it was opened from, so it floats over
+          the table without pushing a single row or changing a column width.
+          Only lawful placements appear: "di dalam" is offered by a Sub Judul
+          and by nothing else. */}
+      {structureMenu ? (
+        <div
+          className="simprok-rab-structure-menu"
+          role="menu"
+          aria-label="Sisipkan baris"
+          style={{ left: `${structureMenu.x}px`, top: `${structureMenu.y}px` }}
+        >
+          <button role="menuitem" onClick={() => insertRow(structureMenu.rowId, 'above', 'item')}>
+            Item di atas
+          </button>
+          <button role="menuitem" onClick={() => insertRow(structureMenu.rowId, 'below', 'item')}>
+            Item di bawah
+          </button>
+          <button role="menuitem" onClick={() => insertRow(structureMenu.rowId, 'above', 'folder')}>
+            Sub Judul di atas
+          </button>
+          <button role="menuitem" onClick={() => insertRow(structureMenu.rowId, 'below', 'folder')}>
+            Sub Judul di bawah
+          </button>
+          {availableInsertPositions(structureMenu.canHoldChildren).includes('inside') ? (
+            <button role="menuitem" onClick={() => insertRow(structureMenu.rowId, 'inside', 'item')}>
+              Item di dalam Sub Judul
+            </button>
+          ) : null}
+          {/* Only a row that can hold children can adopt any. */}
+          {structureMenu.canHoldChildren &&
+          contiguousFollowingSiblings(rows, structureMenu.rowId, isSectionRow).length > 0 ? (
+            <button role="menuitem" onClick={() => requestAdopt(structureMenu.rowId)}>
+              Jadikan baris di bawah sebagai anak…
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/*
+        ADOPT: SIMPROK SUGGESTS, THE OWNER DECIDES.
+        The list opens pre-ticked with the rows immediately below — almost
+        always what the Sub Judul was written for — and shows the numbering the
+        choice would produce BEFORE it is applied, so a large structural move is
+        never a leap of faith. Nothing here mutates rows; only Jadikan Anak does.
+      */}
+      {pendingAdopt ? (
+        (() => {
+          const parentRow = rows.find((row) => row.id === pendingAdopt.parentId);
+          const candidates = contiguousFollowingSiblings(rows, pendingAdopt.parentId, isSectionRow);
+          const selected = new Set(pendingAdopt.selectedIds);
+          const preview = buildNumberedRows(
+            reparentRows(rows, pendingAdopt.selectedIds, pendingAdopt.parentId).rows,
+          );
+          const numberOf = (id: string) =>
+            preview.find((row) => row.id === id)?.number ?? '';
+          const toggle = (id: string) =>
+            setPendingAdopt((current) =>
+              current === null
+                ? current
+                : {
+                    ...current,
+                    selectedIds: current.selectedIds.includes(id)
+                      ? current.selectedIds.filter((entry) => entry !== id)
+                      : // Keep the Owner's ticks in the RAB's own order, never
+                        // in click order — the adopted rows must land in the
+                        // sequence they are read in.
+                        candidates.filter(
+                          (entry) => entry === id || current.selectedIds.includes(entry),
+                        ),
+                  },
+            );
+
+          return (
+            <div
+              className="simprok-rab-confirm simprok-rab-confirm--adopt"
+              role="alertdialog"
+              aria-label="Jadikan baris sebagai anak Sub Judul"
+            >
+              <p>
+                Pilih baris yang menjadi anak <strong>{parentRow?.name}</strong> (
+                {numberOf(pendingAdopt.parentId)}).
+              </p>
+              <ul className="simprok-rab-adopt__list">
+                {candidates.map((id) => {
+                  const row = rows.find((entry) => entry.id === id);
+                  if (!row) return null;
+                  const childCount = descendantIdsOf(rows, id).length;
+                  return (
+                    <li key={id}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(id)}
+                          onChange={() => toggle(id)}
+                        />
+                        <span className="simprok-rab-adopt__number">
+                          {selected.has(id) ? numberOf(id) : ''}
+                        </span>
+                        <span className="simprok-rab-adopt__name">{row.name}</span>
+                        {/* A section takes its contents with it — say so. */}
+                        {childCount > 0 ? (
+                          <span className="simprok-rab-adopt__note">
+                            +{childCount} baris di dalamnya
+                          </span>
+                        ) : null}
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="simprok-rab-confirm__actions">
+                <button onClick={() => setPendingAdopt(null)}>Batal</button>
+                <button
+                  className="simprok-rab-confirm__primary"
+                  onClick={confirmAdopt}
+                  disabled={pendingAdopt.selectedIds.length === 0}
+                >
+                  Jadikan Anak ({pendingAdopt.selectedIds.length})
+                </button>
+              </div>
+            </div>
+          );
+        })()
+      ) : null}
+
+      {/* A section never takes its contents with it silently. */}
+      {pendingDelete ? (
+        <div className="simprok-rab-confirm" role="alertdialog" aria-label="Konfirmasi hapus">
+          <p>
+            Sub Judul ini berisi {pendingDelete.childCount} baris. Hapus Sub Judul beserta
+            isinya?
+          </p>
+          <div className="simprok-rab-confirm__actions">
+            <button onClick={() => setPendingDelete(null)}>Batal</button>
+            <button
+              className="simprok-rab-confirm__danger"
+              onClick={() => {
+                removeRow(pendingDelete.rowId);
+                setPendingDelete(null);
+              }}
+            >
+              Hapus beserta isinya
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* A refused lock says which rows moved, in the Owner's language. */}
       {lockFindings.length > 0 ? (
         <div className="simprok-rab-validation-alert" role="alert">
@@ -1661,7 +2208,15 @@ export function RabWorkspacePage() {
         </div>
       ) : null}
 
-      <main className="simprok-rab-workspace__body">
+      <main
+        className={`simprok-rab-workspace__body${
+          selectedItem && isMobileViewport && mobileInspectOpen
+            ? ' simprok-rab-workspace__body--inspecting'
+            : ''
+        }`}
+        ref={workspaceBodyRef}
+        style={{ '--simprok-rab-drawer-width': `${drawerWidth}px` } as CSSProperties}
+      >
         <section className="simprok-rab-sheet" aria-label="Tabel RAB">
           <div className="simprok-rab-sheet__label">
             {/* Storage is the same either way; freedom to edit is not. */}
@@ -1673,20 +2228,67 @@ export function RabWorkspacePage() {
                 ? 'Tersimpan di server — dapat dibaca dan ditelusuri, tidak dapat diubah'
                 : 'Draft tersimpan di server — edit bebas, simpan kapan saja'}
             </span>
+            <div className="simprok-rab-sheet__tools">
+              {/* THE CREATION DOOR, BACK WHERE IT IS ALWAYS REACHABLE.
+                  `addChild` never stopped working — but its only visible doors
+                  were the empty state and a folder row's own action cell, so a
+                  draft that already had rows and no sub-heading offered no way
+                  to add anything at all. Same function, same row types, same
+                  design language; only the door is restored. */}
+              {rabLocked ? null : (
+                <>
+                  <button
+                    className="simprok-rab-add-sub"
+                    onClick={() => addChild(null, 'folder')}
+                    disabled={!canEditDraft}
+                    title="Tambah Sub Judul"
+                    aria-label="Tambah Sub Judul"
+                  >
+                    + Sub Judul
+                  </button>
+                  <button
+                    className="simprok-rab-add-item"
+                    onClick={() => addChild(null, 'item')}
+                    disabled={!canEditDraft}
+                    title="Tambah Item pekerjaan"
+                    aria-label="Tambah Item pekerjaan"
+                  >
+                    + Item
+                  </button>
+                </>
+              )}
+              {/* Table-only zoom, using Ruang Hidup's existing primitive. */}
+              <div className="simprok-rab-sheet__zoom" role="group" aria-label="Zoom tabel RAB">
+                <button type="button" onClick={() => changeZoom(zoom - 10)} disabled={zoom <= 80} title="Perkecil tabel" aria-label="Perkecil tabel">
+                  <ZoomOut size={15} aria-hidden="true" />
+                </button>
+                <span aria-live="polite">{zoom}%</span>
+                <button type="button" onClick={() => changeZoom(zoom + 10)} disabled={zoom >= 140} title="Perbesar tabel" aria-label="Perbesar tabel">
+                  <ZoomIn size={15} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="simprok-rab-table-wrap">
+            <div
+              className="simprok-rab-canvas__zoom simprok-rab-table-zoom"
+              style={{ '--simprok-rab-zoom': zoom / 100 } as CSSProperties}
+            >
             <table className="simprok-rab-table simprok-rab-draft-table">
               <thead>
                 <tr>
                   <th className="simprok-rab-col-atur">Atur</th>
                   <th className="simprok-rab-col-no">No</th>
-                  <th>Kode</th>
-                  <th>Uraian Pekerjaan</th>
-                  <th>Volume</th>
-                  <th>Satuan</th>
-                  <th>Harga Satuan</th>
-                  <th>Jumlah</th>
+                  {/* The analysis actually used for this row — not the row's
+                      own WBS code, which is machine identity and stays on the
+                      row object for ordering, persistence and routing. */}
+                  <th className="simprok-rab-col-kode">Kode AHSP</th>
+                  <th className="simprok-rab-col-uraian">Uraian Pekerjaan</th>
+                  <th className="simprok-rab-col-volume">Volume</th>
+                  <th className="simprok-rab-col-satuan">Satuan</th>
+                  <th className="simprok-rab-col-harga">Harga Satuan</th>
+                  <th className="simprok-rab-col-jumlah">Jumlah</th>
                   <th className="simprok-rab-col-aksi">Aksi</th>
                 </tr>
               </thead>
@@ -1719,6 +2321,10 @@ export function RabWorkspacePage() {
                   // not the LIVE read's OCCURRENCE_NOT_FOUND.
                   const costStatus = resolvedCostRowStatuses[row.id];
                   const costDisplay = costStatus ? toRabCostDisplay(costStatus) : null;
+                  // One authority for "which AHSP is this row using", shared
+                  // with the drawer and with Ruang Hidup. Unlinked rows get its
+                  // own truthful "Belum terhubung", never a guessed code.
+                  const ahspIdentity = resolveAhspIdentity(row.ahsp);
                   const amount = row.type === 'item' ? (volumes[row.id] || 0) * unitPrice : 0;
                   const selected = row.id === selectedRowId;
                   const hasNegativeRowValue = negativeRows.has(row.id);
@@ -1731,7 +2337,7 @@ export function RabWorkspacePage() {
                   if (row.type === 'note') {
                     return (
                       <tr key={row.id} className="simprok-rab-row simprok-rab-row--note">
-                        <td>
+                        <td className="simprok-rab-col-atur">
                           <div className="simprok-rab-row-move">
                             <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'up'))} disabled={!canEditDraft} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
                               <ArrowUp size={14} />
@@ -1747,24 +2353,57 @@ export function RabWorkspacePage() {
                             </button>
                           </div>
                         </td>
-                        {/* No and Kode — a note holds neither. */}
-                        <td></td>
-                        <td></td>
-                        <td colSpan={5} style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
+                        {/* No and Kode AHSP — a note holds neither. */}
+                        <td className="simprok-rab-col-no"></td>
+                        <td className="simprok-rab-col-kode"></td>
+                        <td colSpan={5} className="simprok-rab-col-uraian" style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
                           <input className="simprok-rab-description-input" value={row.name} readOnly={!canEditDraft} aria-readonly={!canEditDraft} onChange={(event) => updateRowName(row.id, event.target.value)} aria-label="Uraian catatan" />
                         </td>
-                        <td>
-                          <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} disabled={!canEditDraft} title="Hapus catatan" aria-label="Hapus catatan">
-                            <Trash2 size={15} />
-                          </button>
-                        </td>
+                        {/* A note is deleted the same structural way every other
+                            row is: the contextual control in ATUR. */}
+                        <td className="simprok-rab-col-aksi"></td>
                       </tr>
                     );
                   }
 
                   return (
                     <tr key={row.id} className={['simprok-rab-row', row.type === 'folder' ? 'simprok-rab-row--folder' : '', selected ? 'simprok-rab-row--selected' : '', hasNegativeRowValue ? 'simprok-rab-row--invalid' : ''].filter(Boolean).join(' ')} onClick={(event) => handleRowClick(row.id, event)}>
-                      <td>
+                      <td className="simprok-rab-col-atur">
+                        {/* STRUCTURAL CONTROLS, OVERLAID.
+                            Absolutely positioned, so they are outside normal
+                            flow and contribute nothing to the row's height —
+                            the table gets no extra strip and no extra column.
+                            Revealed by hover, keyboard focus or selection, so
+                            the RAB is quiet when nobody is editing it. */}
+                        {canEditDraft ? (
+                          <div className="simprok-rab-row-structure">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                const r = event.currentTarget.getBoundingClientRect();
+                                setStructureMenu(
+                                  structureMenu?.rowId === row.id
+                                    ? null
+                                    : { rowId: row.id, x: r.right, y: r.bottom, canHoldChildren: row.type === 'folder' },
+                                );
+                              }}
+                              title="Sisipkan baris"
+                              aria-label={`Sisipkan baris di sekitar ${row.name}`}
+                              aria-haspopup="menu"
+                              aria-expanded={structureMenu?.rowId === row.id}
+                            >
+                              <Plus size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => requestRemoveRow(row.id)}
+                              title="Hapus baris ini"
+                              aria-label={`Hapus ${row.name}`}
+                            >
+                              <Minus size={13} />
+                            </button>
+                          </div>
+                        ) : null}
                         <div className="simprok-rab-row-move">
                           <button onClick={() => mutateRows((current) => moveWithinSiblings(current, row.id, 'up'))} disabled={!canEditDraft} title="Pindah baris ke atas" aria-label="Pindah baris ke atas">
                             <ArrowUp size={14} />
@@ -1780,27 +2419,55 @@ export function RabWorkspacePage() {
                           </button>
                         </div>
                       </td>
-                      <td className="simprok-rab-row__number">{row.number}</td>
-                      {/* The source/WBS code. Lawful row truth, and never an
-                          AHSP identity — they are different facts. */}
-                      <td>{row.wbsCode}</td>
-                      <td style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
+                      <td className="simprok-rab-row__number simprok-rab-col-no">{row.number}</td>
+                      {/* KODE AHSP — which analysis prices this row.
+                          `row.wbsCode` is still the row's own source/WBS code
+                          and still travels with the row; it simply no longer
+                          spends a human-facing column, because the question a
+                          reader asks here is "what analysis is this?".
+                          The label is the one AHSP identity authority the rest
+                          of the product already reads; nothing is derived from
+                          the row's position and no code is invented. */}
+                      <td className="simprok-rab-col-kode">
+                        {row.type === 'item' ? (
+                          <span
+                            className={ahspIdentity.linked ? undefined : 'simprok-rab-ahsp-code--unlinked'}
+                            title={ahspIdentity.fullLabel}
+                          >
+                            {ahspIdentity.shortLabel}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="simprok-rab-col-uraian" style={{ paddingLeft: `${row.depth * 18 + 12}px` }}>
                         <span className="simprok-rab-row__name">
                           {row.type === 'folder' ? <FolderOpen size={16} /> : null}
                           <input className="simprok-rab-description-input" value={row.name} readOnly={!canEditDraft} aria-readonly={!canEditDraft} onChange={(event) => updateRowName(row.id, event.target.value)} aria-label={`Uraian ${row.type === 'folder' ? 'sub judul' : 'item pekerjaan'}`} />
                         </span>
                       </td>
-                      <td>
+                      {/* Volume reads like the money beside it — `24,00`, right
+                          aligned — using the same Indonesian presentation. It
+                          becomes plain typing text only while focused, and the
+                          committed value is still the parsed number, never the
+                          formatted string. */}
+                      <td className="simprok-rab-col-volume">
                         {row.type === 'item' ? (
                           <input
                             className={(volumes[row.id] || 0) < 0 ? 'simprok-rab-number-invalid' : ''}
-                            type="number"
-                            step="0.01"
-                            value={volumes[row.id] || 0}
+                            type="text"
+                            inputMode="decimal"
+                            value={numericFieldValue(`vol-${row.id}`, volumes[row.id] || 0)}
                             readOnly={!canEditDraft}
                             aria-readonly={!canEditDraft}
+                            onFocus={() =>
+                              setEditingCell({
+                                key: `vol-${row.id}`,
+                                text: formatDraftNumber(volumes[row.id] || 0),
+                              })
+                            }
+                            onBlur={() => setEditingCell(null)}
                             onChange={(event) => {
-                              const volume = Number(event.target.value);
+                              const volume = parseDraftNumber(event.target.value);
+                              setEditingCell({ key: `vol-${row.id}`, text: event.target.value });
                               applyLocalEdit(() => {
                                 setVolumes((current) => ({ ...current, [row.id]: volume }));
                                 setCostRowStatuses((current) => invalidateRow(current, row.id));
@@ -1810,8 +2477,8 @@ export function RabWorkspacePage() {
                           />
                         ) : null}
                       </td>
-                      <td>{row.type === 'item' ? <input className="simprok-rab-description-input" value={row.unit} readOnly={!canEditDraft} aria-readonly={!canEditDraft} onChange={(event) => updateRowUnit(row.id, event.target.value)} aria-label={`Satuan ${row.name}`} /> : null}</td>
-                      <td className="simprok-rab-unit-price-column">
+                      <td className="simprok-rab-col-satuan">{row.type === 'item' ? <input className="simprok-rab-description-input" value={row.unit} readOnly={!canEditDraft} aria-readonly={!canEditDraft} onChange={(event) => updateRowUnit(row.id, event.target.value)} aria-label={`Satuan ${row.name}`} /> : null}</td>
+                      <td className="simprok-rab-unit-price-column simprok-rab-col-harga">
                         {row.type === 'item' ? (
                           <span className="simprok-rab-price-cell">
                             {isKernelEligible ? (
@@ -1838,28 +2505,58 @@ export function RabWorkspacePage() {
                               )
                             ) : row.manualUnitPrice ? (
                               <>
+                                {/* MONEY IS MONEY, WHOEVER TYPED IT.
+                                    A typed price sat as a bare `3.000.000,00`
+                                    beside a calculated `Rp 72.615,92`, which
+                                    made the manual row read as a lesser kind of
+                                    number. The "Rp" is an ADORNMENT next to the
+                                    field, never part of its value: the input
+                                    still holds and parses digits only, so
+                                    nothing shaped like "Rp 3.000.000,00" can
+                                    ever reach the payload. aria-hidden because
+                                    the field's own aria-label already says
+                                    "Harga satuan". */}
+                                <span className="simprok-rab-price-cell__currency" aria-hidden="true">
+                                  Rp
+                                </span>
                                 <input
                                   className={(unitPrices[row.id] ?? row.unitPrice) < 0 ? 'simprok-rab-number-invalid' : ''}
                                   type="text"
-                                  inputMode="numeric"
-                                  value={formatDraftNumber(unitPrices[row.id] ?? row.unitPrice)}
+                                  inputMode="decimal"
+                                  value={numericFieldValue(
+                                    `price-${row.id}`,
+                                    unitPrices[row.id] ?? row.unitPrice,
+                                  )}
                                   readOnly={!canEditDraft}
                                   aria-readonly={!canEditDraft}
+                                  onFocus={() =>
+                                    setEditingCell({
+                                      key: `price-${row.id}`,
+                                      text: formatDraftNumber(unitPrices[row.id] ?? row.unitPrice),
+                                    })
+                                  }
+                                  onBlur={() => setEditingCell(null)}
                                   onChange={(event) => {
                                     const unitPrice = parseDraftNumber(event.target.value);
+                                    setEditingCell({ key: `price-${row.id}`, text: event.target.value });
                                     applyLocalEdit(() => {
                                       setUnitPrices((current) => ({ ...current, [row.id]: unitPrice }));
                                     });
                                   }}
                                   aria-label={`Harga satuan ${row.name}`}
                                 />
-                                <span className="simprok-rab-manual-chip">MANUAL</span>
+                                {/* The inline MANUAL badge is gone from the RAB
+                                    row: it made a construction document look
+                                    like a debug table. The FACT is untouched —
+                                    `priceOrigin`/`manualUnitPrice` still drive
+                                    behaviour, and Rincian Harga still tells the
+                                    provenance story in full. */}
                               </>
                             ) : <span aria-label={`Harga satuan ${row.name}`}>—</span>}
                           </span>
                         ) : null}
                       </td>
-                      <td className="simprok-rab-amount-column">
+                      <td className="simprok-rab-amount-column simprok-rab-col-jumlah">
                         {row.type === 'item'
                           ? isKernelEligible
                             ? costStatus?.kind === 'calculated'
@@ -1871,7 +2568,7 @@ export function RabWorkspacePage() {
                             : row.manualUnitPrice ? formatRupiah(amount) : '—'
                           : ''}
                       </td>
-                      <td>
+                      <td className="simprok-rab-col-aksi">
                         <div className="simprok-rab-row-actions">
                           {row.type === 'folder' ? (
                             <>
@@ -1891,9 +2588,10 @@ export function RabWorkspacePage() {
                               {PRICE_TRACE_ROW_ACTION}
                             </button>
                           ) : null}
-                          <button className="simprok-rab-delete" onClick={() => removeRow(row.id)} disabled={!canEditDraft} title="Hapus baris" aria-label="Hapus baris">
-                            <Trash2 size={15} />
-                          </button>
+                          {/* The trash icon has left the price-action column.
+                              Deleting is a STRUCTURAL act and now lives with
+                              the other structural controls, next to the row's
+                              position — it is the same removeRow underneath. */}
                         </div>
                       </td>
                     </tr>
@@ -1901,6 +2599,7 @@ export function RabWorkspacePage() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
           <footer className="simprok-rab-recap-zone" aria-label="Rekapitulasi Biaya RAB">
             <button className="simprok-rab-recap__ef" onClick={() => openPlaceholder('Atur Execution Factor')} title="Atur Execution Factor - engine belum aktif" aria-label="Atur Execution Factor - engine belum aktif" data-route="/?ruang=execution-factor">
@@ -1946,8 +2645,27 @@ export function RabWorkspacePage() {
           </footer>
         </section>
 
-        {selectedItem ? (
-          <aside className="simprok-ahsp-drawer" aria-label="Detail Analisa AHSP">
+        {/* Desktop: the side panel follows the selected row, unchanged.
+            Phone: the panel is a full-screen surface, so it appears only when
+            the Owner opened it — never over the table they just arrived at. */}
+        {selectedItem && (!isMobileViewport || mobileInspectOpen) ? (
+          <>
+          {/* The one boundary between table and panel. Desktop only — on a
+              phone the panel is full-screen, so there is nothing to drag. */}
+          {isMobileViewport ? null : (
+            <div
+              className="simprok-rab-drawer-resizer"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Ubah lebar panel detail"
+              onPointerDown={startDrawerResize}
+              title="Geser untuk mengubah lebar panel"
+            />
+          )}
+          <aside
+            className={`simprok-ahsp-drawer${isMobileViewport ? ' simprok-ahsp-drawer--fullscreen' : ''}`}
+            aria-label="Detail Analisa AHSP"
+          >
             <div className="simprok-ahsp-drawer__header">
               <div>
                 <h2>{drawerMode === 'PRICE_TRACE' ? PRICE_TRACE_TITLE : 'Detail Analisa AHSP'}</h2>
@@ -2150,6 +2868,68 @@ export function RabWorkspacePage() {
                 <strong>{!projectId ? 'Belum ada project aktif' : rabLocked ? 'Terkunci, tersimpan di server' : 'Draft tersimpan di server'}</strong>
               </div>
             </div>
+            {/* THE RECIPE. "AHSP ini tersusun dari apa?" — the analysis's own
+                components and coefficients, grouped the way an Indonesian
+                construction analysis is written. No money here on purpose:
+                Rincian Harga still owns the project-specific price trace, and
+                merging the two would have made one door answer both questions
+                badly. */}
+            <div className="simprok-ahsp-composition" aria-label="Komponen penyusun AHSP">
+              <h3>Komponen Penyusun AHSP</h3>
+              {ahspComposition === undefined ? (
+                <p className="simprok-ahsp-composition__empty">Memuat komponen AHSP...</p>
+              ) : ahspComposition === null ? (
+                <p className="simprok-ahsp-composition__empty">
+                  {selectedItem.ahspVersionId
+                    ? 'Komponen AHSP belum dapat dibaca untuk baris ini.'
+                    : 'Baris ini belum terhubung ke AHSP, sehingga belum ada komponen penyusun.'}
+                </p>
+              ) : !hasAnyComponent(ahspComponentGroups) ? (
+                <p className="simprok-ahsp-composition__empty">
+                  Analisa ini tidak mencantumkan komponen.
+                </p>
+              ) : (
+                ahspComponentGroups.map((group) => (
+                  <section key={group.key} className="simprok-ahsp-composition__group">
+                    <header>
+                      <span>{group.label}</span>
+                      <small>{group.rows.length} komponen</small>
+                    </header>
+                    {group.rows.length === 0 ? (
+                      <p className="simprok-ahsp-composition__empty">
+                        Tidak ada {group.label.toLowerCase()} pada analisa ini.
+                      </p>
+                    ) : (
+                      <table className="simprok-ahsp-composition__table">
+                        <thead>
+                          <tr>
+                            <th scope="col">Uraian</th>
+                            <th scope="col">Satuan</th>
+                            <th scope="col">Koefisien</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {group.rows.map((component, index) => (
+                            <tr key={`${group.key}-${component.name}-${index}`}>
+                              <td>
+                                {component.name}
+                                {component.unresolved ? (
+                                  <small title="Sumber daya ini belum dapat dipastikan oleh SIMPROK">
+                                    menunggu keputusan manusia
+                                  </small>
+                                ) : null}
+                              </td>
+                              <td>{component.unit}</td>
+                              <td>{component.coefficient}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </section>
+                ))
+              )}
+            </div>
             <div className="simprok-ahsp-drawer__frame">
               <span className="simprok-honest-frame__badge">{costEngineStatus.frameBadge}</span>
               <p>{costEngineStatus.frameMessage}</p>
@@ -2275,6 +3055,7 @@ export function RabWorkspacePage() {
             </>
             ) : null}
           </aside>
+          </>
         ) : null}
       </main>
     </div>
