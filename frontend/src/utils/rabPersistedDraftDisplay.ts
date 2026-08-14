@@ -3,7 +3,12 @@ import {
   groupThousands,
   parseCanonicalDecimalString,
 } from './rabCostDisplay.ts';
-import { resolveAhspIdentity, type AhspIdentityView, type AhspIdentityWire } from './rabTraceDisplay.ts';
+import {
+  resolveAhspIdentity,
+  type AhspIdentityView,
+  type AhspIdentityWire,
+  type PriceSourceAuthorityWire,
+} from './rabTraceDisplay.ts';
 import { assignStructuralNumbers } from './rabRowNumbering.ts';
 
 /**
@@ -60,6 +65,25 @@ export const formatExactQuantity = (value: string | null): string => {
   return `${parsed.negative ? '-' : ''}${groupThousands(parsed.intPart)}${fraction}`;
 };
 
+/**
+ * VOLUME, which is a measured quantity and therefore always reads with at
+ * least two decimals: `24` is shown as `24,00`, never as a bare `24` that
+ * could be mistaken for a count.
+ *
+ * Deliberately a sibling of formatExactQuantity rather than a change to it:
+ * that function also renders AHSP COEFFICIENTS, whose presentation must not be
+ * touched — padding `1` to `1,00` there would restate the analysis. Extra
+ * precision is preserved exactly as sent (Decimal(18,6)); only a shorter
+ * fraction is zero-padded, which is lossless.
+ */
+export const formatExactVolume = (value: string | null): string => {
+  if (value === null) return NULL_DISPLAY;
+  const parsed = parseCanonicalDecimalString(value);
+  if (!parsed) return INVALID_DECIMAL_DISPLAY;
+  const fraction = parsed.fracPart.padEnd(2, '0');
+  return `${parsed.negative ? '-' : ''}${groupThousands(parsed.intPart)},${fraction}`;
+};
+
 export type PersistedPriceOrigin = 'MANUAL_CLIENT' | 'SERVER_COST_KERNEL' | null;
 
 const PRICE_ORIGIN_BADGE: Record<'MANUAL_CLIENT' | 'SERVER_COST_KERNEL', string> = {
@@ -86,6 +110,8 @@ export interface PersistedBoqItem {
   unitPrice: string | null;
   lineTotal: string | null;
   priceOrigin: PersistedPriceOrigin;
+  /** RAB-TRUTH-CLOSEOUT-01 — whose data formed the price, as the server states it. */
+  sourceAuthority?: PriceSourceAuthorityWire | null;
   calculationOccurrenceId: string | null;
   calculationAsOfDate: string | null;
   calculatedAt: string | null;
@@ -128,6 +154,7 @@ export interface PersistedRowDisplay {
   originBadge: string;
   /** Raw origin, exposed alongside originBadge so a caller can style the badge without string-matching the label text. */
   priceOrigin: PersistedPriceOrigin;
+  sourceAuthority: PriceSourceAuthorityWire | null;
   /** Non-null only for a SERVER_COST_KERNEL row — the only origin with provenance to show. */
   provenance: PersistedRowProvenance | null;
 }
@@ -152,11 +179,12 @@ export const toPersistedRowDisplay = (
     description: item.name,
     itemType: item.itemType,
     unit: item.unit,
-    quantityDisplay: isWorkItem ? formatExactQuantity(item.quantity) : '',
+    quantityDisplay: isWorkItem ? formatExactVolume(item.quantity) : '',
     unitPriceDisplay: isWorkItem ? formatExactMoney(item.unitPrice) : '',
     lineTotalDisplay: isWorkItem ? formatExactMoney(item.lineTotal) : '',
     originBadge: isWorkItem ? getPriceOriginBadge(item.priceOrigin) : '',
     priceOrigin: isWorkItem ? item.priceOrigin : null,
+    sourceAuthority: isWorkItem ? (item.sourceAuthority ?? null) : null,
     provenance:
       isWorkItem && item.priceOrigin === 'SERVER_COST_KERNEL'
         ? {

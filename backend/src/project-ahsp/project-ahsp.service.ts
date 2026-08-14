@@ -192,7 +192,13 @@ export class ProjectAhspService {
           ...buildEligibleAhspVersionWhere(input.workspaceId, asOf),
           id: input.ahspVersionId,
         },
-        include: { resources: { orderBy: { id: 'asc' } } },
+        include: {
+          resources: { orderBy: { id: 'asc' } },
+          // RAB-TRUTH-01H — the ownership as it stands right now, read on the
+          // same transaction that freezes this calculation context, so the
+          // occurrence records the authority that actually formed it.
+          ahsp: { select: { ownershipType: true } },
+        },
       });
       if (!version || version.resources.length === 0) {
         throw new NotFoundException('ELIGIBLE_AHSP_VERSION_NOT_FOUND');
@@ -259,6 +265,10 @@ export class ProjectAhspService {
           resolutionContentFingerprint: fingerprint,
           resolutionEvaluatedAt,
           contextCapturedByAccountId: input.accountId,
+          // Frozen with the rest of the calculation context, and never updated
+          // again: a later ownership transfer changes what the AHSP IS, not
+          // what this calculation was formed from.
+          ahspOwnershipAtCalculation: version.ahsp?.ownershipType ?? null,
           resourceResolutions: { create: resolutions },
         },
         include: includeOccurrence,

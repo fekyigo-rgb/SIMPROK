@@ -20,38 +20,132 @@ import { toPersistedRowDisplayList } from "./rabPersistedDraftDisplay.ts";
 // rather than guessed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("O-1. a Cost Kernel price is Auto SIMPROK, under Dari Akun Pengguna", () => {
-  const origin = resolvePriceOrigin("SERVER_COST_KERNEL");
+/**
+ * RAB-TRUTH-CLOSEOUT-01 supersedes the earlier two-origin reading.
+ *
+ * Owner law now fixes exactly THREE price origins, and separates them from the
+ * question of how the row arrived. "Kategori Asal" is gone: printed under
+ * "Auto SIMPROK" it read as a contradicting claim about the same fact.
+ */
+const AUTHORITATIVE = { ahspAuthoritative: true, privateBasicPriceCount: 0, catalogBasicPriceCount: 3 };
+const PRIVATE_PRICE = { ahspAuthoritative: true, privateBasicPriceCount: 1, catalogBasicPriceCount: 2 };
+const PRIVATE_AHSP = { ahspAuthoritative: false, privateBasicPriceCount: 0, catalogBasicPriceCount: 3 };
+
+test("O-1. CASE 2 — a kernel price from fully authoritative sources is Auto SIMPROK", () => {
+  const origin = resolvePriceOrigin("SERVER_COST_KERNEL", {
+    isWorkItem: true,
+    authority: AUTHORITATIVE,
+  });
+  assert.equal(origin.kind, "AUTO_SIMPROK");
   assert.equal(origin.label, "Auto SIMPROK");
-  assert.equal(origin.categoryLabel, "Dari Akun Pengguna");
-  assert.equal(origin.category, "DARI_AKUN_PENGGUNA");
 });
 
-test("O-2. a hand-entered price is Input Pengguna, under Dari Akun Pengguna", () => {
-  // The XLSX import writes rows with no price, so a MANUAL_CLIENT price can
-  // only have been typed by a person inside SIMPROK.
-  const origin = resolvePriceOrigin("MANUAL_CLIENT");
-  assert.equal(origin.label, "Input Pengguna");
-  assert.equal(origin.categoryLabel, "Dari Akun Pengguna");
+test("O-1b. CASE 3/4 — one private source anywhere makes the price Data Pengguna", () => {
+  // A private Basic Price inside an otherwise authoritative chain.
+  assert.equal(
+    resolvePriceOrigin("SERVER_COST_KERNEL", { isWorkItem: true, authority: PRIVATE_PRICE }).kind,
+    "USER_DATA",
+  );
+  // A private/user AHSP with catalogue prices — the mirror case.
+  assert.equal(
+    resolvePriceOrigin("SERVER_COST_KERNEL", { isWorkItem: true, authority: PRIVATE_AHSP }).kind,
+    "USER_DATA",
+  );
+  assert.equal(
+    resolvePriceOrigin("SERVER_COST_KERNEL", { isWorkItem: true, authority: PRIVATE_PRICE }).label,
+    "Data Pengguna",
+  );
 });
 
-test("O-3. no import origin is ever invented", () => {
-  // Nothing persisted today can prove either import origin, so nothing may
-  // emit them.
-  for (const priceOrigin of ["SERVER_COST_KERNEL", "MANUAL_CLIENT", null] as const) {
-    const origin = resolvePriceOrigin(priceOrigin);
-    assert.doesNotMatch(origin.label, /import/i, `${priceOrigin} must not claim an import origin`);
-    assert.doesNotMatch(origin.categoryLabel, /import/i);
+/**
+ * RAB-TRUTH-01H — an unproven authority is reported as unproven.
+ *
+ * This used to answer USER_DATA, on the reasoning that it was the cautious
+ * direction. It is not: "Data Pengguna" asserts the price was formed from the
+ * workspace's own data, which is as much a claim as "Auto SIMPROK". When the
+ * historical authority was never recorded, SIMPROK says so.
+ */
+test("O-1c. running the Cost Kernel alone never earns SIMPROK's authority", () => {
+  for (const authority of [undefined, null, { ahspAuthoritative: null, privateBasicPriceCount: 0 }]) {
+    const origin = resolvePriceOrigin("SERVER_COST_KERNEL", { isWorkItem: true, authority });
+    assert.equal(origin.kind, "UNDETERMINED", "unproven authority must not be resolved");
+    assert.notEqual(origin.label, "Auto SIMPROK");
+    assert.notEqual(origin.label, "Data Pengguna");
+    assert.equal(origin.label, "Asal belum dapat dipastikan");
   }
 });
 
-test("O-4. an unpriced row says so, and a structural row claims no origin", () => {
-  assert.equal(resolvePriceOrigin(null).label, "Belum ada harga");
-  assert.equal(resolvePriceOrigin(null).category, null);
+/**
+ * The three proven outcomes stay exactly as they were — Gate B only separates
+ * "unknown" out of the false branch.
+ */
+test("O-1d. proven authority still classifies exactly as before", () => {
+  const kind = (authority: unknown) =>
+    resolvePriceOrigin("SERVER_COST_KERNEL", { isWorkItem: true, authority: authority as never }).kind;
+  // Proven user asset — still Data Pengguna.
+  assert.equal(kind({ ahspAuthoritative: false, privateBasicPriceCount: 0 }), "USER_DATA");
+  // Proven authoritative — still Auto SIMPROK.
+  assert.equal(kind({ ahspAuthoritative: true, privateBasicPriceCount: 0 }), "AUTO_SIMPROK");
+  // A private Basic Price proves user data even when ownership is unknown,
+  // and even when the AHSP itself is authoritative.
+  assert.equal(kind({ ahspAuthoritative: null, privateBasicPriceCount: 1 }), "USER_DATA");
+  assert.equal(kind({ ahspAuthoritative: true, privateBasicPriceCount: 1 }), "USER_DATA");
+});
+
+test("O-2. CASE 1/6 — a hand-entered price is Ketik Manual, whatever came before it", () => {
+  const origin = resolvePriceOrigin("MANUAL_CLIENT");
+  assert.equal(origin.kind, "MANUAL_INPUT");
+  assert.equal(origin.label, "Ketik Manual");
+  // Even with a fully authoritative chain recorded, a manual current value wins.
+  assert.equal(
+    resolvePriceOrigin("MANUAL_CLIENT", { isWorkItem: true, authority: AUTHORITATIVE }).label,
+    "Ketik Manual",
+  );
+  // It is never described as an engine failure.
+  assert.doesNotMatch(origin.explanation, /belum aktif|gagal|error/i);
+});
+
+test("O-3. import is lineage, not a price origin", () => {
+  for (const priceOrigin of ["SERVER_COST_KERNEL", "MANUAL_CLIENT", null] as const) {
+    const origin = resolvePriceOrigin(priceOrigin);
+    assert.doesNotMatch(origin.label, /import/i, `${priceOrigin} must not claim an import origin`);
+  }
+  // Lineage decorates the origin; it never replaces it.
+  const imported = resolvePriceOrigin("MANUAL_CLIENT", { isWorkItem: true, lineage: "IMPORTED" });
+  assert.equal(imported.kind, "MANUAL_INPUT");
+  assert.equal(imported.label, "Ketik Manual");
+  assert.equal(imported.lineageLabel, "Import · Ketik Manual");
+  const auto = resolvePriceOrigin("SERVER_COST_KERNEL", {
+    isWorkItem: true,
+    authority: AUTHORITATIVE,
+    lineage: "IMPORTED",
+  });
+  assert.equal(auto.lineageLabel, "Import · Auto SIMPROK");
+  // A local row is never decorated.
+  assert.equal(resolvePriceOrigin("MANUAL_CLIENT").lineageLabel, "Ketik Manual");
+});
+
+test("O-4. CASE 5 — no price is a state, not a fourth origin", () => {
+  const none = resolvePriceOrigin(null);
+  assert.equal(none.label, "Belum ada harga");
+  assert.equal(none.kind, "NONE");
 
   const folder = resolvePriceOrigin("SERVER_COST_KERNEL", { isWorkItem: false });
   assert.equal(folder.label, "");
-  assert.equal(folder.category, null);
+  assert.equal(folder.kind, "NONE");
+});
+
+test("O-5. exactly three origins exist, and no contradicting category axis", () => {
+  const kinds = new Set(
+    [
+      resolvePriceOrigin("SERVER_COST_KERNEL", { isWorkItem: true, authority: AUTHORITATIVE }).kind,
+      resolvePriceOrigin("SERVER_COST_KERNEL", { isWorkItem: true, authority: PRIVATE_PRICE }).kind,
+      resolvePriceOrigin("MANUAL_CLIENT").kind,
+    ],
+  );
+  assert.deepEqual([...kinds].sort(), ["AUTO_SIMPROK", "MANUAL_INPUT", "USER_DATA"]);
+  // The old category field is gone, so it cannot contradict the origin again.
+  assert.equal("categoryLabel" in resolvePriceOrigin("MANUAL_CLIENT"), false);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,6 +206,16 @@ const R75 = {
 // returns it. Every figure below is a server string; nothing here is computed.
 const PROOF = {
   kind: "verified" as const,
+  /**
+   * A fully authoritative chain: a SIMPROK/approved AHSP and no private Basic
+   * Price. That is what earns the words "Auto SIMPROK" in T-1 — running the
+   * kernel alone would not.
+   */
+  sourceAuthority: {
+    ahspAuthoritative: true,
+    privateBasicPriceCount: 0,
+    catalogBasicPriceCount: 1,
+  },
   badge: "Terbukti",
   message: "Harga tersimpan berhasil dibuktikan ulang dari provenance-nya sendiri.",
   storedUnitPriceDisplay: "Rp197.005",
@@ -226,7 +330,11 @@ test("T-3. a manual price states what is unavailable instead of inventing it", (
     provenance: null,
   });
 
-  assert.equal(trace.facts.find((f) => f.label === "Asal Harga")?.value, "Input Pengguna");
+  // RAB-TRUTH-CLOSEOUT-01: the Owner's word for a hand-entered price.
+  assert.equal(trace.facts.find((f) => f.label === "Asal Harga")?.value, "Ketik Manual");
+  // …and it is never dressed up as a system failure.
+  const said = trace.facts.map((f) => f.value).join(" ") + trace.unavailable.join(" ");
+  assert.doesNotMatch(said, /engine belum aktif|gagal/i);
   assert.equal(trace.unavailable.length >= 1, true);
   assert.match(trace.unavailable.join(" "), /tidak tercatat|tidak tersedia/i);
   // Nothing fabricated: no AHSP fact, no dates, no technical identifiers.

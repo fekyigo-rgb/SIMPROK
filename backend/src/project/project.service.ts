@@ -26,6 +26,10 @@ import {
   RAB_DRAFT_DEFAULT_TAX_PERCENT,
 } from './rab-draft-recap';
 import { SERVER_ROW_PROTECTION_REASON } from './rab-kernel-persistence.contracts';
+import {
+  RAB_STRUCTURE_REASON,
+  validateAndOrderRabStructure,
+} from './rab-structure-preflight';
 
 /**
  * RAB-TRACE-01 — what an AHSP actually is in this domain. There is no AHSP
@@ -38,6 +42,23 @@ export interface AhspIdentityProjection {
   outputUnit: string | null;
   /** Which truth answered: the row's frozen snapshot, or the live version. */
   source: 'SNAPSHOT' | 'LIVE';
+}
+
+/**
+ * RAB-TRUTH-CLOSEOUT-01 — the persisted facts that decide whether a calculated
+ * price may be called SIMPROK's own. Counts, not opinions: the reader applies
+ * the rule, this only reports what the sources actually are.
+ */
+export interface PriceSourceAuthority {
+  ahspOwnership: string | null;
+  /**
+   * THREE STATES: `true` authoritative, `false` proven user asset, `null` the
+   * historical ownership was never proven. Collapsing null into false would
+   * claim user data without evidence.
+   */
+  ahspAuthoritative: boolean | null;
+  privateBasicPriceCount: number;
+  catalogBasicPriceCount: number;
 }
 
 @Injectable()
@@ -568,11 +589,13 @@ export class ProjectService {
 
     // The official RAB reads through the same AHSP identity authority as the
     // draft, so the two rooms cannot disagree about what analysis a row uses.
-    return await this.attachAhspIdentity(
-      await this.prisma.boqItem.findMany({
-        where: { boqStructureId: rab.boqStructureId },
-        orderBy: { sortOrder: 'asc' },
-      }),
+    return await this.attachPriceSourceAuthority(
+      await this.attachAhspIdentity(
+        await this.prisma.boqItem.findMany({
+          where: { boqStructureId: rab.boqStructureId },
+          orderBy: { sortOrder: 'asc' },
+        }),
+      ),
     );
   }
 
@@ -622,7 +645,9 @@ export class ProjectService {
     // AHSP identity at all. Project the real identity so both rooms can name
     // the analysis truthfully instead of borrowing a field that means
     // something else. Read-only: no column is written and no schema changes.
-    const items = await this.attachAhspIdentity(rawItems);
+    const items = await this.attachPriceSourceAuthority(
+      await this.attachAhspIdentity(rawItems),
+    );
 
     // A stale RabDocument recap from a time when every row was priced is not
     // authoritative once the live items include an unpriced WORK_ITEM — the
@@ -766,6 +791,82 @@ export class ProjectService {
     }));
   }
 
+  /**
+   * WHOSE DATA FORMED EACH PRICE — batched, for a whole RAB at once.
+   *
+   * "SIMPROK calculated it" and "SIMPROK stands behind the sources" are
+   * different claims. Only a chain where the AHSP is a SIMPROK/approved asset
+   * AND no consumed Basic Price came from the workspace's private catalogue may
+   * be called Auto SIMPROK; anything else is the account's own data. The read
+   * path must be able to say which, for every row, without opening each row's
+   * evidence one at a time.
+   *
+   * Two queries for the whole structure, both read-only over facts already
+   * persisted (AHSP.ownershipType, BasicPrice.assetScope). Nothing is inferred
+   * from an amount or a name, and rows with no calculation occurrence simply
+   * get null — an unknown, never an assumed authority.
+   */
+  private async attachPriceSourceAuthority<
+    T extends { calculationOccurrenceId: string | null; ahspVersionId: string | null },
+  >(items: T[]): Promise<Array<T & { sourceAuthority: PriceSourceAuthority | null }>> {
+    const occurrenceIds = Array.from(
+      new Set(
+        items
+          .map((item) => item.calculationOccurrenceId)
+          .filter((id): id is string => !!id),
+      ),
+    );
+    if (occurrenceIds.length === 0) {
+      return items.map((item) => ({ ...item, sourceAuthority: null }));
+    }
+
+    const occurrences = await this.prisma.projectAhspOccurrence.findMany({
+      where: { id: { in: occurrenceIds } },
+      select: {
+        id: true,
+        // RAB-TRUTH-01H — the frozen ownership, not the AHSP's ownership today.
+        ahspOwnershipAtCalculation: true,
+        resourceResolutions: {
+          select: { selectedBasicPrice: { select: { assetScope: true } } },
+        },
+      },
+    });
+
+    const byOccurrence = new Map(
+      occurrences.map((occurrence): [string, PriceSourceAuthority] => {
+        const ownership = occurrence.ahspOwnershipAtCalculation;
+        return [
+          occurrence.id,
+          {
+            ahspOwnership: ownership,
+            // null stays null — unproven history is unknown, not user data.
+            ahspAuthoritative:
+              ownership === null
+                ? null
+                : ownership === 'SIMPROK_ASSET' ||
+                  ownership === 'APPROVED_COMMUNITY_ASSET',
+            privateBasicPriceCount: occurrence.resourceResolutions.filter(
+              (resolution) =>
+                resolution.selectedBasicPrice?.assetScope === 'WORKSPACE_PRIVATE',
+            ).length,
+            catalogBasicPriceCount: occurrence.resourceResolutions.filter(
+              (resolution) =>
+                resolution.selectedBasicPrice?.assetScope === 'SIMPROK_CATALOG',
+            ).length,
+          },
+        ];
+      }),
+    );
+
+    return items.map((item) => ({
+      ...item,
+      sourceAuthority:
+        (item.calculationOccurrenceId &&
+          byOccurrence.get(item.calculationOccurrenceId)) ||
+        null,
+    }));
+  }
+
   async saveDraftBoq(
     projectId: string,
     dto: SaveDraftBoqDto,
@@ -778,7 +879,7 @@ export class ProjectService {
         : undefined;
     };
 
-    return await this.prisma.$transaction(async (tx) => {
+    const saved = await this.prisma.$transaction(async (tx) => {
       const lockedProject = await tx.$queryRaw<
         Array<{ id: string; status: string }>
       >(
@@ -918,6 +1019,23 @@ export class ProjectService {
         }
       });
 
+      /**
+       * STRUCTURAL PREFLIGHT — the last gate before anything is destroyed.
+       *
+       * The whole incoming graph is understood here: duplicate ids, a parent
+       * that is not in the payload, a self-parent, a cycle of any length, a
+       * parent type canonical law forbids, and two siblings claiming one
+       * position. A rejection throws with nothing yet written, so a malformed
+       * document leaves the persisted RAB exactly as it was rather than being
+       * quietly reshaped into a different, plausible-looking one.
+       *
+       * It also returns the rows parent-first, which is what the insert loop
+       * below needs — validation understood the graph, ordering serves the
+       * writer, and the two are no longer the same mechanism (§22). A child
+       * listed before its parent is therefore lawful input, not corruption.
+       */
+      const orderedRows = validateAndOrderRabStructure(dto.rows);
+
       // Safe full-replace: nullify parent refs first to avoid self-FK conflict, then delete.
       await tx.boqItem.updateMany({
         where: { boqStructureId: structure.id },
@@ -934,9 +1052,18 @@ export class ProjectService {
       }> = [];
       let subtotal = new Prisma.Decimal(0);
 
-      for (const [index, row] of dto.rows.entries()) {
+      for (const { row, effectiveSortOrder } of orderedRows) {
+        /**
+         * The preflight proved this parent exists in the payload and that the
+         * walk reaches parents first, so a miss here is impossible rather than
+         * merely unlikely. Failing loudly keeps that guarantee honest: the old
+         * `?? null` is exactly what turned a broken reference into a root row.
+         */
         const parentId = row.parentTempId
-          ? (tempIdMap.get(row.parentTempId) ?? null)
+          ? (tempIdMap.get(row.parentTempId) ??
+            (() => {
+              throw new BadRequestException(RAB_STRUCTURE_REASON.PARENT_NOT_FOUND);
+            })())
           : null;
         const isFolder = row.itemType === 'FOLDER';
         const isNote = row.itemType === 'NOTE';
@@ -991,7 +1118,15 @@ export class ProjectService {
             unit: !isFolder && !isNote ? (row.unit ?? '') : '',
             unitPrice,
             lineTotal,
-            sortOrder: row.sortOrder ?? index,
+            /**
+             * THE VALUE S7 CHECKED, NOT A SECOND DERIVATION.
+             * Re-deriving `row.sortOrder ?? index` here is what let validation
+             * and persistence disagree: the preflight compared what a row
+             * CLAIMED while this line wrote what it RESOLVED to, so an omitted
+             * sortOrder could silently land on a sibling's position. There is
+             * one derivation now, and it happens in the preflight.
+             */
+            sortOrder: effectiveSortOrder,
             ahspVersionId: existing?.ahspVersionId ?? null,
             ahspSnapshotId: existing?.ahspSnapshotId ?? null,
             workingOccurrenceId: existing?.workingOccurrenceId ?? null,
@@ -1087,6 +1222,37 @@ export class ProjectService {
         recap: this.serializeDraftRecap(persistedRecap),
       };
     });
+
+    /**
+     * THE SAME ROW MUST NAME THE SAME ANALYSIS IN BOTH ROOMS.
+     *
+     * getDraftBoq projects the AHSP identity onto every item (attachAhspIdentity
+     * above); this command did not. Ruang Kerja rebuilds its rows from THIS
+     * response after a save, so the moment a draft was saved every row lost the
+     * analysis it is linked to and reported "Belum terhubung" — while Ruang
+     * Hidup, reading the GET path, still showed the code. Same BOQ item, same
+     * selected AHSP, two different answers.
+     *
+     * The linkage was never lost: `ahspVersionId`/`ahspSnapshotId` are carried
+     * through the write untouched. Only the projection was missing, so it is
+     * added here rather than having the client remember a value the server
+     * declined to state. Read-only, additive, outside the transaction because
+     * it reads reference data the transaction never wrote.
+     */
+    return {
+      ...saved,
+      items: await this.attachPriceSourceAuthority(
+        await this.attachAhspIdentity(
+          saved.items as Array<
+            (typeof saved.items)[number] & {
+              ahspVersionId: string | null;
+              ahspSnapshotId: string | null;
+              calculationOccurrenceId: string | null;
+            }
+          >,
+        ),
+      ),
+    };
   }
 
   async getAhspSnapshot(projectId: string) {

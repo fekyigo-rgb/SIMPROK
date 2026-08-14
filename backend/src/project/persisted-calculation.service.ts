@@ -69,7 +69,10 @@ export class PersistedCalculationService {
       },
       include: {
         boqStructure: { include: { project: true } },
-        ahspVersion: true,
+        // RAB-TRUTH-CLOSEOUT-01 — the AHSP's ownership decides whether a price
+        // formed from it may be called SIMPROK's own. Read-only, one extra
+        // relation on a query already being made.
+        ahspVersion: { include: { ahsp: { select: { ownershipType: true } } } },
       },
     });
     if (!item) {
@@ -105,7 +108,14 @@ export class PersistedCalculationService {
       include: {
         referenceRegion: true,
         resourceResolutions: {
-          include: { originalResource: true, resolvedCatalog: true },
+          include: {
+            originalResource: true,
+            resolvedCatalog: true,
+            // Which catalogue each resolved price actually came from. A
+            // WORKSPACE_PRIVATE price is lawful and usable, but a price formed
+            // from one is the workspace's own data — not SIMPROK's authority.
+            selectedBasicPrice: { select: { assetScope: true, status: true } },
+          },
           orderBy: { id: 'asc' },
         },
       },
@@ -227,6 +237,40 @@ export class PersistedCalculationService {
         unitPriceMatches,
         lineTotalMatches,
         allResourceCostsReproduced,
+      },
+      /**
+       * WHOSE DATA FORMED THIS PRICE.
+       *
+       * "SIMPROK calculated it" and "SIMPROK stands behind the sources" are
+       * two different claims, and only the second earns the words "Auto
+       * SIMPROK". A price is authoritative only when EVERY source in its chain
+       * is: the AHSP is a SIMPROK/approved asset, and every Basic Price it
+       * consumed came from the SIMPROK catalogue. One private source anywhere
+       * in the chain makes the whole price the user's own data.
+       *
+       * These are facts already persisted; nothing here is inferred from the
+       * amount, the name, or anything else.
+       */
+      sourceAuthority: {
+        // RAB-TRUTH-01H — the ownership FROZEN when this calculation context
+        // was created, never the AHSP's ownership today. Reading it live let a
+        // finished calculation's origin drift on a later transfer.
+        ahspOwnership: occurrence.ahspOwnershipAtCalculation,
+        // null stays null: an unproven history is reported as unknown, never
+        // resolved into "not authoritative" (which would read as user data).
+        ahspAuthoritative:
+          occurrence.ahspOwnershipAtCalculation === null
+            ? null
+            : occurrence.ahspOwnershipAtCalculation === 'SIMPROK_ASSET' ||
+              occurrence.ahspOwnershipAtCalculation === 'APPROVED_COMMUNITY_ASSET',
+        privateBasicPriceCount: occurrence.resourceResolutions.filter(
+          (resolution) =>
+            resolution.selectedBasicPrice?.assetScope === 'WORKSPACE_PRIVATE',
+        ).length,
+        catalogBasicPriceCount: occurrence.resourceResolutions.filter(
+          (resolution) =>
+            resolution.selectedBasicPrice?.assetScope === 'SIMPROK_CATALOG',
+        ).length,
       },
       provenance: {
         calculationOccurrenceId: occurrence.id,
