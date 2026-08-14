@@ -18,7 +18,7 @@ export function ProjectWorkPage() {
   useEffect(() => {
     if (!token || !projectId) return;
 
-    apiFetch(`http://localhost:3000/progress/monitoring/${projectId}`)
+    apiFetch(`/projects/${projectId}/progress/monitoring`)
       .then(res => {
         if (!res.ok) {
           setErrorStatus(res.status);
@@ -38,7 +38,7 @@ export function ProjectWorkPage() {
         setLoading(false);
       })
       .catch(err => {
-        console.error('Failed to fetch BOQ:', err);
+        console.error('Failed to fetch monitoring data:', err);
         setErrorKind('network');
         setMonitoringData(null);
         setLoading(false);

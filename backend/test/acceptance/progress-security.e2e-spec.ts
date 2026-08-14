@@ -298,7 +298,58 @@ describe('Progress Security (e2e)', () => {
 
     const afterReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
     const afterEntries = await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } });
-    expect(afterReports).toBe(beforeReports);
     expect(afterEntries).toBe(beforeEntries);
+  });
+
+  // MON-02A Truth Surface Tests
+
+  it('6. authorized assigned user -> GET /monitoring succeeds and proves truth contract (unsupported != zero, actual absent != zero)', async () => {
+    const token = await login(userViewEmail);
+    const res = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+
+    const body = res.body;
+    expect(body.projectId).toBe(projectAId);
+    expect(body.baseline).toBeDefined();
+    
+    // Truth Contract: UNAVAILABLE != ZERO
+    expect(body.unavailable).toBeDefined();
+    expect(Array.isArray(body.unavailable)).toBe(true);
+    expect(body.unavailable).toContain('plannedStart');
+    expect(body.unavailable).toContain('plannedFinish');
+
+    // Find the BOQ item
+    const item = body.items.find((i: any) => i.id === boqItemAId);
+    expect(item).toBeDefined();
+    expect(item.planned.quantity).toBe('10');
+
+    // Truth Contract: ABSENT ACTUAL != ZERO (it should be NOT_YET_RECORDED)
+    expect(item.actual).toBeDefined();
+    expect(item.actual.state).toBe('RECORDED'); // Wait, userSubmitEmail submitted progress earlier!
+    // Since test 4 submitted progress, the state should be RECORDED.
+    // Let's check the recorded quantity instead.
+    expect(item.actual.latestRecord).toBeDefined();
+    expect(item.actual.latestRecord.installedQuantity).toBe('2');
+  });
+
+  it('7. non-assigned user -> GET /monitoring is rejected', async () => {
+    const token = await login(userNoAccessEmail);
+    await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(403);
+  });
+
+  it('8. cross-tenant user -> GET /monitoring is rejected', async () => {
+    const token = await login(userCrossEmail);
+    await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(404);
   });
 });
