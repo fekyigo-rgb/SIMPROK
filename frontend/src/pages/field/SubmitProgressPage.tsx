@@ -1,221 +1,190 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { FactHeader } from '../../components/molecules/FactHeader';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
-import { FactHeader } from '../../components/molecules/FactHeader';
 
 type ErrorKind = 'unauthorized' | 'forbidden' | 'not-found' | 'workspace' | 'server' | 'network' | null;
+type HistoryEntry = {
+  id: string;
+  installedQuantity: string;
+  workDate: string;
+  recordedAt: string;
+  captureMethod: string;
+  status: string;
+  supersedesEntryId: string | null;
+  correctionReason: string | null;
+  evidenceReferences: Array<{ url: string; label: string }>;
+  revision: number;
+};
 
 export function SubmitProgressPage() {
   const { projectId, boqItemId } = useParams();
   const navigate = useNavigate();
   const { token } = useAuth();
-  
   const [quantity, setQuantity] = useState('');
   const [workDate, setWorkDate] = useState(new Date().toISOString().split('T')[0]);
   const [notes, setNotes] = useState('');
-  const [photoUrl, setPhotoUrl] = useState('');
+  const [captureMethod, setCaptureMethod] = useState('FIELD_OBSERVATION');
+  const [evidenceUrl, setEvidenceUrl] = useState('');
+  const [evidenceLabel, setEvidenceLabel] = useState('Foto lapangan');
+  const [commandId, setCommandId] = useState(() => crypto.randomUUID());
   const [submitting, setSubmitting] = useState(false);
   const [boqItem, setBoqItem] = useState<any>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [availableActions, setAvailableActions] = useState({ verify: false, correct: false, accept: false });
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [errorKind, setErrorKind] = useState<ErrorKind>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const loadHistory = useCallback(async () => {
+    if (!projectId || !boqItemId) return;
+    const response = await apiFetch(`/projects/${projectId}/progress/items/${boqItemId}/history`);
+    if (!response.ok) return;
+    const body = await response.json();
+    setHistory(body.entries ?? []);
+    setAvailableActions(body.availableActions ?? { verify: false, correct: false, accept: false });
+  }, [projectId, boqItemId]);
 
   useEffect(() => {
     if (!token || !projectId || !boqItemId) return;
-    apiFetch(`http://localhost:3000/projects/${projectId}/boq`)
-      .then(res => {
+    apiFetch(`/projects/${projectId}/progress/monitoring`)
+      .then(async (res) => {
         if (!res.ok) {
           setErrorStatus(res.status);
-          if (res.status === 401) setErrorKind('unauthorized');
-          else if (res.status === 403) setErrorKind('forbidden');
-          else if (res.status === 404) setErrorKind('not-found');
-          else if (res.status === 400) setErrorKind('workspace');
-          else setErrorKind('server');
+          setErrorKind(res.status === 401 ? 'unauthorized' : res.status === 403 ? 'forbidden' : res.status === 404 ? 'not-found' : res.status === 400 ? 'workspace' : 'server');
           return null;
         }
         return res.json();
       })
-      .then(data => {
+      .then((data) => {
         if (!data) return;
-        let item = null;
-        if (data.items) {
-          item = data.items.find((i: any) => i.id === boqItemId);
-        } else if (Array.isArray(data)) {
-          item = data.find((i: any) => i.id === boqItemId);
-        }
-        
-        if (item && item.itemType !== 'WORK_ITEM') {
-          setErrorKind('forbidden');
-        } else {
-          setBoqItem(item);
-        }
+        const item = (data.items ?? []).find((candidate: any) => candidate.id === boqItemId);
+        if (!item || item.itemType !== 'WORK_ITEM') setErrorKind('not-found');
+        else setBoqItem(item);
       })
-      .catch(err => {
-        console.error(err);
-        setErrorKind('network');
-      });
-  }, [token, projectId, boqItemId]);
+      .catch(() => setErrorKind('network'));
+    void loadHistory();
+  }, [token, projectId, boqItemId, loadHistory]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quantity || !workDate) {
-      alert('Volume dan Tanggal wajib diisi!');
-      return;
+  const evidenceReferences = evidenceUrl.trim()
+    ? [{ url: evidenceUrl.trim(), label: evidenceLabel.trim() || 'Bukti lapangan' }]
+    : undefined;
+
+  const send = async (path: string, payload: unknown) => {
+    const response = await apiFetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(Array.isArray(body.message) ? body.message.join(', ') : body.message || 'Perintah gagal disimpan');
     }
+    return response.json();
+  };
 
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!projectId || !boqItemId || !quantity || !workDate) return;
     setSubmitting(true);
-    
-    const payload = {
-      projectId,
-      entries: [
-        {
-          boqItemId,
-          installedQuantity: parseFloat(quantity),
-          workDate,
-          notes: notes || undefined,
-          photoUrl: photoUrl || undefined
-        }
-      ]
-    };
-
+    setNotice(null);
     try {
-      const res = await apiFetch(`http://localhost:3000/projects/${projectId}/progress/field`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload)
+      await send(`/projects/${projectId}/progress/field`, {
+        commandId,
+        entries: [{ boqItemId, installedQuantity: quantity, workDate, captureMethod, notes: notes || undefined, evidenceReferences }],
       });
-      
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.message || 'Gagal mengirim progress');
-      }
-
-      alert('Progress berhasil dikirim ke SIMPROK!');
-      navigate(`/field/project/${projectId}`);
-    } catch (err: any) {
-      alert(err.message);
+      setNotice('Actual tersimpan dan dapat dibaca kembali dari Monitoring.');
+      setCommandId(crypto.randomUUID());
+      await loadHistory();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Perintah gagal disimpan');
+    } finally {
       setSubmitting(false);
     }
   };
 
-  let errorMessage = '';
-  if (errorKind === 'unauthorized') errorMessage = 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
-  else if (errorKind === 'forbidden') errorMessage = 'Anda tidak memiliki akses ke proyek ini.';
-  else if (errorKind === 'not-found') errorMessage = 'Proyek tidak ditemukan.';
-  else if (errorKind === 'workspace') errorMessage = 'Konteks workspace belum valid. Pilih workspace kembali.';
-  else if (errorKind === 'server' || errorKind === 'network') errorMessage = 'Data pekerjaan gagal dimuat. Coba lagi beberapa saat.';
+  const transition = async (entry: HistoryEntry, action: 'verify' | 'accept') => {
+    if (!projectId) return;
+    setSubmitting(true);
+    try {
+      await send(`/projects/${projectId}/progress/entries/${entry.id}/${action}`, {});
+      setNotice(action === 'verify' ? 'Actual telah diverifikasi.' : 'Actual telah diterima.');
+      await loadHistory();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Perintah gagal');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const correct = async (entry: HistoryEntry) => {
+    if (!projectId) return;
+    const reason = window.prompt('Alasan koreksi (riwayat lama tetap disimpan):');
+    if (!reason?.trim()) return;
+    setSubmitting(true);
+    try {
+      await send(`/projects/${projectId}/progress/entries/${entry.id}/corrections`, {
+        commandId: crypto.randomUUID(),
+        installedQuantity: quantity,
+        workDate,
+        captureMethod,
+        reason: reason.trim(),
+        notes: notes || undefined,
+        evidenceReferences,
+      });
+      setNotice('Koreksi baru tersimpan. Actual lama tetap ada dalam riwayat.');
+      await loadHistory();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Koreksi gagal');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const errorMessage = errorKind === 'unauthorized' ? 'Sesi Anda berakhir. Silakan login kembali.'
+    : errorKind === 'forbidden' ? 'Anda tidak memiliki akses ke proyek ini.'
+      : errorKind === 'not-found' ? 'Pekerjaan tidak ditemukan pada proyek ini.'
+        : errorKind === 'workspace' ? 'Konteks workspace belum valid.'
+          : errorKind ? 'Data pekerjaan gagal dimuat. Coba lagi.' : '';
+  const effective = [...history].reverse().find((entry) => !history.some((candidate) => candidate.supersedesEntryId === entry.id) && entry.status !== 'RETURNED_FOR_CORRECTION');
 
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', paddingBottom: '100px', borderRadius: 'var(--radius-lg)', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
-      <button 
-        onClick={() => navigate(`/field/project/${projectId}`)}
-        style={{ background: 'none', border: 'none', color: 'var(--simprok-engineering-blue-600)', cursor: 'pointer', padding: 0, marginBottom: 'var(--space-6)', fontSize: 'var(--text-base)' }}
-      >
-        &larr; Kembali
-      </button>
+    <div style={{ maxWidth: '720px', margin: '0 auto', backgroundColor: 'white', padding: 'var(--space-8)', paddingBottom: '100px', borderRadius: 'var(--radius-lg)' }}>
+      <button onClick={() => navigate(`/field/project/${projectId}`)} style={{ background: 'none', border: 'none', color: 'var(--simprok-engineering-blue-600)', cursor: 'pointer', padding: 0 }}>&larr; Kembali</button>
+      <h2 style={{ color: 'var(--simprok-engineering-blue-900)' }}>Catat Actual Lapangan</h2>
+      {errorKind && <div role="alert" style={{ padding: 16, background: '#FEE2E2', color: '#991B1B', borderRadius: 8 }}>Akses ditolak ({errorStatus || 'Network'}): {errorMessage}</div>}
+      {boqItem && <div style={{ margin: '20px 0', padding: 16, background: 'var(--simprok-engineering-blue-50)', borderRadius: 8 }}>
+        <h3>{boqItem.wbsCode} — {boqItem.name}</h3>
+        <FactHeader label="Volume rencana" value={boqItem.quantity} suffix={boqItem.unit} certaintyLevel="C5" showBadge={false} />
+        {effective && <p><strong>Actual efektif:</strong> {effective.installedQuantity} {boqItem.unit} · {effective.status}</p>}
+      </div>}
+      {notice && <p role="status" style={{ padding: 12, background: '#EFF6FF', borderRadius: 8 }}>{notice}</p>}
 
-      <h2 style={{ fontSize: 'var(--text-2xl)', color: 'var(--simprok-engineering-blue-900)', marginBottom: 'var(--space-6)' }}>Lapor Progress Harian</h2>
-
-      {errorKind ? (
-        <div style={{ padding: 'var(--space-6)', backgroundColor: '#FEE2E2', color: '#991B1B', borderRadius: 'var(--radius-lg)', marginBottom: 'var(--space-6)' }}>
-          <h3 style={{ margin: '0 0 var(--space-2) 0' }}>Akses Ditolak ({errorStatus || 'Network'})</h3>
-          <p style={{ margin: 0 }}>{errorMessage}</p>
-        </div>
-      ) : boqItem && (
-        <div style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-4)', backgroundColor: 'var(--simprok-engineering-blue-50)', borderLeft: '4px solid var(--simprok-engineering-blue-500)', borderRadius: '4px' }}>
-          <h3 style={{ margin: '0 0 16px 0', color: 'var(--simprok-engineering-blue-900)', fontSize: 'var(--text-lg)' }}>
-            {boqItem.wbsCode} - {boqItem.name}
-          </h3>
-          <FactHeader 
-            label="Target Volume" 
-            value={boqItem.quantity} 
-            suffix={boqItem.unit} 
-            certaintyLevel="C5" 
-            showBadge={false} 
-          />
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
-        <div>
-          <label style={{ display: 'block', marginBottom: 'var(--space-2)', fontWeight: 'var(--weight-medium)', color: 'var(--simprok-engineering-blue-900)' }}>
-            Tanggal Pekerjaan
-          </label>
-          <input 
-            type="date" 
-            value={workDate}
-            onChange={(e) => setWorkDate(e.target.value)}
-            style={{ width: '100%', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: '1px solid var(--simprok-engineering-blue-200)', fontSize: 'var(--text-base)' }}
-            required
-          />
-        </div>
-
-        <div>
-          <label style={{ display: 'block', marginBottom: 'var(--space-2)', fontWeight: 'var(--weight-medium)', color: 'var(--simprok-engineering-blue-900)' }}>
-            Volume Aktual (Selesai)
-          </label>
-          <input 
-            type="number" 
-            step="0.01"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            placeholder="Contoh: 15.5"
-            style={{ width: '100%', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: '1px solid var(--simprok-engineering-blue-200)', fontSize: 'var(--text-base)' }}
-            required
-          />
-        </div>
-
-        <div>
-          <label style={{ display: 'block', marginBottom: 'var(--space-2)', fontWeight: 'var(--weight-medium)', color: 'var(--simprok-engineering-blue-900)' }}>
-            Catatan Lapangan
-          </label>
-          <textarea 
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Kondisi cuaca, kendala, atau keterangan tambahan..."
-            rows={4}
-            style={{ width: '100%', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: '1px solid var(--simprok-engineering-blue-200)', fontSize: 'var(--text-base)', resize: 'vertical' }}
-          />
-        </div>
-
-        <div>
-          <label style={{ display: 'block', marginBottom: 'var(--space-2)', fontWeight: 'var(--weight-medium)', color: 'var(--simprok-engineering-blue-900)' }}>
-            Bukti Foto (URL)
-          </label>
-          <input 
-            type="url" 
-            value={photoUrl}
-            onChange={(e) => setPhotoUrl(e.target.value)}
-            placeholder="https://example.com/photo.jpg"
-            style={{ width: '100%', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: '1px solid var(--simprok-engineering-blue-200)', fontSize: 'var(--text-base)' }}
-          />
-          <p style={{ margin: 'var(--space-1) 0 0 0', fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-600)' }}>
-            *Untuk sementara gunakan link URL gambar. Integrasi kamera menyusul.
-          </p>
-        </div>
-
-        <button
-          type="submit"
-          disabled={submitting}
-          style={{
-            width: '100%',
-            marginTop: '24px',
-            padding: '12px 16px',
-            borderRadius: '8px',
-            border: 'none',
-            backgroundColor: 'var(--simprok-engineering-blue-900)',
-            color: 'white',
-            fontWeight: 600,
-            cursor: submitting ? 'not-allowed' : 'pointer',
-            opacity: submitting ? 0.7 : 1,
-          }}
-        >
-          {submitting ? 'Mengirim...' : 'Kirim Progress'}
-        </button>
+      <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 16 }}>
+        <label>Tanggal pekerjaan<input type="date" value={workDate} onChange={(e) => setWorkDate(e.target.value)} required style={{ display: 'block', width: '100%', padding: 10 }} /></label>
+        <label>Volume Actual ({boqItem?.unit ?? 'satuan'})<input type="number" min="0" step="0.01" value={quantity} onChange={(e) => setQuantity(e.target.value)} required style={{ display: 'block', width: '100%', padding: 10 }} /></label>
+        <label>Sumber pencatatan<select value={captureMethod} onChange={(e) => setCaptureMethod(e.target.value)} style={{ display: 'block', width: '100%', padding: 10 }}><option value="FIELD_OBSERVATION">Pengamatan lapangan</option><option value="FIELD_MEASUREMENT">Pengukuran lapangan</option><option value="DOCUMENT_REFERENCE">Referensi dokumen</option></select></label>
+        <label>Catatan<textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} style={{ display: 'block', width: '100%', padding: 10 }} /></label>
+        <fieldset style={{ border: '1px solid #DBEAFE', borderRadius: 8 }}><legend>Bukti opsional</legend><label>URL referensi<input type="url" value={evidenceUrl} onChange={(e) => setEvidenceUrl(e.target.value)} placeholder="https://…" style={{ display: 'block', width: '100%', padding: 10 }} /></label>{evidenceUrl && <label>Nama bukti<input value={evidenceLabel} onChange={(e) => setEvidenceLabel(e.target.value)} style={{ display: 'block', width: '100%', padding: 10 }} /></label>}<small>URL disimpan sebagai referensi; SIMPROK tidak mengklaim file telah diverifikasi.</small></fieldset>
+        <button type="submit" disabled={submitting || !!errorKind} style={{ padding: 12, background: '#172554', color: 'white', border: 0, borderRadius: 8 }}>{submitting ? 'Menyimpan…' : 'Simpan Actual'}</button>
       </form>
+
+      <section style={{ marginTop: 32 }}>
+        <h3>Riwayat Actual</h3>
+        {history.length === 0 ? <p>Belum ada Actual yang dicatat.</p> : history.map((entry) => <article key={entry.id} style={{ padding: 14, marginBottom: 10, border: '1px solid #DBEAFE', borderRadius: 8 }}>
+          <strong>Revisi {entry.revision}: {entry.installedQuantity} {boqItem?.unit}</strong>
+          <div>{entry.status} · {new Date(entry.recordedAt).toLocaleString('id-ID')} · {entry.captureMethod}</div>
+          {entry.correctionReason && <p>Alasan koreksi: {entry.correctionReason}</p>}
+          {entry.evidenceReferences.map((evidence) => <a key={evidence.url} href={evidence.url} target="_blank" rel="noreferrer">{evidence.label}</a>)}
+          {entry.id === effective?.id && <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {availableActions.verify && entry.status === 'SUBMITTED' && <button disabled={submitting} onClick={() => void transition(entry, 'verify')}>Verifikasi</button>}
+            {availableActions.accept && entry.status === 'VERIFIED' && <button disabled={submitting} onClick={() => void transition(entry, 'accept')}>Terima</button>}
+            {availableActions.correct && <button disabled={submitting || !quantity} onClick={() => void correct(entry)}>Buat koreksi</button>}
+          </div>}
+        </article>)}
+      </section>
     </div>
   );
 }

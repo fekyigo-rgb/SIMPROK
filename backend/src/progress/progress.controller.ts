@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Body, UseGuards, Request, Param } from '@nestjs/common';
 import { ProgressService } from './progress.service';
-import { SubmitFieldProgressDto } from './dto/create-progress.dto';
+import { CorrectProgressDto, ProgressTransitionDto, SubmitFieldProgressDto } from './dto/create-progress.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -26,7 +26,79 @@ export class ProgressController {
     @Body() submitDto: SubmitFieldProgressDto,
     @Request() req,
   ) {
-    submitDto.projectId = projectId; // Ensure projectId matches the URL
-    return this.progressService.submitFieldProgress(submitDto, req.user);
+    return this.progressService.submitFieldProgress(
+      projectId,
+      submitDto,
+      req.user.id,
+      req.projectAccess,
+    );
+  }
+
+  @Get('items/:boqItemId/history')
+  @Permissions('PROJECT_VIEW')
+  getWorkItemHistory(
+    @Param('projectId') projectId: string,
+    @Param('boqItemId') boqItemId: string,
+    @Request() req,
+  ) {
+    return this.progressService.getWorkItemHistory(
+      projectId,
+      boqItemId,
+      req.user.id,
+      req.projectAccess,
+    );
+  }
+
+  @Post('entries/:entryId/corrections')
+  @Permissions('PROJECT_VIEW')
+  correctEntry(
+    @Param('projectId') projectId: string,
+    @Param('entryId') entryId: string,
+    @Body() dto: CorrectProgressDto,
+    @Request() req,
+  ) {
+    return this.progressService.correctEntry(
+      projectId,
+      entryId,
+      dto,
+      req.user.id,
+      req.projectAccess,
+    );
+  }
+
+  @Post('entries/:entryId/verify')
+  @Permissions('PROJECT_VIEW')
+  verifyEntry(
+    @Param('projectId') projectId: string,
+    @Param('entryId') entryId: string,
+    @Body() dto: ProgressTransitionDto,
+    @Request() req,
+  ) {
+    return this.progressService.transitionEntry(
+      projectId,
+      entryId,
+      'VERIFY',
+      dto.reason,
+      req.user.id,
+      req.projectAccess,
+    );
+  }
+
+  @Post('entries/:entryId/accept')
+  @Permissions('PROJECT_VIEW')
+  acceptEntry(
+    @Param('projectId') projectId: string,
+    @Param('entryId') entryId: string,
+    @Body() dto: ProgressTransitionDto,
+    @Request() req,
+  ) {
+    return this.progressService.transitionEntry(
+      projectId,
+      entryId,
+      'ACCEPT',
+      dto.reason,
+      req.user.id,
+      req.projectAccess,
+    );
   }
 }

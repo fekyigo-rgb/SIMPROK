@@ -5,6 +5,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../../src/app.module';
 import * as bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 
 const PASSWORD = 'Test1234!';
 const SALT_ROUNDS = 10;
@@ -22,6 +23,7 @@ describe('Progress Security (e2e)', () => {
   let boqItemNoActualId: string;
   let boqItemRecordedZeroId: string;
   let baselineAId: string;
+  let submitAccountId: string;
 
   let userViewEmail = 'prog.view.sec@test.local';
   let userSubmitEmail = 'prog.submit.sec@test.local';
@@ -161,9 +163,30 @@ describe('Progress Security (e2e)', () => {
     }
 
     await createUser(userViewEmail, workspaceAId, roleViewA.id, projectAId);
-    await createUser(userSubmitEmail, workspaceAId, roleSubmitA.id, projectAId);
+    const submitAccount = await createUser(userSubmitEmail, workspaceAId, roleSubmitA.id, projectAId);
+    submitAccountId = submitAccount.id;
     await createUser(userCrossEmail, workspaceBId, roleSubmitB.id, projectBId);
     await createUser(userNoAccessEmail, workspaceAId, roleViewA.id); // No project assignment
+
+    const submitUser = await prisma.user.findFirstOrThrow({
+      where: { membership: { accountId: submitAccount.id, workspaceId: workspaceAId } },
+    });
+    const progressPosition = await prisma.position.create({
+      data: { workspaceId: workspaceAId, code: 'PROGRESS_AUTHORITY_TEST', name: 'Configured Progress Authority' },
+    });
+    await prisma.positionAssignment.create({
+      data: { positionId: progressPosition.id, userId: submitUser.id, isActive: true },
+    });
+    for (const code of ['FIELD_PROGRESS_VERIFY', 'FIELD_PROGRESS_CORRECT', 'FIELD_PROGRESS_ACCEPT']) {
+      const authority = await prisma.authority.upsert({
+        where: { code },
+        update: {},
+        create: { code, name: code },
+      });
+      await prisma.positionAuthority.create({
+        data: { positionId: progressPosition.id, authorityId: authority.id },
+      });
+    }
   });
 
   afterAll(async () => {
@@ -174,6 +197,7 @@ describe('Progress Security (e2e)', () => {
     const memberships = await prisma.workspaceMembership.findMany({ where: { accountId: { in: accountIds } } });
     const membershipIds = memberships.map(m => m.id);
 
+    await prisma.progressAuditEvent.deleteMany({ where: { projectId: { in: [projectAId, projectBId] } } });
     await prisma.progressEntry.deleteMany({ where: { progressReport: { projectId: { in: [projectAId, projectBId] } } } });
     await prisma.progressReport.deleteMany({ where: { projectId: { in: [projectAId, projectBId] } } });
     
@@ -183,6 +207,10 @@ describe('Progress Security (e2e)', () => {
     await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
 
     await prisma.role.deleteMany({ where: { code: { in: ['ROLE_PROG_VIEW_A', 'ROLE_PROG_SUBMIT_A', 'ROLE_PROG_SUBMIT_B'] } } });
+    const progressPositions = await prisma.position.findMany({ where: { workspaceId: workspaceAId, code: 'PROGRESS_AUTHORITY_TEST' } });
+    await prisma.positionAssignment.deleteMany({ where: { positionId: { in: progressPositions.map((position) => position.id) } } });
+    await prisma.positionAuthority.deleteMany({ where: { positionId: { in: progressPositions.map((position) => position.id) } } });
+    await prisma.position.deleteMany({ where: { id: { in: progressPositions.map((position) => position.id) } } });
 
     await prisma.projectBaseline.deleteMany({ where: { projectId: { in: [projectAId, projectBId] } } });
     await prisma.rabDocument.deleteMany({ where: { projectId: { in: [projectAId, projectBId] } } });
@@ -207,7 +235,7 @@ describe('Progress Security (e2e)', () => {
   it('1. no token -> POST /projects/:id/progress/field returns 401', async () => {
     await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/field`)
-      .send({ projectId: projectAId, entries: [] })
+      .send({ commandId: randomUUID(), entries: [] })
       .expect(401);
   });
 
@@ -220,7 +248,7 @@ describe('Progress Security (e2e)', () => {
       .post(`/projects/${projectAId}/progress/field`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
-      .send({ projectId: projectAId, entries: [] })
+      .send({ commandId: randomUUID(), entries: [] })
       .expect(403);
 
     const afterReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
@@ -238,7 +266,7 @@ describe('Progress Security (e2e)', () => {
       .post(`/projects/${projectAId}/progress/field`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
-      .send({ projectId: projectAId, entries: [] })
+      .send({ commandId: randomUUID(), entries: [] })
       .expect(403);
 
     const afterReports = await prisma.progressReport.count({ where: { projectId: projectAId } });
@@ -257,15 +285,17 @@ describe('Progress Security (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .send({
-        projectId: projectAId,
+        commandId: randomUUID(),
         entries: [{
           boqItemId: boqItemAId,
-          installedQuantity: 2,
-          workDate: new Date().toISOString()
+          installedQuantity: '2',
+          workDate: new Date().toISOString(),
+          captureMethod: 'FIELD_OBSERVATION'
         }, {
           boqItemId: boqItemRecordedZeroId,
-          installedQuantity: 0,
-          workDate: new Date().toISOString()
+          installedQuantity: '0',
+          workDate: new Date().toISOString(),
+          captureMethod: 'FIELD_OBSERVATION'
         }]
       })
       .expect(201);
@@ -289,7 +319,7 @@ describe('Progress Security (e2e)', () => {
     expect(latestReport!.projectId).toBe(projectAId);
     expect(latestReport!.project.workspaceId).toBe(workspaceAId);
     expect(latestReport!.entries).toEqual(expect.arrayContaining([
-      expect.objectContaining({ boqItemId: boqItemAId }),
+      expect.objectContaining({ boqItemId: boqItemAId, recordedByAccountId: submitAccountId, actualCost: null, earnedValue: null }),
       expect.objectContaining({ boqItemId: boqItemRecordedZeroId }),
     ]));
   });
@@ -305,11 +335,12 @@ describe('Progress Security (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .send({
-        projectId: projectAId,
+        commandId: randomUUID(),
         entries: [{
           boqItemId: boqItemAId,
-          installedQuantity: 2,
-          workDate: new Date().toISOString()
+          installedQuantity: '2',
+          workDate: new Date().toISOString(),
+          captureMethod: 'FIELD_OBSERVATION'
         }]
       })
       .expect(404); // ProjectAccessGuard usually returns 404 for cross-tenant
@@ -413,7 +444,7 @@ describe('Progress Security (e2e)', () => {
 
     const absentItem = body.items.find((i: any) => i.id === boqItemNoActualId);
     expect(absentItem).toBeDefined();
-    expect(absentItem.actual).toEqual({
+    expect(absentItem.actual).toMatchObject({
       state: 'NOT_YET_RECORDED',
       latestRecord: null,
     });
@@ -442,5 +473,223 @@ describe('Progress Security (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(404);
+  });
+
+  it('9. MON-03 governed Actual -> trusted actor, optional evidence, idempotent retry, authority transitions, correction, audit, readback, immutable baseline', async () => {
+    const submitToken = await login(userSubmitEmail);
+    const viewToken = await login(userViewEmail);
+    const baselineBefore = await prisma.projectBaseline.findUniqueOrThrow({
+      where: { id: baselineAId },
+      include: { rabDocument: true },
+    });
+    const itemBefore = await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemAId } });
+    const commandId = randomUUID();
+    const payload = {
+      commandId,
+      accountId: '00000000-0000-4000-8000-000000000999',
+      workspaceId: workspaceBId,
+      projectId: projectBId,
+      entries: [{
+        boqItemId: boqItemAId,
+        installedQuantity: '3.25',
+        workDate: '2026-08-31T00:00:00.000Z',
+        captureMethod: 'FIELD_OBSERVATION',
+      }],
+    };
+
+    const created = await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/field`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send(payload)
+      .expect(201);
+    const entryId = created.body.entryIds[0];
+    expect(created.body.replayed).toBe(false);
+
+    const replay = await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/field`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send(payload)
+      .expect(201);
+    expect(replay.body).toMatchObject({ entryIds: [entryId], replayed: true });
+
+    const original = await prisma.progressEntry.findUniqueOrThrow({ where: { id: entryId } });
+    expect(original.recordedByAccountId).toBe(submitAccountId);
+    expect(original.actualCost).toBeNull();
+    expect(original.earnedValue).toBeNull();
+    expect(original.evidenceReferences).toBeNull();
+    expect(await prisma.progressReport.count({ where: { commandId } })).toBe(1);
+
+    await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${entryId}/verify`)
+      .set('Authorization', `Bearer ${viewToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({})
+      .expect(403);
+    expect((await prisma.progressEntry.findUniqueOrThrow({ where: { id: entryId } })).status).toBe('SUBMITTED');
+
+    await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${entryId}/verify`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ reason: 'Configured authority verification' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${entryId}/accept`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ reason: 'Configured authority acceptance' })
+      .expect(201);
+
+    const correctionCommandId = randomUUID();
+    const corrected = await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${entryId}/corrections`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: correctionCommandId,
+        installedQuantity: '4.00',
+        workDate: '2026-08-31T00:00:00.000Z',
+        captureMethod: 'FIELD_REMEASUREMENT',
+        reason: 'Corrected after field remeasurement',
+        evidenceReferences: [{ url: 'https://evidence.example/measurement-01', label: 'Measurement reference' }],
+      })
+      .expect(201);
+    const correctionId = corrected.body.entryId;
+    expect(correctionId).not.toBe(entryId);
+
+    const [preservedOriginal, correction] = await Promise.all([
+      prisma.progressEntry.findUniqueOrThrow({ where: { id: entryId } }),
+      prisma.progressEntry.findUniqueOrThrow({ where: { id: correctionId } }),
+    ]);
+    expect(preservedOriginal.installedQuantity.toString()).toBe('3.25');
+    expect(preservedOriginal.status).toBe('RETURNED_FOR_CORRECTION');
+    expect(correction.supersedesEntryId).toBe(entryId);
+    expect(correction.installedQuantity.toString()).toBe('4');
+    expect(correction.revision).toBe(preservedOriginal.revision + 1);
+
+    await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${entryId}/corrections`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: randomUUID(),
+        installedQuantity: '5',
+        workDate: '2026-08-31T00:00:00.000Z',
+        captureMethod: 'FIELD_REMEASUREMENT',
+        reason: 'Stale competing correction',
+      })
+      .expect(409);
+
+    const history = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/items/${boqItemAId}/history`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    expect(history.body.availableActions).toEqual({ verify: true, correct: true, accept: true });
+    expect(history.body.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: entryId, status: 'RETURNED_FOR_CORRECTION' }),
+      expect.objectContaining({ id: correctionId, supersedesEntryId: entryId, status: 'SUBMITTED' }),
+    ]));
+    expect(await prisma.progressAuditEvent.count({ where: { projectId: projectAId, progressEntryId: { in: [entryId, correctionId] } } })).toBe(5);
+
+    const monitoring = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${viewToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const monitoredItem = monitoring.body.items.find((item: any) => item.id === boqItemAId);
+    expect(monitoredItem.actual.effectiveRecord).toMatchObject({
+      id: correctionId,
+      installedQuantity: '4',
+      supersedesEntryId: entryId,
+      captureMethod: 'FIELD_REMEASUREMENT',
+    });
+
+    const baselineAfter = await prisma.projectBaseline.findUniqueOrThrow({
+      where: { id: baselineAId },
+      include: { rabDocument: true },
+    });
+    const itemAfter = await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemAId } });
+    expect(baselineAfter).toEqual(baselineBefore);
+    expect(itemAfter).toEqual(itemBefore);
+  });
+
+  it('10. MON-03 wrong-project item and invalid quantity leave zero partial mutation', async () => {
+    const token = await login(userSubmitEmail);
+    const foreignBoq = await prisma.boqStructure.create({ data: { projectId: projectBId, name: 'Foreign BOQ', version: 1 } });
+    const foreignItem = await prisma.boqItem.create({ data: { boqStructureId: foreignBoq.id, wbsCode: 'X', name: 'Foreign Item', quantity: 1, unit: 'm3' } });
+    const before = {
+      reports: await prisma.progressReport.count({ where: { projectId: projectAId } }),
+      entries: await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } }),
+      audits: await prisma.progressAuditEvent.count({ where: { projectId: projectAId } }),
+    };
+
+    await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/field`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ commandId: randomUUID(), entries: [{ boqItemId: foreignItem.id, installedQuantity: '1', workDate: new Date().toISOString(), captureMethod: 'FIELD_OBSERVATION' }] })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/field`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ commandId: randomUUID(), entries: [{ boqItemId: boqItemAId, installedQuantity: '-1', workDate: new Date().toISOString(), captureMethod: 'FIELD_OBSERVATION' }] })
+      .expect(400);
+
+    expect({
+      reports: await prisma.progressReport.count({ where: { projectId: projectAId } }),
+      entries: await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } }),
+      audits: await prisma.progressAuditEvent.count({ where: { projectId: projectAId } }),
+    }).toEqual(before);
+  });
+
+  it('11. MON-03 audit failure rolls back the complete Actual command', async () => {
+    const token = await login(userSubmitEmail);
+    const before = {
+      reports: await prisma.progressReport.count({ where: { projectId: projectAId } }),
+      entries: await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } }),
+      audits: await prisma.progressAuditEvent.count({ where: { projectId: projectAId } }),
+    };
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION mon03_reject_progress_audit() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'MON03_TEST_AUDIT_FAILURE';
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER mon03_reject_progress_audit
+      BEFORE INSERT ON progress_audit_events
+      FOR EACH ROW EXECUTE FUNCTION mon03_reject_progress_audit();
+    `);
+    try {
+      await request(app.getHttpServer())
+        .post(`/projects/${projectAId}/progress/field`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({
+          commandId: randomUUID(),
+          entries: [{
+            boqItemId: boqItemAId,
+            installedQuantity: '6.50',
+            workDate: '2026-08-31T00:00:00.000Z',
+            captureMethod: 'FIELD_OBSERVATION',
+          }],
+        })
+        .expect(500);
+    } finally {
+      await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS mon03_reject_progress_audit ON progress_audit_events');
+      await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS mon03_reject_progress_audit()');
+    }
+
+    expect({
+      reports: await prisma.progressReport.count({ where: { projectId: projectAId } }),
+      entries: await prisma.progressEntry.count({ where: { progressReport: { projectId: projectAId } } }),
+      audits: await prisma.progressAuditEvent.count({ where: { projectId: projectAId } }),
+    }).toEqual(before);
   });
 });
