@@ -8,8 +8,10 @@ import {
   REHEARSAL_CLUSTER_PORT,
   RUNTIME_ENVIRONMENT_ENV,
   assertLivePermanentRuntimeTarget,
+  assertPermanentCanonicalBoundary,
   assertPermanentRuntimeTarget,
   describePermanentRuntimeTarget,
+  isCanonicalTargetUrl,
   isPermanentRuntimeDeclared,
   parsePermanentTargetFromUrl,
   verifyPermanentRuntimeTarget,
@@ -315,6 +317,109 @@ describe('verifyPermanentRuntimeTarget', () => {
       host: '127.0.0.1',
       port: 55432,
     });
+  });
+});
+
+describe('PERMANENT ⇔ CANONICAL boundary', () => {
+  const CANONICAL = 'postgresql://u:p@127.0.0.1:55432/simprok_db?schema=public';
+  const PERMANENT = { [RUNTIME_ENVIRONMENT_ENV]: 'PERMANENT' };
+
+  describe('forward half — declared PERMANENT must be canonical', () => {
+    it('accepts PERMANENT + canonical', () => {
+      expect(
+        assertPermanentCanonicalBoundary({ databaseUrl: CANONICAL, env: PERMANENT }),
+      ).toEqual({ permanent: true });
+    });
+
+    it.each([
+      ['legacy cluster', 'postgresql://u:p@127.0.0.1:5432/simprok_db', 'STOP_LEGACY_CLUSTER_REFUSED'],
+      ['rehearsal cluster', 'postgresql://u:p@127.0.0.1:55433/simprok_db', 'STOP_REHEARSAL_CLUSTER_REFUSED'],
+      ['simprok_test', 'postgresql://u:p@127.0.0.1:55432/simprok_test', 'STOP_NON_PERMANENT_DATABASE_REFUSED'],
+      ['simprok_e2e', 'postgresql://u:p@127.0.0.1:55432/simprok_e2e', 'STOP_NON_PERMANENT_DATABASE_REFUSED'],
+      ['localhost', 'postgresql://u:p@localhost:55432/simprok_db', 'STOP_PERMANENT_HOST_MISMATCH'],
+      ['unspecified port', 'postgresql://u:p@127.0.0.1/simprok_db', 'STOP_PERMANENT_PORT_UNSPECIFIED'],
+    ])('refuses PERMANENT + %s', (_label, databaseUrl, expected) => {
+      expect(
+        reasonOf(() =>
+          assertPermanentCanonicalBoundary({ databaseUrl, env: PERMANENT }),
+        ),
+      ).toBe(expected);
+    });
+  });
+
+  describe('inverse half — canonical requires a PERMANENT declaration', () => {
+    it.each([
+      ['UNDECLARED', {}],
+      ['DEVELOPMENT', { [RUNTIME_ENVIRONMENT_ENV]: 'DEVELOPMENT' }],
+      ['TEST', { [RUNTIME_ENVIRONMENT_ENV]: 'TEST' }],
+      ['REHEARSAL', { [RUNTIME_ENVIRONMENT_ENV]: 'REHEARSAL' }],
+      ['NODE_ENV=production but undeclared', { NODE_ENV: 'production' }],
+    ])('refuses %s + canonical', (_label, env) => {
+      expect(
+        reasonOf(() =>
+          assertPermanentCanonicalBoundary({ databaseUrl: CANONICAL, env }),
+        ),
+      ).toBe('STOP_CANONICAL_TARGET_REQUIRES_PERMANENT');
+    });
+
+    it('refuses canonical named without the ?schema suffix too', () => {
+      expect(
+        reasonOf(() =>
+          assertPermanentCanonicalBoundary({
+            databaseUrl: 'postgres://u:p@127.0.0.1:55432/simprok_db',
+            env: {},
+          }),
+        ),
+      ).toBe('STOP_CANONICAL_TARGET_REQUIRES_PERMANENT');
+    });
+  });
+
+  describe('it leaves every non-canonical target to its own guard', () => {
+    it.each([
+      ['legacy simprok_db', 'postgresql://u:p@127.0.0.1:5432/simprok_db'],
+      ['acceptance', 'postgresql://u:p@127.0.0.1:5432/simprok_test'],
+      ['e2e', 'postgresql://u:p@127.0.0.1:5432/simprok_e2e'],
+      ['rehearsal', 'postgresql://u:p@127.0.0.1:55433/simprok_b1b12_browser_rehearsal_20260813'],
+      ['no port stated', 'postgresql://u:p@127.0.0.1/simprok_db'],
+      ['unparseable', 'not-a-url'],
+    ])('says nothing about %s when undeclared', (_label, databaseUrl) => {
+      expect(
+        assertPermanentCanonicalBoundary({ databaseUrl, env: {} }),
+      ).toEqual({ permanent: false });
+    });
+
+    it('does not require a DATABASE_URL to exist at all', () => {
+      expect(assertPermanentCanonicalBoundary({ databaseUrl: undefined, env: {} }))
+        .toEqual({ permanent: false });
+      expect(assertPermanentCanonicalBoundary({ databaseUrl: '', env: {} }))
+        .toEqual({ permanent: false });
+    });
+  });
+
+  describe('isCanonicalTargetUrl never throws', () => {
+    it.each([
+      [undefined, false],
+      ['', false],
+      ['not-a-url', false],
+      ['postgresql://u:p@127.0.0.1/simprok_db', false],
+      ['postgresql://u:p@127.0.0.1:5432/simprok_db', false],
+      ['postgresql://u:p@localhost:55432/simprok_db', false],
+      ['postgresql://u:p@127.0.0.1:55432/simprok_test', false],
+      ['postgresql://u:p@127.0.0.1:55432/simprok_db', true],
+    ])('%s -> %s', (url, expected) => {
+      expect(isCanonicalTargetUrl(url as string | undefined)).toBe(expected);
+    });
+  });
+
+  it('refuses before anything could connect — the check is on the string only', () => {
+    // The boundary call takes no client and returns no client. There is
+    // nothing it could have opened by the time it throws.
+    expect(assertPermanentCanonicalBoundary.length).toBe(1);
+    expect(
+      reasonOf(() =>
+        assertPermanentCanonicalBoundary({ databaseUrl: CANONICAL, env: {} }),
+      ),
+    ).toBe('STOP_CANONICAL_TARGET_REQUIRES_PERMANENT');
   });
 });
 

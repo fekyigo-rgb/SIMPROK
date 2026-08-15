@@ -1,5 +1,10 @@
 /**
- * The PERMANENT runtime target guard.
+ * The PERMANENT ⇔ CANONICAL runtime boundary guard.
+ *
+ * SIMPROK has exactly ONE canonical data authority: 127.0.0.1:55432/simprok_db.
+ * It is protected by SEVERAL INDEPENDENT ENFORCEMENT GUARDS. This module is one
+ * of those guards — it is not a second authority, and nothing here may be read
+ * as creating one.
  *
  * THE DRIFT THIS CLOSES, observed on this machine and not hypothetically:
  * the permanent backend is started by a launcher that sources a runtime env
@@ -9,30 +14,40 @@
  * standing between the permanent runtime and a stale, test-polluted database
  * was which file happened to be loaded first.
  *
- * The two guards already in this repository do not cover this seam, and neither
- * should be widened to try:
+ * The other guards in this repository cover different seams, and none should be
+ * widened to cover this one:
  *
- *   canonical-reference/canonical-reference-target.ts  guards RM-03D0 reference
+ *   canonical-reference/canonical-reference-target.ts  RM-03D0 reference
  *                                                      PROVISIONING (a CLI)
- *   rehearsal/b1b12-rehearsal-target.ts                guards B1B12 rehearsal
+ *   rehearsal/b1b12-rehearsal-target.ts                B1B12 rehearsal
  *                                                      PROVISIONING (a CLI)
- *   scripts/database-role-guards.ts                    guards acceptance/E2E by
+ *   scripts/database-role-guards.ts                    acceptance/E2E, by
  *                                                      database NAME
  *
- * Those three state, in their own words, that they share no code path by
+ * Each states in its own words that it shares no code path with the others by
  * construction, so that nothing in one can widen another. This module keeps
- * that arrangement: it is a FOURTH independent authority, it duplicates a small
- * amount of coordinate parsing on purpose, and it grants nothing to anybody.
- * Extracting a shared parser would couple four boundaries that were each
- * deliberately made unable to weaken the others.
+ * that arrangement: it duplicates a small amount of coordinate parsing on
+ * purpose, and it grants nothing to anybody. Extracting a shared parser would
+ * couple boundaries that were each deliberately made unable to weaken the
+ * others.
  *
- * WHY IT IS DECLARATION-SCOPED. This law binds only a runtime that declares
- * itself PERMANENT via SIMPROK_RUNTIME_ENVIRONMENT. A guard that fired on every
- * process would have to decide what `npm test`, an E2E run, a rehearsal and a
- * developer shell are allowed to touch — that is exactly the "one generic guard
- * that accidentally widens another environment" this repository refuses. An
- * undeclared runtime is left entirely alone; a runtime that CLAIMS to be
- * permanent is held to the claim.
+ * THE LAW IS A BICONDITIONAL, and both halves matter:
+ *
+ *   declared PERMANENT  ⇒  the target must be exactly the canonical one
+ *   target is CANONICAL ⇒  the runtime must have declared itself PERMANENT
+ *
+ * The first half alone left the inverse hole open: any process that simply did
+ * NOT declare itself — a developer shell, a stray script, a test run with a
+ * borrowed env — could still open the canonical database, because a guard that
+ * only inspects declared runtimes never looks at undeclared ones. The second
+ * half closes it without claiming authority over anybody's database choice: it
+ * refuses exactly one target, and only when the claim to it is missing.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO. For a NON-canonical target it says nothing
+ * at all — it neither grants nor withholds, and it does not replace whatever
+ * guard that environment already answers to. Deciding what `npm test`, an E2E
+ * run, a rehearsal or a developer shell may touch belongs to those guards, not
+ * to this one.
  *
  * SECRET DISCIPLINE: the DSN is parsed and discarded. No connection string,
  * user or password ever appears in a return value, an error message or a log —
@@ -204,6 +219,60 @@ export function assertPermanentRuntimeTarget(
       `The permanent runtime targets exactly port ${PERMANENT_RUNTIME_PORT}.`,
     );
   }
+}
+
+/**
+ * Whether a DSN names the canonical target — WITHOUT throwing on anything.
+ *
+ * The inverse half of the law has to inspect DSNs belonging to runtimes this
+ * module has no authority over. A DSN it cannot parse, or one that states no
+ * port, is simply NOT the canonical target: `simprok_db` with no port resolves
+ * to 5432, which is the legacy cluster. Reporting "not canonical" for those is
+ * correct, and it is the only answer that leaves other environments alone.
+ */
+export function isCanonicalTargetUrl(databaseUrl: string | undefined): boolean {
+  let target: PermanentRuntimeTarget;
+  try {
+    target = parsePermanentTargetFromUrl(databaseUrl);
+  } catch {
+    return false;
+  }
+  return (
+    target.databaseName === PERMANENT_RUNTIME_DATABASE &&
+    target.host === PERMANENT_RUNTIME_HOST &&
+    target.port === PERMANENT_RUNTIME_PORT
+  );
+}
+
+/**
+ * Enforces the biconditional on the DSN alone, before any client exists.
+ *
+ * Runs on EVERY bootstrap, declared or not, because the undeclared case is the
+ * one the first version of this guard could not see. It stays silent for every
+ * combination except the two the law forbids.
+ */
+export function assertPermanentCanonicalBoundary(params: {
+  databaseUrl: string | undefined;
+  env: Record<string, string | undefined>;
+}): { permanent: boolean } {
+  const permanent = isPermanentRuntimeDeclared(params.env);
+
+  if (permanent) {
+    // declared PERMANENT ⇒ target must be exactly canonical
+    assertPermanentRuntimeTarget(parsePermanentTargetFromUrl(params.databaseUrl));
+    return { permanent };
+  }
+
+  // target is CANONICAL ⇒ the runtime must have said so
+  if (isCanonicalTargetUrl(params.databaseUrl)) {
+    throw new PermanentRuntimeTargetError(
+      'STOP_CANONICAL_TARGET_REQUIRES_PERMANENT',
+      `The canonical database may only be opened by a runtime that declares ${RUNTIME_ENVIRONMENT_ENV}=${PERMANENT_RUNTIME_ENVIRONMENT}.`,
+    );
+  }
+
+  // Any other target belongs to another guard. Say nothing; grant nothing.
+  return { permanent };
 }
 
 /** Structural subset of a pg/Prisma-style client, so tests need no database. */
