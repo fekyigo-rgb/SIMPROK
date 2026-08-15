@@ -928,10 +928,12 @@ model Authority {
 }
 
 model PositionAuthority {
-  id          String   @id @default(uuid()) @db.Uuid
-  positionId  String   @db.Uuid
-  authorityId String   @db.Uuid
-  assignedAt  DateTime @default(now())
+  id          String    @id @default(uuid()) @db.Uuid
+  positionId  String    @db.Uuid
+  authorityId String    @db.Uuid
+  assignedAt  DateTime  @default(now())
+  isActive    Boolean   @default(true)
+  revokedAt   DateTime?
 
   position  Position  @relation(fields: [positionId], references: [id], onDelete: Cascade)
   authority Authority @relation(fields: [authorityId], references: [id], onDelete: Cascade)
@@ -939,6 +941,7 @@ model PositionAuthority {
   @@unique([positionId, authorityId])
   @@index([positionId])
   @@index([authorityId])
+  @@index([isActive])
   @@map("position_authorities")
 }
 

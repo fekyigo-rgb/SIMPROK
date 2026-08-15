@@ -46,7 +46,11 @@ export class ProgressAuthorityService {
                 position: {
                   workspaceId: projectAccess.workspaceId,
                   positionAuthorities: {
-                    some: { authority: { code: authorityCode } },
+                    some: {
+                      isActive: true,
+                      revokedAt: null,
+                      authority: { code: authorityCode },
+                    },
                   },
                 },
               },
@@ -109,6 +113,7 @@ export class ProgressAuthorityService {
                     AND project_assignment."id" = ${projectAccess.assignmentId}::uuid
                     AND project_assignment."projectId" = ${projectAccess.projectId}::uuid
                     AND project_assignment."status" = 'ASSIGNED'
+                    AND project_assignment."revokedAt" IS NULL
                   LIMIT 1
                   FOR SHARE OF wm, account, profile, project_assignment`,
     );
@@ -145,9 +150,12 @@ export class ProgressAuthorityService {
                     AND project_assignment."id" = ${projectAccess.assignmentId}::uuid
                     AND project_assignment."projectId" = ${projectAccess.projectId}::uuid
                     AND project_assignment."status" = 'ASSIGNED'
+                    AND project_assignment."revokedAt" IS NULL
                     AND assignment."isActive" = TRUE
                     AND assignment."removedAt" IS NULL
                     AND position."workspaceId" = ${projectAccess.workspaceId}::uuid
+                    AND grant_row."isActive" = TRUE
+                    AND grant_row."revokedAt" IS NULL
                     AND authority."code" = ${authorityCode}
                   ORDER BY assignment."assignedAt" ASC
                   LIMIT 1

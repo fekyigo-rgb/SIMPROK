@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   effectiveHistoryEntry,
+  correctionCaptureMethod,
   correctionDate,
   historyMessage,
   localCalendarDate,
@@ -32,6 +33,15 @@ test("MON03 timeline uses occurredAt and renders a valid date", () => {
 test("MON03 legacy null work date remains empty for correction", () => {
   assert.equal(correctionDate(null), "");
   assert.equal(correctionDate("2026-08-15T00:00:00.000Z"), "2026-08-15");
+});
+
+test("MON03 correction requires fresh provenance for a legacy capture method", () => {
+  assert.equal(correctionCaptureMethod("LEGACY_UNSPECIFIED"), "");
+  assert.equal(correctionCaptureMethod("LEGACY_IMPORT"), "");
+  assert.equal(
+    correctionCaptureMethod("FIELD_MEASUREMENT"),
+    "FIELD_MEASUREMENT",
+  );
 });
 
 test("MON03 history errors never become the empty-history claim", () => {

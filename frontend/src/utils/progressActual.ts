@@ -54,3 +54,13 @@ export function timelinePresentation(event: ProgressTimelineEvent) {
 export function correctionDate(workDate: string | null): string {
   return workDate ? workDate.slice(0, 10) : "";
 }
+
+export function correctionCaptureMethod(value: string): string {
+  return [
+    "FIELD_OBSERVATION",
+    "FIELD_MEASUREMENT",
+    "DOCUMENT_REFERENCE",
+  ].includes(value)
+    ? value
+    : "";
+}

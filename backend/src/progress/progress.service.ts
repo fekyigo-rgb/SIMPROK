@@ -505,6 +505,21 @@ export class ProgressService {
         );
         const original = locked[0];
         if (!original) throw new NotFoundException('Actual not found');
+        const replayAfterLock = await tx.progressReport.findUnique({
+          where: { commandId: dto.commandId },
+          include: { entries: true },
+        });
+        if (replayAfterLock) {
+          const correction = replayAfterLock.entries[0];
+          if (
+            replayAfterLock.projectId !== projectId ||
+            replayAfterLock.commandFingerprint !== commandFingerprint ||
+            correction?.supersedesEntryId !== entryId ||
+            correction.recordedByAccountId !== accountId
+          )
+            throw new ConflictException('COMMAND_ID_CORRECTION_CONFLICT');
+          return { entryId: correction.id, replayed: true };
+        }
         const report = await tx.progressReport.findUnique({
           where: { id: original.progressReportId },
         });

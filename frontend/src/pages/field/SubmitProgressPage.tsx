@@ -5,6 +5,7 @@ import { FactHeader } from "../../components/molecules/FactHeader";
 import { useAuth } from "../../contexts/AuthContext";
 import { apiFetch } from "../../utils/apiClient";
 import {
+  correctionCaptureMethod,
   correctionDate,
   effectiveHistoryEntry,
   historyMessage,
@@ -378,7 +379,9 @@ export function SubmitProgressPage() {
                           commandId: crypto.randomUUID(),
                           installedQuantity: entry.installedQuantity,
                           workDate: correctionDate(entry.workDate),
-                          captureMethod: entry.captureMethod,
+                          captureMethod: correctionCaptureMethod(
+                            entry.captureMethod,
+                          ),
                           reason: "",
                         })
                       }
@@ -432,10 +435,29 @@ export function SubmitProgressPage() {
               required
             />
           </label>
+          <label>
+            Metode pengukuran koreksi
+            <select
+              value={correction.captureMethod}
+              onChange={(e) =>
+                setCorrection({
+                  ...correction,
+                  captureMethod: e.target.value,
+                })
+              }
+            >
+              <option value="">Pilih metode</option>
+              <option value="FIELD_OBSERVATION">Observasi lapangan</option>
+              <option value="FIELD_MEASUREMENT">Pengukuran lapangan</option>
+              <option value="DOCUMENT_REFERENCE">Referensi dokumen</option>
+            </select>
+          </label>
           <button
             disabled={
               submitting ||
               !correction.installedQuantity ||
+              !correction.workDate ||
+              !correction.captureMethod ||
               !correction.reason.trim()
             }
             onClick={() => void saveCorrection()}
