@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
+import { PERMISSIONS } from '../common/constants/permissions';
 
 @Controller('projects/:projectId/progress')
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, PermissionsGuard)
@@ -31,7 +32,7 @@ export class ProgressController {
 
   @Post('field')
   // This is a write action. It must strictly require FIELD_PROGRESS_SUBMIT.
-  @Permissions('FIELD_PROGRESS_SUBMIT')
+  @Permissions(PERMISSIONS.FIELD_PROGRESS_SUBMIT)
   async submitFieldProgress(
     @Param('projectId') projectId: string,
     @Body() submitDto: SubmitFieldProgressDto,
@@ -61,7 +62,7 @@ export class ProgressController {
   }
 
   @Post('entries/:entryId/corrections')
-  @Permissions('PROJECT_VIEW')
+  @Permissions(PERMISSIONS.FIELD_PROGRESS_CORRECT)
   correctEntry(
     @Param('projectId') projectId: string,
     @Param('entryId') entryId: string,
@@ -78,7 +79,7 @@ export class ProgressController {
   }
 
   @Post('entries/:entryId/verify')
-  @Permissions('PROJECT_VIEW')
+  @Permissions(PERMISSIONS.FIELD_PROGRESS_VERIFY)
   verifyEntry(
     @Param('projectId') projectId: string,
     @Param('entryId') entryId: string,
@@ -97,7 +98,7 @@ export class ProgressController {
   }
 
   @Post('entries/:entryId/accept')
-  @Permissions('PROJECT_VIEW')
+  @Permissions(PERMISSIONS.FIELD_PROGRESS_ACCEPT)
   acceptEntry(
     @Param('projectId') projectId: string,
     @Param('entryId') entryId: string,

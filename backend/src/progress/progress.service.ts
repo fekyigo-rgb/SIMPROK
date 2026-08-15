@@ -19,6 +19,8 @@ import {
   ProgressEvidenceReferenceDto,
   SubmitFieldProgressDto,
 } from './dto/create-progress.dto';
+import { PERMISSIONS } from '../common/constants/permissions';
+import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import {
   PROGRESS_AUTHORITIES,
   ProgressAuthorityService,
@@ -48,6 +50,7 @@ const PROGRESS_AUDIT_SCHEMA_VERSION = 1;
 const PROGRESS_AUDIT_EVENT_TYPE = 'ACTUAL_PROGRESS';
 const PROGRESS_AUDIT_SOURCE_MODULE = 'FIELD_PROGRESS';
 const PROGRESS_AUDIT_ACTOR_TYPE = 'HUMAN';
+const PROJECT_BUSINESS_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 interface EffectiveCandidate {
   id: string;
@@ -61,6 +64,7 @@ export class ProgressService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly authority: ProgressAuthorityService,
+    private readonly permissionResolver: WorkspacePermissionResolverService,
   ) {}
 
   private actor(
@@ -96,6 +100,25 @@ export class ProgressService {
       throw new BadRequestException('Installed quantity cannot be negative');
     }
     return quantity;
+  }
+
+  private projectBusinessDate(value: string): Date {
+    const match = PROJECT_BUSINESS_DATE.exec(value);
+    if (!match) {
+      throw new BadRequestException('WORK_DATE_PROJECT_BUSINESS_DATE_REQUIRED');
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+      date.getUTCFullYear() !== year ||
+      date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day
+    ) {
+      throw new BadRequestException('WORK_DATE_PROJECT_BUSINESS_DATE_REQUIRED');
+    }
+    return date;
   }
 
   private fingerprint(value: unknown): string {
@@ -189,6 +212,8 @@ export class ProgressService {
       action: string;
       trace: ProgressRequestTrace;
       reason?: string;
+      reasonCode?: string;
+      reasonText?: string;
       evidence?: ProgressEvidenceReferenceDto[];
       authority?: ProgressAuthorityContext;
       metadata?: Prisma.InputJsonValue;
@@ -222,7 +247,9 @@ export class ProgressService {
         commandId: params.commandId,
         commandFingerprint: params.commandFingerprint,
         action: params.action,
-        reason: params.reason,
+        reason: params.reasonText ?? params.reason,
+        reasonCode: params.reasonCode,
+        reasonText: params.reasonText ?? params.reason,
         evidenceReferences: this.evidence(params.evidence),
         metadata: params.metadata,
         occurredAt: now,
@@ -287,6 +314,16 @@ export class ProgressService {
           commandFingerprint: params.commandFingerprint,
           action: params.action,
           reason: params.reason,
+          reasonCode: params.reason,
+          reasonText:
+            typeof params.metadata === 'object' &&
+            params.metadata !== null &&
+            !Array.isArray(params.metadata) &&
+            'message' in params.metadata &&
+            typeof (params.metadata as Record<string, unknown>).message ===
+              'string'
+              ? ((params.metadata as Record<string, unknown>).message as string)
+              : null,
           metadata: params.metadata,
           occurredAt: now,
           recordedAt: now,
@@ -535,7 +572,9 @@ export class ProgressService {
         });
         if (items.length !== itemIds.length)
           throw new BadRequestException('INVALID_PROJECT_WORK_ITEM');
-        const dates = dto.entries.map((entry) => new Date(entry.workDate));
+        const dates = dto.entries.map((entry) =>
+          this.projectBusinessDate(entry.workDate),
+        );
         const report = await tx.progressReport.create({
           data: {
             projectId,
@@ -556,7 +595,7 @@ export class ProgressService {
               installedQuantity: this.assertQuantity(input.installedQuantity),
               actualCost: null,
               earnedValue: null,
-              workDate: new Date(input.workDate),
+              workDate: this.projectBusinessDate(input.workDate),
               notes: input.notes,
               captureMethod: input.captureMethod,
               evidenceReferences: this.evidence(input.evidenceReferences),
@@ -751,8 +790,8 @@ export class ProgressService {
             baselineId: report.baselineId,
             commandId: dto.commandId,
             commandFingerprint,
-            periodStartDate: new Date(dto.workDate),
-            periodEndDate: new Date(dto.workDate),
+            periodStartDate: this.projectBusinessDate(dto.workDate),
+            periodEndDate: this.projectBusinessDate(dto.workDate),
             status: 'SUBMITTED',
           },
         });
@@ -769,7 +808,7 @@ export class ProgressService {
             installedQuantity: this.assertQuantity(dto.installedQuantity),
             actualCost: null,
             earnedValue: null,
-            workDate: new Date(dto.workDate),
+            workDate: this.projectBusinessDate(dto.workDate),
             notes: dto.notes,
             captureMethod: dto.captureMethod,
             evidenceReferences: this.evidence(dto.evidenceReferences),
@@ -974,7 +1013,7 @@ export class ProgressService {
           authority,
           action: `ACTUAL_${target}`,
           trace,
-          reason,
+          reasonText: reason,
           businessCommandId: commandId,
           commandId,
           commandFingerprint,
@@ -1080,11 +1119,14 @@ export class ProgressService {
           EFFECTIVE_STATUSES.includes(entry.status),
       ),
     );
-    const [verify, correct, accept] = await Promise.all([
+    const [effectivePermissions, verify, correct, accept] = await Promise.all([
+      this.permissionResolver.resolve(accountId, access.workspaceId),
       this.authority.resolve(accountId, access, PROGRESS_AUTHORITIES.VERIFY),
       this.authority.resolve(accountId, access, PROGRESS_AUTHORITIES.CORRECT),
       this.authority.resolve(accountId, access, PROGRESS_AUTHORITIES.ACCEPT),
     ]);
+    const hasPermission = (permission: string) =>
+      !!effectivePermissions?.permissions.includes(permission);
     return {
       projectId,
       projectTimeZone: baseline.project.timeZone,
@@ -1101,9 +1143,9 @@ export class ProgressService {
       },
       effectiveEntryId: effective?.id ?? null,
       availableActions: {
-        verify: !!verify,
-        correct: !!correct,
-        accept: !!accept,
+        verify: !!verify && hasPermission(PERMISSIONS.FIELD_PROGRESS_VERIFY),
+        correct: !!correct && hasPermission(PERMISSIONS.FIELD_PROGRESS_CORRECT),
+        accept: !!accept && hasPermission(PERMISSIONS.FIELD_PROGRESS_ACCEPT),
       },
       entries: entries.map((entry) => ({
         id: entry.id,
@@ -1139,6 +1181,8 @@ export class ProgressService {
           },
           occurredAt: event.occurredAt,
           reason: event.reason,
+          reasonCode: event.reasonCode,
+          reasonText: event.reasonText,
           authorityCode: event.authorityCode,
           positionCode: event.positionCodeSnapshot,
           roleInProject: event.roleInProjectSnapshot,

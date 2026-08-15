@@ -26,6 +26,7 @@ import { InitiateProjectDto } from './dto/initiate-project.dto';
 import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { PersistBoqItemCalculationDto } from './dto/persist-boq-item-calculation.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
+import { UpdateProjectTimeZoneDto } from './dto/update-project-time-zone.dto';
 import { CreateRabIntelligenceProposalDto } from './dto/create-rab-intelligence-proposal.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
@@ -304,6 +305,31 @@ export class ProjectController {
     @Body() dto: UpdateProjectIntakeContextDto,
   ) {
     return this.projectService.updateIntakeContext(projectId, dto);
+  }
+
+  @Patch(':projectId/time-zone')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  // Project timezone is Project-owned configuration, not Baseline/RAB truth.
+  // Reuse the existing project administration permission until the broader
+  // Project Governance center receives its final dedicated settings catalog.
+  @Permissions(PERMISSIONS.PROJECT_CREATE)
+  async updateProjectTimeZone(
+    @Req() request: any,
+    @Param('projectId') projectId: string,
+    @Body() dto: UpdateProjectTimeZoneDto,
+  ) {
+    const actorAccountId = request.user?.id;
+    const access = request.projectAccess;
+    if (!actorAccountId || !access?.workspaceId || !access?.membershipId) {
+      throw new InternalServerErrorException(
+        'Trusted project actor context is missing',
+      );
+    }
+    return this.projectService.updateProjectTimeZone(projectId, dto, {
+      accountId: actorAccountId,
+      membershipId: access.membershipId,
+      workspaceId: access.workspaceId,
+    });
   }
 
   @Get(':projectId/boq')

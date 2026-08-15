@@ -67,6 +67,9 @@ const ids = {
   authorityProgressCorrect: '10000000-0000-4000-8000-000000000058',
   authorityProgressAccept: '10000000-0000-4000-8000-000000000059',
   projectAssignmentForemanMonitoringProof: '10000000-0000-4000-8000-000000000060',
+  permissionFieldProgressCorrect: '10000000-0000-4000-8000-000000000061',
+  permissionFieldProgressVerify: '10000000-0000-4000-8000-000000000062',
+  permissionFieldProgressAccept: '10000000-0000-4000-8000-000000000063',
 };
 
 async function main() {
@@ -127,6 +130,21 @@ async function main() {
       id: ids.permissionFieldProgressSubmit,
       code: 'FIELD_PROGRESS_SUBMIT',
       name: 'Submit Progress',
+    },
+    {
+      id: ids.permissionFieldProgressCorrect,
+      code: 'FIELD_PROGRESS_CORRECT',
+      name: 'Correct Progress',
+    },
+    {
+      id: ids.permissionFieldProgressVerify,
+      code: 'FIELD_PROGRESS_VERIFY',
+      name: 'Verify Progress',
+    },
+    {
+      id: ids.permissionFieldProgressAccept,
+      code: 'FIELD_PROGRESS_ACCEPT',
+      name: 'Accept Progress',
     },
     { id: ids.permissionRabView, code: 'RAB_VIEW', name: 'RAB View' },
     { id: ids.permissionRabDraftEdit, code: 'RAB_DRAFT_EDIT', name: 'RAB Draft Edit' },
@@ -949,6 +967,25 @@ async function main() {
       permissionId: ids.permissionFieldProgressSubmit,
     },
   });
+  for (const permissionId of [
+    ids.permissionFieldProgressCorrect,
+    ids.permissionFieldProgressVerify,
+    ids.permissionFieldProgressAccept,
+  ]) {
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: roleForeman.id,
+          permissionId,
+        },
+      },
+      update: {},
+      create: {
+        roleId: roleForeman.id,
+        permissionId,
+      },
+    });
+  }
 
   // RAB-DRAFT-PROOF: lawful positive fixture for the RAB draft-lifecycle proof.
   // assigned@test.local reaches this via Proyek Saya -> Lanjutkan/Mulai RAB ->

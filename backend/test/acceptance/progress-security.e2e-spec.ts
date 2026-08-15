@@ -143,11 +143,53 @@ describe('Progress Security (e2e)', () => {
     baselineAId = baseline.id;
 
     // Setup permissions
-    const permView = await prisma.permission.findUniqueOrThrow({
+    const permView = await prisma.permission.upsert({
       where: { code: 'PROJECT_VIEW' },
+      update: {},
+      create: {
+        code: 'PROJECT_VIEW',
+        name: 'View Project',
+      },
     });
-    const permSubmit = await prisma.permission.findUniqueOrThrow({
+    const permSubmit = await prisma.permission.upsert({
       where: { code: 'FIELD_PROGRESS_SUBMIT' },
+      update: {},
+      create: {
+        code: 'FIELD_PROGRESS_SUBMIT',
+        name: 'Submit Field Progress',
+      },
+    });
+    const permProjectCreate = await prisma.permission.upsert({
+      where: { code: 'PROJECT_CREATE' },
+      update: {},
+      create: {
+        code: 'PROJECT_CREATE',
+        name: 'Create Project',
+      },
+    });
+    const permCorrect = await prisma.permission.upsert({
+      where: { code: 'FIELD_PROGRESS_CORRECT' },
+      update: {},
+      create: {
+        code: 'FIELD_PROGRESS_CORRECT',
+        name: 'Correct Field Progress',
+      },
+    });
+    const permVerify = await prisma.permission.upsert({
+      where: { code: 'FIELD_PROGRESS_VERIFY' },
+      update: {},
+      create: {
+        code: 'FIELD_PROGRESS_VERIFY',
+        name: 'Verify Field Progress',
+      },
+    });
+    const permAccept = await prisma.permission.upsert({
+      where: { code: 'FIELD_PROGRESS_ACCEPT' },
+      update: {},
+      create: {
+        code: 'FIELD_PROGRESS_ACCEPT',
+        name: 'Accept Field Progress',
+      },
     });
 
     // Setup roles in Workspaces
@@ -168,6 +210,10 @@ describe('Progress Security (e2e)', () => {
           create: [
             { permissionId: permView.id },
             { permissionId: permSubmit.id },
+            { permissionId: permCorrect.id },
+            { permissionId: permVerify.id },
+            { permissionId: permAccept.id },
+            { permissionId: permProjectCreate.id },
           ],
         },
       },
@@ -306,6 +352,9 @@ describe('Progress Security (e2e)', () => {
       },
     });
     await prisma.progressReport.deleteMany({
+      where: { projectId: { in: [projectAId, projectBId] } },
+    });
+    await prisma.projectTimeZoneEvent.deleteMany({
       where: { projectId: { in: [projectAId, projectBId] } },
     });
 
@@ -456,13 +505,13 @@ describe('Progress Security (e2e)', () => {
           {
             boqItemId: boqItemAId,
             installedQuantity: '2',
-            workDate: new Date().toISOString(),
+            workDate: '2026-08-31',
             captureMethod: 'FIELD_OBSERVATION',
           },
           {
             boqItemId: boqItemRecordedZeroId,
             installedQuantity: '0',
-            workDate: new Date().toISOString(),
+            workDate: '2026-08-31',
             captureMethod: 'FIELD_OBSERVATION',
           },
         ],
@@ -524,7 +573,7 @@ describe('Progress Security (e2e)', () => {
           {
             boqItemId: boqItemAId,
             installedQuantity: '2',
-            workDate: new Date().toISOString(),
+            workDate: '2026-08-31',
             captureMethod: 'FIELD_OBSERVATION',
           },
         ],
@@ -688,7 +737,7 @@ describe('Progress Security (e2e)', () => {
         {
           boqItemId: boqItemAId,
           installedQuantity: '3.25',
-          workDate: '2026-08-31T00:00:00.000Z',
+          workDate: '2026-08-31',
           captureMethod: 'FIELD_OBSERVATION',
         },
       ],
@@ -748,12 +797,12 @@ describe('Progress Security (e2e)', () => {
       actorAccountId: viewAccount.id,
       actorType: 'HUMAN',
       eventType: 'ACTUAL_PROGRESS',
-      reason: 'AUTHORITY_OR_ASSIGNMENT_DENIED',
+      reason: 'TECHNICAL_PERMISSION_DENIED',
+      reasonCode: 'TECHNICAL_PERMISSION_DENIED',
       sourceModule: 'FIELD_PROGRESS',
       targetEntityType: 'PROGRESS_ENTRY',
       businessCommandId: expect.any(String),
       commandId: expect.any(String),
-      commandFingerprint: expect.any(String),
     });
     expect(deniedVerifyAudit.schemaVersion).toBe(1);
     expect(deniedVerifyAudit.occurredAt).toBeInstanceOf(Date);
@@ -806,7 +855,7 @@ describe('Progress Security (e2e)', () => {
     const correctionPayload = {
       commandId: correctionCommandId,
       installedQuantity: '4.00',
-      workDate: '2026-08-31T00:00:00.000Z',
+      workDate: '2026-08-31',
       captureMethod: 'FIELD_REMEASUREMENT',
       reason: 'Corrected after field remeasurement',
       evidenceReferences: [
@@ -852,7 +901,7 @@ describe('Progress Security (e2e)', () => {
       .send({
         commandId: randomUUID(),
         installedQuantity: '5',
-        workDate: '2026-08-31T00:00:00.000Z',
+        workDate: '2026-08-31',
         captureMethod: 'FIELD_REMEASUREMENT',
         reason: 'Stale competing correction',
       })
@@ -993,7 +1042,7 @@ describe('Progress Security (e2e)', () => {
           {
             boqItemId: foreignItem.id,
             installedQuantity: '1',
-            workDate: new Date().toISOString(),
+            workDate: '2026-08-31',
             captureMethod: 'FIELD_OBSERVATION',
           },
         ],
@@ -1009,7 +1058,7 @@ describe('Progress Security (e2e)', () => {
           {
             boqItemId: boqItemAId,
             installedQuantity: '-1',
-            workDate: new Date().toISOString(),
+            workDate: '2026-08-31',
             captureMethod: 'FIELD_OBSERVATION',
           },
         ],
@@ -1086,7 +1135,7 @@ describe('Progress Security (e2e)', () => {
             {
               boqItemId: boqItemAId,
               installedQuantity: '6.50',
-              workDate: '2026-08-31T00:00:00.000Z',
+              workDate: '2026-08-31',
               captureMethod: 'FIELD_OBSERVATION',
             },
           ],
@@ -1127,7 +1176,7 @@ describe('Progress Security (e2e)', () => {
           {
             boqItemId: boqItemAId,
             installedQuantity: '6.75',
-            workDate: '2026-08-31T00:00:00.000Z',
+            workDate: '2026-08-31',
             captureMethod: 'FIELD_OBSERVATION',
           },
         ],
@@ -1243,7 +1292,7 @@ describe('Progress Security (e2e)', () => {
             {
               boqItemId: boqItemAId,
               installedQuantity: '1',
-              workDate: '2026-08-31T00:00:00.000Z',
+              workDate: '2026-08-31',
               captureMethod: 'FIELD_OBSERVATION',
             },
           ],
@@ -1296,7 +1345,7 @@ describe('Progress Security (e2e)', () => {
             {
               boqItemId,
               installedQuantity: '1',
-              workDate: '2026-08-30T00:00:00.000Z',
+              workDate: '2026-08-30',
               captureMethod: 'FIELD_OBSERVATION',
             },
           ],
@@ -1312,7 +1361,7 @@ describe('Progress Security (e2e)', () => {
         .send({
           commandId: randomUUID(),
           installedQuantity: '2',
-          workDate: '2026-08-30T00:00:00.000Z',
+          workDate: '2026-08-30',
           captureMethod: 'FIELD_REMEASUREMENT',
           reason: 'Lawful correction',
         })
@@ -1388,7 +1437,7 @@ describe('Progress Security (e2e)', () => {
               {
                 boqItemId: boqItemAId,
                 installedQuantity: '1',
-                workDate: '2026-08-31T00:00:00.000Z',
+                workDate: '2026-08-31',
                 captureMethod: 'FIELD_OBSERVATION',
               },
             ],
@@ -1448,7 +1497,7 @@ describe('Progress Security (e2e)', () => {
           {
             boqItemId: boqItemRecordedZeroId,
             installedQuantity: '2',
-            workDate: '2026-09-01T00:00:00.000Z',
+            workDate: '2026-09-01',
             captureMethod: 'FIELD_OBSERVATION',
           },
         ],
@@ -1525,7 +1574,7 @@ describe('Progress Security (e2e)', () => {
         {
           boqItemId: boqItemAId,
           installedQuantity: '7.12',
-          workDate: '2026-09-01T00:00:00.000Z',
+          workDate: '2026-09-01',
           captureMethod: 'FIELD_MEASUREMENT',
         },
       ],
@@ -1590,7 +1639,7 @@ describe('Progress Security (e2e)', () => {
           {
             boqItemId: item.id,
             installedQuantity: '6',
-            workDate: '2026-09-02T00:00:00.000Z',
+            workDate: '2026-09-02',
             captureMethod: 'FIELD_MEASUREMENT',
           },
         ],
@@ -1637,7 +1686,7 @@ describe('Progress Security (e2e)', () => {
     const correctionPayload = {
       commandId: correctionCommandId,
       installedQuantity: '7',
-      workDate: '2026-09-03T00:00:00.000Z',
+      workDate: '2026-09-03',
       captureMethod: 'FIELD_OBSERVATION',
       reason: 'Concurrent correction',
     };
@@ -1747,7 +1796,147 @@ describe('Progress Security (e2e)', () => {
     );
   });
 
-  it('20. history projection is project-assignment and tenant isolated without raw audit internals', async () => {
+  it('20. workDate is a Project business date while recordedAt remains server-controlled', async () => {
+    const token = await login(userSubmitEmail);
+    const before = {
+      reports: await prisma.progressReport.count({
+        where: { projectId: projectAId },
+      }),
+      entries: await prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+    };
+    const forgedRecordedAt = '1999-01-01T00:00:00.000Z';
+
+    const created = await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/field`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: randomUUID(),
+        recordedAt: forgedRecordedAt,
+        entries: [
+          {
+            boqItemId: boqItemAId,
+            installedQuantity: '1.25',
+            workDate: '2000-01-01',
+            captureMethod: 'FIELD_OBSERVATION',
+          },
+        ],
+      })
+      .expect(201);
+    const entry = await prisma.progressEntry.findUniqueOrThrow({
+      where: { id: created.body.entryIds[0] },
+    });
+    expect(entry.workDate?.toISOString()).toBe('2000-01-01T00:00:00.000Z');
+    expect(entry.createdAt.toISOString()).not.toBe(forgedRecordedAt);
+    expect(entry.createdAt.toISOString().slice(0, 10)).not.toBe(
+      entry.workDate?.toISOString().slice(0, 10),
+    );
+
+    await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/field`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: randomUUID(),
+        entries: [
+          {
+            boqItemId: boqItemAId,
+            installedQuantity: '1.25',
+            workDate: '2000-01-01T00:00:00.000Z',
+            captureMethod: 'FIELD_OBSERVATION',
+          },
+        ],
+      })
+      .expect(400);
+    expect({
+      reports: await prisma.progressReport.count({
+        where: { projectId: projectAId },
+      }),
+      entries: await prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+    }).toEqual({
+      reports: before.reports + 1,
+      entries: before.entries + 1,
+    });
+  });
+
+  it('21. Project timezone has a governed update path after active baseline without mutating baseline truth', async () => {
+    const token = await login(userSubmitEmail);
+    await prisma.project.update({
+      where: { id: projectAId },
+      data: { timeZone: null },
+    });
+    const baselineBefore = await prisma.projectBaseline.findUniqueOrThrow({
+      where: { id: baselineAId },
+      include: { rabDocument: true },
+    });
+    const eventsBefore = await prisma.projectTimeZoneEvent.count({
+      where: { projectId: projectAId },
+    });
+
+    const updated = await request(app.getHttpServer())
+      .patch(`/projects/${projectAId}/time-zone`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        timeZone: 'Asia/Jayapura',
+        reason: 'Configure Project timezone for MON-03 proof',
+      })
+      .expect(200);
+    expect(updated.body.timeZone).toBe('Asia/Jayapura');
+    expect(
+      await prisma.projectTimeZoneEvent.count({
+        where: { projectId: projectAId },
+      }),
+    ).toBe(eventsBefore + 1);
+    const event = await prisma.projectTimeZoneEvent.findFirstOrThrow({
+      where: { projectId: projectAId },
+      orderBy: { occurredAt: 'desc' },
+    });
+    expect(event).toMatchObject({
+      projectId: projectAId,
+      workspaceId: workspaceAId,
+      actorAccountId: submitAccountId,
+      previousTimeZone: null,
+      nextTimeZone: 'Asia/Jayapura',
+      action: 'PROJECT_TIME_ZONE_UPDATED',
+    });
+    expect(
+      await prisma.projectBaseline.findUniqueOrThrow({
+        where: { id: baselineAId },
+        include: { rabDocument: true },
+      }),
+    ).toEqual(baselineBefore);
+
+    const monitoring = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    expect(monitoring.body.projectTimeZone).toBe('Asia/Jayapura');
+
+    await request(app.getHttpServer())
+      .patch(`/projects/${projectAId}/time-zone`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ timeZone: 'Invalid/NotAZone' })
+      .expect(400);
+    expect(
+      (
+        await prisma.project.findUniqueOrThrow({ where: { id: projectAId } })
+      ).timeZone,
+    ).toBe('Asia/Jayapura');
+    expect(
+      await prisma.projectTimeZoneEvent.count({
+        where: { projectId: projectAId },
+      }),
+    ).toBe(eventsBefore + 1);
+  });
+
+  it('22. history projection is project-assignment and tenant isolated without raw audit internals', async () => {
     const assignedToken = await login(userSubmitEmail);
     const allowed = await request(app.getHttpServer())
       .get(`/projects/${projectAId}/progress/items/${boqItemAId}/history`)

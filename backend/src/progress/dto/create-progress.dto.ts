@@ -1,13 +1,13 @@
 import {
   ArrayMaxSize,
   IsArray,
-  IsDateString,
   IsDecimal,
   IsOptional,
   IsString,
   IsUrl,
   IsUUID,
   Length,
+  Matches,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -31,6 +31,8 @@ export class ProgressEvidenceReferenceDto {
   integrityHash?: string;
 }
 
+const PROJECT_BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 export class ProgressEntryDto {
   @IsUUID()
   boqItemId: string;
@@ -38,7 +40,9 @@ export class ProgressEntryDto {
   @IsDecimal({ decimal_digits: '0,2', force_decimal: false })
   installedQuantity: string;
 
-  @IsDateString()
+  @Matches(PROJECT_BUSINESS_DATE, {
+    message: 'workDate must be a project business date in YYYY-MM-DD format',
+  })
   workDate: string;
 
   @IsString()
@@ -76,7 +80,9 @@ export class CorrectProgressDto {
   @IsDecimal({ decimal_digits: '0,2', force_decimal: false })
   installedQuantity: string;
 
-  @IsDateString()
+  @Matches(PROJECT_BUSINESS_DATE, {
+    message: 'workDate must be a project business date in YYYY-MM-DD format',
+  })
   workDate: string;
 
   @IsString()

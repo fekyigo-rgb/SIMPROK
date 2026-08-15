@@ -11,6 +11,7 @@ import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
 import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
+import { UpdateProjectTimeZoneDto } from './dto/update-project-time-zone.dto';
 import { DeviationService } from './deviation.service';
 import { detectIntakeMode } from './intake-mode.kernel';
 import {
@@ -593,6 +594,71 @@ export class ProjectService {
     return await this.prisma.project.update({
       where: { id: projectId },
       data,
+    });
+  }
+
+  async updateProjectTimeZone(
+    projectId: string,
+    dto: UpdateProjectTimeZoneDto,
+    actor: {
+      accountId: string;
+      membershipId: string;
+      workspaceId: string;
+    },
+    reason?: string,
+  ) {
+    const nextTimeZone = this.normalizeProjectTimeZone(dto.timeZone) ?? null;
+
+    return await this.prisma.$transaction(async (tx) => {
+      const lockedProject = await tx.$queryRaw<
+        Array<{ id: string; workspaceId: string; timeZone: string | null }>
+      >(
+        Prisma.sql`SELECT "id", "workspaceId", "timeZone"
+                     FROM "projects"
+                    WHERE "id" = ${projectId}::uuid
+                    FOR UPDATE`,
+      );
+      const project = lockedProject[0];
+      if (!project) throw new NotFoundException('Project not found');
+      if (project.workspaceId !== actor.workspaceId) {
+        throw new NotFoundException('Project not found');
+      }
+
+      const trustedActor = await tx.workspaceMembership.findFirst({
+        where: {
+          id: actor.membershipId,
+          accountId: actor.accountId,
+          workspaceId: actor.workspaceId,
+          status: 'ACTIVE',
+          userProfile: { status: 'ACTIVE' },
+        },
+        select: { id: true },
+      });
+      if (!trustedActor) {
+        throw new BadRequestException('Trusted project actor is required');
+      }
+
+      const updated = await tx.project.update({
+        where: { id: projectId },
+        data: { timeZone: nextTimeZone },
+      });
+
+      if (project.timeZone !== nextTimeZone) {
+        await tx.projectTimeZoneEvent.create({
+          data: {
+            workspaceId: actor.workspaceId,
+            projectId,
+            actorAccountId: actor.accountId,
+            actorMembershipId: actor.membershipId,
+            previousTimeZone: project.timeZone,
+            nextTimeZone,
+            action: 'PROJECT_TIME_ZONE_UPDATED',
+            reason,
+          },
+        });
+      }
+
+      return updated;
     });
   }
 
