@@ -546,6 +546,119 @@ describe('PERMANENT ⇔ CANONICAL boundary', () => {
     });
   });
 
+  // Every case below was a MEASURED bypass before it was closed. The
+  // measurement is pg-connection-string, which `pg` uses:
+  //   parse('...@example.com:1234/other?host=127.0.0.1&port=55432&user=postgres')
+  //     -> host=127.0.0.1 port=55432 user=postgres
+  describe('canonical reached by relocation or obfuscation, not by spelling', () => {
+    const RELOCATED: [string, string][] = [
+      [
+        'authority reads remote, ?host/?port land on canonical',
+        'postgresql://simprok_app:p@example.com:1234/simprok_db?host=127.0.0.1&port=55432',
+      ],
+      [
+        '?hostaddr instead of ?host',
+        'postgresql://simprok_app:p@example.com:1234/simprok_db?hostaddr=127.0.0.1&port=55432',
+      ],
+      [
+        'authority states NO port, ?port supplies the canonical one',
+        'postgresql://simprok_app:p@127.0.0.1/simprok_db?port=55432',
+      ],
+      [
+        '?port supplied to a localhost alias with no authority port',
+        'postgresql://simprok_app:p@localhost/simprok_db?port=55432',
+      ],
+      [
+        'percent-encoded host that decodes to localhost',
+        'postgresql://simprok_app:p@%6Cocalhost:55432/simprok_db',
+      ],
+      [
+        'percent-encoded host that decodes to the loopback address',
+        'postgresql://simprok_app:p@%31%32%37.0.0.1:55432/simprok_db',
+      ],
+      [
+        'the loopback DNS alias',
+        'postgresql://simprok_app:p@loopback:55432/simprok_db',
+      ],
+      [
+        'query-string parameter names in mixed case',
+        'postgresql://simprok_app:p@example.com:1234/simprok_db?HOST=127.0.0.1&PORT=55432',
+      ],
+      [
+        '?dbname naming the canonical database',
+        'postgresql://simprok_app:p@127.0.0.1:55432/other?dbname=simprok_db',
+      ],
+    ];
+
+    it.each(RELOCATED)('isCanonicalTargetUrl sees through: %s', (_label, url) => {
+      expect(isCanonicalTargetUrl(url)).toBe(true);
+    });
+
+    it.each(RELOCATED)('an UNDECLARED runtime is refused: %s', (_label, databaseUrl) => {
+      expect(
+        reasonOf(() => assertPermanentCanonicalBoundary({ databaseUrl, env: {} })),
+      ).toBe('STOP_CANONICAL_TARGET_REQUIRES_PERMANENT');
+    });
+
+    it('an undecodable USERNAME does not make canonical invisible', () => {
+      // parsePermanentTargetFromUrl throws on this; the inverse half must not
+      // inherit that throw as "not canonical".
+      const url = 'postgresql://%FF:p@127.0.0.1:55432/simprok_db';
+      expect(isCanonicalTargetUrl(url)).toBe(true);
+      expect(
+        reasonOf(() => assertPermanentCanonicalBoundary({ databaseUrl: url, env: {} })),
+      ).toBe('STOP_CANONICAL_TARGET_REQUIRES_PERMANENT');
+    });
+
+    it('treats a canonical AUTHORITY as canonical even when a param points away', () => {
+      // Deliberately fail-closed. pg would honour ?host and go to 10.0.0.5;
+      // Prisma reads the authority and would go to canonical. When two clients
+      // disagree about where a DSN lands, the only safe answer is the unsafe
+      // one — so this counts as canonical and an undeclared runtime is refused.
+      // Over-refusing an ambiguous DSN costs a configuration fix; under-
+      // refusing costs the canonical database.
+      const url = 'postgresql://simprok_app:p@127.0.0.1:55432/simprok_db?host=10.0.0.5';
+      expect(isCanonicalTargetUrl(url)).toBe(true);
+      expect(
+        reasonOf(() => assertPermanentCanonicalBoundary({ databaseUrl: url, env: {} })),
+      ).toBe('STOP_CANONICAL_TARGET_REQUIRES_PERMANENT');
+    });
+
+    it('says nothing about a DSN that is canonical by neither reading', () => {
+      expect(
+        isCanonicalTargetUrl('postgresql://simprok_app:p@10.0.0.5:55432/simprok_db?host=10.0.0.6'),
+      ).toBe(false);
+      expect(
+        assertPermanentCanonicalBoundary({
+          databaseUrl: 'postgresql://simprok_app:p@10.0.0.5:55432/simprok_db?host=10.0.0.6',
+          env: {},
+        }),
+      ).toEqual({ permanent: false });
+    });
+
+    it('refuses an ambiguous DSN for the PERMANENT runtime outright', () => {
+      expect(
+        reasonOf(() =>
+          assertPermanentCanonicalBoundary({
+            databaseUrl:
+              'postgresql://simprok_app:p@127.0.0.1:55432/simprok_db?host=127.0.0.1',
+            env: PERMANENT,
+          }),
+        ),
+      ).toBe('STOP_PERMANENT_TARGET_URL_AMBIGUOUS');
+    });
+
+    it('still accepts the launcher DSN, whose query string is only ?schema', () => {
+      expect(() =>
+        assertPermanentCanonicalBoundary({
+          databaseUrl:
+            'postgresql://simprok_app:p@127.0.0.1:55432/simprok_db?schema=public&connection_limit=5',
+          env: PERMANENT,
+        }),
+      ).not.toThrow();
+    });
+  });
+
   it('refuses before anything could connect — the check is on the string only', () => {
     // The boundary call takes no client and returns no client. There is
     // nothing it could have opened by the time it throws.

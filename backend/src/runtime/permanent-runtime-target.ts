@@ -101,7 +101,60 @@ export const PERMANENT_RUNTIME_ROLE = 'simprok_app';
  * Comparison is against a NORMALISED host (see normaliseHostForEquivalence),
  * which is what makes `LOCALHOST` and `localhost.` members of this set too.
  */
-const CANONICAL_EQUIVALENT_HOSTS: readonly string[] = ['127.0.0.1', 'localhost'];
+const CANONICAL_EQUIVALENT_HOSTS: readonly string[] = [
+  '127.0.0.1',
+  'localhost',
+  // A Windows DNS Client alias. `dns.lookup('loopback', {all:true})` on this
+  // machine answers [::1, 127.0.0.1]; the ::1 attempt is refused instantly
+  // because the canonical cluster listens on 127.0.0.1 only, so the IPv4
+  // address is the one that connects.
+  'loopback',
+];
+
+/**
+ * Query parameters that RELOCATE a connection away from what the URL authority
+ * says, or change WHO connects.
+ *
+ * This is measured, not assumed. Against this repository's own copy of
+ * pg-connection-string — which `pg` uses, and `pg` is what the acceptance and
+ * E2E guards connect with:
+ *
+ *   parse('postgresql://simprok_app:pw@example.com:1234/other
+ *          ?host=127.0.0.1&port=55432&user=postgres')
+ *     -> host=127.0.0.1  port=55432  user=postgres
+ *
+ * The query string WINS. So a DSN whose authority reads like a harmless remote
+ * server can land on the canonical cluster, and a host-only comparison would
+ * call it "not canonical" and wave it through. `?port=` likewise supplies a
+ * port for an authority that states none, which is how a DSN can be both
+ * "unspecified port" and a canonical connection at the same time.
+ *
+ * `options` cannot move the endpoint but carries `-c role=…`, which moves the
+ * identity.
+ *
+ * Deliberately a DENYLIST. `schema`, `connection_limit`, `pool_timeout`,
+ * `application_name` and the other Prisma knobs change neither where nor who,
+ * and refusing them would break the permanent launcher — whose own DSN ends in
+ * `?schema=public` — for no safety gained.
+ */
+export const CONNECTION_OVERRIDING_URL_PARAMS: readonly string[] = [
+  'host',
+  'hostaddr',
+  'port',
+  'dbname',
+  'user',
+  'options',
+  'service',
+  'servicefile',
+  'passfile',
+];
+
+function hasConnectionOverridingParam(url: URL): boolean {
+  for (const name of url.searchParams.keys()) {
+    if (CONNECTION_OVERRIDING_URL_PARAMS.includes(name.toLowerCase())) return true;
+  }
+  return false;
+}
 
 /**
  * WHY NORMALISATION IS NEEDED AT ALL, and it is not obvious.
@@ -119,7 +172,19 @@ const CANONICAL_EQUIVALENT_HOSTS: readonly string[] = ['127.0.0.1', 'localhost']
  * names, and nothing here is a general hostname policy.
  */
 function normaliseHostForEquivalence(hostname: string): string {
-  const lowered = hostname.toLowerCase();
+  // pg-connection-string runs decodeURIComponent over the host before opening
+  // the socket — `%6Cocalhost` becomes `localhost` and connects. A guard that
+  // skips that step reads the same bytes as an unresolvable name while the
+  // client reads them as the loopback. A host that is not valid percent-
+  // encoding is compared as it stands; no client turns it into an address
+  // either.
+  let host = hostname;
+  try {
+    host = decodeURIComponent(host);
+  } catch {
+    /* not percent-encoding — compare verbatim */
+  }
+  const lowered = host.toLowerCase();
   return lowered.endsWith('.') ? lowered.slice(0, -1) : lowered;
 }
 
@@ -212,6 +277,17 @@ export function parsePermanentTargetFromUrl(
     throw new PermanentRuntimeTargetError(
       'STOP_PERMANENT_TARGET_URL_INVALID',
       'The supplied database URL must contain exactly one database name.',
+    );
+  }
+
+  // The permanent runtime states its target ONCE, in the authority. A DSN that
+  // also carries host/port/user/options in its query string has two answers to
+  // "where does this go", and the client — not this guard — decides which wins.
+  // Refusing the ambiguity is the only honest reading.
+  if (hasConnectionOverridingParam(parsed)) {
+    throw new PermanentRuntimeTargetError(
+      'STOP_PERMANENT_TARGET_URL_AMBIGUOUS',
+      'The database URL must not carry connection-overriding query parameters.',
     );
   }
 
@@ -313,21 +389,58 @@ export function assertPermanentRuntimeRole(role: string): void {
  * correct, and it is the only answer that leaves other environments alone.
  */
 export function isCanonicalTargetUrl(databaseUrl: string | undefined): boolean {
-  let target: PermanentRuntimeTarget;
+  if (typeof databaseUrl !== 'string' || databaseUrl.length === 0) return false;
+
+  let url: URL;
   try {
-    target = parsePermanentTargetFromUrl(databaseUrl);
+    url = new URL(databaseUrl);
   } catch {
     return false;
   }
-  return (
-    target.databaseName === PERMANENT_RUNTIME_DATABASE &&
-    target.port === PERMANENT_RUNTIME_PORT &&
-    // Deliberately NOT the strict `=== PERMANENT_RUNTIME_HOST` used by the
-    // forward half. The question here is not "did you spell the target the way
-    // the permanent runtime must" — it is "does this DSN reach the canonical
-    // server", and `localhost` demonstrably does.
-    CANONICAL_EQUIVALENT_HOSTS.includes(normaliseHostForEquivalence(target.host))
-  );
+  if (url.protocol !== 'postgresql:' && url.protocol !== 'postgres:') return false;
+
+  // Deliberately NOT parsePermanentTargetFromUrl. That function is the FORWARD
+  // half's contract and it throws — on an undecodable username, on a missing
+  // port, on an ambiguous query string. Every one of those throws would come
+  // back here as "not canonical" and wave an undeclared runtime through. This
+  // half must never refuse to answer; it answers about coordinates only, and
+  // the username is none of its business.
+  const readDatabase = (): string | null => {
+    try {
+      const name = decodeURIComponent(url.pathname.slice(1));
+      return name && !name.includes('/') ? name : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const param = (name: string): string | null => {
+    for (const [key, value] of url.searchParams.entries()) {
+      if (key.toLowerCase() === name) return value;
+    }
+    return null;
+  };
+
+  const matches = (host: string | null, port: string | null, database: string | null): boolean =>
+    host !== null &&
+    port !== null &&
+    database === PERMANENT_RUNTIME_DATABASE &&
+    Number(port) === PERMANENT_RUNTIME_PORT &&
+    CANONICAL_EQUIVALENT_HOSTS.includes(normaliseHostForEquivalence(host));
+
+  const database = readDatabase();
+
+  // (a) the coordinates as the URL AUTHORITY states them
+  if (matches(url.hostname || null, url.port || null, database)) return true;
+
+  // (b) the coordinates a client resolves AFTER applying query overrides.
+  //     pg-connection-string lets ?host/?port win outright, and supplies a port
+  //     to an authority that states none. Answering only (a) would miss a DSN
+  //     that reads remote and connects local.
+  const effectiveHost = param('host') ?? param('hostaddr') ?? (url.hostname || null);
+  const effectivePort = param('port') ?? (url.port || null);
+  const effectiveDatabase = param('dbname') ?? database;
+  return matches(effectiveHost, effectivePort, effectiveDatabase);
 }
 
 /**
