@@ -41,13 +41,42 @@ export interface ProgressTimelineEvent {
   reason: string | null;
 }
 
-export function timelinePresentation(event: ProgressTimelineEvent) {
-  const date = new Date(event.occurredAt);
+export function projectTimestampPresentation(
+  value: string,
+  projectTimeZone: string | null,
+) {
+  const date = new Date(value);
+  const timeZone = projectTimeZone ?? "UTC";
+  const basis = projectTimeZone
+    ? `Waktu proyek (${projectTimeZone})`
+    : "UTC; zona waktu proyek belum ditetapkan";
+  if (Number.isNaN(date.getTime())) {
+    return {
+      occurredAtLabel: "Waktu tidak tersedia",
+      timeZoneBasis: basis,
+    };
+  }
+  return {
+    occurredAtLabel: new Intl.DateTimeFormat("id-ID", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone,
+    }).format(date),
+    timeZoneBasis: basis,
+  };
+}
+
+export function timelinePresentation(
+  event: ProgressTimelineEvent,
+  projectTimeZone: string | null = null,
+) {
+  const timestamp = projectTimestampPresentation(
+    event.occurredAt,
+    projectTimeZone,
+  );
   return {
     key: `${event.action}:${event.occurredAt}`,
-    occurredAtLabel: Number.isNaN(date.getTime())
-      ? "Waktu tidak tersedia"
-      : date.toLocaleString("id-ID"),
+    ...timestamp,
   };
 }
 

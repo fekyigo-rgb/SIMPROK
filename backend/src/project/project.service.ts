@@ -93,6 +93,21 @@ export class ProjectService {
     return trimmed.length > 0 ? trimmed : null;
   }
 
+  private normalizeProjectTimeZone(
+    value: string | null | undefined,
+  ): string | null | undefined {
+    const normalized = this.normalizeOptionalText(value);
+    if (normalized === undefined || normalized === null) return normalized;
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: normalized }).format(
+        new Date('2026-01-01T00:00:00.000Z'),
+      );
+    } catch {
+      throw new BadRequestException('INVALID_PROJECT_TIME_ZONE');
+    }
+    return normalized;
+  }
+
   private decimalOrNull(
     value: string | null | undefined,
   ): Prisma.Decimal | null | undefined {
@@ -124,6 +139,7 @@ export class ProjectService {
             description: data.description,
             budgetBaseline: this.decimalOrNull(data.budgetBaseline),
             mainMaterialSpec: this.normalizeOptionalText(data.mainMaterialSpec),
+            timeZone: this.normalizeProjectTimeZone(data.timeZone),
             workspace: {
               connect: { id: workspaceId },
             },
@@ -171,7 +187,10 @@ export class ProjectService {
         return project;
       });
     } catch (error) {
-      if (error instanceof NotFoundException) {
+      if (
+        error instanceof NotFoundException ||
+        error instanceof BadRequestException
+      ) {
         throw error;
       }
 
@@ -565,6 +584,10 @@ export class ProjectService {
     if (Object.prototype.hasOwnProperty.call(dto, 'mainMaterialSpec')) {
       data.mainMaterialSpec =
         this.normalizeOptionalText(dto.mainMaterialSpec) ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dto, 'timeZone')) {
+      data.timeZone = this.normalizeProjectTimeZone(dto.timeZone) ?? null;
     }
 
     return await this.prisma.project.update({

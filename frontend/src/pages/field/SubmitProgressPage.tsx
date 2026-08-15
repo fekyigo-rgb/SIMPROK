@@ -11,6 +11,7 @@ import {
   historyMessage,
   localCalendarDate,
   plannedFact,
+  projectTimestampPresentation,
   timelinePresentation,
   type ProgressHistoryLoadState,
   type ProgressTimelineEvent,
@@ -54,6 +55,7 @@ export function SubmitProgressPage() {
     kind: "loading",
   });
   const [effectiveEntryId, setEffectiveEntryId] = useState<string | null>(null);
+  const [projectTimeZone, setProjectTimeZone] = useState<string | null>(null);
   const [actions, setActions] = useState({
     verify: false,
     correct: false,
@@ -81,6 +83,7 @@ export function SubmitProgressPage() {
       const entries = body.entries ?? [];
       setHistory(entries);
       setEffectiveEntryId(body.effectiveEntryId ?? null);
+      setProjectTimeZone(body.projectTimeZone ?? null);
       setActions(
         body.availableActions ?? {
           verify: false,
@@ -111,6 +114,7 @@ export function SubmitProgressPage() {
         if (!item)
           throw new Error("Pekerjaan tidak ditemukan pada proyek ini.");
         setBoqItem(item);
+        setProjectTimeZone(data.projectTimeZone ?? null);
       })
       .catch((error) =>
         setNotice(
@@ -318,81 +322,97 @@ export function SubmitProgressPage() {
       </form>
       <section>
         <h3>Riwayat Actual</h3>
+        <small>
+          {projectTimeZone
+            ? `Waktu proyek: ${projectTimeZone}`
+            : "Zona waktu proyek belum ditetapkan; waktu ditampilkan dalam UTC."}
+        </small>
         {stateMessage && (
           <p role={historyState.kind === "error" ? "alert" : undefined}>
             {stateMessage}
           </p>
         )}
         {historyState.kind === "loaded" &&
-          history.map((entry) => (
-            <article key={entry.id}>
-              <strong>
-                Revisi {entry.revision}: {entry.installedQuantity}{" "}
-                {planned.unit ?? ""}
-              </strong>
-              <div>
-                {entry.status} ·{" "}
-                {new Date(entry.recordedAt).toLocaleString("id-ID")} ·{" "}
-                {entry.captureMethod}
-              </div>
-              {entry.correctionReason && (
-                <p>Alasan koreksi: {entry.correctionReason}</p>
-              )}
-              {entry.evidenceReferences.map((e) => (
-                <a key={e.url} href={e.url} target="_blank" rel="noreferrer">
-                  {e.label}
-                </a>
-              ))}
-              {entry.timeline?.map((event) => (
-                <div key={timelinePresentation(event).key}>
-                  <small>
-                    {event.action} · {event.actor.displayName} ·{" "}
-                    {timelinePresentation(event).occurredAtLabel}
-                    {event.reason ? ` · ${event.reason}` : ""}
-                  </small>
-                </div>
-              ))}
-              {entry.id === effectiveEntryId && (
+          history.map((entry) => {
+            const recordedAt = projectTimestampPresentation(
+              entry.recordedAt,
+              projectTimeZone,
+            );
+            return (
+              <article key={entry.id}>
+                <strong>
+                  Revisi {entry.revision}: {entry.installedQuantity}{" "}
+                  {planned.unit ?? ""}
+                </strong>
                 <div>
-                  {actions.verify && entry.status === "SUBMITTED" && (
-                    <button
-                      disabled={submitting}
-                      onClick={() => void transition(entry, "verify")}
-                    >
-                      Verifikasi
-                    </button>
-                  )}
-                  {actions.accept && entry.status === "VERIFIED" && (
-                    <button
-                      disabled={submitting}
-                      onClick={() => void transition(entry, "accept")}
-                    >
-                      Terima
-                    </button>
-                  )}
-                  {actions.correct && (
-                    <button
-                      disabled={submitting}
-                      onClick={() =>
-                        setCorrection({
-                          entryId: entry.id,
-                          commandId: crypto.randomUUID(),
-                          installedQuantity: entry.installedQuantity,
-                          workDate: correctionDate(entry.workDate),
-                          captureMethod: correctionCaptureMethod(
-                            entry.captureMethod,
-                          ),
-                          reason: "",
-                        })
-                      }
-                    >
-                      Buat koreksi
-                    </button>
-                  )}
+                  {entry.status} · {recordedAt.occurredAtLabel} (
+                  {recordedAt.timeZoneBasis}) · {entry.captureMethod}
                 </div>
-              )}
-            </article>
-          ))}
+                {entry.correctionReason && (
+                  <p>Alasan koreksi: {entry.correctionReason}</p>
+                )}
+                {entry.evidenceReferences.map((e) => (
+                  <a key={e.url} href={e.url} target="_blank" rel="noreferrer">
+                    {e.label}
+                  </a>
+                ))}
+                {entry.timeline?.map((event) => {
+                  const eventTime = timelinePresentation(
+                    event,
+                    projectTimeZone,
+                  );
+                  return (
+                    <div key={eventTime.key}>
+                      <small>
+                        {event.action} · {event.actor.displayName} ·{" "}
+                        {eventTime.occurredAtLabel} ({eventTime.timeZoneBasis})
+                        {event.reason ? ` · ${event.reason}` : ""}
+                      </small>
+                    </div>
+                  );
+                })}
+                {entry.id === effectiveEntryId && (
+                  <div>
+                    {actions.verify && entry.status === "SUBMITTED" && (
+                      <button
+                        disabled={submitting}
+                        onClick={() => void transition(entry, "verify")}
+                      >
+                        Verifikasi
+                      </button>
+                    )}
+                    {actions.accept && entry.status === "VERIFIED" && (
+                      <button
+                        disabled={submitting}
+                        onClick={() => void transition(entry, "accept")}
+                      >
+                        Terima
+                      </button>
+                    )}
+                    {actions.correct && (
+                      <button
+                        disabled={submitting}
+                        onClick={() =>
+                          setCorrection({
+                            entryId: entry.id,
+                            commandId: crypto.randomUUID(),
+                            installedQuantity: entry.installedQuantity,
+                            workDate: correctionDate(entry.workDate),
+                            captureMethod: correctionCaptureMethod(
+                              entry.captureMethod,
+                            ),
+                            reason: "",
+                          })
+                        }
+                      >
+                        Buat koreksi
+                      </button>
+                    )}
+                  </div>
+                )}
+              </article>
+            );
+          })}
       </section>
       {correction && (
         <section aria-label="Koreksi Actual">

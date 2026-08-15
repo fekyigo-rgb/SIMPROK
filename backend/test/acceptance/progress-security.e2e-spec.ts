@@ -68,6 +68,7 @@ describe('Progress Security (e2e)', () => {
         workspaceId: wsA.id,
         organizationId: orgA.id,
         status: 'ACTIVE',
+        timeZone: 'Asia/Makassar',
       },
     });
     projectAId = projA.id;
@@ -720,6 +721,9 @@ describe('Progress Security (e2e)', () => {
     expect(await prisma.progressReport.count({ where: { commandId } })).toBe(1);
 
     const verifyCommandId = randomUUID();
+    const viewAccount = await prisma.account.findUniqueOrThrow({
+      where: { email: userViewEmail },
+    });
     await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/entries/${entryId}/verify`)
       .set('Authorization', `Bearer ${viewToken}`)
@@ -730,6 +734,30 @@ describe('Progress Security (e2e)', () => {
       (await prisma.progressEntry.findUniqueOrThrow({ where: { id: entryId } }))
         .status,
     ).toBe('SUBMITTED');
+    const deniedVerifyAudit = await prisma.progressAuditEvent.findFirstOrThrow({
+      where: {
+        projectId: projectAId,
+        action: 'ACTUAL_VERIFY',
+        outcome: 'DENIED',
+        targetEntityId: entryId,
+      },
+    });
+    expect(deniedVerifyAudit).toMatchObject({
+      progressEntryId: null,
+      workspaceId: workspaceAId,
+      actorAccountId: viewAccount.id,
+      actorType: 'HUMAN',
+      eventType: 'ACTUAL_PROGRESS',
+      reason: 'AUTHORITY_OR_ASSIGNMENT_DENIED',
+      sourceModule: 'FIELD_PROGRESS',
+      targetEntityType: 'PROGRESS_ENTRY',
+      businessCommandId: expect.any(String),
+      commandId: expect.any(String),
+      commandFingerprint: expect.any(String),
+    });
+    expect(deniedVerifyAudit.schemaVersion).toBe(1);
+    expect(deniedVerifyAudit.occurredAt).toBeInstanceOf(Date);
+    expect(deniedVerifyAudit.recordedAt).toBeInstanceOf(Date);
 
     const verified = await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/entries/${entryId}/verify`)
@@ -863,12 +891,48 @@ describe('Progress Security (e2e)', () => {
         },
       }),
     ).toBe(5);
+    const successAudits = await prisma.progressAuditEvent.findMany({
+      where: {
+        projectId: projectAId,
+        progressEntryId: { in: [entryId, correctionId] },
+      },
+      orderBy: { occurredAt: 'asc' },
+    });
+    expect(successAudits).toHaveLength(5);
+    expect(
+      successAudits.map((event) => ({
+        schemaVersion: event.schemaVersion,
+        eventType: event.eventType,
+        outcome: event.outcome,
+        workspaceId: event.workspaceId,
+        actorType: event.actorType,
+        sourceModule: event.sourceModule,
+        targetEntityType: event.targetEntityType,
+        targetEntityId: event.targetEntityId,
+        hasRecordedAt: event.recordedAt instanceof Date,
+        hasCorrelation: !!event.correlationId && !!event.requestId,
+      })),
+    ).toEqual(
+      successAudits.map((event) => ({
+        schemaVersion: 1,
+        eventType: 'ACTUAL_PROGRESS',
+        outcome: 'SUCCESS',
+        workspaceId: workspaceAId,
+        actorType: 'HUMAN',
+        sourceModule: 'FIELD_PROGRESS',
+        targetEntityType: 'PROGRESS_ENTRY',
+        targetEntityId: event.progressEntryId,
+        hasRecordedAt: true,
+        hasCorrelation: true,
+      })),
+    );
 
     const monitoring = await request(app.getHttpServer())
       .get(`/projects/${projectAId}/progress/monitoring`)
       .set('Authorization', `Bearer ${viewToken}`)
       .set('x-workspace-id', workspaceAId)
       .expect(200);
+    expect(monitoring.body.projectTimeZone).toBe('Asia/Makassar');
     const monitoredItem = monitoring.body.items.find(
       (item: any) => item.id === boqItemAId,
     );
@@ -952,7 +1016,7 @@ describe('Progress Security (e2e)', () => {
       })
       .expect(400);
 
-    expect({
+    const after = {
       reports: await prisma.progressReport.count({
         where: { projectId: projectAId },
       }),
@@ -962,7 +1026,27 @@ describe('Progress Security (e2e)', () => {
       audits: await prisma.progressAuditEvent.count({
         where: { projectId: projectAId },
       }),
-    }).toEqual(before);
+    };
+    expect(after).toEqual({
+      reports: before.reports,
+      entries: before.entries,
+      audits: before.audits + 1,
+    });
+    const denied = await prisma.progressAuditEvent.findFirstOrThrow({
+      where: {
+        projectId: projectAId,
+        outcome: 'DENIED',
+        action: 'ACTUAL_SUBMIT',
+        reason: 'TARGET_SCOPE_DENIED',
+      },
+      orderBy: { occurredAt: 'desc' },
+    });
+    expect(denied).toMatchObject({
+      progressEntryId: null,
+      targetEntityType: 'PROJECT',
+      targetEntityId: projectAId,
+      workspaceId: workspaceAId,
+    });
   });
 
   it('11. MON-03 audit failure rolls back the complete Actual command', async () => {
@@ -1030,6 +1114,85 @@ describe('Progress Security (e2e)', () => {
     }).toEqual(before);
   });
 
+  it('11b. MON-03 denial audit failure still rejects the command and leaves zero domain mutation', async () => {
+    const submitToken = await login(userSubmitEmail);
+    const viewToken = await login(userViewEmail);
+    const submitted = await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/field`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: randomUUID(),
+        entries: [
+          {
+            boqItemId: boqItemAId,
+            installedQuantity: '6.75',
+            workDate: '2026-08-31T00:00:00.000Z',
+            captureMethod: 'FIELD_OBSERVATION',
+          },
+        ],
+      })
+      .expect(201);
+    const entryId = submitted.body.entryIds[0] as string;
+    const before = {
+      status: (
+        await prisma.progressEntry.findUniqueOrThrow({ where: { id: entryId } })
+      ).status,
+      reports: await prisma.progressReport.count({
+        where: { projectId: projectAId },
+      }),
+      entries: await prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+      audits: await prisma.progressAuditEvent.count({
+        where: { projectId: projectAId },
+      }),
+    };
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION mon03_reject_progress_denial_audit() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'MON03_TEST_DENIAL_AUDIT_FAILURE';
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER mon03_reject_progress_denial_audit
+      BEFORE INSERT ON progress_audit_events
+      FOR EACH ROW EXECUTE FUNCTION mon03_reject_progress_denial_audit();
+    `);
+    try {
+      await request(app.getHttpServer())
+        .post(`/projects/${projectAId}/progress/entries/${entryId}/verify`)
+        .set('Authorization', `Bearer ${viewToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ commandId: randomUUID(), reason: 'Denied audit failure proof' })
+        .expect(503);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'DROP TRIGGER IF EXISTS mon03_reject_progress_denial_audit ON progress_audit_events',
+      );
+      await prisma.$executeRawUnsafe(
+        'DROP FUNCTION IF EXISTS mon03_reject_progress_denial_audit()',
+      );
+    }
+
+    expect({
+      status: (
+        await prisma.progressEntry.findUniqueOrThrow({ where: { id: entryId } })
+      ).status,
+      reports: await prisma.progressReport.count({
+        where: { projectId: projectAId },
+      }),
+      entries: await prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+      audits: await prisma.progressAuditEvent.count({
+        where: { projectId: projectAId },
+      }),
+    }).toEqual(before);
+  });
+
   it('12. MON-03 audit ledger rejects UPDATE and DELETE at PostgreSQL boundary', async () => {
     const audit = await prisma.progressAuditEvent.findFirstOrThrow({
       where: { projectId: projectAId },
@@ -1049,7 +1212,7 @@ describe('Progress Security (e2e)', () => {
     ).toMatchObject({ id: audit.id, reason: audit.reason });
   });
 
-  it('13. inactive trusted User is rejected with zero progress and audit mutation', async () => {
+  it('13. inactive trusted User is rejected with zero progress mutation and one safe denial audit', async () => {
     const token = await login(userSubmitEmail);
     const user = await prisma.user.findFirstOrThrow({
       where: { membership: { accountId: submitAccountId } },
@@ -1092,7 +1255,7 @@ describe('Progress Security (e2e)', () => {
         data: { status: 'ACTIVE' },
       });
     }
-    expect({
+    const after = {
       reports: await prisma.progressReport.count({
         where: { projectId: projectAId },
       }),
@@ -1102,7 +1265,22 @@ describe('Progress Security (e2e)', () => {
       audits: await prisma.progressAuditEvent.count({
         where: { projectId: projectAId },
       }),
-    }).toEqual(before);
+    };
+    expect(after).toEqual({
+      reports: before.reports,
+      entries: before.entries,
+      audits: before.audits + 1,
+    });
+    const denied = await prisma.progressAuditEvent.findFirstOrThrow({
+      where: {
+        projectId: projectAId,
+        action: 'ACTUAL_SUBMIT',
+        outcome: 'DENIED',
+        reason: 'AUTHORITY_OR_ASSIGNMENT_DENIED',
+      },
+      orderBy: { occurredAt: 'desc' },
+    });
+    expect(denied.progressEntryId).toBeNull();
   });
 
   it('14. SUBMITTED correction returns original while VERIFIED correction preserves verified history', async () => {
@@ -1199,12 +1377,13 @@ describe('Progress Security (e2e)', () => {
       where: { id: assignment.id },
       data: { status: 'ASSIGNED', revokedAt: new Date() },
     });
+    const commandId = randomUUID();
     try {
       await expect(
         progressService.submitFieldProgress(
           projectAId,
           {
-            commandId: randomUUID(),
+            commandId,
             entries: [
               {
                 boqItemId: boqItemAId,
@@ -1224,7 +1403,7 @@ describe('Progress Security (e2e)', () => {
         data: { status: 'ASSIGNED', revokedAt: null },
       });
     }
-    expect({
+    const after = {
       reports: await prisma.progressReport.count({
         where: { projectId: projectAId },
       }),
@@ -1234,7 +1413,27 @@ describe('Progress Security (e2e)', () => {
       audits: await prisma.progressAuditEvent.count({
         where: { projectId: projectAId },
       }),
-    }).toEqual(before);
+    };
+    expect(after).toEqual({
+      reports: before.reports,
+      entries: before.entries,
+      audits: before.audits + 1,
+    });
+    const denial = await prisma.progressAuditEvent.findFirstOrThrow({
+      where: {
+        projectId: projectAId,
+        action: 'ACTUAL_SUBMIT',
+        outcome: 'DENIED',
+        commandId,
+      },
+    });
+    expect(denial).toMatchObject({
+      progressEntryId: null,
+      reason: 'AUTHORITY_OR_ASSIGNMENT_DENIED',
+      targetEntityType: 'PROJECT',
+      targetEntityId: projectAId,
+      workspaceId: workspaceAId,
+    });
   });
 
   it('16. revoked PositionAuthority is retained but denied with zero transition mutation', async () => {
@@ -1279,12 +1478,13 @@ describe('Progress Security (e2e)', () => {
       where: { id: authorityGrant.id },
       data: { isActive: false, revokedAt: new Date() },
     });
+    const deniedCommandId = randomUUID();
     try {
       await request(app.getHttpServer())
         .post(`/projects/${projectAId}/progress/entries/${entryId}/verify`)
         .set('Authorization', `Bearer ${token}`)
         .set('x-workspace-id', workspaceAId)
-        .send({ commandId: randomUUID(), reason: 'Must be denied' })
+        .send({ commandId: deniedCommandId, reason: 'Must be denied' })
         .expect(403);
     } finally {
       await prisma.positionAuthority.update({
@@ -1300,6 +1500,20 @@ describe('Progress Security (e2e)', () => {
         where: { progressEntryId: entryId },
       }),
     }).toEqual(before);
+    const denial = await prisma.progressAuditEvent.findFirstOrThrow({
+      where: {
+        projectId: projectAId,
+        action: 'ACTUAL_VERIFY',
+        outcome: 'DENIED',
+        commandId: deniedCommandId,
+      },
+    });
+    expect(denial).toMatchObject({
+      progressEntryId: null,
+      targetEntityType: 'PROGRESS_ENTRY',
+      targetEntityId: entryId,
+      reason: 'AUTHORITY_OR_ASSIGNMENT_DENIED',
+    });
   });
 
   it('17. simultaneous identical submit retries create one business mutation and payload drift conflicts', async () => {
@@ -1515,6 +1729,7 @@ describe('Progress Security (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(200);
+    expect(history.body.projectTimeZone).toBe('Asia/Makassar');
     const monitoring = await request(app.getHttpServer())
       .get(`/projects/${projectAId}/progress/monitoring`)
       .set('Authorization', `Bearer ${token}`)

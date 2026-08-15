@@ -7,6 +7,7 @@ import {
   historyMessage,
   localCalendarDate,
   plannedFact,
+  projectTimestampPresentation,
   timelinePresentation,
 } from "./progressActual.ts";
 
@@ -28,6 +29,33 @@ test("MON03 timeline uses occurredAt and renders a valid date", () => {
   assert.equal(view.key, "ACTUAL_ACCEPTED:2026-08-15T01:02:03.000Z");
   assert.notEqual(view.occurredAtLabel, "Invalid Date");
   assert.equal(view.occurredAtLabel.includes("2026"), true);
+});
+
+test("MON03 project timezone formatting is explicit and device-independent", () => {
+  const jakarta = projectTimestampPresentation(
+    "2026-08-15T00:00:00.000Z",
+    "Asia/Jakarta",
+  );
+  const makassar = projectTimestampPresentation(
+    "2026-08-15T00:00:00.000Z",
+    "Asia/Makassar",
+  );
+  assert.notEqual(jakarta.occurredAtLabel, makassar.occurredAtLabel);
+  assert.equal(jakarta.timeZoneBasis, "Waktu proyek (Asia/Jakarta)");
+  assert.equal(makassar.timeZoneBasis, "Waktu proyek (Asia/Makassar)");
+});
+
+test("MON03 unknown project timezone displays UTC rather than device local time", () => {
+  const unknown = projectTimestampPresentation(
+    "2026-08-15T00:00:00.000Z",
+    null,
+  );
+  const utc = projectTimestampPresentation("2026-08-15T00:00:00.000Z", "UTC");
+  assert.equal(unknown.occurredAtLabel, utc.occurredAtLabel);
+  assert.equal(
+    unknown.timeZoneBasis,
+    "UTC; zona waktu proyek belum ditetapkan",
+  );
 });
 
 test("MON03 legacy null work date remains empty for correction", () => {

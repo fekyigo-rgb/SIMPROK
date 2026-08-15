@@ -1,11 +1,17 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
-import { Prisma, ProgressActualStatus } from '@prisma/client';
-import { createHash } from 'node:crypto';
+import {
+  Prisma,
+  ProgressActualStatus,
+  ProgressAuditOutcome,
+} from '@prisma/client';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ProjectAccessContext } from '../auth/project-access-policy.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -22,7 +28,13 @@ import {
 interface TrustedProgressActor {
   accountId: string;
   membershipId: string;
+  workspaceId: string;
   roleInProject: string;
+}
+
+interface ProgressRequestTrace {
+  requestId: string;
+  correlationId: string;
 }
 
 const EFFECTIVE_STATUSES: ProgressActualStatus[] = [
@@ -31,6 +43,11 @@ const EFFECTIVE_STATUSES: ProgressActualStatus[] = [
   ProgressActualStatus.VERIFIED,
   ProgressActualStatus.ACCEPTED,
 ];
+
+const PROGRESS_AUDIT_SCHEMA_VERSION = 1;
+const PROGRESS_AUDIT_EVENT_TYPE = 'ACTUAL_PROGRESS';
+const PROGRESS_AUDIT_SOURCE_MODULE = 'FIELD_PROGRESS';
+const PROGRESS_AUDIT_ACTOR_TYPE = 'HUMAN';
 
 interface EffectiveCandidate {
   id: string;
@@ -53,7 +70,15 @@ export class ProgressService {
     return {
       accountId,
       membershipId: access.membershipId,
+      workspaceId: access.workspaceId,
       roleInProject: access.roleInProject,
+    };
+  }
+
+  private trace(trace?: Partial<ProgressRequestTrace>): ProgressRequestTrace {
+    return {
+      requestId: trace?.requestId ?? randomUUID(),
+      correlationId: trace?.correlationId ?? randomUUID(),
     };
   }
 
@@ -162,32 +187,152 @@ export class ProgressService {
       entryId: string;
       actor: TrustedProgressActor;
       action: string;
+      trace: ProgressRequestTrace;
       reason?: string;
       evidence?: ProgressEvidenceReferenceDto[];
       authority?: ProgressAuthorityContext;
       metadata?: Prisma.InputJsonValue;
+      businessCommandId?: string;
       commandId?: string;
       commandFingerprint?: string;
     },
   ) {
+    const now = new Date();
     await tx.progressAuditEvent.create({
       data: {
+        schemaVersion: PROGRESS_AUDIT_SCHEMA_VERSION,
+        eventType: PROGRESS_AUDIT_EVENT_TYPE,
+        outcome: ProgressAuditOutcome.SUCCESS,
+        workspaceId: params.actor.workspaceId,
         projectId: params.projectId,
         progressEntryId: params.entryId,
         actorAccountId: params.actor.accountId,
         actorMembershipId: params.actor.membershipId,
         actorPositionId: params.authority?.positionId,
+        actorType: PROGRESS_AUDIT_ACTOR_TYPE,
         authorityCode: params.authority?.authorityCode,
         positionCodeSnapshot: params.authority?.positionCode,
         roleInProjectSnapshot: params.actor.roleInProject,
+        sourceModule: PROGRESS_AUDIT_SOURCE_MODULE,
+        targetEntityType: 'PROGRESS_ENTRY',
+        targetEntityId: params.entryId,
+        correlationId: params.trace.correlationId,
+        requestId: params.trace.requestId,
+        businessCommandId: params.businessCommandId,
         commandId: params.commandId,
         commandFingerprint: params.commandFingerprint,
         action: params.action,
         reason: params.reason,
         evidenceReferences: this.evidence(params.evidence),
         metadata: params.metadata,
+        occurredAt: now,
+        recordedAt: now,
       },
     });
+  }
+
+  private denialReason(error: unknown): string | null {
+    if (error instanceof ForbiddenException) {
+      return 'AUTHORITY_OR_ASSIGNMENT_DENIED';
+    }
+    if (error instanceof NotFoundException) {
+      return 'TARGET_NOT_AVAILABLE';
+    }
+    if (error instanceof ConflictException) {
+      return 'INVALID_STATE_OR_COMMAND_CONFLICT';
+    }
+    if (
+      error instanceof BadRequestException &&
+      `${error.message}` === 'INVALID_PROJECT_WORK_ITEM'
+    ) {
+      return 'TARGET_SCOPE_DENIED';
+    }
+    return null;
+  }
+
+  private async auditDenied(params: {
+    projectId: string;
+    actor: TrustedProgressActor;
+    action: string;
+    trace: ProgressRequestTrace;
+    reason: string;
+    targetEntityType: string;
+    targetEntityId?: string;
+    metadata?: Prisma.InputJsonValue;
+    businessCommandId?: string;
+    commandId?: string;
+    commandFingerprint?: string;
+  }) {
+    const now = new Date();
+    try {
+      await this.prisma.progressAuditEvent.create({
+        data: {
+          schemaVersion: PROGRESS_AUDIT_SCHEMA_VERSION,
+          eventType: PROGRESS_AUDIT_EVENT_TYPE,
+          outcome: ProgressAuditOutcome.DENIED,
+          workspaceId: params.actor.workspaceId,
+          projectId: params.projectId,
+          progressEntryId: null,
+          actorAccountId: params.actor.accountId,
+          actorMembershipId: params.actor.membershipId,
+          actorType: PROGRESS_AUDIT_ACTOR_TYPE,
+          roleInProjectSnapshot: params.actor.roleInProject,
+          sourceModule: PROGRESS_AUDIT_SOURCE_MODULE,
+          targetEntityType: params.targetEntityType,
+          targetEntityId: params.targetEntityId,
+          correlationId: params.trace.correlationId,
+          requestId: params.trace.requestId,
+          businessCommandId: params.businessCommandId,
+          commandId: params.commandId,
+          commandFingerprint: params.commandFingerprint,
+          action: params.action,
+          reason: params.reason,
+          metadata: params.metadata,
+          occurredAt: now,
+          recordedAt: now,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return;
+      }
+      throw new ServiceUnavailableException('DENIAL_AUDIT_UNAVAILABLE');
+    }
+  }
+
+  private async auditDeniedAndRethrow(params: {
+    error: unknown;
+    projectId: string;
+    actor: TrustedProgressActor;
+    action: string;
+    trace: ProgressRequestTrace;
+    targetEntityType: string;
+    targetEntityId?: string;
+    metadata?: Prisma.InputJsonValue;
+    businessCommandId?: string;
+    commandId?: string;
+    commandFingerprint?: string;
+  }): Promise<never> {
+    const reason = this.denialReason(params.error);
+    if (reason) {
+      await this.auditDenied({
+        projectId: params.projectId,
+        actor: params.actor,
+        action: params.action,
+        trace: params.trace,
+        reason,
+        targetEntityType: params.targetEntityType,
+        targetEntityId: params.targetEntityId,
+        metadata: params.metadata,
+        businessCommandId: params.businessCommandId,
+        commandId: params.commandId,
+        commandFingerprint: params.commandFingerprint,
+      });
+    }
+    throw params.error;
   }
 
   async getMonitoring(projectId: string) {
@@ -197,14 +342,22 @@ export class ProgressService {
       'plannedDuration',
       'plannedWeight',
     ] as const;
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { timeZone: true },
+    });
     const baseline = await this.prisma.projectBaseline.findFirst({
       where: { projectId, status: 'ACTIVE' },
       orderBy: { versionNumber: 'desc' },
-      include: { rabDocument: true },
+      include: {
+        rabDocument: true,
+        project: { select: { timeZone: true } },
+      },
     });
     if (!baseline?.rabDocument?.boqStructureId) {
       return {
         projectId,
+        projectTimeZone: project?.timeZone ?? null,
         baseline: baseline
           ? {
               id: baseline.id,
@@ -259,6 +412,7 @@ export class ProgressService {
     }
     return {
       projectId,
+      projectTimeZone: project?.timeZone ?? null,
       baseline: {
         id: baseline.id,
         versionNumber: baseline.versionNumber,
@@ -323,6 +477,7 @@ export class ProgressService {
     if (dto.entries.length === 0)
       throw new BadRequestException('At least one progress entry is required');
     const actor = this.actor(accountId, access);
+    const trace = this.trace();
     const commandFingerprint = this.fingerprint({
       kind: 'SUBMIT_ACTUAL',
       projectId,
@@ -350,6 +505,12 @@ export class ProgressService {
             entryIds: replay.entries.map((entry) => entry.id),
             replayed: true,
           };
+        }
+        const deniedReplay = await tx.progressAuditEvent.findUnique({
+          where: { commandId: dto.commandId },
+        });
+        if (deniedReplay) {
+          throw new ConflictException('COMMAND_ID_AUDIT_CONFLICT');
         }
         const transactionalActor = await this.authority.requireActiveActor(
           tx,
@@ -409,8 +570,12 @@ export class ProgressService {
             entryId: entry.id,
             actor: currentActor,
             action: 'ACTUAL_SUBMITTED',
+            trace,
             evidence: input.evidenceReferences,
+            businessCommandId: dto.commandId,
+            commandFingerprint,
             metadata: {
+              baselineId: baseline.id,
               roleInProject: currentActor.roleInProject,
               commandId: dto.commandId,
             },
@@ -448,9 +613,33 @@ export class ProgressService {
             replayed: true,
           };
         }
-        throw new ConflictException('COMMAND_ID_PAYLOAD_CONFLICT');
+        return this.auditDeniedAndRethrow({
+          error: new ConflictException('COMMAND_ID_PAYLOAD_CONFLICT'),
+          projectId,
+          actor,
+          action: 'ACTUAL_SUBMIT',
+          trace,
+          targetEntityType: 'PROJECT',
+          targetEntityId: projectId,
+          metadata: { entryCount: dto.entries.length },
+          businessCommandId: dto.commandId,
+          commandId: dto.commandId,
+          commandFingerprint,
+        });
       }
-      throw error;
+      return this.auditDeniedAndRethrow({
+        error,
+        projectId,
+        actor,
+        action: 'ACTUAL_SUBMIT',
+        trace,
+        targetEntityType: 'PROJECT',
+        targetEntityId: projectId,
+        metadata: { entryCount: dto.entries.length },
+        businessCommandId: dto.commandId,
+        commandId: dto.commandId,
+        commandFingerprint,
+      });
     }
   }
 
@@ -462,6 +651,7 @@ export class ProgressService {
     access: ProjectAccessContext,
   ) {
     const actor = this.actor(accountId, access);
+    const trace = this.trace();
     const commandFingerprint = this.fingerprint({
       kind: 'CORRECT_ACTUAL',
       projectId,
@@ -490,6 +680,12 @@ export class ProgressService {
           )
             throw new ConflictException('COMMAND_ID_CORRECTION_CONFLICT');
           return { entryId: correction.id, replayed: true };
+        }
+        const deniedReplay = await tx.progressAuditEvent.findUnique({
+          where: { commandId: dto.commandId },
+        });
+        if (deniedReplay) {
+          throw new ConflictException('COMMAND_ID_AUDIT_CONFLICT');
         }
         const locked = await tx.$queryRaw<
           Array<{
@@ -594,8 +790,14 @@ export class ProgressService {
             original.status === ProgressActualStatus.SUBMITTED
               ? 'ACTUAL_RETURNED_FOR_CORRECTION'
               : 'ACTUAL_SUPERSEDED_BY_CORRECTION',
+          trace,
           reason: dto.reason,
-          metadata: { historicalStatusPreserved: original.status },
+          businessCommandId: dto.commandId,
+          commandFingerprint,
+          metadata: {
+            historicalStatusPreserved: original.status,
+            baselineId: report.baselineId,
+          },
         });
         await this.audit(tx, {
           projectId,
@@ -603,9 +805,16 @@ export class ProgressService {
           actor: currentActor,
           authority,
           action: 'ACTUAL_CORRECTION_SUBMITTED',
+          trace,
           reason: dto.reason,
           evidence: dto.evidenceReferences,
-          metadata: { supersedesEntryId: entryId, commandId: dto.commandId },
+          businessCommandId: dto.commandId,
+          commandFingerprint,
+          metadata: {
+            supersedesEntryId: entryId,
+            commandId: dto.commandId,
+            baselineId: report.baselineId,
+          },
         });
         const confirmedBaseline = await this.activeBaselineForWrite(
           tx,
@@ -634,9 +843,31 @@ export class ProgressService {
         ) {
           return { entryId: correction.id, replayed: true };
         }
-        throw new ConflictException('COMMAND_ID_CORRECTION_CONFLICT');
+        return this.auditDeniedAndRethrow({
+          error: new ConflictException('COMMAND_ID_CORRECTION_CONFLICT'),
+          projectId,
+          actor,
+          action: 'ACTUAL_CORRECT',
+          trace,
+          targetEntityType: 'PROGRESS_ENTRY',
+          targetEntityId: entryId,
+          businessCommandId: dto.commandId,
+          commandId: dto.commandId,
+          commandFingerprint,
+        });
       }
-      throw error;
+      return this.auditDeniedAndRethrow({
+        error,
+        projectId,
+        actor,
+        action: 'ACTUAL_CORRECT',
+        trace,
+        targetEntityType: 'PROGRESS_ENTRY',
+        targetEntityId: entryId,
+        businessCommandId: dto.commandId,
+        commandId: dto.commandId,
+        commandFingerprint,
+      });
     }
   }
 
@@ -654,6 +885,7 @@ export class ProgressService {
         ? PROGRESS_AUTHORITIES.VERIFY
         : PROGRESS_AUTHORITIES.ACCEPT;
     const actor = this.actor(accountId, access);
+    const trace = this.trace();
     const commandFingerprint = this.fingerprint({
       kind: action,
       projectId,
@@ -741,10 +973,16 @@ export class ProgressService {
           actor: currentActor,
           authority,
           action: `ACTUAL_${target}`,
+          trace,
           reason,
+          businessCommandId: commandId,
           commandId,
           commandFingerprint,
-          metadata: { from: expected, to: target },
+          metadata: {
+            from: expected,
+            to: target,
+            baselineId: report.baselineId,
+          },
         });
         return { entryId, status: target, replayed: false };
       });
@@ -771,9 +1009,31 @@ export class ProgressService {
             replayed: true,
           };
         }
-        throw new ConflictException('COMMAND_ID_TRANSITION_CONFLICT');
+        return this.auditDeniedAndRethrow({
+          error: new ConflictException('COMMAND_ID_TRANSITION_CONFLICT'),
+          projectId,
+          actor,
+          action: `ACTUAL_${action}`,
+          trace,
+          targetEntityType: 'PROGRESS_ENTRY',
+          targetEntityId: entryId,
+          businessCommandId: commandId,
+          commandId,
+          commandFingerprint,
+        });
       }
-      throw error;
+      return this.auditDeniedAndRethrow({
+        error,
+        projectId,
+        actor,
+        action: `ACTUAL_${action}`,
+        trace,
+        targetEntityType: 'PROGRESS_ENTRY',
+        targetEntityId: entryId,
+        businessCommandId: commandId,
+        commandId,
+        commandFingerprint,
+      });
     }
   }
 
@@ -786,7 +1046,10 @@ export class ProgressService {
     const baseline = await this.prisma.projectBaseline.findFirst({
       where: { projectId, status: 'ACTIVE' },
       orderBy: { versionNumber: 'desc' },
-      include: { rabDocument: true },
+      include: {
+        rabDocument: true,
+        project: { select: { timeZone: true } },
+      },
     });
     const workItem = baseline?.rabDocument
       ? await this.prisma.boqItem.findFirst({
@@ -824,6 +1087,7 @@ export class ProgressService {
     ]);
     return {
       projectId,
+      projectTimeZone: baseline.project.timeZone,
       boqItemId,
       baseline: { id: baseline.id, versionNumber: baseline.versionNumber },
       workItem: {

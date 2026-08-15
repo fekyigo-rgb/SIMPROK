@@ -98,6 +98,7 @@ model Workspace {
   resourceSourceIdentities        ResourceSourceIdentity[]
   basicPriceSourceEquivalences    BasicPriceSourceEquivalence[]
   basicPriceProvenanceCorrections BasicPriceProvenanceCorrection[]
+  progressAuditEvents             ProgressAuditEvent[]             @relation("ProgressAuditWorkspace")
 
   @@index([organizationId])
   @@map("workspaces")
@@ -326,6 +327,7 @@ model Project {
   budgetBaseline   Decimal?      @db.Decimal(18, 2)
   startDate        DateTime?
   endDate          DateTime?
+  timeZone         String?       @db.VarChar(64)
   createdById      String?       @db.Uuid
   deletedAt        DateTime?
   status           ProjectStatus @default(PLANNED)
@@ -2239,6 +2241,12 @@ enum ProgressActualStatus {
   RETURNED_FOR_CORRECTION
 }
 
+enum ProgressAuditOutcome {
+  SUCCESS
+  DENIED
+  FAILED
+}
+
 model ProgressEntry {
   id                String   @id @default(uuid()) @db.Uuid
   progressReportId  String   @db.Uuid
@@ -2279,32 +2287,48 @@ model ProgressEntry {
 }
 
 model ProgressAuditEvent {
-  id                    String   @id @default(uuid()) @db.Uuid
-  projectId             String   @db.Uuid
-  progressEntryId       String   @db.Uuid
-  actorAccountId        String   @db.Uuid
-  actorMembershipId     String   @db.Uuid
-  actorPositionId       String?  @db.Uuid
+  id                    String               @id @default(uuid()) @db.Uuid
+  schemaVersion         Int?
+  eventType             String?
+  outcome               ProgressAuditOutcome @default(SUCCESS)
+  workspaceId           String               @db.Uuid
+  projectId             String               @db.Uuid
+  progressEntryId       String?              @db.Uuid
+  actorAccountId        String               @db.Uuid
+  actorMembershipId     String               @db.Uuid
+  actorPositionId       String?              @db.Uuid
+  actorType             String?
   action                String
   authorityCode         String?
   positionCodeSnapshot  String?
   roleInProjectSnapshot String?
-  commandId             String?  @unique
+  sourceModule          String?
+  targetEntityType      String?
+  targetEntityId        String?              @db.Uuid
+  correlationId         String?              @db.Uuid
+  requestId             String?              @db.Uuid
+  businessCommandId     String?
+  commandId             String?              @unique
   commandFingerprint    String?
-  reason                String?  @db.Text
+  reason                String?              @db.Text
   evidenceReferences    Json?
   metadata              Json?
-  occurredAt            DateTime @default(now())
+  occurredAt            DateTime             @default(now())
+  recordedAt            DateTime?
 
+  workspace       Workspace           @relation("ProgressAuditWorkspace", fields: [workspaceId], references: [id], onDelete: Restrict)
   project         Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  progressEntry   ProgressEntry       @relation(fields: [progressEntryId], references: [id], onDelete: Restrict)
+  progressEntry   ProgressEntry?      @relation(fields: [progressEntryId], references: [id], onDelete: Restrict)
   actor           Account             @relation("ProgressAuditActor", fields: [actorAccountId], references: [id], onDelete: Restrict)
   actorMembership WorkspaceMembership @relation("ProgressAuditMembership", fields: [actorMembershipId], references: [id], onDelete: Restrict)
   actorPosition   Position?           @relation("ProgressAuditPosition", fields: [actorPositionId], references: [id], onDelete: Restrict)
 
+  @@index([workspaceId, occurredAt])
   @@index([projectId, occurredAt])
   @@index([progressEntryId, occurredAt])
   @@index([actorAccountId, occurredAt])
+  @@index([outcome, occurredAt])
+  @@index([businessCommandId])
   @@map("progress_audit_events")
 }
 
