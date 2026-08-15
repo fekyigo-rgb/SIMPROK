@@ -33,3 +33,24 @@ export function effectiveHistoryEntry<T extends { id: string }>(
     ? (entries.find((entry) => entry.id === effectiveEntryId) ?? null)
     : null;
 }
+
+export interface ProgressTimelineEvent {
+  action: string;
+  occurredAt: string;
+  actor: { displayName: string };
+  reason: string | null;
+}
+
+export function timelinePresentation(event: ProgressTimelineEvent) {
+  const date = new Date(event.occurredAt);
+  return {
+    key: `${event.action}:${event.occurredAt}`,
+    occurredAtLabel: Number.isNaN(date.getTime())
+      ? "Waktu tidak tersedia"
+      : date.toLocaleString("id-ID"),
+  };
+}
+
+export function correctionDate(workDate: string | null): string {
+  return workDate ? workDate.slice(0, 10) : "";
+}

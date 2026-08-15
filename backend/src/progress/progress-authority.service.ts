@@ -15,6 +15,10 @@ export interface ProgressAuthorityContext {
   authorityCode: string;
 }
 
+export interface TransactionalProjectActor {
+  roleInProject: string;
+}
+
 @Injectable()
 export class ProgressAuthorityService {
   constructor(private readonly prisma: PrismaService) {}
@@ -89,24 +93,29 @@ export class ProgressAuthorityService {
     tx: Prisma.TransactionClient,
     accountId: string,
     projectAccess: ProjectAccessContext,
-  ): Promise<void> {
-    const rows = await tx.$queryRaw<Array<{ membershipId: string }>>(
-      Prisma.sql`SELECT wm."id" AS "membershipId"
+  ): Promise<TransactionalProjectActor> {
+    const rows = await tx.$queryRaw<Array<TransactionalProjectActor>>(
+      Prisma.sql`SELECT project_assignment."roleInProject" AS "roleInProject"
                    FROM "workspace_memberships" wm
                    JOIN "accounts" account ON account."id" = wm."accountId"
                    JOIN "users" profile ON profile."workspaceMembershipId" = wm."id"
+                   JOIN "project_assignments" project_assignment ON project_assignment."workspaceMembershipId" = wm."id"
                   WHERE wm."id" = ${projectAccess.membershipId}::uuid
                     AND wm."accountId" = ${accountId}::uuid
                     AND wm."workspaceId" = ${projectAccess.workspaceId}::uuid
                     AND wm."status" = 'ACTIVE'
                     AND account."status" = 'ACTIVE'
                     AND profile."status" = 'ACTIVE'
+                    AND project_assignment."id" = ${projectAccess.assignmentId}::uuid
+                    AND project_assignment."projectId" = ${projectAccess.projectId}::uuid
+                    AND project_assignment."status" = 'ASSIGNED'
                   LIMIT 1
-                  FOR SHARE OF wm, account, profile`,
+                  FOR SHARE OF wm, account, profile, project_assignment`,
     );
     if (rows.length !== 1) {
       throw new ForbiddenException('Active trusted actor required');
     }
+    return rows[0];
   }
 
   async requireWithinTransaction(
@@ -122,6 +131,7 @@ export class ProgressAuthorityService {
                    FROM "workspace_memberships" wm
                    JOIN "accounts" account ON account."id" = wm."accountId"
                    JOIN "users" profile ON profile."workspaceMembershipId" = wm."id"
+                   JOIN "project_assignments" project_assignment ON project_assignment."workspaceMembershipId" = wm."id"
                    JOIN "position_assignments" assignment ON assignment."userId" = profile."id"
                    JOIN "positions" position ON position."id" = assignment."positionId"
                    JOIN "position_authorities" grant_row ON grant_row."positionId" = position."id"
@@ -132,13 +142,16 @@ export class ProgressAuthorityService {
                     AND wm."status" = 'ACTIVE'
                     AND account."status" = 'ACTIVE'
                     AND profile."status" = 'ACTIVE'
+                    AND project_assignment."id" = ${projectAccess.assignmentId}::uuid
+                    AND project_assignment."projectId" = ${projectAccess.projectId}::uuid
+                    AND project_assignment."status" = 'ASSIGNED'
                     AND assignment."isActive" = TRUE
                     AND assignment."removedAt" IS NULL
                     AND position."workspaceId" = ${projectAccess.workspaceId}::uuid
                     AND authority."code" = ${authorityCode}
                   ORDER BY assignment."assignedAt" ASC
                   LIMIT 1
-                  FOR SHARE OF wm, account, profile, assignment, position, grant_row, authority`,
+                  FOR SHARE OF wm, account, profile, project_assignment, assignment, position, grant_row, authority`,
     );
     const row = rows[0];
     if (!row) {

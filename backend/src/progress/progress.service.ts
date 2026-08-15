@@ -74,7 +74,21 @@ export class ProgressService {
   }
 
   private fingerprint(value: unknown): string {
-    return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    const canonicalize = (input: unknown): unknown => {
+      if (Array.isArray(input)) return input.map(canonicalize);
+      if (input && typeof input === 'object') {
+        return Object.fromEntries(
+          Object.entries(input as Record<string, unknown>)
+            .filter(([, item]) => item !== undefined)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, item]) => [key, canonicalize(item)]),
+        );
+      }
+      return input;
+    };
+    return createHash('sha256')
+      .update(JSON.stringify(canonicalize(value)))
+      .digest('hex');
   }
 
   private effectiveEntry<T extends EffectiveCandidate>(entries: T[]): T | null {
@@ -107,7 +121,7 @@ export class ProgressService {
           ...current,
           {
             url: entry.photoUrl,
-            label: 'Bukti lama',
+            label: 'Referensi bukti lama — status verifikasi tidak tersedia',
             kind: 'LEGACY_REFERENCE',
             verificationState: 'UNAVAILABLE',
           },
@@ -337,7 +351,15 @@ export class ProgressService {
             replayed: true,
           };
         }
-        await this.authority.requireActiveActor(tx, accountId, access);
+        const transactionalActor = await this.authority.requireActiveActor(
+          tx,
+          accountId,
+          access,
+        );
+        const currentActor = {
+          ...actor,
+          roleInProject: transactionalActor.roleInProject,
+        };
         const baseline = await this.activeBaselineForWrite(tx, projectId);
         const itemIds = [
           ...new Set(dto.entries.map((entry) => entry.boqItemId)),
@@ -377,19 +399,19 @@ export class ProgressService {
               notes: input.notes,
               captureMethod: input.captureMethod,
               evidenceReferences: this.evidence(input.evidenceReferences),
-              recordedByAccountId: actor.accountId,
-              recordedByMembershipId: actor.membershipId,
+              recordedByAccountId: currentActor.accountId,
+              recordedByMembershipId: currentActor.membershipId,
               status: ProgressActualStatus.SUBMITTED,
             },
           });
           await this.audit(tx, {
             projectId,
             entryId: entry.id,
-            actor,
+            actor: currentActor,
             action: 'ACTUAL_SUBMITTED',
             evidence: input.evidenceReferences,
             metadata: {
-              roleInProject: actor.roleInProject,
+              roleInProject: currentActor.roleInProject,
               commandId: dto.commandId,
             },
           });
@@ -494,6 +516,15 @@ export class ProgressService {
           access,
           PROGRESS_AUTHORITIES.CORRECT,
         );
+        const transactionalActor = await this.authority.requireActiveActor(
+          tx,
+          accountId,
+          access,
+        );
+        const currentActor = {
+          ...actor,
+          roleInProject: transactionalActor.roleInProject,
+        };
         const child = await tx.progressEntry.findUnique({
           where: { supersedesEntryId: entryId },
         });
@@ -531,8 +562,8 @@ export class ProgressService {
             notes: dto.notes,
             captureMethod: dto.captureMethod,
             evidenceReferences: this.evidence(dto.evidenceReferences),
-            recordedByAccountId: actor.accountId,
-            recordedByMembershipId: actor.membershipId,
+            recordedByAccountId: currentActor.accountId,
+            recordedByMembershipId: currentActor.membershipId,
             supersedesEntryId: entryId,
             correctionReason: dto.reason,
             revision: original.revision + 1,
@@ -542,7 +573,7 @@ export class ProgressService {
         await this.audit(tx, {
           projectId,
           entryId,
-          actor,
+          actor: currentActor,
           authority,
           action:
             original.status === ProgressActualStatus.SUBMITTED
@@ -554,7 +585,7 @@ export class ProgressService {
         await this.audit(tx, {
           projectId,
           entryId: correction.id,
-          actor,
+          actor: currentActor,
           authority,
           action: 'ACTUAL_CORRECTION_SUBMITTED',
           reason: dto.reason,
@@ -660,6 +691,15 @@ export class ProgressService {
           access,
           authorityCode,
         );
+        const transactionalActor = await this.authority.requireActiveActor(
+          tx,
+          accountId,
+          access,
+        );
+        const currentActor = {
+          ...actor,
+          roleInProject: transactionalActor.roleInProject,
+        };
         if (
           await tx.progressEntry.findUnique({
             where: { supersedesEntryId: entryId },
@@ -683,7 +723,7 @@ export class ProgressService {
         await this.audit(tx, {
           projectId,
           entryId,
-          actor,
+          actor: currentActor,
           authority,
           action: `ACTUAL_${target}`,
           reason,
@@ -756,7 +796,11 @@ export class ProgressService {
       },
     });
     const effective = this.effectiveEntry(
-      entries.filter((entry) => EFFECTIVE_STATUSES.includes(entry.status)),
+      entries.filter(
+        (entry) =>
+          entry.progressReport.baselineId === baseline.id &&
+          EFFECTIVE_STATUSES.includes(entry.status),
+      ),
     );
     const [verify, correct, accept] = await Promise.all([
       this.authority.resolve(accountId, access, PROGRESS_AUTHORITIES.VERIFY),

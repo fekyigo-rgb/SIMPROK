@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   effectiveHistoryEntry,
+  correctionDate,
   historyMessage,
   localCalendarDate,
   plannedFact,
+  timelinePresentation,
 } from "./progressActual.ts";
 
 test("MON03 UI reads planned quantity and unit from the governed planned object", () => {
@@ -13,6 +15,23 @@ test("MON03 UI reads planned quantity and unit from the governed planned object"
     unit: "m3",
   });
   assert.deepEqual(plannedFact({}), { quantity: null, unit: null });
+});
+
+test("MON03 timeline uses occurredAt and renders a valid date", () => {
+  const view = timelinePresentation({
+    action: "ACTUAL_ACCEPTED",
+    occurredAt: "2026-08-15T01:02:03.000Z",
+    actor: { displayName: "Field Authority" },
+    reason: null,
+  });
+  assert.equal(view.key, "ACTUAL_ACCEPTED:2026-08-15T01:02:03.000Z");
+  assert.notEqual(view.occurredAtLabel, "Invalid Date");
+  assert.equal(view.occurredAtLabel.includes("2026"), true);
+});
+
+test("MON03 legacy null work date remains empty for correction", () => {
+  assert.equal(correctionDate(null), "");
+  assert.equal(correctionDate("2026-08-15T00:00:00.000Z"), "2026-08-15");
 });
 
 test("MON03 history errors never become the empty-history claim", () => {

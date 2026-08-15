@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../../src/app.module';
+import { ProgressService } from '../../src/progress/progress.service';
 import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 
@@ -13,6 +14,7 @@ const SALT_ROUNDS = 10;
 describe('Progress Security (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaClient;
+  let progressService: ProgressService;
 
   let workspaceAId: string;
   let workspaceBId: string;
@@ -39,6 +41,7 @@ describe('Progress Security (e2e)', () => {
     await app.init();
 
     prisma = new PrismaClient();
+    progressService = app.get(ProgressService);
 
     // Setup two orgs and workspaces
     const orgA = await prisma.organization.create({
@@ -716,6 +719,7 @@ describe('Progress Security (e2e)', () => {
     expect(original.evidenceReferences).toBeNull();
     expect(await prisma.progressReport.count({ where: { commandId } })).toBe(1);
 
+    const verifyCommandId = randomUUID();
     await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/entries/${entryId}/verify`)
       .set('Authorization', `Bearer ${viewToken}`)
@@ -727,46 +731,81 @@ describe('Progress Security (e2e)', () => {
         .status,
     ).toBe('SUBMITTED');
 
-    await request(app.getHttpServer())
+    const verified = await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/entries/${entryId}/verify`)
       .set('Authorization', `Bearer ${submitToken}`)
       .set('x-workspace-id', workspaceAId)
       .send({
-        commandId: randomUUID(),
+        commandId: verifyCommandId,
         reason: 'Configured authority verification',
       })
       .expect(201);
-    await request(app.getHttpServer())
+    expect(verified.body).toMatchObject({ entryId, status: 'VERIFIED' });
+    const verifyReplay = await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${entryId}/verify`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: verifyCommandId,
+        reason: 'Configured authority verification',
+      })
+      .expect(201);
+    expect(verifyReplay.body.replayed).toBe(true);
+
+    const acceptCommandId = randomUUID();
+    const accepted = await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/entries/${entryId}/accept`)
       .set('Authorization', `Bearer ${submitToken}`)
       .set('x-workspace-id', workspaceAId)
       .send({
-        commandId: randomUUID(),
+        commandId: acceptCommandId,
         reason: 'Configured authority acceptance',
       })
       .expect(201);
+    expect(accepted.body).toMatchObject({ entryId, status: 'ACCEPTED' });
+    const acceptReplay = await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${entryId}/accept`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: acceptCommandId,
+        reason: 'Configured authority acceptance',
+      })
+      .expect(201);
+    expect(acceptReplay.body.replayed).toBe(true);
 
     const correctionCommandId = randomUUID();
+    const correctionPayload = {
+      commandId: correctionCommandId,
+      installedQuantity: '4.00',
+      workDate: '2026-08-31T00:00:00.000Z',
+      captureMethod: 'FIELD_REMEASUREMENT',
+      reason: 'Corrected after field remeasurement',
+      evidenceReferences: [
+        {
+          url: 'https://evidence.example/measurement-01',
+          label: 'Measurement reference',
+        },
+      ],
+    };
     const corrected = await request(app.getHttpServer())
       .post(`/projects/${projectAId}/progress/entries/${entryId}/corrections`)
       .set('Authorization', `Bearer ${submitToken}`)
       .set('x-workspace-id', workspaceAId)
-      .send({
-        commandId: correctionCommandId,
-        installedQuantity: '4.00',
-        workDate: '2026-08-31T00:00:00.000Z',
-        captureMethod: 'FIELD_REMEASUREMENT',
-        reason: 'Corrected after field remeasurement',
-        evidenceReferences: [
-          {
-            url: 'https://evidence.example/measurement-01',
-            label: 'Measurement reference',
-          },
-        ],
-      })
+      .send(correctionPayload)
       .expect(201);
     const correctionId = corrected.body.entryId;
     expect(correctionId).not.toBe(entryId);
+    const correctionReplay = await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${entryId}/corrections`)
+      .set('Authorization', `Bearer ${submitToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .send(correctionPayload)
+      .expect(201);
+    expect(correctionReplay.body).toMatchObject({
+      entryId: correctionId,
+      replayed: true,
+    });
 
     const [preservedOriginal, correction] = await Promise.all([
       prisma.progressEntry.findUniqueOrThrow({ where: { id: entryId } }),
@@ -801,6 +840,11 @@ describe('Progress Security (e2e)', () => {
       correct: true,
       accept: true,
     });
+    expect(history.body.effectiveEntryId).toBe(correctionId);
+    expect(
+      history.body.entries.find((entry: any) => entry.id === entryId)
+        .timeline[0],
+    ).toHaveProperty('occurredAt');
     expect(history.body.entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: entryId, status: 'ACCEPTED' }),
@@ -834,6 +878,9 @@ describe('Progress Security (e2e)', () => {
       supersedesEntryId: entryId,
       captureMethod: 'FIELD_REMEASUREMENT',
     });
+    expect(monitoredItem.actual.effectiveRecord.id).toBe(
+      history.body.effectiveEntryId,
+    );
 
     const baselineAfter = await prisma.projectBaseline.findUniqueOrThrow({
       where: { id: baselineAId },
@@ -1118,5 +1165,179 @@ describe('Progress Security (e2e)', () => {
         })
       ).status,
     ).toBe('VERIFIED');
+  });
+
+  it('15. stale ProjectAssignment is rejected inside the write transaction with zero mutation', async () => {
+    const membership = await prisma.workspaceMembership.findFirstOrThrow({
+      where: { accountId: submitAccountId, workspaceId: workspaceAId },
+    });
+    const assignment = await prisma.projectAssignment.findFirstOrThrow({
+      where: { workspaceMembershipId: membership.id, projectId: projectAId },
+    });
+    const access = {
+      projectId: projectAId,
+      workspaceId: workspaceAId,
+      projectStatus: 'ACTIVE' as const,
+      membershipId: membership.id,
+      assignmentId: assignment.id,
+      roleInProject: assignment.roleInProject,
+      isPrimaryAssignment: assignment.isPrimaryAssignment,
+      roles: ['ROLE_PROG_SUBMIT_A'],
+    };
+    const before = {
+      reports: await prisma.progressReport.count({
+        where: { projectId: projectAId },
+      }),
+      entries: await prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+      audits: await prisma.progressAuditEvent.count({
+        where: { projectId: projectAId },
+      }),
+    };
+    await prisma.projectAssignment.update({
+      where: { id: assignment.id },
+      data: { status: 'INACTIVE', revokedAt: new Date() },
+    });
+    try {
+      await expect(
+        progressService.submitFieldProgress(
+          projectAId,
+          {
+            commandId: randomUUID(),
+            entries: [
+              {
+                boqItemId: boqItemAId,
+                installedQuantity: '1',
+                workDate: '2026-08-31T00:00:00.000Z',
+                captureMethod: 'FIELD_OBSERVATION',
+              },
+            ],
+          },
+          submitAccountId,
+          access,
+        ),
+      ).rejects.toThrow('Active trusted actor required');
+    } finally {
+      await prisma.projectAssignment.update({
+        where: { id: assignment.id },
+        data: { status: 'ASSIGNED', revokedAt: null },
+      });
+    }
+    expect({
+      reports: await prisma.progressReport.count({
+        where: { projectId: projectAId },
+      }),
+      entries: await prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+      audits: await prisma.progressAuditEvent.count({
+        where: { projectId: projectAId },
+      }),
+    }).toEqual(before);
+  });
+
+  it('16. simultaneous identical submit retries create one business mutation and payload drift conflicts', async () => {
+    const token = await login(userSubmitEmail);
+    const commandId = randomUUID();
+    const payload = {
+      commandId,
+      entries: [
+        {
+          boqItemId: boqItemAId,
+          installedQuantity: '7.12',
+          workDate: '2026-09-01T00:00:00.000Z',
+          captureMethod: 'FIELD_MEASUREMENT',
+        },
+      ],
+    };
+    const [left, right] = await Promise.all([
+      request(app.getHttpServer())
+        .post(`/projects/${projectAId}/progress/field`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .send(payload),
+      request(app.getHttpServer())
+        .post(`/projects/${projectAId}/progress/field`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .send(payload),
+    ]);
+    expect([left.status, right.status]).toEqual([201, 201]);
+    expect([left.body.replayed, right.body.replayed].sort()).toEqual([
+      false,
+      true,
+    ]);
+    expect(await prisma.progressReport.count({ where: { commandId } })).toBe(1);
+    expect(
+      await prisma.progressEntry.count({
+        where: { progressReport: { commandId } },
+      }),
+    ).toBe(1);
+
+    await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/field`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        ...payload,
+        entries: [{ ...payload.entries[0], installedQuantity: '8' }],
+      })
+      .expect(409);
+  });
+
+  it('17. Field and Monitoring ignore a later-created historical-baseline entry as current truth', async () => {
+    const token = await login(userSubmitEmail);
+    const activeBaseline = await prisma.projectBaseline.findUniqueOrThrow({
+      where: { id: baselineAId },
+    });
+    const historicalBaseline = await prisma.projectBaseline.create({
+      data: {
+        projectId: projectAId,
+        rabDocumentId: activeBaseline.rabDocumentId,
+        versionNumber: 0,
+        status: 'SUPERSEDED',
+        approvedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
+    const historicalReport = await prisma.progressReport.create({
+      data: {
+        projectId: projectAId,
+        baselineId: historicalBaseline.id,
+        periodStartDate: new Date('2027-01-01T00:00:00.000Z'),
+        periodEndDate: new Date('2027-01-01T00:00:00.000Z'),
+        status: 'SUBMITTED',
+      },
+    });
+    const historicalEntry = await prisma.progressEntry.create({
+      data: {
+        progressReportId: historicalReport.id,
+        boqItemId: boqItemAId,
+        installedQuantity: 99,
+        workDate: new Date('2027-01-01T00:00:00.000Z'),
+        captureMethod: 'LEGACY_IMPORT',
+        status: 'LEGACY_UNSPECIFIED',
+      },
+    });
+    const history = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/items/${boqItemAId}/history`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const monitoring = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const monitored = monitoring.body.items.find(
+      (item: any) => item.id === boqItemAId,
+    );
+    expect(history.body.entries.map((entry: any) => entry.id)).toContain(
+      historicalEntry.id,
+    );
+    expect(history.body.effectiveEntryId).not.toBe(historicalEntry.id);
+    expect(history.body.effectiveEntryId).toBe(
+      monitored.actual.effectiveRecord.id,
+    );
   });
 });

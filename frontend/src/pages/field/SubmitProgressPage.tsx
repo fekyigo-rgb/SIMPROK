@@ -5,29 +5,27 @@ import { FactHeader } from "../../components/molecules/FactHeader";
 import { useAuth } from "../../contexts/AuthContext";
 import { apiFetch } from "../../utils/apiClient";
 import {
+  correctionDate,
   effectiveHistoryEntry,
   historyMessage,
   localCalendarDate,
   plannedFact,
+  timelinePresentation,
   type ProgressHistoryLoadState,
+  type ProgressTimelineEvent,
 } from "../../utils/progressActual";
 
 type HistoryEntry = {
   id: string;
   installedQuantity: string;
-  workDate: string;
+  workDate: string | null;
   recordedAt: string;
   captureMethod: string;
   status: string;
   correctionReason: string | null;
   evidenceReferences: Array<{ url: string; label: string }>;
   revision: number;
-  timeline?: Array<{
-    action: string;
-    at: string;
-    actor: { displayName: string };
-    reason: string | null;
-  }>;
+  timeline?: ProgressTimelineEvent[];
 };
 type CorrectionDraft = {
   entryId: string;
@@ -345,10 +343,10 @@ export function SubmitProgressPage() {
                 </a>
               ))}
               {entry.timeline?.map((event) => (
-                <div key={`${event.action}:${event.at}`}>
+                <div key={timelinePresentation(event).key}>
                   <small>
                     {event.action} · {event.actor.displayName} ·{" "}
-                    {new Date(event.at).toLocaleString("id-ID")}
+                    {timelinePresentation(event).occurredAtLabel}
                     {event.reason ? ` · ${event.reason}` : ""}
                   </small>
                 </div>
@@ -379,7 +377,7 @@ export function SubmitProgressPage() {
                           entryId: entry.id,
                           commandId: crypto.randomUUID(),
                           installedQuantity: entry.installedQuantity,
-                          workDate: entry.workDate.slice(0, 10),
+                          workDate: correctionDate(entry.workDate),
                           captureMethod: entry.captureMethod,
                           reason: "",
                         })
