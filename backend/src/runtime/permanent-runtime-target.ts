@@ -75,6 +75,55 @@ export const PERMANENT_RUNTIME_PORT = 55432;
 export const PERMANENT_RUNTIME_DATABASE = 'simprok_db';
 
 /**
+ * The one least-privileged application identity the permanent runtime may use.
+ *
+ * A correct database target is not the same as a correct identity. The
+ * canonical cluster also holds `simprok_migrator` (owns every table) and
+ * `simprok_cluster_admin` (superuser); either would connect happily to exactly
+ * the right host, port and database, and would then be running the whole
+ * application with authority it must never have. Pinning the role is what makes
+ * the target check mean "the right connection" rather than "the right address".
+ */
+export const PERMANENT_RUNTIME_ROLE = 'simprok_app';
+
+/**
+ * Host spellings that PROVABLY reach the canonical server on this machine, and
+ * are therefore treated as the canonical endpoint by the INVERSE half.
+ *
+ * This list is evidence, not theory. Every spelling below was connected to the
+ * canonical cluster and asked `host(inet_server_addr())`, and every one of them
+ * answered 127.0.0.1:55432. Everything else that was tried — `::1`, `127.0.0.2`,
+ * `127.1`, `2130706433`, `::ffff:127.0.0.1` — could NOT reach it, because the
+ * canonical cluster sets `listen_addresses = '127.0.0.1'` and so answers on the
+ * IPv4 loopback address only. Spellings that cannot reach the server are not
+ * canonical-equivalent, and listing them would be theatre.
+ *
+ * Comparison is against a NORMALISED host (see normaliseHostForEquivalence),
+ * which is what makes `LOCALHOST` and `localhost.` members of this set too.
+ */
+const CANONICAL_EQUIVALENT_HOSTS: readonly string[] = ['127.0.0.1', 'localhost'];
+
+/**
+ * WHY NORMALISATION IS NEEDED AT ALL, and it is not obvious.
+ *
+ * `postgresql:` is a NON-SPECIAL scheme to the WHATWG URL parser, so the host
+ * goes through opaque-host parsing: it is NOT lowercased and NOT IDNA-mapped.
+ * `new URL('postgresql://u:p@LOCALHOST:55432/simprok_db').hostname` really is
+ * `'LOCALHOST'`, and `'localhost.'` really stays `'localhost.'` — both verified
+ * on this Node build, and both reach the canonical server. A case-sensitive
+ * exact comparison would therefore have let an undeclared runtime in through a
+ * spelling the operating system considers identical.
+ *
+ * Only two normalisations are applied, each because it was measured: ASCII
+ * lowercasing, and removal of ONE trailing root dot. Nothing here resolves
+ * names, and nothing here is a general hostname policy.
+ */
+function normaliseHostForEquivalence(hostname: string): string {
+  const lowered = hostname.toLowerCase();
+  return lowered.endsWith('.') ? lowered.slice(0, -1) : lowered;
+}
+
+/**
  * Named ONLY so a refusal can say WHICH boundary was crossed instead of
  * "mismatch". Nothing below grants anything to these; the allowlist above has
  * already refused them before they are recognised.
@@ -100,6 +149,8 @@ export interface PermanentRuntimeTarget {
   databaseName: string;
   host: string;
   port: number;
+  /** Role named by the DSN. Never a credential — the username only. */
+  role: string;
 }
 
 /**
@@ -174,10 +225,23 @@ export function parsePermanentTargetFromUrl(
     );
   }
 
+  // The USERNAME only. `parsed.username` is percent-encoded, and a malformed
+  // encoding must report that it is malformed rather than leak the raw bytes.
+  let role: string;
+  try {
+    role = decodeURIComponent(parsed.username);
+  } catch {
+    throw new PermanentRuntimeTargetError(
+      'STOP_PERMANENT_TARGET_URL_INVALID',
+      'The supplied database URL has an invalid username encoding.',
+    );
+  }
+
   return {
     databaseName,
     host: parsed.hostname,
     port: Number(parsed.port),
+    role,
   };
 }
 
@@ -219,6 +283,24 @@ export function assertPermanentRuntimeTarget(
       `The permanent runtime targets exactly port ${PERMANENT_RUNTIME_PORT}.`,
     );
   }
+  assertPermanentRuntimeRole(target.role);
+}
+
+/**
+ * The permanent runtime runs as the application, or it does not run.
+ *
+ * The supplied role is NEVER echoed. Naming it back would put a value taken
+ * from a credential-bearing string into a log line, and "which identity did you
+ * try" is not information a refusal owes anybody — the message states the one
+ * identity that is allowed, which is enough to fix the configuration.
+ */
+export function assertPermanentRuntimeRole(role: string): void {
+  if (role !== PERMANENT_RUNTIME_ROLE) {
+    throw new PermanentRuntimeTargetError(
+      'STOP_PERMANENT_ROLE_MISMATCH',
+      `The permanent runtime connects as exactly ${PERMANENT_RUNTIME_ROLE}.`,
+    );
+  }
 }
 
 /**
@@ -239,8 +321,12 @@ export function isCanonicalTargetUrl(databaseUrl: string | undefined): boolean {
   }
   return (
     target.databaseName === PERMANENT_RUNTIME_DATABASE &&
-    target.host === PERMANENT_RUNTIME_HOST &&
-    target.port === PERMANENT_RUNTIME_PORT
+    target.port === PERMANENT_RUNTIME_PORT &&
+    // Deliberately NOT the strict `=== PERMANENT_RUNTIME_HOST` used by the
+    // forward half. The question here is not "did you spell the target the way
+    // the permanent runtime must" — it is "does this DSN reach the canonical
+    // server", and `localhost` demonstrably does.
+    CANONICAL_EQUIVALENT_HOSTS.includes(normaliseHostForEquivalence(target.host))
   );
 }
 
@@ -284,10 +370,23 @@ interface LiveTargetRow extends Record<string, unknown> {
   current_database: string;
   server_host: string | null;
   server_port: number | string | bigint | null;
+  current_role: string | null;
+  session_role: string | null;
 }
 
+/**
+ * BOTH identities are read, and both are asserted.
+ *
+ * `current_user` is the effective identity and can be changed after connecting
+ * — `SET ROLE`, or a SECURITY DEFINER function, will move it. `session_user` is
+ * the identity the connection actually AUTHENTICATED as and does not move. So
+ * `session_user` catches a runtime that logged in as `simprok_migrator` and
+ * dropped to `simprok_app`, which `current_user` alone would report as correct;
+ * and `current_user` catches the opposite, a session that authenticated as the
+ * application and then escalated. Only demanding both leaves no gap.
+ */
 export const PERMANENT_TARGET_PROBE_SQL =
-  'select current_database() as current_database, host(inet_server_addr()) as server_host, inet_server_port() as server_port';
+  'select current_database() as current_database, host(inet_server_addr()) as server_host, inet_server_port() as server_port, current_user as current_role, session_user as session_role';
 
 /**
  * Re-proves the target against the SERVER, not against the string we were
@@ -319,12 +418,36 @@ export async function assertLivePermanentRuntimeTarget(
     );
   }
 
+  if (
+    typeof row.current_role !== 'string' ||
+    row.current_role.length === 0 ||
+    typeof row.session_role !== 'string' ||
+    row.session_role.length === 0
+  ) {
+    throw new PermanentRuntimeTargetError(
+      'STOP_PERMANENT_TARGET_PROBE_INCOMPLETE',
+      'The live target probe did not report both the current and session role.',
+    );
+  }
+
   const live: PermanentRuntimeTarget = {
     databaseName: row.current_database,
     host: String(row.server_host),
     port: Number(row.server_port),
+    role: row.session_role,
   };
+  // The live host is read back from the server as an ADDRESS, so it is judged
+  // by the strict predicate — a name never comes back from inet_server_addr().
   assertPermanentRuntimeTarget(live);
+
+  // Effective identity as well as authenticated identity. assertPermanent
+  // RuntimeTarget above has already settled session_user via `live.role`.
+  if (row.current_role !== PERMANENT_RUNTIME_ROLE) {
+    throw new PermanentRuntimeTargetError(
+      'STOP_PERMANENT_ROLE_MISMATCH',
+      `The permanent runtime must be operating as exactly ${PERMANENT_RUNTIME_ROLE}.`,
+    );
+  }
   return live;
 }
 
@@ -336,7 +459,7 @@ export async function assertLivePermanentRuntimeTarget(
 export function describePermanentRuntimeTarget(
   target: PermanentRuntimeTarget,
 ): string {
-  return `SIMPROK permanent runtime: environment=${PERMANENT_RUNTIME_ENVIRONMENT} host=${target.host} port=${target.port} database=${target.databaseName}`;
+  return `SIMPROK permanent runtime: environment=${PERMANENT_RUNTIME_ENVIRONMENT} host=${target.host} port=${target.port} database=${target.databaseName} role=${target.role}`;
 }
 
 /**
