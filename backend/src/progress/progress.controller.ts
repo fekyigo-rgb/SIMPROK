@@ -1,6 +1,18 @@
-import { Controller, Get, Post, Body, UseGuards, Request, Param } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  UseGuards,
+  Request,
+  Param,
+} from '@nestjs/common';
 import { ProgressService } from './progress.service';
-import { CorrectProgressDto, ProgressTransitionDto, SubmitFieldProgressDto } from './dto/create-progress.dto';
+import {
+  CorrectProgressDto,
+  ProgressTransitionDto,
+  SubmitFieldProgressDto,
+} from './dto/create-progress.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -10,7 +22,6 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, PermissionsGuard)
 export class ProgressController {
   constructor(private readonly progressService: ProgressService) {}
-
 
   @Get('monitoring')
   @Permissions('PROJECT_VIEW')
@@ -78,6 +89,7 @@ export class ProgressController {
       projectId,
       entryId,
       'VERIFY',
+      dto.commandId,
       dto.reason,
       req.user.id,
       req.projectAccess,
@@ -96,6 +108,7 @@ export class ProgressController {
       projectId,
       entryId,
       'ACCEPT',
+      dto.commandId,
       dto.reason,
       req.user.id,
       req.projectAccess,

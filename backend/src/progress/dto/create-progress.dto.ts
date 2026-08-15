@@ -101,6 +101,9 @@ export class CorrectProgressDto {
 }
 
 export class ProgressTransitionDto {
+  @IsUUID()
+  commandId: string;
+
   @IsOptional()
   @IsString()
   @Length(1, 2000)
