@@ -110,7 +110,10 @@ export interface AhspResourceResolutionInput {
   readonly resolvedIdentity?: {
     readonly catalog: ResourceCatalogCandidate;
     /** The authority that settled it — reported honestly, never assumed. */
-    readonly identityReason: 'EXACT_RESOURCE_NAME_MATCH' | 'VERIFIED_MAPPING_REUSED';
+    readonly identityReason:
+      | 'EXACT_RESOURCE_NAME_MATCH'
+      | 'EXACT_RESOURCE_NAME_MATCH_WITH_UNIT_CONTEXT'
+      | 'VERIFIED_MAPPING_REUSED';
   };
 }
 
@@ -125,6 +128,18 @@ export type ResolutionStatus =
 
 export type ReasonCode =
   | 'EXACT_RESOURCE_NAME_MATCH'
+  /**
+   * RM-03D2 identity slice. Several catalog rows matched this reference's name
+   * and type exactly — separate canonical representations of one wording — and
+   * the source's own stated unit resolved, through the Unit authority, to the
+   * canonical unit of exactly one of them.
+   *
+   * It replaces EXACT_RESOURCE_NAME_MATCH on such a row rather than joining it,
+   * so the audit trail can never read as though only one exact candidate had
+   * ever existed. The name still matched exactly; the unit only chose between
+   * equals.
+   */
+  | 'EXACT_RESOURCE_NAME_MATCH_WITH_UNIT_CONTEXT'
   /**
    * RM-03D1 identity slice, additive and currently UNREACHABLE by design.
    *
@@ -391,7 +406,10 @@ function priceAgainstCatalog(
     rawResourceRef: string;
   },
   resolvedCatalog: ResourceCatalogCandidate,
-  identityReason: 'EXACT_RESOURCE_NAME_MATCH' | 'VERIFIED_MAPPING_REUSED',
+  identityReason:
+    | 'EXACT_RESOURCE_NAME_MATCH'
+    | 'EXACT_RESOURCE_NAME_MATCH_WITH_UNIT_CONTEXT'
+    | 'VERIFIED_MAPPING_REUSED',
 ): AhspResourceResolutionResult {
   const {
     rawResourceRef,
@@ -510,7 +528,12 @@ function priceAgainstCatalog(
         ...baseContext,
         status: 'NEEDS_REVIEW',
         reasonCodes: [
-          'EXACT_RESOURCE_NAME_MATCH',
+          // The authority that actually settled the identity, exactly as every
+          // other return in this function reports it. This was a hardcoded
+          // literal while only one reachable value existed; RM-03D2 made a
+          // second one reachable, and a tie settled by the source's unit must
+          // not be recorded here as a lone exact name match.
+          identityReason,
           'RESOURCE_TYPE_MATCH',
           unitReason,
           'UNIT_CONVERSION_UNPROVED',
@@ -589,6 +612,22 @@ function priceAgainstCatalog(
 
   const selectedPrice = compatiblePrices[0];
 
+  // The success explanation used to hardcode "melalui kecocokan nama tepat".
+  // That was true while an exact name match was the only reachable authority,
+  // and became false the moment RM-03D2 made a second one reachable: a row
+  // settled because several exact representations existed and the source's own
+  // unit chose between them would still have been recorded as a lone exact name
+  // match. The reasonCodes said one thing and the sentence a human reads said
+  // another. It now derives from the same value the reasonCodes carry, so the
+  // two cannot disagree.
+  const identityPhrase =
+    identityReason === 'EXACT_RESOURCE_NAME_MATCH_WITH_UNIT_CONTEXT'
+      ? 'melalui kecocokan nama tepat yang dibedakan oleh identitas unit ' +
+        'canonical yang dinyatakan sumber'
+      : identityReason === 'VERIFIED_MAPPING_REUSED'
+        ? 'melalui pemetaan yang telah diverifikasi manusia'
+        : 'melalui kecocokan nama tepat';
+
   // ---- Step 4: RESOLVED — proven identity, price string returned exactly ----
   return {
     ...baseContext,
@@ -616,7 +655,7 @@ function priceAgainstCatalog(
       `Sumber daya AHSP "${rawResourceRef}" (${resourceType}, unit: ${ahspUnit}) ` +
       `berhasil dipetakan ke ResourceCatalog "${resolvedCatalog.name}" ` +
       `(${resolvedCatalog.id}, baseUnit: ${resolvedCatalog.baseUnit}) ` +
-      `melalui kecocokan nama tepat, dan Kamus Unit membuktikan kedua unit ` +
+      `${identityPhrase}, dan Kamus Unit membuktikan kedua unit ` +
       `menunjuk identitas canonical yang sama (${ahspUnitCanonicalCode}, faktor: ` +
       `${ahspUnitQuantityFactor}). ` +
       `Basic Price dipilih otomatis: ${selectedPrice.value} per ${selectedPrice.unit} ` +

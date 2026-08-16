@@ -10,7 +10,19 @@ import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibil
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
-export const E1A_RESOLUTION_POLICY_VERSION = 'E1A_CONTEXTUAL_EXACT_REGION_V1';
+/**
+ * RM-03D2 advanced this from V1.
+ *
+ * The version labels the LAW a stored resolution was decided under, and that law
+ * changed: under V1 an exact-name/type tie could only ever be NEEDS_REVIEW,
+ * while under V2 it may be RESOLVED when the source's own stated unit identifies
+ * exactly one representation. A V1 row and a V2 row carrying the same status
+ * were therefore not produced by the same rules, and leaving both labelled V1
+ * would make the audit trail claim they were.
+ *
+ * No schema change: this is the same String column it has always been.
+ */
+export const E1A_RESOLUTION_POLICY_VERSION = 'E1A_CONTEXTUAL_EXACT_REGION_V2';
 
 export type ResolutionCreate =
   Prisma.ProjectAhspResourceResolutionUncheckedCreateWithoutOccurrenceInput;
@@ -82,12 +94,20 @@ for (const resource of version.resources) {
   // column today, so the code channel is genuinely empty here rather
   // than back-filled from the catalog — which would make the evidence
   // agree with itself by construction.
-  const identity = this.identity.resolve(identityEvidence, {
-    rawName: resource.resourceId,
-    rawCode: null,
-    rawUnit: resource.baseUnit,
-    resourceType: resource.resourceType,
-  });
+  // RM-03D2: the caller's transaction is handed down so the canonical-unit
+  // evidence a representation tie is settled with is read inside the SAME
+  // consistency window as the rest of this resolution — including the FOR
+  // UPDATE window the RAB pre-lock gate runs in.
+  const identity = await this.identity.resolve(
+    identityEvidence,
+    {
+      rawName: resource.resourceId,
+      rawCode: null,
+      rawUnit: resource.baseUnit,
+      resourceType: resource.resourceType,
+    },
+    tx,
+  );
 
   const identifiedCatalog =
     identity.status === 'RESOLVED' && identity.resolvedResourceCatalogId
@@ -220,10 +240,15 @@ for (const resource of version.resources) {
     // this far without being rejected as a name mismatch.
     resolvedIdentity: {
       catalog: matches[0],
+      // Reported as it happened. A representation tie settled by the source's
+      // own unit is NOT the same fact as a lone exact name match, and the
+      // persisted reasonCodes must not say it was.
       identityReason:
         identity.authority === 'VERIFIED_MAPPING_REUSED'
           ? 'VERIFIED_MAPPING_REUSED'
-          : 'EXACT_RESOURCE_NAME_MATCH',
+          : identity.authority === 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT'
+            ? 'EXACT_RESOURCE_NAME_MATCH_WITH_UNIT_CONTEXT'
+            : 'EXACT_RESOURCE_NAME_MATCH',
     },
     validatedUnitResolution: {
       status: unitResolution?.status ?? 'NEEDS_REVIEW',
@@ -260,6 +285,24 @@ for (const resource of version.resources) {
         include: { resource: true },
       })
     : null;
+  // IDENTITY TRUTH AND PRICE TRUTH ARE TWO FACTS, AND THE ROW KEEPS BOTH.
+  //
+  // The price kernel answers a strictly later question — "can this ALREADY
+  // PROVEN resource receive a trusted price?" — so its explanation begins from
+  // an identity it was handed and never re-derived. Persisting only that answer
+  // erased how the identity had been established: which representations existed,
+  // which unit authority chose between them, on what trusted context, and that
+  // the specification check passed. It erased it in both directions, too. A
+  // price that could not be proved replaced a proven identity with a sentence
+  // about units, so the row read as though nothing about the resource had been
+  // settled; and a price that succeeded replaced it with a simpler story than
+  // the one that actually happened.
+  //
+  // They are therefore COMPOSED, never substituted, in the order they occurred:
+  // identity first, by its own authority, then pricing. Neither kernel gains the
+  // other's job — the price kernel still knows nothing about representation
+  // ties, and the identity kernel still knows nothing about money.
+  const explanation = `${identity.explanation} ${result.explanation}`;
   const resolved =
     result.status === 'RESOLVED' &&
     selected !== null &&
@@ -299,7 +342,7 @@ for (const resource of version.resources) {
       ? ProjectAhspResolutionMethod.EXACT_DETERMINISTIC
       : ProjectAhspResolutionMethod.DETERMINISTIC_ATTEMPTED,
     reasonCodes: [...result.reasonCodes],
-    explanation: result.explanation,
+    explanation,
     policyVersion: E1A_RESOLUTION_POLICY_VERSION,
   });
 }

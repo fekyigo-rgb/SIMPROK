@@ -327,9 +327,16 @@ describe('B1B12 Golden unit coverage — forward EQUIPMENT hour vocabulary', () 
     'fails closed for %s + %j rather than borrowing the equipment meaning',
     async (context, raw) => {
       const r = await identity(raw, context);
+      // THE CONTAINMENT PROPERTY, unchanged: no unit definition crosses the
+      // context boundary, and the caller is refused.
       expect(r.status).toBe(UNIT_RESOLUTION_STATUS.NEEDS_REVIEW);
-      expect(r.reasonCodes).toEqual([UNIT_REASON.UNKNOWN_UNIT_ALIAS]);
       expect(r.sourceUnitDefinition).toBeNull();
+      // And now the refusal is reported for the reason that is TRUE. These
+      // spellings are catalogued — this suite asserts so a few lines above — so
+      // calling them unknown misdescribed SIMPROK's own knowledge and would send
+      // a reviewer to create an alias that already exists. Known-but-inapplicable
+      // is a different fact from never-heard-of, and both fail closed.
+      expect(r.reasonCodes).toEqual([UNIT_REASON.FOREIGN_CONTEXT_UNIT_ALIAS]);
     },
   );
 
@@ -438,11 +445,14 @@ describe('B1B12 Golden unit coverage — fail closed', () => {
     expect(r.sourceUnitDefinition).toBeNull();
   });
 
-  it('"jam" under an unrelated context is unknown, never a fallback guess', async () => {
+  it('"jam" under an unrelated context is inapplicable, never a fallback guess', async () => {
     const r = await identity('jam', UNIT_ALIAS_CONTEXT.MATERIAL);
     expect(r.status).toBe(UNIT_RESOLUTION_STATUS.NEEDS_REVIEW);
-    expect(r.reasonCodes).toEqual([UNIT_REASON.UNKNOWN_UNIT_ALIAS]);
     expect(r.sourceUnitDefinition).toBeNull();
+    // "jam" is catalogued for LABOR and for EQUIPMENT and for neither MATERIAL —
+    // so the honest report is that its known meanings do not apply here, not
+    // that the word is unheard of. The refusal itself is identical.
+    expect(r.reasonCodes).toEqual([UNIT_REASON.FOREIGN_CONTEXT_UNIT_ALIAS]);
   });
 
   it('labour hours and equipment hours are not interchangeable', async () => {
@@ -501,8 +511,10 @@ describe('B1B12 Golden unit coverage — fail closed', () => {
     // LABOR caller — that would be exactly the silent cross-mapping §7 forbids.
     const labor = await withoutLabor.resolve('jam', 'jam', undefined, UNIT_ALIAS_CONTEXT.LABOR);
     expect(labor.status).toBe(UNIT_RESOLUTION_STATUS.NEEDS_REVIEW);
-    expect(labor.reasonCodes).toContain(UNIT_REASON.UNKNOWN_UNIT_ALIAS);
     expect(labor.sourceUnitDefinition).toBeNull();
+    // The surviving EQUIPMENT row is still not borrowed — it is merely now
+    // NAMED as the reason the LABOR question cannot be answered.
+    expect(labor.reasonCodes).toContain(UNIT_REASON.FOREIGN_CONTEXT_UNIT_ALIAS);
   });
 
   it('context never changes an already-unambiguous unit', async () => {
