@@ -584,12 +584,19 @@ export class BasicPriceRowResolutionService {
     },
   ): Promise<ResourceIdentityResolution> {
     const evidence = await this.resourceIdentity.loadEvidence(tx, workspaceId);
-    return this.resourceIdentity.resolve(evidence, {
-      rawName: row.rawResourceNameText,
-      rawCode: row.rawResourceCodeText,
-      rawUnit: row.rawUnitText,
-      resourceType: row.sourceSection,
-    });
+    // RM-03D2: the same open transaction, so any canonical-unit evidence a
+    // representation tie needs is read under the serialization this admission
+    // already holds.
+    return this.resourceIdentity.resolve(
+      evidence,
+      {
+        rawName: row.rawResourceNameText,
+        rawCode: row.rawResourceCodeText,
+        rawUnit: row.rawUnitText,
+        resourceType: row.sourceSection,
+      },
+      tx,
+    );
   }
 
   /**

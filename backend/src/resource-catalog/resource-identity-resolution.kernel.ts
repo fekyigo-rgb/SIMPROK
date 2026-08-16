@@ -41,6 +41,12 @@
  *
  * NOT in this kernel, by design: unit law (UnitKernelService owns that
  * outright), Basic Price eligibility, price arithmetic, AHSP applicability.
+ *
+ * RM-03D2 does not change that. This kernel still holds no alias table, no unit
+ * normalizer and no conversion knowledge. It receives canonical unit identities
+ * the Unit authority already settled and compares them for equality, at ONE
+ * branch only — the exact-name/type representation tie. A unit remains something
+ * this kernel is TOLD, never something it works out.
  */
 
 // ============================================================
@@ -116,6 +122,16 @@ export interface SourceSightingEvidence {
  * asked to them.
  */
 export interface ReviewedMappingEvidence {
+  /**
+   * The decision's own stable identity — the BasicPriceImportRowResourceMapping
+   * row id.
+   *
+   * Carried for ONE purpose: to break a tie between two decisions bearing the
+   * same `decidedAt` without falling back to the order the database returned
+   * them in. It grants the mapping no authority it did not already have; it only
+   * gives "which of these two" a deterministic answer. See `priorDecisionFor`.
+   */
+  readonly mappingId: string;
   readonly resourceCatalogId: string;
   readonly rawName: string;
   readonly rawCode: string | null;
@@ -125,12 +141,75 @@ export interface ReviewedMappingEvidence {
   readonly reason: string | null;
 }
 
+/**
+ * RM-03D2 — which canonical unit ONE raw spelling denotes, already decided by
+ * the Unit authority and handed in as a finished fact.
+ *
+ * The kernel does not, and must not, interpret unit text: it holds no alias
+ * table, no normalizer, no dictionary. It only compares two already-canonical
+ * identities for equality. That keeps unit semantics in UnitKernelService where
+ * they are governed, and keeps this kernel pure.
+ *
+ * `rawUnit` is the caller's EXACT spelling, matched by exact string equality, so
+ * a fact resolved for "m3" can never be silently read as the answer for "M3".
+ * The caller resolves both spellings when both occur.
+ *
+ * A NEEDS_REVIEW fact means NOT PROVEN — never "proven different". §12.
+ *
+ * IT CARRIES ITS OWN PROVENANCE, and must. The decision this kernel reaches from
+ * a fact is only as legitimate as the fact was, and "jam" resolving to a canonical
+ * unit BECAUSE the resource is governed as LABOR is a materially weaker, narrower
+ * statement than "jam" being globally unambiguous. A reader of the stored
+ * resolution must be able to tell those two apart afterwards, so the authority
+ * story travels WITH the fact instead of being reconstructed later from a context
+ * nobody recorded.
+ */
+export interface CanonicalUnitIdentityFact {
+  readonly rawUnit: string;
+  readonly status: 'RESOLVED' | 'NEEDS_REVIEW';
+  readonly unitDefinitionId: string | null;
+  /**
+   * The canonical unit's own code (e.g. "M3"), so the deciding unit is auditable
+   * as a unit and not only as an opaque row id.
+   */
+  readonly unitCode: string | null;
+  /** The Unit authority's own reason, carried verbatim into the explanation. */
+  readonly reasonCode: string | null;
+  /** True when a context-scoped alias carried the answer. */
+  readonly contextScoped: boolean;
+  /**
+   * The governed class the meaning actually DEPENDED ON, or null when it did not
+   * depend on one.
+   *
+   * Null whenever `contextScoped` is false, including when a context was
+   * supplied and simply not needed — naming a context there would manufacture a
+   * dependency that never existed and make a context-free proof look narrower
+   * than it is. §6: when context did not matter, do not invent context provenance.
+   */
+  readonly trustedContext: string | null;
+  /**
+   * The alias rows that decided it, in the Unit authority's canonical order.
+   *
+   * Stable existing identities only, and never a positional or ordering-derived
+   * fact — the same evidence set must yield the same list however the database
+   * returned it.
+   */
+  readonly matchedAliasIds: ReadonlyArray<string>;
+}
+
 export interface ResourceIdentityResolutionInput {
   readonly reference: RawResourceReference;
   /** Already tenant-scoped by the caller. */
   readonly catalogCandidates: ReadonlyArray<IdentityCatalogCandidate>;
   readonly sourceSightings: ReadonlyArray<SourceSightingEvidence>;
   readonly reviewedMappings: ReadonlyArray<ReviewedMappingEvidence>;
+  /**
+   * RM-03D2 canonical unit facts, consulted at EXACTLY ONE branch: the
+   * exact-name/type representation tie. Absent or empty behaves exactly as
+   * before — the tie stays NEEDS_REVIEW — so every pre-existing caller is
+   * unchanged.
+   */
+  readonly canonicalUnitIdentities?: ReadonlyArray<CanonicalUnitIdentityFact>;
 }
 
 // ============================================================
@@ -145,6 +224,18 @@ export type ResourceIdentityStatus = 'RESOLVED' | 'NEEDS_REVIEW' | 'UNRESOLVED';
  */
 export type ResourceIdentityAuthority =
   | 'EXACT_CANONICAL_MATCH'
+  /**
+   * RM-03D2. Several catalog rows matched the name and type exactly — they are
+   * separate canonical REPRESENTATIONS of the same wording, deliberately kept
+   * distinct — and the source's own stated unit resolved, through the Unit
+   * authority, to the canonical unit of exactly one of them, every other tied
+   * row having been proven to be a different canonical unit.
+   *
+   * It is emitted INSTEAD OF `EXACT_CANONICAL_MATCH`, never alongside it: a row
+   * settled this way must not be readable as though only one exact candidate
+   * had ever existed.
+   */
+  | 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT'
   /**
    * Reserved, and deliberately NOT reachable from any production path today.
    *
@@ -169,7 +260,20 @@ export type ResourceIdentityReasonCode =
   | 'RESOURCE_TYPE_MISMATCH'
   | 'SPECIFICATION_UNPROVED'
   | 'SPECIFICATION_CONFLICT'
-  | 'RESOURCE_NOT_FOUND';
+  | 'RESOURCE_NOT_FOUND'
+  // ---- RM-03D2: exact-representation tie, decided or refused by unit context ----
+  /** The tie was settled: source unit matched exactly one representation. */
+  | 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT'
+  /** The AHSP line states no unit at all, so nothing can discriminate. */
+  | 'UNIT_CONTEXT_SOURCE_UNIT_UNSTATED'
+  /** The stated unit is unknown, ambiguous, or context-scoped without context. */
+  | 'UNIT_CONTEXT_SOURCE_UNIT_UNPROVED'
+  /** A tied row's own base unit is unproved, so that row cannot be excluded. */
+  | 'UNIT_CONTEXT_CANDIDATE_UNIT_UNPROVED'
+  /** Every tied row proved to be a different canonical unit from the source. */
+  | 'UNIT_CONTEXT_NO_MATCHING_REPRESENTATION'
+  /** Several tied rows share the source's canonical unit — still ambiguous. */
+  | 'UNIT_CONTEXT_MULTIPLE_MATCHING_REPRESENTATIONS';
 
 /** Why a particular catalog row was nominated. Shown to humans verbatim. */
 export type CandidateEvidenceKind =
@@ -220,6 +324,28 @@ export interface ResourceIdentityResolution {
   readonly candidates: ReadonlyArray<ResourceIdentityCandidate>;
   readonly reasonCodes: ReadonlyArray<ResourceIdentityReasonCode>;
   readonly explanation: string;
+}
+
+/**
+ * True when a verdict is a LEVEL-1 REPRESENTATION TIE and nothing else: several
+ * rows matched the name and type exactly, and no other fact has separated them
+ * yet.
+ *
+ * This is the ONLY condition under which RM-03D2 unit evidence is worth
+ * gathering, so the I/O layer asks this rather than re-deriving the tie from the
+ * reason codes. `HUMAN_REVIEW_REQUIRED` is emitted at exactly one place in this
+ * file, which is what makes the test exact.
+ *
+ * Deliberately NOT true for a tie already refused on unit grounds with the
+ * evidence in hand — the caller re-asks at most once, never in a loop.
+ */
+export function isExactRepresentationTie(
+  result: ResourceIdentityResolution,
+): boolean {
+  return (
+    result.status === 'NEEDS_REVIEW' &&
+    result.authority === 'HUMAN_REVIEW_REQUIRED'
+  );
 }
 
 // ============================================================
@@ -440,13 +566,24 @@ function isActive(candidate: IdentityCatalogCandidate): boolean {
  * Authority hierarchy, first decisive level wins:
  *   1. Exact canonical match, one row, specification neither contradicted
  *      nor left unproven                                              → RESOLVED
+ *   1b. Several EXACT rows (a representation tie) whose canonical units the
+ *      Unit authority separates, the source stating one of them, and the
+ *      surviving row passing the same specification law         (RM-03D2)
+ *                                                                     → RESOLVED
  *   2. Evidence-nominated candidates — source code, provenance sightings,
  *      reviewed human decisions from other contexts, name tokens      → NEEDS_REVIEW
  *   3. Several plausible candidates                                   → NEEDS_REVIEW
  *   4. Type or specification contradiction                            → UNRESOLVED
  *   5. Nothing defensible, after all of the above                     → UNRESOLVED
  *
- * EXACT MATCH IS CURRENTLY THE ONLY ROAD TO RESOLVED, and that is deliberate.
+ * AN EXACT NAME AND TYPE MATCH REMAINS THE ONLY ROAD TO RESOLVED. RM-03D2 did
+ * not widen WHICH rows may be asserted — every candidate it can select already
+ * matched the name and the class exactly. It only lets a fact the source itself
+ * states settle WHICH of several equally exact representations was meant, and
+ * only when the Unit authority proves that fact independently of the candidate
+ * being tested. No heuristic gains assertion power: token containment, shared
+ * stems, sightings and reviewed mappings all still stop at discovery.
+ *
  * The one kind of recorded human decision this repository has is bound to a
  * Basic Price import row, which is a different fact from an AHSP reference —
  * so it enriches the evidence and never carries the assertion.
@@ -454,7 +591,13 @@ function isActive(candidate: IdentityCatalogCandidate): boolean {
 export function resolveResourceIdentity(
   input: ResourceIdentityResolutionInput,
 ): ResourceIdentityResolution {
-  const { reference, catalogCandidates, sourceSightings, reviewedMappings } = input;
+  const {
+    reference,
+    catalogCandidates,
+    sourceSightings,
+    reviewedMappings,
+    canonicalUnitIdentities = [],
+  } = input;
   const rawName = reference.rawName;
   const normalizedName = normalizeResourceName(rawName);
   const normalizedCode = normalizeResourceCode(reference.rawCode);
@@ -463,15 +606,34 @@ export function resolveResourceIdentity(
   const usable = catalogCandidates.filter(isActive);
   const byId = new Map(usable.map((candidate) => [candidate.id, candidate]));
 
-  /** The most recent decision a human made about this catalog row, if any. */
+  /**
+   * The most recent decision a human made about this catalog row, if any.
+   *
+   * "Most recent" alone is not a total order. Two reviewed mappings can carry
+   * the exact same `decidedAt` — same batch, same second, and the column is a
+   * plain timestamp — and a strict `>` comparison then keeps whichever the
+   * database happened to return first. That made the reported reviewer, reason
+   * and timestamp depend on row order, which breaks the one law that makes this
+   * kernel checkable at all: THE SAME EVIDENCE MUST PRODUCE THE SAME OUTPUT.
+   * The RAB pre-lock gate re-runs this resolution and compares it with the
+   * frozen one, so an order-dependent field there could fail a lawful lock.
+   *
+   * So an equal timestamp is settled by the decision's own stable id — unique by
+   * construction, so the order is total and no third rule is needed. It is
+   * determinism machinery and nothing more: a reviewed mapping's authority is
+   * untouched, and it remains candidate EVIDENCE that never asserts identity.
+   */
   const priorDecisionFor = (catalogId: string): PriorHumanDecision | null => {
     const matching = reviewedMappings.filter(
       (mapping) => mapping.resourceCatalogId === catalogId,
     );
     if (matching.length === 0) return null;
-    const latest = matching.reduce((newest, mapping) =>
-      mapping.decidedAt > newest.decidedAt ? mapping : newest,
-    );
+    const latest = matching.reduce((newest, mapping) => {
+      if (mapping.decidedAt !== newest.decidedAt) {
+        return mapping.decidedAt > newest.decidedAt ? mapping : newest;
+      }
+      return mapping.mappingId < newest.mappingId ? mapping : newest;
+    });
     return {
       reviewerAccountId: latest.reviewerAccountId,
       decidedAt: latest.decidedAt,
@@ -554,17 +716,212 @@ export function resolveResourceIdentity(
     };
   }
 
+  // ---- LEVEL 1b: RM-03D2 — an exact-name/type REPRESENTATION tie ----
+  //
+  // Several catalog rows state the same name and the same class. They are not
+  // duplicates to be merged: RM-02C1c deliberately keeps a same-name row with a
+  // different unit as a SEPARATE resource. So the question is not "which of
+  // these is right" but "which representation did this source line mean", and
+  // the source usually says so itself, in its own unit column.
+  //
+  // The discrimination is CANONICAL UNIT IDENTITY EQUALITY, never
+  // convertibility: "m3 can be converted to kg" says nothing about which row
+  // was meant, and a rule scoped to one candidate would prove that candidate
+  // with its own evidence. Neither is read here — the kernel only compares two
+  // UnitDefinition ids the Unit authority already settled independently.
+  //
+  // Everything below fails closed to the pre-RM-03D2 verdict, and every refusal
+  // says which of the six distinguishable things went wrong.
   if (exactRows.length > 1) {
-    return {
+    // Every statement this branch makes — which rows it lists, in which order,
+    // and which it names as unprovable — is built from ONE deterministic
+    // ordering, so the same tie described by the database in any row order
+    // produces a byte-identical verdict. Ordering is presentation only; the
+    // decision below is set-based and cannot be swayed by it.
+    const tiedRows = [...exactRows].sort(
+      (a, b) => a.baseUnit.localeCompare(b.baseUnit) || a.id.localeCompare(b.id),
+    );
+
+    const tieRefused = (
+      reasonCode: ResourceIdentityReasonCode,
+      detail: string,
+    ): ResourceIdentityResolution => ({
       status: 'NEEDS_REVIEW',
       authority: 'HUMAN_REVIEW_REQUIRED',
       resolvedResourceCatalogId: null,
-      candidates: exactRows.map((candidate) => describeCandidate(candidate, [])),
-      reasonCodes: ['MULTIPLE_CANDIDATES_NEEDS_REVIEW'],
+      candidates: tiedRows.map((candidate) => describeCandidate(candidate, [])),
+      reasonCodes: ['MULTIPLE_CANDIDATES_NEEDS_REVIEW', reasonCode],
       explanation:
-        `Ditemukan ${exactRows.length} entri ResourceCatalog dengan nama persis ` +
-        `"${rawName}" dan tipe ${type}. SIMPROK tidak memilih sendiri di antara ` +
-        `kandidat yang sama kuat.`,
+        `Ditemukan ${tiedRows.length} entri ResourceCatalog dengan nama persis ` +
+        `"${rawName}" dan tipe ${type} ` +
+        `(${tiedRows.map((row) => `"${row.name}" [${row.baseUnit}] (${row.id})`).join(', ')}). ` +
+        `${detail} SIMPROK tidak memilih sendiri di antara kandidat yang sama kuat.`,
+    });
+
+    /** Exact-spelling lookup. No normalization here — unit text is not this kernel's law. */
+    const unitFactFor = (spelling: string): CanonicalUnitIdentityFact | null =>
+      canonicalUnitIdentities.find((fact) => fact.rawUnit === spelling) ?? null;
+
+    const provenUnitId = (fact: CanonicalUnitIdentityFact | null): string | null =>
+      fact !== null && fact.status === 'RESOLVED' ? fact.unitDefinitionId : null;
+
+    /**
+     * HOW a unit fact was proved, said out loud rather than assumed.
+     *
+     * The decision below is only as legitimate as the evidence under it, and
+     * unit evidence is not all one strength: a context-free alias means the
+     * spelling is unambiguous everywhere, while a context-scoped one means it is
+     * unambiguous ONLY because this resource is governed as MATERIAL, LABOR or
+     * EQUIPMENT. Both may lawfully settle a tie; they are not the same claim,
+     * and a reviewer reading this row months later must be able to tell which
+     * one carried it — which they cannot do if the record says only "unit
+     * matched".
+     *
+     * Everything here comes from the fact the Unit authority handed in. Nothing
+     * is inferred, and a context is named only where the authority itself said
+     * the meaning depended on one.
+     */
+    const unitProvenance = (fact: CanonicalUnitIdentityFact | null): string => {
+      if (fact === null) return 'BUKTI_UNIT_TIDAK_TERSEDIA';
+      const parts: string[] = [fact.reasonCode ?? 'ALASAN_UNIT_TIDAK_DINYATAKAN'];
+      if (fact.unitCode !== null) parts.push(`unit canonical ${fact.unitCode}`);
+      if (fact.contextScoped) {
+        parts.push(
+          `berlaku hanya dalam konteks tepercaya ` +
+            `${fact.trustedContext ?? 'KONTEKS_TIDAK_DINYATAKAN'}`,
+        );
+      }
+      if (fact.matchedAliasIds.length > 0) {
+        parts.push(`alias penentu: ${fact.matchedAliasIds.join(', ')}`);
+      }
+      return parts.join('; ');
+    };
+
+    const rawUnit = reference.rawUnit;
+    if (rawUnit === null || rawUnit.trim() === '') {
+      return tieRefused(
+        'UNIT_CONTEXT_SOURCE_UNIT_UNSTATED',
+        `Sumber AHSP tidak menyatakan unit apa pun, sehingga tidak ada fakta ` +
+          `dari sumber yang dapat membedakan representasi mana yang dimaksud.`,
+      );
+    }
+
+    const sourceFact = unitFactFor(rawUnit);
+    const sourceUnitId = provenUnitId(sourceFact);
+    if (sourceUnitId === null) {
+      return tieRefused(
+        'UNIT_CONTEXT_SOURCE_UNIT_UNPROVED',
+        `Unit sumber "${rawUnit}" belum terbukti menunjuk tepat satu identitas ` +
+          `unit canonical (${unitProvenance(sourceFact)}). ` +
+          `Belum terbukti bukan berarti tidak sepadan.`,
+      );
+    }
+
+    const weighed = tiedRows.map((candidate) => ({
+      candidate,
+      unitId: provenUnitId(unitFactFor(candidate.baseUnit)),
+      fact: unitFactFor(candidate.baseUnit),
+    }));
+
+    // An unproved candidate unit cannot be EXCLUDED, and excluding it anyway
+    // would be treating UNKNOWN as negative proof. One such row keeps the whole
+    // tie open, even when another row matches perfectly.
+    const unprovable = weighed.filter((row) => row.unitId === null);
+    if (unprovable.length > 0) {
+      return tieRefused(
+        'UNIT_CONTEXT_CANDIDATE_UNIT_UNPROVED',
+        `Unit dasar katalog ${unprovable
+          .map((row) => `"${row.candidate.baseUnit}" (${row.candidate.id}: ${unitProvenance(row.fact)})`)
+          .join(', ')} belum terbukti menunjuk tepat satu identitas unit ` +
+          `canonical, sehingga kandidat tersebut tidak dapat disingkirkan secara sah.`,
+      );
+    }
+
+    const matching = weighed.filter((row) => row.unitId === sourceUnitId);
+    if (matching.length === 0) {
+      return tieRefused(
+        'UNIT_CONTEXT_NO_MATCHING_REPRESENTATION',
+        `Tidak satu pun representasi katalog memakai identitas unit canonical ` +
+          `yang sama dengan unit sumber "${rawUnit}". Kesepadanan lewat konversi ` +
+          `tidak pernah menjadi bukti identitas.`,
+      );
+    }
+    if (matching.length > 1) {
+      return tieRefused(
+        'UNIT_CONTEXT_MULTIPLE_MATCHING_REPRESENTATIONS',
+        `${matching.length} representasi katalog memakai identitas unit ` +
+          `canonical yang sama dengan unit sumber "${rawUnit}", sehingga unit ` +
+          `tidak membedakan apa pun di sini.`,
+      );
+    }
+
+    // Exactly one representation, every other tied row PROVEN to be a different
+    // canonical unit. The existing specification law still has to pass — this
+    // branch is a way through the cardinality gate, never around the
+    // false-certainty guards.
+    const only = matching[0].candidate;
+    // The deciding unit evidence is NAMED, not just relied on, and BOTH sides of
+    // it are named — what the source stated and what the surviving representation
+    // states are two separate proofs that happened to agree, not one fact.
+    //
+    // The refusal paths already name their unit reason; the success path must not
+    // be the quiet one. A record that says only "unit matched" cannot answer the
+    // four questions a reviewer actually has: what did the source state, what
+    // canonical unit was proved from it, which representation shared that unit,
+    // and did a trusted context have to be assumed to read either one.
+    const tiePreamble =
+      `Ditemukan ${tiedRows.length} representasi ResourceCatalog dengan nama ` +
+      `persis "${rawName}" dan tipe ${type} ` +
+      `(${tiedRows.map((row) => `"${row.name}" [${row.baseUnit}] (${row.id})`).join(', ')}), ` +
+      `sehingga nama saja tidak menetapkan identitas. Unit yang dinyatakan ` +
+      `sumber, "${rawUnit}", terbukti menunjuk tepat satu identitas unit ` +
+      `canonical (${unitProvenance(sourceFact)}), dan tepat satu representasi ` +
+      `memakai identitas unit canonical yang sama: "${only.name}" ` +
+      `[${only.baseUnit}] (${only.id}) (${unitProvenance(matching[0].fact)}). `;
+
+    if (contradictsSpecification(rawName, only)) {
+      return {
+        status: 'UNRESOLVED',
+        authority: null,
+        resolvedResourceCatalogId: null,
+        candidates: [describeCandidate(only, [])],
+        reasonCodes: ['SPECIFICATION_CONFLICT'],
+        explanation:
+          tiePreamble +
+          `Namun spesifikasi yang dinyatakan kedua belah pihak bertentangan. ` +
+          `Identitas tidak ditetapkan.`,
+      };
+    }
+
+    const tieUnproved = unprovedSpecificationFacts(rawName, only);
+    if (tieUnproved.length > 0) {
+      return {
+        status: 'NEEDS_REVIEW',
+        authority: 'EVIDENCE_CANDIDATE',
+        resolvedResourceCatalogId: null,
+        candidates: [describeCandidate(only, [])],
+        reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW', 'SPECIFICATION_UNPROVED'],
+        explanation:
+          tiePreamble +
+          `Namun entri katalog menyatakan hal yang tidak disebut oleh sumber ` +
+          `AHSP: ${tieUnproved.map((fact) => `"${fact}"`).join(', ')}. ` +
+          `Diperlukan penegasan manusia.`,
+      };
+    }
+
+    return {
+      status: 'RESOLVED',
+      authority: 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT',
+      resolvedResourceCatalogId: only.id,
+      candidates: [describeCandidate(only, [])],
+      reasonCodes: ['EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT'],
+      explanation:
+        tiePreamble +
+        `Representasi lain terbukti memakai identitas unit canonical yang ` +
+        `berbeda, bukan sekadar belum terbukti; kesepadanan lewat konversi tidak ` +
+        `pernah dipakai sebagai bukti identitas. Pemeriksaan spesifikasi lolos: ` +
+        `entri katalog tidak menyatakan hal yang tidak disebut sumber. Identitas ` +
+        `ditetapkan tanpa memerlukan keputusan manusia.`,
     };
   }
 
