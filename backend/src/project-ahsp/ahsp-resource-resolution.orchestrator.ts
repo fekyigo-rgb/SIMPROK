@@ -72,7 +72,14 @@ export class AhspResourceResolutionOrchestrator {
   ): Promise<ResolutionCreate[]> {
     const { asOf, version } = input;
 
-    const identityEvidence = await this.identity.loadEvidence(tx, input.workspaceId);
+    // GHX-01: the version's AHSP source facts are known up front, so governed
+    // human decisions for all of them are preloaded in ONE bounded query here
+    // rather than one query per ambiguous row inside the loop below.
+    const identityEvidence = await this.identity.loadEvidence(
+      tx,
+      input.workspaceId,
+      version.resources.map((resource: any) => resource.id),
+    );
 
 const priceRows = await tx.basicPrice.findMany({
   where: {
@@ -98,8 +105,20 @@ for (const resource of version.resources) {
   // evidence a representation tie is settled with is read inside the SAME
   // consistency window as the rest of this resolution — including the FOR
   // UPDATE window the RAB pre-lock gate runs in.
+  // GHX-01: the decision SUBJECT is derived server-side from the occurrence's
+  // own truth — the workspace this resolution runs in and the immutable AHSP
+  // source fact being resolved. Never from client input, and never from the
+  // resource's spelling: a different AHSPResource that happens to read the same
+  // cannot borrow this one's governed decision.
   const identity = await this.identity.resolve(
-    identityEvidence,
+    {
+      ...identityEvidence,
+      ghxSubject: {
+        workspaceId: input.workspaceId,
+        ahspResourceId: resource.id,
+        resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+      },
+    },
     {
       rawName: resource.resourceId,
       rawCode: null,

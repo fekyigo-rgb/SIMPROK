@@ -197,6 +197,24 @@ export interface CanonicalUnitIdentityFact {
   readonly matchedAliasIds: ReadonlyArray<string>;
 }
 
+/**
+ * GHX-01 — what the Resource Identity kernel is allowed to know about a human
+ * decision. Deliberately tiny.
+ *
+ * It carries the SELECTED ROW and the accountability facts that make the
+ * resulting explanation truthful, and nothing else. No candidate set, no digest,
+ * no token, no policy machinery: applicability was already proven by the caller,
+ * and re-litigating it here would put decision-memory law inside a pure kernel
+ * that must stay about identity evidence alone.
+ */
+export interface VerifiedIdentityDecisionFact {
+  readonly resourceCatalogId: string;
+  readonly decidedByAccountId: string;
+  readonly decidedAt: string;
+  readonly generation: number;
+  readonly reason: string | null;
+}
+
 export interface ResourceIdentityResolutionInput {
   readonly reference: RawResourceReference;
   /** Already tenant-scoped by the caller. */
@@ -210,6 +228,19 @@ export interface ResourceIdentityResolutionInput {
    * unchanged.
    */
   readonly canonicalUnitIdentities?: ReadonlyArray<CanonicalUnitIdentityFact>;
+  /**
+   * GHX-01 — a governed human decision about THIS exact AHSP source fact, already
+   * looked up and scope-validated by the caller.
+   *
+   * It is consulted at exactly ONE place: after every machine level has run and
+   * failed to settle the identity. A machine-proven identity is therefore never
+   * overridden — the human memory is not even reached. And it can only select a
+   * row the machine itself already nominated, so it chooses between legitimate
+   * alternatives and can never manufacture an identity.
+   *
+   * Absent behaves exactly as before, so every pre-GHX caller is unchanged.
+   */
+  readonly verifiedIdentityDecision?: VerifiedIdentityDecisionFact;
 }
 
 // ============================================================
@@ -237,15 +268,18 @@ export type ResourceIdentityAuthority =
    */
   | 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT'
   /**
-   * Reserved, and deliberately NOT reachable from any production path today.
+   * GHX-01 — a governed human decision, recorded against THIS AHSP source fact
+   * and reused because its scope proves it still applies.
    *
-   * It describes reusing a human decision that is genuinely bound to the same
-   * AHSP fact being resolved. No model in this repository records such a
-   * decision yet — the only reviewed mapping that exists is scoped to a Basic
-   * Price import row — so emitting it would be claiming an authority nobody
-   * ever granted. The name stays in the contract so the concept has somewhere
-   * to land when a properly-scoped record exists; until then, nothing produces
-   * it, and a test proves that.
+   * This name was reserved long before anything could produce it, precisely so
+   * the concept would have somewhere to land once a properly-scoped record
+   * existed. AhspResourceIdentityDecision is that record, and this is now the
+   * authority it carries.
+   *
+   * It is emitted ONLY where the machine left a genuine ambiguity among rows it
+   * nominated itself, so it settles WHICH legitimate alternative was meant and
+   * never manufactures an identity. A reviewed Basic Price import-row mapping
+   * still cannot produce it.
    */
   | 'VERIFIED_MAPPING_REUSED'
   | 'EVIDENCE_CANDIDATE'
@@ -576,7 +610,12 @@ function isActive(candidate: IdentityCatalogCandidate): boolean {
  *   4. Type or specification contradiction                            → UNRESOLVED
  *   5. Nothing defensible, after all of the above                     → UNRESOLVED
  *
- * AN EXACT NAME AND TYPE MATCH REMAINS THE ONLY ROAD TO RESOLVED. RM-03D2 did
+ * AN EXACT NAME AND TYPE MATCH REMAINS THE ONLY ROAD TO A MACHINE-PROVEN
+ * IDENTITY, and GHX-01 did not widen that. It added a second, clearly-labelled
+ * road that is NOT a machine proof: a governed human decision, applied at one
+ * place after every machine level has failed, able only to choose among rows the
+ * machine itself nominated and still subject to the specification guard. It
+ * resolves as VERIFIED_MAPPING_REUSED and never as an exact match. RM-03D2 did
  * not widen WHICH rows may be asserted — every candidate it can select already
  * matched the name and the class exactly. It only lets a fact the source itself
  * states settle WHICH of several equally exact representations was meant, and
@@ -584,11 +623,102 @@ function isActive(candidate: IdentityCatalogCandidate): boolean {
  * being tested. No heuristic gains assertion power: token containment, shared
  * stems, sightings and reviewed mappings all still stop at discovery.
  *
- * The one kind of recorded human decision this repository has is bound to a
- * Basic Price import row, which is a different fact from an AHSP reference —
- * so it enriches the evidence and never carries the assertion.
+ * A reviewed BASIC PRICE import-row mapping is bound to a different fact from an
+ * AHSP reference, so it enriches the evidence and never carries the assertion —
+ * that has not changed. What GHX-01 added is a decision recorded against THIS
+ * AHSP source fact, which is the one thing a reviewed mapping never was.
  */
 export function resolveResourceIdentity(
+  input: ResourceIdentityResolutionInput,
+): ResourceIdentityResolution {
+  // MACHINE FIRST, ALWAYS. Every deterministic level runs to completion before a
+  // human decision is even looked at, so a machine-proven identity can never be
+  // overridden by memory — the branch below is unreachable when it resolved.
+  const machine = resolveByMachineEvidence(input);
+  return applyVerifiedIdentityDecision(machine, input);
+}
+
+/**
+ * GHX-01 — THE ONE PLACE a governed human decision becomes an identity.
+ *
+ * Three conditions, all necessary:
+ *   1. the machine did NOT resolve — otherwise memory is never consulted;
+ *   2. the selected row is one the MACHINE ITSELF nominated, so the human chose
+ *      between legitimate alternatives rather than manufacturing an identity;
+ *   3. that row states nothing the source did not — the specification guard is
+ *      re-applied, because a human settling WHICH resource never settles whether
+ *      an unstated diameter was meant.
+ *
+ * It asserts IDENTITY ONLY. No unit becomes proven, no alias is created, no
+ * conversion becomes evidence — downstream unit and price law run exactly as
+ * before and may still fail closed on the very row a human verified.
+ */
+/**
+ * The ONLY verdicts a governed human decision may settle: a genuine ambiguity
+ * among candidates the machine itself nominated as legitimate.
+ *
+ * Everything else is a refusal with a reason a human choice does not answer —
+ * no candidate at all, a hard type boundary, a stated specification conflict, an
+ * unproved specification fact, or a single candidate that was never ambiguous.
+ * A human decides BETWEEN alternatives; they never overrule a guard.
+ */
+export function isHumanDecidable(result: ResourceIdentityResolution): boolean {
+  if (result.status !== 'NEEDS_REVIEW') return false;
+  if (result.reasonCodes.includes('SPECIFICATION_UNPROVED')) return false;
+  if (result.authority === 'HUMAN_REVIEW_REQUIRED') return true;
+  return (
+    result.authority === 'EVIDENCE_CANDIDATE' &&
+    result.reasonCodes.includes('MULTIPLE_CANDIDATES_NEEDS_REVIEW')
+  );
+}
+
+function applyVerifiedIdentityDecision(
+  machine: ResourceIdentityResolution,
+  input: ResourceIdentityResolutionInput,
+): ResourceIdentityResolution {
+  const decision = input.verifiedIdentityDecision;
+  if (!decision) return machine;
+  // MACHINE FIRST: a proven identity is never reconsidered.
+  if (machine.status === 'RESOLVED') return machine;
+  // ELIGIBILITY BEFORE MEMBERSHIP, and the order is load-bearing.
+  //
+  // "the row is in machine.candidates" is NOT sufficient on its own, and an
+  // earlier version of this seam that relied on it alone was WRONG: the
+  // RESOURCE_TYPE_MISMATCH verdict lists the type-mismatched rows as candidates
+  // so a reviewer can SEE what was rejected, and a human decision naming one of
+  // them would then have crossed the hard type boundary. A candidate list can
+  // mean "these were nominated" or "these were ruled out", and only the first
+  // is a question a human may answer.
+  if (!isHumanDecidable(machine)) return machine;
+
+  const chosen = machine.candidates.find(
+    (candidate) => candidate.resourceCatalogId === decision.resourceCatalogId,
+  );
+  // Not among the rows the machine nominated → the decision does not apply here.
+  // Fail closed to the machine's own verdict rather than widening the candidate set.
+  if (!chosen) return machine;
+  if (chosen.specificationUnproved) return machine;
+
+  return {
+    status: 'RESOLVED',
+    authority: 'VERIFIED_MAPPING_REUSED',
+    resolvedResourceCatalogId: chosen.resourceCatalogId,
+    candidates: machine.candidates,
+    reasonCodes: ['VERIFIED_MAPPING_REUSED'],
+    explanation:
+      `Mesin tidak dapat menetapkan identitas sendiri: ${machine.explanation} ` +
+      `Keputusan manusia yang berwenang (generasi ${decision.generation}, ` +
+      `akun ${decision.decidedByAccountId}, ${decision.decidedAt}) memilih ` +
+      `"${chosen.name}" (${chosen.resourceCatalogId}) di antara kandidat sah yang ` +
+      `ditemukan mesin` +
+      (decision.reason === null ? '' : ` — alasan: "${decision.reason}"`) +
+      `. Identitas ini DIVERIFIKASI MANUSIA, bukan dibuktikan mesin, dan berlaku ` +
+      `hanya untuk fakta sumber AHSP ini. Kebenaran unit dan harga tidak ikut ` +
+      `terbukti oleh keputusan ini.`,
+  };
+}
+
+function resolveByMachineEvidence(
   input: ResourceIdentityResolutionInput,
 ): ResourceIdentityResolution {
   const {
