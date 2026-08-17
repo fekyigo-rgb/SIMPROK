@@ -93,6 +93,10 @@ jobs:
       NODE_ENV: test
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/simprok_e2e?schema=public
       JWT_SECRET: ci-only-simprok-test-secret
+      # GHX-01 signs its decision context with a DEDICATED key and deliberately
+      # has NO fallback to the access-token secret, so it must be supplied
+      # separately and must differ from JWT_SECRET. CI-only value.
+      GHX_DECISION_CONTEXT_SECRET: ci-only-simprok-ghx-decision-context-secret
       SIMPROK_E2E_DESTRUCTIVE_CAPABILITY: RESET_SIMPROK_E2E_DATABASE
       INTAKE_WORKER_ENABLED: 'false'
       INTAKE_UNDERSTANDING_WORKER_ENABLED: 'false'
@@ -115,6 +119,7 @@ jobs:
             echo 'NODE_ENV=test'
             echo 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/simprok_e2e?schema=public'
             echo 'JWT_SECRET=ci-only-simprok-test-secret'
+            echo 'GHX_DECISION_CONTEXT_SECRET=ci-only-simprok-ghx-decision-context-secret'
             echo 'SIMPROK_E2E_DESTRUCTIVE_CAPABILITY=RESET_SIMPROK_E2E_DATABASE'
             echo 'INTAKE_WORKER_ENABLED=false'
             echo 'INTAKE_UNDERSTANDING_WORKER_ENABLED=false'
