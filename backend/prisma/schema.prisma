@@ -34,6 +34,7 @@ model Account {
   basicPriceProvenanceCorrections             BasicPriceProvenanceCorrection[]     @relation("BasicPriceProvenanceCorrectionActor")
   lockedRabDocuments                          RabDocument[]                        @relation("RabDocumentLockedBy")
   capturedProjectAhspOccurrences              ProjectAhspOccurrence[]              @relation("ProjectAhspOccurrenceContextCapturedBy")
+  ahspResourceIdentityDecisions               AhspResourceIdentityDecision[]       @relation("AhspResourceIdentityDecisionActor")
 
   @@map("accounts")
 }
@@ -96,6 +97,7 @@ model Workspace {
   resourceSourceIdentities        ResourceSourceIdentity[]
   basicPriceSourceEquivalences    BasicPriceSourceEquivalence[]
   basicPriceProvenanceCorrections BasicPriceProvenanceCorrection[]
+  ahspResourceIdentityDecisions   AhspResourceIdentityDecision[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -756,10 +758,103 @@ model AHSPResource {
 
   ahspVersion                    AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Cascade)
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
+  /// GHX-01 — governed human identity decisions about THIS source fact.
+  identityDecisions              AhspResourceIdentityDecision[]
 
   @@index([ahspVersionId])
   @@index([resourceId])
   @@map("ahsp_resources")
+}
+
+/// GHX-01 — GOVERNED HUMAN RESOURCE IDENTITY DECISION MEMORY.
+///
+/// THIS IS NOT A RESOLUTION RESULT, AND NOT AN ALIAS TABLE.
+///
+/// `ProjectAhspResourceResolution` records what ONE occurrence concluded and is
+/// immutable history. This model records something different: that an authorized
+/// human, faced with a genuine ambiguity the machine could not settle, chose one
+/// legitimate ResourceCatalog representation for ONE specific AHSP source fact.
+/// Neither can hold the other without lying, which is the whole reason this model
+/// exists at all.
+///
+/// THE SUBJECT IS (workspaceId, ahspResourceId), AND BOTH HALVES ARE LOAD-BEARING.
+///
+/// `ahspResourceId` anchors the decision to the immutable AHSP source fact rather
+/// than to its spelling. A different AHSP line that merely happens to share the
+/// same name, type and unit is a DIFFERENT row and inherits nothing — that is what
+/// keeps this from becoming the workspace-wide verified alias the project forbids.
+///
+/// `workspaceId` is mandatory and is not defensive padding: `AHSP.workspaceId` and
+/// `AHSPVersion.workspaceId` are nullable ("NULL for Official Repository"), and the
+/// eligibility policy admits them via `OR: [{workspaceId}, {workspaceId: null}]`. A
+/// global AHSP version is therefore reachable by EVERY workspace while its candidate
+/// catalog rows are workspace-scoped, so keying on the source fact alone would leak
+/// one tenant's decision into every other.
+///
+/// HISTORY IS APPENDED, NEVER REWRITTEN. When the candidate context materially
+/// changes, the old decision does not become wrong — it becomes INAPPLICABLE, and a
+/// new generation is appended beside it, exactly as `ProjectAhspOccurrence` already
+/// does with `generation`/`previousOccurrenceId`. The current decision is the highest
+/// generation for the subject; superseded generations never silently revive.
+model AhspResourceIdentityDecision {
+  id                        String @id @default(uuid()) @db.Uuid
+  workspaceId               String @db.Uuid
+  ahspResourceId            String @db.Uuid
+  selectedResourceCatalogId String @db.Uuid
+
+  /// Lineage, mirroring ProjectAhspOccurrence. Highest generation = current.
+  generation         Int     @default(1)
+  previousDecisionId String? @db.Uuid
+
+  /// APPLICABILITY EVIDENCE ONLY — never identity authority.
+  ///
+  /// A structure-preserving digest of the bounded candidate set the human was
+  /// judging. On reuse it is recomputed and compared: an equal digest means the
+  /// question is still the same question. It proves nothing about identity, and
+  /// the Resource Identity kernel never reads it.
+  candidateContextDigest   String
+  candidateCountAtDecision Int
+
+  resolutionPolicyVersion String
+  decidedByAccountId      String   @db.Uuid
+  decidedAt               DateTime @default(now())
+  reason                  String?  @db.Text
+
+  /// HISTORICAL ORIGIN SNAPSHOT — what was true at decision time.
+  ///
+  /// Deliberately plain scalars with NO foreign keys. An FK here would be wrong in
+  /// both directions: `SetNull` would erase the audit answer at exactly the moment
+  /// it is needed, and `Restrict` would let a decision memory block ordinary project
+  /// deletion, which is not its job. Integrity is proven at write time — the command
+  /// validates the origin resolution before persisting — so these are frozen facts,
+  /// not live pointers, and they answer "where did this come from" even after the
+  /// operational rows are gone. `originProjectName` is what keeps the ids from
+  /// degrading into opaque orphans.
+  ///
+  /// Pricing date and reference region are deliberately NOT snapshotted: an identity
+  /// decision answers what a wording denotes, which does not depend on either.
+  originProjectId     String @db.Uuid
+  originProjectName   String
+  originOccurrenceId  String @db.Uuid
+  originResolutionId  String @db.Uuid
+  originAhspVersionId String @db.Uuid
+
+  workspace               Workspace                      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ahspResource            AHSPResource                   @relation(fields: [ahspResourceId], references: [id], onDelete: Restrict)
+  selectedResourceCatalog ResourceCatalog                @relation(fields: [selectedResourceCatalogId], references: [id], onDelete: Restrict)
+  decidedByAccount        Account                        @relation("AhspResourceIdentityDecisionActor", fields: [decidedByAccountId], references: [id], onDelete: Restrict)
+  previousDecision        AhspResourceIdentityDecision?  @relation("AhspResourceIdentityDecisionLineage", fields: [previousDecisionId], references: [id], onDelete: Restrict)
+  nextDecisions           AhspResourceIdentityDecision[] @relation("AhspResourceIdentityDecisionLineage")
+
+  /// THE concurrency invariant. Two writers racing for the same next generation
+  /// cannot both win; the loser re-reads and either succeeds idempotently or
+  /// conflicts. Duplicate authoritative truth is unrepresentable.
+  @@unique([workspaceId, ahspResourceId, generation])
+  /// The only read shape the consumption seam uses: newest decision for one exact
+  /// subject. Bounded and indexed — never a scan, never "load all history".
+  @@index([workspaceId, ahspResourceId, generation(sort: Desc)])
+  @@index([selectedResourceCatalogId])
+  @@map("ahsp_resource_identity_decisions")
 }
 
 model AHSPSourceDocument {
@@ -968,6 +1063,8 @@ model ResourceCatalog {
   basicPriceImportRows           BasicPriceImportRow[]
   sourceIdentities               ResourceSourceIdentity[]
   importRowResourceMappings      BasicPriceImportRowResourceMapping[]
+
+  ahspResourceIdentityDecisions AhspResourceIdentityDecision[]
 
   // NOTE: the former @@unique([workspaceId, code]) is replaced by a manual
   // partial unique index in the migration SQL (RM-02C1a) because `code` is

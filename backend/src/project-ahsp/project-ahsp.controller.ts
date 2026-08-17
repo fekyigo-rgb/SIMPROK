@@ -19,6 +19,8 @@ import {
 } from '../common/decorators/permissions.decorator';
 import { SelectAhspForBoqItemDto } from './dto/create-project-ahsp-occurrence.dto';
 import { ProjectAhspService } from './project-ahsp.service';
+import { DecideResourceIdentityDto } from './dto/decide-resource-identity.dto';
+import { GhxResourceIdentityDecisionService } from './ghx-resource-identity-decision.service';
 
 interface ProjectAhspRequest {
   user?: { id?: string };
@@ -28,7 +30,55 @@ interface ProjectAhspRequest {
 @Controller('projects/:projectId/ahsp-occurrences')
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, PermissionsGuard)
 export class ProjectAhspController {
-  constructor(private readonly service: ProjectAhspService) {}
+  constructor(
+    private readonly service: ProjectAhspService,
+    private readonly ghx: GhxResourceIdentityDecisionService,
+  ) {}
+
+  /**
+   * GHX-01 READ — the current legitimate Resource Identity question, if there is
+   * one. Guarded by the same stack as every other route here, and by the same
+   * governed permission as the write: seeing the bounded context is part of the
+   * decision, not a lesser act.
+   */
+  @Get('resource-resolutions/:resolutionId/identity-decision-context')
+  @Permissions(PERMISSIONS.AHSP_RESOURCE_IDENTITY_DECIDE)
+  readIdentityDecisionContext(
+    @Req() request: ProjectAhspRequest,
+    @Param('projectId') projectId: string,
+    @Param('resolutionId') resolutionId: string,
+  ) {
+    return this.ghx.readContext({
+      projectId,
+      resolutionId,
+      workspaceId: request.projectAccess?.workspaceId ?? '',
+      actorAccountId: request.user?.id ?? '',
+    });
+  }
+
+  /**
+   * GHX-01 WRITE — THE one authoritative command that records a governed human
+   * Resource Identity decision. It records memory only; the normal reevaluation
+   * path remains the single place an occurrence becomes RESOLVED.
+   */
+  @Post('resource-resolutions/:resolutionId/identity-decision')
+  @Permissions(PERMISSIONS.AHSP_RESOURCE_IDENTITY_DECIDE)
+  decideResourceIdentity(
+    @Req() request: ProjectAhspRequest,
+    @Param('projectId') projectId: string,
+    @Param('resolutionId') resolutionId: string,
+    @Body() body: DecideResourceIdentityDto,
+  ) {
+    return this.ghx.decide({
+      projectId,
+      resolutionId,
+      workspaceId: request.projectAccess?.workspaceId ?? '',
+      actorAccountId: request.user?.id ?? '',
+      selectedResourceCatalogId: body.selectedResourceCatalogId,
+      decisionContextToken: body.decisionContextToken,
+      reason: body.reason ?? null,
+    });
+  }
 
   @Get('eligible-versions')
   @Permissions(PERMISSIONS.AHSP_VIEW)

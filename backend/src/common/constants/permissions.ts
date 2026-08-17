@@ -55,6 +55,27 @@ export const PERMISSIONS = {
   BASIC_PRICE_VERIFY: 'BASIC_PRICE_VERIFY',
   BASIC_PRICE_PUBLISH: 'BASIC_PRICE_PUBLISH',
   BASIC_PRICE_REVIEW_VIEW: 'BASIC_PRICE_REVIEW_VIEW',
+
+  /**
+   * GHX-01 — authority to settle ONE genuinely ambiguous AHSP resource identity
+   * by choosing between the legitimate candidates the machine could not separate.
+   *
+   * WHY NO EXISTING CODE WAS REUSED, having checked each:
+   *   BASIC_PRICE_RESOLVE guards the analogous command one domain over, but it
+   *     authorizes resolving a Basic Price IMPORT ROW. Reusing it would hand AHSP
+   *     identity authority to every importer — precisely the widening this
+   *     milestone exists to prevent.
+   *   AHSP_APPROVE approves an AHSP DEFINITION (POST /ahsp/:id/approve), not a
+   *     per-project identity ambiguity.
+   *   RAB_DRAFT_EDIT is content editing. Granting identity-assertion authority to
+   *     everyone who may edit a draft would remove the "governed" from this
+   *     capability entirely.
+   *
+   * GOVERNED ACTIVATION, and never an ACTIVE_MEMBERSHIP baseline: asserting what a
+   * resource IS is curation authority, not ordinary workspace membership. No new
+   * role is introduced — this composes with the existing guard stack.
+   */
+  AHSP_RESOURCE_IDENTITY_DECIDE: 'AHSP_RESOURCE_IDENTITY_DECIDE',
 } as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -290,6 +311,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
       'View internal (pre-publication) Basic Price submissions and curation reviews.',
     note: "Internal curation authority — NEVER part of the ACTIVE_MEMBERSHIP_BASELINE, and no longer used to gate a user's own import batch (see basic-price-import.controller.ts, which uses BASIC_PRICE_IMPORT/_RESOLVE for that instead). RM-02C3 activated this code for the acceptance environment only — see rm02c3-basic-price-acceptance-activation.ts. Not part of any canonical production seed.",
   },
+  {
+    code: PERMISSIONS.AHSP_RESOURCE_IDENTITY_DECIDE,
+    domain: PERMISSION_DOMAINS.AHSP,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Settle one genuinely ambiguous AHSP resource identity by selecting among the legitimate candidates the machine could not separate.',
+    note: 'GHX-01. Curation authority — NEVER part of the ACTIVE_MEMBERSHIP_BASELINE. Workspace-scoped like every SIMPROK permission, which is exactly why the decision it authorizes reuses at workspace scope and never wider. It authorizes CHOOSING between bounded candidates; it can never manufacture a catalog identity, bypass tenant/type/specification law, override a machine-proven truth, or make an unproven unit canonical.',
+  },
 ] as const;
 
 export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
@@ -325,6 +354,7 @@ export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.BASIC_PRICE_VERIFY,
   PERMISSIONS.BASIC_PRICE_PUBLISH,
   PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
+  PERMISSIONS.AHSP_RESOURCE_IDENTITY_DECIDE,
 ];
 
 // Permission codes granted structurally, by WorkspacePermissionResolverService

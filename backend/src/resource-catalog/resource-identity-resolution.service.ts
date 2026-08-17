@@ -8,9 +8,12 @@ import {
   SourceSightingEvidence,
   ReviewedMappingEvidence,
   CanonicalUnitIdentityFact,
+  VerifiedIdentityDecisionFact,
   isExactRepresentationTie,
+  isHumanDecidable,
   resolveResourceIdentity,
 } from './resource-identity-resolution.kernel';
+import { candidateContextDigest } from './ghx-candidate-context';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
   UNIT_ALIAS_CONTEXT,
@@ -21,6 +24,17 @@ import {
  * Everything the identity kernel is allowed to see, loaded ONCE for a whole
  * AHSP version rather than per resource. Two reads instead of 2N.
  */
+/** The newest governed decision for one subject, as preloaded. */
+export interface GhxLatestDecision {
+  readonly selectedResourceCatalogId: string;
+  readonly candidateContextDigest: string;
+  readonly decidedByAccountId: string;
+  readonly decidedAt: Date;
+  readonly generation: number;
+  readonly reason: string | null;
+  readonly resolutionPolicyVersion: string;
+}
+
 export interface ResourceIdentityEvidence {
   readonly catalogCandidates: ReadonlyArray<IdentityCatalogCandidate>;
   readonly sourceSightings: ReadonlyArray<SourceSightingEvidence>;
@@ -47,12 +61,46 @@ export interface ResourceIdentityEvidence {
    * simply resolves every time, which is correct, just less economical.
    */
   readonly unitIdentityCache?: Map<string, CanonicalUnitIdentityFact>;
+  /**
+   * GHX-01 — the decision SUBJECT this resolution is about.
+   *
+   * Supplied by callers that resolve a real AHSP source fact (the occurrence
+   * orchestrator). Absent for callers resolving something else entirely — Basic
+   * Price import rows have no ahspResourceId — and absence simply means no
+   * governed memory is consulted, which is correct rather than degraded.
+   */
+  readonly ghxSubject?: {
+    readonly workspaceId: string;
+    readonly ahspResourceId: string;
+    /**
+     * The policy the CURRENT resolution is being decided under. A decision
+     * recorded under a different law is not silently reused — see
+     * `applyGovernedHumanDecision`.
+     */
+    readonly resolutionPolicyVersion: string;
+  };
+  /**
+   * GHX-01 — latest decision per subject, PRELOADED ONCE for the whole AHSP
+   * version.
+   *
+   * The orchestrator loads evidence once and then resolves each resource in a
+   * loop, so querying memory inside that loop would be a textbook N+1: a 50-row
+   * RAB with several ambiguities would issue one decision query per ambiguous
+   * row. One bounded `findMany` with `distinct: ['ahspResourceId']` returns the
+   * newest generation for every subject in the version instead — one query,
+   * whatever the row count.
+   *
+   * Absent (callers that build evidence by hand) simply means no memory is
+   * consulted, which is correct rather than degraded.
+   */
+  readonly ghxLatestDecisions?: ReadonlyMap<string, GhxLatestDecision>;
 }
 
 type EvidenceClient = Pick<
   Prisma.TransactionClient,
   'resourceCatalog' | 'resourceSourceIdentity' | 'basicPriceImportRowResourceMapping'
->;
+> &
+  Partial<Pick<Prisma.TransactionClient, 'ahspResourceIdentityDecision'>>;
 
 /**
  * The client the RM-03D2 canonical-unit read runs on. Kept separate from
@@ -119,6 +167,12 @@ export class ResourceIdentityResolutionService {
   async loadEvidence(
     client: EvidenceClient,
     workspaceId: string,
+    /**
+     * GHX-01 — the AHSP source facts this evidence set will be asked about.
+     * Supplied by the occurrence orchestrator, which knows the whole version up
+     * front. Omitted → no governed memory is preloaded and none is consulted.
+     */
+    ghxAhspResourceIds?: ReadonlyArray<string>,
   ): Promise<ResourceIdentityEvidence> {
     const [catalogRows, sightingRows, mappingRows] = await Promise.all([
       client.resourceCatalog.findMany({
@@ -176,7 +230,33 @@ export class ResourceIdentityResolutionService {
       }),
     ]);
 
+    // ONE bounded query for the whole version: newest generation per subject.
+    // `distinct` after `orderBy generation desc` is what makes it latest-only —
+    // no history is loaded, and no per-row query is ever issued.
+    const wantedSubjects = [...new Set(ghxAhspResourceIds ?? [])];
+    const decisionRows =
+      wantedSubjects.length > 0 && client.ahspResourceIdentityDecision
+        ? await client.ahspResourceIdentityDecision.findMany({
+            where: { workspaceId, ahspResourceId: { in: wantedSubjects } },
+            orderBy: [{ ahspResourceId: 'asc' }, { generation: 'desc' }],
+            distinct: ['ahspResourceId'],
+            select: {
+              ahspResourceId: true,
+              selectedResourceCatalogId: true,
+              candidateContextDigest: true,
+              decidedByAccountId: true,
+              decidedAt: true,
+              generation: true,
+              reason: true,
+              resolutionPolicyVersion: true,
+            },
+          })
+        : [];
+
     return {
+      ghxLatestDecisions: new Map(
+        decisionRows.map((row) => [row.ahspResourceId, row]),
+      ),
       catalogCandidates: catalogRows.map((row) => ({
         id: row.id,
         code: row.code,
@@ -251,14 +331,28 @@ export class ResourceIdentityResolutionService {
       sourceSightings: evidence.sourceSightings,
       reviewedMappings: evidence.reviewedMappings,
     });
-    if (!isExactRepresentationTie(first)) return first;
+    // EVERY outcome routes through the one GHX seam, not just the unit-context
+    // path: a genuine ambiguity is a genuine ambiguity whether it arose from an
+    // exact-representation tie or from evidence candidates. Returning early here
+    // would have made governed memory reachable from only one kind of question.
+    if (!isExactRepresentationTie(first)) {
+      return this.applyGovernedHumanDecision(
+        first,
+        { reference, canonicalUnitIdentities: [] },
+        evidence,
+      );
+    }
 
     // A tie whose source states NO unit can never be settled by one, and the
     // kernel says so from the evidence it already has. Asking the database
     // anyway would be a round-trip that provably cannot change the verdict —
     // and on the RAB pre-lock path it would spend it inside the freeze window.
     if (reference.rawUnit === null || reference.rawUnit.trim() === '') {
-      return first;
+      return this.applyGovernedHumanDecision(
+        first,
+        { reference, canonicalUnitIdentities: [] },
+        evidence,
+      );
     }
 
     // The tied rows are exactly the candidates the kernel just returned, so the
@@ -335,12 +429,106 @@ export class ResourceIdentityResolutionService {
       .map((spelling) => cache?.get(keyOf(spelling)) ?? resolved.get(spelling))
       .filter((fact): fact is CanonicalUnitIdentityFact => fact !== undefined);
 
-    return resolveResourceIdentity({
+    const withUnitContext = resolveResourceIdentity({
       reference,
       catalogCandidates: evidence.catalogCandidates,
       sourceSightings: evidence.sourceSightings,
       reviewedMappings: evidence.reviewedMappings,
       canonicalUnitIdentities,
+    });
+
+    return this.applyGovernedHumanDecision(
+      withUnitContext,
+      { reference, canonicalUnitIdentities },
+      evidence,
+    );
+  }
+
+  /**
+   * GHX-01 — THE ONE PLACE governed human decision memory is fetched.
+   *
+   * MACHINE FIRST IS ENFORCED HERE TWICE OVER. The lookup only happens when the
+   * machine has already failed AND the failure is one a human may lawfully
+   * answer, so a resolved identity — including one RM-03D2 settled from the
+   * source's own unit — never even causes a query, let alone gets overridden.
+   *
+   * The read is bounded and indexed: newest generation for ONE exact subject
+   * (workspaceId + ahspResourceId). It never loads decision history, never scans,
+   * and adds no query at all to the common case.
+   *
+   * Applicability is proven in two independent places: the digest comparison
+   * below (is this still the same question?) and the kernel's own candidate
+   * membership + specification guard (is this still a legitimate answer?).
+   *
+   * IT TAKES NO DATABASE CLIENT, DELIBERATELY. It cannot: the decision for this
+   * subject was already fetched with the rest of the version's evidence, under
+   * the caller's own snapshot. Accepting a client here would suggest this seam
+   * may query — which is exactly the per-resource lookup the preload exists to
+   * make impossible.
+   */
+  private applyGovernedHumanDecision(
+    machine: ResourceIdentityResolution,
+    kernelInput: {
+      reference: RawResourceReference;
+      canonicalUnitIdentities: ReadonlyArray<CanonicalUnitIdentityFact>;
+    },
+    evidence: ResourceIdentityEvidence,
+  ): ResourceIdentityResolution {
+    const subject = evidence.ghxSubject;
+    // No subject supplied (every pre-GHX caller) → nothing changes, no query.
+    if (!subject) return machine;
+    // Machine proved it, or the refusal is not one a human may lawfully answer.
+    if (!isHumanDecidable(machine)) return machine;
+
+    // PRELOADED, NEVER QUERIED HERE. The decision for this subject was fetched
+    // once with the rest of the version's evidence, under the SAME transaction
+    // snapshot, so this seam adds no query and cannot mix snapshots.
+    const latest = evidence.ghxLatestDecisions?.get(subject.ahspResourceId);
+    // Only the newest generation is ever consulted. A superseded decision never
+    // revives, even if the candidate context later resembles the state it was
+    // made under — reviving one would be archaeology, not determinism.
+    if (!latest) return machine;
+
+    // POLICY APPLICABILITY, tested on the LATEST generation only.
+    //
+    // Deliberately NOT "latest decision whose policy matches": that query would
+    // reach past a newer decision made under another law and resurrect an older
+    // superseded generation hidden behind it. If the newest decision was made
+    // under a different policy, the honest answer is that governed memory does
+    // not apply here at all.
+    if (latest.resolutionPolicyVersion !== subject.resolutionPolicyVersion) {
+      return machine;
+    }
+
+    const liveDigest = candidateContextDigest(
+      machine.candidates.map((candidate) => ({
+        resourceCatalogId: candidate.resourceCatalogId,
+        name: candidate.name,
+        type: candidate.type,
+        baseUnit: candidate.baseUnit,
+        specifications: candidate.specifications,
+      })),
+    );
+    if (liveDigest !== latest.candidateContextDigest) return machine;
+
+    const fact: VerifiedIdentityDecisionFact = {
+      resourceCatalogId: latest.selectedResourceCatalogId,
+      decidedByAccountId: latest.decidedByAccountId,
+      decidedAt: latest.decidedAt.toISOString(),
+      generation: latest.generation,
+      reason: latest.reason,
+    };
+
+    // Back through the SAME kernel — one resolver, one verdict shape. The kernel
+    // re-applies candidate membership and specification safety before it will
+    // assert anything.
+    return resolveResourceIdentity({
+      reference: kernelInput.reference,
+      catalogCandidates: evidence.catalogCandidates,
+      sourceSightings: evidence.sourceSightings,
+      reviewedMappings: evidence.reviewedMappings,
+      canonicalUnitIdentities: kernelInput.canonicalUnitIdentities,
+      verifiedIdentityDecision: fact,
     });
   }
 
