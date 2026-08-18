@@ -1,15 +1,26 @@
 import {
-  BasicPriceXlsxIntakeAdapter,
+  BasicPriceUniversalIntakeAdapter,
   BASIC_PRICE_PARSER_CONTRACT_VERSION,
-} from './basic-price-xlsx-intake.adapter';
+} from './basic-price-universal-intake.adapter';
 import { buildBasicPriceXlsx } from '../../test/fixtures/basic-price-xlsx.fixture';
+import { testEnvelope } from '../../test/fixtures/source-envelope.fixture';
 
-describe('BasicPriceXlsxIntakeAdapter', () => {
-  const adapter = new BasicPriceXlsxIntakeAdapter();
+/**
+ * TEST X1 — NO XLSX REGRESSION.
+ *
+ * Every assertion below is the RM-02 suite's, unchanged. Only the call shape
+ * moved: the sectioned workbook now reaches the Basic Price domain through the
+ * Universal Smart Intake (envelope -> reader -> structure detector -> domain
+ * adapter) instead of a bespoke XLSX parser. If the universal path read one
+ * cell, one address, one rounding or one reason code differently from the
+ * parser Owner already accepted, this file fails.
+ */
+describe('BasicPriceUniversalIntakeAdapter — sectioned XLSX (RM-02 regression)', () => {
+  const adapter = new BasicPriceUniversalIntakeAdapter();
 
   it('parses section, identity, and price evidence for a clean row', async () => {
     const buffer = await buildBasicPriceXlsx();
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
 
     expect(result.parserContractVersion).toBe(BASIC_PRICE_PARSER_CONTRACT_VERSION);
     expect(result.sheetName).toBe('HARGA SATUAN UPAH DAN BAHAN');
@@ -35,7 +46,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('retains the exact real-evidence long round-trip decimal string without ever rounding it', async () => {
     const buffer = await buildBasicPriceXlsx({ includeLongRoundTripDecimal: true });
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
     const row = result.rows.find((r) => r.sourceRowNumber === 9)!;
 
     expect(row.rawPriceNumericRoundTripString).toBe('158333.33333333334');
@@ -44,7 +55,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('exact-tie ROUND_HALF_UP: 0.125 rounds up to 0.13, never down (mandatory per test matrix B06)', async () => {
     const buffer = await buildBasicPriceXlsx({ includeExactTieRounding: true });
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
     const row = result.rows.find((r) => r.sourceRowNumber === 10)!;
 
     expect(row.rawPriceNumericRoundTripString).toBe('0.125');
@@ -53,7 +64,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('a formula price cell with a numeric cached result is usable canonical evidence', async () => {
     const buffer = await buildBasicPriceXlsx({ includeFormulaCachedResult: true });
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
     const row = result.rows.find((r) => r.sourceRowNumber === 11)!;
 
     expect(row.rawPriceFormulaText).toBe('F9*1.5');
@@ -65,7 +76,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('a formula error result (e.g. #REF!) on the KET column never blocks the price column of the same row', async () => {
     const buffer = await buildBasicPriceXlsx({ includeFormulaError: true });
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
     const row = result.rows.find((r) => r.sourceRowNumber === 9)!;
     // G (KET) is not part of BasicPriceImportRow's design and is never read.
     expect(row.errors).toEqual([]);
@@ -74,7 +85,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('missing unit AND missing price: row is preserved (never discarded), errors surface both gaps, no canonical price is fabricated', async () => {
     const buffer = await buildBasicPriceXlsx({ includeMissingUnit: true });
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
     const row = result.rows.find((r) => r.rawResourceNameText.startsWith('Kawat BRC'))!;
 
     expect(row).toBeDefined();
@@ -85,7 +96,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('missing price only: row is preserved with PRICE_CELL_EMPTY, unit is still captured', async () => {
     const buffer = await buildBasicPriceXlsx({ includeMissingPrice: true });
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
     const row = result.rows.find((r) => r.rawResourceNameText.startsWith('Balok kayu'))!;
 
     expect(row.rawUnitText).toBe('M3');
@@ -113,7 +124,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
   describe('a price of zero and a price that cannot be read are different facts', () => {
     it('an explicitly stated 0 IS a price, and is carried as 0.00 with its rounding provenance', async () => {
       const buffer = await buildBasicPriceXlsx({ includeZeroPrice: true });
-      const result = await adapter.parse(buffer, 'fixture.xlsx');
+      const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
       const row = result.rows.find((r) =>
         r.rawResourceNameText.startsWith('Alat Bantu'),
       )!;
@@ -127,7 +138,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
     it('text where a number belongs is NOT zero — no canonical price is produced', async () => {
       const buffer = await buildBasicPriceXlsx({ includeTextPrice: true });
-      const result = await adapter.parse(buffer, 'fixture.xlsx');
+      const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
       const row = result.rows.find((r) =>
         r.rawResourceNameText.startsWith('Pasir'),
       )!;
@@ -144,7 +155,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
       const buffer = await buildBasicPriceXlsx({
         includeFormulaWithoutCachedResult: true,
       });
-      const result = await adapter.parse(buffer, 'fixture.xlsx');
+      const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
       const row = result.rows.find((r) =>
         r.rawResourceNameText.startsWith('Semen'),
       )!;
@@ -164,7 +175,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
         includeMissingPrice: true,
         includeMissingUnit: true,
       });
-      const result = await adapter.parse(buffer, 'fixture.xlsx');
+      const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
 
       const unreadable = result.rows.filter((r) =>
         r.errors.some((error) =>
@@ -192,7 +203,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('resolves a formula cell (external-reference-shaped) name/unit via cached result text, never [object Object]', async () => {
     const buffer = await buildBasicPriceXlsx();
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
     const row = result.rows.find((r) => r.sourceRowNumber === 33)!;
 
     expect(row.rawResourceNameText).toBe('Kawat jaring');
@@ -202,7 +213,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('classifies each of the three sections correctly by their real section-title markers', async () => {
     const buffer = await buildBasicPriceXlsx();
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
 
     expect(result.rows.find((r) => r.sourceRowNumber === 9)?.sourceSection).toBe('LABOR');
     expect(result.rows.find((r) => r.sourceRowNumber === 33)?.sourceSection).toBe('MATERIAL');
@@ -211,7 +222,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('never emits a row for a section-title, column-header, or nameless trailing-summary row', async () => {
     const buffer = await buildBasicPriceXlsx();
-    const result = await adapter.parse(buffer, 'fixture.xlsx');
+    const result = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
 
     expect(result.rows.some((r) => r.sourceRowNumber === 5)).toBe(false); // "DAFTAR HARGA SATUAN UPAH" title
     expect(result.rows.some((r) => r.sourceRowNumber === 7)).toBe(false); // "NO" column header
@@ -221,7 +232,7 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
 
   it('flags an ambiguous/missing sheet selection deterministically', async () => {
     const buffer = await buildBasicPriceXlsx();
-    await expect(adapter.parse(buffer, 'fixture.xlsx', 'NOT_A_REAL_SHEET')).rejects.toThrow(
+    await expect(adapter.parse(testEnvelope(buffer, 'fixture.xlsx'), { selectedTable: 'NOT_A_REAL_SHEET' })).rejects.toThrow(
       'WORKBOOK_SHEET_AMBIGUOUS_OR_NOT_FOUND',
     );
   });
@@ -238,9 +249,9 @@ describe('BasicPriceXlsxIntakeAdapter', () => {
     const buffer = await buildBasicPriceXlsx();
     const bufferC = await buildBasicPriceXlsx({ includeMissingUnit: true });
 
-    const resultA = await adapter.parse(buffer, 'fixture.xlsx');
-    const resultB = await adapter.parse(buffer, 'fixture.xlsx');
-    const resultC = await adapter.parse(bufferC, 'fixture.xlsx');
+    const resultA = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
+    const resultB = await adapter.parse(testEnvelope(buffer, 'fixture.xlsx'));
+    const resultC = await adapter.parse(testEnvelope(bufferC, 'fixture.xlsx'));
 
     expect(resultA.sourceSha256).toBe(resultB.sourceSha256);
     expect(resultA.sourceSha256).not.toBe(resultC.sourceSha256);

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { Prisma, PrismaClient, ResourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { findProvenanceCandidate } from './basic-price-source-provenance.service';
@@ -115,11 +115,22 @@ export class BasicPriceRowMappingCandidatesService {
       throw new NotFoundException('Row not found');
     assertBatchOwnedByCaller(row.batch, currentAccountId, 'Row not found');
 
+    // USI-01R LAW 2.9 — NO FAMILY, NO SUGGESTIONS.
+    //
+    // Both candidate searches below are scoped BY resource family: a name match
+    // only means something inside LABOR, MATERIAL or EQUIPMENT. Searching
+    // without one would return matches from every family at once and quietly
+    // invite the reviewer to bind a bulldozer to a bag of cement. The row's
+    // family has to be settled first, and the answer says so.
+    if (row.sourceSection === null)
+      throw new ConflictException('ROW_SOURCE_SECTION_UNRESOLVED');
+    const sourceSection = row.sourceSection;
+
     const [candidates, provenance] = await Promise.all([
       findMappingCandidates(
         this.prisma,
         workspaceId,
-        row.sourceSection,
+        sourceSection,
         row.rawResourceNameText,
       ),
       findProvenanceCandidate(this.prisma, {
@@ -128,7 +139,7 @@ export class BasicPriceRowMappingCandidatesService {
         sheetName: row.batch.selectedSheetName,
         parserContractVersion: row.batch.parserContractVersion,
         sourceRowNumber: row.sourceRowNumber,
-        sourceSection: row.sourceSection,
+        sourceSection,
         rawResourceCodeText: row.rawResourceCodeText,
         rawResourceNameText: row.rawResourceNameText,
         rawUnitText: row.rawUnitText,

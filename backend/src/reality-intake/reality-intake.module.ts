@@ -22,6 +22,10 @@ import { UploadController } from './upload.controller';
     BusinessSubscriptionService,
     PriceSubmissionReviewService,
   ],
-  exports: [PriceSubmissionReviewService],
+  // StorageService is exported as a plain FILESYSTEM PORT. It carries no
+  // knowledge of IntakeJob, ExtractionArtifact or the workers, so sharing it
+  // with the Basic Price vertical intake reuses infrastructure without importing
+  // any RM-12 platform concept (ROADMAP.md section 15).
+  exports: [PriceSubmissionReviewService, StorageService],
 })
 export class RealityIntakeModule {}

@@ -86,7 +86,10 @@ export class BasicPriceRowResolutionService {
         proposedCanonicalPrice: Prisma.Decimal | null;
         resourceCatalogId: string | null;
         unitDefinitionId: string | null;
-        sourceSection: ResourceType;
+        // USI-01R — NULL when the source stated a resource category SIMPROK
+        // could not safely map. The guard immediately after the row lock is
+        // what keeps every consumer below able to treat this as a ResourceType.
+        sourceSection: ResourceType | null;
         sourceRowNumber: number;
         rawResourceCodeText: string | null;
         rawResourceNameText: string;
@@ -98,9 +101,26 @@ export class BasicPriceRowResolutionService {
     const row = rowLock[0];
     if (!row || row.batchId !== batchId)
       throw new NotFoundException('Row not found');
+
+    // USI-01R LAW 2.9 — FAIL CLOSED ON AN UNKNOWN RESOURCE FAMILY.
+    //
+    // sourceSection is authority here: it binds the chosen ResourceCatalog's
+    // type and scopes the Unit Kernel's context-sensitive alias lookup ("jam"
+    // is a labour hour on a LABOR row and an equipment hour on an EQUIPMENT
+    // one). A row whose family the source stated in words SIMPROK does not know
+    // has no such context, and resolving it would mean picking that context by
+    // default — exactly the guess intake already refused to make. So the row
+    // waits for a human instead, and says why.
+    if (row.sourceSection === null)
+      throw new ConflictException('ROW_SOURCE_SECTION_UNRESOLVED');
     if (row.status !== 'NEEDS_REVIEW')
       throw new ConflictException('ROW_NOT_MUTABLE');
-    return { ...row, batch };
+    // A BINDING, NOT A CAST. Control-flow narrowing on a property is lost the
+    // moment the row is handed to another function, and every helper downstream
+    // genuinely requires a known family. Returning the narrowed value means the
+    // check above lives in exactly one place and every caller — ordinary
+    // resolve and reviewed admission alike — inherits it.
+    return { ...row, sourceSection: row.sourceSection, batch };
   }
 
   /**
