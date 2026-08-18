@@ -1,6 +1,12 @@
 import { groupThousands, parseCanonicalDecimalString } from './rabCostDisplay.ts';
 import type { PriceSourceAuthorityWire } from './rabTraceDisplay.ts';
 import {
+  summariseResourceTrust,
+  toResourceTrust,
+  type ResourceTrustSummary,
+  type ResourceTrustView,
+} from './rabResourceTrust.ts';
+import {
   INVALID_DECIMAL_DISPLAY,
   NULL_DISPLAY,
   formatExactMoney,
@@ -157,6 +163,11 @@ export interface PersistedCalculationResourceDisplay {
   freshness: string;
   status: string;
   reasonCodes: string[];
+  /**
+   * What the server's own verdict means for this component, in one calm phrase.
+   * Derived ONLY from `status` + `reasonCodes` above — see rabResourceTrust.ts.
+   */
+  trust: ResourceTrustView;
 }
 
 export interface PersistedCalculationDisplay {
@@ -187,6 +198,12 @@ export interface PersistedCalculationDisplay {
     generation: string;
   } | null;
   resources: PersistedCalculationResourceDisplay[];
+  /**
+   * EXCEPTION-FIRST. How many components are settled and how many genuinely
+   * need a human, so the reader is told what to do instead of being handed
+   * fifty rows to inspect.
+   */
+  trustSummary: ResourceTrustSummary;
 }
 
 const UNAVAILABLE = (message: string): PersistedCalculationDisplay => ({
@@ -203,6 +220,7 @@ const UNAVAILABLE = (message: string): PersistedCalculationDisplay => ({
   reproduced: false,
   provenance: null,
   resources: [],
+  trustSummary: summariseResourceTrust([]),
 });
 
 /**
@@ -245,6 +263,10 @@ export const toPersistedCalculationDisplay = (
     freshness: resource.selectedFreshnessStatus ?? NULL_DISPLAY,
     status: resource.status,
     reasonCodes: resource.reasonCodes,
+    trust: toResourceTrust({
+      status: resource.status,
+      reasonCodes: resource.reasonCodes ?? [],
+    }),
   }));
 
   return {
@@ -274,5 +296,6 @@ export const toPersistedCalculationDisplay = (
       generation: String(wire.provenance.occurrenceGeneration),
     },
     resources,
+    trustSummary: summariseResourceTrust(resources.map((r) => r.trust)),
   };
 };

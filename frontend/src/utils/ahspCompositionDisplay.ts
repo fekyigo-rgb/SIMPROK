@@ -12,7 +12,21 @@
  * GET /projects/:projectId/ahsp-occurrences/:occurrenceId endpoint. Nothing new
  * is computed here and no second resolver exists: `ahspCoefficient` and
  * `ahspUnit` are the analysis's own values, copied at selection time.
+ *
+ * MINIMAL EXCEPTION UX: this panel is also where an exception is actually
+ * VISIBLE. A line that still contains an unproven component can never be
+ * persisted — the RAB persistence gate refuses it — so the persisted price
+ * trace will never show one. The occurrence behind this panel is therefore the
+ * only surface where "which of these components needs me?" can honestly be
+ * answered, and it already arrives in a single request.
  */
+
+import {
+  summariseResourceTrust,
+  toResourceTrust,
+  type ResourceTrustSummary,
+  type ResourceTrustView,
+} from './rabResourceTrust.ts';
 
 /** The occurrence resolution shape this module reads, and nothing more. */
 export interface AhspResolutionWire {
@@ -21,14 +35,36 @@ export interface AhspResolutionWire {
   ahspUnit?: string | null;
   ahspCoefficient?: string | number | null;
   status?: string | null;
+  /**
+   * The server's own reason codes for this resolution. They already travel on
+   * this endpoint's payload (the occurrence is returned with its full
+   * `resourceResolutions` rows) and were simply not declared here before, so
+   * the panel could only ever say "resolved or not". Declaring them lets the
+   * reader be told WHICH of the four honest states applies, and why, without a
+   * single extra request.
+   */
+  reasonCodes?: readonly string[] | null;
 }
 
 export interface AhspComponentRow {
   name: string;
   unit: string;
   coefficient: string;
-  /** True when SIMPROK could not yet prove which catalogue resource this is. */
+  /**
+   * True when SIMPROK could not yet prove which catalogue resource this is.
+   * Kept as-is for existing callers; `trust` below is the richer, honest form.
+   */
   unresolved: boolean;
+  /**
+   * WHY THIS REPLACED A BOOLEAN IN PRACTICE.
+   *
+   * `unresolved` can only say "fine" or "not fine", so it merged two completely
+   * different situations: a component SIMPROK genuinely cannot prove, and one
+   * where SIMPROK has narrowed the question and a human can settle it in
+   * seconds. Those need opposite responses from the reader, so they are no
+   * longer the same colour of problem here.
+   */
+  trust: ResourceTrustView;
 }
 
 export interface AhspComponentGroup {
@@ -88,6 +124,12 @@ export const groupAhspComposition = (
         // human. Removing it would make the analysis look complete when it
         // is not.
         unresolved: Boolean(row.status) && row.status !== 'RESOLVED',
+        // Server verdict in, reader's language out. Nothing is inferred from
+        // the component's name, unit or position in the recipe.
+        trust: toResourceTrust({
+          status: row.status ?? '',
+          reasonCodes: row.reasonCodes ?? [],
+        }),
       })),
   }));
 };
@@ -95,3 +137,25 @@ export const groupAhspComposition = (
 /** True when the analysis states no components at all — used to stay honest. */
 export const hasAnyComponent = (groups: readonly AhspComponentGroup[]): boolean =>
   groups.some((group) => group.rows.length > 0);
+
+/**
+ * EXCEPTION-FIRST across the whole analysis.
+ *
+ * Counts every component in every group once, so the panel can open with "how
+ * much of this is already done, and what is left for me" instead of handing the
+ * reader three tables to audit.
+ */
+export const summariseAhspComposition = (
+  groups: readonly AhspComponentGroup[],
+): ResourceTrustSummary =>
+  summariseResourceTrust(groups.flatMap((group) => group.rows.map((row) => row.trust)));
+
+/**
+ * The components that genuinely need a human, in recipe order, flattened across
+ * groups. Empty on a healthy analysis — which is the normal case, and the
+ * reason the panel can stay quiet.
+ */
+export const attentionComponents = (
+  groups: readonly AhspComponentGroup[],
+): AhspComponentRow[] =>
+  groups.flatMap((group) => group.rows.filter((row) => row.trust.needsAttention));
