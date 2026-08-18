@@ -9,6 +9,7 @@ import { buildLookupPath } from '../utils/catalogSearch';
 export type PriceSourceType = 'VENDOR_QUOTE' | 'MARKET_SURVEY' | 'REGULATION' | 'SYSTEM_ESTIMATE';
 export type PriceSourceOrigin = 'GOVERNMENT' | 'SUPPLIER' | 'STORE' | 'DISTRIBUTOR' | 'FIELD_REPORT' | 'COMMUNITY_REPORT';
 export type ResourceType = 'MATERIAL' | 'LABOR' | 'EQUIPMENT';
+export type PriceTableStructure = 'SECTIONED_PRICE_LIST' | 'SEMANTIC_HEADER_TABLE' | 'REGIONAL_MATRIX';
 export type UnitDimension = 'COUNT' | 'MASS' | 'LENGTH' | 'AREA' | 'VOLUME' | 'TIME' | 'PERSON_TIME' | 'EQUIPMENT_TIME';
 export type UnitKind = 'CANONICAL' | 'COMMERCIAL_PACKAGE' | 'CONTEXTUAL';
 
@@ -67,8 +68,68 @@ export interface BasicPriceImportMetadata {
   deliveredToProject?: boolean;
 }
 
+/**
+ * USI-01 §17 — an intake refusal, carried whole.
+ *
+ * The backend answers a refused upload with a NAMED code plus the evidence a
+ * human needs to act on it: which tables it examined, which jurisdictions it
+ * found, which structures were plausible. Collapsing that into a generic
+ * "upload failed" is what produced the old message that blamed the user's
+ * workbook for SIMPROK's own limits, so the whole body is kept.
+ */
+/** A column SIMPROK can describe but will not name on the human's behalf. */
+export interface ColumnRoleCandidate {
+  columnNumber: number;
+  headerText: string | null;
+  nonEmptyRows: number;
+  distinctValues: number;
+  samples: string[];
+}
+
+export interface IntakeRefusalDetails {
+  choices?: string[];
+  availableTables?: string[];
+  availableStructures?: PriceTableStructure[];
+  acceptedSections?: ResourceType[];
+  supportedExtensions?: string[];
+  tables?: { tableName: string; structures: PriceTableStructure[] }[];
+  nameCandidates?: ColumnRoleCandidate[];
+  unitCandidates?: ColumnRoleCandidate[];
+  [key: string]: unknown;
+}
+
+export class IntakeRefusalError extends Error {
+  // Explicit fields rather than constructor parameter properties: this project
+  // builds with `erasableSyntaxOnly`, which forbids the shorthand.
+  readonly code: string;
+  readonly details: IntakeRefusalDetails;
+  readonly httpStatus: number;
+
+  constructor(code: string, details: IntakeRefusalDetails, httpStatus: number) {
+    super(code);
+    this.name = 'IntakeRefusalError';
+    this.code = code;
+    this.details = details;
+    this.httpStatus = httpStatus;
+  }
+}
+
 async function parseOrThrow(response: Response): Promise<BasicPriceImportBatchSummary> {
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) {
+    const raw = await response.text();
+    let body: ({ message?: unknown } & IntakeRefusalDetails) | null = null;
+    try {
+      body = JSON.parse(raw) as { message?: unknown } & IntakeRefusalDetails;
+    } catch {
+      body = null; // Not JSON — the raw text below is still more honest than a guess.
+    }
+    // A validation failure sends `message` as an ARRAY; only a named intake
+    // refusal sends it as a single code.
+    if (body && typeof body.message === 'string') {
+      throw new IntakeRefusalError(body.message, body, response.status);
+    }
+    throw new Error(raw);
+  }
   return response.json() as Promise<BasicPriceImportBatchSummary>;
 }
 
@@ -99,14 +160,34 @@ const appendMetadata = (body: FormData, metadata: BasicPriceImportMetadata) => {
   }
 };
 
+/**
+ * USI-01 §5 — the answers to the questions SIMPROK asks ONCE, and only when the
+ * source genuinely does not prove one reading. Every field is optional: a
+ * source that proves exactly one reading is never interrogated.
+ */
+export interface BasicPriceIntakeSelection {
+  /** Which table/sheet. NEVER pre-filled — §18 forbids requiring an exact name. */
+  selectedSheet?: string;
+  selectedStructure?: PriceTableStructure;
+  /** The source's OWN jurisdiction wording, e.g. "SIRIMAU". Not a Region id. */
+  selectedRegionLabel?: string;
+  /** Stated by a human when the source declares no sections of its own. */
+  declaredSection?: ResourceType;
+  /** For a source whose name/unit columns carry no header at all. */
+  selectedNameColumn?: number;
+  selectedUnitColumn?: number;
+}
+
 export async function previewBasicPriceImport(
   file: File,
-  selectedSheet: string,
+  selection: BasicPriceIntakeSelection,
   metadata: BasicPriceImportMetadata,
 ): Promise<BasicPriceImportBatchSummary> {
   const body = new FormData();
   body.append('file', file);
-  body.append('selectedSheet', selectedSheet);
+  for (const [key, value] of Object.entries(selection)) {
+    if (value !== undefined && value !== null && value !== '') body.append(key, String(value));
+  }
   appendMetadata(body, metadata);
   const response = await apiFetch('/basic-price-imports/preview', { method: 'POST', body });
   return parseOrThrow(response);

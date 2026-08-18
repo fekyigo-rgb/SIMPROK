@@ -7,10 +7,12 @@ import {
 import { BasicPriceImportService } from './basic-price-import.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
+import { BasicPriceSourceArchiveService } from './basic-price-source-archive.service';
 import { buildBasicPriceXlsx } from '../../test/fixtures/basic-price-xlsx.fixture';
 
 describe('BasicPriceImportService', () => {
   let service: BasicPriceImportService;
+  let sourceArchive: any;
   let tx: {
     basicPriceImportBatch: {
       create: jest.Mock;
@@ -83,6 +85,10 @@ describe('BasicPriceImportService', () => {
         callback(tx),
       ),
     };
+    sourceArchive = {
+      retain: jest.fn(async () => 'memory://retained-source'),
+      read: jest.fn(),
+    };
     reviewService = {
       createReviewWithinTransaction: jest
         .fn()
@@ -94,6 +100,9 @@ describe('BasicPriceImportService', () => {
         BasicPriceImportService,
         { provide: PrismaService, useValue: prisma },
         { provide: PriceSubmissionReviewService, useValue: reviewService },
+        // USI-01R2 — raw bytes are retained for this vertical-local intake
+        // before any domain row is written.
+        { provide: BasicPriceSourceArchiveService, useValue: sourceArchive },
       ],
     }).compile();
 
@@ -136,15 +145,28 @@ describe('BasicPriceImportService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('rejects a non-.xlsx filename', async () => {
+    // USI-01 replaced "reject anything that is not .xlsx" with a reader
+    // registry: CSV is now a first-class format, so the old expectation
+    // contradicted the corrected law and had to change. What must NOT change is
+    // that an UNSUPPORTED format is still refused — by name, as SIMPROK's own
+    // limitation rather than as a fault in the sender's file (§17).
+    it('rejects a format no registered reader can read', async () => {
       const file = {
-        buffer: Buffer.from('x'),
-        size: 1,
-        originalname: 'basic-price.csv',
+        buffer: Buffer.from('%PDF-1.7'),
+        size: 8,
+        originalname: 'basic-price.pdf',
       };
       await expect(
         service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {}),
       ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {}),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          message: 'UNSUPPORTED_SOURCE_FORMAT',
+          supportedExtensions: ['.csv', '.xlsx'],
+        }),
+      });
     });
 
     it('throws NotFound when the workspace does not resolve to an organization', async () => {

@@ -35,6 +35,7 @@ model Account {
   lockedRabDocuments                          RabDocument[]                        @relation("RabDocumentLockedBy")
   capturedProjectAhspOccurrences              ProjectAhspOccurrence[]              @relation("ProjectAhspOccurrenceContextCapturedBy")
   ahspResourceIdentityDecisions               AhspResourceIdentityDecision[]       @relation("AhspResourceIdentityDecisionActor")
+  ingestionConnectorsActingFor                IngestionConnector[]                 @relation("IngestionConnectorActsOnBehalfOf")
 
   @@map("accounts")
 }
@@ -57,6 +58,7 @@ model Organization {
   projects               Project[]
   priceSubmissionReviews PriceSubmissionReview[]
   intelligenceEvidence   IntelligenceEvidence[]
+  ingestionConnectors    IngestionConnector[]
 
   @@map("organizations")
 }
@@ -98,6 +100,7 @@ model Workspace {
   basicPriceSourceEquivalences    BasicPriceSourceEquivalence[]
   basicPriceProvenanceCorrections BasicPriceProvenanceCorrection[]
   ahspResourceIdentityDecisions   AhspResourceIdentityDecision[]
+  ingestionConnectors             IngestionConnector[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -1665,6 +1668,101 @@ model Region {
   @@map("regions")
 }
 
+// =====================================================
+// SECTION G.2: USI-01 UNIVERSAL SMART INTAKE BOUNDARY
+// =====================================================
+
+/// USI-01 LAW 3 — CHANNEL != SOURCE != ORIGIN != TRUST.
+///
+/// HOW BYTES REACHED SIMPROK, and nothing else. It is emphatically NOT
+/// `PriceSourceOrigin` (who the price came from in the world), NOT
+/// `PriceSourceType` (what kind of statement it is), and it establishes NO
+/// verification, publication or trust whatsoever.
+///
+/// A government price list a human uploads from a laptop is USER_UPLOAD +
+/// GOVERNMENT origin. A supplier's workbook arriving over the Supplier Bridge
+/// is SUPPLIER_BRIDGE + SUPPLIER origin. Intake never derives one axis from the
+/// other, and no channel is more trusted than another.
+enum IngestionChannel {
+  USER_UPLOAD
+  SUPPLIER_BRIDGE
+  EXTERNAL_API
+  MOBILE
+  GOVERNMENT_FEED
+}
+
+enum IngestionConnectorStatus {
+  ACTIVE
+  REVOKED
+}
+
+/// USI-01 §12 — HOW A SOURCE LOCATOR IS SPELLED.
+///
+/// `BasicPriceImportRow`'s four `source*CellAddress` columns hold a POSITION in
+/// the source, and until USI-01 that position could only ever be a spreadsheet
+/// cell reference. This column says which coordinate system a batch's rows are
+/// written in, so a CSV row's "R12C6" can never be read as A1 notation and a
+/// non-spreadsheet source is never given a fabricated cell address.
+///
+/// EXCEL_A1 is the default because it is TRUE of every row that existed before
+/// this column did: every one of them came from a workbook.
+enum SourceLocatorDialect {
+  EXCEL_A1
+  CSV_RC
+}
+
+/// USI-01 §9/§10 — WHO IS ALLOWED TO SEND SIMPROK DATA WITHOUT A BROWSER.
+///
+/// A connector is an IDENTITY and a PERMISSION SLIP, never a trust claim: data
+/// arriving through one lands in exactly the same candidate/review lifecycle as
+/// a human upload, and no connector can write a BasicPrice, a PriceSubmission
+/// verification, or a publication.
+///
+/// SECURITY SHAPE (§9): least privilege — a connector is bound to ONE workspace
+/// and acts on behalf of ONE account, so a supplier cannot reach another
+/// tenant. Revocation is a status, never a delete, so a revoked connector's
+/// historical provenance survives on the batches it produced. It carries NO
+/// database credentials in either direction.
+///
+/// AUTHENTICATION IS NOT ISSUANCE. This model holds the secret's hash so the
+/// boundary can fail closed; how a secret is minted, delivered and rotated is
+/// an Owner decision that USI-01 deliberately did not make.
+model IngestionConnector {
+  id             String @id @default(uuid()) @db.Uuid
+  workspaceId    String @db.Uuid
+  organizationId String @db.Uuid
+
+  displayName String
+  channel     IngestionChannel
+
+  /// SHA-256 of a high-entropy machine secret. Deliberately not a password
+  /// hash: the secret is randomly generated rather than human-chosen, so key
+  /// stretching buys nothing, and a per-request KDF on a bulk ingest path is a
+  /// denial-of-service lever rather than a defence.
+  secretHash String
+
+  status IngestionConnectorStatus @default(ACTIVE)
+
+  /// The account SIMPROK holds responsible for everything this connector sends.
+  /// Never the connector itself — execution belongs to a User.
+  actsOnBehalfOfAccountId String @db.Uuid
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  revokedAt          DateTime?
+  revokedByAccountId String?   @db.Uuid
+
+  workspace         Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  organization      Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actsOnBehalfOf    Account                 @relation("IngestionConnectorActsOnBehalfOf", fields: [actsOnBehalfOfAccountId], references: [id], onDelete: Restrict)
+  basicPriceBatches BasicPriceImportBatch[]
+
+  @@index([workspaceId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("ingestion_connectors")
+}
+
 enum BasicPriceImportBatchStatus {
   PREVIEWED
   READY_FOR_REVIEW
@@ -1687,6 +1785,81 @@ model BasicPriceImportBatch {
   sourceByteLength      Int
   selectedSheetName     String
   parserContractVersion String
+
+  /// USI-01 §12 — the coordinate system this batch's row locators are written
+  /// in. EXCEL_A1 is the default because it is true of every batch that existed
+  /// before this column: all of them were workbooks.
+  sourceLocatorDialect SourceLocatorDialect @default(EXCEL_A1)
+
+  /// USI-01 §8 — the SOURCE'S OWN WORDING for the jurisdiction this batch was
+  /// scoped to, when the source covered more than one ("SIRIMAU", "TELUK
+  /// AMBON"). It is verbatim evidence, NOT a canonical Region — `regionId` is
+  /// the canonical answer and only a human sets it. Null when the source spoke
+  /// of exactly one place, which is every batch imported before USI-01.
+  sourceRegionScopeLabel String?
+
+  /// USI-01R2 §5 — WHERE THIS BATCH'S ORIGINAL BYTES ARE RETAINED.
+  ///
+  /// LAW 2.2 requires SIMPROK to be able to answer "what exactly was received?"
+  /// The bytes are kept under a content-addressed path and this is the pointer
+  /// to them, alongside `sourceSha256` which identifies them.
+  ///
+  /// It is deliberately NOT a `SourceDocument` foreign key. Moving Basic Price
+  /// arrivals onto the Reality Intake platform model is RM-12 work by name
+  /// (ROADMAP.md §15: "memindahkan intake ke Platform Layer"), and DEBT.md
+  /// records this intake as UTANG-PLATFORM-03 vertical-local temporary intake
+  /// until that gate. Null for batches imported before bytes were retained.
+  sourceStorageRef String?
+
+  /// USI-01 LAW 3 — HOW these bytes reached SIMPROK. Independent of
+  /// `sourceOrigin`/`sourceType`, which say who the price came from in the
+  /// world. USER_UPLOAD is the default because it is true of every batch that
+  /// existed before the Supplier Bridge did.
+  ingestionChannel     IngestionChannel @default(USER_UPLOAD)
+  ingestionConnectorId String?          @db.Uuid
+
+  /// USI-01R §10 — DELIVERY IDENTITY. One HTTP request, webhook delivery,
+  /// retry or transfer. It is EVIDENCE OF TRANSMISSION ONLY and is deliberately
+  /// NOT a fingerprint input: re-delivering the same observation with a new
+  /// request id is a retry, never a new price.
+  ingestionDeliveryId String?
+
+  /// USI-01R §10 — SOURCE OBSERVATION IDENTITY, three independent facts.
+  ///
+  ///   externalSourceId  WHICH external system/catalog spoke.
+  ///   externalRecordId  WHICH logical item/offer/price stream it spoke about.
+  ///   externalVersion   WHICH version of that stream this is.
+  ///
+  /// Together they are what makes a supplier's later price a NEW OBSERVATION of
+  /// a known stream rather than a duplicate product identity (LAW 2.4/2.5).
+  /// All three are fingerprint inputs; the delivery id above is not.
+  ingestionExternalSourceId String?
+  ingestionExternalRecordId String?
+  ingestionExternalVersion  String?
+
+  /// USI-01R2 §6A — THE ATOMIC SOURCE OBSERVATION KEY.
+  ///
+  /// One deterministic string identifying WHICH OBSERVATION of a source stream
+  /// this batch is, derived from connector + externalSourceId + externalRecordId
+  /// + (externalVersion, else the source's own observation time). Null when the
+  /// source states no record identity at all — a human's file upload — which
+  /// keeps that path on its existing bytes-and-context replay law.
+  ///
+  /// It exists as a COLUMN because the invariant has to be enforced by the
+  /// database. A read-then-insert check cannot hold under concurrency: two
+  /// simultaneous deliveries can both observe "nothing exists" and both insert.
+  /// The unique index below is what makes "one observation, one fact" true
+  /// rather than merely intended.
+  sourceObservationKey String?
+
+  /// USI-01R §10 — WHEN THE SOURCE SAYS IT OBSERVED THE PRICE.
+  ///
+  /// Emphatically not `createdAt`, which is when SIMPROK received it. A price
+  /// observed on the 18th and delivered on the 25th is a 18th-of-the-month
+  /// fact, and collapsing the two would silently rewrite when the world was
+  /// measured. Null when the source states nothing — never back-filled from the
+  /// arrival time.
+  sourceObservedAt DateTime?
 
   regionId                    String?   @db.Uuid
   effectiveDate               DateTime?
@@ -1725,13 +1898,25 @@ model BasicPriceImportBatch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  region Region?               @relation(fields: [regionId], references: [id], onDelete: Restrict)
-  rows   BasicPriceImportRow[]
+  region             Region?               @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  ingestionConnector IngestionConnector?   @relation(fields: [ingestionConnectorId], references: [id], onDelete: Restrict)
+  rows               BasicPriceImportRow[]
 
   @@unique([workspaceId, importFingerprint])
+  /// USI-01R2 §6B — ONE OBSERVATION, ONE FACT, ENFORCED BY THE DATABASE.
+  ///
+  /// Two concurrent deliveries of the same observation race to insert; exactly
+  /// one wins and the loser is handed the winner rather than creating a second
+  /// truth. A CHANGED payload under the same key surfaces as a conflict at this
+  /// index instead of quietly becoming a rival row.
+  ///
+  /// PostgreSQL treats NULLs as distinct, so manual uploads — which have no
+  /// observation key — are untouched by this constraint.
+  @@unique([workspaceId, sourceObservationKey])
   @@index([workspaceId])
   @@index([organizationId])
   @@index([status])
+  @@index([ingestionConnectorId])
   @@map("basic_price_import_batches")
 }
 
@@ -1739,6 +1924,27 @@ enum BasicPriceImportRowSection {
   LABOR
   MATERIAL
   EQUIPMENT
+}
+
+/// USI-01R LAW 2.8 — WHERE A ROW'S RESOURCE FAMILY CAME FROM.
+///
+/// `sourceSection` drives real downstream authority: the resolution service
+/// uses it as the ResourceType context for Unit Kernel lookup and for
+/// ResourceCatalog type matching. A reader of that column must therefore be
+/// able to tell whether the document SAID equipment, or whether a human at the
+/// upload screen said it on the document's behalf.
+///
+/// The order below is the precedence order, strongest first. An explicit
+/// per-row category in the source outranks a section title, which outranks a
+/// human's blanket declaration — because the source knows its own rows and the
+/// uploader is guessing about all of them at once.
+enum BasicPriceImportRowSectionProvenance {
+  /// The row itself carried a category the source stated (e.g. "ALAT").
+  SOURCE_ROW_CATEGORY
+  /// A section title above the row declared it (the RM-02 sectioned workbook).
+  SOURCE_SECTION_TITLE
+  /// Nothing in the source said; a human stated it for the whole batch.
+  UPLOADER_DECLARED
 }
 
 enum BasicPriceImportRowCollisionType {
@@ -1774,7 +1980,23 @@ model BasicPriceImportRow {
   id      String @id @default(uuid()) @db.Uuid
   batchId String @db.Uuid
 
-  sourceSection          BasicPriceImportRowSection
+  /// USI-01R LAW 2.9 — NULL means SIMPROK DOES NOT KNOW this row's resource
+  /// family, and refuses to invent one. That happens when the source states a
+  /// category it has no safe mapping for: guessing MATERIAL there would put a
+  /// bulldozer in the materials catalog. A null row is intake evidence that can
+  /// never resolve or submit until a human settles it — which is the correct
+  /// outcome, not a defect. Every row written before USI-01R has a real value.
+  sourceSection           BasicPriceImportRowSection?
+  /// Which authority set `sourceSection`. Null only for pre-USI-01R rows.
+  sourceSectionProvenance BasicPriceImportRowSectionProvenance?
+
+  /// USI-01R LAW 2.2/CAT-06 — the source's OWN category words, verbatim, kept
+  /// whether or not SIMPROK could map them. "ALAT" stays readable as "ALAT"
+  /// after it has been understood as EQUIPMENT, and an unmappable category is
+  /// still on the record for a human to interpret.
+  rawSourceCategoryCode String?
+  rawSourceCategoryName String?
+
   sourceRowNumber        Int
   sourceCodeCellAddress  String
   sourceNameCellAddress  String
@@ -1785,7 +2007,14 @@ model BasicPriceImportRow {
   rawResourceNameText String
   rawUnitText         String?
 
-  rawPriceCellType                    Int
+  /// USI-01 §12 — the source cell's NATIVE TYPE, as the spreadsheet reader read
+  /// it (an ExcelJS ValueType). NULL means the source format has no typed cells
+  /// at all — a CSV field, and later a JSON/API value. Fabricating a
+  /// spreadsheet cell type for a source that never had one is exactly the lie
+  /// §12 forbids, so the column became nullable rather than the readers
+  /// becoming liars. Every row written before USI-01 still carries its real
+  /// Excel type, and nothing about them changed.
+  rawPriceCellType                    Int?
   rawPriceNumericRoundTripString      String?
   rawPriceTextValue                   String?
   rawPriceFormulaText                 String?
@@ -1793,6 +2022,17 @@ model BasicPriceImportRow {
   rawPriceFormulaError                String?
   rawPriceNumberFormat                String?
   rawPriceDisplayText                 String?
+
+  /// USI-01 LAW 2 — RAW TRUTH NEVER DISAPPEARS. Every source column this row's
+  /// dedicated fields do not already hold, kept verbatim and keyed by the
+  /// source's OWN header text: the other jurisdictions' figures in a regional
+  /// matrix, a preparer's `simprok_unit_candidate`, a provenance note, a
+  /// source-language label. Without it, importing a wide real-world table would
+  /// silently discard most of what the source actually said.
+  ///
+  /// It is EVIDENCE, never input to any calculation. Nothing downstream reads a
+  /// price, a unit or an identity out of here.
+  rawSourceContext Json?
 
   proposedCanonicalPrice Decimal? @db.Decimal(18, 2)
   canonicalRoundingMode  String?
@@ -2012,21 +2252,21 @@ enum ProjectAhspResolutionMethod {
 }
 
 model ProjectAhspOccurrence {
-  id                           String    @id @default(uuid()) @db.Uuid
-  workspaceId                  String    @db.Uuid
-  projectId                    String    @db.Uuid
-  ahspVersionId                String    @db.Uuid
+  id                           String         @id @default(uuid()) @db.Uuid
+  workspaceId                  String         @db.Uuid
+  projectId                    String         @db.Uuid
+  ahspVersionId                String         @db.Uuid
   idempotencyKey               String
-  createdByAccountId           String?   @db.Uuid
-  businessPricingAsOfDate      DateTime? @db.Date
-  referenceRegionId            String?   @db.Uuid
+  createdByAccountId           String?        @db.Uuid
+  businessPricingAsOfDate      DateTime?      @db.Date
+  referenceRegionId            String?        @db.Uuid
   resolutionPolicyVersion      String?
   requestPayloadHash           String?
-  generation                   Int       @default(1)
-  previousOccurrenceId         String?   @db.Uuid
+  generation                   Int            @default(1)
+  previousOccurrenceId         String?        @db.Uuid
   resolutionContentFingerprint String?
   resolutionEvaluatedAt        DateTime?
-  contextCapturedByAccountId   String?   @db.Uuid
+  contextCapturedByAccountId   String?        @db.Uuid
   /// RAB-TRUTH-01H — the AHSP's ownership AT THE MOMENT this calculation
   /// context was frozen. `AHSP.ownershipType` is mutable: a lawful transfer can
   /// change it later, and reading it live made a finished calculation's origin
@@ -2047,8 +2287,8 @@ model ProjectAhspOccurrence {
   /// column compares directly against `ahsps.ownershipType` instead of needing
   /// a cast to be read.
   ahspOwnershipAtCalculation   OwnershipType?
-  createdAt                    DateTime  @default(now())
-  updatedAt                    DateTime  @updatedAt
+  createdAt                    DateTime       @default(now())
+  updatedAt                    DateTime       @updatedAt
 
   workspace                Workspace                       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   project                  Project                         @relation(fields: [projectId], references: [id], onDelete: Cascade)

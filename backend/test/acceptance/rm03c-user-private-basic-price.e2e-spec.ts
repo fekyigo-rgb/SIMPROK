@@ -309,6 +309,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
       data: {
         batchId,
         sourceSection: 'LABOR',
+        sourceSectionProvenance: 'SOURCE_SECTION_TITLE',
         sourceRowNumber: 9,
         sourceCodeCellAddress: 'D9',
         sourceNameCellAddress: 'C9',
@@ -334,6 +335,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
       data: {
         batchId,
         sourceSection: 'LABOR',
+        sourceSectionProvenance: 'SOURCE_SECTION_TITLE',
         sourceRowNumber: 10,
         sourceCodeCellAddress: 'D10',
         sourceNameCellAddress: 'C10',
@@ -364,6 +366,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
       data: {
         batchId,
         sourceSection: 'LABOR',
+        sourceSectionProvenance: 'SOURCE_SECTION_TITLE',
         sourceRowNumber: 11,
         sourceCodeCellAddress: 'D11',
         sourceNameCellAddress: 'C11',

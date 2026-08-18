@@ -276,19 +276,29 @@ export class ResourceIdentityResolutionService {
         sheetName: row.sheetName,
         sourceRowNumber: row.sourceRowNumber,
       })),
-      reviewedMappings: mappingRows.map((row) => ({
-        mappingId: row.id,
-        resourceCatalogId: row.resourceCatalogId,
-        rawName: row.row.rawResourceNameText,
-        rawCode: row.row.rawResourceCodeText,
+      reviewedMappings: mappingRows.flatMap((row) => {
         // The type the human actually settled on, falling back to the section
         // the workbook itself declared. Never inferred from the catalog row —
         // that would make the mapping agree with itself by construction.
-        resourceType: row.row.resolvedResourceType ?? row.row.sourceSection,
-        reviewerAccountId: row.reviewerAccountId,
-        decidedAt: row.decidedAt.toISOString(),
-        reason: row.reason,
-      })),
+        const resourceType = row.row.resolvedResourceType ?? row.row.sourceSection;
+        // USI-01R — a source may state a resource family SIMPROK cannot map, so
+        // this can now genuinely be unknown. A past decision whose family cannot
+        // be named is not evidence that can support a new one, and admitting it
+        // as a null would let it match anything. It is dropped, not defaulted.
+        if (resourceType === null) return [];
+        return [
+          {
+            mappingId: row.id,
+            resourceCatalogId: row.resourceCatalogId,
+            rawName: row.row.rawResourceNameText,
+            rawCode: row.row.rawResourceCodeText,
+            resourceType,
+            reviewerAccountId: row.reviewerAccountId,
+            decidedAt: row.decidedAt.toISOString(),
+            reason: row.reason,
+          },
+        ];
+      }),
       unitIdentityCache: new Map<string, CanonicalUnitIdentityFact>(),
     };
   }

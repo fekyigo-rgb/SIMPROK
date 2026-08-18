@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { buildBasicPriceXlsx } from '../fixtures/basic-price-xlsx.fixture';
-import { BASIC_PRICE_PARSER_CONTRACT_VERSION } from '../../src/basic-price/basic-price-xlsx-intake.adapter';
+import { BASIC_PRICE_PARSER_CONTRACT_VERSION } from '../../src/basic-price/basic-price-universal-intake.adapter';
 
 /**
  * RM-02D1-REMEDIATION-V3.1 — SOURCE_ROW_PROVENANCE.
