@@ -9,10 +9,19 @@ import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
-  BASIC_PRICE_PARSER_CONTRACT_VERSION,
   BasicPriceImportKnowledgeObject,
-  BasicPriceXlsxIntakeAdapter,
-} from './basic-price-xlsx-intake.adapter';
+  BasicPriceIntakeSelection,
+  BasicPriceUniversalIntakeAdapter,
+} from './basic-price-universal-intake.adapter';
+import { INTAKE_ERRORS, IntakeError } from '../universal-intake/intake-errors';
+import {
+  MAX_ENVELOPE_BYTES,
+  SourceEnvelope,
+  sealSourceEnvelope,
+  sourceObservationIdentityOf,
+} from '../universal-intake/source-envelope';
+import { ReaderRegistry } from '../universal-intake/readers/reader-registry';
+import { BasicPriceSourceArchiveService } from './basic-price-source-archive.service';
 import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto';
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
@@ -22,8 +31,8 @@ import {
   isSameUtcDay,
 } from './basic-price-private-asset.service';
 
-export const MAX_UPLOAD_BYTES = 10_485_760;
-type UploadedXlsx = {
+export const MAX_UPLOAD_BYTES = MAX_ENVELOPE_BYTES;
+type UploadedSourceFile = {
   buffer: Buffer;
   size: number;
   originalname: string;
@@ -55,40 +64,159 @@ const FINGERPRINT_METADATA_KEYS = [
   'deliveredToProject',
 ] as const;
 
+/**
+ * USI-01 — INTAKE IDENTITY BEYOND THE WORKBOOK.
+ *
+ * These segments join the fingerprint ONLY when they say something, and they
+ * are appended AFTER every pre-existing segment. That is load-bearing, not
+ * tidiness: a legacy browser upload of a sectioned workbook produces a
+ * byte-identical fingerprint string to the one it produced before USI-01
+ * existed, so an exact replay still finds its own batch (test I6) and no
+ * historical batch is orphaned.
+ *
+ * Each one is here because it makes two intakes DIFFERENT FACTS (test I7): the
+ * same matrix read at its SIRIMAU column is not the batch read at its BAGUALA
+ * column, and a supplier-sent artifact is not the same arrival as the identical
+ * bytes a human uploaded.
+ */
+function intakeIdentitySegments(
+  knowledge: BasicPriceImportKnowledgeObject,
+  envelope: SourceEnvelope,
+): string[] {
+  const segments: string[] = [];
+  if (knowledge.regionScopeLabel !== null)
+    segments.push(`regionScopeLabel:${knowledge.regionScopeLabel}`);
+  if (envelope.ingestionChannel !== 'USER_UPLOAD')
+    segments.push(`ingestionChannel:${envelope.ingestionChannel}`);
+  if (envelope.connectorId !== null)
+    segments.push(`ingestionConnectorId:${envelope.connectorId}`);
+
+  // USI-01R §11 — SOURCE OBSERVATION IDENTITY, NOT DELIVERY IDENTITY.
+  //
+  // `deliveryId` is deliberately ABSENT from this list. A retried delivery of
+  // the same observation must land on the same batch (OBS-01); including the
+  // request id would have manufactured a brand-new price every time a network
+  // hiccup caused a resend.
+  //
+  // `externalVersion` IS present, and is what makes a supplier's genuinely
+  // newer price a new observation rather than a rejected duplicate (OBS-02,
+  // LAW 2.5).
+  if (envelope.externalSourceId !== null)
+    segments.push(`externalSourceId:${envelope.externalSourceId}`);
+  if (envelope.externalRecordId !== null)
+    segments.push(`externalRecordId:${envelope.externalRecordId}`);
+  if (envelope.externalVersion !== null)
+    segments.push(`externalVersion:${envelope.externalVersion}`);
+  return segments;
+}
+
+/**
+ * USI-01R2 §6C — HOW TWO SOURCE VERSIONS COMPARE, HONESTLY.
+ *
+ * Most version strings in the world are not orderable, and pretending otherwise
+ * is how an old price silently becomes "the latest". A lexical comparison would
+ * happily rank "v10" before "v9" and "REV-B" before "REV-a".
+ *
+ * So ordering is claimed only where it is PROVEN:
+ *   - a purely numeric version compares numerically;
+ *   - an ISO-8601 timestamp compares chronologically;
+ *   - identical strings are EQUAL;
+ *   - everything else is ORDER_UNKNOWN, and SIMPROK says so.
+ */
+export type SourceVersionOrder = 'OLDER' | 'NEWER' | 'EQUAL' | 'ORDER_UNKNOWN';
+
+const NUMERIC_VERSION = /^\d+(?:\.\d+)*$/;
+const ISO_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+
+export function compareSourceVersions(
+  incoming: string,
+  existing: string,
+): SourceVersionOrder {
+  if (incoming === existing) return 'EQUAL';
+
+  if (NUMERIC_VERSION.test(incoming) && NUMERIC_VERSION.test(existing)) {
+    // Segment-wise, so 1.10 is correctly newer than 1.9.
+    const left = incoming.split('.').map(Number);
+    const right = existing.split('.').map(Number);
+    for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+      const a = left[i] ?? 0;
+      const b = right[i] ?? 0;
+      if (a !== b) return a > b ? 'NEWER' : 'OLDER';
+    }
+    return 'EQUAL';
+  }
+
+  if (ISO_TIMESTAMP.test(incoming) && ISO_TIMESTAMP.test(existing)) {
+    const a = Date.parse(incoming);
+    const b = Date.parse(existing);
+    if (Number.isFinite(a) && Number.isFinite(b)) {
+      if (a === b) return 'EQUAL';
+      return a > b ? 'NEWER' : 'OLDER';
+    }
+  }
+
+  // An opaque vendor token. SIMPROK does not rank what it cannot read.
+  return 'ORDER_UNKNOWN';
+}
+
 @Injectable()
 export class BasicPriceImportService {
-  private readonly adapter = new BasicPriceXlsxIntakeAdapter();
+  private readonly adapter = new BasicPriceUniversalIntakeAdapter();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly reviewService: PriceSubmissionReviewService,
+    // USI-01R2 §5 — retains the ORIGINAL BYTES for this vertical-local intake.
+    // Not a platform evidence model: moving arrivals onto Reality Intake is
+    // RM-12 work by name, and this slice must not close that debt early.
+    private readonly sourceArchive: BasicPriceSourceArchiveService,
   ) {}
 
   private validateFile(
-    file: UploadedXlsx | undefined,
-  ): asserts file is UploadedXlsx {
-    if (!file?.buffer) throw new BadRequestException('XLSX file is required');
+    file: UploadedSourceFile | undefined,
+  ): asserts file is UploadedSourceFile {
+    if (!file?.buffer) throw new BadRequestException('A source file is required');
     if (file.size > MAX_UPLOAD_BYTES)
-      throw new PayloadTooLargeException('XLSX file exceeds 10 MiB');
-    if (!file.originalname.toLowerCase().endsWith('.xlsx'))
-      throw new BadRequestException('Only XLSX files are accepted');
+      throw new PayloadTooLargeException('Source file exceeds 10 MiB');
+  }
+
+  /**
+   * §17 ERROR HONESTY. Every intake refusal reaches the caller as its OWN
+   * diagnostic, carrying the evidence needed to act — which tables were
+   * examined, which structures were plausible, which jurisdictions were found.
+   * "Invalid file" is never the answer, and SIMPROK's own reader limitations
+   * are never dressed up as a fault in the sender's document.
+   */
+  private translateIntakeError(error: unknown): never {
+    if (!(error instanceof IntakeError)) throw error;
+    const body = { message: error.code, ...(error.details ?? {}) };
+    switch (error.code) {
+      case INTAKE_ERRORS.SOURCE_EXCEEDS_MAX_BYTES:
+      case INTAKE_ERRORS.SOURCE_ROW_LIMIT_EXCEEDED:
+        throw new PayloadTooLargeException(body);
+      case INTAKE_ERRORS.SOURCE_TABLE_AMBIGUOUS:
+      case INTAKE_ERRORS.SOURCE_STRUCTURE_AMBIGUOUS:
+      case INTAKE_ERRORS.REGION_COLUMN_SELECTION_REQUIRED:
+      case INTAKE_ERRORS.SECTION_DECLARATION_REQUIRED:
+      case INTAKE_ERRORS.COLUMN_ROLE_SELECTION_REQUIRED:
+        // A human decision is genuinely outstanding. This is not a failure of
+        // the file and not a failure of SIMPROK — it is the one question only a
+        // person can answer, asked exactly once.
+        throw new ConflictException(body);
+      default:
+        throw new BadRequestException(body);
+    }
   }
 
   private async parse(
-    file: UploadedXlsx,
-    selectedSheet?: string,
+    envelope: SourceEnvelope,
+    selection: BasicPriceIntakeSelection,
   ): Promise<BasicPriceImportKnowledgeObject> {
     try {
-      return await this.adapter.parse(
-        file.buffer,
-        file.originalname,
-        selectedSheet,
-      );
+      return await this.adapter.parse(envelope, selection);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'INVALID_XLSX';
-      if (message === 'SOURCE_ROW_LIMIT_EXCEEDED')
-        throw new PayloadTooLargeException(message);
-      throw new BadRequestException(message);
+      this.translateIntakeError(error);
     }
   }
 
@@ -97,6 +225,7 @@ export class BasicPriceImportService {
     organizationId: string,
     knowledge: BasicPriceImportKnowledgeObject,
     metadata: PreviewBasicPriceImportDto,
+    envelope: SourceEnvelope,
   ): string {
     const metadataPart = FINGERPRINT_METADATA_KEYS.map(
       (key) => `${key}:${(metadata as Record<string, unknown>)[key] ?? ''}`,
@@ -108,12 +237,145 @@ export class BasicPriceImportService {
           organizationId,
           knowledge.sourceSha256,
           knowledge.sheetName,
-          BASIC_PRICE_PARSER_CONTRACT_VERSION,
+          // The knowledge object's OWN contract, not a module constant: each
+          // structure has its own parser contract, and two structures read out
+          // of one file are two different readings of it.
+          knowledge.parserContractVersion,
           metadataPart,
+          ...intakeIdentitySegments(knowledge, envelope),
         ].join('|'),
       )
       .digest('hex')
       .toUpperCase();
+  }
+
+  /**
+   * USI-01R2 §6 — WHICH OBSERVATION OF A SOURCE STREAM IS THIS?
+   *
+   * Returns the atomic observation key plus an honest ordering verdict against
+   * whatever is already on record. It NO LONGER decides uniqueness by reading
+   * first: two concurrent deliveries can both read "nothing exists", so the
+   * decision belongs to the unique index and the insert below it. What this
+   * does is compute identity and give the caller a truthful late-arrival
+   * verdict.
+   *
+   * OBS-05 — IDENTITY MAY BE INCOMPLETE, AND THAT IS SAID OUT LOUD. A source
+   * that names a record but neither a version nor an observation time cannot
+   * distinguish a future changed price from this one. SIMPROK will not invent
+   * the missing axis from its own clock, so such a source gets no observation
+   * key and falls back to the file-content fingerprint law — which means a
+   * genuinely changed payload is a new batch, and an identical one is a replay.
+   */
+  private async resolveObservation(
+    envelope: SourceEnvelope,
+  ): Promise<{
+    observationKey: string | null;
+    identityComplete: boolean;
+    versionOrder: SourceVersionOrder | null;
+    lateArrivingSourceVersion: boolean;
+  }> {
+    const identity = sourceObservationIdentityOf(envelope);
+    const observationKey = identity?.key ?? null;
+    if (identity === null) {
+      // A manual upload, or a source that stated no record identity at all.
+      return {
+        observationKey: null,
+        identityComplete: envelope.externalRecordId === null,
+        versionOrder: null,
+        lateArrivingSourceVersion: false,
+      };
+    }
+
+    const identityComplete = identity.complete;
+
+    let versionOrder: SourceVersionOrder | null = null;
+    let lateArrivingSourceVersion = false;
+    if (envelope.externalVersion) {
+      const siblings = await this.prisma.basicPriceImportBatch.findMany({
+        where: {
+          workspaceId: envelope.workspaceId,
+          ingestionConnectorId: envelope.connectorId,
+          ingestionExternalSourceId: envelope.externalSourceId,
+          ingestionExternalRecordId: envelope.externalRecordId,
+          ingestionExternalVersion: { not: null },
+        },
+        select: { ingestionExternalVersion: true },
+      });
+
+      for (const sibling of siblings) {
+        const order = compareSourceVersions(
+          envelope.externalVersion,
+          sibling.ingestionExternalVersion!,
+        );
+        if (versionOrder === null || order !== 'EQUAL') versionOrder = order;
+        // OBS-04/OBS-06 — only a PROVEN ordering may mark a late arrival. An
+        // opaque token yields ORDER_UNKNOWN and no claim is made either way.
+        if (order === 'OLDER') lateArrivingSourceVersion = true;
+      }
+    }
+
+    return {
+      observationKey,
+      identityComplete,
+      versionOrder,
+      lateArrivingSourceVersion,
+    };
+  }
+
+  /**
+   * USI-01R2 §6B — the unique index has spoken. Translate it into the truth.
+   *
+   * Reaching here means another batch already holds this observation key. If it
+   * carries the SAME bytes it is the same observation and the caller is handed
+   * the winner (a retry, OBS-01). If it carries DIFFERENT bytes the source has
+   * contradicted itself under one stated version, and SIMPROK refuses rather
+   * than storing two truths (OBS-03).
+   */
+  private async settleObservationCollision(
+    workspaceId: string,
+    observationKey: string,
+    incomingSourceSha256: string,
+  ) {
+    const winner = await this.prisma.basicPriceImportBatch.findUnique({
+      where: {
+        workspaceId_sourceObservationKey: { workspaceId, sourceObservationKey: observationKey },
+      },
+    });
+    if (!winner) return null;
+
+    if (winner.sourceSha256 !== incomingSourceSha256) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        message: 'SOURCE_OBSERVATION_CONFLICT',
+        sourceObservationKey: observationKey,
+        existingBatchId: winner.id,
+        existingSourceSha256: winner.sourceSha256,
+        incomingSourceSha256,
+      });
+    }
+    return winner;
+  }
+
+  /** The part of an observation verdict a caller is told about. */
+  private observationVerdict(observation: {
+    identityComplete: boolean;
+    versionOrder: SourceVersionOrder | null;
+    lateArrivingSourceVersion: boolean;
+  }) {
+    return {
+      lateArrivingSourceVersion: observation.lateArrivingSourceVersion,
+      sourceVersionOrder: observation.versionOrder,
+      // OBS-05 — false means the source named a record but gave no version and
+      // no observation time, so a future changed price for it could not be told
+      // apart from this one by identity alone.
+      sourceObservationIdentityComplete: observation.identityComplete,
+    };
+  }
+
+  /** The formats SIMPROK can read today, for honest client-facing messaging. */
+  supportedSourceExtensions(): string[] {
+    return ReaderRegistry.default().supportedExtensions();
   }
 
   private async resolveOrganizationId(workspaceId: string): Promise<string> {
@@ -143,7 +405,11 @@ export class BasicPriceImportService {
       rawUnitText?: string | null;
       rawPriceDisplayText?: string | null;
       proposedCanonicalPrice?: { toString(): string } | null;
-      sourceSection: string;
+      // USI-01R — null when the source stated a category SIMPROK could not map.
+      sourceSection: string | null;
+      sourceSectionProvenance?: string | null;
+      rawSourceCategoryCode?: string | null;
+      rawSourceCategoryName?: string | null;
       sourceRowNumber: number;
       collisionType?: string;
       collisionOfRowId?: string | null;
@@ -184,6 +450,11 @@ export class BasicPriceImportService {
           ? r.proposedCanonicalPrice.toString()
           : null,
         section: r.sourceSection,
+        // USI-01R — the review UI must be able to show WHO decided a row's
+        // resource family, and what the source itself called it.
+        sectionProvenance: r.sourceSectionProvenance ?? null,
+        sourceCategoryCode: r.rawSourceCategoryCode ?? null,
+        sourceCategoryName: r.rawSourceCategoryName ?? null,
         sourceRowNumber: r.sourceRowNumber,
         collisionType: r.collisionType ?? 'NONE',
         collisionOfRowId: r.collisionOfRowId ?? null,
@@ -208,10 +479,38 @@ export class BasicPriceImportService {
   async preview(
     workspaceId: string,
     uploadedByAccountId: string,
-    file: UploadedXlsx | undefined,
+    file: UploadedSourceFile | undefined,
     metadata: PreviewBasicPriceImportDto,
   ) {
     this.validateFile(file);
+    const organizationId = await this.resolveOrganizationId(workspaceId);
+    // The browser upload is not a special case — it seals an envelope and walks
+    // through the same door every other connector will (§10). USER_UPLOAD is a
+    // TRANSPORT fact and says nothing about origin or trust.
+    const envelope = sealSourceEnvelope({
+      ingestionChannel: 'USER_UPLOAD',
+      fileName: file.originalname,
+      mediaType: file.mimetype ?? null,
+      bytes: file.buffer,
+      workspaceId,
+      organizationId,
+      actorAccountId: uploadedByAccountId,
+    });
+    return this.intake(envelope, metadata);
+  }
+
+  /**
+   * THE ONE INTAKE DOOR (§10).
+   *
+   * Every source that ever becomes a Basic Price candidate passes through here
+   * — a human's browser upload today, a supplier agent's push tomorrow — and
+   * arrives carrying its own transport provenance. There is no second entry
+   * point, and there is deliberately no "create a BasicPrice" counterpart: this
+   * method's entire output is a batch of NEEDS_REVIEW candidates awaiting the
+   * existing, unchanged human trust lifecycle (LAW 1, tests I1/S3).
+   */
+  async intake(envelope: SourceEnvelope, metadata: PreviewBasicPriceImportDto) {
+    const workspaceId = envelope.workspaceId;
     // RM-03D1 — preview WRITES all four provenance columns, and validated none
     // of them. The very first write could therefore mint a claim that explains
     // a different date than the one it stores, with only the DB's structural
@@ -226,13 +525,54 @@ export class BasicPriceImportService {
       effectiveDateProvenance: metadata.effectiveDateProvenance ?? null,
       effectiveDateDerivationRule: metadata.effectiveDateDerivationRule ?? null,
     });
-    const knowledge = await this.parse(file, metadata.selectedSheet);
-    const organizationId = await this.resolveOrganizationId(workspaceId);
+    const knowledge = await this.parse(envelope, {
+      selectedTable: metadata.selectedSheet ?? null,
+      selectedStructure: metadata.selectedStructure ?? null,
+      selectedRegionLabel: metadata.selectedRegionLabel ?? null,
+      declaredSection: metadata.declaredSection ?? null,
+      selectedNameColumn: metadata.selectedNameColumn ?? null,
+      selectedUnitColumn: metadata.selectedUnitColumn ?? null,
+    });
+    const organizationId = envelope.organizationId;
+
+    // LAW 2.2 — the bytes are retained BEFORE any domain row exists, so a batch
+    // can never claim a source it cannot produce. The path is content-addressed
+    // and is never deleted by a losing request, so concurrent identical uploads
+    // converge on one copy that both may read (STORE-01/02).
+    const sourceStorageRef = await this.sourceArchive.retain({
+      workspaceId,
+      contentDigestSha256: envelope.contentDigestSha256,
+      bytes: envelope.bytes,
+    });
+
+    // USI-01R2 §6 — which observation this is, and how it orders. Uniqueness is
+    // settled by the database below, not by this read.
+    const observation = await this.resolveObservation(envelope);
+
+    // An observation already on record under this key is either a retry (same
+    // bytes -> hand back the winner) or a contradiction (different bytes ->
+    // refuse). Checked before the insert as a fast path; the unique index is
+    // what makes it correct under concurrency.
+    if (observation.observationKey) {
+      const winner = await this.settleObservationCollision(
+        workspaceId,
+        observation.observationKey,
+        knowledge.sourceSha256,
+      );
+      if (winner) {
+        const winnerRows = await this.prisma.basicPriceImportRow.findMany({
+          where: { batchId: winner.id },
+        });
+        return { ...this.summarize(winner, winnerRows), ...this.observationVerdict(observation) };
+      }
+    }
+
     const fingerprint = this.fingerprint(
       workspaceId,
       organizationId,
       knowledge,
       metadata,
+      envelope,
     );
 
     const existing = await this.prisma.basicPriceImportBatch.findUnique({
@@ -247,7 +587,7 @@ export class BasicPriceImportService {
       const rows = await this.prisma.basicPriceImportRow.findMany({
         where: { batchId: existing.id },
       });
-      return this.summarize(existing, rows);
+      return { ...this.summarize(existing, rows), ...this.observationVerdict(observation) };
     }
 
     try {
@@ -256,12 +596,30 @@ export class BasicPriceImportService {
           data: {
             workspaceId,
             organizationId,
-            uploadedByAccountId,
+            uploadedByAccountId: envelope.actorAccountId,
             sourceFileName: knowledge.fileName,
             sourceSha256: knowledge.sourceSha256,
-            sourceByteLength: file.size,
+            sourceByteLength: envelope.byteSize,
             selectedSheetName: knowledge.sheetName,
             parserContractVersion: knowledge.parserContractVersion,
+            // USI-01 — how the bytes arrived, and how this batch's row
+            // locators are spelled. Both are provenance, neither is trust.
+            sourceLocatorDialect: knowledge.locatorDialect,
+            sourceRegionScopeLabel: knowledge.regionScopeLabel,
+            // Where the original bytes are retained, beside the hash that
+            // identifies them.
+            sourceStorageRef,
+            // USI-01R2 §6A — which OBSERVATION of a source stream this is.
+            sourceObservationKey: observation.observationKey,
+            ingestionChannel: envelope.ingestionChannel,
+            ingestionConnectorId: envelope.connectorId,
+            // USI-01R §10 — transmission evidence, kept but never identity.
+            ingestionDeliveryId: envelope.deliveryId,
+            // ...and the source's own observation identity, which IS.
+            ingestionExternalSourceId: envelope.externalSourceId,
+            ingestionExternalRecordId: envelope.externalRecordId,
+            ingestionExternalVersion: envelope.externalVersion,
+            sourceObservedAt: envelope.sourceObservedAt,
             regionId: metadata.regionId ?? null,
             effectiveDate: metadata.effectiveDate
               ? new Date(metadata.effectiveDate)
@@ -297,7 +655,12 @@ export class BasicPriceImportService {
           const created = await tx.basicPriceImportRow.create({
             data: {
               batchId: batch.id,
+              // USI-01R GAP B — a row whose family the source stated, together
+              // with WHO decided it and the source's own words either way.
               sourceSection: row.sourceSection,
+              sourceSectionProvenance: row.sourceSectionProvenance,
+              rawSourceCategoryCode: row.rawSourceCategoryCode,
+              rawSourceCategoryName: row.rawSourceCategoryName,
               sourceRowNumber: row.sourceRowNumber,
               sourceCodeCellAddress: row.sourceCodeCellAddress,
               sourceNameCellAddress: row.sourceNameCellAddress,
@@ -316,6 +679,9 @@ export class BasicPriceImportService {
               rawPriceFormulaError: row.rawPriceFormulaError,
               rawPriceNumberFormat: row.rawPriceNumberFormat,
               rawPriceDisplayText: row.rawPriceDisplayText,
+              // LAW 2 — everything the source said that this domain has no
+              // field for, kept verbatim rather than discarded.
+              rawSourceContext: row.rawSourceContext ?? Prisma.DbNull,
               proposedCanonicalPrice: row.proposedCanonicalPrice,
               canonicalRoundingMode: row.canonicalRoundingMode,
               resolutionStatus: 'UNRESOLVED',
@@ -332,15 +698,38 @@ export class BasicPriceImportService {
         if (finalItemCount !== createdRows.length)
           throw new ConflictException('IMPORT_ROW_COUNT_MISMATCH');
 
-        return this.summarize(batch, createdRows);
+        return { ...this.summarize(batch, createdRows), ...this.observationVerdict(observation) };
       });
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        // Concurrent identical request already created it (I04/I05) --
-        // re-read the winner rather than error or duplicate.
+        // A concurrent request won the race. WHICH index it won on decides what
+        // that means, so the observation key is settled first: under
+        // concurrency this is the ONLY place OBS-03 can be detected, because
+        // both requests read an empty table before either inserted.
+        if (observation.observationKey) {
+          // Throws SOURCE_OBSERVATION_CONFLICT if the winner holds different
+          // bytes under the same stated observation; returns the winner if the
+          // bytes are identical (a retry).
+          const observationWinner = await this.settleObservationCollision(
+            workspaceId,
+            observation.observationKey,
+            knowledge.sourceSha256,
+          );
+          if (observationWinner) {
+            const rows = await this.prisma.basicPriceImportRow.findMany({
+              where: { batchId: observationWinner.id },
+            });
+            return {
+              ...this.summarize(observationWinner, rows),
+              ...this.observationVerdict(observation),
+            };
+          }
+        }
+
+        // Otherwise it was the fingerprint index: an identical replay (I04/I05).
         const winner =
           await this.prisma.basicPriceImportBatch.findUniqueOrThrow({
             where: {
@@ -353,7 +742,10 @@ export class BasicPriceImportService {
         const winnerRows = await this.prisma.basicPriceImportRow.findMany({
           where: { batchId: winner.id },
         });
-        return this.summarize(winner, winnerRows);
+        return {
+          ...this.summarize(winner, winnerRows),
+          ...this.observationVerdict(observation),
+        };
       }
       throw error;
     }

@@ -35,6 +35,7 @@ import { apiFetch } from '../utils/apiClient';
 import {
   groupAhspComposition,
   hasAnyComponent,
+  summariseAhspComposition,
   type AhspResolutionWire,
 } from '../utils/ahspCompositionDisplay';
 import {
@@ -928,6 +929,16 @@ export function RabWorkspacePage() {
   const ahspComponentGroups = useMemo(
     () => groupAhspComposition(ahspComposition ?? []),
     [ahspComposition],
+  );
+
+  /**
+   * How much of this analysis is already settled, and what is left for a human.
+   * Counted from the groups already in memory — no extra request, and in
+   * particular NO per-component GHX call.
+   */
+  const ahspTrustSummary = useMemo(
+    () => summariseAhspComposition(ahspComponentGroups),
+    [ahspComponentGroups],
   );
 
   const persistedProofDisplay = useMemo(
@@ -2788,10 +2799,30 @@ export function RabWorkspacePage() {
                         }}
                       >
                         Komponen pembentuk harga satuan
+                        {/*
+                          EXCEPTION-FIRST. One calm sentence answers "do I need
+                          to do anything?" before the reader meets any row, so a
+                          50-component analysis with 5 problems reads as five
+                          things to look at rather than fifty cards to inspect.
+                          Every number here is counted from the server's own
+                          per-resource verdicts — nothing is inferred here.
+                        */}
+                        <span
+                          style={{
+                            display: 'block',
+                            marginTop: '2px',
+                            color: persistedProofDisplay.trustSummary.allClear
+                              ? 'var(--simprok-catatan-muted)'
+                              : 'var(--simprok-authority-navy-900)',
+                          }}
+                        >
+                          {persistedProofDisplay.trustSummary.headline}
+                        </span>
                       </caption>
                       <thead>
                         <tr style={{ textAlign: 'left', color: 'var(--simprok-catatan-muted)' }}>
                           <th scope="col">Komponen</th>
+                          <th scope="col">Status</th>
                           <th scope="col">Koefisien</th>
                           <th scope="col">Harga dasar</th>
                           <th scope="col">Biaya</th>
@@ -2810,6 +2841,35 @@ export function RabWorkspacePage() {
                             >
                               {resource.name}
                             </th>
+                            {/*
+                              The server's verdict in the reader's language.
+                              Meaning is carried by TEXT, never by colour alone,
+                              and a component that needs attention says what is
+                              missing in one ordinary sentence instead of
+                              offering a choice nobody can lawfully make.
+                            */}
+                            <td>
+                              <span
+                                style={{
+                                  color: resource.trust.needsAttention
+                                    ? 'var(--simprok-authority-navy-900)'
+                                    : 'var(--simprok-catatan-muted)',
+                                  fontWeight: resource.trust.needsAttention ? 600 : 400,
+                                }}
+                              >
+                                {resource.trust.label}
+                              </span>
+                              {resource.trust.reason ? (
+                                <span
+                                  style={{
+                                    display: 'block',
+                                    color: 'var(--simprok-catatan-muted)',
+                                  }}
+                                >
+                                  {resource.trust.reason}
+                                </span>
+                              ) : null}
+                            </td>
                             <td>
                               {resource.coefficientDisplay} {resource.ahspUnit}
                             </td>
@@ -2889,7 +2949,24 @@ export function RabWorkspacePage() {
                   Analisa ini tidak mencantumkan komponen.
                 </p>
               ) : (
-                ahspComponentGroups.map((group) => (
+                <>
+                  {/*
+                    EXCEPTION-FIRST. One sentence, before any table, so a long
+                    analysis is read as "these few need me" instead of as a wall
+                    of components to audit. On a healthy analysis it simply says
+                    everything is done and asks for nothing.
+                  */}
+                  <p
+                    className="simprok-ahsp-composition__empty"
+                    style={
+                      ahspTrustSummary.allClear
+                        ? undefined
+                        : { color: 'var(--simprok-authority-navy-900)' }
+                    }
+                  >
+                    {ahspTrustSummary.headline}
+                  </p>
+                  {ahspComponentGroups.map((group) => (
                   <section key={group.key} className="simprok-ahsp-composition__group">
                     <header>
                       <span>{group.label}</span>
@@ -2913,9 +2990,24 @@ export function RabWorkspacePage() {
                             <tr key={`${group.key}-${component.name}-${index}`}>
                               <td>
                                 {component.name}
-                                {component.unresolved ? (
-                                  <small title="Sumber daya ini belum dapat dipastikan oleh SIMPROK">
-                                    menunggu keputusan manusia
+                                {/*
+                                  HONEST PER-COMPONENT STATUS.
+
+                                  This used to read "menunggu keputusan manusia"
+                                  for EVERY component that was not RESOLVED,
+                                  which told the reader a human could settle a
+                                  resource that is simply not in the catalogue —
+                                  an action nobody can lawfully take. It now says
+                                  which of the four true states applies, using
+                                  the server's own verdict, and only a genuine
+                                  ambiguity is described as needing a decision.
+                                */}
+                                {component.trust.needsAttention ? (
+                                  <small>
+                                    {component.trust.label}
+                                    {component.trust.reason
+                                      ? ` — ${component.trust.reason}`
+                                      : ''}
                                   </small>
                                 ) : null}
                               </td>
@@ -2926,8 +3018,9 @@ export function RabWorkspacePage() {
                         </tbody>
                       </table>
                     )}
-                  </section>
-                ))
+                    </section>
+                  ))}
+                </>
               )}
             </div>
             <div className="simprok-ahsp-drawer__frame">

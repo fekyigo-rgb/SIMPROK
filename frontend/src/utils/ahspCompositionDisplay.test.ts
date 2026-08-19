@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  attentionComponents,
   formatCoefficient,
   groupAhspComposition,
   hasAnyComponent,
+  summariseAhspComposition,
 } from "./ahspCompositionDisplay.ts";
+import { toResourceTrust } from "./rabResourceTrust.ts";
 
 /**
  * RAB-TABLE-UX-01R GAP-08 — the AHSP recipe is GROUPED existing domain data,
@@ -44,6 +47,7 @@ test("carries each component's own unit and coefficient", () => {
     unit: "OH",
     coefficient: "0.66",
     unresolved: false,
+    trust: toResourceTrust({ status: "RESOLVED", reasonCodes: [] }),
   });
   assert.equal(bahan.rows[0].unit, "m3");
   assert.equal(bahan.rows[0].coefficient, "1.2");
@@ -54,6 +58,132 @@ test("carries each component's own unit and coefficient", () => {
  * would make an incomplete analysis look complete — the exact cosmetic lie
  * SIMPROK forbids. Mortar is the live example (MULTIPLE_CANDIDATES).
  */
+test("MEUX-1. a genuine ambiguity asks for a decision; a missing resource never does", () => {
+  const groups = groupAhspComposition([
+    // The machine narrowed it to legitimate alternatives — a human can settle it.
+    {
+      rawAhspResourceRef: "Mortar",
+      rawAhspResourceType: "MATERIAL",
+      ahspUnit: "m3",
+      ahspCoefficient: "0.480000",
+      status: "NEEDS_REVIEW",
+      reasonCodes: ["MULTIPLE_CANDIDATES_NEEDS_REVIEW"],
+    },
+    // Nothing to choose between — this must never become "silakan pilih".
+    {
+      rawAhspResourceRef: "Bahan Hantu",
+      rawAhspResourceType: "MATERIAL",
+      ahspUnit: "m3",
+      ahspCoefficient: "1.000000",
+      status: "UNRESOLVED",
+      reasonCodes: ["RESOURCE_NOT_FOUND"],
+    },
+  ]);
+
+  const bahan = groups[1];
+  const mortar = bahan.rows.find((r) => r.name === "Mortar")!;
+  const hantu = bahan.rows.find((r) => r.name === "Bahan Hantu")!;
+
+  assert.equal(mortar.trust.state, "NEEDS_HUMAN_DECISION");
+  assert.equal(mortar.trust.label, "Perlu keputusan Anda");
+  assert.equal(mortar.trust.decisionAvailable, true);
+
+  assert.equal(hantu.trust.state, "NOT_PROVABLE");
+  assert.equal(hantu.trust.label, "Belum dapat dipastikan");
+  assert.equal(hantu.trust.reason, "Sumber daya ini belum dikenali di katalog.");
+  assert.equal(hantu.trust.decisionAvailable, false);
+});
+
+test("MEUX-2. a 24-component analysis reports its 3 exceptions, not 24 rows to audit", () => {
+  const many = [
+    ...Array.from({ length: 21 }, (_, i) => ({
+      rawAhspResourceRef: `Bahan ${i + 1}`,
+      rawAhspResourceType: "MATERIAL",
+      ahspUnit: "m3",
+      ahspCoefficient: "1.000000",
+      status: "RESOLVED",
+      reasonCodes: ["EXACT_RESOURCE_NAME_MATCH"],
+    })),
+    {
+      rawAhspResourceRef: "Mortar",
+      rawAhspResourceType: "MATERIAL",
+      ahspUnit: "m3",
+      ahspCoefficient: "0.480000",
+      status: "NEEDS_REVIEW",
+      reasonCodes: ["MULTIPLE_CANDIDATES_NEEDS_REVIEW"],
+    },
+    {
+      rawAhspResourceRef: "Bahan Hantu",
+      rawAhspResourceType: "MATERIAL",
+      ahspUnit: "m3",
+      ahspCoefficient: "1.000000",
+      status: "UNRESOLVED",
+      reasonCodes: ["RESOURCE_NOT_FOUND"],
+    },
+    {
+      rawAhspResourceRef: "Pekerja",
+      rawAhspResourceType: "LABOR",
+      ahspUnit: "OH",
+      ahspCoefficient: "0.660000",
+      status: "UNRESOLVED",
+      reasonCodes: ["UNIT_NOT_SUPPORTED"],
+    },
+  ];
+
+  const groups = groupAhspComposition(many);
+  const summary = summariseAhspComposition(groups);
+
+  assert.equal(summary.total, 24);
+  assert.equal(summary.settled, 21);
+  assert.equal(summary.needsDecision, 1);
+  assert.equal(summary.notProvable, 2);
+  assert.equal(summary.attention, 3);
+  assert.equal(
+    summary.headline,
+    "SIMPROK sudah menyelesaikan 21 dari 24 komponen. 1 perlu keputusan Anda, 2 belum dapat dipastikan.",
+  );
+
+  // The user is handed exactly the three that need them — across all groups.
+  const attention = attentionComponents(groups);
+  assert.equal(attention.length, 3);
+  assert.deepEqual(attention.map((r) => r.name).sort(), [
+    "Bahan Hantu",
+    "Mortar",
+    "Pekerja",
+  ]);
+  // And the 21 healthy components are still inspectable, just not shouting.
+  assert.equal(groups.flatMap((g) => g.rows).length, 24);
+});
+
+test("MEUX-3. a fully proven analysis stays quiet", () => {
+  const groups = groupAhspComposition(
+    rows.map((r) => ({ ...r, status: "RESOLVED", reasonCodes: ["EXACT_RESOURCE_NAME_MATCH"] })),
+  );
+  const summary = summariseAhspComposition(groups);
+  assert.equal(summary.allClear, true);
+  assert.equal(attentionComponents(groups).length, 0);
+  assert.equal(
+    summary.headline,
+    "Seluruh 5 komponen sudah beres. Tidak ada yang perlu Anda lakukan.",
+  );
+});
+
+test("MEUX-4. a component with no reason codes still fails closed, never optimistic", () => {
+  // Older occurrences may carry a status with no codes. Silence is not proof.
+  const groups = groupAhspComposition([
+    {
+      rawAhspResourceRef: "Lama",
+      rawAhspResourceType: "MATERIAL",
+      ahspUnit: "m3",
+      ahspCoefficient: "1.000000",
+      status: "NEEDS_REVIEW",
+    },
+  ]);
+  const row = groups[1].rows[0];
+  assert.equal(row.trust.state, "NOT_PROVABLE");
+  assert.equal(row.trust.decisionAvailable, false);
+});
+
 test("an unresolved component is still listed, and marked", () => {
   const bahan = groupAhspComposition(rows)[1];
   const mortar = bahan.rows.find((r) => r.name === "Mortar");

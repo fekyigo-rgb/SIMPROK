@@ -6,6 +6,7 @@ import {
   toPersistedCalculationDisplay,
   type PersistedCalculationWire,
 } from "./rabPersistedCalculationDisplay.ts";
+import { toResourceTrust } from "./rabResourceTrust.ts";
 
 /**
  * RM-03 breakdown display. TEST_ONLY_SYNTHETIC_FIXTURE=YES, PRODUCTION_TRUTH=NO.
@@ -114,7 +115,53 @@ test("RM03-D-03: each resource row carries its coefficient, Basic Price source, 
     freshness: "CURRENT",
     status: "RESOLVED",
     reasonCodes: ["EXACT_RESOURCE_NAME_MATCH"],
+    // The server's verdict, translated for the reader. Derived only from the
+    // status and reason codes on this same row.
+    trust: toResourceTrust({
+      status: "RESOLVED",
+      reasonCodes: ["EXACT_RESOURCE_NAME_MATCH"],
+    }),
   });
+});
+
+test("RM03-D-03b: the breakdown states how many components are settled and how many need a human", () => {
+  const display = toPersistedCalculationDisplay(verifiedWire);
+
+  assert.equal(display.trustSummary.total, 1);
+  assert.equal(display.trustSummary.settled, 1);
+  assert.equal(display.trustSummary.attention, 0);
+  assert.equal(display.trustSummary.allClear, true);
+  assert.equal(display.resources[0].trust.state, "MACHINE_PROVEN");
+  assert.equal(display.resources[0].trust.label, "Terbukti otomatis");
+  assert.equal(display.resources[0].trust.decisionAvailable, false);
+});
+
+test("RM03-D-03c: an unresolved component becomes a truthful exception, never a fake choice", () => {
+  const display = toPersistedCalculationDisplay({
+    ...verifiedWire,
+    resources: [
+      {
+        ...verifiedWire.resources![0],
+        status: "UNRESOLVED",
+        reasonCodes: ["RESOURCE_NOT_FOUND"],
+      },
+    ],
+  });
+
+  const trust = display.resources[0].trust;
+  assert.equal(trust.state, "NOT_PROVABLE");
+  assert.equal(trust.label, "Belum dapat dipastikan");
+  assert.equal(trust.reason, "Sumber daya ini belum dikenali di katalog.");
+  assert.equal(trust.decisionAvailable, false);
+  assert.equal(display.trustSummary.attention, 1);
+  assert.equal(display.trustSummary.allClear, false);
+});
+
+test("RM03-D-03d: an unavailable trace reports an empty, honest trust summary", () => {
+  const display = toPersistedCalculationDisplay(null);
+  assert.equal(display.kind, "unavailable");
+  assert.equal(display.trustSummary.total, 0);
+  assert.equal(display.trustSummary.headline, "Belum ada komponen untuk ditelusuri.");
 });
 
 test("RM03-D-04: a mismatch is shown as a mismatch, with both numbers kept and neither preferred", () => {

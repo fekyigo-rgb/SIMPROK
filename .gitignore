@@ -48,3 +48,20 @@ frontend/.gitignore
 
 # SIMPROK local agent runtime artifacts
 /docs/agent-queue/RUN_REPORT.local.md
+
+# USI-01 Reality Intake source evidence.
+#
+# The BYTES of every external artifact SIMPROK receives are retained on disk
+# under this path (LAW 2.2 — raw truth never disappears), keyed by workspace and
+# checksum. It is runtime evidence, not source: it holds real uploaded supplier
+# and government documents, and committing it would put customer data in git.
+# Overridable via INTAKE_STORAGE_DIR.
+backend/storage/
+
+# Owner acceptance workbooks and any other spreadsheet left at the repository
+# root. These are real business data — supplier and government price lists —
+# placed here for rehearsal, never source. Committing one would put customer
+# data in git permanently, so the door is closed rather than trusted.
+/*.xlsx
+/*.xls
+/*.csv

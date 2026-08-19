@@ -8,6 +8,8 @@ import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 import { RabLifecyclePolicyService } from '../project/rab-lifecycle-policy.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { AhspResourceResolutionOrchestrator } from './ahsp-resource-resolution.orchestrator';
+import { GhxResourceIdentityDecisionService } from './ghx-resource-identity-decision.service';
+import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision-context-token.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, BasicPriceModule, UnitKernelModule],
@@ -17,6 +19,8 @@ import { AhspResourceResolutionOrchestrator } from './ahsp-resource-resolution.o
     RabLifecyclePolicyService,
     ResourceIdentityResolutionService,
     AhspResourceResolutionOrchestrator,
+    GhxResourceIdentityDecisionService,
+    GhxDecisionContextTokenService,
   ],
 })
 export class ProjectAhspModule {}

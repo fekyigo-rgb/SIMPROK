@@ -11,6 +11,7 @@ import {
   TECHNICAL_DETAIL_TITLE,
 } from "./rabTraceDisplay.ts";
 import { toPersistedRowDisplayList } from "./rabPersistedDraftDisplay.ts";
+import { summariseResourceTrust, toResourceTrust } from "./rabResourceTrust.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RAB-TRACE-01 — ORIGIN: only what the repository can prove
@@ -252,8 +253,12 @@ const PROOF = {
       freshness: "CURRENT",
       status: "RESOLVED",
       reasonCodes: [],
+      trust: toResourceTrust({ status: "RESOLVED", reasonCodes: [] }),
     },
   ],
+  trustSummary: summariseResourceTrust([
+    toResourceTrust({ status: "RESOLVED", reasonCodes: [] }),
+  ]),
 };
 
 test("T-1. a kernel price is explained by the authoritative proof, not row fields", () => {

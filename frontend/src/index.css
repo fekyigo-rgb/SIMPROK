@@ -6197,3 +6197,295 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+ * PHONE-WIDTH RAB — THE SAME ROWS, READ AS A LIST INSTEAD OF A SPREADSHEET
+ *
+ * THE SEAM THIS REPAIRS. `.simprok-rab-table` carries a hard floor of 1204px
+ * (Ruang Kerja) inside `.simprok-rab-table-wrap`, and Ruang Hidup's canvas
+ * carries a 1180px floor of its own. Above that width the floor is invisible.
+ * On a phone it is the whole product: at 390px the scroll window is ~354px,
+ * so the only columns standing in it are Atur, No and Kode AHSP. Volume
+ * (x=524), Satuan (620), Harga Satuan (702), Jumlah (866) and the Rincian
+ * Harga door (1062) were all painted past the right edge — every business
+ * value the row exists to carry, plus its door to AHSP, behind 800px of
+ * horizontal scroll nobody discovers. The rows were never missing; they were
+ * unreachable, which for the Owner is the same thing.
+ *
+ * THE REPAIR. Below the breakpoint the product ALREADY uses for phones —
+ * 640px, the same one `isMobileViewport` reads in RabWorkspacePage, so no
+ * second boundary enters the product — the table stops presenting itself as
+ * a spreadsheet and presents each row as one labelled card. Nothing is
+ * hidden: every column that had a header becomes a labelled line, so the
+ * Owner reads the SAME facts, in the same order, without scrolling sideways.
+ *
+ * WHY THIS IS NOT A SECOND RAB. No second component, no second query, no
+ * second store, no second breakpoint. Presentation only — the same <table>,
+ * the same <tr> per row, the same cells, the same ids, the same onClick
+ * handlers, the same server truth. Delete this block and the product is
+ * exactly what it was.
+ * ═══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 640px) {
+  /* The nested horizontal prisons stand down. There is nothing left to scroll
+     sideways, so the frames that existed to contain that scrolling stop
+     constraining the list. */
+  .simprok-rab-sheet {
+    overflow: visible;
+  }
+  .simprok-rab-table-wrap,
+  .simprok-rab-table-canvas {
+    overflow-x: visible;
+    max-width: 100%;
+  }
+
+  /* Ruang Hidup's Full-Canvas Viewer keeps its component and its zoom; only
+     its geometry adapts. The document is written by JS as an absolutely
+     positioned 1180px sheet inside a sized scroll area, so those inline
+     values are the ones that yield here. Width `100% / zoom` scaled by `zoom`
+     resolves to exactly 100% — the same primitive `.simprok-rab-table-zoom`
+     already uses in Ruang Kerja — so the zoom control stays a live door
+     instead of becoming a dead one. */
+  .simprok-rab-canvas {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none;
+    overflow: visible;
+    padding: var(--space-3) !important;
+  }
+  .simprok-rab-canvas > div {
+    position: static !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+  }
+  .simprok-rab-canvas__zoom {
+    position: static !important;
+    width: calc(100% / var(--simprok-rab-zoom, 1)) !important;
+    min-width: 0 !important;
+    box-shadow: none;
+  }
+
+  /* THE TABLE BECOMES A LIST. The header row is the one thing that cannot
+     survive stacking, so its labels move onto the cells themselves below and
+     it leaves the accessibility tree rather than being read as nine orphan
+     words above a list that no longer has columns. */
+  .simprok-rab-table,
+  .simprok-rab-table.simprok-rab-draft-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    table-layout: auto;
+    border: 0;
+    background: 0 0;
+  }
+  .simprok-rab-table thead {
+    display: none;
+  }
+  .simprok-rab-table tbody {
+    display: block;
+  }
+  .simprok-rab-table tbody tr {
+    display: block;
+    margin: 0 0 var(--space-3);
+    border: 1px solid var(--simprok-engineering-blue-200);
+    border-radius: var(--radius-md);
+    background: var(--simprok-white);
+    overflow: hidden;
+  }
+
+  /* One cell, one line: label on the left, the Owner's value on the right.
+     Column widths are a spreadsheet's geometry and mean nothing in a list, so
+     they are released — `!important` only where the base rules used it too. */
+  .simprok-rab-table tbody td,
+  .simprok-rab-table.simprok-rab-draft-table tbody td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    width: auto !important;
+    /* A POSITIONAL FLOOR STILL LIVES IN THIS STYLESHEET.
+       `.simprok-rab-table td:nth-child(2)` sets a 360px minimum, and the two
+       rooms do not share a column order — it lands on Kode AHSP in Ruang
+       Hidup and on No in Ruang Kerja. On a desktop it is absorbed by a
+       1204px table. Stacked, it made the cell 360px wide inside a 330px card
+       and the value was clipped by the card edge ("Belum terhubu"). A list
+       has no columns, so no cell keeps a column floor here. */
+    min-width: 0 !important;
+    min-height: 44px;
+    padding: 8px 12px !important;
+    border: 0;
+    border-bottom: 1px solid var(--simprok-engineering-blue-100);
+    text-align: left !important;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+  }
+  .simprok-rab-table tbody tr td:last-child {
+    border-bottom: 0;
+  }
+  /* A cell with nothing in it is not a fact worth a line of its own. */
+  .simprok-rab-table tbody td:empty {
+    display: none;
+  }
+
+  /* THE HEADER, MOVED ONTO THE ROW. Every column that had a header keeps its
+     name here, so no value is left to be guessed at by position — and no
+     value is dropped to make the row fit. */
+  .simprok-rab-table tbody td::before {
+    flex: none;
+    color: var(--simprok-engineering-blue-700);
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-bold);
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-no::before {
+    content: "No";
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-kode::before {
+    content: "Kode AHSP";
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-volume::before {
+    content: "Volume";
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-satuan::before {
+    content: "Satuan";
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-harga::before {
+    content: "Harga Satuan";
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-jumlah::before {
+    content: "Jumlah";
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-asal::before {
+    content: "Asal Harga";
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-atur::before {
+    content: "Atur";
+  }
+
+  /* URAIAN is why the Owner opened the row, so it reads first and reads whole.
+     The depth indent is an inline style and a spreadsheet idea; in a list the
+     card itself is the row, so the indent stands down. */
+  .simprok-rab-table tbody td.simprok-rab-col-uraian {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding-left: 12px !important;
+    background: var(--simprok-engineering-blue-50);
+    font-weight: var(--weight-semibold);
+    overflow-wrap: anywhere;
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-uraian::before {
+    content: "Uraian Pekerjaan";
+  }
+
+  /* Controls fill the line they sit on and are big enough for a thumb. 16px is
+     the size below which a phone browser zooms the page on focus — the Owner
+     should never have to zoom back out to keep typing. */
+  .simprok-rab-table tbody td input,
+  .simprok-rab-table tbody td .simprok-rab-description-input,
+  .simprok-rab-table.simprok-rab-draft-table tbody td input {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    padding-top: 6px !important;
+    padding-bottom: 6px !important;
+    font-size: 16px;
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-volume input,
+  .simprok-rab-table tbody td.simprok-rab-col-harga input {
+    text-align: right;
+  }
+  .simprok-rab-table tbody td .simprok-rab-row__name {
+    display: flex;
+    width: 100%;
+  }
+
+  /* JUMLAH is the row's answer, so it carries the authority navy the rest of
+     the product already gives a settled total. */
+  .simprok-rab-table tbody td.simprok-rab-col-jumlah {
+    background: var(--simprok-surface-light);
+    color: var(--simprok-authority-navy-900);
+    font-weight: var(--weight-bold);
+  }
+
+  /* THE DOOR TO AHSP, back within reach. Same button, same handler — it simply
+     stops being 700px off the right edge of a phone. */
+  .simprok-rab-table tbody td.simprok-rab-col-aksi {
+    justify-content: stretch;
+    background: var(--simprok-white);
+  }
+  .simprok-rab-table tbody td.simprok-rab-col-aksi::before {
+    content: none;
+  }
+  /* The cell's flex child is the action WRAPPER, so that is the thing that has
+     to fill the line before the button inside it can. A folder row carries two
+     buttons here and they share the line evenly. */
+  .simprok-rab-table tbody td .simprok-rab-row-actions {
+    flex: 1 1 auto;
+    gap: var(--space-2);
+    width: 100%;
+  }
+  .simprok-rab-table tbody td .simprok-rab-row-actions > button {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 44px;
+  }
+  .simprok-rab-table tbody td .simprok-rab-table-action,
+  .simprok-rab-table.simprok-rab-draft-table tbody td .simprok-rab-table-action {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 44px;
+    padding-top: 8px !important;
+    padding-bottom: 8px !important;
+    text-align: center;
+  }
+
+  /* THE STRUCTURAL CONTROLS. On a desktop these are revealed by hover; a phone
+     has no hover, so here they are simply present, at a size a thumb can hit. */
+  .simprok-rab-table tbody td.simprok-rab-col-atur {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: var(--space-2);
+  }
+  .simprok-rab-draft-table .simprok-rab-col-atur {
+    position: static;
+  }
+  .simprok-rab-row-structure {
+    position: static;
+    flex-direction: row;
+    gap: var(--space-2);
+    transform: none;
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .simprok-rab-row-move {
+    gap: var(--space-2) !important;
+    display: flex !important;
+    grid-template-columns: none;
+  }
+  .simprok-rab-row-structure button,
+  .simprok-rab-draft-table .simprok-rab-row-move button,
+  .simprok-rab-row-move button {
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  /* A folder row is a heading; it keeps every line it actually has. */
+  .simprok-rab-table tbody tr.simprok-rab-row--folder td.simprok-rab-col-uraian {
+    background: var(--simprok-engineering-blue-100);
+    color: var(--simprok-engineering-blue-900);
+    font-weight: var(--weight-bold);
+  }
+  /* The selected row stays obvious once columns no longer line up to show it —
+     stated as a border, not by colour alone. */
+  .simprok-rab-table tbody tr.simprok-rab-row--selected {
+    border-color: var(--simprok-bright-sky-blue-400);
+    box-shadow: 0 0 0 1px var(--simprok-bright-sky-blue-400);
+  }
+}

@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { WORKING_DRAFT_STRUCTURE_NAME } from '../../src/project/rab-lifecycle-policy.service';
+import { E1A_RESOLUTION_POLICY_VERSION } from '../../src/project-ahsp/ahsp-resource-resolution.orchestrator';
 
 describe('Project AHSP whole-version selection (e2e)', () => {
   const prisma = new PrismaClient();
@@ -627,7 +628,10 @@ describe('Project AHSP whole-version selection (e2e)', () => {
       workspaceId,
       createdByAccountId: accountId,
       ahspVersionId: wholeVersionId,
-      resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V1',
+      // The SHIPPED constant, never a literal: the point of this assertion is
+      // that a caller cannot spoof the policy version, and it must keep proving
+      // that as the policy legitimately advances.
+      resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
     });
     expect(response.body.resourceResolutions).toHaveLength(2);
     expect(

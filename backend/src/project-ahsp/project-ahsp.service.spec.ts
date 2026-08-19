@@ -5,7 +5,10 @@ import { createHash } from 'crypto';
 import * as kernel from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { ProjectAhspService } from './project-ahsp.service';
-import { AhspResourceResolutionOrchestrator } from './ahsp-resource-resolution.orchestrator';
+import {
+  AhspResourceResolutionOrchestrator,
+  E1A_RESOLUTION_POLICY_VERSION,
+} from './ahsp-resource-resolution.orchestrator';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
 describe('ProjectAhspService E1A', () => {
@@ -34,7 +37,11 @@ describe('ProjectAhspService E1A', () => {
           ahspVersionId: input.ahspVersionId,
           businessPricingAsOfDate: input.businessPricingAsOfDate,
           referenceRegionId: input.referenceRegionId,
-          resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V1',
+          // Read from the shipped constant, never retyped. The policy version
+          // is part of the idempotency payload BY DESIGN — advancing the law
+          // must make a replayed request a different request — so a literal
+          // here would silently assert the old law forever.
+          resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
         }),
       )
       .digest('hex');
@@ -163,7 +170,11 @@ describe('ProjectAhspService E1A', () => {
     // already used, so every assertion below still exercises the shipped
     // decision path rather than a stub of it.
     const eligibility = new BasicPriceEligibilityPolicy();
-    const identity = new ResourceIdentityResolutionService(prisma);
+    // RM-03D2: the REAL identity service now consults the Unit authority to
+    // settle an exact-representation tie, so it takes the SAME real-ish unit
+    // stub this spec already drives the orchestrator with. Nothing about the
+    // identity decision itself is stubbed.
+    const identity = new ResourceIdentityResolutionService(prisma, units as any);
     service = new ProjectAhspService(
       prisma,
       eligibility,
@@ -617,7 +628,7 @@ describe('ProjectAhspService E1A', () => {
     prisma.$transaction.mockImplementation((callback: any) => callback(tx));
     jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({ ...input, status: 'UNRESOLVED', reasonCodes: ['NO_PRICE'], explanation: 'none' }));
     await service.selectForBoqItem({ ...selectionInput, ...( { selectionMode: 'USER_OVERRIDDEN', resolutionPolicyVersion: 'CALLER' } as any) });
-    expect(created.data.resolutionPolicyVersion).toBe('E1A_CONTEXTUAL_EXACT_REGION_V1');
+    expect(created.data.resolutionPolicyVersion).toBe(E1A_RESOLUTION_POLICY_VERSION);
     expect(created.data.resourceResolutions.create[0].selectionMode).toBeNull();
   });
 

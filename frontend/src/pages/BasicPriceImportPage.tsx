@@ -2,12 +2,21 @@ import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, FileInput } from 'lucide-react';
 import {
+  IntakeRefusalError,
   previewBasicPriceImport,
   updateBasicPriceImportBatch,
   type BasicPriceImportMetadata,
+  type BasicPriceIntakeSelection,
   type PriceSourceOrigin,
   type PriceSourceType,
 } from '../api/basicPriceImport';
+import {
+  IntakeQuestionPanel,
+  intakeQuestionOf,
+  intakeRefusalMessage,
+  type IntakeAnswerKey,
+  type IntakeQuestionModel,
+} from '../components/basic-price/IntakeQuestion';
 import {
   batchStatusLabel,
   formatBatchProgress,
@@ -47,25 +56,70 @@ export function BasicPriceImportPage() {
   const [batch, setBatch] = useState<BasicPriceImportBatchSummary | null>(null);
   const [region, setRegion] = useState<RegionLookupItem | null>(null);
   const [isBusy, setIsBusy] = useState(false);
-  const [statusMessage, setStatusMessage] = useState('Pilih file XLSX Basic Price untuk memulai.');
+  const [statusMessage, setStatusMessage] = useState('Pilih berkas daftar harga (XLSX atau CSV) untuk memulai.');
+  // USI-01 — the answers a human has given about THIS file. Empty on the first
+  // attempt: SIMPROK asks nothing until the source proves it must.
+  const [selection, setSelection] = useState<BasicPriceIntakeSelection>({});
+  const [question, setQuestion] = useState<IntakeQuestionModel | null>(null);
 
   const updateMetadataField = <K extends keyof BasicPriceImportMetadata>(key: K, value: BasicPriceImportMetadata[K]) => {
     setMetadata((current) => ({ ...current, [key]: value }));
   };
 
-  const handleFileChosen = async (file: File) => {
-    setSelectedFile(file);
+  /**
+   * USI-01 — reads a source, and asks at most one question at a time.
+   *
+   * NOTE WHAT IS NOT SENT: a sheet name. The previous version pinned every
+   * upload to the literal sheet "HARGA SATUAN UPAH DAN BAHAN", so any workbook
+   * organized differently was rejected before it was ever read — the exact
+   * exact-sheet-name requirement §18 forbids. SIMPROK now finds the table by
+   * evidence, and only asks when a file genuinely proves more than one reading.
+   */
+  const readSource = async (file: File, answers: BasicPriceIntakeSelection) => {
     setIsBusy(true);
-    setStatusMessage('Membaca workbook Basic Price...');
+    setStatusMessage('SIMPROK sedang membaca berkas...');
     try {
-      const result = await previewBasicPriceImport(file, 'HARGA SATUAN UPAH DAN BAHAN', metadata);
+      const result = await previewBasicPriceImport(file, answers, metadata);
       setBatch(result);
-      setStatusMessage(`Preview siap: ${result.totalRows} baris terbaca dari ${file.name}.`);
-    } catch {
-      setStatusMessage('Gagal membaca workbook. Periksa format file dan coba lagi.');
+      setQuestion(null);
+      setStatusMessage(
+        `SIMPROK mengenali daftar harga ini — ${result.totalRows} baris terbaca dari ${file.name}.`,
+      );
+    } catch (error) {
+      setBatch(null);
+      if (error instanceof IntakeRefusalError) {
+        const next = intakeQuestionOf(error.code, error.details, answers);
+        setQuestion(next);
+        // A question is not a failure, and is never worded as one.
+        setStatusMessage(
+          next
+            ? 'SIMPROK sudah membaca berkas ini dan menemukan satu hal yang harus Anda putuskan.'
+            : intakeRefusalMessage(error.code, error.details),
+        );
+      } else {
+        setQuestion(null);
+        setStatusMessage('Unggahan tidak sampai ke SIMPROK. Periksa koneksi lalu coba lagi.');
+      }
     } finally {
       setIsBusy(false);
     }
+  };
+
+  const handleFileChosen = async (file: File) => {
+    setSelectedFile(file);
+    // A new file is a new subject: answers given about the previous one must
+    // never be carried onto it.
+    setSelection({});
+    setQuestion(null);
+    await readSource(file, {});
+  };
+
+  const handleAnswer = async (key: IntakeAnswerKey, value: string) => {
+    if (!selectedFile) return;
+    const isColumn = key === 'selectedNameColumn' || key === 'selectedUnitColumn';
+    const answers = { ...selection, [key]: isColumn ? Number(value) : value };
+    setSelection(answers);
+    await readSource(selectedFile, answers);
   };
 
   const handleSaveMetadata = async () => {
@@ -105,16 +159,20 @@ export function BasicPriceImportPage() {
           ref={fileInputRef}
           hidden
           type="file"
-          accept=".xlsx"
+          accept=".xlsx,.csv"
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void handleFileChosen(file);
           }}
         />
-        <button onClick={() => fileInputRef.current?.click()} disabled={isBusy} title="Pilih file XLSX Basic Price" aria-label="Pilih file Basic Price">
-          <FileInput size={17} /> Pilih File Basic Price
+        <button onClick={() => fileInputRef.current?.click()} disabled={isBusy} title="Pilih berkas daftar harga (XLSX atau CSV)" aria-label="Pilih berkas daftar harga">
+          <FileInput size={17} /> Pilih Berkas Daftar Harga
         </button>
       </section>
+
+      {question ? (
+        <IntakeQuestionPanel question={question} disabled={isBusy} onAnswer={(key, value) => void handleAnswer(key, value)} />
+      ) : null}
 
       {batch ? (
         <section className="simprok-rab-validation-alert simprok-rab-validation-alert--info" aria-label="Preview Impor Basic Price">

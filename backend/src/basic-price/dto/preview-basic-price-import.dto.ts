@@ -1,11 +1,32 @@
-import { IsOptional, IsString, IsUUID, IsEnum, IsBoolean, IsDateString, Matches } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { IsOptional, IsString, IsUUID, IsEnum, IsBoolean, IsDateString, IsInt, Matches, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import {
   PriceSourceType,
   PriceSourceOrigin,
   PriceEffectiveDateProvenance,
   PriceSourcePeriodGranularity,
 } from '@prisma/client';
+import type {
+  BasicPriceSection,
+  PriceTableStructure,
+} from '../../universal-intake/structure/structure-detector';
+
+/**
+ * `@IsEnum` needs a runtime object, and these two vocabularies live in the
+ * intake layer as TypeScript unions rather than Prisma enums — deliberately, so
+ * that recognizing a new table shape never requires a database migration.
+ */
+const PRICE_TABLE_STRUCTURES = {
+  SECTIONED_PRICE_LIST: 'SECTIONED_PRICE_LIST',
+  SEMANTIC_HEADER_TABLE: 'SEMANTIC_HEADER_TABLE',
+  REGIONAL_MATRIX: 'REGIONAL_MATRIX',
+} as const;
+
+const BASIC_PRICE_SECTIONS = {
+  LABOR: 'LABOR',
+  MATERIAL: 'MATERIAL',
+  EQUIPMENT: 'EQUIPMENT',
+} as const;
 
 /**
  * RM-03D1 — a provenance string must actually say something. `@IsString()`
@@ -84,4 +105,44 @@ export class PreviewBasicPriceImportDto {
   @IsOptional() @Transform(toBoolean) @IsBoolean() deliveredToProject?: boolean;
 
   @IsOptional() @IsString() selectedSheet?: string;
+
+  /**
+   * USI-01 §5 — THE HUMAN'S ANSWER TO A GENUINE AMBIGUITY, ASKED ONCE.
+   *
+   * None of these four is ever needed when the source proves exactly one
+   * reading. They exist for the cases where SIMPROK deliberately refuses to
+   * guess, and each corresponds to a named refusal the intake returns first:
+   *
+   *   selectedStructure    SOURCE_STRUCTURE_AMBIGUOUS — one table, two
+   *                        plausible shapes.
+   *   selectedRegionLabel  REGION_COLUMN_SELECTION_REQUIRED — the source covers
+   *                        several jurisdictions and a batch carries one. This
+   *                        is the source's OWN wording ("SIRIMAU"), not a
+   *                        canonical Region; `regionId` remains the canonical
+   *                        answer and is a separate human decision.
+   *   declaredSection      SECTION_DECLARATION_REQUIRED — the source declares
+   *                        no LABOR/MATERIAL/EQUIPMENT sections of its own, and
+   *                        the resolution lifecycle downstream treats this as
+   *                        authority, so a person states it rather than SIMPROK
+   *                        inferring it from a resource's name.
+   */
+  @IsOptional()
+  @IsEnum(PRICE_TABLE_STRUCTURES)
+  selectedStructure?: PriceTableStructure;
+
+  @IsOptional() @IsString() @Matches(NON_BLANK) selectedRegionLabel?: string;
+
+  @IsOptional() @IsEnum(BASIC_PRICE_SECTIONS) declaredSection?: BasicPriceSection;
+
+  /**
+   * USI-01R2 §10 — WHICH COLUMN IS THE RESOURCE NAME, AND WHICH IS THE UNIT.
+   *
+   * Needed only for a source whose shape is proven but whose columns carry no
+   * header — a scanned regional price list is the real case. SIMPROK answers
+   * COLUMN_ROLE_SELECTION_REQUIRED with the candidate columns and real sample
+   * values from the file, and a person picks once. It can never override a
+   * header the source DID state.
+   */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) selectedNameColumn?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) selectedUnitColumn?: number;
 }
