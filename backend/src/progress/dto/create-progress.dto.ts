@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsDecimal,
+  IsEnum,
   IsOptional,
   IsString,
   IsUrl,
@@ -32,6 +33,14 @@ export class ProgressEvidenceReferenceDto {
 }
 
 const PROJECT_BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+export enum ProgressCorrectionReasonCode {
+  DATA_ENTRY_ERROR = 'DATA_ENTRY_ERROR',
+  MEASUREMENT_UPDATE = 'MEASUREMENT_UPDATE',
+  FIELD_FACT_CORRECTION = 'FIELD_FACT_CORRECTION',
+  ADMINISTRATIVE_CORRECTION = 'ADMINISTRATIVE_CORRECTION',
+  OTHER = 'OTHER',
+}
 
 export class ProgressEntryDto {
   @IsUUID()
@@ -89,9 +98,12 @@ export class CorrectProgressDto {
   @Length(1, 80)
   captureMethod: string;
 
+  @IsEnum(ProgressCorrectionReasonCode)
+  reasonCode: ProgressCorrectionReasonCode;
+
   @IsString()
   @Length(1, 2000)
-  reason: string;
+  reasonText: string;
 
   @IsOptional()
   @IsString()

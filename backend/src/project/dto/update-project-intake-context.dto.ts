@@ -20,10 +20,4 @@ export class UpdateProjectIntakeContextDto {
   @MaxLength(5000)
   @IsOptional()
   mainMaterialSpec?: string | null;
-
-  @Transform(normalizeOptionalText)
-  @IsString()
-  @MaxLength(64)
-  @IsOptional()
-  timeZone?: string | null;
 }

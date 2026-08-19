@@ -43,10 +43,4 @@ export class CreateProjectDto {
   @IsOptional()
   @IsUUID()
   workspaceId?: string;
-
-  @Transform(normalizeOptionalText)
-  @IsString()
-  @MaxLength(64)
-  @IsOptional()
-  timeZone?: string | null;
 }

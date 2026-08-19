@@ -41,6 +41,7 @@ interface ProgressRequestTrace {
 
 const EFFECTIVE_STATUSES: ProgressActualStatus[] = [
   ProgressActualStatus.LEGACY_UNSPECIFIED,
+  ProgressActualStatus.RECORDED,
   ProgressActualStatus.SUBMITTED,
   ProgressActualStatus.VERIFIED,
   ProgressActualStatus.ACCEPTED,
@@ -49,7 +50,7 @@ const EFFECTIVE_STATUSES: ProgressActualStatus[] = [
 const PROGRESS_AUDIT_SCHEMA_VERSION = 1;
 const PROGRESS_AUDIT_EVENT_TYPE = 'ACTUAL_PROGRESS';
 const PROGRESS_AUDIT_SOURCE_MODULE = 'FIELD_PROGRESS';
-const PROGRESS_AUDIT_ACTOR_TYPE = 'HUMAN';
+const PROGRESS_AUDIT_ACTOR_TYPE = 'USER';
 const PROJECT_BUSINESS_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 interface EffectiveCandidate {
@@ -57,6 +58,8 @@ interface EffectiveCandidate {
   workDate: Date | null;
   createdAt: Date;
   supersedesEntryId: string | null;
+  status: ProgressActualStatus;
+  revision: number;
 }
 
 @Injectable()
@@ -140,6 +143,60 @@ export class ProgressService {
   }
 
   private effectiveEntry<T extends EffectiveCandidate>(entries: T[]): T | null {
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    const chains = new Map<string, T[]>();
+    const legitimacy = (status: ProgressActualStatus) => {
+      if (status === ProgressActualStatus.ACCEPTED) return 3;
+      if (status === ProgressActualStatus.VERIFIED) return 2;
+      return EFFECTIVE_STATUSES.includes(status) ? 1 : -1;
+    };
+    for (const entry of entries) {
+      let root = entry;
+      const visited = new Set<string>();
+      while (root.supersedesEntryId && byId.has(root.supersedesEntryId)) {
+        if (visited.has(root.id)) break;
+        visited.add(root.id);
+        root = byId.get(root.supersedesEntryId)!;
+      }
+      const chain = chains.get(root.id) ?? [];
+      chain.push(entry);
+      chains.set(root.id, chain);
+    }
+
+    const candidates = [...chains.values()]
+      .map(
+        (chain) =>
+          [...chain]
+            .filter((entry) => legitimacy(entry.status) >= 0)
+            .sort((left, right) => {
+              const rank = legitimacy(right.status) - legitimacy(left.status);
+              if (rank !== 0) return rank;
+              const revision = right.revision - left.revision;
+              if (revision !== 0) return revision;
+              const recorded =
+                right.createdAt.getTime() - left.createdAt.getTime();
+              return recorded !== 0
+                ? recorded
+                : right.id.localeCompare(left.id);
+            })[0] ?? null,
+      )
+      .filter((entry): entry is T => entry !== null);
+
+    return (
+      candidates.sort((left, right) => {
+        const workDate =
+          (right.workDate?.getTime() ?? Number.MIN_SAFE_INTEGER) -
+          (left.workDate?.getTime() ?? Number.MIN_SAFE_INTEGER);
+        if (workDate !== 0) return workDate;
+        const recorded = right.createdAt.getTime() - left.createdAt.getTime();
+        return recorded !== 0 ? recorded : right.id.localeCompare(left.id);
+      })[0] ?? null
+    );
+  }
+
+  private governanceCandidate<T extends EffectiveCandidate>(
+    entries: T[],
+  ): T | null {
     const supersededIds = new Set(
       entries.map((entry) => entry.supersedesEntryId).filter(Boolean),
     );
@@ -151,6 +208,8 @@ export class ProgressService {
             (right.workDate?.getTime() ?? Number.MIN_SAFE_INTEGER) -
             (left.workDate?.getTime() ?? Number.MIN_SAFE_INTEGER);
           if (workDate !== 0) return workDate;
+          const revision = right.revision - left.revision;
+          if (revision !== 0) return revision;
           const recorded = right.createdAt.getTime() - left.createdAt.getTime();
           return recorded !== 0 ? recorded : right.id.localeCompare(left.id);
         })[0] ?? null
@@ -220,6 +279,8 @@ export class ProgressService {
       businessCommandId?: string;
       commandId?: string;
       commandFingerprint?: string;
+      entityVersionBefore?: number;
+      entityVersionAfter?: number;
     },
   ) {
     const now = new Date();
@@ -250,6 +311,9 @@ export class ProgressService {
         reason: params.reasonText ?? params.reason,
         reasonCode: params.reasonCode,
         reasonText: params.reasonText ?? params.reason,
+        errorCode: null,
+        entityVersionBefore: params.entityVersionBefore,
+        entityVersionAfter: params.entityVersionAfter,
         evidenceReferences: this.evidence(params.evidence),
         metadata: params.metadata,
         occurredAt: now,
@@ -258,15 +322,26 @@ export class ProgressService {
     });
   }
 
-  private denialReason(error: unknown): string | null {
+  private denialErrorCode(error: unknown): string | null {
     if (error instanceof ForbiddenException) {
-      return 'AUTHORITY_OR_ASSIGNMENT_DENIED';
+      const known = [
+        'PROJECT_ASSIGNMENT_REVOKED',
+        'ACTIVE_PROJECT_ACTOR_REQUIRED',
+        'DECISION_AUTHORITY_REVOKED',
+        'DECISION_AUTHORITY_REQUIRED',
+        'SEPARATION_OF_DUTIES_DENIED',
+      ];
+      return known.includes(`${error.message}`)
+        ? `${error.message}`
+        : 'AUTHORITY_OR_ASSIGNMENT_DENIED';
     }
     if (error instanceof NotFoundException) {
       return 'TARGET_NOT_AVAILABLE';
     }
     if (error instanceof ConflictException) {
-      return 'INVALID_STATE_OR_COMMAND_CONFLICT';
+      return `${error.message}`.startsWith('COMMAND_ID_')
+        ? 'COMMAND_CONFLICT'
+        : 'INVALID_LIFECYCLE_TRANSITION';
     }
     if (
       error instanceof BadRequestException &&
@@ -282,7 +357,8 @@ export class ProgressService {
     actor: TrustedProgressActor;
     action: string;
     trace: ProgressRequestTrace;
-    reason: string;
+    errorCode: string;
+    errorText?: string;
     targetEntityType: string;
     targetEntityId?: string;
     metadata?: Prisma.InputJsonValue;
@@ -310,20 +386,15 @@ export class ProgressService {
           correlationId: params.trace.correlationId,
           requestId: params.trace.requestId,
           businessCommandId: params.businessCommandId,
-          commandId: params.commandId,
+          commandId: params.commandId
+            ? `DENIED:${params.action}:${params.commandId}`
+            : undefined,
           commandFingerprint: params.commandFingerprint,
           action: params.action,
-          reason: params.reason,
-          reasonCode: params.reason,
-          reasonText:
-            typeof params.metadata === 'object' &&
-            params.metadata !== null &&
-            !Array.isArray(params.metadata) &&
-            'message' in params.metadata &&
-            typeof (params.metadata as Record<string, unknown>).message ===
-              'string'
-              ? ((params.metadata as Record<string, unknown>).message as string)
-              : null,
+          reason: params.errorText,
+          reasonCode: null,
+          reasonText: null,
+          errorCode: params.errorCode,
           metadata: params.metadata,
           occurredAt: now,
           recordedAt: now,
@@ -353,16 +424,22 @@ export class ProgressService {
     commandId?: string;
     commandFingerprint?: string;
   }): Promise<never> {
-    const reason = this.denialReason(params.error);
-    if (reason) {
+    const errorCode = this.denialErrorCode(params.error);
+    if (errorCode) {
+      const safeTargetEntityId =
+        errorCode === 'TARGET_NOT_AVAILABLE'
+          ? undefined
+          : params.targetEntityId;
       await this.auditDenied({
         projectId: params.projectId,
         actor: params.actor,
         action: params.action,
         trace: params.trace,
-        reason,
+        errorCode,
+        errorText:
+          params.error instanceof Error ? params.error.message : undefined,
         targetEntityType: params.targetEntityType,
-        targetEntityId: params.targetEntityId,
+        targetEntityId: safeTargetEntityId,
         metadata: params.metadata,
         businessCommandId: params.businessCommandId,
         commandId: params.commandId,
@@ -417,8 +494,6 @@ export class ProgressService {
       ? await this.prisma.progressEntry.findMany({
           where: {
             boqItemId: { in: workItemIds },
-            status: { in: EFFECTIVE_STATUSES },
-            correction: null,
             progressReport: {
               is: { projectId, baselineId: baseline.id, status: 'SUBMITTED' },
             },
@@ -436,6 +511,7 @@ export class ProgressService {
             status: true,
             recordedByAccountId: true,
             supersedesEntryId: true,
+            revision: true,
             createdAt: true,
           },
         })
@@ -613,6 +689,7 @@ export class ProgressService {
             evidence: input.evidenceReferences,
             businessCommandId: dto.commandId,
             commandFingerprint,
+            entityVersionAfter: entry.revision,
             metadata: {
               baselineId: baseline.id,
               roleInProject: currentActor.roleInProject,
@@ -699,7 +776,8 @@ export class ProgressService {
       installedQuantity: dto.installedQuantity,
       workDate: dto.workDate,
       captureMethod: dto.captureMethod,
-      reason: dto.reason,
+      reasonCode: dto.reasonCode,
+      reasonText: dto.reasonText,
       notes: dto.notes,
       evidenceReferences: dto.evidenceReferences,
     });
@@ -815,7 +893,8 @@ export class ProgressService {
             recordedByAccountId: currentActor.accountId,
             recordedByMembershipId: currentActor.membershipId,
             supersedesEntryId: entryId,
-            correctionReason: dto.reason,
+            correctionReasonCode: dto.reasonCode,
+            correctionReason: dto.reasonText,
             revision: original.revision + 1,
             status: ProgressActualStatus.SUBMITTED,
           },
@@ -830,9 +909,12 @@ export class ProgressService {
               ? 'ACTUAL_RETURNED_FOR_CORRECTION'
               : 'ACTUAL_SUPERSEDED_BY_CORRECTION',
           trace,
-          reason: dto.reason,
+          reasonCode: dto.reasonCode,
+          reasonText: dto.reasonText,
           businessCommandId: dto.commandId,
           commandFingerprint,
+          entityVersionBefore: original.revision,
+          entityVersionAfter: correction.revision,
           metadata: {
             historicalStatusPreserved: original.status,
             baselineId: report.baselineId,
@@ -845,10 +927,13 @@ export class ProgressService {
           authority,
           action: 'ACTUAL_CORRECTION_SUBMITTED',
           trace,
-          reason: dto.reason,
+          reasonCode: dto.reasonCode,
+          reasonText: dto.reasonText,
           evidence: dto.evidenceReferences,
           businessCommandId: dto.commandId,
           commandFingerprint,
+          entityVersionBefore: original.revision,
+          entityVersionAfter: correction.revision,
           metadata: {
             supersedesEntryId: entryId,
             commandId: dto.commandId,
@@ -939,9 +1024,12 @@ export class ProgressService {
             id: string;
             progressReportId: string;
             status: ProgressActualStatus;
+            recordedByAccountId: string | null;
+            revision: number;
           }>
         >(
-          Prisma.sql`SELECT "id", "progressReportId", "status" FROM "progress_entries" WHERE "id" = ${entryId}::uuid FOR UPDATE`,
+          Prisma.sql`SELECT "id", "progressReportId", "status", "recordedByAccountId", "revision"
+                       FROM "progress_entries" WHERE "id" = ${entryId}::uuid FOR UPDATE`,
         );
         const entry = locked[0];
         if (!entry) throw new NotFoundException('Actual not found');
@@ -986,6 +1074,26 @@ export class ProgressService {
           ...actor,
           roleInProject: transactionalActor.roleInProject,
         };
+        const verifier =
+          action === 'ACCEPT'
+            ? await tx.progressAuditEvent.findFirst({
+                where: {
+                  progressEntryId: entryId,
+                  outcome: ProgressAuditOutcome.SUCCESS,
+                  action: 'ACTUAL_VERIFIED',
+                },
+                orderBy: { occurredAt: 'desc' },
+                select: { actorAccountId: true },
+              })
+            : null;
+        await this.authority.requireSeparationPolicy(
+          tx,
+          access,
+          authority,
+          action,
+          accountId,
+          [entry.recordedByAccountId, verifier?.actorAccountId],
+        );
         if (
           await tx.progressEntry.findUnique({
             where: { supersedesEntryId: entryId },
@@ -1017,6 +1125,8 @@ export class ProgressService {
           businessCommandId: commandId,
           commandId,
           commandFingerprint,
+          entityVersionBefore: entry.revision,
+          entityVersionAfter: entry.revision,
           metadata: {
             from: expected,
             to: target,
@@ -1114,9 +1224,12 @@ export class ProgressService {
     });
     const effective = this.effectiveEntry(
       entries.filter(
-        (entry) =>
-          entry.progressReport.baselineId === baseline.id &&
-          EFFECTIVE_STATUSES.includes(entry.status),
+        (entry) => entry.progressReport.baselineId === baseline.id,
+      ),
+    );
+    const governanceCandidate = this.governanceCandidate(
+      entries.filter(
+        (entry) => entry.progressReport.baselineId === baseline.id,
       ),
     );
     const [effectivePermissions, verify, correct, accept] = await Promise.all([
@@ -1127,6 +1240,36 @@ export class ProgressService {
     ]);
     const hasPermission = (permission: string) =>
       !!effectivePermissions?.permissions.includes(permission);
+    const verifierAccountId = governanceCandidate?.auditEvents
+      .filter(
+        (event) =>
+          event.outcome === ProgressAuditOutcome.SUCCESS &&
+          event.action === 'ACTUAL_VERIFIED',
+      )
+      .at(-1)?.actorAccountId;
+    const verifySeparationAllowed =
+      !!governanceCandidate &&
+      (governanceCandidate.recordedByAccountId !== accountId ||
+        (!!verify &&
+          (await this.authority.canCombineResponsibility(
+            access,
+            verify,
+            'VERIFY',
+          ))));
+    const acceptCrossesOwnStage =
+      !!governanceCandidate &&
+      [governanceCandidate.recordedByAccountId, verifierAccountId].some(
+        (priorActorAccountId) => priorActorAccountId === accountId,
+      );
+    const acceptSeparationAllowed =
+      !!governanceCandidate &&
+      (!acceptCrossesOwnStage ||
+        (!!accept &&
+          (await this.authority.canCombineResponsibility(
+            access,
+            accept,
+            'ACCEPT',
+          ))));
     return {
       projectId,
       projectTimeZone: baseline.project.timeZone,
@@ -1142,10 +1285,23 @@ export class ProgressService {
         },
       },
       effectiveEntryId: effective?.id ?? null,
+      governanceEntryId: governanceCandidate?.id ?? null,
       availableActions: {
-        verify: !!verify && hasPermission(PERMISSIONS.FIELD_PROGRESS_VERIFY),
-        correct: !!correct && hasPermission(PERMISSIONS.FIELD_PROGRESS_CORRECT),
-        accept: !!accept && hasPermission(PERMISSIONS.FIELD_PROGRESS_ACCEPT),
+        verify:
+          governanceCandidate?.status === ProgressActualStatus.SUBMITTED &&
+          !!verify &&
+          hasPermission(PERMISSIONS.FIELD_PROGRESS_VERIFY) &&
+          verifySeparationAllowed,
+        correct:
+          !!effective &&
+          governanceCandidate?.id === effective.id &&
+          !!correct &&
+          hasPermission(PERMISSIONS.FIELD_PROGRESS_CORRECT),
+        accept:
+          governanceCandidate?.status === ProgressActualStatus.VERIFIED &&
+          !!accept &&
+          hasPermission(PERMISSIONS.FIELD_PROGRESS_ACCEPT) &&
+          acceptSeparationAllowed,
       },
       entries: entries.map((entry) => ({
         id: entry.id,
@@ -1159,6 +1315,7 @@ export class ProgressService {
         evidenceReferences: this.evidenceProjection(entry),
         status: entry.status,
         supersedesEntryId: entry.supersedesEntryId,
+        correctionReasonCode: entry.correctionReasonCode,
         correctionReason: entry.correctionReason,
         revision: entry.revision,
         isEffective: entry.id === effective?.id,

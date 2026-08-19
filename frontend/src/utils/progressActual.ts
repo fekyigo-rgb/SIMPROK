@@ -3,11 +3,36 @@ export type ProgressHistoryLoadState =
   | { kind: "loaded"; count: number }
   | { kind: "error"; message: string };
 
-export function localCalendarDate(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+export function projectCalendarDate(
+  projectTimeZone: string | null,
+  date = new Date(),
+): string {
+  if (!projectTimeZone) return "";
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: projectTimeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const value = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? "";
+    const year = value("year");
+    const month = value("month");
+    const day = value("day");
+    return year && month && day ? `${year}-${month}-${day}` : "";
+  } catch {
+    return "";
+  }
+}
+
+export function projectWorkDateDefault(
+  current: string,
+  userSelected: boolean,
+  projectTimeZone: string | null,
+  date = new Date(),
+): string {
+  return userSelected ? current : projectCalendarDate(projectTimeZone, date);
 }
 
 export function plannedFact(

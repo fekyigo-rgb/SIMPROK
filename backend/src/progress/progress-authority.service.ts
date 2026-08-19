@@ -9,6 +9,15 @@ export const PROGRESS_AUTHORITIES = {
   ACCEPT: 'FIELD_PROGRESS_ACCEPT',
 } as const;
 
+export const PROGRESS_APPROVAL_POLICY_OBJECTS = {
+  VERIFY_COMBINED_RESPONSIBILITY:
+    'FIELD_PROGRESS_VERIFY_COMBINED_RESPONSIBILITY',
+  ACCEPT_COMBINED_RESPONSIBILITY:
+    'FIELD_PROGRESS_ACCEPT_COMBINED_RESPONSIBILITY',
+} as const;
+
+type ProgressApprovalAction = 'VERIFY' | 'ACCEPT';
+
 export interface ProgressAuthorityContext {
   positionId: string;
   positionCode: string;
@@ -118,7 +127,21 @@ export class ProgressAuthorityService {
                   FOR SHARE OF wm, account, profile, project_assignment`,
     );
     if (rows.length !== 1) {
-      throw new ForbiddenException('Active trusted actor required');
+      const assignment = await tx.projectAssignment.findFirst({
+        where: {
+          id: projectAccess.assignmentId,
+          workspaceMembershipId: projectAccess.membershipId,
+          projectId: projectAccess.projectId,
+        },
+        select: { status: true, revokedAt: true },
+      });
+      if (
+        assignment &&
+        (assignment.status !== 'ASSIGNED' || assignment.revokedAt !== null)
+      ) {
+        throw new ForbiddenException('PROJECT_ASSIGNMENT_REVOKED');
+      }
+      throw new ForbiddenException('ACTIVE_PROJECT_ACTOR_REQUIRED');
     }
     return rows[0];
   }
@@ -163,8 +186,109 @@ export class ProgressAuthorityService {
     );
     const row = rows[0];
     if (!row) {
-      throw new ForbiddenException('Configured project authority required');
+      const assignment = await tx.projectAssignment.findFirst({
+        where: {
+          id: projectAccess.assignmentId,
+          workspaceMembershipId: projectAccess.membershipId,
+          projectId: projectAccess.projectId,
+        },
+        select: { status: true, revokedAt: true },
+      });
+      if (
+        assignment &&
+        (assignment.status !== 'ASSIGNED' || assignment.revokedAt !== null)
+      ) {
+        throw new ForbiddenException('PROJECT_ASSIGNMENT_REVOKED');
+      }
+
+      const revokedAuthority = await tx.positionAuthority.findFirst({
+        where: {
+          position: {
+            workspaceId: projectAccess.workspaceId,
+            assignments: {
+              some: {
+                isActive: true,
+                removedAt: null,
+                user: {
+                  workspaceMembershipId: projectAccess.membershipId,
+                },
+              },
+            },
+          },
+          authority: { code: authorityCode },
+          OR: [{ isActive: false }, { revokedAt: { not: null } }],
+        },
+        select: { id: true },
+      });
+      throw new ForbiddenException(
+        revokedAuthority
+          ? 'DECISION_AUTHORITY_REVOKED'
+          : 'DECISION_AUTHORITY_REQUIRED',
+      );
     }
     return { ...row, authorityCode };
+  }
+
+  private policyObjectType(action: ProgressApprovalAction): string {
+    return action === 'VERIFY'
+      ? PROGRESS_APPROVAL_POLICY_OBJECTS.VERIFY_COMBINED_RESPONSIBILITY
+      : PROGRESS_APPROVAL_POLICY_OBJECTS.ACCEPT_COMBINED_RESPONSIBILITY;
+  }
+
+  private async combinedResponsibilityAllowed(
+    db: Prisma.TransactionClient | PrismaService,
+    projectAccess: ProjectAccessContext,
+    authority: ProgressAuthorityContext,
+    action: ProgressApprovalAction,
+  ): Promise<boolean> {
+    return (
+      (await db.approvalMatrix.count({
+        where: {
+          workspaceId: projectAccess.workspaceId,
+          isActive: true,
+          objectType: this.policyObjectType(action),
+          requiredPositionId: authority.positionId,
+          authority: { code: authority.authorityCode },
+        },
+      })) > 0
+    );
+  }
+
+  async canCombineResponsibility(
+    projectAccess: ProjectAccessContext,
+    authority: ProgressAuthorityContext,
+    action: ProgressApprovalAction,
+  ): Promise<boolean> {
+    return this.combinedResponsibilityAllowed(
+      this.prisma,
+      projectAccess,
+      authority,
+      action,
+    );
+  }
+
+  async requireSeparationPolicy(
+    tx: Prisma.TransactionClient,
+    projectAccess: ProjectAccessContext,
+    authority: ProgressAuthorityContext,
+    action: ProgressApprovalAction,
+    actorAccountId: string,
+    priorActorAccountIds: Array<string | null | undefined>,
+  ): Promise<void> {
+    const crossesOwnStage = priorActorAccountIds.some(
+      (priorActorAccountId) => priorActorAccountId === actorAccountId,
+    );
+    if (!crossesOwnStage) return;
+    if (
+      await this.combinedResponsibilityAllowed(
+        tx,
+        projectAccess,
+        authority,
+        action,
+      )
+    ) {
+      return;
+    }
+    throw new ForbiddenException('SEPARATION_OF_DUTIES_DENIED');
   }
 }

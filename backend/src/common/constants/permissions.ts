@@ -29,6 +29,7 @@ export const PERMISSIONS = {
 
   PROJECT_VIEW: 'PROJECT_VIEW',
   PROJECT_CREATE: 'PROJECT_CREATE',
+  PROJECT_SETTINGS_MANAGE: 'PROJECT_SETTINGS_MANAGE',
   RAB_VIEW: 'RAB_VIEW',
   RAB_DRAFT_EDIT: 'RAB_DRAFT_EDIT',
 
@@ -199,6 +200,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     note: 'Seeded through RBAC seed in IDENTITY-A2. Runtime DB requires normal seed/test setup to materialize this permission.',
   },
   {
+    code: PERMISSIONS.PROJECT_SETTINGS_MANAGE,
+    domain: PERMISSION_DOMAINS.PROJECT,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Configure Project-owned settings on an assigned project through governed activation.',
+    note: 'MON-03: Project timezone changes use this precise capability; PROJECT_CREATE and PROJECT_VIEW are not edit shortcuts.',
+  },
+  {
     code: PERMISSIONS.RAB_VIEW,
     domain: PERMISSION_DOMAINS.PROJECT,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
@@ -352,6 +361,7 @@ export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.FIELD_PROGRESS_CORRECT,
   PERMISSIONS.FIELD_PROGRESS_VERIFY,
   PERMISSIONS.FIELD_PROGRESS_ACCEPT,
+  PERMISSIONS.PROJECT_SETTINGS_MANAGE,
   PERMISSIONS.BASIC_PRICE_VERIFY,
   PERMISSIONS.BASIC_PRICE_PUBLISH,
   PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,

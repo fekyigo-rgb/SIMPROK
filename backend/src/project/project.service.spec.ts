@@ -4,6 +4,7 @@ import { validate } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
+import { UpdateProjectTimeZoneDto } from './dto/update-project-time-zone.dto';
 import { ProjectService } from './project.service';
 import { RabLifecyclePolicyService } from './rab-lifecycle-policy.service';
 import {
@@ -67,7 +68,6 @@ describe('ProjectService P7C intake contract', () => {
         description: 'Narasi',
         budgetBaseline: '250000000.00',
         mainMaterialSpec: '  Beton K-300  ',
-        timeZone: 'Asia/Jakarta',
       },
       'workspace-1',
     );
@@ -77,7 +77,6 @@ describe('ProjectService P7C intake contract', () => {
         description: 'Narasi',
         budgetBaseline: new Prisma.Decimal('250000000.00'),
         mainMaterialSpec: 'Beton K-300',
-        timeZone: 'Asia/Jakarta',
       }),
     });
     expect(tx.boqStructure.create).toHaveBeenCalledWith({
@@ -100,25 +99,8 @@ describe('ProjectService P7C intake contract', () => {
       data: expect.objectContaining({
         budgetBaseline: undefined,
         mainMaterialSpec: undefined,
-        timeZone: undefined,
       }),
     });
-  });
-
-  it('rejects an invalid Project timezone instead of silently guessing', async () => {
-    const { prisma } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any, {} as any);
-
-    await expect(
-      service.create(
-        {
-          name: 'Project',
-          code: 'BAD-TZ',
-          timeZone: 'Not/A_Zone',
-        },
-        'workspace-1',
-      ),
-    ).rejects.toThrow('INVALID_PROJECT_TIME_ZONE');
   });
 
   it('normalizes whitespace spec to null on create', async () => {
@@ -188,30 +170,6 @@ describe('ProjectService P7C intake contract', () => {
     });
   });
 
-  it('patches Project timezone only after IANA validation', async () => {
-    const { prisma } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any, {} as any);
-
-    await service.updateIntakeContext('project-1', {
-      timeZone: 'Asia/Makassar',
-    });
-
-    expect(prisma.project.update).toHaveBeenCalledWith({
-      where: { id: 'project-1' },
-      data: { timeZone: 'Asia/Makassar' },
-    });
-  });
-
-  it('rejects invalid Project timezone on PATCH', async () => {
-    const { prisma } = createPrismaMock();
-    const service = new ProjectService(prisma as any, {} as any, {} as any);
-
-    await expect(
-      service.updateIntakeContext('project-1', { timeZone: 'Browser/Local' }),
-    ).rejects.toThrow('INVALID_PROJECT_TIME_ZONE');
-    expect(prisma.project.update).not.toHaveBeenCalled();
-  });
-
   it('does not clear omitted fields', async () => {
     const { prisma } = createPrismaMock();
     const service = new ProjectService(prisma as any, {} as any, {} as any);
@@ -237,6 +195,182 @@ describe('ProjectService P7C intake contract', () => {
       where: { id: 'project-1' },
       data: { budgetBaseline: null, mainMaterialSpec: null },
     });
+  });
+
+  it('requires a command identity on the dedicated Project timezone DTO', async () => {
+    const dto = plainToInstance(UpdateProjectTimeZoneDto, {
+      timeZone: 'Asia/Jakarta',
+    });
+    await expect(validate(dto)).resolves.not.toHaveLength(0);
+  });
+
+  it('changes Project timezone with domain history and canonical audit in one transaction', async () => {
+    const commandId = '10000000-0000-4000-8000-000000000099';
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        {
+          id: '10000000-0000-4000-8000-000000000091',
+          workspaceId: '10000000-0000-4000-8000-000000000092',
+          timeZone: null,
+        },
+      ]),
+      projectTimeZoneEvent: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000093',
+        }),
+      },
+      workspaceMembership: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000094',
+        }),
+      },
+      projectAssignment: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000095',
+        }),
+      },
+      project: {
+        update: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000091',
+          timeZone: 'Asia/Makassar',
+        }),
+        findUniqueOrThrow: jest.fn(),
+      },
+      progressAuditEvent: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = { $transaction: jest.fn((callback) => callback(tx)) };
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
+
+    await service.updateProjectTimeZone(
+      '10000000-0000-4000-8000-000000000091',
+      { commandId, timeZone: 'Asia/Makassar', reason: 'Project confirmation' },
+      {
+        accountId: '10000000-0000-4000-8000-000000000096',
+        membershipId: '10000000-0000-4000-8000-000000000094',
+        workspaceId: '10000000-0000-4000-8000-000000000092',
+        assignmentId: '10000000-0000-4000-8000-000000000095',
+        roleInProject: 'PROJECT_GOVERNOR',
+      },
+    );
+
+    expect(tx.projectTimeZoneEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        commandId,
+        previousTimeZone: null,
+        nextTimeZone: 'Asia/Makassar',
+      }),
+    });
+    expect(tx.progressAuditEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        eventType: 'PROJECT_CONFIGURATION',
+        actorType: 'USER',
+        action: 'PROJECT_TIME_ZONE_UPDATED',
+        targetEntityId: '10000000-0000-4000-8000-000000000093',
+        businessCommandId: commandId,
+        errorCode: null,
+      }),
+    });
+  });
+
+  it('records a no-op Project timezone command so replay identity cannot later become a mutation', async () => {
+    const commandId = '10000000-0000-4000-8000-000000000098';
+    const projectId = '10000000-0000-4000-8000-000000000091';
+    const workspaceId = '10000000-0000-4000-8000-000000000092';
+    const membershipId = '10000000-0000-4000-8000-000000000094';
+    const assignmentId = '10000000-0000-4000-8000-000000000095';
+    const accountId = '10000000-0000-4000-8000-000000000096';
+
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        {
+          id: projectId,
+          workspaceId,
+          timeZone: 'Asia/Jakarta',
+        },
+      ]),
+      projectTimeZoneEvent: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000097',
+        }),
+      },
+      workspaceMembership: {
+        findFirst: jest.fn().mockResolvedValue({ id: membershipId }),
+      },
+      projectAssignment: {
+        findFirst: jest.fn().mockResolvedValue({ id: assignmentId }),
+      },
+      project: {
+        update: jest.fn(),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          id: projectId,
+          timeZone: 'Asia/Jakarta',
+        }),
+      },
+      progressAuditEvent: {
+        create: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(tx)),
+    };
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
+
+    await service.updateProjectTimeZone(
+      projectId,
+      {
+        commandId,
+        timeZone: 'Asia/Jakarta',
+        reason: 'Confirm existing Project timezone',
+      },
+      {
+        accountId,
+        membershipId,
+        workspaceId,
+        assignmentId,
+        roleInProject: 'PROJECT_GOVERNOR',
+      },
+    );
+
+    expect(tx.project.update).not.toHaveBeenCalled();
+    expect(tx.projectTimeZoneEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        commandId,
+        previousTimeZone: 'Asia/Jakarta',
+        nextTimeZone: 'Asia/Jakarta',
+        action: 'PROJECT_TIME_ZONE_CONFIRMED',
+      }),
+    });
+    expect(tx.progressAuditEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        businessCommandId: commandId,
+        action: 'PROJECT_TIME_ZONE_CONFIRMED',
+      }),
+    });
+  });
+
+  it('rejects an invalid Project timezone before any transaction', async () => {
+    const prisma = { $transaction: jest.fn() };
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
+
+    await expect(
+      service.updateProjectTimeZone(
+        '10000000-0000-4000-8000-000000000091',
+        {
+          commandId: '10000000-0000-4000-8000-000000000099',
+          timeZone: 'Browser/Local',
+        },
+        {
+          accountId: '10000000-0000-4000-8000-000000000096',
+          membershipId: '10000000-0000-4000-8000-000000000094',
+          workspaceId: '10000000-0000-4000-8000-000000000092',
+          assignmentId: '10000000-0000-4000-8000-000000000095',
+          roleInProject: 'PROJECT_GOVERNOR',
+        },
+      ),
+    ).rejects.toThrow('INVALID_PROJECT_TIME_ZONE');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('ignores workspaceId and organizationId body fields', async () => {

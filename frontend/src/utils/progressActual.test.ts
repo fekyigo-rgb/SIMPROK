@@ -5,7 +5,8 @@ import {
   correctionCaptureMethod,
   correctionDate,
   historyMessage,
-  localCalendarDate,
+  projectCalendarDate,
+  projectWorkDateDefault,
   plannedFact,
   projectTimestampPresentation,
   timelinePresentation,
@@ -96,13 +97,22 @@ test("MON03 effective identity comes only from the backend projection", () => {
   assert.equal(effectiveHistoryEntry(entries, null), null);
 });
 
-test("MON03 local calendar default does not drift to UTC on a +09 midnight boundary", () => {
+test("MON03 work-date default comes from the Project timezone", () => {
   const boundary = new Date("2026-08-14T15:30:00.000Z");
-  const fakeLocal = {
-    getFullYear: () => 2026,
-    getMonth: () => 7,
-    getDate: () => 15,
-  } as Date;
-  assert.equal(boundary.toISOString().slice(0, 10), "2026-08-14");
-  assert.equal(localCalendarDate(fakeLocal), "2026-08-15");
+  assert.equal(projectCalendarDate("Asia/Tokyo", boundary), "2026-08-15");
+  assert.equal(projectCalendarDate("UTC", boundary), "2026-08-14");
+  assert.equal(projectCalendarDate(null, boundary), "");
+});
+
+test("MON03 timezone loading never overwrites a manually selected work date", () => {
+  const boundary = new Date("2026-08-14T15:30:00.000Z");
+  assert.equal(
+    projectWorkDateDefault("2026-08-12", true, "Asia/Tokyo", boundary),
+    "2026-08-12",
+  );
+  assert.equal(
+    projectWorkDateDefault("", false, "Asia/Tokyo", boundary),
+    "2026-08-15",
+  );
+  assert.equal(projectWorkDateDefault("", false, null, boundary), "");
 });

@@ -26,8 +26,11 @@ export class PermissionsGuard implements CanActivate {
   ) {}
 
   private progressWriteAction(request: any): string | null {
-    if (request.method !== 'POST') return null;
     const path = `${request.route?.path ?? request.originalUrl ?? request.url}`;
+    if (request.method === 'PATCH' && path.includes('/time-zone')) {
+      return 'PROJECT_TIME_ZONE_UPDATE';
+    }
+    if (request.method !== 'POST') return null;
     if (!path.includes('/progress')) return null;
     if (path.includes('/field')) return 'ACTUAL_SUBMIT';
     if (path.includes('/corrections')) return 'ACTUAL_CORRECT';
@@ -36,17 +39,28 @@ export class PermissionsGuard implements CanActivate {
     return null;
   }
 
-  private progressTarget(request: any): {
+  private async progressTarget(request: any): Promise<{
     targetEntityType: string;
     targetEntityId: string | null;
-  } {
+  }> {
     const uuid =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const entryId = request.params?.entryId;
     if (typeof entryId === 'string' && uuid.test(entryId)) {
-      return { targetEntityType: 'PROGRESS_ENTRY', targetEntityId: entryId };
+      const trustedEntry = await this.prisma!.progressEntry.findFirst({
+        where: {
+          id: entryId,
+          progressReport: { projectId: request.projectAccess.projectId },
+        },
+        select: { id: true },
+      });
+      return {
+        targetEntityType: 'PROGRESS_ENTRY',
+        targetEntityId: trustedEntry?.id ?? null,
+      };
     }
-    const projectId = request.projectAccess?.projectId ?? request.params?.projectId;
+    const projectId =
+      request.projectAccess?.projectId ?? request.params?.projectId;
     return {
       targetEntityType: 'PROJECT',
       targetEntityId:
@@ -60,8 +74,8 @@ export class PermissionsGuard implements CanActivate {
     request: any;
     accountId: string;
     action: string;
-    reasonCode: string;
-    reasonText: string;
+    errorCode: string;
+    errorText: string;
   }): Promise<void> {
     const access = params.request.projectAccess;
     if (!access?.projectId || !access.workspaceId || !access.membershipId) {
@@ -71,34 +85,42 @@ export class PermissionsGuard implements CanActivate {
       typeof params.request.body?.commandId === 'string'
         ? params.request.body.commandId
         : undefined;
-    const target = this.progressTarget(params.request);
     if (!this.prisma) {
       throw new ServiceUnavailableException('DENIAL_AUDIT_UNAVAILABLE');
     }
+    const target = await this.progressTarget(params.request);
+    const projectConfiguration = params.action === 'PROJECT_TIME_ZONE_UPDATE';
     try {
       await this.prisma.progressAuditEvent.create({
         data: {
           schemaVersion: 1,
-          eventType: 'ACTUAL_PROGRESS',
+          eventType: projectConfiguration
+            ? 'PROJECT_CONFIGURATION'
+            : 'ACTUAL_PROGRESS',
           outcome: ProgressAuditOutcome.DENIED,
           workspaceId: access.workspaceId,
           projectId: access.projectId,
           progressEntryId: null,
           actorAccountId: params.accountId,
           actorMembershipId: access.membershipId,
-          actorType: 'HUMAN',
+          actorType: 'USER',
           roleInProjectSnapshot: access.roleInProject ?? null,
-          sourceModule: 'FIELD_PROGRESS',
+          sourceModule: projectConfiguration
+            ? 'PROJECT_GOVERNANCE'
+            : 'FIELD_PROGRESS',
           targetEntityType: target.targetEntityType,
           targetEntityId: target.targetEntityId,
           correlationId: randomUUID(),
           requestId: randomUUID(),
           businessCommandId: commandId,
-          commandId,
+          commandId: commandId
+            ? `DENIED:${params.action}:${commandId}`
+            : undefined,
           action: params.action,
-          reason: params.reasonCode,
-          reasonCode: params.reasonCode,
-          reasonText: params.reasonText,
+          reason: params.errorText,
+          reasonCode: null,
+          reasonText: null,
+          errorCode: params.errorCode,
           metadata: {
             guard: 'PermissionsGuard',
             requiredPermissions:
@@ -207,8 +229,8 @@ export class PermissionsGuard implements CanActivate {
     }
 
     // 5. Evaluasi Hak Akses
-    const hasRequiredPermission = (requiredPermissions ?? []).some((permission) =>
-      effective.permissions.includes(permission),
+    const hasRequiredPermission = (requiredPermissions ?? []).some(
+      (permission) => effective.permissions.includes(permission),
     );
 
     const hasEveryRequiredPermission = (requiredAllPermissions ?? []).every(
@@ -229,8 +251,8 @@ export class PermissionsGuard implements CanActivate {
           request,
           accountId,
           action,
-          reasonCode: 'TECHNICAL_PERMISSION_DENIED',
-          reasonText:
+          errorCode: 'TECHNICAL_PERMISSION_DENIED',
+          errorText:
             'The actor does not hold the required technical progress permission in this project workspace.',
         });
       }

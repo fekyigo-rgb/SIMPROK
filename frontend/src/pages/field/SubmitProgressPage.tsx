@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { FactHeader } from "../../components/molecules/FactHeader";
 import { useAuth } from "../../contexts/AuthContext";
@@ -9,8 +9,8 @@ import {
   correctionDate,
   effectiveHistoryEntry,
   historyMessage,
-  localCalendarDate,
   plannedFact,
+  projectWorkDateDefault,
   projectTimestampPresentation,
   timelinePresentation,
   type ProgressHistoryLoadState,
@@ -24,6 +24,7 @@ type HistoryEntry = {
   recordedAt: string;
   captureMethod: string;
   status: string;
+  correctionReasonCode: string | null;
   correctionReason: string | null;
   evidenceReferences: Array<{ url: string; label: string }>;
   revision: number;
@@ -35,7 +36,8 @@ type CorrectionDraft = {
   installedQuantity: string;
   workDate: string;
   captureMethod: string;
-  reason: string;
+  reasonCode: string;
+  reasonText: string;
 };
 
 export function SubmitProgressPage() {
@@ -43,7 +45,8 @@ export function SubmitProgressPage() {
   const navigate = useNavigate();
   const { token } = useAuth();
   const [quantity, setQuantity] = useState("");
-  const [workDate, setWorkDate] = useState(localCalendarDate);
+  const [workDate, setWorkDate] = useState("");
+  const workDateEdited = useRef(false);
   const [notes, setNotes] = useState("");
   const [captureMethod, setCaptureMethod] = useState("FIELD_OBSERVATION");
   const [evidenceUrl, setEvidenceUrl] = useState("");
@@ -55,6 +58,9 @@ export function SubmitProgressPage() {
     kind: "loading",
   });
   const [effectiveEntryId, setEffectiveEntryId] = useState<string | null>(null);
+  const [governanceEntryId, setGovernanceEntryId] = useState<string | null>(
+    null,
+  );
   const [projectTimeZone, setProjectTimeZone] = useState<string | null>(null);
   const [actions, setActions] = useState({
     verify: false,
@@ -66,6 +72,13 @@ export function SubmitProgressPage() {
   >({});
   const [correction, setCorrection] = useState<CorrectionDraft | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const applyProjectTimeZone = useCallback((value: string | null) => {
+    setProjectTimeZone(value);
+    setWorkDate((current) =>
+      projectWorkDateDefault(current, workDateEdited.current, value),
+    );
+  }, []);
 
   const loadHistory = useCallback(async () => {
     if (!projectId || !boqItemId) return;
@@ -83,7 +96,8 @@ export function SubmitProgressPage() {
       const entries = body.entries ?? [];
       setHistory(entries);
       setEffectiveEntryId(body.effectiveEntryId ?? null);
-      setProjectTimeZone(body.projectTimeZone ?? null);
+      setGovernanceEntryId(body.governanceEntryId ?? null);
+      applyProjectTimeZone(body.projectTimeZone ?? null);
       setActions(
         body.availableActions ?? {
           verify: false,
@@ -98,7 +112,7 @@ export function SubmitProgressPage() {
         message: "Riwayat Actual gagal dimuat karena gangguan jaringan.",
       });
     }
-  }, [projectId, boqItemId]);
+  }, [projectId, boqItemId, applyProjectTimeZone]);
 
   useEffect(() => {
     if (!token || !projectId || !boqItemId) return;
@@ -114,7 +128,7 @@ export function SubmitProgressPage() {
         if (!item)
           throw new Error("Pekerjaan tidak ditemukan pada proyek ini.");
         setBoqItem(item);
-        setProjectTimeZone(data.projectTimeZone ?? null);
+        applyProjectTimeZone(data.projectTimeZone ?? null);
       })
       .catch((error) =>
         setNotice(
@@ -124,7 +138,7 @@ export function SubmitProgressPage() {
         ),
       );
     void loadHistory();
-  }, [token, projectId, boqItemId, loadHistory]);
+  }, [token, projectId, boqItemId, loadHistory, applyProjectTimeZone]);
 
   const send = async (path: string, payload: unknown) => {
     const response = await apiFetch(path, {
@@ -204,7 +218,8 @@ export function SubmitProgressPage() {
   };
 
   const saveCorrection = async () => {
-    if (!projectId || !correction?.reason.trim()) return;
+    if (!projectId || !correction?.reasonCode || !correction.reasonText.trim())
+      return;
     setSubmitting(true);
     try {
       await send(
@@ -214,7 +229,8 @@ export function SubmitProgressPage() {
           installedQuantity: correction.installedQuantity,
           workDate: correction.workDate,
           captureMethod: correction.captureMethod,
-          reason: correction.reason.trim(),
+          reasonCode: correction.reasonCode,
+          reasonText: correction.reasonText.trim(),
         },
       );
       setCorrection(null);
@@ -271,9 +287,17 @@ export function SubmitProgressPage() {
           <input
             type="date"
             value={workDate}
-            onChange={(e) => setWorkDate(e.target.value)}
+            onChange={(e) => {
+              workDateEdited.current = true;
+              setWorkDate(e.target.value);
+            }}
             required
           />
+          {!projectTimeZone && (
+            <small>
+              Pilih tanggal pekerjaan; zona waktu proyek belum ditetapkan.
+            </small>
+          )}
         </label>
         <label>
           Volume Actual ({planned.unit ?? "satuan"})
@@ -348,8 +372,16 @@ export function SubmitProgressPage() {
                   {entry.status} · {recordedAt.occurredAtLabel} (
                   {recordedAt.timeZoneBasis}) · {entry.captureMethod}
                 </div>
-                {entry.correctionReason && (
-                  <p>Alasan koreksi: {entry.correctionReason}</p>
+                {(entry.correctionReasonCode || entry.correctionReason) && (
+                  <p>
+                    Alasan koreksi:
+                    {entry.correctionReasonCode
+                      ? ` ${entry.correctionReasonCode}`
+                      : ""}
+                    {entry.correctionReason
+                      ? `${entry.correctionReasonCode ? " — " : " "}${entry.correctionReason}`
+                      : ""}
+                  </p>
                 )}
                 {entry.evidenceReferences.map((e) => (
                   <a key={e.url} href={e.url} target="_blank" rel="noreferrer">
@@ -371,25 +403,30 @@ export function SubmitProgressPage() {
                     </div>
                   );
                 })}
-                {entry.id === effectiveEntryId && (
+                {(entry.id === governanceEntryId ||
+                  entry.id === effectiveEntryId) && (
                   <div>
-                    {actions.verify && entry.status === "SUBMITTED" && (
-                      <button
-                        disabled={submitting}
-                        onClick={() => void transition(entry, "verify")}
-                      >
-                        Verifikasi
-                      </button>
-                    )}
-                    {actions.accept && entry.status === "VERIFIED" && (
-                      <button
-                        disabled={submitting}
-                        onClick={() => void transition(entry, "accept")}
-                      >
-                        Terima
-                      </button>
-                    )}
-                    {actions.correct && (
+                    {entry.id === governanceEntryId &&
+                      actions.verify &&
+                      entry.status === "SUBMITTED" && (
+                        <button
+                          disabled={submitting}
+                          onClick={() => void transition(entry, "verify")}
+                        >
+                          Verifikasi
+                        </button>
+                      )}
+                    {entry.id === governanceEntryId &&
+                      actions.accept &&
+                      entry.status === "VERIFIED" && (
+                        <button
+                          disabled={submitting}
+                          onClick={() => void transition(entry, "accept")}
+                        >
+                          Terima
+                        </button>
+                      )}
+                    {entry.id === effectiveEntryId && actions.correct && (
                       <button
                         disabled={submitting}
                         onClick={() =>
@@ -401,7 +438,8 @@ export function SubmitProgressPage() {
                             captureMethod: correctionCaptureMethod(
                               entry.captureMethod,
                             ),
-                            reason: "",
+                            reasonCode: "",
+                            reasonText: "",
                           })
                         }
                       >
@@ -446,11 +484,32 @@ export function SubmitProgressPage() {
             />
           </label>
           <label>
-            Alasan koreksi
-            <textarea
-              value={correction.reason}
+            Kategori koreksi
+            <select
+              value={correction.reasonCode}
               onChange={(e) =>
-                setCorrection({ ...correction, reason: e.target.value })
+                setCorrection({ ...correction, reasonCode: e.target.value })
+              }
+              required
+            >
+              <option value="">Pilih kategori</option>
+              <option value="DATA_ENTRY_ERROR">Kesalahan entri data</option>
+              <option value="MEASUREMENT_UPDATE">Pembaruan pengukuran</option>
+              <option value="FIELD_FACT_CORRECTION">
+                Koreksi fakta lapangan
+              </option>
+              <option value="ADMINISTRATIVE_CORRECTION">
+                Koreksi administratif
+              </option>
+              <option value="OTHER">Lainnya</option>
+            </select>
+          </label>
+          <label>
+            Penjelasan koreksi
+            <textarea
+              value={correction.reasonText}
+              onChange={(e) =>
+                setCorrection({ ...correction, reasonText: e.target.value })
               }
               required
             />
@@ -478,7 +537,8 @@ export function SubmitProgressPage() {
               !correction.installedQuantity ||
               !correction.workDate ||
               !correction.captureMethod ||
-              !correction.reason.trim()
+              !correction.reasonCode ||
+              !correction.reasonText.trim()
             }
             onClick={() => void saveCorrection()}
           >

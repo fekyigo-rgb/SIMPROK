@@ -364,16 +364,18 @@ model Project {
 }
 
 model ProjectTimeZoneEvent {
-  id                String   @id @default(uuid()) @db.Uuid
-  workspaceId       String   @db.Uuid
-  projectId         String   @db.Uuid
-  actorAccountId    String   @db.Uuid
-  actorMembershipId String   @db.Uuid
-  previousTimeZone  String?  @db.VarChar(64)
-  nextTimeZone      String?  @db.VarChar(64)
-  action            String
-  reason            String?  @db.Text
-  occurredAt        DateTime @default(now())
+  id                 String   @id @default(uuid()) @db.Uuid
+  workspaceId        String   @db.Uuid
+  projectId          String   @db.Uuid
+  actorAccountId     String   @db.Uuid
+  actorMembershipId  String   @db.Uuid
+  previousTimeZone   String?  @db.VarChar(64)
+  nextTimeZone       String?  @db.VarChar(64)
+  action             String
+  reason             String?  @db.Text
+  commandId          String?  @unique
+  commandFingerprint String?
+  occurredAt         DateTime @default(now())
 
   workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   project         Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
@@ -2274,6 +2276,14 @@ enum ProgressAuditOutcome {
   FAILED
 }
 
+enum ProgressCorrectionReasonCode {
+  DATA_ENTRY_ERROR
+  MEASUREMENT_UPDATE
+  FIELD_FACT_CORRECTION
+  ADMINISTRATIVE_CORRECTION
+  OTHER
+}
+
 model ProgressEntry {
   id                String   @id @default(uuid()) @db.Uuid
   progressReportId  String   @db.Uuid
@@ -2282,14 +2292,15 @@ model ProgressEntry {
   actualCost        Decimal? @db.Decimal(18, 2)
   earnedValue       Decimal? @db.Decimal(18, 2)
 
-  status                 ProgressActualStatus @default(SUBMITTED)
-  captureMethod          String               @default("LEGACY_UNSPECIFIED")
+  status                 ProgressActualStatus          @default(SUBMITTED)
+  captureMethod          String                        @default("LEGACY_UNSPECIFIED")
   evidenceReferences     Json?
-  recordedByAccountId    String?              @db.Uuid
-  recordedByMembershipId String?              @db.Uuid
-  supersedesEntryId      String?              @unique @db.Uuid
-  correctionReason       String?              @db.Text
-  revision               Int                  @default(1)
+  recordedByAccountId    String?                       @db.Uuid
+  recordedByMembershipId String?                       @db.Uuid
+  supersedesEntryId      String?                       @unique @db.Uuid
+  correctionReasonCode   ProgressCorrectionReasonCode?
+  correctionReason       String?                       @db.Text
+  revision               Int                           @default(1)
 
   workDate DateTime?
   notes    String?   @db.Text
@@ -2340,6 +2351,9 @@ model ProgressAuditEvent {
   reason                String?              @db.Text
   reasonCode            String?
   reasonText            String?              @db.Text
+  errorCode             String?
+  entityVersionBefore   Int?
+  entityVersionAfter    Int?
   evidenceReferences    Json?
   metadata              Json?
   occurredAt            DateTime             @default(now())

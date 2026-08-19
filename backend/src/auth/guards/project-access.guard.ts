@@ -26,8 +26,11 @@ export class ProjectAccessGuard implements CanActivate {
   ) {}
 
   private progressWriteAction(request: any): string | null {
-    if (request.method !== 'POST') return null;
     const path = `${request.route?.path ?? request.originalUrl ?? request.url}`;
+    if (request.method === 'PATCH' && path.includes('/time-zone')) {
+      return 'PROJECT_TIME_ZONE_UPDATE';
+    }
+    if (request.method !== 'POST') return null;
     if (!path.includes('/progress')) return null;
     if (path.includes('/field')) return 'ACTUAL_SUBMIT';
     if (path.includes('/corrections')) return 'ACTUAL_CORRECT';
@@ -36,15 +39,21 @@ export class ProjectAccessGuard implements CanActivate {
     return null;
   }
 
-  private progressTarget(request: any, projectId: string): {
+  private progressTarget(
+    request: any,
+    projectId: string,
+  ): {
     targetEntityType: string;
-    targetEntityId: string;
+    targetEntityId: string | null;
   } {
     const uuid =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const entryId = request.params?.entryId;
     if (typeof entryId === 'string' && uuid.test(entryId)) {
-      return { targetEntityType: 'PROGRESS_ENTRY', targetEntityId: entryId };
+      // Assignment was denied before the server could establish that the
+      // supplied entry belongs to this Project. Never promote the URL value
+      // into canonical audit truth.
+      return { targetEntityType: 'PROGRESS_ENTRY', targetEntityId: null };
     }
     return { targetEntityType: 'PROJECT', targetEntityId: projectId };
   }
@@ -80,31 +89,39 @@ export class ProjectAccessGuard implements CanActivate {
         ? params.request.body.commandId
         : undefined;
     const target = this.progressTarget(params.request, project.id);
+    const projectConfiguration = params.action === 'PROJECT_TIME_ZONE_UPDATE';
 
     try {
       await this.prisma.progressAuditEvent.create({
         data: {
           schemaVersion: 1,
-          eventType: 'ACTUAL_PROGRESS',
+          eventType: projectConfiguration
+            ? 'PROJECT_CONFIGURATION'
+            : 'ACTUAL_PROGRESS',
           outcome: ProgressAuditOutcome.DENIED,
           workspaceId: project.workspaceId,
           projectId: project.id,
           progressEntryId: null,
           actorAccountId: params.accountId,
           actorMembershipId: membership.id,
-          actorType: 'HUMAN',
-          sourceModule: 'FIELD_PROGRESS',
+          actorType: 'USER',
+          sourceModule: projectConfiguration
+            ? 'PROJECT_GOVERNANCE'
+            : 'FIELD_PROGRESS',
           targetEntityType: target.targetEntityType,
           targetEntityId: target.targetEntityId,
           correlationId: randomUUID(),
           requestId: randomUUID(),
           businessCommandId: commandId,
-          commandId,
+          commandId: commandId
+            ? `DENIED:${params.action}:${commandId}`
+            : undefined,
           action: params.action,
-          reason: 'PROJECT_ASSIGNMENT_DENIED',
-          reasonCode: 'PROJECT_ASSIGNMENT_DENIED',
-          reasonText:
+          reason:
             'The actor is not actively assigned to this project for the requested progress action.',
+          reasonCode: null,
+          reasonText: null,
+          errorCode: 'PROJECT_ASSIGNMENT_DENIED',
           metadata: { guard: 'ProjectAccessGuard' },
           occurredAt: new Date(),
           recordedAt: new Date(),

@@ -1,5 +1,12 @@
 import { Transform } from 'class-transformer';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsUUID,
+  Length,
+  MaxLength,
+  ValidateIf,
+} from 'class-validator';
 
 const normalizeOptionalText = ({ value }: { value: unknown }) => {
   if (typeof value !== 'string') return value;
@@ -8,9 +15,17 @@ const normalizeOptionalText = ({ value }: { value: unknown }) => {
 };
 
 export class UpdateProjectTimeZoneDto {
+  @IsUUID()
+  commandId: string;
+
   @Transform(normalizeOptionalText)
+  @ValidateIf((_object, value) => value !== null)
   @IsString()
   @MaxLength(64)
+  timeZone: string | null;
+
   @IsOptional()
-  timeZone?: string | null;
+  @IsString()
+  @Length(1, 2000)
+  reason?: string;
 }

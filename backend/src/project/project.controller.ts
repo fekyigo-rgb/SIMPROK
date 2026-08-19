@@ -85,9 +85,15 @@ export class ProjectController {
     // comes from the body or the query, so a forged id cannot steer a freeze.
     const actorAccountId = request.user?.id;
     if (!actorAccountId) {
-      throw new InternalServerErrorException('Trusted account context is missing');
+      throw new InternalServerErrorException(
+        'Trusted account context is missing',
+      );
     }
-    return this.rabLockService.lockWorkingDraft({ projectId, workspaceId, actorAccountId });
+    return this.rabLockService.lockWorkingDraft({
+      projectId,
+      workspaceId,
+      actorAccountId,
+    });
   }
 
   @Post(':projectId/boq/import/preview')
@@ -310,9 +316,7 @@ export class ProjectController {
   @Patch(':projectId/time-zone')
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   // Project timezone is Project-owned configuration, not Baseline/RAB truth.
-  // Reuse the existing project administration permission until the broader
-  // Project Governance center receives its final dedicated settings catalog.
-  @Permissions(PERMISSIONS.PROJECT_CREATE)
+  @Permissions(PERMISSIONS.PROJECT_SETTINGS_MANAGE)
   async updateProjectTimeZone(
     @Req() request: any,
     @Param('projectId') projectId: string,
@@ -329,6 +333,8 @@ export class ProjectController {
       accountId: actorAccountId,
       membershipId: access.membershipId,
       workspaceId: access.workspaceId,
+      assignmentId: access.assignmentId,
+      roleInProject: access.roleInProject,
     });
   }
 
