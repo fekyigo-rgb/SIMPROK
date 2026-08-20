@@ -91,7 +91,7 @@ jobs:
         working-directory: backend
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/simprok_e2e?schema=public
+      DATABASE_URL: postgresql://simprok_e2e_app:simprok-e2e-app-ci-only@localhost:5432/simprok_e2e?schema=public
       JWT_SECRET: ci-only-simprok-test-secret
       # GHX-01 signs its decision context with a DEDICATED key and deliberately
       # has NO fallback to the access-token secret, so it must be supplied
@@ -113,11 +113,102 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Provision restricted E2E runtime database role
+        run: |
+          node <<'NODE'
+          const { Client } = require('pg');
+
+          const adminUrl =
+            'postgresql://postgres:postgres@localhost:5432/postgres';
+
+          const runtimeUrl =
+            'postgresql://simprok_e2e_app:simprok-e2e-app-ci-only@localhost:5432/simprok_e2e';
+
+          async function main() {
+            const admin = new Client({
+              connectionString: adminUrl,
+            });
+
+            await admin.connect();
+
+            try {
+              await admin.query(`
+                CREATE ROLE simprok_e2e_app
+                  LOGIN
+                  PASSWORD 'simprok-e2e-app-ci-only'
+                  NOSUPERUSER
+                  NOCREATEROLE
+                  NOCREATEDB
+                  NOREPLICATION
+                  NOBYPASSRLS
+              `);
+
+              await admin.query(`
+                ALTER DATABASE simprok_e2e
+                OWNER TO simprok_e2e_app
+              `);
+            } finally {
+              await admin.end();
+            }
+
+            const runtime = new Client({
+              connectionString: runtimeUrl,
+            });
+
+            await runtime.connect();
+
+            try {
+              const result = await runtime.query(`
+                SELECT
+                  current_user,
+                  current_database(),
+                  rolsuper,
+                  rolcreaterole,
+                  has_database_privilege(
+                    current_user,
+                    current_database(),
+                    'CREATE'
+                  ) AS can_create
+                FROM pg_roles
+                WHERE rolname = current_user
+              `);
+
+              const row = result.rows[0];
+
+              console.log({
+                current_user: row.current_user,
+                current_database: row.current_database,
+                rolsuper: row.rolsuper,
+                rolcreaterole: row.rolcreaterole,
+                can_create: row.can_create,
+              });
+
+              if (
+                row.current_user !== 'simprok_e2e_app' ||
+                row.current_database !== 'simprok_e2e' ||
+                row.rolsuper !== false ||
+                row.rolcreaterole !== false ||
+                row.can_create !== true
+              ) {
+                throw new Error(
+                  'E2E_RUNTIME_ROLE_CONTRACT_NOT_PROVEN',
+                );
+              }
+            } finally {
+              await runtime.end();
+            }
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+          NODE
       - name: Create isolated test environment
         run: |
           {
             echo 'NODE_ENV=test'
-            echo 'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/simprok_e2e?schema=public'
+            echo 'DATABASE_URL=postgresql://simprok_e2e_app:simprok-e2e-app-ci-only@localhost:5432/simprok_e2e?schema=public'
             echo 'JWT_SECRET=ci-only-simprok-test-secret'
             echo 'GHX_DECISION_CONTEXT_SECRET=ci-only-simprok-ghx-decision-context-secret'
             echo 'SIMPROK_E2E_DESTRUCTIVE_CAPABILITY=RESET_SIMPROK_E2E_DATABASE'

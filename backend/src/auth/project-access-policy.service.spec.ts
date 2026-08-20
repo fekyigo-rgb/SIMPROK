@@ -102,6 +102,7 @@ describe('ProjectAccessPolicyService', () => {
           where: {
             workspaceMembershipId: 'm1',
             status: 'ASSIGNED',
+            revokedAt: null,
             projectId: 'p1',
             project: { is: { workspaceId: 'w1' } },
           },
@@ -113,6 +114,7 @@ describe('ProjectAccessPolicyService', () => {
           where: {
             workspaceMembershipId: 'm1',
             status: 'ASSIGNED',
+            revokedAt: null,
             project: { is: { workspaceId: 'w1' } },
           },
         }),

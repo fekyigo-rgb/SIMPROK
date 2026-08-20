@@ -4,12 +4,17 @@ import {
   ExecutionContext,
   ForbiddenException,
   BadRequestException,
+  ServiceUnavailableException,
+  Optional,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { Prisma, ProgressAuditOutcome } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import {
   PERMISSIONS_ALL_KEY,
   PERMISSIONS_KEY,
 } from '../../common/decorators/permissions.decorator';
+import { PrismaService } from '../../prisma/prisma.service';
 import { WorkspacePermissionResolverService } from '../workspace-permission-resolver.service';
 
 @Injectable()
@@ -17,7 +22,124 @@ export class PermissionsGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly permissionResolver: WorkspacePermissionResolverService,
+    @Optional() private readonly prisma?: PrismaService,
   ) {}
+
+  private progressWriteAction(request: any): string | null {
+    const path = `${request.route?.path ?? request.originalUrl ?? request.url}`;
+    if (request.method === 'PATCH' && path.includes('/time-zone')) {
+      return 'PROJECT_TIME_ZONE_UPDATE';
+    }
+    if (request.method !== 'POST') return null;
+    if (!path.includes('/progress')) return null;
+    if (path.includes('/field')) return 'ACTUAL_SUBMIT';
+    if (path.includes('/corrections')) return 'ACTUAL_CORRECT';
+    if (path.includes('/verify')) return 'ACTUAL_VERIFY';
+    if (path.includes('/accept')) return 'ACTUAL_ACCEPT';
+    return null;
+  }
+
+  private async progressTarget(request: any): Promise<{
+    targetEntityType: string;
+    targetEntityId: string | null;
+  }> {
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const entryId = request.params?.entryId;
+    if (typeof entryId === 'string' && uuid.test(entryId)) {
+      const trustedEntry = await this.prisma!.progressEntry.findFirst({
+        where: {
+          id: entryId,
+          progressReport: { projectId: request.projectAccess.projectId },
+        },
+        select: { id: true },
+      });
+      return {
+        targetEntityType: 'PROGRESS_ENTRY',
+        targetEntityId: trustedEntry?.id ?? null,
+      };
+    }
+    const projectId =
+      request.projectAccess?.projectId ?? request.params?.projectId;
+    return {
+      targetEntityType: 'PROJECT',
+      targetEntityId:
+        typeof projectId === 'string' && uuid.test(projectId)
+          ? projectId
+          : null,
+    };
+  }
+
+  private async auditDeniedProgressWrite(params: {
+    request: any;
+    accountId: string;
+    action: string;
+    errorCode: string;
+    errorText: string;
+  }): Promise<void> {
+    const access = params.request.projectAccess;
+    if (!access?.projectId || !access.workspaceId || !access.membershipId) {
+      return;
+    }
+    const commandId =
+      typeof params.request.body?.commandId === 'string'
+        ? params.request.body.commandId
+        : undefined;
+    if (!this.prisma) {
+      throw new ServiceUnavailableException('DENIAL_AUDIT_UNAVAILABLE');
+    }
+    const target = await this.progressTarget(params.request);
+    const projectConfiguration = params.action === 'PROJECT_TIME_ZONE_UPDATE';
+    try {
+      await this.prisma.progressAuditEvent.create({
+        data: {
+          schemaVersion: 1,
+          eventType: projectConfiguration
+            ? 'PROJECT_CONFIGURATION'
+            : 'ACTUAL_PROGRESS',
+          outcome: ProgressAuditOutcome.DENIED,
+          workspaceId: access.workspaceId,
+          projectId: access.projectId,
+          progressEntryId: null,
+          actorAccountId: params.accountId,
+          actorMembershipId: access.membershipId,
+          actorType: 'USER',
+          roleInProjectSnapshot: access.roleInProject ?? null,
+          sourceModule: projectConfiguration
+            ? 'PROJECT_GOVERNANCE'
+            : 'FIELD_PROGRESS',
+          targetEntityType: target.targetEntityType,
+          targetEntityId: target.targetEntityId,
+          correlationId: randomUUID(),
+          requestId: randomUUID(),
+          businessCommandId: commandId,
+          commandId: commandId
+            ? `DENIED:${params.action}:${commandId}`
+            : undefined,
+          action: params.action,
+          reason: params.errorText,
+          reasonCode: null,
+          reasonText: null,
+          errorCode: params.errorCode,
+          metadata: {
+            guard: 'PermissionsGuard',
+            requiredPermissions:
+              (params.request.__requiredPermissionsForAudit as string[]) ?? [],
+          },
+          occurredAt: new Date(),
+          recordedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return;
+      }
+      throw new ServiceUnavailableException('DENIAL_AUDIT_UNAVAILABLE');
+    }
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     // 1. Ekstrak Metadata Izin
@@ -107,8 +229,8 @@ export class PermissionsGuard implements CanActivate {
     }
 
     // 5. Evaluasi Hak Akses
-    const hasRequiredPermission = (requiredPermissions ?? []).some((permission) =>
-      effective.permissions.includes(permission),
+    const hasRequiredPermission = (requiredPermissions ?? []).some(
+      (permission) => effective.permissions.includes(permission),
     );
 
     const hasEveryRequiredPermission = (requiredAllPermissions ?? []).every(
@@ -119,6 +241,21 @@ export class PermissionsGuard implements CanActivate {
       (requiredPermissions?.length > 0 && !hasRequiredPermission) ||
       !hasEveryRequiredPermission
     ) {
+      const action = this.progressWriteAction(request);
+      if (action) {
+        request.__requiredPermissionsForAudit = [
+          ...(requiredPermissions ?? []),
+          ...(requiredAllPermissions ?? []),
+        ];
+        await this.auditDeniedProgressWrite({
+          request,
+          accountId,
+          action,
+          errorCode: 'TECHNICAL_PERMISSION_DENIED',
+          errorText:
+            'The actor does not hold the required technical progress permission in this project workspace.',
+        });
+      }
       throw new ForbiddenException(
         'Access Denied: Insufficient Permission for this Workspace',
       );

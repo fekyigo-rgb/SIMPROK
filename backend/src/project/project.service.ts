@@ -5,12 +5,14 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { Prisma, ProjectStatus } from '@prisma/client';
+import { Prisma, ProgressAuditOutcome, ProjectStatus } from '@prisma/client';
+import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
 import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
+import { UpdateProjectTimeZoneDto } from './dto/update-project-time-zone.dto';
 import { DeviationService } from './deviation.service';
 import { detectIntakeMode } from './intake-mode.kernel';
 import {
@@ -93,6 +95,21 @@ export class ProjectService {
     return trimmed.length > 0 ? trimmed : null;
   }
 
+  private normalizeProjectTimeZone(
+    value: string | null | undefined,
+  ): string | null | undefined {
+    const normalized = this.normalizeOptionalText(value);
+    if (normalized === undefined || normalized === null) return normalized;
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: normalized }).format(
+        new Date('2026-01-01T00:00:00.000Z'),
+      );
+    } catch {
+      throw new BadRequestException('INVALID_PROJECT_TIME_ZONE');
+    }
+    return normalized;
+  }
+
   private decimalOrNull(
     value: string | null | undefined,
   ): Prisma.Decimal | null | undefined {
@@ -171,7 +188,10 @@ export class ProjectService {
         return project;
       });
     } catch (error) {
-      if (error instanceof NotFoundException) {
+      if (
+        error instanceof NotFoundException ||
+        error instanceof BadRequestException
+      ) {
         throw error;
       }
 
@@ -573,6 +593,156 @@ export class ProjectService {
     });
   }
 
+  async updateProjectTimeZone(
+    projectId: string,
+    dto: UpdateProjectTimeZoneDto,
+    actor: {
+      accountId: string;
+      membershipId: string;
+      workspaceId: string;
+      assignmentId: string;
+      roleInProject: string;
+    },
+  ) {
+    const nextTimeZone = this.normalizeProjectTimeZone(dto.timeZone) ?? null;
+    const reason = this.normalizeOptionalText(dto.reason) ?? null;
+    const commandFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          action: 'PROJECT_TIME_ZONE_SET',
+          projectId,
+          actorAccountId: actor.accountId,
+          nextTimeZone,
+          reason,
+        }),
+      )
+      .digest('hex');
+
+    return this.prisma.$transaction(async (tx) => {
+      const lockedProject = await tx.$queryRaw<
+        Array<{ id: string; workspaceId: string; timeZone: string | null }>
+      >(
+        Prisma.sql`SELECT "id", "workspaceId", "timeZone"
+                     FROM "projects"
+                    WHERE "id" = ${projectId}::uuid
+                    FOR UPDATE`,
+      );
+      const project = lockedProject[0];
+      if (!project) throw new NotFoundException('Project not found');
+      if (project.workspaceId !== actor.workspaceId) {
+        throw new NotFoundException('Project not found');
+      }
+
+      const existingCommand = await tx.projectTimeZoneEvent.findUnique({
+        where: { commandId: dto.commandId },
+      });
+      if (existingCommand) {
+        if (
+          existingCommand.projectId !== projectId ||
+          existingCommand.actorAccountId !== actor.accountId ||
+          existingCommand.commandFingerprint !== commandFingerprint
+        ) {
+          throw new ConflictException('COMMAND_ID_REUSED');
+        }
+        return tx.project.findUniqueOrThrow({ where: { id: projectId } });
+      }
+
+      const trustedActor = await tx.workspaceMembership.findFirst({
+        where: {
+          id: actor.membershipId,
+          accountId: actor.accountId,
+          workspaceId: actor.workspaceId,
+          status: 'ACTIVE',
+          userProfile: { status: 'ACTIVE' },
+        },
+        select: { id: true },
+      });
+      if (!trustedActor) {
+        throw new BadRequestException('Trusted project actor is required');
+      }
+
+      const trustedAssignment = await tx.projectAssignment.findFirst({
+        where: {
+          id: actor.assignmentId,
+          projectId,
+          workspaceMembershipId: actor.membershipId,
+          status: 'ASSIGNED',
+          revokedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!trustedAssignment) {
+        throw new BadRequestException('Trusted project assignment is required');
+      }
+
+      const changed = project.timeZone !== nextTimeZone;
+      const updated = changed
+        ? await tx.project.update({
+            where: { id: projectId },
+            data: { timeZone: nextTimeZone },
+          })
+        : await tx.project.findUniqueOrThrow({
+            where: { id: projectId },
+          });
+
+      const action = changed
+        ? 'PROJECT_TIME_ZONE_UPDATED'
+        : 'PROJECT_TIME_ZONE_CONFIRMED';
+      const now = new Date();
+      const domainEvent = await tx.projectTimeZoneEvent.create({
+        data: {
+          workspaceId: actor.workspaceId,
+          projectId,
+          actorAccountId: actor.accountId,
+          actorMembershipId: actor.membershipId,
+          previousTimeZone: project.timeZone,
+          nextTimeZone,
+          action,
+          reason,
+          commandId: dto.commandId,
+          commandFingerprint,
+          occurredAt: now,
+        },
+      });
+
+      await tx.progressAuditEvent.create({
+        data: {
+          schemaVersion: 1,
+          eventType: 'PROJECT_CONFIGURATION',
+          outcome: ProgressAuditOutcome.SUCCESS,
+          workspaceId: actor.workspaceId,
+          projectId,
+          progressEntryId: null,
+          actorAccountId: actor.accountId,
+          actorMembershipId: actor.membershipId,
+          actorType: 'USER',
+          action,
+          roleInProjectSnapshot: actor.roleInProject,
+          sourceModule: 'PROJECT_GOVERNANCE',
+          targetEntityType: 'PROJECT_TIME_ZONE_EVENT',
+          targetEntityId: domainEvent.id,
+          correlationId: randomUUID(),
+          requestId: randomUUID(),
+          businessCommandId: dto.commandId,
+          commandId: `PROJECT_TIME_ZONE:${dto.commandId}`,
+          commandFingerprint,
+          reason,
+          reasonCode: null,
+          reasonText: reason,
+          errorCode: null,
+          metadata: {
+            previousTimeZone: project.timeZone,
+            nextTimeZone,
+          },
+          occurredAt: now,
+          recordedAt: now,
+        },
+      });
+
+      return updated;
+    });
+  }
+
   async getBoq(projectId: string) {
     const baseline = await this.prisma.projectBaseline.findFirst({
       where: { projectId, status: 'ACTIVE' },
@@ -667,17 +837,18 @@ export class ProjectService {
       where: { projectId, boqStructureId: structure.id, status: 'DRAFT' },
       orderBy: { updatedAt: 'desc' },
     });
-    const subtotal = rab && rab.totalBaseCost !== null
-      ? new Prisma.Decimal(rab.totalBaseCost)
-      : items.reduce(
-          (sum, item) =>
-            sum.add(
-              item.itemType === 'WORK_ITEM' && item.lineTotal
-                ? item.lineTotal
-                : 0,
-            ),
-          new Prisma.Decimal(0),
-        );
+    const subtotal =
+      rab && rab.totalBaseCost !== null
+        ? new Prisma.Decimal(rab.totalBaseCost)
+        : items.reduce(
+            (sum, item) =>
+              sum.add(
+                item.itemType === 'WORK_ITEM' && item.lineTotal
+                  ? item.lineTotal
+                  : 0,
+              ),
+            new Prisma.Decimal(0),
+          );
     const recap = this.buildDraftRecap(
       subtotal,
       rab?.profitPercent,
@@ -720,7 +891,11 @@ export class ProjectService {
     T extends { ahspVersionId: string | null; ahspSnapshotId?: string | null },
   >(items: T[]): Promise<Array<T & { ahsp: AhspIdentityProjection | null }>> {
     const snapshotIds = Array.from(
-      new Set(items.map((item) => item.ahspSnapshotId).filter((id): id is string => !!id)),
+      new Set(
+        items
+          .map((item) => item.ahspSnapshotId)
+          .filter((id): id is string => !!id),
+      ),
     );
     const versionIds = Array.from(
       new Set(
@@ -807,8 +982,13 @@ export class ProjectService {
    * get null — an unknown, never an assumed authority.
    */
   private async attachPriceSourceAuthority<
-    T extends { calculationOccurrenceId: string | null; ahspVersionId: string | null },
-  >(items: T[]): Promise<Array<T & { sourceAuthority: PriceSourceAuthority | null }>> {
+    T extends {
+      calculationOccurrenceId: string | null;
+      ahspVersionId: string | null;
+    },
+  >(
+    items: T[],
+  ): Promise<Array<T & { sourceAuthority: PriceSourceAuthority | null }>> {
     const occurrenceIds = Array.from(
       new Set(
         items
@@ -847,7 +1027,8 @@ export class ProjectService {
                   ownership === 'APPROVED_COMMUNITY_ASSET',
             privateBasicPriceCount: occurrence.resourceResolutions.filter(
               (resolution) =>
-                resolution.selectedBasicPrice?.assetScope === 'WORKSPACE_PRIVATE',
+                resolution.selectedBasicPrice?.assetScope ===
+                'WORKSPACE_PRIVATE',
             ).length,
             catalogBasicPriceCount: occurrence.resourceResolutions.filter(
               (resolution) =>
@@ -959,7 +1140,9 @@ export class ProjectService {
         tempIdCounts.set(row.tempId, (tempIdCounts.get(row.tempId) ?? 0) + 1);
       }
       if ([...tempIdCounts.values()].some((count) => count > 1)) {
-        throw new ConflictException(SERVER_ROW_PROTECTION_REASON.DUPLICATE_TEMP_ID);
+        throw new ConflictException(
+          SERVER_ROW_PROTECTION_REASON.DUPLICATE_TEMP_ID,
+        );
       }
 
       // §4.1: every existing SERVER_COST_KERNEL row must be referenced by
@@ -1062,7 +1245,9 @@ export class ProjectService {
         const parentId = row.parentTempId
           ? (tempIdMap.get(row.parentTempId) ??
             (() => {
-              throw new BadRequestException(RAB_STRUCTURE_REASON.PARENT_NOT_FOUND);
+              throw new BadRequestException(
+                RAB_STRUCTURE_REASON.PARENT_NOT_FOUND,
+              );
             })())
           : null;
         const isFolder = row.itemType === 'FOLDER';
@@ -1074,7 +1259,9 @@ export class ProjectService {
 
         const existing = existingById.get(row.tempId);
         const isServerRow =
-          !isFolder && !isNote && existing?.priceOrigin === 'SERVER_COST_KERNEL';
+          !isFolder &&
+          !isNote &&
+          existing?.priceOrigin === 'SERVER_COST_KERNEL';
 
         // null/undefined unitPrice means "not priced yet" and must stay null —
         // never collapse an unknown price into a fabricated 0 (5D null-integrity law).

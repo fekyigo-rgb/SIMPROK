@@ -23,9 +23,13 @@ export const PERMISSIONS = {
   APPROVAL_MATRIX_MANAGE: 'APPROVAL_MATRIX_MANAGE',
 
   FIELD_PROGRESS_SUBMIT: 'FIELD_PROGRESS_SUBMIT',
+  FIELD_PROGRESS_CORRECT: 'FIELD_PROGRESS_CORRECT',
+  FIELD_PROGRESS_VERIFY: 'FIELD_PROGRESS_VERIFY',
+  FIELD_PROGRESS_ACCEPT: 'FIELD_PROGRESS_ACCEPT',
 
   PROJECT_VIEW: 'PROJECT_VIEW',
   PROJECT_CREATE: 'PROJECT_CREATE',
+  PROJECT_SETTINGS_MANAGE: 'PROJECT_SETTINGS_MANAGE',
   RAB_VIEW: 'RAB_VIEW',
   RAB_DRAFT_EDIT: 'RAB_DRAFT_EDIT',
 
@@ -180,6 +184,30 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     description: 'Submit field progress entries for an assigned project.',
   },
   {
+    code: PERMISSIONS.FIELD_PROGRESS_CORRECT,
+    domain: PERMISSION_DOMAINS.FIELD_PROGRESS,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Invoke correction of a field progress Actual within an assigned project; decision authority remains separately governed by PositionAuthority.',
+    note: 'MON-03 Owner clarification: technical capability is not job-title authority and is never PROJECT_VIEW.',
+  },
+  {
+    code: PERMISSIONS.FIELD_PROGRESS_VERIFY,
+    domain: PERMISSION_DOMAINS.FIELD_PROGRESS,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Invoke verification of a field progress Actual within an assigned project; decision authority remains separately governed by PositionAuthority.',
+    note: 'MON-03 Owner clarification: technical capability is not job-title authority and is never PROJECT_VIEW.',
+  },
+  {
+    code: PERMISSIONS.FIELD_PROGRESS_ACCEPT,
+    domain: PERMISSION_DOMAINS.FIELD_PROGRESS,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Invoke acceptance of a field progress Actual within an assigned project; decision authority remains separately governed by PositionAuthority.',
+    note: 'MON-03 Owner clarification: technical capability is not job-title authority and is never PROJECT_VIEW.',
+  },
+  {
     code: PERMISSIONS.PROJECT_VIEW,
     domain: PERMISSION_DOMAINS.PROJECT,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
@@ -191,6 +219,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
     description: 'Create or initiate project records where authorized.',
     note: 'Seeded through RBAC seed in IDENTITY-A2. Runtime DB requires normal seed/test setup to materialize this permission.',
+  },
+  {
+    code: PERMISSIONS.PROJECT_SETTINGS_MANAGE,
+    domain: PERMISSION_DOMAINS.PROJECT,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Configure Project-owned settings on an assigned project through governed activation.',
+    note: 'MON-03: Project timezone changes use this precise capability; PROJECT_CREATE and PROJECT_VIEW are not edit shortcuts.',
   },
   {
     code: PERMISSIONS.RAB_VIEW,
@@ -351,6 +387,10 @@ export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
 // "not seeded anywhere." These are internal curation authorities and are
 // NEVER part of ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES below.
 export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
+  PERMISSIONS.FIELD_PROGRESS_CORRECT,
+  PERMISSIONS.FIELD_PROGRESS_VERIFY,
+  PERMISSIONS.FIELD_PROGRESS_ACCEPT,
+  PERMISSIONS.PROJECT_SETTINGS_MANAGE,
   PERMISSIONS.BASIC_PRICE_VERIFY,
   PERMISSIONS.BASIC_PRICE_PUBLISH,
   PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,

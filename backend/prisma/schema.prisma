@@ -34,6 +34,9 @@ model Account {
   basicPriceProvenanceCorrections             BasicPriceProvenanceCorrection[]     @relation("BasicPriceProvenanceCorrectionActor")
   lockedRabDocuments                          RabDocument[]                        @relation("RabDocumentLockedBy")
   capturedProjectAhspOccurrences              ProjectAhspOccurrence[]              @relation("ProjectAhspOccurrenceContextCapturedBy")
+  recordedProgressEntries                     ProgressEntry[]                      @relation("ProgressEntryRecorder")
+  progressAuditEvents                         ProgressAuditEvent[]                 @relation("ProgressAuditActor")
+  projectTimeZoneEvents                       ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions               AhspResourceIdentityDecision[]       @relation("AhspResourceIdentityDecisionActor")
   ingestionConnectorsActingFor                IngestionConnector[]                 @relation("IngestionConnectorActsOnBehalfOf")
 
@@ -99,6 +102,8 @@ model Workspace {
   resourceSourceIdentities        ResourceSourceIdentity[]
   basicPriceSourceEquivalences    BasicPriceSourceEquivalence[]
   basicPriceProvenanceCorrections BasicPriceProvenanceCorrection[]
+  progressAuditEvents             ProgressAuditEvent[]             @relation("ProgressAuditWorkspace")
+  projectTimeZoneEvents           ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions   AhspResourceIdentityDecision[]
   ingestionConnectors             IngestionConnector[]
 
@@ -128,11 +133,14 @@ model WorkspaceMembership {
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
-  account         Account             @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  userProfile     User?
-  membershipRoles MembershipRole[]
-  assignments     ProjectAssignment[]
+  account                 Account                @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  workspace               Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userProfile             User?
+  membershipRoles         MembershipRole[]
+  assignments             ProjectAssignment[]
+  recordedProgressEntries ProgressEntry[]        @relation("ProgressEntryMembership")
+  progressAuditEvents     ProgressAuditEvent[]   @relation("ProgressAuditMembership")
+  projectTimeZoneEvents   ProjectTimeZoneEvent[]
 
   @@unique([accountId, workspaceId])
   @@index([accountId])
@@ -263,6 +271,7 @@ model Position {
   projectBaselines    ProjectBaseline[]
   projectRisks        ProjectRisk[]
   formalDecisions     FormalDecision[]
+  progressAuditEvents ProgressAuditEvent[] @relation("ProgressAuditPosition")
 
   @@index([workspaceId])
   @@map("positions")
@@ -326,6 +335,7 @@ model Project {
   budgetBaseline   Decimal?      @db.Decimal(18, 2)
   startDate        DateTime?
   endDate          DateTime?
+  timeZone         String?       @db.VarChar(64)
   createdById      String?       @db.Uuid
   deletedAt        DateTime?
   status           ProjectStatus @default(PLANNED)
@@ -349,11 +359,38 @@ model Project {
   formalDecisions      FormalDecision[]
   intelligenceEvidence IntelligenceEvidence[]
   ahspOccurrences      ProjectAhspOccurrence[]
+  progressAuditEvents  ProgressAuditEvent[]
+  timeZoneEvents       ProjectTimeZoneEvent[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
   @@index([organizationId])
   @@map("projects")
+}
+
+model ProjectTimeZoneEvent {
+  id                 String   @id @default(uuid()) @db.Uuid
+  workspaceId        String   @db.Uuid
+  projectId          String   @db.Uuid
+  actorAccountId     String   @db.Uuid
+  actorMembershipId  String   @db.Uuid
+  previousTimeZone   String?  @db.VarChar(64)
+  nextTimeZone       String?  @db.VarChar(64)
+  action             String
+  reason             String?  @db.Text
+  commandId          String?  @unique
+  commandFingerprint String?
+  occurredAt         DateTime @default(now())
+
+  workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  actor           Account             @relation(fields: [actorAccountId], references: [id], onDelete: Restrict)
+  actorMembership WorkspaceMembership @relation(fields: [actorMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, occurredAt])
+  @@index([projectId, occurredAt])
+  @@index([actorAccountId, occurredAt])
+  @@map("project_time_zone_events")
 }
 
 enum ProjectType {
@@ -1020,10 +1057,12 @@ model Authority {
 }
 
 model PositionAuthority {
-  id          String   @id @default(uuid()) @db.Uuid
-  positionId  String   @db.Uuid
-  authorityId String   @db.Uuid
-  assignedAt  DateTime @default(now())
+  id          String    @id @default(uuid()) @db.Uuid
+  positionId  String    @db.Uuid
+  authorityId String    @db.Uuid
+  assignedAt  DateTime  @default(now())
+  isActive    Boolean   @default(true)
+  revokedAt   DateTime?
 
   position  Position  @relation(fields: [positionId], references: [id], onDelete: Cascade)
   authority Authority @relation(fields: [authorityId], references: [id], onDelete: Cascade)
@@ -1031,6 +1070,7 @@ model PositionAuthority {
   @@unique([positionId, authorityId])
   @@index([positionId])
   @@index([authorityId])
+  @@index([isActive])
   @@map("position_authorities")
 }
 
@@ -2532,14 +2572,16 @@ model ProjectBaseline {
 // =====================================================
 
 model ProgressReport {
-  id              String   @id @default(uuid()) @db.Uuid
-  projectId       String   @db.Uuid
-  baselineId      String   @db.Uuid
-  periodStartDate DateTime
-  periodEndDate   DateTime
-  status          String   @default("DRAFT")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                 String   @id @default(uuid()) @db.Uuid
+  projectId          String   @db.Uuid
+  baselineId         String   @db.Uuid
+  periodStartDate    DateTime
+  periodEndDate      DateTime
+  status             String   @default("DRAFT")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  commandId          String?  @unique
+  commandFingerprint String?
 
   overallPlannedProgress Decimal? @db.Decimal(5, 2)
   overallActualProgress  Decimal? @db.Decimal(5, 2)
@@ -2556,13 +2598,46 @@ model ProgressReport {
   @@map("progress_reports")
 }
 
+enum ProgressActualStatus {
+  LEGACY_UNSPECIFIED
+  RECORDED
+  SUBMITTED
+  VERIFIED
+  ACCEPTED
+  RETURNED_FOR_CORRECTION
+}
+
+enum ProgressAuditOutcome {
+  SUCCESS
+  DENIED
+  FAILED
+}
+
+enum ProgressCorrectionReasonCode {
+  DATA_ENTRY_ERROR
+  MEASUREMENT_UPDATE
+  FIELD_FACT_CORRECTION
+  ADMINISTRATIVE_CORRECTION
+  OTHER
+}
+
 model ProgressEntry {
-  id                String  @id @default(uuid()) @db.Uuid
-  progressReportId  String  @db.Uuid
-  boqItemId         String  @db.Uuid
-  installedQuantity Decimal @db.Decimal(18, 2)
-  actualCost        Decimal @db.Decimal(18, 2)
-  earnedValue       Decimal @db.Decimal(18, 2)
+  id                String   @id @default(uuid()) @db.Uuid
+  progressReportId  String   @db.Uuid
+  boqItemId         String   @db.Uuid
+  installedQuantity Decimal  @db.Decimal(18, 2)
+  actualCost        Decimal? @db.Decimal(18, 2)
+  earnedValue       Decimal? @db.Decimal(18, 2)
+
+  status                 ProgressActualStatus          @default(SUBMITTED)
+  captureMethod          String                        @default("LEGACY_UNSPECIFIED")
+  evidenceReferences     Json?
+  recordedByAccountId    String?                       @db.Uuid
+  recordedByMembershipId String?                       @db.Uuid
+  supersedesEntryId      String?                       @unique @db.Uuid
+  correctionReasonCode   ProgressCorrectionReasonCode?
+  correctionReason       String?                       @db.Text
+  revision               Int                           @default(1)
 
   workDate DateTime?
   notes    String?   @db.Text
@@ -2571,11 +2646,70 @@ model ProgressEntry {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  progressReport ProgressReport @relation(fields: [progressReportId], references: [id], onDelete: Cascade)
-  boqItem        BoqItem        @relation(fields: [boqItemId], references: [id])
+  progressReport     ProgressReport       @relation(fields: [progressReportId], references: [id], onDelete: Cascade)
+  boqItem            BoqItem              @relation(fields: [boqItemId], references: [id])
+  recordedBy         Account?             @relation("ProgressEntryRecorder", fields: [recordedByAccountId], references: [id], onDelete: Restrict)
+  recorderMembership WorkspaceMembership? @relation("ProgressEntryMembership", fields: [recordedByMembershipId], references: [id], onDelete: Restrict)
+  supersedes         ProgressEntry?       @relation("ProgressEntryCorrection", fields: [supersedesEntryId], references: [id], onDelete: Restrict)
+  correction         ProgressEntry?       @relation("ProgressEntryCorrection")
+  auditEvents        ProgressAuditEvent[]
 
   @@index([progressReportId])
+  @@index([boqItemId, createdAt])
+  @@index([recordedByAccountId])
+  @@index([recordedByMembershipId])
   @@map("progress_entries")
+}
+
+model ProgressAuditEvent {
+  id                    String               @id @default(uuid()) @db.Uuid
+  schemaVersion         Int?
+  eventType             String?
+  outcome               ProgressAuditOutcome @default(SUCCESS)
+  workspaceId           String               @db.Uuid
+  projectId             String               @db.Uuid
+  progressEntryId       String?              @db.Uuid
+  actorAccountId        String               @db.Uuid
+  actorMembershipId     String               @db.Uuid
+  actorPositionId       String?              @db.Uuid
+  actorType             String?
+  action                String
+  authorityCode         String?
+  positionCodeSnapshot  String?
+  roleInProjectSnapshot String?
+  sourceModule          String?
+  targetEntityType      String?
+  targetEntityId        String?              @db.Uuid
+  correlationId         String?              @db.Uuid
+  requestId             String?              @db.Uuid
+  businessCommandId     String?
+  commandId             String?              @unique
+  commandFingerprint    String?
+  reason                String?              @db.Text
+  reasonCode            String?
+  reasonText            String?              @db.Text
+  errorCode             String?
+  entityVersionBefore   Int?
+  entityVersionAfter    Int?
+  evidenceReferences    Json?
+  metadata              Json?
+  occurredAt            DateTime             @default(now())
+  recordedAt            DateTime?
+
+  workspace       Workspace           @relation("ProgressAuditWorkspace", fields: [workspaceId], references: [id], onDelete: Restrict)
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  progressEntry   ProgressEntry?      @relation(fields: [progressEntryId], references: [id], onDelete: Restrict)
+  actor           Account             @relation("ProgressAuditActor", fields: [actorAccountId], references: [id], onDelete: Restrict)
+  actorMembership WorkspaceMembership @relation("ProgressAuditMembership", fields: [actorMembershipId], references: [id], onDelete: Restrict)
+  actorPosition   Position?           @relation("ProgressAuditPosition", fields: [actorPositionId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, occurredAt])
+  @@index([projectId, occurredAt])
+  @@index([progressEntryId, occurredAt])
+  @@index([actorAccountId, occurredAt])
+  @@index([outcome, occurredAt])
+  @@index([businessCommandId])
+  @@map("progress_audit_events")
 }
 
 enum DeviationType {

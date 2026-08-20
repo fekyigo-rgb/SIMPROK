@@ -4,9 +4,14 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Prisma, ProgressAuditOutcome } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { ProjectAccessPolicyService } from '../project-access-policy.service';
+import { PrismaService } from '../../prisma/prisma.service';
 
 /*
  * Apply on project-scoped controllers AFTER JwtAuthGuard, e.g.:
@@ -15,7 +20,123 @@ import { ProjectAccessPolicyService } from '../project-access-policy.service';
  */
 @Injectable()
 export class ProjectAccessGuard implements CanActivate {
-  constructor(private readonly accessPolicy: ProjectAccessPolicyService) {}
+  constructor(
+    private readonly accessPolicy: ProjectAccessPolicyService,
+    @Optional() private readonly prisma?: PrismaService,
+  ) {}
+
+  private progressWriteAction(request: any): string | null {
+    const path = `${request.route?.path ?? request.originalUrl ?? request.url}`;
+    if (request.method === 'PATCH' && path.includes('/time-zone')) {
+      return 'PROJECT_TIME_ZONE_UPDATE';
+    }
+    if (request.method !== 'POST') return null;
+    if (!path.includes('/progress')) return null;
+    if (path.includes('/field')) return 'ACTUAL_SUBMIT';
+    if (path.includes('/corrections')) return 'ACTUAL_CORRECT';
+    if (path.includes('/verify')) return 'ACTUAL_VERIFY';
+    if (path.includes('/accept')) return 'ACTUAL_ACCEPT';
+    return null;
+  }
+
+  private progressTarget(
+    request: any,
+    projectId: string,
+  ): {
+    targetEntityType: string;
+    targetEntityId: string | null;
+  } {
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const entryId = request.params?.entryId;
+    if (typeof entryId === 'string' && uuid.test(entryId)) {
+      // Assignment was denied before the server could establish that the
+      // supplied entry belongs to this Project. Never promote the URL value
+      // into canonical audit truth.
+      return { targetEntityType: 'PROGRESS_ENTRY', targetEntityId: null };
+    }
+    return { targetEntityType: 'PROJECT', targetEntityId: projectId };
+  }
+
+  private async auditAssignmentDenied(params: {
+    request: any;
+    accountId: string;
+    projectId: string;
+    action: string;
+  }): Promise<void> {
+    if (!this.prisma) {
+      throw new ServiceUnavailableException('DENIAL_AUDIT_UNAVAILABLE');
+    }
+    const project = await this.prisma.project.findUnique({
+      where: { id: params.projectId },
+      select: { id: true, workspaceId: true },
+    });
+    if (!project) return;
+
+    const membership = await this.prisma.workspaceMembership.findFirst({
+      where: {
+        accountId: params.accountId,
+        workspaceId: project.workspaceId,
+        status: 'ACTIVE',
+        userProfile: { status: 'ACTIVE' },
+      },
+      select: { id: true },
+    });
+    if (!membership) return;
+
+    const commandId =
+      typeof params.request.body?.commandId === 'string'
+        ? params.request.body.commandId
+        : undefined;
+    const target = this.progressTarget(params.request, project.id);
+    const projectConfiguration = params.action === 'PROJECT_TIME_ZONE_UPDATE';
+
+    try {
+      await this.prisma.progressAuditEvent.create({
+        data: {
+          schemaVersion: 1,
+          eventType: projectConfiguration
+            ? 'PROJECT_CONFIGURATION'
+            : 'ACTUAL_PROGRESS',
+          outcome: ProgressAuditOutcome.DENIED,
+          workspaceId: project.workspaceId,
+          projectId: project.id,
+          progressEntryId: null,
+          actorAccountId: params.accountId,
+          actorMembershipId: membership.id,
+          actorType: 'USER',
+          sourceModule: projectConfiguration
+            ? 'PROJECT_GOVERNANCE'
+            : 'FIELD_PROGRESS',
+          targetEntityType: target.targetEntityType,
+          targetEntityId: target.targetEntityId,
+          correlationId: randomUUID(),
+          requestId: randomUUID(),
+          businessCommandId: commandId,
+          commandId: commandId
+            ? `DENIED:${params.action}:${commandId}`
+            : undefined,
+          action: params.action,
+          reason:
+            'The actor is not actively assigned to this project for the requested progress action.',
+          reasonCode: null,
+          reasonText: null,
+          errorCode: 'PROJECT_ASSIGNMENT_DENIED',
+          metadata: { guard: 'ProjectAccessGuard' },
+          occurredAt: new Date(),
+          recordedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return;
+      }
+      throw new ServiceUnavailableException('DENIAL_AUDIT_UNAVAILABLE');
+    }
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -48,6 +169,15 @@ export class ProjectAccessGuard implements CanActivate {
         throw new NotFoundException('Project not found');
       }
 
+      const action = this.progressWriteAction(request);
+      if (action) {
+        await this.auditAssignmentDenied({
+          request,
+          accountId,
+          projectId,
+          action,
+        });
+      }
       throw new ForbiddenException('Project assignment required');
     }
 

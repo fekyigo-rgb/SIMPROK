@@ -19,7 +19,8 @@ export type ProjectAccessResolution =
       context: ProjectAccessContext;
     }
   | {
-      kind: 'PROJECT_NOT_FOUND' | 'MEMBERSHIP_NOT_FOUND' | 'ASSIGNMENT_REQUIRED';
+      kind:
+        'PROJECT_NOT_FOUND' | 'MEMBERSHIP_NOT_FOUND' | 'ASSIGNMENT_REQUIRED';
     };
 
 interface EligibleMembershipRecord {
@@ -106,6 +107,7 @@ export class ProjectAccessPolicyService {
     return {
       workspaceMembershipId: membershipId,
       status: 'ASSIGNED',
+      revokedAt: null,
       ...(projectId ? { projectId } : {}),
       project: {
         is: { workspaceId },
@@ -123,7 +125,10 @@ export class ProjectAccessPolicyService {
     workspaceId: string,
     projectId?: string,
   ): Promise<AssignedAccessRecord | null> {
-    const membership = await this.findEligibleMembership(accountId, workspaceId);
+    const membership = await this.findEligibleMembership(
+      accountId,
+      workspaceId,
+    );
 
     if (!membership) {
       return null;
