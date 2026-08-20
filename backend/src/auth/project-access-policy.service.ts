@@ -48,6 +48,7 @@ interface AssignedAccessRecord {
 }
 
 export type AccessibleProject = Project & {
+  organizationName: string | null;
   access: {
     assignmentId: string;
     roleInProject: string;
@@ -210,8 +211,43 @@ export class ProjectAccessPolicyService {
       return [];
     }
 
+    if (access.assignments.length === 0) {
+      return [];
+    }
+
+    const organizationIds = Array.from(
+      new Set(
+        access.assignments.map(
+          (assignment) => assignment.project.organizationId,
+        ),
+      ),
+    );
+
+    const organizations = await this.prisma.organization.findMany({
+      where: {
+        id: {
+          in: organizationIds,
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+      },
+    });
+
+    const organizationNameById = new Map(
+      organizations.map((organization) => [
+        organization.id,
+        organization.name,
+      ]),
+    );
+
     return access.assignments.map((assignment) => ({
       ...assignment.project,
+      organizationName:
+        organizationNameById.get(
+          assignment.project.organizationId,
+        ) ?? null,
       access: {
         assignmentId: assignment.id,
         roleInProject: assignment.roleInProject,
