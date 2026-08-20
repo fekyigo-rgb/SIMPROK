@@ -34,6 +34,14 @@ export function Topbar() {
         mobileLabel: 'Ruang Kerja RAB',
       };
     }
+    if (normalizedPath === '/field') {
+      return {
+        title: 'Monitoring',
+        subtitle: 'Daftar proyek konstruksi yang sedang dalam tahap pelaksanaan.',
+        mobileLabel: 'Monitoring',
+      };
+    }
+
 
     if (normalizedPath === '/proyek') {
       return {
