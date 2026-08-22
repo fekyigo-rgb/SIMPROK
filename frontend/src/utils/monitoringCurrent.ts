@@ -6,6 +6,41 @@ export type MonitoringFactState =
   | 'NOT_YET_RECORDED'
   | 'UNAVAILABLE';
 
+export type MonitoringWeightReason =
+  | 'BASELINE_VALUE_UNAVAILABLE'
+  | 'ZERO_BASELINE_DENOMINATOR'
+  | 'INVALID_BASELINE_DENOMINATOR'
+  | 'ITEM_VALUE_UNAVAILABLE'
+  | 'INCOMPLETE_BASELINE_VALUE_COVERAGE';
+
+export type MonitoringWeightFact =
+  | { state: 'AVAILABLE'; percentage: string; reason: null }
+  | {
+      state: 'UNAVAILABLE';
+      percentage: null;
+      reason: MonitoringWeightReason;
+    }
+  | { state: 'NOT_APPLICABLE'; percentage: null; reason: null };
+
+export interface MonitoringRowWeight {
+  own: MonitoringWeightFact;
+  subtree: MonitoringWeightFact;
+  cumulative: MonitoringWeightFact;
+}
+
+export interface MonitoringProjectWeight {
+  basis: 'ACTIVE_BASELINE_RAB_TOTAL_BASE_COST';
+  completeness: 'COMPLETE' | 'INCOMPLETE' | 'UNAVAILABLE';
+  reason: MonitoringWeightReason | null;
+  denominator: {
+    state: 'AVAILABLE' | 'UNAVAILABLE';
+    value: string | null;
+  };
+  eligibleWorkItemCount: number;
+  weightedWorkItemCount: number;
+  unavailableWorkItemCount: number;
+}
+
 export interface MonitoringEffectiveRecord {
   id: string;
   installedQuantity: string;
@@ -40,6 +75,7 @@ export interface MonitoringItem {
   itemType: string;
   sortOrder: number;
   planned: { quantity: string; unit: string };
+  weight: MonitoringRowWeight;
   actual: MonitoringActual | null;
 }
 
@@ -63,6 +99,7 @@ export interface MonitoringResponse {
     approvedAt: string;
   } | null;
   freshness: MonitoringFreshness;
+  weight: MonitoringProjectWeight;
   items: MonitoringItem[];
   unavailable: string[];
 }
@@ -107,6 +144,73 @@ export function effectiveActual(
 ): MonitoringEffectiveRecord | null {
   if (item?.actual?.state !== 'RECORDED') return null;
   return item.actual.effectiveRecord;
+}
+
+/**
+ * Display rounding only. Authoritative percentage math is completed by the
+ * backend with Prisma.Decimal; this function never chooses a denominator or
+ * turns the wire value back into a JavaScript floating-point Number.
+ */
+export function formatWeightPercentage(
+  fact: MonitoringWeightFact,
+): string {
+  if (fact.state === 'UNAVAILABLE') return 'TIDAK TERSEDIA';
+  if (fact.state === 'NOT_APPLICABLE') return '—';
+
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(fact.percentage);
+  if (!match) return 'TIDAK TERSEDIA';
+  const negative = match[1] === '-';
+  const integer = match[2];
+  const fraction = (match[3] ?? '').padEnd(3, '0');
+  let scaled = BigInt(integer) * 100n + BigInt(fraction.slice(0, 2));
+  if (fraction[2] >= '5') scaled += 1n;
+
+  const whole = scaled / 100n;
+  const decimals = (scaled % 100n).toString().padStart(2, '0');
+  const sign = negative && scaled !== 0n ? '-' : '';
+  return `${sign}${whole.toString()},${decimals}%`;
+}
+
+export function rowWeightPresentation(item: MonitoringItem): {
+  kind: 'ITEM' | 'SECTION' | 'NONE';
+  value: string;
+} {
+  if (item.itemType === 'WORK_ITEM') {
+    return { kind: 'ITEM', value: formatWeightPercentage(item.weight.own) };
+  }
+  if (item.itemType === 'FOLDER') {
+    return {
+      kind: 'SECTION',
+      value: formatWeightPercentage(item.weight.subtree),
+    };
+  }
+  return { kind: 'NONE', value: '—' };
+}
+
+export function weightCompletenessLabel(
+  weight: MonitoringProjectWeight,
+): string {
+  if (weight.completeness === 'COMPLETE') return 'Lengkap';
+  if (weight.completeness === 'INCOMPLETE') return 'Belum lengkap';
+  return 'TIDAK TERSEDIA';
+}
+
+export function weightCompletenessExplanation(
+  weight: MonitoringProjectWeight,
+): string {
+  if (weight.completeness === 'COMPLETE') {
+    return 'Seluruh item pekerjaan mempunyai nilai Baseline yang dapat dihitung.';
+  }
+  if (weight.reason === 'ZERO_BASELINE_DENOMINATOR') {
+    return 'Total nilai dasar Baseline adalah nol, sehingga bobot tidak dapat dihitung.';
+  }
+  if (
+    weight.reason === 'BASELINE_VALUE_UNAVAILABLE' ||
+    weight.reason === 'INVALID_BASELINE_DENOMINATOR'
+  ) {
+    return 'Total nilai dasar Baseline belum tersedia untuk perhitungan bobot.';
+  }
+  return 'Sebagian nilai item Baseline belum tersedia atau belum cocok dengan total Baseline.';
 }
 
 export function formatProjectBusinessDate(value: string | null): string {

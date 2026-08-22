@@ -7,11 +7,14 @@ import {
   captureMethodLabel,
   dataThroughLabel,
   effectiveActual,
+  formatWeightPercentage,
   lastRecordedLabel,
   lifecycleLabel,
   progressDetailPath,
   recordedAtLabel,
+  rowWeightPresentation,
   selectedWorkItem,
+  weightCompletenessLabel,
   type MonitoringItem,
 } from './monitoringCurrent.ts';
 
@@ -24,6 +27,11 @@ const item = (
   itemType: 'WORK_ITEM',
   sortOrder: 0,
   planned: { quantity: '10', unit: 'm3' },
+  weight: {
+    own: { state: 'AVAILABLE', percentage: '10', reason: null },
+    subtree: { state: 'NOT_APPLICABLE', percentage: null, reason: null },
+    cumulative: { state: 'AVAILABLE', percentage: '10', reason: null },
+  },
   actual: {
     state: 'NOT_YET_RECORDED',
     effectiveRecord: null,
@@ -245,4 +253,89 @@ test('H2-A0-11 the shell neither consumes legacy reality nor paints later truth'
   assert.match(page, /bukan persentase kemajuan proyek/);
   assert.match(page, /bukan\s+total realisasi, realisasi kumulatif, atau persentase kemajuan\s+proyek/);
   assert.match(page, /Buka Detail Progress/);
+});
+
+test('H2-A1-1 item and cumulative weights use backend facts with display rounding last', () => {
+  const monitored = item({
+    id: 'weighted',
+    name: 'Weighted',
+    weight: {
+      own: {
+        state: 'AVAILABLE',
+        percentage: '33.333333333333333333',
+        reason: null,
+      },
+      subtree: { state: 'NOT_APPLICABLE', percentage: null, reason: null },
+      cumulative: {
+        state: 'AVAILABLE',
+        percentage: '66.666666666666666667',
+        reason: null,
+      },
+    },
+  });
+
+  assert.equal(rowWeightPresentation(monitored).value, '33,33%');
+  assert.equal(
+    formatWeightPercentage(monitored.weight.cumulative),
+    '66,67%',
+  );
+});
+
+test('H2-A1-2 structural aggregate is labeled as a section, never an owned item weight', () => {
+  const structural = item({
+    id: 'folder',
+    name: 'Folder',
+    itemType: 'FOLDER',
+    actual: null,
+    weight: {
+      own: { state: 'NOT_APPLICABLE', percentage: null, reason: null },
+      subtree: { state: 'AVAILABLE', percentage: '50', reason: null },
+      cumulative: { state: 'AVAILABLE', percentage: '50', reason: null },
+    },
+  });
+
+  assert.deepEqual(rowWeightPresentation(structural), {
+    kind: 'SECTION',
+    value: '50,00%',
+  });
+  assert.equal(formatWeightPercentage(structural.weight.own), '—');
+});
+
+test('H2-A1-3 unavailable weight never becomes zero while authoritative zero remains visible', () => {
+  assert.equal(
+    formatWeightPercentage({
+      state: 'UNAVAILABLE',
+      percentage: null,
+      reason: 'ITEM_VALUE_UNAVAILABLE',
+    }),
+    'TIDAK TERSEDIA',
+  );
+  assert.equal(
+    formatWeightPercentage({
+      state: 'AVAILABLE',
+      percentage: '0',
+      reason: null,
+    }),
+    '0,00%',
+  );
+});
+
+test('H2-A1-4 coverage language is bounded and never presented as project progress', () => {
+  assert.equal(
+    weightCompletenessLabel({
+      basis: 'ACTIVE_BASELINE_RAB_TOTAL_BASE_COST',
+      completeness: 'COMPLETE',
+      reason: null,
+      denominator: { state: 'AVAILABLE', value: '1000.00' },
+      eligibleWorkItemCount: 3,
+      weightedWorkItemCount: 3,
+      unavailableWorkItemCount: 0,
+    }),
+    'Lengkap',
+  );
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  assert.match(page, /Bobot terhadap proyek/);
+  assert.match(page, /Bobot kumulatif RAB/);
+  assert.match(page, /bukan persentase kemajuan/);
+  assert.doesNotMatch(page, /planned-to-date|ahead|behind|On Track/);
 });
