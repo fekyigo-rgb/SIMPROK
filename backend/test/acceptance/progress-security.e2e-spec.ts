@@ -112,6 +112,9 @@ describe('Progress Security (e2e)', () => {
         name: 'Item',
         quantity: 10,
         unit: 'm3',
+        unitPrice: 60,
+        lineTotal: 600,
+        priceOrigin: 'MANUAL_CLIENT',
         sortOrder: 1,
       },
     });
@@ -124,6 +127,9 @@ describe('Progress Security (e2e)', () => {
         name: 'Item Without Actual',
         quantity: 5,
         unit: 'm3',
+        unitPrice: 60,
+        lineTotal: 300,
+        priceOrigin: 'MANUAL_CLIENT',
         sortOrder: 2,
       },
     });
@@ -134,8 +140,11 @@ describe('Progress Security (e2e)', () => {
         parentId: boqFolder.id,
         wbsCode: '1.3',
         name: 'Item With Recorded Zero',
-        quantity: 3,
+        quantity: 4,
         unit: 'm3',
+        unitPrice: 25,
+        lineTotal: 100,
+        priceOrigin: 'MANUAL_CLIENT',
         sortOrder: 3,
       },
     });
@@ -174,6 +183,9 @@ describe('Progress Security (e2e)', () => {
         name: 'Item B Without Actual',
         quantity: 1,
         unit: 'unit',
+        unitPrice: 1,
+        lineTotal: 1,
+        priceOrigin: 'MANUAL_CLIENT',
       },
     });
     const rabB = await prisma.rabDocument.create({
@@ -724,6 +736,8 @@ describe('Progress Security (e2e)', () => {
           itemType: true,
           quantity: true,
           unit: true,
+          unitPrice: true,
+          lineTotal: true,
           sortOrder: true,
         },
       });
@@ -743,6 +757,8 @@ describe('Progress Security (e2e)', () => {
         items: items.map((item) => ({
           ...item,
           quantity: item.quantity.toString(),
+          unitPrice: item.unitPrice?.toString() ?? null,
+          lineTotal: item.lineTotal?.toString() ?? null,
         })),
       };
     };
@@ -755,6 +771,11 @@ describe('Progress Security (e2e)', () => {
       }),
       prisma.progressAuditEvent.count({ where: { projectId: projectAId } }),
       prisma.deviationSignal.count({ where: { projectId: projectAId } }),
+      prisma.projectBaseline.count({ where: { projectId: projectAId } }),
+      prisma.rabDocument.count({ where: { projectId: projectAId } }),
+      prisma.boqItem.count({
+        where: { boqStructure: { projectId: projectAId } },
+      }),
     ]);
     const res = await request(app.getHttpServer())
       .get(`/projects/${projectAId}/progress/monitoring`)
@@ -769,11 +790,25 @@ describe('Progress Security (e2e)', () => {
       }),
       prisma.progressAuditEvent.count({ where: { projectId: projectAId } }),
       prisma.deviationSignal.count({ where: { projectId: projectAId } }),
+      prisma.projectBaseline.count({ where: { projectId: projectAId } }),
+      prisma.rabDocument.count({ where: { projectId: projectAId } }),
+      prisma.boqItem.count({
+        where: { boqStructure: { projectId: projectAId } },
+      }),
     ]);
 
     const body = res.body;
     expect(body.projectId).toBe(projectAId);
     expect(body.baseline).toMatchObject({ id: baselineAId, versionNumber: 1 });
+    expect(body.weight).toEqual({
+      basis: 'ACTIVE_BASELINE_RAB_TOTAL_BASE_COST',
+      completeness: 'COMPLETE',
+      reason: null,
+      denominator: { state: 'AVAILABLE', value: '1000.00' },
+      eligibleWorkItemCount: 3,
+      weightedWorkItemCount: 3,
+      unavailableWorkItemCount: 0,
+    });
 
     expect(planningTruthAfter).toEqual(planningTruthBefore);
     expect(domainCountsAfter).toEqual(domainCountsBefore);
@@ -790,6 +825,11 @@ describe('Progress Security (e2e)', () => {
       itemType: 'FOLDER',
       sortOrder: 0,
       actual: null,
+      weight: {
+        own: { state: 'NOT_APPLICABLE', percentage: null },
+        subtree: { state: 'AVAILABLE', percentage: '100' },
+        cumulative: { state: 'AVAILABLE', percentage: '100' },
+      },
     });
 
     // Truth Contract: UNAVAILABLE != ZERO
@@ -807,6 +847,10 @@ describe('Progress Security (e2e)', () => {
     expect(recordedItem.planned.quantity).toBe('10');
     expect(recordedItem.actual.state).toBe('RECORDED');
     expect(recordedItem.actual.effectiveRecord.installedQuantity).toBe('2');
+    expect(recordedItem.weight).toMatchObject({
+      own: { state: 'AVAILABLE', percentage: '60' },
+      cumulative: { state: 'AVAILABLE', percentage: '60' },
+    });
 
     const absentItem = body.items.find((i: any) => i.id === boqItemNoActualId);
     expect(absentItem).toBeDefined();
@@ -816,6 +860,10 @@ describe('Progress Security (e2e)', () => {
       latestRecord: null,
     });
     expect(absentItem.actual).not.toHaveProperty('installedQuantity');
+    expect(absentItem.weight).toMatchObject({
+      own: { state: 'AVAILABLE', percentage: '30' },
+      cumulative: { state: 'AVAILABLE', percentage: '90' },
+    });
 
     const recordedZeroItem = body.items.find(
       (i: any) => i.id === boqItemRecordedZeroId,
@@ -824,6 +872,10 @@ describe('Progress Security (e2e)', () => {
     expect(recordedZeroItem.actual.state).toBe('RECORDED');
     expect(recordedZeroItem.actual.effectiveRecord.installedQuantity).toBe('0');
     expect(recordedZeroItem.actual).not.toEqual(absentItem.actual);
+    expect(recordedZeroItem.weight).toMatchObject({
+      own: { state: 'AVAILABLE', percentage: '10' },
+      cumulative: { state: 'AVAILABLE', percentage: '100' },
+    });
 
     const effectiveEntryIds = [
       recordedItem.actual.effectiveRecord.id,
@@ -937,6 +989,49 @@ describe('Progress Security (e2e)', () => {
       expect(res.body.message).toBe('MULTIPLE_ACTIVE_BASELINES');
     } finally {
       await prisma.projectBaseline.delete({ where: { id: competing.id } });
+    }
+  });
+
+  it('6d. Monitoring keeps the existing no-Baseline fail-closed contract', async () => {
+    const token = await login(userViewEmail);
+    const canonicalBaseline = await prisma.projectBaseline.findUniqueOrThrow({
+      where: { id: baselineAId },
+      select: { status: true },
+    });
+    await prisma.projectBaseline.update({
+      where: { id: baselineAId },
+      data: { status: 'DRAFT' },
+    });
+
+    try {
+      const res = await request(app.getHttpServer())
+        .get(`/projects/${projectAId}/progress/monitoring`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+
+      expect(res.body).toMatchObject({
+        projectId: projectAId,
+        baseline: null,
+        items: [],
+        freshness: {
+          dataThrough: { state: 'UNAVAILABLE', workDate: null },
+          lastRecordedAt: { state: 'UNAVAILABLE', recordedAt: null },
+        },
+        weight: {
+          completeness: 'UNAVAILABLE',
+          reason: 'BASELINE_VALUE_UNAVAILABLE',
+          denominator: { state: 'UNAVAILABLE', value: null },
+          eligibleWorkItemCount: 0,
+          weightedWorkItemCount: 0,
+          unavailableWorkItemCount: 0,
+        },
+      });
+    } finally {
+      await prisma.projectBaseline.update({
+        where: { id: baselineAId },
+        data: { status: canonicalBaseline.status },
+      });
     }
   });
 

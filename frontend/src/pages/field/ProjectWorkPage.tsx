@@ -8,11 +8,15 @@ import {
   captureMethodLabel,
   dataThroughLabel,
   effectiveActual,
+  formatWeightPercentage,
   formatProjectBusinessDate,
   lastRecordedLabel,
   progressDetailPath,
   recordedAtLabel,
+  rowWeightPresentation,
   selectedWorkItem,
+  weightCompletenessExplanation,
+  weightCompletenessLabel,
   type MonitoringProject,
   type MonitoringResponse,
 } from '../../utils/monitoringCurrent';
@@ -285,6 +289,16 @@ export function ProjectWorkPage() {
                       <th>Uraian Pekerjaan</th>
                       <th>Satuan</th>
                       <th>Volume BOQ</th>
+                      <th
+                        title="Kontribusi nilai item terhadap total nilai dasar Baseline RAB"
+                      >
+                        Bobot Item
+                      </th>
+                      <th
+                        title="Komposisi kumulatif RAB sesuai urutan pekerjaan, bukan progress waktu"
+                      >
+                        Bobot Kumulatif
+                      </th>
                       <th>Realisasi Terakhir yang Berlaku</th>
                       <th>Tanggal Pekerjaan</th>
                       <th>Status Realisasi</th>
@@ -295,6 +309,7 @@ export function ProjectWorkPage() {
                       const actual = effectiveActual(row);
                       const isWorkItem = row.itemType === 'WORK_ITEM';
                       const isSelected = selected?.id === row.id;
+                      const weightPresentation = rowWeightPresentation(row);
                       return (
                         <tr
                           key={row.id}
@@ -336,6 +351,25 @@ export function ProjectWorkPage() {
                           </td>
                           <td data-label="Volume BOQ">
                             {isWorkItem ? row.planned.quantity : '—'}
+                          </td>
+                          <td
+                            data-label={
+                              weightPresentation.kind === 'SECTION'
+                                ? 'Bobot Bagian'
+                                : 'Bobot Item'
+                            }
+                          >
+                            <span
+                              className={`h2a1-weight h2a1-weight-${weightPresentation.kind.toLowerCase()}`}
+                            >
+                              {weightPresentation.kind === 'SECTION' && (
+                                <small>Kontribusi bagian</small>
+                              )}
+                              <strong>{weightPresentation.value}</strong>
+                            </span>
+                          </td>
+                          <td data-label="Bobot Kumulatif">
+                            {formatWeightPercentage(row.weight.cumulative)}
                           </td>
                           <td data-label="Realisasi Terakhir yang Berlaku">
                             {isWorkItem
@@ -401,6 +435,18 @@ export function ProjectWorkPage() {
                     <dd>Versi {monitoring.baseline.versionNumber}</dd>
                   </div>
                   <div>
+                    <dt>Cakupan Bobot</dt>
+                    <dd>{weightCompletenessLabel(monitoring.weight)}</dd>
+                    <small>{weightCompletenessExplanation(monitoring.weight)}</small>
+                  </div>
+                  <div>
+                    <dt>Bobot terhitung</dt>
+                    <dd>
+                      {monitoring.weight.weightedWorkItemCount} /{' '}
+                      {monitoring.weight.eligibleWorkItemCount} item pekerjaan
+                    </dd>
+                  </div>
+                  <div>
                     <dt>Data pekerjaan sampai</dt>
                     <dd>{dataThrough}</dd>
                   </div>
@@ -425,6 +471,14 @@ export function ProjectWorkPage() {
                     <dd>
                       {selected.planned.quantity} {selected.planned.unit}
                     </dd>
+                  </div>
+                  <div>
+                    <dt>Bobot terhadap proyek</dt>
+                    <dd>{formatWeightPercentage(selected.weight.own)}</dd>
+                  </div>
+                  <div>
+                    <dt>Bobot kumulatif RAB</dt>
+                    <dd>{formatWeightPercentage(selected.weight.cumulative)}</dd>
                   </div>
                   <div>
                     <dt>Status Realisasi</dt>
@@ -471,6 +525,12 @@ export function ProjectWorkPage() {
                   Nilai ini adalah catatan realisasi yang saat ini berlaku, bukan
                   total realisasi, realisasi kumulatif, atau persentase kemajuan
                   proyek.
+                </p>
+                <p className="h2a1-weight-note">
+                  Bobot menunjukkan kontribusi nilai item terhadap total nilai dasar
+                  Baseline RAB. Bobot kumulatif menunjukkan komposisi RAB sesuai
+                  urutan pekerjaan, bukan persentase kemajuan atau perkembangan
+                  terhadap waktu.
                 </p>
                 <button
                   className="h2a0-detail-action"

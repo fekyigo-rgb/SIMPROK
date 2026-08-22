@@ -26,6 +26,7 @@ import {
   ProgressAuthorityService,
   type ProgressAuthorityContext,
 } from './progress-authority.service';
+import { projectMonitoringWeights } from './monitoring-weight';
 
 interface TrustedProgressActor {
   accountId: string;
@@ -473,6 +474,7 @@ export class ProgressService {
     }
     const baseline = activeBaselines[0] ?? null;
     if (!baseline?.rabDocument?.boqStructureId) {
+      const weight = projectMonitoringWeights([], null);
       return {
         projectId,
         projectTimeZone: project?.timeZone ?? null,
@@ -491,6 +493,7 @@ export class ProgressService {
             recordedAt: null,
           },
         },
+        weight: weight.project,
         unavailable,
       };
     }
@@ -501,6 +504,10 @@ export class ProgressService {
     const workItemIds = items
       .filter((item) => item.itemType === 'WORK_ITEM')
       .map((item) => item.id);
+    const weight = projectMonitoringWeights(
+      items,
+      baseline.rabDocument.totalBaseCost,
+    );
     const entries = workItemIds.length
       ? await this.prisma.progressEntry.findMany({
           where: {
@@ -576,6 +583,7 @@ export class ProgressService {
         approvedAt: baseline.approvedAt,
       },
       freshness,
+      weight: weight.project,
       items: items.map((item) => {
         const effective = effectiveByItem.get(item.id);
         return {
@@ -587,6 +595,7 @@ export class ProgressService {
           itemType: item.itemType,
           sortOrder: item.sortOrder,
           planned: { quantity: item.quantity.toString(), unit: item.unit },
+          weight: weight.rows.get(item.id),
           actual:
             item.itemType !== 'WORK_ITEM'
               ? null
