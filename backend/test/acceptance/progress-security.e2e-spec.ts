@@ -21,6 +21,7 @@ describe('Progress Security (e2e)', () => {
 
   let projectAId: string;
   let projectBId: string;
+  let boqFolderAId: string;
   let boqItemAId: string;
   let boqItemNoActualId: string;
   let boqItemRecordedZeroId: string;
@@ -91,35 +92,51 @@ describe('Progress Security (e2e)', () => {
     const boqStruct = await prisma.boqStructure.create({
       data: { projectId: projectAId, name: 'Main BOQ', version: 1 },
     });
+    const boqFolder = await prisma.boqItem.create({
+      data: {
+        boqStructureId: boqStruct.id,
+        wbsCode: '1',
+        name: 'Structural Folder',
+        itemType: 'FOLDER',
+        quantity: 0,
+        unit: '',
+        sortOrder: 0,
+      },
+    });
+    boqFolderAId = boqFolder.id;
     const boqItem = await prisma.boqItem.create({
       data: {
         boqStructureId: boqStruct.id,
+        parentId: boqFolder.id,
         wbsCode: '1.1',
         name: 'Item',
         quantity: 10,
         unit: 'm3',
+        sortOrder: 1,
       },
     });
     boqItemAId = boqItem.id;
     const boqItemNoActual = await prisma.boqItem.create({
       data: {
         boqStructureId: boqStruct.id,
+        parentId: boqFolder.id,
         wbsCode: '1.2',
         name: 'Item Without Actual',
         quantity: 5,
         unit: 'm3',
-        sortOrder: 1,
+        sortOrder: 2,
       },
     });
     boqItemNoActualId = boqItemNoActual.id;
     const boqItemRecordedZero = await prisma.boqItem.create({
       data: {
         boqStructureId: boqStruct.id,
+        parentId: boqFolder.id,
         wbsCode: '1.3',
         name: 'Item With Recorded Zero',
         quantity: 3,
         unit: 'm3',
-        sortOrder: 2,
+        sortOrder: 3,
       },
     });
     boqItemRecordedZeroId = boqItemRecordedZero.id;
@@ -144,6 +161,41 @@ describe('Progress Security (e2e)', () => {
       },
     });
     baselineAId = baseline.id;
+
+    // Project B carries a legitimate active Baseline with no Actual so the
+    // empty-effective-set contract is proven through an authorized GET.
+    const boqStructB = await prisma.boqStructure.create({
+      data: { projectId: projectBId, name: 'Main BOQ B', version: 1 },
+    });
+    await prisma.boqItem.create({
+      data: {
+        boqStructureId: boqStructB.id,
+        wbsCode: '1',
+        name: 'Item B Without Actual',
+        quantity: 1,
+        unit: 'unit',
+      },
+    });
+    const rabB = await prisma.rabDocument.create({
+      data: {
+        projectId: projectBId,
+        boqStructureId: boqStructB.id,
+        name: 'RAB B',
+        version: 1,
+        totalBaseCost: 1,
+        totalFinalCost: 1,
+        status: 'APPROVED',
+      },
+    });
+    await prisma.projectBaseline.create({
+      data: {
+        projectId: projectBId,
+        rabDocumentId: rabB.id,
+        versionNumber: 1,
+        status: 'ACTIVE',
+        approvedAt: new Date(),
+      },
+    });
 
     // Setup permissions
     const permView = await prisma.permission.upsert({
@@ -696,18 +748,49 @@ describe('Progress Security (e2e)', () => {
     };
 
     const planningTruthBefore = await readPlanningTruth();
+    const domainCountsBefore = await Promise.all([
+      prisma.progressReport.count({ where: { projectId: projectAId } }),
+      prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+      prisma.progressAuditEvent.count({ where: { projectId: projectAId } }),
+      prisma.deviationSignal.count({ where: { projectId: projectAId } }),
+    ]);
     const res = await request(app.getHttpServer())
       .get(`/projects/${projectAId}/progress/monitoring`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(200);
     const planningTruthAfter = await readPlanningTruth();
+    const domainCountsAfter = await Promise.all([
+      prisma.progressReport.count({ where: { projectId: projectAId } }),
+      prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+      prisma.progressAuditEvent.count({ where: { projectId: projectAId } }),
+      prisma.deviationSignal.count({ where: { projectId: projectAId } }),
+    ]);
 
     const body = res.body;
     expect(body.projectId).toBe(projectAId);
-    expect(body.baseline).toBeDefined();
+    expect(body.baseline).toMatchObject({ id: baselineAId, versionNumber: 1 });
 
     expect(planningTruthAfter).toEqual(planningTruthBefore);
+    expect(domainCountsAfter).toEqual(domainCountsBefore);
+
+    expect(body.items.map((item: any) => item.id)).toEqual([
+      boqFolderAId,
+      boqItemAId,
+      boqItemNoActualId,
+      boqItemRecordedZeroId,
+    ]);
+    const folder = body.items.find((item: any) => item.id === boqFolderAId);
+    expect(folder).toMatchObject({
+      parentId: null,
+      itemType: 'FOLDER',
+      sortOrder: 0,
+      actual: null,
+    });
 
     // Truth Contract: UNAVAILABLE != ZERO
     expect(body.unavailable).toEqual(
@@ -720,14 +803,16 @@ describe('Progress Security (e2e)', () => {
 
     const recordedItem = body.items.find((i: any) => i.id === boqItemAId);
     expect(recordedItem).toBeDefined();
+    expect(recordedItem.parentId).toBe(boqFolderAId);
     expect(recordedItem.planned.quantity).toBe('10');
     expect(recordedItem.actual.state).toBe('RECORDED');
-    expect(recordedItem.actual.latestRecord.installedQuantity).toBe('2');
+    expect(recordedItem.actual.effectiveRecord.installedQuantity).toBe('2');
 
     const absentItem = body.items.find((i: any) => i.id === boqItemNoActualId);
     expect(absentItem).toBeDefined();
     expect(absentItem.actual).toMatchObject({
       state: 'NOT_YET_RECORDED',
+      effectiveRecord: null,
       latestRecord: null,
     });
     expect(absentItem.actual).not.toHaveProperty('installedQuantity');
@@ -737,8 +822,122 @@ describe('Progress Security (e2e)', () => {
     );
     expect(recordedZeroItem).toBeDefined();
     expect(recordedZeroItem.actual.state).toBe('RECORDED');
-    expect(recordedZeroItem.actual.latestRecord.installedQuantity).toBe('0');
+    expect(recordedZeroItem.actual.effectiveRecord.installedQuantity).toBe('0');
     expect(recordedZeroItem.actual).not.toEqual(absentItem.actual);
+
+    const effectiveEntryIds = [
+      recordedItem.actual.effectiveRecord.id,
+      recordedZeroItem.actual.effectiveRecord.id,
+    ];
+    const latestEffectiveEntry = await prisma.progressEntry.findFirstOrThrow({
+      where: { id: { in: effectiveEntryIds } },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(body.freshness).toEqual({
+      dataThrough: {
+        state: 'RECORDED',
+        workDate: '2026-08-31T00:00:00.000Z',
+      },
+      lastRecordedAt: {
+        state: 'RECORDED',
+        recordedAt: latestEffectiveEntry.createdAt.toISOString(),
+      },
+    });
+  });
+
+  it('6a. authorized project with no effective Actual returns no fake freshness date', async () => {
+    const token = await login(userCrossEmail);
+    const res = await request(app.getHttpServer())
+      .get(`/projects/${projectBId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceBId)
+      .expect(200);
+
+    expect(res.body.baseline).toMatchObject({ versionNumber: 1 });
+    expect(res.body.freshness).toEqual({
+      dataThrough: { state: 'NOT_YET_RECORDED', workDate: null },
+      lastRecordedAt: { state: 'NOT_YET_RECORDED', recordedAt: null },
+    });
+    expect(res.body.items[0].actual).toMatchObject({
+      state: 'NOT_YET_RECORDED',
+      effectiveRecord: null,
+    });
+  });
+
+  it('6b. a newer raw non-effective record cannot advance effective freshness', async () => {
+    const token = await login(userViewEmail);
+    const before = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+
+    const rawReport = await prisma.progressReport.create({
+      data: {
+        projectId: projectAId,
+        baselineId: baselineAId,
+        periodStartDate: new Date('2099-12-31T00:00:00.000Z'),
+        periodEndDate: new Date('2099-12-31T00:00:00.000Z'),
+        status: 'SUBMITTED',
+        entries: {
+          create: {
+            boqItemId: boqItemNoActualId,
+            installedQuantity: 999,
+            workDate: new Date('2099-12-31T00:00:00.000Z'),
+            createdAt: new Date('2099-12-31T23:59:00.000Z'),
+            status: 'RETURNED_FOR_CORRECTION',
+            captureMethod: 'FIELD_OBSERVATION',
+            revision: 1,
+          },
+        },
+      },
+    });
+
+    try {
+      const after = await request(app.getHttpServer())
+        .get(`/projects/${projectAId}/progress/monitoring`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+
+      expect(after.body.freshness).toEqual(before.body.freshness);
+      expect(
+        after.body.items.find((item: any) => item.id === boqItemNoActualId)
+          .actual,
+      ).toMatchObject({
+        state: 'NOT_YET_RECORDED',
+        effectiveRecord: null,
+      });
+    } finally {
+      await prisma.progressReport.delete({ where: { id: rawReport.id } });
+    }
+  });
+
+  it('6c. Monitoring fails closed when more than one ACTIVE Baseline exists', async () => {
+    const token = await login(userViewEmail);
+    const canonicalBaseline = await prisma.projectBaseline.findUniqueOrThrow({
+      where: { id: baselineAId },
+    });
+    const competing = await prisma.projectBaseline.create({
+      data: {
+        projectId: projectAId,
+        rabDocumentId: canonicalBaseline.rabDocumentId,
+        versionNumber: 999,
+        status: 'ACTIVE',
+        approvedAt: new Date(),
+      },
+    });
+
+    try {
+      const res = await request(app.getHttpServer())
+        .get(`/projects/${projectAId}/progress/monitoring`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(409);
+      expect(res.body.message).toBe('MULTIPLE_ACTIVE_BASELINES');
+    } finally {
+      await prisma.projectBaseline.delete({ where: { id: competing.id } });
+    }
   });
 
   it('7. non-assigned user -> GET /monitoring is rejected', async () => {

@@ -460,14 +460,18 @@ export class ProgressService {
       where: { id: projectId },
       select: { timeZone: true },
     });
-    const baseline = await this.prisma.projectBaseline.findFirst({
+    const activeBaselines = await this.prisma.projectBaseline.findMany({
       where: { projectId, status: 'ACTIVE' },
       orderBy: { versionNumber: 'desc' },
+      take: 2,
       include: {
         rabDocument: true,
-        project: { select: { timeZone: true } },
       },
     });
+    if (activeBaselines.length > 1) {
+      throw new ConflictException('MULTIPLE_ACTIVE_BASELINES');
+    }
+    const baseline = activeBaselines[0] ?? null;
     if (!baseline?.rabDocument?.boqStructureId) {
       return {
         projectId,
@@ -480,6 +484,13 @@ export class ProgressService {
             }
           : null,
         items: [],
+        freshness: {
+          dataThrough: { state: 'UNAVAILABLE' as const, workDate: null },
+          lastRecordedAt: {
+            state: 'UNAVAILABLE' as const,
+            recordedAt: null,
+          },
+        },
         unavailable,
       };
     }
@@ -523,6 +534,39 @@ export class ProgressService {
       );
       if (effective) effectiveByItem.set(workItemId, effective);
     }
+    const effectiveRecords = [...effectiveByItem.values()];
+    const latestWorkDate = effectiveRecords.reduce<Date | null>(
+      (latest, entry) =>
+        entry.workDate && (!latest || entry.workDate > latest)
+          ? entry.workDate
+          : latest,
+      null,
+    );
+    const latestRecordedAt = effectiveRecords.reduce<Date | null>(
+      (latest, entry) =>
+        !latest || entry.createdAt > latest ? entry.createdAt : latest,
+      null,
+    );
+    const freshness =
+      effectiveRecords.length === 0
+        ? {
+            dataThrough: {
+              state: 'NOT_YET_RECORDED' as const,
+              workDate: null,
+            },
+            lastRecordedAt: {
+              state: 'NOT_YET_RECORDED' as const,
+              recordedAt: null,
+            },
+          }
+        : {
+            dataThrough: latestWorkDate
+              ? { state: 'RECORDED' as const, workDate: latestWorkDate }
+              : { state: 'UNAVAILABLE' as const, workDate: null },
+            lastRecordedAt: latestRecordedAt
+              ? { state: 'RECORDED' as const, recordedAt: latestRecordedAt }
+              : { state: 'UNAVAILABLE' as const, recordedAt: null },
+          };
     return {
       projectId,
       projectTimeZone: project?.timeZone ?? null,
@@ -531,6 +575,7 @@ export class ProgressService {
         versionNumber: baseline.versionNumber,
         approvedAt: baseline.approvedAt,
       },
+      freshness,
       items: items.map((item) => {
         const effective = effectiveByItem.get(item.id);
         return {

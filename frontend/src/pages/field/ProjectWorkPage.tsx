@@ -1,131 +1,490 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
+import {
+  actualStateLabel,
+  buildMonitoringRows,
+  captureMethodLabel,
+  dataThroughLabel,
+  effectiveActual,
+  formatProjectBusinessDate,
+  lastRecordedLabel,
+  progressDetailPath,
+  recordedAtLabel,
+  selectedWorkItem,
+  type MonitoringProject,
+  type MonitoringResponse,
+} from '../../utils/monitoringCurrent';
+import './ProjectWorkPage.css';
 
-type ErrorKind = 'unauthorized' | 'forbidden' | 'not-found' | 'workspace' | 'server' | 'network' | null;
+type ErrorKind =
+  | 'unauthorized'
+  | 'forbidden'
+  | 'not-found'
+  | 'workspace'
+  | 'baseline-conflict'
+  | 'server'
+  | 'network'
+  | null;
+
+class MonitoringRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`Monitoring request failed with ${status}`);
+    this.status = status;
+  }
+}
+
+function errorKindForStatus(status: number): Exclude<ErrorKind, null> {
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not-found';
+  if (status === 400) return 'workspace';
+  if (status === 409) return 'baseline-conflict';
+  return 'server';
+}
+
+function actualQuantity(
+  quantity: string | undefined,
+  state: 'RECORDED' | 'NOT_YET_RECORDED' | 'UNAVAILABLE' | undefined,
+  unit: string,
+): string {
+  if (state === 'UNAVAILABLE') return 'TIDAK TERSEDIA';
+  return quantity === undefined ? 'BELUM DICATAT' : `${quantity} ${unit}`.trim();
+}
 
 export function ProjectWorkPage() {
   const { projectId } = useParams();
-  const [monitoringData, setMonitoringData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [errorStatus, setErrorStatus] = useState<number | null>(null);
-  const [errorKind, setErrorKind] = useState<ErrorKind>(null);
   const { token } = useAuth();
   const navigate = useNavigate();
+  const [project, setProject] = useState<MonitoringProject | null>(null);
+  const [monitoring, setMonitoring] = useState<MonitoringResponse | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
+  const [errorProjectId, setErrorProjectId] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
+  const [errorKind, setErrorKind] = useState<ErrorKind>(null);
 
   useEffect(() => {
     if (!token || !projectId) return;
 
-    apiFetch(`/projects/${projectId}/progress/monitoring`)
-      .then(res => {
-        if (!res.ok) {
-          setErrorStatus(res.status);
-          if (res.status === 401) setErrorKind('unauthorized');
-          else if (res.status === 403) setErrorKind('forbidden');
-          else if (res.status === 404) setErrorKind('not-found');
-          else if (res.status === 400) setErrorKind('workspace');
-          else setErrorKind('server');
-          setLoading(false);
-          return null;
+    const controller = new AbortController();
+
+    Promise.all([
+      apiFetch(`/projects/${projectId}`, { signal: controller.signal }),
+      apiFetch(`/projects/${projectId}/progress/monitoring`, {
+        signal: controller.signal,
+      }),
+    ])
+      .then(async ([projectResponse, monitoringResponse]) => {
+        if (!projectResponse.ok) {
+          throw new MonitoringRequestError(projectResponse.status);
         }
-        return res.json();
+        if (!monitoringResponse.ok) {
+          throw new MonitoringRequestError(monitoringResponse.status);
+        }
+        return Promise.all([
+          projectResponse.json() as Promise<MonitoringProject>,
+          monitoringResponse.json() as Promise<MonitoringResponse>,
+        ]);
       })
-      .then(data => {
-        if (data === null) return;
-        setMonitoringData(data);
-        setLoading(false);
+      .then(([projectData, monitoringData]) => {
+        setProject(projectData);
+        setMonitoring(monitoringData);
+        setSelectedId(null);
+        setLoadedProjectId(projectId);
+        setErrorProjectId(null);
+        setErrorKind(null);
+        setErrorStatus(null);
       })
-      .catch(err => {
-        console.error('Failed to fetch monitoring data:', err);
-        setErrorKind('network');
-        setMonitoringData(null);
-        setLoading(false);
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        if (error instanceof MonitoringRequestError) {
+          setErrorStatus(error.status);
+          setErrorKind(errorKindForStatus(error.status));
+        } else {
+          console.error('Failed to fetch H2-A0 monitoring data:', error);
+          setErrorKind('network');
+        }
+        setErrorProjectId(projectId);
+        setLoadedProjectId(null);
+        setProject(null);
+        setMonitoring(null);
       });
+
+    return () => controller.abort();
   }, [token, projectId]);
 
+  const rows = useMemo(
+    () => buildMonitoringRows(monitoring?.items ?? []),
+    [monitoring?.items],
+  );
+  const selected = useMemo(
+    () => selectedWorkItem(rows, selectedId),
+    [rows, selectedId],
+  );
+  const selectedActual = effectiveActual(selected);
+  const effectiveItemCount = useMemo(
+    () => rows.filter((row) => effectiveActual(row) !== null).length,
+    [rows],
+  );
+  const workItemCount = useMemo(
+    () => rows.filter((row) => row.itemType === 'WORK_ITEM').length,
+    [rows],
+  );
+
+  const dataThrough = monitoring
+    ? dataThroughLabel(monitoring.freshness.dataThrough)
+    : 'TIDAK TERSEDIA';
+  const lastRecorded = monitoring
+    ? lastRecordedLabel(
+        monitoring.freshness.lastRecordedAt,
+        monitoring.projectTimeZone,
+      )
+    : { value: 'TIDAK TERSEDIA', basis: '' };
+  const currentErrorKind = errorProjectId === projectId ? errorKind : null;
+  const loading = loadedProjectId !== projectId && currentErrorKind === null;
+
   let errorMessage = '';
-  if (errorKind === 'unauthorized') errorMessage = 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
-  else if (errorKind === 'forbidden') errorMessage = 'Anda tidak memiliki akses ke proyek ini.';
-  else if (errorKind === 'not-found') errorMessage = 'Proyek tidak ditemukan.';
-  else if (errorKind === 'workspace') errorMessage = 'Konteks workspace belum valid. Pilih workspace kembali.';
-  else if (errorKind === 'server' || errorKind === 'network') errorMessage = 'Data pekerjaan gagal dimuat. Coba lagi beberapa saat.';
+  if (currentErrorKind === 'unauthorized') {
+    errorMessage = 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
+  } else if (currentErrorKind === 'forbidden') {
+    errorMessage = 'Anda tidak memiliki akses ke proyek ini.';
+  } else if (currentErrorKind === 'not-found') {
+    errorMessage = 'Proyek tidak ditemukan.';
+  } else if (currentErrorKind === 'workspace') {
+    errorMessage = 'Konteks workspace belum valid. Pilih workspace kembali.';
+  } else if (currentErrorKind === 'baseline-conflict') {
+    errorMessage =
+      'Monitoring dihentikan karena proyek mempunyai lebih dari satu Baseline aktif. Data tidak dipilih secara diam-diam.';
+  } else if (currentErrorKind === 'server' || currentErrorKind === 'network') {
+    errorMessage = 'Data Monitoring gagal dimuat. Coba lagi beberapa saat.';
+  }
+
+  if (loading) {
+    if (!token || !projectId) {
+      return (
+        <div className="h2a0-page">
+          <section className="h2a0-error" role="alert">
+            <h2>Monitoring tidak dapat dibuka (401)</h2>
+            <p>Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.</p>
+          </section>
+        </div>
+      );
+    }
+    return <div className="h2a0-state">Memuat Monitoring terkini…</div>;
+  }
+
+  if (currentErrorKind) {
+    return (
+      <div className="h2a0-page">
+        <button className="h2a0-back" onClick={() => navigate('/field')}>
+          ← Kembali ke Daftar Proyek
+        </button>
+        <section className="h2a0-error" role="alert">
+          <h2>Monitoring tidak dapat dibuka ({errorStatus ?? 'Network'})</h2>
+          <p>{errorMessage}</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (!project || !monitoring) return null;
+
+  const selectedRecordedAt =
+    selected?.actual?.state === 'NOT_YET_RECORDED'
+      ? { value: 'BELUM DICATAT', basis: '' }
+      : recordedAtLabel(
+          selectedActual?.recordedAt ?? null,
+          monitoring.projectTimeZone,
+        );
 
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto' }}>
-      <button 
-        onClick={() => navigate('/field')}
-        style={{ background: 'none', border: 'none', color: 'var(--simprok-engineering-blue-600)', cursor: 'pointer', padding: 0, marginBottom: 'var(--space-4)', fontSize: 'var(--text-base)' }}
-      >
-        &larr; Kembali ke Daftar Proyek
+    <main className="h2a0-page">
+      <button className="h2a0-back" onClick={() => navigate('/field')}>
+        ← Kembali ke Daftar Proyek
       </button>
-      
-      <h2 style={{ fontSize: 'var(--text-2xl)', color: 'var(--simprok-engineering-blue-900)', marginBottom: 'var(--space-6)' }}>Daftar Pekerjaan</h2>
-      
-      {loading ? (
-        <p>Memuat monitoring...</p>
-      ) : errorKind ? (
-        <div style={{ padding: 'var(--space-6)', backgroundColor: '#FEE2E2', color: '#991B1B', borderRadius: 'var(--radius-lg)' }}>
-          <h3 style={{ margin: '0 0 var(--space-2) 0' }}>Akses Ditolak ({errorStatus || 'Network'})</h3>
-          <p style={{ margin: 0 }}>{errorMessage}</p>
+
+      <header className="h2a0-project-header">
+        <div>
+          <p className="h2a0-eyebrow">Monitoring Proyek</p>
+          <h1>{project.name}</h1>
+          {project.code && <p className="h2a0-project-code">{project.code}</p>}
         </div>
-      ) : !monitoringData?.baseline ? (
-        <div style={{ padding: 'var(--space-6)', backgroundColor: '#FEF3C7', color: '#92400E', borderRadius: 'var(--radius-lg)' }}>
-          <h3 style={{ margin: '0 0 var(--space-2) 0' }}>Baseline Tidak Ditemukan</h3>
-          <p style={{ margin: 0 }}>Tidak ada RAB Baseline yang aktif untuk proyek ini. Data tidak tersedia.</p>
+        <div className="h2a0-baseline-identity">
+          <span>Baseline Aktif</span>
+          {monitoring.baseline ? (
+            <>
+              <strong>Versi {monitoring.baseline.versionNumber}</strong>
+              <small>
+                Disetujui{' '}
+                {
+                  recordedAtLabel(
+                    monitoring.baseline.approvedAt,
+                    monitoring.projectTimeZone,
+                  ).value
+                }
+              </small>
+            </>
+          ) : (
+            <strong>TIDAK TERSEDIA</strong>
+          )}
         </div>
+      </header>
+
+      <section className="h2a0-context-strip" aria-label="Konteks Monitoring">
+        <div>
+          <span>Lingkup</span>
+          <strong>{selected ? `${selected.number} · ${selected.name}` : 'SELURUH PROYEK'}</strong>
+        </div>
+        <div>
+          <span>Periode</span>
+          <strong>TERKINI</strong>
+        </div>
+        <div>
+          <span>Data pekerjaan sampai</span>
+          <strong>{dataThrough}</strong>
+          <small>Tanggal kerja efektif terbaru</small>
+        </div>
+        <div>
+          <span>Terakhir diperbarui</span>
+          <strong>{lastRecorded.value}</strong>
+          {lastRecorded.basis && <small>{lastRecorded.basis}</small>}
+        </div>
+      </section>
+
+      {!monitoring.baseline ? (
+        <section className="h2a0-warning" role="status">
+          <h2>Baseline aktif tidak tersedia</h2>
+          <p>
+            Identitas proyek tetap dapat dilihat, tetapi RAB/WBS dan data realisasi
+            tidak ditampilkan tanpa Baseline aktif yang sah.
+          </p>
+        </section>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-
-          <div style={{ backgroundColor: '#F0F9FF', padding: 'var(--space-4)', borderRadius: 'var(--radius-md)', border: '1px solid #BAE6FD' }}>
-            <h3 style={{ margin: '0 0 var(--space-2) 0', color: '#0369A1', fontSize: 'var(--text-sm)' }}>Status Baseline Proyek</h3>
-            <ul style={{ margin: 0, paddingLeft: 'var(--space-4)', color: '#0C4A6E', fontSize: 'var(--text-sm)' }}>
-              <li><strong>RAB Version:</strong> {monitoringData.baseline.versionNumber}</li>
-              {monitoringData.unavailable?.includes('plannedStart') && <li><strong>Mulai:</strong> <em>UNAVAILABLE</em></li>}
-              {monitoringData.unavailable?.includes('plannedFinish') && <li><strong>Selesai:</strong> <em>UNAVAILABLE</em></li>}
-            </ul>
-          </div>
-
-          {(monitoringData.items || []).filter((item: any) => item.itemType === 'WORK_ITEM').map((item: any) => (
-            <div 
-              key={item.id}
-              onClick={() => navigate(`/field/project/${projectId}/progress/${item.id}`)}
-              style={{
-                backgroundColor: 'white',
-                padding: 'var(--space-6)',
-                borderRadius: 'var(--radius-lg)',
-                border: '1px solid var(--simprok-engineering-blue-200)',
-                cursor: 'pointer',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <span style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-600)', backgroundColor: 'var(--simprok-surface-light)', padding: 'var(--space-1) var(--space-2)', borderRadius: 'var(--radius-sm)' }}>
-                    WBS: {item.wbsCode}
-                  </span>
-                  <h3 style={{ margin: 'var(--space-2) 0 0 0', color: 'var(--simprok-engineering-blue-900)' }}>{item.name}</h3>
-                </div>
+        <div className="h2a0-workspace">
+          <section className="h2a0-anchor" aria-labelledby="h2a0-anchor-title">
+            <div className="h2a0-section-heading">
+              <div>
+                <p className="h2a0-eyebrow">Orientasi stabil</p>
+                <h2 id="h2a0-anchor-title">RAB/WBS Monitoring</h2>
               </div>
-              <div style={{ marginTop: 'var(--space-4)', display: 'flex', gap: 'var(--space-6)', fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-700)' }}>
-                <div style={{ flex: 1, backgroundColor: 'var(--simprok-surface-light)', padding: 'var(--space-2)', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--simprok-engineering-blue-500)', marginBottom: '4px' }}>Rencana (Baseline)</div>
-                  <strong>{item.planned?.quantity} {item.planned?.unit}</strong>
-                </div>
-                <div style={{ flex: 1, backgroundColor: item.actual?.state === 'RECORDED' ? '#ECFCCB' : '#FEF2F2', padding: 'var(--space-2)', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: item.actual?.state === 'RECORDED' ? '#4D7C0F' : '#B91C1C', marginBottom: '4px' }}>Realisasi (Actual)</div>
-                  {item.actual?.state === 'RECORDED' ? (
-                    <strong style={{ color: '#3F6212' }}>{item.actual.latestRecord?.installedQuantity} {item.planned?.unit}</strong>
-                  ) : (
-                    <em style={{ color: '#991B1B' }}>NOT YET RECORDED</em>
-                  )}
-                </div>
+              <span>{workItemCount} item pekerjaan</span>
+            </div>
+
+            {rows.length === 0 ? (
+              <p className="h2a0-empty">Struktur RAB/WBS belum tersedia.</p>
+            ) : (
+              <div className="h2a0-table-scroll">
+                <table className="h2a0-table">
+                  <thead>
+                    <tr>
+                      <th>No</th>
+                      <th>Uraian Pekerjaan</th>
+                      <th>Satuan</th>
+                      <th>Volume BOQ</th>
+                      <th>Realisasi Terakhir yang Berlaku</th>
+                      <th>Tanggal Pekerjaan</th>
+                      <th>Status Realisasi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => {
+                      const actual = effectiveActual(row);
+                      const isWorkItem = row.itemType === 'WORK_ITEM';
+                      const isSelected = selected?.id === row.id;
+                      return (
+                        <tr
+                          key={row.id}
+                          className={`${isSelected ? 'is-selected' : ''} ${
+                            isWorkItem ? 'is-work-item' : 'is-structural'
+                          }`}
+                        >
+                          <td data-label="No">{row.number || '—'}</td>
+                          <td data-label="Uraian Pekerjaan">
+                            {isWorkItem ? (
+                              <button
+                                className="h2a0-row-select"
+                                onClick={() => setSelectedId(row.id)}
+                                aria-pressed={isSelected}
+                              >
+                                <span
+                                  className="h2a0-row-name"
+                                  style={{ paddingInlineStart: `${row.depth * 18}px` }}
+                                >
+                                  {row.name}
+                                </span>
+                                <small>{row.wbsCode || 'Kode WBS tidak tersedia'}</small>
+                              </button>
+                            ) : (
+                              <div
+                                className="h2a0-structural-name"
+                                style={{ paddingInlineStart: `${row.depth * 18}px` }}
+                              >
+                                <strong>{row.name}</strong>
+                                <small>
+                                  {row.wbsCode ||
+                                    (row.itemType === 'NOTE' ? 'Catatan' : 'Struktur')}
+                                </small>
+                              </div>
+                            )}
+                          </td>
+                          <td data-label="Satuan">
+                            {isWorkItem ? row.planned.unit || '—' : '—'}
+                          </td>
+                          <td data-label="Volume BOQ">
+                            {isWorkItem ? row.planned.quantity : '—'}
+                          </td>
+                          <td data-label="Realisasi Terakhir yang Berlaku">
+                            {isWorkItem
+                              ? actualQuantity(
+                                  actual?.installedQuantity,
+                                  row.actual?.state,
+                                  row.planned.unit,
+                                )
+                              : '—'}
+                          </td>
+                          <td data-label="Tanggal Pekerjaan">
+                            {isWorkItem
+                              ? formatProjectBusinessDate(actual?.workDate ?? null) ||
+                                (row.actual?.state === 'UNAVAILABLE'
+                                  ? 'TIDAK TERSEDIA'
+                                  : 'BELUM DICATAT')
+                              : '—'}
+                          </td>
+                          <td data-label="Status Realisasi">
+                            <span
+                              className={`h2a0-status h2a0-status-${
+                                isWorkItem
+                                  ? row.actual?.state.toLowerCase()
+                                  : 'structural'
+                              }`}
+                            >
+                              {isWorkItem
+                                ? actualStateLabel(row.actual)
+                                : row.itemType === 'NOTE'
+                                  ? 'CATATAN'
+                                  : 'STRUKTUR'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <aside className="h2a0-current" aria-labelledby="h2a0-current-title">
+            <div className="h2a0-section-heading">
+              <div>
+                <p className="h2a0-eyebrow">Lingkup aktif</p>
+                <h2 id="h2a0-current-title">Kondisi Terkini</h2>
               </div>
             </div>
-          ))}
+
+            {!selected ? (
+              <div className="h2a0-project-scope">
+                <span className="h2a0-scope-badge">SELURUH PROYEK</span>
+                <h3>{project.name}</h3>
+                <p>
+                  {effectiveItemCount} dari {workItemCount} item pekerjaan mempunyai
+                  catatan realisasi yang berlaku. Ini adalah hitungan ketersediaan
+                  data, bukan persentase kemajuan proyek.
+                </p>
+                <dl className="h2a0-facts">
+                  <div>
+                    <dt>Baseline Aktif</dt>
+                    <dd>Versi {monitoring.baseline.versionNumber}</dd>
+                  </div>
+                  <div>
+                    <dt>Data pekerjaan sampai</dt>
+                    <dd>{dataThrough}</dd>
+                  </div>
+                  <div>
+                    <dt>Terakhir diperbarui</dt>
+                    <dd>{lastRecorded.value}</dd>
+                  </div>
+                </dl>
+                <p className="h2a0-guidance">
+                  Pilih satu item pekerjaan pada struktur RAB/WBS untuk melihat
+                  catatan realisasi yang berlaku tanpa meninggalkan orientasi proyek.
+                </p>
+              </div>
+            ) : (
+              <div className="h2a0-item-scope">
+                <span className="h2a0-scope-badge">Pekerjaan · {selected.number}</span>
+                <h3>{selected.name}</h3>
+                <p className="h2a0-wbs-code">{selected.wbsCode}</p>
+                <dl className="h2a0-facts">
+                  <div>
+                    <dt>Volume BOQ</dt>
+                    <dd>
+                      {selected.planned.quantity} {selected.planned.unit}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Status Realisasi</dt>
+                    <dd>{actualStateLabel(selected.actual)}</dd>
+                  </div>
+                  <div>
+                    <dt>Realisasi Terakhir yang Berlaku</dt>
+                    <dd>
+                      {actualQuantity(
+                        selectedActual?.installedQuantity,
+                        selected.actual?.state,
+                        selected.planned.unit,
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Tanggal Pekerjaan</dt>
+                    <dd>
+                      {formatProjectBusinessDate(selectedActual?.workDate ?? null) ||
+                        (selected.actual?.state === 'UNAVAILABLE'
+                          ? 'TIDAK TERSEDIA'
+                          : 'BELUM DICATAT')}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Dicatat di SIMPROK</dt>
+                    <dd>{selectedRecordedAt.value}</dd>
+                    {selectedRecordedAt.basis && (
+                      <small>{selectedRecordedAt.basis}</small>
+                    )}
+                  </div>
+                  <div>
+                    <dt>Metode pencatatan</dt>
+                    <dd>
+                      {selectedActual
+                        ? captureMethodLabel(selectedActual.captureMethod)
+                        : selected.actual?.state === 'UNAVAILABLE'
+                          ? 'TIDAK TERSEDIA'
+                          : 'BELUM DICATAT'}
+                    </dd>
+                  </div>
+                </dl>
+                <p className="h2a0-semantics">
+                  Nilai ini adalah catatan realisasi yang saat ini berlaku, bukan
+                  total realisasi, realisasi kumulatif, atau persentase kemajuan
+                  proyek.
+                </p>
+                <button
+                  className="h2a0-detail-action"
+                  onClick={() =>
+                    navigate(progressDetailPath(project.id, selected.id))
+                  }
+                >
+                  Buka Detail Progress
+                </button>
+              </div>
+            )}
+          </aside>
         </div>
       )}
-    </div>
+    </main>
   );
 }
