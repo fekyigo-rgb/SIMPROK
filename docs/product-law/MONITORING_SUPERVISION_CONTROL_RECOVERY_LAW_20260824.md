@@ -1,8 +1,8 @@
 # SIMPROK Product Law — Monitoring, Supervision, Control, Reporting, SMKK, and Recovery
 
-**Status:** OWNER-RATIFIED PRODUCT LAW  
-**Date:** 2026-08-24  
-**Scope:** Halaman 2 Monitoring / Project Control Room and its relationship to domain workspaces and Recovery  
+**Status:** OWNER-RATIFIED PRODUCT LAW<br>
+**Date:** 2026-08-24<br>
+**Scope:** Halaman 2 Monitoring / Project Control Room and its relationship to domain workspaces and Recovery<br>
 **Authority:** Owner decision. Do not reinterpret as optional UX guidance.
 
 ## 1. Purpose
