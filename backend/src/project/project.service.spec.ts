@@ -1225,33 +1225,38 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
   });
 });
 
-describe('ProjectService getReality GATE-2A active-baseline total truth', () => {
-  function createHarness(options: {
-    hasReport?: boolean;
-    baseline?: { rabDocumentId: string | null } | null;
-    rab?: { totalBaseCost: Prisma.Decimal | null } | null;
-  }) {
+describe('ProjectService getReality pre-MON-04 containment', () => {
+  function createHarness() {
     const prisma = {
       progressReport: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue(
-            options.hasReport === false
-              ? []
-              : [{ id: 'report-1', entries: [] }],
-          ),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'report-old-baseline',
+            baselineId: 'baseline-old',
+            entries: [
+              {
+                status: 'ACCEPTED',
+                installedQuantity: '7.5',
+                boqItem: { quantity: '10', unit: 'm3' },
+              },
+            ],
+          },
+        ]),
       },
       projectBaseline: {
-        findFirst: jest
-          .fn()
-          .mockResolvedValue(
-            options.baseline === undefined ? null : options.baseline,
-          ),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'baseline-active-different',
+          rabDocumentId: 'rab-active',
+        }),
       },
       rabDocument: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue(options.rab === undefined ? null : options.rab),
+        findUnique: jest.fn().mockResolvedValue({
+          totalBaseCost: new Prisma.Decimal('1234567.89'),
+        }),
+      },
+      deviationSignal: {
+        create: jest.fn(),
+        update: jest.fn(),
       },
     };
     const deviationService = {
@@ -1265,83 +1270,34 @@ describe('ProjectService getReality GATE-2A active-baseline total truth', () => 
     return { service, prisma, deviationService };
   }
 
-  it('returns UNAVAILABLE — never planned cost 0 — when the active baseline RabDocument totalBaseCost is null (test 7)', async () => {
-    const { service } = createHarness({
-      baseline: { rabDocumentId: 'rab-1' },
-      rab: { totalBaseCost: null },
-    });
+  it('fails closed before selecting Actual, Baseline, quantity, or lifecycle calculation authority', async () => {
+    const { service, prisma, deviationService } = createHarness();
 
     const result = await service.getReality('project-1');
 
     expect(result).toEqual({
       available: false,
       status: 'UNAVAILABLE',
-      message: expect.any(String),
+      message:
+        'Perhitungan progress dan deviasi resmi belum diaktifkan sampai Owner menetapkan kelayakan Actual untuk perhitungan resmi',
       data: null,
     });
-    expect(result).not.toHaveProperty('overallPlannedCost');
+    expect(result).not.toHaveProperty('overallActualProgress');
+    expect(result).not.toHaveProperty('overallPlannedProgress');
+    expect(result).not.toHaveProperty('deviationSignals');
+    expect(prisma.progressReport.findMany).not.toHaveBeenCalled();
+    expect(prisma.projectBaseline.findFirst).not.toHaveBeenCalled();
+    expect(prisma.rabDocument.findUnique).not.toHaveBeenCalled();
+    expect(deviationService.computeAndPersist).not.toHaveBeenCalled();
   });
 
-  it('returns UNAVAILABLE when the active baseline has no resolvable RabDocument at all (test 8)', async () => {
-    const { service } = createHarness({
-      baseline: { rabDocumentId: 'rab-missing' },
-      rab: null,
-    });
+  it('performs zero DeviationSignal create/update and no business persistence', async () => {
+    const { service, prisma, deviationService } = createHarness();
 
-    const result = await service.getReality('project-1');
+    await service.getReality('project-1');
 
-    expect(result.status).toBe('UNAVAILABLE');
-    expect(result.data).toBeNull();
-  });
-
-  it('§PR57 Gap D-01: returns UNAVAILABLE — never planned cost 0 — when a progress report exists but no ACTIVE ProjectBaseline exists at all', async () => {
-    const { service, prisma } = createHarness({});
-
-    const result = await service.getReality('project-1');
-
-    expect(prisma.projectBaseline.findFirst).toHaveBeenCalled();
-    expect(result).toEqual({
-      available: false,
-      status: 'UNAVAILABLE',
-      message: expect.any(String),
-      data: null,
-    });
-    expect(result).not.toHaveProperty('overallPlannedCost');
-  });
-
-  it('returns UNAVAILABLE when the active baseline itself carries no rabDocumentId', async () => {
-    const { service } = createHarness({
-      baseline: { rabDocumentId: null },
-    });
-
-    const result = await service.getReality('project-1');
-
-    expect(result.status).toBe('UNAVAILABLE');
-    expect(result.data).toBeNull();
-  });
-
-  it('returns the exact planned total when the active baseline RabDocument total is valid and non-null (test 9)', async () => {
-    const { service } = createHarness({
-      baseline: { rabDocumentId: 'rab-1' },
-      rab: { totalBaseCost: new Prisma.Decimal('1234567.89') },
-    });
-
-    const result = await service.getReality('project-1');
-
-    expect(result.status).toBeUndefined();
-    expect((result as any).overallPlannedCost).toBe(1234567.89);
-  });
-
-  it('preserves the existing UNAVAILABLE state when the primary reality input (progress report) is absent (test 10)', async () => {
-    const { service } = createHarness({ hasReport: false });
-
-    const result = await service.getReality('project-1');
-
-    expect(result).toEqual({
-      available: false,
-      status: 'UNAVAILABLE',
-      message: 'Data realitas belum tersedia',
-      data: null,
-    });
+    expect(deviationService.computeAndPersist).not.toHaveBeenCalled();
+    expect(prisma.deviationSignal.create).not.toHaveBeenCalled();
+    expect(prisma.deviationSignal.update).not.toHaveBeenCalled();
   });
 });

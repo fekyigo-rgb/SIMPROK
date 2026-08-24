@@ -352,109 +352,17 @@ export class ProjectService {
     return project;
   }
 
-  async getReality(projectId: string) {
-    // Return latest progress reports and deviations
-    const reports = await this.prisma.progressReport.findMany({
-      where: { projectId },
-      orderBy: { periodEndDate: 'desc' },
-      take: 1,
-      include: {
-        entries: {
-          include: {
-            boqItem: true,
-          },
-        },
-      },
-    });
-
-    const report = reports[0];
-    if (!report)
-      return {
-        available: false,
-        status: 'UNAVAILABLE',
-        message: 'Data realitas belum tersedia',
-        data: null,
-      };
-
-    // Fetch baseline to get total planned cost
-    const baseline = await this.prisma.projectBaseline.findFirst({
-      where: { projectId, status: 'ACTIVE' },
-      orderBy: { versionNumber: 'desc' },
-    });
-
-    // NO_BASELINE_FALSE_ZERO / ACTIVE_BASELINE_RAB_TOTAL_NULL_IS_NOT_ZERO: no
-    // ACTIVE ProjectBaseline at all, a baseline whose RabDocument is
-    // missing, or a RabDocument whose totalBaseCost is not yet authoritative
-    // (NULL — an incomplete draft, per the GATE-2A truth constraint) must
-    // never be reported as a planned cost of 0. `let overallPlannedCost = 0`
-    // followed by a conditional skip is exactly how JavaScript silently
-    // fabricates a real-looking zero — fail closed in every one of these
-    // three cases instead, reusing this method's existing UNAVAILABLE shape.
-    if (!baseline) {
-      return {
-        available: false,
-        status: 'UNAVAILABLE',
-        message: 'Baseline aktif belum tersedia',
-        data: null,
-      };
-    }
-    const rab = baseline.rabDocumentId
-      ? await this.prisma.rabDocument.findUnique({
-          where: { id: baseline.rabDocumentId },
-        })
-      : null;
-    if (!rab || rab.totalBaseCost === null) {
-      return {
-        available: false,
-        status: 'UNAVAILABLE',
-        message:
-          'Total RAB baseline aktif belum tersedia atau belum otoritatif',
-        data: null,
-      };
-    }
-    const overallPlannedCost = Number(rab.totalBaseCost);
-
-    // Calculate Actual Progress and Cost
-    let totalActualProgressPct = 0;
-    let entryCount = 0;
-    let overallActualCost = 0;
-
-    for (const entry of report.entries) {
-      const installedQty = Number(entry.installedQuantity) || 0;
-      const plannedQty = Number(entry.boqItem.quantity) || 1; // prevent div/0
-
-      const itemProgressPct = Math.min((installedQty / plannedQty) * 100, 100);
-      totalActualProgressPct += itemProgressPct;
-      entryCount++;
-
-      // Since BoqItem doesn't store unitPrice directly in the schema,
-      // we derive a proportional actual cost from the overall planned cost for verification.
-      // In a real scenario, this would use AHSP snapshot resource calculations.
-      overallActualCost += Number(entry.actualCost) || 0;
-    }
-
-    const overallActualProgress =
-      entryCount > 0 ? totalActualProgressPct / entryCount : 0;
-    const overallPlannedProgress = null; // Truthful: no time-phased schedule model exists
-
-    // NOTE: No actualCost fallback. If actualCost is 0, it means field did not record it.
-    // SIMPROK must not invent evidence. 0 = NOT YET RECORDED. The UI must display this honestly.
-
-    // PHASE 01: DEVIATION INTELLIGENCE
-    // Generate verified deviations based strictly on known foundations
-    const deviationSignals = await this.deviationService.computeAndPersist(
-      projectId,
-      report.id,
-      report.entries,
-    );
-
+  getReality(projectId: string) {
+    void projectId;
+    // Compatibility-only read surface. Official Actual calculation eligibility
+    // is an Owner Product Gate, so this route must not select a lifecycle state,
+    // derive progress/deviation, or persist a signal before that law exists.
     return {
-      ...report,
-      overallPlannedProgress,
-      overallActualProgress,
-      overallPlannedCost,
-      overallActualCost,
-      deviationSignals,
+      available: false,
+      status: 'UNAVAILABLE',
+      message:
+        'Perhitungan progress dan deviasi resmi belum diaktifkan sampai Owner menetapkan kelayakan Actual untuk perhitungan resmi',
+      data: null,
     };
   }
 

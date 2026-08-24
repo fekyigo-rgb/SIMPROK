@@ -1,13 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ProgressCard } from '../components/organisms/ProgressCard';
 import { RiskCard } from '../components/organisms/RiskCard';
 import { ForecastCard } from '../components/organisms/ForecastCard';
 import { RecommendationCard } from '../components/organisms/RecommendationCard';
 import { Button } from '../components/atoms/Button';
 import { useAuth } from '../contexts/AuthContext';
-import { DeviationSignal } from '../components/molecules/DeviationSignal';
 import { apiFetch } from '../utils/apiClient';
 
 type RoomType = 'HUB' | 'REALITY' | 'HORIZON' | 'STORM' | 'WISDOM' | 'AUTHORITY' | 'LOGISTICS';
@@ -188,44 +186,17 @@ export function ProjectWarRoomPage() {
                 <button 
                   onClick={() => navigate(`/field/project/${id}`)}
                   style={{ padding: '6px 12px', backgroundColor: 'var(--simprok-engineering-blue-800)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 'bold' }}>
-                  📡 Launch Field Terminal
+                  Buka Monitoring
                 </button>
               </div>
-              {reality && reality.available !== false ? (
-                <ProgressCard 
-                  itemName="Overall Project Execution"
-                  itemCode="WBS-ROOT"
-                  weight={100}
-                  plannedProgress={reality.overallPlannedProgress != null ? parseFloat(reality.overallPlannedProgress) : null}
-                  actualProgress={parseFloat(reality.overallActualProgress) || 0}
-                  plannedCost={parseFloat(reality.overallPlannedCost) || 0}
-                  actualCost={parseFloat(reality.overallActualCost) || 0}
-                  actualCostRecorded={(parseFloat(reality.overallActualCost) || 0) > 0}
-                  certaintyLevel="C4"
-                />
-              ) : <p style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-text-light)', fontStyle: 'italic' }}>Data realitas belum tersedia.</p>}
-              
-              {/* DEVIATION SIGNALS */}
-              {reality?.deviationSignals && reality.deviationSignals.length > 0 && (
-                <div style={{ marginTop: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-                  <span style={{ fontSize: 'var(--text-sm)', color: 'var(--simprok-engineering-blue-700)', fontWeight: 'var(--weight-bold)' }}>Observed Deviations</span>
-                  {reality.deviationSignals.map((signal: any) => (
-                    <div key={signal.id} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                      <DeviationSignal 
-                        label={signal.type + ' DEVIATION'}
-                        plannedValue={reality.overallPlannedProgress} // Mocked for UI, actual variance is computed in backend
-                        actualValue={reality.overallActualProgress}
-                        unit="%"
-                        lowerIsBetter={false}
-                      />
-                      <div style={{ padding: 'var(--space-2) var(--space-3)', backgroundColor: signal.severity === 'WARNING' ? '#FEF3C7' : 'var(--simprok-surface-light)', borderRadius: 'var(--radius-sm)', border: '1px solid', borderColor: signal.severity === 'WARNING' ? '#F59E0B' : 'var(--simprok-engineering-blue-200)' }}>
-                        <span style={{ fontSize: 'var(--text-xs)', fontWeight: 'var(--weight-bold)', color: signal.severity === 'WARNING' ? '#B45309' : 'var(--simprok-engineering-blue-700)', display: 'block', marginBottom: '4px' }}>SIMPROK SIGNAL ({signal.severity})</span>
-                        <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--simprok-text-main)' }}>{signal.description}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div role="status" style={{ padding: 'var(--space-4)', backgroundColor: 'var(--simprok-surface-light)', border: '1px solid var(--simprok-engineering-blue-200)', borderRadius: 'var(--radius-sm)' }}>
+                <p style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)', fontWeight: 'var(--weight-semibold)' }}>
+                  {reality?.message ?? 'Perhitungan progress dan deviasi resmi belum diaktifkan sampai Owner menetapkan kelayakan Actual untuk perhitungan resmi.'}
+                </p>
+                <p style={{ margin: 'var(--space-2) 0 0', fontSize: 'var(--text-sm)', color: 'var(--simprok-text-light)' }}>
+                  Actual lapangan yang tercatat tetap dapat ditinjau melalui Monitoring tanpa menjadikannya angka kemajuan resmi.
+                </p>
+              </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--simprok-engineering-blue-100)' }}>
                 <Button onClick={() => setActiveRoom('HORIZON')}>Proceed to Horizon Room (Forecast) →</Button>
