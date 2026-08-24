@@ -353,6 +353,51 @@ RETURNED_FOR_CORRECTION is not eligible. RECORDED and LEGACY_UNSPECIFIED are not
 
 Existing correction lineage and audit history remain preserved. Rules for historical/as-of report reproduction after later correction remain a future reporting/version-projection decision and must not be invented by calculation code.
 
+### Current official calculation lineage selection — Owner-ratified
+
+Per-record lifecycle eligibility is necessary but is not, by itself, sufficient for current official calculation.
+
+For each correction lineage, only the current lineage leaf may be considered as the current official calculation fact. Once a correction successor exists, its predecessor becomes historical for current-calculation purposes and MUST NOT be used as fallback, even when that predecessor retains `VERIFIED` or `ACCEPTED` status for audit/history integrity.
+
+Therefore:
+
+```text
+SUPERSEDED VERIFIED  -> NOT CURRENT CALCULATION FACT
+SUPERSEDED ACCEPTED  -> NOT CURRENT CALCULATION FACT
+
+LEAF SUBMITTED       -> NO CURRENT ELIGIBLE FACT
+LEAF VERIFIED        -> CURRENT CALCULATION ELIGIBLE
+LEAF ACCEPTED        -> CURRENT CALCULATION ELIGIBLE
+```
+
+Example:
+
+```text
+R1 ACCEPTED
+   ↓ corrected by
+R2 SUBMITTED
+```
+
+R1 remains preserved as historical `ACCEPTED`, but R1 MUST NOT continue feeding current official calculation. R2 is the current lineage candidate, but because R2 is still `SUBMITTED`, the lineage currently contributes no eligible official calculation fact. When R2 reaches `VERIFIED`, R2 may become the current official calculation fact.
+
+SIMPROK MUST NOT restore certainty by falling back to a superseded predecessor while its correction successor remains below the `VERIFIED` threshold.
+
+This rule governs CURRENT calculation only. Historical/as-of report reproduction and retroactive restatement remain separate future Product Law decisions.
+
+Permanent distinctions:
+
+```text
+ELIGIBLE BY STATUS
+!=
+CURRENT IN CORRECTION LINEAGE
+
+SUPERSEDED
+!=
+DELETED
+```
+
+Historical facts and audit lineage remain preserved.
+
 ### Integrity is channel-independent
 
 Human entry, mobile capture, camera, drone, satellite, sensor, and future machine observations all obey the same eligibility law.
