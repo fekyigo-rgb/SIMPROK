@@ -9,6 +9,7 @@ import {
   correctionDate,
   effectiveHistoryEntry,
   historyMessage,
+  monitoringReturnPath,
   plannedFact,
   projectWorkDateDefault,
   projectTimestampPresentation,
@@ -43,7 +44,8 @@ type CorrectionDraft = {
 export function SubmitProgressPage() {
   const { projectId, boqItemId } = useParams();
   const navigate = useNavigate();
-  const { token } = useAuth();
+  const { token, hasPermission } = useAuth();
+  const canSubmitActual = hasPermission("FIELD_PROGRESS_SUBMIT");
   const [quantity, setQuantity] = useState("");
   const [workDate, setWorkDate] = useState("");
   const workDateEdited = useRef(false);
@@ -256,10 +258,18 @@ export function SubmitProgressPage() {
         borderRadius: "var(--radius-lg)",
       }}
     >
-      <button onClick={() => navigate(`/field/project/${projectId}`)}>
+      <button
+        onClick={() =>
+          navigate(monitoringReturnPath(projectId ?? '', boqItemId ?? ''))
+        }
+      >
         &larr; Kembali
       </button>
-      <h2>Catat Actual Lapangan</h2>
+      <h2>
+        {canSubmitActual
+          ? "Catat Actual Lapangan"
+          : "Riwayat Actual Lapangan"}
+      </h2>
       {notice && <p role="status">{notice}</p>}
       {boqItem && (
         <section>
@@ -281,7 +291,8 @@ export function SubmitProgressPage() {
           )}
         </section>
       )}
-      <form onSubmit={submit} style={{ display: "grid", gap: 16 }}>
+      {canSubmitActual && (
+        <form onSubmit={submit} style={{ display: "grid", gap: 16 }}>
         <label>
           Tanggal pekerjaan
           <input
@@ -343,7 +354,8 @@ export function SubmitProgressPage() {
         <button type="submit" disabled={submitting}>
           Simpan Actual
         </button>
-      </form>
+        </form>
+      )}
       <section>
         <h3>Riwayat Actual</h3>
         <small>

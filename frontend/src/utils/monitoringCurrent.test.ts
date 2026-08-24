@@ -252,7 +252,19 @@ test('H2-A0-11 the shell neither consumes legacy reality nor paints later truth'
   assert.doesNotMatch(page, />\s*Network\s*</);
   assert.match(page, /bukan persentase kemajuan proyek/);
   assert.match(page, /bukan\s+total realisasi, realisasi kumulatif, atau persentase kemajuan\s+proyek/);
-  assert.match(page, /Buka Detail Progress/);
+  assert.match(page, /Catat \/ Kelola Actual/);
+  assert.match(page, /Lihat Riwayat Actual/);
+  assert.match(page, /hasPermission\('FIELD_PROGRESS_SUBMIT'\)/);
+});
+
+test('MON03 read authority keeps history while submit authority gates the write form', () => {
+  const page = readFileSync('src/pages/field/SubmitProgressPage.tsx', 'utf8');
+  assert.match(page, /const \{ token, hasPermission \} = useAuth\(\)/);
+  assert.match(page, /hasPermission\("FIELD_PROGRESS_SUBMIT"\)/);
+  assert.match(page, /<h3>Riwayat Actual<\/h3>/);
+  assert.match(page, /\{canSubmitActual && \(\s*<form onSubmit=\{submit\}/);
+  assert.match(page, /\? "Catat Actual Lapangan"\s*: "Riwayat Actual Lapangan"/);
+  assert.match(page, />\s*Simpan Actual\s*<\/button>/);
 });
 
 test('H2-A1-1 item and cumulative weights use backend facts with display rounding last', () => {
