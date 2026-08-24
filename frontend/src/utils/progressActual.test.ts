@@ -5,12 +5,20 @@ import {
   correctionCaptureMethod,
   correctionDate,
   historyMessage,
+  monitoringReturnPath,
   projectCalendarDate,
   projectWorkDateDefault,
   plannedFact,
   projectTimestampPresentation,
   timelinePresentation,
 } from "./progressActual.ts";
+
+test("MON03 workbench return keeps the exact selected item in a tiny URL seam", () => {
+  assert.equal(
+    monitoringReturnPath("project-1", "item-1"),
+    "/field/project/project-1?item=item-1",
+  );
+});
 
 test("MON03 UI reads planned quantity and unit from the governed planned object", () => {
   assert.deepEqual(plannedFact({ planned: { quantity: "10", unit: "m3" } }), {
