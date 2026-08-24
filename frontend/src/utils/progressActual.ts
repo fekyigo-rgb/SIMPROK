@@ -3,6 +3,13 @@ export type ProgressHistoryLoadState =
   | { kind: "loaded"; count: number }
   | { kind: "error"; message: string };
 
+export function monitoringReturnPath(
+  projectId: string,
+  boqItemId: string,
+): string {
+  return `/field/project/${projectId}?item=${encodeURIComponent(boqItemId)}`;
+}
+
 export function projectCalendarDate(
   projectTimeZone: string | null,
   date = new Date(),

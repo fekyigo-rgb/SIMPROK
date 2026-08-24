@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
 import {
@@ -61,8 +61,10 @@ function actualQuantity(
 
 export function ProjectWorkPage() {
   const { projectId } = useParams();
-  const { token } = useAuth();
+  const { token, hasPermission } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnItemId = searchParams.get('item');
   const [project, setProject] = useState<MonitoringProject | null>(null);
   const [monitoring, setMonitoring] = useState<MonitoringResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -97,7 +99,14 @@ export function ProjectWorkPage() {
       .then(([projectData, monitoringData]) => {
         setProject(projectData);
         setMonitoring(monitoringData);
-        setSelectedId(null);
+        setSelectedId(
+          monitoringData.items.some(
+            (item) =>
+              item.id === returnItemId && item.itemType === 'WORK_ITEM',
+          )
+            ? returnItemId
+            : null,
+        );
         setLoadedProjectId(projectId);
         setErrorProjectId(null);
         setErrorKind(null);
@@ -119,7 +128,7 @@ export function ProjectWorkPage() {
       });
 
     return () => controller.abort();
-  }, [token, projectId]);
+  }, [token, projectId, returnItemId]);
 
   const rows = useMemo(
     () => buildMonitoringRows(monitoring?.items ?? []),
@@ -538,7 +547,9 @@ export function ProjectWorkPage() {
                     navigate(progressDetailPath(project.id, selected.id))
                   }
                 >
-                  Buka Detail Progress
+                  {hasPermission('FIELD_PROGRESS_SUBMIT')
+                    ? 'Catat / Kelola Actual'
+                    : 'Lihat Riwayat Actual'}
                 </button>
               </div>
             )}
