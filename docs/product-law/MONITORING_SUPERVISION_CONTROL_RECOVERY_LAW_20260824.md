@@ -300,17 +300,70 @@ Therefore:
 
 Future phone/camera/drone/satellite/sensor/machine inputs must join the same governed evidence and Actual backbone. Do not build parallel truth stores for each device/channel.
 
-## 15. Official Actual Calculation Eligibility is a hard next-stage gate
+## 15. Official Actual Calculation Eligibility — Owner-ratified
 
-Before official earned progress, deviation, S-Curve, forecast, or recovery intelligence consumes Actual, SIMPROK must explicitly decide which lifecycle states are eligible.
+Before official earned progress, deviation, S-Curve, forecast, or Recovery intelligence consumes Actual, SIMPROK must use only lifecycle states eligible under this law.
 
-Do not silently assume that SUBMITTED, VERIFIED, or ACCEPTED is the correct calculation authority.
+The Owner-ratified minimum authority is:
+
+> **VERIFIED is the minimum lifecycle state eligible for official SIMPROK calculation.**
+
+The current lifecycle eligibility matrix is:
+
+```text
+LEGACY_UNSPECIFIED       -> NOT ELIGIBLE
+RECORDED                 -> NOT ELIGIBLE
+SUBMITTED                -> NOT ELIGIBLE
+VERIFIED                 -> ELIGIBLE
+ACCEPTED                 -> ELIGIBLE
+RETURNED_FOR_CORRECTION  -> NOT ELIGIBLE
+```
+
+### Submitted facts remain immediately visible
+
+A SUBMITTED Actual may be shown immediately in Monitoring as a governed current-condition fact and may support operational awareness and supervision attention.
+
+However:
+
+```text
+VISIBLE IN MONITORING
+!=
+ELIGIBLE FOR OFFICIAL CALCULATION
+```
+
+Authorized submission does not prove verified content:
+
+```text
+AUTHORIZED SUBMISSION
+!=
+VERIFIED CONTENT
+```
+
+### Verified is the minimum calculation threshold
+
+Only after an Actual reaches VERIFIED may it begin participating in official SIMPROK calculation.
+
+ACCEPTED is also eligible under the current lifecycle, but ACCEPTED is not required as the minimum threshold for ordinary official Monitoring calculation.
+
+Any additional special role for ACCEPTED in a particular certification, reporting, payment, contractual-acceptance, or authority context requires a separate explicit Product Law if such a distinction is later needed.
+
+### Correction remains fail-closed
+
+RETURNED_FOR_CORRECTION is not eligible. RECORDED and LEGACY_UNSPECIFIED are not eligible.
+
+Existing correction lineage and audit history remain preserved. Rules for historical/as-of report reproduction after later correction remain a future reporting/version-projection decision and must not be invented by calculation code.
+
+### Integrity is channel-independent
+
+Human entry, mobile capture, camera, drone, satellite, sensor, and future machine observations all obey the same eligibility law.
+
+Capture channel does not grant calculation authority. No device or machine channel may bypass the VERIFIED minimum.
 
 Status:
 
-> **OFFICIAL_ACTUAL_CALCULATION_ELIGIBILITY = UNDECIDED / NEXT-STAGE PRODUCT GATE**
+> **OFFICIAL_ACTUAL_CALCULATION_ELIGIBILITY = OWNER-RATIFIED / VERIFIED-MINIMUM**
 
-This decision must precede official deviation/S-Curve/control math.
+This law must be consumed through one canonical backend calculation-eligibility authority before MON-04 official deviation/S-Curve/control math is implemented.
 
 ## 16. Agent implementation law
 
