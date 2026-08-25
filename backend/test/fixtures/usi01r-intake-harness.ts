@@ -130,24 +130,24 @@ export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
   };
 
   const rowModel = {
-    create: ({ data }: { data: HarnessRecord }) => {
+    create: async ({ data }: { data: HarnessRecord }) => {
       const row = { id: id('row'), version: 0, ...data };
       rows.push(row);
-      return Promise.resolve(row);
+      return row;
     },
     // Intake writes its rows SET-BASED, one bounded statement per chunk, and
     // supplies the id itself so the source's order survives a read-back that
     // has no order of its own. The fake honours both: it keeps what it is
     // given, and it answers with a count rather than rows — exactly as Prisma
     // does, and exactly what makes the id the only thing left to order by.
-    createMany: ({ data }: { data: HarnessRecord[] }) => {
+    createMany: async ({ data }: { data: HarnessRecord[] }) => {
       for (const row of data) rows.push({ version: 0, ...row });
-      return Promise.resolve({ count: data.length });
+      return { count: data.length };
     },
     count: async ({ where }: any) =>
       rows.filter((row) => row.batchId === where.batchId).length,
-    findMany: ({ where }: { where: HarnessWhere }) =>
-      Promise.resolve(rows.filter((row) => row.batchId === where.batchId)),
+    findMany: async ({ where }: { where: HarnessWhere }) =>
+      rows.filter((row) => row.batchId === where.batchId),
   };
 
   const allowed: Record<string, unknown> = {
