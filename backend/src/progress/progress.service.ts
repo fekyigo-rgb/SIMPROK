@@ -35,6 +35,24 @@ import {
   progressSemanticProofMetadata,
   readProgressSemanticAuthority,
 } from './progress-semantic-authority.policy';
+import {
+  calculateCurrentOfficialQuantity,
+  type CurrentOfficialQuantityResult,
+} from './progress-current-official-quantity.policy';
+
+type CurrentOfficialQuantityResponse =
+  | Exclude<
+      CurrentOfficialQuantityResult,
+      { state: 'COMPLETE' } | { state: 'INCOMPLETE' }
+    >
+  | {
+      state: 'COMPLETE';
+      currentOfficialQuantity: string;
+    }
+  | {
+      state: 'INCOMPLETE';
+      knownEligibleQuantitySubtotal: string;
+    };
 
 interface TrustedProgressActor {
   accountId: string;
@@ -568,15 +586,40 @@ export class ProgressService {
             status: true,
             recordedByAccountId: true,
             supersedesEntryId: true,
+            correctionReasonCode: true,
+            correctionReason: true,
             revision: true,
             createdAt: true,
+            auditEvents: {
+              where: {
+                action: MON04_SEMANTIC_AUDIT_ACTION,
+                outcome: ProgressAuditOutcome.SUCCESS,
+              },
+              orderBy: { occurredAt: 'asc' },
+              include: { actor: { select: { displayName: true } } },
+            },
           },
         })
       : [];
+
+    const entriesByWorkItem = new Map<
+      string,
+      Array<(typeof entries)[number]>
+    >();
+
+    for (const entry of entries) {
+      const grouped = entriesByWorkItem.get(entry.boqItemId);
+      if (grouped) {
+        grouped.push(entry);
+      } else {
+        entriesByWorkItem.set(entry.boqItemId, [entry]);
+      }
+    }
+
     const effectiveByItem = new Map<string, (typeof entries)[number]>();
     for (const workItemId of workItemIds) {
       const effective = this.effectiveEntry(
-        entries.filter((entry) => entry.boqItemId === workItemId),
+        entriesByWorkItem.get(workItemId) ?? [],
       );
       if (effective) effectiveByItem.set(workItemId, effective);
     }
@@ -624,7 +667,32 @@ export class ProgressService {
       freshness,
       weight: weight.project,
       items: items.map((item) => {
+        const itemEntries = entriesByWorkItem.get(item.id) ?? [];
         const effective = effectiveByItem.get(item.id);
+
+        let currentOfficialQuantityResponse: CurrentOfficialQuantityResponse | null =
+          null;
+        if (item.itemType === 'WORK_ITEM') {
+          const rawQuantityResult = calculateCurrentOfficialQuantity(
+            { projectId, activeBaselineId: baseline.id, boqItemId: item.id },
+            itemEntries,
+          );
+          currentOfficialQuantityResponse =
+            rawQuantityResult.state === 'COMPLETE'
+              ? {
+                  ...rawQuantityResult,
+                  currentOfficialQuantity:
+                    rawQuantityResult.currentOfficialQuantity.toString(),
+                }
+              : rawQuantityResult.state === 'INCOMPLETE'
+                ? {
+                    ...rawQuantityResult,
+                    knownEligibleQuantitySubtotal:
+                      rawQuantityResult.knownEligibleQuantitySubtotal.toString(),
+                  }
+                : rawQuantityResult;
+        }
+
         return {
           id: item.id,
           parentId: item.parentId,
@@ -635,6 +703,7 @@ export class ProgressService {
           sortOrder: item.sortOrder,
           planned: { quantity: item.quantity.toString(), unit: item.unit },
           weight: weight.rows.get(item.id),
+          currentOfficialQuantity: currentOfficialQuantityResponse,
           actual:
             item.itemType !== 'WORK_ITEM'
               ? null
