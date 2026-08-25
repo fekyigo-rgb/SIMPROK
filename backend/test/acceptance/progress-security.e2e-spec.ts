@@ -11,6 +11,43 @@ import { randomUUID } from 'crypto';
 const PASSWORD = 'Test1234!';
 const SALT_ROUNDS = 10;
 
+interface SemanticHistoryLeaf {
+  id: string;
+  supersedesEntryId: string | null;
+  semanticAuthority: {
+    state: 'PROVEN' | 'NOT_PROVEN' | 'STALE' | 'INVALID_PROVENANCE';
+    proof: {
+      actorDisplayName: string | null;
+      authorityCode: string;
+    } | null;
+  };
+}
+
+interface SemanticHistoryBody {
+  semanticVerification: {
+    state: 'VALID' | 'INVALID_LINEAGE';
+    contextDigest: string | null;
+    invalidReason: string | null;
+    currentLeaves: SemanticHistoryLeaf[];
+  };
+  availableActions: { semanticAttestEntryIds: string[] };
+  entries: Array<{ id: string; isCurrentLineageLeaf: boolean }>;
+}
+
+interface SemanticAttestationResponseBody {
+  entryId: string;
+  semanticAuthority: 'PROVEN' | 'STALE';
+  replayed: boolean;
+}
+
+interface ErrorResponseBody {
+  message: string;
+}
+
+interface EntryResponseBody {
+  entryId: string;
+}
+
 describe('Progress Security (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaClient;
@@ -525,13 +562,117 @@ describe('Progress Security (e2e)', () => {
     await prisma.$disconnect();
   });
 
-  const login = async (email: string) => {
+  const login = async (email: string): Promise<string> => {
     const res = await request(app.getHttpServer())
       .post('/auth/login')
       .send({ email, password: PASSWORD })
       .expect(201);
-    return res.body.access_token;
+    return (res.body as { access_token: string }).access_token;
   };
+
+  const createSemanticWorkItem = async (name: string) => {
+    const baseline = await prisma.projectBaseline.findUniqueOrThrow({
+      where: { id: baselineAId },
+      include: { rabDocument: true },
+    });
+    return prisma.boqItem.create({
+      data: {
+        boqStructureId: baseline.rabDocument.boqStructureId,
+        wbsCode: `MON04-${randomUUID().slice(0, 8)}`,
+        name,
+        quantity: 20,
+        unit: 'm3',
+        unitPrice: 1,
+        lineTotal: 20,
+        priceOrigin: 'MANUAL_CLIENT',
+      },
+    });
+  };
+
+  const submitSemanticRoot = async (
+    token: string,
+    boqItemId: string,
+    installedQuantity: string,
+    workDate = '2026-08-25',
+  ): Promise<string> => {
+    const response = await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/field`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: randomUUID(),
+        entries: [
+          {
+            boqItemId,
+            installedQuantity,
+            workDate,
+            captureMethod: 'FIELD_MEASUREMENT',
+            evidenceReferences: [
+              {
+                url: `https://evidence.example/${randomUUID()}`,
+                label: 'Field measurement',
+              },
+            ],
+          },
+        ],
+      })
+      .expect(201);
+    return (response.body as { entryIds: string[] }).entryIds[0];
+  };
+
+  const transitionSemanticRoot = async (
+    token: string,
+    entryId: string,
+    action: 'verify' | 'accept',
+  ) =>
+    request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${entryId}/${action}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ commandId: randomUUID(), reason: `MON04 ${action}` })
+      .expect(201);
+
+  const semanticHistory = async (
+    token: string,
+    boqItemId: string,
+  ): Promise<SemanticHistoryBody> => {
+    const response = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/items/${boqItemId}/history`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    return response.body as SemanticHistoryBody;
+  };
+
+  const semanticContextDigest = (history: SemanticHistoryBody): string => {
+    if (!history.semanticVerification.contextDigest) {
+      throw new Error('Expected a valid semantic verification context');
+    }
+    return history.semanticVerification.contextDigest;
+  };
+
+  const attestSemantics = (
+    token: string,
+    entryId: string,
+    contextDigest: string,
+    commandId = randomUUID(),
+  ) =>
+    request(app.getHttpServer())
+      .post(
+        `/projects/${projectAId}/progress/entries/${entryId}/semantic-attestations`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ commandId, contextDigest, confirmed: true });
+
+  const successfulSemanticProofCount = (entryIds: string[]) =>
+    prisma.progressAuditEvent.count({
+      where: {
+        progressEntryId: { in: entryIds },
+        action: 'ACTUAL_SEMANTIC_AUTHORITY_CONFIRMED',
+        outcome: 'SUCCESS',
+      },
+    });
 
   it('1. no token -> POST /projects/:id/progress/field returns 401', async () => {
     await request(app.getHttpServer())
@@ -1259,6 +1400,7 @@ describe('Progress Security (e2e)', () => {
       verify: true,
       correct: false,
       accept: false,
+      semanticAttestEntryIds: [],
     });
     expect(history.body.effectiveEntryId).toBe(entryId);
     expect(history.body.governanceEntryId).toBe(correctionId);
@@ -2576,6 +2718,481 @@ describe('Progress Security (e2e)', () => {
     await expect(
       prisma.projectTimeZoneEvent.delete({ where: { id: event.id } }),
     ).rejects.toThrow('PROJECT_TIME_ZONE_HISTORY_APPEND_ONLY');
+  });
+
+  it('MON04 T1 - a single current root can receive explicit durable semantic authority', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T1 single root');
+    const entryId = await submitSemanticRoot(token, item.id, '4');
+    await transitionSemanticRoot(token, entryId, 'verify');
+
+    const before = await semanticHistory(token, item.id);
+    expect(before.semanticVerification).toMatchObject({
+      state: 'VALID',
+      currentLeaves: [
+        {
+          id: entryId,
+          semanticAuthority: { state: 'NOT_PROVEN', proof: null },
+        },
+      ],
+    });
+    expect(before.availableActions.semanticAttestEntryIds).toEqual([entryId]);
+
+    const attested = await attestSemantics(
+      token,
+      entryId,
+      semanticContextDigest(before),
+    ).expect(201);
+    expect(attested.body as SemanticAttestationResponseBody).toMatchObject({
+      entryId,
+      semanticAuthority: 'PROVEN',
+      replayed: false,
+    });
+    expect(await successfulSemanticProofCount([entryId])).toBe(1);
+
+    const after = await semanticHistory(token, item.id);
+    expect(
+      after.semanticVerification.currentLeaves[0].semanticAuthority,
+    ).toMatchObject({
+      state: 'PROVEN',
+      proof: {
+        actorDisplayName: userSubmitEmail,
+        authorityCode: 'FIELD_PROGRESS_VERIFY',
+      },
+    });
+  });
+
+  it('MON04 T2 - two independent current roots are both present in the attested context', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T2 two roots');
+    const rootA = await submitSemanticRoot(token, item.id, '3');
+    const rootB = await submitSemanticRoot(token, item.id, '4');
+    await transitionSemanticRoot(token, rootA, 'verify');
+    await transitionSemanticRoot(token, rootB, 'verify');
+
+    const history = await semanticHistory(token, item.id);
+    expect(
+      history.semanticVerification.currentLeaves.map((leaf) => leaf.id).sort(),
+    ).toEqual([rootA, rootB].sort());
+
+    await attestSemantics(token, rootA, semanticContextDigest(history)).expect(
+      201,
+    );
+    const proof = await prisma.progressAuditEvent.findFirstOrThrow({
+      where: {
+        progressEntryId: rootA,
+        action: 'ACTUAL_SEMANTIC_AUTHORITY_CONFIRMED',
+        outcome: 'SUCCESS',
+      },
+      orderBy: { occurredAt: 'desc' },
+    });
+    expect(
+      (proof.metadata as { currentLeafIds: string[] }).currentLeafIds.sort(),
+    ).toEqual([rootA, rootB].sort());
+  });
+
+  it('MON04 T3 - correction context uses only the current leaf and marks its predecessor historical', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T3 correction');
+    const originalId = await submitSemanticRoot(token, item.id, '2');
+    await transitionSemanticRoot(token, originalId, 'verify');
+    const correction = await request(app.getHttpServer())
+      .post(
+        `/projects/${projectAId}/progress/entries/${originalId}/corrections`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: randomUUID(),
+        installedQuantity: '2.5',
+        workDate: '2026-08-26',
+        captureMethod: 'FIELD_MEASUREMENT',
+        reasonCode: 'MEASUREMENT_UPDATE',
+        reasonText: 'T3 correction',
+      })
+      .expect(201);
+    const correctionId = (correction.body as EntryResponseBody).entryId;
+    await transitionSemanticRoot(token, correctionId, 'verify');
+
+    const history = await semanticHistory(token, item.id);
+    expect(history.semanticVerification.currentLeaves).toEqual([
+      expect.objectContaining({
+        id: correctionId,
+        supersedesEntryId: originalId,
+      }),
+    ]);
+    expect(
+      history.entries.find((entry) => entry.id === originalId)
+        ?.isCurrentLineageLeaf,
+    ).toBe(false);
+    expect(
+      history.entries.find((entry) => entry.id === correctionId)
+        ?.isCurrentLineageLeaf,
+    ).toBe(true);
+  });
+
+  it('MON04 T4 - invalid lineage fails closed while another safe item remains functional', async () => {
+    const token = await login(userSubmitEmail);
+    const invalidItem = await createSemanticWorkItem('MON04 T4 invalid');
+    const rootA = await submitSemanticRoot(token, invalidItem.id, '1');
+    const rootB = await submitSemanticRoot(token, invalidItem.id, '2');
+    await prisma.progressEntry.update({
+      where: { id: rootA },
+      data: {
+        supersedesEntryId: rootB,
+        correctionReasonCode: 'MEASUREMENT_UPDATE',
+        correctionReason: 'Hostile cycle fixture A',
+      },
+    });
+    await prisma.progressEntry.update({
+      where: { id: rootB },
+      data: {
+        supersedesEntryId: rootA,
+        correctionReasonCode: 'MEASUREMENT_UPDATE',
+        correctionReason: 'Hostile cycle fixture B',
+      },
+    });
+
+    const invalidHistory = await semanticHistory(token, invalidItem.id);
+    expect(invalidHistory.semanticVerification).toMatchObject({
+      state: 'INVALID_LINEAGE',
+      invalidReason: 'CYCLE',
+      contextDigest: null,
+      currentLeaves: [],
+    });
+    await attestSemantics(token, rootA, '0'.repeat(64)).expect(409);
+    expect(await successfulSemanticProofCount([rootA, rootB])).toBe(0);
+
+    const safeItem = await createSemanticWorkItem('MON04 T4 safe');
+    const safeRoot = await submitSemanticRoot(token, safeItem.id, '3');
+    await transitionSemanticRoot(token, safeRoot, 'verify');
+    const safeHistory = await semanticHistory(token, safeItem.id);
+    expect(safeHistory.semanticVerification).toMatchObject({
+      state: 'VALID',
+      currentLeaves: [expect.objectContaining({ id: safeRoot })],
+    });
+  });
+
+  it('MON04 T5 - lifecycle verification alone leaves semantic authority NOT_PROVEN', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T5 lifecycle only');
+    const entryId = await submitSemanticRoot(token, item.id, '5');
+    await transitionSemanticRoot(token, entryId, 'verify');
+
+    const entry = await prisma.progressEntry.findUniqueOrThrow({
+      where: { id: entryId },
+    });
+    const history = await semanticHistory(token, item.id);
+    expect(entry.status).toBe('VERIFIED');
+    expect(
+      history.semanticVerification.currentLeaves[0].semanticAuthority,
+    ).toEqual({ state: 'NOT_PROVEN', proof: null });
+    expect(await successfulSemanticProofCount([entryId])).toBe(0);
+  });
+
+  it('MON04 T6 - an existing ACCEPTED fact receives no invented semantic backfill', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T6 accepted legacy');
+    const membership = await prisma.workspaceMembership.findFirstOrThrow({
+      where: { accountId: submitAccountId, workspaceId: workspaceAId },
+    });
+    const report = await prisma.progressReport.create({
+      data: {
+        projectId: projectAId,
+        baselineId: baselineAId,
+        periodStartDate: new Date('2026-08-25T00:00:00.000Z'),
+        periodEndDate: new Date('2026-08-25T00:00:00.000Z'),
+        status: 'SUBMITTED',
+      },
+    });
+    const legacy = await prisma.progressEntry.create({
+      data: {
+        progressReportId: report.id,
+        boqItemId: item.id,
+        installedQuantity: 6,
+        status: 'ACCEPTED',
+        captureMethod: 'LEGACY_UNSPECIFIED',
+        recordedByAccountId: submitAccountId,
+        recordedByMembershipId: membership.id,
+        workDate: new Date('2026-08-25T00:00:00.000Z'),
+      },
+    });
+
+    const history = await semanticHistory(token, item.id);
+    expect(history.semanticVerification.currentLeaves[0]).toMatchObject({
+      id: legacy.id,
+      lifecycleStatus: 'ACCEPTED',
+      semanticAuthority: { state: 'NOT_PROVEN', proof: null },
+    });
+    expect(await successfulSemanticProofCount([legacy.id])).toBe(0);
+  });
+
+  it('MON04 T7 - a real attestation/new-root race never leaves the old context PROVEN', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T7 stale new root');
+    const rootA = await submitSemanticRoot(token, item.id, '1');
+    const rootB = await submitSemanticRoot(token, item.id, '2');
+    await transitionSemanticRoot(token, rootA, 'verify');
+    await transitionSemanticRoot(token, rootB, 'verify');
+    const opened = await semanticHistory(token, item.id);
+
+    const [attestation, rootC] = await Promise.all([
+      attestSemantics(token, rootA, semanticContextDigest(opened)),
+      submitSemanticRoot(token, item.id, '3'),
+    ]);
+
+    expect([201, 409]).toContain(attestation.status);
+    if (attestation.status === 409) {
+      expect((attestation.body as ErrorResponseBody).message).toBe(
+        'SEMANTIC_CONTEXT_STALE',
+      );
+    }
+
+    const finalHistory = await semanticHistory(token, item.id);
+    expect(
+      finalHistory.semanticVerification.currentLeaves
+        .map((leaf) => leaf.id)
+        .sort(),
+    ).toEqual([rootA, rootB, rootC].sort());
+    expect(
+      finalHistory.semanticVerification.currentLeaves.find(
+        (leaf) => leaf.id === rootA,
+      )?.semanticAuthority.state,
+    ).toBe(attestation.status === 201 ? 'STALE' : 'NOT_PROVEN');
+    expect(await successfulSemanticProofCount([rootA, rootB, rootC])).toBe(
+      attestation.status === 201 ? 1 : 0,
+    );
+  });
+
+  it('MON04 T8 - a real attestation/correction race completes without deadlock or stale PROVEN truth', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T8 stale correction');
+    const rootA = await submitSemanticRoot(token, item.id, '1');
+    await transitionSemanticRoot(token, rootA, 'verify');
+    const opened = await semanticHistory(token, item.id);
+
+    const [attestation, corrected] = await Promise.all([
+      attestSemantics(token, rootA, semanticContextDigest(opened)),
+      request(app.getHttpServer())
+        .post(`/projects/${projectAId}/progress/entries/${rootA}/corrections`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({
+          commandId: randomUUID(),
+          installedQuantity: '1.25',
+          workDate: '2026-08-26',
+          captureMethod: 'FIELD_MEASUREMENT',
+          reasonCode: 'MEASUREMENT_UPDATE',
+          reasonText: 'T8 correction race',
+        })
+        .expect(201),
+    ]);
+
+    expect([201, 409]).toContain(attestation.status);
+    if (attestation.status === 409) {
+      expect((attestation.body as ErrorResponseBody).message).toBe(
+        'SEMANTIC_TARGET_NOT_CURRENT',
+      );
+    }
+
+    const correctionId = (corrected.body as EntryResponseBody).entryId;
+    const finalHistory = await semanticHistory(token, item.id);
+    expect(finalHistory.semanticVerification.currentLeaves).toEqual([
+      expect.objectContaining({
+        id: correctionId,
+        supersedesEntryId: rootA,
+        semanticAuthority: { state: 'NOT_PROVEN', proof: null },
+      }),
+    ]);
+    expect(
+      finalHistory.entries.find((entry) => entry.id === rootA)
+        ?.isCurrentLineageLeaf,
+    ).toBe(false);
+    expect(
+      finalHistory.entries.find((entry) => entry.id === correctionId)
+        ?.isCurrentLineageLeaf,
+    ).toBe(true);
+    expect(await successfulSemanticProofCount([rootA, correctionId])).toBe(
+      attestation.status === 201 ? 1 : 0,
+    );
+  });
+
+  it('MON04 T9 - successful proof persists exact append-only machine-readable provenance', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T9 provenance');
+    const entryId = await submitSemanticRoot(token, item.id, '9');
+    await transitionSemanticRoot(token, entryId, 'verify');
+    const history = await semanticHistory(token, item.id);
+    const commandId = randomUUID();
+    const contextDigest = semanticContextDigest(history);
+
+    await attestSemantics(token, entryId, contextDigest, commandId).expect(201);
+    const proof = await prisma.progressAuditEvent.findUniqueOrThrow({
+      where: { commandId },
+    });
+    expect(proof).toMatchObject({
+      schemaVersion: 1,
+      eventType: 'ACTUAL_PROGRESS',
+      outcome: 'SUCCESS',
+      workspaceId: workspaceAId,
+      projectId: projectAId,
+      progressEntryId: entryId,
+      actorAccountId: submitAccountId,
+      actorType: 'USER',
+      action: 'ACTUAL_SEMANTIC_AUTHORITY_CONFIRMED',
+      authorityCode: 'FIELD_PROGRESS_VERIFY',
+      sourceModule: 'FIELD_PROGRESS',
+      targetEntityType: 'PROGRESS_ENTRY',
+      targetEntityId: entryId,
+      businessCommandId: commandId,
+      commandId,
+      entityVersionBefore: 1,
+      entityVersionAfter: 1,
+    });
+    expect(proof.occurredAt).toBeInstanceOf(Date);
+    expect(proof.recordedAt).toBeInstanceOf(Date);
+    expect(proof.commandFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(proof.metadata).toEqual({
+      policyVersion: 'MON04_CURRENT_NUMERIC_LAW_V1',
+      attestationType: 'DISTINCT_INCREMENT_NON_OVERLAP_CONFIRMED',
+      contextVersion: 1,
+      activeBaselineId: baselineAId,
+      boqItemId: item.id,
+      contextDigest,
+      currentLeafIds: [entryId],
+      explicitConfirmation: true,
+    });
+
+    const readback = await semanticHistory(token, item.id);
+    expect(
+      readback.semanticVerification.currentLeaves[0].semanticAuthority.state,
+    ).toBe('PROVEN');
+  });
+
+  it('MON04 T11 - foreign tenant and inactive-Baseline facts cannot receive or enter active semantic proof', async () => {
+    const token = await login(userSubmitEmail);
+    const crossTenantToken = await login(userCrossEmail);
+    const item = await createSemanticWorkItem('MON04 T11 scope');
+    const entryId = await submitSemanticRoot(token, item.id, '11');
+    await transitionSemanticRoot(token, entryId, 'verify');
+    const activeContext = await semanticHistory(token, item.id);
+
+    const crossTenant = await attestSemantics(
+      crossTenantToken,
+      entryId,
+      semanticContextDigest(activeContext),
+    );
+    expect([403, 404]).toContain(crossTenant.status);
+    expect(JSON.stringify(crossTenant.body)).not.toContain(entryId);
+
+    const oldStructure = await prisma.boqStructure.create({
+      data: {
+        projectId: projectAId,
+        name: `MON04 old ${randomUUID()}`,
+        version: 99,
+      },
+    });
+    const oldItem = await prisma.boqItem.create({
+      data: {
+        boqStructureId: oldStructure.id,
+        wbsCode: `OLD-${randomUUID().slice(0, 8)}`,
+        name: 'Inactive Baseline item',
+        quantity: 1,
+        unit: 'm3',
+      },
+    });
+    const oldRab = await prisma.rabDocument.create({
+      data: {
+        projectId: projectAId,
+        boqStructureId: oldStructure.id,
+        name: `MON04 old RAB ${randomUUID()}`,
+        version: 99,
+        status: 'APPROVED',
+      },
+    });
+    const oldBaseline = await prisma.projectBaseline.create({
+      data: {
+        projectId: projectAId,
+        rabDocumentId: oldRab.id,
+        versionNumber: 99,
+        status: 'SUPERSEDED',
+        approvedAt: new Date(),
+      },
+    });
+    const oldReport = await prisma.progressReport.create({
+      data: {
+        projectId: projectAId,
+        baselineId: oldBaseline.id,
+        periodStartDate: new Date('2026-08-25T00:00:00.000Z'),
+        periodEndDate: new Date('2026-08-25T00:00:00.000Z'),
+        status: 'SUBMITTED',
+      },
+    });
+    const oldEntry = await prisma.progressEntry.create({
+      data: {
+        progressReportId: oldReport.id,
+        boqItemId: oldItem.id,
+        installedQuantity: 1,
+        status: 'VERIFIED',
+        captureMethod: 'LEGACY_UNSPECIFIED',
+      },
+    });
+
+    const inactive = await attestSemantics(
+      token,
+      oldEntry.id,
+      '0'.repeat(64),
+    ).expect(409);
+    expect((inactive.body as ErrorResponseBody).message).toBe(
+      'SEMANTIC_TARGET_NOT_ACTIVE_BASELINE',
+    );
+    expect(await successfulSemanticProofCount([entryId, oldEntry.id])).toBe(0);
+  });
+
+  it('MON04 T12 - simultaneous identical attestation commands append one proof and replay deterministically', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T12 replay');
+    const entryId = await submitSemanticRoot(token, item.id, '12');
+    await transitionSemanticRoot(token, entryId, 'verify');
+    const history = await semanticHistory(token, item.id);
+    const commandId = randomUUID();
+    const contextDigest = semanticContextDigest(history);
+
+    const [left, right] = await Promise.all([
+      attestSemantics(token, entryId, contextDigest, commandId),
+      attestSemantics(token, entryId, contextDigest, commandId),
+    ]);
+    expect([left.status, right.status]).toEqual([201, 201]);
+    expect(
+      [
+        (left.body as SemanticAttestationResponseBody).replayed,
+        (right.body as SemanticAttestationResponseBody).replayed,
+      ].sort(),
+    ).toEqual([false, true]);
+    expect(await successfulSemanticProofCount([entryId])).toBe(1);
+
+    await attestSemantics(token, entryId, 'f'.repeat(64), commandId).expect(
+      409,
+    );
+    expect(await successfulSemanticProofCount([entryId])).toBe(1);
+  });
+
+  it('MON04 T13 - SUBMITTED to VERIFIED to ACCEPTED creates no implicit semantic proof', async () => {
+    const token = await login(userSubmitEmail);
+    const item = await createSemanticWorkItem('MON04 T13 no implicit proof');
+    const entryId = await submitSemanticRoot(token, item.id, '13');
+    await transitionSemanticRoot(token, entryId, 'verify');
+    await transitionSemanticRoot(token, entryId, 'accept');
+
+    const entry = await prisma.progressEntry.findUniqueOrThrow({
+      where: { id: entryId },
+    });
+    const history = await semanticHistory(token, item.id);
+    expect(entry.status).toBe('ACCEPTED');
+    expect(
+      history.semanticVerification.currentLeaves[0].semanticAuthority,
+    ).toEqual({ state: 'NOT_PROVEN', proof: null });
+    expect(await successfulSemanticProofCount([entryId])).toBe(0);
   });
 
   it('22. history projection is project-assignment and tenant isolated without raw audit internals', async () => {

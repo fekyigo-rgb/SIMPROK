@@ -267,6 +267,21 @@ test('MON03 read authority keeps history while submit authority gates the write 
   assert.match(page, />\s*Simpan Actual\s*<\/button>/);
 });
 
+test('MON04 verifier UI shows every current root and requires an explicit human confirmation', () => {
+  const page = readFileSync('src/pages/field/SubmitProgressPage.tsx', 'utf8');
+  assert.match(page, /semanticVerification\.currentLeaves\.map/);
+  assert.match(page, /Pastikan Actual tidak tumpang tindih/);
+  assert.match(page, /Tinjau dan konfirmasi/);
+  assert.match(page, /type="checkbox"/);
+  assert.match(
+    page,
+    /memastikan Actual target adalah tambahan fisik[\s\S]*bukan duplikasi atau tumpang tindih/,
+  );
+  assert.match(page, /semantic-attestations/);
+  assert.match(page, /contextDigest: semanticVerification\.contextDigest/);
+  assert.match(page, /confirmed: true/);
+});
+
 test('H2-A1-1 item and cumulative weights use backend facts with display rounding last', () => {
   const monitored = item({
     id: 'weighted',
