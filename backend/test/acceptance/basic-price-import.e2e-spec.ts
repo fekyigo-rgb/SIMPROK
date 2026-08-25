@@ -383,6 +383,49 @@ describe('RM02B Basic Price import (e2e)', () => {
   });
 
   describe('preview / parsing evidence', () => {
+    /**
+     * UNSUPPORTED INPUT FAILS SPECIFICALLY, NOT GENERICALLY.
+     *
+     * The reader law already refuses unreadable bytes, but it was proven only at
+     * the reader — never through the door a person actually uses. That gap
+     * matters because the failure mode being guarded against is not "it was
+     * rejected", it is "it was rejected with a sentence nobody can act on":
+     * a 500, or a message blaming a workbook SIMPROK never opened.
+     *
+     * So this asserts the SHAPE of the refusal at the official endpoint — a 4xx
+     * carrying one of intake's own NAMED codes, which is what lets the browser
+     * tell a question about the document apart from a permission or a fault.
+     */
+    it('refuses an unsupported/unreadable source with a NAMED intake code, never a generic fault', async () => {
+      const notAWorkbook = Buffer.from(
+        'this is not a spreadsheet, it is a sentence',
+        'utf8',
+      );
+      const response = await previewFile(notAWorkbook, 'unsupported-source');
+      const body = response.body as { message?: unknown };
+
+      // 4xx: SIMPROK's own refusal, never a crash.
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(response.status).toBeLessThan(500);
+      // A named code the browser can turn into a question about the document.
+      expect(typeof body.message).toBe('string');
+      expect([
+        'UNSUPPORTED_SOURCE_FORMAT',
+        'SOURCE_UNREADABLE',
+        'WORKBOOK_HAS_NO_SHEETS',
+        'NO_PRICE_TABLE_DETECTED',
+      ]).toContain(body.message);
+
+      // AND NOTHING WAS STORED. A refused document leaves no half-batch.
+      const batches = await prisma.basicPriceImportBatch.count({
+        where: {
+          workspaceId: WORKSPACE_A,
+          sourceVendorName: 'unsupported-source',
+        },
+      });
+      expect(batches).toBe(0);
+    });
+
     it('creates a persisted batch with every row starting NEEDS_REVIEW — never auto-resolved', async () => {
       const buffer = await buildBasicPriceXlsx();
       const response = await previewFile(buffer, 'preview-basic').expect(201);
@@ -587,9 +630,22 @@ describe('RM02B Basic Price import (e2e)', () => {
       // (resolved OR rejected), so the two rows this scenario isn't
       // exercising must be explicitly rejected, not just ignored.
       const buffer = await buildBasicPriceXlsx();
-      const preview = await previewFile(buffer, 'submit-full-flow', assignedToken, {
-        effectiveDate: '2026-07-25', regionId: REGION_ID, sourceOrigin: 'SUPPLIER', sourceType: 'MARKET_SURVEY',
-      }).expect(201);
+      const preview = await previewFile(
+        buffer,
+        'submit-full-flow',
+        assignedToken,
+        {
+          effectiveDate: '2026-07-25',
+          regionId: REGION_ID,
+          // FIELD_REPORT, because this test SUBMITS, and the curation door
+          // serves the field/community family only — a supplier's own quote is
+          // recorded with its source rather than put to community
+          // verification, and the endpoint now enforces that rather than the UI
+          // merely hiding it.
+          sourceOrigin: 'FIELD_REPORT',
+          sourceType: 'MARKET_SURVEY',
+        },
+      ).expect(201);
       const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
       const otherRows = preview.body.rows.filter((r: { sourceRowNumber: number }) => r.sourceRowNumber !== 9);
 
@@ -651,7 +707,7 @@ describe('RM02B Basic Price import (e2e)', () => {
           workspaceId: WORKSPACE_A,
           organizationId,
           resourceId: RESOURCE_MATERIAL_ID,
-          sourceOrigin: 'SUPPLIER',
+          sourceOrigin: 'FIELD_REPORT',
           sourceType: 'MARKET_SURVEY',
           status: 'VERIFIED',
         },

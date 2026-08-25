@@ -7,6 +7,7 @@ import {
 } from './simprok-intelligence.port';
 import { IntelligenceEvidenceService } from './intelligence-evidence.service';
 import { isAllowedIntelligenceTool } from './simprok-intelligence-tools';
+import { buildUsableBasicPriceWhere } from '../basic-price/basic-price-eligibility.policy';
 
 export const P8A_POLICY_VERSION = 'P8A-1';
 
@@ -229,15 +230,57 @@ export class ConstitutionalAiBoundaryService {
     }
 
     for (const priceId of item.selectedBasicPriceIds) {
+      /**
+       * ONE ELIGIBILITY TRUTH — this boundary asks the SAME question the
+       * Explorer, AHSP resolution and the Cost Kernel ask, so it must not
+       * answer it for itself.
+       *
+       * WHAT USED TO BE HERE, AND WHY IT WAS WRONG. This site wrote its own
+       * predicate: `status: 'PUBLISHED'` plus a three-branch `OR` on
+       * workspace/organization. Against
+       * `BasicPriceEligibilityPolicy.usableWhere` — which every other live
+       * consumer already builds from — it diverged three ways at once:
+       *
+       *   WIDER   it never asserted `verificationStatus`, though the whole
+       *           premise of that column is that VERIFIED != PUBLISHED. No
+       *           database constraint couples the two axes, and the publication
+       *           service's own D-12 contract names two-axis drift as a state
+       *           that must fail closed — so "published on one axis" was never
+       *           safe to read as published.
+       *   WIDER   the `{ organizationId }` branch admitted a price owned by a
+       *           SIBLING WORKSPACE in the same organization. Canonical law
+       *           allows the caller's own workspace or a genuinely
+       *           null-workspace national row, and nothing else. Same
+       *           organization is not the same Basic Price authority.
+       *   NARROWER it could never see a lawful WORKSPACE_PRIVATE price, because
+       *           the database forbids a private row from wearing
+       *           status='PUBLISHED' (basic_prices_private_never_published_check).
+       *           So a workspace's own lawful price was scored
+       *           BASIC_PRICE_NOT_CANONICAL — and that code is CRITICAL here,
+       *           failing the whole proposal, not just that one id.
+       *
+       * An AI consumer must not hold a weaker truth, a broader tenant scope, or
+       * a narrower lawful-price view than the product engines. The builder is
+       * imported as the exported pure function rather than injected as the
+       * policy class deliberately: `usableWhere()` is a one-line wrapper over
+       * exactly this function, and six existing call sites construct this
+       * service with `new` (five specs and scripts/openai-smoke.ts), so a third
+       * constructor parameter would cost nine files to reach the same law.
+       *
+       * IT RETURNS ONLY AN `OR` KEY, which is what makes the spread safe beside
+       * the scalar `id` filter. Both the old `status` line and the old `OR`
+       * array are gone rather than kept alongside it: a surviving top-level
+       * `status: 'PUBLISHED'` would AND against the canonical branches and
+       * silently re-exclude every private price.
+       *
+       * The applicability check below (`resource.baseUnit`) stays here. Canonical
+       * law owns WHETHER THE PRICE IS LAWFULLY USABLE; this consumer keeps its
+       * own request-specific filters, exactly as AHSP and the Cost Kernel do.
+       */
       const price = await this.prisma.basicPrice.findFirst({
         where: {
           id: priceId,
-          status: 'PUBLISHED',
-          OR: [
-            { workspaceId: request.workspaceId },
-            { workspaceId: null, organizationId: null },
-            { organizationId: request.organizationId },
-          ],
+          ...buildUsableBasicPriceWhere(request.workspaceId),
         },
         include: { resource: { select: { id: true, baseUnit: true } } },
       });

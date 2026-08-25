@@ -38,6 +38,21 @@ export class UpdateBasicPriceImportBatchDto {
   @IsOptional() @IsDateString() effectiveDate?: string;
 
   /**
+   * SOFT RE-VERIFICATION — "check this again around here", stated by a person.
+   *
+   * A DIFFERENT FACT FROM `effectiveDate` ABOVE, and shown to the user under a
+   * different label (`Verifikasi ulang pada`) for exactly that reason: one
+   * ambiguous "Tanggal Berlaku" carrying two meanings is how a hard boundary
+   * and a piece of advice get confused.
+   *
+   * OPTIONAL, AND NEVER DERIVED. SIMPROK computes no freshness horizon — no
+   * canonical policy states one — so leaving this empty is a normal outcome
+   * that stays empty. It is never mapped to `validUntil`, which is the only
+   * date the system actually enforces.
+   */
+  @IsOptional() @IsDateString() reviewDate?: string;
+
+  /**
 
 
    * RM-03D1 — TEMPORAL PROVENANCE. A source stating only "TA 2024" states no

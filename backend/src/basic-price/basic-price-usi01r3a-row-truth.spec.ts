@@ -22,6 +22,28 @@ import { testEnvelope } from '../../test/fixtures/source-envelope.fixture';
  *
  * These tests hold the line at the exact place the old rule crossed it: SIMPROK
  * may call a row a heading only when the source AFFIRMATIVELY says so.
+ *
+ * WHAT THIS TASK SHARPENED, AND WHY IT IS NOT A RETREAT.
+ *
+ * USI-01R3A was right that absence proves nothing about being a TITLE. It then
+ * drew a second conclusion that does not follow: that such a row should stay a
+ * Basic Price CANDIDATE. The real Ambon workbook priced that reasoning — 41
+ * category banners (BATU, SEMEN, KACA, BAHAN SANITAIR...) became unresolved
+ * rows, and the review room filled with questions about nothing.
+ *
+ * The decisive fact is not aesthetic. A row with no price can NEVER become a
+ * usable Basic Price: BasicPriceRowResolutionService gates READY_FOR_SUBMISSION
+ * on 'proposedCanonicalPrice !== null', and keepBatchPrivate refuses a row
+ * without one (ROW_NOT_RESOLVED). Such a row is unresolvable BY CONSTRUCTION,
+ * whatever a reviewer decides about it.
+ *
+ * So the verdict splits in two, and both halves are honest:
+ *   STRUCTURAL_HEADING      the source PROVED it is a title. Unchanged.
+ *   NO_COMMERCIAL_EVIDENCE  the source gave no unit, no price under ANY
+ *                           jurisdiction, and no number. That proves nothing
+ *                           about titles and everything about prices: there is
+ *                           no price here to observe.
+ * It is still not dropped in silence - it is counted into excludedNonDataRows.
  */
 
 /** Nothing proven, so each case below states only what it changes. */
@@ -59,11 +81,16 @@ describe('USI-01R3A — ROW TRUTH: a heading must be proven', () => {
     ).toBe('ROW_KIND_AMBIGUOUS');
   });
 
-  it('ROWTRUTH-04: a name with NO affirmative heading evidence is AMBIGUOUS, never a heading', () => {
-    // THE CENTRAL CASE. This is precisely the row USI-01R3 deleted.
+  it('ROWTRUTH-04: a name with NO affirmative heading evidence is still NEVER called a heading', () => {
+    // THE CENTRAL CASE, and the half of it that has not moved: SIMPROK does not
+    // get to call this a title, because nothing said it was one.
     const kind = classifyPhysicalRow(noEvidence);
-    expect(kind).toBe('ROW_KIND_AMBIGUOUS');
     expect(kind).not.toBe('STRUCTURAL_HEADING');
+    // What it IS: a row with no unit, no price anywhere and no number, which
+    // proves only that there is no price observation here.
+    expect(kind).toBe('NO_COMMERCIAL_EVIDENCE');
+    // And it is not passed off as a resource either.
+    expect(kind).not.toBe('RESOURCE_ROW');
   });
 
   it('ROWTRUTH-05: a row with AFFIRMATIVE heading evidence is a STRUCTURAL_HEADING', () => {
@@ -94,12 +121,23 @@ describe('USI-01R3A — ROW TRUTH: a heading must be proven', () => {
       'PERALATAN TUKANG',
     ]) {
       expect(affirmativeHeadingEvidence(text)).toBeNull();
+      // Still not a heading - the text proves nothing, exactly as before.
+      const kind = classifyPhysicalRow({
+        ...noEvidence,
+        headingEvidence: affirmativeHeadingEvidence(text),
+      });
+      expect(kind).not.toBe('STRUCTURAL_HEADING');
+      // Excluded by its EMPTY COMMERCIAL FIELDS, never by its spelling. Give
+      // any one of these strings a unit or a price and it is a resource again -
+      // proven by the assertion below, which no word list could satisfy.
+      expect(kind).toBe('NO_COMMERCIAL_EVIDENCE');
       expect(
         classifyPhysicalRow({
           ...noEvidence,
+          hasUnitEvidence: true,
           headingEvidence: affirmativeHeadingEvidence(text),
         }),
-      ).toBe('ROW_KIND_AMBIGUOUS');
+      ).toBe('RESOURCE_ROW');
     }
   });
 
@@ -207,26 +245,23 @@ describe('USI-01R3A — ROW TRUTH through the real domain projection', () => {
   const sourceRowsOfKind = (kind: string) =>
     PORTABLE_ROWS.filter((row) => row.expectedKind === kind);
 
-  it('ROWTRUTH-06: an AMBIGUOUS row survives projection, keeps its reason, and its siblings continue', () => {
+  it('ROWTRUTH-06: a row with no commercial evidence is excluded and COUNTED, and its siblings continue', () => {
     const knowledge = byRegion.get('SIRIMAU')!;
-    const ambiguous = sourceRowsOfKind('ROW_KIND_AMBIGUOUS');
-    expect(ambiguous.length).toBeGreaterThan(0);
+    const empty = sourceRowsOfKind('NO_COMMERCIAL_EVIDENCE');
+    expect(empty.length).toBeGreaterThan(0);
 
-    for (const source of ambiguous) {
-      const row = knowledge.rows.find(
-        (r) => r.sourceRowNumber === source.rowNumber,
-      );
-      // VISIBLE — it did not evaporate...
-      expect(row).toBeDefined();
-      expect(row!.rawResourceNameText).toBe(source.name);
-      // ...it SAYS why it is unresolved...
-      expect(row!.warnings).toContain(ROW_KIND_AMBIGUOUS_REASON);
-      // ...and it never acquired a price it could not justify.
-      expect(row!.proposedCanonicalPrice).toBeNull();
+    for (const source of empty) {
+      // NOT a candidate: there is no price here to observe, and a priceless row
+      // could never reach READY_FOR_SUBMISSION however a reviewer answered it.
+      expect(
+        knowledge.rows.some((r) => r.sourceRowNumber === source.rowNumber),
+      ).toBe(false);
     }
+    // AND NOT SILENT. Every physical row the reader saw is still accounted for.
+    expect(knowledge.excludedNonDataRows).toBeGreaterThanOrEqual(empty.length);
 
-    // HEALTHY SIBLINGS CONTINUE. One undecidable row does not fail the batch,
-    // and does not contaminate the rows around it.
+    // HEALTHY SIBLINGS CONTINUE. An excluded banner does not fail the batch and
+    // does not contaminate the rows around it.
     for (const source of sourceRowsOfKind('RESOURCE_ROW')) {
       const row = knowledge.rows.find(
         (r) => r.sourceRowNumber === source.rowNumber,
@@ -236,13 +271,20 @@ describe('USI-01R3A — ROW TRUTH through the real domain projection', () => {
     }
   });
 
-  it('ROWTRUTH-05: only the PROVEN title is excluded, and it is the ONLY exclusion', () => {
+  it('ROWTRUTH-05: exactly two things are excluded — a PROVEN title, and a row with no commercial evidence', () => {
     const knowledge = byRegion.get('SIRIMAU')!;
     const headings = sourceRowsOfKind('STRUCTURAL_HEADING');
+    const empty = sourceRowsOfKind('NO_COMMERCIAL_EVIDENCE');
     expect(headings.length).toBeGreaterThan(0);
-    expect(knowledge.excludedNonDataRows).toBe(headings.length);
+    expect(empty.length).toBeGreaterThan(0);
 
-    for (const source of headings) {
+    // The two exclusions are DIFFERENT claims and both are earned: one because
+    // the source spelled a section title in the controlled grammar, the other
+    // because the source stated no unit, no price anywhere and no number.
+    // Nothing else is excluded.
+    expect(knowledge.excludedNonDataRows).toBe(headings.length + empty.length);
+
+    for (const source of [...headings, ...empty]) {
       expect(
         knowledge.rows.some((r) => r.sourceRowNumber === source.rowNumber),
       ).toBe(false);
@@ -261,21 +303,25 @@ describe('USI-01R3A — ROW TRUTH through the real domain projection', () => {
     );
     expect(new Set(excluded).size).toBe(1);
 
-    // And the AMBIGUOUS verdict itself is region-independent — not merely the
-    // row's presence. A row that is undecidable in Sirimau is undecidable
-    // everywhere, because the document, not the importer, decides.
-    const ambiguousPerRegion = PORTABLE_REGIONS.map((label) =>
-      byRegion
-        .get(label)!
-        .rows.filter((row) => row.warnings.includes(ROW_KIND_AMBIGUOUS_REASON))
-        .map((row) => row.sourceRowNumber),
-    );
-    expect(ambiguousPerRegion[0].length).toBeGreaterThan(0);
-    expect(ambiguousPerRegion[1]).toEqual(ambiguousPerRegion[0]);
-    expect(ambiguousPerRegion[2]).toEqual(ambiguousPerRegion[0]);
+    // And the EXCLUSION verdict itself is region-independent — not merely the
+    // count. A row excluded in Sirimau is excluded everywhere, because the
+    // document, not the importer, decides. Price evidence is looked for across
+    // EVERY jurisdiction, so a row priced only in Baguala stays a resource row
+    // while Sirimau is the batch being imported.
+    const excludedPerRegion = PORTABLE_REGIONS.map((label) => {
+      const present = new Set(
+        byRegion.get(label)!.rows.map((row) => row.sourceRowNumber),
+      );
+      return PORTABLE_ROWS.filter((row) => !present.has(row.rowNumber))
+        .map((row) => row.rowNumber)
+        .sort((a, b) => a - b);
+    });
+    expect(excludedPerRegion[0].length).toBeGreaterThan(0);
+    expect(excludedPerRegion[1]).toEqual(excludedPerRegion[0]);
+    expect(excludedPerRegion[2]).toEqual(excludedPerRegion[0]);
   });
 
-  it('nothing is silently dropped: every named row is a candidate or a proven heading', () => {
+  it('nothing is silently dropped: every named row is a candidate or a counted exclusion', () => {
     const knowledge = byRegion.get('SIRIMAU')!;
     expect(knowledge.rows.length + knowledge.excludedNonDataRows).toBe(
       PORTABLE_ROWS.length,

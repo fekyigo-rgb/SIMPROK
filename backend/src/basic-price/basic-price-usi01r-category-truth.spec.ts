@@ -1,5 +1,8 @@
 import { INTAKE_ERRORS } from '../universal-intake/intake-errors';
-import { resourceFamilyOfCategoryText } from '../universal-intake/structure/header-vocabulary';
+import {
+  resourceFamilyOfCategoryText,
+  statesResourceFamilyExactly,
+} from '../universal-intake/structure/header-vocabulary';
 import {
   BasicPriceUniversalIntakeAdapter,
   SECTION_DECLARED_BY_UPLOADER_REASON,
@@ -120,6 +123,33 @@ describe('USI-01R row-level category truth', () => {
       expect(resourceFamilyOfCategoryText('Peralatan')).toBe('EQUIPMENT');
       expect(resourceFamilyOfCategoryText('F')).toBeNull();
       expect(resourceFamilyOfCategoryText('B')).toBeNull();
+    });
+
+    it('reading a CATEGORY and PROVING a column are two different questions', () => {
+      // The category reading is by LEADING WORD, and for a section title that
+      // is right: "BAHAN BESI DAN ALUMINIUM" is material. The same reading is
+      // NOT proof about a column of values, because ordinary resource NAMES
+      // begin with family words too. `statesResourceFamilyExactly` is the
+      // narrow question the column proof is allowed to ask, and it declines
+      // every value that is a name with a family word in front of it.
+      expect(resourceFamilyOfCategoryText('Pekerja terampil')).toBe('LABOR');
+      expect(statesResourceFamilyExactly('Pekerja terampil')).toBeNull();
+      expect(statesResourceFamilyExactly('Pekerja biasa')).toBeNull();
+      expect(statesResourceFamilyExactly('Bahan bakar solar')).toBeNull();
+      expect(statesResourceFamilyExactly('Alat bantu')).toBeNull();
+
+      // "Pekerja" alone is refused too, and deliberately: it is the commonest
+      // labour line in an Indonesian AHSP, so as a whole VALUE it is far more
+      // likely to be a resource than a heading.
+      expect(resourceFamilyOfCategoryText('Pekerja')).toBe('LABOR');
+      expect(statesResourceFamilyExactly('Pekerja')).toBeNull();
+
+      // Narrowing the proof must not disarm it: a value that IS a family and
+      // nothing else still proves exactly that.
+      expect(statesResourceFamilyExactly('ALAT')).toBe('EQUIPMENT');
+      expect(statesResourceFamilyExactly('bahan')).toBe('MATERIAL');
+      expect(statesResourceFamilyExactly('UPAH')).toBe('LABOR');
+      expect(statesResourceFamilyExactly('TENAGA KERJA')).toBe('LABOR');
     });
   });
 

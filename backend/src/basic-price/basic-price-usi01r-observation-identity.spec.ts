@@ -37,6 +37,7 @@ const build = () => {
     harness.prisma,
     harness.reviewService,
     harness.sourceArchive,
+    harness.proposals,
   );
   const secret = generateConnectorSecret();
   const connectorPrisma: any = {
@@ -122,6 +123,9 @@ describe('USI-01R delivery vs source observation identity', () => {
       expect(batches.map((b) => b.ingestionExternalVersion).sort()).toEqual(['1', '2']);
       // Same product stream, two observations — exactly LAW 2.4.
       expect(new Set(batches.map((b) => b.ingestionExternalRecordId)).size).toBe(1);
+      expect(v2.reimport.classification).toBe('SOURCE_UPDATE');
+      expect(v2.reimport.existingBatchId).toBe(v1.batchId);
+      expect(v2.reimport.updateBatchId).toBe(v2.batchId);
     });
 
     it('a different record is a different stream, not a version of this one', async () => {
@@ -230,6 +234,7 @@ describe('USI-01R delivery vs source observation identity', () => {
       expect(second.batchId).toBe(first.batchId);
       expect(batches).toHaveLength(1);
       expect(storedBytes.size).toBe(1);
+      expect(second.reimport.classification).toBe('EXACT_EXISTING');
     });
 
     it('a manual upload has no observation key at all, and none is fabricated', () => {

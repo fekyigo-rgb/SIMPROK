@@ -224,10 +224,27 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     expect(tx.basicPrice.update).not.toHaveBeenCalled();
   });
 
-  it('10b. a correction can never REINTRODUCE an incoherent classification', async () => {
+  it('10b. a correction propagates a restated source type, and never invents one', async () => {
+    // This used to assert that correcting a GOVERNMENT batch to MARKET_SURVEY
+    // was refused. That refusal treated origin and type as one axis; Owner law
+    // (BASIC-PRICE-MASTER-DECISION §10) keeps them separate, and a government
+    // agency publishing a market survey is an ordinary document.
     batch = batchRow({ sourceType: 'MARKET_SURVEY' });
 
-    await expect(correct()).rejects.toThrow('SOURCE_ORIGIN_TYPE_INCOHERENT');
+    await correct();
+    expect(tx.basicPrice.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ sourceType: 'MARKET_SURVEY' }),
+      }),
+    );
+
+    // The fail-closed half is unchanged: an UNSTATED type still refuses, and
+    // nothing is written.
+    jest.clearAllMocks();
+    batch = batchRow({ sourceType: null });
+    await expect(correct()).rejects.toThrow(
+      'SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE',
+    );
     expect(tx.basicPrice.update).not.toHaveBeenCalled();
     expect(tx.basicPriceProvenanceCorrection.create).not.toHaveBeenCalled();
   });
@@ -292,22 +309,14 @@ describe('provenance coherence guards (RM-03D1)', () => {
       ).not.toThrow();
     });
 
-    it('GOVERNMENT + MARKET_SURVEY is refused — the exact falsehood this slice removes', () => {
-      const error = (() => {
-        try {
-          assertSourceClassificationCoherent('GOVERNMENT', 'MARKET_SURVEY');
-          return null;
-        } catch (e) {
-          return e as any;
-        }
-      })();
-      expect(error).toBeInstanceOf(ConflictException);
-      expect(error.getResponse()).toMatchObject({
-        message: 'SOURCE_ORIGIN_TYPE_INCOHERENT',
-        sourceOrigin: 'GOVERNMENT',
-        sourceType: 'MARKET_SURVEY',
-        expectedSourceType: 'REGULATION',
-      });
+    it('GOVERNMENT + MARKET_SURVEY is ACCEPTED — a real document, not a falsehood', () => {
+      // RM-03D1 refused this pair. The refusal itself was the error: a
+      // government agency can publish a market survey, and origin and type are
+      // independent axes under Owner law (BASIC-PRICE-MASTER-DECISION §10).
+      // What this guard still protects is the UNSTATED fact, asserted below.
+      expect(() =>
+        assertSourceClassificationCoherent('GOVERNMENT', 'MARKET_SURVEY'),
+      ).not.toThrow();
     });
 
     it('a MISSING sourceType fails closed — there is no default any more', () => {
@@ -322,12 +331,36 @@ describe('provenance coherence guards (RM-03D1)', () => {
       ).toThrow('SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE');
     });
 
-    it('every other origin keeps its own coherent type', () => {
-      expect(() => assertSourceClassificationCoherent('SUPPLIER', 'VENDOR_QUOTE')).not.toThrow();
-      expect(() => assertSourceClassificationCoherent('FIELD_REPORT', 'MARKET_SURVEY')).not.toThrow();
-      expect(() => assertSourceClassificationCoherent('SUPPLIER', 'REGULATION')).toThrow(
-        'SOURCE_ORIGIN_TYPE_INCOHERENT',
-      );
+    it('no combination of two STATED facts is refused — only silence is', () => {
+      // Every pairing is a description SIMPROK records. A supplier really can
+      // circulate a regulated tariff, and a field report really can be the
+      // survey behind a regulation.
+      for (const origin of [
+        'GOVERNMENT',
+        'SUPPLIER',
+        'STORE',
+        'DISTRIBUTOR',
+        'FIELD_REPORT',
+        'COMMUNITY_REPORT',
+      ]) {
+        for (const type of [
+          'VENDOR_QUOTE',
+          'MARKET_SURVEY',
+          'REGULATION',
+          'SYSTEM_ESTIMATE',
+        ]) {
+          expect(() =>
+            assertSourceClassificationCoherent(origin, type),
+          ).not.toThrow();
+        }
+      }
+      // And the fail-closed half is unchanged: an unstated fact still refuses.
+      expect(() =>
+        assertSourceClassificationCoherent(null, 'VENDOR_QUOTE'),
+      ).toThrow('SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE');
+      expect(() =>
+        assertSourceClassificationCoherent('SUPPLIER', null),
+      ).toThrow('SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE');
     });
   });
 

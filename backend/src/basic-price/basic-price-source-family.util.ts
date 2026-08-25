@@ -38,3 +38,35 @@ export function sourceOriginsForFamily(
 ): PriceSourceOrigin[] {
   return SOURCE_FAMILY_ORIGIN_MAP[family];
 }
+
+/**
+ * The same grouping, read the other way: which family does THIS origin belong
+ * to? Needed by source-policy routing, which starts from a batch's stated
+ * origin rather than from a filter's chosen family.
+ *
+ * INVERTED FROM THE MAP ABOVE AT MODULE LOAD, never restated. A second literal
+ * table is how "SUPPLIER is STORE_SUPPLIER here and FIELD_PRICE over there"
+ * becomes representable, and this file exists precisely so that one grouping
+ * has one meaning.
+ *
+ * Returns null for an origin the map does not place — impossible today, since
+ * `SOURCE_FAMILY_ORIGIN_MAP` covers every `PriceSourceOrigin`, but a new enum
+ * value must read as "not yet classified" rather than be silently folded into
+ * whichever family happens to be first.
+ */
+const FAMILY_BY_ORIGIN: ReadonlyMap<PriceSourceOrigin, SourceFamily> = new Map(
+  (
+    Object.entries(SOURCE_FAMILY_ORIGIN_MAP) as [
+      SourceFamily,
+      PriceSourceOrigin[],
+    ][]
+  ).flatMap(([family, origins]) =>
+    origins.map((origin) => [origin, family] as const),
+  ),
+);
+
+export function sourceFamilyOfOrigin(
+  origin: PriceSourceOrigin,
+): SourceFamily | null {
+  return FAMILY_BY_ORIGIN.get(origin) ?? null;
+}

@@ -29,14 +29,28 @@ export const REGION_PLAN_CONTRACT_VERSION = 'RM03D0_REGION_PLAN_V1';
  * had just invented. The closed set lives here so `applyRegionPlan` cannot be
  * talked into recognising anything else.
  *
- * It contains only the canonical token. There is no acceptance Region path —
- * Region provisioning is an RM-03D0 canonical concept — so the RM-02C1b
- * acceptance token is deliberately NOT a member and can never authorize a
- * Region write.
+ * There is no acceptance Region path — Region provisioning is an RM-03D0
+ * canonical concept — so the RM-02C1b acceptance token is deliberately NOT a
+ * member and can never authorize a Region write.
+ *
+ * THE GOVERNED REHEARSAL AUTHORITY IS A MEMBER, and for the same reason the
+ * canonical one is. A rehearsal that cannot designate the Owner's actual region
+ * cannot rehearse the Owner's journey: the only regions a rehearsal database
+ * held were "Jakarta Selatan" provisioning fixtures, so a reviewer either saw a
+ * place the source never named or was blocked outright. This module still
+ * refuses to derive, guess, trim or case-fold a designation, and every conflict
+ * law below is unchanged — a rehearsal designates the same real place, by the
+ * same rules, through the same reviewed plan hash.
+ *
+ * Additive only. Each caller names the token it expects and must supply that
+ * exact string, so no authority can stand in for another.
  */
 export const REGION_CONFIRMATION_TOKEN = 'APPLY_RM03D0_CANONICAL_REFERENCES';
+export const GOVERNED_REHEARSAL_REGION_CONFIRMATION_TOKEN =
+  'APPLY_GOVERNED_REHEARSAL_REFERENCES';
 export const KNOWN_REGION_CONFIRMATION_TOKENS: readonly string[] = [
   REGION_CONFIRMATION_TOKEN,
+  GOVERNED_REHEARSAL_REGION_CONFIRMATION_TOKEN,
 ];
 
 export type RegionDisposition = 'CREATE_REGION' | 'REUSE_EXACT_REGION';

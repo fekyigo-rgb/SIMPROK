@@ -1,19 +1,38 @@
 import { PriceSourceOrigin, PriceSourceType } from '@prisma/client';
 
 /**
- * THE origin → type authority. One table, one meaning, no competing copy.
+ * THE TYPE AN ORIGIN *TYPICALLY* IMPLIES — a last-resort default for a source
+ * that structurally CANNOT state its own type. Never a rule about what is true.
  *
- * This shipped inside reality-intake's business-subscription worker, where it
- * decided the sourceType of a submission derived from a KnowledgeEvent. It was
- * always general domain semantics rather than that worker's private opinion:
- * a government-issued standard price list is REGULATION, a supplier/store/
- * distributor figure is a VENDOR_QUOTE, and a field or community report is a
- * MARKET_SURVEY. Basic Price needs exactly the same judgement, so the table
- * moves here and both consumers import it. Copying it would have created a
- * second authority able to disagree with the first — which is how "government
- * origin, market survey type" becomes representable again.
+ * ORIGIN AND TYPE ARE DIFFERENT AXES, AND OWNER LAW SAYS SO IN THOSE WORDS:
+ * `docs/control/BASIC-PRICE-MASTER-DECISION.md` §10 —
  *
- * RM-03D1: this is the rule that makes `GOVERNMENT + MARKET_SURVEY` refusable.
+ *     SOURCE_TYPE ≠ SOURCE_ORIGIN ≠ INGESTION_CHANNEL ≠ SYNC_MODE
+ *
+ * `sourceOrigin` answers WHO the price came from in the world. `sourceType`
+ * answers WHAT KIND OF STATEMENT the document is. A government agency can
+ * publish a market survey; a supplier can circulate a regulated tariff. The two
+ * do not determine one another, and `schema.prisma` states the same law for the
+ * channel axis in the same breath: "Intake never derives one axis from the
+ * other."
+ *
+ * WHY THIS TABLE STILL EXISTS. Its one honest job is the job it was born for:
+ * `reality-intake`'s business-subscription worker derives a `PriceSubmission`
+ * from a `CanonicalPricePoint`, and that model HAS NO `sourceType` COLUMN AT
+ * ALL while `PriceSubmission.sourceType` is required. The worker must write
+ * something into a field its source cannot speak to, so it writes the type the
+ * origin typically implies. That is a default for silence — not a judgement
+ * about a source that spoke.
+ *
+ * WHAT IT MUST NEVER DO AGAIN. RM-03D1 promoted it into an equality that could
+ * REFUSE a stated pair, and a later change wired that refusal into intake, the
+ * metadata PATCH, and both write boundaries — so a person who truthfully
+ * described a government-published market survey was told their own document
+ * was incoherent, and the import form stopped asking for the type at all.
+ * A default for a silent source had become a law over a speaking one.
+ *
+ * The refusal is gone. `expectedSourceTypeFor` remains, for the worker and for
+ * suggesting a starting value to a human who may overrule it.
  */
 export const SOURCE_TYPE_BY_ORIGIN: Record<PriceSourceOrigin, PriceSourceType> =
   {
@@ -38,21 +57,12 @@ export function assertSourceOriginMappingComplete(): void {
 }
 
 /**
- * Is this (origin, type) pair coherent?
+ * The type this origin TYPICALLY implies.
  *
- * Deliberately an EQUALITY against the one table rather than a looser "is this
- * plausible" test. The whole defect being closed is a government-origin price
- * carrying MARKET_SURVEY, and any rule permissive enough to allow a second type
- * per origin would permit exactly that again.
+ * A SUGGESTION, and the only lawful readings of it are: fill a column a silent
+ * source cannot fill, or offer a human a starting value they may overrule. It
+ * is never a test of whether a stated pair is allowed — see the header.
  */
-export function isCoherentSourcePair(
-  origin: PriceSourceOrigin,
-  type: PriceSourceType,
-): boolean {
-  return SOURCE_TYPE_BY_ORIGIN[origin] === type;
-}
-
-/** The single type an origin implies, for error messages and defaults-free reads. */
 export function expectedSourceTypeFor(
   origin: PriceSourceOrigin,
 ): PriceSourceType {

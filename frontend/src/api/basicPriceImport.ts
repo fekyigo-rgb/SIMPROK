@@ -4,14 +4,27 @@
 // a page (the pages are large enough on their own already).
 import { apiFetch } from '../utils/apiClient';
 import type { BasicPriceImportBatchSummary } from '../utils/basicPriceImportDisplay';
+// The catalog and unit vocabularies live at the bottom of the dependency chain
+// (see basicPriceImportDisplay) and are re-exported here so every existing
+// importer of this module keeps working against ONE definition of each.
+export type {
+  ResourceType,
+  UnitDimension,
+  UnitKind,
+} from '../utils/basicPriceImportDisplay';
+import type {
+  ResourceType,
+  UnitDimension,
+  UnitKind,
+} from '../utils/basicPriceImportDisplay';
 import { buildLookupPath } from '../utils/catalogSearch';
+// The one law that decides whether a failed response is intake speaking about
+// the document, or something else entirely. See basicPriceIntakeErrors.
+import { isIntakeRefusalCode } from '../utils/basicPriceIntakeErrors';
 
 export type PriceSourceType = 'VENDOR_QUOTE' | 'MARKET_SURVEY' | 'REGULATION' | 'SYSTEM_ESTIMATE';
 export type PriceSourceOrigin = 'GOVERNMENT' | 'SUPPLIER' | 'STORE' | 'DISTRIBUTOR' | 'FIELD_REPORT' | 'COMMUNITY_REPORT';
-export type ResourceType = 'MATERIAL' | 'LABOR' | 'EQUIPMENT';
 export type PriceTableStructure = 'SECTIONED_PRICE_LIST' | 'SEMANTIC_HEADER_TABLE' | 'REGIONAL_MATRIX';
-export type UnitDimension = 'COUNT' | 'MASS' | 'LENGTH' | 'AREA' | 'VOLUME' | 'TIME' | 'PERSON_TIME' | 'EQUIPMENT_TIME';
-export type UnitKind = 'CANONICAL' | 'COMMERCIAL_PACKAGE' | 'CONTEXTUAL';
 
 export interface ResourceLookupItem {
   id: string;
@@ -57,6 +70,8 @@ export interface UnitLookupQuery {
 export interface BasicPriceImportMetadata {
   regionId?: string;
   effectiveDate?: string;
+  /** Soft re-verification, stated by a person. Never derived. */
+  reviewDate?: string;
   sourceType?: PriceSourceType;
   sourceOrigin?: PriceSourceOrigin;
   sourceOrganizationName?: string;
@@ -114,6 +129,26 @@ export class IntakeRefusalError extends Error {
   }
 }
 
+/**
+ * A request that failed for a reason having NOTHING to do with the workbook.
+ *
+ * Its own type, so the page can say which of them it was: a denied permission,
+ * an expired session and a server fault are three different things a person
+ * acts on differently, and none of them is a question about a file.
+ */
+export class ImportRequestError extends Error {
+  readonly httpStatus: number;
+  /** The server's own text, kept for diagnostics. Never rendered as prose. */
+  readonly detail: string;
+
+  constructor(httpStatus: number, detail: string) {
+    super(`IMPORT_REQUEST_FAILED_${httpStatus}`);
+    this.name = 'ImportRequestError';
+    this.httpStatus = httpStatus;
+    this.detail = detail;
+  }
+}
+
 async function parseOrThrow(response: Response): Promise<BasicPriceImportBatchSummary> {
   if (!response.ok) {
     const raw = await response.text();
@@ -123,12 +158,14 @@ async function parseOrThrow(response: Response): Promise<BasicPriceImportBatchSu
     } catch {
       body = null; // Not JSON — the raw text below is still more honest than a guess.
     }
-    // A validation failure sends `message` as an ARRAY; only a named intake
-    // refusal sends it as a single code.
-    if (body && typeof body.message === 'string') {
+    // A validation failure sends `message` as an ARRAY; a named intake refusal
+    // sends one of the codes above. ANYTHING ELSE — a guard, a framework fault,
+    // a message this client has never heard of — is not intake speaking, and is
+    // never dressed up as a question about the document.
+    if (body && typeof body.message === 'string' && isIntakeRefusalCode(body.message)) {
       throw new IntakeRefusalError(body.message, body, response.status);
     }
-    throw new Error(raw);
+    throw new ImportRequestError(response.status, raw);
   }
   return response.json() as Promise<BasicPriceImportBatchSummary>;
 }
@@ -223,7 +260,11 @@ export async function resolveBasicPriceImportRow(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ version, resourceCatalogId, unitDefinitionId }),
   });
-  if (!response.ok) throw new Error(await response.text());
+  // `ImportRequestError`, not a bare `Error`: it carries the status and body the
+  // page needs to say WHY. A plain Error forced the caller to guess, and the
+  // guess it printed was always "the row may have changed" — which is one of
+  // several possible causes and the wrong one for a 401, 403 or 500.
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
 }
 
 export async function rejectBasicPriceImportRow(
@@ -237,10 +278,111 @@ export async function rejectBasicPriceImportRow(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ version, reason }),
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
 }
 
 export async function submitBasicPriceImportBatch(batchId: string): Promise<BasicPriceImportBatchSummary> {
   const response = await apiFetch(`/basic-price-imports/${batchId}/submit`, { method: 'POST' });
   return parseOrThrow(response);
+}
+
+/**
+ * One price this workspace may now use, exactly as the server's
+ * `mapPrivateBasicPriceItem` projection describes it. Mirrored, never
+ * reshaped — a client that renames the server's fields is the first step
+ * towards a client that reinterprets them.
+ */
+export interface PrivateBasicPriceItem {
+  basicPriceId: string;
+  resource: { id: string; code: string | null; name: string; type: string };
+  region: { id: string; code: string; name: string } | null;
+  /** Exact decimal string, two digits. Never a JS number. */
+  price: string;
+  effectiveDate: string;
+  assetScope: 'WORKSPACE_PRIVATE';
+  sourceOrigin: string;
+  /** Publication axes, echoed so a caller can see they were NOT touched. */
+  status: string;
+  verificationStatus: string;
+  sourceImportRowId: string;
+  sourcePeriodLabel: string | null;
+  sourcePeriodGranularity: string | null;
+  effectiveDateProvenance: string | null;
+  effectiveDateDerivationRule: string | null;
+}
+
+export interface KeepBatchPrivateResult {
+  batchId: string;
+  createdCount: number;
+  alreadyPrivateCount: number;
+  prices: PrivateBasicPriceItem[];
+}
+
+/**
+ * RM-03C — KEEP MY OWN RESOLVED ROWS, AND USE THEM.
+ *
+ * The route has existed since RM-03C and nothing in this app had ever called
+ * it. So the only door out of the review room was `/submit`, which hands rows
+ * to SIMPROK's curation queue and creates no usable price at all: a person who
+ * simply wanted their own imported prices had no action that did that.
+ *
+ * Incremental and idempotent. It materializes whatever rows are finished now,
+ * leaves the batch open so the rest can still be worked on, and a second call
+ * over unchanged rows creates nothing and truthfully reports zero.
+ *
+ * A failure surfaces as `ImportRequestError` carrying the server's own named
+ * code. It is deliberately NOT routed through `parseOrThrow`: that function
+ * exists to recognise INTAKE refusals — questions about a document — and this
+ * call is not about a document at all.
+ */
+export async function keepBasicPriceImportBatchPrivate(
+  batchId: string,
+): Promise<KeepBatchPrivateResult> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/keep-private`, { method: 'POST' });
+  if (!response.ok) {
+    throw new ImportRequestError(response.status, await response.text());
+  }
+  return response.json() as Promise<KeepBatchPrivateResult>;
+}
+
+/**
+ * "Simpan & Gunakan" — ONE user intent, ONE request, ONE backend command.
+ *
+ * NOTE WHAT IS NOT IN THIS SIGNATURE: no resource id, no unit id, no list of
+ * bindings. The browser states INTENT — "accept what you can prove, except
+ * these rows I am still working on" — and the server derives the eligible set
+ * from its own authorities at execution time. A client-authored list would be
+ * stale by the time it arrived and would make this page the identity authority.
+ *
+ * IT IS ALSO ONE REQUEST, AND THAT MATTERS TWICE. The page once looped the
+ * single-row resolve call per proven row — thirteen requests for the Owner's
+ * workbook and an unusable product at a few thousand. It then made two: accept,
+ * then keep. Two business mutations sequenced by a browser means a dropped
+ * connection between them leaves the batch half-done with nobody able to say
+ * which half. The orchestration is the server's now.
+ */
+export interface SmartSaveResult {
+  batchId: string;
+  accepted: {
+    acceptedCount: number;
+    eligibleCount: number;
+    skippedCount: number;
+    excludedCount: number;
+    /** Eligible rows a work ceiling deferred. Press again; nothing is redone. */
+    remainingEligible: number;
+  };
+  kept: KeepBatchPrivateResult;
+}
+
+export async function smartSaveBatch(
+  batchId: string,
+  excludeRowIds: string[] = [],
+): Promise<SmartSaveResult> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/smart-save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ excludeRowIds }),
+  });
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+  return (await response.json()) as SmartSaveResult;
 }

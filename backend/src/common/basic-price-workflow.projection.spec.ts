@@ -381,9 +381,40 @@ describe('basic-price workflow projections (RM-02D2A2)', () => {
         sourceOrigin: 'SUPPLIER',
         sourceName: 'Toko Jaya',
         freshnessStatus: 'CURRENT',
+        // SOFT RE-VERIFICATION. This row states no recommended date, so the
+        // projection says so plainly instead of borrowing `validUntil` — the
+        // two are different facts and only `validUntil` is enforced anywhere.
+        reviewDate: null,
+        reverification: 'NOT_RECOMMENDED',
         workspaceScope: 'WORKSPACE',
         assetScope: 'SIMPROK_CATALOG',
       });
+    });
+
+    /**
+     * A RECOMMENDED DATE IS ADVICE, AND ITS STATE IS DERIVED AT READ TIME.
+     *
+     * Nothing is stored for `reverification`: it is computed from the date and
+     * the clock every time the row is projected. That is what keeps an overdue
+     * price out of every filter — there is no column for a query to find.
+     */
+    it('derives the re-verification state and never touches validUntil', () => {
+      const past = mapExplorerItem(
+        { ...baseRow, reviewDate: '2020-12-31T00:00:00.000Z' },
+        'ws-1',
+      );
+      expect(past.reverification).toBe('DUE');
+      expect(past.reviewDate).toBe('2020-12-31T00:00:00.000Z');
+      // The hard boundary is untouched by the soft one.
+      expect(past.validUntil).toBe('2026-12-31T00:00:00.000Z');
+      // And an overdue price is NOT relabelled as expired.
+      expect(past.freshnessStatus).toBe('CURRENT');
+
+      const future = mapExplorerItem(
+        { ...baseRow, reviewDate: '2999-12-31T00:00:00.000Z' },
+        'ws-1',
+      );
+      expect(future.reverification).toBe('CURRENT');
     });
 
     /**

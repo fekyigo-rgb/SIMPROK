@@ -57,6 +57,30 @@ export const PERMISSIONS = {
   BASIC_PRICE_REVIEW_VIEW: 'BASIC_PRICE_REVIEW_VIEW',
 
   /**
+   * BP-CAT-01B — authority to admit ONE already-published workspace catalog
+   * price into the SHARED SIMPROK catalog.
+   *
+   * WHY NO EXISTING CODE WAS REUSED, having checked each:
+   *   BASIC_PRICE_PUBLISH ends a workspace's own curation ladder. Reusing it
+   *     would mean every workspace that may publish its own price may also
+   *     hand that price to every other tenant in SIMPROK — a workspace
+   *     decision silently becoming a platform one. That is the exact widening
+   *     this code exists to prevent.
+   *   BASIC_PRICE_VERIFY authorizes the ACCEPT decision inside one workspace's
+   *     review, one rung below publication; it is even further from platform
+   *     reach.
+   *   BASIC_PRICE_MANAGE is workspace price administration, held far too
+   *     widely to carry national consequence.
+   *
+   * GOVERNED ACTIVATION, and never an ACTIVE_MEMBERSHIP baseline — it is not
+   * seeded to any role by any canonical seed. Granting it is a deliberate act
+   * per environment, exactly as _VERIFY and _PUBLISH already are. No new role,
+   * no new RBAC tier: it composes with the existing
+   * WorkspaceMembership -> MembershipRole -> Role -> RolePermission chain.
+   */
+  BASIC_PRICE_PROMOTE_SHARED: 'BASIC_PRICE_PROMOTE_SHARED',
+
+  /**
    * GHX-01 — authority to settle ONE genuinely ambiguous AHSP resource identity
    * by choosing between the legitimate candidates the machine could not separate.
    *
@@ -312,6 +336,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     note: "Internal curation authority — NEVER part of the ACTIVE_MEMBERSHIP_BASELINE, and no longer used to gate a user's own import batch (see basic-price-import.controller.ts, which uses BASIC_PRICE_IMPORT/_RESOLVE for that instead). RM-02C3 activated this code for the acceptance environment only — see rm02c3-basic-price-acceptance-activation.ts. Not part of any canonical production seed.",
   },
   {
+    code: PERMISSIONS.BASIC_PRICE_PROMOTE_SHARED,
+    domain: PERMISSION_DOMAINS.BASIC_PRICE,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Admit one already-published workspace catalog price into the shared SIMPROK catalog, where every workspace can reach it.',
+    note: "BP-CAT-01E — DECLARED, NOT ACTIVATED. There is currently NO production route guarded by this code: the promote-shared endpoint was removed once the authority census proved AUTH-C. Lifting a tenant's fact into shared SIMPROK knowledge is a PLATFORM decision, and SIMPROK has no production-real platform authority primitive to express it — the Authority/PositionAuthority chain exists in schema but is inert (its writers throw, no guard reads it). A workspace-scoped permission is the wrong shape for that act, and the fact that nobody can currently grant this code in-product is a safety property, not proof that it is the right authority model. The code is retained as the declared name of the capability, pending an Owner decision on the platform authority primitive. It is NEVER part of the ACTIVE_MEMBERSHIP_BASELINE and no canonical seed grants it.",
+  },
+  {
     code: PERMISSIONS.AHSP_RESOURCE_IDENTITY_DECIDE,
     domain: PERMISSION_DOMAINS.AHSP,
     state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
@@ -354,6 +386,7 @@ export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.BASIC_PRICE_VERIFY,
   PERMISSIONS.BASIC_PRICE_PUBLISH,
   PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
+  PERMISSIONS.BASIC_PRICE_PROMOTE_SHARED,
   PERMISSIONS.AHSP_RESOURCE_IDENTITY_DECIDE,
 ];
 

@@ -5,6 +5,7 @@ import { BasicPriceEligibilityPolicy } from './basic-price-eligibility.policy';
 import { BasicPriceImportService } from './basic-price-import.service';
 import { BasicPriceRowResolutionService } from './basic-price-row-resolution.service';
 import { BasicPricePublicationService } from './basic-price-publication.service';
+import { BasicPricePromotionService } from './basic-price-promotion.service';
 import { BasicPriceImportController } from './basic-price-import.controller';
 import { BasicPricePublicationController } from './basic-price-publication.controller';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -12,6 +13,8 @@ import { RealityIntakeModule } from '../reality-intake/reality-intake.module';
 import { BasicPriceImportLookupController } from './basic-price-import-lookup.controller';
 import { BasicPriceImportLookupService } from './basic-price-import-lookup.service';
 import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping-candidates.service';
+import { BasicPriceRowResolutionProposalService } from './basic-price-row-resolution-proposal.service';
+import { BasicPriceSmartSaveService } from './basic-price-smart-save.service';
 import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
 import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
@@ -41,8 +44,14 @@ import { BasicPriceSourceArchiveService } from './basic-price-source-archive.ser
     BasicPriceSupplierBridgeService,
     BasicPriceRowResolutionService,
     BasicPricePublicationService,
+    BasicPricePromotionService,
     BasicPriceImportLookupService,
     BasicPriceRowMappingCandidatesService,
+    // INT-CONNECT-01 — the composition seam between this module and the two
+    // canonical authorities already listed here. It owns no domain law of its
+    // own; it exists so the review room asks them BEFORE it asks a human.
+    BasicPriceRowResolutionProposalService,
+    BasicPriceSmartSaveService,
     BasicPricePrivateAssetService,
     TrustedBasicPriceActorService,
     // THE resource identity authority, listed exactly as ProjectAhspModule

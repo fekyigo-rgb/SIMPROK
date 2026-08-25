@@ -180,6 +180,51 @@ describe('structure detection — USI-01 §5 FORMAT != TABLE SHAPE', () => {
       expect(candidate.regionScope.choices).toHaveLength(2);
     });
 
+    it('a resource-family WORD inside a NAME is not proof about the column', async () => {
+      // USI-01R2 §10 — the elimination that decides which columns a human is
+      // offered must PROVE, not lean. "Pekerja", "Pekerja biasa" and "Pekerja
+      // terampil" are three labour resources by NAME, and a rule that reads a
+      // family from a value's leading word calls all three LABOR and strikes
+      // the one right answer off the list. Naming a family is not being one.
+      const table = await readCsvTable(
+        Buffer.from(
+          ',,SIRIMAU,BAGUALA\n' +
+            'Pekerja,OH,120000,110000\n' +
+            'Pekerja biasa,OH,130000,115000\n' +
+            'Pekerja terampil,OH,150000,140000\n',
+          'utf8',
+        ),
+      );
+      const [candidate] = detectTableStructures(table).candidates;
+
+      expect(candidate.structure).toBe('REGIONAL_MATRIX');
+      expect(candidate.columnRoles?.required).toBe(true);
+      expect(
+        candidate.columnRoles?.nameCandidates.map((c) => c.columnNumber),
+      ).toContain(1);
+    });
+
+    it('a column that IS a family and nothing else is still disproven as a name', async () => {
+      // The other half of the same law: narrowing the proof must not disarm it.
+      // A column stating ALAT/BAHAN/UPAH answers "which family", and a family
+      // is not a name — so it is never offered as one.
+      const table = await readCsvTable(
+        Buffer.from(
+          ',,SIRIMAU,BAGUALA\n' +
+            'UPAH,OH,120000,110000\n' +
+            'BAHAN,M3,130000,115000\n' +
+            'ALAT,JAM,150000,140000\n',
+          'utf8',
+        ),
+      );
+      const [candidate] = detectTableStructures(table).candidates;
+
+      expect(candidate.structure).toBe('REGIONAL_MATRIX');
+      expect(
+        candidate.columnRoles?.nameCandidates.map((c) => c.columnNumber),
+      ).not.toContain(1);
+    });
+
     it('the adversarial CSV is still recognized as one clean semantic table', async () => {
       const detection = detectTableStructures(await readCsvTable(buildAdversarialCsv()));
       expect(detection.candidates.map((c) => c.structure)).toEqual([

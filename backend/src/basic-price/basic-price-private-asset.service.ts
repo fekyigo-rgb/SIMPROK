@@ -7,64 +7,83 @@ import {
   type PrivateBasicPriceItem,
 } from '../common/basic-price-workflow.projection';
 import type { TrustedBasicPriceActor } from './trusted-basic-price-actor.service';
+import { privateUseBlockReason } from './basic-price-batch-actions.policy';
 import {
-  expectedSourceTypeFor,
-  isCoherentSourcePair,
-} from '../common/price-source-coherence';
+  sourceClassificationIssue,
+  temporalProvenanceIssue,
+  type BatchProvenanceFacts,
+  type MetadataCoherenceIssue,
+} from './basic-price-metadata-coherence.law';
 
 /**
- * The batch facts every private-price write depends on. Read once, asserted
- * once, used by both the create path and the correction path so the two can
- * never disagree about what "truthful enough to write" means.
+ * THE METADATA LAW LIVES IN ONE FILE, AND THIS IS NOT IT.
+ *
+ * Everything that decides whether a batch's source classification and temporal
+ * provenance are truthful enough to write a price from now lives in
+ * `basic-price-metadata-coherence.law.ts`, as pure functions that RETURN a
+ * named reason. This service turns that reason into the ConflictException it
+ * has always thrown, with the same codes and the same detail payloads; the
+ * review room reads the same reason to decide whether to open its door.
+ *
+ * That is the whole point of the move. The room used to check that four facts
+ * were PRESENT while the writer additionally checked that they were COHERENT,
+ * so a batch could be told "you may review", have thirteen rows resolved by
+ * hand, and only then be refused for metadata it had held all along. Two
+ * answers to one question, and the softer one guarded the door.
+ *
+ * NOTHING WAS RELAXED. The re-exports below keep every existing importer —
+ * including the provenance-correction service and its spec — pointing at the
+ * same names.
  */
-interface BatchProvenanceFacts {
-  sourceOrigin: string | null;
-  sourceType: string | null;
-  /**
-   * The date the provenance claim must actually explain. Optional only so
-   * callers that genuinely have no date yet can still check the structural
-   * half; when it IS supplied, a DERIVED claim is verified against it.
-   */
-  effectiveDate?: Date | null;
-  sourcePeriodLabel: string | null;
-  sourcePeriodGranularity: string | null;
-  effectiveDateProvenance: string | null;
-  effectiveDateDerivationRule: string | null;
+export {
+  YEAR_IN_LABEL,
+  derivedEffectiveDateFor,
+  isSameUtcDay,
+  type BatchProvenanceFacts,
+} from './basic-price-metadata-coherence.law';
+
+/** Raise the writer's exception for a reason the shared law returned. */
+function raise(issue: MetadataCoherenceIssue): never {
+  // The two rich codes carry evidence a person needs in order to FIX the batch
+  // — what was claimed, and what that claim actually produces. The rest are
+  // self-explanatory and stay bare, exactly as before.
+  if (
+    issue.code === 'DERIVATION_RULE_NOT_PROVABLE' ||
+    issue.code === 'DERIVATION_DOES_NOT_EXPLAIN_EFFECTIVE_DATE'
+  ) {
+    const { code, ...detail } = issue;
+    throw new ConflictException({
+      statusCode: 409,
+      error: 'Conflict',
+      message: code,
+      ...detail,
+    });
+  }
+  throw new ConflictException(issue.code);
 }
 
-const isBlank = (value: string | null | undefined): boolean =>
-  value === null || value === undefined || value.trim().length === 0;
-
 /**
- * RM-03D1 — a private price may never carry an unstated or incoherent source
- * classification.
- *
- * The writer used to fall back to MARKET_SURVEY when the batch said nothing,
- * which could mint the very falsehood this slice exists to correct: a
- * government standard price list recorded as a market survey. There is no
- * fallback now, and the pair is checked against the ONE shared origin→type
- * authority rather than a second opinion local to this file.
+ * RM-03D1 — a private price may never carry an UNSTATED source classification.
+ * Delegates to the shared law; the refusal codes are unchanged.
  */
 export function assertSourceClassificationCoherent(
   sourceOrigin: string | null,
   sourceType: string | null,
 ): void {
-  if (!sourceOrigin) {
-    throw new ConflictException('SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE');
-  }
-  if (!sourceType) {
-    throw new ConflictException('SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE');
-  }
-  if (!isCoherentSourcePair(sourceOrigin as any, sourceType as any)) {
-    throw new ConflictException({
-      statusCode: 409,
-      error: 'Conflict',
-      message: 'SOURCE_ORIGIN_TYPE_INCOHERENT',
-      sourceOrigin,
-      sourceType,
-      expectedSourceType: expectedSourceTypeFor(sourceOrigin as any) ?? null,
-    });
-  }
+  const issue = sourceClassificationIssue(sourceOrigin, sourceType);
+  if (issue) raise(issue);
+}
+
+/**
+ * RM-03D1 — a DERIVED date must be re-derivable, and a stated date must not
+ * pretend to have been derived. Delegates to the shared law; the refusal codes
+ * and their detail payloads are unchanged.
+ */
+export function assertTemporalProvenanceCoherent(
+  batch: BatchProvenanceFacts,
+): void {
+  const issue = temporalProvenanceIssue(batch);
+  if (issue) raise(issue);
 }
 
 /** The temporal facts one PRICE carries, resolved from batch + row evidence. */
@@ -125,135 +144,6 @@ export function resolvePriceTemporalFacts(
     effectiveDateProvenance: null,
     effectiveDateDerivationRule: null,
   };
-}
-
-
-/**
- * RM-03D1 — THE derivation authority. What a derivation rule actually MEANS.
- *
- * Before this, nothing in the repository knew what `PERIOD_START` was, so a
- * DERIVED claim was only ever checked for STRUCTURAL completeness: label
- * present, granularity present, rule present. That let a fully-populated claim
- * describe a date it does not produce —
- *
- *     TA 2024 · YEAR · PERIOD_START · effectiveDate 2024-06-15
- *
- * — which is every field filled and still false. Structural completeness is not
- * truth.
- *
- * Returns the date the stated derivation produces, or NULL when this authority
- * cannot prove one. NULL means UNVERIFIABLE and the caller must fail closed: an
- * unprovable derivation is not a derivation.
- *
- * Deliberately tiny. Only the locked law is implemented — YEAR + PERIOD_START —
- * because that is the only derivation the evidence and the Owner decision
- * establish. MONTH/QUARTER/END_OF_PERIOD and friends are NOT invented here;
- * when a real source demands one, it arrives with its own decision.
- */
-export const YEAR_IN_LABEL = /\b(19|20)\d{2}\b/g;
-
-export function derivedEffectiveDateFor(
-  sourcePeriodLabel: string | null,
-  sourcePeriodGranularity: string | null,
-  effectiveDateDerivationRule: string | null,
-): Date | null {
-  if (
-    sourcePeriodGranularity !== 'YEAR' ||
-    effectiveDateDerivationRule !== 'PERIOD_START' ||
-    !sourcePeriodLabel
-  ) {
-    return null;
-  }
-  // The label is verbatim source text ("TA 2024", "Tahun Anggaran 2024"), so the
-  // year is read out of it rather than assumed. Exactly one distinct year must
-  // be present: none means there is nothing to derive from, and several means
-  // the period is ambiguous — both are unprovable, not "probably fine".
-  const years = new Set(sourcePeriodLabel.match(YEAR_IN_LABEL) ?? []);
-  if (years.size !== 1) return null;
-  const year = Number([...years][0]);
-  return new Date(Date.UTC(year, 0, 1));
-}
-
-/** Same UTC calendar day? Compared by date, never by instant. */
-export function isSameUtcDay(left: Date, right: Date): boolean {
-  return left.toISOString().slice(0, 10) === right.toISOString().slice(0, 10);
-}
-
-/**
- * RM-03D1 — a DERIVED date must be re-derivable, and a stated date must not
- * pretend to have been derived.
- *
- * The database enforces the same shape, and deliberately so: this gives a
- * caller a named error instead of a constraint violation, while the constraint
- * makes the incoherent row unrepresentable even to a writer that forgets to
- * ask. Whitespace is rejected here because `'   '` is not a period label, and a
- * NOT NULL column would happily accept it.
- */
-export function assertTemporalProvenanceCoherent(
-  batch: BatchProvenanceFacts,
-): void {
-  const provenance = batch.effectiveDateProvenance;
-  if (!provenance) {
-    // Unknown provenance stays legal — it reads as "we do not claim", which is
-    // honest for anything imported before this distinction existed.
-    if (!isBlank(batch.effectiveDateDerivationRule)) {
-      throw new ConflictException('DERIVATION_RULE_REQUIRES_PROVENANCE');
-    }
-    return;
-  }
-  if (provenance === 'DERIVED_FROM_SOURCE_PERIOD') {
-    if (isBlank(batch.sourcePeriodLabel)) {
-      throw new ConflictException('SOURCE_PERIOD_LABEL_REQUIRED_FOR_DERIVED_DATE');
-    }
-    if (!batch.sourcePeriodGranularity) {
-      throw new ConflictException(
-        'SOURCE_PERIOD_GRANULARITY_REQUIRED_FOR_DERIVED_DATE',
-      );
-    }
-    if (isBlank(batch.effectiveDateDerivationRule)) {
-      throw new ConflictException(
-        'DERIVATION_RULE_REQUIRED_FOR_DERIVED_DATE',
-      );
-    }
-    // STRUCTURE IS NOT TRUTH. The claim must actually produce the date it
-    // describes, or it is a well-formed falsehood.
-    if (batch.effectiveDate) {
-      const derived = derivedEffectiveDateFor(
-        batch.sourcePeriodLabel,
-        batch.sourcePeriodGranularity,
-        batch.effectiveDateDerivationRule,
-      );
-      if (!derived) {
-        throw new ConflictException({
-          statusCode: 409,
-          error: 'Conflict',
-          message: 'DERIVATION_RULE_NOT_PROVABLE',
-          sourcePeriodLabel: batch.sourcePeriodLabel,
-          sourcePeriodGranularity: batch.sourcePeriodGranularity,
-          effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
-        });
-      }
-      if (!isSameUtcDay(derived, batch.effectiveDate)) {
-        throw new ConflictException({
-          statusCode: 409,
-          error: 'Conflict',
-          message: 'DERIVATION_DOES_NOT_EXPLAIN_EFFECTIVE_DATE',
-          effectiveDate: batch.effectiveDate.toISOString().slice(0, 10),
-          derivedEffectiveDate: derived.toISOString().slice(0, 10),
-          sourcePeriodLabel: batch.sourcePeriodLabel,
-          sourcePeriodGranularity: batch.sourcePeriodGranularity,
-          effectiveDateDerivationRule: batch.effectiveDateDerivationRule,
-        });
-      }
-    }
-    return;
-  }
-  // SOURCE_STATED: the source printed the date, so there is no rule to carry.
-  // A period LABEL may still be present — a document can truthfully state both
-  // "TA 2024" and an exact date — so only the rule is forbidden.
-  if (!isBlank(batch.effectiveDateDerivationRule)) {
-    throw new ConflictException('DERIVATION_RULE_FORBIDDEN_FOR_SOURCE_STATED');
-  }
 }
 
 export interface KeepBatchPrivateResult {
@@ -346,6 +236,20 @@ const PRIVATE_PRICE_SELECT = {
  * row status; the only state it creates is the price itself, and the
  * one-private-price-per-row rule is enforced by the database's unique index on
  * `sourceImportRowId` rather than by a status flag.
+ *
+ * WHY IT NOW ACCEPTS A BATCH THAT IS STILL `NEEDS_REVIEW`. It used to require
+ * `READY_FOR_REVIEW`, described as "the human has finished resolving this
+ * batch". That gate belongs to the TERMINAL action, not this one: a batch only
+ * reaches `READY_FOR_REVIEW` once EVERY row has been decided, so on the
+ * Owner's real 86-row workbook the six rows that WERE finished could not be
+ * kept until the other eighty were too. Since this writer selects
+ * `READY_FOR_SUBMISSION` rows only, re-checks each row's own resource identity
+ * and canonical price, is idempotent per row, and leaves the batch open, an
+ * unfinished neighbour was never evidence against a finished row. The gate now
+ * says what it means — the batch is still in its mutable window — and lives
+ * with the rest of the lifecycle law in
+ * `basic-price-batch-actions.policy.ts`, where the review room reads the same
+ * answer before offering the action.
  */
 @Injectable()
 export class BasicPricePrivateAssetService {
@@ -375,11 +279,14 @@ export class BasicPricePrivateAssetService {
           sourcePeriodGranularity: string | null;
           effectiveDateProvenance: string | null;
           effectiveDateDerivationRule: string | null;
+          /** Soft re-verification, human-stated on the metadata form. */
+          reviewDate: Date | null;
         }>
       >(
         Prisma.sql`SELECT "id", "workspaceId", "organizationId", "status", "effectiveDate",
                           "regionId", "sourceType", "sourceOrigin", "uploadedByAccountId",
-                          "sourcePeriodLabel", "sourcePeriodGranularity", "effectiveDateProvenance", "effectiveDateDerivationRule"
+                          "sourcePeriodLabel", "sourcePeriodGranularity", "effectiveDateProvenance", "effectiveDateDerivationRule",
+                          "reviewDate"
                      FROM "basic_price_import_batches"
                     WHERE "id" = ${batchId}::uuid
                     FOR UPDATE`,
@@ -402,34 +309,15 @@ export class BasicPricePrivateAssetService {
         throw new NotFoundException('Batch not found');
       }
 
-      // Same readiness gate as submitBatch: the human has finished resolving
-      // this batch. A batch still being worked on has no settled facts to keep.
-      if (batch.status !== 'READY_FOR_REVIEW') {
-        throw new ConflictException('BATCH_NOT_READY_FOR_REVIEW');
-      }
-      // Truthfulness preconditions — identical to submitBatch's, because a
-      // private price needs exactly the same honest context a submitted one
-      // does. None of these is ever defaulted or fabricated.
-      if (!batch.effectiveDate) {
-        throw new ConflictException('EFFECTIVE_DATE_REQUIRED_BEFORE_PRIVATE_USE');
-      }
-      if (!batch.regionId) {
-        throw new ConflictException('REGION_REQUIRED_BEFORE_PRIVATE_USE');
-      }
-      if (!batch.sourceOrigin) {
-        throw new ConflictException('SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE');
-      }
-      // RM-03D1 — sourceType is now a REQUIRED truth, not a defaulted one. This
-      // writer previously wrote `batch.sourceType ?? 'MARKET_SURVEY'`, which
-      // could mint exactly the falsehood this slice exists to correct: a
-      // government price list silently classified as a market survey. There is
-      // no default any more; an unstated source type fails closed.
-      assertSourceClassificationCoherent(batch.sourceOrigin, batch.sourceType);
-      assertTemporalProvenanceCoherent({
-        ...batch,
-        effectiveDate: batch.effectiveDate as Date,
-      });
-
+      // The rows this call would materialize, locked. Read BEFORE the
+      // preconditions now, because the preconditions are no longer stated here:
+      // they are asked of `privateUseBlockReason`, which needs the ready-row
+      // count to answer, and which is the SAME law the review room reads to
+      // decide what to offer. Precedence is unchanged — that function checks
+      // status, then metadata, then the row count, in the order this method
+      // used to check them inline — so every existing caller still sees the
+      // same code for the same batch. What changed is that a user can now be
+      // TOLD the reason before acting instead of meeting a dead button.
       const readyRows = await tx.$queryRaw<Array<{ id: string }>>(
         Prisma.sql`SELECT "id" FROM "basic_price_import_rows"
                     WHERE "batchId" = ${batchId}::uuid
@@ -437,9 +325,29 @@ export class BasicPricePrivateAssetService {
                     ORDER BY "sourceRowNumber" ASC
                     FOR UPDATE`,
       );
-      if (readyRows.length === 0) {
-        throw new ConflictException('NO_ROWS_READY_FOR_PRIVATE_USE');
+
+      const blocked = privateUseBlockReason({
+        status: batch.status,
+        effectiveDate: batch.effectiveDate,
+        regionId: batch.regionId,
+        sourceOrigin: batch.sourceOrigin,
+        sourceType: batch.sourceType,
+        readyForSubmissionRows: readyRows.length,
+      });
+      if (blocked) {
+        // RM-03D1 — sourceType is a REQUIRED truth, not a defaulted one. This
+        // writer once wrote `batch.sourceType ?? 'MARKET_SURVEY'`, which could
+        // mint exactly the falsehood this slice exists to correct: a government
+        // price list silently classified as a market survey. The incoherent
+        // pair re-raises through the classification authority so the caller
+        // keeps the richer 409 body it has always had — which names the ONE
+        // type the stated origin implies — rather than a bare code.
+        throw new ConflictException(blocked);
       }
+      // `BatchProvenanceFacts.effectiveDate` is optional/nullable, and the gate
+      // above already refused a null one, so the batch is passed as it is — the
+      // old `as Date` narrowed nothing the type did not already allow.
+      assertTemporalProvenanceCoherent(batch);
 
       const prices: PrivateBasicPriceItem[] = [];
       let createdCount = 0;
@@ -498,7 +406,28 @@ export class BasicPricePrivateAssetService {
             // stated truth or the write never happened.
             sourceType: batch.sourceType as any,
             sourceOrigin: batch.sourceOrigin as any,
+            // FRESHNESS STATUS IS NOT TOUCHED BY RE-VERIFICATION, and that is
+            // deliberate. `EXPIRED` is read by
+            // `ahsp-resource-price-resolution.kernel.ts`, which degrades a whole
+            // resolution to NEEDS_REVIEW when every candidate carries it —
+            // so writing it from a predicted date would quietly stop an old but
+            // perfectly usable survey price from resolving. Overdue-ness is
+            // derived at READ time from `reviewDate` and stored nowhere.
             freshnessStatus: 'CURRENT',
+            // SOFT RE-VERIFICATION — "check this again around here", never
+            // "expires on". COPIED FROM THE BATCH, never computed.
+            //
+            // An earlier version derived this from the ingestion channel plus a
+            // fixed two-year horizon. Both were invented: no canonical policy
+            // in this repository states how long any source stays fresh, and
+            // freshness behaviour is not decided by which channel the bytes
+            // arrived through. So the value is whatever a HUMAN stated on the
+            // metadata form, and null when nobody stated anything — which is an
+            // ordinary outcome, not a gap to fill in.
+            //
+            // `validUntil` stays untouched, because only a source that really
+            // states a hard validity limit may set that.
+            reviewDate: batch.reviewDate,
             // RM-03D1 — TEMPORAL PROVENANCE, carried verbatim from the batch.
             // `effectiveDate` above is a single calendar day, but a source that
             // states only "TA 2024" never printed one. These three keep the

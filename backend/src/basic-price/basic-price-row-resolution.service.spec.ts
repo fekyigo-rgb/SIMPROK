@@ -1,10 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, ResourceType } from '@prisma/client';
 import { BasicPriceRowResolutionService } from './basic-price-row-resolution.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { BasicPriceRowResolutionProposalService } from './basic-price-row-resolution-proposal.service';
 
 describe('BasicPriceRowResolutionService', () => {
   let service: BasicPriceRowResolutionService;
@@ -143,6 +144,35 @@ describe('BasicPriceRowResolutionService', () => {
         // the decision itself.
         ResourceIdentityResolutionService,
         { provide: UnitKernelService, useValue: unitKernel },
+        // THE SEAM ONTO THE CANONICAL AUTHORITIES — the ONE place this suite
+        // says what the machine offered the reviewer.
+        //
+        // The audit fields used to be computed from `findMappingCandidates`, a
+        // second matcher testing exact normalized-name equality, and these
+        // tests seeded it through the raw-SQL branch above. They now seed the
+        // CANONICAL proposal instead — the same verdict the review room
+        // renders — because an audit trail must describe the screen a human
+        // actually saw. `candidateRows` keeps its meaning: 'what SIMPROK put in
+        // front of them'. Only who says it has changed.
+        {
+          provide: BasicPriceRowResolutionProposalService,
+          useValue: {
+            proposeForRows: jest.fn((_ws: string, rows: { id: string }[]) => {
+              const byRow = new Map<string, unknown>();
+              for (const row of rows) {
+                byRow.set(row.id, {
+                  rowId: row.id,
+                  resource: {
+                    status: 'NEEDS_REVIEW',
+                    resourceCatalogId: null,
+                    candidates: candidateRows,
+                  },
+                });
+              }
+              return Promise.resolve(byRow);
+            }),
+          },
+        },
       ],
     }).compile();
 
@@ -1101,9 +1131,212 @@ describe('BasicPriceRowResolutionService', () => {
         resourceCatalogId: 'mapped-01',
         evidence: ['REVIEWED_MAPPING_NAME_MATCH'],
       });
-      // Row-scoped evidence, never a global alias — the human still decides.
-      expect(candidate.priorHumanDecision).toMatchObject({ reviewerAccountId: 'someone-earlier' });
+      // THE DECISION STILL DECIDES — it nominated this candidate, under its own
+      // row-scoped evidence kind, and the admission is still forbidden.
+      //
+      // What it no longer does is arrive whole. This assertion used to read
+      // `candidate.priorHumanDecision.reviewerAccountId`, which is exactly the
+      // leak the 409 projection closes: the earlier reviewer's account, the
+      // moment they decided and their private note travelled to whoever called
+      // this endpoint. The knowledge is unchanged and still internal — see the
+      // same-workspace privacy suite below, which proves the engine still holds
+      // all three while the response carries none of them.
+      expect(candidate.hasPriorHumanDecision).toBe(true);
+      expect(candidate).not.toHaveProperty('priorHumanDecision');
       nothingWasCreated();
+    });
+
+    // -----------------------------------------------------------------------
+    // SAME-WORKSPACE PRIVATE AUDIT METADATA — the 409 projection.
+    //
+    // Tenant isolation was never the question here: account A and account B are
+    // in the SAME workspace, A's mapping is lawful evidence B's resolution is
+    // entitled to benefit from, and no predicate would or should exclude it.
+    //
+    // The question is what B's HTTP response is allowed to contain. A batch is
+    // user-owned: B admitting a resource on B's own row must not read the note A
+    // typed while settling A's row. So the engine keeps everything and the reply
+    // keeps almost nothing — privacy by projection, never by forgetting.
+    // -----------------------------------------------------------------------
+    describe('SAME-WORKSPACE PRIVATE AUDIT METADATA (409 identity refusal)', () => {
+      const PRIVATE_ACCOUNT_A = 'private-account-A';
+      const PRIVATE_NOTE_A = 'CATATAN PRIVAT ACCOUNT A';
+      const PRIVATE_DECIDED_AT = '2026-02-03T04:05:06.000Z';
+
+      /**
+       * The 409 body, named once. Typing it here is not decoration: it is what
+       * lets these assertions read the response as the CONTRACT it is rather
+       * than as an `any` chain, so a field that disappears fails at compile time
+       * instead of quietly turning an expectation into a no-op.
+       */
+      interface SafeCandidateBody {
+        resourceCatalogId: string;
+        name: string;
+        code: string | null;
+        type: string;
+        baseUnit: string;
+        evidence: string[];
+        specificationUnproved: boolean;
+        unprovedSpecificationFacts: string[];
+        hasPriorHumanDecision: boolean;
+      }
+      interface IdentityRefusalBody {
+        message: string;
+        resourceIdentity: {
+          status: string;
+          authority: string | null;
+          resolvedResourceCatalogId: string | null;
+          reasonCodes: string[];
+          candidates: SafeCandidateBody[];
+        };
+      }
+
+      /** A's lawful reviewed mapping, owned by the SAME workspace B works in. */
+      const seedAccountADecision = () => {
+        identityCatalogRows = [
+          catalogRow({
+            id: 'mapped-by-a-01',
+            name: 'Bahan pengikat tipe satu',
+          }),
+        ];
+        identityMappingRows = [
+          {
+            id: 'mapping-private-01',
+            workspaceId: WORKSPACE_ID,
+            resourceCatalogId: 'mapped-by-a-01',
+            reviewerAccountId: PRIVATE_ACCOUNT_A,
+            decidedAt: new Date(PRIVATE_DECIDED_AT),
+            reason: PRIVATE_NOTE_A,
+            row: {
+              rawResourceNameText: 'Semen Portland',
+              rawResourceCodeText: null,
+              resolvedResourceType: 'MATERIAL',
+              sourceSection: 'MATERIAL',
+            },
+          },
+        ];
+      };
+
+      const refusalBody = async (): Promise<IdentityRefusalBody> => {
+        const error: unknown = await admit().catch((thrown: unknown) => thrown);
+        expect(error).toBeInstanceOf(ConflictException);
+        return (
+          error as ConflictException
+        ).getResponse() as IdentityRefusalBody;
+      };
+
+      it("carries NONE of account A's private audit metadata in the serialized body", async () => {
+        seedAccountADecision();
+
+        // THE SERIALIZED BODY, not the TypeScript shape. A type can be narrowed
+        // while the runtime object still carries the fields, and it is the wire
+        // that reaches a browser.
+        const payload = JSON.stringify(await refusalBody());
+
+        for (const secret of [
+          PRIVATE_ACCOUNT_A,
+          PRIVATE_NOTE_A,
+          '2026-02-03T04:05:06',
+          'reviewerAccountId',
+          'priorHumanDecision',
+          'decidedAt',
+          'mapping-private-01',
+        ]) {
+          expect(payload).not.toContain(secret);
+        }
+        nothingWasCreated();
+      });
+
+      it('still carries what the caller needs to recover instead of duplicating', async () => {
+        seedAccountADecision();
+        const body = await refusalBody();
+
+        expect(body.message).toBe('RESOURCE_IDENTITY_NOT_EXHAUSTED');
+        expect(body.resourceIdentity.reasonCodes.length).toBeGreaterThan(0);
+
+        const candidate = body.resourceIdentity.candidates[0];
+        // Everything a human needs to pick this row instead of making a second
+        // one — and the safe signal that somebody already settled it once.
+        expect(candidate.resourceCatalogId).toBe('mapped-by-a-01');
+        expect(candidate.name).toBe('Bahan pengikat tipe satu');
+        expect(candidate.type).toBe('MATERIAL');
+        expect(candidate.baseUnit).toBe('Zak');
+        expect(candidate.evidence).toEqual(['REVIEWED_MAPPING_NAME_MATCH']);
+        expect(candidate.hasPriorHumanDecision).toBe(true);
+
+        // The whole outward candidate shape, fenced key-by-key. A field added to
+        // the kernel's candidate cannot reach this response without this test
+        // being read and changed.
+        expect(Object.keys(candidate).sort()).toEqual([
+          'baseUnit',
+          'code',
+          'evidence',
+          'hasPriorHumanDecision',
+          'name',
+          'resourceCatalogId',
+          'specificationUnproved',
+          'type',
+          'unprovedSpecificationFacts',
+        ]);
+        // `specifications` is the catalog row's raw claims blob, surfaced for the
+        // kernel's own reasoning. It is not part of this reply.
+        expect(candidate).not.toHaveProperty('specifications');
+      });
+
+      it('does NOT send the raw canonical Resource Identity explanation', async () => {
+        seedAccountADecision();
+        const body = await refusalBody();
+
+        // No client reads it — callers switch on `message`, which is still here
+        // and still machine-readable. The authority keeps its own explanation.
+        expect(body.resourceIdentity).not.toHaveProperty('explanation');
+
+        const payload = JSON.stringify(body);
+        expect(payload).not.toContain('"explanation"');
+        // The kernel's PROSE, not the field name: `resolvedResourceCatalogId` is
+        // a structured identity key and legitimately contains that word, which is
+        // exactly why this asserts on the sentence form instead.
+        expect(payload).not.toContain('entri ResourceCatalog');
+        expect(payload).not.toContain('cocok persis');
+      });
+
+      it('ACTIVE KNOWLEDGE: the engine still holds the whole decision internally', async () => {
+        seedAccountADecision();
+
+        // The projection is the LAST step. Asked directly, the same authority
+        // over the same evidence still returns the reviewer, the moment and the
+        // note — which is what makes this privacy-by-projection rather than
+        // privacy-by-amnesia. If this ever fails, SIMPROK was made to forget.
+        //
+        // Constructed locally over the SAME mocked evidence, so this test needs
+        // nothing from the shared setup and cannot perturb any other test.
+        const authority = new ResourceIdentityResolutionService(
+          prisma as unknown as PrismaService,
+          unitKernel as unknown as UnitKernelService,
+        );
+        type EvidenceClientArg = Parameters<
+          ResourceIdentityResolutionService['loadEvidence']
+        >[0];
+        const evidence = await authority.loadEvidence(
+          tx as unknown as EvidenceClientArg,
+          WORKSPACE_ID,
+        );
+        const verdict = await authority.resolve(evidence, {
+          rawName: 'Semen Portland',
+          rawCode: null,
+          rawUnit: 'M3',
+          resourceType: ResourceType.MATERIAL,
+        });
+
+        const known = verdict.candidates.find(
+          (c) => c.resourceCatalogId === 'mapped-by-a-01',
+        );
+        expect(known?.priorHumanDecision?.reviewerAccountId).toBe(
+          PRIVATE_ACCOUNT_A,
+        );
+        expect(known?.priorHumanDecision?.reason).toBe(PRIVATE_NOTE_A);
+        expect(verdict.explanation.length).toBeGreaterThan(0);
+      });
     });
 
     it('7. a GLOBAL catalog candidate forbids a workspace-local duplicate, and the loader really does look at global rows', async () => {

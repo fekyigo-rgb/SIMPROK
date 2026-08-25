@@ -1,0 +1,13 @@
+-- SOFT RE-VERIFICATION CARRIER, and nothing else.
+--
+-- `BasicPrice.reviewDate` already existed; the import batch had no field to
+-- carry a human-stated re-verification date, so the value a person typed on the
+-- metadata form had nowhere to live between the form and the created price.
+--
+-- ADDITIVE AND NULLABLE. Every existing row keeps NULL, which reads as "nobody
+-- stated a re-verification date" — the same meaning it had before this column
+-- existed. No existing value is reinterpreted, no default is back-filled, and
+-- no other column's meaning changes. `validUntil` (the hard validity boundary
+-- the Cost Kernel and AHSP resolution enforce) and `effectiveDate` (the
+-- source's effective-start fact) are untouched.
+ALTER TABLE "basic_price_import_batches" ADD COLUMN "reviewDate" TIMESTAMP(3);

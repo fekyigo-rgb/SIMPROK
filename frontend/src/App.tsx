@@ -45,6 +45,10 @@ function App() {
               <Route path="project/:projectId/rab/ahsp-snapshot" element={<ProjectAhspSnapshotPage />} />
               <Route path="basic-price" element={<BasicPriceExplorerPage />} />
               <Route path="basic-price/import" element={<PermissionRoute permission="BASIC_PRICE_IMPORT"><BasicPriceImportPage /></PermissionRoute>} />
+              {/* Reopen an existing batch to read or repair its metadata. Same
+                  page, same permission as creating one — it edits exactly the
+                  fields the upload form does, on a batch the caller owns. */}
+              <Route path="basic-price/import/:batchId" element={<PermissionRoute permission="BASIC_PRICE_IMPORT"><BasicPriceImportPage /></PermissionRoute>} />
               <Route path="basic-price/import/:batchId/review" element={<PermissionRoute permission="BASIC_PRICE_RESOLVE"><BasicPriceReviewPage /></PermissionRoute>} />
               <Route path="basic-price/reviews" element={<PermissionRoute permission="BASIC_PRICE_REVIEW_VIEW"><BasicPriceReviewQueuePage /></PermissionRoute>} />
               <Route path="basic-price/reviews/:reviewId" element={<PermissionRoute permission="BASIC_PRICE_REVIEW_VIEW"><BasicPriceReviewDetailPage /></PermissionRoute>} />

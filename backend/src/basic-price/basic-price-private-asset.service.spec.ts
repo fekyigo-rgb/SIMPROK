@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
 import type { TrustedBasicPriceActor } from './trusted-basic-price-actor.service';
@@ -112,13 +112,21 @@ describe('BasicPricePrivateAssetService', () => {
       makeTx();
       await service.keepBatchPrivate({ batchId, actor });
 
-      const data = tx.basicPrice.create.mock.calls[0][0].data;
+      const data = tx.basicPrice.create.mock.calls[0][0]
+        .data as Record<string, unknown>;
       // Omitted, so the row takes the schema defaults UNPUBLISHED/UNVERIFIED.
       // A private asset becomes usable through eligibility, never by claiming
       // it went through a publication ladder it never entered.
       expect(data).not.toHaveProperty('status');
       expect(data).not.toHaveProperty('verificationStatus');
-      expect(data).not.toHaveProperty('reviewDate');
+      // `reviewDate` USED TO BE ASSERTED ABSENT HERE, and it was grouped with
+      // the two above as if it were a third publication-ladder claim. It is
+      // not one. It is soft advice — "check this again by" — that feeds no
+      // eligibility, no filter and no ladder, and the publication meaning this
+      // test defends is unchanged by it. What must stay true is that it never
+      // becomes a HARD boundary, which is asserted directly below.
+      expect(data).not.toHaveProperty('validUntil');
+      expect(data.freshnessStatus).toBe('CURRENT');
     });
 
     it('creates no submission, no review, and no publication audit', async () => {
@@ -184,13 +192,23 @@ describe('BasicPricePrivateAssetService', () => {
       );
     });
 
-    it('refuses an INCOHERENT origin/type pair outright', async () => {
-      // The precise defect RM-03D1 closes: government origin, market-survey type.
+    it('records a government-published market survey as stated, because that is a real document', async () => {
+      // THIS PAIR USED TO BE REFUSED, AND THE REFUSAL WAS THE DEFECT.
+      //
+      // RM-03D1 read GOVERNMENT + MARKET_SURVEY as a falsehood. It is an
+      // ordinary document: a government agency publishing the results of a
+      // market survey. sourceOrigin says WHO the price came from; sourceType
+      // says WHAT KIND OF STATEMENT it is, and Owner law keeps those axes
+      // separate (BASIC-PRICE-MASTER-DECISION §10). SIMPROK records what the
+      // human stated instead of arguing with their document.
       makeTx({ batch: { ...baseBatch(), sourceOrigin: 'GOVERNMENT', sourceType: 'MARKET_SURVEY' } });
-      await expect(service.keepBatchPrivate({ batchId, actor })).rejects.toThrow(
-        'SOURCE_ORIGIN_TYPE_INCOHERENT',
-      );
-      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+      await service.keepBatchPrivate({ batchId, actor });
+      const written = tx.basicPrice.create.mock.calls[0][0].data as {
+        sourceOrigin: string;
+        sourceType: string;
+      };
+      expect(written.sourceOrigin).toBe('GOVERNMENT');
+      expect(written.sourceType).toBe('MARKET_SURVEY');
     });
   });
 
@@ -293,12 +311,42 @@ describe('BasicPricePrivateAssetService', () => {
   });
 
   describe('lifecycle and idempotency', () => {
-    it('requires the batch to be READY_FOR_REVIEW, like submit does', async () => {
+    it('refuses a batch outside its mutable window', async () => {
       makeTx({ batch: { ...baseBatch(), status: 'PREVIEWED' } });
 
       await expect(
         service.keepBatchPrivate({ batchId, actor }),
-      ).rejects.toBeInstanceOf(ConflictException);
+      ).rejects.toMatchObject({ message: 'BATCH_NOT_MUTABLE' });
+    });
+
+    /**
+     * THE GATE THAT MADE THE PRODUCT UNUSABLE, and why widening it is correct
+     * rather than a loosening.
+     *
+     * This used to require READY_FOR_REVIEW "like submit does". A batch only
+     * reaches that status once EVERY row has been decided, so on the Owner's
+     * real 86-row workbook the six rows that WERE finished could not be kept
+     * until the other eighty were finished too — and the only other action in
+     * the room, submit, was gated the same way. The review room therefore had
+     * no available action at all, which is what a click producing nothing
+     * actually looked like from the inside.
+     *
+     * Nothing about a finished row depends on its neighbours. The writer still
+     * selects READY_FOR_SUBMISSION rows only and still re-checks each row's own
+     * resource identity and canonical price below. Submit keeps the strict gate
+     * because submit is terminal; this one is not.
+     */
+    it('accepts a batch still NEEDS_REVIEW: finished rows are kept while others are still being worked on', async () => {
+      makeTx({ batch: { ...baseBatch(), status: 'NEEDS_REVIEW' } });
+
+      const result = await service.keepBatchPrivate({ batchId, actor });
+
+      expect(result.createdCount).toBe(1);
+      // And the batch was not advanced by keeping rows, so the remaining rows
+      // stay workable and this may be pressed again. Proven structurally: this
+      // suite's transaction mock carries NO `basicPriceImportBatch` client at
+      // all, so any attempt to write one would have thrown rather than passed.
+      expect(tx).not.toHaveProperty('basicPriceImportBatch');
     });
 
     it('refuses when no row has been resolved to READY_FOR_SUBMISSION', async () => {

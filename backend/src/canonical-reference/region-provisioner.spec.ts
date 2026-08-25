@@ -426,11 +426,41 @@ describe('RM-03D0 Region provisioner', () => {
      * it defends against.
      */
     describe('the caller cannot widen the recognised authority', () => {
-      it('exposes exactly one Region authority, and it is the canonical token', () => {
+      it('exposes exactly the canonical and governed-rehearsal Region authorities', () => {
         expect(KNOWN_REGION_CONFIRMATION_TOKENS).toEqual([
           'APPLY_RM03D0_CANONICAL_REFERENCES',
+          'APPLY_GOVERNED_REHEARSAL_REFERENCES',
         ]);
         expect(REGION_CONFIRMATION_TOKEN).toBe('APPLY_RM03D0_CANONICAL_REFERENCES');
+        // The acceptance token is still not a Region authority and never was.
+        expect(KNOWN_REGION_CONFIRMATION_TOKENS).not.toContain(
+          'APPLY_RM02C1B_TO_SIMPROK_TEST',
+        );
+      });
+
+      it('never lets one Region authority stand in for the other', async () => {
+        const h = harness([]);
+        for (const [confirmationToken, expectedConfirmationToken] of [
+          [
+            'APPLY_GOVERNED_REHEARSAL_REFERENCES',
+            'APPLY_RM03D0_CANONICAL_REFERENCES',
+          ],
+          [
+            'APPLY_RM03D0_CANONICAL_REFERENCES',
+            'APPLY_GOVERNED_REHEARSAL_REFERENCES',
+          ],
+        ] as const) {
+          await expect(
+            applyRegionPlan(h.prisma, {
+              regionCode: CODE,
+              regionName: NAME,
+              expectedPlanSha256: 'x',
+              confirmationToken,
+              expectedConfirmationToken,
+            }),
+          ).rejects.toThrow(/STOP_MISSING_CONFIRMATION_TOKEN/);
+        }
+        expect(h.created).toEqual([]);
       });
 
       it('takes no allow-list argument at all', () => {

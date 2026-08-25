@@ -2,7 +2,8 @@ import { readFileSync } from 'fs';
 import { Prisma } from '@prisma/client';
 import {
   BasicPriceUniversalIntakeAdapter,
-  ROW_KIND_AMBIGUOUS_REASON,
+  affirmativeHeadingEvidence,
+  classifyPhysicalRow,
 } from './basic-price-universal-intake.adapter';
 import { XlsxSourceReader } from '../universal-intake/readers/xlsx.reader';
 import type { SourceTable } from '../universal-intake/readers/source-table';
@@ -127,11 +128,15 @@ describe('USI-01R3A — PORTABLE regional regression (no Owner files)', () => {
     expect(rowSets[2]).toEqual(rowSets[0]);
     expect(new Set(rowSets[0]).size).toBe(rowSets[0].length);
 
-    // The candidate set is exactly "everything the source proved was not a
-    // title" — stated against the fixture's own declared intent.
+    // The candidate set is exactly "every row that could carry a price" —
+    // stated against the fixture's own declared intent. Two kinds are outside
+    // it, for two different and separately earned reasons: a PROVEN title, and
+    // a row whose commercial fields are all empty under every jurisdiction.
     expect(rowSets[0]).toEqual(
       PORTABLE_ROWS.filter(
-        (row) => row.expectedKind !== 'STRUCTURAL_HEADING',
+        (row) =>
+          row.expectedKind !== 'STRUCTURAL_HEADING' &&
+          row.expectedKind !== 'NO_COMMERCIAL_EVIDENCE',
       ).map((row) => row.rowNumber),
     );
   });
@@ -261,20 +266,36 @@ describe('USI-01R3A — PORTABLE regional regression (no Owner files)', () => {
     expect(withSiblingContext).toBeGreaterThan(0);
   });
 
-  it('REGPORT-09: the name-only unresolved row stays ROW_KIND_AMBIGUOUS in every region', () => {
+  it('REGPORT-09: the name-only row is excluded in every region, and never as a title', () => {
     const source = PORTABLE_ROWS.find(
-      (row) => row.expectedKind === 'ROW_KIND_AMBIGUOUS',
+      (row) => row.expectedKind === 'NO_COMMERCIAL_EVIDENCE',
     )!;
 
     for (const label of PORTABLE_REGIONS) {
-      const row = candidateAt(label, source.rowNumber);
-      // It did NOT disappear as a heading...
-      expect(row).toBeDefined();
-      // ...it names its own uncertainty...
-      expect(row!.warnings).toContain(ROW_KIND_AMBIGUOUS_REASON);
-      // ...and it invents no price.
-      expect(row!.proposedCanonicalPrice).toBeNull();
+      // NOT a candidate: no unit, no price under ANY jurisdiction, no number.
+      // There is no price here to observe, and a priceless row could never
+      // reach READY_FOR_SUBMISSION however a reviewer answered it.
+      expect(candidateAt(label, source.rowNumber)).toBeUndefined();
     }
+
+    // AND THE CLAIM IS STILL THE NARROW ONE. SIMPROK does not say this row is a
+    // title — nothing said so, and the classifier proves it by refusing that
+    // verdict for exactly these facts.
+    expect(
+      classifyPhysicalRow({
+        hasName: true,
+        hasUnitEvidence: false,
+        hasPriceEvidenceInAnyJurisdiction: false,
+        hasRowNumberEvidence: false,
+        headingEvidence: affirmativeHeadingEvidence(source.name),
+      }),
+    ).toBe('NO_COMMERCIAL_EVIDENCE');
+
+    // Region-independent, because the DOCUMENT decides it.
+    const excluded = PORTABLE_REGIONS.map(
+      (label) => byRegion.get(label)!.excludedNonDataRows,
+    );
+    expect(new Set(excluded).size).toBe(1);
   });
 
   it('the header, and only the header, sits above the data', () => {

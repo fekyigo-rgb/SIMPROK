@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { searchRegions, type RegionLookupItem } from '../../api/basicPriceWorkflow';
-import { regionOptionLabel } from '../../utils/basicPriceWorkflowDisplay';
+import {
+  regionChosenLabel,
+  regionOptionLabels,
+} from '../../utils/basicPriceWorkflowDisplay';
 import { createLatestRequestGate } from '../../utils/catalogSearch';
 
 interface RegionSearchSelectProps {
@@ -52,6 +55,10 @@ export function RegionSearchSelect({ selected, disabled = false, onSelect }: Reg
     setQuery(value);
   };
 
+  // Names first; a code is appended only where two candidates in THIS result
+  // set share a name and nothing else could tell them apart.
+  const labels = regionOptionLabels(results);
+
   return (
     <fieldset disabled={disabled} style={{ minWidth: '280px', padding: '10px' }}>
       <legend>Wilayah (Region)</legend>
@@ -61,21 +68,33 @@ export function RegionSearchSelect({ selected, disabled = false, onSelect }: Reg
           type="search"
           value={query}
           onChange={(event) => changeQuery(event.target.value)}
-          placeholder="Ketik kode atau nama wilayah"
+          placeholder="Ketik nama wilayah, misalnya Ambon"
         />
       </label>
       <button type="button" onClick={() => { setHasInteracted(true); void runSearch(''); }}>
         Tampilkan wilayah
       </button>
       {state === 'loading' ? <p role="status">Mencari wilayah...</p> : null}
-      {state === 'empty' ? <p>Tidak ada wilayah yang cocok.</p> : null}
+      {/*
+        AN EMPTY RESULT IS NOT A DEAD END. Wilayah is governed reference data —
+        SIMPROK will not invent a place, because an invented place is a false
+        claim about the real world. So when nothing matches, the honest answer
+        names WHO can add it rather than leaving a person retyping.
+      */}
+      {state === 'empty' ? (
+        <p role="status">
+          Wilayah itu belum terdaftar di SIMPROK. Daftar wilayah ditetapkan oleh
+          pemilik data, bukan dibuat otomatis saat impor — mintalah wilayah ini
+          ditambahkan, lalu pilih kembali di sini.
+        </p>
+      ) : null}
       {state === 'error' ? <p role="alert">Gagal memuat wilayah. Silakan coba lagi.</p> : null}
       {state === 'ready' ? (
         <ul aria-label="Hasil pencarian Wilayah">
           {results.map((region) => (
             <li key={region.id}>
               <button type="button" onClick={() => { onSelect(region); setState('idle'); }}>
-                {regionOptionLabel(region)}
+                {labels.get(region.id) ?? region.name}
               </button>
             </li>
           ))}
@@ -83,7 +102,7 @@ export function RegionSearchSelect({ selected, disabled = false, onSelect }: Reg
       ) : null}
       {selected ? (
         <div role="status">
-          <strong>Terpilih:</strong> {regionOptionLabel(selected)}
+          <strong>Terpilih:</strong> {regionChosenLabel(selected)}
           <button type="button" onClick={() => onSelect(null)}>Ganti wilayah</button>
         </div>
       ) : (

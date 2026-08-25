@@ -1,5 +1,9 @@
 import { Prisma } from '@prisma/client';
 import { toDecimalString2 } from './money';
+import {
+  reverificationState,
+  type ReverificationState,
+} from '../basic-price/basic-price-reverification.policy';
 
 /**
  * RM-02D2A2 — the single canonical projection layer for the Basic Price
@@ -389,6 +393,22 @@ export interface BasicPriceExplorerItem {
    */
   sourceName: string | null;
   freshnessStatus: string;
+  /**
+   * SOFT RE-VERIFICATION — the date SIMPROK recommends this price be checked
+   * again, or null when it recommends nothing (a live integration reports its
+   * own freshness; a source with no stated period has nothing to anchor to).
+   *
+   * IT IS NOT `validUntil`, and the two must never be rendered with the same
+   * words. `validUntil` is a hard boundary the Cost Kernel and AHSP resolution
+   * actually enforce; this is advice. A price past this date stays fully
+   * usable and stays in every candidate set.
+   */
+  reviewDate: string | null;
+  /**
+   * Derived here, never stored: `DUE` once the recommended date has passed,
+   * `NOT_RECOMMENDED` when no date was ever recommended. Nothing filters on it.
+   */
+  reverification: ReverificationState;
   workspaceScope: BasicPriceWorkspaceScope;
   /**
    * RM-03C. Read straight off the persisted column — never inferred from which
@@ -413,6 +433,8 @@ export interface ExplorerRowSource {
   value: Prisma.Decimal | string;
   effectiveDate: DateLike;
   validUntil: DateLike | null;
+  /** Optional so every existing caller and fixture keeps compiling unchanged. */
+  reviewDate?: DateLike | null;
   sourceType: string;
   sourceOrigin: string;
   freshnessStatus: string;
@@ -455,7 +477,8 @@ export interface ExplorerRowSource {
 export function deriveExplorerSourceName(
   row: ExplorerRowSource,
 ): string | null {
-  const batch = row.sourceSubmission?.importRow?.batch ?? row.sourceImportRow?.batch;
+  const batch =
+    row.sourceSubmission?.importRow?.batch ?? row.sourceImportRow?.batch;
   if (!batch) return null;
   // A blank/whitespace-only stored name is not a real human-facing source
   // name either — treat it the same as absent rather than rendering "".
@@ -481,6 +504,11 @@ export function mapExplorerItem(
     sourceOrigin: row.sourceOrigin,
     sourceName: deriveExplorerSourceName(row),
     freshnessStatus: row.freshnessStatus,
+    reviewDate: toIsoOrNull(row.reviewDate),
+    reverification: reverificationState(
+      row.reviewDate ? new Date(row.reviewDate) : null,
+      new Date(),
+    ),
     // The eligibility query only ever returns rows where workspaceId is the
     // caller's own workspace or null; this equality check is the honest
     // expression of that contract rather than a bare null check, so a future

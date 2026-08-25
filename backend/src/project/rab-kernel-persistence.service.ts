@@ -264,6 +264,10 @@ export class RabKernelPersistenceService {
             assetScope: true,
             sourceSubmissionId: true,
             sourceImportRowId: true,
+            // BP-CAT-01B — a shared catalog row carries its provenance through
+            // the price it was promoted from, so the chain to prove is chosen
+            // from this column too.
+            promotedFromBasicPriceId: true,
             resourceId: true,
             workspaceId: true,
             organizationId: true,
@@ -497,6 +501,7 @@ export class RabKernelPersistenceService {
       assetScope: BasicPriceAssetScope;
       sourceSubmissionId: string | null;
       sourceImportRowId: string | null;
+      promotedFromBasicPriceId?: string | null;
       resourceId: string;
       workspaceId: string | null;
       organizationId: string | null;
@@ -515,6 +520,52 @@ export class RabKernelPersistenceService {
         basicPrice,
         trustedWorkspaceId,
       );
+    }
+
+    // BP-CAT-01B — A SHARED CATALOG ROW'S PROVENANCE IS ITS ORIGIN'S PROVENANCE.
+    //
+    // A promoted row deliberately holds no `sourceSubmissionId` of its own:
+    // that column is UNIQUE and still belongs to the price it was promoted from,
+    // and `sourceImportRowId` may never sit on a catalog row at all. Without
+    // this branch such a row would pass canonical eligibility and then be
+    // refused here — selectable but unusable, which is worse than not being
+    // offered. So the chain is proved against the ORIGIN, which owns the real
+    // submission, the real ACCEPT decision and the real PUBLISH audit.
+    //
+    // This is not a second lifecycle: it re-enters the SAME catalog chain below,
+    // one level down, bound to the origin's own workspace and organization. The
+    // origin is re-read rather than trusted, and a lineage pointing at a missing
+    // or private row fails closed like any other broken link. The recursion is
+    // bounded to exactly one hop because `basic_prices_promoted_row_is_shared_check`
+    // makes a promoted row's own lineage the only one it can carry, and a
+    // promoted row can never itself be an origin that is workspace-owned.
+    if (basicPrice.promotedFromBasicPriceId) {
+      const origin = await tx.basicPrice.findUnique({
+        where: { id: basicPrice.promotedFromBasicPriceId },
+        select: {
+          id: true,
+          assetScope: true,
+          sourceSubmissionId: true,
+          sourceImportRowId: true,
+          resourceId: true,
+          workspaceId: true,
+          organizationId: true,
+          regionId: true,
+        },
+      });
+      // The promoted row must genuinely restate its origin's facts. An origin
+      // that names a different resource or region than the row standing on it
+      // is not evidence for that row, however intact its own chain is.
+      if (
+        !origin ||
+        origin.assetScope !== BasicPriceAssetScope.SIMPROK_CATALOG ||
+        origin.workspaceId === null ||
+        origin.resourceId !== basicPrice.resourceId ||
+        origin.regionId !== basicPrice.regionId
+      ) {
+        throw new ConflictException(INCOMPLETE);
+      }
+      return this.assertTraceableProvenance(tx, origin, origin.workspaceId);
     }
 
     if (basicPrice.sourceSubmissionId === null) {

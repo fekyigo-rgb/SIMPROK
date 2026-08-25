@@ -7,6 +7,8 @@ import {
 } from '@prisma/client';
 import { resolveAhspResourcePrice } from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
+import { promotionLineagePrecedenceWhere } from '../basic-price/basic-price-promotion-precedence';
+import { basicPriceCurrentnessWhere } from '../basic-price/basic-price-currentness';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
@@ -81,17 +83,32 @@ export class AhspResourceResolutionOrchestrator {
       version.resources.map((resource: any) => resource.id),
     );
 
-const priceRows = await tx.basicPrice.findMany({
-  where: {
-    ...this.eligibility.usableWhere(input.workspaceId),
-    regionId: input.referenceRegionId,
-    effectiveDate: { lte: asOf },
-    AND: [
-      { OR: [{ validUntil: null }, { validUntil: { gte: asOf } }] },
-    ],
-  },
-  include: { resource: true },
-});
+    const priceRows = await tx.basicPrice.findMany({
+      where: {
+        ...this.eligibility.usableWhere(input.workspaceId),
+        // BP-CAT-01E — this is the CANDIDATE offer, so the one-logical-truth rule
+        // applies: a workspace must not be offered its own price twice, once as
+        // the origin it owns and again as the descendant it donated, and then be
+        // told the ambiguity NEEDS_REVIEW. The re-read below stays raw-lawful on
+        // purpose — it is already bound to a row this offer contained.
+        ...promotionLineagePrecedenceWhere(input.workspaceId),
+        // BP-CORR-01 — a price a published correction has REPLACED is still lawful
+        // and still readable, but it is no longer what this resource costs. Offering
+        // it here would put the old money back into a new calculation, and offering
+        // it ALONGSIDE its successor would make the resolver report NEEDS_REVIEW for
+        // an ambiguity SIMPROK had already resolved.
+        //
+        // The re-read below deliberately does NOT compose this, and that is what
+        // preserves historical calculations: a resolution persisted against a price
+        // that has since been superseded still re-reads that exact row and still
+        // proves its provenance. Selection changed; history did not.
+        ...basicPriceCurrentnessWhere({ asOf }),
+        regionId: input.referenceRegionId,
+        effectiveDate: { lte: asOf },
+        AND: [{ OR: [{ validUntil: null }, { validUntil: { gte: asOf } }] }],
+      },
+      include: { resource: true },
+    });
 
 const resolutions: ResolutionCreate[] = [];
 for (const resource of version.resources) {

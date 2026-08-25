@@ -1,3 +1,4 @@
+import type { Server } from 'node:http';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
@@ -43,6 +44,12 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
   const asOfDate = '2026-08-07';
 
   let app: INestApplication;
+  /**
+   * `getHttpServer()` is declared `any`, so handing it straight to supertest
+   * passes an unchecked value. Named once with the type it actually returns,
+   * matching the idiom the newer suites in this directory already use.
+   */
+  const server = (): Server => app.getHttpServer() as Server;
 
   // Workspace A — the owner of the private asset.
   let orgAId: string;
@@ -127,7 +134,9 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
                       code: `${tag}_${params.suffix.toUpperCase()}`,
                       name: `${tag} ${params.suffix}`,
                       rolePermissions: {
-                        create: permissions.map((p) => ({ permissionId: p.id })),
+                        create: permissions.map((p) => ({
+                          permissionId: p.id,
+                        })),
                       },
                     },
                   })
@@ -179,7 +188,11 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
     return { accountId: account.id, membershipId: membership.id, email };
   };
 
-  const keepPrivate = (bearer: string, workspaceId: string, targetBatchId = batchId) =>
+  const keepPrivate = (
+    bearer: string,
+    workspaceId: string,
+    targetBatchId = batchId,
+  ) =>
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     request(app.getHttpServer())
       .post(`/basic-price-imports/${targetBatchId}/keep-private`)
@@ -215,7 +228,11 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
       data: { code: `${tag}-REG`, name: `${tag} Region`, isActive: true },
     });
     const otherRegion = await prisma.region.create({
-      data: { code: `${tag}-REG2`, name: `${tag} Other Region`, isActive: true },
+      data: {
+        code: `${tag}-REG2`,
+        name: `${tag} Other Region`,
+        isActive: true,
+      },
     });
     regionId = region.id;
     otherRegionId = otherRegion.id;
@@ -231,7 +248,10 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
     });
     projectId = project.id;
 
-    const owner = await createActor({ suffix: 'owner', workspaceId: workspaceAId });
+    const owner = await createActor({
+      suffix: 'owner',
+      workspaceId: workspaceAId,
+    });
     ownerAccountId = owner.accountId;
     const publisher = await createActor({
       suffix: 'publisher',
@@ -811,9 +831,10 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
 
       expect(response.body.ahspVersionId).toBe(version.id);
 
-      const resolution = await prisma.projectAhspResourceResolution.findFirstOrThrow(
-        { where: { occurrence: { projectId } } },
-      );
+      const resolution =
+        await prisma.projectAhspResourceResolution.findFirstOrThrow({
+          where: { occurrence: { projectId } },
+        });
       // Deterministic: the workspace's own price, selected because it is the
       // ONLY eligible candidate — not because private outranks anything.
       expect(resolution.status).toBe('RESOLVED');
@@ -855,7 +876,9 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
 
     it('re-proves the persisted line read-only, reproducing the stored money exactly', async () => {
       const response = await request(app.getHttpServer())
-        .get(`/projects/${projectId}/boq/items/${boqItemId}/persisted-calculation`)
+        .get(
+          `/projects/${projectId}/boq/items/${boqItemId}/persisted-calculation`,
+        )
         .set('Authorization', `Bearer ${rabEditorToken}`)
         .expect(200);
 
@@ -942,7 +965,10 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
 
     it('rejects a catalog price wearing the private evidence link', async () => {
       await expect(
-        attempt({ assetScope: 'SIMPROK_CATALOG', sourceImportRowId: probeRowId }),
+        attempt({
+          assetScope: 'SIMPROK_CATALOG',
+          sourceImportRowId: probeRowId,
+        }),
       ).rejects.toThrow();
     });
 
@@ -967,6 +993,358 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
         where: { assetScope: 'WORKSPACE_PRIVATE', workspaceId: workspaceAId },
       });
       expect(seeded).toBe(2);
+    });
+  });
+
+  // ── 7. The incremental gate ──────────────────────────────────────────────
+  //
+  // THE OWNER'S ACTUAL MOMENT, over the actual endpoints.
+  //
+  // Every block above works on a batch that is already READY_FOR_REVIEW —
+  // which means every row in it has already been decided. That is not the state
+  // a real import is in. The Owner's 86-row workbook had six rows finished and
+  // eighty still open, so the batch was NEEDS_REVIEW, and the private writer
+  // used to refuse exactly that: the six finished rows could not be kept until
+  // the other eighty were finished too. The review room therefore had no
+  // available action at all, which is what a click producing nothing looked
+  // like from the inside.
+  //
+  // This block builds its OWN batch, so the shared fixture above — and the
+  // "exactly two private rows" count that closes it — are untouched.
+  describe('A part-finished batch can still keep the rows that ARE finished', () => {
+    /**
+     * The shapes this block reads, declared rather than inferred. `response.body`
+     * is `any`, and a block that reaches into it unchecked both fails lint and
+     * silently survives a projection that stops sending these fields — which is
+     * exactly the contract these tests exist to hold.
+     */
+    interface BatchActionsBody {
+      status: string;
+      needsReviewRows: number;
+      readyForSubmissionRows: number;
+      /** Finished rows already stored as private prices, null if unmeasured. */
+      alreadyPrivateRows: number | null;
+      actions: {
+        privateUse: {
+          offered: boolean;
+          reasonCode: string | null;
+          actionableRows: number | null;
+        };
+        simprokProposal: {
+          offered: boolean;
+          reasonCode: string | null;
+          sourceFamily: string | null;
+        };
+      };
+      sourceOrigin: string | null;
+      sourceType: string | null;
+    }
+    interface KeepPrivateBody {
+      createdCount: number;
+      alreadyPrivateCount: number;
+      prices: { basicPriceId: string }[];
+    }
+    interface ExplorerBody {
+      data: {
+        assetScope: string;
+        price: string;
+        sourceOrigin: string;
+        sourceType: string;
+        resource: { id: string };
+      }[];
+    }
+    interface ConflictBody {
+      message: string;
+      expectedSourceType?: string;
+    }
+
+    let openBatchId: string;
+    let openResourceId: string;
+    let keptPriceIds: string[] = [];
+
+    beforeAll(async () => {
+      const resource = await prisma.resourceCatalog.create({
+        data: {
+          workspaceId: workspaceAId,
+          code: `${tag}-OPEN-01`,
+          name: `${tag} Pekerja Batch Terbuka`,
+          type: 'LABOR',
+          baseUnit: 'Org/Hari',
+        },
+      });
+      openResourceId = resource.id;
+
+      const batch = await prisma.basicPriceImportBatch.create({
+        data: {
+          workspaceId: workspaceAId,
+          organizationId: orgAId,
+          uploadedByAccountId: ownerAccountId,
+          sourceFileName: `${tag}-batch-terbuka.xlsx`,
+          sourceSha256: 'd'.repeat(64),
+          sourceByteLength: 2048,
+          selectedSheetName: 'HARGA SATUAN UPAH DAN BAHAN',
+          parserContractVersion: 'RM02B-XLSX-V1',
+          regionId,
+          effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+          sourceType: 'VENDOR_QUOTE',
+          sourceOrigin: 'STORE',
+          sourceVendorName: `${tag} Toko Bangunan Jaya`,
+          importFingerprint: `${tag}-fingerprint-terbuka`,
+          // THE STATE THE OWNER WAS ACTUALLY IN — not a contrivance. This is
+          // what `recomputeBatchStatus` writes while ANY row is still open.
+          status: 'NEEDS_REVIEW',
+        },
+      });
+      openBatchId = batch.id;
+
+      // One row finished, one still open: six-of-eighty-six in miniature.
+      await prisma.basicPriceImportRow.create({
+        data: {
+          batchId: openBatchId,
+          sourceSection: 'LABOR',
+          sourceSectionProvenance: 'SOURCE_SECTION_TITLE',
+          sourceRowNumber: 11,
+          sourceCodeCellAddress: 'D11',
+          sourceNameCellAddress: 'C11',
+          sourceUnitCellAddress: 'E11',
+          sourcePriceCellAddress: 'F11',
+          rawResourceCodeText: 'L.11',
+          rawResourceNameText: `${tag} Pekerja Batch Terbuka`,
+          rawUnitText: 'Org/Hari',
+          rawPriceCellType: 2,
+          rawPriceNumericRoundTripString: '150000',
+          proposedCanonicalPrice: '150000.00',
+          canonicalRoundingMode: 'EXACT',
+          resourceCatalogId: openResourceId,
+          resolvedResourceType: 'LABOR',
+          resolutionStatus: 'RESOLVED',
+          reasonCodes: ['TEST_FIXTURE_ONLY'],
+          status: 'READY_FOR_SUBMISSION',
+        },
+      });
+      await prisma.basicPriceImportRow.create({
+        data: {
+          batchId: openBatchId,
+          sourceSection: 'LABOR',
+          sourceSectionProvenance: 'SOURCE_SECTION_TITLE',
+          sourceRowNumber: 12,
+          sourceCodeCellAddress: 'D12',
+          sourceNameCellAddress: 'C12',
+          sourceUnitCellAddress: 'E12',
+          sourcePriceCellAddress: 'F12',
+          rawResourceCodeText: 'L.12',
+          rawResourceNameText: `${tag} Baris Belum Diputuskan`,
+          rawUnitText: 'Org/Hari',
+          rawPriceCellType: 2,
+          rawPriceNumericRoundTripString: '175000',
+          proposedCanonicalPrice: '175000.00',
+          canonicalRoundingMode: 'EXACT',
+          reasonCodes: ['TEST_FIXTURE_ONLY'],
+          status: 'NEEDS_REVIEW',
+        },
+      });
+    }, 40_000);
+
+    afterAll(async () => {
+      if (keptPriceIds.length > 0) {
+        await prisma.basicPrice.deleteMany({
+          where: { id: { in: keptPriceIds } },
+        });
+      }
+      await prisma.basicPriceImportRow.deleteMany({
+        where: { batchId: openBatchId },
+      });
+      await prisma.basicPriceImportBatch.deleteMany({
+        where: { id: openBatchId },
+      });
+    }, 40_000);
+
+    it('tells the review room WHY each door is open or shut, not merely whether', async () => {
+      const response = await request(server())
+        .get(`/basic-price-imports/${openBatchId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+      const body = response.body as BatchActionsBody;
+
+      expect(body.status).toBe('NEEDS_REVIEW');
+      expect(body.needsReviewRows).toBe(1);
+      expect(body.readyForSubmissionRows).toBe(1);
+
+      // The finished row can be kept RIGHT NOW.
+      expect(body.actions.privateUse).toEqual({
+        offered: true,
+        reasonCode: null,
+        // WHAT ONE PRESS WOULD ACHIEVE. Nothing has been kept yet, so the one
+        // finished row is genuinely one row of work — the number and the
+        // verdict come from the same policy and cannot disagree.
+        actionableRows: 1,
+      });
+
+      // SOURCE-POLICY ROUTING, PROVEN FROM RUNTIME rather than from a comment:
+      // a store's own price is recorded with its source, not put to community
+      // verification.
+      expect(body.actions.simprokProposal.offered).toBe(false);
+      expect(body.actions.simprokProposal.reasonCode).toBe(
+        'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION',
+      );
+      expect(body.actions.simprokProposal.sourceFamily).toBe('STORE_SUPPLIER');
+    });
+
+    it('keeps the finished row while the other is still open, and leaves the batch open', async () => {
+      const response = await keepPrivate(
+        ownerToken,
+        workspaceAId,
+        openBatchId,
+      ).expect(201);
+
+      const body = response.body as KeepPrivateBody;
+      expect(body.createdCount).toBe(1);
+      expect(body.alreadyPrivateCount).toBe(0);
+      keptPriceIds = body.prices.map((price) => price.basicPriceId);
+
+      // The batch is NOT advanced. The remaining rows stay workable, and this
+      // action can be taken again as more of them are finished.
+      const after = await prisma.basicPriceImportBatch.findUniqueOrThrow({
+        where: { id: openBatchId },
+      });
+      expect(after.status).toBe('NEEDS_REVIEW');
+      const stillOpen = await prisma.basicPriceImportRow.count({
+        where: { batchId: openBatchId, status: 'NEEDS_REVIEW' },
+      });
+      expect(stillOpen).toBe(1);
+    });
+
+    it('made a price this workspace can actually use, through the normal Explorer read', async () => {
+      const response = await request(server())
+        .get('/basic-prices')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .query({ resourceId: openResourceId })
+        .expect(200);
+
+      const body = response.body as ExplorerBody;
+      expect(body.data).toHaveLength(1);
+      const [price] = body.data;
+      expect(price.assetScope).toBe('WORKSPACE_PRIVATE');
+      expect(price.price).toBe('150000.00');
+      // OWNERSHIP and SOURCE stay orthogonal: the asset is this workspace's
+      // own, and the price still truthfully came from a store.
+      expect(price.sourceOrigin).toBe('STORE');
+      expect(price.sourceType).toBe('VENDOR_QUOTE');
+      expect(price.resource.id).toBe(openResourceId);
+    });
+
+    it('ENFORCES the source-family route at the write boundary, not merely in the room', async () => {
+      // THE POINT OF THIS TEST. The room already declines to offer curation for
+      // a STORE batch (asserted above). That would be a UI decoration if the
+      // endpoint still accepted the call — a rule that holds only for people who
+      // go through the screen. So the same law is proven HERE, against the
+      // endpoint, with the same reason code the room advertised.
+      const response = await request(server())
+        .post(`/basic-price-imports/${openBatchId}/submit`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({})
+        .expect(409);
+      expect((response.body as ConflictBody).message).toBe(
+        'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION',
+      );
+
+      // AND THE REFUSAL COSTS THE OWNER NOTHING. A family SIMPROK does not send
+      // to community curation still reaches a fully usable governed price — the
+      // test above just read this very price out of the Explorer.
+      //
+      // THIS USED TO ASSERT `offered: true`, which was both the weaker claim
+      // and the misleading one: the finished row had ALREADY been kept, so an
+      // offer to keep it again was the room inviting work that did not exist.
+      // The private door is closed here for the best possible reason, and the
+      // projection names that reason — so "not offered" can never be read as
+      // "refused".
+      const after = await request(server())
+        .get(`/basic-price-imports/${openBatchId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+      const body = after.body as BatchActionsBody;
+      expect(body.alreadyPrivateRows).toBeGreaterThan(0);
+      expect(body.actions.privateUse).toMatchObject({
+        offered: false,
+        reasonCode: 'ALL_READY_ROWS_ALREADY_PRIVATE',
+        actionableRows: 0,
+      });
+    });
+
+    it('stores the source pair a human stated, in ANY combination', async () => {
+      // ORIGIN AND TYPE ARE INDEPENDENT AXES (Owner law,
+      // BASIC-PRICE-MASTER-DECISION §10). This endpoint briefly refused pairs
+      // that disagreed with SOURCE_TYPE_BY_ORIGIN, which made a real document —
+      // a market survey published BY a government agency — impossible to
+      // describe. It records what it was told.
+      const current = await prisma.basicPriceImportBatch.findUniqueOrThrow({
+        where: { id: openBatchId },
+      });
+      const response = await request(server())
+        .patch(`/basic-price-imports/${openBatchId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({
+          version: current.version,
+          sourceOrigin: 'GOVERNMENT',
+          sourceType: 'MARKET_SURVEY',
+        })
+        .expect(200);
+
+      const body = response.body as BatchActionsBody;
+      expect(body.sourceOrigin).toBe('GOVERNMENT');
+      expect(body.sourceType).toBe('MARKET_SURVEY');
+
+      // Stored, not merely echoed.
+      const stored = await prisma.basicPriceImportBatch.findUniqueOrThrow({
+        where: { id: openBatchId },
+      });
+      expect(stored.sourceOrigin).toBe('GOVERNMENT');
+      expect(stored.sourceType).toBe('MARKET_SURVEY');
+    });
+
+    it('never DERIVES a source type — changing the ORIGIN does not move the TYPE', async () => {
+      // The other half of the same repair, and the decisive form of it.
+      //
+      // The server briefly rewrote `sourceType` from `sourceOrigin` whenever a
+      // caller restated the origin, which invented a fact about somebody's
+      // document. The batch currently reads GOVERNMENT + MARKET_SURVEY (set by
+      // the test above). Restating ONLY the origin as SUPPLIER would, under the
+      // old derivation, have silently rewritten the type to VENDOR_QUOTE.
+      //
+      // It does not. The type is a separate fact and only its owner may change
+      // it.
+      const current = await prisma.basicPriceImportBatch.findUniqueOrThrow({
+        where: { id: openBatchId },
+      });
+      expect(current.sourceType).toBe('MARKET_SURVEY');
+
+      await request(server())
+        .patch(`/basic-price-imports/${openBatchId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ version: current.version, sourceOrigin: 'SUPPLIER' })
+        .expect(200);
+
+      const stored = await prisma.basicPriceImportBatch.findUniqueOrThrow({
+        where: { id: openBatchId },
+      });
+      expect(stored.sourceOrigin).toBe('SUPPLIER');
+      expect(stored.sourceType).toBe('MARKET_SURVEY');
+
+      // And the read path reports the same two independent facts.
+      const read = await request(server())
+        .get(`/basic-price-imports/${openBatchId}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+      const body = read.body as BatchActionsBody;
+      expect(body.sourceOrigin).toBe('SUPPLIER');
+      expect(body.sourceType).toBe('MARKET_SURVEY');
     });
   });
 });

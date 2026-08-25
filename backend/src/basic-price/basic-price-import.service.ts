@@ -5,8 +5,8 @@ import {
   NotFoundException,
   PayloadTooLargeException,
 } from '@nestjs/common';
-import { createHash } from 'crypto';
-import { Prisma } from '@prisma/client';
+import { createHash, randomUUID } from 'crypto';
+import { Prisma, PriceSourceOrigin, PriceSourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   BasicPriceImportKnowledgeObject,
@@ -14,6 +14,8 @@ import {
   BasicPriceUniversalIntakeAdapter,
 } from './basic-price-universal-intake.adapter';
 import { INTAKE_ERRORS, IntakeError } from '../universal-intake/intake-errors';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
 import {
   MAX_ENVELOPE_BYTES,
   SourceEnvelope,
@@ -26,12 +28,39 @@ import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
+import { batchTemporalQuestions } from './basic-price-temporal-question.law';
 import {
   assertTemporalProvenanceCoherent,
   isSameUtcDay,
 } from './basic-price-private-asset.service';
+import {
+  evaluateBatchLifecycleActions,
+  proposalBlockReason,
+} from './basic-price-batch-actions.policy';
+import {
+  BasicPriceRowMachineProposal,
+  BasicPriceRowResolutionProposalService,
+} from './basic-price-row-resolution-proposal.service';
+import {
+  classifyReimport,
+  INTERPRETATION_SIBLING_ORDER_BY,
+  selectInterpretationSibling,
+  type InterpretationIdentity,
+} from './basic-price-reimport.law';
 
 export const MAX_UPLOAD_BYTES = MAX_ENVELOPE_BYTES;
+
+/**
+ * How many import rows are written per INSERT.
+ *
+ * Bounded by PostgreSQL's 65535-parameter ceiling per statement, not by taste:
+ * this table writes about thirty columns per row, so 500 rows is roughly
+ * 15 000 parameters — comfortably inside the limit at every source size the
+ * readers admit, while keeping the whole 20 000-row ceiling to forty round
+ * trips rather than twenty thousand.
+ */
+const IMPORT_ROW_INSERT_CHUNK = 500;
+
 type UploadedSourceFile = {
   buffer: Buffer;
   size: number;
@@ -107,6 +136,48 @@ function intakeIdentitySegments(
     segments.push(`externalRecordId:${envelope.externalRecordId}`);
   if (envelope.externalVersion !== null)
     segments.push(`externalVersion:${envelope.externalVersion}`);
+
+  /**
+   * THE SAME BYTES READ WITH A DIFFERENT LAWFUL INTERPRETATION ARE NOT THE SAME
+   * IMPORT TRUTH.
+   *
+   * WHY THIS HAD TO JOIN IDENTITY. The Owner's workbook was accepted once with
+   * its resource-name column answered as the unit column: 934 poisoned rows,
+   * every row wearing its own name as a unit. Answered honestly the SAME file
+   * yields 894 truthful ones. Nothing above can tell those apart — same digest,
+   * same sheet, same contract, same region, same metadata — so the corrected
+   * import matched the poisoned batch's fingerprint and was handed the poison
+   * back as a replay. A person could not fix their own import.
+   *
+   * WHY IT IS READ FROM THE READING AND NOT FROM THE REQUEST. `knowledge
+   * .interpretation` is null wherever the DOCUMENT decided a fact, so a stray
+   * `selectedNameColumn` sent alongside a workbook that states its own headers
+   * changes nothing here. Identity must fork on different TRUTH, never on a
+   * different way of asking for the same truth, or SIMPROK would mint duplicate
+   * batches instead of preventing them.
+   *
+   * WHY LEGACY FINGERPRINTS SURVIVE. These segments are appended LAST and only
+   * when something is actually stated, exactly like every segment above. A
+   * sectioned workbook depends on no human answer at all, so its fingerprint
+   * string is byte-identical to the one it produced before this existed and its
+   * replay still finds its own batch.
+   *
+   * A CORRECTED INTERPRETATION IS A NEW BATCH, NEVER AN EDIT OF AN OLD ONE. The
+   * poisoned batch keeps its rows, its fingerprint and its history untouched;
+   * retiring it is a separate Owner decision and nothing here performs one.
+   */
+  const interpretation = knowledge.interpretation;
+  if (interpretation !== null) {
+    // A FIXED ORDER, NOT THE OBJECT'S. Two identical interpretations must
+    // produce one identical string, so the sequence is written out rather than
+    // inherited from however the fields happen to be declared.
+    if (interpretation.resourceNameColumn !== null)
+      segments.push(`resourceNameColumn:${interpretation.resourceNameColumn}`);
+    if (interpretation.sourceUnitColumn !== null)
+      segments.push(`sourceUnitColumn:${interpretation.sourceUnitColumn}`);
+    if (interpretation.declaredSection !== null)
+      segments.push(`declaredSection:${interpretation.declaredSection}`);
+  }
   return segments;
 }
 
@@ -171,12 +242,176 @@ export class BasicPriceImportService {
     // Not a platform evidence model: moving arrivals onto Reality Intake is
     // RM-12 work by name, and this slice must not close that debt early.
     private readonly sourceArchive: BasicPriceSourceArchiveService,
+    /**
+     * INT-CONNECT-01 — the seam that asks the EXISTING Unit and Resource
+     * Identity authorities what they already know about this batch's rows.
+     * Consulted on the review READ path only (see `getBatch`), never during
+     * preview: an import must not become slower to make a later screen smarter,
+     * and nothing it returns is ever written.
+     */
+    private readonly proposals: BasicPriceRowResolutionProposalService,
+    /**
+     * USI-01R2 §10 / COLUMN INTELLIGENCE — the SAME canonical Unit authority
+     * every other seam asks, used here for one narrow job: to disprove a column
+     * before a human is asked to choose it. See
+     * `pruneDisprovenColumnCandidates`.
+     */
+    private readonly units: UnitKernelService,
   ) {}
+
+  /**
+   * DO NOT ASK A HUMAN WHAT SIMPROK CAN ALREADY DISPROVE.
+   *
+   * The structure detector removes what a document proves on its own — the
+   * resource-CLASS column, a column repeating one value on every row. It cannot
+   * remove the UNIT column, because "is this spelling a unit?" is not a
+   * structural fact: it is the Unit authority's question, and that authority
+   * lives behind a database the pure detector deliberately cannot reach.
+   *
+   * So the last elimination happens here, where the authority IS reachable. A
+   * column whose every sampled value the Unit Kernel resolves to a canonical
+   * unit is the unit column. Offering it as a candidate for "which column holds
+   * the resource NAME" invites a wrong click on an option that was never
+   * possible — which is exactly what a real workbook did, offering a column
+   * reading "Org/hr / m3" beside the real names.
+   *
+   * NO SECOND UNIT DICTIONARY IS INTRODUCED, and none may be: the one authority
+   * answers, or the column stays on the list.
+   *
+   * FAIL OPEN. Every refusal below leaves the candidate list untouched — an
+   * authority that cannot answer must never shrink a human's options, and a
+   * pruning that removed everything would replace a confusing question with an
+   * unanswerable one.
+   *
+   * ---------------------------------------------------------------------------
+   * THIS AUTHORITY PRUNES IN ONE DIRECTION ONLY, AND THE ASYMMETRY IS THE LAW.
+   *
+   * The reply may be read as "every value in this column IS a canonical unit,
+   * so this is not the NAME column". It may NOT be read backwards. A mirror
+   * once stood here that dropped a column from the UNIT list when the Kernel
+   * resolved NOT ONE of its values, and that inference is invalid: ABSENCE OF
+   * PROOF IS NOT PROOF OF ABSENCE. "I know none of these spellings" describes
+   * the reach of SIMPROK's dictionary. It says nothing whatever about what the
+   * document means.
+   *
+   * A REAL UNIT COLUMN SPELLED IN VOCABULARY SIMPROK HAS NOT LEARNED YET IS
+   * THE ORDINARY CASE, not the exotic one — `sac`, `bundle`, `roll`, a regional
+   * abbreviation, any foreign source. Removing it left a person unable to state
+   * a true fact about their own document, and converted SIMPROK's ignorance
+   * into the user's dead end. That is the one thing this seam must never do.
+   *
+   * WHAT KEEPS THE UNIT QUESTION SAFE IS UPSTREAM AND UNCHANGED: the intake
+   * adapter refuses Name == Unit outright, and removes the chosen name column
+   * from the unit list unconditionally. Narrowing belongs to facts a document
+   * proves — never to gaps in a dictionary.
+   * ---------------------------------------------------------------------------
+   */
+  private async pruneDisprovenColumnCandidates(
+    details: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    /** Strips the server-side proof evidence off every candidate list. */
+    const withoutProofValues = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? (value as unknown[]).map((candidate): unknown => {
+            if (candidate === null || typeof candidate !== 'object')
+              return candidate;
+            const rest: Record<string, unknown> = {
+              ...(candidate as Record<string, unknown>),
+            };
+            delete rest.proofValues;
+            return rest;
+          })
+        : value;
+
+    /** The browser never receives `proofValues`, whatever this method decides. */
+    const published = (
+      nameCandidates: unknown,
+      unitCandidates: unknown,
+    ): Record<string, unknown> => ({
+      ...details,
+      nameCandidates: withoutProofValues(nameCandidates),
+      unitCandidates: withoutProofValues(unitCandidates),
+    });
+
+    const provable = (candidate: unknown): string[] | null => {
+      const record = candidate as {
+        proofValues?: unknown;
+        distinctValues?: unknown;
+      };
+      if (!Array.isArray(record.proofValues)) return null;
+      // The detector truncates at a bound. A verdict over a truncated set would
+      // describe a prefix rather than the column, so no verdict is reached.
+      if (
+        typeof record.distinctValues === 'number' &&
+        record.distinctValues > record.proofValues.length
+      ) {
+        return null;
+      }
+      const stated = record.proofValues.filter(
+        (value): value is string =>
+          typeof value === 'string' && value.trim() !== '',
+      );
+      return stated.length === 0 ? null : stated;
+    };
+
+    const nameCandidates = details.nameCandidates;
+    const unitCandidates = details.unitCandidates;
+    const nameList = Array.isArray(nameCandidates) ? nameCandidates : [];
+
+    // A LIST OF ONE IS NOT A CHOICE. Eliminating from it could only ever leave
+    // the human with nothing, so this does not reason over it at all.
+    const nameProofs = nameList.length >= 2 ? nameList.map(provable) : null;
+
+    // ONE BATCHED QUESTION FOR THE WHOLE SCREEN, NOT ONE PER COLUMN AND NEVER
+    // ONE PER ROW. Every distinct spelling the NAME candidates state is asked
+    // about exactly once, through the authority's own batch entry point, so the
+    // cost is bounded by the number of DISTINCT spellings rather than by the
+    // sheet's height. The unit list asks nothing, because no answer it could
+    // receive would lawfully shorten it.
+    const allValues = [
+      ...new Set((nameProofs ?? []).flatMap((values) => values ?? [])),
+    ];
+    if (allValues.length === 0)
+      return published(nameCandidates, unitCandidates);
+
+    const answers = await this.units.resolveCanonicalUnitIdentities(allValues);
+    const proven = new Set(
+      answers
+        .filter((answer) => answer.status === UNIT_RESOLUTION_STATUS.RESOLVED)
+        .map((answer) => answer.rawUnit),
+    );
+
+    // A column is the UNIT column only when EVERY value it states is a proven
+    // canonical unit. One ambiguous or unknown spelling and the proof fails —
+    // and failing means keeping the human's choice, never narrowing it.
+    const keptNames =
+      nameProofs === null
+        ? nameList
+        : nameList.filter((_, index) => {
+            const values = nameProofs[index];
+            if (values === null) return true;
+            return !values.every((value) => proven.has(value));
+          });
+
+    // THE UNIT LIST LEAVES THIS METHOD EXACTLY AS IT ARRIVED — not because it
+    // could not be filtered, but because the only filter available here is the
+    // invalid inference documented above. A column this Kernel cannot read is
+    // still a column a person can read.
+    //
+    // FAIL OPEN ON THE NAME SIDE TOO. Removing everything would replace a
+    // confusing question with an unanswerable one, and removing nothing is
+    // simply the honest outcome.
+    return published(
+      keptNames.length > 0 ? keptNames : nameCandidates,
+      unitCandidates,
+    );
+  }
 
   private validateFile(
     file: UploadedSourceFile | undefined,
   ): asserts file is UploadedSourceFile {
-    if (!file?.buffer) throw new BadRequestException('A source file is required');
+    if (!file?.buffer)
+      throw new BadRequestException('A source file is required');
     if (file.size > MAX_UPLOAD_BYTES)
       throw new PayloadTooLargeException('Source file exceeds 10 MiB');
   }
@@ -216,6 +451,17 @@ export class BasicPriceImportService {
     try {
       return await this.adapter.parse(envelope, selection);
     } catch (error) {
+      // The ONE question SIMPROK can still narrow before asking it. Everything
+      // else is translated unchanged.
+      if (
+        error instanceof IntakeError &&
+        error.code === INTAKE_ERRORS.COLUMN_ROLE_SELECTION_REQUIRED
+      ) {
+        throw new ConflictException({
+          message: error.code,
+          ...(await this.pruneDisprovenColumnCandidates(error.details ?? {})),
+        });
+      }
       this.translateIntakeError(error);
     }
   }
@@ -227,9 +473,10 @@ export class BasicPriceImportService {
     metadata: PreviewBasicPriceImportDto,
     envelope: SourceEnvelope,
   ): string {
-    const metadataPart = FINGERPRINT_METADATA_KEYS.map(
-      (key) => `${key}:${(metadata as Record<string, unknown>)[key] ?? ''}`,
-    ).join('|');
+    const metadataPart = FINGERPRINT_METADATA_KEYS.map((key) => {
+      const value = metadata[key];
+      return `${key}:${value ?? ''}`;
+    }).join('|');
     return createHash('sha256')
       .update(
         [
@@ -266,9 +513,7 @@ export class BasicPriceImportService {
    * key and falls back to the file-content fingerprint law — which means a
    * genuinely changed payload is a new batch, and an identical one is a replay.
    */
-  private async resolveObservation(
-    envelope: SourceEnvelope,
-  ): Promise<{
+  private async resolveObservation(envelope: SourceEnvelope): Promise<{
     observationKey: string | null;
     identityComplete: boolean;
     versionOrder: SourceVersionOrder | null;
@@ -338,7 +583,10 @@ export class BasicPriceImportService {
   ) {
     const winner = await this.prisma.basicPriceImportBatch.findUnique({
       where: {
-        workspaceId_sourceObservationKey: { workspaceId, sourceObservationKey: observationKey },
+        workspaceId_sourceObservationKey: {
+          workspaceId,
+          sourceObservationKey: observationKey,
+        },
       },
     });
     if (!winner) return null;
@@ -373,6 +621,173 @@ export class BasicPriceImportService {
     };
   }
 
+  /**
+   * SMART RE-IMPORT — product naming of a relation intake already proved.
+   *
+   * Not a second identity engine. Exact replay still is the fingerprint unique
+   * index; a corrected reading still is a different fingerprint. This only
+   * decides whether the ordinary user is offered SKIP / USE UPDATE, and it
+   * never mutates the batch it names.
+   *
+   * UNAUTHORIZED HISTORY IS INDISTINGUISHABLE FROM ABSENCE. A fingerprint or
+   * observation match belonging to another account is not returned, not
+   * described, and not used as a re-import option.
+   */
+  private assertIntakeBatchOwned(
+    batch: { uploadedByAccountId: string },
+    actorAccountId: string,
+  ): void {
+    if (batch.uploadedByAccountId !== actorAccountId) {
+      throw new NotFoundException('Batch not found');
+    }
+  }
+
+  /**
+   * Comparable-sibling lookup uses the EXISTING source-envelope axes already
+   * stored on the batch — never filename, never a second identity hash.
+   *
+   * Same bytes + same owner is not enough: a different selected sheet or a
+   * different source region scope is a different logical source. Parser
+   * contract is already an identity axis on the fingerprint and is matched
+   * here so two structures read out of one file cannot update each other.
+   */
+  private async findOwnedInterpretationSibling(params: {
+    workspaceId: string;
+    uploadedByAccountId: string;
+    sourceSha256: string;
+    regionId: string | null;
+    selectedSheetName: string;
+    sourceRegionScopeLabel: string | null;
+    parserContractVersion: string;
+    incoming: InterpretationIdentity;
+    excludeBatchId: string;
+  }): Promise<string | null> {
+    const siblings = await this.prisma.basicPriceImportBatch.findMany({
+      where: {
+        workspaceId: params.workspaceId,
+        uploadedByAccountId: params.uploadedByAccountId,
+        sourceSha256: params.sourceSha256,
+        regionId: params.regionId,
+        selectedSheetName: params.selectedSheetName,
+        sourceRegionScopeLabel: params.sourceRegionScopeLabel,
+        parserContractVersion: params.parserContractVersion,
+        id: { not: params.excludeBatchId },
+      },
+      select: {
+        id: true,
+        interpretationResourceNameColumn: true,
+        interpretationSourceUnitColumn: true,
+        interpretationDeclaredSection: true,
+        createdAt: true,
+      },
+      orderBy: INTERPRETATION_SIBLING_ORDER_BY,
+      take: 20,
+    });
+    return selectInterpretationSibling(
+      siblings.map((sibling) => ({
+        id: sibling.id,
+        createdAt: sibling.createdAt,
+        resourceNameColumn: sibling.interpretationResourceNameColumn,
+        sourceUnitColumn: sibling.interpretationSourceUnitColumn,
+        declaredSection: sibling.interpretationDeclaredSection,
+      })),
+      params.incoming,
+    );
+  }
+
+  private async findOwnedSourceStreamSibling(params: {
+    workspaceId: string;
+    uploadedByAccountId: string;
+    connectorId: string | null;
+    externalSourceId: string | null;
+    externalRecordId: string;
+    incomingSourceSha256: string;
+    excludeBatchId: string;
+  }): Promise<string | null> {
+    const siblings = await this.prisma.basicPriceImportBatch.findMany({
+      where: {
+        workspaceId: params.workspaceId,
+        uploadedByAccountId: params.uploadedByAccountId,
+        ingestionConnectorId: params.connectorId,
+        ingestionExternalSourceId: params.externalSourceId,
+        ingestionExternalRecordId: params.externalRecordId,
+        sourceSha256: { not: params.incomingSourceSha256 },
+        id: { not: params.excludeBatchId },
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'desc' },
+      take: 1,
+    });
+    return siblings[0]?.id ?? null;
+  }
+
+  private async presentIntake(
+    batch: Parameters<BasicPriceImportService['summarize']>[0] & {
+      uploadedByAccountId: string;
+    },
+    rows: Parameters<BasicPriceImportService['summarize']>[1],
+    observation: {
+      identityComplete: boolean;
+      versionOrder: SourceVersionOrder | null;
+      lateArrivingSourceVersion: boolean;
+    },
+    options: {
+      actorAccountId: string;
+      exactReplay: boolean;
+      envelope: SourceEnvelope;
+      knowledge: BasicPriceImportKnowledgeObject;
+      regionId: string | null;
+    },
+  ) {
+    this.assertIntakeBatchOwned(batch, options.actorAccountId);
+
+    let interpretationSiblingId: string | null = null;
+    let sourceStreamSiblingId: string | null = null;
+    if (!options.exactReplay) {
+      const incoming: InterpretationIdentity = {
+        resourceNameColumn:
+          options.knowledge.interpretation?.resourceNameColumn ?? null,
+        sourceUnitColumn:
+          options.knowledge.interpretation?.sourceUnitColumn ?? null,
+        declaredSection:
+          options.knowledge.interpretation?.declaredSection ?? null,
+      };
+      interpretationSiblingId = await this.findOwnedInterpretationSibling({
+        workspaceId: options.envelope.workspaceId,
+        uploadedByAccountId: options.actorAccountId,
+        sourceSha256: options.knowledge.sourceSha256,
+        regionId: options.regionId,
+        selectedSheetName: options.knowledge.sheetName,
+        sourceRegionScopeLabel: options.knowledge.regionScopeLabel,
+        parserContractVersion: options.knowledge.parserContractVersion,
+        incoming,
+        excludeBatchId: batch.id,
+      });
+      if (!interpretationSiblingId && options.envelope.externalRecordId) {
+        sourceStreamSiblingId = await this.findOwnedSourceStreamSibling({
+          workspaceId: options.envelope.workspaceId,
+          uploadedByAccountId: options.actorAccountId,
+          connectorId: options.envelope.connectorId,
+          externalSourceId: options.envelope.externalSourceId,
+          externalRecordId: options.envelope.externalRecordId,
+          incomingSourceSha256: options.knowledge.sourceSha256,
+          excludeBatchId: batch.id,
+        });
+      }
+    }
+
+    return {
+      ...this.summarize(batch, rows),
+      ...this.observationVerdict(observation),
+      reimport: classifyReimport({
+        exactOwnedBatchId: options.exactReplay ? batch.id : null,
+        interpretationSiblingId,
+        sourceStreamSiblingId,
+        incomingBatchId: batch.id,
+      }),
+    };
+  }
+
   /** The formats SIMPROK can read today, for honest client-facing messaging. */
   supportedSourceExtensions(): string[] {
     return ReaderRegistry.default().supportedExtensions();
@@ -393,8 +808,37 @@ export class BasicPriceImportService {
       status: string;
       importFingerprint: string;
       effectiveDate: Date | null;
+      /** Soft re-verification, human-stated. Optional on the way in so every
+       * existing caller and fixture keeps compiling unchanged. */
+      reviewDate?: Date | null;
+      /** Temporal provenance, read so the review gate can ask the WRITER's
+       * coherence question. Optional for the same compile-compatibility reason. */
+      sourcePeriodLabel?: string | null;
+      sourcePeriodGranularity?: string | null;
+      effectiveDateProvenance?: string | null;
+      effectiveDateDerivationRule?: string | null;
       regionId: string | null;
+      /**
+       * THE SOURCE CLASSIFICATION, ON THE WAY OUT AS WELL AS IN.
+       *
+       * These two were writable through `PATCH :batchId` and readable nowhere.
+       * A user could therefore set them, be told "tersimpan", and have no way
+       * to see afterwards what SIMPROK had actually stored — so metadata
+       * persistence was unprovable through the product itself. They are also
+       * what decides the whole source-policy route below, and the review room
+       * cannot honestly explain a routing decision it cannot see.
+       */
+      sourceType: string | null;
+      sourceOrigin: string | null;
+      /**
+       * WHO published the price. Read by the Basic Price Explorer for its
+       * source line, and returned here so a reopened batch can show what was
+       * saved instead of the person retyping it.
+       */
+      sourceOrganizationName: string | null;
       version: number;
+      /** Transport fact, server-set. Says nothing about origin or trust. */
+      ingestionChannel?: string | null;
     },
     rows: Array<{
       id: string;
@@ -418,22 +862,153 @@ export class BasicPriceImportService {
       reasonCodes?: string[];
       version?: number;
     }>,
+    /**
+     * INT-CONNECT-01 — what the canonical authorities already proved about each
+     * row, keyed by row id. Optional, and absent everywhere except the review
+     * read path.
+     *
+     * WHAT IS ACTUALLY GUARANTEED, stated exactly:
+     *
+     *   - preview, patch and submit EXECUTE NO INTELLIGENCE QUERY. Neither
+     *     authority is consulted on those paths, so no existing caller pays for
+     *     work it did not ask for;
+     *   - the additive fields `machineProposal` and `identityPairProvenRows`
+     *     are NEUTRAL on those paths — null and zero respectively — because
+     *     nothing was asked, not because nothing was found.
+     *
+     * NOT "exactly the shape they always did", which an earlier note here
+     * claimed. `summarize()` gained those two fields for every caller, and a
+     * neutral value is still a present field. Removing them to make the older
+     * sentence true would trade a truthful contract for a tidy comment; the
+     * sentence is what was wrong, so the sentence is what changed.
+     */
+    proposals?: ReadonlyMap<string, BasicPriceRowMachineProposal>,
+    /**
+     * WHICH of this batch's rows already exist as WORKSPACE_PRIVATE prices.
+     *
+     * OPTIONAL, AND ABSENCE MEANS NOT ASKED — the same neutrality rule
+     * `proposals` follows, and for the same reason: only the review read path
+     * pays for it, and a projection that never asked has no basis to claim that
+     * nothing is stored. Undefined therefore travels to the policy as
+     * undefined, where it suppresses the already-stored verdict entirely rather
+     * than defaulting to a zero that would be wrong by exactly the number of
+     * prices that do exist.
+     *
+     * A SET RATHER THAN A COUNT, because the count could only ever correct a
+     * button, and the sentence a person actually reads sits on the ROW. The
+     * count is still published, derived from this — `sourceImportRowId` is
+     * `@unique`, so the two can never disagree.
+     */
+    privateRowIds?: ReadonlySet<string>,
   ) {
+    // ONE FACT, TWO SHAPES. The count the action projection needs and the
+    // per-row flag the row label needs are the SAME truth, so it is derived
+    // once and never measured twice.
+    const alreadyPrivateRows = privateRowIds ? privateRowIds.size : undefined;
+    const machineRows = rows.filter(
+      (r) => proposals?.get(r.id)?.identityPairProven === true,
+    ).length;
+    const readyForSubmissionRows = rows.filter(
+      (r) => r.status === 'READY_FOR_SUBMISSION',
+    ).length;
     return {
       batchId: batch.id,
       status: batch.status,
       importFingerprint: batch.importFingerprint,
       effectiveDate: batch.effectiveDate,
+      /**
+       * SOFT RE-VERIFICATION, projected so the metadata form can show back what
+       * was actually SAVED rather than what the form happens to be holding —
+       * the same read-your-own-writes rule every other field here follows.
+       * Null is the ordinary case and renders as an empty field, never as a
+       * warning.
+       */
+      reviewDate: batch.reviewDate ?? null,
       regionId: batch.regionId,
+      sourceType: batch.sourceType,
+      sourceOrigin: batch.sourceOrigin,
+      sourceOrganizationName: batch.sourceOrganizationName,
       version: batch.version,
+      /**
+       * WHAT THIS BATCH MAY DO NEXT, AND WHY NOT WHEN IT MAY NOT.
+       *
+       * The review room used to decide this for itself, with a local copy of
+       * the preconditions that could answer only yes or no. When it said no it
+       * rendered a disabled button — which the browser makes inert, so the
+       * Owner's click on `Ajukan Batch (6 siap)` produced no request, no
+       * message and no outcome. Nothing was broken downstream; the door simply
+       * never opened, and nothing on the page could say why.
+       *
+       * The answer now comes from the same law the two writers enforce
+       * (`basic-price-batch-actions.policy.ts`), so a reason a user reads is a
+       * reason the server would actually have given.
+       */
+      actions: evaluateBatchLifecycleActions({
+        status: batch.status,
+        effectiveDate: batch.effectiveDate,
+        regionId: batch.regionId,
+        sourceOrigin: batch.sourceOrigin,
+        sourceType: batch.sourceType,
+        readyForSubmissionRows,
+        // THE WRITER'S OWN INPUTS, so the review gate asks the writer's
+        // coherence question rather than a softer one. Without these the gate
+        // could say "you may review" about a batch `keepBatchPrivate` would
+        // later refuse for a derivation that does not explain its date.
+        sourcePeriodLabel: batch.sourcePeriodLabel ?? null,
+        sourcePeriodGranularity: batch.sourcePeriodGranularity ?? null,
+        effectiveDateProvenance: batch.effectiveDateProvenance ?? null,
+        effectiveDateDerivationRule: batch.effectiveDateDerivationRule ?? null,
+        // WHAT ONE PRESS WOULD STILL ACHIEVE. Undefined on every path that did
+        // not measure it, which is what keeps an unasked question from becoming
+        // a verdict about work that may already be done.
+        alreadyPrivateRows,
+      }),
       totalRows: rows.length,
       needsReviewRows: rows.filter((r) => r.status === 'NEEDS_REVIEW').length,
-      readyForSubmissionRows: rows.filter(
-        (r) => r.status === 'READY_FOR_SUBMISSION',
-      ).length,
+      readyForSubmissionRows,
       rejectedRows: rows.filter((r) => r.status === 'REJECTED').length,
       submittedRows: rows.filter((r) => r.status === 'SUBMISSION_CREATED')
         .length,
+      /**
+       * INT-CONNECT-01 — how many MUTABLE rows have BOTH required Basic Price
+       * identity legs — resource and unit — proven and admissible by the
+       * canonical authorities, so the review room can direct attention at what
+       * is genuinely left.
+       *
+       * IT IS NOT A COUNT OF FINISHED ROWS. It says nothing about a canonical
+       * price being present, nothing about same-identity collisions inside the
+       * batch, and nothing about a row reaching READY_FOR_SUBMISSION — those are
+       * decided by `BasicPriceRowResolutionService` AFTER it accepts the pair,
+       * from facts no proposal ever sees.
+       *
+       * COUNTED FROM THE PROPOSALS, NEVER PREDICTED. Absent (0) on every path
+       * that did not ask for proposals, which is honest: a caller that never
+       * consulted the authorities has no basis to claim a machine proved
+       * anything.
+       */
+      identityPairProvenRows: machineRows,
+      /**
+       * HOW MANY READY ROWS ARE ALREADY STORED, and null when nobody asked.
+       *
+       * Null is not zero. A caller that never paid for the count must not be
+       * able to read this field as proof that nothing has been saved — that is
+       * exactly the inference that produced a save button offering to store
+       * thirteen prices which already existed.
+       */
+      alreadyPrivateRows: alreadyPrivateRows ?? null,
+      /**
+       * WHICH TEMPORAL QUESTION IS TRUE FOR THIS SOURCE — codes, never prose.
+       *
+       * One required calendar day does not mean one honest question about it.
+       * A market survey was OBSERVED on a day; a regulation STATES the day it
+       * begins. The room asks the one that is true here and leaves the other
+       * unasked, instead of showing every date field a schema can hold. The
+       * browser owns the sentences; this owns only which sentence applies.
+       */
+      temporal: batchTemporalQuestions({
+        sourceType: batch.sourceType,
+        ingestionChannel: batch.ingestionChannel ?? null,
+      }),
       // Every field a human needs to actually resolve a row (assign
       // resource/unit identity, judge a collision) — not just a status
       // label — since this projection is the only row data the review UI
@@ -462,6 +1037,27 @@ export class BasicPriceImportService {
         unitDefinitionId: r.unitDefinitionId ?? null,
         reasonCodes: r.reasonCodes ?? [],
         version: r.version ?? 0,
+        /**
+         * What the canonical authorities proved about THIS row, or null when
+         * they were not consulted (every non-review path, and every row that is
+         * no longer mutable). Null means "not asked", never "found nothing" —
+         * the two are different facts and the UI must not merge them.
+         */
+        machineProposal: proposals?.get(r.id) ?? null,
+        /**
+         * IS THIS ROW ALREADY A PRICE THIS WORKSPACE CAN USE?
+         *
+         * The room had no way to ask. A bound row stays READY_FOR_SUBMISSION
+         * forever, so the only sentence available for one was the internal
+         * status translated literally — and it read `Siap diajukan`, a curation
+         * word, about a row whose price was already sitting in the workspace.
+         *
+         * FALSE ON EVERY PATH THAT DID NOT ASK, which is honest for a boolean:
+         * those paths render no row status a person acts on. The COUNT keeps
+         * the stricter null-means-unasked rule, because a count feeds a policy
+         * verdict and a flag feeds a label.
+         */
+        savedAsPrivatePrice: privateRowIds?.has(r.id) ?? false,
       })),
     };
   }
@@ -509,8 +1105,21 @@ export class BasicPriceImportService {
    * method's entire output is a batch of NEEDS_REVIEW candidates awaiting the
    * existing, unchanged human trust lifecycle (LAW 1, tests I1/S3).
    */
-  async intake(envelope: SourceEnvelope, metadata: PreviewBasicPriceImportDto) {
+  async intake(
+    envelope: SourceEnvelope,
+    incomingMetadata: PreviewBasicPriceImportDto,
+  ) {
     const workspaceId = envelope.workspaceId;
+    // THE CALLER'S OWN WORDS, UNTOUCHED.
+    //
+    // This briefly rewrote the DTO: it derived `sourceType` from
+    // `sourceOrigin` and refused any pair that disagreed with the table. Both
+    // halves were wrong. Origin and type are independent axes (Owner law,
+    // BASIC-PRICE-MASTER-DECISION §10), so deriving one invented a fact about
+    // the document, and refusing a stated pair called a real-world combination
+    // — a market survey published BY a government agency — impossible.
+    // Whatever the human stated is what gets fingerprinted and stored.
+    const metadata = incomingMetadata;
     // RM-03D1 — preview WRITES all four provenance columns, and validated none
     // of them. The very first write could therefore mint a claim that explains
     // a different date than the one it stores, with only the DB's structural
@@ -519,7 +1128,9 @@ export class BasicPriceImportService {
     assertTemporalProvenanceCoherent({
       sourceOrigin: null,
       sourceType: null,
-      effectiveDate: metadata.effectiveDate ? new Date(metadata.effectiveDate) : null,
+      effectiveDate: metadata.effectiveDate
+        ? new Date(metadata.effectiveDate)
+        : null,
       sourcePeriodLabel: metadata.sourcePeriodLabel ?? null,
       sourcePeriodGranularity: metadata.sourcePeriodGranularity ?? null,
       effectiveDateProvenance: metadata.effectiveDateProvenance ?? null,
@@ -548,6 +1159,12 @@ export class BasicPriceImportService {
     // USI-01R2 §6 — which observation this is, and how it orders. Uniqueness is
     // settled by the database below, not by this read.
     const observation = await this.resolveObservation(envelope);
+    const presentOptions = {
+      actorAccountId: envelope.actorAccountId,
+      envelope,
+      knowledge,
+      regionId: metadata.regionId ?? null,
+    };
 
     // An observation already on record under this key is either a retry (same
     // bytes -> hand back the winner) or a contradiction (different bytes ->
@@ -563,7 +1180,10 @@ export class BasicPriceImportService {
         const winnerRows = await this.prisma.basicPriceImportRow.findMany({
           where: { batchId: winner.id },
         });
-        return { ...this.summarize(winner, winnerRows), ...this.observationVerdict(observation) };
+        return this.presentIntake(winner, winnerRows, observation, {
+          ...presentOptions,
+          exactReplay: true,
+        });
       }
     }
 
@@ -587,7 +1207,10 @@ export class BasicPriceImportService {
       const rows = await this.prisma.basicPriceImportRow.findMany({
         where: { batchId: existing.id },
       });
-      return { ...this.summarize(existing, rows), ...this.observationVerdict(observation) };
+      return this.presentIntake(existing, rows, observation, {
+        ...presentOptions,
+        exactReplay: true,
+      });
     }
 
     try {
@@ -606,6 +1229,16 @@ export class BasicPriceImportService {
             // locators are spelled. Both are provenance, neither is trust.
             sourceLocatorDialect: knowledge.locatorDialect,
             sourceRegionScopeLabel: knowledge.regionScopeLabel,
+            // WHICH INTERPRETATION PRODUCED THESE ROWS. Recorded from the
+            // reading itself, so a batch can answer the question later instead
+            // of a reader inferring column roles from cell addresses. Null
+            // throughout wherever the document decided everything.
+            interpretationResourceNameColumn:
+              knowledge.interpretation?.resourceNameColumn ?? null,
+            interpretationSourceUnitColumn:
+              knowledge.interpretation?.sourceUnitColumn ?? null,
+            interpretationDeclaredSection:
+              knowledge.interpretation?.declaredSection ?? null,
             // Where the original bytes are retained, beside the hash that
             // identifies them.
             sourceStorageRef,
@@ -648,57 +1281,117 @@ export class BasicPriceImportService {
           },
         });
 
+        /**
+         * ONE WRITE PER CHUNK, NOT ONE PER ROW.
+         *
+         * THIS LINE USED TO BE `await tx.basicPriceImportRow.create()` INSIDE A
+         * LOOP, and the Owner's real Ambon workbook is what proved it wrong:
+         * 934 rows meant 934 sequential round-trips inside an interactive
+         * transaction whose timeout is 5 seconds, and the upload died on
+         * Prisma P2028 — "transaction already closed", 5010 ms elapsed. The
+         * batch had already been written when the loop ran out of time, so the
+         * whole transaction rolled back and the Owner's browser was answered
+         * 500 by a workbook SIMPROK had read perfectly.
+         *
+         * The defect was never the timeout. A per-row write is an N+1 against
+         * the database, and raising the clock would only move the row count at
+         * which the same upload fails — while making every failure slower.
+         *
+         * IDS ARE MINTED HERE, and that is what keeps SOURCE ORDER exact.
+         * `createMany` returns a COUNT rather than rows, so the written rows
+         * have to be reassembled from something. Minting the ids in source
+         * order makes that reassembly proven rather than assumed: the array
+         * index IS the source position, and the read-back is keyed by id.
+         *
+         * AN EARLIER VERSION OF THIS NOTE JUSTIFIED IT BY CLAIMING "there is no
+         * unique index on (batchId, sourceRowNumber)". THAT WAS FALSE — the
+         * constraint is declared at prisma/schema.prisma, `@@unique([batchId,
+         * sourceRowNumber])` on BasicPriceImportRow — and so was the reasoning
+         * built on it, that a source "may legitimately state a row number
+         * twice": `sourceRowNumber` is the reader's PHYSICAL row number within
+         * the one selected table, unique by construction.
+         *
+         * The IMPLEMENTATION was never wrong and is unchanged. Ordering by a
+         * column would still be a second thing to trust where minting needs
+         * none, and it would still make source order depend on a constraint
+         * rather than on the read itself. Only the stated reason was wrong, and
+         * only the stated reason has changed.
+         *
+         * CHUNKED because PostgreSQL binds at most 65535 parameters per
+         * statement, and this table writes ~30 columns per row. At the reader's
+         * 20 000-row ceiling a single statement would exceed that limit and
+         * fail on the largest sources — the ones this repair exists for.
+         */
+        const rowIds = knowledge.rows.map(() => randomUUID());
+        const rowsToCreate = knowledge.rows.map((row, index) => ({
+          id: rowIds[index],
+          batchId: batch.id,
+          // USI-01R GAP B — a row whose family the source stated, together
+          // with WHO decided it and the source's own words either way.
+          sourceSection: row.sourceSection,
+          sourceSectionProvenance: row.sourceSectionProvenance,
+          rawSourceCategoryCode: row.rawSourceCategoryCode,
+          rawSourceCategoryName: row.rawSourceCategoryName,
+          sourceRowNumber: row.sourceRowNumber,
+          sourceCodeCellAddress: row.sourceCodeCellAddress,
+          sourceNameCellAddress: row.sourceNameCellAddress,
+          sourceUnitCellAddress: row.sourceUnitCellAddress,
+          sourcePriceCellAddress: row.sourcePriceCellAddress,
+          rawResourceCodeText: row.rawResourceCodeText,
+          rawResourceNameText: row.rawResourceNameText,
+          rawUnitText: row.rawUnitText,
+          rawPriceCellType: row.rawPriceCellType,
+          rawPriceNumericRoundTripString: row.rawPriceNumericRoundTripString,
+          rawPriceTextValue: row.rawPriceTextValue,
+          rawPriceFormulaText: row.rawPriceFormulaText,
+          rawPriceCachedResultRoundTripString:
+            row.rawPriceCachedResultRoundTripString,
+          rawPriceFormulaError: row.rawPriceFormulaError,
+          rawPriceNumberFormat: row.rawPriceNumberFormat,
+          rawPriceDisplayText: row.rawPriceDisplayText,
+          // LAW 2 — everything the source said that this domain has no
+          // field for, kept verbatim rather than discarded.
+          rawSourceContext: row.rawSourceContext ?? Prisma.DbNull,
+          proposedCanonicalPrice: row.proposedCanonicalPrice,
+          canonicalRoundingMode: row.canonicalRoundingMode,
+          resolutionStatus: 'UNRESOLVED' as const,
+          status: 'NEEDS_REVIEW' as const,
+          reasonCodes: [...row.warnings, ...row.errors],
+        }));
+
+        for (
+          let start = 0;
+          start < rowsToCreate.length;
+          start += IMPORT_ROW_INSERT_CHUNK
+        ) {
+          await tx.basicPriceImportRow.createMany({
+            data: rowsToCreate.slice(start, start + IMPORT_ROW_INSERT_CHUNK),
+          });
+        }
+
+        // The read-back IS the count check: it proves both that every row this
+        // request wrote is on record, and that nothing else is in the batch.
+        const persistedRows = await tx.basicPriceImportRow.findMany({
+          where: { batchId: batch.id },
+        });
+        if (persistedRows.length !== rowsToCreate.length)
+          throw new ConflictException('IMPORT_ROW_COUNT_MISMATCH');
+
+        const persistedById = new Map(persistedRows.map((r) => [r.id, r]));
         const createdRows: Prisma.BasicPriceImportRowGetPayload<
           Record<string, never>
         >[] = [];
-        for (const row of knowledge.rows) {
-          const created = await tx.basicPriceImportRow.create({
-            data: {
-              batchId: batch.id,
-              // USI-01R GAP B — a row whose family the source stated, together
-              // with WHO decided it and the source's own words either way.
-              sourceSection: row.sourceSection,
-              sourceSectionProvenance: row.sourceSectionProvenance,
-              rawSourceCategoryCode: row.rawSourceCategoryCode,
-              rawSourceCategoryName: row.rawSourceCategoryName,
-              sourceRowNumber: row.sourceRowNumber,
-              sourceCodeCellAddress: row.sourceCodeCellAddress,
-              sourceNameCellAddress: row.sourceNameCellAddress,
-              sourceUnitCellAddress: row.sourceUnitCellAddress,
-              sourcePriceCellAddress: row.sourcePriceCellAddress,
-              rawResourceCodeText: row.rawResourceCodeText,
-              rawResourceNameText: row.rawResourceNameText,
-              rawUnitText: row.rawUnitText,
-              rawPriceCellType: row.rawPriceCellType,
-              rawPriceNumericRoundTripString:
-                row.rawPriceNumericRoundTripString,
-              rawPriceTextValue: row.rawPriceTextValue,
-              rawPriceFormulaText: row.rawPriceFormulaText,
-              rawPriceCachedResultRoundTripString:
-                row.rawPriceCachedResultRoundTripString,
-              rawPriceFormulaError: row.rawPriceFormulaError,
-              rawPriceNumberFormat: row.rawPriceNumberFormat,
-              rawPriceDisplayText: row.rawPriceDisplayText,
-              // LAW 2 — everything the source said that this domain has no
-              // field for, kept verbatim rather than discarded.
-              rawSourceContext: row.rawSourceContext ?? Prisma.DbNull,
-              proposedCanonicalPrice: row.proposedCanonicalPrice,
-              canonicalRoundingMode: row.canonicalRoundingMode,
-              resolutionStatus: 'UNRESOLVED',
-              status: 'NEEDS_REVIEW',
-              reasonCodes: [...row.warnings, ...row.errors],
-            },
-          });
-          createdRows.push(created);
+        for (const id of rowIds) {
+          const persisted = persistedById.get(id);
+          if (!persisted)
+            throw new ConflictException('IMPORT_ROW_COUNT_MISMATCH');
+          createdRows.push(persisted);
         }
 
-        const finalItemCount = await tx.basicPriceImportRow.count({
-          where: { batchId: batch.id },
+        return this.presentIntake(batch, createdRows, observation, {
+          ...presentOptions,
+          exactReplay: false,
         });
-        if (finalItemCount !== createdRows.length)
-          throw new ConflictException('IMPORT_ROW_COUNT_MISMATCH');
-
-        return { ...this.summarize(batch, createdRows), ...this.observationVerdict(observation) };
       });
     } catch (error) {
       if (
@@ -722,10 +1415,10 @@ export class BasicPriceImportService {
             const rows = await this.prisma.basicPriceImportRow.findMany({
               where: { batchId: observationWinner.id },
             });
-            return {
-              ...this.summarize(observationWinner, rows),
-              ...this.observationVerdict(observation),
-            };
+            return this.presentIntake(observationWinner, rows, observation, {
+              ...presentOptions,
+              exactReplay: true,
+            });
           }
         }
 
@@ -742,10 +1435,10 @@ export class BasicPriceImportService {
         const winnerRows = await this.prisma.basicPriceImportRow.findMany({
           where: { batchId: winner.id },
         });
-        return {
-          ...this.summarize(winner, winnerRows),
-          ...this.observationVerdict(observation),
-        };
+        return this.presentIntake(winner, winnerRows, observation, {
+          ...presentOptions,
+          exactReplay: true,
+        });
       }
       throw error;
     }
@@ -778,7 +1471,7 @@ export class BasicPriceImportService {
     /** ABSENT = unchanged (undefined) · NULL = clear · VALUE = replace. */
     const patch = <T>(key: keyof UpdateBasicPriceImportBatchDto, value: T) => {
       if (!provided) return value ?? undefined;
-      if (!provided.has(key as string)) return undefined;
+      if (!provided.has(key)) return undefined;
       return value === undefined ? undefined : value;
     };
     return this.prisma.$transaction(async (tx) => {
@@ -794,11 +1487,19 @@ export class BasicPriceImportService {
           sourcePeriodGranularity: string | null;
           effectiveDateProvenance: string | null;
           effectiveDateDerivationRule: string | null;
+          // Read under the SAME lock the write takes, because the source
+          // classification is now judged on the MERGED state: a patch that
+          // moves only the origin has to be checked against the type already
+          // stored, and reading that outside the lock would judge a value
+          // another writer could have changed.
+          sourceType: string | null;
+          sourceOrigin: string | null;
         }>
       >(
         Prisma.sql`SELECT "id", "workspaceId", "status", "version", "uploadedByAccountId",
                           "effectiveDate", "sourcePeriodLabel", "sourcePeriodGranularity",
-                          "effectiveDateProvenance", "effectiveDateDerivationRule"
+                          "effectiveDateProvenance", "effectiveDateDerivationRule",
+                          "sourceType", "sourceOrigin"
                      FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
       );
       const batch = locked[0];
@@ -876,7 +1577,7 @@ export class BasicPriceImportService {
         stored: T | null,
       ): T | null => {
         const patched = patch(key, next);
-        return patched === undefined ? stored : (patched as T | null);
+        return patched === undefined ? stored : patched;
       };
       assertTemporalProvenanceCoherent({
         sourceOrigin: null,
@@ -891,12 +1592,12 @@ export class BasicPriceImportService {
           'sourcePeriodGranularity',
           dto.sourcePeriodGranularity,
           batch.sourcePeriodGranularity,
-        ) as any,
+        ),
         effectiveDateProvenance: merged(
           'effectiveDateProvenance',
           dto.effectiveDateProvenance,
           batch.effectiveDateProvenance,
-        ) as any,
+        ),
         effectiveDateDerivationRule: merged(
           'effectiveDateDerivationRule',
           dto.effectiveDateDerivationRule,
@@ -904,13 +1605,42 @@ export class BasicPriceImportService {
         ),
       });
 
+      // SOURCE FACTS ARE STORED AS STATED. No derivation, no pair test: the
+      // two axes are independent, so there is no combination of stated values
+      // for this method to argue with. An UNSTATED fact stays unstated, and the
+      // action gates fail closed on it — which is where fail-closed belongs.
+
       const updated = await tx.basicPriceImportBatch.update({
         where: { id: batchId },
+        // THE REGION ITSELF, ON THE WAY BACK OUT OF THE SAVE.
+        //
+        // `savedMetadataLines` — the "Tercatat di SIMPROK" block that makes
+        // metadata persistence provable through the product — is documented to
+        // read the SERVER's answer and never the form's own state. For every
+        // other field it can. For the region it could not: `regionId` alone is
+        // a UUID no room may print at a person, so the line degraded to
+        // "sudah dipilih" until the next reload. The read path already shapes
+        // the region exactly this way; the save now answers with the same
+        // fact, so what a person is told they saved is a PLACE.
+        include: { region: { select: { id: true, code: true, name: true } } },
         data: {
           regionId: dto.regionId ?? undefined,
           effectiveDate: dto.effectiveDate
             ? new Date(dto.effectiveDate)
             : undefined,
+          /**
+           * SOFT RE-VERIFICATION, under the SAME omitted-means-unchanged rule
+           * as every other field here — `patch` is what lets a person CLEAR it
+           * by sending an explicit null, which matters because "I no longer
+           * think this needs re-checking" is a real decision, and a field that
+           * can only ever be set would silently make the first guess permanent.
+           *
+           * Nothing derives this. An absent value stays absent.
+           */
+          reviewDate: patch(
+            'reviewDate',
+            dto.reviewDate ? new Date(dto.reviewDate) : dto.reviewDate,
+          ),
           sourceType: dto.sourceType ?? undefined,
           sourceOrigin: dto.sourceOrigin ?? undefined,
           sourceOrganizationName: dto.sourceOrganizationName ?? undefined,
@@ -941,7 +1671,10 @@ export class BasicPriceImportService {
       const rows = await tx.basicPriceImportRow.findMany({
         where: { batchId },
       });
-      return this.summarize(updated, rows);
+      return {
+        ...this.summarize(updated, rows),
+        region: updated.region ?? null,
+      };
     });
   }
 
@@ -952,6 +1685,17 @@ export class BasicPriceImportService {
   ) {
     const batch = await this.prisma.basicPriceImportBatch.findUnique({
       where: { id: batchId },
+      // The region ITSELF. `regionId` alone is a UUID: a person reopening a
+      // batch to check what they saved cannot read it, and this room may not
+      // print it at them either. Shaped exactly like every other region
+      // projection so a caller renders it with the words it already uses,
+      // rather than reassembling a half-region of its own.
+      //
+      // The metadata SAVE answers with the same field, for the reason stated
+      // there. The two paths a person actually watches a region through — save
+      // it, then reload and check — therefore say the same thing in the same
+      // shape, instead of one of them going quiet.
+      include: { region: { select: { id: true, code: true, name: true } } },
     });
     if (!batch || batch.workspaceId !== workspaceId)
       throw new NotFoundException('Batch not found');
@@ -960,17 +1704,95 @@ export class BasicPriceImportService {
       where: { batchId },
       orderBy: { sourceRowNumber: 'asc' },
     });
-    return this.summarize(batch, rows);
+
+    // INT-CONNECT-01 — THE REVIEW ROOM ASKS BEFORE IT ASKS THE HUMAN.
+    //
+    // Every fact below is computed here and NOTHING is written: the row keeps
+    // its own state machine, its own version, and its own human-decided
+    // identity. What changes is only that the reviewer now arrives at a screen
+    // where SIMPROK has already said what it can prove and why — instead of two
+    // empty search boxes over engines that were never consulted.
+    //
+    // Bounded on purpose: `proposeForRows` batches its database work, so this
+    // read carries no row-linear N+1. It is NOT a constant — the work is bounded
+    // by the distinct evidence a batch contains (governed contexts, unit
+    // spellings, proposed identities), never by how many rows there are. See
+    // that method's own note for the exact bound.
+    //
+    // Only mutable rows are asked about. A rejected or already-submitted row has
+    // nothing left to decide, and proposing an identity for it would be advice
+    // nobody can act on.
+    const proposals = await this.proposals.proposeForRows(
+      workspaceId,
+      rows
+        .filter((row) => row.status === 'NEEDS_REVIEW')
+        .map((row) => ({
+          id: row.id,
+          sourceSection: row.sourceSection,
+          rawResourceNameText: row.rawResourceNameText,
+          rawResourceCodeText: row.rawResourceCodeText,
+          rawUnitText: row.rawUnitText,
+        })),
+    );
+
+    /**
+     * WHICH ROWS ARE ALREADY STORED — and therefore how many.
+     *
+     * ASKED ONLY HERE, because only this room renders the states that depend on
+     * it. The review page used to be told 13 rows were ready and nothing else,
+     * so it offered to save thirteen prices that already existed, and labelled
+     * each of those rows `Siap diajukan` — an internal row status translated
+     * into a curation word, for rows whose price was already in the workspace.
+     *
+     * PER ROW, NOT A SCALAR, and that is the only thing that changed here. A
+     * count can correct a button; it cannot tell one ROW from another, and the
+     * row is where the sentence a person reads actually lives. `BasicPrice
+     * .sourceImportRowId` is `@unique`, so the id list and the old `count()`
+     * are provably the same number — `alreadyPrivateRows` keeps its exact
+     * meaning, from the same tenant-scoped query shape, in one round trip.
+     */
+    const privatePriceRows = await this.prisma.basicPrice.findMany({
+      where: { workspaceId, sourceImportRow: { batchId } },
+      select: { sourceImportRowId: true },
+    });
+    const privateRowIds = new Set(
+      privatePriceRows
+        .map((price) => price.sourceImportRowId)
+        .filter((rowId): rowId is string => rowId !== null),
+    );
+
+    return {
+      ...this.summarize(batch, rows, proposals, privateRowIds),
+      region: batch.region ?? null,
+    };
   }
 
   /**
-   * Batch approval (state machine A: READY_FOR_REVIEW -> APPROVED_FOR_SUBMISSION
-   * -> SUBMITTED/PARTIALLY_SUBMITTED). Preconditions: effectiveDate and
-   * regionId set (schema contract §12.2), plus sourceOrigin set — a
-   * structural necessity this design's precondition list did not spell
-   * out: PriceSubmission.sourceOrigin has no schema default and is never
-   * fabricated. Idempotent: already-submitted batches return their
-   * existing state, never re-process.
+   * PROPOSE THIS BATCH TO SIMPROK'S CURATION (state machine A:
+   * READY_FOR_REVIEW -> APPROVED_FOR_SUBMISSION -> SUBMITTED /
+   * PARTIALLY_SUBMITTED).
+   *
+   * TERMINAL, AND THAT IS WHY IT KEEPS THE STRICT GATE. It freezes the batch,
+   * so it legitimately requires every row to have been decided first — which
+   * is exactly what READY_FOR_REVIEW means. Its sibling `keepBatchPrivate` is
+   * incremental and deliberately does NOT require that; the two are not
+   * exclusive and a batch may do both.
+   *
+   * WHAT IT IS NOT. It is not "save my prices". It creates no BasicPrice at
+   * all: one PriceSubmission plus its review per ready row, for a human
+   * curator to judge. A user whose prices must simply become usable wants
+   * `keepBatchPrivate`, and the review room now offers that as the primary
+   * action rather than presenting this one as the only way out.
+   *
+   * PRECONDITIONS ARE NOT STATED HERE ANY MORE. They live in
+   * `basic-price-batch-actions.policy.ts` alongside the private path's, so the
+   * room that decides whether to OFFER this action reads the same law this
+   * method enforces — including that sourceOrigin must be set (PriceSubmission
+   * .sourceOrigin has no schema default and is never fabricated) and that the
+   * (origin, type) pair must be coherent.
+   *
+   * Idempotent: already-submitted batches return their existing state, never
+   * re-process.
    */
   async submitBatch(
     workspaceId: string,
@@ -989,6 +1811,13 @@ export class BasicPriceImportService {
           sourceType: string | null;
           sourceOrigin: string | null;
           uploadedByAccountId: string;
+          sourceOrganizationName: string | null;
+          // `SELECT *` has always returned these; only the declared shape
+          // omitted them, which is why the idempotent return below had to cast
+          // itself away. Declared now, so the projection is type-checked here
+          // exactly as it is on every other path.
+          importFingerprint: string;
+          version: number;
         }>
       >(
         Prisma.sql`SELECT * FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
@@ -1008,24 +1837,36 @@ export class BasicPriceImportService {
         const rows = await tx.basicPriceImportRow.findMany({
           where: { batchId },
         });
-        return this.summarize(batch as any, rows);
+        return this.summarize(batch, rows);
       }
-      if (batch.status !== 'READY_FOR_REVIEW')
-        throw new ConflictException('BATCH_NOT_READY_FOR_REVIEW');
-      if (!batch.effectiveDate)
-        throw new ConflictException(
-          'EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION',
-        );
-      if (!batch.regionId)
-        throw new ConflictException('REGION_REQUIRED_BEFORE_SUBMISSION');
-      if (!batch.sourceOrigin)
-        throw new ConflictException('SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION');
-
       const readyRows = await tx.$queryRaw<Array<{ id: string }>>(
         Prisma.sql`SELECT "id" FROM "basic_price_import_rows" WHERE "batchId" = ${batchId}::uuid AND "status" = 'READY_FOR_SUBMISSION' FOR UPDATE`,
       );
-      if (readyRows.length === 0)
-        throw new ConflictException('NO_ROWS_READY_FOR_SUBMISSION');
+
+      // ONE STATEMENT OF THE PRECONDITIONS, read by this writer and by the
+      // review room that decides whether to offer the action at all. They used
+      // to be stated twice — here as throws, and again in the frontend's own
+      // `canSubmitBatch`, which could answer only yes/no and therefore rendered
+      // a silent dead button when it said no. Same checks, same order, same
+      // codes; the difference is that the reason now reaches a person.
+      //
+      // SOURCE CLASSIFICATION IS PART OF THE GATE NOW. This method used to
+      // write `sourceType: batch.sourceType ?? 'MARKET_SURVEY'` a few lines
+      // below — the exact falsehood RM-03D1 removed from the private writer: a
+      // government price list recorded as a market survey. There is no fallback
+      // any more, and an incoherent (origin, type) pair is refused by the one
+      // origin-to-type authority rather than silently stored.
+      const blocked = proposalBlockReason({
+        status: batch.status,
+        effectiveDate: batch.effectiveDate,
+        regionId: batch.regionId,
+        sourceOrigin: batch.sourceOrigin,
+        sourceType: batch.sourceType,
+        readyForSubmissionRows: readyRows.length,
+      });
+      if (blocked) {
+        throw new ConflictException(blocked);
+      }
 
       await tx.basicPriceImportBatch.update({
         where: { id: batchId },
@@ -1046,8 +1887,12 @@ export class BasicPriceImportService {
             resourceId: row.resourceCatalogId,
             regionId: batch.regionId,
             reportedByAccountId: batch.uploadedByAccountId,
-            sourceOrigin: batch.sourceOrigin as any,
-            sourceType: (batch.sourceType as any) ?? 'MARKET_SURVEY',
+            // Both halves cast from the raw-SQL read's `string` to the enum the
+            // column actually holds. No fallback on either: the gate above
+            // already refused an absent or incoherent classification, so this
+            // is the batch's stated truth or the submission never happened.
+            sourceOrigin: batch.sourceOrigin as PriceSourceOrigin,
+            sourceType: batch.sourceType as PriceSourceType,
             status: 'SUBMITTED',
           },
         });

@@ -246,6 +246,7 @@ describe('USI-01 architecture guards', () => {
         harness.prisma,
         harness.reviewService,
         harness.sourceArchive,
+        harness.proposals,
       );
       const summary = await service.preview(
         HARNESS_WORKSPACE,

@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { searchExplorerRegions, type RegionLookupItem } from '../../api/basicPriceExplorer';
-import { regionOptionLabel } from '../../utils/basicPriceExplorerDisplay';
+import {
+  regionChosenLabel,
+  regionOptionLabels,
+} from '../../utils/basicPriceExplorerDisplay';
 import { createLatestRequestGate } from '../../utils/catalogSearch';
 
 interface ExplorerRegionFilterSelectProps {
@@ -57,6 +60,10 @@ export function ExplorerRegionFilterSelect({
     setQuery(value);
   };
 
+  // Names first; a code is appended only where two candidates in THIS result
+  // set share a name and nothing else could tell them apart.
+  const labels = regionOptionLabels(results);
+
   return (
     <fieldset disabled={disabled} style={{ minWidth: '240px', padding: '10px' }}>
       <legend>Wilayah</legend>
@@ -66,7 +73,7 @@ export function ExplorerRegionFilterSelect({
           type="search"
           value={query}
           onChange={(event) => changeQuery(event.target.value)}
-          placeholder="Ketik kode atau nama wilayah"
+          placeholder="Ketik nama wilayah"
         />
       </label>
       <button type="button" onClick={() => { setHasInteracted(true); void runSearch(''); }}>
@@ -80,7 +87,7 @@ export function ExplorerRegionFilterSelect({
           {results.map((region) => (
             <li key={region.id}>
               <button type="button" onClick={() => { onSelect(region); setState('idle'); }}>
-                {regionOptionLabel(region)}
+                {labels.get(region.id) ?? region.name}
               </button>
             </li>
           ))}
@@ -88,7 +95,7 @@ export function ExplorerRegionFilterSelect({
       ) : null}
       {selected ? (
         <div role="status">
-          <strong>Wilayah terpilih:</strong> {regionOptionLabel(selected)}
+          <strong>Wilayah terpilih:</strong> {regionChosenLabel(selected)}
           <button type="button" onClick={() => onSelect(null)}>Hapus filter wilayah</button>
         </div>
       ) : (

@@ -215,6 +215,7 @@ describe('USI-01R2 §5/§8 — source bytes are retained safely', () => {
       harness.prisma,
       harness.reviewService,
       harness.sourceArchive,
+      harness.proposals,
     );
     const bytes = buildBasicPriceCsv();
 
@@ -239,6 +240,7 @@ describe('USI-01R2 §5/§8 — source bytes are retained safely', () => {
       harness.prisma,
       harness.reviewService,
       harness.sourceArchive,
+      harness.proposals,
     );
     const bytes = buildBasicPriceCsv();
 

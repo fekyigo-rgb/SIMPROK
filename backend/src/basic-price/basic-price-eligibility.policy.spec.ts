@@ -59,7 +59,11 @@ describe('BasicPriceEligibilityPolicy', () => {
       expect(Object.keys(where)).toEqual(['OR']);
       const or = where.OR as Prisma.BasicPriceWhereInput[];
       expect(or).toHaveLength(2);
-      return { catalog: or[0] as any, priv: or[1] as any };
+      // Typed, not `any`. These branches are asserted field by field throughout
+      // this file, and an `any` would let a renamed condition pass as
+      // `undefined === undefined` — silently retiring the very check that is
+      // supposed to be guarding the predicate.
+      return { catalog: or[0], priv: or[1] };
     };
 
     it('is the same predicate whether built via the class or the pure function', () => {
@@ -78,11 +82,28 @@ describe('BasicPriceEligibilityPolicy', () => {
       // Publication must not acquire an ownership condition. Narrowing the
       // catalog by assetScope would change what "published" means.
       expect(catalog).not.toHaveProperty('assetScope');
+      // BP-CAT-01E — the key set is exact and order-independent, so a NEW
+      // condition appearing here fails this test rather than quietly joining
+      // the predicate. It is back to three keys on purpose: promotion-lineage
+      // precedence briefly lived here and did not belong. Eligibility answers
+      // LAWFULNESS; which lawful row should compete is a selection question and
+      // lives in basic-price-promotion-precedence.ts.
       expect(Object.keys(catalog).sort()).toEqual([
         'OR',
         'status',
         'verificationStatus',
       ]);
+      expect(catalog).not.toHaveProperty('NOT');
+    });
+
+    it('BP-CAT-01E: a lawful SHARED row stays lawful for the workspace that produced it', () => {
+      const { catalog } = branches();
+      // The row a workspace donated is still perfectly lawful FOR THAT
+      // WORKSPACE — it is merely redundant next to the origin they already
+      // own. Eligibility must keep saying yes; only presentation may shadow it.
+      // Folding that shadowing in here made a lawful row read as unlawful.
+      expect(catalog.OR).toEqual([{ workspaceId }, { workspaceId: null }]);
+      expect(JSON.stringify(catalog)).not.toContain('promotedFrom');
     });
 
     it('private branch requires WORKSPACE_PRIVATE and STRICT workspace equality', () => {

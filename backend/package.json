@@ -33,10 +33,14 @@
     "resource-catalog:missing-unit:dry-run": "tsx scripts/rm02c1c/resource-catalog-missing-unit-disposition.ts --dry-run",
     "resource-catalog:missing-unit:apply": "tsx scripts/rm02c1c/resource-catalog-missing-unit-disposition.ts --apply",
     "b1b12:provision:rehearsal": "ts-node --transpile-only scripts/b1b12/provision-owner-browser-rehearsal.ts",
+    "b1b12:reprovision:rehearsal": "tsx scripts/b1b12/reprovision-b1b12-rehearsal.ts",
+    "b1b12:migrate:rehearsal": "tsx scripts/b1b12/migrate-b1b12-rehearsal.ts",
+    "b1b12:references:rehearsal": "tsx scripts/b1b12/b1b12-reference-provisioning.ts",
     "b1b12:start:backend": "tsx scripts/b1b12/start-b1b12-rehearsal-backend.ts",
     "verify:equivalence:271": "tsx scripts/verify-equivalence-271.ts",
     "test:openai:smoke": "tsx scripts/openai-smoke.ts",
-    "gate:post-recovery": "npm run build && npm run test && npm run test:e2e && npm --prefix ../frontend run build"
+    "gate:post-recovery": "npm run build && npm run test && npm run test:e2e && npm --prefix ../frontend run build",
+    "b1b12:acceptance:workspace": "tsx scripts/b1b12/provision-basic-price-acceptance.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

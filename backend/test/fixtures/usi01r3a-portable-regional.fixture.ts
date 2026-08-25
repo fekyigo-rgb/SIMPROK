@@ -58,7 +58,11 @@ export const PORTABLE_ROWS: ReadonlyArray<{
   unit: string | null;
   prices: Record<PortableRegion, number | string | null>;
   /** What this row must be classified as, and why it is here. */
-  expectedKind: 'RESOURCE_ROW' | 'STRUCTURAL_HEADING' | 'ROW_KIND_AMBIGUOUS';
+  expectedKind:
+    | 'RESOURCE_ROW'
+    | 'STRUCTURAL_HEADING'
+    | 'NO_COMMERCIAL_EVIDENCE'
+    | 'ROW_KIND_AMBIGUOUS';
   purpose: string;
 }> = [
   {
@@ -111,14 +115,19 @@ export const PORTABLE_ROWS: ReadonlyArray<{
   {
     rowNumber: 9,
     code: null,
-    // A name and nothing else. It could be an incomplete resource, a damaged
-    // extraction, or a title — the source does not say, and USI-01R3A refuses
-    // to decide for it.
+    // A name and nothing else: no unit, no price under ANY jurisdiction, and
+    // no number. SIMPROK still refuses to call it a TITLE — nothing said it was
+    // one. What the emptiness does prove is narrower and sufficient: there is
+    // no price here to observe, so it is not a Basic Price candidate. A row
+    // with no price can never reach READY_FOR_SUBMISSION anyway
+    // (BasicPriceRowResolutionService gates on proposedCanonicalPrice), so
+    // keeping it would only manufacture an unanswerable question.
     name: 'Uraian Tanpa Bukti Uji',
     unit: null,
     prices: { SIRIMAU: null, 'TELUK AMBON': null, BAGUALA: null },
-    expectedKind: 'ROW_KIND_AMBIGUOUS',
-    purpose: 'REGPORT-09 / ROWTRUTH-04 — unproven, therefore kept.',
+    expectedKind: 'NO_COMMERCIAL_EVIDENCE',
+    purpose:
+      'REGPORT-09 / ROWTRUTH-04 — excluded for empty commercial fields, never for its wording, and counted rather than dropped in silence.',
   },
   {
     rowNumber: 10,
