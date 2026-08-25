@@ -47,6 +47,35 @@ interface ErrorResponseBody {
 interface EntryResponseBody {
   entryId: string;
 }
+type Law1MonitoringQuantity =
+  | {
+      state: 'COMPLETE';
+      currentOfficialQuantity: string;
+    }
+  | {
+      state: 'INCOMPLETE';
+      knownEligibleQuantitySubtotal: string;
+    }
+  | {
+      state:
+        | 'NOT_YET_RECORDED'
+        | 'NO_ELIGIBLE_CURRENT_FACT'
+        | 'INVALID_NUMERIC_FACT'
+        | 'SEMANTICS_UNPROVEN';
+    }
+  | {
+      state: 'INVALID_LINEAGE';
+      reason: string;
+    };
+
+interface Law1MonitoringItem {
+  id: string;
+  currentOfficialQuantity: Law1MonitoringQuantity | null;
+}
+
+interface Law1MonitoringBody {
+  items: Law1MonitoringItem[];
+}
 
 describe('Progress Security (e2e)', () => {
   let app: INestApplication<App>;
@@ -3219,5 +3248,126 @@ describe('Progress Security (e2e)', () => {
       .set('x-workspace-id', workspaceBId);
     expect([403, 404]).toContain(crossTenant.status);
     expect(JSON.stringify(crossTenant.body)).not.toContain(boqItemAId);
+  });
+  it('MON04 LAW1 consumer - Monitoring uses canonical quantity truth', async () => {
+    const token = await login(userSubmitEmail);
+
+    const attestCurrentContext = async (
+      boqItemId: string,
+      entryIds: string[],
+    ) => {
+      const history = await semanticHistory(token, boqItemId);
+      const contextDigest = semanticContextDigest(history);
+
+      for (const entryId of entryIds) {
+        await attestSemantics(token, entryId, contextDigest).expect(201);
+      }
+    };
+
+    // A. No Actual -> NOT_YET_RECORDED.
+    const itemA = await createSemanticWorkItem('LAW1 consumer A no actual');
+
+    // B. One VERIFIED + semantic PROVEN quantity 4 -> COMPLETE(4).
+    const itemB = await createSemanticWorkItem('LAW1 consumer B single proven');
+    const rootB = await submitSemanticRoot(token, itemB.id, '4');
+    await transitionSemanticRoot(token, rootB, 'verify');
+    await attestCurrentContext(itemB.id, [rootB]);
+
+    // C. Two independent VERIFIED + PROVEN roots 3 + 4 -> COMPLETE(7).
+    const itemC = await createSemanticWorkItem(
+      'LAW1 consumer C additive roots',
+    );
+    const rootC1 = await submitSemanticRoot(token, itemC.id, '3');
+    const rootC2 = await submitSemanticRoot(token, itemC.id, '4');
+    await transitionSemanticRoot(token, rootC1, 'verify');
+    await transitionSemanticRoot(token, rootC2, 'verify');
+    await attestCurrentContext(itemC.id, [rootC1, rootC2]);
+
+    // D. VERIFIED + PROVEN 3 plus distinct SUBMITTED 4
+    // -> INCOMPLETE with known subtotal 3.
+    const itemD = await createSemanticWorkItem('LAW1 consumer D incomplete');
+    const rootD1 = await submitSemanticRoot(token, itemD.id, '3');
+    await submitSemanticRoot(token, itemD.id, '4');
+    await transitionSemanticRoot(token, rootD1, 'verify');
+    await attestCurrentContext(itemD.id, [rootD1]);
+
+    // E. Lifecycle eligible but semantic proof absent
+    // -> SEMANTICS_UNPROVEN.
+    const itemE = await createSemanticWorkItem(
+      'LAW1 consumer E semantics unproven',
+    );
+    const rootE = await submitSemanticRoot(token, itemE.id, '4');
+    await transitionSemanticRoot(token, rootE, 'verify');
+
+    // F. A previously eligible/proven predecessor must never reappear
+    // after an ineligible correction successor becomes current.
+    const itemF = await createSemanticWorkItem('LAW1 consumer F no fallback');
+    const rootF = await submitSemanticRoot(token, itemF.id, '4');
+    await transitionSemanticRoot(token, rootF, 'verify');
+    await attestCurrentContext(itemF.id, [rootF]);
+
+    await request(app.getHttpServer())
+      .post(`/projects/${projectAId}/progress/entries/${rootF}/corrections`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: randomUUID(),
+        installedQuantity: '5',
+        workDate: '2026-08-26',
+        captureMethod: 'FIELD_MEASUREMENT',
+        reasonCode: 'MEASUREMENT_UPDATE',
+        reasonText: 'LAW1 consumer no-fallback correction',
+      })
+      .expect(201);
+
+    // G. Proven numeric zero is an official COMPLETE(0),
+    // not NOT_YET_RECORDED.
+    const itemG = await createSemanticWorkItem('LAW1 consumer G proven zero');
+    const rootG = await submitSemanticRoot(token, itemG.id, '0');
+    await transitionSemanticRoot(token, rootG, 'verify');
+    await attestCurrentContext(itemG.id, [rootG]);
+
+    const monitoring = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+
+    const monitoringBody = monitoring.body as unknown as Law1MonitoringBody;
+
+    const resultFor = (boqItemId: string) =>
+      monitoringBody.items.find((item) => item.id === boqItemId)
+        ?.currentOfficialQuantity;
+    expect(resultFor(itemA.id)).toEqual({
+      state: 'NOT_YET_RECORDED',
+    });
+
+    expect(resultFor(itemB.id)).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '4',
+    });
+
+    expect(resultFor(itemC.id)).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '7',
+    });
+
+    expect(resultFor(itemD.id)).toEqual({
+      state: 'INCOMPLETE',
+      knownEligibleQuantitySubtotal: '3',
+    });
+
+    expect(resultFor(itemE.id)).toEqual({
+      state: 'SEMANTICS_UNPROVEN',
+    });
+
+    expect(resultFor(itemF.id)).toEqual({
+      state: 'NO_ELIGIBLE_CURRENT_FACT',
+    });
+
+    expect(resultFor(itemG.id)).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '0',
+    });
   });
 });
