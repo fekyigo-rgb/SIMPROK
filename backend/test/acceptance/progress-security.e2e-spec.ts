@@ -68,9 +68,47 @@ type Law1MonitoringQuantity =
       reason: string;
     };
 
+type Law2MonitoringProgress =
+  | {
+      state: 'COMPLETE';
+      rawPhysicalProgressPercent: string;
+      boundedContributionProgressPercent: string;
+    }
+  | {
+      state: 'INCOMPLETE';
+      knownProgressSubtotalPercent?: string;
+    }
+  | {
+      state: 'UNAVAILABLE';
+      reason:
+        | 'PLANNED_QUANTITY_UNAVAILABLE'
+        | 'PLANNED_QUANTITY_INVALID'
+        | 'PLANNED_QUANTITY_ZERO'
+        | 'SAME_WORK_ITEM_UNIT_CONTEXT_UNAVAILABLE';
+    }
+  | {
+      state:
+        | 'NOT_YET_RECORDED'
+        | 'NO_ELIGIBLE_CURRENT_FACT'
+        | 'INVALID_NUMERIC_FACT'
+        | 'SEMANTICS_UNPROVEN';
+    }
+  | {
+      state: 'INVALID_LINEAGE';
+      reason: string;
+    };
+
 interface Law1MonitoringItem {
   id: string;
   currentOfficialQuantity: Law1MonitoringQuantity | null;
+  currentOfficialItemProgress: Law2MonitoringProgress | null;
+  weight: {
+    own: {
+      state: 'AVAILABLE' | 'UNAVAILABLE' | 'NOT_APPLICABLE';
+      percentage: string | null;
+      reason: string | null;
+    };
+  };
 }
 
 interface Law1MonitoringBody {
@@ -3368,6 +3406,319 @@ describe('Progress Security (e2e)', () => {
     expect(resultFor(itemG.id)).toEqual({
       state: 'COMPLETE',
       currentOfficialQuantity: '0',
+    });
+  });
+
+  it('MON04 LAW2 consumer - Monitoring exposes canonical WORK_ITEM physical progress without erasing LAW1 truth', async () => {
+    const token = await login(userSubmitEmail);
+
+    /*
+     * Reuse the established MON04 acceptance-fixture pattern:
+     * create test-only WORK_ITEM rows in the same canonical Active-Baseline
+     * BOQ structure. No production planning write path is changed here.
+     *
+     * Crucially, this test NEVER updates an existing WORK_ITEM denominator
+     * after Actual is created. Every LAW2 test item is born with the planned
+     * quantity/unit that the consumer must read.
+     */
+    const baseline = await prisma.projectBaseline.findUniqueOrThrow({
+      where: { id: baselineAId },
+      include: { rabDocument: true },
+    });
+
+    const createLaw2WorkItem = async (
+      name: string,
+      plannedQuantity: number,
+      unit: string,
+      lineTotal: number | null = plannedQuantity,
+    ) =>
+      prisma.boqItem.create({
+        data: {
+          boqStructureId: baseline.rabDocument.boqStructureId,
+          wbsCode: `LAW2-${randomUUID().slice(0, 8)}`,
+          name,
+          itemType: 'WORK_ITEM',
+          quantity: plannedQuantity,
+          unit,
+          unitPrice: lineTotal === null ? null : 1,
+          lineTotal,
+          priceOrigin: lineTotal === null ? null : 'MANUAL_CLIENT',
+        },
+      });
+
+    const attestCurrentContext = async (
+      boqItemId: string,
+      entryIds: string[],
+    ) => {
+      const history = await semanticHistory(token, boqItemId);
+      const contextDigest = semanticContextDigest(history);
+
+      for (const entryId of entryIds) {
+        await attestSemantics(token, entryId, contextDigest).expect(201);
+      }
+    };
+
+    const proveCompleteQuantity = async (
+      boqItemId: string,
+      installedQuantity: string,
+    ) => {
+      const entryId = await submitSemanticRoot(
+        token,
+        boqItemId,
+        installedQuantity,
+      );
+
+      await transitionSemanticRoot(token, entryId, 'verify');
+      await attestCurrentContext(boqItemId, [entryId]);
+
+      return entryId;
+    };
+
+    // A. No Actual is not numeric zero.
+    const noActual = await createLaw2WorkItem(
+      'LAW2 consumer A no actual',
+      8,
+      'm3',
+      8,
+    );
+
+    // B. Proven numeric zero -> official 0%, not unavailable.
+    const provenZero = await createLaw2WorkItem(
+      'LAW2 consumer B proven zero',
+      8,
+      'm3',
+      8,
+    );
+    await proveCompleteQuantity(provenZero.id, '0');
+
+    // C. COMPLETE(4) / Planned(8) -> RAW 50 / BOUNDED 50.
+    const halfComplete = await createLaw2WorkItem(
+      'LAW2 consumer C fifty percent',
+      8,
+      'm3',
+      8,
+    );
+    await proveCompleteQuantity(halfComplete.id, '4');
+
+    // D. Actual > Planned preserves RAW truth above 100.
+    const overPlanned = await createLaw2WorkItem(
+      'LAW2 consumer D over planned',
+      8,
+      'm3',
+      8,
+    );
+    await proveCompleteQuantity(overPlanned.id, '12');
+
+    // E. Planned zero blocks division but MUST NOT erase COMPLETE(4).
+    const zeroDenominator = await createLaw2WorkItem(
+      'LAW2 consumer E zero denominator',
+      0,
+      'm3',
+      0,
+    );
+    await proveCompleteQuantity(zeroDenominator.id, '4');
+
+    // F. Blank contextual unit blocks LAW2 numeric progress but MUST NOT
+    // erase the canonical LAW1 quantity.
+    const blankUnit = await createLaw2WorkItem(
+      'LAW2 consumer F blank unit',
+      8,
+      '',
+      8,
+    );
+    await proveCompleteQuantity(blankUnit.id, '4');
+
+    // G. Known subtotal is diagnostic only, never official COMPLETE.
+    const incomplete = await createLaw2WorkItem(
+      'LAW2 consumer G incomplete subtotal',
+      20,
+      'm3',
+      20,
+    );
+    const incompleteProvenRoot = await submitSemanticRoot(
+      token,
+      incomplete.id,
+      '3',
+    );
+    await submitSemanticRoot(token, incomplete.id, '4');
+    await transitionSemanticRoot(token, incompleteProvenRoot, 'verify');
+    await attestCurrentContext(incomplete.id, [incompleteProvenRoot]);
+
+    // H. H2-A1 independence:
+    // lineTotal intentionally unavailable, therefore item weight is
+    // unavailable, while LAW2 quantity/planned/unit truth remains sufficient.
+    const weightIndependent = await createLaw2WorkItem(
+      'LAW2 consumer H H2-A1 independent',
+      8,
+      'm3',
+      null,
+    );
+    await proveCompleteQuantity(weightIndependent.id, '4');
+
+    /*
+     * Snapshot AFTER all test setup and BEFORE the Monitoring GET.
+     * The GET itself must remain read-only.
+     */
+    const domainBeforeRead = {
+      reports: await prisma.progressReport.count({
+        where: { projectId: projectAId },
+      }),
+      entries: await prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+      audits: await prisma.progressAuditEvent.count({
+        where: { projectId: projectAId },
+      }),
+      deviations: await prisma.deviationSignal.count({
+        where: { projectId: projectAId },
+      }),
+    };
+
+    const monitoring = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/progress/monitoring`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+
+    const domainAfterRead = {
+      reports: await prisma.progressReport.count({
+        where: { projectId: projectAId },
+      }),
+      entries: await prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+      audits: await prisma.progressAuditEvent.count({
+        where: { projectId: projectAId },
+      }),
+      deviations: await prisma.deviationSignal.count({
+        where: { projectId: projectAId },
+      }),
+    };
+
+    expect(domainAfterRead).toEqual(domainBeforeRead);
+
+    const body = monitoring.body as unknown as Law1MonitoringBody;
+
+    const rowFor = (boqItemId: string): Law1MonitoringItem => {
+      const row = body.items.find((item) => item.id === boqItemId);
+
+      if (!row) {
+        throw new Error(`Expected Monitoring row ${boqItemId}`);
+      }
+
+      return row;
+    };
+
+    /*
+     * Structural rows never acquire official WORK_ITEM progress.
+     */
+    expect(rowFor(boqFolderAId).currentOfficialQuantity).toBeNull();
+    expect(rowFor(boqFolderAId).currentOfficialItemProgress).toBeNull();
+
+    /*
+     * A. Missing fact remains missing — never coerced to numeric zero.
+     */
+    expect(rowFor(noActual.id).currentOfficialQuantity).toEqual({
+      state: 'NOT_YET_RECORDED',
+    });
+    expect(rowFor(noActual.id).currentOfficialItemProgress).toEqual({
+      state: 'NOT_YET_RECORDED',
+    });
+
+    /*
+     * B. Proven numeric zero is true official 0%.
+     */
+    expect(rowFor(provenZero.id).currentOfficialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '0',
+    });
+    expect(rowFor(provenZero.id).currentOfficialItemProgress).toEqual({
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '0',
+      boundedContributionProgressPercent: '0',
+    });
+
+    /*
+     * C. Nominal official result.
+     */
+    expect(rowFor(halfComplete.id).currentOfficialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '4',
+    });
+    expect(rowFor(halfComplete.id).currentOfficialItemProgress).toEqual({
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '50',
+      boundedContributionProgressPercent: '50',
+    });
+
+    /*
+     * D. RAW truth is not capped; only contribution is bounded.
+     */
+    expect(rowFor(overPlanned.id).currentOfficialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '12',
+    });
+    expect(rowFor(overPlanned.id).currentOfficialItemProgress).toEqual({
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '150',
+      boundedContributionProgressPercent: '100',
+    });
+
+    /*
+     * E. Downstream denominator failure MUST preserve LAW1 COMPLETE(4).
+     */
+    expect(rowFor(zeroDenominator.id).currentOfficialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '4',
+    });
+    expect(rowFor(zeroDenominator.id).currentOfficialItemProgress).toEqual({
+      state: 'UNAVAILABLE',
+      reason: 'PLANNED_QUANTITY_ZERO',
+    });
+
+    /*
+     * F. Downstream unit-context failure MUST also preserve LAW1 COMPLETE(4).
+     */
+    expect(rowFor(blankUnit.id).currentOfficialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '4',
+    });
+    expect(rowFor(blankUnit.id).currentOfficialItemProgress).toEqual({
+      state: 'UNAVAILABLE',
+      reason: 'SAME_WORK_ITEM_UNIT_CONTEXT_UNAVAILABLE',
+    });
+
+    /*
+     * G. INCOMPLETE subtotal remains diagnostic and is never promoted
+     * to official COMPLETE progress.
+     */
+    expect(rowFor(incomplete.id).currentOfficialQuantity).toEqual({
+      state: 'INCOMPLETE',
+      knownEligibleQuantitySubtotal: '3',
+    });
+    expect(rowFor(incomplete.id).currentOfficialItemProgress).toEqual({
+      state: 'INCOMPLETE',
+      knownProgressSubtotalPercent: '15',
+    });
+
+    /*
+     * H. H2-A1 independence:
+     * item weight is unavailable because lineTotal is unavailable,
+     * while LAW2 remains officially COMPLETE from its own lawful inputs.
+     */
+    expect(rowFor(weightIndependent.id).weight.own).toEqual({
+      state: 'UNAVAILABLE',
+      percentage: null,
+      reason: 'ITEM_VALUE_UNAVAILABLE',
+    });
+    expect(rowFor(weightIndependent.id).currentOfficialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '4',
+    });
+    expect(rowFor(weightIndependent.id).currentOfficialItemProgress).toEqual({
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '50',
+      boundedContributionProgressPercent: '50',
     });
   });
 });

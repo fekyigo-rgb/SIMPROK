@@ -39,6 +39,10 @@ import {
   calculateCurrentOfficialQuantity,
   type CurrentOfficialQuantityResult,
 } from './progress-current-official-quantity.policy';
+import {
+  calculateWorkItemCurrentPhysicalProgress,
+  type WorkItemCurrentPhysicalProgressResult,
+} from './progress-current-physical-progress.policy';
 
 type CurrentOfficialQuantityResponse =
   | Exclude<
@@ -53,6 +57,46 @@ type CurrentOfficialQuantityResponse =
       state: 'INCOMPLETE';
       knownEligibleQuantitySubtotal: string;
     };
+
+type WorkItemCurrentPhysicalProgressResponse =
+  | Exclude<
+      WorkItemCurrentPhysicalProgressResult,
+      { state: 'COMPLETE' } | { state: 'INCOMPLETE' }
+    >
+  | {
+      state: 'COMPLETE';
+      rawPhysicalProgressPercent: string;
+      boundedContributionProgressPercent: string;
+    }
+  | {
+      state: 'INCOMPLETE';
+      knownProgressSubtotalPercent?: string;
+    };
+
+const serializeWorkItemCurrentPhysicalProgress = (
+  result: WorkItemCurrentPhysicalProgressResult,
+): WorkItemCurrentPhysicalProgressResponse => {
+  if (result.state === 'COMPLETE') {
+    return {
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: result.rawPhysicalProgressPercent.toString(),
+      boundedContributionProgressPercent:
+        result.boundedContributionProgressPercent.toString(),
+    };
+  }
+
+  if (result.state === 'INCOMPLETE') {
+    return result.knownProgressSubtotalPercent === undefined
+      ? { state: 'INCOMPLETE' }
+      : {
+          state: 'INCOMPLETE',
+          knownProgressSubtotalPercent:
+            result.knownProgressSubtotalPercent.toString(),
+        };
+  }
+
+  return result;
+};
 
 interface TrustedProgressActor {
   accountId: string;
@@ -672,11 +716,15 @@ export class ProgressService {
 
         let currentOfficialQuantityResponse: CurrentOfficialQuantityResponse | null =
           null;
+        let currentOfficialItemProgressResponse: WorkItemCurrentPhysicalProgressResponse | null =
+          null;
+
         if (item.itemType === 'WORK_ITEM') {
           const rawQuantityResult = calculateCurrentOfficialQuantity(
             { projectId, activeBaselineId: baseline.id, boqItemId: item.id },
             itemEntries,
           );
+
           currentOfficialQuantityResponse =
             rawQuantityResult.state === 'COMPLETE'
               ? {
@@ -691,6 +739,16 @@ export class ProgressService {
                       rawQuantityResult.knownEligibleQuantitySubtotal.toString(),
                   }
                 : rawQuantityResult;
+
+          const rawItemProgressResult =
+            calculateWorkItemCurrentPhysicalProgress({
+              currentOfficialQuantity: rawQuantityResult,
+              plannedQuantity: item.quantity,
+              plannedUnit: item.unit,
+            });
+
+          currentOfficialItemProgressResponse =
+            serializeWorkItemCurrentPhysicalProgress(rawItemProgressResult);
         }
 
         return {
@@ -704,6 +762,7 @@ export class ProgressService {
           planned: { quantity: item.quantity.toString(), unit: item.unit },
           weight: weight.rows.get(item.id),
           currentOfficialQuantity: currentOfficialQuantityResponse,
+          currentOfficialItemProgress: currentOfficialItemProgressResponse,
           actual:
             item.itemType !== 'WORK_ITEM'
               ? null
