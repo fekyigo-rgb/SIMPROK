@@ -13,6 +13,9 @@ import {
   plannedFact,
   projectWorkDateDefault,
   projectTimestampPresentation,
+  semanticAuthorityLabel,
+  semanticLeafRelationship,
+  type ProgressSemanticAuthorityState,
   timelinePresentation,
   type ProgressHistoryLoadState,
   type ProgressTimelineEvent,
@@ -28,7 +31,9 @@ type HistoryEntry = {
   correctionReasonCode: string | null;
   correctionReason: string | null;
   evidenceReferences: Array<{ url: string; label: string }>;
+  supersedesEntryId: string | null;
   revision: number;
+  isCurrentLineageLeaf: boolean;
   timeline?: ProgressTimelineEvent[];
 };
 type CorrectionDraft = {
@@ -40,6 +45,35 @@ type CorrectionDraft = {
   reasonCode: string;
   reasonText: string;
 };
+type SemanticLeaf = {
+  id: string;
+  supersedesEntryId: string | null;
+  installedQuantity: string;
+  workDate: string | null;
+  lifecycleStatus: string;
+  captureMethod: string;
+  evidenceReferences: Array<{ url: string; label: string }>;
+  semanticAuthority: {
+    state: ProgressSemanticAuthorityState;
+    proof: {
+      actorDisplayName: string | null;
+      occurredAt: string;
+    } | null;
+  };
+};
+type SemanticVerification =
+  | {
+      state: "VALID";
+      contextDigest: string;
+      invalidReason: null;
+      currentLeaves: SemanticLeaf[];
+    }
+  | {
+      state: "INVALID_LINEAGE";
+      contextDigest: null;
+      invalidReason: string;
+      currentLeaves: [];
+    };
 
 export function SubmitProgressPage() {
   const { projectId, boqItemId } = useParams();
@@ -68,7 +102,15 @@ export function SubmitProgressPage() {
     verify: false,
     correct: false,
     accept: false,
+    semanticAttestEntryIds: [] as string[],
   });
+  const [semanticVerification, setSemanticVerification] =
+    useState<SemanticVerification | null>(null);
+  const [semanticTargetId, setSemanticTargetId] = useState<string | null>(null);
+  const [semanticConfirmed, setSemanticConfirmed] = useState(false);
+  const [semanticCommands, setSemanticCommands] = useState<
+    Record<string, string>
+  >({});
   const [transitionCommands, setTransitionCommands] = useState<
     Record<string, string>
   >({});
@@ -89,26 +131,53 @@ export function SubmitProgressPage() {
       const response = await apiFetch(
         `/projects/${projectId}/progress/items/${boqItemId}/history`,
       );
-      if (!response.ok)
-        return setHistoryState({
+      if (!response.ok) {
+        setSemanticVerification(null);
+        setSemanticTargetId(null);
+        setSemanticConfirmed(false);
+        setActions((current) => ({
+          ...current,
+          semanticAttestEntryIds: [],
+        }));
+        setHistoryState({
           kind: "error",
           message: `Riwayat Actual gagal dimuat (${response.status}).`,
         });
+        return;
+      }
       const body = await response.json();
       const entries = body.entries ?? [];
       setHistory(entries);
       setEffectiveEntryId(body.effectiveEntryId ?? null);
       setGovernanceEntryId(body.governanceEntryId ?? null);
+      const semantic = body.semanticVerification ?? null;
+      setSemanticVerification(semantic);
+      setSemanticTargetId((current) =>
+        semantic?.currentLeaves?.some(
+          (entry: SemanticLeaf) => entry.id === current,
+        )
+          ? current
+          : null,
+      );
+      setSemanticConfirmed(false);
       applyProjectTimeZone(body.projectTimeZone ?? null);
       setActions(
         body.availableActions ?? {
           verify: false,
           correct: false,
           accept: false,
+          semanticAttestEntryIds: [],
         },
       );
       setHistoryState({ kind: "loaded", count: entries.length });
     } catch {
+      setSemanticVerification(null);
+      setSemanticTargetId(null);
+      setSemanticConfirmed(false);
+      setActions((current) => ({
+        ...current,
+        semanticAttestEntryIds: [],
+      }));
       setHistoryState({
         kind: "error",
         message: "Riwayat Actual gagal dimuat karena gangguan jaringan.",
@@ -214,6 +283,53 @@ export function SubmitProgressPage() {
       await loadHistory();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Perintah gagal");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const attestSemantic = async () => {
+    if (
+      !projectId ||
+      !semanticTargetId ||
+      semanticVerification?.state !== "VALID" ||
+      !semanticConfirmed
+    )
+      return;
+    const stableId = semanticCommands[semanticTargetId] ?? crypto.randomUUID();
+    setSemanticCommands((value) => ({
+      ...value,
+      [semanticTargetId]: stableId,
+    }));
+    setSubmitting(true);
+    setNotice(null);
+    try {
+      await send(
+        `/projects/${projectId}/progress/entries/${semanticTargetId}/semantic-attestations`,
+        {
+          commandId: stableId,
+          contextDigest: semanticVerification.contextDigest,
+          confirmed: true,
+        },
+      );
+      setSemanticCommands((value) => {
+        const next = { ...value };
+        delete next[semanticTargetId];
+        return next;
+      });
+      setSemanticTargetId(null);
+      setSemanticConfirmed(false);
+      setNotice(
+        "Konfirmasi makna Actual tersimpan dengan konteks yang ditinjau.",
+      );
+      await loadHistory();
+    } catch (error) {
+      await loadHistory();
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Konfirmasi gagal; muat ulang konteks dan tinjau kembali.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -356,6 +472,119 @@ export function SubmitProgressPage() {
         </button>
         </form>
       )}
+      {semanticVerification && (
+        <section aria-label="Kepastian makna Actual">
+          <h3>Pastikan Actual tidak tumpang tindih</h3>
+          <p>
+            Tinjau seluruh Actual aktif pada pekerjaan yang sama sebelum
+            memastikan satu Actual adalah tambahan fisik yang berbeda.
+          </p>
+          {semanticVerification.state === "INVALID_LINEAGE" ? (
+            <p role="alert">
+              Hubungan koreksi Actual tidak valid. Konfirmasi tidak dapat
+              disimpan; Actual lain yang aman tetap dapat digunakan.
+            </p>
+          ) : semanticVerification.currentLeaves.length === 0 ? (
+            <p>Belum ada Actual aktif untuk ditinjau.</p>
+          ) : (
+            <>
+              {semanticVerification.currentLeaves.map((leaf) => {
+                const proofTime = leaf.semanticAuthority.proof
+                  ? projectTimestampPresentation(
+                      leaf.semanticAuthority.proof.occurredAt,
+                      projectTimeZone,
+                    )
+                  : null;
+                return (
+                  <article key={leaf.id}>
+                    <strong>
+                      {leaf.installedQuantity} {planned.unit ?? ""}
+                    </strong>
+                    <div>
+                      {leaf.workDate?.slice(0, 10) ??
+                        "Tanggal pekerjaan tidak tersedia"}{" "}
+                      | {leaf.lifecycleStatus} |{" "}
+                      {semanticLeafRelationship(leaf.supersedesEntryId)}
+                    </div>
+                    <div>
+                      Makna Actual:{" "}
+                      <strong>
+                        {semanticAuthorityLabel(leaf.semanticAuthority.state)}
+                      </strong>
+                    </div>
+                    {leaf.semanticAuthority.proof && proofTime && (
+                      <small>
+                        Dikonfirmasi oleh{" "}
+                        {leaf.semanticAuthority.proof.actorDisplayName ??
+                          "verifikator berwenang"}{" "}
+                        | {proofTime.occurredAtLabel} (
+                        {proofTime.timeZoneBasis})
+                      </small>
+                    )}
+                    {leaf.evidenceReferences.map((evidence) => (
+                      <a
+                        key={evidence.url}
+                        href={evidence.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {evidence.label}
+                      </a>
+                    ))}
+                    {actions.semanticAttestEntryIds.includes(leaf.id) &&
+                      leaf.semanticAuthority.state !== "PROVEN" && (
+                        <button
+                          disabled={submitting}
+                          onClick={() => {
+                            setSemanticTargetId(leaf.id);
+                            setSemanticConfirmed(false);
+                          }}
+                        >
+                          Tinjau dan konfirmasi
+                        </button>
+                      )}
+                  </article>
+                );
+              })}
+              {semanticTargetId && (
+                <div>
+                  <p>
+                    Bandingkan Actual target dengan semua Actual aktif yang
+                    ditampilkan di atas.
+                  </p>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={semanticConfirmed}
+                      onChange={(event) =>
+                        setSemanticConfirmed(event.target.checked)
+                      }
+                    />
+                    Saya telah meninjau seluruh Actual aktif pada pekerjaan ini
+                    dan memastikan Actual target adalah tambahan fisik yang
+                    berbeda, bukan duplikasi atau tumpang tindih.
+                  </label>
+                  <button
+                    disabled={submitting || !semanticConfirmed}
+                    onClick={() => void attestSemantic()}
+                  >
+                    Simpan konfirmasi
+                  </button>
+                  <button
+                    disabled={submitting}
+                    onClick={() => {
+                      setSemanticTargetId(null);
+                      setSemanticConfirmed(false);
+                    }}
+                  >
+                    Batal
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
       <section>
         <h3>Riwayat Actual</h3>
         <small>
@@ -380,6 +609,11 @@ export function SubmitProgressPage() {
                   Revisi {entry.revision}: {entry.installedQuantity}{" "}
                   {planned.unit ?? ""}
                 </strong>
+                <div>
+                  {entry.isCurrentLineageLeaf
+                    ? "Actual aktif pada garis koreksi"
+                    : "Riwayat / telah digantikan pada garis koreksi"}
+                </div>
                 <div>
                   {entry.status} · {recordedAt.occurredAtLabel} (
                   {recordedAt.timeZoneBasis}) · {entry.captureMethod}

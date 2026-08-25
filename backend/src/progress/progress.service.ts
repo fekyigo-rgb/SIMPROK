@@ -17,6 +17,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   CorrectProgressDto,
   ProgressEvidenceReferenceDto,
+  ProgressSemanticAttestationDto,
   SubmitFieldProgressDto,
 } from './dto/create-progress.dto';
 import { PERMISSIONS } from '../common/constants/permissions';
@@ -27,6 +28,13 @@ import {
   type ProgressAuthorityContext,
 } from './progress-authority.service';
 import { projectMonitoringWeights } from './monitoring-weight';
+import {
+  createProgressSemanticVerificationContext,
+  isProgressSemanticAttestationEligible,
+  MON04_SEMANTIC_AUDIT_ACTION,
+  progressSemanticProofMetadata,
+  readProgressSemanticAuthority,
+} from './progress-semantic-authority.policy';
 
 interface TrustedProgressActor {
   accountId: string;
@@ -263,6 +271,27 @@ export class ProgressService {
     return { id: rows[0].id, boqStructureId: rab.boqStructureId };
   }
 
+  private async lockSemanticContextWorkItems(
+    tx: Prisma.TransactionClient,
+    boqStructureId: string,
+    itemIds: readonly string[],
+  ): Promise<string[]> {
+    if (itemIds.length === 0) return [];
+    const orderedIds = [...new Set(itemIds)].sort();
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id"
+                   FROM "boq_items"
+                  WHERE "boqStructureId" = ${boqStructureId}::uuid
+                    AND "itemType" = 'WORK_ITEM'
+                    AND "id" IN (${Prisma.join(
+                      orderedIds.map((id) => Prisma.sql`${id}::uuid`),
+                    )})
+                  ORDER BY "id"
+                  FOR UPDATE`,
+    );
+    return rows.map((row) => row.id);
+  }
+
   private async audit(
     tx: Prisma.TransactionClient,
     params: {
@@ -340,9 +369,19 @@ export class ProgressService {
       return 'TARGET_NOT_AVAILABLE';
     }
     if (error instanceof ConflictException) {
-      return `${error.message}`.startsWith('COMMAND_ID_')
-        ? 'COMMAND_CONFLICT'
-        : 'INVALID_LIFECYCLE_TRANSITION';
+      if (`${error.message}`.startsWith('COMMAND_ID_')) {
+        return 'COMMAND_CONFLICT';
+      }
+      if (`${error.message}` === 'SEMANTIC_CONTEXT_STALE') {
+        return 'STALE_SEMANTIC_CONTEXT';
+      }
+      if (`${error.message}`.startsWith('SEMANTIC_CONTEXT_INVALID_LINEAGE')) {
+        return 'INVALID_LINEAGE';
+      }
+      if (`${error.message}`.startsWith('SEMANTIC_')) {
+        return 'SEMANTIC_ATTESTATION_NOT_ALLOWED';
+      }
+      return 'INVALID_LIFECYCLE_TRANSITION';
     }
     if (
       error instanceof BadRequestException &&
@@ -692,15 +731,12 @@ export class ProgressService {
         const itemIds = [
           ...new Set(dto.entries.map((entry) => entry.boqItemId)),
         ];
-        const items = await tx.boqItem.findMany({
-          where: {
-            id: { in: itemIds },
-            boqStructureId: baseline.boqStructureId,
-            itemType: 'WORK_ITEM',
-          },
-          select: { id: true },
-        });
-        if (items.length !== itemIds.length)
+        const lockedItemIds = await this.lockSemanticContextWorkItems(
+          tx,
+          baseline.boqStructureId,
+          itemIds,
+        );
+        if (lockedItemIds.length !== itemIds.length)
           throw new BadRequestException('INVALID_PROJECT_WORK_ITEM');
         const dates = dto.entries.map((entry) =>
           this.projectBusinessDate(entry.workDate),
@@ -916,6 +952,13 @@ export class ProgressService {
         const baseline = await this.activeBaselineForWrite(tx, projectId);
         if (baseline.id !== report.baselineId)
           throw new ConflictException('ACTIVE_BASELINE_CHANGED');
+        const lockedItemIds = await this.lockSemanticContextWorkItems(
+          tx,
+          baseline.boqStructureId,
+          [original.boqItemId],
+        );
+        if (lockedItemIds.length !== 1)
+          throw new NotFoundException('Actual not found');
         const correctionReport = await tx.progressReport.create({
           data: {
             projectId,
@@ -1042,6 +1085,252 @@ export class ProgressService {
         trace,
         targetEntityType: 'PROGRESS_ENTRY',
         targetEntityId: entryId,
+        businessCommandId: dto.commandId,
+        commandId: dto.commandId,
+        commandFingerprint,
+      });
+    }
+  }
+
+  async attestEntrySemantics(
+    projectId: string,
+    entryId: string,
+    dto: ProgressSemanticAttestationDto,
+    accountId: string,
+    access: ProjectAccessContext,
+  ) {
+    if (dto.confirmed !== true) {
+      throw new BadRequestException('EXPLICIT_SEMANTIC_CONFIRMATION_REQUIRED');
+    }
+    const actor = this.actor(accountId, access);
+    const trace = this.trace();
+    const commandFingerprint = this.fingerprint({
+      kind: MON04_SEMANTIC_AUDIT_ACTION,
+      projectId,
+      entryId,
+      actorAccountId: accountId,
+      contextDigest: dto.contextDigest,
+      confirmed: dto.confirmed,
+      reason: dto.reason,
+    });
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const lockedTargetIds = await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT id
+                       FROM progress_entries
+                      WHERE id = ${entryId}::uuid
+                      FOR UPDATE`,
+        );
+        if (lockedTargetIds.length !== 1) {
+          throw new NotFoundException('Actual not found');
+        }
+        const target = await tx.progressEntry.findUnique({
+          where: { id: entryId },
+          select: {
+            id: true,
+            boqItemId: true,
+            revision: true,
+            progressReport: {
+              select: { projectId: true, baselineId: true },
+            },
+          },
+        });
+        if (!target || target.progressReport.projectId !== projectId) {
+          throw new NotFoundException('Actual not found');
+        }
+
+        const baseline = await this.activeBaselineForWrite(tx, projectId);
+        if (target.progressReport.baselineId !== baseline.id) {
+          throw new ConflictException('SEMANTIC_TARGET_NOT_ACTIVE_BASELINE');
+        }
+        const lockedItemIds = await this.lockSemanticContextWorkItems(
+          tx,
+          baseline.boqStructureId,
+          [target.boqItemId],
+        );
+        if (lockedItemIds.length !== 1) {
+          throw new NotFoundException('Actual not found');
+        }
+
+        const relevantEntries = await tx.progressEntry.findMany({
+          where: {
+            boqItemId: target.boqItemId,
+            progressReport: {
+              projectId,
+              baselineId: baseline.id,
+            },
+          },
+          orderBy: { id: 'asc' },
+          select: {
+            id: true,
+            supersedesEntryId: true,
+            installedQuantity: true,
+            workDate: true,
+            status: true,
+            captureMethod: true,
+            evidenceReferences: true,
+            notes: true,
+            correctionReasonCode: true,
+            correctionReason: true,
+            recordedByAccountId: true,
+            revision: true,
+          },
+        });
+        const context = createProgressSemanticVerificationContext(
+          {
+            projectId,
+            activeBaselineId: baseline.id,
+            boqItemId: target.boqItemId,
+          },
+          relevantEntries,
+        );
+
+        const replay = await tx.progressAuditEvent.findUnique({
+          where: { commandId: dto.commandId },
+        });
+        if (replay) {
+          if (
+            replay.action !== MON04_SEMANTIC_AUDIT_ACTION ||
+            replay.outcome !== ProgressAuditOutcome.SUCCESS ||
+            replay.projectId !== projectId ||
+            replay.progressEntryId !== entryId ||
+            replay.actorAccountId !== accountId ||
+            replay.commandFingerprint !== commandFingerprint
+          ) {
+            throw new ConflictException('COMMAND_ID_SEMANTIC_CONFLICT');
+          }
+          const stillCurrent =
+            context.state === 'VALID' &&
+            context.contextDigest === dto.contextDigest &&
+            context.currentLeafIds.includes(entryId);
+          return {
+            entryId,
+            semanticAuthority: stillCurrent ? 'PROVEN' : 'STALE',
+            contextDigest: dto.contextDigest,
+            replayed: true,
+          };
+        }
+
+        if (context.state === 'INVALID_LINEAGE') {
+          throw new ConflictException(
+            `SEMANTIC_CONTEXT_INVALID_LINEAGE:${context.reason}`,
+          );
+        }
+        const currentTarget = context.currentLeaves.find(
+          (entry) => entry.id === entryId,
+        );
+        if (!currentTarget) {
+          throw new ConflictException('SEMANTIC_TARGET_NOT_CURRENT');
+        }
+        if (!isProgressSemanticAttestationEligible(currentTarget.status)) {
+          throw new ConflictException(
+            'SEMANTIC_ATTESTATION_REQUIRES_LIFECYCLE_ELIGIBLE_CURRENT_LEAF',
+          );
+        }
+        if (context.contextDigest !== dto.contextDigest) {
+          throw new ConflictException('SEMANTIC_CONTEXT_STALE');
+        }
+
+        const authority = await this.authority.requireWithinTransaction(
+          tx,
+          accountId,
+          access,
+          PROGRESS_AUTHORITIES.VERIFY,
+        );
+        const transactionalActor = await this.authority.requireActiveActor(
+          tx,
+          accountId,
+          access,
+        );
+        const currentActor = {
+          ...actor,
+          roleInProject: transactionalActor.roleInProject,
+        };
+        await this.authority.requireSeparationPolicy(
+          tx,
+          access,
+          authority,
+          'VERIFY',
+          accountId,
+          [currentTarget.recordedByAccountId],
+        );
+
+        const confirmedBaseline = await this.activeBaselineForWrite(
+          tx,
+          projectId,
+        );
+        if (confirmedBaseline.id !== baseline.id) {
+          throw new ConflictException('SEMANTIC_CONTEXT_STALE');
+        }
+        await this.audit(tx, {
+          projectId,
+          entryId,
+          actor: currentActor,
+          authority,
+          action: MON04_SEMANTIC_AUDIT_ACTION,
+          trace,
+          reasonText: dto.reason,
+          businessCommandId: dto.commandId,
+          commandId: dto.commandId,
+          commandFingerprint,
+          entityVersionBefore: currentTarget.revision,
+          entityVersionAfter: currentTarget.revision,
+          metadata: progressSemanticProofMetadata(
+            context,
+          ) as unknown as Prisma.InputJsonValue,
+        });
+        return {
+          entryId,
+          semanticAuthority: 'PROVEN' as const,
+          contextDigest: context.contextDigest,
+          replayed: false,
+        };
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const replay = await this.prisma.progressAuditEvent.findUnique({
+          where: { commandId: dto.commandId },
+        });
+        if (
+          replay?.action === MON04_SEMANTIC_AUDIT_ACTION &&
+          replay.outcome === ProgressAuditOutcome.SUCCESS &&
+          replay.projectId === projectId &&
+          replay.progressEntryId === entryId &&
+          replay.actorAccountId === accountId &&
+          replay.commandFingerprint === commandFingerprint
+        ) {
+          return {
+            entryId,
+            semanticAuthority: 'PROVEN' as const,
+            contextDigest: dto.contextDigest,
+            replayed: true,
+          };
+        }
+        return this.auditDeniedAndRethrow({
+          error: new ConflictException('COMMAND_ID_SEMANTIC_CONFLICT'),
+          projectId,
+          actor,
+          action: MON04_SEMANTIC_AUDIT_ACTION,
+          trace,
+          targetEntityType: 'PROGRESS_ENTRY',
+          targetEntityId: entryId,
+          businessCommandId: dto.commandId,
+          commandId: dto.commandId,
+          commandFingerprint,
+        });
+      }
+      return this.auditDeniedAndRethrow({
+        error,
+        projectId,
+        actor,
+        action: MON04_SEMANTIC_AUDIT_ACTION,
+        trace,
+        targetEntityType: 'PROGRESS_ENTRY',
+        targetEntityId: entryId,
+        metadata: { suppliedContextDigest: dto.contextDigest },
         businessCommandId: dto.commandId,
         commandId: dto.commandId,
         commandFingerprint,
@@ -1246,14 +1535,19 @@ export class ProgressService {
     accountId: string,
     access: ProjectAccessContext,
   ) {
-    const baseline = await this.prisma.projectBaseline.findFirst({
+    const activeBaselines = await this.prisma.projectBaseline.findMany({
       where: { projectId, status: 'ACTIVE' },
       orderBy: { versionNumber: 'desc' },
+      take: 2,
       include: {
         rabDocument: true,
         project: { select: { timeZone: true } },
       },
     });
+    if (activeBaselines.length > 1) {
+      throw new ConflictException('MULTIPLE_ACTIVE_BASELINES');
+    }
+    const baseline = activeBaselines[0] ?? null;
     const workItem = baseline?.rabDocument
       ? await this.prisma.boqItem.findFirst({
           where: {
@@ -1276,16 +1570,11 @@ export class ProgressService {
         },
       },
     });
-    const effective = this.effectiveEntry(
-      entries.filter(
-        (entry) => entry.progressReport.baselineId === baseline.id,
-      ),
+    const activeEntries = entries.filter(
+      (entry) => entry.progressReport.baselineId === baseline.id,
     );
-    const governanceCandidate = this.governanceCandidate(
-      entries.filter(
-        (entry) => entry.progressReport.baselineId === baseline.id,
-      ),
-    );
+    const effective = this.effectiveEntry(activeEntries);
+    const governanceCandidate = this.governanceCandidate(activeEntries);
     const [effectivePermissions, verify, correct, accept] = await Promise.all([
       this.permissionResolver.resolve(accountId, access.workspaceId),
       this.authority.resolve(accountId, access, PROGRESS_AUTHORITIES.VERIFY),
@@ -1324,6 +1613,66 @@ export class ProgressService {
             accept,
             'ACCEPT',
           ))));
+    const semanticContext = createProgressSemanticVerificationContext(
+      {
+        projectId,
+        activeBaselineId: baseline.id,
+        boqItemId,
+      },
+      activeEntries,
+    );
+    const verifyCanCombine =
+      !!verify &&
+      (await this.authority.canCombineResponsibility(access, verify, 'VERIFY'));
+    const semanticAttestEntryIds =
+      semanticContext.state === 'VALID' &&
+      !!verify &&
+      hasPermission(PERMISSIONS.FIELD_PROGRESS_VERIFY)
+        ? semanticContext.currentLeaves
+            .filter((entry) =>
+              isProgressSemanticAttestationEligible(entry.status),
+            )
+            .filter(
+              (entry) =>
+                entry.recordedByAccountId !== accountId || verifyCanCombine,
+            )
+            .map((entry) => entry.id)
+        : [];
+    const semanticVerification =
+      semanticContext.state === 'INVALID_LINEAGE'
+        ? {
+            state: semanticContext.state,
+            policyVersion: semanticContext.policyVersion,
+            attestationType: semanticContext.attestationType,
+            contextVersion: semanticContext.contextVersion,
+            contextDigest: null,
+            invalidReason: semanticContext.reason,
+            currentLeaves: [],
+          }
+        : {
+            state: semanticContext.state,
+            policyVersion: semanticContext.policyVersion,
+            attestationType: semanticContext.attestationType,
+            contextVersion: semanticContext.contextVersion,
+            contextDigest: semanticContext.contextDigest,
+            invalidReason: null,
+            currentLeaves: semanticContext.currentLeaves.map((entry) => ({
+              id: entry.id,
+              supersedesEntryId: entry.supersedesEntryId,
+              installedQuantity: entry.installedQuantity.toString(),
+              workDate: entry.workDate,
+              lifecycleStatus: entry.status,
+              captureMethod: entry.captureMethod,
+              evidenceReferences: this.evidenceProjection(entry),
+              semanticAuthority: readProgressSemanticAuthority(
+                semanticContext,
+                entry.auditEvents,
+              ),
+            })),
+          };
+    const currentLeafIds = new Set(
+      semanticContext.state === 'VALID' ? semanticContext.currentLeafIds : [],
+    );
     return {
       projectId,
       projectTimeZone: baseline.project.timeZone,
@@ -1356,7 +1705,9 @@ export class ProgressService {
           !!accept &&
           hasPermission(PERMISSIONS.FIELD_PROGRESS_ACCEPT) &&
           acceptSeparationAllowed,
+        semanticAttestEntryIds,
       },
+      semanticVerification,
       entries: entries.map((entry) => ({
         id: entry.id,
         installedQuantity: entry.installedQuantity.toString(),
@@ -1373,6 +1724,7 @@ export class ProgressService {
         correctionReason: entry.correctionReason,
         revision: entry.revision,
         isEffective: entry.id === effective?.id,
+        isCurrentLineageLeaf: currentLeafIds.has(entry.id),
         provenance: {
           projectId,
           workItemId: boqItemId,

@@ -10,6 +10,7 @@ import {
 import { ProgressService } from './progress.service';
 import {
   CorrectProgressDto,
+  ProgressSemanticAttestationDto,
   ProgressTransitionDto,
   SubmitFieldProgressDto,
 } from './dto/create-progress.dto';
@@ -18,6 +19,12 @@ import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
+import type { ProjectAccessContext } from '../auth/project-access-policy.service';
+
+interface ProgressSemanticAttestationRequest {
+  user: { id: string };
+  projectAccess: ProjectAccessContext;
+}
 
 @Controller('projects/:projectId/progress')
 @UseGuards(JwtAuthGuard, ProjectAccessGuard, PermissionsGuard)
@@ -56,6 +63,23 @@ export class ProgressController {
     return this.progressService.getWorkItemHistory(
       projectId,
       boqItemId,
+      req.user.id,
+      req.projectAccess,
+    );
+  }
+
+  @Post('entries/:entryId/semantic-attestations')
+  @Permissions(PERMISSIONS.FIELD_PROGRESS_VERIFY)
+  attestEntrySemantics(
+    @Param('projectId') projectId: string,
+    @Param('entryId') entryId: string,
+    @Body() dto: ProgressSemanticAttestationDto,
+    @Request() req: ProgressSemanticAttestationRequest,
+  ) {
+    return this.progressService.attestEntrySemantics(
+      projectId,
+      entryId,
+      dto,
       req.user.id,
       req.projectAccess,
     );

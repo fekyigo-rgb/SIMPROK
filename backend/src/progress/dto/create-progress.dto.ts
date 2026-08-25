@@ -1,5 +1,6 @@
 import {
   ArrayMaxSize,
+  Equals,
   IsArray,
   IsDecimal,
   IsEnum,
@@ -121,6 +122,22 @@ export class CorrectProgressDto {
 export class ProgressTransitionDto {
   @IsUUID()
   commandId: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 2000)
+  reason?: string;
+}
+
+export class ProgressSemanticAttestationDto {
+  @IsUUID()
+  commandId: string;
+
+  @Matches(/^[a-f0-9]{64}$/)
+  contextDigest: string;
+
+  @Equals(true)
+  confirmed: true;
 
   @IsOptional()
   @IsString()

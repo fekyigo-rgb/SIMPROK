@@ -10,6 +10,29 @@ export function monitoringReturnPath(
   return `/field/project/${projectId}?item=${encodeURIComponent(boqItemId)}`;
 }
 
+export type ProgressSemanticAuthorityState =
+  "PROVEN" | "NOT_PROVEN" | "STALE" | "INVALID_PROVENANCE";
+
+export function semanticAuthorityLabel(
+  state: ProgressSemanticAuthorityState,
+): string {
+  const labels: Record<ProgressSemanticAuthorityState, string> = {
+    PROVEN: "Sudah dikonfirmasi",
+    NOT_PROVEN: "Belum dikonfirmasi",
+    STALE: "Perlu ditinjau ulang",
+    INVALID_PROVENANCE: "Bukti konfirmasi tidak dapat digunakan",
+  };
+  return labels[state];
+}
+
+export function semanticLeafRelationship(
+  supersedesEntryId: string | null,
+): string {
+  return supersedesEntryId
+    ? "Koreksi dari Actual sebelumnya"
+    : "Actual terpisah";
+}
+
 export function projectCalendarDate(
   projectTimeZone: string | null,
   date = new Date(),

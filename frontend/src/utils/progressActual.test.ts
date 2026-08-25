@@ -9,6 +9,8 @@ import {
   projectCalendarDate,
   projectWorkDateDefault,
   plannedFact,
+  semanticAuthorityLabel,
+  semanticLeafRelationship,
   projectTimestampPresentation,
   timelinePresentation,
 } from "./progressActual.ts";
@@ -17,6 +19,24 @@ test("MON03 workbench return keeps the exact selected item in a tiny URL seam", 
   assert.equal(
     monitoringReturnPath("project-1", "item-1"),
     "/field/project/project-1?item=item-1",
+  );
+});
+
+test("MON04 semantic authority has calm truthful labels", () => {
+  assert.equal(semanticAuthorityLabel("PROVEN"), "Sudah dikonfirmasi");
+  assert.equal(semanticAuthorityLabel("NOT_PROVEN"), "Belum dikonfirmasi");
+  assert.equal(semanticAuthorityLabel("STALE"), "Perlu ditinjau ulang");
+  assert.equal(
+    semanticAuthorityLabel("INVALID_PROVENANCE"),
+    "Bukti konfirmasi tidak dapat digunakan",
+  );
+});
+
+test("MON04 correction and independent-root meaning stay distinct", () => {
+  assert.equal(semanticLeafRelationship(null), "Actual terpisah");
+  assert.equal(
+    semanticLeafRelationship("prior-entry"),
+    "Koreksi dari Actual sebelumnya",
   );
 });
 
