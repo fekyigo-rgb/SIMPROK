@@ -55,6 +55,40 @@ export const CANONICAL_REFERENCE_CONFIRMATION_TOKEN =
   'APPLY_RM03D0_CANONICAL_REFERENCES';
 
 /**
+ * The GOVERNED REHEARSAL token — a governed non-canonical database that must
+ * hold the SAME reference knowledge the Owner's workspace holds.
+ *
+ * WHY THIS EXISTS, AND WHAT IT IS NOT. A rehearsal is only worth running if it
+ * answers with the knowledge the real environment answers with. The B1B12
+ * rehearsal and the governed E2E database carried no ResourceCatalog at all, so
+ * the Resource Identity authority truthfully reported RESOURCE_NOT_FOUND for
+ * every row of the Owner's workbook — a correct answer about an empty database
+ * and a false picture of the Owner's. The tempting shortcut is for a test to
+ * create the handful of catalog rows its workbook happens to need, which proves
+ * the plumbing and nothing else: it makes the test data smarter than the
+ * product and then credits the engine with finding what the test just planted.
+ *
+ * So a rehearsal is provisioned from the SAME reviewed, SHA-pinned RM-02C0
+ * inventory the canonical workspace was provisioned from, through THIS planner,
+ * with no row invented for any workbook. What the engine then finds, it found.
+ *
+ * ADDITIVE ONLY, exactly as RM-03D0 was. No planning behaviour changes, no
+ * default is loosened, and no authority can substitute for another: each caller
+ * still names the token it expects and must supply that exact string. Naming
+ * the authority truthfully is the whole point — passing a token that says
+ * "SIMPROK_TEST" while writing to a rehearsal database would make the audit
+ * trail say something untrue, which is the coupling RM-03D0 removed rather than
+ * worked around.
+ *
+ * IT AUTHORIZES NO TARGET BY ITSELF. Which database may be written is proven
+ * separately, by the caller's own target guard —
+ * `b1b12-rehearsal-target.ts` for the rehearsal, the governed E2E lifecycle for
+ * `simprok_e2e`. A token names an authority; a guard names a database.
+ */
+export const GOVERNED_REHEARSAL_CONFIRMATION_TOKEN =
+  'APPLY_GOVERNED_REHEARSAL_REFERENCES';
+
+/**
  * The closed set of confirmation authorities this module recognises.
  *
  * A caller may only ever *select* one of these; it can never invent a token
@@ -67,6 +101,7 @@ export const CANONICAL_REFERENCE_CONFIRMATION_TOKEN =
 export const KNOWN_CONFIRMATION_TOKENS: readonly string[] = [
   CONFIRMATION_TOKEN,
   CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
+  GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
 ];
 
 export const EXPECTED_SOURCE_SHA256 =

@@ -1,9 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { Prisma } from '@prisma/client';
-import {
-  BasicPriceUniversalIntakeAdapter,
-  ROW_KIND_AMBIGUOUS_REASON,
-} from './basic-price-universal-intake.adapter';
+import { BasicPriceUniversalIntakeAdapter } from './basic-price-universal-intake.adapter';
 import { XlsxSourceReader } from '../universal-intake/readers/xlsx.reader';
 import type { SourceTable } from '../universal-intake/readers/source-table';
 import { detectTableStructures } from '../universal-intake/structure/structure-detector';
@@ -134,65 +131,77 @@ describeIf('REAL Workbook B — row identity and per-row region isolation', () =
     expect(new Set(rowSets[0]).size).toBe(rowSets[0].length);
   });
 
-  it('ROW-03: row exclusion is identical for every region — and is now EARNED', () => {
-    const excluded = REGIONS.map((label) => byRegion.get(label)!.excludedNonDataRows);
+    it('ROW-03: row exclusion is identical for every region — and is EARNED', () => {
+      const excluded = REGIONS.map(
+        (label) => byRegion.get(label)!.excludedNonDataRows,
+      );
     expect(excluded[1]).toBe(excluded[0]);
     expect(excluded[2]).toBe(excluded[0]);
 
-    // USI-01R3A §5–§8 — THIS COUNT IS ZERO, AND ZERO IS THE TRUTHFUL ANSWER.
+      // FORTY ROWS ARE EXCLUDED, AND THE REASON IS NOT THE ONE USI-01R3 GAVE.
+      //
+      // USI-01R3 excluded these forty by calling them titles, which it could not
+      // prove. USI-01R3A then kept all forty as candidates, and the Owner's
+      // browser showed what that costs: the review room filled with rows like
+      // "[Upah] — BATU" carrying unit "-", and the real exceptions were buried
+      // under banners.
+      //
+      // They are excluded again, on a different and provable ground. Every one is
+      // a row with NO unit, NO price under ANY jurisdiction, and NO number in the
+      // source's own numbering column. SIMPROK still does not claim they are
+      // titles — five of them are OCR ruins ("eA+u eA+A/ BA+AKo", "acsesonis rim
+      // rvc") about which nothing may be claimed. It claims only that they are
+      // not PRICE OBSERVATIONS, which their empty commercial fields do prove.
     //
-    // USI-01R3 excluded 40 rows from this workbook. Not one of them was PROVEN
-    // to be a title: they were name-only rows with no unit, no price and no
-    // number, and the old rule read that absence as structural evidence. Five
-    // of the forty are visibly OCR-damaged ("eA+u eA+A/ BA+AKo", "acsesonis
-    // rim rvc"), which is precisely the case where "it must be a heading" is a
-    // guess dressed as a finding.
+      // The decisive fact is structural, not aesthetic: a row with no price can
+      // never reach READY_FOR_SUBMISSION, because BasicPriceRowResolutionService
+      // gates that transition on `proposedCanonicalPrice !== null`, and
+      // keepBatchPrivate refuses such a row outright. Keeping them as candidates
+      // could only ever manufacture questions no reviewer is able to answer.
     //
-    // This workbook carries no section-title grammar, no merged title band
-    // distinguishable from its ordinary B:C name merge, and no other explicit
-    // marker. So SIMPROK proves nothing about those rows and says so, rather
-    // than deleting them. They survive as ROW_KIND_AMBIGUOUS below.
-    expect(excluded[0]).toBe(0);
+      // NOT ONE is recognised by its wording. Row 686 ("BAHAN PLAFON GIPSUM") is
+      // a banner by every human reading, and it is NOT excluded — the extraction
+      // left a unit in its cell, so it still carries commercial evidence and the
+      // rule declines to guess past it. That row is the proof this is evidence
+      // and not a vocabulary.
+      expect(excluded[0]).toBe(40);
   });
 
-  it('ROW-03A: the 40 rows USI-01R3 deleted survive, flagged, in every region', () => {
-    const ambiguousPerRegion = REGIONS.map((label) =>
-      byRegion
-        .get(label)!
-        .rows.filter((row) => row.warnings.includes(ROW_KIND_AMBIGUOUS_REASON)),
-    );
-
-    // The uncertainty is real, and it is region-independent: the DOCUMENT is
-    // undecided, not the importer.
-    expect(ambiguousPerRegion[0].length).toBe(40);
-    for (const rows of ambiguousPerRegion) {
-      expect(rows.map((row) => row.sourceRowNumber)).toEqual(
-        ambiguousPerRegion[0].map((row) => row.sourceRowNumber),
+    it('ROW-03A: the 40 excluded rows are banners, are counted, and are gone from every region', () => {
+      // COUNTED, NEVER SILENT. Every physical named row the reader saw is either
+      // a candidate or part of this count — the batch still accounts for all of
+      // them, and the raw bytes are untouched.
+      for (const label of REGIONS) {
+        const knowledge = byRegion.get(label)!;
+        expect(knowledge.rows.length + knowledge.excludedNonDataRows).toBe(
+          knowledge.rows.length + 40,
       );
     }
 
-    // Named examples from the real file, so this is anchored to the source and
-    // not to a count.
-    const names = ambiguousPerRegion[0].map((row) => row.rawResourceNameText);
-    expect(names).toContain('BATU');
-    expect(names).toContain('KERIKIL');
-
-    // AND THE DAMAGED ONES, which are the whole point. Row 744 reads
-    // "acsesonis rim rvc" — an OCR ruin of an accessories heading, and equally
-    // plausibly the ruin of a resource name. It is matched loosely and by row,
-    // because its spaces are U+00A0 rather than U+0020: the extraction damaged
-    // even the whitespace, which is precisely why nothing about this row may be
-    // asserted with confidence — least of all that it is a heading.
-    const damaged = ambiguousPerRegion[0].find((row) => row.sourceRowNumber === 744);
-    expect(damaged).toBeDefined();
-    expect(damaged!.rawResourceNameText).toMatch(/^acsesonis\s+rim\s+rvc$/i);
-
-    // Undecidable, and therefore priceless — never resolved by inference.
-    for (const row of ambiguousPerRegion[0]) {
-      expect(row.proposedCanonicalPrice).toBeNull();
+      // NONE of them reaches the review room, in ANY region — the DOCUMENT
+      // decides this, not the importer, so the answer cannot move with the
+      // selected jurisdiction.
+      for (const label of REGIONS) {
+        const names = byRegion
+          .get(label)!
+          .rows.map((row) => row.rawResourceNameText);
+        expect(names).not.toContain('BATU');
+        expect(names).not.toContain('KERIKIL');
+        expect(names).not.toContain('SEMEN');
+        // The OCR ruin at row 744 is gone too, and for the same structural
+        // reason rather than because anyone read it.
+        expect(
+          byRegion.get(label)!.rows.some((row) => row.sourceRowNumber === 744),
+        ).toBe(false);
     }
-  });
 
+      // NOTE ON WHAT IS DELIBERATELY NOT ASSERTED HERE. A surviving candidate may
+      // legitimately have NO price and NO unit in the selected jurisdiction: LAW G
+      // looks for price evidence across EVERY jurisdiction, so a resource priced
+      // only in Baguala is still a candidate while Sirimau is being imported.
+      // ROW-02 below proves exactly that, and asserting "every candidate carries
+      // price evidence in THIS region" would contradict it.
+    });
   it('ROW-02: a resource priced in ONE region only stays a candidate in ALL regions', () => {
     // Exactly the class of row USI-01R2 destroyed.
     const baguala = byRegion.get('BAGUALA')!;

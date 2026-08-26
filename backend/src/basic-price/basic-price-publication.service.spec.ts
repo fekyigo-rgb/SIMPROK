@@ -315,7 +315,16 @@ describe('BasicPricePublicationService', () => {
 
     expect(tx.basicPrice.update).toHaveBeenCalledWith({
       where: { id: BASIC_PRICE_ID },
-      data: { status: 'PUBLISHED', verificationStatus: 'PUBLISHED' },
+      // BP-CORR-01: the atomic write gained a THIRD field and no more. An
+      // ordinary publish — which is what this case exercises — states a new
+      // fact and replaces nothing, so the pointer is written as an explicit
+      // null rather than omitted. Asserted exactly, so a fourth field fails
+      // here just as loudly as the third would have.
+      data: {
+        status: 'PUBLISHED',
+        verificationStatus: 'PUBLISHED',
+        supersedesBasicPriceId: null,
+      },
     });
     expect(tx.basicPricePublicationAudit.create).toHaveBeenCalledTimes(1);
     expect(tx.basicPricePublicationAudit.create).toHaveBeenCalledWith({

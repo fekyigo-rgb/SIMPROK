@@ -116,7 +116,12 @@ export class BasicPriceImportLookupService {
     const [items, total] = await Promise.all([
       this.prisma.region.findMany({
         where,
-        orderBy: [{ code: 'asc' }],
+        // BY NAME, because a person is looking for a PLACE. Ordering by `code`
+        // sorted the list by provisioning identity, so a page of regions came
+        // back grouped by whichever fixture or batch created them rather than
+        // alphabetically by the only field a human reads. `code` stays as the
+        // tie-break so the order is still total and deterministic.
+        orderBy: [{ name: 'asc' }, { code: 'asc' }],
         skip: offset,
         take: limit,
         select: { id: true, code: true, name: true },

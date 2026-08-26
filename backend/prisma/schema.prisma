@@ -1660,6 +1660,53 @@ model BasicPrice {
   /// price wearing a private evidence link" are both unrepresentable states,
   /// not merely unwritten ones.
   sourceImportRowId           String?                       @unique @db.Uuid
+  /// BP-CAT-01B — the originating workspace BasicPrice this SHARED catalog row
+  /// was promoted from. NULL on every row that was not produced by promotion,
+  /// which is every row that existed before this field and every ordinary
+  /// workspace/private row after it — the column states a fact about promoted
+  /// rows only and invents nothing about anyone else.
+  ///
+  /// It carries THREE jobs at once, which is why no existing relation could do
+  /// it: (1) provenance — `sourceSubmissionId` is `@unique` and already held by
+  /// the origin, and `sourceImportRowId` is forbidden on a catalog row by
+  /// `basic_prices_import_row_link_private_only_check`, so this is the ONLY
+  /// honest way a shared row can name where it came from; (2) idempotency —
+  /// `@unique` on a nullable column is exactly the invariant "at most ONE shared
+  /// result per originating price", because PostgreSQL treats NULLs as distinct,
+  /// so unlimited non-promoted rows coexist while a second promotion of the same
+  /// origin is refused by the database itself; (3) history — `onDelete: Restrict`
+  /// means an origin whose truth is still standing in the shared catalog cannot
+  /// be deleted out from under it.
+  promotedFromBasicPriceId    String?                       @unique @db.Uuid
+  /// BP-CORR-01 — the already-published BasicPrice this row REPLACES as the
+  /// current truth for the same logical context. NULL on every row that
+  /// supersedes nothing, which is every row that existed before this field and
+  /// every ordinary publication after it: an ordinary publish states a new
+  /// fact, it does not correct an old one.
+  ///
+  /// IT IS THE ONLY NEW FACT BP-CORR-01 ADDED, and it exists because no
+  /// existing relation could answer "which published Basic Price directly
+  /// replaced which prior published Basic Price". `promotedFromBasicPriceId`
+  /// answers a different question (which shared row restates which workspace
+  /// origin) and is deliberately kept disjoint from this one by a CHECK.
+  /// `BasicPriceProvenanceCorrection` answers a third (how a WORKSPACE_PRIVATE
+  /// price was re-DESCRIBED) and may never move money, which is precisely the
+  /// case this column exists for.
+  ///
+  /// HISTORY IS NEVER REWRITTEN TO CREATE IT. The predecessor is not touched,
+  /// not flagged, not dated and not deleted — the successor carries the whole
+  /// relationship. "Is A still current" is therefore answered by asking whether
+  /// any row points AT A, never by reading a mutable column ON A.
+  ///
+  /// It carries three jobs, exactly as the promotion lineage above does:
+  /// (1) history — the successor names its exact predecessor, so a corrected
+  /// price can always be read back to what it corrected; (2) ONE CURRENT TRUTH
+  /// — `@unique` on a nullable column means at most ONE successor per
+  /// predecessor, so a correction chain can never fork into two competing
+  /// current truths, and PostgreSQL refuses the second one rather than trusting
+  /// application code to; (3) `onDelete: Restrict` — a predecessor that is
+  /// still being superseded cannot be deleted out from under its successor.
+  supersedesBasicPriceId      String?                       @unique @db.Uuid
   createdAt                   DateTime                      @default(now())
   updatedAt                   DateTime                      @updatedAt
 
@@ -1668,6 +1715,25 @@ model BasicPrice {
   region                         Region?                          @relation(fields: [regionId], references: [id], onDelete: Restrict)
   sourceSubmission               PriceSubmission?                 @relation(fields: [sourceSubmissionId], references: [id])
   sourceImportRow                BasicPriceImportRow?             @relation("PrivateBasicPriceProvenance", fields: [sourceImportRowId], references: [id], onDelete: Restrict)
+  /// BP-CAT-01B — the origin side of the promotion lineage. RESTRICT, never
+  /// CASCADE: deleting the origin of a live shared price would leave national
+  /// truth with no provenance, which is the one thing promotion exists to
+  /// prevent.
+  promotedFrom                   BasicPrice?                      @relation("BasicPriceSharedPromotion", fields: [promotedFromBasicPriceId], references: [id], onDelete: Restrict)
+  /// The reverse read: "was this workspace price already promoted, and to what".
+  promotedTo                     BasicPrice?                      @relation("BasicPriceSharedPromotion")
+  /// BP-CORR-01 — the predecessor side. RESTRICT, never CASCADE: deleting the
+  /// price a correction was made against would leave the correction claiming to
+  /// have replaced something that no longer exists.
+  supersedes                     BasicPrice?                      @relation("BasicPriceSupersession", fields: [supersedesBasicPriceId], references: [id], onDelete: Restrict)
+  /// THE CURRENTNESS READ, and the reason no column on the predecessor was
+  /// needed: "A is still current" is exactly `A.supersededBy IS NULL`. Because
+  /// `supersedesBasicPriceId` is UNIQUE this is a to-ONE relation, so the check
+  /// is a single index-backed lookup rather than a chain walk, and because the
+  /// database refuses the pointer on any row that is not PUBLISHED+PUBLISHED
+  /// (basic_prices_supersession_successor_is_published_check) its mere
+  /// existence already proves the successor is lawfully current.
+  supersededBy                   BasicPrice?                      @relation("BasicPriceSupersession")
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
   publicationAudits              BasicPricePublicationAudit[]
   provenanceCorrections          BasicPriceProvenanceCorrection[]
@@ -1916,6 +1982,21 @@ model BasicPriceImportBatch {
   effectiveDateProvenance     PriceEffectiveDateProvenance?
   effectiveDateDerivationRule String?
 
+  /// SOFT RE-VERIFICATION — the date a human asked for these prices to be
+  /// CHECKED AGAIN, carried here so it can travel to every BasicPrice this
+  /// batch materializes (`BasicPrice.reviewDate`, which already existed and
+  /// had no batch-side carrier).
+  ///
+  /// IT IS NOT `validUntil` AND MUST NEVER BE MAPPED TO IT. `validUntil` is a
+  /// hard boundary the AHSP candidate query and the Cost Kernel actually
+  /// enforce; this is advice. A price past this date stays fully usable and
+  /// stays in every candidate set.
+  ///
+  /// NULLABLE AND NEVER DERIVED. SIMPROK does not compute a freshness horizon —
+  /// no canonical policy states one — so this is null unless a person stated it,
+  /// and null means "nobody said", never "expired".
+  reviewDate                  DateTime?
+
   sourceType             PriceSourceType?
   sourceOrigin           PriceSourceOrigin?
   sourceOrganizationName String?
@@ -1926,6 +2007,29 @@ model BasicPriceImportBatch {
   loadingIncluded       Boolean?
   unloadingIncluded     Boolean?
   deliveredToProject    Boolean?
+
+  /// SEMANTIC INTERPRETATION IDENTITY — WHICH READING PRODUCED THESE ROWS.
+  ///
+  /// A source whose columns carry no header, or which declares no resource
+  /// families of its own, admits MORE THAN ONE LAWFUL READING of the same bytes.
+  /// The Owner's workbook proved what that costs: read with its resource-name
+  /// column answered as the unit column it produced 934 poisoned rows, and read
+  /// honestly the identical file produced 894 truthful ones. These three columns
+  /// are what let a reader ask a batch "which interpretation produced you?" and
+  /// get an answer instead of an inference.
+  ///
+  /// THEY ARE FINGERPRINT INPUTS, which is the point: without them a corrected
+  /// re-import matched the poisoned batch and was handed the poison back as a
+  /// replay, so the defect could not be repaired from the outside at all.
+  ///
+  /// NULL MEANS "THE DOCUMENT DECIDED THIS", AND FOR OLDER BATCHES "NOT
+  /// RECORDED". Nothing is back-filled. A batch imported before these columns
+  /// existed states null, and SIMPROK does not reconstruct historical column
+  /// roles from rows — an inferred provenance would be a fabricated one, and a
+  /// fabricated provenance is worse than an absent one.
+  interpretationResourceNameColumn Int?
+  interpretationSourceUnitColumn   Int?
+  interpretationDeclaredSection    BasicPriceImportRowSection?
 
   importFingerprint String
   status            BasicPriceImportBatchStatus @default(PREVIEWED)
@@ -2259,6 +2363,28 @@ model BasicPricePublicationAudit {
   actorAccountId String   @db.Uuid
   reason         String?  @db.Text
   createdAt      DateTime @default(now())
+  /// BP-CORR-01B TEMPORAL — WHEN THIS GOVERNED EVENT BECAME TRUE, which is not
+  /// the same fact as `createdAt`.
+  ///
+  ///   createdAt    WHEN SIMPROK LEARNED IT. Bookkeeping. Always now().
+  ///   effectiveAt  WHEN IT BECAME TRUE in the world. A business fact, which a
+  ///                source may state as earlier OR later than the moment we
+  ///                were told.
+  ///
+  /// They coincide often enough that conflating them looks harmless, and it is
+  /// not. A supplier who retracts their July list "effective 1 August", handled
+  /// on 5 August, would otherwise keep selling a withdrawn price for four days;
+  /// a retraction announced today and effective next Monday would otherwise
+  /// remove the price today. `asOf` is compared against THIS column, never
+  /// against `createdAt`.
+  ///
+  /// NULLABLE, because it is meaningless for the two actions that already
+  /// existed: a PUBLISH and a SUPERSEDED are instantaneous governance
+  /// transitions that become true exactly when they are recorded, and back-
+  /// filling a value onto historical rows would invent a fact nobody stated.
+  /// A CHECK makes it MANDATORY for WITHDRAWN specifically, so the one action
+  /// whose currentness depends on it can never be written without it.
+  effectiveAt    DateTime?
 
   basicPrice BasicPrice @relation(fields: [basicPriceId], references: [id], onDelete: Cascade)
   actor      Account    @relation("BasicPricePublicationAuditActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "fk_basic_price_publication_audit_actor")

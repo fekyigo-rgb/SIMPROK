@@ -3,6 +3,7 @@ import type {
   PriceTableStructure,
   ResourceType,
 } from '../../api/basicPriceImport';
+import { unitColumnOptions } from '../../utils/basicPriceColumnRole';
 
 /**
  * USI-01 §16/§17 — HOW SIMPROK SPEAKS WHEN IT WILL NOT GUESS.
@@ -106,7 +107,13 @@ export function intakeQuestionOf(
       // record of what it has already answered decides which half is being
       // asked now.
       const askingUnit = answered.selectedNameColumn !== undefined;
-      const candidates = (askingUnit ? details.unitCandidates : details.nameCandidates) ?? [];
+      const offered = (askingUnit ? details.unitCandidates : details.nameCandidates) ?? [];
+      // ONE COLUMN CANNOT HOLD TWO ROLES, so the column already named as the
+      // resource name is never offered again as the unit column. See
+      // `unitColumnOptions` for why — and for the fail-open rule it keeps.
+      const candidates = askingUnit
+        ? unitColumnOptions(offered, answered.selectedNameColumn)
+        : offered;
       return {
         prompt: askingUnit
           ? 'Kolom mana yang berisi SATUAN?'
@@ -155,8 +162,19 @@ export function intakeRefusalMessage(code: string, details: IntakeRefusalDetails
       return 'Berkas ini melampaui batas jumlah baris yang diproses SIMPROK dalam satu unggahan.';
     case 'SOURCE_BYTES_REQUIRED':
       return 'Berkas yang dipilih kosong.';
+    case 'WORKBOOK_HAS_NO_SHEETS':
+      return 'Berkas ini terbaca sebagai workbook, tetapi tidak memuat satu pun lembar kerja.';
     default:
-      return 'Unggahan belum bisa dilanjutkan. SIMPROK menahan diri daripada menebak.';
+      // REACHED ONLY BY A GENUINELY UNKNOWN INTAKE CODE. Every code the backend
+      // can emit today has its own sentence above or its own question, and a
+      // NON-intake failure — permission, session, server — no longer arrives
+      // here at all (see `isIntakeRefusalCode` in api/basicPriceImport). That
+      // misrouting is what made this sentence the Owner's dead end: a 403 was
+      // worded as SIMPROK being careful about a workbook it had never rejected.
+      //
+      // What remains must still not read as a verdict on the document, and must
+      // say what did NOT happen: nothing guessed, nothing stored.
+      return 'SIMPROK belum dapat melanjutkan karena ada kondisi yang belum dapat dijelaskan dengan aman. Tidak ada data yang diterka atau disimpan sebagai fakta.';
   }
 }
 

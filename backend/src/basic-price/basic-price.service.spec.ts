@@ -1,6 +1,25 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { PriceVerificationStatus } from '@prisma/client';
+import { Prisma, PriceVerificationStatus } from '@prisma/client';
+
+/**
+ * BP-CORR-01B TEMPORAL — the exact shape the currentness fragment is asserted
+ * against. Declared rather than cast to `any`: these assertions exist to catch
+ * a rename or a field swap, and an `any` bag would let both through silently.
+ */
+type WithdrawnAuditFilter = {
+  action?: string;
+  effectiveAt?: { lte?: Date };
+  /** Must stay absent — recording time is not effective time. */
+  createdAt?: unknown;
+};
+
+type OriginCurrentnessFilter = {
+  OR?: Array<{
+    supersededBy?: unknown;
+    publicationAudits?: { some?: WithdrawnAuditFilter };
+  }>;
+};
 import { BasicPriceService } from './basic-price.service';
 import { BasicPriceEligibilityPolicy } from './basic-price-eligibility.policy';
 import { PrismaService } from '../prisma/prisma.service';
@@ -142,6 +161,11 @@ describe('BasicPriceService', () => {
           sourceOrigin: 'GOVERNMENT',
           sourceName: null,
           freshnessStatus: 'CURRENT',
+          // Soft re-verification advice, absent on this row. Distinct from
+          // `validUntil` above, which is the only hard boundary the system
+          // enforces anywhere.
+          reviewDate: null,
+          reverification: 'NOT_RECOMMENDED',
           workspaceScope: 'WORKSPACE',
           // RM-03C: which asset family this row belongs to, stated rather than
           // left for the reader to guess from workspaceScope (a curated
@@ -694,12 +718,93 @@ describe('BasicPriceService', () => {
       const result = await service.findByResource('rc-01', workspaceId);
 
       expect(result).toEqual([mockPrice]);
-      const where = prisma.basicPrice.findMany.mock.calls[0][0].where;
+      // Typed rather than left as `any`: this test now asserts SIX named keys
+      // by value, and an untyped bag would let a rename pass silently.
+      const where = (
+        prisma.basicPrice.findMany.mock.calls[0] as [
+          { where: Prisma.BasicPriceWhereInput },
+        ]
+      )[0].where;
       expectTwoBranchEligibility(where);
       expect(where.resourceId).toBe('rc-01');
-      // Exactly two keys: the resource filter and the eligibility OR. Nothing
-      // else silently narrows or widens this read.
-      expect(Object.keys(where).sort()).toEqual(['OR', 'resourceId']);
+      // BP-CORR-01B — exactly SIX keys, each with a named owner, so nothing
+      // else can silently narrow or widen this read:
+      //   resourceId        — the caller's own filter
+      //   OR                — canonical eligibility: WHICH ROWS ARE LAWFUL
+      //   NOT               — promotion-lineage precedence: which lawful row
+      //                       COMPETES
+      //   supersededBy      — currentness: was this row replaced
+      //   publicationAudits — currentness: was this row withdrawn
+      //   promotedFrom      — currentness: does this row restate something that
+      //                       is no longer current
+      // The last four are registered rather than exempted, and each is asserted
+      // by value below. This is a per-resource candidate list, so a workspace
+      // must be offered neither its own price twice (once as the origin it owns
+      // and again as the descendant it donated) nor a price a published
+      // correction has replaced, a human has withdrawn, or that merely copies
+      // one of those.
+      expect(Object.keys(where).sort()).toEqual([
+        'NOT',
+        'OR',
+        'promotedFrom',
+        'publicationAudits',
+        'resourceId',
+        'supersededBy',
+      ]);
+      expect(where.NOT).toEqual({
+        promotedFrom: { is: { workspaceId } },
+      });
+      // Exact-id lineage, and nothing else — never a date, a value or a
+      // resource heuristic standing in for a human's correction decision.
+      expect(where.supersededBy).toEqual({ is: null });
+      // BP-CORR-01B TEMPORAL — the Explorer has no business date of its own, so
+      // it states the PRESENT instant explicitly rather than omitting one. The
+      // omitted form used to mean "a withdrawal exists at some point, therefore
+      // not current", which removed a future-dated withdrawal's price before
+      // its own effective date.
+      const withdrawnNow = (
+        where.publicationAudits as { none?: WithdrawnAuditFilter }
+      ).none;
+      expect(withdrawnNow?.action).toBe('WITHDRAWN');
+      expect(withdrawnNow?.effectiveAt?.lte).toBeInstanceOf(Date);
+      // Never the recording timestamp — that is when SIMPROK learned the fact,
+      // not when the fact became true.
+      expect(withdrawnNow?.createdAt).toBeUndefined();
+
+      const origin = (where.promotedFrom as { isNot?: OriginCurrentnessFilter })
+        .isNot;
+      expect(origin?.OR?.[0]).toEqual({ supersededBy: { isNot: null } });
+      // The origin is judged on the SAME clock and the SAME field as the row.
+      const originWithdrawn = origin?.OR?.[1]?.publicationAudits?.some;
+      expect(originWithdrawn?.action).toBe('WITHDRAWN');
+      expect(originWithdrawn?.effectiveAt?.lte).toEqual(
+        withdrawnNow?.effectiveAt?.lte,
+      );
+      expect(originWithdrawn?.createdAt).toBeUndefined();
+    });
+
+    /**
+     * THE LAYERING, ASSERTED WHERE IT IS CONSUMED. Precedence may only ever
+     * REMOVE a row the caller was already entitled to; it must never become a
+     * second way to reach a price eligibility refused.
+     */
+    it('BP-CAT-01E: precedence composes beside eligibility and never widens it', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([]);
+      await service.findByResource('rc-01', workspaceId);
+      const where = (
+        prisma.basicPrice.findMany.mock.calls[0] as [
+          { where: Prisma.BasicPriceWhereInput },
+        ]
+      )[0].where;
+
+      // The eligibility branches are untouched by the composition.
+      expectTwoBranchEligibility(where);
+      // And precedence is a pure negation — it carries no status, scope or
+      // publication condition of its own.
+      const precedence = JSON.stringify(where.NOT);
+      expect(precedence).not.toContain('status');
+      expect(precedence).not.toContain('assetScope');
+      expect(precedence).toContain('promotedFrom');
     });
 
     it('keeps its pre-existing display order and does NOT rank by assetScope', async () => {

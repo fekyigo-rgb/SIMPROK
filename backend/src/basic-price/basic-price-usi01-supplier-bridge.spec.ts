@@ -47,6 +47,7 @@ describe('USI-01 §10 Supplier Bridge — Phase 0', () => {
       harness.prisma,
       harness.reviewService,
       harness.sourceArchive,
+      harness.proposals,
     );
     const { service: connectors, secret } = createConnectorService();
     const bridge = new BasicPriceSupplierBridgeService(connectors, imports);
@@ -187,6 +188,7 @@ describe('USI-01 §10 Supplier Bridge — Phase 0', () => {
           harness.prisma,
           harness.reviewService,
           harness.sourceArchive,
+          harness.proposals,
         ),
       );
       return bridge.submit({

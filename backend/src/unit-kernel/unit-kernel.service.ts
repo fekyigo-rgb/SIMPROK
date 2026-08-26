@@ -91,6 +91,24 @@ function aliasProblem(match: { rows: unknown[]; contextRequired: boolean; ambigu
       : null;
 }
 
+/**
+ * THE canonical GOVERNED BACKEND AUTHORITY for unit identity and resolution.
+ *
+ * REUSE IT — DO NOT REPLICATE THE DOMAIN LOGIC. Any NEW governed backend
+ * resolution logic that must answer "what does this raw spelling mean?" calls
+ * this service rather than growing a second alias table, a second normalizer, or
+ * a second "m3 == meter kubik" list. Two unit laws can disagree, and nothing
+ * would notice.
+ *
+ * WHAT THIS COMMENT DOES NOT CLAIM: that every workflow in the repository
+ * already routes through here today. Known normalization debt exists outside
+ * this authority — browser-side unit normalization in the frontend is the
+ * documented example. INT-CONNECT-01 deliberately did NOT migrate or remove it,
+ * and this comment neither ratifies that debt nor pretends it is gone. It is
+ * recorded as architecture debt in
+ * docs/architecture/SIMPROK-INTELLIGENCE-CAPABILITY-MAP.md (CAP-UNIT-01 and
+ * Bagian B), awaiting its own gate.
+ */
 @Injectable()
 export class UnitKernelService {
   constructor(private readonly prisma: PrismaService) {}

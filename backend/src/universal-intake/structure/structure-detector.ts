@@ -1,5 +1,9 @@
 import { SourceRow, SourceTable, textAt } from '../readers/source-table';
-import { ColumnRole, matchHeaderRole } from './header-vocabulary';
+import {
+  ColumnRole,
+  matchHeaderRole,
+  statesResourceFamilyExactly,
+} from './header-vocabulary';
 import { interpretPriceLiteral } from './price-literal';
 
 /**
@@ -92,7 +96,29 @@ export interface ColumnRoleCandidate {
   distinctValues: number;
   /** Real values from the source, so the human is choosing from evidence. */
   samples: string[];
+  /**
+   * EVERY distinct value this column states, bounded — the evidence a proof is
+   * allowed to reason over.
+   *
+   * Deliberately separate from `samples`, which is four values chosen to SHOW a
+   * human what a column looks like. Proving a column's role from a display
+   * sample would be exactly the statistics-dressed-as-evidence this module
+   * refuses: four unit-looking cells at the top of a column say nothing about
+   * the hundred below them.
+   *
+   * Server-side only. It is stripped before the refusal reaches a browser.
+   */
+  proofValues: string[];
 }
+
+/**
+ * How many DISTINCT values a role proof may reason over. Bounded because a
+ * proof must stay cheap on a large sheet, and because a column with more
+ * distinct values than this is not one a bounded vocabulary was going to
+ * account for anyway — at which point the honest answer is to leave the
+ * question with the human.
+ */
+export const COLUMN_PROOF_VALUE_LIMIT = 200;
 
 export interface DetectedStructure {
   structure: PriceTableStructure;
@@ -246,7 +272,52 @@ function profileRoleCandidate(
     nonEmptyRows: distinct.size === 0 ? 0 : dataRows.filter((r) => textAt(r, columnNumber) !== null).length,
     distinctValues: distinct.size,
     samples: values,
+    // Bounded, and TRUNCATED RATHER THAN SAMPLED: a proof that reads a prefix
+    // of the distinct values can still only conclude something about the values
+    // it read, which is why every consumer below refuses to conclude at all
+    // once the limit is reached.
+    proofValues: [...distinct].slice(0, COLUMN_PROOF_VALUE_LIMIT),
   };
+}
+
+/**
+ * Can SIMPROK PROVE this column does not hold resource names?
+ *
+ * ONE disqualifier, and it is a proof rather than a lean. Anything weaker —
+ * "looks like units", "too short", "always the same value" — is deliberately
+ * absent, because an unprovable suspicion must leave the choice with the human.
+ * That is the whole difference between ELIMINATING and PREDICTING.
+ *
+ * A CONSTANT COLUMN IS NOT DISPROVEN, and an earlier version of this function
+ * got that wrong. "Several resources cannot share one name" sounds obvious and
+ * is not universally true: a price list that records the same resource across
+ * several observations, periods or vendors legitimately repeats one name down
+ * its whole name column. Eliminating it would have removed the RIGHT ANSWER
+ * from the human's list on exactly the sources hardest to read by eye.
+ *
+ * Reads `proofValues` — every distinct value, bounded — never `samples`, which
+ * exists to show a human what a column looks like and proves nothing.
+ */
+function disprovenAsResourceName(candidate: ColumnRoleCandidate): boolean {
+  // IT IS THE RESOURCE-CLASS COLUMN. Every value it states IS a resource
+  // family and nothing besides — "ALAT", "BAHAN", "UPAH". A column saying that
+  // answers "which family", and a family is not a name.
+  //
+  // THE PROOF IS EXACT, AND AN EARLIER VERSION OF THIS LINE WAS NOT. It asked
+  // `resourceFamilyOfCategoryText`, which reads a family from a value's LEADING
+  // WORD because that is how a source titles its sections. Pointed at a column
+  // of values it disqualified "Pekerja / Pekerja biasa / Pekerja terampil" —
+  // three resource NAMES, in the very column the human was being asked to
+  // identify — and would have taken the right answer off their list. Naming a
+  // family is not the same fact as BEING one, and only the second is proof
+  // about a column: see `statesResourceFamilyExactly`.
+  //
+  // Refuses to conclude when the distinct values outran the bound: a verdict
+  // over a truncated set would be a verdict about a prefix, not the column.
+  if (candidate.distinctValues > candidate.proofValues.length) return false;
+  const stated = candidate.proofValues.filter((value) => value.trim() !== '');
+  if (stated.length === 0) return false;
+  return stated.every((value) => statesResourceFamilyExactly(value) !== null);
 }
 
 function isNumericColumn(profile: ColumnProfile): boolean {
@@ -533,6 +604,30 @@ function detectUnheadedRegionalMatrix(table: SourceTable): DetectedStructure | n
   }
   if (candidates.length === 0) return null;
 
+  /**
+   * DO NOT ASK A HUMAN WHAT SIMPROK CAN ALREADY DISPROVE.
+   *
+   * The list above is every column that is not a jurisdiction and not numeric —
+   * which on a real workbook meant offering the resource-CLASS column
+   * ("LABOR", "LABOR", "MATERIAL") and a column repeating one location on every
+   * row as candidates for "which column holds the resource NAME". Both are
+   * answerable by SIMPROK, and a question SIMPROK can answer is not a question
+   * a human should be made to answer: every avoidable prompt spends the
+   * reviewer's attention and invites a wrong click on an option that was never
+   * possible.
+   *
+   * Only PROVABLE disqualifiers are applied. Where the evidence merely leans,
+   * the column stays on the list and the human still decides.
+   */
+  const nameCandidates = candidates.filter(
+    (candidate) => !disprovenAsResourceName(candidate),
+  );
+
+  // FAIL OPEN, NEVER CLOSED. If elimination removed everything, the elimination
+  // is what is wrong — not the file. Offer the unpruned list rather than leaving
+  // a human with no answerable question at all.
+  const offeredNames = nameCandidates.length > 0 ? nameCandidates : candidates;
+
   return {
     structure: 'REGIONAL_MATRIX',
     tableName: table.name,
@@ -553,7 +648,11 @@ function detectUnheadedRegionalMatrix(table: SourceTable): DetectedStructure | n
     },
     columnRoles: {
       required: true,
-      nameCandidates: candidates,
+      nameCandidates: offeredNames,
+      // The unit question keeps the full list: a unit column is not disproven
+      // by either rule above, and nothing here can prove a spelling IS a unit —
+      // only the Unit authority can, and it lives behind a database this pure
+      // detector deliberately cannot reach.
       unitCandidates: candidates,
     },
     evidence: [

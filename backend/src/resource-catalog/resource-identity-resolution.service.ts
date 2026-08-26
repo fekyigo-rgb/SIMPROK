@@ -96,7 +96,7 @@ export interface ResourceIdentityEvidence {
   readonly ghxLatestDecisions?: ReadonlyMap<string, GhxLatestDecision>;
 }
 
-type EvidenceClient = Pick<
+export type EvidenceClient = Pick<
   Prisma.TransactionClient,
   'resourceCatalog' | 'resourceSourceIdentity' | 'basicPriceImportRowResourceMapping'
 > &
@@ -150,6 +150,14 @@ function trustedUnitContext(resourceType: string): UnitAliasContext | undefined 
  * ProjectAhspService already used), while sightings and reviewed human
  * decisions are keyed on `workspaceId` with strict equality — never an OR with
  * null, which would make one tenant's evidence usable by every other.
+ */
+/**
+ * THE canonical resource-identity authority. REUSE IT — DO NOT REPLICATE THE
+ * MATCHING LOGIC. Every workflow that must answer "which catalog row is this raw
+ * name?" calls this service, so one kernel and one evidence law decide it. A
+ * second matcher can disagree with this one silently, which is exactly the
+ * failure mode a canonical authority exists to prevent. See
+ * docs/architecture/SIMPROK-INTELLIGENCE-CAPABILITY-MAP.md (CAP-RESID-01).
  */
 @Injectable()
 export class ResourceIdentityResolutionService {

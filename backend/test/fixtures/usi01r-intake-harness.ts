@@ -11,7 +11,6 @@ export const HARNESS_OTHER_WORKSPACE = '99999999-9999-4999-8999-999999999999';
 export const HARNESS_ORGANIZATION = '22222222-2222-4222-8222-222222222222';
 export const HARNESS_ACCOUNT = '33333333-3333-4333-8333-333333333333';
 
-
 /**
  * USI-01R test harness.
  *
@@ -27,9 +26,29 @@ export const HARNESS_ACCOUNT = '33333333-3333-4333-8333-333333333333';
  *      shared final path — instead of being mocked away. The thing under test
  *      is the actual service, not a fake of it.
  */
+/**
+ * LOCAL, TEST-ONLY shapes for this in-memory fake.
+ *
+ * The fake stores whatever Prisma was asked to write, so a stored record is an
+ * open bag of fields rather than a generated model type. `unknown` values keep
+ * every read honest — a caller must narrow before using one — where `any` would
+ * have let the whole store leak untyped into the specs that consume it.
+ */
+type HarnessRecord = Record<string, unknown>;
+type HarnessWhere = Record<string, unknown>;
+
+/**
+ * The ONE method intake would reach for if it (wrongly) consulted the proposal
+ * authority. Named rather than `as any` so this deliberately-throwing stub
+ * cannot drift away from the call site it exists to forbid.
+ */
+interface ThrowingProposalAuthority {
+  proposeForRows: (...args: never[]) => never;
+}
+
 export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
-  const batches: any[] = [];
-  const rows: any[] = [];
+  const batches: HarnessRecord[] = [];
+  const rows: HarnessRecord[] = [];
   const storedBytes = new Map<string, Buffer>();
   const temporaryPaths = new Set<string>();
 
@@ -53,7 +72,8 @@ export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
         return (
           batches.find(
             (batch) =>
-              batch.sourceObservationKey === byObservation.sourceObservationKey &&
+              batch.sourceObservationKey ===
+                byObservation.sourceObservationKey &&
               batch.workspaceId === byObservation.workspaceId,
           ) ?? null
         );
@@ -77,7 +97,7 @@ export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
         ),
       );
     },
-    create: async ({ data }: any) => {
+    create: async ({ data }: { data: HarnessRecord }) => {
       // BOTH unique indexes are enforced here, exactly as PostgreSQL enforces
       // them. Without this the concurrency tests would pass against a fake that
       // simply never says no.
@@ -96,32 +116,52 @@ export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
         Object.setPrototypeOf(error, PrismaKnownError.prototype);
         throw error;
       }
-      const batch = { id: id('batch'), version: 0, ...data };
+      const now = new Date();
+      const batch = {
+        id: id('batch'),
+        version: 0,
+        createdAt: now,
+        updatedAt: now,
+        ...data,
+      };
       batches.push(batch);
       return batch;
     },
   };
 
   const rowModel = {
-    create: async ({ data }: any) => {
+    create: async ({ data }: { data: HarnessRecord }) => {
       const row = { id: id('row'), version: 0, ...data };
       rows.push(row);
       return row;
     },
+    // Intake writes its rows SET-BASED, one bounded statement per chunk, and
+    // supplies the id itself so the source's order survives a read-back that
+    // has no order of its own. The fake honours both: it keeps what it is
+    // given, and it answers with a count rather than rows — exactly as Prisma
+    // does, and exactly what makes the id the only thing left to order by.
+    createMany: async ({ data }: { data: HarnessRecord[] }) => {
+      for (const row of data) rows.push({ version: 0, ...row });
+      return { count: data.length };
+    },
     count: async ({ where }: any) =>
       rows.filter((row) => row.batchId === where.batchId).length,
-    findMany: async ({ where }: any) => rows.filter((row) => row.batchId === where.batchId),
+    findMany: async ({ where }: { where: HarnessWhere }) =>
+      rows.filter((row) => row.batchId === where.batchId),
   };
 
   const allowed: Record<string, unknown> = {
-    workspace: { findUnique: async () => ({ organizationId: HARNESS_ORGANIZATION }) },
+    workspace: {
+      findUnique: () =>
+        Promise.resolve({ organizationId: HARNESS_ORGANIZATION }),
+    },
     basicPriceImportBatch: batchModel,
     basicPriceImportRow: rowModel,
     $transaction: async (callback: any) =>
       callback({
         basicPriceImportBatch: batchModel,
         basicPriceImportRow: rowModel,
-          }),
+      }),
   };
 
   const prisma: any = new Proxy(allowed, {
@@ -197,11 +237,31 @@ export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
   const sourceArchive = new BasicPriceSourceArchiveService(storage);
   const reviewService = { createReviewWithinTransaction: jest.fn() } as any;
 
+  /**
+   * INT-CONNECT-01 — the machine-proposal seam, wired to REFUSE.
+   *
+   * Intake reads a source; it does not decide what the source means. The
+   * canonical Unit and Resource Identity authorities are consulted on the
+   * review READ path and nowhere else, so a `preview` that ever reached for
+   * them would be a real defect — a slower import buying a screen it does not
+   * serve. Following the harness's own law, that is ENFORCED here rather than
+   * hoped for: this collaborator throws, so any such call fails the test that
+   * made it instead of quietly succeeding against a stub.
+   */
+  const proposals: ThrowingProposalAuthority = {
+    proposeForRows: () => {
+      throw new Error(
+        'INTAKE_MUST_NOT_CONSULT_RESOLUTION_AUTHORITIES: proposals belong to the review read path.',
+      );
+    },
+  };
+
   return {
     prisma,
     storage,
     sourceArchive,
     reviewService,
+    proposals,
     batches,
     rows,
     storedBytes,

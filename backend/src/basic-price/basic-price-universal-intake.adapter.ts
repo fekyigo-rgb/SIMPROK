@@ -123,6 +123,7 @@ export const UNIT_FROM_SIMPROK_CANDIDATE_REASON = 'UNIT_TEXT_FROM_SIMPROK_UNIT_C
 export type SourceRowKind =
   | 'RESOURCE_ROW'
   | 'STRUCTURAL_HEADING'
+  | 'NO_COMMERCIAL_EVIDENCE'
   | 'ROW_KIND_AMBIGUOUS'
   | 'NON_DATA';
 
@@ -219,9 +220,47 @@ export function classifyPhysicalRow(input: {
   if (resourceProven) return 'RESOURCE_ROW';
   if (headingProven) return 'STRUCTURAL_HEADING';
 
-  // Nothing proved anything — a numbered row with no commercial fields, and a
-  // bare name alike. USI-01R3 fell through to STRUCTURAL_HEADING here and the
-  // row disappeared. It survives now, and says why.
+  // NOTHING COMMERCIAL, AND THE DOCUMENT NEVER COUNTED IT AS AN ITEM.
+  //
+  // No unit, no price under ANY jurisdiction, and no number in the source's own
+  // numbering column. A Basic Price row is an OBSERVATION OF A PRICE, and there
+  // is no price here to observe — under any region, not merely the selected
+  // one. That is a conclusion the evidence supports: not "this is a title",
+  // which nothing proved, but "this is not a priced resource row", which the
+  // absence of every commercial field does prove.
+  //
+  // WHY THIS IS NOT ROW_KIND_AMBIGUOUS. It used to be, and the real Ambon
+  // workbook shows what that costs: 41 category banners — BATU, SEMEN, KACA,
+  // BAHAN SANITAIR, PERALATAN TUKANG — were emitted as resource candidates and
+  // then wore the section the human had been forced to declare, producing rows
+  // like "[Upah] — BATU" with unit "-". Those are not ambiguous rows a reviewer
+  // could settle; they are questions about nothing, and 41 of them buried the
+  // real exceptions.
+  //
+  // WHY IT IS NOT A WORD LIST. Not one banner is recognised by its text. The
+  // test is purely structural and the workbook itself validates it: of the 41
+  // such rows, the document numbered NONE, and of every row the document DID
+  // number, none lacked a price. A vocabulary would also have to be wrong here
+  // by construction — several banners are OCR wreckage ("eAHAN TALANG",
+  // "acsesonis rim rvc") that no dictionary can contain.
+  //
+  // WHY IT IS STILL NOT SILENT. The caller counts these into
+  // `excludedNonDataRows` and the count is reported, so the batch still
+  // accounts for every physical row it read. Raw bytes are untouched.
+  //
+  // A NUMBERED row with no commercial fields keeps falling through below: the
+  // source called it an item, which contradicts "not a row" without proving
+  // "resource", so it stays visible and flagged (LAW H).
+  if (
+    !input.hasUnitEvidence &&
+    !input.hasPriceEvidenceInAnyJurisdiction &&
+    !input.hasRowNumberEvidence
+  ) {
+    return 'NO_COMMERCIAL_EVIDENCE';
+  }
+
+  // Nothing proved anything — a numbered row with no commercial fields. It
+  // survives, and says why.
   return 'ROW_KIND_AMBIGUOUS';
 }
 
@@ -277,6 +316,42 @@ export interface BasicPriceImportKnowledgeRow {
   errors: string[];
 }
 
+/**
+ * WHICH HUMAN ANSWERS THIS READING ACTUALLY DEPENDED ON.
+ *
+ * THE SAME BYTES READ WITH A DIFFERENT LAWFUL INTERPRETATION ARE NOT THE SAME
+ * IMPORT TRUTH. The Owner's real workbook proved it: read with the name column
+ * answered as the unit column it yielded 934 poisoned rows, and read honestly
+ * it yielded 894 truthful ones. Identical file, identical region, identical
+ * everything a fingerprint looked at — so the corrected import could only ever
+ * find the poisoned batch again.
+ *
+ * WHAT BELONGS HERE IS THE READING, NEVER THE REQUEST. Only facts the parse
+ * DEPENDED ON are recorded, and a field is null when the DOCUMENT decided it.
+ * A workbook that states its own column headers admits exactly one lawful
+ * reading of those columns, so a `selectedNameColumn` sent alongside it changed
+ * nothing and must not fork identity — otherwise a stray parameter would mint
+ * duplicate batches for one truth, which is the opposite failure.
+ *
+ * NULL THEREFORE MEANS "THE SOURCE ANSWERED THIS", never "unknown". A reading
+ * that depended on no human answer at all carries no interpretation, which is
+ * exactly why every pre-existing fingerprint stays byte-identical.
+ */
+export interface BasicPriceIntakeInterpretation {
+  /**
+   * The columns this reading actually read names and units from — recorded only
+   * where the document carried no column headers and a person named them.
+   */
+  resourceNameColumn: number | null;
+  sourceUnitColumn: number | null;
+  /**
+   * The resource family a person supplied — recorded only where the document
+   * declared none of its own. When the source states categories the source
+   * wins, so a declaration alongside it decided nothing and is not recorded.
+   */
+  declaredSection: BasicPriceSection | null;
+}
+
 export interface BasicPriceImportKnowledgeObject {
   parserContractVersion: string;
   readerId: string;
@@ -299,6 +374,8 @@ export interface BasicPriceImportKnowledgeObject {
   detectionEvidence: string[];
   /** Rows the source AFFIRMATIVELY proved to be section titles (LAW G.1). */
   excludedNonDataRows: number;
+  /** Null when this reading depended on no human answer — see the type above. */
+  interpretation: BasicPriceIntakeInterpretation | null;
   rows: BasicPriceImportKnowledgeRow[];
 }
 
@@ -849,6 +926,7 @@ export class BasicPriceUniversalIntakeAdapter {
       regionScopeKind: regionChoice?.kind ?? null,
       detectionEvidence: structure.evidence,
       excludedNonDataRows: rows.excludedNonDataRows,
+      interpretation: rows.interpretation,
       rows: rows.rows,
     };
   }
@@ -866,6 +944,14 @@ export class BasicPriceUniversalIntakeAdapter {
     totalSourceRows: number;
     /** Rows the source PROVED to be section titles (LAW G.1), never guessed. */
     excludedNonDataRows: number;
+    /**
+     * ALWAYS NULL, AND STRUCTURALLY SO. This reading takes no `selection` at
+     * all: its columns come from stated headers and its families from the
+     * document's own full-row section titles. There is no human answer it could
+     * depend on, so this shape admits exactly one lawful interpretation of its
+     * bytes and contributes nothing to import identity.
+     */
+    interpretation: null;
   } {
     const nameColumn = structure.roleColumns.RESOURCE_NAME!;
     const codeColumn = structure.roleColumns.RESOURCE_CODE!;
@@ -931,7 +1017,12 @@ export class BasicPriceUniversalIntakeAdapter {
       );
     }
 
-    return { rows, totalSourceRows, excludedNonDataRows: 0 };
+    return {
+      rows,
+      totalSourceRows,
+      excludedNonDataRows: 0,
+      interpretation: null,
+    };
   }
 
   /**
@@ -955,6 +1046,7 @@ export class BasicPriceUniversalIntakeAdapter {
     totalSourceRows: number;
     /** Rows the source PROVED to be section titles (LAW G.1), never guessed. */
     excludedNonDataRows: number;
+    interpretation: BasicPriceIntakeInterpretation | null;
   } {
     const declaredSection = selection.declaredSection ?? null;
     const categoryNameColumn = structure.roleColumns.CATEGORY_NAME ?? null;
@@ -984,15 +1076,66 @@ export class BasicPriceUniversalIntakeAdapter {
       const unitChosen = selection.selectedUnitColumn ?? null;
       const valid = (column: number | null, pool: { columnNumber: number }[]) =>
         column !== null && pool.some((c) => c.columnNumber === column);
+      const nameValid = valid(nameChosen, structure.columnRoles.nameCandidates);
+
+      // ONE COLUMN CANNOT HOLD TWO ROLES.
+      //
+      // Pool membership used to be the only thing asked here, and a column is
+      // legitimately in BOTH pools: the name question prunes what the document
+      // disproves, and the unit question keeps the full list because no
+      // structural fact can disprove a unit column. So one column could be
+      // named for both roles — and the Owner's real Ambon import did exactly
+      // that. Every row's unit cell address became its own name cell address
+      // and every row carried its resource name as its unit.
+      //
+      // THE CONSEQUENCES WERE NOT LOCAL, which is why this belongs at intake.
+      // `classifyPhysicalRow` reads `hasUnitEvidence` from the unit column, so
+      // 40 category banners looked commercial and entered the review room; the
+      // Unit authority was then asked whether a resource name is a unit of
+      // measure, truthfully answered no for all 934 rows, and not one identity
+      // pair could close. One contradictory answer became 934 review problems.
+      //
+      // It is caught HERE and not in a browser because this is the truth
+      // boundary: a supplier bridge, an API caller and a replay must all meet
+      // the same refusal. And it is a REFUSAL, never a repair — SIMPROK does
+      // not silently move the unit role to another column, because which
+      // column holds the unit remains the one question only a reader of the
+      // document can answer.
+      const rolesCollide = nameChosen !== null && nameChosen === unitChosen;
+
       if (
-        !valid(nameChosen, structure.columnRoles.nameCandidates) ||
-        !valid(unitChosen, structure.columnRoles.unitCandidates)
+        !nameValid ||
+        !valid(unitChosen, structure.columnRoles.unitCandidates) ||
+        rolesCollide
       ) {
+        // ASK AGAIN WITHOUT THE IMPOSSIBLE OPTION. Once a column is named for
+        // the resource name, offering it again under "which column holds the
+        // unit" invites the very click that produced the batch above.
+        //
+        // AND THE REMOVAL IS UNCONDITIONAL. An earlier form of this fell back
+        // to the unpruned list whenever pruning emptied it — which put the
+        // named column back on screen in the ONE case where it was the only
+        // thing left, i.e. exactly the case most likely to be clicked. That is
+        // not fail-open, it is fail-open into the defect: the option would be
+        // refused by the guard above the moment it was chosen, so drawing it
+        // could only ever waste a person's click and teach them to distrust
+        // the question.
+        //
+        // AN EMPTY LIST IS THE HONEST ANSWER HERE, and it is not a dead end
+        // that had to be invented: a source with exactly one non-jurisdiction
+        // text column states NO unit column, and `IntakeQuestionPanel` already
+        // says so plainly when a question carries no options. Fail-open still
+        // governs where proof is genuinely insufficient — see `nameValid`
+        // below, which prunes nothing until a valid name column exists.
         throw new IntakeError(INTAKE_ERRORS.COLUMN_ROLE_SELECTION_REQUIRED, {
           tableName: table.name,
           structure: structure.structure,
           nameCandidates: structure.columnRoles.nameCandidates,
-          unitCandidates: structure.columnRoles.unitCandidates,
+          unitCandidates: nameValid
+            ? structure.columnRoles.unitCandidates.filter(
+                (candidate) => candidate.columnNumber !== nameChosen,
+              )
+            : structure.columnRoles.unitCandidates,
         });
       }
     }
@@ -1068,7 +1211,14 @@ export class BasicPriceUniversalIntakeAdapter {
         // LAW G.1 — the row must PROVE it is a title. Absence proves nothing.
         headingEvidence: affirmativeHeadingEvidence(name),
       });
-      if (rowKind === 'STRUCTURAL_HEADING') {
+      // Neither kind is a price observation, so neither becomes a Basic Price
+      // candidate — one because the source proved it is a title, the other
+      // because the source gave it no commercial field at all. Both are
+      // COUNTED, so the batch still accounts for every physical row it read.
+      if (
+        rowKind === 'STRUCTURAL_HEADING' ||
+        rowKind === 'NO_COMMERCIAL_EVIDENCE'
+      ) {
         excludedNonDataRows += 1;
         continue;
       }
@@ -1111,6 +1261,29 @@ export class BasicPriceUniversalIntakeAdapter {
       if (rowKind === 'ROW_KIND_AMBIGUOUS') warnings.push(ROW_KIND_AMBIGUOUS_REASON);
       const errors: string[] = [...evidence.errors, ...resolvedSection.errors];
       if (!unit) errors.push('UNIT_REQUIRED');
+      // A UNIT OF MEASURE IS NEVER A BARE PRICE LITERAL.
+      //
+      // The real Ambon workbook changes column layout mid-file: from row 793 it
+      // shifts one column left, so the cell the human named as the unit column
+      // starts holding a PRICE. 132 rows then arrive with `rawUnitText` values
+      // like "1470000" — and, worse, the cell read as this jurisdiction's price
+      // is actually the NEXT jurisdiction's.
+      //
+      // SIMPROK cannot re-derive the layout here; the detector owns that, and
+      // it proved one layout from the header. What it CAN do is refuse to
+      // pretend a number is a unit. This is the same authority the detector
+      // already applies to jurisdiction columns one file over — "A JURISDICTION
+      // IS NAMED, NOT NUMBERED" — asked of the unit cell instead.
+      //
+      // AN ERROR, NOT A WARNING, and deliberately so: the row already fails
+      // closed downstream when the Unit Kernel cannot resolve "1470000" as an
+      // alias, but it fails with UNKNOWN_UNIT_ALIAS, which sends a reviewer to
+      // look for a missing unit spelling that does not exist. Naming the real
+      // cause here is the difference between 132 undiagnosable rows and 132
+      // rows that say what is wrong with the document.
+      if (unit && interpretPriceLiteral(unit).outcome !== 'NOT_NUMERIC') {
+        errors.push('SOURCE_UNIT_CELL_HOLDS_PRICE_LITERAL');
+      }
       if (!code) warnings.push('RESOURCE_CODE_MISSING');
       if (unitFallbackColumn !== null) warnings.push(UNIT_FROM_SIMPROK_CANDIDATE_REASON);
 
@@ -1139,7 +1312,30 @@ export class BasicPriceUniversalIntakeAdapter {
       );
     }
 
-    return { rows, totalSourceRows, excludedNonDataRows };
+    // WHAT A PERSON DECIDED, SEPARATED FROM WHAT THE DOCUMENT DECIDED.
+    //
+    // `columnRoles.required` is the detector's own statement that this source
+    // carries no column headers, so the pair below is a human's answer rather
+    // than a stated fact — and the EFFECTIVE columns are recorded, not the raw
+    // parameters, because those are what these rows were actually read from.
+    //
+    // The section is recorded only where the document declared none. Where it
+    // states categories the source wins outright (`resolveRowSection`), so a
+    // declaration sent alongside it changed no row's family and recording it
+    // would fork identity for two readings that are the same reading.
+    const humanNamedTheColumns = structure.columnRoles.required;
+    const humanDeclaredTheSection =
+      !sourceStatesCategory && declaredSection !== null;
+    const interpretation =
+      humanNamedTheColumns || humanDeclaredTheSection
+        ? {
+            resourceNameColumn: humanNamedTheColumns ? nameColumn : null,
+            sourceUnitColumn: humanNamedTheColumns ? effectiveUnitColumn : null,
+            declaredSection: humanDeclaredTheSection ? declaredSection : null,
+          }
+        : null;
+
+    return { rows, totalSourceRows, excludedNonDataRows, interpretation };
   }
 
   private buildRow(input: {

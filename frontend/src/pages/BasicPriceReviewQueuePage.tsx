@@ -9,6 +9,7 @@ import {
   resourceLabel,
   reviewerLabel,
   slaStateLabel,
+  submissionStatusLabel,
 } from '../utils/basicPriceWorkflowDisplay';
 
 type QueueState =
@@ -86,9 +87,21 @@ export function BasicPriceReviewQueuePage() {
               aria-label={`Review ${resourceLabel(item.resource)}`}
             >
               <strong>{resourceLabel(item.resource)}</strong>
+              {/*
+                TWO DIFFERENT FACTS, AND THE ROW USED TO CARRY ONLY ONE.
+
+                `slaState` is about the CLOCK — how long this has been waiting,
+                and whether it has been resolved at all. `submissionStatus` is
+                the GOVERNANCE verdict: awaiting a decision, verified, or
+                rejected. A curator scanning this list needs the second one to
+                know which rows are still theirs to decide, and the server had
+                been sending it all along while the row printed only the clock.
+                The detail page already showed both; the queue did not.
+              */}
               <p>
                 Wilayah: {regionLabel(item.region)} · Harga: {formatPrice(item.currentPrice)} ·
-                Status: {slaStateLabel(item.slaState)}
+                Keputusan: {submissionStatusLabel(item.submissionStatus)} ·
+                SLA: {slaStateLabel(item.slaState)}
               </p>
               <p>Reviewer: {reviewerLabel(item.assignedReviewer)}</p>
               <button

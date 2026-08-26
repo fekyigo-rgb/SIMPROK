@@ -175,6 +175,40 @@ export async function provisionB1B12Section(
     'PROJECT_VIEW',
     'RAB_VIEW',
     'AHSP_VIEW',
+    // THE BASIC PRICE DOOR, MADE EXERCISABLE.
+    //
+    // This fixture granted only BASIC_PRICE_VERIFY and BASIC_PRICE_PUBLISH — the
+    // two permissions its own B1-B12 assertions needed — so NO actor in the
+    // rehearsal database could import a price list at all. The Owner opening
+    // /basic-price/import on this environment was answered 403 by
+    // PermissionsGuard before intake ever saw the workbook, which the browser
+    // then mis-rendered as SIMPROK declining to guess about the file.
+    //
+    // The guard was right and the fixture was incomplete. A rehearsal
+    // environment exists to exercise the real product, so the editor now holds
+    // the three permissions the import journey actually requires. This grants
+    // nothing that production does not already define, and weakens no check.
+    'BASIC_PRICE_IMPORT',
+    'BASIC_PRICE_RESOLVE',
+    'BASIC_PRICE_REVIEW_VIEW',
+    // AND THE TWO ROOMS THE JOURNEY GREW AFTERWARDS — the same defect one step
+    // further down the corridor.
+    //
+    // The three grants above carried a reviewer as far as the review room and
+    // stopped there, because that was where the product stopped when they were
+    // written. The journey now continues: `Simpan & Gunakan` materializes the
+    // finished rows as workspace-private Basic Prices (BASIC_PRICE_SUBMIT, the
+    // same authority `submit` holds — see the keep-private route's own note),
+    // and the person then goes to the Basic Price Explorer to see them
+    // (BASIC_PRICE_VIEW). Without these two the rehearsal editor met a 403 at
+    // the exact moment their prices were supposed to become usable, and the
+    // Explorer showed nothing — a fixture one step behind the door again.
+    //
+    // This grants nothing production does not already define and weakens no
+    // check: both codes are existing permissions, enforced by the same
+    // PermissionsGuard, on the same workspace boundary.
+    'BASIC_PRICE_SUBMIT',
+    'BASIC_PRICE_VIEW',
   ]);
   const viewer = await createActor('viewer', [
     'RAB_VIEW',

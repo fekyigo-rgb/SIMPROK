@@ -1,6 +1,7 @@
 import {
   CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
   CONFIRMATION_TOKEN,
+  GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
   KNOWN_CONFIRMATION_TOKENS,
   applyBootstrapPlan,
 } from './resource-catalog-bootstrap-planner';
@@ -47,17 +48,37 @@ describe('RM-03D0 confirmation authority generalization', () => {
       );
     });
 
-    it('recognises exactly these two authorities and nothing else', () => {
-      expect([...KNOWN_CONFIRMATION_TOKENS].sort()).toEqual(
-        [CONFIRMATION_TOKEN, CANONICAL_REFERENCE_CONFIRMATION_TOKEN].sort(),
+    it('names the governed rehearsal authority explicitly', () => {
+      expect(GOVERNED_REHEARSAL_CONFIRMATION_TOKEN).toBe(
+        'APPLY_GOVERNED_REHEARSAL_REFERENCES',
       );
-      expect(KNOWN_CONFIRMATION_TOKENS).toHaveLength(2);
     });
 
-    it('never lets the canonical token mention a test database, or vice versa', () => {
+    it('recognises exactly these three authorities and nothing else', () => {
+      expect([...KNOWN_CONFIRMATION_TOKENS].sort()).toEqual(
+        [
+          CONFIRMATION_TOKEN,
+          CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
+          GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
+        ].sort(),
+      );
+      expect(KNOWN_CONFIRMATION_TOKENS).toHaveLength(3);
+    });
+
+    it('never lets one authority describe another target', () => {
       expect(CANONICAL_REFERENCE_CONFIRMATION_TOKEN).not.toMatch(/SIMPROK_TEST/i);
       expect(CONFIRMATION_TOKEN).not.toMatch(/CANONICAL/i);
-      expect(CONFIRMATION_TOKEN).not.toBe(CANONICAL_REFERENCE_CONFIRMATION_TOKEN);
+      // The rehearsal authority must not claim to be canonical, and the
+      // canonical one must not claim to be a rehearsal. An audit line that
+      // names the wrong environment is the coupling RM-03D0 removed.
+      expect(GOVERNED_REHEARSAL_CONFIRMATION_TOKEN).not.toMatch(/CANONICAL/i);
+      expect(GOVERNED_REHEARSAL_CONFIRMATION_TOKEN).not.toMatch(
+        /SIMPROK_TEST/i,
+      );
+      expect(CANONICAL_REFERENCE_CONFIRMATION_TOKEN).not.toMatch(/REHEARSAL/i);
+      expect(new Set(KNOWN_CONFIRMATION_TOKENS).size).toBe(
+        KNOWN_CONFIRMATION_TOKENS.length,
+      );
     });
   });
 
@@ -112,6 +133,64 @@ describe('RM-03D0 confirmation authority generalization', () => {
             confirmationToken: CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
             expectedConfirmationToken: CONFIRMATION_TOKEN,
           }),
+        ),
+      ).rejects.toThrow(/STOP_MISSING_CONFIRMATION_TOKEN/);
+    });
+
+    /**
+     * THE REHEARSAL AUTHORITY IS NOT A SKELETON KEY. It was added so a
+     * rehearsal database could hold the Owner's real reference knowledge; it
+     * must never become a way to reach canonical, and canonical must never
+     * reach a rehearsal.
+     */
+    it.each([
+      [
+        'rehearsal token',
+        'canonical apply',
+        GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
+        CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
+      ],
+      [
+        'rehearsal token',
+        'acceptance apply',
+        GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
+        CONFIRMATION_TOKEN,
+      ],
+      [
+        'canonical token',
+        'rehearsal apply',
+        CANONICAL_REFERENCE_CONFIRMATION_TOKEN,
+        GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
+      ],
+      [
+        'acceptance token',
+        'rehearsal apply',
+        CONFIRMATION_TOKEN,
+        GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
+      ],
+    ])(
+      'the %s cannot authorize a %s',
+      async (
+        _supplied,
+        _expected,
+        confirmationToken,
+        expectedConfirmationToken,
+      ) => {
+        await expect(
+          applyBootstrapPlan(
+            neverCalled,
+            params({ confirmationToken, expectedConfirmationToken }),
+          ),
+        ).rejects.toThrow(/STOP_MISSING_CONFIRMATION_TOKEN/);
+      },
+    );
+
+    it('the rehearsal token cannot silently authorize the legacy default path', async () => {
+      // No expectation supplied => legacy authority => rehearsal token refused.
+      await expect(
+        applyBootstrapPlan(
+          neverCalled,
+          params({ confirmationToken: GOVERNED_REHEARSAL_CONFIRMATION_TOKEN }),
         ),
       ).rejects.toThrow(/STOP_MISSING_CONFIRMATION_TOKEN/);
     });

@@ -8,6 +8,8 @@ import { BasicPriceImportService } from './basic-price-import.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 import { BasicPriceSourceArchiveService } from './basic-price-source-archive.service';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { BasicPriceRowResolutionProposalService } from './basic-price-row-resolution-proposal.service';
 import { buildBasicPriceXlsx } from '../../test/fixtures/basic-price-xlsx.fixture';
 
 describe('BasicPriceImportService', () => {
@@ -21,6 +23,7 @@ describe('BasicPriceImportService', () => {
     };
     basicPriceImportRow: {
       create: jest.Mock;
+      createMany: jest.Mock;
       count: jest.Mock;
       findMany: jest.Mock;
       findUniqueOrThrow: jest.Mock;
@@ -36,11 +39,19 @@ describe('BasicPriceImportService', () => {
     basicPriceImportBatch: {
       findUnique: jest.Mock;
       findUniqueOrThrow: jest.Mock;
+      findMany: jest.Mock;
     };
     basicPriceImportRow: { findMany: jest.Mock };
+    /**
+     * The review room asks WHICH rows are already stored — the count it also
+     * publishes is derived from that one answer, so the two cannot disagree.
+     */
+    basicPrice: { findMany: jest.Mock };
     $transaction: jest.Mock;
   };
   let reviewService: { createReviewWithinTransaction: jest.Mock };
+  /** INT-CONNECT-01 — the seam the review read path consults. */
+  let proposals: { proposeForRows: jest.Mock };
 
   const WORKSPACE_ID = 'ws-01';
   const ORGANIZATION_ID = 'org-01';
@@ -60,6 +71,7 @@ describe('BasicPriceImportService', () => {
       },
       basicPriceImportRow: {
         create: jest.fn(),
+        createMany: jest.fn(),
         count: jest.fn(),
         findMany: jest.fn(),
         findUniqueOrThrow: jest.fn(),
@@ -79,8 +91,12 @@ describe('BasicPriceImportService', () => {
       basicPriceImportBatch: {
         findUnique: jest.fn().mockResolvedValue(null),
         findUniqueOrThrow: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       basicPriceImportRow: { findMany: jest.fn().mockResolvedValue([]) },
+      // Nothing kept yet, which is the ordinary state of every batch these
+      // tests build. Cases about already-stored rows set it explicitly.
+      basicPrice: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((callback: (tx: unknown) => unknown) =>
         callback(tx),
       ),
@@ -94,6 +110,7 @@ describe('BasicPriceImportService', () => {
         .fn()
         .mockResolvedValue({ reviewId: 'review-1', status: 'CREATED' }),
     };
+    proposals = { proposeForRows: jest.fn(() => Promise.resolve(new Map())) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -103,6 +120,29 @@ describe('BasicPriceImportService', () => {
         // USI-01R2 — raw bytes are retained for this vertical-local intake
         // before any domain row is written.
         { provide: BasicPriceSourceArchiveService, useValue: sourceArchive },
+        // INT-CONNECT-01 — the review read path asks the canonical Unit and
+        // Resource Identity authorities through this seam. Stubbed to answer
+        // "nothing proven" so THIS suite keeps testing exactly what it always
+        // tested: the intake state machine, untouched by intelligence. The
+        // wiring itself is proved in
+        // basic-price-row-resolution-proposal.service.spec.ts.
+        {
+          provide: BasicPriceRowResolutionProposalService,
+          useValue: proposals,
+        },
+        // COLUMN INTELLIGENCE — the Unit authority is consulted for ONE narrow
+        // job on this path: disproving a column before a human is asked to
+        // choose it (see `pruneDisprovenColumnCandidates`). Stubbed to prove
+        // NOTHING, so every existing expectation in this suite still describes
+        // the intake state machine with no elimination applied — the pruning's
+        // own behaviour is proved against the real authority in
+        // test/acceptance/real-workflow-basic-price.e2e-spec.ts.
+        {
+          provide: UnitKernelService,
+          useValue: {
+            resolveCanonicalUnitIdentities: jest.fn(() => Promise.resolve([])),
+          },
+        },
       ],
     }).compile();
 
@@ -124,17 +164,36 @@ describe('BasicPriceImportService', () => {
         ...data,
       }),
     );
-    // Scoped per-batch (by counting create() calls for that exact batchId)
-    // so a test that calls preview() more than once still sees an accurate
-    // count for each individual batch, matching real Prisma semantics.
+
+    // A SET-BASED WRITE, MOCKED AS ONE. `createMany` stores what it was given
+    // and answers with a count, exactly as Prisma does — and the read-back that
+    // follows it hands the rows back in a DELIBERATELY SCRAMBLED order.
+    //
+    // That scramble is the point. Prisma guarantees no order on an unsorted
+    // findMany, and the service is not allowed to depend on one: it reassembles
+    // its rows by the ids it minted itself. A mock that returned insertion
+    // order would let an order-dependent regression pass here and fail on a
+    // real database.
+    const persisted: Record<string, Record<string, unknown>[]> = {};
+    tx.basicPriceImportRow.createMany.mockImplementation(
+      ({ data }: { data: Record<string, unknown>[] }) => {
+        for (const row of data) {
+          const batchId = String(row.batchId);
+          persisted[batchId] = persisted[batchId] ?? [];
+          persisted[batchId].push({ version: 0, ...row });
+        }
+        return Promise.resolve({ count: data.length });
+      },
+    );
+    tx.basicPriceImportRow.findMany.mockImplementation(
+      ({ where }: { where: { batchId: string } }) =>
+        Promise.resolve([...(persisted[where.batchId] ?? [])].reverse()),
+    );
+    // Scoped per-batch so a test that calls preview() more than once still
+    // sees an accurate count for each individual batch.
     tx.basicPriceImportRow.count.mockImplementation(
       ({ where }: { where: { batchId: string } }) =>
-        Promise.resolve(
-          tx.basicPriceImportRow.create.mock.calls.filter(
-            ([arg]: [{ data: Record<string, unknown> }]) =>
-              arg.data.batchId === where.batchId,
-          ).length,
-        ),
+        Promise.resolve((persisted[where.batchId] ?? []).length),
     );
   });
 
@@ -191,17 +250,60 @@ describe('BasicPriceImportService', () => {
           }),
         }),
       );
-      expect(tx.basicPriceImportRow.create).toHaveBeenCalled();
-      const allRowCreateCalls = tx.basicPriceImportRow.create.mock.calls;
+      expect(tx.basicPriceImportRow.createMany).toHaveBeenCalled();
+      const writtenRows = tx.basicPriceImportRow.createMany.mock.calls.flatMap(
+        ([arg]: [{ data: Record<string, unknown>[] }]) => arg.data,
+      );
       expect(
-        allRowCreateCalls.every(
-          ([arg]: [{ data: Record<string, unknown> }]) =>
-            arg.data.status === 'NEEDS_REVIEW' &&
-            arg.data.resolutionStatus === 'UNRESOLVED',
+        writtenRows.every(
+          (data: Record<string, unknown>) =>
+            data.status === 'NEEDS_REVIEW' &&
+            data.resolutionStatus === 'UNRESOLVED',
         ),
       ).toBe(true);
       expect(result.status).toBe('NEEDS_REVIEW');
       expect(result.totalRows).toBeGreaterThan(0);
+    });
+
+    it('writes rows in BOUNDED SET-BASED statements — never one per row (P2028)', async () => {
+      // THE OWNER'S 934-ROW WORKBOOK IS WHY THIS TEST EXISTS. A per-row create
+      // meant one round-trip per row inside a 5-second interactive transaction,
+      // and the real upload died on Prisma P2028 at 5010 ms — a workbook SIMPROK
+      // had read perfectly, answered 500. The invariant is not "it is faster":
+      // it is that the number of WRITES does not grow with the number of rows.
+      const file = await uploadFile();
+      const result = await service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {});
+
+      expect(tx.basicPriceImportRow.create).not.toHaveBeenCalled();
+      expect(
+        tx.basicPriceImportRow.createMany.mock.calls.length,
+      ).toBeLessThanOrEqual(Math.ceil(result.totalRows / 500));
+
+      // Every row still arrived — a bounded write is not a truncated one.
+      const writtenRows = tx.basicPriceImportRow.createMany.mock.calls.flatMap(
+        ([arg]: [{ data: Record<string, unknown>[] }]) => arg.data,
+      );
+      expect(writtenRows).toHaveLength(result.totalRows);
+    });
+
+    it('returns rows in SOURCE ORDER even when the database reads them back shuffled', async () => {
+      // `createMany` answers with a count, not rows, so the order the source
+      // stated has to be reconstructed rather than inherited. It is
+      // reconstructed from the ids this service minted itself — the read-back
+      // in this suite is deliberately reversed, and the answer must not be.
+      const file = await uploadFile();
+      const result = await service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {});
+
+      const written = tx.basicPriceImportRow.createMany.mock.calls.flatMap(
+        ([arg]: [{ data: Record<string, unknown>[] }]) => arg.data,
+      );
+      expect(result.rows.map((row) => row.id)).toEqual(
+        written.map((data: Record<string, unknown>) => data.id),
+      );
+      const sourceRowNumbers = result.rows.map((row) => row.sourceRowNumber);
+      expect([...sourceRowNumbers].sort((a, b) => a - b)).toEqual(
+        sourceRowNumbers,
+      );
     });
 
     it('REPLAY (I01): the exact same file + same metadata returns the existing batch, never re-parses into new rows', async () => {
@@ -209,6 +311,7 @@ describe('BasicPriceImportService', () => {
       const existingBatch = {
         id: 'existing-batch',
         workspaceId: WORKSPACE_ID,
+        uploadedByAccountId: ACCOUNT_ID,
         importFingerprint: 'X',
         status: 'NEEDS_REVIEW',
         version: 0,
@@ -229,6 +332,29 @@ describe('BasicPriceImportService', () => {
 
       expect(tx.basicPriceImportBatch.create).not.toHaveBeenCalled();
       expect(result.batchId).toBe('existing-batch');
+      expect(result.reimport).toEqual({
+        classification: 'EXACT_EXISTING',
+        existingBatchId: 'existing-batch',
+        updateBatchId: null,
+        difference: 'NONE',
+      });
+    });
+
+    it('R-8: an exact fingerprint match owned by another account is indistinguishable from absence', async () => {
+      const file = await uploadFile();
+      prisma.basicPriceImportBatch.findUnique.mockResolvedValue({
+        id: 'foreign-batch',
+        workspaceId: WORKSPACE_ID,
+        uploadedByAccountId: 'other-account',
+        importFingerprint: 'X',
+        status: 'NEEDS_REVIEW',
+        version: 0,
+      });
+
+      await expect(
+        service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {}),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(tx.basicPriceImportBatch.create).not.toHaveBeenCalled();
     });
 
     it('I02: identical file with different metadata (e.g. a different regionId) produces a different fingerprint than an empty-metadata preview', async () => {
@@ -256,9 +382,21 @@ describe('BasicPriceImportService', () => {
       status: 'READY_FOR_REVIEW',
       effectiveDate: new Date('2026-01-01'),
       regionId: 'region-01',
+      // A FIELD REPORT, because this suite exercises the CURATION door and that
+      // door serves the field/community family only. It used to say GOVERNMENT,
+      // which is now refused at the ENDPOINT rather than merely hidden in the
+      // UI: an official list is recorded with its own source, never put to
+      // community verification.
+      //
+      // The pair is STATED, not derived. Origin and type are independent axes
+      // (BASIC-PRICE-MASTER-DECISION §10); this batch happens to be a field
+      // report that is a market survey, and either value could have been
+      // otherwise without the other changing.
       sourceType: 'MARKET_SURVEY',
-      sourceOrigin: 'GOVERNMENT',
+      sourceOrigin: 'FIELD_REPORT',
       uploadedByAccountId: ACCOUNT_ID,
+      importFingerprint: 'fingerprint-01',
+      version: 0,
     };
 
     beforeEach(() => {
@@ -361,7 +499,10 @@ describe('BasicPriceImportService', () => {
             organizationId: ORGANIZATION_ID,
             resourceId: 'resource-01',
             regionId: 'region-01',
-            sourceOrigin: 'GOVERNMENT',
+            // Carried verbatim from the batch — the submission describes where
+            // the price came from, and this writer substitutes nothing.
+            sourceOrigin: 'FIELD_REPORT',
+            sourceType: 'MARKET_SURVEY',
             status: 'SUBMITTED',
           }),
         }),
@@ -497,6 +638,225 @@ describe('BasicPriceImportService', () => {
           'another-account-in-same-workspace',
         ),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    /**
+     * INT-CONNECT-01 — THE WIRING ITSELF, not just the seam behind it.
+     *
+     * A healthy engine that nobody calls is the exact defect this slice closes,
+     * so "getBatch asks the authorities" is asserted here rather than assumed
+     * from the fact that a service exists.
+     */
+    it('INT-CONNECT-01: asks the canonical authorities, and only about rows a human can still act on', async () => {
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([
+        {
+          id: 'r-open',
+          status: 'NEEDS_REVIEW',
+          resolutionStatus: 'UNRESOLVED',
+          rawResourceNameText: 'Air',
+          rawResourceCodeText: null,
+          rawUnitText: 'ltr',
+          sourceSection: 'MATERIAL',
+          sourceRowNumber: 2,
+          reasonCodes: [],
+          version: 0,
+        },
+        {
+          id: 'r-done',
+          status: 'READY_FOR_SUBMISSION',
+          resolutionStatus: 'RESOLVED',
+          rawResourceNameText: 'Semen',
+          rawResourceCodeText: null,
+          rawUnitText: 'kg',
+          sourceSection: 'MATERIAL',
+          sourceRowNumber: 3,
+          reasonCodes: [],
+          version: 1,
+        },
+        {
+          id: 'r-rejected',
+          status: 'REJECTED',
+          resolutionStatus: 'UNRESOLVED',
+          rawResourceNameText: 'Entah',
+          rawResourceCodeText: null,
+          rawUnitText: 'bh',
+          sourceSection: 'MATERIAL',
+          sourceRowNumber: 4,
+          reasonCodes: [],
+          version: 1,
+        },
+      ]);
+
+      await service.getBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID);
+
+      expect(proposals.proposeForRows).toHaveBeenCalledTimes(1);
+      const [workspaceArg, rowsArg] = proposals.proposeForRows.mock
+        .calls[0] as [string, ReadonlyArray<{ id: string }>];
+      expect(workspaceArg).toBe(WORKSPACE_ID);
+      // A resolved or rejected row has nothing left to decide; proposing an
+      // identity for it would be advice nobody can act on.
+      expect(rowsArg.map((r) => r.id)).toEqual(['r-open']);
+      // Every fact comes from the row itself — nothing a client could steer.
+      expect(rowsArg[0]).toEqual({
+        id: 'r-open',
+        sourceSection: 'MATERIAL',
+        rawResourceNameText: 'Air',
+        rawResourceCodeText: null,
+        rawUnitText: 'ltr',
+      });
+    });
+
+    it('INT-CONNECT-01: carries the proposal to the row, and counts proven rows honestly', async () => {
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([
+        {
+          id: 'r-open',
+          status: 'NEEDS_REVIEW',
+          resolutionStatus: 'UNRESOLVED',
+          rawResourceNameText: 'Air',
+          rawResourceCodeText: null,
+          rawUnitText: 'ltr',
+          sourceSection: 'MATERIAL',
+          sourceRowNumber: 2,
+          reasonCodes: [],
+          version: 0,
+        },
+        {
+          id: 'r-open-2',
+          status: 'NEEDS_REVIEW',
+          resolutionStatus: 'UNRESOLVED',
+          rawResourceNameText: 'Entah',
+          rawResourceCodeText: null,
+          rawUnitText: 'bh',
+          sourceSection: 'MATERIAL',
+          sourceRowNumber: 5,
+          reasonCodes: [],
+          version: 0,
+        },
+      ]);
+      const proven = {
+        rowId: 'r-open',
+        identityPairProven: true,
+        blockingFacts: [],
+        unit: {},
+        resource: {},
+      };
+      const open = {
+        rowId: 'r-open-2',
+        identityPairProven: false,
+        blockingFacts: ['UNKNOWN_UNIT_ALIAS'],
+        unit: {},
+        resource: {},
+      };
+      proposals.proposeForRows.mockResolvedValueOnce(
+        new Map([
+          ['r-open', proven],
+          ['r-open-2', open],
+        ]),
+      );
+
+      const result = await service.getBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
+
+      expect(result.rows[0].machineProposal).toBe(proven);
+      expect(result.rows[1].machineProposal).toBe(open);
+      // Reported from the proposals, never predicted from row statuses.
+      expect(result.identityPairProvenRows).toBe(1);
+    });
+
+    it('INT-CONNECT-01: a row nobody asked about carries null, never a fabricated verdict', async () => {
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([
+        {
+          id: 'r-done',
+          status: 'READY_FOR_SUBMISSION',
+          resolutionStatus: 'RESOLVED',
+          rawResourceNameText: 'Semen',
+          rawResourceCodeText: null,
+          rawUnitText: 'kg',
+          sourceSection: 'MATERIAL',
+          sourceRowNumber: 3,
+          reasonCodes: [],
+          version: 1,
+        },
+      ]);
+
+      const result = await service.getBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
+
+      // Null means "not asked". It must never be readable as "found nothing".
+      expect(result.rows[0].machineProposal).toBeNull();
+      expect(result.identityPairProvenRows).toBe(0);
+    });
+
+    it('INT-CONNECT-01: preview never consults the authorities — that is the review room job', async () => {
+      // Guards the intake boundary from the other side: the same harness law the
+      // USI-01R fixture enforces by throwing.
+      proposals.proposeForRows.mockClear();
+      const file = await uploadFile();
+      await service.preview(WORKSPACE_ID, ACCOUNT_ID, file, {});
+      expect(proposals.proposeForRows).not.toHaveBeenCalled();
+    });
+
+    /**
+     * INT-CONNECT-01 SECURITY — CASE 2.
+     *
+     * The existing test above proves the 404. This proves the CONSEQUENCE the
+     * new payload makes worth stating: authorization runs to completion BEFORE
+     * the proposal seam is consulted, so a cross-workspace batchId yields no
+     * rows, no proposal, and no candidate/evidence data of any kind. If the
+     * ordering in getBatch were ever inverted, the 404 would still be thrown but
+     * foreign evidence would already have been computed — this test fails then.
+     */
+    it('INT-CONNECT-01 SECURITY: a cross-workspace batchId yields zero rows, zero proposal, and never reaches the authorities', async () => {
+      prisma.basicPriceImportBatch.findUnique.mockResolvedValue({
+        ...storedBatch,
+        workspaceId: 'other-workspace',
+      });
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([
+        {
+          id: 'foreign-row',
+          status: 'NEEDS_REVIEW',
+          resolutionStatus: 'UNRESOLVED',
+          rawResourceNameText: 'Air',
+          rawResourceCodeText: null,
+          rawUnitText: 'ltr',
+          sourceSection: 'MATERIAL',
+          sourceRowNumber: 2,
+          reasonCodes: [],
+          version: 0,
+        },
+      ]);
+
+      await expect(
+        service.getBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      // The rows were never even read, let alone proposed about.
+      expect(prisma.basicPriceImportRow.findMany).not.toHaveBeenCalled();
+      expect(proposals.proposeForRows).not.toHaveBeenCalled();
+    });
+
+    it('INT-CONNECT-01 SECURITY: a same-workspace batch owned by ANOTHER account is refused before the authorities are asked', async () => {
+      // The user-owned import boundary. A teammate holding BASIC_PRICE_IMPORT in
+      // the same workspace still gets plain non-existence, and the proposal seam
+      // is never consulted on someone else's batch.
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.getBatch(
+          WORKSPACE_ID,
+          'batch-01',
+          'another-account-in-same-workspace',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(prisma.basicPriceImportRow.findMany).not.toHaveBeenCalled();
+      expect(proposals.proposeForRows).not.toHaveBeenCalled();
     });
   });
 

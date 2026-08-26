@@ -88,6 +88,58 @@ export const regionLabel = (region: RegionIdentity | null): string =>
 export const regionOptionLabel = (region: RegionLookupItem): string =>
   `${region.code} — ${region.name}`;
 
+/**
+ * REGION CANDIDATES, LABELLED THE WAY A PERSON LOOKS FOR A PLACE.
+ *
+ * WHAT WENT WRONG. `regionOptionLabel` leads with `code`, and in a SELECTOR
+ * that makes the internal identifier the first thing read. On the Owner's
+ * rehearsal database all three regions are named "Jakarta Selatan" and differ
+ * only by a provisioning code, so the list read as:
+ *
+ *     B1B12OWNER20260813-JAKSEL — Jakarta Selatan
+ *     B1B12OWNER20260817-JAKSEL — Jakarta Selatan
+ *     B1B12OWNER20260819-JAKSEL — Jakarta Selatan
+ *
+ * A person looking for a PLACE was asked to choose between three fixture
+ * identities. That is the implementation's mental model, not theirs.
+ *
+ * THE RULE: the NAME is the answer. The code appears only when the name alone
+ * cannot tell two candidates in THIS list apart — which is why this takes the
+ * whole list rather than one item. Disambiguation is earned per result set,
+ * never paid for on every row.
+ *
+ * IT INVENTS NOTHING. `Region` carries only id/code/name — no province, no
+ * parent — so the code is the only disambiguator that EXISTS; a prettier one
+ * would have to be fabricated, and a fabricated place is exactly what the
+ * region provisioner refuses to allow. Where names are already distinct,
+ * nobody sees a code at all.
+ */
+export const regionOptionLabels = (
+  regions: readonly RegionLookupItem[],
+): Map<string, string> => {
+  const nameCounts = new Map<string, number>();
+  for (const region of regions) {
+    nameCounts.set(region.name, (nameCounts.get(region.name) ?? 0) + 1);
+  }
+  const labels = new Map<string, string>();
+  for (const region of regions) {
+    labels.set(
+      region.id,
+      (nameCounts.get(region.name) ?? 0) > 1
+        ? `${region.name} (${region.code})`
+        : region.name,
+    );
+  }
+  return labels;
+};
+
+/**
+ * The chosen region, once it IS chosen. Always the plain name: at that point
+ * there is nothing left to tell it apart from, so a code would be noise.
+ */
+export const regionChosenLabel = (region: RegionLookupItem): string =>
+  region.name;
+
 export const reviewerLabel = (reviewer: ReviewerIdentity | null): string =>
   reviewer ? `${reviewer.fullName} (${reviewer.email})` : 'Belum ditugaskan';
 

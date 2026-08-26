@@ -13,7 +13,10 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { Permissions } from '../common/decorators/permissions.decorator';
+import {
+  Permissions,
+  PermissionsAll,
+} from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 import {
   BasicPriceImportService,
@@ -30,6 +33,8 @@ import {
   RejectBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import { AdmitResourceForImportRowDto } from './dto/admit-resource-for-import-row.dto';
+import { AcceptMachineProvenRowsDto } from './dto/accept-machine-proven-rows.dto';
+import { BasicPriceSmartSaveService } from './basic-price-smart-save.service';
 import { CorrectPrivateProvenanceDto } from './dto/correct-private-provenance.dto';
 
 /**
@@ -51,6 +56,19 @@ import { CorrectPrivateProvenanceDto } from './dto/correct-private-provenance.dt
  * `request.workspaceContext` (x-workspace-id header), matching
  * BasicPriceController's existing convention exactly.
  */
+/**
+ * The two SERVER-DERIVED identities every route here reads off the request.
+ *
+ * `PermissionsGuard` resolves `workspaceContext` from the x-workspace-id header
+ * and `JwtAuthGuard` resolves `user`, so by the time a handler runs both are
+ * present. Declared once so a handler can name what it reads instead of
+ * reaching into `any`.
+ */
+interface RequestIdentity {
+  workspaceContext: { workspaceId: string };
+  user: { id: string };
+}
+
 @Controller('basic-price-imports')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class BasicPriceImportController {
@@ -60,6 +78,7 @@ export class BasicPriceImportController {
     private readonly mappingCandidatesService: BasicPriceRowMappingCandidatesService,
     private readonly privateAssetService: BasicPricePrivateAssetService,
     private readonly trustedActor: TrustedBasicPriceActorService,
+    private readonly smartSaveService: BasicPriceSmartSaveService,
   ) {}
 
   @Post('preview')
@@ -131,6 +150,89 @@ export class BasicPriceImportController {
       rowId,
       reviewerAccountId,
       dto,
+    );
+  }
+
+  /**
+   * ONE GOVERNED ACCEPTANCE for every row SIMPROK has already proven.
+   *
+   * SAME PERMISSION, SAME AUTHORITY, SAME AUDIT as pressing `Selesaikan` once —
+   * because it IS that act, made once instead of N times. `BASIC_PRICE_RESOLVE`
+   * is deliberately not widened: accepting thirteen proven rows is not a larger
+   * capability than accepting one, it is the same capability exercised without
+   * transcription.
+   *
+   * THE BODY CARRIES NO IDENTITY. It may name rows to LEAVE ALONE, and nothing
+   * else; the eligible set is derived server-side at execution time. A request
+   * that could name catalog ids would make the browser the identity authority.
+   */
+  /**
+   * `Simpan & Gunakan` — ONE user intent, ONE backend command.
+   *
+   * The browser used to sequence this itself: accept-machine-proven, wait,
+   * keep-private. Two business mutations orchestrated by a client, so a dropped
+   * connection between them left the batch half-done with nobody able to say
+   * which half. The orchestration is now server-side and this is the only route
+   * a normal `Simpan & Gunakan` press calls.
+   *
+   * BOTH PERMISSIONS, VIA `PermissionsAll` — binding an identity and
+   * materializing a price are two capabilities, and a caller holding only one
+   * must not acquire the other by pressing a button that does both.
+   *
+   * THE BODY CARRIES NO IDENTITY. It may name rows to LEAVE ALONE and nothing
+   * else; the eligible set is derived server-side at execution time.
+   */
+  @Post(':batchId/smart-save')
+  @PermissionsAll(
+    PERMISSIONS.BASIC_PRICE_RESOLVE,
+    PERMISSIONS.BASIC_PRICE_SUBMIT,
+  )
+  async smartSave(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Body() dto: AcceptMachineProvenRowsDto,
+  ) {
+    // Both halves of the identity are SERVER-DERIVED: the workspace from
+    // PermissionsGuard's resolved context, the account from the verified JWT.
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user.id,
+    );
+    return this.smartSaveService.acceptProvenAndKeepPrivate({
+      workspaceId: request.workspaceContext.workspaceId,
+      batchId,
+      actor,
+      reviewerAccountId: request.user.id,
+      excludeRowIds: dto?.excludeRowIds,
+    });
+  }
+
+  /**
+   * The BINDING half on its own, kept because it is a genuinely separate
+   * capability (`BASIC_PRICE_RESOLVE` alone) and because the acceptance suite
+   * exercises it directly. The normal product door is `smart-save` above.
+   */
+  @Post(':batchId/accept-machine-proven')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async acceptMachineProvenRows(
+    /**
+     * TYPED, unlike its neighbours. Every other route here takes `any` and
+     * reads two fields off it unchecked; that is pre-existing debt this task
+     * does not own and does not spread. Both facts are SERVER-DERIVED — the
+     * workspace from the context guard, the account from the auth guard — and
+     * naming their shape costs nothing and removes three unsafe reads.
+     */
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Body() dto: AcceptMachineProvenRowsDto,
+  ) {
+    const workspaceId = request.workspaceContext.workspaceId;
+    const reviewerAccountId = request.user.id;
+    return this.resolutionService.acceptMachineProvenRows(
+      workspaceId,
+      batchId,
+      reviewerAccountId,
+      { excludeRowIds: dto?.excludeRowIds },
     );
   }
 

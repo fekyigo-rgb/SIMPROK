@@ -263,6 +263,25 @@ const NON_FAMILY_CATEGORIES: readonly string[] = [
   'umum',
 ];
 
+/**
+ * Family words that are ALSO ordinary resource names, and therefore prove
+ * nothing about a COLUMN.
+ *
+ * "Pekerja" is the clearest case and it is not hypothetical: it is both the
+ * leading word of a labour category and the single most common labour line in
+ * an Indonesian AHSP — "Pekerja", "Pekerja biasa", "Pekerja terampil" are
+ * resource NAMES, in a resource-NAME column. A rule that reads a family out of
+ * them is right about the WORD and wrong about the COLUMN.
+ *
+ * Listed here rather than removed from the table above because the mapping is
+ * correct where a category is what is being read: a section titled "PEKERJA"
+ * really does mean LABOR. What this set says is narrower and only about proof —
+ * see `statesResourceFamilyExactly`.
+ */
+const FAMILY_WORDS_THAT_ARE_ALSO_RESOURCE_NAMES: readonly string[] = [
+  'pekerja',
+];
+
 export function resourceFamilyOfCategoryText(
   text: string | null | undefined,
 ): ResourceFamily | null {
@@ -280,6 +299,45 @@ export function resourceFamilyOfCategoryText(
 
   const byWord = FAMILY_BY_LEADING_WORD.find((e) =>
     e.leadingWords.includes(words[0]),
+  );
+  return byWord ? byWord.family : null;
+}
+
+/**
+ * Does this value state a resource family AND NOTHING ELSE?
+ *
+ * WHY THIS IS NOT `resourceFamilyOfCategoryText`. That function answers "what
+ * family does this CATEGORY WORDING mean", and it answers it by LEADING WORD
+ * because a source's own section titles qualify the family after naming it —
+ * "BAHAN BESI DAN ALUMINIUM" is material, "SEWA ALAT" is equipment. Read as a
+ * CATEGORY that is exactly right. Read as PROOF ABOUT A COLUMN it is far too
+ * broad: "Pasir beton" opens with no family word and survives, but "Bahan
+ * bakar solar", "Alat bantu" and "Pekerja terampil" are all ordinary resource
+ * NAMES that begin with one. A column full of them is a name column, and a
+ * leading-word rule would conclude the opposite.
+ *
+ * So this asks the strictly narrower question, and only this one is proof:
+ *
+ *   - the WHOLE value, not its first word, must be a family token;
+ *   - the token must not be one a resource is ever plainly called.
+ *
+ * Everything it cannot prove it declines, and the caller then leaves the
+ * column on the human's list. FAIL OPEN — an unprovable suspicion never
+ * removes the right answer from a person's choices.
+ */
+export function statesResourceFamilyExactly(
+  text: string | null | undefined,
+): ResourceFamily | null {
+  if (!text) return null;
+  const folded = foldHeader(text);
+  if (folded === '') return null;
+  if (FAMILY_WORDS_THAT_ARE_ALSO_RESOURCE_NAMES.includes(folded)) return null;
+
+  const byPair = FAMILY_BY_LEADING_PAIR.find((e) => e.leadingPair === folded);
+  if (byPair) return byPair.family;
+
+  const byWord = FAMILY_BY_LEADING_WORD.find((e) =>
+    e.leadingWords.includes(folded),
   );
   return byWord ? byWord.family : null;
 }

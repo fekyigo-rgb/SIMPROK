@@ -9,6 +9,15 @@ import {
   type UnitLookupItem,
 } from '../../api/basicPriceImport';
 import { createLatestRequestGate } from '../../utils/catalogSearch';
+// The catalog's human vocabulary. Imported rather than re-spelled here: the
+// review room and this selector must call a MATERIAL the same thing.
+import {
+  resourceOptionLabel,
+  rowSectionLabel,
+  unitDimensionLabel,
+  unitKindLabel,
+  unitOptionLabel,
+} from '../../utils/basicPriceImportDisplay';
 
 type SelectedItem = ResourceLookupItem | UnitLookupItem;
 
@@ -118,7 +127,7 @@ export function CatalogSearchSelect({
             onChange={(event) => changeFilter(setResourceType, event.target.value as ResourceType | '')}
           >
             <option value="">Semua tipe</option>
-            {resourceTypes.map((value) => <option key={value} value={value}>{value}</option>)}
+            {resourceTypes.map((value) => <option key={value} value={value}>{rowSectionLabel(value)}</option>)}
           </select>
         </label>
       ) : (
@@ -130,14 +139,14 @@ export function CatalogSearchSelect({
               onChange={(event) => changeFilter(setDimension, event.target.value as UnitDimension | '')}
             >
               <option value="">Semua dimensi</option>
-              {dimensions.map((value) => <option key={value} value={value}>{value}</option>)}
+              {dimensions.map((value) => <option key={value} value={value}>{unitDimensionLabel(value)}</option>)}
             </select>
           </label>
           <label>
             Jenis
             <select value={kind} onChange={(event) => changeFilter(setKind, event.target.value as UnitKind | '')}>
               <option value="">Semua jenis</option>
-              {kinds.map((value) => <option key={value} value={value}>{value}</option>)}
+              {kinds.map((value) => <option key={value} value={value}>{unitKindLabel(value)}</option>)}
             </select>
           </label>
         </>
@@ -154,8 +163,8 @@ export function CatalogSearchSelect({
             <li key={item.id}>
               <button type="button" onClick={() => onSelect(item)}>
                 {isResource(item)
-                  ? `${item.code ?? 'Tanpa kode'} — ${item.name} — ${item.type} — ${item.baseUnit}`
-                  : `${item.code} — ${item.displayName} — ${item.symbol} — ${item.dimension} — ${item.kind}`}
+                  ? resourceOptionLabel(item)
+                  : unitOptionLabel(item)}
               </button>
             </li>
           ))}
@@ -165,8 +174,8 @@ export function CatalogSearchSelect({
         <div role="status">
           <strong>Terpilih:</strong>{' '}
           {isResource(selected)
-            ? `${selected.code ?? 'Tanpa kode'} — ${selected.name} — ${selected.type} — ${selected.baseUnit}`
-            : `${selected.code} — ${selected.displayName} — ${selected.symbol} — ${selected.dimension} — ${selected.kind}`}
+            ? resourceOptionLabel(selected)
+            : unitOptionLabel(selected)}
           <button type="button" onClick={() => onSelect(null)}>Ganti pilihan</button>
         </div>
       ) : <p>Belum ada pilihan.</p>}

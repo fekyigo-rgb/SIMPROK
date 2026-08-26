@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileInput, RefreshCw } from 'lucide-react';
+import { BadgeCheck, ClipboardCheck, FileInput, RefreshCw } from 'lucide-react';
 import {
   BasicPriceExplorerError,
   fetchBasicPriceExplorer,
@@ -10,6 +10,7 @@ import {
   type RegionLookupItem,
 } from '../api/basicPriceExplorer';
 import { ExplorerRegionFilterSelect } from '../components/basic-price/ExplorerRegionFilterSelect';
+import { useAuth } from '../contexts/AuthContext';
 import {
   EXPLORER_EMPTY_STATE_BODY,
   EXPLORER_EMPTY_STATE_TITLE,
@@ -26,6 +27,9 @@ import {
   regionLabel,
   resourceLabel,
   resourceTypeLabel,
+  REVERIFICATION_HELP_TEXT,
+  REVERIFICATION_HELP_TRIGGER,
+  reverificationLine,
   sourceFamilyLabel,
   sourceOriginLabel,
   sourceTypeLabel,
@@ -84,6 +88,31 @@ const formatDate = (value: string): string =>
  */
 export function BasicPriceExplorerPage() {
   const navigate = useNavigate();
+  /**
+   * THE TWO CURATION ROOMS HAD NO DOOR.
+   *
+   * `/basic-price/reviews` and `/basic-price/publications` were built, routed
+   * and permission-gated, and nothing anywhere in the product linked to either
+   * one: a curator could reach the queue of things awaiting their verdict only
+   * by typing the URL, and a publisher likewise. A room with no door is not a
+   * room a person has.
+   *
+   * The doors live HERE, in the Basic Price room, rather than in the Sidebar,
+   * because the Sidebar is deliberately ungated — every active membership sees
+   * every entry — and these two are not everybody's. Hukum Pintu's third state
+   * applies: outside your authority, the door is not greyed out, it is absent.
+   * `hasPermission` fails closed while capabilities are still loading, so a
+   * door never flickers into existence before the authority behind it is known.
+   *
+   * These are the SAME permission codes the backend guards the routes with
+   * (BASIC_PRICE_REVIEW_VIEW on GET /basic-price-reviews, BASIC_PRICE_PUBLISH
+   * on GET /basic-price-publications) and the same ones PermissionRoute already
+   * enforces on entry — this only decides whether the door is drawn, never
+   * whether it opens.
+   */
+  const { hasPermission } = useAuth();
+  const curatesSubmissions = hasPermission('BASIC_PRICE_REVIEW_VIEW');
+  const publishesPrices = hasPermission('BASIC_PRICE_PUBLISH');
   const [draft, setDraft] = useState<DraftFilters>(EMPTY_DRAFT);
   const [page, setPage] = useState(1);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -190,6 +219,22 @@ export function BasicPriceExplorerPage() {
           >
             <FileInput size={16} /> Impor / Masukkan Harga
           </button>
+          {curatesSubmissions ? (
+            <button
+              onClick={() => navigate('/basic-price/reviews')}
+              title="Harga yang diusulkan ke SIMPROK dan menunggu peninjauan"
+            >
+              <ClipboardCheck size={16} /> Pengajuan Basic Price
+            </button>
+          ) : null}
+          {publishesPrices ? (
+            <button
+              onClick={() => navigate('/basic-price/publications')}
+              title="Harga yang sudah diverifikasi dan menunggu penerbitan"
+            >
+              <BadgeCheck size={16} /> Siap Diterbitkan
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -380,6 +425,28 @@ export function BasicPriceExplorerPage() {
                       {item.validUntil ? ` sampai ${formatDate(item.validUntil)}` : ''} ·{' '}
                       {freshnessLabel(item.freshnessStatus)}
                     </p>
+                    {/*
+                      A SEPARATE LINE, DELIBERATELY. "Berlaku sejak / sampai" is
+                      the hard validity window; this is advice about freshness.
+                      Folding them into one sentence would let a reader hear
+                      "expires" where SIMPROK only said "check this again". It
+                      is absent entirely when nothing was recommended, because a
+                      dash there would read as a missing fact rather than a
+                      deliberate silence.
+                    */}
+                    {reverificationLine(item, formatDate) ? (
+                      <p>
+                        {reverificationLine(item, formatDate)}{' '}
+                        <span
+                          role="note"
+                          tabIndex={0}
+                          title={REVERIFICATION_HELP_TEXT.join('\n\n')}
+                          aria-label={REVERIFICATION_HELP_TEXT.join(' ')}
+                        >
+                          {REVERIFICATION_HELP_TRIGGER}
+                        </span>
+                      </p>
+                    ) : null}
                     <p>
                       {explorerSourceNameLabel(item.sourceName)} ({sourceTypeLabel(item.sourceType)},{' '}
                       {sourceOriginLabel(item.sourceOrigin)})

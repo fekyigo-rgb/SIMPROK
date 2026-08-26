@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -10,7 +11,11 @@ import {
   ResolveBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import { AdmitResourceForImportRowDto } from './dto/admit-resource-for-import-row.dto';
-import { findMappingCandidates } from './basic-price-row-mapping-candidates.service';
+import {
+  BasicPriceRowResolutionProposalService,
+  type BasicPriceRowMachineProposal,
+} from './basic-price-row-resolution-proposal.service';
+import { toBasicPriceSafeCandidate } from './basic-price-row-resolution-proposal.service';
 import { findProvenanceCandidate } from './basic-price-source-provenance.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
@@ -45,12 +50,52 @@ export const RESOURCE_ADMISSION_LOCK_NAMESPACE = advisoryLockKey(
   'RM03D1_REVIEWED_RESOURCE_ADMISSION',
 );
 
+/**
+ * How many machine-proven rows one transaction binds at a time.
+ *
+ * Small enough that no single transaction holds row locks across a whole
+ * workbook (`assertBatchRowMutable` takes `FOR UPDATE` per row), large enough
+ * that a normal batch finishes in a handful of round trips. A committed chunk
+ * is permanent, so a later chunk failing costs only that chunk's work.
+ */
+const ACCEPT_MACHINE_PROVEN_CHUNK = 10;
+
+/**
+ * The most rows ONE request will bind, ever.
+ *
+ * Not a job platform, and deliberately not one: this is simply a refusal to
+ * accept unbounded work in a single HTTP request. Anything past it comes back
+ * as `remainingEligible`, and pressing again continues from persisted truth —
+ * a row already bound is no longer `NEEDS_REVIEW`, so the second press does not
+ * redo the first press's work.
+ *
+ * Comfortably above the Owner's 86-row workbook (13 eligible), so that journey
+ * completes in exactly one command with `remainingEligible: 0`.
+ */
+const ACCEPT_MACHINE_PROVEN_MAX_PER_CALL = 500;
+
+/**
+ * WHY a mapping row exists, when it was not typed by a person.
+ *
+ * Recorded on every row bound by the governed batch acceptance so that mode is
+ * distinguishable from an individual `Selesaikan` forever after. A blank reason
+ * would make a batch acceptance look exactly like a reviewer who confirmed one
+ * row and typed no note — and an audit trail that cannot say HOW a decision was
+ * made only answers half the question.
+ */
+export const MACHINE_PROVEN_BATCH_ACCEPTANCE_REASON =
+  'ACCEPTED_MACHINE_PROVEN_BATCH';
+
 @Injectable()
 export class BasicPriceRowResolutionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly resourceIdentity: ResourceIdentityResolutionService,
     private readonly unitKernel: UnitKernelService,
+    // The ONE seam onto the canonical authorities. Injected so the resolve
+    // path records the same machine verdict the review room displayed, rather
+    // than a second matcher's opinion of it.
+    private readonly proposals: BasicPriceRowResolutionProposalService,
   ) {}
 
   private async assertBatchRowMutable(
@@ -184,6 +229,227 @@ export class BasicPriceRowResolutionService {
         dto,
       ),
     );
+  }
+
+  /**
+   * ONE HUMAN ACTION OVER MANY DETERMINISTIC ROWS — and not one line of new
+   * identity law.
+   *
+   * WHAT WAS WRONG. SIMPROK proved thirteen rows outright, then asked the
+   * reviewer to press `Selesaikan` thirteen times to say so. That is not human
+   * authority; it is transcription. Authority is the decision to accept what
+   * was proven, and a person can make that decision once. Worse, the browser
+   * was the thing looping — thirteen POSTs — so at a few thousand rows the
+   * product simply stops working.
+   *
+   * THE CLIENT SENDS INTENT, NEVER DECISIONS. No ResourceCatalog id and no
+   * UnitDefinition id crosses the wire. The caller says "accept what you can
+   * prove in this batch, except these rows I am still thinking about", and the
+   * SERVER re-derives the eligible set here, now, from the same authorities the
+   * review room read. A client-authored list of bindings could be stale, or
+   * manufactured, and would make the browser the identity authority.
+   *
+   * IT IS THE SAME AUTHORITY, ORCHESTRATED. Every row goes through
+   * `resolveWithinTransaction` — the identical primitive `resolveRow` uses — so
+   * the row lock, the ownership check, the ROW_NOT_MUTABLE guard, the unknown
+   * family refusal, the Unit Kernel's trusted-context proof, collision
+   * detection and the append-only reviewer mapping all happen exactly as they
+   * do for a single click. There is no bulk resolver, and there must never be
+   * one: a second path would drift from this one and the drift would be silent.
+   *
+   * THE REVIEWER IS STILL THE AUTHOR. `reviewerAccountId` is the acting human
+   * on every mapping row written, identical to the single-row path. Nothing is
+   * persisted before the person acts.
+   *
+   * BOUNDED, NOT HEROIC. Rows are bound in deterministic order in chunks, each
+   * chunk its own transaction, in the same incremental spirit as
+   * `keepBatchPrivate`: a chunk that commits stays committed, and re-running is
+   * safe because a row already bound is no longer `NEEDS_REVIEW` and is simply
+   * skipped. A row that refuses (a collision, a race, a human who resolved it
+   * in another tab) is counted and stepped over — one stubborn row must not
+   * discard the work of the rest.
+   */
+  async acceptMachineProvenRows(
+    workspaceId: string,
+    batchId: string,
+    reviewerAccountId: string,
+    options: { excludeRowIds?: readonly string[] } = {},
+  ): Promise<{
+    acceptedRowIds: string[];
+    acceptedCount: number;
+    eligibleCount: number;
+    skippedCount: number;
+    excludedCount: number;
+    /**
+     * Eligible rows this request did NOT reach because it hit its own work
+     * ceiling. Zero for any ordinary batch; non-zero is an honest instruction
+     * to press again, not a failure.
+     */
+    remainingEligible: number;
+    /** How many times the identity authority's evidence was loaded. */
+    evidenceLoads: number;
+    chunks: number;
+  }> {
+    const excluded = new Set(options.excludeRowIds ?? []);
+
+    // OWNERSHIP FIRST, before any proposal work is done on this batch's behalf.
+    const batch = await this.prisma.basicPriceImportBatch.findUnique({
+      where: { id: batchId },
+      select: {
+        id: true,
+        workspaceId: true,
+        status: true,
+        uploadedByAccountId: true,
+      },
+    });
+    if (!batch || batch.workspaceId !== workspaceId)
+      throw new NotFoundException('Batch not found');
+    assertBatchOwnedByCaller(batch, reviewerAccountId, 'Batch not found');
+    if (batch.status !== 'NEEDS_REVIEW' && batch.status !== 'READY_FOR_REVIEW')
+      throw new ConflictException('BATCH_NOT_MUTABLE');
+
+    // Only rows still awaiting a decision are candidates. A rejected row, a row
+    // already resolved, and a row a human is still editing in the browser are
+    // all excluded here rather than being refused later.
+    const rows = await this.prisma.basicPriceImportRow.findMany({
+      where: { batchId, status: 'NEEDS_REVIEW' },
+      orderBy: { sourceRowNumber: 'asc' },
+      select: {
+        id: true,
+        // OPTIMISTIC VERSION, carried because the primitive demands it exactly
+        // as it does from a single click: a row someone edited between this
+        // read and the write fails ROW_VERSION_STALE and is skipped, which is
+        // the correct answer rather than a silent overwrite.
+        version: true,
+        sourceSection: true,
+        rawResourceNameText: true,
+        rawResourceCodeText: true,
+        rawUnitText: true,
+      },
+    });
+    const considered = rows.filter((row) => !excluded.has(row.id));
+
+    // THE SAME PROPOSAL AUTHORITY THE ROOM READ, asked again at execution time
+    // so a stale screen cannot bind anything. Batched internally — one evidence
+    // load for the whole set, never a query per row.
+    const proposals = await this.proposals.proposeForRows(
+      workspaceId,
+      considered,
+    );
+
+    const eligible: Array<{
+      rowId: string;
+      version: number;
+      resourceCatalogId: string;
+      unitDefinitionId: string;
+      proposal: BasicPriceRowMachineProposal;
+    }> = [];
+    for (const row of considered) {
+      const proposal = proposals.get(row.id);
+      if (!proposal) continue;
+      // BOTH LEGS PROVEN AND THIS WORKSPACE MAY SELECT IT. `identityPairProven`
+      // is the authorities' verdict; `admissibleForResolve` is Basic Price's
+      // own actionability question. A candidate shortlist, a not-found name and
+      // an unknown source family all fail here and stay open for a human.
+      if (!proposal.identityPairProven) continue;
+      if (!proposal.resource.admissibleForResolve) continue;
+      const resourceCatalogId = proposal.resource.resourceCatalogId;
+      const unitDefinitionId = proposal.unit.unitDefinitionId;
+      if (!resourceCatalogId || !unitDefinitionId) continue;
+      eligible.push({
+        rowId: row.id,
+        version: row.version,
+        resourceCatalogId,
+        unitDefinitionId,
+        proposal,
+      });
+    }
+
+    // THE REQUEST'S OWN WORK CEILING. Not a job platform — just a refusal to
+    // accept an unbounded amount of work in one HTTP request. Anything beyond
+    // it is reported as `remainingEligible` so the caller can press again, and
+    // the second press continues from persisted truth rather than redoing
+    // anything.
+    const withinCeiling = eligible.slice(0, ACCEPT_MACHINE_PROVEN_MAX_PER_CALL);
+    const remainingEligible = eligible.length - withinCeiling.length;
+
+    const acceptedRowIds: string[] = [];
+    let skippedCount = 0;
+    let chunks = 0;
+    for (
+      let i = 0;
+      i < withinCeiling.length;
+      i += ACCEPT_MACHINE_PROVEN_CHUNK
+    ) {
+      const chunk = withinCeiling.slice(i, i + ACCEPT_MACHINE_PROVEN_CHUNK);
+      chunks += 1;
+      await this.prisma.$transaction(
+        async (tx) => {
+          for (const item of chunk) {
+            try {
+              await this.resolveWithinTransaction(
+                tx,
+                workspaceId,
+                batchId,
+                item.rowId,
+                reviewerAccountId,
+                {
+                  version: item.version,
+                  resourceCatalogId: item.resourceCatalogId,
+                  unitDefinitionId: item.unitDefinitionId,
+                  // HOW THIS DECISION WAS MADE, recorded on the append-only
+                  // mapping so the two modes are distinguishable forever after.
+                  // A blank reason would make a governed batch acceptance
+                  // indistinguishable from a reviewer who confirmed one row and
+                  // typed nothing — and "who decided" is only half the audit
+                  // question; "how" is the other half.
+                  reason: MACHINE_PROVEN_BATCH_ACCEPTANCE_REASON,
+                },
+                undefined,
+                // The batch-wide verdict taken at the instant the human pressed.
+                item.proposal,
+              );
+              acceptedRowIds.push(item.rowId);
+            } catch (error) {
+              // A ROW MAY LAWFULLY REFUSE. A same-identity collision with a row
+              // bound moments ago, a stale version because someone edited it in
+              // another tab, or a row already decided, are all real answers —
+              // not failures of this action. Each is counted and stepped over.
+              // Anything that is NOT a domain refusal still propagates, because
+              // a broken database must not look like a skipped row.
+              if (
+                error instanceof ConflictException ||
+                error instanceof BadRequestException ||
+                error instanceof NotFoundException
+              ) {
+                skippedCount += 1;
+                continue;
+              }
+              throw error;
+            }
+          }
+        },
+        // WIDENED DELIBERATELY, exactly as `admitResourceForRow` does. Prisma's
+        // 5s default is sized for a single row, and a chunk is not a single row.
+        { timeout: 30_000, maxWait: 30_000 },
+      );
+    }
+
+    return {
+      acceptedRowIds,
+      acceptedCount: acceptedRowIds.length,
+      eligibleCount: eligible.length,
+      skippedCount,
+      excludedCount: excluded.size,
+      remainingEligible,
+      // EXACTLY ONE, for the whole command, and it is counted rather than
+      // asserted: the identity authority's evidence is loaded once above and
+      // handed to every row, so this number does not grow with row count. If a
+      // future edit reintroduces a per-row load, the acceptance test that reads
+      // this field fails instead of the regression going unnoticed.
+      evidenceLoads: 1,
+      chunks,
+    };
   }
 
   /**
@@ -333,6 +599,22 @@ export class BasicPriceRowResolutionService {
      * every admission inside the ordinary resolve statistics.
      */
     justAdmittedResourceCatalogId?: string,
+    /**
+     * The machine's verdict for THIS row, already computed by the caller.
+     *
+     * Set only by the governed batch acceptance, and for two reasons. The
+     * cheap one: without it, binding N rows re-runs the identity authority's
+     * whole evidence load N times inside the transaction, once per row, to
+     * write one audit field — the classic N+1, paid on the slowest path there
+     * is. The important one: the audit field records WHAT THE MACHINE OFFERED
+     * AT THE MOMENT THE HUMAN DECIDED, and in a batch acceptance the human
+     * decided ONCE, before any row was bound. The batch-wide proposal taken at
+     * that instant IS that moment; re-deriving it row by row would record a
+     * picture that shifts as earlier rows are written.
+     *
+     * The single-row path passes nothing and is completely unchanged.
+     */
+    precomputedProposal?: BasicPriceRowMachineProposal | null,
   ) {
     {
       // reviewerAccountId is the caller's own account id (request.user.id) —
@@ -446,13 +728,56 @@ export class BasicPriceRowResolutionService {
       // neither) dto.resourceCatalogId matches, so the audit trail can find
       // every row where the two signals disagreed, not just the ones where
       // provenance "won".
-      const [allCandidates, provenance] = await Promise.all([
-        findMappingCandidates(
-          tx,
-          workspaceId,
-          row.sourceSection,
-          row.rawResourceNameText,
-        ),
+      // THE AUDIT RECORDS WHAT THE REVIEWER WAS ACTUALLY SHOWN.
+      //
+      // These two fields — `suggestionSource` and `candidateCountAtDecision` —
+      // are the permanent record of what the machine offered at the moment a
+      // human decided. They used to be computed from `findMappingCandidates`,
+      // a second matcher that tests ONE thing: exact equality of normalized
+      // names, workspace-strict, ACTIVE only. The reviewer's screen came from
+      // somewhere else entirely — the canonical Resource Identity authority,
+      // which also consults aliases, source sightings, prior human decisions,
+      // globally-scoped catalog rows and token/stem containment.
+      //
+      // The two disagree constantly on real data. On the Owner's Ambon workbook
+      // 481 of 866 item rows begin with an OCR bullet ("-   Pasir Beton"), so
+      // the normalized name never equals the catalog's ("Pasir beton") and the
+      // old matcher returned ZERO for every one of them. A reviewer would be
+      // shown a candidate by the canonical authority, click it, and the
+      // permanent record would say `MANUAL_SEARCH, candidateCountAtDecision: 0`
+      // — an audit trail describing a screen nobody saw.
+      //
+      // So the signal set now comes from the SAME authority the reviewer read.
+      // It is passed `tx` because a resource admitted moments earlier in this
+      // very transaction must be visible to it.
+      //
+      // THE ENUM VALUES ARE UNCHANGED, and their names are now historical:
+      // `NORMALIZED_NAME_SINGLE_CANDIDATE` means "the authority offered exactly
+      // one", not "one normalized name matched". Renaming them is a migration,
+      // and a truthful signal under an old label is strictly better than a
+      // false signal under an accurate one.
+      const [machineProposal, provenance] = await Promise.all([
+        // ONE EVIDENCE LOAD PER DECISION, not per row. A caller that already
+        // asked the authority about this exact row — the governed batch
+        // acceptance does, once for the whole batch — hands its answer in, and
+        // the authority is not asked again.
+        precomputedProposal !== undefined
+          ? Promise.resolve(precomputedProposal)
+          : this.proposals
+              .proposeForRows(
+                workspaceId,
+                [
+                  {
+                    id: rowId,
+                    sourceSection: row.sourceSection,
+                    rawResourceNameText: row.rawResourceNameText,
+                    rawResourceCodeText: row.rawResourceCodeText,
+                    rawUnitText: row.rawUnitText,
+                  },
+                ],
+                tx,
+              )
+              .then((byRow) => byRow.get(rowId) ?? null),
         findProvenanceCandidate(tx, {
           workspaceId,
           batchSourceSha256: row.batch.sourceSha256,
@@ -466,8 +791,31 @@ export class BasicPriceRowResolutionService {
         }),
       ]);
 
+      // EVERY IDENTITY THE AUTHORITY PUT IN FRONT OF THE REVIEWER — a resolved
+      // one counts as an offer just as a nominated candidate does.
+      //
+      // DISTINCT BY CATALOG ROW, because the two channels overlap: the
+      // authority may RESOLVE to a row and also list that same row among its
+      // candidates, and counting it twice would report one unambiguous offer as
+      // NORMALIZED_NAME_MULTIPLE_CANDIDATES. What this set means is "how many
+      // different identities was the human choosing between", so the same
+      // identity named twice is one choice.
+      const offeredIds = new Set<string>();
+      if (machineProposal?.resource.resourceCatalogId) {
+        offeredIds.add(machineProposal.resource.resourceCatalogId);
+      }
+      for (const candidate of machineProposal?.resource.candidates ?? []) {
+        offeredIds.add(candidate.resourceCatalogId);
+      }
+      const allCandidates = [...offeredIds].map((resourceCatalogId) => ({
+        resourceCatalogId,
+      }));
+
       // The signal set as it stood at DECISION TIME. On the ordinary resolve
-      // path nothing is excluded and this is simply `allCandidates`.
+      // path nothing is excluded and this is simply `allCandidates`; on the
+      // admission path the row just admitted is removed, because a resource
+      // SIMPROK created seconds ago was never something the reviewer chose
+      // between.
       const candidates = allCandidates.filter(
         (candidate) =>
           candidate.resourceCatalogId !== justAdmittedResourceCatalogId,
@@ -561,12 +909,33 @@ export class BasicPriceRowResolutionService {
   }
 
   /**
-   * Hand the authoritative verdict back verbatim rather than restating it.
+   * Hand the authoritative refusal back as a SAFE PROJECTION of the verdict.
    *
-   * The reviewer asked "does SIMPROK know this?" and the answer is the whole
-   * resolution — the candidates it found, why each was nominated, what a
-   * previous human already decided about them. Collapsing that to a bare
-   * error code would make the reviewer re-derive what the system already knows.
+   * WHY IT IS NOT HANDED BACK WHOLE. The reviewer asked "does SIMPROK know
+   * this?" and deserves the answer — which candidates exist, why each was
+   * nominated, whether a human already settled one. That intent is unchanged.
+   * What changed is that this used to answer by copying
+   * `ResourceIdentityResolution` verbatim, and the canonical candidate carries
+   * two things a browser must never receive:
+   *
+   *   priorHumanDecision   the reviewer's ACCOUNT ID, the moment they decided,
+   *                        and their free-text private note;
+   *   specifications       the catalog row's raw claims blob, surfaced for the
+   *                        kernel's own reasoning rather than for a response.
+   *
+   * A batch is user-owned. Account B admitting a resource on B's own row must
+   * not read the private note account A typed while settling A's row, even
+   * though both work in one workspace and SIMPROK may lawfully KNOW about A's
+   * decision. `identity.explanation` went the same way: it is written for an
+   * auditor and names catalog ids, model vocabulary and, on the governed path,
+   * that same account and note. No client reads it — the machine-readable
+   * `message` is what callers switch on — so it is not sent.
+   *
+   * NOTHING WAS FORGOTTEN TO ACHIEVE THIS. The authority still loads the
+   * mapping, still lets it nominate candidates, and still holds the full
+   * decision internally; `isIdentityExhausted` above still reads the unprojected
+   * verdict, so the ADMISSION GATE is decided on the whole truth and only the
+   * REPLY is narrowed. Privacy belongs in the projection, never in the memory.
    */
   private static identityRefusal(
     identity: ResourceIdentityResolution,
@@ -580,8 +949,10 @@ export class BasicPriceRowResolutionService {
         authority: identity.authority,
         resolvedResourceCatalogId: identity.resolvedResourceCatalogId,
         reasonCodes: identity.reasonCodes,
-        candidates: identity.candidates,
-        explanation: identity.explanation,
+        // The ONE shared Basic Price projection — the same function the review
+        // room's `machineProposal` uses, so both outward seams narrow
+        // identically and a future field cannot leak through only one of them.
+        candidates: identity.candidates.map(toBasicPriceSafeCandidate),
       },
     });
   }

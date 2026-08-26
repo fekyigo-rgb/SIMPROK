@@ -17,6 +17,8 @@ import {
 } from '../common/basic-price-workflow.projection';
 import { nextUtcDayStart, parseDateOnlyUtc } from '../common/date-only.util';
 import { sourceOriginsForFamily } from './basic-price-source-family.util';
+import { promotionLineagePrecedenceWhere } from './basic-price-promotion-precedence';
+import { basicPriceCurrentnessWhere } from './basic-price-currentness';
 
 const EXPLORER_ROW_SELECT = {
   id: true,
@@ -29,6 +31,9 @@ const EXPLORER_ROW_SELECT = {
   value: true,
   effectiveDate: true,
   validUntil: true,
+  // Soft re-verification advice. Selected so the Explorer can say "check this
+  // again by" — it filters nothing and gates nothing.
+  reviewDate: true,
   sourceType: true,
   sourceOrigin: true,
   freshnessStatus: true,
@@ -200,8 +205,27 @@ export class BasicPriceService {
     //             another tenant's.
     // The optional query param cannot widen either branch — it is validated
     // above and otherwise ignored.
-    const where: Prisma.BasicPriceWhereInput =
-      this.eligibility.usableWhere(workspaceId);
+    // BP-CAT-01E — two questions, composed rather than merged. Eligibility says
+    // WHICH ROWS ARE LAWFUL; precedence says which of those lawful rows is the
+    // one logical candidate here. The Explorer is a candidate list, so a
+    // workspace must not be shown its own price twice — once as the origin it
+    // owns and again as the descendant it donated.
+    // BP-CORR-01 — the third question, composed the same way. The Explorer is a
+    // CANDIDATE list (that is why precedence already applies here), so a price
+    // a published correction has replaced must not be offered as though it were
+    // still the answer. It is not hidden from SIMPROK: `findOneForWorkspace`
+    // below stays raw-lawful, so the superseded row remains fully readable by
+    // id — history stays rich, the offer stays one truth.
+    const where: Prisma.BasicPriceWhereInput = {
+      ...this.eligibility.usableWhere(workspaceId),
+      ...promotionLineagePrecedenceWhere(workspaceId),
+      // BP-CORR-01B TEMPORAL — the Explorer has no business date of its own, so
+      // it states the one it IS on: the present, resolved once for this request.
+      // Passing nothing used to mean "a withdrawal exists somewhere in time,
+      // therefore not current", which removed a future-dated withdrawal's price
+      // before its own effective date.
+      ...basicPriceCurrentnessWhere({ asOf: new Date() }),
+    };
 
     const resourceFilter: Prisma.ResourceCatalogWhereInput = {
       OR: [{ workspaceId }, { workspaceId: null }],
@@ -374,8 +398,56 @@ export class BasicPriceService {
       where: {
         resourceId,
         ...this.eligibility.usableWhere(workspaceId),
+        // BP-CAT-01E — a per-resource candidate list, so the same one-logical-
+        // truth rule applies here as in the Explorer. `findOneForWorkspace`
+        // below deliberately does NOT compose this: asking for a specific row
+        // by id is a lawfulness question, not a selection one.
+        ...promotionLineagePrecedenceWhere(workspaceId),
+        // BP-CORR-01 — and for the same reason, a replaced price is not one of
+        // this resource's current candidates. Same exemption applies:
+        // `findOneForWorkspace` keeps returning it by id.
+        // BP-CORR-01B TEMPORAL — present-tense read, so it states the present.
+        ...basicPriceCurrentnessWhere({ asOf: new Date() }),
       },
-      include: {
+      // BP-CAT-01D — RICH INSIDE, SAFE OUTSIDE.
+      //
+      // This used to be an `include`, which returns EVERY scalar on the row.
+      // That was survivable while every row a caller could see belonged to
+      // them; shared promotion ended that. A promoted row truthfully carries
+      // the ORIGIN's `reportedByAccountId`, and it carries
+      // `promotedFromBasicPriceId` — the id of a BasicPrice in a workspace the
+      // reader may not read. Both were being handed to every other tenant.
+      //
+      // Stated as an explicit allow-list, exactly like EXPLORER_ROW_SELECT
+      // above, so a future column is private until someone deliberately adds it
+      // here. An `include` would have adopted it silently, which is how this
+      // leak happened in the first place.
+      //
+      // Nothing is deleted from persistence: the internal trail and the Cost
+      // Kernel still read every one of these facts directly.
+      select: {
+        id: true,
+        // Kept: NULL on a shared row and the caller's own id otherwise, so it
+        // says "catalog or mine" without naming anyone else's tenant.
+        workspaceId: true,
+        assetScope: true,
+        resourceId: true,
+        regionId: true,
+        value: true,
+        effectiveDate: true,
+        validUntil: true,
+        reviewDate: true,
+        sourceType: true,
+        sourceOrigin: true,
+        freshnessStatus: true,
+        status: true,
+        verificationStatus: true,
+        sourcePeriodLabel: true,
+        sourcePeriodGranularity: true,
+        effectiveDateProvenance: true,
+        effectiveDateDerivationRule: true,
+        createdAt: true,
+        updatedAt: true,
         resource: {
           select: {
             id: true,

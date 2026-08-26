@@ -258,24 +258,38 @@ describe('RM03D1 Basic Price provenance correction (e2e)', () => {
     expect(await prisma.basicPriceProvenanceCorrection.count({ where: { basicPriceId } })).toBe(1);
   });
 
-  it('D: an incoherent GOVERNMENT + MARKET_SURVEY batch is never propagated to a price', async () => {
+  it('D: a GOVERNMENT + MARKET_SURVEY batch is lawful, and propagates as stated', async () => {
     const { batchId, basicPriceId } = await materializeUnprovenancedPrivatePrice('prov-correct-incoherent');
     const batch = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
-    // Make the BATCH incoherent, then try to propagate it. The correction must
-    // refuse rather than faithfully copy a falsehood onto a price.
+
+    // THIS TEST HAS BEEN WRONG TWICE, IN OPPOSITE DIRECTIONS.
+    //
+    // It first proved that the CORRECTION refused to copy this pair onto a
+    // price. It was then changed to prove the PATCH refused to store it at all.
+    // Both rested on the same mistake: reading SOURCE_TYPE_BY_ORIGIN as a law
+    // about what is true, when it is only the type an origin TYPICALLY implies
+    // — a default for a source that cannot speak for itself.
+    //
+    // A government agency publishing the results of a market survey is an
+    // ordinary document. Owner law keeps the axes apart in as many words
+    // (BASIC-PRICE-MASTER-DECISION §10: SOURCE_TYPE ≠ SOURCE_ORIGIN), so
+    // SIMPROK records the pair the human stated.
     await request(app.getHttpServer())
       .patch(`/basic-price-imports/${batchId}`)
       .set(hdr())
       .send({ version: batch.version, sourceType: 'MARKET_SURVEY' })
       .expect(200);
 
-    const response = await correct(batchId).expect(409);
-    expect(response.body.message).toBe('SOURCE_ORIGIN_TYPE_INCOHERENT');
-    expect(response.body.expectedSourceType).toBe('REGULATION');
+    const stored = await prisma.basicPriceImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+    expect(stored.sourceOrigin).toBe('GOVERNMENT');
+    expect(stored.sourceType).toBe('MARKET_SURVEY');
 
-    const untouched = await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPriceId } });
-    expect(untouched.sourceType).toBe('REGULATION');
-    expect(await prisma.basicPriceProvenanceCorrection.count({ where: { basicPriceId } })).toBe(0);
+    // And the correction carries that stated truth onto the price rather than
+    // substituting the type the table would have guessed.
+    await correct(batchId).expect(201);
+    const after = await prisma.basicPrice.findUniqueOrThrow({ where: { id: basicPriceId } });
+    expect(after.sourceOrigin).toBe('GOVERNMENT');
+    expect(after.sourceType).toBe('MARKET_SURVEY');
   });
 
   it('E: a DERIVED date with no granularity is refused — a label alone is not machine-readable', async () => {

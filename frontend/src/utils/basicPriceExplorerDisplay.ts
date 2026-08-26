@@ -7,10 +7,22 @@
 // ALWAYS a decimal string and is formatted through formatBackendRupiah
 // (string arithmetic), never Number().
 import { formatBackendRupiah } from './rabCostDisplay.ts';
-import { resourceLabel, regionLabel, regionOptionLabel } from './basicPriceWorkflowDisplay.ts';
+import {
+  resourceLabel,
+  regionLabel,
+  regionOptionLabel,
+  regionChosenLabel,
+  regionOptionLabels,
+} from './basicPriceWorkflowDisplay.ts';
 import type { RegionIdentity, RegionLookupItem } from './basicPriceWorkflowDisplay.ts';
 
-export { resourceLabel, regionLabel, regionOptionLabel };
+export {
+  resourceLabel,
+  regionLabel,
+  regionOptionLabel,
+  regionChosenLabel,
+  regionOptionLabels,
+};
 export type { RegionIdentity, RegionLookupItem };
 
 // ── Projection contract types (must match the backend byte-for-byte) ────────
@@ -36,6 +48,14 @@ export interface BasicPriceExplorerItem {
   sourceOrigin: string;
   sourceName: string | null;
   freshnessStatus: string;
+  /**
+   * SOFT RE-VERIFICATION — the date SIMPROK recommends this price be checked
+   * again, or null when it recommends nothing. It is NOT `validUntil`, and the
+   * two must never share wording: `validUntil` is a hard boundary the Cost
+   * Kernel actually enforces, this is advice.
+   */
+  reviewDate?: string | null;
+  reverification?: 'CURRENT' | 'DUE' | 'NOT_RECOMMENDED';
   workspaceScope: BasicPriceWorkspaceScope;
 }
 
@@ -198,3 +218,48 @@ export const EXPLORER_EMPTY_STATE_BODY =
   'Harga yang telah melewati proses verifikasi dan publikasi akan tampil di sini.';
 
 export const EXPLORER_NO_MATCH_TITLE = 'Tidak ada harga dasar yang cocok dengan filter ini.';
+
+/**
+ * RE-VERIFICATION, IN THE USER'S OWN WORDS.
+ *
+ * `Verifikasi ulang pada` — never `Berlaku sampai`, which belongs to
+ * `validUntil` and means something the system actually enforces. A price past
+ * its re-verification date is still a lawful, usable price; SIMPROK is asking
+ * for a second look, not withdrawing permission.
+ */
+export const REVERIFICATION_LABEL = 'Verifikasi ulang pada';
+export const REVERIFICATION_DUE_BADGE = 'Perlu verifikasi ulang';
+
+/**
+ * THE HELP A PERSON GETS WHEN THEY ASK WHAT THE DATE MEANS.
+ *
+ * Deliberately free of field names, enum values and backend vocabulary: a
+ * reader needs to know what will happen to their price, not what the column is
+ * called. Kept here beside the label so the explanation and the wording can
+ * never drift apart.
+ */
+export const REVERIFICATION_HELP_TRIGGER = 'Apa maksud tanggal ini?';
+
+export const REVERIFICATION_HELP_TEXT = [
+  'Ini adalah perkiraan waktu harga perlu diperiksa kembali karena harga pasar dapat berubah. Melewati tanggal ini tidak otomatis membuat harga salah atau tidak boleh digunakan. SIMPROK hanya mengingatkan agar harga diverifikasi dan diperbarui bila memang sudah berubah.',
+  'Gunakan untuk harga hasil survei, laporan lapangan, quotation/manual snapshot, atau sumber lain yang tidak diperbarui otomatis.',
+  // 'freshness' was the one English word left in a sentence meant for a site
+  // engineer. The fact it names is ordinary and has ordinary Indonesian words.
+  'Untuk harga pemasok/toko yang terhubung langsung dan diperbarui otomatis oleh sistem, kemutakhiran harga mengikuti waktu pembaruan yang sebenarnya sehingga tanggal prediksi ini tidak diperlukan.',
+] as const;
+
+/**
+ * One line about re-verification, or null when there is nothing to say.
+ *
+ * `NOT_RECOMMENDED` returns null on purpose: a live-integrated price was never
+ * given a predicted date, and rendering an empty or "-" value there would
+ * suggest a missing fact rather than a deliberate absence.
+ */
+export const reverificationLine = (
+  item: Pick<BasicPriceExplorerItem, 'reviewDate' | 'reverification'>,
+  formatDate: (iso: string) => string,
+): string | null => {
+  if (!item.reviewDate || item.reverification === 'NOT_RECOMMENDED') return null;
+  const base = `${REVERIFICATION_LABEL} ${formatDate(item.reviewDate)}`;
+  return item.reverification === 'DUE' ? `${base} · ${REVERIFICATION_DUE_BADGE}` : base;
+};

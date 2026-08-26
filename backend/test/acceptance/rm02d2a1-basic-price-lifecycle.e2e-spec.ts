@@ -1,3 +1,4 @@
+import type { Server } from 'node:http';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import {
@@ -7,9 +8,12 @@ import {
   UserStatus,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import type { Server } from 'node:http';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { BasicPricePublicationService } from '../../src/basic-price/basic-price-publication.service';
+import { BasicPricePromotionService } from '../../src/basic-price/basic-price-promotion.service';
+import { basicPriceCurrentnessWhere } from '../../src/basic-price/basic-price-currentness';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { buildBasicPriceXlsx } from '../fixtures/basic-price-xlsx.fixture';
 
@@ -69,6 +73,12 @@ const ALL_BASIC_PRICE_PERMISSION_CODES = [
 
 describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct actors)', () => {
   let app: INestApplication;
+  /**
+   * `getHttpServer()` is declared `any`, so handing it straight to supertest
+   * passes an unchecked value. Named once with the type it actually returns,
+   * matching the idiom the newer suites in this directory already use.
+   */
+  const server = (): Server => app.getHttpServer() as Server;
   let prisma: PrismaClient;
   let appPrisma: PrismaService;
   let actor1Token: string; // importer/resolver/submitter
@@ -224,7 +234,25 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
     await grantRole(
       ROLE_CROSSTENANT_ID,
       'RM02D2A1_CROSSTENANT_REVIEW_VIEW',
-      ['BASIC_PRICE_REVIEW_VIEW'],
+      [
+        'BASIC_PRICE_REVIEW_VIEW',
+        // SMART-SAVE, IN ITS OWN WORKSPACE ONLY. Without both of these the
+        // cross-tenant smart-save proof below would be stopped by
+        // PermissionsGuard and would prove the guard rather than the batch
+        // ownership boundary the command itself must hold. Granting them here
+        // widens nothing in Workspace A, which is the whole point: this actor
+        // is fully authorized where it lives and still may not touch a batch
+        // that lives somewhere else.
+        'BASIC_PRICE_RESOLVE',
+        'BASIC_PRICE_SUBMIT',
+        // BP-CORR-01B: the same reasoning, for the stale-shared-restatement
+        // proof. A shared catalog row is national truth, so proving it stops
+        // being OFFERED requires a reader in a DIFFERENT tenant than the one
+        // that produced it — Workspace A's own actors have the descendant
+        // shadowed by promotion precedence and would prove nothing. Granting
+        // VIEW here widens nothing in Workspace A.
+        'BASIC_PRICE_VIEW',
+      ],
       'crosstenant@test.local',
       WORKSPACE_B,
     );
@@ -415,7 +443,7 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
         organizationId,
         resourceId: RESOURCE_BOTH_ID,
         regionId: options.regionId === undefined ? REGION_ID : options.regionId,
-        sourceOrigin: 'SUPPLIER',
+        sourceOrigin: 'FIELD_REPORT',
         sourceType: 'MARKET_SURVEY',
         status: options.status ?? 'UNDER_REVIEW',
       },
@@ -475,7 +503,7 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
         effectiveDate: fixture.revision.effectiveDate!,
         value: fixture.revision.value,
         sourceType: 'MARKET_SURVEY',
-        sourceOrigin: 'SUPPLIER',
+        sourceOrigin: 'FIELD_REPORT',
         verificationStatus: 'VERIFIED',
         freshnessStatus: 'CURRENT',
       },
@@ -489,15 +517,51 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
   };
 
   afterAll(async () => {
-    await prisma.basicPriceImportBatch.deleteMany({
-      where: { workspaceId: WORKSPACE_A },
-    });
+    const suiteResourceIds = [
+      RESOURCE_MATERIAL_ID,
+      RESOURCE_LABOR_ID,
+      RESOURCE_BOTH_ID,
+    ];
+    // BP-CORR-01 / BP-CORR-01B: DEPENDENTS BEFORE THE ROWS THEY POINT AT.
+    //
+    // BOTH self-relations are ON DELETE RESTRICT — deliberately, so neither a
+    // superseded predecessor nor a promoted origin can be deleted out from
+    // under the row that depends on it. That guarantee applies to teardown too:
+    // a single deleteMany covering both ends is refused by the database, so the
+    // graph is peeled from its leaves inwards. Bounded rather than recursive;
+    // the loop simply stops when nothing is left pointing at anything.
+    for (let depth = 0; depth < 5; depth += 1) {
+      const removed = await prisma.basicPrice.deleteMany({
+        where: {
+          OR: [
+            {
+              resourceId: { in: suiteResourceIds },
+              supersedesBasicPriceId: { not: null },
+            },
+            // Shared descendants have a NULL workspaceId, so they are reached
+            // by resource and lineage rather than by tenant.
+            {
+              resourceId: { in: suiteResourceIds },
+              promotedFromBasicPriceId: { not: null },
+            },
+          ],
+        },
+      });
+      if (removed.count === 0) break;
+    }
+    // PRICES BEFORE BATCHES. A workspace-private BasicPrice carries
+    // `sourceImportRowId` — its evidence — so deleting the batch first would
+    // orphan that reference and the FK refuses. This suite only began keeping
+    // private prices when the rejection-survival proof was added below.
     await prisma.basicPrice.deleteMany({
       where: {
         resourceId: {
           in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID, RESOURCE_BOTH_ID],
         },
       },
+    });
+    await prisma.basicPriceImportBatch.deleteMany({
+      where: { workspaceId: WORKSPACE_A },
     });
     await prisma.priceSubmission.deleteMany({
       where: {
@@ -585,7 +649,7 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
       .field('sourceVendorName', 'rm02d2a1-e2e')
       .field('effectiveDate', '2026-07-25')
       .field('regionId', REGION_ID)
-      .field('sourceOrigin', 'SUPPLIER')
+      .field('sourceOrigin', 'FIELD_REPORT')
       .field('sourceType', 'MARKET_SURVEY')
       .expect(201);
 
@@ -862,7 +926,7 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
         organizationId,
         resourceId: RESOURCE_BOTH_ID,
         regionId: REGION_ID,
-        sourceOrigin: 'SUPPLIER',
+        sourceOrigin: 'FIELD_REPORT',
         sourceType: 'MARKET_SURVEY',
         status: 'UNDER_REVIEW',
       },
@@ -1242,5 +1306,1201 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
         data: { status: UserStatus.ACTIVE },
       });
     }
+  });
+  /**
+   * OWNER LAW — A REJECTED PROPOSAL MUST NOT REVOKE A LAWFUL PRIVATE PRICE.
+   *
+   * The two acts are independent by design: keeping your own imported rows is
+   * a workspace-private governed asset, and proposing them to SIMPROK is an
+   * optional, separate offer. Until now that separation was proven only
+   * STRUCTURALLY — by reading `resolveWithoutBasicPrice` and observing it
+   * touches no BasicPrice. Structure is a strong argument and it is not a
+   * proof: it says the current code does not do it, not that the running
+   * system does not.
+   *
+   * This runs the whole thing against the real database, through the real
+   * routes, with the real distinct actors:
+   *
+   *   keep-private  →  submit  →  a human REJECTS the proposal  →  is the
+   *   private price still there, still private, still readable?
+   */
+  it('a REJECTED public proposal leaves the workspace-private price intact and usable', async () => {
+    /** The shapes this proof reads, declared rather than inferred from `any`. */
+    interface PreviewBody {
+      batchId: string;
+      rows: { id: string; sourceRowNumber: number; version: number }[];
+    }
+    interface KeptBody {
+      createdCount: number;
+      prices: { basicPriceId: string }[];
+    }
+    interface ExplorerBody {
+      data: { basicPriceId: string }[];
+    }
+
+    // A DISTINCT vendor name, so this is genuinely a second batch rather than
+    // a fingerprint replay of the lifecycle batch above.
+    const preview = await request(server())
+      .post('/basic-price-imports/preview')
+      .set('Authorization', `Bearer ${actor1Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .attach('file', await buildBasicPriceXlsx(), {
+        filename: 'basic-price.xlsx',
+        contentType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      .field('selectedSheet', 'HARGA SATUAN UPAH DAN BAHAN')
+      .field('sourceVendorName', 'rm02d2a1-private-survives-rejection')
+      .field('effectiveDate', '2026-07-25')
+      .field('regionId', REGION_ID)
+      // FIELD_REPORT: the community-curation door serves this family, which is
+      // the only family for which "proposal rejected" is even reachable.
+      .field('sourceOrigin', 'FIELD_REPORT')
+      .field('sourceType', 'MARKET_SURVEY')
+      .expect(201);
+
+    const previewBody = preview.body as PreviewBody;
+    const batchId = previewBody.batchId;
+    const row = previewBody.rows.find((r) => r.sourceRowNumber === 9)!;
+
+    await request(server())
+      .post(`/basic-price-imports/${batchId}/rows/${row.id}/resolve`)
+      .set('Authorization', `Bearer ${actor1Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .send({
+        version: row.version,
+        resourceCatalogId: RESOURCE_LABOR_ID,
+        unitDefinitionId: personDayUnitId,
+      })
+      .expect(201);
+    for (const other of previewBody.rows.filter((r) => r.id !== row.id)) {
+      await request(server())
+        .post(`/basic-price-imports/${batchId}/rows/${other.id}/reject`)
+        .set('Authorization', `Bearer ${actor1Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .send({ version: other.version, reason: 'out of scope for this proof' })
+        .expect(201);
+    }
+
+    // 1. KEEP IT. The private asset exists before any proposal is made — which
+    //    is the product order too: use your own price first, share second.
+    const kept = await request(server())
+      .post(`/basic-price-imports/${batchId}/keep-private`)
+      .set('Authorization', `Bearer ${actor1Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(201);
+    const keptBody = kept.body as KeptBody;
+    expect(keptBody.createdCount).toBe(1);
+    const privateBasicPriceId = keptBody.prices[0].basicPriceId;
+
+    // 2. PROPOSE IT. A separate, optional act on the same batch.
+    await request(server())
+      .post(`/basic-price-imports/${batchId}/submit`)
+      .set('Authorization', `Bearer ${actor1Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(201);
+
+    const submission = await prisma.priceSubmission.findFirstOrThrow({
+      where: { importRow: { batchId } },
+    });
+    const review = await prisma.priceSubmissionReview.findUniqueOrThrow({
+      where: { priceSubmissionId: submission.id },
+    });
+
+    // 3. REJECT IT — a real second human, through the real review route.
+    await request(server())
+      .post(`/basic-price-reviews/${review.id}/reject`)
+      .set('Authorization', `Bearer ${actor2Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .send({ note: 'not enough evidence for the shared catalog' })
+      .expect(201);
+
+    expect(
+      (
+        await prisma.priceSubmission.findUniqueOrThrow({
+          where: { id: submission.id },
+        })
+      ).status,
+    ).toBe('REJECTED');
+
+    // 4. THE PRIVATE PRICE IS UNTOUCHED — the whole point.
+    const surviving = await prisma.basicPrice.findUniqueOrThrow({
+      where: { id: privateBasicPriceId },
+    });
+    expect(surviving.assetScope).toBe('WORKSPACE_PRIVATE');
+    expect(surviving.workspaceId).toBe(WORKSPACE_A);
+    // Not deleted, not revoked, not demoted, and not quietly re-scoped.
+    expect(surviving.status).toBe('UNPUBLISHED');
+    expect(surviving.verificationStatus).toBe('UNVERIFIED');
+
+    // 5. AND STILL USABLE, through the normal read a person actually uses —
+    //    the rejection changed what SIMPROK will share, not what this
+    //    workspace may do with its own price.
+    const explorer = await request(server())
+      .get('/basic-prices')
+      .set('Authorization', `Bearer ${actor1Token}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .query({ resourceId: RESOURCE_LABOR_ID })
+      .expect(200);
+    const ids = (explorer.body as ExplorerBody).data.map(
+      (item) => item.basicPriceId,
+    );
+    expect(ids).toContain(privateBasicPriceId);
+
+    // 6. AND THE REJECTION IS ON THE RECORD. Private survival is not achieved
+    //    by forgetting that a curator said no.
+    expect(
+      await prisma.priceSubmissionReviewDecision.count({
+        where: { reviewId: review.id, action: 'REJECT' },
+      }),
+    ).toBe(1);
+  });
+
+  /**
+   * ═══ SMART-SAVE, WITHOUT THE OWNER'S WORKBOOK ═══
+   *
+   * WHY HERE. The only e2e that exercises `smart-save` today is the real 86-row
+   * acceptance suite, and that suite skips itself when the gitignored workbook
+   * is absent — correctly, because it exists to measure SIMPROK's intelligence
+   * against a real document. But the COMMAND's own laws are not about that
+   * document at all, and a law proven only on the machine that happens to hold
+   * a spreadsheet is not proven. These use the in-repo fixture workbook, so
+   * they run wherever this suite runs.
+   *
+   * WHAT IS DELIBERATELY NOT DUPLICATED. The 13/35/30/8 identity baseline stays
+   * where it belongs. Nothing below asks the fixture to be smart: exactly one
+   * row is finished BY HAND, which is all these laws need and all they claim.
+   */
+  describe('SMART-SAVE — the command laws, on the in-repo fixture', () => {
+    interface PreviewBody {
+      batchId: string;
+      rows: { id: string; sourceRowNumber: number; version: number }[];
+    }
+    interface SmartSaveBody {
+      accepted: { acceptedCount: number; excludedCount: number };
+      kept: {
+        createdCount: number;
+        alreadyPrivateCount: number;
+        prices: { basicPriceId: string }[];
+      };
+    }
+    interface BatchBody {
+      readyForSubmissionRows: number;
+      alreadyPrivateRows: number | null;
+      actions: {
+        privateUse: {
+          offered: boolean;
+          reasonCode: string | null;
+          actionableRows: number | null;
+        };
+      };
+      temporal: { effectiveDateQuestion: string; reverification: string };
+      rows: { id: string; status: string; savedAsPrivatePrice: boolean }[];
+    }
+
+    /**
+     * THE HTTP SERVER, NAMED FOR WHAT IT IS. `app.getHttpServer()` is typed
+     * `any`, so every request built from it is an unchecked call on an unknown
+     * thing. It is the Node server it has always been, and saying so once here
+     * is what lets supertest type-check the requests below. The rest of this
+     * file predates the helper and is left exactly as it is.
+     */
+    const server = (): Server => app.getHttpServer() as Server;
+
+    let batchId = '';
+    let finishedRowId = '';
+    let openRowId = '';
+
+    const readBatch = async (): Promise<BatchBody> => {
+      const response = await request(server())
+        .get(`/basic-price-imports/${batchId}`)
+        .set('Authorization', `Bearer ${actor1Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(200);
+      return response.body as BatchBody;
+    };
+
+    const smartSave = (body: Record<string, unknown> = {}) =>
+      request(server())
+        .post(`/basic-price-imports/${batchId}/smart-save`)
+        .set('Authorization', `Bearer ${actor1Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .send(body);
+
+    it('G-1. one row finished by hand, the rest left open', async () => {
+      // A distinct vendor name, so intake identity treats this as its own
+      // import rather than replaying a batch an earlier proof already made.
+      const preview = await request(server())
+        .post('/basic-price-imports/preview')
+        .set('Authorization', `Bearer ${actor1Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .attach('file', await buildBasicPriceXlsx(), {
+          filename: 'basic-price.xlsx',
+          contentType:
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        })
+        .field('selectedSheet', 'HARGA SATUAN UPAH DAN BAHAN')
+        .field('sourceVendorName', 'rm02d2a1-smart-save-command-laws')
+        .field('effectiveDate', '2026-07-25')
+        .field('regionId', REGION_ID)
+        .field('sourceOrigin', 'FIELD_REPORT')
+        .field('sourceType', 'MARKET_SURVEY')
+        .expect(201);
+
+      const body = preview.body as PreviewBody;
+      batchId = body.batchId;
+      const row = body.rows.find((r) => r.sourceRowNumber === 9)!;
+      finishedRowId = row.id;
+      openRowId = body.rows.find((r) => r.id !== row.id)!.id;
+
+      await request(server())
+        .post(`/basic-price-imports/${batchId}/rows/${row.id}/resolve`)
+        .set('Authorization', `Bearer ${actor1Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .send({
+          version: row.version,
+          resourceCatalogId: RESOURCE_LABOR_ID,
+          unitDefinitionId: personDayUnitId,
+        })
+        .expect(201);
+
+      const batch = await readBatch();
+      expect(batch.readyForSubmissionRows).toBe(1);
+      // NOTHING STORED YET, and the projection says so as a measured number
+      // rather than by omission.
+      expect(batch.alreadyPrivateRows).toBe(0);
+      expect(batch.actions.privateUse).toMatchObject({
+        offered: true,
+        reasonCode: null,
+        actionableRows: 1,
+      });
+    });
+
+    /**
+     * G-2 — THE BOUNDARY NO GUARD CAN HOLD.
+     *
+     * `PermissionsAll(RESOLVE, SUBMIT)` proves this account is a member of the
+     * workspace it named and holds both capabilities IN it. It has never seen
+     * the batch id in the URL. So a fully-authorized member of Workspace B,
+     * naming a Workspace A batch, reaches the handler — and the command's own
+     * first act must refuse before it reads anything.
+     *
+     * The ORDER of that refusal (zero measurement queries) cannot be observed
+     * over HTTP and is pinned as a call-counter in
+     * `basic-price-smart-save-authority.spec.ts`. What this proves is the part
+     * a person could actually exploit: the answer, and what it discloses.
+     */
+    it('G-2. CROSS-WORKSPACE — refused as plain non-existence, disclosing nothing', async () => {
+      const response = await request(server())
+        .post(`/basic-price-imports/${batchId}/smart-save`)
+        .set('Authorization', `Bearer ${crosstenantToken}`)
+        .set('x-workspace-id', WORKSPACE_B)
+        .send({});
+
+      // 404, never 403: a distinguishable "you may not see this" is itself an
+      // existence oracle for another tenant's data.
+      expect(response.status).toBe(404);
+
+      const serialized = JSON.stringify(response.body);
+      // NOT ONE FACT ABOUT THE FOREIGN BATCH TRAVELS — no progress envelope, no
+      // counts, no persistence verdict.
+      expect(serialized).not.toContain('smartSave');
+      expect(serialized).not.toContain('boundRowsDelta');
+      expect(serialized).not.toContain('PARTIAL');
+
+      // AND NOTHING WAS TOUCHED. The batch is exactly as G-1 left it.
+      const batch = await readBatch();
+      expect(batch.readyForSubmissionRows).toBe(1);
+      expect(batch.alreadyPrivateRows).toBe(0);
+      expect(
+        await prisma.basicPrice.count({
+          where: { sourceImportRow: { batchId } },
+        }),
+      ).toBe(0);
+    });
+
+    it('G-3. ONE press stores the finished row', async () => {
+      const response = await smartSave().expect(201);
+      const outcome = response.body as SmartSaveBody;
+      // Nothing was machine-proven in this fixture, and nothing pretends to be:
+      // the press stored the row a HUMAN finished.
+      expect(outcome.accepted.acceptedCount).toBe(0);
+      expect(outcome.kept.createdCount).toBe(1);
+      expect(outcome.kept.alreadyPrivateCount).toBe(0);
+    });
+
+    /**
+     * G-4 — THE DEFECT THE OWNER SAW IN THE BROWSER.
+     *
+     * A kept row never leaves READY_FOR_SUBMISSION, so the room went on
+     * offering to store prices it had just created. The projection now measures
+     * what is already stored and answers with the work that is actually left.
+     */
+    it('G-4. POST-SAVE PROJECTION — nothing is offered as new work', async () => {
+      const batch = await readBatch();
+      // The row is still ready — that fact is about the SEPARATE curation door
+      // and is untouched.
+      expect(batch.readyForSubmissionRows).toBe(1);
+      // And it is already stored, so one press would achieve nothing.
+      expect(batch.alreadyPrivateRows).toBe(1);
+
+      /**
+       * AND THE ROW ITSELF KNOWS. A count can correct a button; only a per-row
+       * fact can correct the sentence printed beside the row. Without it the
+       * room had nothing to render but the internal status, which stays
+       * READY_FOR_SUBMISSION forever — so a stored row announced it was
+       * `Siap diajukan`, a curation word, about a price already sitting usable
+       * in the workspace.
+       */
+      const stored = batch.rows.find((r) => r.id === finishedRowId);
+      expect(stored?.savedAsPrivatePrice).toBe(true);
+      // Every other row is untouched by the save and says so.
+      for (const row of batch.rows.filter((r) => r.id !== finishedRowId)) {
+        expect(row.savedAsPrivatePrice).toBe(false);
+      }
+      expect(batch.actions.privateUse).toMatchObject({
+        offered: false,
+        reasonCode: 'ALL_READY_ROWS_ALREADY_PRIVATE',
+        actionableRows: 0,
+      });
+    });
+
+    /**
+     * G-5 — AND THE CLARITY IS NOT THE SAFETY BOUNDARY. Withholding the
+     * invitation must never be what prevents a duplicate; the command stays
+     * idempotent for the stale tab that presses anyway.
+     */
+    it('G-5. IDEMPOTENT — a press the room no longer offers still duplicates nothing', async () => {
+      const response = await smartSave().expect(201);
+      const outcome = response.body as SmartSaveBody;
+      expect(outcome.kept.createdCount).toBe(0);
+      expect(outcome.kept.alreadyPrivateCount).toBe(1);
+
+      expect(
+        await prisma.basicPrice.count({
+          where: { sourceImportRow: { batchId } },
+        }),
+      ).toBe(1);
+      const perRow = await prisma.basicPrice.groupBy({
+        by: ['sourceImportRowId'],
+        where: { sourceImportRow: { batchId } },
+        _count: { _all: true },
+      });
+      expect(perRow).toHaveLength(1);
+      expect(perRow[0]._count._all).toBe(1);
+    });
+
+    /**
+     * G-6 — A HUMAN EXCLUSION IS CARRIED AS SCOPE, AND CHANGES NOTHING ELSE.
+     *
+     * This fixture proves no identities, so there is nothing here the machine
+     * WOULD have bound — the full "SIMPROK was certain and the human still
+     * won" proof needs machine-proven rows and lives in the real-workbook
+     * suite. What this pins is the contract every press depends on: the body
+     * may name rows to leave alone, that intent is counted and returned, the
+     * named row is untouched, and the keep half runs regardless.
+     */
+    it('G-6. an excluded row is counted, left open, and blocks nothing else', async () => {
+      const response = await smartSave({ excludeRowIds: [openRowId] }).expect(
+        201,
+      );
+      const outcome = response.body as SmartSaveBody;
+      expect(outcome.accepted.excludedCount).toBe(1);
+
+      const excluded = await prisma.basicPriceImportRow.findUniqueOrThrow({
+        where: { id: openRowId },
+        select: { status: true, resourceCatalogId: true },
+      });
+      expect(excluded.status).toBe('NEEDS_REVIEW');
+      expect(excluded.resourceCatalogId).toBeNull();
+      expect(
+        await prisma.basicPriceImportRowResourceMapping.count({
+          where: { rowId: openRowId },
+        }),
+      ).toBe(0);
+
+      // The row a human DID finish is still stored, and still exactly once.
+      expect(
+        await prisma.basicPrice.count({
+          where: { sourceImportRowId: finishedRowId },
+        }),
+      ).toBe(1);
+    });
+
+    /**
+     * G-7 — THE TEMPORAL QUESTION TRAVELS WITH THE BATCH.
+     *
+     * This batch declares MARKET_SURVEY, so the room must ask when the price
+     * was OBSERVED rather than when it "becomes" effective — and the answer is
+     * a code the browser turns into words, never prose from the server.
+     */
+    it('G-7. a survey batch is asked the observation question, not a decree question', async () => {
+      const batch = await readBatch();
+      expect(batch.temporal).toEqual({
+        effectiveDateQuestion: 'OBSERVED_PRICE_DATE',
+        // Uploaded by hand, so it ages in silence and the soft date is offered.
+        reverification: 'RECOMMENDED',
+      });
+    });
+  });
+
+  /**
+   * BP-CORR-01 — PUBLISHED PRICE CORRECTION AND SUPERSESSION, PROVED AGAINST
+   * THE REAL DATABASE AND THE REAL HTTP ROUTE.
+   *
+   * The unit suite pins the writer's contract and the shape of the currentness
+   * predicate. What it cannot prove is the part that only a real PostgreSQL can
+   * answer: that the migration's constraints actually hold, that the candidate
+   * query really stops offering a replaced price, and that the predecessor is
+   * still there afterwards with its money untouched. That is this suite's job.
+   *
+   * It runs on the SAME governed ladder as every other publication here — the
+   * price is accepted by Actor 2 and published by Actor 3, and correcting it
+   * buys no exemption from either.
+   */
+  describe('BP-CORR-01 published price correction and supersession', () => {
+    const publishAs = (
+      basicPriceId: string,
+      body: Record<string, unknown> = {},
+    ) =>
+      request(getTypedHttpServer())
+        .post(`/basic-price-publications/${basicPriceId}/publish`)
+        .set('Authorization', `Bearer ${actor3Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .send(body);
+
+    const candidatesForResource = async (): Promise<
+      Array<{ id: string; value: string }>
+    > => {
+      const response = await request(getTypedHttpServer())
+        .get(`/basic-prices/by-resource/${RESOURCE_BOTH_ID}`)
+        .set('Authorization', `Bearer ${actor3Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(200);
+      return response.body as Array<{ id: string; value: string }>;
+    };
+
+    /** An accepted price carrying a distinct value, ready for publication. */
+    const acceptedWorth = async (value: string) => {
+      const accepted = await createAcceptedPrice();
+      await prisma.basicPrice.update({
+        where: { id: accepted.basicPrice.id },
+        data: { value },
+      });
+      return accepted;
+    };
+
+    it('CUR-01 → CUR-03 — a published correction becomes the current truth and the predecessor stops being offered', async () => {
+      const original = await acceptedWorth('78000.00');
+      await publishAs(original.basicPrice.id).expect(201);
+
+      // CUR-01 — before any correction, the published price IS the candidate.
+      const before = await candidatesForResource();
+      expect(before.map((row) => row.id)).toContain(original.basicPrice.id);
+
+      const corrected = await acceptedWorth('80000.00');
+
+      // CUR-02 — the successor exists and is VERIFIED, but is NOT yet
+      // published. The predecessor must still be the current truth: a merely
+      // PROPOSED correction may never move money.
+      const midway = await candidatesForResource();
+      expect(midway.map((row) => row.id)).toContain(original.basicPrice.id);
+      expect(midway.map((row) => row.id)).not.toContain(
+        corrected.basicPrice.id,
+      );
+
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: original.basicPrice.id,
+      }).expect(201);
+
+      // CUR-03 / CUR-04 — exactly ONE current truth for this context, and it is
+      // the correction. The predecessor is not merely deprioritised; it is no
+      // longer offered at all, so it cannot compete as a second answer.
+      const after = await candidatesForResource();
+      const ids = after.map((row) => row.id);
+      expect(ids).toContain(corrected.basicPrice.id);
+      expect(ids).not.toContain(original.basicPrice.id);
+    });
+
+    it('HIST-01/HIST-02 — the superseded predecessor survives, readable by id, with its money and identity untouched', async () => {
+      const original = await acceptedWorth('78000.00');
+      await publishAs(original.basicPrice.id).expect(201);
+      const before = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: original.basicPrice.id },
+      });
+
+      const corrected = await acceptedWorth('80000.00');
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: original.basicPrice.id,
+      }).expect(201);
+
+      // HIST-02 — BYTE-IDENTICAL. Not "still published", not "mostly the same":
+      // every column the predecessor had before the correction is exactly what
+      // it has after. This is the whole gate in one assertion.
+      const after = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: original.basicPrice.id },
+      });
+      expect(after).toEqual(before);
+      expect(after.value.toString()).toBe('78000');
+      expect(after.status).toBe('PUBLISHED');
+      expect(after.supersedesBasicPriceId).toBeNull();
+
+      // HIST-01 — and it is still REACHABLE. The by-id read is a lawfulness
+      // question, not a selection one, so history stays rich even though the
+      // candidate list has moved on.
+      const detail = await request(getTypedHttpServer())
+        .get(`/basic-prices/${original.basicPrice.id}`)
+        .set('Authorization', `Bearer ${actor3Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(200);
+      expect((detail.body as { id: string }).id).toBe(original.basicPrice.id);
+
+      // HIST-03 — the successor names its exact predecessor.
+      const successor = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: corrected.basicPrice.id },
+      });
+      expect(successor.supersedesBasicPriceId).toBe(original.basicPrice.id);
+
+      // HIST-04 — the predecessor's history GAINED a line and lost none, and
+      // the correction did not forge a PUBLISH audit on it. The Cost Kernel
+      // proves a publisher with exactly that lookup, so a forged row here would
+      // let a correction answer the two-human ladder on its behalf.
+      const audits = await prisma.basicPricePublicationAudit.findMany({
+        where: { basicPriceId: original.basicPrice.id },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(audits.map((audit) => audit.action)).toEqual([
+        'PUBLISH',
+        'SUPERSEDED',
+      ]);
+      expect(audits.filter((audit) => audit.action === 'PUBLISH')).toHaveLength(
+        1,
+      );
+    });
+
+    it('CUR-04 — a predecessor may be replaced ONCE; a second successor is refused and nothing is published', async () => {
+      const original = await acceptedWorth('78000.00');
+      await publishAs(original.basicPrice.id).expect(201);
+      const first = await acceptedWorth('80000.00');
+      await publishAs(first.basicPrice.id, {
+        supersedesBasicPriceId: original.basicPrice.id,
+      }).expect(201);
+
+      const second = await acceptedWorth('81000.00');
+      const response = await publishAs(second.basicPrice.id, {
+        supersedesBasicPriceId: original.basicPrice.id,
+      }).expect(409);
+      expect((response.body as { message: string }).message).toBe(
+        'PREDECESSOR_ALREADY_SUPERSEDED',
+      );
+
+      // FAIL CLOSED — the rejected successor is not half-published.
+      const rejected = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: second.basicPrice.id },
+      });
+      expect(rejected.status).toBe('UNPUBLISHED');
+      expect(rejected.supersedesBasicPriceId).toBeNull();
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: second.basicPrice.id },
+        }),
+      ).toBe(0);
+    });
+
+    it('CUR-02 — an UNPUBLISHED price was never current, so nothing may claim to replace it', async () => {
+      const neverPublished = await acceptedWorth('78000.00');
+      const successor = await acceptedWorth('80000.00');
+      const response = await publishAs(successor.basicPrice.id, {
+        supersedesBasicPriceId: neverPublished.basicPrice.id,
+      }).expect(409);
+      expect((response.body as { message: string }).message).toBe(
+        'SUPERSEDED_BASIC_PRICE_NOT_PUBLISHED',
+      );
+      expect(
+        (
+          await prisma.basicPrice.findUniqueOrThrow({
+            where: { id: successor.basicPrice.id },
+          })
+        ).status,
+      ).toBe('UNPUBLISHED');
+    });
+
+    it('HIST-08 — a price cannot supersede itself', async () => {
+      const accepted = await acceptedWorth('78000.00');
+      const response = await publishAs(accepted.basicPrice.id, {
+        supersedesBasicPriceId: accepted.basicPrice.id,
+      }).expect(409);
+      expect((response.body as { message: string }).message).toBe(
+        'SUPERSESSION_SELF_REFERENCE',
+      );
+    });
+
+    it('§13 — a predecessor in ANOTHER tenant is plain non-existence, never a leak', async () => {
+      const original = await acceptedWorth('78000.00');
+      await publishAs(original.basicPrice.id).expect(201);
+      // Move the published predecessor out of the caller's workspace. The
+      // caller still knows its id, which is precisely the attack: naming a row
+      // they may not see and having the server confirm it exists.
+      await prisma.basicPrice.update({
+        where: { id: original.basicPrice.id },
+        data: { workspaceId: WORKSPACE_B },
+      });
+      try {
+        const successor = await acceptedWorth('80000.00');
+        await publishAs(successor.basicPrice.id, {
+          supersedesBasicPriceId: original.basicPrice.id,
+        }).expect(404);
+      } finally {
+        await prisma.basicPrice.update({
+          where: { id: original.basicPrice.id },
+          data: { workspaceId: WORKSPACE_A },
+        });
+      }
+    });
+
+    it('CUR-08 — a genuinely later observation is NOT a correction: both prices remain lawful and compete', async () => {
+      const january = await acceptedWorth('78000.00');
+      await prisma.basicPrice.update({
+        where: { id: january.basicPrice.id },
+        data: { effectiveDate: new Date('2026-01-15T00:00:00.000Z') },
+      });
+      await publishAs(january.basicPrice.id).expect(201);
+
+      const march = await acceptedWorth('82000.00');
+      await prisma.basicPrice.update({
+        where: { id: march.basicPrice.id },
+        data: { effectiveDate: new Date('2026-03-15T00:00:00.000Z') },
+      });
+      // Published with NO predecessor named — because March being dearer than
+      // January does not mean January was WRONG. SIMPROK must not infer a
+      // correction from a date, and the human did not declare one.
+      await publishAs(march.basicPrice.id).expect(201);
+
+      const ids = (await candidatesForResource()).map((row) => row.id);
+      expect(ids).toContain(january.basicPrice.id);
+      expect(ids).toContain(march.basicPrice.id);
+
+      // Neither row was touched by the other's publication.
+      for (const id of [january.basicPrice.id, march.basicPrice.id]) {
+        const row = await prisma.basicPrice.findUniqueOrThrow({
+          where: { id },
+        });
+        expect(row.supersedesBasicPriceId).toBeNull();
+        expect(
+          await prisma.basicPricePublicationAudit.count({
+            where: { basicPriceId: id, action: 'SUPERSEDED' },
+          }),
+        ).toBe(0);
+      }
+    });
+
+    it('IDEM-01/IDEM-04 — an exact repeat is idempotent; a repeat naming a different predecessor is refused', async () => {
+      const original = await acceptedWorth('78000.00');
+      await publishAs(original.basicPrice.id).expect(201);
+      const corrected = await acceptedWorth('80000.00');
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: original.basicPrice.id,
+      }).expect(201);
+
+      // IDEM-01/02 — the same act again changes nothing and duplicates nothing.
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: original.basicPrice.id,
+      }).expect(201);
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: corrected.basicPrice.id },
+        }),
+      ).toBe(1);
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: original.basicPrice.id, action: 'SUPERSEDED' },
+        }),
+      ).toBe(1);
+
+      // IDEM-04 — a settled correction may not be quietly re-pointed, and it
+      // may not be retracted to "corrects nothing" either.
+      const other = await acceptedWorth('79000.00');
+      await publishAs(other.basicPrice.id).expect(201);
+      const repointed = await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: other.basicPrice.id,
+      }).expect(409);
+      expect((repointed.body as { message: string }).message).toBe(
+        'SUPERSESSION_ALREADY_SETTLED',
+      );
+      const retracted = await publishAs(corrected.basicPrice.id).expect(409);
+      expect((retracted.body as { message: string }).message).toBe(
+        'SUPERSESSION_ALREADY_SETTLED',
+      );
+      expect(
+        (
+          await prisma.basicPrice.findUniqueOrThrow({
+            where: { id: corrected.basicPrice.id },
+          })
+        ).supersedesBasicPriceId,
+      ).toBe(original.basicPrice.id);
+    });
+
+    /**
+     * BP-CORR-01B GAP A — A SHARED RESTATEMENT IS NOT AN INDEPENDENT
+     * OBSERVATION.
+     *
+     * `S.promotedFromBasicPriceId = A.id` says, in the database, that S is a
+     * COPY of A admitted into the shared catalog. It carries A's money and
+     * decided nothing of its own. So the moment A stops being current — because
+     * a human published a correction of it — S is restating a truth SIMPROK has
+     * already replaced, and continuing to offer it to other tenants would spread
+     * exactly the number that was corrected away.
+     *
+     * S is still perfectly LAWFUL, and still readable. It has simply stopped
+     * being an answer to "what does this cost now".
+     */
+    const promoteToShared = async (basicPriceId: string) => {
+      const promotion = app.get(BasicPricePromotionService);
+      const result = await promotion.promoteToSharedCatalog({
+        workspaceId: WORKSPACE_A,
+        basicPriceId,
+        actorAccountId: actor3AccountId,
+      });
+      return result.shared;
+    };
+
+    /** What Workspace B — a genuinely different tenant — is offered. */
+    const sharedCandidatesForOtherTenant = async (): Promise<string[]> => {
+      const response = await request(getTypedHttpServer())
+        .get(`/basic-prices/by-resource/${RESOURCE_BOTH_ID}`)
+        .set('Authorization', `Bearer ${crosstenantToken}`)
+        .set('x-workspace-id', WORKSPACE_B)
+        .expect(200);
+      return (response.body as Array<{ id: string }>).map((row) => row.id);
+    };
+
+    it('A-02 → A-04 — a shared descendant stops being offered once its exact origin is superseded', async () => {
+      const origin = await acceptedWorth('78000.00');
+      await publishAs(origin.basicPrice.id).expect(201);
+      const shared = await promoteToShared(origin.basicPrice.id);
+
+      // A-02 — while the origin is current, the other tenant is offered the
+      // shared restatement. This is the whole point of promoting it.
+      expect(await sharedCandidatesForOtherTenant()).toContain(shared.id);
+
+      const corrected = await acceptedWorth('80000.00');
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: origin.basicPrice.id,
+      }).expect(201);
+
+      // A-04 — THE GAP. S was never itself superseded, so a currentness rule
+      // that only asks "was I replaced" leaves it standing. It must instead ask
+      // the question its lineage makes unavoidable: is the thing I am a copy of
+      // still current?
+      const afterIds = await sharedCandidatesForOtherTenant();
+      expect(afterIds).not.toContain(shared.id);
+
+      // A-07 / A-08 — and the correction is NOT handed to them in its place.
+      // Sharing is an explicit governed act, never a side effect of correcting.
+      expect(afterIds).not.toContain(corrected.basicPrice.id);
+    });
+
+    it('A-05 / A-06 — the stale shared descendant survives, stays readable, and keeps pointing at its original origin', async () => {
+      const origin = await acceptedWorth('78000.00');
+      await publishAs(origin.basicPrice.id).expect(201);
+      const shared = await promoteToShared(origin.basicPrice.id);
+      const before = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: shared.id },
+      });
+
+      const corrected = await acceptedWorth('80000.00');
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: origin.basicPrice.id,
+      }).expect(201);
+
+      // A-06 — BYTE-IDENTICAL. The lineage is historical truth: S was promoted
+      // from A and always will have been. It is never retargeted at B.
+      const after = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: shared.id },
+      });
+      expect(after).toEqual(before);
+      expect(after.promotedFromBasicPriceId).toBe(origin.basicPrice.id);
+      expect(after.status).toBe('PUBLISHED');
+      expect(after.value.toString()).toBe('78000');
+
+      // A-05 — still lawful, still readable by id. Suppression is a SELECTION
+      // rule; it never reaches the lawfulness question.
+      const detail = await request(getTypedHttpServer())
+        .get(`/basic-prices/${shared.id}`)
+        .set('Authorization', `Bearer ${crosstenantToken}`)
+        .set('x-workspace-id', WORKSPACE_B)
+        .expect(200);
+      expect((detail.body as { id: string }).id).toBe(shared.id);
+    });
+
+    it('A-09 / A-10 — an unrelated shared row of the same resource and the same value is untouched', async () => {
+      // Two independently observed prices that happen to cost the same are two
+      // different truths. Suppression is exact-lineage only, so correcting one
+      // origin must not silently take the other off the shelf.
+      const unrelated = await acceptedWorth('78000.00');
+      await publishAs(unrelated.basicPrice.id).expect(201);
+      const unrelatedShared = await promoteToShared(unrelated.basicPrice.id);
+
+      const origin = await acceptedWorth('78000.00');
+      await publishAs(origin.basicPrice.id).expect(201);
+      const originShared = await promoteToShared(origin.basicPrice.id);
+
+      const corrected = await acceptedWorth('80000.00');
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: origin.basicPrice.id,
+      }).expect(201);
+
+      const ids = await sharedCandidatesForOtherTenant();
+      expect(ids).not.toContain(originShared.id);
+      // Same resource, same money, no lineage to the superseded origin — so it
+      // is still current, and must be.
+      expect(ids).toContain(unrelatedShared.id);
+    });
+
+    /**
+     * BP-CORR-01B GAP B — WITHDRAWAL WITHOUT REPLACEMENT.
+     *
+     * A source can retract a price without anyone knowing the right number
+     * instead. SIMPROK must be able to say "this is no longer offered" without
+     * inventing a successor to say it with.
+     */
+    const withdraw = async (
+      basicPriceId: string,
+      reason = 'Source retracted',
+      effectiveAt?: Date,
+    ) => {
+      const publication = app.get(BasicPricePublicationService);
+      return publication.withdraw({
+        workspaceId: WORKSPACE_A,
+        basicPriceId,
+        actorAccountId: actor3AccountId,
+        reason,
+        effectiveAt,
+      });
+    };
+
+    /**
+     * BP-CORR-01B TEMPORAL — the PRODUCTION currentness predicate, executed
+     * against real PostgreSQL for an arbitrary business `asOf`.
+     *
+     * This is the same exported function every consumer composes, not a
+     * re-implementation: the AHSP candidate offer builds its query from exactly
+     * this. It is exercised directly because the two HTTP read routes both
+     * project the PRESENT — they have no business date to pass — so the one
+     * case that actually distinguishes "when we learned it" from "when it
+     * became true" (an as-of that falls BETWEEN the two) is unreachable through
+     * them by construction.
+     */
+    const isCurrentAsOf = async (basicPriceId: string, asOf: Date) => {
+      const row = await prisma.basicPrice.findFirst({
+        where: { id: basicPriceId, ...basicPriceCurrentnessWhere({ asOf }) },
+        select: { id: true },
+      });
+      return row !== null;
+    };
+
+    it('W-01 → W-06 — a withdrawn price stops being offered while staying published, stored and readable', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+
+      // W-01 — current before withdrawal.
+      expect((await candidatesForResource()).map((row) => row.id)).toContain(
+        price.basicPrice.id,
+      );
+      const before = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: price.basicPrice.id },
+      });
+
+      // W-02 — withdrawn, with NO successor created.
+      const result = await withdraw(price.basicPrice.id);
+      expect(result.created).toBe(true);
+
+      // W-11 — nothing was invented to represent the absence.
+      expect(
+        await prisma.basicPrice.count({
+          where: { supersedesBasicPriceId: price.basicPrice.id },
+        }),
+      ).toBe(0);
+
+      // W-03 / W-04 — the row survives, byte-identical. It is still PUBLISHED:
+      // withdrawal is not un-publishing and not rejection.
+      const after = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: price.basicPrice.id },
+      });
+      expect(after).toEqual(before);
+      expect(after.status).toBe('PUBLISHED');
+      expect(after.verificationStatus).toBe('PUBLISHED');
+      expect(after.value.toString()).toBe('78000');
+
+      // W-06 — but it is no longer offered.
+      expect(
+        (await candidatesForResource()).map((row) => row.id),
+      ).not.toContain(price.basicPrice.id);
+
+      // W-05 — and it is still readable by id, for every lawful historical use.
+      const detail = await request(getTypedHttpServer())
+        .get(`/basic-prices/${price.basicPrice.id}`)
+        .set('Authorization', `Bearer ${actor3Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(200);
+      expect((detail.body as { id: string }).id).toBe(price.basicPrice.id);
+    });
+
+    it('W-08 — withdrawal replay is idempotent and leaves exactly one governance record', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      expect((await withdraw(price.basicPrice.id)).created).toBe(true);
+      expect((await withdraw(price.basicPrice.id)).created).toBe(false);
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: price.basicPrice.id, action: 'WITHDRAWN' },
+        }),
+      ).toBe(1);
+      // The PUBLISH audit is untouched — history gained a line and lost none.
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: price.basicPrice.id, action: 'PUBLISH' },
+        }),
+      ).toBe(1);
+    });
+
+    it('GAP A + GAP B compose — a shared descendant of a WITHDRAWN origin also stops being offered, and stays readable', async () => {
+      const origin = await acceptedWorth('78000.00');
+      await publishAs(origin.basicPrice.id).expect(201);
+      const shared = await promoteToShared(origin.basicPrice.id);
+      expect(await sharedCandidatesForOtherTenant()).toContain(shared.id);
+
+      await withdraw(origin.basicPrice.id);
+
+      // The restatement follows its origin out of candidacy — the SAME rule as
+      // supersession, in the SAME composition, not a second shadow engine.
+      expect(await sharedCandidatesForOtherTenant()).not.toContain(shared.id);
+
+      // Still lawful, still readable, lineage untouched.
+      const after = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: shared.id },
+      });
+      expect(after.promotedFromBasicPriceId).toBe(origin.basicPrice.id);
+      await request(getTypedHttpServer())
+        .get(`/basic-prices/${shared.id}`)
+        .set('Authorization', `Bearer ${crosstenantToken}`)
+        .set('x-workspace-id', WORKSPACE_B)
+        .expect(200);
+    });
+
+    /**
+     * BP-CORR-01B TEMPORAL — WHEN WE LEARNED IT vs WHEN IT BECAME TRUE.
+     *
+     * The source states a retraction effective 1 August. SIMPROK is told on
+     * 5 August (the real recording instant — these tests do not fake the
+     * clock). The decisive question is 3 August: after the withdrawal took
+     * effect, but before SIMPROK knew about it.
+     */
+    const AUG_01 = new Date('2026-08-01T00:00:00.000Z');
+    const JUL_31 = new Date('2026-07-31T00:00:00.000Z');
+    const AUG_03 = new Date('2026-08-03T00:00:00.000Z');
+    const AUG_06 = new Date('2026-08-06T00:00:00.000Z');
+
+    it('T-01 → T-04 — a backdated withdrawal takes effect from the date the SOURCE stated, not the date SIMPROK was told', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      const id = price.basicPrice.id;
+
+      const result = await withdraw(
+        id,
+        'Source retracted its July list',
+        AUG_01,
+      );
+      const audit = await prisma.basicPricePublicationAudit.findFirstOrThrow({
+        where: { basicPriceId: id, action: 'WITHDRAWN' },
+      });
+      // The two facts are genuinely different rows-worth of truth: the stated
+      // effective date is in the past, the recording instant is now.
+      expect(audit.effectiveAt).toEqual(AUG_01);
+      expect(audit.createdAt.getTime()).toBeGreaterThan(AUG_01.getTime());
+      expect(result.created).toBe(true);
+
+      // T-01 — before the effective point, the price was legitimately current.
+      expect(await isCurrentAsOf(id, JUL_31)).toBe(true);
+      // T-02 — the effective instant itself is already in force.
+      expect(await isCurrentAsOf(id, AUG_01)).toBe(false);
+      // T-03 — THE DECISIVE CASE. After it became true, before we were told.
+      // The old `createdAt` comparison offered this price here; that was the
+      // defect, and four days of withdrawn money is what it cost.
+      expect(await isCurrentAsOf(id, AUG_03)).toBe(false);
+      // T-04 — and after the recording instant, unchanged.
+      expect(await isCurrentAsOf(id, AUG_06)).toBe(false);
+    });
+
+    it('T-05 — a FUTURE-dated withdrawal does not suppress too early, including in the present-tense HTTP read', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      const id = price.basicPrice.id;
+
+      const nextYear = new Date('2099-01-04T00:00:00.000Z');
+      await withdraw(id, 'Retraction announced ahead of time', nextYear);
+
+      // Recorded now, effective far in the future. Suppressing on the mere
+      // EXISTENCE of the record — which is what the first implementation did
+      // when no as-of was supplied — would remove the price today.
+      expect(await isCurrentAsOf(id, new Date())).toBe(true);
+      // The effective instant itself, and everything after it, is in force.
+      expect(await isCurrentAsOf(id, nextYear)).toBe(false);
+      expect(
+        await isCurrentAsOf(id, new Date('2099-06-01T00:00:00.000Z')),
+      ).toBe(false);
+
+      // And the real present-tense HTTP route agrees: still offered today.
+      expect((await candidatesForResource()).map((row) => row.id)).toContain(
+        id,
+      );
+    });
+
+    it('T-06 — with no stated effective time, the governed decision instant is recorded and the price stops being offered now', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      const id = price.basicPrice.id;
+      const before = new Date();
+
+      await withdraw(id);
+
+      const audit = await prisma.basicPricePublicationAudit.findFirstOrThrow({
+        where: { basicPriceId: id, action: 'WITHDRAWN' },
+      });
+      // Never null — a null would fail OPEN in the projection and the
+      // withdrawal would govern nothing.
+      expect(audit.effectiveAt).not.toBeNull();
+      expect(audit.effectiveAt!.getTime()).toBeGreaterThanOrEqual(
+        before.getTime() - 1000,
+      );
+      expect(
+        (await candidatesForResource()).map((row) => row.id),
+      ).not.toContain(id);
+    });
+
+    it('T-07 — a shared descendant follows its origin on the ORIGIN’s effective clock', async () => {
+      const origin = await acceptedWorth('78000.00');
+      await publishAs(origin.basicPrice.id).expect(201);
+      const shared = await promoteToShared(origin.basicPrice.id);
+
+      await withdraw(origin.basicPrice.id, 'Source retracted', AUG_01);
+
+      // Before the origin's effective point the restatement was still lawful
+      // truth for other tenants; from that point it is not.
+      expect(await isCurrentAsOf(shared.id, JUL_31)).toBe(true);
+      expect(await isCurrentAsOf(shared.id, AUG_03)).toBe(false);
+
+      // T-08 — and the descendant survives, readable, lineage intact.
+      const after = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: shared.id },
+      });
+      expect(after.promotedFromBasicPriceId).toBe(origin.basicPrice.id);
+      await request(getTypedHttpServer())
+        .get(`/basic-prices/${shared.id}`)
+        .set('Authorization', `Bearer ${crosstenantToken}`)
+        .set('x-workspace-id', WORKSPACE_B)
+        .expect(200);
+    });
+
+    it('T-10 — a withdrawal at any effective time mutates no published economic fact', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      const before = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: price.basicPrice.id },
+      });
+
+      await withdraw(price.basicPrice.id, 'Source retracted', AUG_01);
+
+      const after = await prisma.basicPrice.findUniqueOrThrow({
+        where: { id: price.basicPrice.id },
+      });
+      expect(after).toEqual(before);
+    });
+
+    it('T-11 — a replay naming a DIFFERENT effective time is refused; the first governed decision stands', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      const id = price.basicPrice.id;
+      await withdraw(id, 'Source retracted', AUG_01);
+
+      await expect(withdraw(id, 'Source retracted', AUG_06)).rejects.toThrow(
+        'WITHDRAWAL_ALREADY_SETTLED',
+      );
+
+      const audits = await prisma.basicPricePublicationAudit.findMany({
+        where: { basicPriceId: id, action: 'WITHDRAWN' },
+      });
+      expect(audits).toHaveLength(1);
+      expect(audits[0].effectiveAt).toEqual(AUG_01);
+    });
+
+    it('the database itself refuses a WITHDRAWN governance record with no effective time', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      // Straight at the table, bypassing the writer: the constraint must hold
+      // even against a future writer that forgets.
+      await expect(
+        prisma.basicPricePublicationAudit.create({
+          data: {
+            basicPriceId: price.basicPrice.id,
+            action: 'WITHDRAWN',
+            actorAccountId: actor3AccountId,
+            reason: 'no effective time',
+          },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('W-09 — a price belonging to another tenant cannot be withdrawn, and learns nothing about itself', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      await prisma.basicPrice.update({
+        where: { id: price.basicPrice.id },
+        data: { workspaceId: WORKSPACE_B },
+      });
+      try {
+        await expect(withdraw(price.basicPrice.id)).rejects.toThrow(
+          'BasicPrice not found',
+        );
+        expect(
+          await prisma.basicPricePublicationAudit.count({
+            where: { basicPriceId: price.basicPrice.id, action: 'WITHDRAWN' },
+          }),
+        ).toBe(0);
+      } finally {
+        await prisma.basicPrice.update({
+          where: { id: price.basicPrice.id },
+          data: { workspaceId: WORKSPACE_A },
+        });
+      }
+    });
+
+    it('A-12 — no production route reaches shared promotion; AUTH-C stays locked', async () => {
+      await request(getTypedHttpServer())
+        .post(`/basic-prices/${RESOURCE_BOTH_ID}/promote-shared`)
+        .set('Authorization', `Bearer ${actor3Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(404);
+    });
+
+    it('HIST-05 — the database itself refuses to delete a predecessor a correction still stands on', async () => {
+      const original = await acceptedWorth('78000.00');
+      await publishAs(original.basicPrice.id).expect(201);
+      const corrected = await acceptedWorth('80000.00');
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: original.basicPrice.id,
+      }).expect(201);
+
+      // ON DELETE RESTRICT, proved by PostgreSQL rather than by intent. History
+      // cannot be erased to tidy up the present.
+      await expect(
+        prisma.basicPrice.delete({ where: { id: original.basicPrice.id } }),
+      ).rejects.toThrow();
+      await expect(
+        prisma.basicPrice.findUniqueOrThrow({
+          where: { id: original.basicPrice.id },
+        }),
+      ).resolves.toBeDefined();
+    });
   });
 });
