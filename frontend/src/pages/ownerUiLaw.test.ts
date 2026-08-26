@@ -20,6 +20,7 @@ const projectList = readFileSync("src/pages/ProjectListPage.tsx", "utf8");
 const workspace = readFileSync("src/pages/RabWorkspacePage.tsx", "utf8");
 const cardAction = readFileSync("src/utils/projectCardAction.ts", "utf8");
 const rabDoor = readFileSync("src/pages/ProjectRabDoorPage.tsx", "utf8");
+const legacyWarRoom = readFileSync("src/pages/ProjectWarRoomPage.tsx", "utf8");
 /** The one stylesheet both RAB rooms share, and therefore the one place a
  *  column-geometry regression can hide. */
 const css = readFileSync("src/index.css", "utf8");
@@ -1056,4 +1057,23 @@ test("VD-5. the primary status and the Addendum action are untouched", () => {
   assert.match(rabDoor, /onClick=\{handleAddendumAction\}/);
   assert.match(rabDoor, /Ajukan Perubahan \/ Addendum/);
   assert.match(rabDoor, /\{!archived \? \(/);
+});
+
+test("PRE-MON-04. legacy Reality fails closed and keeps the canonical Monitoring door", () => {
+  assert.match(legacyWarRoom, /projects\/\$\{id\}\/reality/);
+  assert.match(
+    legacyWarRoom,
+    /Perhitungan progress dan deviasi resmi belum diaktifkan/,
+  );
+  assert.match(
+    legacyWarRoom,
+    /Actual lapangan yang tercatat tetap dapat ditinjau melalui Monitoring/,
+  );
+  assert.match(legacyWarRoom, /navigate\(`\/field\/project\/\$\{id\}`\)/);
+  assert.match(legacyWarRoom, />\s*Buka Monitoring\s*<\/button>/);
+  assert.doesNotMatch(legacyWarRoom, /Overall Project Execution/);
+  assert.doesNotMatch(legacyWarRoom, /Observed Deviations/);
+  assert.doesNotMatch(legacyWarRoom, /SIMPROK SIGNAL/);
+  assert.doesNotMatch(legacyWarRoom, /certaintyLevel="C4"/);
+  assert.doesNotMatch(legacyWarRoom, /overallActualProgress/);
 });

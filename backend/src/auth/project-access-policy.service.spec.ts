@@ -53,10 +53,20 @@ const assignment = {
 
 describe('ProjectAccessPolicyService', () => {
   let prisma: {
-    project: { findUnique: jest.Mock };
-    workspaceMembership: { findUnique: jest.Mock };
-    projectAssignment: { findMany: jest.Mock };
+    project: {
+      findUnique: jest.Mock;
+    };
+    workspaceMembership: {
+      findUnique: jest.Mock;
+    };
+    projectAssignment: {
+      findMany: jest.Mock;
+    };
+    organization: {
+      findMany: jest.Mock;
+    };
   };
+
   let service: ProjectAccessPolicyService;
 
   beforeEach(() => {
@@ -74,8 +84,18 @@ describe('ProjectAccessPolicyService', () => {
       projectAssignment: {
         findMany: jest.fn(),
       },
+      organization: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'org1',
+            name: 'Org-A',
+          },
+        ]),
+      },
     };
-    service = new ProjectAccessPolicyService(prisma as any);
+
+    service =
+      new ProjectAccessPolicyService(prisma as any);
   });
 
   it.each([
@@ -86,49 +106,143 @@ describe('ProjectAccessPolicyService', () => {
     async (_label, assignments, expectedGranted) => {
       prisma.projectAssignment.findMany.mockResolvedValue(assignments);
 
-      const resolution = await service.resolveProjectAccess('account-1', 'p1');
-      const projects = await service.listAccessibleProjects('account-1', 'w1');
+      const resolution =
+        await service.resolveProjectAccess(
+          'account-1',
+          'p1',
+        );
 
-      const guardGranted = resolution.kind === 'GRANTED';
-      const listed = projects.some((candidate) => candidate.id === 'p1');
+      expect(
+        prisma.organization.findMany,
+      ).not.toHaveBeenCalled();
+
+      const projects =
+        await service.listAccessibleProjects(
+          'account-1',
+          'w1',
+        );
+
+      const guardGranted =
+        resolution.kind === 'GRANTED';
+
+      const listed =
+        projects.some(
+          (candidate) => candidate.id === 'p1',
+        );
 
       expect(guardGranted).toBe(expectedGranted);
       expect(listed).toBe(expectedGranted);
       expect(listed).toBe(guardGranted);
 
-      expect(prisma.projectAssignment.findMany).toHaveBeenNthCalledWith(
+      if (expectedGranted) {
+        expect(projects).toHaveLength(1);
+
+        expect(
+          projects[0]?.organizationName,
+        ).toBe('Org-A');
+
+        expect(
+          prisma.organization.findMany,
+        ).toHaveBeenCalledTimes(1);
+
+        expect(
+          prisma.organization.findMany,
+        ).toHaveBeenCalledWith({
+          where: {
+            id: {
+              in: ['org1'],
+            },
+          },
+          select: {
+            id: true,
+            name: true,
+          },
+        });
+      } else {
+        expect(projects).toEqual([]);
+
+        expect(
+          prisma.organization.findMany,
+        ).not.toHaveBeenCalled();
+      }
+
+      expect(
+        prisma.projectAssignment.findMany,
+      ).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
           where: {
             workspaceMembershipId: 'm1',
             status: 'ASSIGNED',
+            revokedAt: null,
             projectId: 'p1',
-            project: { is: { workspaceId: 'w1' } },
+            project: {
+              is: {
+                workspaceId: 'w1',
+              },
+            },
+          },
+          include: {
+            project: true,
           },
         }),
       );
-      expect(prisma.projectAssignment.findMany).toHaveBeenNthCalledWith(
+
+      expect(
+        prisma.projectAssignment.findMany,
+      ).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({
           where: {
             workspaceMembershipId: 'm1',
             status: 'ASSIGNED',
-            project: { is: { workspaceId: 'w1' } },
+            revokedAt: null,
+            project: {
+              is: {
+                workspaceId: 'w1',
+              },
+            },
+          },
+          include: {
+            project: true,
           },
         }),
       );
+
+      expect(
+        prisma.projectAssignment.findMany,
+      ).toHaveBeenCalledTimes(2);
     },
   );
 
-  it('returns no access and no list when workspace membership is not eligible', async () => {
-    prisma.workspaceMembership.findUnique.mockResolvedValue(null);
+  it(
+    'returns no access and no list when workspace membership is not eligible',
+    async () => {
+      prisma.workspaceMembership.findUnique.mockResolvedValue(null);
 
-    await expect(
-      service.resolveProjectAccess('account-1', 'p1'),
-    ).resolves.toEqual({ kind: 'MEMBERSHIP_NOT_FOUND' });
-    await expect(
-      service.listAccessibleProjects('account-1', 'w1'),
-    ).resolves.toEqual([]);
-    expect(prisma.projectAssignment.findMany).not.toHaveBeenCalled();
-  });
+      await expect(
+        service.resolveProjectAccess(
+          'account-1',
+          'p1',
+        ),
+      ).resolves.toEqual({
+        kind: 'MEMBERSHIP_NOT_FOUND',
+      });
+
+      await expect(
+        service.listAccessibleProjects(
+          'account-1',
+          'w1',
+        ),
+      ).resolves.toEqual([]);
+
+      expect(
+        prisma.projectAssignment.findMany,
+      ).not.toHaveBeenCalled();
+
+      expect(
+        prisma.organization.findMany,
+      ).not.toHaveBeenCalled();
+    },
+  );
 });

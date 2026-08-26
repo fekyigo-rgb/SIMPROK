@@ -4,6 +4,7 @@ import { validate } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
+import { UpdateProjectTimeZoneDto } from './dto/update-project-time-zone.dto';
 import { ProjectService } from './project.service';
 import { RabLifecyclePolicyService } from './rab-lifecycle-policy.service';
 import {
@@ -60,13 +61,16 @@ describe('ProjectService P7C intake contract', () => {
     const { prisma, tx } = createPrismaMock();
     const service = new ProjectService(prisma as any, {} as any, {} as any);
 
-    await service.create({
-      name: 'Project',
-      code: 'P7C',
-      description: 'Narasi',
-      budgetBaseline: '250000000.00',
-      mainMaterialSpec: '  Beton K-300  ',
-    }, 'workspace-1');
+    await service.create(
+      {
+        name: 'Project',
+        code: 'P7C',
+        description: 'Narasi',
+        budgetBaseline: '250000000.00',
+        mainMaterialSpec: '  Beton K-300  ',
+      },
+      'workspace-1',
+    );
 
     expect(tx.project.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -76,7 +80,12 @@ describe('ProjectService P7C intake contract', () => {
       }),
     });
     expect(tx.boqStructure.create).toHaveBeenCalledWith({
-      data: { projectId: 'project-1', name: 'Working Draft', version: 1, status: 'DRAFT' },
+      data: {
+        projectId: 'project-1',
+        name: 'Working Draft',
+        version: 1,
+        status: 'DRAFT',
+      },
     });
   });
 
@@ -98,11 +107,14 @@ describe('ProjectService P7C intake contract', () => {
     const { prisma, tx } = createPrismaMock();
     const service = new ProjectService(prisma as any, {} as any, {} as any);
 
-    await service.create({
-      name: 'Project',
-      code: 'P7C',
-      mainMaterialSpec: '   ',
-    }, 'workspace-1');
+    await service.create(
+      {
+        name: 'Project',
+        code: 'P7C',
+        mainMaterialSpec: '   ',
+      },
+      'workspace-1',
+    );
 
     expect(tx.project.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ mainMaterialSpec: null }),
@@ -110,9 +122,21 @@ describe('ProjectService P7C intake contract', () => {
   });
 
   it.each([
-    ['negative pagu', CreateProjectDto, { name: 'P', code: 'P', budgetBaseline: '-1' }],
-    ['invalid decimal', CreateProjectDto, { name: 'P', code: 'P', budgetBaseline: 'abc' }],
-    ['more than 2 decimals', CreateProjectDto, { name: 'P', code: 'P', budgetBaseline: '1.234' }],
+    [
+      'negative pagu',
+      CreateProjectDto,
+      { name: 'P', code: 'P', budgetBaseline: '-1' },
+    ],
+    [
+      'invalid decimal',
+      CreateProjectDto,
+      { name: 'P', code: 'P', budgetBaseline: 'abc' },
+    ],
+    [
+      'more than 2 decimals',
+      CreateProjectDto,
+      { name: 'P', code: 'P', budgetBaseline: '1.234' },
+    ],
   ])('rejects %s in DTO validation', async (_label, dtoClass, payload) => {
     const dto = plainToInstance(dtoClass, payload);
     await expect(validate(dto)).resolves.not.toHaveLength(0);
@@ -122,7 +146,9 @@ describe('ProjectService P7C intake contract', () => {
     const { prisma } = createPrismaMock();
     const service = new ProjectService(prisma as any, {} as any, {} as any);
 
-    await service.updateIntakeContext('project-1', { budgetBaseline: '100000.50' });
+    await service.updateIntakeContext('project-1', {
+      budgetBaseline: '100000.50',
+    });
 
     expect(prisma.project.update).toHaveBeenCalledWith({
       where: { id: 'project-1' },
@@ -134,7 +160,9 @@ describe('ProjectService P7C intake contract', () => {
     const { prisma } = createPrismaMock();
     const service = new ProjectService(prisma as any, {} as any, {} as any);
 
-    await service.updateIntakeContext('project-1', { mainMaterialSpec: 'Semen Tipe I' });
+    await service.updateIntakeContext('project-1', {
+      mainMaterialSpec: 'Semen Tipe I',
+    });
 
     expect(prisma.project.update).toHaveBeenCalledWith({
       where: { id: 'project-1' },
@@ -158,12 +186,191 @@ describe('ProjectService P7C intake contract', () => {
     const { prisma } = createPrismaMock();
     const service = new ProjectService(prisma as any, {} as any, {} as any);
 
-    await service.updateIntakeContext('project-1', { budgetBaseline: null, mainMaterialSpec: null });
+    await service.updateIntakeContext('project-1', {
+      budgetBaseline: null,
+      mainMaterialSpec: null,
+    });
 
     expect(prisma.project.update).toHaveBeenCalledWith({
       where: { id: 'project-1' },
       data: { budgetBaseline: null, mainMaterialSpec: null },
     });
+  });
+
+  it('requires a command identity on the dedicated Project timezone DTO', async () => {
+    const dto = plainToInstance(UpdateProjectTimeZoneDto, {
+      timeZone: 'Asia/Jakarta',
+    });
+    await expect(validate(dto)).resolves.not.toHaveLength(0);
+  });
+
+  it('changes Project timezone with domain history and canonical audit in one transaction', async () => {
+    const commandId = '10000000-0000-4000-8000-000000000099';
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        {
+          id: '10000000-0000-4000-8000-000000000091',
+          workspaceId: '10000000-0000-4000-8000-000000000092',
+          timeZone: null,
+        },
+      ]),
+      projectTimeZoneEvent: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000093',
+        }),
+      },
+      workspaceMembership: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000094',
+        }),
+      },
+      projectAssignment: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000095',
+        }),
+      },
+      project: {
+        update: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000091',
+          timeZone: 'Asia/Makassar',
+        }),
+        findUniqueOrThrow: jest.fn(),
+      },
+      progressAuditEvent: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = { $transaction: jest.fn((callback) => callback(tx)) };
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
+
+    await service.updateProjectTimeZone(
+      '10000000-0000-4000-8000-000000000091',
+      { commandId, timeZone: 'Asia/Makassar', reason: 'Project confirmation' },
+      {
+        accountId: '10000000-0000-4000-8000-000000000096',
+        membershipId: '10000000-0000-4000-8000-000000000094',
+        workspaceId: '10000000-0000-4000-8000-000000000092',
+        assignmentId: '10000000-0000-4000-8000-000000000095',
+        roleInProject: 'PROJECT_GOVERNOR',
+      },
+    );
+
+    expect(tx.projectTimeZoneEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        commandId,
+        previousTimeZone: null,
+        nextTimeZone: 'Asia/Makassar',
+      }),
+    });
+    expect(tx.progressAuditEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        eventType: 'PROJECT_CONFIGURATION',
+        actorType: 'USER',
+        action: 'PROJECT_TIME_ZONE_UPDATED',
+        targetEntityId: '10000000-0000-4000-8000-000000000093',
+        businessCommandId: commandId,
+        errorCode: null,
+      }),
+    });
+  });
+
+  it('records a no-op Project timezone command so replay identity cannot later become a mutation', async () => {
+    const commandId = '10000000-0000-4000-8000-000000000098';
+    const projectId = '10000000-0000-4000-8000-000000000091';
+    const workspaceId = '10000000-0000-4000-8000-000000000092';
+    const membershipId = '10000000-0000-4000-8000-000000000094';
+    const assignmentId = '10000000-0000-4000-8000-000000000095';
+    const accountId = '10000000-0000-4000-8000-000000000096';
+
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        {
+          id: projectId,
+          workspaceId,
+          timeZone: 'Asia/Jakarta',
+        },
+      ]),
+      projectTimeZoneEvent: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: '10000000-0000-4000-8000-000000000097',
+        }),
+      },
+      workspaceMembership: {
+        findFirst: jest.fn().mockResolvedValue({ id: membershipId }),
+      },
+      projectAssignment: {
+        findFirst: jest.fn().mockResolvedValue({ id: assignmentId }),
+      },
+      project: {
+        update: jest.fn(),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          id: projectId,
+          timeZone: 'Asia/Jakarta',
+        }),
+      },
+      progressAuditEvent: {
+        create: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(tx)),
+    };
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
+
+    await service.updateProjectTimeZone(
+      projectId,
+      {
+        commandId,
+        timeZone: 'Asia/Jakarta',
+        reason: 'Confirm existing Project timezone',
+      },
+      {
+        accountId,
+        membershipId,
+        workspaceId,
+        assignmentId,
+        roleInProject: 'PROJECT_GOVERNOR',
+      },
+    );
+
+    expect(tx.project.update).not.toHaveBeenCalled();
+    expect(tx.projectTimeZoneEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        commandId,
+        previousTimeZone: 'Asia/Jakarta',
+        nextTimeZone: 'Asia/Jakarta',
+        action: 'PROJECT_TIME_ZONE_CONFIRMED',
+      }),
+    });
+    expect(tx.progressAuditEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        businessCommandId: commandId,
+        action: 'PROJECT_TIME_ZONE_CONFIRMED',
+      }),
+    });
+  });
+
+  it('rejects an invalid Project timezone before any transaction', async () => {
+    const prisma = { $transaction: jest.fn() };
+    const service = new ProjectService(prisma as any, {} as any, {} as any);
+
+    await expect(
+      service.updateProjectTimeZone(
+        '10000000-0000-4000-8000-000000000091',
+        {
+          commandId: '10000000-0000-4000-8000-000000000099',
+          timeZone: 'Browser/Local',
+        },
+        {
+          accountId: '10000000-0000-4000-8000-000000000096',
+          membershipId: '10000000-0000-4000-8000-000000000094',
+          workspaceId: '10000000-0000-4000-8000-000000000092',
+          assignmentId: '10000000-0000-4000-8000-000000000095',
+          roleInProject: 'PROJECT_GOVERNOR',
+        },
+      ),
+    ).rejects.toThrow('INVALID_PROJECT_TIME_ZONE');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('ignores workspaceId and organizationId body fields', async () => {
@@ -187,8 +394,9 @@ describe('ProjectService P7C intake contract', () => {
     prisma.projectBaseline.count.mockResolvedValue(1);
     const service = new ProjectService(prisma as any, {} as any, {} as any);
 
-    await expect(service.updateIntakeContext('project-1', { budgetBaseline: '1' }))
-      .rejects.toBeInstanceOf(ConflictException);
+    await expect(
+      service.updateIntakeContext('project-1', { budgetBaseline: '1' }),
+    ).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.project.update).not.toHaveBeenCalled();
   });
 
@@ -198,7 +406,8 @@ describe('ProjectService P7C intake contract', () => {
       id: 'project-1',
       budgetBaseline: null,
       mainMaterialSpec: null,
-      description: 'Pagu Anggaran: 999999999\nSpesifikasi Material Utama: Beton',
+      description:
+        'Pagu Anggaran: 999999999\nSpesifikasi Material Utama: Beton',
     });
     const service = new ProjectService(prisma as any, {} as any, {} as any);
 
@@ -215,9 +424,7 @@ describe('ProjectService P7C intake contract', () => {
       budgetBaseline: new Prisma.Decimal('100.00'),
       mainMaterialSpec: 'Beton',
     });
-    prisma.boqItem.count
-      .mockResolvedValueOnce(0)
-      .mockResolvedValueOnce(1);
+    prisma.boqItem.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
     const service = new ProjectService(prisma as any, {} as any, {} as any);
 
     await expect(service.getIntakeMode('project-1')).resolves.toMatchObject({
@@ -228,7 +435,9 @@ describe('ProjectService P7C intake contract', () => {
 });
 
 describe('ProjectService initiateSetup collision guard', () => {
-  function createSetupHarness(drafts: Array<{ id: string; name: string; status: string }>) {
+  function createSetupHarness(
+    drafts: Array<{ id: string; name: string; status: string }>,
+  ) {
     const tx = {
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'project-1' }]),
       boqStructure: {
@@ -262,12 +471,19 @@ describe('ProjectService initiateSetup collision guard', () => {
     const { service, tx } = createSetupHarness([
       { id: 'owner-draft', name: 'Nama Bebas Owner', status: 'DRAFT' },
     ]);
-    tx.boqItem.count
-      .mockResolvedValueOnce(0)
-      .mockResolvedValueOnce(1);
+    tx.boqItem.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
 
     const payload = {
-      items: [{ wbsCode: '1', name: 'Mobilisasi', itemType: 'WORK_ITEM', quantity: 2, unit: 'ls', unitPrice: 100 }],
+      items: [
+        {
+          wbsCode: '1',
+          name: 'Mobilisasi',
+          itemType: 'WORK_ITEM',
+          quantity: 2,
+          unit: 'ls',
+          unitPrice: 100,
+        },
+      ],
     } as any;
 
     const first = await service.initiateSetup('project-1', payload);
@@ -276,7 +492,9 @@ describe('ProjectService initiateSetup collision guard', () => {
     expect(second).toEqual(first);
     expect(tx.boqStructure.create).not.toHaveBeenCalled();
     expect(tx.boqItem.create).toHaveBeenCalledTimes(1);
-    expect(tx.boqItem.create).toHaveBeenCalledWith({ data: expect.objectContaining({ boqStructureId: 'owner-draft' }) });
+    expect(tx.boqItem.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ boqStructureId: 'owner-draft' }),
+    });
     expect(tx.rabDocument.create).not.toHaveBeenCalled();
     expect(tx.projectBaseline.create).not.toHaveBeenCalled();
     expect(tx.progressReport.create).not.toHaveBeenCalled();
@@ -289,7 +507,9 @@ describe('ProjectService initiateSetup collision guard', () => {
       { id: 'draft-2', name: 'Second Unrelated Name', status: 'DRAFT' },
     ]);
 
-    await expect(service.initiateSetup('project-1', { items: [] })).rejects.toThrow('MULTIPLE_DRAFT_BOQ_STRUCTURES');
+    await expect(
+      service.initiateSetup('project-1', { items: [] }),
+    ).rejects.toThrow('MULTIPLE_DRAFT_BOQ_STRUCTURES');
 
     expect(tx.boqItem.count).not.toHaveBeenCalled();
     expect(tx.boqStructure.create).not.toHaveBeenCalled();
@@ -303,8 +523,12 @@ describe('ProjectService initiateSetup collision guard', () => {
 
 describe('ProjectService initiateSetup GATE-2A price truth', () => {
   function createHarness() {
-    const boqItemCreate = jest.fn(({ data }: { data: Record<string, unknown> }) =>
-      Promise.resolve({ id: `item-${boqItemCreate.mock.calls.length}`, ...data }),
+    const boqItemCreate = jest.fn(
+      ({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve({
+          id: `item-${boqItemCreate.mock.calls.length}`,
+          ...data,
+        }),
     );
     const tx = {
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'project-1' }]),
@@ -317,7 +541,9 @@ describe('ProjectService initiateSetup GATE-2A price truth', () => {
         create: boqItemCreate,
       },
     };
-    const prisma = { $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(tx)) };
+    const prisma = {
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(tx)),
+    };
     const service = new ProjectService(prisma as any, {} as any, {} as any);
     return { service, boqItemCreate };
   }
@@ -336,7 +562,15 @@ describe('ProjectService initiateSetup GATE-2A price truth', () => {
   it('WORK_ITEM with omitted unitPrice stores unitPrice=null, lineTotal=null, priceOrigin=null (test 1)', async () => {
     const { service, boqItemCreate } = createHarness();
     await service.initiateSetup('project-1', {
-      items: [{ wbsCode: '1', name: 'Tanpa harga', itemType: 'WORK_ITEM', quantity: 5, unit: 'ls' }],
+      items: [
+        {
+          wbsCode: '1',
+          name: 'Tanpa harga',
+          itemType: 'WORK_ITEM',
+          quantity: 5,
+          unit: 'ls',
+        },
+      ],
     } as any);
 
     const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
@@ -349,7 +583,16 @@ describe('ProjectService initiateSetup GATE-2A price truth', () => {
   it('WORK_ITEM with explicit zero unitPrice stores unitPrice=0, lineTotal=0, priceOrigin=MANUAL_CLIENT (test 2)', async () => {
     const { service, boqItemCreate } = createHarness();
     await service.initiateSetup('project-1', {
-      items: [{ wbsCode: '1', name: 'Harga nol', itemType: 'WORK_ITEM', quantity: 5, unit: 'ls', unitPrice: 0 }],
+      items: [
+        {
+          wbsCode: '1',
+          name: 'Harga nol',
+          itemType: 'WORK_ITEM',
+          quantity: 5,
+          unit: 'ls',
+          unitPrice: 0,
+        },
+      ],
     } as any);
 
     const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
@@ -362,7 +605,16 @@ describe('ProjectService initiateSetup GATE-2A price truth', () => {
   it('WORK_ITEM with explicit non-zero unitPrice stores exact unitPrice/lineTotal, priceOrigin=MANUAL_CLIENT (test 3)', async () => {
     const { service, boqItemCreate } = createHarness();
     await service.initiateSetup('project-1', {
-      items: [{ wbsCode: '1', name: 'Harga nyata', itemType: 'WORK_ITEM', quantity: 3, unit: 'ls', unitPrice: 25000 }],
+      items: [
+        {
+          wbsCode: '1',
+          name: 'Harga nyata',
+          itemType: 'WORK_ITEM',
+          quantity: 3,
+          unit: 'ls',
+          unitPrice: 25000,
+        },
+      ],
     } as any);
 
     const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
@@ -396,9 +648,29 @@ describe('ProjectService initiateSetup GATE-2A price truth', () => {
     await service.initiateSetup('project-1', {
       items: [
         { wbsCode: '1', name: 'Folder', itemType: 'FOLDER' },
-        { wbsCode: '1.1', name: 'Tanpa harga', itemType: 'WORK_ITEM', quantity: 1, unit: 'ls' },
-        { wbsCode: '1.2', name: 'Harga nol', itemType: 'WORK_ITEM', quantity: 1, unit: 'ls', unitPrice: 0 },
-        { wbsCode: '1.3', name: 'Harga nyata', itemType: 'WORK_ITEM', quantity: 2, unit: 'ls', unitPrice: 500 },
+        {
+          wbsCode: '1.1',
+          name: 'Tanpa harga',
+          itemType: 'WORK_ITEM',
+          quantity: 1,
+          unit: 'ls',
+        },
+        {
+          wbsCode: '1.2',
+          name: 'Harga nol',
+          itemType: 'WORK_ITEM',
+          quantity: 1,
+          unit: 'ls',
+          unitPrice: 0,
+        },
+        {
+          wbsCode: '1.3',
+          name: 'Harga nyata',
+          itemType: 'WORK_ITEM',
+          quantity: 2,
+          unit: 'ls',
+          unitPrice: 500,
+        },
         { wbsCode: '1.4', name: 'Catatan', itemType: 'NOTE' },
       ],
     } as any);
@@ -412,7 +684,9 @@ describe('ProjectService initiateSetup GATE-2A price truth', () => {
 
 describe('UpdateProjectIntakeContextDto validation', () => {
   it('rejects invalid decimal strings', async () => {
-    const dto = plainToInstance(UpdateProjectIntakeContextDto, { budgetBaseline: '1,000' });
+    const dto = plainToInstance(UpdateProjectIntakeContextDto, {
+      budgetBaseline: '1,000',
+    });
     await expect(validate(dto)).resolves.not.toHaveLength(0);
   });
 });
@@ -443,10 +717,13 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
 
   function createPrismaMock(existingItems: unknown[]) {
     let nextId = 0;
-    const boqItemCreate = jest.fn(({ data }: { data: Record<string, unknown> }) =>
-      Promise.resolve({ id: `new-row-${nextId++}`, ...data }),
+    const boqItemCreate = jest.fn(
+      ({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve({ id: `new-row-${nextId++}`, ...data }),
     );
-    const boqItemDeleteMany = jest.fn().mockResolvedValue({ count: existingItems.length });
+    const boqItemDeleteMany = jest
+      .fn()
+      .mockResolvedValue({ count: existingItems.length });
     const rabDocumentUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
     const tx = {
       $queryRaw: jest
@@ -495,7 +772,13 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
        */
       projectAhspOccurrence: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    return { prisma, tx, boqItemCreate, boqItemDeleteMany, rabDocumentUpdateMany };
+    return {
+      prisma,
+      tx,
+      boqItemCreate,
+      boqItemDeleteMany,
+      rabDocumentUpdateMany,
+    };
   }
 
   function buildService(prisma: unknown) {
@@ -525,7 +808,9 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
           unitPrice: 555,
         },
       ]),
-    ).rejects.toMatchObject({ message: 'SERVER_ROW_UNIT_PRICE_OVERWRITE_FORBIDDEN' });
+    ).rejects.toMatchObject({
+      message: 'SERVER_ROW_UNIT_PRICE_OVERWRITE_FORBIDDEN',
+    });
     // Fail-closed BEFORE the destructive full-replace — zero mutation.
     expect(boqItemDeleteMany).not.toHaveBeenCalled();
   });
@@ -545,7 +830,9 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
           unitPrice: null,
         },
       ]),
-    ).rejects.toMatchObject({ message: 'SERVER_ROW_UNIT_PRICE_OVERWRITE_FORBIDDEN' });
+    ).rejects.toMatchObject({
+      message: 'SERVER_ROW_UNIT_PRICE_OVERWRITE_FORBIDDEN',
+    });
     expect(boqItemDeleteMany).not.toHaveBeenCalled();
   });
 
@@ -594,7 +881,14 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
 
     await expect(
       save(service, [
-        { tempId: 'unrelated-row', itemType: 'WORK_ITEM', name: 'Lain', quantity: 1, unit: 'ls', unitPrice: 1 },
+        {
+          tempId: 'unrelated-row',
+          itemType: 'WORK_ITEM',
+          name: 'Lain',
+          quantity: 1,
+          unit: 'ls',
+          unitPrice: 1,
+        },
       ]),
     ).rejects.toMatchObject({
       message: 'SERVER_ROW_OMISSION_REQUIRES_EXPLICIT_COMMAND',
@@ -608,8 +902,20 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
 
     await expect(
       save(service, [
-        { tempId: SERVER_ROW_ID, itemType: 'WORK_ITEM', name: 'A', quantity: 5, unit: 'M1' },
-        { tempId: SERVER_ROW_ID, itemType: 'WORK_ITEM', name: 'B', quantity: 5, unit: 'M1' },
+        {
+          tempId: SERVER_ROW_ID,
+          itemType: 'WORK_ITEM',
+          name: 'A',
+          quantity: 5,
+          unit: 'M1',
+        },
+        {
+          tempId: SERVER_ROW_ID,
+          itemType: 'WORK_ITEM',
+          name: 'B',
+          quantity: 5,
+          unit: 'M1',
+        },
       ]),
     ).rejects.toMatchObject({ message: 'DUPLICATE_TEMP_ID' });
   });
@@ -620,8 +926,22 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
 
     await expect(
       save(service, [
-        { tempId: 'dup', itemType: 'WORK_ITEM', name: 'A', quantity: 1, unit: 'ls', unitPrice: 1 },
-        { tempId: 'dup', itemType: 'WORK_ITEM', name: 'B', quantity: 1, unit: 'ls', unitPrice: 2 },
+        {
+          tempId: 'dup',
+          itemType: 'WORK_ITEM',
+          name: 'A',
+          quantity: 1,
+          unit: 'ls',
+          unitPrice: 1,
+        },
+        {
+          tempId: 'dup',
+          itemType: 'WORK_ITEM',
+          name: 'B',
+          quantity: 1,
+          unit: 'ls',
+          unitPrice: 2,
+        },
       ]),
     ).rejects.toMatchObject({ message: 'DUPLICATE_TEMP_ID' });
     expect(boqItemDeleteMany).not.toHaveBeenCalled();
@@ -658,7 +978,9 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
     expect(data.unitPrice.toString()).toBe('200000');
     expect(data.lineTotal.toString()).toBe('1000000');
     expect(data.calculationOccurrenceId).toBe('occurrence-1');
-    expect(data.calculationPolicyVersion).toBe('RAB_KERNEL_PERSISTENCE_GRADE_A_V1');
+    expect(data.calculationPolicyVersion).toBe(
+      'RAB_KERNEL_PERSISTENCE_GRADE_A_V1',
+    );
     expect(data.ahspVersionId).toBe('ahsp-version-1');
 
     const manualRowCreateCall = boqItemCreate.mock.calls.find(
@@ -694,7 +1016,13 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
     const service = buildService(prisma);
 
     await save(service, [
-      { tempId: 'unpriced-1', itemType: 'WORK_ITEM', name: 'Belum diisi', quantity: 3, unit: 'ls' },
+      {
+        tempId: 'unpriced-1',
+        itemType: 'WORK_ITEM',
+        name: 'Belum diisi',
+        quantity: 3,
+        unit: 'ls',
+      },
     ]);
 
     const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
@@ -709,8 +1037,21 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
     const service = buildService(prisma);
 
     await save(service, [
-      { tempId: 'priced-1', itemType: 'WORK_ITEM', name: 'A', quantity: 1, unit: 'ls', unitPrice: 100 },
-      { tempId: 'unpriced-1', itemType: 'WORK_ITEM', name: 'B', quantity: 1, unit: 'ls' },
+      {
+        tempId: 'priced-1',
+        itemType: 'WORK_ITEM',
+        name: 'A',
+        quantity: 1,
+        unit: 'ls',
+        unitPrice: 100,
+      },
+      {
+        tempId: 'unpriced-1',
+        itemType: 'WORK_ITEM',
+        name: 'B',
+        quantity: 1,
+        unit: 'ls',
+      },
     ]);
 
     expect(rabDocumentUpdateMany).toHaveBeenCalledWith(
@@ -724,10 +1065,19 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
 describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy', () => {
   const STRUCTURE_ID = 'structure-1';
 
-  function createRecapHarness(options: {
-    existingRabDocument?: { profitPercent: Prisma.Decimal | number; taxPercent: Prisma.Decimal | number } | null;
-    persistedRab?: { totalBaseCost: Prisma.Decimal; profitPercent: Prisma.Decimal | number; taxPercent: Prisma.Decimal | number } | null;
-  } = {}) {
+  function createRecapHarness(
+    options: {
+      existingRabDocument?: {
+        profitPercent: Prisma.Decimal | number;
+        taxPercent: Prisma.Decimal | number;
+      } | null;
+      persistedRab?: {
+        totalBaseCost: Prisma.Decimal;
+        profitPercent: Prisma.Decimal | number;
+        taxPercent: Prisma.Decimal | number;
+      } | null;
+    } = {},
+  ) {
     const rabDocumentUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
     const rabDocumentCreate = jest.fn().mockResolvedValue({});
     const rabDocumentFindFirst = jest
@@ -738,7 +1088,9 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
       );
     let nextId = 0;
     const tx = {
-      $queryRaw: jest.fn().mockResolvedValue([{ id: 'project-1', status: 'PLANNED' }]),
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValue([{ id: 'project-1', status: 'PLANNED' }]),
       projectBaseline: { count: jest.fn().mockResolvedValue(0) },
       rabDocument: {
         count: jest.fn().mockResolvedValue(0),
@@ -764,7 +1116,9 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
         ),
       },
     };
-    const prisma = { $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(tx)) };
+    const prisma = {
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(tx)),
+    };
     const service = new ProjectService(
       prisma as any,
       {} as any,
@@ -774,7 +1128,14 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
   }
 
   const ONE_PRICED_WORK_ITEM = [
-    { tempId: 'r1', itemType: 'WORK_ITEM', name: 'A', quantity: 5, unit: 'M1', unitPrice: 200000 },
+    {
+      tempId: 'r1',
+      itemType: 'WORK_ITEM',
+      name: 'A',
+      quantity: 5,
+      unit: 'M1',
+      unitPrice: 200000,
+    },
   ];
   const ONE_UNPRICED_WORK_ITEM = [
     { tempId: 'r1', itemType: 'WORK_ITEM', name: 'A', quantity: 5, unit: 'M1' },
@@ -783,7 +1144,11 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
   it('C-01: no existing DRAFT RabDocument and omitted percentages resolve to the canonical default 10/11', async () => {
     const { service } = createRecapHarness();
 
-    const result = await service.saveDraftBoq('project-1', { rows: ONE_PRICED_WORK_ITEM } as any, ONE_PRICED_WORK_ITEM);
+    const result = await service.saveDraftBoq(
+      'project-1',
+      { rows: ONE_PRICED_WORK_ITEM } as any,
+      ONE_PRICED_WORK_ITEM,
+    );
 
     const recap = result.recap as any;
     expect(recap.marginPercent).toBe('10.00');
@@ -794,10 +1159,17 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
 
   it('C-02: a deliberately-set 5%/12% on the existing DRAFT is preserved when a later save omits the fields', async () => {
     const { service } = createRecapHarness({
-      existingRabDocument: { profitPercent: new Prisma.Decimal(5), taxPercent: new Prisma.Decimal(12) },
+      existingRabDocument: {
+        profitPercent: new Prisma.Decimal(5),
+        taxPercent: new Prisma.Decimal(12),
+      },
     });
 
-    const result = await service.saveDraftBoq('project-1', { rows: ONE_PRICED_WORK_ITEM } as any, ONE_PRICED_WORK_ITEM);
+    const result = await service.saveDraftBoq(
+      'project-1',
+      { rows: ONE_PRICED_WORK_ITEM } as any,
+      ONE_PRICED_WORK_ITEM,
+    );
 
     const recap = result.recap as any;
     expect(recap.marginPercent).toBe('5.00');
@@ -807,7 +1179,10 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
 
   it('C-03: an explicit DTO percentage overrides both the existing DRAFT setting and the canonical default', async () => {
     const { service } = createRecapHarness({
-      existingRabDocument: { profitPercent: new Prisma.Decimal(5), taxPercent: new Prisma.Decimal(12) },
+      existingRabDocument: {
+        profitPercent: new Prisma.Decimal(5),
+        taxPercent: new Prisma.Decimal(12),
+      },
     });
 
     const result = await service.saveDraftBoq(
@@ -824,10 +1199,17 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
 
   it('C-04: an incomplete draft retains the effective percentages (not reset to default, not null) while totals stay null', async () => {
     const { service } = createRecapHarness({
-      existingRabDocument: { profitPercent: new Prisma.Decimal(5), taxPercent: new Prisma.Decimal(12) },
+      existingRabDocument: {
+        profitPercent: new Prisma.Decimal(5),
+        taxPercent: new Prisma.Decimal(12),
+      },
     });
 
-    const result = await service.saveDraftBoq('project-1', { rows: ONE_UNPRICED_WORK_ITEM } as any, ONE_UNPRICED_WORK_ITEM);
+    const result = await service.saveDraftBoq(
+      'project-1',
+      { rows: ONE_UNPRICED_WORK_ITEM } as any,
+      ONE_UNPRICED_WORK_ITEM,
+    );
 
     const recap = result.recap as any;
     expect(recap.pricingStatus).toBe('INCOMPLETE');
@@ -843,115 +1225,79 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
   });
 });
 
-describe('ProjectService getReality GATE-2A active-baseline total truth', () => {
-  function createHarness(options: {
-    hasReport?: boolean;
-    baseline?: { rabDocumentId: string | null } | null;
-    rab?: { totalBaseCost: Prisma.Decimal | null } | null;
-  }) {
+describe('ProjectService getReality pre-MON-04 containment', () => {
+  function createHarness() {
     const prisma = {
       progressReport: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue(
-            options.hasReport === false
-              ? []
-              : [{ id: 'report-1', entries: [] }],
-          ),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'report-old-baseline',
+            baselineId: 'baseline-old',
+            entries: [
+              {
+                status: 'ACCEPTED',
+                installedQuantity: '7.5',
+                boqItem: { quantity: '10', unit: 'm3' },
+              },
+            ],
+          },
+        ]),
       },
       projectBaseline: {
-        findFirst: jest
-          .fn()
-          .mockResolvedValue(options.baseline === undefined ? null : options.baseline),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'baseline-active-different',
+          rabDocumentId: 'rab-active',
+        }),
       },
       rabDocument: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue(options.rab === undefined ? null : options.rab),
+        findUnique: jest.fn().mockResolvedValue({
+          totalBaseCost: new Prisma.Decimal('1234567.89'),
+        }),
+      },
+      deviationSignal: {
+        create: jest.fn(),
+        update: jest.fn(),
       },
     };
-    const deviationService = { computeAndPersist: jest.fn().mockResolvedValue([]) };
-    const service = new ProjectService(prisma as any, deviationService as any, {} as any);
+    const deviationService = {
+      computeAndPersist: jest.fn().mockResolvedValue([]),
+    };
+    const service = new ProjectService(
+      prisma as any,
+      deviationService as any,
+      {} as any,
+    );
     return { service, prisma, deviationService };
   }
 
-  it('returns UNAVAILABLE — never planned cost 0 — when the active baseline RabDocument totalBaseCost is null (test 7)', async () => {
-    const { service } = createHarness({
-      baseline: { rabDocumentId: 'rab-1' },
-      rab: { totalBaseCost: null },
-    });
+  it('fails closed before selecting Actual, Baseline, quantity, or lifecycle calculation authority', async () => {
+    const { service, prisma, deviationService } = createHarness();
 
     const result = await service.getReality('project-1');
 
     expect(result).toEqual({
       available: false,
       status: 'UNAVAILABLE',
-      message: expect.any(String),
+      message:
+        'Perhitungan progress dan deviasi resmi belum diaktifkan sampai Owner menetapkan kelayakan Actual untuk perhitungan resmi',
       data: null,
     });
-    expect(result).not.toHaveProperty('overallPlannedCost');
+    expect(result).not.toHaveProperty('overallActualProgress');
+    expect(result).not.toHaveProperty('overallPlannedProgress');
+    expect(result).not.toHaveProperty('deviationSignals');
+    expect(prisma.progressReport.findMany).not.toHaveBeenCalled();
+    expect(prisma.projectBaseline.findFirst).not.toHaveBeenCalled();
+    expect(prisma.rabDocument.findUnique).not.toHaveBeenCalled();
+    expect(deviationService.computeAndPersist).not.toHaveBeenCalled();
   });
 
-  it('returns UNAVAILABLE when the active baseline has no resolvable RabDocument at all (test 8)', async () => {
-    const { service } = createHarness({
-      baseline: { rabDocumentId: 'rab-missing' },
-      rab: null,
-    });
+  it('performs zero DeviationSignal create/update and no business persistence', async () => {
+    const { service, prisma, deviationService } = createHarness();
 
-    const result = await service.getReality('project-1');
+    await service.getReality('project-1');
 
-    expect(result.status).toBe('UNAVAILABLE');
-    expect(result.data).toBeNull();
-  });
-
-  it('§PR57 Gap D-01: returns UNAVAILABLE — never planned cost 0 — when a progress report exists but no ACTIVE ProjectBaseline exists at all', async () => {
-    const { service, prisma } = createHarness({});
-
-    const result = await service.getReality('project-1');
-
-    expect(prisma.projectBaseline.findFirst).toHaveBeenCalled();
-    expect(result).toEqual({
-      available: false,
-      status: 'UNAVAILABLE',
-      message: expect.any(String),
-      data: null,
-    });
-    expect(result).not.toHaveProperty('overallPlannedCost');
-  });
-
-  it('returns UNAVAILABLE when the active baseline itself carries no rabDocumentId', async () => {
-    const { service } = createHarness({
-      baseline: { rabDocumentId: null },
-    });
-
-    const result = await service.getReality('project-1');
-
-    expect(result.status).toBe('UNAVAILABLE');
-    expect(result.data).toBeNull();
-  });
-
-  it('returns the exact planned total when the active baseline RabDocument total is valid and non-null (test 9)', async () => {
-    const { service } = createHarness({
-      baseline: { rabDocumentId: 'rab-1' },
-      rab: { totalBaseCost: new Prisma.Decimal('1234567.89') },
-    });
-
-    const result = await service.getReality('project-1');
-
-    expect(result.status).toBeUndefined();
-    expect((result as any).overallPlannedCost).toBe(1234567.89);
-  });
-
-  it('preserves the existing UNAVAILABLE state when the primary reality input (progress report) is absent (test 10)', async () => {
-    const { service } = createHarness({ hasReport: false });
-
-    const result = await service.getReality('project-1');
-
-    expect(result).toEqual({
-      available: false,
-      status: 'UNAVAILABLE',
-      message: 'Data realitas belum tersedia',
-      data: null,
-    });
+    expect(deviationService.computeAndPersist).not.toHaveBeenCalled();
+    expect(prisma.deviationSignal.create).not.toHaveBeenCalled();
+    expect(prisma.deviationSignal.update).not.toHaveBeenCalled();
   });
 });

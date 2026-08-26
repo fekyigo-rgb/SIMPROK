@@ -23,6 +23,24 @@ dokumen manapun di `docs/control/`.
    - status: OWNER-LOCKED;
    - jalur repository: `docs/control/ROADMAP.md`.
 
+## OWNER-RATIFIED DOMAIN PRODUCT LAWS
+
+Dokumen domain di bawah ini adalah sumber hukum produk kanonik dan harus dibaca
+langsung dari repository. `docs/control/` hanya menunjuk; tidak menduplikasi atau
+menafsirkan ulang isi hukum.
+
+- Monitoring parent Product Law:
+  `docs/product-law/MONITORING_SUPERVISION_CONTROL_RECOVERY_LAW_20260824.md`
+  — OWNER-RATIFIED PRODUCT LAW.
+- MON-04 Current Numeric Product-Law Addendum v1.0:
+  `docs/product-law/MON04_CURRENT_NUMERIC_LAW_ADDENDUM_v1.0.md`
+  — OWNER-RATIFIED / LOCKED pada 25 Agustus 2026.
+  `LIVE NUMERIC ACTIVATION = HOLD` dan `MON-04 IMPLEMENTATION = HOLD`
+  sampai gate terpisah membuktikan verification context, durable semantic/non-overlap
+  provenance, dan lawful calculation consumption.
+- Owner lock/pointer memory untuk Addendum tersebut:
+  `docs/project-memory/MON04_CURRENT_NUMERIC_LAW_OWNER_LOCK.md`.
+
 ## MUTABLE OPERATIONAL TRUTH
 
 Dokumen berikut mencatat keadaan yang berubah — bukan hukum. Diperbarui
@@ -47,12 +65,16 @@ verdict untuk SIMPROK:
 3. baca `docs/control/ROADMAP.md` secara utuh;
 4. baca `docs/control/STATE.md` secara utuh — dokumen ini sudah tersedia,
    membacanya adalah kewajiban, bukan langkah kondisional lagi;
-5. bekerja hanya pada target roadmap dan kewenangan kursi yang berlaku;
-6. jika bukti, status, atau konflik dokumen belum jelas, laporkan
+5. untuk pekerjaan Monitoring, baca parent Monitoring Product Law dan setiap
+   Owner-ratified Addendum yang tercantum pada indeks ini, termasuk
+   `docs/product-law/MON04_CURRENT_NUMERIC_LAW_ADDENDUM_v1.0.md` untuk
+   MON-04/current numeric truth;
+6. bekerja hanya pada target roadmap dan kewenangan kursi yang berlaku;
+7. jika bukti, status, atau konflik dokumen belum jelas, laporkan
    `NEEDS_REVIEW` atau `FAIL_CLOSED`; jangan mengarang.
 
 Dokumen ini hanya indeks dan protokol akses. Dokumen ini tidak menggantikan,
-meringkas sebagai hukum baru, atau mengubah isi dua sumber kanonik di atas.
+meringkas sebagai hukum baru, atau mengubah isi sumber kanonik di atas.
 
 ## Integritas sumber
 

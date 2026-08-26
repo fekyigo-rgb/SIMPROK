@@ -49,7 +49,8 @@ const ids = {
   roleAcceptanceProjectCreator: '10000000-0000-4000-8000-000000000040',
   membershipRoleAssignedProjectCreator: '10000000-0000-4000-8000-000000000041',
   roleAcceptanceFrontendDoorDirector: '10000000-0000-4000-8000-000000000042',
-  membershipRoleAssignedFrontendDoorDirector: '10000000-0000-4000-8000-000000000043',
+  membershipRoleAssignedFrontendDoorDirector:
+    '10000000-0000-4000-8000-000000000043',
   projectMonitoringProof: '10000000-0000-4000-8000-000000000044',
   projectAssignmentMonitoringProof: '10000000-0000-4000-8000-000000000045',
   boqStructureMonitoringProof: '10000000-0000-4000-8000-000000000046',
@@ -61,6 +62,20 @@ const ids = {
   progressReportMonitoringProof: '10000000-0000-4000-8000-000000000052',
   progressEntryMonitoringPositive: '10000000-0000-4000-8000-000000000053',
   progressEntryMonitoringZero: '10000000-0000-4000-8000-000000000054',
+  positionForemanProgressAuthority: '10000000-0000-4000-8000-000000000055',
+  positionAssignmentForemanProgressAuthority:
+    '10000000-0000-4000-8000-000000000056',
+  authorityProgressVerify: '10000000-0000-4000-8000-000000000057',
+  authorityProgressCorrect: '10000000-0000-4000-8000-000000000058',
+  authorityProgressAccept: '10000000-0000-4000-8000-000000000059',
+  projectAssignmentForemanMonitoringProof:
+    '10000000-0000-4000-8000-000000000060',
+  permissionFieldProgressCorrect: '10000000-0000-4000-8000-000000000061',
+  permissionFieldProgressVerify: '10000000-0000-4000-8000-000000000062',
+  permissionFieldProgressAccept: '10000000-0000-4000-8000-000000000063',
+  permissionProjectSettingsManage: '10000000-0000-4000-8000-000000000064',
+  approvalProgressVerifyCombined: '10000000-0000-4000-8000-000000000065',
+  approvalProgressAcceptCombined: '10000000-0000-4000-8000-000000000066',
 };
 
 async function main() {
@@ -122,8 +137,32 @@ async function main() {
       code: 'FIELD_PROGRESS_SUBMIT',
       name: 'Submit Progress',
     },
+    {
+      id: ids.permissionFieldProgressCorrect,
+      code: 'FIELD_PROGRESS_CORRECT',
+      name: 'Correct Progress',
+    },
+    {
+      id: ids.permissionFieldProgressVerify,
+      code: 'FIELD_PROGRESS_VERIFY',
+      name: 'Verify Progress',
+    },
+    {
+      id: ids.permissionFieldProgressAccept,
+      code: 'FIELD_PROGRESS_ACCEPT',
+      name: 'Accept Progress',
+    },
+    {
+      id: ids.permissionProjectSettingsManage,
+      code: 'PROJECT_SETTINGS_MANAGE',
+      name: 'Manage Project Settings',
+    },
     { id: ids.permissionRabView, code: 'RAB_VIEW', name: 'RAB View' },
-    { id: ids.permissionRabDraftEdit, code: 'RAB_DRAFT_EDIT', name: 'RAB Draft Edit' },
+    {
+      id: ids.permissionRabDraftEdit,
+      code: 'RAB_DRAFT_EDIT',
+      name: 'RAB Draft Edit',
+    },
   ];
 
   await Promise.all(
@@ -218,7 +257,10 @@ async function main() {
     },
   });
 
-  for (const permissionId of [ids.permissionRabView, ids.permissionRabDraftEdit]) {
+  for (const permissionId of [
+    ids.permissionRabView,
+    ids.permissionRabDraftEdit,
+  ]) {
     await prisma.rolePermission.upsert({
       where: { roleId_permissionId: { roleId: role.id, permissionId } },
       update: {},
@@ -305,7 +347,8 @@ async function main() {
     },
     update: {
       name: 'Acceptance Project Creator',
-      description: 'Grants PROJECT_CREATE to the assigned acceptance member only',
+      description:
+        'Grants PROJECT_CREATE to the assigned acceptance member only',
       isSystem: false,
     },
     create: {
@@ -313,15 +356,24 @@ async function main() {
       workspaceId: workspaceA.id,
       code: 'ACCEPTANCE_PROJECT_CREATOR',
       name: 'Acceptance Project Creator',
-      description: 'Grants PROJECT_CREATE to the assigned acceptance member only',
+      description:
+        'Grants PROJECT_CREATE to the assigned acceptance member only',
       isSystem: false,
     },
   });
 
   await prisma.rolePermission.upsert({
-    where: { roleId_permissionId: { roleId: roleAcceptanceProjectCreator.id, permissionId: ids.permissionProjectCreate } },
+    where: {
+      roleId_permissionId: {
+        roleId: roleAcceptanceProjectCreator.id,
+        permissionId: ids.permissionProjectCreate,
+      },
+    },
     update: {},
-    create: { roleId: roleAcceptanceProjectCreator.id, permissionId: ids.permissionProjectCreate },
+    create: {
+      roleId: roleAcceptanceProjectCreator.id,
+      permissionId: ids.permissionProjectCreate,
+    },
   });
 
   await prisma.membershipRole.upsert({
@@ -357,7 +409,8 @@ async function main() {
     },
     update: {
       name: 'Acceptance Frontend Door (DIRECTOR)',
-      description: 'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
+      description:
+        'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
       isSystem: false,
     },
     create: {
@@ -365,7 +418,8 @@ async function main() {
       workspaceId: workspaceA.id,
       code: 'DIRECTOR',
       name: 'Acceptance Frontend Door (DIRECTOR)',
-      description: 'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
+      description:
+        'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
       isSystem: false,
     },
   });
@@ -558,6 +612,7 @@ async function main() {
       organizationId: orgA.id,
       name: 'MON-02A Monitoring Truth Proof',
       status: 'ACTIVE',
+      timeZone: 'Asia/Jakarta',
     },
     create: {
       id: ids.projectMonitoringProof,
@@ -566,6 +621,7 @@ async function main() {
       code: 'MON-02A-PROOF',
       name: 'MON-02A Monitoring Truth Proof',
       status: 'ACTIVE',
+      timeZone: 'Asia/Jakarta',
     },
   });
 
@@ -739,8 +795,11 @@ async function main() {
         progressReportId: monitoringReport.id,
         boqItemId: actual.boqItemId,
         installedQuantity: actual.installedQuantity,
-        actualCost: 0,
-        earnedValue: 0,
+        actualCost: null,
+        earnedValue: null,
+        captureMethod: 'ACCEPTANCE_FIXTURE',
+        recordedByAccountId: assignedAccount.id,
+        recordedByMembershipId: assignedMembership.id,
         workDate: new Date('2026-08-01T00:00:00.000Z'),
       },
       create: {
@@ -748,13 +807,15 @@ async function main() {
         progressReportId: monitoringReport.id,
         boqItemId: actual.boqItemId,
         installedQuantity: actual.installedQuantity,
-        actualCost: 0,
-        earnedValue: 0,
+        actualCost: null,
+        earnedValue: null,
+        captureMethod: 'ACCEPTANCE_FIXTURE',
+        recordedByAccountId: assignedAccount.id,
+        recordedByMembershipId: assignedMembership.id,
         workDate: new Date('2026-08-01T00:00:00.000Z'),
       },
     });
   }
-
 
   const roleForeman = await prisma.role.upsert({
     where: {
@@ -865,6 +926,128 @@ async function main() {
     },
   });
 
+  await prisma.projectAssignment.upsert({
+    where: {
+      workspaceMembershipId_projectId: {
+        workspaceMembershipId: foremanMembership.id,
+        projectId: monitoringProject.id,
+      },
+    },
+    update: {
+      roleInProject: 'FOREMAN',
+      isPrimaryAssignment: false,
+      status: 'ASSIGNED',
+      revokedAt: null,
+    },
+    create: {
+      id: ids.projectAssignmentForemanMonitoringProof,
+      workspaceMembershipId: foremanMembership.id,
+      projectId: monitoringProject.id,
+      roleInProject: 'FOREMAN',
+      isPrimaryAssignment: false,
+      status: 'ASSIGNED',
+    },
+  });
+
+  const progressAuthorityPosition = await prisma.position.upsert({
+    where: { id: ids.positionForemanProgressAuthority },
+    update: {
+      workspaceId: workspaceA.id,
+      code: 'FIELD_PROGRESS_AUTHORITY',
+      name: 'Configured Field Progress Authority',
+    },
+    create: {
+      id: ids.positionForemanProgressAuthority,
+      workspaceId: workspaceA.id,
+      code: 'FIELD_PROGRESS_AUTHORITY',
+      name: 'Configured Field Progress Authority',
+    },
+  });
+  await prisma.positionAssignment.upsert({
+    where: { id: ids.positionAssignmentForemanProgressAuthority },
+    update: {
+      positionId: progressAuthorityPosition.id,
+      userId: ids.userForeman,
+      isActive: true,
+      removedAt: null,
+    },
+    create: {
+      id: ids.positionAssignmentForemanProgressAuthority,
+      positionId: progressAuthorityPosition.id,
+      userId: ids.userForeman,
+      isActive: true,
+    },
+  });
+  const progressAuthorities = new Map<string, { id: string }>();
+  for (const configuredAuthority of [
+    {
+      id: ids.authorityProgressVerify,
+      code: 'FIELD_PROGRESS_VERIFY',
+      name: 'Verify Field Progress',
+    },
+    {
+      id: ids.authorityProgressCorrect,
+      code: 'FIELD_PROGRESS_CORRECT',
+      name: 'Correct Field Progress',
+    },
+    {
+      id: ids.authorityProgressAccept,
+      code: 'FIELD_PROGRESS_ACCEPT',
+      name: 'Accept Field Progress',
+    },
+  ]) {
+    const authority = await prisma.authority.upsert({
+      where: { code: configuredAuthority.code },
+      update: { name: configuredAuthority.name },
+      create: configuredAuthority,
+    });
+    progressAuthorities.set(configuredAuthority.code, authority);
+    await prisma.positionAuthority.upsert({
+      where: {
+        positionId_authorityId: {
+          positionId: progressAuthorityPosition.id,
+          authorityId: authority.id,
+        },
+      },
+      update: { isActive: true, revokedAt: null },
+      create: {
+        positionId: progressAuthorityPosition.id,
+        authorityId: authority.id,
+      },
+    });
+  }
+
+  for (const policy of [
+    {
+      id: ids.approvalProgressVerifyCombined,
+      objectType: 'FIELD_PROGRESS_VERIFY_COMBINED_RESPONSIBILITY',
+      authorityCode: 'FIELD_PROGRESS_VERIFY',
+    },
+    {
+      id: ids.approvalProgressAcceptCombined,
+      objectType: 'FIELD_PROGRESS_ACCEPT_COMBINED_RESPONSIBILITY',
+      authorityCode: 'FIELD_PROGRESS_ACCEPT',
+    },
+  ]) {
+    await prisma.approvalMatrix.upsert({
+      where: { id: policy.id },
+      update: {
+        workspaceId: workspaceA.id,
+        authorityId: progressAuthorities.get(policy.authorityCode)!.id,
+        objectType: policy.objectType,
+        requiredPositionId: progressAuthorityPosition.id,
+        isActive: true,
+      },
+      create: {
+        id: policy.id,
+        workspaceId: workspaceA.id,
+        authorityId: progressAuthorities.get(policy.authorityCode)!.id,
+        objectType: policy.objectType,
+        requiredPositionId: progressAuthorityPosition.id,
+        isActive: true,
+      },
+    });
+  }
 
   await prisma.rolePermission.upsert({
     where: {
@@ -879,6 +1062,39 @@ async function main() {
       permissionId: permission.id,
     },
   });
+  await prisma.rolePermission.upsert({
+    where: {
+      roleId_permissionId: {
+        roleId: roleForeman.id,
+        permissionId: ids.permissionFieldProgressSubmit,
+      },
+    },
+    update: {},
+    create: {
+      roleId: roleForeman.id,
+      permissionId: ids.permissionFieldProgressSubmit,
+    },
+  });
+  for (const permissionId of [
+    ids.permissionFieldProgressCorrect,
+    ids.permissionFieldProgressVerify,
+    ids.permissionFieldProgressAccept,
+    ids.permissionProjectSettingsManage,
+  ]) {
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: roleForeman.id,
+          permissionId,
+        },
+      },
+      update: {},
+      create: {
+        roleId: roleForeman.id,
+        permissionId,
+      },
+    });
+  }
 
   // RAB-DRAFT-PROOF: lawful positive fixture for the RAB draft-lifecycle proof.
   // assigned@test.local reaches this via Proyek Saya -> Lanjutkan/Mulai RAB ->
@@ -931,7 +1147,11 @@ async function main() {
   // none yet. A re-seed must never touch a draft that already has real rows
   // from a browser-proof import.
   const existingRabDraftProofDrafts = await prisma.boqStructure.findMany({
-    where: { projectId: rabDraftProofProject.id, name: 'Working Draft', status: 'DRAFT' },
+    where: {
+      projectId: rabDraftProofProject.id,
+      name: 'Working Draft',
+      status: 'DRAFT',
+    },
     select: { id: true },
   });
   if (existingRabDraftProofDrafts.length === 0) {

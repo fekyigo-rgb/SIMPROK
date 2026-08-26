@@ -58,12 +58,11 @@ function App() {
               <Route path="project/:id" element={<ProjectWarRoomPage />} />
               <Route path="showcase" element={<RoleRoute allowedRoles={['OWNER']}><ShowcasePage /></RoleRoute>} />
               <Route path="first-real-input-preview" element={<FirstRealInputPreviewPage />} />
+              <Route path="field" element={<FieldTerminalPage />} />
             </Route>
-            
-            <Route path="/field" element={<FieldLayout />}>
-              <Route index element={<FieldTerminalPage />} />
-              <Route path="project/:projectId" element={<ProjectWorkPage />} />
-              <Route path="project/:projectId/progress/:boqItemId" element={<SubmitProgressPage />} />
+            <Route path="/field/project/:projectId" element={<FieldLayout />}>
+              <Route index element={<ProjectWorkPage />} />
+              <Route path="progress/:boqItemId" element={<SubmitProgressPage />} />
             </Route>
           </Route>
         </Routes>
