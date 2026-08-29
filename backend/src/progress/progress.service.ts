@@ -43,6 +43,10 @@ import {
   calculateWorkItemCurrentPhysicalProgress,
   type WorkItemCurrentPhysicalProgressResult,
 } from './progress-current-physical-progress.policy';
+import {
+  calculateCurrentOfficialRabWeightedPhysicalProgress,
+  type CurrentOfficialRabWeightedPhysicalProgressResult,
+} from './progress-current-rab-weighted-physical-progress.policy';
 
 type CurrentOfficialQuantityResponse =
   | Exclude<
@@ -73,6 +77,20 @@ type WorkItemCurrentPhysicalProgressResponse =
       knownProgressSubtotalPercent?: string;
     };
 
+type CurrentOfficialRabWeightedPhysicalProgressResponse =
+  | Exclude<
+      CurrentOfficialRabWeightedPhysicalProgressResult,
+      { state: 'COMPLETE' } | { state: 'INCOMPLETE' }
+    >
+  | {
+      state: 'COMPLETE';
+      currentOfficialRabWeightedPhysicalProgressPercent: string;
+    }
+  | {
+      state: 'INCOMPLETE';
+      knownWeightedContributionSubtotalPercent: string;
+    };
+
 const serializeWorkItemCurrentPhysicalProgress = (
   result: WorkItemCurrentPhysicalProgressResult,
 ): WorkItemCurrentPhysicalProgressResponse => {
@@ -93,6 +111,28 @@ const serializeWorkItemCurrentPhysicalProgress = (
           knownProgressSubtotalPercent:
             result.knownProgressSubtotalPercent.toString(),
         };
+  }
+
+  return result;
+};
+
+const serializeCurrentOfficialRabWeightedPhysicalProgress = (
+  result: CurrentOfficialRabWeightedPhysicalProgressResult,
+): CurrentOfficialRabWeightedPhysicalProgressResponse => {
+  if (result.state === 'COMPLETE') {
+    return {
+      state: 'COMPLETE',
+      currentOfficialRabWeightedPhysicalProgressPercent:
+        result.currentOfficialRabWeightedPhysicalProgressPercent.toString(),
+    };
+  }
+
+  if (result.state === 'INCOMPLETE') {
+    return {
+      state: 'INCOMPLETE',
+      knownWeightedContributionSubtotalPercent:
+        result.knownWeightedContributionSubtotalPercent.toString(),
+    };
   }
 
   return result;
@@ -576,6 +616,11 @@ export class ProgressService {
     const baseline = activeBaselines[0] ?? null;
     if (!baseline?.rabDocument?.boqStructureId) {
       const weight = projectMonitoringWeights([], null);
+      const currentOfficialRabWeightedPhysicalProgress =
+        calculateCurrentOfficialRabWeightedPhysicalProgress({
+          projectWeight: weight.project,
+          workItems: [],
+        });
       return {
         projectId,
         projectTimeZone: project?.timeZone ?? null,
@@ -595,6 +640,10 @@ export class ProgressService {
           },
         },
         weight: weight.project,
+        currentOfficialRabWeightedPhysicalProgress:
+          serializeCurrentOfficialRabWeightedPhysicalProgress(
+            currentOfficialRabWeightedPhysicalProgress,
+          ),
         unavailable,
       };
     }
@@ -602,9 +651,8 @@ export class ProgressService {
       where: { boqStructureId: baseline.rabDocument.boqStructureId },
       orderBy: { sortOrder: 'asc' },
     });
-    const workItemIds = items
-      .filter((item) => item.itemType === 'WORK_ITEM')
-      .map((item) => item.id);
+    const workItems = items.filter((item) => item.itemType === 'WORK_ITEM');
+    const workItemIds = workItems.map((item) => item.id);
     const weight = projectMonitoringWeights(
       items,
       baseline.rabDocument.totalBaseCost,
@@ -667,6 +715,46 @@ export class ProgressService {
       );
       if (effective) effectiveByItem.set(workItemId, effective);
     }
+
+    const currentTruthByWorkItem = new Map<
+      string,
+      {
+        rawQuantityResult: CurrentOfficialQuantityResult;
+        rawItemProgressResult: WorkItemCurrentPhysicalProgressResult;
+      }
+    >();
+    const law3WorkItems = workItems.map((item) => {
+      const rawQuantityResult = calculateCurrentOfficialQuantity(
+        { projectId, activeBaselineId: baseline.id, boqItemId: item.id },
+        entriesByWorkItem.get(item.id) ?? [],
+      );
+      const rawItemProgressResult = calculateWorkItemCurrentPhysicalProgress({
+        currentOfficialQuantity: rawQuantityResult,
+        plannedQuantity: item.quantity,
+        plannedUnit: item.unit,
+      });
+      const itemWeight = weight.rows.get(item.id);
+
+      if (!itemWeight) {
+        throw new Error('H2A1_WORK_ITEM_WEIGHT_PROJECTION_REQUIRED');
+      }
+
+      currentTruthByWorkItem.set(item.id, {
+        rawQuantityResult,
+        rawItemProgressResult,
+      });
+
+      return {
+        boqItemId: item.id,
+        rabWeight: itemWeight.own,
+        currentOfficialItemProgress: rawItemProgressResult,
+      };
+    });
+    const currentOfficialRabWeightedPhysicalProgress =
+      calculateCurrentOfficialRabWeightedPhysicalProgress({
+        projectWeight: weight.project,
+        workItems: law3WorkItems,
+      });
     const effectiveRecords = [...effectiveByItem.values()];
     const latestWorkDate = effectiveRecords.reduce<Date | null>(
       (latest, entry) =>
@@ -710,8 +798,11 @@ export class ProgressService {
       },
       freshness,
       weight: weight.project,
+      currentOfficialRabWeightedPhysicalProgress:
+        serializeCurrentOfficialRabWeightedPhysicalProgress(
+          currentOfficialRabWeightedPhysicalProgress,
+        ),
       items: items.map((item) => {
-        const itemEntries = entriesByWorkItem.get(item.id) ?? [];
         const effective = effectiveByItem.get(item.id);
 
         let currentOfficialQuantityResponse: CurrentOfficialQuantityResponse | null =
@@ -720,10 +811,8 @@ export class ProgressService {
           null;
 
         if (item.itemType === 'WORK_ITEM') {
-          const rawQuantityResult = calculateCurrentOfficialQuantity(
-            { projectId, activeBaselineId: baseline.id, boqItemId: item.id },
-            itemEntries,
-          );
+          const { rawQuantityResult, rawItemProgressResult } =
+            currentTruthByWorkItem.get(item.id)!;
 
           currentOfficialQuantityResponse =
             rawQuantityResult.state === 'COMPLETE'
@@ -739,13 +828,6 @@ export class ProgressService {
                       rawQuantityResult.knownEligibleQuantitySubtotal.toString(),
                   }
                 : rawQuantityResult;
-
-          const rawItemProgressResult =
-            calculateWorkItemCurrentPhysicalProgress({
-              currentOfficialQuantity: rawQuantityResult,
-              plannedQuantity: item.quantity,
-              plannedUnit: item.unit,
-            });
 
           currentOfficialItemProgressResponse =
             serializeWorkItemCurrentPhysicalProgress(rawItemProgressResult);
