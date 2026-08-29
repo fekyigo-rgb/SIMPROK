@@ -98,6 +98,20 @@ type Law2MonitoringProgress =
       reason: string;
     };
 
+type Law3MonitoringProgress =
+  | {
+      state: 'COMPLETE';
+      currentOfficialRabWeightedPhysicalProgressPercent: string;
+    }
+  | {
+      state: 'INCOMPLETE';
+      knownWeightedContributionSubtotalPercent: string;
+    }
+  | {
+      state: 'UNAVAILABLE';
+      reason: string;
+    };
+
 interface Law1MonitoringItem {
   id: string;
   currentOfficialQuantity: Law1MonitoringQuantity | null;
@@ -108,10 +122,20 @@ interface Law1MonitoringItem {
       percentage: string | null;
       reason: string | null;
     };
+    subtree: {
+      state: 'AVAILABLE' | 'UNAVAILABLE' | 'NOT_APPLICABLE';
+      percentage: string | null;
+      reason: string | null;
+    };
   };
 }
 
 interface Law1MonitoringBody {
+  currentOfficialRabWeightedPhysicalProgress: Law3MonitoringProgress;
+  weight: {
+    completeness: 'COMPLETE' | 'INCOMPLETE' | 'UNAVAILABLE';
+    reason: string | null;
+  };
   items: Law1MonitoringItem[];
 }
 
@@ -3720,5 +3744,324 @@ describe('Progress Security (e2e)', () => {
       rawPhysicalProgressPercent: '50',
       boundedContributionProgressPercent: '50',
     });
+  });
+
+  it('MON04 LAW3 consumer - Monitoring aggregates WORK_ITEM-only H2-A1 weights over the same LAW2 truth', async () => {
+    const token = await login(userSubmitEmail);
+
+    /*
+     * This final suite case reuses Project A, its authorized actor, semantic
+     * helpers, route, and suite-owned cleanup. A dedicated Active Baseline
+     * isolates LAW3 arithmetic from the preceding LAW1/LAW2 matrices.
+     */
+    await prisma.projectBaseline.update({
+      where: { id: baselineAId },
+      data: { status: 'DRAFT' },
+    });
+    const structure = await prisma.boqStructure.create({
+      data: {
+        projectId: projectAId,
+        name: 'MON04 LAW3 canonical E2E BOQ',
+        version: 2,
+      },
+    });
+    const folder = await prisma.boqItem.create({
+      data: {
+        boqStructureId: structure.id,
+        wbsCode: 'LAW3-F',
+        name: 'LAW3 structural folder',
+        itemType: 'FOLDER',
+        quantity: 0,
+        unit: '',
+        sortOrder: 0,
+      },
+    });
+    const createLaw3WorkItem = async (params: {
+      name: string;
+      wbsCode: string;
+      lineTotal: number;
+      sortOrder: number;
+      parentId?: string;
+    }) =>
+      prisma.boqItem.create({
+        data: {
+          boqStructureId: structure.id,
+          parentId: params.parentId,
+          wbsCode: params.wbsCode,
+          name: params.name,
+          itemType: 'WORK_ITEM',
+          quantity: 10,
+          unit: 'm3',
+          unitPrice: 1,
+          lineTotal: params.lineTotal,
+          priceOrigin: 'MANUAL_CLIENT',
+          sortOrder: params.sortOrder,
+        },
+      });
+    const itemA = await createLaw3WorkItem({
+      name: 'LAW3 child A over progress',
+      wbsCode: 'LAW3-F.1',
+      lineTotal: 300,
+      sortOrder: 1,
+      parentId: folder.id,
+    });
+    const itemB = await createLaw3WorkItem({
+      name: 'LAW3 child B half progress',
+      wbsCode: 'LAW3-F.2',
+      lineTotal: 300,
+      sortOrder: 2,
+      parentId: folder.id,
+    });
+    const provenZero = await createLaw3WorkItem({
+      name: 'LAW3 positive weight proven zero',
+      wbsCode: 'LAW3-ZP',
+      lineTotal: 400,
+      sortOrder: 3,
+    });
+    const zeroWeightUnresolved = await createLaw3WorkItem({
+      name: 'LAW3 exact zero weight unresolved',
+      wbsCode: 'LAW3-ZW',
+      lineTotal: 0,
+      sortOrder: 4,
+    });
+    const rab = await prisma.rabDocument.create({
+      data: {
+        projectId: projectAId,
+        boqStructureId: structure.id,
+        name: 'MON04 LAW3 canonical E2E RAB',
+        version: 2,
+        totalBaseCost: 1000,
+        totalFinalCost: 1000,
+        status: 'APPROVED',
+      },
+    });
+    const law3Baseline = await prisma.projectBaseline.create({
+      data: {
+        projectId: projectAId,
+        rabDocumentId: rab.id,
+        versionNumber: 2,
+        status: 'ACTIVE',
+        approvedAt: new Date(),
+      },
+    });
+
+    const proveCompleteQuantity = async (
+      boqItemId: string,
+      installedQuantity: string,
+    ) => {
+      const entryId = await submitSemanticRoot(
+        token,
+        boqItemId,
+        installedQuantity,
+        '2026-08-29',
+      );
+      await transitionSemanticRoot(token, entryId, 'verify');
+      const history = await semanticHistory(token, boqItemId);
+      await attestSemantics(
+        token,
+        entryId,
+        semanticContextDigest(history),
+      ).expect(201);
+    };
+
+    await proveCompleteQuantity(itemA.id, '15');
+    await proveCompleteQuantity(itemB.id, '5');
+    await proveCompleteQuantity(provenZero.id, '0');
+
+    const getMonitoring = async () =>
+      request(app.getHttpServer())
+        .get(`/projects/${projectAId}/progress/monitoring`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+    const readFootprint = async () => ({
+      reports: await prisma.progressReport.count({
+        where: { projectId: projectAId },
+      }),
+      entries: await prisma.progressEntry.count({
+        where: { progressReport: { projectId: projectAId } },
+      }),
+      audits: await prisma.progressAuditEvent.count({
+        where: { projectId: projectAId },
+      }),
+      deviations: await prisma.deviationSignal.count({
+        where: { projectId: projectAId },
+      }),
+      activeBaseline: await prisma.projectBaseline.count({
+        where: { projectId: projectAId, status: 'ACTIVE' },
+      }),
+      boqItems: await prisma.boqItem.count({
+        where: { boqStructureId: structure.id },
+      }),
+    });
+
+    const footprintBefore = await readFootprint();
+    const completeRead = await getMonitoring();
+    const repeatedCompleteRead = await getMonitoring();
+    const footprintAfter = await readFootprint();
+    const completeBody = completeRead.body as unknown as Law1MonitoringBody;
+    const repeatedCompleteBody =
+      repeatedCompleteRead.body as unknown as Law1MonitoringBody;
+    const completeRowFor = (boqItemId: string): Law1MonitoringItem => {
+      const row = completeBody.items.find((item) => item.id === boqItemId);
+      if (!row) throw new Error(`Expected LAW3 Monitoring row ${boqItemId}`);
+      return row;
+    };
+
+    expect(footprintAfter).toEqual(footprintBefore);
+    expect(
+      repeatedCompleteBody.currentOfficialRabWeightedPhysicalProgress,
+    ).toEqual(completeBody.currentOfficialRabWeightedPhysicalProgress);
+    expect(completeBody.currentOfficialRabWeightedPhysicalProgress).toEqual({
+      state: 'COMPLETE',
+      currentOfficialRabWeightedPhysicalProgressPercent: '45',
+    });
+    expect(completeRowFor(folder.id)).toMatchObject({
+      currentOfficialQuantity: null,
+      currentOfficialItemProgress: null,
+      weight: {
+        own: { state: 'NOT_APPLICABLE', percentage: null },
+      },
+    });
+    expect(completeRowFor(folder.id).weight.subtree).toEqual({
+      state: 'AVAILABLE',
+      percentage: '60',
+      reason: null,
+    });
+    expect(completeRowFor(itemA.id)).toMatchObject({
+      currentOfficialQuantity: {
+        state: 'COMPLETE',
+        currentOfficialQuantity: '15',
+      },
+      currentOfficialItemProgress: {
+        state: 'COMPLETE',
+        rawPhysicalProgressPercent: '150',
+        boundedContributionProgressPercent: '100',
+      },
+      weight: { own: { state: 'AVAILABLE', percentage: '30' } },
+    });
+    expect(completeRowFor(itemB.id)).toMatchObject({
+      currentOfficialItemProgress: {
+        state: 'COMPLETE',
+        rawPhysicalProgressPercent: '50',
+        boundedContributionProgressPercent: '50',
+      },
+      weight: { own: { state: 'AVAILABLE', percentage: '30' } },
+    });
+    expect(completeRowFor(provenZero.id)).toMatchObject({
+      currentOfficialQuantity: {
+        state: 'COMPLETE',
+        currentOfficialQuantity: '0',
+      },
+      currentOfficialItemProgress: {
+        state: 'COMPLETE',
+        rawPhysicalProgressPercent: '0',
+        boundedContributionProgressPercent: '0',
+      },
+      weight: { own: { state: 'AVAILABLE', percentage: '40' } },
+    });
+    expect(completeRowFor(zeroWeightUnresolved.id)).toMatchObject({
+      currentOfficialQuantity: { state: 'NOT_YET_RECORDED' },
+      currentOfficialItemProgress: { state: 'NOT_YET_RECORDED' },
+      weight: { own: { state: 'AVAILABLE', percentage: '0' } },
+    });
+
+    /* Positive unresolved physical truth keeps the subtotal diagnostic. */
+    const positiveWeightUnresolved = await createLaw3WorkItem({
+      name: 'LAW3 positive weight unresolved',
+      wbsCode: 'LAW3-U',
+      lineTotal: 200,
+      sortOrder: 5,
+    });
+    await prisma.rabDocument.update({
+      where: { id: rab.id },
+      data: { totalBaseCost: 1200, totalFinalCost: 1200 },
+    });
+    const incompleteRead = await getMonitoring();
+    const incompleteBody = incompleteRead.body as unknown as Law1MonitoringBody;
+
+    expect(incompleteBody.weight).toEqual({
+      completeness: 'COMPLETE',
+      reason: null,
+      basis: 'ACTIVE_BASELINE_RAB_TOTAL_BASE_COST',
+      denominator: { state: 'AVAILABLE', value: '1200.00' },
+      eligibleWorkItemCount: 5,
+      weightedWorkItemCount: 5,
+      unavailableWorkItemCount: 0,
+    });
+    expect(incompleteBody.currentOfficialRabWeightedPhysicalProgress).toEqual({
+      state: 'INCOMPLETE',
+      knownWeightedContributionSubtotalPercent: '37.5',
+    });
+    expect(
+      incompleteBody.currentOfficialRabWeightedPhysicalProgress,
+    ).not.toHaveProperty('currentOfficialRabWeightedPhysicalProgressPercent');
+    expect(
+      incompleteBody.items.find(
+        (item) => item.id === positiveWeightUnresolved.id,
+      )?.currentOfficialItemProgress,
+    ).toEqual({ state: 'NOT_YET_RECORDED' });
+
+    /* Missing weight is coverage-incomplete, never an assumed zero weight. */
+    await prisma.boqItem.update({
+      where: { id: positiveWeightUnresolved.id },
+      data: { unitPrice: null, lineTotal: null, priceOrigin: null },
+    });
+    await prisma.rabDocument.update({
+      where: { id: rab.id },
+      data: { totalBaseCost: 1000, totalFinalCost: 1000 },
+    });
+    const coverageRead = await getMonitoring();
+    const coverageBody = coverageRead.body as unknown as Law1MonitoringBody;
+    const unavailableWeightRow = coverageBody.items.find(
+      (item) => item.id === positiveWeightUnresolved.id,
+    );
+
+    expect(coverageBody.weight).toMatchObject({
+      completeness: 'INCOMPLETE',
+      reason: 'INCOMPLETE_BASELINE_VALUE_COVERAGE',
+    });
+    expect(unavailableWeightRow?.weight.own).toEqual({
+      state: 'UNAVAILABLE',
+      percentage: null,
+      reason: 'ITEM_VALUE_UNAVAILABLE',
+    });
+    expect(coverageBody.currentOfficialRabWeightedPhysicalProgress).toEqual({
+      state: 'INCOMPLETE',
+      knownWeightedContributionSubtotalPercent: '45',
+    });
+
+    /* Global H2-A1 unavailability blocks LAW3 but preserves LAW1/LAW2 rows. */
+    await prisma.rabDocument.update({
+      where: { id: rab.id },
+      data: { totalBaseCost: null },
+    });
+    const unavailableRead = await getMonitoring();
+    const unavailableBody =
+      unavailableRead.body as unknown as Law1MonitoringBody;
+    const unavailableItemA = unavailableBody.items.find(
+      (item) => item.id === itemA.id,
+    );
+
+    expect(unavailableBody.weight).toMatchObject({
+      completeness: 'UNAVAILABLE',
+      reason: 'BASELINE_VALUE_UNAVAILABLE',
+    });
+    expect(unavailableBody.currentOfficialRabWeightedPhysicalProgress).toEqual({
+      state: 'UNAVAILABLE',
+      reason: 'BASELINE_VALUE_UNAVAILABLE',
+    });
+    expect(unavailableItemA).toMatchObject({
+      currentOfficialQuantity: {
+        state: 'COMPLETE',
+        currentOfficialQuantity: '15',
+      },
+      currentOfficialItemProgress: {
+        state: 'COMPLETE',
+        rawPhysicalProgressPercent: '150',
+        boundedContributionProgressPercent: '100',
+      },
+    });
+    expect(law3Baseline.status).toBe('ACTIVE');
   });
 });
