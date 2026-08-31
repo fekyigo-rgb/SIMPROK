@@ -41,11 +41,29 @@ const collectTs = (dir: string): string[] =>
  * what it may do: copy an already-published origin, clear both ownership
  * columns, and never update the origin it came from.
  *
+ * BP-KDN-01: it now stands at six. The sixth is a second UPDATE inside the
+ * private-asset service, and it exists so a previously unknown %KDN can be
+ * filled later without minting a fake Basic Price. It is forbidden money and
+ * both publication axes; see the dedicated assertion below.
+ *
+ * BP-DETAIL-MAINT-02: it now stands at eight. The seventh is a second
+ * updateMany in the same private-asset service, filling missing %KDN on a
+ * catalog observation under VERIFY / PROMOTE_SHARED. The eighth is a second
+ * CREATE in that service: a private money successor. It writes `value` and
+ * `supersedesBasicPriceId` on the NEW row and never updates the predecessor's
+ * `value`.
+ *
+ * BP-CHANGE-SEM-03: it now stands at ten. The ninth is a third CREATE in the
+ * private-asset service: a Detail-born NEW observation (`recordsNewObservation`,
+ * no supersession, no borrowed import-row evidence). The tenth is a fourth
+ * CREATE: a private KDN correction successor (money copied, KDN restated,
+ * supersession pointer). Neither PATCHes the predecessor.
+ *
  * Migration SQL is NOT a runtime writer and is deliberately out of scope here:
  * this test scans src/ only.
  */
 describe('W-01 permanent BasicPrice writer inventory', () => {
-  it('keeps exactly the five approved writers and no other Prisma writer method', () => {
+  it('keeps exactly the ten approved writers and no other Prisma writer method', () => {
     const matches = collectTs(sourceRoot).flatMap((file) => {
       const source = readFileSync(file, 'utf8');
       return [
@@ -74,6 +92,39 @@ describe('W-01 permanent BasicPrice writer inventory', () => {
       {
         file: 'basic-price/basic-price-private-asset.service.ts',
         method: 'update',
+      },
+      // BP-KDN-01 — the ONE %KDN enrichment writer. Fills a previously unknown
+      // observation fact on an existing private price. updateMany keeps the
+      // fill atomic against a concurrent identical retry. Forbidden money and
+      // both publication axes; see the dedicated assertion below.
+      {
+        file: 'basic-price/basic-price-private-asset.service.ts',
+        method: 'updateMany',
+      },
+      // BP-DETAIL-MAINT-02 — catalog missing-%KDN fill. Same two KDN columns,
+      // different ownership WHERE. Forbidden money.
+      {
+        file: 'basic-price/basic-price-private-asset.service.ts',
+        method: 'updateMany',
+      },
+      // BP-DETAIL-MAINT-02 — the ONE private money-correction writer. Creates
+      // a successor; it never updates the predecessor's `value`.
+      {
+        file: 'basic-price/basic-price-private-asset.service.ts',
+        method: 'create',
+      },
+      // BP-CHANGE-SEM-03 — private KDN correction successor. Copies money,
+      // restates KDN, names the predecessor. Never PATCHes.
+      {
+        file: 'basic-price/basic-price-private-asset.service.ts',
+        method: 'create',
+      },
+      // BP-CHANGE-SEM-03 — the ONE private new-observation writer. Creates a
+      // later lawful fact without supersession and without borrowed import-row
+      // evidence.
+      {
+        file: 'basic-price/basic-price-private-asset.service.ts',
+        method: 'create',
       },
       // BP-CAT-01B — the ONE shared-catalog writer. Creates only. It is the
       // only writer that may produce a row belonging to NO workspace, and it
@@ -287,6 +338,202 @@ describe('W-01 permanent BasicPrice writer inventory', () => {
     ]) {
       expect(new RegExp(`^\\s*${forbidden}\\s*:`, 'm').test(data)).toBe(false);
     }
+  });
+
+  it('BP-KDN-01: the KDN enrichment update may write only kdnPercent and kdnEstablishment', () => {
+    const source = readFileSync(
+      join(sourceRoot, 'basic-price', 'basic-price-private-asset.service.ts'),
+      'utf8',
+    );
+    const enrichStart = source.indexOf('async enrichKdn(');
+    expect(enrichStart).toBeGreaterThan(-1);
+    const start = source.indexOf(
+      'await tx.basicPrice.updateMany({',
+      enrichStart,
+    );
+    const end = source.indexOf(
+      'await tx.basicPriceProvenanceCorrection.create({',
+      start,
+    );
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const slice = source.slice(start, end);
+    const dataStart = slice.indexOf('data: {');
+    const dataEnd = slice.indexOf('});', dataStart);
+    expect(dataStart).toBeGreaterThan(-1);
+    expect(dataEnd).toBeGreaterThan(dataStart);
+    const data = slice.slice(dataStart, dataEnd);
+    const where = slice.slice(0, dataStart);
+
+    // Tenant lock stays in WHERE so a concurrent catalog/foreign row cannot
+    // be filled. DATA itself must never restated ownership or money.
+    expect(where).toContain(
+      'assetScope: BasicPriceAssetScope.WORKSPACE_PRIVATE',
+    );
+    expect(where).toContain('kdnPercent: null');
+
+    expect(/^\s*kdnPercent\s*:/m.test(data)).toBe(true);
+    expect(/^\s*kdnEstablishment\s*:/m.test(data)).toBe(true);
+
+    for (const forbidden of [
+      'value',
+      'status',
+      'verificationStatus',
+      'assetScope',
+      'regionId',
+      'resourceId',
+      'sourceImportRowId',
+      'tkdnValue',
+    ]) {
+      expect(new RegExp(`^\\s*${forbidden}\\s*:`, 'm').test(data)).toBe(false);
+    }
+  });
+
+  it('BP-DETAIL-MAINT-02: catalog KDN enrichment writes only kdnPercent and kdnEstablishment', () => {
+    const source = readFileSync(
+      join(sourceRoot, 'basic-price', 'basic-price-private-asset.service.ts'),
+      'utf8',
+    );
+    const enrichStart = source.indexOf('async enrichCatalogKdn(');
+    expect(enrichStart).toBeGreaterThan(-1);
+    const start = source.indexOf(
+      'await tx.basicPrice.updateMany({',
+      enrichStart,
+    );
+    const end = source.indexOf(
+      'await tx.basicPriceProvenanceCorrection.create({',
+      start,
+    );
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const slice = source.slice(start, end);
+    const dataStart = slice.indexOf('data: {');
+    const dataEnd = slice.indexOf('});', dataStart);
+    expect(dataStart).toBeGreaterThan(-1);
+    expect(dataEnd).toBeGreaterThan(dataStart);
+    const data = slice.slice(dataStart, dataEnd);
+    const where = slice.slice(0, dataStart);
+
+    expect(where).toContain('assetScope: BasicPriceAssetScope.SIMPROK_CATALOG');
+    expect(where).toContain('kdnPercent: null');
+    expect(/^\s*kdnPercent\s*:/m.test(data)).toBe(true);
+    expect(/^\s*kdnEstablishment\s*:/m.test(data)).toBe(true);
+    for (const forbidden of [
+      'value',
+      'status',
+      'verificationStatus',
+      'assetScope',
+      'regionId',
+      'resourceId',
+      'sourceImportRowId',
+      'tkdnValue',
+    ]) {
+      expect(new RegExp(`^\\s*${forbidden}\\s*:`, 'm').test(data)).toBe(false);
+    }
+  });
+
+  it('BP-DETAIL-MAINT-02: private money correction creates a successor and never patches predecessor value', () => {
+    const source = readFileSync(
+      join(sourceRoot, 'basic-price', 'basic-price-private-asset.service.ts'),
+      'utf8',
+    );
+    const methodStart = source.indexOf('async correctPrivatePrice(');
+    expect(methodStart).toBeGreaterThan(-1);
+    const method = source.slice(methodStart);
+    const start = method.indexOf('await tx.basicPrice.create({');
+    const end = method.indexOf(
+      'await tx.basicPriceProvenanceCorrection.create({',
+      start,
+    );
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const data = method.slice(start, end);
+
+    expect(/^\s*value\s*:/m.test(data)).toBe(true);
+    expect(data).toContain('supersedesBasicPriceId: predecessor.id');
+    expect(/^\s*sourceImportRowId\s*:/m.test(data)).toBe(false);
+    expect(/^\s*status\s*:/m.test(data)).toBe(false);
+    expect(/^\s*verificationStatus\s*:/m.test(data)).toBe(false);
+    expect(method).not.toMatch(/\.basicPrice\.update(Many)?\s*\(/);
+    expect(method).not.toMatch(/predecessor\.value\s*=/);
+  });
+
+  it('BP-CHANGE-SEM-03: new observation creates without supersession or borrowed import evidence', () => {
+    const source = readFileSync(
+      join(sourceRoot, 'basic-price', 'basic-price-private-asset.service.ts'),
+      'utf8',
+    );
+    const methodStart = source.indexOf(
+      'private async insertPrivateNewObservation(',
+    );
+    expect(methodStart).toBeGreaterThan(-1);
+    const method = source.slice(methodStart);
+    const start = method.indexOf('await tx.basicPrice.create({');
+    const end = method.indexOf(
+      'await tx.basicPriceProvenanceCorrection.create({',
+      start,
+    );
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const data = method.slice(start, end);
+
+    expect(data).toContain('recordsNewObservation: true');
+    expect(data).toContain("effectiveDateProvenance: 'SOURCE_STATED'");
+    expect(/^\s*supersedesBasicPriceId\s*:/m.test(data)).toBe(false);
+    expect(/^\s*sourceImportRowId\s*:/m.test(data)).toBe(false);
+    expect(/^\s*sourcePeriodLabel\s*:/m.test(data)).toBe(false);
+    expect(data).toContain('effectiveDate: observationDate');
+    expect(/^\s*value\s*:/m.test(data)).toBe(true);
+    expect(data).toContain('params.kdnEstablishment');
+    expect(method).not.toMatch(/\.basicPrice\.update(Many)?\s*\(/);
+  });
+
+  it('BP-CHANGE-SEM-03: private KDN correction copies money and never uses enrich', () => {
+    const source = readFileSync(
+      join(sourceRoot, 'basic-price', 'basic-price-private-asset.service.ts'),
+      'utf8',
+    );
+    const methodStart = source.indexOf('async correctPrivateKdn(');
+    expect(methodStart).toBeGreaterThan(-1);
+    const method = source.slice(
+      methodStart,
+      source.indexOf('private async lockPrivatePredecessor(', methodStart),
+    );
+    const start = method.indexOf('await tx.basicPrice.create({');
+    const end = method.indexOf(
+      'await tx.basicPriceProvenanceCorrection.create({',
+      start,
+    );
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const data = method.slice(start, end);
+
+    expect(data).toContain('supersedesBasicPriceId: predecessor.id');
+    expect(data).toContain('value: predecessor.value');
+    expect(data).toContain('effectiveDate: predecessor.effectiveDate');
+    expect(/^\s*sourceImportRowId\s*:/m.test(data)).toBe(false);
+    expect(method).toContain("semantic: 'CORRECTION'");
+    expect(method).not.toMatch(/kdnPercent: null/);
+    expect(method).not.toMatch(/\.basicPrice\.update(Many)?\s*\(/);
+    expect(method).not.toContain('MANUAL_ENRICHMENT');
+    expect(data).toContain('MANUAL_CORRECTION');
+  });
+
+  it('BP-CHANGE-SEM-03: private KDN new observation uses MANUAL_NEW_OBSERVATION not enrich', () => {
+    const source = readFileSync(
+      join(sourceRoot, 'basic-price', 'basic-price-private-asset.service.ts'),
+      'utf8',
+    );
+    const methodStart = source.indexOf('async observePrivateKdn(');
+    expect(methodStart).toBeGreaterThan(-1);
+    const method = source.slice(
+      methodStart,
+      source.indexOf('async correctPrivateKdn(', methodStart),
+    );
+    expect(method).toContain('MANUAL_NEW_OBSERVATION');
+    expect(method).not.toContain('MANUAL_ENRICHMENT');
+    expect(method).not.toContain('kdnEstablishment: null');
+    expect(method).not.toMatch(/\.basicPrice\.update(Many)?\s*\(/);
   });
 
   it('no writer anywhere creates a publication audit for a private price', () => {

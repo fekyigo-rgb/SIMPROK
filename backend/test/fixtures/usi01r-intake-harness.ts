@@ -46,6 +46,47 @@ interface ThrowingProposalAuthority {
   proposeForRows: (...args: never[]) => never;
 }
 
+/**
+ * A Prisma failure the SERVICE's own `instanceof` checks will recognise.
+ *
+ * The prototype swap is what makes it real: the code under test narrows on
+ * `PrismaClientKnownRequestError` before it ever reads `.code`, so an ordinary
+ * Error carrying a code field would fall straight through the branch this fake
+ * exists to exercise.
+ */
+function prismaError(code: string, message: string): Error {
+  const error = new Error(message) as Error & { code: string };
+  error.code = code;
+  error.name = 'PrismaClientKnownRequestError';
+  Object.setPrototypeOf(error, PrismaKnownError.prototype);
+  return error;
+}
+
+/** Any one statement this fake can be asked to run inside a transaction. */
+type HarnessStatement = (...args: never[]) => Promise<unknown>;
+
+/**
+ * BP-REGION-TRUTH-07U — POSTGRESQL'S OWN LAW, MODELLED.
+ *
+ * A statement that fails inside a transaction ABORTS it. Every later statement
+ * on the same connection is refused with SQLSTATE 25P02 until the block ends,
+ * and a JavaScript `catch` does nothing about that: it catches the exception,
+ * not the server-side state.
+ *
+ * WHY THE FAKE MUST KNOW THIS. Without it a recovery read issued from inside a
+ * `catch` — through the very transaction the failed write had just poisoned —
+ * ran happily against this harness and returned a perfectly good answer, while
+ * the real database answered 25P02 and turned a lawful 409 into a 500. The unit
+ * pins stayed green for exactly as long as the fake was more forgiving than
+ * PostgreSQL. It no longer is.
+ */
+function abortedTransactionError(): Error {
+  return new Error(
+    'ERROR: current transaction is aborted, commands ignored until end of ' +
+      'transaction block (SQLSTATE 25P02)',
+  );
+}
+
 export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
   const batches: HarnessRecord[] = [];
   const rows: HarnessRecord[] = [];
@@ -127,6 +168,67 @@ export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
       batches.push(batch);
       return batch;
     },
+    /**
+     * BP-REGION-TRUTH-07S §11 — THE OTHER HALF OF THE BROWSER LIFECYCLE.
+     *
+     * `preview` mints a batch; the metadata form finalizes it. Proving that
+     * identity describes FINAL facts is impossible against a fake that only
+     * knows how to create, so this fake now finalizes too — and enforces the
+     * SAME unique index on the way, because the whole question is what happens
+     * when two batches finalize into one identity.
+     *
+     * `undefined` means unchanged, exactly as Prisma treats it. Anything else,
+     * including an explicit null, is written.
+     */
+    update: ({ where, data }: { where: HarnessWhere; data: HarnessRecord }) => {
+      const batch = batches.find((candidate) => candidate.id === where.id);
+      if (!batch) throw prismaError('P2025', 'Record to update not found');
+
+      const next: HarnessRecord = { ...batch };
+      for (const [field, value] of Object.entries(data)) {
+        if (value === undefined) continue;
+        // The one Prisma write operator this save uses. Read through a named
+        // shape rather than an `any` hop, so a future operator lands as a type
+        // error instead of silently writing an object into a column.
+        const increment =
+          field === 'version' && value !== null && typeof value === 'object'
+            ? (value as { increment?: number }).increment
+            : undefined;
+        if (increment !== undefined) {
+          next.version = (next.version as number) + increment;
+          continue;
+        }
+        next[field] = value;
+      }
+      // THE UNIQUE INDEX, ENFORCED ON UPDATE TOO. Without this the fake would
+      // happily let two batches claim one identity and the concurrency pin
+      // would pass against a database that says no.
+      const clash = batches.find(
+        (candidate) =>
+          candidate.id !== batch.id &&
+          candidate.workspaceId === next.workspaceId &&
+          candidate.importFingerprint === next.importFingerprint,
+      );
+      if (clash) throw prismaError('P2002', 'Unique constraint failed');
+
+      Object.assign(batch, next);
+      // A resolved promise, not an `async` body: the fake does no awaiting, and
+      // the caller awaits this exactly as it awaits the real client.
+      return Promise.resolve(batch);
+    },
+  };
+
+  /**
+   * The row lock the metadata save takes. The service selects a named column
+   * list `FOR UPDATE`; this fake answers with the whole stored record, which is
+   * a superset of it, and finds the row by the ONE bound parameter the
+   * statement carries.
+   */
+  const queryRaw = (sql: unknown) => {
+    const values = (sql as { values?: unknown[] } | null)?.values;
+    const batchId = Array.isArray(values) ? values[0] : undefined;
+    const batch = batches.find((candidate) => candidate.id === batchId);
+    return Promise.resolve(batch ? [batch] : []);
   };
 
   const rowModel = {
@@ -157,11 +259,41 @@ export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
     },
     basicPriceImportBatch: batchModel,
     basicPriceImportRow: rowModel,
-    $transaction: async (callback: any) =>
-      callback({
-        basicPriceImportBatch: batchModel,
-        basicPriceImportRow: rowModel,
-      }),
+    $queryRaw: queryRaw,
+    /**
+     * The transaction client is the SAME store, wrapped in the abort law above:
+     * the first statement to fail poisons it, and everything after that is
+     * refused rather than answered.
+     */
+    $transaction: async (
+      callback: (tx: Record<string, unknown>) => Promise<unknown>,
+    ): Promise<unknown> => {
+      let poisoned = false;
+      const inTransaction =
+        (statement: HarnessStatement): HarnessStatement =>
+        async (...args: never[]) => {
+          if (poisoned) throw abortedTransactionError();
+          try {
+            return await statement(...args);
+          } catch (error) {
+            poisoned = true;
+            throw error;
+          }
+        };
+      const guardModel = (model: object): Record<string, HarnessStatement> =>
+        Object.fromEntries(
+          Object.entries(model).map(([name, statement]) => [
+            name,
+            inTransaction(statement as HarnessStatement),
+          ]),
+        );
+
+      return await callback({
+        basicPriceImportBatch: guardModel(batchModel),
+        basicPriceImportRow: guardModel(rowModel),
+        $queryRaw: inTransaction(queryRaw),
+      });
+    },
   };
 
   const prisma: any = new Proxy(allowed, {

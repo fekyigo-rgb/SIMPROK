@@ -81,6 +81,8 @@ export class BasicPricePromotionService {
     effectiveDateProvenance: true,
     effectiveDateDerivationRule: true,
     value: true,
+    kdnPercent: true,
+    kdnEstablishment: true,
     sourceType: true,
     sourceOrigin: true,
     freshnessStatus: true,

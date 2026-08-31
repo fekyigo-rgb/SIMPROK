@@ -1092,6 +1092,13 @@ model ResourceCatalog {
   type           ResourceType
   baseUnit       String
   specifications Json?
+  /// BP-KDN-01 — LEGACY COMPATIBILITY ONLY.
+  ///
+  /// A single nullable scalar cannot retain multiple lawful %KDN observations
+  /// of one ResourceCatalog (manufacturer / source / spec / import row). The
+  /// canonical observation fact lives on `BasicPrice.kdnPercent`, with
+  /// provenance on `BasicPriceImportRow`. This column is not written by the
+  /// KDN pipeline and is not the Detail reader.
   tkdnValue      Decimal?     @db.Decimal(5, 2)
   status         String       @default("ACTIVE")
   createdAt      DateTime     @default(now())
@@ -1251,6 +1258,40 @@ enum PriceFreshnessStatus {
 enum BasicPriceAssetScope {
   WORKSPACE_PRIVATE
   SIMPROK_CATALOG
+}
+
+/// BP-KDN-01 / BP-CHANGE-SEM-03 — HOW a persisted %KDN fact was established.
+///
+/// SOURCE_IMPORT_ROW       the same import observation that produced the price
+///                         also stated this %KDN. Price-source and KDN-source
+///                         share that row, and that sharing is honest.
+/// MANUAL_ENRICHMENT       an authorized actor filled a previously unknown %KDN
+///                         later, without minting a fake new Basic Price. The
+///                         price's import row is NOT this KDN's source.
+/// MANUAL_CORRECTION       a previously stated %KDN was wrong and was restated
+///                         by a superseding observation. Not enrichment.
+/// MANUAL_NEW_OBSERVATION  a later lawful %KDN fact in a new context/date.
+///                         Not a claim that the older %KDN was an error.
+///
+/// CHECK `basic_prices_kdn_pair_check` forbids stated %KDN with a null
+/// establishment. Correction and new observation therefore cannot wear NULL;
+/// they also must not wear ENRICHMENT or IMPORT, which would lie about how
+/// the fact was established.
+enum BasicPriceKdnEstablishment {
+  SOURCE_IMPORT_ROW
+  MANUAL_ENRICHMENT
+  MANUAL_CORRECTION
+  MANUAL_NEW_OBSERVATION
+}
+
+/// BP-KDN-01 — whether this batch auto-mapped a %KDN column.
+/// ABSENT        the source stated no KDN heading. Import continues.
+/// ESTABLISHED   exactly one CLEAR heading, or a human confirmed a candidate.
+/// NEEDS_REVIEW  ambiguous and/or conflicting KDN-like headings. No guess.
+enum BasicPriceKdnMappingStatus {
+  ABSENT
+  ESTABLISHED
+  NEEDS_REVIEW
 }
 
 enum PriceSubmissionStatus {
@@ -1639,6 +1680,14 @@ model BasicPrice {
   /// trust it. Meaningless for SOURCE_STATED.
   effectiveDateDerivationRule String?
   value                       Decimal                       @db.Decimal(18, 2)
+  /// BP-KDN-01 — the %KDN fact of THIS price observation.
+  ///
+  /// Independent of `value`: PRICE ≠ KDN. Null is unknown, never a silent
+  /// zero. Two BasicPrice rows for the same ResourceCatalog may lawfully
+  /// carry different %KDN facts when their source/spec context differs.
+  /// ResourceCatalog.tkdnValue is not this column's competitor.
+  kdnPercent                  Decimal?                      @db.Decimal(5, 2)
+  kdnEstablishment            BasicPriceKdnEstablishment?
   sourceType                  PriceSourceType               @default(SYSTEM_ESTIMATE)
   verificationStatus          PriceVerificationStatus       @default(UNVERIFIED)
   sourceOrigin                PriceSourceOrigin             @default(SUPPLIER)
@@ -1652,13 +1701,16 @@ model BasicPrice {
   /// direction is "this belongs to the curated catalog", never "this is
   /// privately usable".
   assetScope                  BasicPriceAssetScope          @default(SIMPROK_CATALOG)
-  /// RM-03C — the ONLY provenance channel a WORKSPACE_PRIVATE price may have,
-  /// and a channel a SIMPROK_CATALOG price may never use (catalog rows reach
-  /// their import row through sourceSubmission -> PriceSubmission.importRow
-  /// instead). Both directions are enforced by CHECK constraints in the
-  /// migration, so "a private price with no traceable evidence" and "a catalog
-  /// price wearing a private evidence link" are both unrepresentable states,
-  /// not merely unwritten ones.
+  /// RM-03C — the provenance channel a WORKSPACE_PRIVATE *origin* price must
+  /// have. A private successor (BP-DETAIL-MAINT-02) may omit it and name its
+  /// predecessor through `supersedesBasicPriceId` instead. A Detail-born NEW
+  /// observation (BP-CHANGE-SEM-03) may omit both and set
+  /// `recordsNewObservation` instead — that row does not claim the predecessor
+  /// was wrong, so it must not wear a supersession pointer. CHECK I4a allows
+  /// those three evidence channels only. A SIMPROK_CATALOG price may never use
+  /// this channel (catalog rows reach their import row through sourceSubmission
+  /// -> PriceSubmission.importRow instead). Unattributable private rows remain
+  /// unrepresentable states, not merely unwritten ones.
   sourceImportRowId           String?                       @unique @db.Uuid
   /// BP-CAT-01B — the originating workspace BasicPrice this SHARED catalog row
   /// was promoted from. NULL on every row that was not produced by promotion,
@@ -1707,6 +1759,13 @@ model BasicPrice {
   /// application code to; (3) `onDelete: Restrict` — a predecessor that is
   /// still being superseded cannot be deleted out from under its successor.
   supersedesBasicPriceId      String?                       @unique @db.Uuid
+  /// BP-CHANGE-SEM-03 — this private row records a later lawful observation
+  /// that does NOT claim an older observation was wrong. False on every import
+  /// origin, every correction successor, and every catalog row. True only on
+  /// Detail-born new observations. Currentness does not hide the predecessor:
+  /// both remain historically truthful on their own dates. The predecessor is
+  /// named in the audit JSON, never through `supersedesBasicPriceId`.
+  recordsNewObservation       Boolean                       @default(false)
   createdAt                   DateTime                      @default(now())
   updatedAt                   DateTime                      @updatedAt
 
@@ -1727,12 +1786,12 @@ model BasicPrice {
   /// have replaced something that no longer exists.
   supersedes                     BasicPrice?                      @relation("BasicPriceSupersession", fields: [supersedesBasicPriceId], references: [id], onDelete: Restrict)
   /// THE CURRENTNESS READ, and the reason no column on the predecessor was
-  /// needed: "A is still current" is exactly `A.supersededBy IS NULL`. Because
-  /// `supersedesBasicPriceId` is UNIQUE this is a to-ONE relation, so the check
-  /// is a single index-backed lookup rather than a chain walk, and because the
-  /// database refuses the pointer on any row that is not PUBLISHED+PUBLISHED
-  /// (basic_prices_supersession_successor_is_published_check) its mere
-  /// existence already proves the successor is lawfully current.
+  /// needed: "A is still current" is answered by whether a successor pointing
+  /// AT A has already taken force at `asOf`. Because `supersedesBasicPriceId`
+  /// is UNIQUE this is a to-ONE relation. Catalog successors remain
+  /// PUBLISHED+PUBLISHED (S2). BP-DETAIL-MAINT-02 also allows a
+  /// WORKSPACE_PRIVATE UNPUBLISHED+UNVERIFIED successor, timed by its
+  /// `createdAt` rather than a publication audit.
   supersededBy                   BasicPrice?                      @relation("BasicPriceSupersession")
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
   publicationAudits              BasicPricePublicationAudit[]
@@ -1904,6 +1963,58 @@ model BasicPriceImportBatch {
   /// of exactly one place, which is every batch imported before USI-01.
   sourceRegionScopeLabel String?
 
+  /// BP-REGION-TRUTH-07S §7 — HOW that scope was read: COLUMN (the label heads
+  /// its own price column) or ROW_VALUE (the label is stated per row in a
+  /// region column). Computed at intake since USI-01 and, until now, discarded
+  /// at the database boundary — so a stored batch could say WHICH scope it was
+  /// read under but never HOW, and the provenance could not be reconstructed.
+  ///
+  /// NULL MEANS UNKNOWN, NOT "NEITHER". Every batch written before this column
+  /// existed keeps null, and nothing infers a kind for them from their label:
+  /// the reading that knew the answer is over, and guessing it afterwards would
+  /// manufacture provenance rather than record it.
+  sourceRegionScopeKind String?
+
+  /// BP-REGION-TRUTH-07S §5 — THE SOURCE'S OWN WORD PROVING THE SCOPE IS A
+  /// PLACE ("KECAMATAN", "WILAYAH"), verbatim, or NULL when the source proved
+  /// no geography at all.
+  ///
+  /// WHY A BATCH MUST CARRY THIS. "SIRIMAU | TELUK AMBON | BAGUALA" and
+  /// "GROSIR | ECERAN" are the same SHAPE — distinct labels over parallel price
+  /// columns — and only a word the source writes tells them apart. Without it
+  /// stored, SIMPROK could not later know whether this batch's scope even had a
+  /// geographic meaning to reconcile against `regionId`, and would have had to
+  /// either warn about every column matrix or stay silent about all of them.
+  ///
+  /// IT IS EVIDENCE, NOT A CLAIM OF AGREEMENT. It never names a canonical
+  /// Region, is never compared to one by spelling, and asserts nothing about
+  /// whether the scope and `regionId` describe the same place — see
+  /// `regionScopeConfirmedRegionId` for the only fact that settles that.
+  sourceRegionScopeGeographicEvidence String?
+
+  /// BP-REGION-TRUTH-07S §8 — WHICH canonical Region a HUMAN confirmed this
+  /// geographic source scope against. NULL means nobody has.
+  ///
+  /// SIMPROK CANNOT PROVE THIS ITSELF, AND MUST NOT PRETEND TO. `Region` is a
+  /// flat code/name table with no jurisdictional hierarchy, so there is no
+  /// authoritative fact here by which "SIRIMAU" could be shown to be inside, or
+  /// outside, "Kecamatan Teluk Ambon Baguala". Comparing the two spellings
+  /// would be a guess wearing a proof's clothes. So the compatibility is
+  /// neither asserted nor denied — it is left UNPROVEN and asked, once.
+  ///
+  /// STORED AS THE REGION, NOT AS A BOOLEAN, because a confirmation belongs to
+  /// the fact it confirmed. A person who confirms "SIRIMAU goes with Region A"
+  /// and then changes the batch to Region B has confirmed nothing about B, and
+  /// a bare "confirmed" flag would silently carry the old decision onto the new
+  /// region — the same shape of falsehood `effectiveDateProvenance` guards
+  /// against when a date changes.
+  ///
+  /// DELIBERATELY NOT A FOREIGN KEY. It records WHAT WAS CONFIRMED at the time,
+  /// which must stay readable as evidence even if that Region is later
+  /// deactivated; a cascade or a restrict would let region housekeeping rewrite
+  /// or block a human decision that was truthfully made.
+  regionScopeConfirmedRegionId String? @db.Uuid
+
   /// USI-01R2 §5 — WHERE THIS BATCH'S ORIGINAL BYTES ARE RETAINED.
   ///
   /// LAW 2.2 requires SIMPROK to be able to answer "what exactly was received?"
@@ -2030,6 +2141,15 @@ model BasicPriceImportBatch {
   interpretationResourceNameColumn Int?
   interpretationSourceUnitColumn   Int?
   interpretationDeclaredSection    BasicPriceImportRowSection?
+  /// BP-KDN-01 — recorded ONLY when a human confirmed an ambiguous/conflict
+  /// KDN heading. Null when the document proved a CLEAR heading, when KDN
+  /// is absent, or when mapping still needs review. Fingerprint input only
+  /// in the human-confirmed case, same law as selectedNameColumn.
+  interpretationKdnColumn          Int?
+  kdnMappingStatus                 BasicPriceKdnMappingStatus @default(ABSENT)
+  /// Candidate KDN-like columns awaiting a human, verbatim headers. Null
+  /// when mapping is ABSENT or ESTABLISHED. Never used as a KDN value.
+  kdnMappingCandidates             Json?
 
   importFingerprint String
   status            BasicPriceImportBatchStatus @default(PREVIEWED)
@@ -2146,6 +2266,12 @@ model BasicPriceImportRow {
   sourceNameCellAddress  String
   sourceUnitCellAddress  String
   sourcePriceCellAddress String
+  /// BP-KDN-01 — KDN provenance for THIS source row. Null throughout when
+  /// the batch has no established KDN column (absent or still in review).
+  /// Dedicated fields, never rawSourceContext: that JSON is evidence that
+  /// no calculation may read.
+  sourceKdnCellAddress String?
+  sourceKdnHeaderText  String?
 
   rawResourceCodeText String?
   rawResourceNameText String
@@ -2180,6 +2306,14 @@ model BasicPriceImportRow {
 
   proposedCanonicalPrice Decimal? @db.Decimal(18, 2)
   canonicalRoundingMode  String?
+  /// Exact canonical %KDN (`Decimal(5, 2)`), or null when unknown/invalid.
+  /// Invalid values keep their raw text and a `kdnReasonCode`; they never
+  /// become 0.00 and never block an otherwise lawful price.
+  proposedCanonicalKdn   Decimal? @db.Decimal(5, 2)
+  rawKdnTextValue        String?
+  rawKdnNumericRoundTripString String?
+  rawKdnDisplayText      String?
+  kdnReasonCode          String?
 
   resourceCatalogId    String?       @db.Uuid
   resolvedResourceType ResourceType?

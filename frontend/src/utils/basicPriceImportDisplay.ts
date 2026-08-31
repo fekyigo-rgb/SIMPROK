@@ -179,6 +179,7 @@ export type PrivateUseBlockReason =
   | 'REGION_REQUIRED_BEFORE_PRIVATE_USE'
   | 'SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE'
   | 'SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE'
+  | 'REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_PRIVATE_USE'
   | 'NO_ROWS_READY_FOR_PRIVATE_USE'
   | 'ALL_READY_ROWS_ALREADY_PRIVATE';
 
@@ -190,6 +191,7 @@ export type ProposalNotOfferedReason =
   | 'REGION_REQUIRED_BEFORE_SUBMISSION'
   | 'SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION'
   | 'SOURCE_TYPE_REQUIRED_BEFORE_SUBMISSION'
+  | 'REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_SUBMISSION'
   | 'NO_ROWS_READY_FOR_SUBMISSION';
 
 /**
@@ -276,6 +278,21 @@ export interface BatchLifecycleActions {
     sourceFamily: SourceFamily | null;
   };
   reviewGate: BatchReviewGate;
+  /**
+   * BP-REGION-TRUTH-07S — the two region answers and the server's verdict about
+   * whether anyone has said they are the same place.
+   *
+   * OPTIONAL ON THE WAY IN, because every fixture and every older recorded
+   * response in this codebase predates it, and an absent block must read as
+   * "nothing to say" rather than as a missing field. `regionScopeNoticeView`
+   * below is the only thing that reads it.
+   */
+  regionScope?: {
+    sourceLabel: string | null;
+    geographicEvidence: string | null;
+    confirmedRegionId: string | null;
+    compatibilityUnproven: boolean;
+  };
 }
 
 export interface BasicPriceImportBatchSummary {
@@ -296,6 +313,15 @@ export interface BasicPriceImportBatchSummary {
    * about a file SIMPROK has just read, not about a region anyone has chosen.
    */
   region?: { id: string; code: string; name: string } | null;
+  /**
+   * BP-VISUAL-TRUTH-07 §7 — the PRICE COLUMN this batch was read from, in the
+   * source document's own wording ("TELUK AMBON"). It is NOT `region`, and the
+   * two must never be printed under one word: `region` is the canonical place
+   * SIMPROK files the price under, this is the column of the workbook the
+   * numbers were actually taken from. Null whenever the source offered only
+   * one column and nobody had to choose.
+   */
+  sourceRegionScopeLabel?: string | null;
   sourceType: 'VENDOR_QUOTE' | 'MARKET_SURVEY' | 'REGULATION' | 'SYSTEM_ESTIMATE' | null;
   /** WHO published the price. What the Explorer's source line reads. */
   sourceOrganizationName: string | null;
@@ -329,6 +355,15 @@ export interface BasicPriceImportBatchSummary {
    * caller already owns. Absent on GET/PATCH. The browser never classifies.
    */
   reimport?: ReimportRelation | null;
+  /**
+   * BP-KDN-01 — optional KDN column mapping. NEEDS_REVIEW never fail-stops
+   * a lawful price import.
+   */
+  kdnMapping?: {
+    status: 'ABSENT' | 'ESTABLISHED' | 'NEEDS_REVIEW' | string;
+    confirmedColumn: number | null;
+    candidates: Array<{ columnNumber: number; headerText: string; kind?: string }>;
+  };
   rows: BasicPriceImportRowSummary[];
 }
 
@@ -420,8 +455,19 @@ export const reimportDecisionView = (
     return {
       shown: true,
       kind: 'ALREADY_IDENTICAL',
+      /**
+       * BP-VISUAL-TRUTH-07 §22 — ONE FACT, SAID ONCE.
+       *
+       * The body used to reopen by repeating the title almost word for word:
+       * "Data ini sudah pernah diimpor." above "Daftar harga ini sudah pernah
+       * diimpor dan tidak ada perubahan yang terdeteksi." Someone who has read
+       * the heading is made to read it a second time to reach the single clause
+       * that was new. The heading states the relation; the body now carries
+       * only what the heading cannot — that nothing differs, and therefore what
+       * continuing would and would not do.
+       */
       title: 'Data ini sudah pernah diimpor.',
-      body: 'Daftar harga ini sudah pernah diimpor dan tidak ada perubahan yang terdeteksi.',
+      body: 'Tidak ada perubahan yang terdeteksi, jadi tidak ada data baru yang akan ditambahkan.',
       historyNote: null,
       differenceNote: null,
       primary: { action: 'USE_EXISTING', label: 'Gunakan yang sudah ada' },
@@ -437,7 +483,14 @@ export const reimportDecisionView = (
       ? 'File ini pernah diimpor, tetapi cara pembacaannya sekarang berbeda.'
       : 'SIMPROK menemukan data sebelumnya dari sumber yang sama, tetapi isi data sekarang berbeda.',
     historyNote: 'Data sebelumnya tetap tersimpan sebagai riwayat.',
-    differenceNote: reading ? 'Cara pembacaan berbeda.' : 'Isi sumber berbeda.',
+    /**
+     * §22 — and this line no longer restates the body either. `differenceNote`
+     * exists to name WHAT differs in as few words as a chip can hold; saying
+     * "Cara pembacaan berbeda." under a body that has just said the reading is
+     * now different is the same sentence twice in two type sizes. It names the
+     * axis, and the body keeps the explanation.
+     */
+    differenceNote: reading ? 'Perbedaan: cara pembacaan' : 'Perbedaan: isi sumber',
     primary: { action: 'USE_UPDATE', label: 'Gunakan pembaruan ini' },
     secondary: { action: 'USE_EXISTING', label: 'Gunakan yang sudah ada' },
   };
@@ -446,7 +499,7 @@ export const reimportDecisionView = (
 const BATCH_STATUS_LABELS: Record<BasicPriceImportBatchSummary['status'], string> = {
   PREVIEWED: 'Preview',
   READY_FOR_REVIEW: 'Siap ditinjau',
-  NEEDS_REVIEW: 'Perlu ditinjau',
+  NEEDS_REVIEW: 'Perlu konfirmasi',
   // THE CURATION PATH, NAMED. These three are the only batch states that mean
   // the SIMPROK curation door was actually used, and each one now says so —
   // a bare 'Diajukan' left the reader to guess the destination.
@@ -454,7 +507,7 @@ const BATCH_STATUS_LABELS: Record<BasicPriceImportBatchSummary['status'], string
   PARTIALLY_SUBMITTED: 'Sebagian diusulkan ke SIMPROK',
   SUBMITTED: 'Sudah diusulkan ke SIMPROK',
   REJECTED: 'Ditolak',
-  SUPERSEDED: 'Digantikan batch baru',
+  SUPERSEDED: 'Digantikan daftar baru',
 };
 
 export const batchStatusLabel = (status: BasicPriceImportBatchSummary['status']): string =>
@@ -478,7 +531,7 @@ export const batchStatusLabel = (status: BasicPriceImportBatchSummary['status'])
  */
 const ROW_STATUS_LABELS: Record<BasicPriceImportRowSummary['status'], string> = {
   PARSED: 'Terbaca',
-  NEEDS_REVIEW: 'Perlu ditinjau',
+  NEEDS_REVIEW: 'Perlu konfirmasi',
   /**
    * DECIDED, AND NOT YET STORED. The row's identity is settled and one press of
    * `Simpan & Gunakan` would turn it into a usable price — which is what "siap"
@@ -590,7 +643,7 @@ export const rowStateLabel = (
 export type KnownRowSection = Exclude<BasicPriceImportRowSummary['section'], null>;
 
 const SECTION_LABELS: Record<KnownRowSection, string> = {
-  LABOR: 'Upah',
+  LABOR: 'Tenaga kerja',
   MATERIAL: 'Bahan',
   EQUIPMENT: 'Peralatan',
 };
@@ -656,8 +709,17 @@ const PRIVATE_USE_BLOCK_SENTENCES: Record<PrivateUseBlockReason, string> = {
     'Asal sumber harga belum diisi. Lengkapi dulu di halaman Impor.',
   SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE:
     'Jenis sumber harga belum tercatat. Lengkapi dulu di halaman Impor.',
+  /**
+   * NOT AN ACCUSATION, AND NOT A CLAIM THAT THE TWO DISAGREE. SIMPROK holds no
+   * fact by which a source's own place name can be shown to be inside or
+   * outside a canonical Wilayah, so it says exactly that and asks once. The two
+   * facts themselves are shown side by side by `regionScopeNoticeView` — this
+   * sentence is only the reason the save is waiting.
+   */
+  REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_PRIVATE_USE:
+    'Wilayah pada sumber belum dapat dipastikan sesuai dengan Wilayah SIMPROK. Tinjau wilayah dulu di halaman Impor.',
   NO_ROWS_READY_FOR_PRIVATE_USE:
-    'Belum ada baris yang selesai. Selesaikan minimal satu baris di bawah, lalu simpan.',
+    'Belum ada baris yang siap disimpan. Konfirmasi pilihan pada setidaknya satu baris untuk melanjutkan.',
   // NOT A REFUSAL. The work is done, and the room says so instead of offering
   // to repeat it. The count that belongs beside this sentence is rendered by
   // the page, which knows how many prices are actually stored.
@@ -682,6 +744,10 @@ const PROPOSAL_BLOCK_SENTENCES: Record<ProposalNotOfferedReason, string> = {
     'Asal sumber harga belum diisi. Lengkapi dulu di halaman Impor.',
   SOURCE_TYPE_REQUIRED_BEFORE_SUBMISSION:
     'Jenis sumber harga belum tercatat. Lengkapi dulu di halaman Impor.',
+  // The same unproven pair as the private door, in the proposal's own words.
+  // An unreconciled geography must not reach SIMPROK's curation either.
+  REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_SUBMISSION:
+    'Wilayah pada sumber belum dapat dipastikan sesuai dengan Wilayah SIMPROK. Tinjau wilayah dulu di halaman Impor.',
   NO_ROWS_READY_FOR_SUBMISSION:
     'Belum ada baris yang siap diusulkan.',
 };
@@ -729,14 +795,26 @@ export const unitDimensionLabel = (dimension: UnitDimension): string =>
 
 export const unitKindLabel = (kind: UnitKind): string => UNIT_KIND_LABELS[kind] ?? kind;
 
-/** One catalog resource, as a person reads it. */
+/** One catalog resource, as a person reads it — name first, metadata second. */
+export const resourceOptionMeta = (item: {
+  code: string | null;
+  type: ResourceType;
+  baseUnit: string;
+}): string =>
+  [rowSectionLabel(item.type), item.baseUnit, item.code ?? 'Kode tidak tersedia'].join(' • ');
+
 export const resourceOptionLabel = (item: {
   code: string | null;
   name: string;
   type: ResourceType;
   baseUnit: string;
-}): string =>
-  `${item.code ?? 'Tanpa kode'} — ${item.name} — ${rowSectionLabel(item.type)} — ${item.baseUnit}`;
+}): string => `${item.name} — ${resourceOptionMeta(item)}`;
+
+/** Soften English unit display names that still leak from catalog data. */
+const humanUnitDisplayName = (displayName: string): string => {
+  if (/^cubic\s*metr[ey]$/i.test(displayName.trim())) return 'meter kubik';
+  return displayName;
+};
 
 /** One canonical unit, as a person reads it. */
 export const unitOptionLabel = (item: {
@@ -745,8 +823,26 @@ export const unitOptionLabel = (item: {
   symbol: string;
   dimension: UnitDimension;
   kind: UnitKind;
-}): string =>
-  `${item.code} — ${item.displayName} — ${item.symbol} — ${unitDimensionLabel(item.dimension)} — ${unitKindLabel(item.kind)}`;
+}): string => {
+  const name = humanUnitDisplayName(item.displayName);
+  // Prefer "meter kubik (m³)" over English "Cubic metre".
+  const named =
+    name === 'meter kubik' ? `meter kubik (${item.symbol || 'm³'})` : `${name} — ${item.symbol}`;
+  return `${item.code} — ${named} — ${unitDimensionLabel(item.dimension)} — ${unitKindLabel(item.kind)}`;
+};
+
+/**
+ * Row card facts line — one price spelling, ordinary Indonesian absences.
+ */
+export const rowReviewFactsLine = (row: BasicPriceImportRowSummary): string => {
+  const code = row.code?.trim() ? row.code : 'Kode tidak tersedia';
+  const unit = row.unit?.trim()
+    ? `Satuan dari berkas: ${row.unit}`
+    : 'Satuan dari berkas: tidak tercantum';
+  const priceSource = row.proposedCanonicalPrice ?? row.rawPriceDisplayText;
+  const price = priceSource ? `Harga Rp ${priceSource}` : 'Harga tidak tercantum';
+  return `${code} · ${unit} · ${price}`;
+};
 
 /**
  * SOURCE VOCABULARY, IN ONE PLACE.
@@ -805,6 +901,29 @@ export const SOURCE_ORIGIN_OPTIONS: { value: NonNullable<BasicPriceImportBatchSu
 const NOT_YET_STATED = 'belum diisi';
 
 /**
+ * BP-VISUAL-TRUTH-07 §19 — A CALENDAR DAY, WRITTEN THE WAY THIS AUDIENCE
+ * WRITES ONE.
+ *
+ * SIMPROK stores and transports a date as ISO `YYYY-MM-DD` and that does not
+ * change here: this is PRESENTATION ONLY, applied at the moment a stored date
+ * becomes a sentence a person reads. `08/29/2026` and `2026-08-29` are the same
+ * fact; only one of them is the fact an Indonesian reader recognises at a
+ * glance, and a screen that mixes the two teaches nobody which is which.
+ *
+ * NOTHING IS PARSED AND NOTHING IS SHIFTED. The ISO head is split on its own
+ * hyphens and the three pieces are reordered — no `new Date()`, so no time zone
+ * can move the day, which is the exact failure `toLocalDateOnlyString` exists
+ * to prevent one file over. A value that is not an ISO date head is returned
+ * untouched rather than guessed at.
+ */
+export const formatIsoDateAsIndonesian = (isoDate: string): string => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(isoDate);
+  if (!match) return isoDate;
+  const [, year, month, day] = match;
+  return `${day}/${month}/${year}`;
+};
+
+/**
  * WHAT SIMPROK ACTUALLY HAS ON RECORD FOR THIS BATCH.
  *
  * Every line reads from the SERVER's answer, never from the form's local
@@ -849,16 +968,94 @@ export const savedMetadataLines = (batch: BasicPriceImportBatchSummary): string[
    * would read as a fact SIMPROK lost.
    */
   const reverification = batch.reviewDate
-    ? [`${REVERIFICATION_LABEL}: ${batch.reviewDate.slice(0, 10)}`]
+    ? [`${REVERIFICATION_LABEL}: ${formatIsoDateAsIndonesian(batch.reviewDate)}`]
+    : [];
+  /**
+   * BP-VISUAL-TRUTH-07 §7 — THE COLUMN AND THE PLACE ARE TWO ANSWERS, AND THIS
+   * IS WHERE THEY STOPPED BEING TOLD APART.
+   *
+   * A regional-matrix workbook is asked one question at intake — which of its
+   * price columns to read — and the answer is the document's own heading, e.g.
+   * "TELUK AMBON". The canonical Region is a SEPARATE question answered in this
+   * very form, e.g. "Kecamatan Teluk Ambon Baguala, Kota Ambon". Both were
+   * stored correctly and always have been; only the Region was ever read back,
+   * under the word "Wilayah" — the same word the column question used. A person
+   * who answered "TELUK AMBON" and was shown "Wilayah: Kecamatan Teluk Ambon
+   * Baguala, Kota Ambon" had no way to learn they had answered two questions,
+   * and every reason to conclude SIMPROK had substituted one region for another.
+   *
+   * So the column fact is now stated, in its own words, under its own name, and
+   * ONLY when the source actually offered a choice — a single-column source
+   * gains no line, because nobody chose anything.
+   */
+  const priceColumn = batch.sourceRegionScopeLabel?.trim()
+    ? [`Kolom harga pada berkas: ${batch.sourceRegionScopeLabel.trim()}`]
     : [];
   return [
-    `Asal sumber: ${origin}`,
+    `Asal data: ${origin}`,
     `Nama sumber: ${publisher ? publisher : NOT_YET_STATED}`,
-    `Jenis sumber: ${type}`,
-    `${dateLabel}: ${batch.effectiveDate ? batch.effectiveDate.slice(0, 10) : NOT_YET_STATED}`,
+    `Metode perolehan: ${type}`,
+    `${dateLabel}: ${batch.effectiveDate ? formatIsoDateAsIndonesian(batch.effectiveDate) : NOT_YET_STATED}`,
     ...reverification,
     `Wilayah: ${region}`,
+    ...priceColumn,
   ];
+};
+
+/**
+ * BP-REGION-TRUTH-07S §8 — THE ONE THING A PERSON HAS TO DECIDE, AND NOTHING
+ * ELSE.
+ *
+ * The two facts are already on screen: `savedMetadataLines` prints the file's
+ * own column wording and the canonical Wilayah under their own separate names.
+ * What was missing is the sentence BETWEEN them — that SIMPROK cannot tell
+ * whether they describe the same place — and one action to settle it.
+ *
+ * CALM, NOT LOUD. A short statement and a single button. The reasoning belongs
+ * behind the room's existing disclosure, not in a paragraph beside the form:
+ * `Region` is a flat code/name table with no hierarchy, so there is no
+ * authoritative fact by which "SIRIMAU" could be shown to sit inside "Kecamatan
+ * Teluk Ambon Baguala", and inventing one from the spelling would be a guess
+ * with a proof's confidence.
+ *
+ * NULL MEANS SAY NOTHING, and that is the ordinary case: every source that
+ * wrote no region word of its own, every source that offered only one place,
+ * and every pair a person has already reconciled.
+ */
+export interface RegionScopeNotice {
+  /** The source's own wording for the column that was read. */
+  sourceLabel: string;
+  /** The source's own word proving that column names a place. */
+  sourceEvidence: string;
+  /** The canonical Wilayah, in the words this app already uses for one. */
+  regionLabel: string;
+  message: string;
+  actionLabel: string;
+  /** The secondary explanation, for the room's existing disclosure pattern. */
+  why: string;
+}
+
+export const regionScopeNoticeView = (
+  batch: BasicPriceImportBatchSummary,
+): RegionScopeNotice | null => {
+  const scope = batch.actions?.regionScope;
+  if (!scope?.compatibilityUnproven) return null;
+  // Never invent either half. The server said this pair is unproven, which it
+  // only ever does when both facts are present; a missing one here would mean
+  // the projection and this view disagree, and the honest response is silence.
+  if (!scope.sourceLabel || !scope.geographicEvidence) return null;
+  if (!batch.regionId) return null;
+
+  return {
+    sourceLabel: scope.sourceLabel,
+    sourceEvidence: scope.geographicEvidence,
+    regionLabel: batch.region ? regionChosenLabel(batch.region) : 'sudah dipilih',
+    message:
+      'Wilayah pada sumber belum dapat dipastikan sesuai dengan Wilayah SIMPROK.',
+    actionLabel: 'Tinjau wilayah',
+    why:
+      'Berkas ini menuliskan sendiri bahwa kolom harganya adalah wilayah, dan SIMPROK belum memiliki dasar untuk memastikan wilayah pada berkas sama dengan Wilayah yang Anda pilih. SIMPROK tidak menebak — Anda yang memutuskan.',
+  };
 };
 
 /**
@@ -887,6 +1084,28 @@ export const rowActionFailureMessage = (
   if (httpStatus >= 500) return `${lead} SIMPROK mengalami kendala. Keputusan Anda belum tersimpan.`;
   return `${lead} Keputusan Anda belum tersimpan.`;
 };
+
+/**
+ * BP-VISUAL-TRUTH-07 §14 — WHAT A REVIEWER READS ONCE SIMPROK HAS ALREADY
+ * REPAIRED WHAT IT COULD.
+ *
+ * The sentence in `rowActionFailureMessage` for 409 ends "muat ulang lalu
+ * putuskan lagi" — it asks the person to perform the recovery. That sentence
+ * remains correct for the one case where the refresh itself failed, but it is
+ * the wrong thing to say when SIMPROK has just fetched the newest state on
+ * their behalf: it would send someone to reload a page that is already current,
+ * discarding the selections still sitting in the boxes.
+ *
+ * THREE FACTS, IN THE ORDER A PERSON NEEDS THEM: the row moved, SIMPROK has
+ * the new version on screen, and the decision is still theirs to make. It does
+ * NOT say "berhasil" about anything, because nothing was written — the write
+ * was refused, and the next one will be a deliberate press against the version
+ * now displayed.
+ */
+export const staleRowRecoveryMessage = (sourceRowNumber: number): string =>
+  `Baris ${sourceRowNumber} baru saja diperbarui oleh perubahan lain, jadi keputusan Anda belum tersimpan. ` +
+  `SIMPROK sudah memuat versi terbaru baris ini — pilihan Anda masih tersimpan sebagai draf. ` +
+  `Periksa kembali, lalu konfirmasi ulang untuk menyimpan.`;
 
 /** The server's own named code, if this body carries one. Never a guess. */
 const namedCodeOf = (rawBody: string): string | null => {
@@ -933,7 +1152,7 @@ export const lifecycleActionFailureMessage = (
   if (httpStatus === 404)
     return 'Batch ini tidak ditemukan lagi. Muat ulang halaman.';
   if (httpStatus === 409)
-    return 'Keadaan batch sudah berubah sejak halaman ini dimuat. Muat ulang lalu coba lagi. Tidak ada yang tersimpan sebagian.';
+    return 'Data baris ini telah berubah. Muat data terbaru sebelum melanjutkan. Tidak ada yang tersimpan sebagian.';
   if (httpStatus >= 500)
     return 'SIMPROK mengalami kendala. Tidak ada fakta yang diterka atau disimpan sebagian.';
   return kind === 'PRIVATE_USE'
@@ -963,7 +1182,7 @@ export const metadataSaveFailureMessage = (
 ): string => {
   const code = namedCodeOf(rawBody);
   if (code === 'BATCH_VERSION_STALE')
-    return 'Batch ini sudah berubah sejak halaman dimuat. Muat ulang halaman lalu isi kembali. Tidak ada yang tersimpan.';
+    return 'Data baris ini telah berubah. Muat data terbaru sebelum melanjutkan. Tidak ada yang tersimpan.';
   if (code === 'BATCH_NOT_MUTABLE')
     return 'Batch ini sudah ditutup, jadi keterangannya tidak bisa diubah lagi. Tidak ada yang tersimpan.';
   if (httpStatus === 401)
@@ -1065,7 +1284,8 @@ const BLOCKING_FACT_LABELS: Record<string, string> = {
   FOREIGN_CONTEXT_UNIT_ALIAS: 'Satuan itu dikenal, tetapi untuk kategori lain.',
   UNIT_NOT_REPRESENTABLE_BY_UNIT_AUTHORITY:
     'Satuan kanonik itu belum dapat dibuktikan oleh otoritas satuan.',
-  RESOURCE_NOT_FOUND: 'Sumber daya belum ditemukan di katalog.',
+  RESOURCE_NOT_FOUND:
+    'Item belum dikenali. Pilih Item SIMPROK yang sesuai, atau tolak baris ini.',
   MULTIPLE_CANDIDATES_NEEDS_REVIEW: 'Ada lebih dari satu kandidat yang sama kuat.',
   STRONG_CANDIDATE_NEEDS_REVIEW: 'Ada satu kandidat kuat yang masih perlu ditegaskan.',
   SPECIFICATION_UNPROVED: 'Entri katalog menyebut hal yang tidak disebut sumber.',
@@ -1271,8 +1491,15 @@ export const formatMachineFirstSummary = (batch: BasicPriceImportBatchSummary): 
   // a proof that evaporated.
   if (tally.proven > 0) segments.push(`${tally.proven} dikenali otomatis`);
 
-  segments.push(`${tally.attention} perlu keputusan Anda`);
-  segments.push(`${tally.unknown} belum dikenali`);
+  // HIERARCHY, NOT PEERS. "Perlu keputusan" on the counter is the PARENT of
+  // attention + unknown; spelling both as siblings of that total contradicted
+  // the chip (e.g. 894 vs 222 + 672).
+  const waiting = tally.attention + tally.unknown;
+  if (waiting > 0) {
+    segments.push(
+      `${waiting} masih menunggu (${tally.attention} perlu keputusan Anda · ${tally.unknown} belum dikenali)`,
+    );
+  }
   return segments.join(' · ');
 };
 
@@ -1381,7 +1608,32 @@ export const machinePickedUnit = (
  * while printing "Bahan" there would simply be false.
  */
 export const rowSectionDisplay = (row: BasicPriceImportRowSummary): string => {
-  if (row.section !== null) return rowSectionLabel(row.section);
+  if (row.section !== null) {
+    const label = rowSectionLabel(row.section);
+    /**
+     * BP-VISUAL-TRUTH-07 §12 — A WEAK HINT MUST NOT BE DRESSED AS A FACT.
+     *
+     * `UPLOADER_DECLARED` means nobody proved this row's family: the document
+     * was silent, so a person answered one batch-wide question and every
+     * evidence-free row was stamped with that answer. The Owner watched Batu
+     * Kali and Batu Belah — plainly Bahan — sit on screen reading "Tenaga
+     * kerja" in exactly the same type as a family the source had actually
+     * stated. The hint was doing its job; the SCREEN was overstating it.
+     *
+     * So a batch hint says it is a starting point until something stronger
+     * confirms it, and `resourceCatalogId` is that something: once a human has
+     * chosen the Item SIMPROK, the family is theirs and the resolver has
+     * already corrected the row to the catalog's own type (see
+     * `basic-price-row-resolution.service.ts` — a weak hint never defeats a
+     * confirmed catalog identity). That is why the resolved Batu Kali reads
+     * "Bahan" flat, with nothing hedged about it: by then it IS the fact.
+     *
+     * The two document-proven provenances are untouched and never hedged.
+     */
+    const unconfirmedBatchHint =
+      row.sectionProvenance === 'UPLOADER_DECLARED' && row.resourceCatalogId === null;
+    return unconfirmedBatchHint ? `Kategori awal: ${label}` : label;
+  }
   const stated = row.sourceCategoryName ?? row.sourceCategoryCode;
   return stated === null
     ? 'Kategori belum dapat dipastikan'
@@ -1618,7 +1870,7 @@ const ROW_NOTE_LABELS: Record<string, string> = {
     'Kategori yang ditulis baris ini berbeda dengan kategori judul bagiannya.',
   SOURCE_CATEGORY_UNRECOGNIZED: 'Kategori yang ditulis sumber belum dikenali SIMPROK.',
   SECTION_DECLARED_BY_UPLOADER:
-    'Kategori baris ini dinyatakan oleh pengunggah, bukan oleh dokumen sumber.',
+    'Kategori belum tercantum di berkas dan masih perlu dipastikan.',
   UNIT_TEXT_FROM_SIMPROK_UNIT_CANDIDATE:
     'Satuan diambil dari kolom yang ditunjuk saat impor, bukan dari kolom satuan bertajuk.',
 };
@@ -1660,6 +1912,42 @@ export const rowNoteLines = (row: BasicPriceImportRowSummary): RowNoteLines => {
         : `${untranslatedCount} informasi teknis tambahan belum memiliki penjelasan pengguna.`,
   };
 };
+
+/**
+ * BP-VISUAL-TRUTH-07 §17/§20 — CALM OUTSIDE, RICH INSIDE, AND NOTHING DELETED.
+ *
+ * WHAT THE OWNER SAW. One unresolved row said its single problem four times
+ * over: a "Belum dikenali" chip, then "Satuan belum dikenali", then "Item belum
+ * dikenali. Pilih Item SIMPROK yang sesuai…", then "Sumber daya: SIMPROK belum
+ * menemukan sumber daya yang dapat dibuktikan…" — every one of them true, and
+ * together an unreadable wall on a workbook with hundreds of such rows.
+ *
+ * THE REPAIR IS NOT DELETION. §20 is explicit that truthful information is not
+ * removed to make a screen sparse, and every sentence here is a distinct named
+ * fact a reviewer may need. So the FIRST note stays on the card — it is the one
+ * that names what to do — and the rest move behind "Mengapa?", which is exactly
+ * where a reason belongs relative to an instruction.
+ *
+ * ORDER IS THE SERVER'S, NOT A RANKING INVENTED HERE. `reasonCodes` arrives in
+ * the engines' own order and `rowNoteLines` preserves it; this takes the head
+ * and the tail of that list and reorders nothing. When there is only one note
+ * there is no disclosure at all, because a single sentence hidden behind a
+ * toggle is worse than a single sentence.
+ */
+export interface RowNoteDisclosure {
+  /** Always shown. Null only when the row has no notes at all. */
+  primary: string | null;
+  /** Shown on demand under "Mengapa?" — never dropped, never auto-expanded. */
+  secondary: string[];
+}
+
+export const rowNoteDisclosure = (notes: Pick<RowNoteLines, 'human'>): RowNoteDisclosure => ({
+  primary: notes.human[0] ?? null,
+  secondary: notes.human.slice(1),
+});
+
+/** The one wording for the on-demand reason toggle, so it reads the same everywhere. */
+export const WHY_DISCLOSURE_TITLE = 'Mengapa?';
 
 /**
  * THE METADATA DOOR — what the import page may offer, and why not.
@@ -2049,7 +2337,7 @@ export const smartSaveOutcomeMessage = (outcome: {
     );
   }
   if (parts.length === 0) {
-    return 'Belum ada baris yang bisa disimpan. Selesaikan minimal satu baris di bawah, lalu coba lagi.';
+    return 'Belum ada baris yang bisa disimpan. Konfirmasi pilihan pada minimal satu baris di bawah, lalu coba lagi.';
   }
   return parts.join(' ');
 };
@@ -2380,6 +2668,19 @@ export const effectiveDateCopy = (
 ): TemporalCopy =>
   (question && EFFECTIVE_DATE_COPY[question]) ??
   EFFECTIVE_DATE_COPY.PRICE_DATE_UNSPECIFIED;
+
+/**
+ * BP-VISUAL-TRUTH-07 §20/§21 — the way to ASK for the date explanation, rather
+ * than being handed it permanently.
+ *
+ * Deliberately the same words the reverification field already uses for its own
+ * disclosure (`REVERIFICATION_HELP_TRIGGER`) — two date fields sitting in one
+ * form should offer their explanations under one phrasing, not two. It is a
+ * separate constant rather than an import of that one because that name is
+ * about reverification, and a shared literal under a misleading name is how the
+ * next person changes one and silently changes the other.
+ */
+export const TEMPORAL_HELP_TRIGGER = 'Apa maksud tanggal ini?';
 
 /**
  * WHEN THE SOFT DATE IS WORTH ASKING FOR, AND WHAT TO SAY WHEN IT IS NOT.

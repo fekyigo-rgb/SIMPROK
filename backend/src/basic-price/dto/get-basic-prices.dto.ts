@@ -81,6 +81,38 @@ export class GetBasicPricesDto {
   })
   dateTo?: string;
 
+  /**
+   * BP-UX-FINAL-01C — "BERLAKU PADA TANGGAL", AND IT MEANS EXACTLY THAT.
+   *
+   * A DIFFERENT AXIS FROM `dateFrom`/`dateTo`/`year`, which all narrow
+   * `effectiveDate` and answer "which prices STARTED in this window". This one
+   * asks the question a person actually has — "what price APPLIED on this day"
+   * — and is answered by the full temporal law the AHSP resolver and the Cost
+   * Kernel already enforce:
+   *
+   *     effectiveDate <= asOf
+   *     AND (validUntil IS NULL OR validUntil >= asOf)
+   *     AND currentness evaluated AT asOf
+   *
+   * The UI shipped this control sending `dateTo` alone, which is only the first
+   * of those three lines. A list filtered that way still contained prices whose
+   * own source said they had expired, and prices a published correction had
+   * already replaced — under a label that promised otherwise.
+   *
+   * ABSENT MEANS NOW, resolved ONCE at the service boundary — never "at some
+   * point", and never re-read per clause.
+   *
+   * Same exact-calendar-date contract as the range filters: this is a cheap
+   * format gate, and `parseDateOnlyUtc` does the real parse (exact regex plus a
+   * year/month/day round-trip) so "2026-02-30" is refused rather than silently
+   * rolled forward into a different question.
+   */
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'asOf must be an exact YYYY-MM-DD calendar date',
+  })
+  asOf?: string;
+
   // Source name filter — only meaningful when the row's provenance chain
   // actually carries a vendor/organization name (see basic-price-workflow
   // projection's deriveExplorerSourceName). Never widens eligibility.

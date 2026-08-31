@@ -138,3 +138,85 @@ turns out to still be cluster-wide.
   deferral period).
 - `CONNECT_ISOLATION`: **NOT_YET_PROVEN**.
 - This runbook + SQL: prepared, not adopted, not executed.
+
+## 7. E2E IS NOW SERVED BY A DIFFERENT, REPOSITORY-GOVERNED ROLE (2026-08-27)
+
+**Read this before acting on §4.** Nothing above is retracted — it is
+historical record and stays. What follows narrows its remaining scope, because
+half of the problem §4 was written to solve has since been solved by a
+different, already-governed role.
+
+**The E2E half is closed.** `backend/.env.e2e` now authenticates as
+**`simprok_e2e_app`**, not `postgres`. That role is not invented here: it is
+defined by this repository's own CI, `.github/workflows/pr-quality-gate.yml`,
+which creates it `NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION
+NOBYPASSRLS`, makes it owner of `simprok_e2e`, writes this exact DSN into
+`backend/.env.e2e`, and then runs `verify:db:e2e` and `test:e2e`. Its password
+is a committed CI-only literal, not a secret.
+
+Measured locally on 2026-08-27, cluster `127.0.0.1:5432`:
+
+```
+current_user   = simprok_e2e_app
+rolsuper       = false      rolcreaterole = false
+rolcreatedb    = false      rolbypassrls  = false
+```
+
+Under that identity the MON-03 PostgreSQL boundary acceptance
+(`progress-security.e2e-spec.ts` test 12) executes its INSERT/UPDATE/DELETE
+assertions for the first time as a genuine non-superuser, and the official
+`npm run test:e2e:safe` passes end to end.
+
+One local, Owner-authorized DDL was needed to get there:
+
+```sql
+ALTER SCHEMA public OWNER TO pg_database_owner;   -- on simprok_e2e only
+```
+
+`prisma migrate reset` drops and recreates `public`, so the runtime role must
+own it. On a freshly created database — which is what CI has — PostgreSQL 15+
+already owns `public` by `pg_database_owner`, so CI's `ALTER DATABASE ... OWNER
+TO simprok_e2e_app` carries the schema along. This local `simprok_e2e`
+predates the role, so its `public` was still owned explicitly by `postgres`.
+The statement aligns local with CI and grants the role no cluster-level
+privilege; the four attributes above are unchanged by it.
+
+**The acceptance half is still open, and §4 still governs it.**
+`backend/.env.test` — the `simprok_test` acceptance database — continues to
+authenticate as the shared `postgres` superuser. `simprok_test_runner` has
+**not** been created; `test-role-least-privilege.sql` remains PLAN ONLY and
+must still never be executed by an agent.
+
+**So the two roles are not rivals, and a future executor should not treat them
+as one decision:**
+
+| | `simprok_e2e_app` | `simprok_test_runner` |
+|---|---|---|
+| Status | EXISTS, in use | PLANNED, never created |
+| Governed by | `.github/workflows/pr-quality-gate.yml` | this runbook + its `.sql` |
+| Databases | `simprok_e2e` only | `simprok_test` **and** `simprok_e2e` |
+| Credential | committed CI-only literal | human-set, interactive `\password` |
+| Agent may use it | yes | no — human superuser only |
+
+When §4 is eventually actioned, its remaining work is **`.env.test` /
+`simprok_test` only**. Repointing `.env.e2e` at `simprok_test_runner` would
+replace a working, CI-matching configuration with a divergent one — do not do
+it without a deliberate Owner decision to consolidate.
+
+**Ticket state, updated:**
+
+- `UTANG-TESTCRED-01`: **OPEN**, now scoped to the acceptance credential
+  (`.env.test` / `simprok_test`). The E2E credential no longer contributes to
+  it.
+- `CONNECT_ISOLATION` for `simprok_test_runner`: still **NOT_YET_PROVEN** (the
+  role does not exist).
+- Canonical isolation for `simprok_e2e_app`: **PROVEN 2026-08-27**. Read-only
+  census of the canonical cluster `127.0.0.1:55432` (as
+  `simprok_readonly_audit`) lists exactly `simprok_app`,
+  `simprok_cluster_admin`, `simprok_migrator`, `simprok_readonly_audit` —
+  `simprok_e2e_app` **does not exist there**, so it cannot authenticate to
+  canonical at all. Beware the earlier false alarm: a
+  `has_database_privilege(..., 'simprok_db', 'CONNECT') = true` measured on
+  port **5432** refers to a LEGACY database that merely shares the name
+  `simprok_db` inside the test cluster. It is not the canonical database, and
+  it is not grounds for a canonical `REVOKE`.

@@ -28,7 +28,8 @@ export type IntakeAnswerKey =
   | 'selectedRegionLabel'
   | 'declaredSection'
   | 'selectedNameColumn'
-  | 'selectedUnitColumn';
+  | 'selectedUnitColumn'
+  | 'selectedKdnColumn';
 
 export interface IntakeQuestionModel {
   /** What SIMPROK needs answered, in the user's language. */
@@ -38,13 +39,19 @@ export interface IntakeQuestionModel {
 }
 
 const SECTION_LABELS: Record<ResourceType, string> = {
-  LABOR: 'Upah / Tenaga Kerja',
+  LABOR: 'Tenaga kerja',
   MATERIAL: 'Bahan',
   EQUIPMENT: 'Peralatan',
 };
 
+const SECTION_EXAMPLES: Record<ResourceType, string> = {
+  LABOR: 'contoh: Pekerja, Tukang batu, Mandor',
+  MATERIAL: 'contoh: Semen, Pasir, Batu kali',
+  EQUIPMENT: 'contoh: Excavator, Concrete mixer, Dump truck',
+};
+
 const STRUCTURE_LABELS: Record<PriceTableStructure, string> = {
-  SECTIONED_PRICE_LIST: 'Daftar harga bersection (Upah / Bahan / Peralatan)',
+  SECTIONED_PRICE_LIST: 'Daftar harga berbagian (Tenaga kerja / Bahan / Peralatan)',
   SEMANTIC_HEADER_TABLE: 'Tabel harga berjudul kolom',
   REGIONAL_MATRIX: 'Matriks harga per wilayah',
 };
@@ -63,21 +70,40 @@ export function intakeQuestionOf(
     case 'SECTION_DECLARATION_REQUIRED':
       return {
         prompt:
-          'Berkas ini tidak menyebutkan sendiri golongan sumber dayanya. Golongan apa isi daftar harga ini?',
+          'Pilih jenis data. SIMPROK belum dapat memastikan kategori daftar harga ini dari berkas. Jenis data apa yang paling sesuai sebagai panduan awal? (Baris yang memiliki bukti sendiri tetap mengikuti bukti tersebut.)',
         answerKey: 'declaredSection',
         options: (details.acceptedSections ?? ['LABOR', 'MATERIAL', 'EQUIPMENT']).map(
-          (section) => ({ value: section, label: SECTION_LABELS[section] ?? section }),
+          (section) => ({
+            value: section,
+            label: `${SECTION_LABELS[section] ?? section} — ${SECTION_EXAMPLES[section] ?? ''}`,
+          }),
         ),
       };
 
     case 'REGION_COLUMN_SELECTION_REQUIRED':
     case 'REGION_COLUMN_NOT_FOUND':
       return {
+        /**
+         * BP-VISUAL-TRUTH-07 §7 — THIS QUESTION IS ABOUT A COLUMN, AND IT USED
+         * TO CALL ITSELF "WILAYAH".
+         *
+         * The source's OWN wording is shown here, never a canonical Region
+         * name, and mapping it to a Region stays a separate, deliberate human
+         * step — that part was always right. What was wrong is that this
+         * question and that separate step were BOTH named "Wilayah". A person
+         * who answered "TELUK AMBON" here had every reason to believe they had
+         * chosen SIMPROK's region, and then to read the Region standing in
+         * Konteks Sumber as SIMPROK having overruled them with a different
+         * place whose name merely overlaps.
+         *
+         * So the question now says what it is actually asking: which COLUMN of
+         * this workbook the prices should be read out of. It names the other
+         * question explicitly, because the cheapest way to stop two facts being
+         * confused is to say, at the moment of the first, that a second exists.
+         */
         prompt:
-          'Berkas ini memuat harga untuk beberapa wilayah sekaligus. Satu batch hanya boleh mewakili satu wilayah — wilayah mana yang diimpor sekarang?',
+          'Pilih kolom harga. Berkas ini memuat kolom harga untuk lebih dari satu wilayah, dan satu impor membaca tepat satu kolom. Kolom mana yang ingin dibaca? Judul di bawah ini adalah tulisan berkas Anda sendiri — Wilayah resmi SIMPROK dipilih terpisah di Konteks Sumber.',
         answerKey: 'selectedRegionLabel',
-        // The source's OWN wording is shown, never a canonical Region name.
-        // Mapping it to a Region stays a separate, deliberate human step.
         options: (details.choices ?? []).map((label) => ({ value: label, label })),
       };
 
@@ -116,12 +142,30 @@ export function intakeQuestionOf(
         : offered;
       return {
         prompt: askingUnit
-          ? 'Kolom mana yang berisi SATUAN?'
-          : 'Berkas ini tidak memberi judul pada kolomnya. Kolom mana yang berisi NAMA sumber daya?',
+          ? 'Tentukan kolom satuan. Pilih kolom yang berisi satuan ukuran — bukan nama item atau harga.'
+          : 'Tentukan kolom nama item. SIMPROK tidak menemukan judul kolom. Pilih kolom yang berisi nama barang, tenaga kerja, atau peralatan — bukan satuan, kode, atau harga.',
         answerKey: askingUnit ? 'selectedUnitColumn' : 'selectedNameColumn',
+        /**
+         * BP-VISUAL-TRUTH-07 §13 — THIS QUESTION STAYS, AND IT READS LIKE THE
+         * DOCUMENT.
+         *
+         * Unlike the batch-wide category hint, these two genuinely change how
+         * the file is parsed and SIMPROK cannot answer them from the document,
+         * so they are asked. What was wrong was the card: `Kolom 2` sat
+         * directly above three bare cell values, and a person who has never
+         * seen this screen cannot tell whether those words are the column's
+         * contents or three more options.
+         *
+         * "Contoh:" names them for what they are. The values themselves are
+         * still the SOURCE'S OWN CELLS, sampled — nothing here is invented, and
+         * a column with no readable sample says so rather than showing a
+         * plausible-looking blank.
+         */
         options: candidates.map((candidate) => ({
           value: String(candidate.columnNumber),
-          label: `Kolom ${candidate.columnNumber} — contoh: ${candidate.samples.slice(0, 2).join(' / ') || '(kosong)'}`,
+          label:
+            `Kolom ${candidate.columnNumber}\nContoh:\n` +
+            (candidate.samples.slice(0, 3).join('\n') || '(kosong)'),
         })),
       };
     }
@@ -188,17 +232,24 @@ export function IntakeQuestionPanel({
   onAnswer: (key: IntakeAnswerKey, value: string) => void;
 }) {
   return (
-    <section
-      className="simprok-rab-validation-alert simprok-rab-validation-alert--info"
-      aria-label="Pertanyaan Impor Basic Price"
-    >
-      <strong>SIMPROK butuh satu keputusan Anda</strong>
+    /*
+      A QUESTION IS NOT AN ERROR, AND MUST NOT LOOK LIKE ONE (§15).
+      Gold attention, never red: SIMPROK has read the file successfully and
+      found exactly one thing it refuses to guess about. `--info` blue would
+      have been equally wrong — this is not a notice, it is a fork the person
+      has to take before anything can continue.
+    */
+    <section className="bp-decision" aria-label="Pertanyaan Impor Basic Price">
+      <strong className="bp-section-title">SIMPROK butuh satu keputusan Anda</strong>
       <p>{question.prompt}</p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '12px' }}>
+      <div className="bp-decision__options">
         {question.options.map((option) => (
           <button
             key={option.value}
+            type="button"
+            className="bp-btn bp-decision__choice"
             disabled={disabled}
+            aria-disabled={disabled}
             onClick={() => onAnswer(question.answerKey, option.value)}
             title={option.label}
           >

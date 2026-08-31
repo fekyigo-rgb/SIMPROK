@@ -8,7 +8,10 @@ import {
 import { resolveAhspResourcePrice } from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { promotionLineagePrecedenceWhere } from '../basic-price/basic-price-promotion-precedence';
-import { basicPriceCurrentnessWhere } from '../basic-price/basic-price-currentness';
+import {
+  basicPriceCurrentnessWhere,
+  mergeCurrentnessAnd,
+} from '../basic-price/basic-price-currentness';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
@@ -102,10 +105,11 @@ export class AhspResourceResolutionOrchestrator {
         // preserves historical calculations: a resolution persisted against a price
         // that has since been superseded still re-reads that exact row and still
         // proves its provenance. Selection changed; history did not.
-        ...basicPriceCurrentnessWhere({ asOf }),
+        ...mergeCurrentnessAnd(basicPriceCurrentnessWhere({ asOf }), [
+          { OR: [{ validUntil: null }, { validUntil: { gte: asOf } }] },
+        ]),
         regionId: input.referenceRegionId,
         effectiveDate: { lte: asOf },
-        AND: [{ OR: [{ validUntil: null }, { validUntil: { gte: asOf } }] }],
       },
       include: { resource: true },
     });

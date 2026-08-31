@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   BASIC_PRICE_CURRENTNESS_VERSION,
   basicPriceCurrentnessWhere,
+  mergeCurrentnessAnd,
 } from './basic-price-currentness';
 
 /**
@@ -50,6 +51,29 @@ const predicateBody = () => {
   expect(start).toBeGreaterThan(-1);
   return code.slice(start);
 };
+
+const expectedSupersededBy = (asOf: Date) => ({
+  isNot: {
+    OR: [
+      {
+        AND: [
+          { verificationStatus: { not: 'UNVERIFIED' } },
+          {
+            supersedes: {
+              is: { publicationAudits: { none: { action: 'SUPERSEDED' } } },
+            },
+          },
+        ],
+      },
+      {
+        AND: [
+          { verificationStatus: 'UNVERIFIED' },
+          { createdAt: { lte: asOf } },
+        ],
+      },
+    ],
+  },
+});
 
 describe('BP-CORR-01 supersession', () => {
   /**
@@ -440,22 +464,165 @@ describe('BP-CORR-01 supersession', () => {
       // judged, which is exactly why a correction or a withdrawal never has to
       // write to published history.
       const asOf = new Date('2026-08-03T00:00:00.000Z');
-      expect(basicPriceCurrentnessWhere({ asOf })).toEqual({
-        supersededBy: { is: null },
-        publicationAudits: {
-          none: { action: 'WITHDRAWN', effectiveAt: { lte: asOf } },
-        },
-        promotedFrom: {
-          isNot: {
+
+      /**
+       * BP-UX-FINAL-01D — the row-being-judged still contributes NO mutable
+       * column of its own, and reason 1 is now temporal.
+       *
+       * `supersededBy` carries only the INTEGRITY guard (a successor whose
+       * governance record is missing must fail closed); the temporal question
+       * moved to `publicationAudits`, which is where the canonical instant
+       * actually lives — on the predecessor's own SUPERSEDED audit.
+       */
+      const untimeableCorrection = expectedSupersededBy(asOf).isNot;
+      const originNoLongerCurrent = {
+        OR: [
+          {
             OR: [
-              { supersededBy: { isNot: null } },
               {
                 publicationAudits: {
-                  some: { action: 'WITHDRAWN', effectiveAt: { lte: asOf } },
+                  some: { action: 'SUPERSEDED', createdAt: { lte: asOf } },
                 },
+              },
+              {
+                AND: [
+                  { supersededBy: { isNot: null } },
+                  { publicationAudits: { none: { action: 'SUPERSEDED' } } },
+                ],
               },
             ],
           },
+          {
+            publicationAudits: {
+              some: { action: 'WITHDRAWN', effectiveAt: { lte: asOf } },
+            },
+          },
+        ],
+      };
+
+      expect(basicPriceCurrentnessWhere({ asOf })).toEqual({
+        supersededBy: { isNot: untimeableCorrection },
+        publicationAudits: {
+          none: {
+            OR: [
+              { action: 'WITHDRAWN', effectiveAt: { lte: asOf } },
+              { action: 'SUPERSEDED', createdAt: { lte: asOf } },
+            ],
+          },
+        },
+        promotedFrom: { isNot: originNoLongerCurrent },
+        AND: [
+          {
+            OR: [
+              { supersedesBasicPriceId: null },
+              { verificationStatus: { not: 'UNVERIFIED' } },
+              { createdAt: { lte: asOf } },
+            ],
+          },
+        ],
+      });
+    });
+
+    /**
+     * BP-UX-FINAL-01D — REASON 1 IS ANSWERED AT `asOf`, NOT ABSOLUTELY.
+     *
+     * The defect this kills: `supersededBy: { is: null }` had no date beside
+     * it, so a correction published TODAY silently rewrote what SIMPROK would
+     * have answered LAST YEAR. Reasons 2 and 3 already took an `asOf`; reason 1
+     * did not, and the asymmetry was invisible because the two instants
+     * coincide for every present-tense read.
+     *
+     * The canonical anchor is the PREDECESSOR's own SUPERSEDED audit
+     * `createdAt` — the only instant that action has, because schema law states
+     * a SUPERSEDED transition "becomes true exactly when it is recorded" and
+     * refuses to invent an `effectiveAt` for it.
+     */
+    it('§4 — the supersession clause compares `asOf` against the RECORDED governance instant', () => {
+      const asOf = new Date('2026-03-01T00:00:00.000Z');
+      const fragment = basicPriceCurrentnessWhere({ asOf });
+
+      const none = (fragment.publicationAudits as { none: { OR: unknown[] } })
+        .none;
+      expect(none.OR).toContainEqual({
+        action: 'SUPERSEDED',
+        createdAt: { lte: asOf },
+      });
+      // Never a bare `{ action: 'SUPERSEDED' }` in the temporal clause: that
+      // would read "corrected at some point, therefore not current then",
+      // which is exactly the retroactive rewrite this gate removed.
+      expect(none.OR).not.toContainEqual({ action: 'SUPERSEDED' });
+    });
+
+    it('§4 — an untimeable correction fails CLOSED at every instant', () => {
+      // Pointer present, governance record absent. "No record dated at or
+      // before D" would otherwise answer NO forever and offer corrected-away
+      // money for the rest of time, so the guard is unconditional — it carries
+      // no `asOf` at all, in either direction.
+      for (const asOf of [
+        new Date('1999-01-01T00:00:00.000Z'),
+        new Date('2099-01-01T00:00:00.000Z'),
+      ]) {
+        const fragment = basicPriceCurrentnessWhere({ asOf });
+        expect(fragment.supersededBy).toEqual(expectedSupersededBy(asOf));
+        const serialised = JSON.stringify(fragment.supersededBy);
+        expect(serialised).toContain('"not":"UNVERIFIED"');
+        expect(serialised).toContain('"createdAt"');
+      }
+    });
+
+    /**
+     * C-ASOF-07 — A CORRECTION MADE TODAY MUST NOT REWRITE A COST ALREADY
+     * CALCULATED FOR AN EARLIER BUSINESS DATE.
+     *
+     * The AHSP candidate offer composes this exact fragment with its BUSINESS
+     * `asOf` (pinned by CK-03 below). Before 01D the supersession clause ignored
+     * that date entirely, so a correction published this morning changed which
+     * candidates a resolution dated last March would have been offered — the
+     * Cost Kernel's own historical reconstruction, silently rewritten.
+     *
+     * Now the clause carries whatever instant the caller states, so the offer
+     * for March is answered by what governance knew in March.
+     */
+    it('C-ASOF-07 — a business as-of reaches the correction clause, not just the withdrawal one', () => {
+      const businessDate = new Date('2026-03-15T00:00:00.000Z');
+      const fragment = basicPriceCurrentnessWhere({ asOf: businessDate });
+      const none = (fragment.publicationAudits as { none: { OR: unknown[] } })
+        .none;
+
+      // Both verbs answered for the SAME business instant — a resolver that
+      // states a date must have every lifecycle rule answered on that date.
+      expect(none.OR).toContainEqual({
+        action: 'SUPERSEDED',
+        createdAt: { lte: businessDate },
+      });
+      expect(none.OR).toContainEqual({
+        action: 'WITHDRAWN',
+        effectiveAt: { lte: businessDate },
+      });
+    });
+
+    it('§4 — a promoted descendant inherits the SAME correction clock as its origin', () => {
+      // One law, asked about two rows. If the descendant used a different
+      // clause it would follow its origin out of candidacy on a different
+      // clock than the origin itself — two shadow engines for one rule.
+      const asOf = new Date('2026-03-01T00:00:00.000Z');
+      const fragment = basicPriceCurrentnessWhere({ asOf });
+      const serialised = JSON.stringify(fragment.promotedFrom);
+
+      expect(serialised).toContain('"SUPERSEDED"');
+      expect(serialised).toContain('"createdAt"');
+      // And the old absolute form is gone: a bare `supersededBy isNot null`
+      // alone would suppress a descendant whose origin is corrected tomorrow.
+      expect(fragment.promotedFrom).not.toEqual({
+        isNot: {
+          OR: [
+            { supersededBy: { isNot: null } },
+            {
+              publicationAudits: {
+                some: { action: 'WITHDRAWN', effectiveAt: { lte: asOf } },
+              },
+            },
+          ],
         },
       });
     });
@@ -483,23 +650,77 @@ describe('BP-CORR-01 supersession', () => {
     it('§10 — the withdrawal clause compares the caller as-of against EFFECTIVE time, never against recording time', () => {
       const asOf = new Date('2026-03-01T00:00:00.000Z');
       const fragment = basicPriceCurrentnessWhere({ asOf });
-      expect(fragment.publicationAudits).toEqual({
-        none: { action: 'WITHDRAWN', effectiveAt: { lte: asOf } },
+      const none = (
+        fragment.publicationAudits as {
+          none: { OR: Record<string, unknown>[] };
+        }
+      ).none;
+
+      expect(none.OR).toContainEqual({
+        action: 'WITHDRAWN',
+        effectiveAt: { lte: asOf },
       });
-      // `createdAt` must not appear anywhere in the decision. It is evidence of
-      // bookkeeping, never of business truth.
-      expect(JSON.stringify(fragment)).not.toContain('createdAt');
+
+      /**
+       * BP-UX-FINAL-01D NARROWED THIS ASSERTION, AND THE NARROWING IS THE LAW.
+       *
+       * It used to read `expect(JSON.stringify(fragment)).not.toContain(
+       * 'createdAt')` — "bookkeeping is never business truth", stated over the
+       * WHOLE fragment. That was right about WITHDRAWN and wrong as a blanket
+       * rule, because the two verbs are different kinds of fact:
+       *
+       *   WITHDRAWN   the SOURCE's claim about the world. It HAS a separate
+       *               business instant, the CHECK constraint refuses the row
+       *               without one, and reading `createdAt` here would ignore an
+       *               instant that exists.
+       *   SUPERSEDED  SIMPROK's OWN governance transition. Schema law: it
+       *               "becomes true exactly when it is recorded", its
+       *               `effectiveAt` is NULL by design, and the migration
+       *               refuses to back-fill one because that "would manufacture
+       *               a claim nobody made". `createdAt` is the ONLY instant it
+       *               has.
+       *
+       * So the ban stays exactly where it was earned: on the withdrawal clause.
+       */
+      const withdrawalClause = none.OR.find(
+        (member) => member.action === 'WITHDRAWN',
+      );
+      expect(withdrawalClause).toBeDefined();
+      expect(JSON.stringify(withdrawalClause)).not.toContain('createdAt');
 
       // The lineage clause must carry the SAME as-of against the SAME field. If
       // it did not, a shared restatement would follow its origin out of
       // candidacy on a different clock than the origin itself.
-      expect(fragment.promotedFrom).toEqual({
+      const lineage = JSON.stringify(fragment.promotedFrom);
+      expect(lineage).toContain('"WITHDRAWN"');
+      expect(lineage).toContain('"effectiveAt"');
+      expect(JSON.parse(lineage)).toEqual({
         isNot: {
           OR: [
-            { supersededBy: { isNot: null } },
+            {
+              OR: [
+                {
+                  publicationAudits: {
+                    some: {
+                      action: 'SUPERSEDED',
+                      createdAt: { lte: asOf.toISOString() },
+                    },
+                  },
+                },
+                {
+                  AND: [
+                    { supersededBy: { isNot: null } },
+                    { publicationAudits: { none: { action: 'SUPERSEDED' } } },
+                  ],
+                },
+              ],
+            },
             {
               publicationAudits: {
-                some: { action: 'WITHDRAWN', effectiveAt: { lte: asOf } },
+                some: {
+                  action: 'WITHDRAWN',
+                  effectiveAt: { lte: asOf.toISOString() },
+                },
               },
             },
           ],
@@ -525,33 +746,40 @@ describe('BP-CORR-01 supersession', () => {
       // Never a bare `{ action: 'WITHDRAWN' }`: that would read "withdrawn at
       // some point, therefore not current now", which is false for a withdrawal
       // that has not taken effect yet.
-      expect(fragment.publicationAudits).not.toEqual({
-        none: { action: 'WITHDRAWN' },
-      });
+      const none = (
+        fragment.publicationAudits as {
+          none: { OR: Record<string, unknown>[] };
+        }
+      ).none;
+      expect(none.OR).not.toContainEqual({ action: 'WITHDRAWN' });
       expect(
-        (fragment.publicationAudits as { none: Record<string, unknown> }).none
-          .effectiveAt,
+        none.OR.find((member) => member.action === 'WITHDRAWN')?.effectiveAt,
+      ).toBeDefined();
+      // BP-UX-FINAL-01D — and the same discipline now applies to the correction
+      // verb: existence of a SUPERSEDED record is never enough on its own
+      // either, because it may have been recorded AFTER the instant asked about.
+      expect(none.OR).not.toContainEqual({ action: 'SUPERSEDED' });
+      expect(
+        none.OR.find((member) => member.action === 'SUPERSEDED')?.createdAt,
       ).toBeDefined();
     });
 
-    it('the currentness fragment can only ever REMOVE a row — three keys, no top-level OR/AND/NOT, no scope of its own', () => {
-      // THREE non-colliding keys. None of them is `OR`, `AND` or `NOT`, so this
-      // fragment can be spread beside canonical eligibility (which owns `OR`),
-      // promotion precedence (which owns `NOT`) and the AHSP offer's validity
-      // window (which owns `AND`) without any of the four clobbering another.
-      // A future fourth rule must find a fourth key or be nested — never take
-      // one of those three.
+    it('the currentness fragment can only ever REMOVE a row — four keys, no top-level OR/NOT, no scope of its own', () => {
+      // Four non-colliding keys. `OR` still belongs to eligibility; `NOT` still
+      // belongs to promotion precedence. `AND` is the fourth currentness key
+      // (private successor recorded-by-asOf) and callers that also need `AND`
+      // must merge rather than overwrite.
       for (const fragment of [
         basicPriceCurrentnessWhere({ asOf: new Date('2026-01-01T00:00:00Z') }),
         basicPriceCurrentnessWhere({ asOf: new Date() }),
       ]) {
         expect(Object.keys(fragment).sort()).toEqual([
+          'AND',
           'promotedFrom',
           'publicationAudits',
           'supersededBy',
         ]);
         expect(fragment.OR).toBeUndefined();
-        expect(fragment.AND).toBeUndefined();
         expect(fragment.NOT).toBeUndefined();
       }
       // It must never re-state eligibility. Composing a publication predicate
@@ -561,9 +789,116 @@ describe('BP-CORR-01 supersession', () => {
       expect(predicateBody()).not.toContain('PUBLISHED');
       expect(predicateBody()).not.toContain('assetScope');
       expect(predicateBody()).not.toContain('workspaceId');
+      // BP-UX-FINAL-01D — V3: reason 1 became temporal. The version string is
+      // part of the contract, so a silent law change fails here first.
       expect(BASIC_PRICE_CURRENTNESS_VERSION).toBe(
-        'BPCORR01B_BASIC_PRICE_CURRENTNESS_V2',
+        'BPUXFINAL01D_BASIC_PRICE_CURRENTNESS_V3',
       );
+    });
+
+    it('BP-DETAIL-MAINT-02 — a private successor is timed by createdAt on the same asOf clock', () => {
+      const before = new Date('2026-01-01T00:00:00.000Z');
+      const after = new Date('2026-08-27T00:00:00.000Z');
+      const earlier = basicPriceCurrentnessWhere({ asOf: before });
+      const later = basicPriceCurrentnessWhere({ asOf: after });
+
+      expect(JSON.stringify(earlier.supersededBy)).toContain('"createdAt"');
+      expect(JSON.stringify(later.supersededBy)).toContain('"createdAt"');
+      expect(JSON.stringify(earlier.supersededBy)).toContain(
+        before.toISOString(),
+      );
+      expect(JSON.stringify(later.supersededBy)).toContain(after.toISOString());
+      expect(JSON.stringify(earlier.supersededBy)).not.toContain(
+        after.toISOString(),
+      );
+      expect(predicateBody()).not.toContain('assetScope');
+      expect(predicateBody()).not.toContain('PUBLISHED');
+    });
+
+    it('PRIVATE-ASOF-01 — an August private successor is not current at a March asOf', () => {
+      const march = new Date('2026-03-01T00:00:00.000Z');
+      const august = new Date('2026-08-27T00:00:00.000Z');
+      const historical = basicPriceCurrentnessWhere({ asOf: march });
+      const present = basicPriceCurrentnessWhere({ asOf: august });
+
+      expect(historical.AND).toEqual([
+        {
+          OR: [
+            { supersedesBasicPriceId: null },
+            { verificationStatus: { not: 'UNVERIFIED' } },
+            { createdAt: { lte: march } },
+          ],
+        },
+      ]);
+      expect(present.AND).toEqual([
+        {
+          OR: [
+            { supersedesBasicPriceId: null },
+            { verificationStatus: { not: 'UNVERIFIED' } },
+            { createdAt: { lte: august } },
+          ],
+        },
+      ]);
+      expect(JSON.stringify(historical.AND)).not.toContain(
+        august.toISOString(),
+      );
+      // Origins and catalog successors stay off this bookkeeping clock:
+      // they pass via null pointer / not-UNVERIFIED, not via createdAt alone.
+      expect(JSON.stringify(historical.AND)).toContain(
+        'supersedesBasicPriceId',
+      );
+      expect(JSON.stringify(historical.AND)).toContain('UNVERIFIED');
+    });
+
+    it('PRIVATE-LIFECYCLE-01 — CHECK S2 keeps the private successor discriminator unpromotable', () => {
+      const sql = readFileSync(
+        join(
+          __dirname,
+          '..',
+          '..',
+          'prisma',
+          'migrations',
+          '20260827180000_bp_detail_maint_02_private_supersession',
+          'migration.sql',
+        ),
+        'utf8',
+      );
+      expect(sql).toContain('"assetScope" = \'WORKSPACE_PRIVATE\'');
+      expect(sql).toContain('"status" = \'UNPUBLISHED\'');
+      expect(sql).toContain('"verificationStatus" = \'UNVERIFIED\'');
+      expect(sql).toContain(
+        '"status" = \'PUBLISHED\' AND "verificationStatus" = \'PUBLISHED\'',
+      );
+      const publication = readFileSync(
+        join(__dirname, 'basic-price-publication.service.ts'),
+        'utf8',
+      );
+      expect(publication).toContain('SUPERSEDED_BASIC_PRICE_NOT_CATALOG');
+      const method = readFileSync(
+        join(__dirname, 'basic-price-private-asset.service.ts'),
+        'utf8',
+      ).split('async correctPrivatePrice(')[1];
+      expect(method).toBeDefined();
+      expect(method).not.toMatch(/^\s*verificationStatus\s*:/m);
+      expect(method).not.toMatch(/^\s*status\s*:/m);
+    });
+
+    it('PRIVATE-ASOF-01 — mergeCurrentnessAnd keeps the successor clause beside applicability', () => {
+      const asOf = new Date('2026-03-01T00:00:00.000Z');
+      const merged = mergeCurrentnessAnd(basicPriceCurrentnessWhere({ asOf }), [
+        { effectiveDate: { lte: asOf } },
+      ]);
+      expect(merged.AND).toHaveLength(2);
+      expect(merged.AND?.[0]).toEqual({
+        OR: [
+          { supersedesBasicPriceId: null },
+          { verificationStatus: { not: 'UNVERIFIED' } },
+          { createdAt: { lte: asOf } },
+        ],
+      });
+      expect(merged.AND?.[1]).toEqual({ effectiveDate: { lte: asOf } });
+      expect(merged.OR).toBeUndefined();
+      expect(merged.NOT).toBeUndefined();
     });
   });
 
@@ -877,6 +1212,7 @@ describe('BP-CORR-01 supersession', () => {
       // bare call here would answer a historical question with wall-clock
       // "today", which is precisely what the Cost Kernel must never do.
       expect(offer).toContain('basicPriceCurrentnessWhere({ asOf })');
+      expect(offer).toContain('mergeCurrentnessAnd');
       expect(reread).not.toContain('basicPriceCurrentnessWhere');
     });
 
@@ -886,6 +1222,8 @@ describe('BP-CORR-01 supersession', () => {
       const byId = findOne.split('}')[0] + findOne.split('async ')[0];
       expect(findOne).toContain('usableWhere(workspaceId)');
       expect(byId).not.toContain('basicPriceCurrentnessWhere');
+      const list = service.split('async findAllForWorkspace')[1] ?? '';
+      expect(list).toContain('mergeCurrentnessAnd');
     });
   });
 
@@ -907,14 +1245,35 @@ describe('BP-CORR-01 supersession', () => {
         expect(predicateBody()).not.toContain(heuristic);
       }
 
-      // BP-CORR-01B TEMPORAL — `createdAt` is now absent from the decision
-      // ENTIRELY. It was briefly here, standing in for the withdrawal's
-      // effective point, and that was the defect: a bookkeeping timestamp
-      // answering a business question. The only date this predicate reads is
-      // the governed effective instant.
+      /**
+       * BP-UX-FINAL-01D — THE TWO DATES, EACH WHERE IT BELONGS.
+       *
+       * This used to assert `createdAt` was absent from the predicate ENTIRELY.
+       * That was the right ban stated too widely. `createdAt` standing in for a
+       * WITHDRAWAL's effective point was the BP-CORR-01B defect — a bookkeeping
+       * timestamp answering a claim the source had dated itself. But a
+       * SUPERSEDED transition has no separate business instant to ignore:
+       * schema law says it "becomes true exactly when it is recorded" and the
+       * migration refuses to back-fill an `effectiveAt` for it, because doing so
+       * "would manufacture a claim nobody made".
+       *
+       * So each verb is now pinned to the one instant it actually owns, and the
+       * cross-wiring — the real defect in either direction — is what fails.
+       */
       const body = predicateBody();
-      expect(body).not.toContain('createdAt');
       expect(body).toContain('effectiveAt: { lte: asOf }');
+      expect(body).toContain('createdAt: { lte: asOf }');
+
+      const clauseOf = (helper: string) =>
+        (body.split(`const ${helper}`)[1] ?? '').split('});')[0];
+
+      const withdrawnClause = clauseOf('withdrawnAudit');
+      expect(withdrawnClause).toContain('effectiveAt: { lte: asOf }');
+      expect(withdrawnClause).not.toContain('createdAt');
+
+      const supersededClause = clauseOf('supersededAudit');
+      expect(supersededClause).toContain('createdAt: { lte: asOf }');
+      expect(supersededClause).not.toContain('effectiveAt');
     });
 
     it('CUR-08 — a genuine later observation publishes with no predecessor and both prices stay lawful', async () => {

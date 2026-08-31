@@ -33,3 +33,23 @@ export function toMoneyDecimal2(value: Prisma.Decimal | string): Prisma.Decimal 
     Prisma.Decimal.ROUND_HALF_UP,
   );
 }
+
+/**
+ * Exact-decimal helpers for non-money scale-2 facts (BP-KDN-01 %KDN).
+ * Same Prisma.Decimal / ROUND_HALF_UP authority as money — never IEEE-754.
+ * Kept here so intake structure files need not import `@prisma/client`.
+ */
+export function isDecimalOutsideInclusiveRange(
+  value: string,
+  min: string,
+  max: string,
+): boolean {
+  const exact = new Prisma.Decimal(value);
+  return exact.lt(min) || exact.gt(max);
+}
+
+export function toFixedScale2HalfUp(value: string): string {
+  return new Prisma.Decimal(value)
+    .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+    .toFixed(2);
+}

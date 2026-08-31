@@ -8,6 +8,15 @@ import { BasicPriceImportLookupService } from './basic-price-import-lookup.servi
 import { SearchRegionDto } from './dto/search-basic-price-import-lookups.dto';
 
 /**
+ * The one fact `PermissionsGuard` attaches to every request that reaches this
+ * controller. Declared rather than read off `any` so a new route cannot pick up
+ * the wrong property name and fail at runtime instead of at build time.
+ */
+interface WorkspaceScopedRequest {
+  workspaceContext?: { workspaceId?: string };
+}
+
+/**
  * BasicPriceController — Golden Path v0 Slice A
  *
  * Read-only. Semua endpoint dilindungi JWT + PermissionsGuard.
@@ -64,6 +73,40 @@ export class BasicPriceController {
   findByResource(@Req() request: any, @Param('resourceId') resourceId: string) {
     const workspaceId: string = request.workspaceContext?.workspaceId;
     return this.basicPriceService.findByResource(resourceId, workspaceId);
+  }
+
+  /**
+   * GET /basic-prices/:id/detail
+   *
+   * BP-UX-FINAL-01C — the browser-facing Basic Price detail: one explicit
+   * projection carrying the human-readable price, the evidence facts SIMPROK
+   * can actually prove, and the REAL persisted supersession timeline.
+   *
+   * A SEPARATE DOOR FROM `:id`, DELIBERATELY. The raw `:id` read below is a
+   * proven contract — acceptance specs assert `status`, `verificationStatus`
+   * and `supersedesBasicPriceId` directly off it — so it is left untouched and
+   * the projected read gets its own bounded route rather than a breaking
+   * change dressed up as a tidy-up.
+   *
+   * Declared BEFORE `:id` so the two-segment path is matched by this handler
+   * and never swallowed by the single-segment one.
+   *
+   * Same permission and the same workspace context as every other read here:
+   * this is a narrower view of data `BASIC_PRICE_VIEW` already opens, never a
+   * new authority.
+   */
+  @Get(':id/detail')
+  @Permissions('BASIC_PRICE_VIEW')
+  findDetail(
+    // TYPED, unlike its four neighbours. Those read `request: any` and each
+    // costs two `no-unsafe-*` errors; that is pre-existing debt this mission is
+    // not authorised to churn, but a NEW route has no reason to inherit it.
+    // The shape is exactly what `PermissionsGuard` puts on the request.
+    @Req() request: WorkspaceScopedRequest,
+    @Param('id') id: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId as string;
+    return this.basicPriceService.findDetailForWorkspace(id, workspaceId);
   }
 
   /**

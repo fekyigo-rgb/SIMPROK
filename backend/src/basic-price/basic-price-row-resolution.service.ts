@@ -135,13 +135,17 @@ export class BasicPriceRowResolutionService {
         // could not safely map. The guard immediately after the row lock is
         // what keeps every consumer below able to treat this as a ResourceType.
         sourceSection: ResourceType | null;
+        // BP-VISUAL-USABILITY-05 — UPLOADER_DECLARED is a weak batch hint, not
+        // document truth. Resolve must be able to tell that apart from a
+        // source-proven family before applying the type boundary.
+        sourceSectionProvenance: string | null;
         sourceRowNumber: number;
         rawResourceCodeText: string | null;
         rawResourceNameText: string;
         rawUnitText: string | null;
       }>
     >(
-      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
+      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceSectionProvenance", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
     );
     const row = rowLock[0];
     if (!row || row.batchId !== batchId)
@@ -219,15 +223,21 @@ export class BasicPriceRowResolutionService {
     reviewerAccountId: string,
     dto: ResolveBasicPriceImportRowDto,
   ) {
-    return this.prisma.$transaction((tx) =>
-      this.resolveWithinTransaction(
-        tx,
-        workspaceId,
-        batchId,
-        rowId,
-        reviewerAccountId,
-        dto,
-      ),
+    return this.prisma.$transaction(
+      (tx) =>
+        this.resolveWithinTransaction(
+          tx,
+          workspaceId,
+          batchId,
+          rowId,
+          reviewerAccountId,
+          dto,
+        ),
+      // Same budget as `admitResourceForRow`. `resolveWithinTransaction` proves
+      // identity, unit, and same-batch collision before it writes; Prisma's 5s
+      // default is sized for a trivial update and turns a slow-but-lawful
+      // resolve into P2028 instead of a finished mapping decision.
+      { timeout: 20_000, maxWait: 20_000 },
     );
   }
 
@@ -635,14 +645,20 @@ export class BasicPriceRowResolutionService {
       });
       if (!resourceCatalog)
         throw new ConflictException('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
-      // RM-02D1-REMEDIATION-V3.2.1 (Blocker 2): a row's sourceSection
-      // (LABOR/MATERIAL/EQUIPMENT) is a hard type boundary — a LABOR row
-      // can never be resolved to a MATERIAL or EQUIPMENT resource, even by
-      // explicit human choice. This check runs before any row update and
-      // before any mapping-decision insert, so a type-mismatched attempt
-      // leaves zero trace in either table.
-      if (resourceCatalog.type !== row.sourceSection)
+      // RM-02D1-REMEDIATION-V3.2.1 (Blocker 2) + BP-VISUAL-USABILITY-05:
+      // a DOCUMENT-PROVEN sourceSection (SOURCE_ROW_CATEGORY /
+      // SOURCE_SECTION_TITLE) remains a hard type boundary. A weak batch
+      // UPLOADER_DECLARED hint must NOT defeat a human-confirmed catalog
+      // identity of a different family — that is how Batu Kali stamped
+      // LABOR by a global "Upah" answer became un-saveable as Bahan.
+      const typeMismatch = resourceCatalog.type !== row.sourceSection;
+      const weakBatchHint =
+        row.sourceSectionProvenance === 'UPLOADER_DECLARED';
+      if (typeMismatch && !weakBatchHint)
         throw new ConflictException('RESOURCE_TYPE_MISMATCH');
+      const effectiveSection: ResourceType = typeMismatch
+        ? resourceCatalog.type
+        : row.sourceSection;
       const unitDefinition = await tx.unitDefinition.findFirst({
         where: { id: dto.unitDefinitionId, isActive: true },
       });
@@ -659,8 +675,10 @@ export class BasicPriceRowResolutionService {
       // passed because a resource-specific conversion rule is evidence the
       // kernel is entitled to see; on the admission path it is the identity
       // this transaction just created, which by construction has no rules yet.
+      // When a weak batch hint is being corrected, Unit Kernel context follows
+      // the catalog family the reviewer confirmed — never the stale hint.
       await this.assertSelectedUnitProvenBySourceUnit(
-        row,
+        { ...row, sourceSection: effectiveSection },
         unitDefinition,
         dto.resourceCatalogId,
       );
@@ -696,6 +714,9 @@ export class BasicPriceRowResolutionService {
         data: {
           resourceCatalogId: dto.resourceCatalogId,
           resolvedResourceType: resourceCatalog.type,
+          // Correct a weak batch hint to the family the human confirmed.
+          // Document-proven families never reach here with a type mismatch.
+          ...(typeMismatch ? { sourceSection: effectiveSection } : {}),
           unitDefinitionId: dto.unitDefinitionId,
           collisionType,
           collisionOfRowId,
@@ -1242,29 +1263,32 @@ export class BasicPriceRowResolutionService {
     currentAccountId: string,
     dto: RejectBasicPriceImportRowDto,
   ) {
-    return this.prisma.$transaction(async (tx) => {
-      const row = await this.assertBatchRowMutable(
-        tx,
-        workspaceId,
-        batchId,
-        rowId,
-        currentAccountId,
-      );
-      if (row.version !== dto.version)
-        throw new ConflictException('ROW_VERSION_STALE');
+    return this.prisma.$transaction(
+      async (tx) => {
+        const row = await this.assertBatchRowMutable(
+          tx,
+          workspaceId,
+          batchId,
+          rowId,
+          currentAccountId,
+        );
+        if (row.version !== dto.version)
+          throw new ConflictException('ROW_VERSION_STALE');
 
-      const updated = await tx.basicPriceImportRow.update({
-        where: { id: rowId },
-        data: {
-          status: 'REJECTED',
-          reasonCodes: { push: `REJECTED:${dto.reason}` },
-          resolvedAt: new Date(),
-          version: { increment: 1 },
-        },
-      });
+        const updated = await tx.basicPriceImportRow.update({
+          where: { id: rowId },
+          data: {
+            status: 'REJECTED',
+            reasonCodes: { push: `REJECTED:${dto.reason}` },
+            resolvedAt: new Date(),
+            version: { increment: 1 },
+          },
+        });
 
-      await this.recomputeBatchStatus(tx, batchId);
-      return updated;
-    });
+        await this.recomputeBatchStatus(tx, batchId);
+        return updated;
+      },
+      { timeout: 20_000, maxWait: 20_000 },
+    );
   }
 }

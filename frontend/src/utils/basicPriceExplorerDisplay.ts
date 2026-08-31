@@ -57,7 +57,23 @@ export interface BasicPriceExplorerItem {
   reviewDate?: string | null;
   reverification?: 'CURRENT' | 'DUE' | 'NOT_RECOMMENDED';
   workspaceScope: BasicPriceWorkspaceScope;
+  /**
+   * RM-03C — WHICH ASSET FAMILY THIS ROW BELONGS TO.
+   *
+   * The server has sent this since RM-03C and this mirror simply never named
+   * it, so the Explorer could not tell a workspace's OWN private price apart
+   * from a curated catalog row. That is the difference between "we imported
+   * this ourselves" and "SIMPROK published this", and it belongs on the
+   * Detail's evidence tab rather than being inferred from `workspaceScope`,
+   * which answers a different question (tenancy, not curation).
+   *
+   * Optional, because the review/publication projections and older fixtures do
+   * not carry it — an absent value reads as unknown, never as catalog.
+   */
+  assetScope?: BasicPriceAssetScope;
 }
+
+export type BasicPriceAssetScope = 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG';
 
 export interface ExplorerPageMeta {
   total: number;
@@ -66,12 +82,144 @@ export interface ExplorerPageMeta {
   totalPages: number;
 }
 
+/**
+ * BP-UX-FINAL-01D — THE PROJECTED DETAIL READ (GET /basic-prices/:id/detail).
+ *
+ * Mirrors `backend/src/common/basic-price-workflow.projection.ts` exactly. The
+ * price half is the SAME `BasicPriceExplorerItem` the list row used — one
+ * projection, two screens — so Detail and the table can never disagree about
+ * what a price is called, what it costs or where it came from.
+ */
+
+/**
+ * ONE CORRECTION. NOT one price observation.
+ *
+ * The server reads `BasicPrice.supersedesBasicPriceId`, which carries exactly
+ * one sentence: a human published this price as an explicit CORRECTION of that
+ * erroneous one. A later, equally valid observation of the same market carries
+ * no such pointer and is not here. Everything on screen therefore says
+ * KOREKSI — never "riwayat harga", which would promise a completeness this
+ * column cannot give.
+ *
+ * NO `basicPriceId`. Rendering a dated amount needs no identifier, so a
+ * predecessor's raw UUID is not sent and this list is keyed by position.
+ */
+export interface BasicPriceCorrectionEntry {
+  /** Exact decimal string. Never passed through Number() at any depth. */
+  price: string;
+  effectiveDate: string;
+  /**
+   * SUPERSEDED only when an exact `supersedesBasicPriceId` pointer names this
+   * row. Never inferred from age, value or date order.
+   */
+  state: 'CURRENT' | 'SUPERSEDED';
+}
+
+/**
+ * The correction lineage, and whether it is all of it.
+ *
+ * The server's read is BOUNDED, so `truncated` is how it admits stopping short.
+ * It is the difference between the heading "Riwayat Koreksi" and "Riwayat
+ * Koreksi Terbaru", and neither heading is ever a claim about the full set of
+ * price observations.
+ */
+export interface BasicPriceCorrectionHistory {
+  entries: BasicPriceCorrectionEntry[];
+  truncated: boolean;
+}
+
+/**
+ * What SIMPROK can actually PROVE about where this price came from.
+ *
+ * TWO FACTS, AND THE DISTANCE BETWEEN THEM IS THE WHOLE POINT.
+ *
+ *   importBatchLinked     this price is linked to a recorded import batch. A
+ *                         RELATION, and nothing at all about a file.
+ *   originalFileRetained  that batch's ORIGINAL BYTES are still retained.
+ *                         Only this one licenses a sentence about the uploaded
+ *                         file still being held.
+ *
+ * The panel used to state the stronger sentence unconditionally, for every row,
+ * including rows with no provenance chain whatsoever. Each sentence is now
+ * gated on the fact that proves it, and on no weaker one.
+ */
+export interface BasicPriceEvidenceFacts {
+  importBatchLinked: boolean;
+  originalFileRetained: boolean;
+  sourcePeriodLabel: string | null;
+  effectiveDateProvenance: string | null;
+  effectiveDateDerivationRule: string | null;
+  /** Human-readable %KDN origin. Null when unstated or no public sentence. */
+  kdnSourceSummary: string | null;
+  observationBasis: 'SOURCE_DOCUMENT' | 'FIELD_REPORTED' | null;
+}
+
+/**
+ * %KDN — the DOMESTIC-CONTENT fact of the RESOURCE this price is for.
+ *
+ * NOT TKDN. %KDN is an item/resource/Basic Price level FACT; TKDN is a
+ * CALCULATED aggregate at RAB/Project level. This screen shows the first and
+ * computes nothing.
+ *
+ * `null` means nobody has stated a value — which is NOT `0`. Zero is itself a
+ * substantive claim ("no domestic content"), so the two must never render the
+ * same way.
+ */
+export interface BasicPriceDomesticContent {
+  /** Exact decimal string, two digits (e.g. "72.50"), or null when unstated. */
+  kdnPercent: string | null;
+}
+
+export interface BasicPriceDetail {
+  price: BasicPriceExplorerItem;
+  evidence: BasicPriceEvidenceFacts;
+  corrections: BasicPriceCorrectionHistory;
+  domesticContent: BasicPriceDomesticContent;
+}
+
+/** Shown while the lawful detail read is still in flight. */
+export const KDN_PENDING_LABEL = 'Memuat...';
+/** Shown when the read completed and NO domestic-content fact was stated. */
+export const KDN_UNAVAILABLE_LABEL = 'Belum tersedia';
+
+/**
+ * THE THREE STATES, AND WHY `undefined` AND `null` MUST DIFFER.
+ *
+ *   undefined  the detail read has not answered yet  -> "Memuat..."
+ *   null       it answered, and nothing was stated   -> "Belum tersedia"
+ *   "72.50"    it answered with a fact               -> "72,50%"
+ *   "0.00"     ALSO a fact                           -> "0,00%"
+ *
+ * Collapsing absence into `0%` would print a compliance claim SIMPROK was never
+ * given. Collapsing "not yet loaded" into "Belum tersedia" would print an
+ * absence SIMPROK has not finished checking. Both are lies of a different size.
+ *
+ * The decimal separator is a comma because the rest of this room is Indonesian;
+ * the value itself is never passed through Number(), so exactness survives.
+ */
+export const kdnLabel = (kdnPercent: string | null | undefined): string => {
+  if (kdnPercent === undefined) return KDN_PENDING_LABEL;
+  if (kdnPercent === null) return KDN_UNAVAILABLE_LABEL;
+  return `${kdnPercent.replace('.', ',')}%`;
+};
+
 export interface ExplorerFilters {
   search?: string;
   regionId?: string;
   year?: string;
   dateFrom?: string;
   dateTo?: string;
+  /**
+   * "Berlaku pada tanggal" — the APPLICABILITY lens, and a different axis from
+   * the `dateFrom`/`dateTo`/`year` range filters above.
+   *
+   * The server answers it with the full temporal law the AHSP resolver and the
+   * Cost Kernel already enforce (effectiveDate <= asOf, validUntil null or
+   * >= asOf, currentness evaluated AT asOf). The browser sends one date and
+   * computes none of that itself — duplicating any of it here would be a second
+   * copy of currentness law, drifting the moment the server's rule changed.
+   */
+  asOf?: string;
   sourceOrigin?: string;
   sourceFamily?: string;
   sourceName?: string;
@@ -97,6 +245,7 @@ export function buildExplorerQueryParams(filters: ExplorerFilters): Record<strin
   put('year', filters.year);
   put('dateFrom', filters.dateFrom);
   put('dateTo', filters.dateTo);
+  put('asOf', filters.asOf);
   put('sourceOrigin', filters.sourceOrigin);
   put('sourceFamily', filters.sourceFamily);
   put('sourceName', filters.sourceName);
@@ -162,6 +311,13 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
 };
 export const sourceTypeLabel = (type: string): string => SOURCE_TYPE_LABELS[type] ?? type;
 
+const OBSERVATION_BASIS_LABELS: Record<string, string> = {
+  SOURCE_DOCUMENT: 'Dokumen sumber',
+  FIELD_REPORTED: 'Hasil survei/laporan lapangan',
+};
+export const observationBasisLabel = (basis: string): string =>
+  OBSERVATION_BASIS_LABELS[basis] ?? basis;
+
 const FRESHNESS_LABELS: Record<string, string> = {
   CURRENT: 'Terkini',
   EXPIRING: 'Akan Kedaluwarsa',
@@ -170,13 +326,93 @@ const FRESHNESS_LABELS: Record<string, string> = {
 export const freshnessLabel = (status: string): string => FRESHNESS_LABELS[status] ?? status;
 
 export const workspaceScopeLabel = (scope: BasicPriceWorkspaceScope): string =>
-  scope === 'WORKSPACE' ? 'Workspace Anda' : 'Umum (Global)';
+  scope === 'WORKSPACE' ? 'Ruang kerja Anda' : 'Umum (Global)';
+
+/**
+ * WHO CURATED THIS PRICE — a different question from who owns it.
+ *
+ * An absent value is reported as unknown rather than defaulted to catalog:
+ * telling a person a price passed SIMPROK's curation when the payload never
+ * said so would be the exact kind of unearned claim the projection's own
+ * fail-safe direction exists to prevent.
+ */
+export const assetScopeLabel = (scope: BasicPriceAssetScope | undefined): string => {
+  if (scope === 'WORKSPACE_PRIVATE') return 'Ruang kerja Anda';
+  if (scope === 'SIMPROK_CATALOG') return 'Katalog SIMPROK';
+  return 'Tidak dinyatakan';
+};
+
+/**
+ * ONE CAKUPAN FIELD — tenancy and curation family, without duplicating two
+ * nearly-identical scope rows on Detail.
+ */
+export const cakupanLabel = (
+  item: Pick<BasicPriceExplorerItem, 'assetScope' | 'workspaceScope'>,
+): string => {
+  if (item.assetScope === 'WORKSPACE_PRIVATE') return 'Ruang kerja Anda';
+  if (item.assetScope === 'SIMPROK_CATALOG') return 'Katalog SIMPROK';
+  return workspaceScopeLabel(item.workspaceScope);
+};
+
+/** Evidence note when original upload bytes are still retained. */
+export const EVIDENCE_FILE_RETAINED_NOTE =
+  'Berkas sumber tersimpan di SIMPROK dan tidak ditampilkan di sini.';
+
+/**
+ * "BERLAKU PADA TANGGAL" — AND NOW IT MEANS EXACTLY THAT.
+ *
+ * THE PREVIOUS WORDING WAS HONEST ABOUT A WEAKER QUERY. The control sent
+ * `dateTo=D`, which is only `effectiveDate <= D`, so the help text could
+ * truthfully promise no more than "started on or before this date" — and the
+ * resulting list still contained prices whose own source said they had expired,
+ * and prices a published correction had already replaced.
+ *
+ * `asOf=D` asks the whole question server-side, through the same temporal law
+ * the AHSP resolver and the Cost Kernel already enforce:
+ *
+ *     effectiveDate <= D
+ *     AND (validUntil IS NULL OR validUntil >= D)
+ *     AND currentness evaluated AT D
+ *
+ * NONE OF WHICH IS COMPUTED HERE. The browser sends one date. A second copy of
+ * validity or currentness law in this file would drift from the one the money
+ * is spent through, and the screen would start disagreeing with the engine.
+ */
+export const EFFECTIVE_ON_DATE_HELP = 'Harga yang berlaku pada tanggal ini.';
+
+/**
+ * WHERE `effectiveDate` CAME FROM — in words, or not at all.
+ *
+ * RM-03D1 records whether the source STATED the date or SIMPROK DERIVED it from
+ * a coarser period. That distinction is worth showing on an evidence tab; the
+ * enum spelling is not. An unrecognised or absent value returns null so the
+ * screen renders NOTHING — a raw `DERIVED_FROM_SOURCE_PERIOD` in front of a
+ * site engineer is not a fact, it is a leak of vocabulary.
+ */
+export const effectiveDateProvenanceLabel = (
+  provenance: string | null | undefined,
+): string | null => {
+  if (provenance === 'SOURCE_STATED') return 'Dinyatakan langsung oleh sumber';
+  if (provenance === 'DERIVED_FROM_SOURCE_PERIOD') {
+    return 'Diturunkan SIMPROK dari periode sumber';
+  }
+  return null;
+};
+
+/**
+ * Said out loud when a person has chosen a date OTHER than today, so an
+ * as-of lens can never be mistaken for the present-day list (§C).
+ */
+export const asOfContextLine = (
+  isoDate: string,
+  formatDate: (iso: string) => string,
+): string => `Menampilkan harga yang berlaku pada ${formatDate(isoDate)}.`;
 
 // Category filter — canonical ResourceCatalog.type, human label only.
 export const RESOURCE_TYPE_OPTIONS = ['MATERIAL', 'LABOR', 'EQUIPMENT'] as const;
 const RESOURCE_TYPE_LABELS: Record<string, string> = {
-  MATERIAL: 'Material/Bahan',
-  LABOR: 'Upah/Tenaga Kerja',
+  MATERIAL: 'Bahan',
+  LABOR: 'Tenaga kerja',
   EQUIPMENT: 'Peralatan',
 };
 export const resourceTypeLabel = (type: string): string => RESOURCE_TYPE_LABELS[type] ?? type;

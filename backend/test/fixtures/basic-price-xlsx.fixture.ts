@@ -22,6 +22,13 @@ export interface BasicPriceFixtureOptions {
   includeZeroPrice?: boolean;
   includeTextPrice?: boolean;
   includeFormulaWithoutCachedResult?: boolean;
+  /**
+   * BP-KDN-01 — an optional %KDN column on the shared sectioned layout.
+   * Column H, outside the price/name/unit roles, so existing fixtures stay
+   * byte-identical unless this flag is set. The LABOR row states 72.5;
+   * other rows leave the cell blank (unknown, never zero).
+   */
+  includeKdnColumn?: boolean;
 }
 
 /**
@@ -67,6 +74,9 @@ export async function buildBasicPriceXlsx(options: BasicPriceFixtureOptions = {}
   sheet.getCell('E7').value = 'SATUAN';
   sheet.getCell('F7').value = 'HARGA  (Rp)';
   sheet.getCell('G7').value = 'KET';
+  if (options.includeKdnColumn) {
+    sheet.getCell('H7').value = 'KDN (%)';
+  }
 
   sheet.getCell('B9').value = '1';
   sheet.getCell('C9').value = 'Pekerja';
@@ -77,6 +87,9 @@ export async function buildBasicPriceXlsx(options: BasicPriceFixtureOptions = {}
   priceCell.numFmt = CURRENCY_NUMFMT;
   if (options.includeFormulaError) {
     sheet.getCell('G9').value = { formula: '#REF!/160', result: { error: '#REF!' } } as any;
+  }
+  if (options.includeKdnColumn) {
+    sheet.getCell('H9').value = 72.5;
   }
 
   if (options.includeExactTieRounding) {
@@ -103,6 +116,9 @@ export async function buildBasicPriceXlsx(options: BasicPriceFixtureOptions = {}
   sheet.getCell('E30').value = 'SATUAN';
   sheet.getCell('F30').value = 'HARGA  (Rp)';
   sheet.getCell('G30').value = 'KET';
+  if (options.includeKdnColumn) {
+    sheet.getCell('H30').value = 'KDN (%)';
+  }
 
   sheet.getCell('C33').value = { formula: '[1]ANALISA!C94', result: 'Kawat jaring' } as any;
   sheet.getCell('D33').value = '01 K';
@@ -170,6 +186,9 @@ export async function buildBasicPriceXlsx(options: BasicPriceFixtureOptions = {}
   sheet.getCell('E314').value = 'SATUAN';
   sheet.getCell('F314').value = 'HARGA  (Rp)';
   sheet.getCell('G314').value = 'KET.';
+  if (options.includeKdnColumn) {
+    sheet.getCell('H314').value = 'KDN (%)';
+  }
 
   sheet.getCell('B316').value = '1';
   sheet.getCell('C316').value = 'Sewa crane';

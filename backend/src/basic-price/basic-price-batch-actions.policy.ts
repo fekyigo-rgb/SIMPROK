@@ -85,6 +85,58 @@ export interface BatchLifecycleFacts {
    * is what keeps an unasked question from becoming a verdict.
    */
   alreadyPrivateRows?: number | null;
+  /**
+   * BP-REGION-TRUTH-07S — THE SOURCE'S OWN GEOGRAPHIC CLAIM ABOUT THIS BATCH'S
+   * PRICE SCOPE, and whether a human has reconciled it with `regionId`.
+   *
+   * All optional, and absent reads as "not stated" — so every existing caller
+   * keeps compiling and keeps its current verdict. A path that does not read
+   * these facts cannot raise the question, which is correct: an unasked
+   * question may not become a verdict.
+   */
+  sourceRegionScopeLabel?: string | null;
+  sourceRegionScopeGeographicEvidence?: string | null;
+  regionScopeConfirmedRegionId?: string | null;
+}
+
+/**
+ * DOES THIS BATCH CARRY AN UNRECONCILED GEOGRAPHIC CLAIM FROM ITS SOURCE?
+ *
+ * THE SITUATION THIS EXISTS FOR. The Owner's Ambon workbook writes "KECAMATAN"
+ * over three price columns and the reviewer picks one — "SIRIMAU". Separately,
+ * and in a different box, they pick a canonical Region — "Kecamatan Teluk Ambon
+ * Baguala". Both answers are honest, both are stored, and SIMPROK has no fact by
+ * which they are the same place or different ones: `Region` is a flat code/name
+ * table with no hierarchy, so there is nothing to prove compatibility WITH.
+ *
+ * SIMPROK MUST THEREFORE NEITHER ASSERT NOR DENY IT. Silently accepting the pair
+ * would make a price save-ready under a Region the source never claimed for it.
+ * Comparing the two spellings would be a guess wearing a proof's clothes. So the
+ * pair is called UNPROVEN and asked about once, and the answer is stored as the
+ * Region it was given about.
+ *
+ * ALL FOUR CONDITIONS ARE REQUIRED, and each removes a false alarm:
+ *
+ *   scope label      — a source that offered ONE place asked no scope question,
+ *                      so there is no second answer to reconcile.
+ *   geographic word  — "GROSIR | ECERAN" is the same SHAPE as a jurisdiction
+ *                      matrix. Without a region word written BY THE SOURCE this
+ *                      stays silent, which is what stops one ambiguity from
+ *                      making SIMPROK noisy everywhere.
+ *   a chosen Region  — nothing to reconcile against until one is picked, and its
+ *                      absence is already reported as a missing required fact.
+ *   no confirmation  — for THIS Region. A confirmation given about a different
+ *                      Region confirms nothing about this one, so changing the
+ *                      Region reopens the question rather than inheriting an
+ *                      answer about somewhere else.
+ */
+export function regionScopeCompatibilityUnproven(
+  facts: BatchLifecycleFacts,
+): boolean {
+  if (!facts.sourceRegionScopeLabel) return false;
+  if (!facts.sourceRegionScopeGeographicEvidence) return false;
+  if (!facts.regionId) return false;
+  return facts.regionScopeConfirmedRegionId !== facts.regionId;
 }
 
 export type PrivateUseBlockReason =
@@ -93,6 +145,14 @@ export type PrivateUseBlockReason =
   | 'REGION_REQUIRED_BEFORE_PRIVATE_USE'
   | 'SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE'
   | 'SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE'
+  /**
+   * THE SOURCE CALLED THIS SCOPE A PLACE, AND NOBODY HAS SAID IT IS THIS PLACE.
+   * Not a fault, not a refusal of the work already done, and not a claim that
+   * the two disagree — only that SIMPROK will not store a price under a Region
+   * whose relation to the source's own geography is unproven. One confirmation
+   * clears it. See `regionScopeCompatibilityUnproven`.
+   */
+  | 'REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_PRIVATE_USE'
   | 'NO_ROWS_READY_FOR_PRIVATE_USE'
   /**
    * EVERY ROW THAT IS READY HAS ALREADY BEEN STORED. Not a fault and not a
@@ -114,6 +174,10 @@ export type ProposalBlockReason =
   | 'REGION_REQUIRED_BEFORE_SUBMISSION'
   | 'SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION'
   | 'SOURCE_TYPE_REQUIRED_BEFORE_SUBMISSION'
+  /** Same unproven pair as the private path, refused in the proposal's own
+   * vocabulary — an unreconciled geography must not be offered to SIMPROK's
+   * curation any more than it may be stored privately. */
+  | 'REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_SUBMISSION'
   | 'NO_ROWS_READY_FOR_SUBMISSION';
 
 /**
@@ -345,6 +409,13 @@ export function privateUseBlockReason(
   if (!facts.regionId) {
     return 'REGION_REQUIRED_BEFORE_PRIVATE_USE';
   }
+  // IMMEDIATELY AFTER THE REGION, because it is a question ABOUT the region and
+  // a person reading the two in sequence is being told one story: which place,
+  // then whether the source agrees it is that place. Asking it before a Region
+  // exists would be asking someone to reconcile an answer they have not given.
+  if (regionScopeCompatibilityUnproven(facts)) {
+    return 'REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_PRIVATE_USE';
+  }
   const classification = classificationBlock(
     facts,
     'SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE',
@@ -458,6 +529,9 @@ export function proposalBlockReason(
   if (!facts.regionId) {
     return 'REGION_REQUIRED_BEFORE_SUBMISSION';
   }
+  if (regionScopeCompatibilityUnproven(facts)) {
+    return 'REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_SUBMISSION';
+  }
   const classification = classificationBlock(
     facts,
     'SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION',
@@ -499,6 +573,27 @@ export interface BatchLifecycleActions {
    * cannot reach a room whose only exits are refusals.
    */
   reviewGate: BatchReviewGate;
+  /**
+   * BP-REGION-TRUTH-07S — THE TWO REGION ANSWERS, SIDE BY SIDE, AND WHETHER
+   * ANYONE HAS SAID THEY ARE THE SAME PLACE.
+   *
+   * Projected as facts, with the verdict computed HERE, for the reason this
+   * whole file exists: the browser must never hold its own copy of a product
+   * rule. It renders what the source said, what the canonical Region says, and
+   * the one sentence in between — it does not decide which pairs are a problem.
+   *
+   * `compatibilityUnproven` is false for every non-geographic source, so the
+   * ordinary import shows nothing at all here.
+   */
+  regionScope: {
+    /** The source's own wording for the scope this batch was read under. */
+    sourceLabel: string | null;
+    /** The source's own word proving that scope is a place, when it wrote one. */
+    geographicEvidence: string | null;
+    /** Which Region a human already reconciled that scope against, if any. */
+    confirmedRegionId: string | null;
+    compatibilityUnproven: boolean;
+  };
 }
 
 /**
@@ -557,5 +652,11 @@ export function evaluateBatchLifecycleActions(
       sourceFamily,
     },
     reviewGate: evaluateBatchReviewGate(facts),
+    regionScope: {
+      sourceLabel: facts.sourceRegionScopeLabel ?? null,
+      geographicEvidence: facts.sourceRegionScopeGeographicEvidence ?? null,
+      confirmedRegionId: facts.regionScopeConfirmedRegionId ?? null,
+      compatibilityUnproven: regionScopeCompatibilityUnproven(facts),
+    },
   };
 }

@@ -63,6 +63,7 @@ describe('BasicPriceRowResolutionService', () => {
     resourceCatalogId: null,
     unitDefinitionId: null,
     sourceSection: 'MATERIAL',
+    sourceSectionProvenance: null as string | null,
     sourceRowNumber: 33,
     rawResourceCodeText: null,
     rawResourceNameText: 'Semen Portland',
@@ -869,7 +870,13 @@ describe('BasicPriceRowResolutionService', () => {
           if (sql.includes('basic_price_import_batches'))
             return Promise.resolve([baseBatch]);
           if (sql.includes('basic_price_import_rows'))
-            return Promise.resolve([{ ...baseRow, sourceSection: 'LABOR' }]);
+            return Promise.resolve([
+              {
+                ...baseRow,
+                sourceSection: 'LABOR',
+                sourceSectionProvenance: 'SOURCE_ROW_CATEGORY',
+              },
+            ]);
           if (sql.includes('resource_catalogs'))
             return Promise.resolve(candidateRows);
           return Promise.resolve([]);
@@ -894,6 +901,21 @@ describe('BasicPriceRowResolutionService', () => {
     });
 
     it('rejects resolving a MATERIAL row to an EQUIPMENT resource', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([baseBatch]);
+          if (sql.includes('basic_price_import_rows'))
+            return Promise.resolve([
+              {
+                ...baseRow,
+                sourceSectionProvenance: 'SOURCE_SECTION_TITLE',
+              },
+            ]);
+          return Promise.resolve([]);
+        },
+      );
       tx.resourceCatalog.findFirst.mockResolvedValue({
         id: 'resource-equipment',
         type: 'EQUIPMENT',
@@ -909,6 +931,126 @@ describe('BasicPriceRowResolutionService', () => {
       expect(
         tx.basicPriceImportRowResourceMapping.create,
       ).not.toHaveBeenCalled();
+    });
+
+    it('CAT-02 — a weak UPLOADER_DECLARED Upah hint does not block completing Batu Kali as Bahan', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([baseBatch]);
+          if (sql.includes('basic_price_import_rows'))
+            return Promise.resolve([
+              {
+                ...baseRow,
+                rawResourceNameText: 'Batu Kali',
+                sourceSection: 'LABOR',
+                sourceSectionProvenance: 'UPLOADER_DECLARED',
+                rawUnitText: 'M3',
+              },
+            ]);
+          return Promise.resolve([]);
+        },
+      );
+      tx.resourceCatalog.findFirst.mockResolvedValue({
+        id: 'resource-batu-kali',
+        type: 'MATERIAL',
+      });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-m3',
+        code: 'M3',
+      });
+      // Preserve the default lawful identity proof. Omitting priceOperation
+      // here falsely triggers UNIT_SELECTION_REQUIRES_PRICE_CONVERSION and
+      // masks the CAT-02 category question this pin exists to prove.
+      unitKernel.resolve.mockResolvedValue({
+        status: 'RESOLVED',
+        rawSourceUnit: 'M3',
+        rawTargetUnit: 'M3',
+        priceOperation: 'IDENTITY',
+        policyVersion: 'KAMUS_UNIT_KERNEL_01A_V1',
+        reasonCodes: ['EXACT_UNIT_ALIAS_EQUIVALENCE', 'EXACT_UNIT_IDENTITY'],
+        explanation:
+          'Kedua alias menunjuk identitas unit canonical yang sama.',
+      });
+
+      const result = await service.resolveRow(
+        WORKSPACE_ID,
+        BATCH_ID,
+        ROW_ID,
+        REVIEWER_ID,
+        {
+          version: 0,
+          resourceCatalogId: 'resource-batu-kali',
+          unitDefinitionId: 'unit-m3',
+        },
+      );
+
+      expect(result).toBeDefined();
+      expect(tx.basicPriceImportRow.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            resourceCatalogId: 'resource-batu-kali',
+            sourceSection: 'MATERIAL',
+            resolvedResourceType: 'MATERIAL',
+          }),
+        }),
+      );
+    });
+
+    it('CAT-03 — a weak UPLOADER_DECLARED Upah hint does not block completing Batu Belah as Bahan', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([baseBatch]);
+          if (sql.includes('basic_price_import_rows'))
+            return Promise.resolve([
+              {
+                ...baseRow,
+                rawResourceNameText: 'Batu Belah',
+                sourceSection: 'LABOR',
+                sourceSectionProvenance: 'UPLOADER_DECLARED',
+                rawUnitText: 'M3',
+              },
+            ]);
+          return Promise.resolve([]);
+        },
+      );
+      tx.resourceCatalog.findFirst.mockResolvedValue({
+        id: 'resource-batu-belah',
+        type: 'MATERIAL',
+      });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-m3',
+        code: 'M3',
+      });
+      unitKernel.resolve.mockResolvedValue({
+        status: 'RESOLVED',
+        rawSourceUnit: 'M3',
+        rawTargetUnit: 'M3',
+        priceOperation: 'IDENTITY',
+        policyVersion: 'KAMUS_UNIT_KERNEL_01A_V1',
+        reasonCodes: ['EXACT_UNIT_ALIAS_EQUIVALENCE', 'EXACT_UNIT_IDENTITY'],
+        explanation:
+          'Kedua alias menunjuk identitas unit canonical yang sama.',
+      });
+
+      await service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
+        version: 0,
+        resourceCatalogId: 'resource-batu-belah',
+        unitDefinitionId: 'unit-m3',
+      });
+
+      expect(tx.basicPriceImportRow.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            resourceCatalogId: 'resource-batu-belah',
+            sourceSection: 'MATERIAL',
+            resolvedResourceType: 'MATERIAL',
+          }),
+        }),
+      );
     });
 
     it('a type match at the exact row.sourceSection still resolves normally (regression guard)', async () => {

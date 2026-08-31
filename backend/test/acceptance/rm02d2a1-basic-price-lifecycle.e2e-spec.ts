@@ -14,6 +14,9 @@ import { AppModule } from '../../src/app.module';
 import { BasicPricePublicationService } from '../../src/basic-price/basic-price-publication.service';
 import { BasicPricePromotionService } from '../../src/basic-price/basic-price-promotion.service';
 import { basicPriceCurrentnessWhere } from '../../src/basic-price/basic-price-currentness';
+// C-ASOF-07 — the PRODUCTION resolver, called directly. The propagation proof
+// is worthless if it re-implements the candidate query instead of running it.
+import { AhspResourceResolutionOrchestrator } from '../../src/project-ahsp/ahsp-resource-resolution.orchestrator';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { buildBasicPriceXlsx } from '../fixtures/basic-price-xlsx.fixture';
 
@@ -39,6 +42,18 @@ const WORKSPACE_B = '10000000-0000-4000-8000-000000000005';
 const PASSWORD = 'Test1234!';
 
 const REGION_ID = '42000000-0000-4000-8000-000000000001';
+/**
+ * C-ASOF-07 — DEDICATED REGIONS, SO THE RESOLVER'S ANSWER IS ABOUT TIME ONLY.
+ *
+ * The AHSP candidate offer is scoped by (resource, region). Dozens of earlier
+ * tests in this suite publish prices for RESOURCE_BOTH_ID in REGION_ID, so a
+ * resolution run there is legitimately AMBIGUOUS — and an ambiguous answer
+ * proves nothing about whether a future correction rewrote the past. Giving
+ * these two proofs their own region makes the candidate set exactly the prices
+ * they create, so the only variable left is the `asOf` instant.
+ */
+const CASOF07_REGION_ID = '42000000-0000-4000-8000-0000000000c7';
+const CASOF07_OBSERVATION_REGION_ID = '42000000-0000-4000-8000-0000000000c8';
 const RESOURCE_MATERIAL_ID = '42000000-0000-4000-8000-000000000002';
 const RESOURCE_LABOR_ID = '42000000-0000-4000-8000-000000000003';
 const ROLE_ACTOR1_ID = '42000000-0000-4000-8000-000000000005';
@@ -105,6 +120,16 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
   let actorBothUserId: string;
   const membershipRoleIds: string[] = [];
   const createdPermissionIds: string[] = [];
+  /**
+   * C-ASOF-07 — the AHSP rows this suite creates to drive the real resolver.
+   *
+   * Tracked BY ID rather than torn down by workspace: the residual fingerprint
+   * gate compares the final database against the seeded baseline, so deleting
+   * every AHSP in the workspace would remove seeded rows this suite never owned
+   * and turn a clean run into a residual failure. Versions and resources
+   * cascade from the AHSP, so these ids are the whole graph.
+   */
+  const createdAhspIds: string[] = [];
   const ACTOR_BOTH_EMAIL = 'rm02d2a1-actor-both@test.local';
 
   beforeAll(async () => {
@@ -517,6 +542,12 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
   };
 
   afterAll(async () => {
+    // C-ASOF-07 — the resolver fixture, removed before the prices it read.
+    // AHSPVersion and AHSPResource cascade from the AHSP, so this one delete
+    // takes the whole graph and leaves every seeded row untouched.
+    if (createdAhspIds.length > 0) {
+      await prisma.aHSP.deleteMany({ where: { id: { in: createdAhspIds } } });
+    }
     const suiteResourceIds = [
       RESOURCE_MATERIAL_ID,
       RESOURCE_LABOR_ID,
@@ -575,7 +606,13 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
         id: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID, RESOURCE_BOTH_ID] },
       },
     });
-    await prisma.region.deleteMany({ where: { id: REGION_ID } });
+    await prisma.region.deleteMany({
+      where: {
+        id: {
+          in: [REGION_ID, CASOF07_REGION_ID, CASOF07_OBSERVATION_REGION_ID],
+        },
+      },
+    });
     await prisma.membershipRole.deleteMany({
       where: { id: { in: membershipRoleIds } },
     });
@@ -2480,6 +2517,520 @@ describe('RM-02D2A-1 Basic Price backend runtime lifecycle (e2e, three distinct 
         .post(`/basic-prices/${RESOURCE_BOTH_ID}/promote-shared`)
         .set('Authorization', `Bearer ${actor3Token}`)
         .set('x-workspace-id', WORKSPACE_A)
+        .expect(404);
+    });
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * BP-UX-FINAL-01D — A CORRECTION MADE TODAY MUST NOT REWRITE YESTERDAY.
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * THE DEFECT THESE KILL. Reason 1 of the currentness predicate used to read
+     * `supersededBy: { is: null }` — absolute, with no date beside it. Reasons 2
+     * and 3 already took an `asOf`. So publishing a correction TODAY silently
+     * deleted the predecessor from every HISTORICAL answer, right back to the
+     * day it was first published. A lens that borrows tomorrow's knowledge is
+     * not a historical lens.
+     *
+     * THE ANCHOR, AND WHY IT IS NOT FAKED. The governance instant is the
+     * PREDECESSOR's own SUPERSEDED audit `createdAt`, written by the publication
+     * transaction. These tests never move the clock: they publish for real, READ
+     * the instant PostgreSQL recorded, and then ask the production predicate
+     * about the moments either side of it. That is the only way to prove the
+     * boundary rather than to assert it.
+     *
+     * The predicate is exercised through `isCurrentAsOf`, which composes the
+     * exact exported function the AHSP candidate offer composes — not a
+     * re-implementation. It also exercises a Prisma shape no unit test can
+     * prove: a to-one `isNot` that travels through the successor and back to
+     * the predecessor. Only real PostgreSQL can say whether that resolves.
+     */
+    const supersessionInstantOf = async (predecessorId: string) => {
+      const audit = await prisma.basicPricePublicationAudit.findFirstOrThrow({
+        where: { basicPriceId: predecessorId, action: 'SUPERSEDED' },
+      });
+      // The one action whose currentness is timed by when it was RECORDED.
+      // Schema law refuses it an `effectiveAt`, so this asserts the absence
+      // rather than trusting it.
+      expect(audit.effectiveAt).toBeNull();
+      return audit.createdAt;
+    };
+
+    /** A published price, corrected by a second published price. */
+    const publishThenCorrect = async () => {
+      const original = await acceptedWorth('78000.00');
+      await publishAs(original.basicPrice.id).expect(201);
+      const corrected = await acceptedWorth('80000.00');
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: original.basicPrice.id,
+      }).expect(201);
+      return {
+        predecessorId: original.basicPrice.id,
+        successorId: corrected.basicPrice.id,
+        transitionAt: await supersessionInstantOf(original.basicPrice.id),
+      };
+    };
+
+    const ONE_SECOND = 1_000;
+
+    /**
+     * A resolved money value as its exact decimal TEXT.
+     *
+     * `sourcePriceValue` is a Prisma `Decimal` at runtime behind a loosely
+     * typed create-input field, so it is narrowed to something that provably
+     * has a `toString` before being read — never coerced through `Number`,
+     * which is the one thing money may not survive.
+     */
+    const decimalText = (value: unknown): string | null =>
+      value === null || value === undefined
+        ? null
+        : (value as { toString(): string }).toString();
+
+    it('C-ASOF-01 — a published price with no correction is current at every instant', async () => {
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      const id = price.basicPrice.id;
+
+      expect(await isCurrentAsOf(id, JUL_31)).toBe(true);
+      expect(await isCurrentAsOf(id, new Date())).toBe(true);
+      expect(
+        await isCurrentAsOf(id, new Date('2099-01-01T00:00:00.000Z')),
+      ).toBe(true);
+    });
+
+    it('C-ASOF-02 — BEFORE the governed instant, the predecessor was genuinely current', async () => {
+      const { predecessorId, transitionAt } = await publishThenCorrect();
+
+      // THE DECISIVE CASE. On this date SIMPROK really did offer this price:
+      // the correction had not been made, let alone recorded. Answering "not
+      // current" here would be reconstructing the past out of knowledge that
+      // did not exist in it.
+      const justBefore = new Date(transitionAt.getTime() - ONE_SECOND);
+      expect(await isCurrentAsOf(predecessorId, justBefore)).toBe(true);
+      // And far earlier, for good measure — the price's own history is intact.
+      expect(await isCurrentAsOf(predecessorId, JUL_31)).toBe(true);
+    });
+
+    it('C-ASOF-03 — the governed instant ITSELF is already in force', async () => {
+      const { predecessorId, transitionAt } = await publishThenCorrect();
+      // `lte`, the same boundary the withdrawal clause uses (T-02). One rule,
+      // one direction, no off-by-one between the two verbs.
+      expect(await isCurrentAsOf(predecessorId, transitionAt)).toBe(false);
+    });
+
+    it('C-ASOF-04 — after the governed instant the predecessor stays suppressed', async () => {
+      const { predecessorId, transitionAt } = await publishThenCorrect();
+
+      expect(
+        await isCurrentAsOf(
+          predecessorId,
+          new Date(transitionAt.getTime() + ONE_SECOND),
+        ),
+      ).toBe(false);
+      expect(await isCurrentAsOf(predecessorId, new Date())).toBe(false);
+      expect(
+        await isCurrentAsOf(
+          predecessorId,
+          new Date('2099-01-01T00:00:00.000Z'),
+        ),
+      ).toBe(false);
+
+      // C-ASOF-06 — and the PRESENT-tense HTTP read agrees: the correction is
+      // in force today, so the room offers the successor and not the original.
+      const ids = (await candidatesForResource()).map((row) => row.id);
+      expect(ids).not.toContain(predecessorId);
+    });
+
+    it('C-ASOF-06 — a correction never rewrites the historical Explorer answer', async () => {
+      // The Explorer's own composition, not a hand-rolled where clause: the
+      // same eligibility + precedence + currentness the room actually runs.
+      const { predecessorId, successorId, transitionAt } =
+        await publishThenCorrect();
+
+      const explorerAsOf = async (asOf: Date) => {
+        const rows = await prisma.basicPrice.findMany({
+          where: {
+            id: { in: [predecessorId, successorId] },
+            ...basicPriceCurrentnessWhere({ asOf }),
+          },
+          select: { id: true },
+        });
+        return rows.map((row) => row.id);
+      };
+
+      const before = await explorerAsOf(
+        new Date(transitionAt.getTime() - ONE_SECOND),
+      );
+      expect(before).toContain(predecessorId);
+
+      const after = await explorerAsOf(new Date());
+      expect(after).not.toContain(predecessorId);
+      expect(after).toContain(successorId);
+    });
+
+    it('C-ASOF-05 — an ordinary LATER observation suppresses nothing, at any instant', async () => {
+      // No pointer, so no correction. A March observation never proves the
+      // January one was wrong, and both stay lawfully current side by side.
+      const first = await acceptedWorth('78000.00');
+      await publishAs(first.basicPrice.id).expect(201);
+      const later = await acceptedWorth('81000.00');
+      await publishAs(later.basicPrice.id).expect(201);
+
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: first.basicPrice.id, action: 'SUPERSEDED' },
+        }),
+      ).toBe(0);
+      expect(await isCurrentAsOf(first.basicPrice.id, new Date())).toBe(true);
+      expect(await isCurrentAsOf(first.basicPrice.id, JUL_31)).toBe(true);
+      expect(await isCurrentAsOf(later.basicPrice.id, new Date())).toBe(true);
+    });
+
+    it('C-ASOF-08 / C-ASOF-09 — a promoted descendant follows its origin on the ORIGIN’s governed clock', async () => {
+      const origin = await acceptedWorth('78000.00');
+      await publishAs(origin.basicPrice.id).expect(201);
+      const shared = await promoteToShared(origin.basicPrice.id);
+
+      const corrected = await acceptedWorth('80000.00');
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: origin.basicPrice.id,
+      }).expect(201);
+      const transitionAt = await supersessionInstantOf(origin.basicPrice.id);
+
+      // C-ASOF-08 — before the origin's governance instant the restatement was
+      // lawful truth for other tenants, and a historical answer must say so.
+      expect(
+        await isCurrentAsOf(
+          shared.id,
+          new Date(transitionAt.getTime() - ONE_SECOND),
+        ),
+      ).toBe(true);
+      // C-ASOF-09 — from that instant it is restating corrected-away money.
+      expect(await isCurrentAsOf(shared.id, transitionAt)).toBe(false);
+      expect(await isCurrentAsOf(shared.id, new Date())).toBe(false);
+      expect(await sharedCandidatesForOtherTenant()).not.toContain(shared.id);
+    });
+
+    /**
+     * C-ASOF-07 — A CORRECTION PUBLISHED TODAY MUST NOT REWRITE THE CANDIDATE
+     * OFFER A RESOLUTION WAS LAWFULLY GIVEN FOR AN EARLIER BUSINESS DATE.
+     *
+     * WHY THIS IS THE ONE PROOF THE OTHERS DO NOT GIVE. C-ASOF-01…12 exercise
+     * the currentness predicate itself. This one proves it PROPAGATES: that the
+     * AHSP resource-price decision — the seam where Basic Price money actually
+     * enters a calculation — inherits the temporal law rather than quietly
+     * answering with today's knowledge.
+     *
+     * NOTHING IS MOCKED. It calls the production
+     * `AhspResourceResolutionOrchestrator.resolveVersionResources`, the same
+     * method the occurrence path and the RAB pre-lock gate both call, against
+     * real PostgreSQL. The candidate offer is built by that method's own
+     * composition of eligibility + precedence + currentness + applicability; a
+     * hand-rolled where clause here would prove only that the test agrees with
+     * itself.
+     *
+     * THE FIXTURE IS SHAPED SO THE ANSWER IS UNAMBIGUOUS. The correction B
+     * carries a LATER effective date than the historical business date D, so on
+     * D exactly one price was ever applicable — A. If the future correction
+     * leaked backwards, D would resolve to nothing (A suppressed, B not yet
+     * applicable) rather than to A, and the failure would be loud.
+     */
+    it('C-ASOF-07 — a future correction never rewrites an earlier AHSP candidate offer', async () => {
+      const orchestrator = app.get(AhspResourceResolutionOrchestrator);
+
+      // A real AHSP version whose resource identifies the very catalog row the
+      // lifecycle prices sit on — same name, type and unit, so identity
+      // RESOLVES by its own authority rather than by anything this test asserts.
+      const ahsp = await prisma.aHSP.create({
+        data: {
+          workspaceId: WORKSPACE_A,
+          workType: `${'C-ASOF-07'} work`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: 'C-ASOF-07 method',
+        },
+      });
+      createdAhspIds.push(ahsp.id);
+      const version = await prisma.aHSPVersion.create({
+        data: {
+          ahspId: ahsp.id,
+          workspaceId: WORKSPACE_A,
+          versionNumber: 1,
+          outputUnit: 'Lbr',
+        },
+      });
+      const ahspResource = await prisma.aHSPResource.create({
+        data: {
+          ahspVersionId: version.id,
+          resourceId: 'RM-02D2A-1 D-08 Resource',
+          resourceType: 'MATERIAL',
+          coefficient: '1.000000',
+          baseUnit: 'Lbr',
+        },
+      });
+
+      await prisma.region.upsert({
+        where: { id: CASOF07_REGION_ID },
+        create: {
+          id: CASOF07_REGION_ID,
+          code: 'RM02D2A1-CASOF07',
+          name: 'C-ASOF-07 Region',
+        },
+        update: {},
+      });
+
+      const JAN = new Date('2026-01-05T00:00:00.000Z');
+      const BUSINESS_DATE = new Date('2026-03-01T00:00:00.000Z');
+      const CORRECTION_EFFECTIVE = new Date('2026-06-01T00:00:00.000Z');
+
+      // A — the price that WAS the truth on the business date.
+      const original = await acceptedWorth('78000.00');
+      await prisma.basicPrice.update({
+        where: { id: original.basicPrice.id },
+        data: { effectiveDate: JAN, regionId: CASOF07_REGION_ID },
+      });
+      await publishAs(original.basicPrice.id).expect(201);
+
+      const resolveAt = async (asOf: Date) =>
+        orchestrator.resolveVersionResources(prisma, {
+          workspaceId: WORKSPACE_A,
+          // Feeds the pure price kernel only; no row is written by this read.
+          projectId: '42000000-0000-4000-8000-0000000000cf',
+          referenceRegionId: CASOF07_REGION_ID,
+          asOf,
+          version: { id: version.id, resources: [ahspResource] },
+        });
+
+      // BEFORE the correction exists at all: the offer for D is A.
+      const beforeCorrection = await resolveAt(BUSINESS_DATE);
+      expect(beforeCorrection).toHaveLength(1);
+      expect(beforeCorrection[0].status).toBe('RESOLVED');
+      expect(beforeCorrection[0].selectedBasicPriceId).toBe(
+        original.basicPrice.id,
+      );
+
+      // B — an explicit CORRECTION of A, published NOW, effective from June.
+      const corrected = await acceptedWorth('80000.00');
+      await prisma.basicPrice.update({
+        where: { id: corrected.basicPrice.id },
+        data: {
+          effectiveDate: CORRECTION_EFFECTIVE,
+          regionId: CASOF07_REGION_ID,
+        },
+      });
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: original.basicPrice.id,
+      }).expect(201);
+
+      // The governance instant really is AFTER the business date being asked
+      // about — otherwise this test would prove nothing about the past.
+      const transitionAt = await supersessionInstantOf(original.basicPrice.id);
+      expect(transitionAt.getTime()).toBeGreaterThan(BUSINESS_DATE.getTime());
+
+      // THE CLAIM. The SAME historical question, asked after the correction
+      // landed, still answers with the price that was lawfully offered then —
+      // and answers it IDENTICALLY, not merely with the same id.
+      const afterCorrection = await resolveAt(BUSINESS_DATE);
+      expect(afterCorrection).toEqual(beforeCorrection);
+      expect(afterCorrection[0].selectedBasicPriceId).toBe(
+        original.basicPrice.id,
+      );
+      expect(decimalText(afterCorrection[0].sourcePriceValue)).toBe('78000');
+
+      // ...and the PRESENT question moves, because the correction is in force
+      // now. A predicate that ignored `asOf` could not produce both answers.
+      const present = await resolveAt(new Date());
+      expect(present[0].status).toBe('RESOLVED');
+      expect(present[0].selectedBasicPriceId).toBe(corrected.basicPrice.id);
+      expect(decimalText(present[0].sourcePriceValue)).toBe('80000');
+    });
+
+    it('C-ASOF-07 — an ordinary LATER observation never triggers correction semantics in the resolver', async () => {
+      // The negative half. A price published later with NO supersedes pointer
+      // asserts nothing about the earlier one, so the earlier one must stay
+      // offerable — and the resolver must see TWO lawful candidates rather than
+      // silently treating the newer as a replacement.
+      const orchestrator = app.get(AhspResourceResolutionOrchestrator);
+
+      const ahsp = await prisma.aHSP.create({
+        data: {
+          workspaceId: WORKSPACE_A,
+          workType: 'C-ASOF-07 observation work',
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: 'C-ASOF-07 observation method',
+        },
+      });
+      createdAhspIds.push(ahsp.id);
+      const version = await prisma.aHSPVersion.create({
+        data: {
+          ahspId: ahsp.id,
+          workspaceId: WORKSPACE_A,
+          versionNumber: 1,
+          outputUnit: 'Lbr',
+        },
+      });
+      const ahspResource = await prisma.aHSPResource.create({
+        data: {
+          ahspVersionId: version.id,
+          resourceId: 'RM-02D2A-1 D-08 Resource',
+          resourceType: 'MATERIAL',
+          coefficient: '1.000000',
+          baseUnit: 'Lbr',
+        },
+      });
+
+      await prisma.region.upsert({
+        where: { id: CASOF07_OBSERVATION_REGION_ID },
+        create: {
+          id: CASOF07_OBSERVATION_REGION_ID,
+          code: 'RM02D2A1-CASOF07-OBS',
+          name: 'C-ASOF-07 Observation Region',
+        },
+        update: {},
+      });
+
+      const first = await acceptedWorth('78000.00');
+      await prisma.basicPrice.update({
+        where: { id: first.basicPrice.id },
+        data: {
+          effectiveDate: new Date('2026-01-05T00:00:00.000Z'),
+          regionId: CASOF07_OBSERVATION_REGION_ID,
+        },
+      });
+      await publishAs(first.basicPrice.id).expect(201);
+
+      const later = await acceptedWorth('81000.00');
+      await prisma.basicPrice.update({
+        where: { id: later.basicPrice.id },
+        data: {
+          effectiveDate: new Date('2026-02-05T00:00:00.000Z'),
+          regionId: CASOF07_OBSERVATION_REGION_ID,
+        },
+      });
+      // NO supersedesBasicPriceId — an ordinary publish, stating a new fact.
+      await publishAs(later.basicPrice.id).expect(201);
+
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: first.basicPrice.id, action: 'SUPERSEDED' },
+        }),
+      ).toBe(0);
+
+      const resolution = await orchestrator.resolveVersionResources(prisma, {
+        workspaceId: WORKSPACE_A,
+        projectId: '42000000-0000-4000-8000-0000000000cf',
+        referenceRegionId: CASOF07_OBSERVATION_REGION_ID,
+        asOf: new Date('2026-03-01T00:00:00.000Z'),
+        version: { id: version.id, resources: [ahspResource] },
+      });
+
+      // Both remain lawful candidates, so the kernel hands the ambiguity to a
+      // human instead of inventing a winner. The decisive part is WHY there are
+      // two: the earlier price was NOT suppressed as though it had been
+      // corrected, because nothing corrected it.
+      expect(resolution).toHaveLength(1);
+      expect(resolution[0].status).not.toBe('RESOLVED');
+      expect(await isCurrentAsOf(first.basicPrice.id, new Date())).toBe(true);
+      expect(await isCurrentAsOf(later.basicPrice.id, new Date())).toBe(true);
+    });
+
+    it('C-ASOF-11 — a successor pointer with NO governance record fails CLOSED', async () => {
+      // The writer makes this state unreachable, so it is forged here directly
+      // against the table. The question is not whether it can happen; it is
+      // what SIMPROK answers if it ever does. "No record dated at or before D"
+      // would otherwise read as "not yet corrected" at EVERY instant, and the
+      // predecessor would be offered forever.
+      const { predecessorId } = await publishThenCorrect();
+
+      await prisma.basicPricePublicationAudit.deleteMany({
+        where: { basicPriceId: predecessorId, action: 'SUPERSEDED' },
+      });
+
+      // The pointer still stands; only the record that times it is gone.
+      expect(
+        await prisma.basicPrice.count({
+          where: { supersedesBasicPriceId: predecessorId },
+        }),
+      ).toBe(1);
+
+      // Suppressed at every instant, including ones long before the correction.
+      expect(await isCurrentAsOf(predecessorId, JUL_31)).toBe(false);
+      expect(await isCurrentAsOf(predecessorId, new Date())).toBe(false);
+      expect(
+        await isCurrentAsOf(
+          predecessorId,
+          new Date('2099-01-01T00:00:00.000Z'),
+        ),
+      ).toBe(false);
+      // And it is still LAWFUL and still readable — suppression is a selection
+      // rule, never a permission one.
+      await request(getTypedHttpServer())
+        .get(`/basic-prices/${predecessorId}`)
+        .set('Authorization', `Bearer ${actor3Token}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(200);
+    });
+
+    it('C-ASOF-11 — a promoted descendant of an UNTIMEABLE origin also fails closed', async () => {
+      const origin = await acceptedWorth('78000.00');
+      await publishAs(origin.basicPrice.id).expect(201);
+      const shared = await promoteToShared(origin.basicPrice.id);
+      const corrected = await acceptedWorth('80000.00');
+      await publishAs(corrected.basicPrice.id, {
+        supersedesBasicPriceId: origin.basicPrice.id,
+      }).expect(201);
+
+      await prisma.basicPricePublicationAudit.deleteMany({
+        where: { basicPriceId: origin.basicPrice.id, action: 'SUPERSEDED' },
+      });
+
+      // The same law, asked about the descendant: an origin whose correction
+      // cannot be timed must not have its money restated to other tenants.
+      expect(await isCurrentAsOf(shared.id, JUL_31)).toBe(false);
+      expect(await isCurrentAsOf(shared.id, new Date())).toBe(false);
+    });
+
+    it('C-ASOF-10 — withdrawal keeps its OWN effective clock, unchanged', async () => {
+      // The two verbs must not have been merged into one rule. A withdrawal is
+      // a claim the SOURCE dates; a correction is a transition SIMPROK records.
+      const price = await acceptedWorth('78000.00');
+      await publishAs(price.basicPrice.id).expect(201);
+      const id = price.basicPrice.id;
+
+      await withdraw(id, 'Source retracted its July list', AUG_01);
+
+      expect(await isCurrentAsOf(id, JUL_31)).toBe(true);
+      // AUG_03 is BEFORE the recording instant and AFTER the stated effective
+      // one. A createdAt comparison would answer `true` here; the source's own
+      // date is what governs, and it says otherwise.
+      expect(await isCurrentAsOf(id, AUG_03)).toBe(false);
+      expect(
+        await prisma.basicPricePublicationAudit.count({
+          where: { basicPriceId: id, action: 'SUPERSEDED' },
+        }),
+      ).toBe(0);
+    });
+
+    it('C-ASOF-12 — a historical as-of never widens what another tenant may read', async () => {
+      // Time-travel is a SELECTION lens, never a permission one. Asking about a
+      // day before a correction must not turn a foreign private lineage into
+      // something Workspace B can enumerate.
+      const { predecessorId, transitionAt } = await publishThenCorrect();
+      const justBefore = new Date(transitionAt.getTime() - ONE_SECOND);
+
+      // The predecessor is Workspace A's, and it was current at `justBefore` —
+      // yet B still cannot read it by id.
+      expect(await isCurrentAsOf(predecessorId, justBefore)).toBe(true);
+      await request(getTypedHttpServer())
+        .get(`/basic-prices/${predecessorId}`)
+        .set('Authorization', `Bearer ${crosstenantToken}`)
+        .set('x-workspace-id', WORKSPACE_B)
+        .expect(404);
+      await request(getTypedHttpServer())
+        .get(`/basic-prices/${predecessorId}/detail`)
+        .set('Authorization', `Bearer ${crosstenantToken}`)
+        .set('x-workspace-id', WORKSPACE_B)
         .expect(404);
     });
 
