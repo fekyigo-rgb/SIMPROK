@@ -5,6 +5,7 @@ import type { Server } from 'node:http';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { basicPriceApplicabilityAnd } from '../../src/basic-price/basic-price-applicability';
+import { BasicPricePromotionService } from '../../src/basic-price/basic-price-promotion.service';
 import {
   basicPriceCurrentnessWhere,
   mergeCurrentnessAnd,
@@ -133,6 +134,8 @@ describe('BP-DETAIL-MAINT-02R ratification (e2e)', () => {
   let verifyToken: string;
   let publishToken: string;
   let personDayUnitId: string;
+  let promotionService: BasicPricePromotionService;
+  let publisherAccountId: string;
   const createdPermissionIds: string[] = [];
 
   beforeAll(async () => {
@@ -140,6 +143,9 @@ describe('BP-DETAIL-MAINT-02R ratification (e2e)', () => {
       await Test.createTestingModule({ imports: [AppModule] }).compile()
     ).createNestApplication();
     await app.init();
+    // The SAME governed promotion service bpcat01b drives. There is no
+    // production route yet, so this is the existing flow, not a new one.
+    promotionService = app.get(BasicPricePromotionService);
     prisma = new PrismaClient();
     await prisma.region.upsert({
       where: { id: REGION_ID },
@@ -173,6 +179,10 @@ describe('BP-DETAIL-MAINT-02R ratification (e2e)', () => {
       'BASIC_PRICE_VERIFY',
       'BASIC_PRICE_PUBLISH',
       'BASIC_PRICE_VIEW',
+      // Owner Law D — needed only so the SHARED half of a promotion lineage is
+      // reachable at all. Without it the copy-refusal below is masked as 404
+      // (permission), and the lineage law would never be the thing under test.
+      'BASIC_PRICE_PROMOTE_SHARED',
     ];
     const permissionsBefore = await prisma.permission.findMany({
       where: { code: { in: curatorCodes } },
@@ -253,7 +263,7 @@ describe('BP-DETAIL-MAINT-02R ratification (e2e)', () => {
     await grantCuratorRole(
       ROLE_PUBLISHER_ID,
       'BP_MAINT_02R_PUBLISHER',
-      ['BASIC_PRICE_PUBLISH', 'BASIC_PRICE_VIEW'],
+      ['BASIC_PRICE_PUBLISH', 'BASIC_PRICE_VIEW', 'BASIC_PRICE_PROMOTE_SHARED'],
       'foreman@test.local',
     );
 
@@ -278,6 +288,11 @@ describe('BP-DETAIL-MAINT-02R ratification (e2e)', () => {
           .send({ email: 'foreman@test.local', password: PASSWORD })
       ).body,
     );
+    publisherAccountId = (
+      await prisma.account.findUniqueOrThrow({
+        where: { email: 'foreman@test.local' },
+      })
+    ).id;
   });
 
   afterEach(async () => {
@@ -286,6 +301,15 @@ describe('BP-DETAIL-MAINT-02R ratification (e2e)', () => {
     });
     await prisma.basicPrice.deleteMany({
       where: { resourceId: RESOURCE_ID, supersedesBasicPriceId: { not: null } },
+    });
+    // A promoted descendant names its origin through `promotedFromBasicPriceId`
+    // with onDelete: Restrict, so it must go FIRST. One DELETE covering both
+    // would depend on a row order Postgres does not promise.
+    await prisma.basicPrice.deleteMany({
+      where: {
+        resourceId: RESOURCE_ID,
+        promotedFromBasicPriceId: { not: null },
+      },
     });
     await prisma.basicPrice.deleteMany({ where: { resourceId: RESOURCE_ID } });
     await prisma.basicPriceImportBatch.deleteMany({
@@ -299,6 +323,15 @@ describe('BP-DETAIL-MAINT-02R ratification (e2e)', () => {
     });
     await prisma.basicPrice.deleteMany({
       where: { resourceId: RESOURCE_ID, supersedesBasicPriceId: { not: null } },
+    });
+    // A promoted descendant names its origin through `promotedFromBasicPriceId`
+    // with onDelete: Restrict, so it must go FIRST. One DELETE covering both
+    // would depend on a row order Postgres does not promise.
+    await prisma.basicPrice.deleteMany({
+      where: {
+        resourceId: RESOURCE_ID,
+        promotedFromBasicPriceId: { not: null },
+      },
     });
     await prisma.basicPrice.deleteMany({ where: { resourceId: RESOURCE_ID } });
     await prisma.basicPriceImportBatch.deleteMany({
@@ -871,5 +904,333 @@ describe('BP-DETAIL-MAINT-02R ratification (e2e)', () => {
         expectedKdnPercent: null,
       })
       .expect(404);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * OWNER LAW D — ORIGIN KDN = SHARED KDN, ON THE LIVE simprok_e2e DATABASE.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   * WHY THESE EXIST. Every KDN law above is proved against a catalog row with
+   * no promotion lineage, and `bpcat01b` proves promotion with no KDN. The two
+   * had never met, so the one invariant that spans BOTH rows had never been
+   * observed in PostgreSQL — only in unit tests over an in-memory store.
+   *
+   * Nothing new is built here. The lineage comes from the SAME governed
+   * `promoteToSharedCatalog` bpcat01b drives, the enrichment from the SAME
+   * `/catalog-kdn` route the tests above drive, and every assertion reads the
+   * rows BACK OUT of the database rather than trusting a response body.
+   */
+  const makePromotedLineage = async (kdn?: {
+    origin: string | null;
+    descendant: string | null;
+  }) => {
+    const origin = await prisma.basicPrice.create({
+      data: {
+        assetScope: 'SIMPROK_CATALOG',
+        workspaceId: WORKSPACE_A,
+        organizationId: ORG_A,
+        resourceId: RESOURCE_ID,
+        regionId: REGION_ID,
+        effectiveDate: MARCH,
+        value: new Prisma.Decimal('99000.00'),
+        status: 'PUBLISHED',
+        verificationStatus: 'PUBLISHED',
+        kdnPercent: null,
+        kdnEstablishment: null,
+      },
+    });
+
+    // THE EXISTING PROMOTION FLOW. Not a hand-written descendant: the lineage
+    // pointer must be the one production writes, or this proves nothing.
+    const promoted = await promotionService.promoteToSharedCatalog({
+      workspaceId: WORKSPACE_A,
+      basicPriceId: origin.id,
+      actorAccountId: publisherAccountId,
+    });
+    const descendantId = promoted.shared.id;
+
+    // Only AFTER promotion, and only when a case needs a pre-existing state:
+    // promotion copies KDN verbatim, so seeding before it would not produce a
+    // divergence at all.
+    if (kdn) {
+      await prisma.basicPrice.update({
+        where: { id: origin.id },
+        data: {
+          kdnPercent:
+            kdn.origin === null ? null : new Prisma.Decimal(kdn.origin),
+          kdnEstablishment: kdn.origin === null ? null : 'MANUAL_ENRICHMENT',
+        },
+      });
+      await prisma.basicPrice.update({
+        where: { id: descendantId },
+        data: {
+          kdnPercent:
+            kdn.descendant === null ? null : new Prisma.Decimal(kdn.descendant),
+          kdnEstablishment:
+            kdn.descendant === null ? null : 'MANUAL_ENRICHMENT',
+        },
+      });
+    }
+
+    return { originId: origin.id, descendantId };
+  };
+
+  /** Exact scale-2 text, or null. Never a float, never `0` for absent. */
+  const kdn2 = (value: Prisma.Decimal | null): string | null =>
+    value === null ? null : value.toFixed(2);
+
+  /** Reads the pair straight out of PostgreSQL. Never a mutation result. */
+  const readPair = async (originId: string, descendantId: string) => {
+    const [origin, descendant] = await Promise.all([
+      prisma.basicPrice.findUniqueOrThrow({ where: { id: originId } }),
+      prisma.basicPrice.findUniqueOrThrow({ where: { id: descendantId } }),
+    ]);
+    const immutable = (row: typeof origin) => ({
+      value: row.value.toFixed(2),
+      status: row.status,
+      verificationStatus: row.verificationStatus,
+      assetScope: row.assetScope,
+      workspaceId: row.workspaceId,
+      organizationId: row.organizationId,
+      resourceId: row.resourceId,
+      regionId: row.regionId,
+      effectiveDate: row.effectiveDate.toISOString(),
+      validUntil: row.validUntil?.toISOString() ?? null,
+      sourceType: row.sourceType,
+      sourceOrigin: row.sourceOrigin,
+      freshnessStatus: row.freshnessStatus,
+      promotedFromBasicPriceId: row.promotedFromBasicPriceId,
+      supersedesBasicPriceId: row.supersedesBasicPriceId,
+    });
+    return {
+      originKdn: kdn2(origin.kdnPercent),
+      descendantKdn: kdn2(descendant.kdnPercent),
+      originEstablishment: origin.kdnEstablishment,
+      descendantEstablishment: descendant.kdnEstablishment,
+      lineage: descendant.promotedFromBasicPriceId,
+      immutable: {
+        origin: immutable(origin),
+        descendant: immutable(descendant),
+      },
+    };
+  };
+
+  it('CAT-KDN-LIN-01..04 — origin fill reaches the promoted copy; money and publication do not move', async () => {
+    const { originId, descendantId } = await makePromotedLineage();
+
+    const before = await readPair(originId, descendantId);
+    expect(before.lineage).toBe(originId); // the promotion flow really linked them
+    expect(before.originKdn).toBeNull();
+    expect(before.descendantKdn).toBeNull();
+
+    const response = await request(http())
+      .post(`/basic-price-imports/prices/${originId}/catalog-kdn`)
+      .set(hdr(verifyToken, WORKSPACE_A))
+      .send({
+        kdnPercent: '72.50',
+        reason: 'kurasi lineage',
+        expectedKdnPercent: null,
+      })
+      .expect(201);
+    expect(response.body).toMatchObject({
+      basicPriceId: originId,
+      kdnPercent: '72.50',
+      unchanged: false,
+    });
+
+    // CASE 1 + CASE 2 — read BOTH rows back out of PostgreSQL.
+    const after = await readPair(originId, descendantId);
+    expect(after.originKdn).toBe('72.50');
+    expect(after.descendantKdn).toBe('72.50');
+    expect(after.descendantKdn).toBe(after.originKdn); // EXACT_MATCH
+    expect(after.descendantEstablishment).toBe('MANUAL_ENRICHMENT');
+
+    // CASE 3 — every other persisted fact on BOTH rows is byte-identical.
+    expect(after.immutable).toEqual(before.immutable);
+
+    // CASE 4 — one attribution row per row actually changed, no silent write.
+    const provenance = await prisma.basicPriceProvenanceCorrection.findMany({
+      where: { basicPriceId: { in: [originId, descendantId] } },
+      select: { basicPriceId: true, actorAccountId: true, reason: true },
+    });
+    expect(provenance).toHaveLength(2);
+    expect(provenance.map((r) => r.basicPriceId).sort()).toEqual(
+      [originId, descendantId].sort(),
+    );
+    for (const row of provenance) {
+      expect(row.reason).toBe('kurasi lineage');
+      expect(typeof row.actorAccountId).toBe('string');
+    }
+  });
+
+  it('CAT-KDN-LIN-05 — the promoted copy is refused as an independent KDN source', async () => {
+    const { originId, descendantId } = await makePromotedLineage();
+    const before = await readPair(originId, descendantId);
+
+    // publishToken holds BASIC_PRICE_PROMOTE_SHARED, so the shared row is
+    // REACHABLE — the refusal below is the lineage law, not a permission 404.
+    const refused = await request(http())
+      .post(`/basic-price-imports/prices/${descendantId}/catalog-kdn`)
+      .set(hdr(publishToken, WORKSPACE_A))
+      .send({
+        kdnPercent: '65.00',
+        reason: 'copy tries to decide',
+        expectedKdnPercent: null,
+      })
+      .expect(409);
+    expect(JSON.stringify(refused.body)).toContain(
+      'KDN_PROMOTED_COPY_NOT_KDN_AUTHORITY',
+    );
+
+    const after = await readPair(originId, descendantId);
+    expect(after.originKdn).toBeNull();
+    expect(after.descendantKdn).toBeNull();
+    expect(
+      await prisma.basicPriceProvenanceCorrection.count({
+        where: { basicPriceId: { in: [originId, descendantId] } },
+      }),
+    ).toBe(0);
+    expect(after.immutable).toEqual(before.immutable);
+  });
+
+  it('CAT-KDN-LIN-06 — a pre-existing divergence is refused, and neither value is chosen', async () => {
+    const { originId, descendantId } = await makePromotedLineage({
+      origin: '72.50',
+      descendant: '65.00',
+    });
+    const before = await readPair(originId, descendantId);
+    expect(before.originKdn).toBe('72.50');
+    expect(before.descendantKdn).toBe('65.00');
+
+    const refused = await request(http())
+      .post(`/basic-price-imports/prices/${originId}/catalog-kdn`)
+      .set(hdr(verifyToken, WORKSPACE_A))
+      .send({
+        kdnPercent: '72.50',
+        reason: 'resolve please',
+        expectedKdnPercent: '72.50',
+      })
+      .expect(409);
+    expect(JSON.stringify(refused.body)).toContain('KDN_LINEAGE_DIVERGENT');
+
+    // NEITHER SIDE MOVED. Not A→B, not B→A, not null, not averaged.
+    const after = await readPair(originId, descendantId);
+    expect(after.originKdn).toBe('72.50');
+    expect(after.descendantKdn).toBe('65.00');
+    expect(after.immutable).toEqual(before.immutable);
+  });
+
+  it('CAT-KDN-LIN-07 — null origin against a stated copy is a disagreement, not a gap to fill', async () => {
+    const { originId, descendantId } = await makePromotedLineage({
+      origin: null,
+      descendant: '65.00',
+    });
+    const before = await readPair(originId, descendantId);
+    expect(before.originKdn).toBeNull();
+    expect(before.descendantKdn).toBe('65.00');
+
+    const refused = await request(http())
+      .post(`/basic-price-imports/prices/${originId}/catalog-kdn`)
+      .set(hdr(verifyToken, WORKSPACE_A))
+      .send({
+        kdnPercent: '72.50',
+        reason: 'fill the null side',
+        expectedKdnPercent: null,
+      })
+      .expect(409);
+    expect(JSON.stringify(refused.body)).toContain('KDN_LINEAGE_DIVERGENT');
+
+    const after = await readPair(originId, descendantId);
+    expect(after.originKdn).toBeNull();
+    expect(after.descendantKdn).toBe('65.00');
+    expect(after.immutable).toEqual(before.immutable);
+  });
+
+  /**
+   * REAL-DB ATOMICITY, using the fault-injection pattern this repository
+   * already established for MON-03 (progress-security.e2e-spec.ts test 11):
+   * a BEFORE INSERT trigger that RAISEs, dropped in `finally`.
+   *
+   * The provenance INSERT is the LAST statement in the enrichment transaction,
+   * after the origin UPDATE and after the descendant UPDATE. Failing it is
+   * therefore the honest way to ask: does PostgreSQL take BOTH updates back?
+   */
+  it('CAT-KDN-LIN-08 — a failure after propagation rolls BOTH rows back', async () => {
+    const { originId, descendantId } = await makePromotedLineage();
+    const before = await readPair(originId, descendantId);
+    expect(before.originKdn).toBeNull();
+    expect(before.descendantKdn).toBeNull();
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION catkdn_reject_provenance() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'CATKDN_TEST_PROVENANCE_FAILURE';
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER catkdn_reject_provenance
+      BEFORE INSERT ON basic_price_provenance_corrections
+      FOR EACH ROW EXECUTE FUNCTION catkdn_reject_provenance();
+    `);
+    try {
+      await request(http())
+        .post(`/basic-price-imports/prices/${originId}/catalog-kdn`)
+        .set(hdr(verifyToken, WORKSPACE_A))
+        .send({
+          kdnPercent: '72.50',
+          reason: 'atomicity',
+          expectedKdnPercent: null,
+        })
+        .expect(500);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'DROP TRIGGER IF EXISTS catkdn_reject_provenance ON basic_price_provenance_corrections',
+      );
+      await prisma.$executeRawUnsafe(
+        'DROP FUNCTION IF EXISTS catkdn_reject_provenance()',
+      );
+    }
+
+    // NO PARTIAL PERSISTENCE. The origin does not keep the value it briefly
+    // held, and the descendant does not keep the one propagated to it.
+    const after = await readPair(originId, descendantId);
+    expect(after.originKdn).toBeNull();
+    expect(after.descendantKdn).toBeNull();
+    expect(after.originEstablishment).toBeNull();
+    expect(after.descendantEstablishment).toBeNull();
+    expect(after.immutable).toEqual(before.immutable);
+    expect(
+      await prisma.basicPriceProvenanceCorrection.count({
+        where: { basicPriceId: { in: [originId, descendantId] } },
+      }),
+    ).toBe(0);
+  });
+
+  it('CAT-KDN-LIN-09 — lineage enrichment never writes ResourceCatalog.tkdnValue', async () => {
+    const { originId, descendantId } = await makePromotedLineage();
+    await request(http())
+      .post(`/basic-price-imports/prices/${originId}/catalog-kdn`)
+      .set(hdr(verifyToken, WORKSPACE_A))
+      .send({
+        kdnPercent: '72.50',
+        reason: 'tkdn boundary',
+        expectedKdnPercent: null,
+      })
+      .expect(201);
+
+    const after = await readPair(originId, descendantId);
+    expect(after.originKdn).toBe('72.50');
+    expect(after.descendantKdn).toBe('72.50');
+
+    // KDN is a BasicPrice observation fact. TKDN is the RAB/Project aggregate
+    // and lives on a different table entirely. Filling one may never fill the
+    // other, on either half of the lineage.
+    const catalog = await prisma.resourceCatalog.findUniqueOrThrow({
+      where: { id: RESOURCE_ID },
+      select: { tkdnValue: true },
+    });
+    expect(catalog.tkdnValue).toBeNull();
   });
 });

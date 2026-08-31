@@ -850,6 +850,43 @@ export class BasicPricePrivateAssetService {
    * observation. Reuses the same fill-missing law as private enrichKdn.
    * Workspace catalog requires BASIC_PRICE_VERIFY. Shared catalog requires
    * BASIC_PRICE_PROMOTE_SHARED. Ordinary SUBMIT cannot enter.
+   *
+   * ═════════════════════════════════════════════════════════════════════════
+   * OWNER LAW D — ORIGIN KDN = SHARED KDN, ORIGIN-AUTHORITATIVE.
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * THE DEFECT THIS CLOSES. This route reached a BasicPrice by id and judged it
+   * ALONE. Both halves of a promotion lineage are `SIMPROK_CATALOG`, so both
+   * were admissible here — the workspace-owned origin under BASIC_PRICE_VERIFY,
+   * and its shared copy under BASIC_PRICE_PROMOTE_SHARED. Each read
+   * `kdnPercent: null` on its OWN row and each write was individually lawful,
+   * individually audited, and individually correct. Together they produced
+   * origin 72.50 / shared 65.00 with nothing in the system able to notice.
+   *
+   * A shared row exists because `promotedFromBasicPriceId` says it is a COPY of
+   * another row — it carries the origin's money and decided nothing of its own.
+   * That is not decoration: `basicPriceCurrentnessWhere` reason 3 suppresses the
+   * copy when the ORIGIN stops being current, precisely because the copy states
+   * no independent fact. A copy holding a domestic-content number its own source
+   * does not hold is a second source of truth wearing a copy's clothes.
+   *
+   * THE LAW, AS THE OWNER STATED IT:
+   *
+   *   1. The ORIGIN is the KDN authority.
+   *   2. A promoted copy may never establish KDN of its own.
+   *   3. Filling the origin fills every lawful descendant IN THE SAME
+   *      TRANSACTION — never a partial lineage.
+   *   4. A divergence that ALREADY exists is refused, not repaired. SIMPROK
+   *      does not pick a number, does not prefer origin, does not prefer
+   *      shared, and does not auto-resolve.
+   *   5. Lineage that cannot be proven fails CLOSED.
+   *
+   * WHAT THIS DELIBERATELY DOES NOT DO. No new table, no new column, no
+   * migration, no second KDN service, no conflict resolver. Lineage is read
+   * from the `promotedFromBasicPriceId` that promotion already writes — the
+   * only lineage fact SIMPROK has, and the same one currentness and precedence
+   * already read. Money, status, publication and verification are untouched on
+   * every row, exactly as before.
    */
   async enrichCatalogKdn(params: {
     basicPriceId: string;
@@ -880,6 +917,7 @@ export class BasicPricePrivateAssetService {
           workspaceId: true,
           kdnPercent: true,
           kdnEstablishment: true,
+          promotedFromBasicPriceId: true,
         },
       });
       if (!price) throw new NotFoundException('BasicPrice not found');
@@ -896,10 +934,72 @@ export class BasicPricePrivateAssetService {
         throw new NotFoundException('BasicPrice not found');
       }
 
+      // OWNER LAW D.2 — A PROMOTED COPY IS NEVER THE KDN AUTHORITY.
+      //
+      // Refused rather than silently retargeted at the origin: enriching a
+      // national row is a decision about a DIFFERENT artifact, made by a
+      // different permission, and quietly redirecting it would let
+      // BASIC_PRICE_PROMOTE_SHARED write into a workspace's own catalog row.
+      // The operator is told where the authority lives and asks there.
+      if (price.promotedFromBasicPriceId !== null) {
+        throw new ConflictException('KDN_PROMOTED_COPY_NOT_KDN_AUTHORITY');
+      }
+
       const existing =
         price.kdnPercent === null || price.kdnPercent === undefined
           ? null
           : toDecimalString2(price.kdnPercent);
+
+      /**
+       * OWNER LAW D.3/D.4 — THE LINEAGE IS READ BEFORE ANY BRANCH DECIDES.
+       *
+       * Deliberately ahead of the expectation and unchanged checks below. A
+       * divergent lineage whose ORIGIN already happens to hold `canonical`
+       * would otherwise fall into an `unchanged: true` early return and report
+       * success while a descendant still held a different number. Divergence
+       * dominates every other answer this method can give.
+       *
+       * `findMany`, not a to-one read, even though `promotedFromBasicPriceId`
+       * is UNIQUE and today yields at most one row: the propagation below is a
+       * single set-based `updateMany` with a counted result, which is both
+       * simpler than special-casing one descendant AND correct for N if that
+       * uniqueness is ever relaxed. It costs one indexed lookup.
+       */
+      const descendants = await tx.basicPrice.findMany({
+        where: { promotedFromBasicPriceId: price.id },
+        select: { id: true, kdnPercent: true },
+      });
+
+      // OWNER LAW D.5 — FAIL CLOSED ON A LINEAGE THIS METHOD CANNOT SEE ALL OF.
+      //
+      // Promotion cannot build a chain today (`promoteToSharedCatalog` locks the
+      // origin by `workspaceId = :uuid`, which never matches a shared row's NULL,
+      // so a copy can never itself be promoted). This proves that rather than
+      // arguing it: one bounded count, and a grandchild anywhere means this
+      // method is not seeing the whole lineage and must not write half of it.
+      if (descendants.length > 0) {
+        const grandDescendants = await tx.basicPrice.count({
+          where: {
+            promotedFromBasicPriceId: { in: descendants.map((row) => row.id) },
+          },
+        });
+        if (grandDescendants > 0) {
+          throw new ConflictException('KDN_LINEAGE_NOT_PROVABLE');
+        }
+      }
+
+      // OWNER LAW D.4 — A DIVERGENCE THAT ALREADY EXISTS IS REPORTED, NEVER
+      // REPAIRED. Not "prefer the origin", not "prefer the newest", not "fill
+      // the null side". Both numbers were written by a human against real
+      // evidence; choosing between them is a decision SIMPROK is not entitled
+      // to make, and a null on one side is just as much a disagreement as two
+      // different percentages. Nothing is written on this path.
+      const divergent = descendants.some(
+        (row) => storedKdnOf(row.kdnPercent) !== existing,
+      );
+      if (divergent) {
+        throw new ConflictException('KDN_LINEAGE_DIVERGENT');
+      }
 
       if (!expectedKdnMatchesStored(expectedKdnPercent, existing)) {
         if (existing === canonical) {
@@ -943,6 +1043,24 @@ export class BasicPricePrivateAssetService {
             ? null
             : toDecimalString2(again.kdnPercent);
         if (now === canonical) {
+          // A CONCURRENT WRITER GOT HERE FIRST — AND MUST HAVE CARRIED THE
+          // LINEAGE WITH IT, because it ran this same method. Re-proved rather
+          // than assumed: reporting `unchanged: true` is a claim that the whole
+          // lineage already states `canonical`, and that claim must be true.
+          //
+          // Compared in TypeScript through `storedKdnOf`, the same comparison
+          // the divergence check above uses, rather than a `NOT` filter on a
+          // nullable column — a still-null descendant must read as divergent
+          // here, and SQL's three-valued logic would quietly drop it.
+          const lineageNow = await tx.basicPrice.findMany({
+            where: { promotedFromBasicPriceId: price.id },
+            select: { kdnPercent: true },
+          });
+          if (
+            lineageNow.some((row) => storedKdnOf(row.kdnPercent) !== canonical)
+          ) {
+            throw new ConflictException('KDN_LINEAGE_DIVERGENT');
+          }
           return {
             basicPriceId: price.id,
             kdnPercent: now,
@@ -956,19 +1074,56 @@ export class BasicPricePrivateAssetService {
         );
       }
 
-      await tx.basicPriceProvenanceCorrection.create({
-        data: {
-          basicPriceId: price.id,
-          workspaceId: actor.workspaceId,
-          actorAccountId: actor.accountId,
-          reason,
-          before: { kdnPercent: null, kdnEstablishment: null },
-          after: {
-            kdnPercent: canonical,
+      /**
+       * OWNER LAW D.3 — THE DESCENDANTS MOVE WITH THE ORIGIN, OR NOBODY MOVES.
+       *
+       * ONE set-based statement, not a loop of independent writes, so there is
+       * no window in which descendant #1 is filled and descendant #2 is not.
+       *
+       * `kdnPercent: null` is kept in the WHERE — the same atomic fill-missing
+       * guard the origin uses — so this can never overwrite a value that
+       * appeared between the divergence check and here. If that happens the
+       * count falls short, and a short count is not a partial success: it
+       * throws, and the enclosing `$transaction` rolls the ORIGIN's own update
+       * back with it. The lineage is filled completely or not at all.
+       */
+      if (descendants.length > 0) {
+        const propagated = await tx.basicPrice.updateMany({
+          where: {
+            promotedFromBasicPriceId: price.id,
+            assetScope: BasicPriceAssetScope.SIMPROK_CATALOG,
+            kdnPercent: null,
+          },
+          data: {
+            kdnPercent: new Prisma.Decimal(canonical),
             kdnEstablishment: 'MANUAL_ENRICHMENT',
           },
-        },
-      });
+        });
+        if (propagated.count !== descendants.length) {
+          throw new ConflictException('KDN_LINEAGE_PROPAGATION_INCOMPLETE');
+        }
+      }
+
+      // ONE PROVENANCE ROW PER ROW ACTUALLY CHANGED, on the existing mechanism.
+      // A descendant that silently gained a number with no record of who put it
+      // there would be exactly the unattributable fact this table exists to
+      // prevent. Bounded by the lineage read above, which the UNIQUE index
+      // holds to one row.
+      for (const changedId of [price.id, ...descendants.map((row) => row.id)]) {
+        await tx.basicPriceProvenanceCorrection.create({
+          data: {
+            basicPriceId: changedId,
+            workspaceId: actor.workspaceId,
+            actorAccountId: actor.accountId,
+            reason,
+            before: { kdnPercent: null, kdnEstablishment: null },
+            after: {
+              kdnPercent: canonical,
+              kdnEstablishment: 'MANUAL_ENRICHMENT',
+            },
+          },
+        });
+      }
 
       return {
         basicPriceId: price.id,

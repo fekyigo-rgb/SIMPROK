@@ -59,11 +59,27 @@ const collectTs = (dir: string): string[] =>
  * CREATE: a private KDN correction successor (money copied, KDN restated,
  * supersession pointer). Neither PATCHes the predecessor.
  *
+ * OWNER LAW D: it now stands at eleven. The eleventh is a third updateMany in
+ * the private-asset service, and it is the ONLY writer that reaches a row the
+ * caller did not name. It exists because `promotedFromBasicPriceId` makes a
+ * shared row a COPY of an origin, and a copy holding a different %KDN from its
+ * origin is a second source of truth — the one thing catalog enrichment was
+ * forbidden to create.
+ *
+ * It writes the SAME two KDN columns as the writer above it, under the same
+ * `kdnPercent: null` fill-missing guard, in the SAME transaction, and only
+ * after that writer has already succeeded on the origin. It cannot originate a
+ * value: the number it writes is the one the origin just accepted. A short
+ * count throws, so the origin's own update is rolled back with it.
+ *
+ * It is registered here rather than exempted, and the test below pins exactly
+ * what it may touch: the two KDN columns, never money, never publication.
+ *
  * Migration SQL is NOT a runtime writer and is deliberately out of scope here:
  * this test scans src/ only.
  */
 describe('W-01 permanent BasicPrice writer inventory', () => {
-  it('keeps exactly the ten approved writers and no other Prisma writer method', () => {
+  it('keeps exactly the eleven approved writers and no other Prisma writer method', () => {
     const matches = collectTs(sourceRoot).flatMap((file) => {
       const source = readFileSync(file, 'utf8');
       return [
@@ -103,6 +119,17 @@ describe('W-01 permanent BasicPrice writer inventory', () => {
       },
       // BP-DETAIL-MAINT-02 — catalog missing-%KDN fill. Same two KDN columns,
       // different ownership WHERE. Forbidden money.
+      {
+        file: 'basic-price/basic-price-private-asset.service.ts',
+        method: 'updateMany',
+      },
+      // OWNER LAW D — the ONE lineage-propagation writer, and the only writer
+      // in SIMPROK that touches a row the caller did not name. It carries the
+      // origin's just-accepted %KDN onto that origin's promoted descendants,
+      // in the same transaction and under the same fill-missing guard, so
+      // ORIGIN KDN = SHARED KDN can never be false after a successful write.
+      // It originates nothing: remove the writer above it and this one has no
+      // value to carry.
       {
         file: 'basic-price/basic-price-private-asset.service.ts',
         method: 'updateMany',
@@ -426,6 +453,56 @@ describe('W-01 permanent BasicPrice writer inventory', () => {
       'regionId',
       'resourceId',
       'sourceImportRowId',
+      'tkdnValue',
+    ]) {
+      expect(new RegExp(`^\\s*${forbidden}\\s*:`, 'm').test(data)).toBe(false);
+    }
+  });
+
+  it('OWNER LAW D: lineage propagation writes the same two KDN columns and nothing else', () => {
+    const source = readFileSync(
+      join(sourceRoot, 'basic-price', 'basic-price-private-asset.service.ts'),
+      'utf8',
+    );
+    const enrichStart = source.indexOf('async enrichCatalogKdn(');
+    expect(enrichStart).toBeGreaterThan(-1);
+    // The SECOND updateMany inside this method: the origin's own fill is
+    // pinned by the test above, this one carries it onto the descendants.
+    const originUpdate = source.indexOf(
+      'await tx.basicPrice.updateMany({',
+      enrichStart,
+    );
+    const start = source.indexOf(
+      'await tx.basicPrice.updateMany({',
+      originUpdate + 1,
+    );
+    const end = source.indexOf('KDN_LINEAGE_PROPAGATION_INCOMPLETE', start);
+    expect(start).toBeGreaterThan(originUpdate);
+    expect(end).toBeGreaterThan(start);
+    const slice = source.slice(start, end);
+    const dataStart = slice.indexOf('data: {');
+    const dataEnd = slice.indexOf('});', dataStart);
+    expect(dataStart).toBeGreaterThan(-1);
+    const data = slice.slice(dataStart, dataEnd);
+    const where = slice.slice(0, dataStart);
+
+    // REACHES DESCENDANTS BY LINEAGE ID ONLY — never by resource, region,
+    // value or name. A fuzzy match here would be an invented lineage.
+    expect(where).toContain('promotedFromBasicPriceId: price.id');
+    expect(where).toContain('assetScope: BasicPriceAssetScope.SIMPROK_CATALOG');
+    // The same fill-missing guard, so it can never overwrite a stated value.
+    expect(where).toContain('kdnPercent: null');
+    expect(/^\s*kdnPercent\s*:/m.test(data)).toBe(true);
+    expect(/^\s*kdnEstablishment\s*:/m.test(data)).toBe(true);
+    for (const forbidden of [
+      'value',
+      'status',
+      'verificationStatus',
+      'assetScope',
+      'regionId',
+      'resourceId',
+      'sourceImportRowId',
+      'promotedFromBasicPriceId',
       'tkdnValue',
     ]) {
       expect(new RegExp(`^\\s*${forbidden}\\s*:`, 'm').test(data)).toBe(false);

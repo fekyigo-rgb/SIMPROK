@@ -9,7 +9,12 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
   const ACTOR = { accountId: 'acct-1', workspaceId: 'ws-1' };
   let service: BasicPricePrivateAssetService;
   let tx: {
-    basicPrice: { findFirst: jest.Mock; updateMany: jest.Mock };
+    basicPrice: {
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
+      updateMany: jest.Mock;
+    };
     basicPriceProvenanceCorrection: { create: jest.Mock };
   };
 
@@ -17,6 +22,11 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
     tx = {
       basicPrice: {
         findFirst: jest.fn(),
+        // OWNER LAW D — the method now reads promotion lineage before it
+        // writes. "No descendants" is the ordinary case every law in this
+        // file was written for, and remains their subject.
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       basicPriceProvenanceCorrection: {
@@ -51,6 +61,7 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
     tx.basicPrice.findFirst.mockResolvedValue({
       id: 'bp-cat',
       workspaceId: ACTOR.workspaceId,
+      promotedFromBasicPriceId: null,
       kdnPercent: null,
       kdnEstablishment: null,
     });
@@ -81,6 +92,7 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
     tx.basicPrice.findFirst.mockResolvedValue({
       id: 'bp-shared',
       workspaceId: null,
+      promotedFromBasicPriceId: null,
       kdnPercent: null,
       kdnEstablishment: null,
     });
@@ -99,6 +111,7 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
     tx.basicPrice.findFirst.mockResolvedValue({
       id: 'bp-cat',
       workspaceId: ACTOR.workspaceId,
+      promotedFromBasicPriceId: null,
       kdnPercent: null,
       kdnEstablishment: null,
     });
@@ -112,6 +125,7 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
     tx.basicPrice.findFirst.mockResolvedValue({
       id: 'bp-cat',
       workspaceId: ACTOR.workspaceId,
+      promotedFromBasicPriceId: null,
       kdnPercent: '72.50',
       kdnEstablishment: 'MANUAL_ENRICHMENT',
     });
@@ -125,6 +139,7 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
     tx.basicPrice.findFirst.mockResolvedValue({
       id: 'bp-cat',
       workspaceId: ACTOR.workspaceId,
+      promotedFromBasicPriceId: null,
       kdnPercent: '72.50',
       kdnEstablishment: 'MANUAL_ENRICHMENT',
     });
@@ -137,6 +152,7 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
     tx.basicPrice.findFirst.mockResolvedValue({
       id: 'bp-cat',
       workspaceId: ACTOR.workspaceId,
+      promotedFromBasicPriceId: null,
       kdnPercent: '72.50',
       kdnEstablishment: 'MANUAL_ENRICHMENT',
     });
@@ -152,6 +168,7 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
     tx.basicPrice.findFirst.mockResolvedValue({
       id: 'bp-other',
       workspaceId: 'ws-other',
+      promotedFromBasicPriceId: null,
       kdnPercent: null,
       kdnEstablishment: null,
     });
@@ -175,6 +192,7 @@ describe('BP-DETAIL-MAINT-02 catalog missing-KDN enrichment', () => {
     tx.basicPrice.findFirst.mockResolvedValue({
       id: 'bp-cat',
       workspaceId: ACTOR.workspaceId,
+      promotedFromBasicPriceId: null,
       kdnPercent: null,
     });
     await expect(enrich({ kdnPercent: '   ' })).rejects.toBeInstanceOf(
