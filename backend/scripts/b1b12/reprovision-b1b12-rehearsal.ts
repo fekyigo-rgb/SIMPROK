@@ -34,9 +34,9 @@ import {
   parseGovernedEnvFile,
 } from '../../src/rehearsal/b1b12-rehearsal-environment';
 import { parseRehearsalTargetFromUrl } from '../../src/rehearsal/b1b12-rehearsal-target';
+import { resolveB1B12RuntimePaths } from '../../src/rehearsal/b1b12-runtime-paths';
 
-const GOVERNED_ENV_FILE =
-  'C:/Users/asus/SIMPROK-RUNTIME/secrets/b1b12.backend.env';
+const { backendEnvFile: GOVERNED_ENV_FILE } = resolveB1B12RuntimePaths();
 const BACKEND_ROOT = resolve(__dirname, '..', '..');
 
 function main(): void {

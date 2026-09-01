@@ -133,6 +133,30 @@ export interface DetectedStructure {
     required: boolean;
     kind: 'COLUMN' | 'ROW_VALUE' | null;
     choices: RegionScopeChoice[];
+    /**
+     * THE SOURCE'S OWN WORD PROVING THESE CHOICES ARE PLACES — or null when the
+     * source proved no such thing.
+     *
+     * WHY THIS IS NOT DERIVABLE FROM `choices`. A parallel price matrix looks
+     * identical whether its columns are jurisdictions or trade terms:
+     * "SIRIMAU | TELUK AMBON | BAGUALA" and "GROSIR | ECERAN" are both distinct
+     * labels over parallel numeric columns. Nothing in the shape distinguishes
+     * them, and guessing from the label spelling would be exactly the fuzzy
+     * geography this module refuses.
+     *
+     * What DOES distinguish them is a word the source itself writes: the
+     * "KECAMATAN" banner above the Owner's Ambon columns, or the "WILAYAH"
+     * header over a per-row region column. Those words are already in
+     * `header-vocabulary`'s REGION_LABEL role and were already recognised here —
+     * they were merely discarded once recognised, which is why a positively
+     * geographic scope and a semantically neutral one arrived downstream
+     * indistinguishable.
+     *
+     * It is EVIDENCE, verbatim, never a canonical Region and never a claim that
+     * the scope and a chosen Region agree. Null means "the source did not say",
+     * which is the ordinary case and must stay silent.
+     */
+    geographicEvidence: string | null;
   };
   /**
    * Set when the table proved its shape but NOT which column carries the
@@ -156,7 +180,9 @@ export interface TableDetection {
 }
 
 export function sectionOfMarkerText(text: string): BasicPriceSection | null {
-  return SECTION_MARKERS.find(({ pattern }) => pattern.test(text))?.section ?? null;
+  return (
+    SECTION_MARKERS.find(({ pattern }) => pattern.test(text))?.section ?? null
+  );
 }
 
 /** The first non-null trimmed text across columns 1..limit of a row. */
@@ -209,7 +235,12 @@ function detectSectioned(table: SourceTable): DetectedStructure | null {
     },
     firstDataRowNumber,
     dataRowCount,
-    regionScope: { required: false, kind: null, choices: [] },
+    regionScope: {
+      required: false,
+      kind: null,
+      choices: [],
+      geographicEvidence: null,
+    },
     columnRoles: { required: false, nameCandidates: [], unitCandidates: [] },
     evidence: [
       `SECTION_TITLES_PRESENT:${[...sectionsFound].sort().join(',')}`,
@@ -269,7 +300,10 @@ function profileRoleCandidate(
   return {
     columnNumber,
     headerText,
-    nonEmptyRows: distinct.size === 0 ? 0 : dataRows.filter((r) => textAt(r, columnNumber) !== null).length,
+    nonEmptyRows:
+      distinct.size === 0
+        ? 0
+        : dataRows.filter((r) => textAt(r, columnNumber) !== null).length,
     distinctValues: distinct.size,
     samples: values,
     // Bounded, and TRUNCATED RATHER THAN SAMPLED: a proof that reads a prefix
@@ -432,7 +466,9 @@ function detectHeaderStructures(table: SourceTable): {
   if (best.duplicatedRoles.length > 0) {
     // Two columns both claiming to be "the unit" is a genuine ambiguity in the
     // source, not something to resolve by taking the leftmost.
-    rejections.push(`HEADER_ROLE_DUPLICATED:${best.duplicatedRoles.sort().join(',')}`);
+    rejections.push(
+      `HEADER_ROLE_DUPLICATED:${best.duplicatedRoles.sort().join(',')}`,
+    );
     return { candidates: [], rejections };
   }
 
@@ -446,6 +482,25 @@ function detectHeaderStructures(table: SourceTable): {
 
   const candidates: DetectedStructure[] = [];
   const baseColumns = best.columns;
+
+  /**
+   * A HEADED TABLE STATES ITS GEOGRAPHY IN A COLUMN HEADER, OR NOT AT ALL.
+   *
+   * `REGION_LABEL` is assigned by `matchHeaderRole` from the shared vocabulary
+   * ("wilayah", "kecamatan", "kota", "kabupaten", …), so its presence is the
+   * SOURCE saying this axis is a place. Its header text is taken verbatim; no
+   * spelling is compared against any Region, here or anywhere downstream.
+   *
+   * Absent means absent. A matrix of "GROSIR | ECERAN" heads no such column and
+   * therefore proves no geography — which is exactly why it must never raise a
+   * region question.
+   */
+  const geographicEvidence =
+    best.roleColumns.REGION_LABEL === undefined
+      ? null
+      : (baseColumns.find(
+          (column) => column.columnNumber === best.roleColumns.REGION_LABEL,
+        )?.headerText ?? null);
 
   if (best.priceColumns.length === 1) {
     const regionLabelColumn = best.roleColumns.REGION_LABEL ?? null;
@@ -480,6 +535,10 @@ function detectHeaderStructures(table: SourceTable): {
         required: choices.length > 1,
         kind: choices.length > 0 ? 'ROW_VALUE' : null,
         choices,
+        // A ROW_VALUE scope EXISTS only because a REGION_LABEL column was
+        // proved above, so this is never null when there are choices — the
+        // geography is the column's own header word.
+        geographicEvidence,
       },
       columnRoles: { required: false, nameCandidates: [], unitCandidates: [] },
       evidence: [
@@ -492,12 +551,15 @@ function detectHeaderStructures(table: SourceTable): {
   }
 
   if (best.priceColumns.length === 0 && numericUnlabelled.length >= 2) {
-    const choices: RegionScopeChoice[] = numericUnlabelled.map((columnNumber) => ({
-      kind: 'COLUMN' as const,
-      label: baseColumns.find((c) => c.columnNumber === columnNumber)!.headerText,
-      columnNumber,
-      observedRowCount: profileColumn(table, columnNumber, dataRows).nonEmpty,
-    }));
+    const choices: RegionScopeChoice[] = numericUnlabelled.map(
+      (columnNumber) => ({
+        kind: 'COLUMN' as const,
+        label: baseColumns.find((c) => c.columnNumber === columnNumber)!
+          .headerText,
+        columnNumber,
+        observedRowCount: profileColumn(table, columnNumber, dataRows).nonEmpty,
+      }),
+    );
 
     candidates.push({
       structure: 'REGIONAL_MATRIX',
@@ -509,7 +571,17 @@ function detectHeaderStructures(table: SourceTable): {
       dataRowCount: dataRows.length,
       // ALWAYS required. One source row here states several jurisdictions'
       // prices, and a batch may carry exactly one of them (§8).
-      regionScope: { required: true, kind: 'COLUMN', choices },
+      //
+      // REQUIRED IS NOT THE SAME AS GEOGRAPHIC. This shape is reached by any
+      // table with parallel unlabelled numeric columns, so the scope question
+      // is asked either way; whether those columns are PLACES is a separate
+      // fact, and only a REGION_LABEL header proves it.
+      regionScope: {
+        required: true,
+        kind: 'COLUMN',
+        choices,
+        geographicEvidence,
+      },
       columnRoles: { required: false, nameCandidates: [], unitCandidates: [] },
       evidence: [
         `PARALLEL_NUMERIC_COLUMNS:${numericUnlabelled.length}`,
@@ -536,17 +608,47 @@ function detectHeaderStructures(table: SourceTable): {
  * in doubt. Which text column is the resource name is genuinely not stated, and
  * SIMPROK asks instead of inferring.
  */
-function detectUnheadedRegionalMatrix(table: SourceTable): DetectedStructure | null {
+function detectUnheadedRegionalMatrix(
+  table: SourceTable,
+): DetectedStructure | null {
   const scanRows = table.rows.slice(0, HEADER_SCAN_ROWS);
 
   let best: { rowNumber: number; labels: DetectedColumn[] } | null = null;
   let rowNumberColumn: number | null = null;
+  /**
+   * THE BANNER OVER THE JURISDICTION COLUMNS — REMEMBERED, NOT MERELY SKIPPED.
+   *
+   * The Owner's Ambon workbook writes "KECAMATAN" across the span above
+   * "SIRIMAU | TELUK AMBON | BAGUALA". That banner row is correctly rejected as
+   * a header (its cells repeat one word, so they name no individual column) and
+   * each of its cells is correctly refused as a jurisdiction by the role test
+   * below — a role word is not a place name.
+   *
+   * But refusing it as a LABEL is not the same as learning nothing from it. It
+   * is the only thing in the entire file that states what those three columns
+   * ARE, and discarding it is what left a positively geographic scope
+   * indistinguishable downstream from "GROSIR | ECERAN".
+   *
+   * FIRST ONE WINS, for the same reason `best` takes the earliest qualifying
+   * row: the banner sits above its data, so the first region word in the scan
+   * window is the one that governs. Only REGION_LABEL counts — a "HARGA" or
+   * "SATUAN" cell proves nothing about geography.
+   */
+  let geographicEvidence: string | null = null;
   for (const row of scanRows) {
     const labelled: DetectedColumn[] = [];
-    for (let columnNumber = 1; columnNumber <= table.columnCount; columnNumber += 1) {
+    for (
+      let columnNumber = 1;
+      columnNumber <= table.columnCount;
+      columnNumber += 1
+    ) {
       const text = textAt(row, columnNumber);
       if (text === null) continue;
-      if (matchHeaderRole(text) !== null) continue; // a role word is not a jurisdiction
+      const role = matchHeaderRole(text);
+      if (role === 'REGION_LABEL' && geographicEvidence === null) {
+        geographicEvidence = text;
+      }
+      if (role !== null) continue; // a role word is not a jurisdiction
       // A scanned header often merges several column titles into one cell
       // ("No     URAIAN BAHAN"). Its LEADING word still states what that column
       // is, and a numbering column is never a jurisdiction — however numeric
@@ -593,14 +695,16 @@ function detectUnheadedRegionalMatrix(table: SourceTable): DetectedStructure | n
   // Every column that is NOT a jurisdiction and NOT predominantly numeric is a
   // plausible name or unit column. They are offered, never chosen.
   const candidates: ColumnRoleCandidate[] = [];
-  for (let columnNumber = 1; columnNumber <= table.columnCount; columnNumber += 1) {
+  for (
+    let columnNumber = 1;
+    columnNumber <= table.columnCount;
+    columnNumber += 1
+  ) {
     if (regionColumns.has(columnNumber)) continue;
     const profile = profileColumn(table, columnNumber, sample);
     if (profile.nonEmpty === 0) continue;
     if (isNumericColumn(profile)) continue; // a row-number column, not a name
-    candidates.push(
-      profileRoleCandidate(columnNumber, null, dataRows),
-    );
+    candidates.push(profileRoleCandidate(columnNumber, null, dataRows));
   }
   if (candidates.length === 0) return null;
 
@@ -633,17 +737,22 @@ function detectUnheadedRegionalMatrix(table: SourceTable): DetectedStructure | n
     tableName: table.name,
     headerRowNumber: best.rowNumber,
     columns: best.labels,
-    roleColumns: rowNumberColumn === null ? {} : { ROW_NUMBER: rowNumberColumn },
+    roleColumns:
+      rowNumberColumn === null ? {} : { ROW_NUMBER: rowNumberColumn },
     firstDataRowNumber: dataRows.length > 0 ? dataRows[0].number : null,
     dataRowCount: dataRows.length,
     regionScope: {
       required: true,
       kind: 'COLUMN',
+      // Null unless the source wrote a region word of its own above these
+      // columns. An unheaded matrix that names no such word stays silent.
+      geographicEvidence,
       choices: best.labels.map((c) => ({
         kind: 'COLUMN' as const,
         label: c.headerText,
         columnNumber: c.columnNumber,
-        observedRowCount: profileColumn(table, c.columnNumber, dataRows).nonEmpty,
+        observedRowCount: profileColumn(table, c.columnNumber, dataRows)
+          .nonEmpty,
       })),
     },
     columnRoles: {
@@ -662,8 +771,6 @@ function detectUnheadedRegionalMatrix(table: SourceTable): DetectedStructure | n
   };
 }
 
-
-
 /**
  * Detects every price-table shape a single table can prove.
  *
@@ -680,17 +787,21 @@ export function detectTableStructures(table: SourceTable): TableDetection {
     return { tableName: table.name, candidates: [sectioned], rejections: [] };
   }
   const { candidates, rejections } = detectHeaderStructures(table);
-  if (candidates.length > 0) return { tableName: table.name, candidates, rejections };
+  if (candidates.length > 0)
+    return { tableName: table.name, candidates, rejections };
 
   // LAST, and only when a proper header row proved nothing: a jurisdiction
   // banner with unheaded resource/unit columns. It is tried last so it can
   // never shadow a table that DOES name its columns.
   const unheaded = detectUnheadedRegionalMatrix(table);
-  if (unheaded) return { tableName: table.name, candidates: [unheaded], rejections };
+  if (unheaded)
+    return { tableName: table.name, candidates: [unheaded], rejections };
 
   return { tableName: table.name, candidates, rejections };
 }
 
-export function detectSourceStructures(tables: SourceTable[]): TableDetection[] {
+export function detectSourceStructures(
+  tables: SourceTable[],
+): TableDetection[] {
   return tables.map(detectTableStructures);
 }

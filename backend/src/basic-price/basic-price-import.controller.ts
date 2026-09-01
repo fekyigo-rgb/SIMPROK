@@ -26,6 +26,7 @@ import { BasicPriceRowResolutionService } from './basic-price-row-resolution.ser
 import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping-candidates.service';
 import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
 import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.service';
+import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto';
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import {
@@ -36,6 +37,11 @@ import { AdmitResourceForImportRowDto } from './dto/admit-resource-for-import-ro
 import { AcceptMachineProvenRowsDto } from './dto/accept-machine-proven-rows.dto';
 import { BasicPriceSmartSaveService } from './basic-price-smart-save.service';
 import { CorrectPrivateProvenanceDto } from './dto/correct-private-provenance.dto';
+import { EnrichBasicPriceKdnDto } from './dto/enrich-basic-price-kdn.dto';
+import { CorrectPrivateBasicPriceDto } from './dto/correct-private-basic-price.dto';
+import { ObservePrivateBasicPriceDto } from './dto/observe-private-basic-price.dto';
+import { ObservePrivateKdnDto } from './dto/observe-private-kdn.dto';
+import { CorrectPrivateKdnDto } from './dto/correct-private-kdn.dto';
 
 /**
  * BasicPriceImportController — user-owned import boundary (Owner Decision:
@@ -79,6 +85,7 @@ export class BasicPriceImportController {
     private readonly privateAssetService: BasicPricePrivateAssetService,
     private readonly trustedActor: TrustedBasicPriceActorService,
     private readonly smartSaveService: BasicPriceSmartSaveService,
+    private readonly permissionResolver: WorkspacePermissionResolverService,
   ) {}
 
   @Post('preview')
@@ -402,6 +409,178 @@ export class BasicPriceImportController {
     return this.privateAssetService.correctPrivateProvenanceFromBatch({
       batchId,
       actor,
+      reason: dto.reason,
+    });
+  }
+
+  /**
+   * BP-KDN-01 — fill a previously unknown %KDN on an existing private price
+   * this workspace owns. Does not create a Basic Price and does not touch
+   * money. Same BASIC_PRICE_SUBMIT as provenance correction.
+   */
+  @Post('prices/:priceId/kdn')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async enrichKdn(
+    @Req() request: any,
+    @Param('priceId') priceId: string,
+    @Body() dto: EnrichBasicPriceKdnDto,
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user?.id,
+    );
+    return this.privateAssetService.enrichKdn({
+      basicPriceId: priceId,
+      actor,
+      kdnPercent: dto.kdnPercent,
+      reason: dto.reason,
+      expectedKdnPercent: dto.expectedKdnPercent,
+    });
+  }
+
+  /**
+   * BP-DETAIL-MAINT-02 — fill a previously unknown %KDN on a SIMPROK Catalog
+   * observation. Workspace catalog: BASIC_PRICE_VERIFY. Shared catalog:
+   * BASIC_PRICE_PROMOTE_SHARED. Ordinary SUBMIT cannot enter. Same KDN
+   * interpreter and fill-missing law as the private enrich route.
+   */
+  @Post('prices/:priceId/catalog-kdn')
+  @Permissions(
+    PERMISSIONS.BASIC_PRICE_VERIFY,
+    PERMISSIONS.BASIC_PRICE_PROMOTE_SHARED,
+  )
+  async enrichCatalogKdn(
+    @Req() request: any,
+    @Param('priceId') priceId: string,
+    @Body() dto: EnrichBasicPriceKdnDto,
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user?.id,
+    );
+    const effective = await this.permissionResolver.resolve(
+      actor.accountId,
+      actor.workspaceId,
+    );
+    const held = effective?.permissions ?? [];
+    return this.privateAssetService.enrichCatalogKdn({
+      basicPriceId: priceId,
+      actor,
+      kdnPercent: dto.kdnPercent,
+      reason: dto.reason,
+      expectedKdnPercent: dto.expectedKdnPercent,
+      canVerify: held.includes(PERMISSIONS.BASIC_PRICE_VERIFY),
+      canPromoteShared: held.includes(PERMISSIONS.BASIC_PRICE_PROMOTE_SHARED),
+    });
+  }
+
+  /**
+   * BP-DETAIL-MAINT-02 — private post-create money correction.
+   *
+   * Creates a successor observation. Does not PATCH the predecessor. Same
+   * BASIC_PRICE_SUBMIT as keep-private / KDN enrich. Catalog money still
+   * routes through review and publication, never this door.
+   */
+  @Post('prices/:priceId/corrections')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async correctPrivatePrice(
+    @Req() request: any,
+    @Param('priceId') priceId: string,
+    @Body() dto: CorrectPrivateBasicPriceDto,
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user?.id,
+    );
+    return this.privateAssetService.correctPrivatePrice({
+      basicPriceId: priceId,
+      actor,
+      expectedValue: dto.expectedValue,
+      proposedValue: dto.proposedValue,
+      reason: dto.reason,
+    });
+  }
+
+  /**
+   * BP-CHANGE-SEM-03 — later lawful private price observation.
+   *
+   * Same BASIC_PRICE_SUBMIT as keep-private / correction. Does not claim
+   * the predecessor was wrong. Catalog money still routes through review
+   * and publication, never this door.
+   */
+  @Post('prices/:priceId/observations')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async observePrivatePrice(
+    @Req() request: RequestIdentity,
+    @Param('priceId') priceId: string,
+    @Body() dto: ObservePrivateBasicPriceDto,
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user?.id,
+    );
+    return this.privateAssetService.observePrivatePrice({
+      basicPriceId: priceId,
+      actor,
+      expectedValue: dto.expectedValue,
+      proposedValue: dto.proposedValue,
+      effectiveDate: dto.effectiveDate,
+      reason: dto.reason,
+      sameSource: dto.sameSource,
+      sourceIdentityName: dto.sourceIdentityName,
+    });
+  }
+
+  /**
+   * BP-CHANGE-SEM-03 — later lawful private KDN observation.
+   *
+   * Not the null-fill enrich writer. Catalog KDN still has no stated-value
+   * overwrite from this door.
+   */
+  @Post('prices/:priceId/kdn-observations')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async observePrivateKdn(
+    @Req() request: RequestIdentity,
+    @Param('priceId') priceId: string,
+    @Body() dto: ObservePrivateKdnDto,
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user?.id,
+    );
+    return this.privateAssetService.observePrivateKdn({
+      basicPriceId: priceId,
+      actor,
+      expectedValue: dto.expectedValue,
+      expectedKdnPercent: dto.expectedKdnPercent,
+      proposedKdnPercent: dto.proposedKdnPercent,
+      effectiveDate: dto.effectiveDate,
+      reason: dto.reason,
+    });
+  }
+
+  /**
+   * BP-CHANGE-SEM-03 — stated private KDN was recorded wrong.
+   *
+   * Successor with supersession. Does not PATCH. Does not use enrich.
+   */
+  @Post('prices/:priceId/kdn-corrections')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async correctPrivateKdn(
+    @Req() request: RequestIdentity,
+    @Param('priceId') priceId: string,
+    @Body() dto: CorrectPrivateKdnDto,
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user?.id,
+    );
+    return this.privateAssetService.correctPrivateKdn({
+      basicPriceId: priceId,
+      actor,
+      expectedValue: dto.expectedValue,
+      expectedKdnPercent: dto.expectedKdnPercent,
+      proposedKdnPercent: dto.proposedKdnPercent,
       reason: dto.reason,
     });
   }

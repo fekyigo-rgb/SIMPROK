@@ -43,8 +43,44 @@ const WORKBOOK_PATH = 'C:/SIMPROK/BASIC PRICE IKK - SIMPROK READY 2024.xlsx';
 const EXPECTED_SOURCE_ROWS = 86;
 
 const WORKSPACE_A = '10000000-0000-4000-8000-000000000004';
+const ORG_A = '10000000-0000-4000-8000-000000000002';
 const PASSWORD = 'Test1234!';
 const ROLE_ID = '46000000-0000-4000-8000-000000000001';
+
+/**
+ * BP-REGION-TRUTH-07V — A SECOND WORKSPACE, BECAUSE IMPORT IDENTITY IS REAL.
+ *
+ * WHY THIS EXISTS. `workspaceId_importFingerprint` forbids two batches holding
+ * one import identity, and BP-REGION-TRUTH-07S recomputes that identity from a
+ * batch's FINAL facts. The closeout block finalizes the Owner's batch to the
+ * only facts this workbook actually supports — Baguala, 2024-01-01 derived from
+ * the stated year, field report, market survey — and from that moment those
+ * facts, over this file, in this workspace, ARE that batch. Any later batch
+ * patched to the same truth is the same import, and SIMPROK correctly refuses
+ * it with 409 BATCH_IDENTITY_ALREADY_EXISTS.
+ *
+ * WHAT THAT COST THE SUITE. The three blocks below are not import-identity
+ * tests. D proves a re-verification date is carried, X proves a human exclusion
+ * is respected, P proves an interrupted save tells the truth — and every one of
+ * them opens by asking for a FRESH batch. Sharing one workspace with the
+ * closeout made that impossible: their PATCH collided with the closeout batch's
+ * identity, and twelve assertions about three unrelated laws failed for a
+ * reason none of them was about.
+ *
+ * WHY A WORKSPACE AND NOT A DIFFERENT FACT. The alternative was to give each
+ * block its own region, date or source claim — every one of which this workbook
+ * does not state, and inventing them is precisely what this suite refuses to do
+ * everywhere else. A workspace is not a fact about the source. The same real
+ * file, with the same real facts, imported by a different tenant is a genuinely
+ * different import, and `workspaceId` is the fingerprint's first input for
+ * exactly that reason. Nothing about the workbook is bent to make room.
+ *
+ * The closeout batch stays where it is and stays readable — D-5 and P-5 compare
+ * against it — and identity-collision law keeps its own dedicated coverage in
+ * `basic-price-region-truth-07s-identity.spec.ts` (IDENTITY-05, IDENTITY-07).
+ */
+const SCENARIO_WORKSPACE_ID = '10000000-0000-4000-8000-00000000004a';
+const SCENARIO_ROLE_ID = '46000000-0000-4000-8000-000000000002';
 
 /**
  * THE REFERENCE KNOWLEDGE THIS DATABASE MUST HOLD, AND WHERE IT COMES FROM.
@@ -279,6 +315,8 @@ describeReal(
      * AMBIGUOUS_UNIT_ALIAS and drew a false conclusion about the product.
      */
     const createdPermissionIds: string[] = [];
+    /** Memberships this suite MADE — never the ones the seed already owned. */
+    const createdMembershipIds: string[] = [];
     const createdUnitDefinitionIds: string[] = [];
     const createdUnitAliasIds: string[] = [];
     /** Aliases this suite deactivated, to be switched back on afterwards. */
@@ -321,47 +359,109 @@ describeReal(
           return created;
         }),
       );
-      await prisma.role.upsert({
-        where: { id: ROLE_ID },
-        create: {
-          id: ROLE_ID,
-          workspaceId: WORKSPACE_A,
-          code: 'REAL_WORKFLOW_BASIC_PRICE',
-          name: 'Real Workflow Basic Price',
-        },
-        update: {},
-      });
-      for (const permission of permissions) {
-        await prisma.rolePermission.upsert({
-          where: {
-            roleId_permissionId: {
-              roleId: ROLE_ID,
-              permissionId: permission.id,
-            },
-          },
-          create: { roleId: ROLE_ID, permissionId: permission.id },
-          update: {},
-        });
-      }
-
       const account = await prisma.account.findUniqueOrThrow({
         where: { email: 'assigned@test.local' },
       });
-      const membership = await prisma.workspaceMembership.findUniqueOrThrow({
-        where: {
-          accountId_workspaceId: {
-            accountId: account.id,
-            workspaceId: WORKSPACE_A,
+
+      /**
+       * THE GRANT CHAIN, SAID ONCE. Role is a WORKSPACE-scoped row and the
+       * membership is per workspace, so a second workspace needs its own pair —
+       * built by the same statements that already built the first, rather than
+       * by a second, subtly different copy of them.
+       *
+       * `assigned@test.local` and its bearer token are unchanged: identity
+       * belongs to the account, and which workspace it is acting in is the
+       * header it sends. One person, two tenancies — exactly as the product
+       * models it.
+       */
+      const grantWorkspaceAccess = async (
+        workspaceId: string,
+        roleId: string,
+        code: string,
+      ) => {
+        await prisma.role.upsert({
+          where: { id: roleId },
+          create: {
+            id: roleId,
+            workspaceId,
+            code,
+            name: 'Real Workflow Basic Price',
           },
+          update: {},
+        });
+        for (const permission of permissions) {
+          await prisma.rolePermission.upsert({
+            where: {
+              roleId_permissionId: { roleId, permissionId: permission.id },
+            },
+            create: { roleId, permissionId: permission.id },
+            update: {},
+          });
+        }
+        // Recorded ONLY when this suite actually made it, so `afterAll` removes
+        // exactly what it added and never the membership the seed owns.
+        const existingMembership = await prisma.workspaceMembership.findUnique({
+          where: {
+            accountId_workspaceId: { accountId: account.id, workspaceId },
+          },
+        });
+        const membership =
+          existingMembership ??
+          (await prisma.workspaceMembership.create({
+            data: { accountId: account.id, workspaceId, status: 'ACTIVE' },
+          }));
+        if (!existingMembership) {
+          createdMembershipIds.push(membership.id);
+          /**
+           * THE THIRD LINK OF THE IDENTITY CHAIN. Account → Membership → User
+           * is the product's own law, and Basic Price walks all three: the
+           * trusted-actor authority resolves the USER before it will let a
+           * price be kept. A membership without one is an account that can hold
+           * permissions and still not act.
+           */
+          await prisma.user.create({
+            data: {
+              workspaceMembershipId: membership.id,
+              workspaceId,
+              fullName: 'Assigned Acceptance User',
+              status: 'ACTIVE',
+            },
+          });
+        }
+        await prisma.membershipRole.create({
+          data: {
+            workspaceMembershipId: membership.id,
+            roleId,
+            isActive: true,
+          },
+        });
+      };
+
+      // The Owner's own workspace keeps the membership the seed already gave
+      // it; only the role grant is this suite's to make.
+      await grantWorkspaceAccess(
+        WORKSPACE_A,
+        ROLE_ID,
+        'REAL_WORKFLOW_BASIC_PRICE',
+      );
+
+      // BP-REGION-TRUTH-07V — the second tenancy the scenario blocks import
+      // into. Created here so it is torn down by the same `afterAll` that
+      // returns everything else.
+      await prisma.workspace.upsert({
+        where: { id: SCENARIO_WORKSPACE_ID },
+        create: {
+          id: SCENARIO_WORKSPACE_ID,
+          name: 'Real Workflow Basic Price Scenarios',
+          organizationId: ORG_A,
         },
+        update: {},
       });
-      await prisma.membershipRole.create({
-        data: {
-          workspaceMembershipId: membership.id,
-          roleId: ROLE_ID,
-          isActive: true,
-        },
-      });
+      await grantWorkspaceAccess(
+        SCENARIO_WORKSPACE_ID,
+        SCENARIO_ROLE_ID,
+        'REAL_WORKFLOW_BASIC_PRICE_SCENARIOS',
+      );
 
       // ── THE REFERENCE KNOWLEDGE, THROUGH THE GOVERNED PROVISIONERS ──────
       //
@@ -393,29 +493,96 @@ describeReal(
         INVENTORY_PATH,
         EXPECTED_INVENTORY_SHA256,
       );
-      const catalogPlan = await buildPlan(prisma, {
-        inventory,
-        inventoryPath: INVENTORY_PATH,
-        inventorySha256,
-        workspaceId: WORKSPACE_A,
-        generatedFromGitHead: 'REAL_WORKFLOW_E2E',
-      });
-      await applyBootstrapPlan(prisma, {
-        expectedPlanSha256: computePlanHash(catalogPlan),
-        confirmationToken: GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
-        expectedConfirmationToken: GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
-        workspaceId: WORKSPACE_A,
-        inventory,
-        inventoryPath: INVENTORY_PATH,
-        inventorySha256,
-        generatedFromGitHead: 'REAL_WORKFLOW_E2E',
-      });
+      /**
+       * THE SAME REVIEWED INVENTORY INTO BOTH TENANCIES.
+       *
+       * ResourceCatalog is workspace-scoped, so the scenario workspace needs
+       * the reference knowledge too — and it must be the SAME knowledge, from
+       * the same pinned file through the same planner under the same
+       * confirmation authority. That is what lets `pairProvenAtMeasurement`,
+       * measured once in the Owner's workspace, stand as the expected number in
+       * the scenario blocks: if it were a property of a workspace rather than
+       * of the workbook and the reference knowledge, those assertions would now
+       * fail — which is a stronger statement than the one they made before.
+       */
+      for (const workspaceId of [WORKSPACE_A, SCENARIO_WORKSPACE_ID]) {
+        const catalogPlan = await buildPlan(prisma, {
+          inventory,
+          inventoryPath: INVENTORY_PATH,
+          inventorySha256,
+          workspaceId,
+          generatedFromGitHead: 'REAL_WORKFLOW_E2E',
+        });
+        await applyBootstrapPlan(prisma, {
+          expectedPlanSha256: computePlanHash(catalogPlan),
+          confirmationToken: GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
+          expectedConfirmationToken: GOVERNED_REHEARSAL_CONFIRMATION_TOKEN,
+          workspaceId,
+          inventory,
+          inventoryPath: INVENTORY_PATH,
+          inventorySha256,
+          generatedFromGitHead: 'REAL_WORKFLOW_E2E',
+        });
+      }
 
       const login = await request(server())
         .post('/auth/login')
         .send({ email: 'assigned@test.local', password: PASSWORD });
       token = (login.body as LoginResult).access_token;
     });
+
+    /**
+     * EVERY BATCH OF THIS WORKBOOK IN ONE WORKSPACE, AND THE PRICES THAT HOLD
+     * THEM DOWN — removed in the one order the schema permits.
+     *
+     * `BasicPrice.sourceImportRow` is `onDelete: Restrict`, deliberately, so a
+     * materialized price can never lose its evidence. The prices therefore go
+     * first or the batch delete fails outright.
+     *
+     * Used both by the scenario blocks, which each return the workspace they
+     * borrowed, and by `afterAll` for the whole file.
+     */
+    const clearImportedBatches = async (workspaceId: string) => {
+      await prisma.basicPrice.deleteMany({
+        where: {
+          workspaceId,
+          sourceImportRow: {
+            batch: { sourceFileName: { in: IMPORTED_FILE_NAMES } },
+          },
+        },
+      });
+      await prisma.basicPriceImportBatch.deleteMany({
+        where: { workspaceId, sourceFileName: { in: IMPORTED_FILE_NAMES } },
+      });
+    };
+
+    /**
+     * BP-REGION-TRUTH-07V — THE SCENARIO WORKSPACE IS LENT TO ONE BLOCK AT A
+     * TIME, AND HANDED BACK EMPTY.
+     *
+     * Import identity is per workspace, so two scenario blocks holding batches
+     * of this workbook under the same final facts at the same time would
+     * collide with each other exactly as they collided with the closeout batch.
+     * Each block therefore takes the workspace clean and returns it clean.
+     *
+     * THE GUARD IS AN ASSERTION, NOT A CONVENIENCE. Every one of these blocks
+     * opens by claiming a FRESH batch. That claim now has to be true of the
+     * whole tenancy before the block starts, so a future block that forgets to
+     * tidy up fails HERE — naming the reason — rather than three tests later
+     * inside an assertion about a re-verification date.
+     */
+    const ownsScenarioWorkspaceAlone = () => {
+      beforeAll(async () => {
+        const leftBehind = await prisma.basicPriceImportBatch.count({
+          where: {
+            workspaceId: SCENARIO_WORKSPACE_ID,
+            sourceFileName: { in: IMPORTED_FILE_NAMES },
+          },
+        });
+        expect(leftBehind).toBe(0);
+      });
+      afterAll(() => clearImportedBatches(SCENARIO_WORKSPACE_ID));
+    };
 
     afterAll(async () => {
       // REVERSE DEPENDENCY ORDER. Batches first (their rows cascade), then the
@@ -426,23 +593,21 @@ describeReal(
       // `onDelete: Restrict` — deliberately, so a materialized price can never
       // lose its evidence — which means deleting the batch while a price still
       // points at one of its rows fails outright rather than cascading.
-      await prisma.basicPrice.deleteMany({
-        where: {
-          workspaceId: WORKSPACE_A,
-          sourceImportRow: {
-            batch: { sourceFileName: { in: IMPORTED_FILE_NAMES } },
-          },
-        },
+      await clearImportedBatches(WORKSPACE_A);
+      await clearImportedBatches(SCENARIO_WORKSPACE_ID);
+      const roleIds = [ROLE_ID, SCENARIO_ROLE_ID];
+      await prisma.membershipRole.deleteMany({
+        where: { roleId: { in: roleIds } },
       });
-      await prisma.basicPriceImportBatch.deleteMany({
-        where: {
-          workspaceId: WORKSPACE_A,
-          sourceFileName: { in: IMPORTED_FILE_NAMES },
-        },
+      await prisma.rolePermission.deleteMany({
+        where: { roleId: { in: roleIds } },
       });
-      await prisma.membershipRole.deleteMany({ where: { roleId: ROLE_ID } });
-      await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_ID } });
-      await prisma.role.deleteMany({ where: { id: ROLE_ID } });
+      await prisma.role.deleteMany({ where: { id: { in: roleIds } } });
+      if (createdMembershipIds.length > 0) {
+        await prisma.workspaceMembership.deleteMany({
+          where: { id: { in: createdMembershipIds } },
+        });
+      }
       if (createdPermissionIds.length > 0) {
         await prisma.permission.deleteMany({
           where: { id: { in: createdPermissionIds } },
@@ -475,10 +640,15 @@ describeReal(
       // boundary the bootstrap wrote inside — the E2E database starts with no
       // ResourceCatalog at all, so this removes exactly what was provisioned.
       await prisma.resourceSourceIdentity.deleteMany({
-        where: { workspaceId: WORKSPACE_A },
+        where: { workspaceId: { in: [WORKSPACE_A, SCENARIO_WORKSPACE_ID] } },
       });
       await prisma.resourceCatalog.deleteMany({
-        where: { workspaceId: WORKSPACE_A },
+        where: { workspaceId: { in: [WORKSPACE_A, SCENARIO_WORKSPACE_ID] } },
+      });
+      // The second tenancy itself, last: everything that pointed into it is
+      // gone by now, and it is a row this suite made rather than one it found.
+      await prisma.workspace.deleteMany({
+        where: { id: SCENARIO_WORKSPACE_ID },
       });
       // Only if THIS run created it. A reused Region is someone else's row.
       if (regionCreatedHere && REGION_ID) {
@@ -550,11 +720,14 @@ describeReal(
      * different fact, and each block below asserts that it really did receive
      * its own batch rather than trusting that it did.
      */
-    const previewDeclaring = (declared: Record<string, string>) => {
+    const previewDeclaring = (
+      declared: Record<string, string>,
+      workspaceId: string = WORKSPACE_A,
+    ) => {
       let pending = request(server())
         .post('/basic-price-imports/preview')
         .set('Authorization', 'Bearer ' + token)
-        .set('x-workspace-id', WORKSPACE_A)
+        .set('x-workspace-id', workspaceId)
         .attach('file', workbook, {
           filename: 'BASIC PRICE IKK - SIMPROK READY 2024.xlsx',
           contentType:
@@ -1607,6 +1780,8 @@ describeReal(
      * the door the Owner will actually use.
      */
     describe('RE-VERIFICATION DATE — stated by a human, carried, never invented', () => {
+      ownsScenarioWorkspaceAlone();
+
       /**
        * A DATE NOTHING COULD HAVE DERIVED. The workbook states the year 2024
        * and this batch's effective date is 2024-01-01, so no horizon rule of
@@ -1621,7 +1796,7 @@ describeReal(
         const response = await request(server())
           .get('/basic-price-imports/' + batchId)
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A);
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID);
         expect(response.status).toBe(200);
         return response.body as BatchView;
       };
@@ -1630,7 +1805,10 @@ describeReal(
         // Uploaded by someone who already knew the place. That one true fact,
         // stated at upload, is what makes this its own import rather than a
         // replay of the Owner's — asserted below, never assumed.
-        const created = await previewDeclaring({ regionId: REGION_ID });
+        const created = await previewDeclaring(
+          { regionId: REGION_ID },
+          SCENARIO_WORKSPACE_ID,
+        );
         expect(created.status).toBe(201);
         batchId = (created.body as BatchSummary).batchId;
         expect(batchId).not.toBe(closeoutBatchId);
@@ -1646,7 +1824,7 @@ describeReal(
         const patched = await request(server())
           .patch('/basic-price-imports/' + batchId)
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A)
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID)
           .send({
             version: fresh.version,
             regionId: REGION_ID,
@@ -1700,7 +1878,7 @@ describeReal(
         const response = await request(server())
           .post('/basic-price-imports/' + batchId + '/smart-save')
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A)
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID)
           .send({});
         expect({
           status: response.status,
@@ -1768,7 +1946,7 @@ describeReal(
           .get('/basic-prices')
           .query({ regionId: REGION_ID, limit: 50 })
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A);
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID);
         expect(response.status).toBe(200);
 
         const page = response.body as {
@@ -1837,6 +2015,8 @@ describeReal(
      * meant "SIMPROK overrules your correction". Certainty is not authority.
      */
     describe('PRE-BINDING HUMAN EXCLUSION — certainty is not authority', () => {
+      ownsScenarioWorkspaceAlone();
+
       let batchId = '';
       /** The one proven row the human took back, and what it is called. */
       let excludedRowId = '';
@@ -1847,16 +2027,17 @@ describeReal(
         const response = await request(server())
           .get('/basic-price-imports/' + batchId)
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A);
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID);
         expect(response.status).toBe(200);
         return response.body as BatchView;
       };
 
       it('X-1. A FRESH BATCH — nothing bound, nothing ready, the rows proven', async () => {
         // Uploaded by someone who already knew this was a field report.
-        const created = await previewDeclaring({
-          sourceOrigin: 'FIELD_REPORT',
-        });
+        const created = await previewDeclaring(
+          { sourceOrigin: 'FIELD_REPORT' },
+          SCENARIO_WORKSPACE_ID,
+        );
         expect(created.status).toBe(201);
         batchId = (created.body as BatchSummary).batchId;
         expect(batchId).not.toBe(closeoutBatchId);
@@ -1865,7 +2046,7 @@ describeReal(
         const patched = await request(server())
           .patch('/basic-price-imports/' + batchId)
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A)
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID)
           .send({
             version: fresh.version,
             regionId: REGION_ID,
@@ -1931,7 +2112,7 @@ describeReal(
         const response = await request(server())
           .post('/basic-price-imports/' + batchId + '/smart-save')
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A)
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID)
           .send({ excludeRowIds: [excludedRowId] });
 
         expect({
@@ -2042,7 +2223,7 @@ describeReal(
         const response = await request(server())
           .post('/basic-price-imports/' + batchId + '/smart-save')
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A)
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID)
           .send({});
         expect({
           status: response.status,
@@ -2099,15 +2280,27 @@ describeReal(
      * chunk commits made by the real command on the real workbook.
      */
     describe('SMART-SAVE INTERRUPTION — the truth about what already happened', () => {
+      ownsScenarioWorkspaceAlone();
+
       let batchId = '';
       /** The failure body the interrupted press actually answered with. */
       let failureBody: SmartSaveFailureBody | null = null;
 
-      const readBatchById = async (id: string): Promise<BatchView> => {
+      /**
+       * READ AS THE TENANT THAT OWNS IT. This block's own batches live in the
+       * scenario workspace; the Owner's clean closeout batch it compares itself
+       * against in P-5 lives in the Owner's. A batch is only readable from
+       * inside its own tenancy — that is the product's law, not a detail — so
+       * the workspace travels with the id rather than being assumed.
+       */
+      const readBatchById = async (
+        id: string,
+        workspaceId: string = SCENARIO_WORKSPACE_ID,
+      ): Promise<BatchView> => {
         const response = await request(server())
           .get('/basic-price-imports/' + id)
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A);
+          .set('x-workspace-id', workspaceId);
         expect(response.status).toBe(200);
         return response.body as BatchView;
       };
@@ -2116,7 +2309,7 @@ describeReal(
         request(server())
           .post('/basic-price-imports/' + id + '/smart-save')
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A)
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID)
           .send({});
 
       /**
@@ -2126,8 +2319,11 @@ describeReal(
        * batch which failed and recovered ends up indistinguishable from the
        * Owner's own uninterrupted run.
        */
-      const endStateOf = async (id: string) => {
-        const batch = await readBatchById(id);
+      const endStateOf = async (
+        id: string,
+        workspaceId: string = SCENARIO_WORKSPACE_ID,
+      ) => {
+        const batch = await readBatchById(id, workspaceId);
         const rows = await prisma.basicPriceImportRow.findMany({
           where: { batchId: id },
           orderBy: { sourceRowNumber: 'asc' },
@@ -2189,7 +2385,10 @@ describeReal(
 
       it('P-1. a FRESH batch — nothing bound, nothing kept, the rows proven', async () => {
         // Uploaded by someone who already knew this was a market survey.
-        const created = await previewDeclaring({ sourceType: 'MARKET_SURVEY' });
+        const created = await previewDeclaring(
+          { sourceType: 'MARKET_SURVEY' },
+          SCENARIO_WORKSPACE_ID,
+        );
         expect(created.status).toBe(201);
         batchId = (created.body as BatchSummary).batchId;
         expect(batchId).not.toBe(closeoutBatchId);
@@ -2198,7 +2397,7 @@ describeReal(
         const patched = await request(server())
           .patch('/basic-price-imports/' + batchId)
           .set('Authorization', 'Bearer ' + token)
-          .set('x-workspace-id', WORKSPACE_A)
+          .set('x-workspace-id', SCENARIO_WORKSPACE_ID)
           .send({
             version: fresh.version,
             regionId: REGION_ID,
@@ -2365,7 +2564,7 @@ describeReal(
        */
       it('P-5. the recovered batch is indistinguishable from one that never failed', async () => {
         const recovered = await endStateOf(batchId);
-        const clean = await endStateOf(closeoutBatchId);
+        const clean = await endStateOf(closeoutBatchId, WORKSPACE_A);
         // Both really did the work; comparing two empty shapes would prove
         // nothing at all.
         expect(recovered.readyRows).toBe(pairProvenAtMeasurement);

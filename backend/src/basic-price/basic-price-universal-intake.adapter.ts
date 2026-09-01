@@ -29,6 +29,14 @@ import {
   interpretPriceLiteral,
 } from '../universal-intake/structure/price-literal';
 import { resourceFamilyOfCategoryText } from '../universal-intake/structure/header-vocabulary';
+import {
+  interpretKdnColumns,
+  type KdnColumnDecision,
+} from '../universal-intake/structure/kdn-column';
+import {
+  readKdnCell,
+  type KdnCellEvidence,
+} from '../universal-intake/structure/kdn-evidence';
 
 /**
  * USI-01 §6 — THE BASIC PRICE DOMAIN ADAPTER.
@@ -85,7 +93,8 @@ export type SectionProvenance =
   | 'SOURCE_SECTION_TITLE'
   | 'UPLOADER_DECLARED';
 
-export const SECTION_DECLARED_BY_UPLOADER_REASON = 'SECTION_DECLARED_BY_UPLOADER';
+export const SECTION_DECLARED_BY_UPLOADER_REASON =
+  'SECTION_DECLARED_BY_UPLOADER';
 
 /**
  * USI-01R LAW 2.8 — the source said one thing and the human said another.
@@ -97,9 +106,11 @@ export const SECTION_DECLARED_BY_UPLOADER_REASON = 'SECTION_DECLARED_BY_UPLOADER
 export const SOURCE_CATEGORY_CONFLICT_REASON = 'SOURCE_CATEGORY_CONFLICT';
 
 /** The source stated a category SIMPROK has no safe mapping for (CAT-07). */
-export const SOURCE_CATEGORY_UNRECOGNIZED_REASON = 'SOURCE_CATEGORY_UNRECOGNIZED';
+export const SOURCE_CATEGORY_UNRECOGNIZED_REASON =
+  'SOURCE_CATEGORY_UNRECOGNIZED';
 /** The unit text came from a preparer's SIMPROK-unit suggestion, not the source's own unit column. */
-export const UNIT_FROM_SIMPROK_CANDIDATE_REASON = 'UNIT_TEXT_FROM_SIMPROK_UNIT_CANDIDATE';
+export const UNIT_FROM_SIMPROK_CANDIDATE_REASON =
+  'UNIT_TEXT_FROM_SIMPROK_UNIT_CANDIDATE';
 
 /**
  * USI-01R3 LAW G — WHAT A PHYSICAL SOURCE ROW *IS*, DECIDED ONCE.
@@ -281,6 +292,9 @@ export interface BasicPriceImportKnowledgeRow {
   sourceNameCellAddress: string;
   sourceUnitCellAddress: string;
   sourcePriceCellAddress: string;
+  /** Null when this batch has no established KDN column. */
+  sourceKdnCellAddress: string | null;
+  sourceKdnHeaderText: string | null;
 
   rawResourceCodeText: string | null;
   rawResourceNameText: string;
@@ -311,6 +325,12 @@ export interface BasicPriceImportKnowledgeRow {
   // ambiguous rather than absent — the two are told apart by reasonCodes.
   proposedCanonicalPrice: string | null;
   canonicalRoundingMode: string | null;
+
+  proposedCanonicalKdn: string | null;
+  rawKdnTextValue: string | null;
+  rawKdnNumericRoundTripString: string | null;
+  rawKdnDisplayText: string | null;
+  kdnReasonCode: string | null;
 
   warnings: string[];
   errors: string[];
@@ -350,6 +370,12 @@ export interface BasicPriceIntakeInterpretation {
    * wins, so a declaration alongside it decided nothing and is not recorded.
    */
   declaredSection: BasicPriceSection | null;
+  /**
+   * Recorded only when a human confirmed an ambiguous/conflict KDN heading.
+   * A CLEAR heading is the document deciding — null, so a stray
+   * `selectedKdnColumn` cannot fork identity for one proven reading.
+   */
+  kdnColumn: number | null;
 }
 
 export interface BasicPriceImportKnowledgeObject {
@@ -371,11 +397,28 @@ export interface BasicPriceImportKnowledgeObject {
   /** Verbatim source label of the jurisdiction this reading was scoped to. */
   regionScopeLabel: string | null;
   regionScopeKind: 'COLUMN' | 'ROW_VALUE' | null;
+  /**
+   * BP-REGION-TRUTH-07S — the source's OWN word proving that the scope above is
+   * a PLACE, or null when the source proved no such thing.
+   *
+   * Verbatim evidence ("KECAMATAN", "WILAYAH"), carried outward unchanged. It
+   * is never compared to a canonical Region, never mapped to one, and asserts
+   * nothing about whether the two agree — only that the question of agreement
+   * is a real one for this source. See `regionScope.geographicEvidence` in the
+   * structure detector for why the shape alone cannot answer it.
+   */
+  regionScopeGeographicEvidence: string | null;
   detectionEvidence: string[];
   /** Rows the source AFFIRMATIVELY proved to be section titles (LAW G.1). */
   excludedNonDataRows: number;
   /** Null when this reading depended on no human answer — see the type above. */
   interpretation: BasicPriceIntakeInterpretation | null;
+  /**
+   * BP-KDN-01 — optional KDN column decision for this reading. ABSENT and
+   * ESTABLISHED (document-decided) never fork identity. NEEDS_REVIEW does
+   * not fail-stop the price workflow.
+   */
+  kdnMapping: KdnColumnDecision;
   rows: BasicPriceImportKnowledgeRow[];
 }
 
@@ -394,6 +437,12 @@ export interface BasicPriceIntakeSelection {
    */
   selectedNameColumn?: number | null;
   selectedUnitColumn?: number | null;
+  /**
+   * BP-KDN-01 — which ambiguous/conflict KDN-like column a human confirmed.
+   * Ignored when the document already proved a CLEAR heading. Never required
+   * for a lawful price import.
+   */
+  selectedKdnColumn?: number | null;
 }
 
 interface PriceEvidence {
@@ -441,7 +490,9 @@ function spreadsheetPriceEvidence(cell: SourceCell | null): PriceEvidence {
   //
   // So the literal is interpreted, and ONLY a deterministic reading is taken.
   const nativeCanonical =
-    native?.numericRoundTripString ?? native?.cachedResultRoundTripString ?? null;
+    native?.numericRoundTripString ??
+    native?.cachedResultRoundTripString ??
+    null;
   const textShaped =
     cellType === SPREADSHEET_VALUE_TYPE.STRING ||
     cellType === SPREADSHEET_VALUE_TYPE.SHARED_STRING ||
@@ -465,7 +516,8 @@ function spreadsheetPriceEvidence(cell: SourceCell | null): PriceEvidence {
     case SPREADSHEET_VALUE_TYPE.SHARED_STRING:
       // Only when the text could NOT be read. A readable literal is not a
       // defect to report.
-      if (normalizedFromText === null) errors.push('PRICE_CELL_IS_TEXT_NOT_NUMBER');
+      if (normalizedFromText === null)
+        errors.push('PRICE_CELL_IS_TEXT_NOT_NUMBER');
       break;
     case SPREADSHEET_VALUE_TYPE.FORMULA: {
       // Emission order is preserved: a formula can be both an unrecognized
@@ -549,7 +601,8 @@ function spreadsheetPriceEvidence(cell: SourceCell | null): PriceEvidence {
   // candidate was derived above: the raw text a normalized cell carries is
   // exactly the raw text a refused cell would have carried.
   const textValue =
-    native?.textValue ?? (nativeCanonical !== null ? null : (cell?.rawText ?? null));
+    native?.textValue ??
+    (nativeCanonical !== null ? null : (cell?.rawText ?? null));
 
   return {
     cellType,
@@ -603,7 +656,8 @@ function textPriceEvidence(cell: SourceCell | null): PriceEvidence {
       ? roundCanonical(reading.canonicalSourceString)
       : { proposedCanonicalPrice: null, canonicalRoundingMode: null };
 
-  if (reading.outcome !== 'NUMERIC' && reading.reason) errors.push(reading.reason);
+  if (reading.outcome !== 'NUMERIC' && reading.reason)
+    errors.push(reading.reason);
 
   return {
     cellType: null,
@@ -650,7 +704,8 @@ function roundCanonical(canonicalSourceString: string | null): {
  */
 function separatorProvenance(reading: PriceLiteralReading): string[] {
   if (reading.outcome !== 'NUMERIC') return [];
-  if (reading.decimalSeparator === null && reading.groupingSeparator === null) return [];
+  if (reading.decimalSeparator === null && reading.groupingSeparator === null)
+    return [];
   const parts: string[] = [];
   if (reading.decimalSeparator)
     parts.push(
@@ -686,7 +741,11 @@ function captureRawContext(
 ): Record<string, string> | null {
   const context: Record<string, string> = {};
   let entries = 0;
-  for (let columnNumber = 1; columnNumber <= table.columnCount; columnNumber += 1) {
+  for (
+    let columnNumber = 1;
+    columnNumber <= table.columnCount;
+    columnNumber += 1
+  ) {
     if (consumedColumns.has(columnNumber)) continue;
     if (entries >= MAX_RAW_CONTEXT_ENTRIES) break;
     const cell = row.cells[columnNumber - 1] ?? null;
@@ -728,7 +787,9 @@ function resolveRowSection(input: {
 }): ResolvedRowSection {
   const warnings: string[] = [];
   const errors: string[] = [];
-  const hasCategoryText = Boolean(input.rawCategoryName ?? input.rawCategoryCode);
+  const hasCategoryText = Boolean(
+    input.rawCategoryName ?? input.rawCategoryCode,
+  );
 
   if (hasCategoryText) {
     // Only the NAME is read for meaning. A bare code letter is one document's
@@ -740,7 +801,12 @@ function resolveRowSection(input: {
         // row where the document and the human disagreed.
         warnings.push(SOURCE_CATEGORY_CONFLICT_REASON);
       }
-      return { section: family, provenance: 'SOURCE_ROW_CATEGORY', warnings, errors };
+      return {
+        section: family,
+        provenance: 'SOURCE_ROW_CATEGORY',
+        warnings,
+        errors,
+      };
     }
 
     // The source stated a category and SIMPROK does not know it. Falling back
@@ -781,19 +847,26 @@ export function resolveStructureSelection(
 ): ResolvedStructureSelection {
   let candidateTables = tables;
   if (selection.selectedTable) {
-    candidateTables = tables.filter((table) => table.name === selection.selectedTable);
+    candidateTables = tables.filter(
+      (table) => table.name === selection.selectedTable,
+    );
     if (candidateTables.length === 0) {
-      throw new IntakeError(INTAKE_ERRORS.WORKBOOK_SHEET_AMBIGUOUS_OR_NOT_FOUND, {
-        requestedTable: selection.selectedTable,
-        availableTables: tables.map((table) => table.name),
-      });
+      throw new IntakeError(
+        INTAKE_ERRORS.WORKBOOK_SHEET_AMBIGUOUS_OR_NOT_FOUND,
+        {
+          requestedTable: selection.selectedTable,
+          availableTables: tables.map((table) => table.name),
+        },
+      );
     }
   }
 
   const withCandidates = candidateTables
     .map((table) => ({
       table,
-      detection: detections.find((detection) => detection.tableName === table.name)!,
+      detection: detections.find(
+        (detection) => detection.tableName === table.name,
+      )!,
     }))
     .filter(({ detection }) => detection.candidates.length > 0);
 
@@ -803,8 +876,8 @@ export function resolveStructureSelection(
       rejections: Object.fromEntries(
         candidateTables.map((table) => [
           table.name,
-          detections.find((detection) => detection.tableName === table.name)?.rejections ??
-            [],
+          detections.find((detection) => detection.tableName === table.name)
+            ?.rejections ?? [],
         ]),
       ),
     });
@@ -814,7 +887,9 @@ export function resolveStructureSelection(
     throw new IntakeError(INTAKE_ERRORS.SOURCE_TABLE_AMBIGUOUS, {
       tables: withCandidates.map(({ table, detection }) => ({
         tableName: table.name,
-        structures: detection.candidates.map((candidate) => candidate.structure),
+        structures: detection.candidates.map(
+          (candidate) => candidate.structure,
+        ),
       })),
     });
   }
@@ -878,18 +953,136 @@ export function resolveStructureSelection(
  * transport provenance could go unrecorded.
  */
 /** Strongest resource-family authority actually exercised in a reading. */
+/** Strongest resource-family authority actually exercised in a reading. */
 function summarizeSectionProvenance(
   rows: BasicPriceImportKnowledgeRow[],
 ): SectionProvenance {
   if (rows.some((row) => row.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY'))
     return 'SOURCE_ROW_CATEGORY';
-  if (rows.some((row) => row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE'))
+  if (
+    rows.some((row) => row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE')
+  )
     return 'SOURCE_SECTION_TITLE';
   return 'UPLOADER_DECLARED';
 }
 
+/**
+ * Headers the KDN interpreter may read. Structure detection already named
+ * them for semantic/matrix tables. A sectioned workbook stores `columns: []`
+ * because its family is proven by section titles, so the NO-header row is
+ * read here as an overlay — meaning, not column number.
+ */
+function kdnHeaderColumns(
+  table: SourceTable,
+  structure: DetectedStructure,
+): Array<{ columnNumber: number; headerText: string }> {
+  if (structure.columns.length > 0) {
+    return structure.columns.map((column) => ({
+      columnNumber: column.columnNumber,
+      headerText: column.headerText,
+    }));
+  }
+  const headerRow = table.rows.find((row) => {
+    const marker = textAt(row, 2);
+    return marker !== null && /^NO$/i.test(marker);
+  });
+  if (!headerRow) return [];
+  const columns: Array<{ columnNumber: number; headerText: string }> = [];
+  for (
+    let columnNumber = 1;
+    columnNumber <= table.columnCount;
+    columnNumber += 1
+  ) {
+    const headerText = textAt(headerRow, columnNumber);
+    if (headerText) columns.push({ columnNumber, headerText });
+  }
+  return columns;
+}
+
+function kdnColumnOf(decision: KdnColumnDecision): number | null {
+  return decision.status === 'ESTABLISHED'
+    ? decision.column.columnNumber
+    : null;
+}
+
+function mergeKdnInterpretation(
+  existing: BasicPriceIntakeInterpretation | null,
+  decision: KdnColumnDecision,
+): BasicPriceIntakeInterpretation | null {
+  const kdnColumn =
+    decision.status === 'ESTABLISHED' && decision.humanConfirmed
+      ? decision.column.columnNumber
+      : null;
+  if (existing === null && kdnColumn === null) return null;
+  if (existing === null) {
+    return {
+      resourceNameColumn: null,
+      sourceUnitColumn: null,
+      declaredSection: null,
+      kdnColumn,
+    };
+  }
+  return { ...existing, kdnColumn };
+}
+
+function emptyKdnFields(): Pick<
+  BasicPriceImportKnowledgeRow,
+  | 'sourceKdnCellAddress'
+  | 'sourceKdnHeaderText'
+  | 'proposedCanonicalKdn'
+  | 'rawKdnTextValue'
+  | 'rawKdnNumericRoundTripString'
+  | 'rawKdnDisplayText'
+  | 'kdnReasonCode'
+> {
+  return {
+    sourceKdnCellAddress: null,
+    sourceKdnHeaderText: null,
+    proposedCanonicalKdn: null,
+    rawKdnTextValue: null,
+    rawKdnNumericRoundTripString: null,
+    rawKdnDisplayText: null,
+    kdnReasonCode: null,
+  };
+}
+
+function kdnFieldsForRow(input: {
+  table: SourceTable;
+  row: SourceRow;
+  decision: KdnColumnDecision;
+  locate: (columnNumber: number | null) => string;
+}): Pick<
+  BasicPriceImportKnowledgeRow,
+  | 'sourceKdnCellAddress'
+  | 'sourceKdnHeaderText'
+  | 'proposedCanonicalKdn'
+  | 'rawKdnTextValue'
+  | 'rawKdnNumericRoundTripString'
+  | 'rawKdnDisplayText'
+  | 'kdnReasonCode'
+> {
+  if (input.decision.status !== 'ESTABLISHED') {
+    return emptyKdnFields();
+  }
+  const columnNumber = input.decision.column.columnNumber;
+  const evidence: KdnCellEvidence = readKdnCell(
+    input.row.cells[columnNumber - 1] ?? null,
+  );
+  return {
+    sourceKdnCellAddress: input.locate(columnNumber),
+    sourceKdnHeaderText: input.decision.column.headerText,
+    proposedCanonicalKdn: evidence.proposedCanonicalKdn,
+    rawKdnTextValue: evidence.rawKdnTextValue,
+    rawKdnNumericRoundTripString: evidence.rawKdnNumericRoundTripString,
+    rawKdnDisplayText: evidence.rawKdnDisplayText,
+    kdnReasonCode: evidence.kdnReasonCode,
+  };
+}
+
 export class BasicPriceUniversalIntakeAdapter {
-  constructor(private readonly readers: ReaderRegistry = ReaderRegistry.default()) {}
+  constructor(
+    private readonly readers: ReaderRegistry = ReaderRegistry.default(),
+  ) {}
 
   async parse(
     envelope: SourceEnvelope,
@@ -903,10 +1096,21 @@ export class BasicPriceUniversalIntakeAdapter {
       selection,
     );
 
+    const kdnMapping = interpretKdnColumns(
+      kdnHeaderColumns(table, structure),
+      selection.selectedKdnColumn,
+    );
+
     const rows =
       structure.structure === 'SECTIONED_PRICE_LIST'
-        ? this.readSectioned(table, structure)
-        : this.readHeaderTable(table, structure, regionChoice, selection);
+        ? this.readSectioned(table, structure, kdnMapping)
+        : this.readHeaderTable(
+            table,
+            structure,
+            regionChoice,
+            selection,
+            kdnMapping,
+          );
 
     return {
       parserContractVersion: CONTRACT_BY_STRUCTURE[structure.structure],
@@ -924,9 +1128,14 @@ export class BasicPriceUniversalIntakeAdapter {
       sectionProvenance: summarizeSectionProvenance(rows.rows),
       regionScopeLabel: regionChoice?.label ?? null,
       regionScopeKind: regionChoice?.kind ?? null,
+      // Read from the STRUCTURE, not from the choice: the banner proves the
+      // whole axis is geographic, and it does so whether or not this particular
+      // reading ended up scoped to one of its columns.
+      regionScopeGeographicEvidence: structure.regionScope.geographicEvidence,
       detectionEvidence: structure.evidence,
       excludedNonDataRows: rows.excludedNonDataRows,
       interpretation: rows.interpretation,
+      kdnMapping,
       rows: rows.rows,
     };
   }
@@ -939,19 +1148,19 @@ export class BasicPriceUniversalIntakeAdapter {
   private readSectioned(
     table: SourceTable,
     structure: DetectedStructure,
+    kdnMapping: KdnColumnDecision,
   ): {
     rows: BasicPriceImportKnowledgeRow[];
     totalSourceRows: number;
     /** Rows the source PROVED to be section titles (LAW G.1), never guessed. */
     excludedNonDataRows: number;
     /**
-     * ALWAYS NULL, AND STRUCTURALLY SO. This reading takes no `selection` at
-     * all: its columns come from stated headers and its families from the
-     * document's own full-row section titles. There is no human answer it could
-     * depend on, so this shape admits exactly one lawful interpretation of its
-     * bytes and contributes nothing to import identity.
+     * Null for name/unit/section — those stay document-decided on this shape.
+     * The only lawful non-null case is a human-confirmed ambiguous/conflict
+     * KDN heading, which must fork identity the same way a header-table
+     * confirmation does.
      */
-    interpretation: null;
+    interpretation: BasicPriceIntakeInterpretation | null;
   } {
     const nameColumn = structure.roleColumns.RESOURCE_NAME!;
     const codeColumn = structure.roleColumns.RESOURCE_CODE!;
@@ -990,7 +1199,9 @@ export class BasicPriceUniversalIntakeAdapter {
 
       const code = textAt(row, codeColumn);
       const unit = textAt(row, unitColumn);
-      const evidence = spreadsheetPriceEvidence(row.cells[priceColumn - 1] ?? null);
+      const evidence = spreadsheetPriceEvidence(
+        row.cells[priceColumn - 1] ?? null,
+      );
 
       const warnings: string[] = [...evidence.warnings];
       const errors: string[] = [...evidence.errors];
@@ -1013,6 +1224,7 @@ export class BasicPriceUniversalIntakeAdapter {
           warnings,
           errors,
           rawSourceContext: null,
+          kdnMapping,
         }),
       );
     }
@@ -1021,7 +1233,7 @@ export class BasicPriceUniversalIntakeAdapter {
       rows,
       totalSourceRows,
       excludedNonDataRows: 0,
-      interpretation: null,
+      interpretation: mergeKdnInterpretation(null, kdnMapping),
     };
   }
 
@@ -1041,6 +1253,7 @@ export class BasicPriceUniversalIntakeAdapter {
     structure: DetectedStructure,
     regionChoice: RegionScopeChoice | null,
     selection: BasicPriceIntakeSelection,
+    kdnMapping: KdnColumnDecision,
   ): {
     rows: BasicPriceImportKnowledgeRow[];
     totalSourceRows: number;
@@ -1051,7 +1264,8 @@ export class BasicPriceUniversalIntakeAdapter {
     const declaredSection = selection.declaredSection ?? null;
     const categoryNameColumn = structure.roleColumns.CATEGORY_NAME ?? null;
     const categoryCodeColumn = structure.roleColumns.CATEGORY_CODE ?? null;
-    const sourceStatesCategory = categoryNameColumn !== null || categoryCodeColumn !== null;
+    const sourceStatesCategory =
+      categoryNameColumn !== null || categoryCodeColumn !== null;
 
     // USI-01R LAW 2.8 — DO NOT ASK A HUMAN WHAT THE SOURCE ALREADY SAID.
     //
@@ -1151,17 +1365,24 @@ export class BasicPriceUniversalIntakeAdapter {
       structure.roleColumns.SOURCE_UNIT ??
       (structure.columnRoles.required ? selection.selectedUnitColumn! : null);
     const unitFallbackColumn =
-      unitColumn === null ? (structure.roleColumns.SIMPROK_UNIT_CANDIDATE ?? null) : null;
+      unitColumn === null
+        ? (structure.roleColumns.SIMPROK_UNIT_CANDIDATE ?? null)
+        : null;
     const effectiveUnitColumn = unitColumn ?? unitFallbackColumn;
     const priceColumn =
       structure.structure === 'REGIONAL_MATRIX'
         ? regionChoice!.columnNumber
         : structure.roleColumns.PRICE!;
     const regionLabelColumn =
-      structure.regionScope.kind === 'ROW_VALUE' ? regionChoice?.columnNumber ?? null : null;
+      structure.regionScope.kind === 'ROW_VALUE'
+        ? (regionChoice?.columnNumber ?? null)
+        : null;
 
     const headerByColumn = new Map<number, string>(
-      structure.columns.map((column) => [column.columnNumber, column.headerText]),
+      structure.columns.map((column) => [
+        column.columnNumber,
+        column.headerText,
+      ]),
     );
     const consumedColumns = new Set<number>(
       [
@@ -1173,19 +1394,25 @@ export class BasicPriceUniversalIntakeAdapter {
         // into rawSourceContext.
         categoryNameColumn,
         categoryCodeColumn,
-      ].filter((column): column is number => column !== null && column !== undefined),
+        kdnColumnOf(kdnMapping),
+      ].filter(
+        (column): column is number => column !== null && column !== undefined,
+      ),
     );
 
     // EVERY jurisdiction the source offers — not just the selected one. This is
     // what makes row classification region-independent (LAW G).
     const priceEvidenceColumns =
-      structure.regionScope.kind === 'COLUMN' && structure.regionScope.choices.length > 0
+      structure.regionScope.kind === 'COLUMN' &&
+      structure.regionScope.choices.length > 0
         ? structure.regionScope.choices.map((choice) => choice.columnNumber)
         : [priceColumn];
     const rowNumberColumn = structure.roleColumns.ROW_NUMBER ?? null;
 
     const dataRows = table.rows.filter(
-      (row) => structure.headerRowNumber === null || row.number > structure.headerRowNumber,
+      (row) =>
+        structure.headerRowNumber === null ||
+        row.number > structure.headerRowNumber,
     );
 
     const rows: BasicPriceImportKnowledgeRow[] = [];
@@ -1198,7 +1425,8 @@ export class BasicPriceUniversalIntakeAdapter {
 
       // LAW G — CLASSIFY THE PHYSICAL ROW, NOT THE SELECTED REGION'S CELL.
       const hasUnitEvidence =
-        effectiveUnitColumn !== null && textAt(row, effectiveUnitColumn) !== null;
+        effectiveUnitColumn !== null &&
+        textAt(row, effectiveUnitColumn) !== null;
       const hasPriceEvidenceInAnyJurisdiction = priceEvidenceColumns.some(
         (column) => (row.cells[column - 1] ?? null) !== null,
       );
@@ -1258,7 +1486,8 @@ export class BasicPriceUniversalIntakeAdapter {
         ...resolvedSection.warnings,
       ];
       // LAW H — an undecidable row stays visible, and says why.
-      if (rowKind === 'ROW_KIND_AMBIGUOUS') warnings.push(ROW_KIND_AMBIGUOUS_REASON);
+      if (rowKind === 'ROW_KIND_AMBIGUOUS')
+        warnings.push(ROW_KIND_AMBIGUOUS_REASON);
       const errors: string[] = [...evidence.errors, ...resolvedSection.errors];
       if (!unit) errors.push('UNIT_REQUIRED');
       // A UNIT OF MEASURE IS NEVER A BARE PRICE LITERAL.
@@ -1285,7 +1514,8 @@ export class BasicPriceUniversalIntakeAdapter {
         errors.push('SOURCE_UNIT_CELL_HOLDS_PRICE_LITERAL');
       }
       if (!code) warnings.push('RESOURCE_CODE_MISSING');
-      if (unitFallbackColumn !== null) warnings.push(UNIT_FROM_SIMPROK_CANDIDATE_REASON);
+      if (unitFallbackColumn !== null)
+        warnings.push(UNIT_FROM_SIMPROK_CANDIDATE_REASON);
 
       rows.push(
         this.buildRow({
@@ -1307,7 +1537,13 @@ export class BasicPriceUniversalIntakeAdapter {
           evidence,
           warnings,
           errors,
-          rawSourceContext: captureRawContext(table, row, headerByColumn, consumedColumns),
+          rawSourceContext: captureRawContext(
+            table,
+            row,
+            headerByColumn,
+            consumedColumns,
+          ),
+          kdnMapping,
         }),
       );
     }
@@ -1326,14 +1562,19 @@ export class BasicPriceUniversalIntakeAdapter {
     const humanNamedTheColumns = structure.columnRoles.required;
     const humanDeclaredTheSection =
       !sourceStatesCategory && declaredSection !== null;
-    const interpretation =
+    const baseInterpretation =
       humanNamedTheColumns || humanDeclaredTheSection
         ? {
             resourceNameColumn: humanNamedTheColumns ? nameColumn : null,
             sourceUnitColumn: humanNamedTheColumns ? effectiveUnitColumn : null,
             declaredSection: humanDeclaredTheSection ? declaredSection : null,
+            kdnColumn: null as number | null,
           }
         : null;
+    const interpretation = mergeKdnInterpretation(
+      baseInterpretation,
+      kdnMapping,
+    );
 
     return { rows, totalSourceRows, excludedNonDataRows, interpretation };
   }
@@ -1359,6 +1600,7 @@ export class BasicPriceUniversalIntakeAdapter {
     warnings: string[];
     errors: string[];
     rawSourceContext: Record<string, string> | null;
+    kdnMapping: KdnColumnDecision;
   }): BasicPriceImportKnowledgeRow {
     const { table, row, columns, evidence } = input;
     const locate = (columnNumber: number | null) =>
@@ -1390,6 +1632,12 @@ export class BasicPriceUniversalIntakeAdapter {
       rawSourceContext: input.rawSourceContext,
       proposedCanonicalPrice: evidence.proposedCanonicalPrice,
       canonicalRoundingMode: evidence.canonicalRoundingMode,
+      ...kdnFieldsForRow({
+        table,
+        row,
+        decision: input.kdnMapping,
+        locate,
+      }),
       warnings: input.warnings,
       errors: input.errors,
     };

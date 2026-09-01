@@ -37,6 +37,7 @@ export interface InterpretationIdentity {
   resourceNameColumn: number | null;
   sourceUnitColumn: number | null;
   declaredSection: string | null;
+  kdnColumn?: number | null;
 }
 
 export function interpretationsDiffer(
@@ -46,7 +47,8 @@ export function interpretationsDiffer(
   return (
     left.resourceNameColumn !== right.resourceNameColumn ||
     left.sourceUnitColumn !== right.sourceUnitColumn ||
-    left.declaredSection !== right.declaredSection
+    left.declaredSection !== right.declaredSection ||
+    (left.kdnColumn ?? null) !== (right.kdnColumn ?? null)
   );
 }
 
@@ -92,6 +94,7 @@ export function selectInterpretationSibling(
         resourceNameColumn: sibling.resourceNameColumn,
         sourceUnitColumn: sibling.sourceUnitColumn,
         declaredSection: sibling.declaredSection,
+        kdnColumn: sibling.kdnColumn,
       }),
     )?.id ?? null
   );

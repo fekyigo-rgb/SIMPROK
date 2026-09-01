@@ -101,7 +101,7 @@ const baseBatch = (overrides: Partial<BasicPriceImportBatchSummary> = {}): Basic
 });
 
 test("batchStatusLabel names the destination whenever it says diajukan", () => {
-  assert.equal(batchStatusLabel("NEEDS_REVIEW"), "Perlu ditinjau");
+  assert.equal(batchStatusLabel("NEEDS_REVIEW"), "Perlu konfirmasi");
   // A bare "Diajukan" left the reader to guess where. The curation path is
   // the ONLY destination this word has, so it is said out loud.
   assert.equal(batchStatusLabel("SUBMITTED"), "Sudah diusulkan ke SIMPROK");
@@ -117,7 +117,7 @@ test("rowStatusLabel says what a row means, not what its table column holds", ()
 });
 
 test("rowSectionLabel translates workbook sections", () => {
-  assert.equal(rowSectionLabel("LABOR"), "Upah");
+  assert.equal(rowSectionLabel("LABOR"), "Tenaga kerja");
   assert.equal(rowSectionLabel("MATERIAL"), "Bahan");
   assert.equal(rowSectionLabel("EQUIPMENT"), "Peralatan");
 });
@@ -176,6 +176,7 @@ const ALL_PRIVATE_USE_BLOCK_REASONS: Record<PrivateUseBlockReason, true> = {
   REGION_REQUIRED_BEFORE_PRIVATE_USE: true,
   SOURCE_ORIGIN_REQUIRED_BEFORE_PRIVATE_USE: true,
   SOURCE_TYPE_REQUIRED_BEFORE_PRIVATE_USE: true,
+  REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_PRIVATE_USE: true,
   NO_ROWS_READY_FOR_PRIVATE_USE: true,
   ALL_READY_ROWS_ALREADY_PRIVATE: true,
 };
@@ -456,7 +457,7 @@ test("BP-INT-14: a disabled Selesaikan always names what is still missing", () =
   const reason = completionBlockReason(row, { resource: false, unit: true, busy: false });
   assert.ok(reason);
   assert.match(reason, /^1 hal lagi diperlukan: /);
-  assert.match(reason, /katalog/);
+  assert.match(reason, /Item SIMPROK|Item belum dikenali/);
 });
 
 test("BP-INT-13: a reviewer holding both selections sees no block at all", () => {
@@ -534,8 +535,7 @@ test("BP-INT-15: the batch summary counts the rows it was given, and predicts no
   );
   assert.match(summary, /3 baris terbaca/);
   assert.match(summary, /1 dikenali otomatis/);
-  assert.match(summary, /1 perlu keputusan Anda/);
-  assert.match(summary, /1 belum dikenali/);
+  assert.match(summary, /2 masih menunggu \(1 perlu keputusan Anda · 1 belum dikenali\)/);
 });
 
 test("a batch whose rows were never asked about claims no open questions at all", () => {
@@ -551,8 +551,10 @@ test("a batch whose rows were never asked about claims no open questions at all"
       ),
     }),
   );
-  assert.match(summary, /0 perlu keputusan Anda/);
-  assert.match(summary, /0 belum dikenali/);
+  // Zero open questions stay silent — printing "0 perlu keputusan" reads as a verdict.
+  assert.equal(summary, "5 baris terbaca");
+  assert.doesNotMatch(summary, /perlu keputusan Anda/);
+  assert.doesNotMatch(summary, /belum dikenali/);
   // THE INTERNAL ROW STATE IS NOT A SUMMARY SEGMENT ANY MORE. It used to read
   // "5 siap diajukan" — a curation word for a row heading nowhere — and it went
   // on saying it after those rows were stored. What is stored is reported as
@@ -719,8 +721,9 @@ test("GATE E: a row already decided is reported by its status, not as an open qu
   assert.equal(tally.attention, 0);
   assert.equal(tally.unknown, 0);
   assert.equal(tally.notAsked, 2);
-  assert.match(formatMachineFirstSummary(batch), /0 perlu keputusan Anda/);
-  assert.match(formatMachineFirstSummary(batch), /0 belum dikenali/);
+  assert.equal(formatMachineFirstSummary(batch), "2 baris terbaca");
+  assert.doesNotMatch(formatMachineFirstSummary(batch), /perlu keputusan Anda/);
+  assert.doesNotMatch(formatMachineFirstSummary(batch), /belum dikenali/);
 });
 
 test("GATE B: nothing in the display claims a row is finished, only that its identity pair is proven", () => {
@@ -919,7 +922,7 @@ test("CASE B: a proven context-scoped unit names the WORK, not the enum", () => 
   });
   const narrative = rowMachineNarrative(row);
   assert.ok(narrative);
-  assert.match(narrative.unit, /untuk pekerjaan Upah/);
+  assert.match(narrative.unit, /untuk pekerjaan Tenaga kerja/);
   assert.doesNotMatch(narrative.unit, /LABOR/);
   for (const text of visibleText(narrative)) assertHumanSafe(text, "case B scoped");
 });
@@ -969,7 +972,7 @@ test("CASE C: an unrecognised row says so honestly, invents no candidate, blames
 
   assert.equal(narrative.state, "UNKNOWN");
   assert.match(narrative.resource, /belum menemukan sumber daya yang dapat dibuktikan/);
-  assert.match(narrative.resource, /katalog/); // it still says WHY
+  assert.match(narrative.resource, /Item SIMPROK|Item belum dikenali/); // says WHY, without catalog jargon
   assert.equal(narrative.candidates.length, 0, "nothing may be invented");
   assert.match(narrative.unit, /belum dikenali/i);
   for (const text of visibleText(narrative)) assertHumanSafe(text, "case C");
@@ -1061,7 +1064,7 @@ test("a labelled blocking fact still gets its OWN sentence, not the generic one"
   });
   const reason = completionBlockReason(row, { resource: false, unit: true, busy: false });
   assert.ok(reason);
-  assert.match(reason, /belum ditemukan di katalog/);
+  assert.match(reason, /Item belum dikenali|Item SIMPROK/);
   assert.equal(reason.includes(HUMAN_FACT_FALLBACK), false);
 });
 
@@ -1165,13 +1168,32 @@ test("savedMetadataLines reports the server's values, and says so when a fact is
   // a regulation is the one source that genuinely states when it begins — so
   // both the form and this block call it that. A survey batch would read
   // "Tanggal / periode harga" in both places, because that is what was asked.
+  // BP-VISUAL-TRUTH-07 §18/§19 — the approved vocabulary ("Asal data",
+  // "Metode perolehan") and the Indonesian calendar order. The FACTS are
+  // unchanged; only the words a person reads them under.
   assert.deepEqual(lines, [
-    "Asal sumber: Pemerintah",
+    "Asal data: Pemerintah",
     "Nama sumber: belum diisi",
-    "Jenis sumber: Regulasi",
-    "Mulai berlaku menurut sumber: 2024-01-01",
+    "Metode perolehan: Regulasi",
+    "Mulai berlaku menurut sumber: 01/01/2024",
     "Wilayah: Kota Ambon",
   ]);
+});
+
+test("BP-VISUAL-TRUTH-07 §7: the workbook's price column is a line of its own, never folded into Wilayah", () => {
+  const lines = savedMetadataLines(
+    baseBatch({
+      regionId: "region-01",
+      region: {
+        id: "region-01",
+        code: "8171030",
+        name: "Kecamatan Teluk Ambon Baguala, Kota Ambon",
+      },
+      sourceRegionScopeLabel: "TELUK AMBON",
+    }),
+  );
+  assert.ok(lines.includes("Wilayah: Kecamatan Teluk Ambon Baguala, Kota Ambon"));
+  assert.ok(lines.includes("Kolom harga pada berkas: TELUK AMBON"));
 });
 
 test("savedMetadataLines never leaves an unset fact looking like a value", () => {
@@ -1217,7 +1239,7 @@ test("a metadata-save failure names its own cause instead of guessing at the bat
 test("the server's own named refusal is what the person reads", () => {
   assert.match(
     metadataSaveFailureMessage(409, JSON.stringify({ message: "BATCH_VERSION_STALE" })),
-    /sudah berubah sejak halaman dimuat/,
+    /telah berubah|sudah berubah/,
   );
   assert.match(
     metadataSaveFailureMessage(409, JSON.stringify({ message: "BATCH_NOT_MUTABLE" })),
@@ -1298,24 +1320,24 @@ test("a row failure always names the row and never claims the decision was saved
 test("a resource candidate reads as words, not as an enum", () => {
   assert.equal(
     resourceOptionLabel({ code: "SMN-01", name: "SEMEN PC", type: "MATERIAL", baseUnit: "Zak" }),
-    "SMN-01 — SEMEN PC — Bahan — Zak",
+    "SEMEN PC — Bahan • Zak • SMN-01",
   );
-  assert.match(
+  assert.equal(
     resourceOptionLabel({ code: null, name: "Pekerja", type: "LABOR", baseUnit: "OH" }),
-    /^Tanpa kode — Pekerja — Upah — OH$/,
+    "Pekerja — Tenaga kerja • OH • Kode tidak tersedia",
   );
 });
 
 test("a unit candidate reads as words, and keeps every fact that distinguishes it", () => {
   const label = unitOptionLabel({
     code: "M3",
-    displayName: "Meter Kubik",
+    displayName: "Cubic metre",
     symbol: "m³",
     dimension: "VOLUME",
     kind: "CANONICAL",
   });
-  assert.equal(label, "M3 — Meter Kubik — m³ — Volume — satuan dasar");
-  assert.doesNotMatch(label, /[A-Z]{3,}/);
+  assert.equal(label, "M3 — meter kubik (m³) — Volume — satuan dasar");
+  assert.doesNotMatch(label, /Cubic/i);
 });
 
 test("every unit dimension and kind has a word — none falls through to its enum", () => {

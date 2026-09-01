@@ -71,3 +71,12 @@ test("UX-3 the handler never searches history or recomputes an existing batch", 
   assert.match(handler, /reimportActionPath\(action, relation\)/);
   assert.doesNotMatch(handler, /findOwned|sourceSha256|siblings/);
 });
+
+test("BP-KDN-01 the KDN mapping question is non-blocking and never fail-stops price import", () => {
+  assert.match(page, /kdnMappingQuestionOf/);
+  assert.match(page, /selectedKdnColumn/);
+  const handlerStart = body.indexOf("const handleAnswer");
+  const handler = body.slice(handlerStart, body.indexOf("const handleSaveMetadata"));
+  assert.match(handler, /key === 'selectedKdnColumn' && value === 'none'/);
+  assert.match(handler, /setQuestion\(null\)/);
+});

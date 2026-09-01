@@ -67,8 +67,8 @@ test("G-5 the ungated Sidebar gains no gated entry", () => {
 
 test("G-6 the door names the room in ordinary words, never the mechanism", () => {
   const body = renderable(explorer);
-  assert.match(body, /Pengajuan Basic Price/);
-  assert.match(body, /Siap Diterbitkan/);
+  assert.match(body, /Pengajuan harga/);
+  assert.match(body, /Siap diterbitkan/i);
   // No implementation vocabulary on a door an ordinary person can see.
   assert.doesNotMatch(body, /PriceSubmission|verificationStatus|assetScope|slaState/);
 });

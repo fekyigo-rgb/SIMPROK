@@ -7,13 +7,26 @@
 import { apiFetch } from '../utils/apiClient';
 import { buildExplorerQueryParams } from '../utils/basicPriceExplorerDisplay';
 import type {
+  BasicPriceCorrectionEntry,
+  BasicPriceCorrectionHistory,
+  BasicPriceDetail,
+  BasicPriceEvidenceFacts,
   BasicPriceExplorerItem,
   ExplorerFilters,
   ExplorerPageMeta,
   RegionLookupItem,
 } from '../utils/basicPriceExplorerDisplay';
 
-export type { BasicPriceExplorerItem, ExplorerFilters, ExplorerPageMeta, RegionLookupItem };
+export type {
+  BasicPriceCorrectionEntry,
+  BasicPriceCorrectionHistory,
+  BasicPriceDetail,
+  BasicPriceEvidenceFacts,
+  BasicPriceExplorerItem,
+  ExplorerFilters,
+  ExplorerPageMeta,
+  RegionLookupItem,
+};
 
 /** Carries the HTTP status so the page can render an honest FORBIDDEN/INVALID_FILTER/SERVER_ERROR state. */
 export class BasicPriceExplorerError extends Error {
@@ -49,6 +62,29 @@ export const fetchBasicPriceExplorer = (
   signal?: AbortSignal,
 ): Promise<ExplorerPage> =>
   requestJson<ExplorerPage>(withQuery('/basic-prices', buildExplorerQueryParams(filters)), { signal });
+
+/**
+ * BP-UX-FINAL-01C — the projected detail + real price history for ONE price.
+ *
+ * ON DEMAND ONLY. This is called when a person opens the freshness layer or the
+ * Detail panel — never once per Explorer row. The list stays exactly one
+ * paginated request; fetching a history for twenty rows nobody opened would be
+ * an N+1 paid for on every page load.
+ *
+ * A SEPARATE ROUTE FROM `GET /basic-prices/:id`, deliberately: that one still
+ * returns a raw entity because twelve end-to-end assertions read `status`,
+ * `verificationStatus` and `assetScope` straight off it. This route is the
+ * browser's door — explicit allow-listed projection, no internal columns, no
+ * foreign identifiers.
+ */
+export const fetchBasicPriceDetail = (
+  basicPriceId: string,
+  signal?: AbortSignal,
+): Promise<BasicPriceDetail> =>
+  requestJson<BasicPriceDetail>(
+    `/basic-prices/${encodeURIComponent(basicPriceId)}/detail`,
+    { signal },
+  );
 
 interface LookupPage<T> {
   items: T[];

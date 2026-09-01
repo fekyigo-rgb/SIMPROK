@@ -19,12 +19,16 @@ import {
   type IntakeAnswerKey,
   type IntakeQuestionModel,
 } from '../components/basic-price/IntakeQuestion';
+import { kdnMappingQuestionOf } from '../components/basic-price/kdnMappingQuestion';
+import { BasicPriceJourneyStepper } from '../components/basic-price/BasicPriceJourneyStepper';
 import {
   batchStatusLabel,
   formatBatchProgress,
   metadataGateView,
   metadataSaveFailureMessage,
+  regionScopeNoticeView,
   savedMetadataLines,
+  TEMPORAL_HELP_TRIGGER,
   effectiveDateCopy,
   reverificationIsOffered,
   REVERIFICATION_NOT_NEEDED_NOTE,
@@ -44,6 +48,7 @@ import {
 import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
 import { RegionSearchSelect } from '../components/basic-price/RegionSearchSelect';
 import type { RegionLookupItem } from '../api/basicPriceWorkflow';
+import '../styles/basicPrice.css';
 
 /**
  * RM-02 Basic Price import — upload -> preview -> confirm metadata -> hand
@@ -58,6 +63,21 @@ import type { RegionLookupItem } from '../api/basicPriceWorkflow';
  * "save, reload, reopen, the values are still there" could not be shown through
  * the product at all — and a batch whose region or source was missing could be
  * discovered only in the review room, which had no way back to fix it.
+ *
+ * BP-UX-FINAL-01 §12/§13/§14 — WHAT THIS SLICE CHANGED, AND WHAT IT DID NOT.
+ *
+ * CHANGED: the room now opens by answering the two questions a person arrives
+ * with — WHAT DO I DO (choose a file) and WHAT HAPPENS NEXT (SIMPROK reads it,
+ * then asks for the context it cannot infer) — and it carries the shared
+ * journey stepper, so the batch's position in the wider Basic Price life is
+ * visible instead of being something you had to already know. The twelve
+ * metadata inputs are grouped into one compact "Konteks Sumber" section rather
+ * than a wall of full-width fields.
+ *
+ * NOT CHANGED: the intake engine, the fingerprint, the re-import semantics, the
+ * metadata gate, the requiredness law, the temporal question, or which of the
+ * two doors may open. Every verdict on this page is still the server's, read
+ * through `metadataGateView` and `reimportDecisionView` exactly as before.
  */
 export function BasicPriceImportPage() {
   const navigate = useNavigate();
@@ -132,6 +152,7 @@ export function BasicPriceImportPage() {
         const existing = await getBasicPriceImportBatch(reopenBatchId);
         if (cancelled) return;
         setBatch(existing);
+        setQuestion(kdnMappingQuestionOf(existing.kdnMapping));
         setMetadata({
           regionId: existing.regionId ?? undefined,
           effectiveDate: existing.effectiveDate ? existing.effectiveDate.slice(0, 10) : undefined,
@@ -167,10 +188,9 @@ export function BasicPriceImportPage() {
    * USI-01 — reads a source, and asks at most one question at a time.
    *
    * NOTE WHAT IS NOT SENT: a sheet name. The previous version pinned every
-   * upload to the literal sheet "HARGA SATUAN UPAH DAN BAHAN", so any workbook
-   * organized differently was rejected before it was ever read — the exact
-   * exact-sheet-name requirement §18 forbids. SIMPROK now finds the table by
-   * evidence, and only asks when a file genuinely proves more than one reading.
+   * upload to one literal sheet name, so any workbook organized differently was
+   * rejected before it was ever read. SIMPROK now finds the table by evidence,
+   * and only asks when a file genuinely proves more than one reading.
    */
   const readSource = async (
     file: File,
@@ -191,7 +211,7 @@ export function BasicPriceImportPage() {
     try {
       const result = await previewBasicPriceImport(file, answers, context);
       setBatch(result);
-      setQuestion(null);
+      setQuestion(kdnMappingQuestionOf(result.kdnMapping));
       const decision = reimportDecisionView(result.reimport);
       setStatusMessage(
         decision
@@ -250,16 +270,58 @@ export function BasicPriceImportPage() {
 
   const handleAnswer = async (key: IntakeAnswerKey, value: string) => {
     if (!selectedFile) return;
-    const isColumn = key === 'selectedNameColumn' || key === 'selectedUnitColumn';
+    if (key === 'selectedKdnColumn' && value === 'none') {
+      setQuestion(null);
+      return;
+    }
+    const isColumn =
+      key === 'selectedNameColumn' ||
+      key === 'selectedUnitColumn' ||
+      key === 'selectedKdnColumn';
     const answers = { ...selection, [key]: isColumn ? Number(value) : value };
     setSelection(answers);
     await readSource(selectedFile, answers);
   };
 
+  /**
+   * BP-REGION-TRUTH-07S §8 — the human's one decision about the source's own
+   * geography.
+   *
+   * It sends an INTENT, never a region: the server pairs the confirmation with
+   * the Wilayah this batch actually holds, so what is recorded is what was
+   * true when the person decided. Refused while the form is dirty for the same
+   * reason `Simpan` is — confirming a scope against an unsaved region would
+   * confirm it against something the database has never seen.
+   */
+  const handleConfirmRegionScope = async () => {
+    if (!batch) return;
+    setIsBusy(true);
+    setStatusMessage('Mencatat peninjauan wilayah...');
+    try {
+      const updated = await updateBasicPriceImportBatch(batch.batchId, batch.version, {
+        confirmRegionScopeCompatibility: true,
+      });
+      setBatch(updated);
+      setRegion(updated.region ?? null);
+      setStatusMessage('Peninjauan wilayah tercatat.');
+    } catch (error) {
+      // The SAME vocabulary the metadata save uses. This travels through the
+      // same endpoint and can fail for the same named reasons, so it must not
+      // grow a second, vaguer explanation of its own.
+      setStatusMessage(
+        error instanceof ImportRequestError
+          ? metadataSaveFailureMessage(error.httpStatus, error.detail)
+          : 'Peninjauan tidak sampai ke SIMPROK. Periksa koneksi lalu coba lagi. Tidak ada yang tersimpan.',
+      );
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleSaveMetadata = async () => {
     if (!batch) return;
     setIsBusy(true);
-    setStatusMessage('Menyimpan metadata batch...');
+    setStatusMessage('Menyimpan konteks sumber...');
     try {
       const updated = await updateBasicPriceImportBatch(batch.batchId, batch.version, metadata);
       setBatch(updated);
@@ -270,7 +332,7 @@ export function BasicPriceImportPage() {
       // ONLY A SUCCESSFUL SAVE CLEARS IT. The catch below deliberately leaves
       // the form dirty, so a failed save cannot open the review door.
       setIsMetadataDirty(false);
-      setStatusMessage('Metadata batch tersimpan.');
+      setStatusMessage('Konteks sumber tersimpan.');
     } catch (error) {
       // NAMED, NOT GUESSED. The old line told every failure that the batch
       // "mungkin sudah berubah" — including an expired session and a missing
@@ -289,6 +351,9 @@ export function BasicPriceImportPage() {
   // WHAT THE TWO DOORS MAY OFFER. The requiredness law is the server's; this
   // combines its verdict with the one fact only the browser holds.
   const metadataGate = metadataGateView(batch, metadata, isMetadataDirty, isBusy);
+  // BP-REGION-TRUTH-07S — null for every source that claimed no geography, and
+  // for every pair already reconciled. The server owns that verdict.
+  const regionScopeNotice = batch ? regionScopeNoticeView(batch) : null;
   const reimportView = reimportDecisionView(batch?.reimport);
   /**
    * A const, so the null check below still holds inside the click handler it
@@ -320,236 +385,308 @@ export function BasicPriceImportPage() {
   };
 
   return (
-    <div className="simprok-rab-workspace">
-      <div className="simprok-rab-focus-nav" aria-label="Navigasi Impor Basic Price">
-        <button onClick={() => navigate('/')} title="Kembali ke Beranda" aria-label="Kembali ke Beranda">
-          <ArrowLeft size={17} /> Kembali
+    <div className="bp-room">
+      {/*
+        BACK TO THE BASIC PRICE ROOM, NOT TO THE DASHBOARD (§19). This used to
+        land on `/`, which meant leaving the import flow dropped a person two
+        rooms away from where they had been working. The Explorer is the room
+        this journey starts and ends in.
+      */}
+      <div className="bp-head__doors" aria-label="Navigasi Impor Basic Price">
+        <button
+          type="button"
+          className="bp-btn bp-btn--sm"
+          onClick={() => navigate('/basic-price')}
+          title="Kembali ke daftar Basic Price"
+          aria-label="Kembali ke daftar Basic Price"
+        >
+          <ArrowLeft size={14} /> Basic Price
         </button>
       </div>
 
-      <header className="simprok-rab-workspace__header">
+      <header className="bp-head">
         <div>
-          <div className="simprok-rab-workspace__eyebrow">SIMPROK / Basic Price / Impor</div>
-          <h1>Impor Basic Price</h1>
+          <div className="bp-head__crumb">SIMPROK / Basic Price / Impor</div>
+          <h1 className="bp-head__title">Impor / Tambah Harga</h1>
           {/*
             "sebelum diajukan" named no destination, in the one paragraph that
             introduces the whole flow — so the reader met the curation word
             before they met the curation door, and before the far more likely
             outcome, which is keeping the price for this workspace.
           */}
-          <p>Unggah workbook Basic Price (Upah, Bahan, Peralatan). SIMPROK membaca dan menghitung; setiap baris tetap menunggu keputusan manusia sebelum disimpan.</p>
+          <p className="bp-head__sub">
+            Unggah daftar harga (tenaga kerja, bahan, atau peralatan). SIMPROK
+            membaca dan menghitung; setiap baris tetap menunggu keputusan manusia
+            sebelum disimpan.
+          </p>
         </div>
-        <span className="simprok-rab-workspace__status">{statusMessage}</span>
+        <div className="bp-head__actions">
+          <input
+            ref={fileInputRef}
+            hidden
+            type="file"
+            accept=".xlsx,.csv"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void handleFileChosen(file);
+            }}
+          />
+          <button
+            type="button"
+            className="bp-btn bp-btn--primary"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isBusy}
+            aria-disabled={isBusy}
+            title="Pilih berkas daftar harga (XLSX atau CSV)"
+            aria-label="Pilih berkas daftar harga"
+          >
+            <FileInput size={14} /> {batch ? 'Pilih Berkas Lain' : 'Pilih Berkas Daftar Harga'}
+          </button>
+        </div>
       </header>
 
-      <section className="simprok-rab-toolbar" aria-label="Aksi Impor Basic Price">
-        <input
-          ref={fileInputRef}
-          hidden
-          type="file"
-          accept=".xlsx,.csv"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void handleFileChosen(file);
-          }}
-        />
-        <button onClick={() => fileInputRef.current?.click()} disabled={isBusy} title="Pilih berkas daftar harga (XLSX atau CSV)" aria-label="Pilih berkas daftar harga">
-          <FileInput size={17} /> Pilih Berkas Daftar Harga
-        </button>
-      </section>
+      {/*
+        WHERE THIS BATCH IS IN THE WHOLE JOURNEY (§12). A projection of the
+        batch's own fields — see `journeyView`. It states nothing the payload
+        does not prove, and it is the same bar the row-review room shows, so
+        crossing between the two rooms does not lose the thread.
+      */}
+      <BasicPriceJourneyStepper batch={batch} />
+
+      <p className="bp-note bp-note--info" aria-live="polite">
+        {statusMessage}
+      </p>
 
       {question ? (
         <IntakeQuestionPanel question={question} disabled={isBusy} onAnswer={(key, value) => void handleAnswer(key, value)} />
       ) : null}
 
       {reimportView ? (
-        <section className="simprok-rab-card" aria-label="Impor sebelumnya">
-          <strong>{reimportView.title}</strong>
+        <section className="bp-note bp-note--attention" aria-label="Impor sebelumnya">
+          <strong className="bp-section-title">{reimportView.title}</strong>
           <p>{reimportView.body}</p>
-          {reimportView.historyNote ? <p>{reimportView.historyNote}</p> : null}
+          {reimportView.historyNote ? <p className="bp-muted">{reimportView.historyNote}</p> : null}
           {reimportView.differenceNote ? (
-            <details>
+            <details className="bp-details">
               <summary>Lihat perbedaannya</summary>
               <p>{reimportView.differenceNote}</p>
             </details>
           ) : null}
-          <button
-            type="button"
-            onClick={() => handleReimportAction(reimportView.primary.action)}
-            disabled={isBusy}
-            style={{ marginTop: '12px' }}
-          >
-            {reimportView.primary.label}
-          </button>
-          {/*
-            NO SECOND BUTTON WHEN THERE IS NO SECOND BATCH. An exact replay has
-            one existing batch and one truthful thing to do with it, so the card
-            offers one action; choosing a different file is already the toolbar
-            above. An update names two batches and keeps both.
-          */}
-          {reimportSecondary ? (
+          <div className="bp-rowcard__actions">
             <button
               type="button"
-              onClick={() => handleReimportAction(reimportSecondary.action)}
+              className="bp-btn bp-btn--primary"
+              onClick={() => handleReimportAction(reimportView.primary.action)}
               disabled={isBusy}
-              style={{ marginTop: '12px', marginLeft: '8px' }}
+              aria-disabled={isBusy}
             >
-              {reimportSecondary.label}
+              {reimportView.primary.label}
             </button>
-          ) : null}
+            {/*
+              NO SECOND BUTTON WHEN THERE IS NO SECOND BATCH. An exact replay has
+              one existing batch and one truthful thing to do with it, so the card
+              offers one action; choosing a different file is already the header
+              above. An update names two batches and keeps both.
+            */}
+            {reimportSecondary ? (
+              <button
+                type="button"
+                className="bp-btn"
+                onClick={() => handleReimportAction(reimportSecondary.action)}
+                disabled={isBusy}
+                aria-disabled={isBusy}
+              >
+                {reimportSecondary.label}
+              </button>
+            ) : null}
+          </div>
         </section>
       ) : null}
 
       {batch && !reimportView ? (
-        <section className="simprok-rab-validation-alert simprok-rab-validation-alert--info" aria-label="Preview Impor Basic Price">
-          <strong>{selectedFile?.name} — {batchStatusLabel(batch.status)}</strong>
-          {usedExistingNotice ? <p aria-live="polite">{USED_EXISTING_CONFIRMATION}</p> : null}
-          <p>{formatBatchProgress(batch)}</p>
+        <section className="bp-detail" aria-label="Konteks Sumber Harga">
+          <div className="bp-detail__head">
+            <div>
+              <div className="bp-detail__name">{selectedFile?.name ?? 'Batch impor'}</div>
+              <div className="bp-detail__meta">
+                {batchStatusLabel(batch.status)} · {formatBatchProgress(batch)}
+              </div>
+            </div>
+          </div>
 
-          {/*
-            TWO QUESTIONS, BECAUSE THERE ARE TWO FACTS.
+          <div className="bp-tabpanel">
+            {usedExistingNotice ? <p aria-live="polite">{USED_EXISTING_CONFIRMATION}</p> : null}
 
-            "Jenis Sumber Harga" was briefly deleted from this form on the
-            reasoning that an origin implies exactly one type, so asking twice
-            was asking a question with one answer. That reasoning was wrong, and
-            Owner law says so in as many words
-            (BASIC-PRICE-MASTER-DECISION §10):
-
-                SOURCE_TYPE ≠ SOURCE_ORIGIN
-
-            "Asal Sumber" is WHO the price came from in the world. "Jenis
-            Sumber" is WHAT KIND OF STATEMENT the document is. A government
-            agency can publish a market survey; a supplier can circulate a
-            regulated tariff. Deleting the second question did not simplify the
-            form, it made those documents undescribable — and the server then
-            filled the gap with a guess.
-
-            Both are asked, both are stored verbatim, and neither is derived
-            from the other. "Tercatat di SIMPROK" below prints what was
-            actually stored, which is what makes persistence provable through
-            the product rather than only in the database.
-          */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: '12px', marginTop: '12px' }}>
-            <label>
-              Asal Sumber
-              <select value={metadata.sourceOrigin ?? ''} onChange={(event) => updateMetadataField('sourceOrigin', (event.target.value || undefined) as PriceSourceOrigin | undefined)}>
-                <option value="">— Belum dipilih —</option>
-                {SOURCE_ORIGIN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
-            <label>
-              Jenis Sumber Harga
-              <select value={metadata.sourceType ?? ''} onChange={(event) => updateMetadataField('sourceType', (event.target.value || undefined) as PriceSourceType | undefined)}>
-                <option value="">— Belum dipilih —</option>
-                {SOURCE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
             {/*
-              THE SAME REQUIRED DAY, ASKED IN THE WORDS THAT ARE TRUE HERE.
-
-              This read "Tanggal Berlaku" for every source that has ever
-              existed, and for most of the Owner's data that is a false claim: a
-              market survey does not BECOME effective on a day, it was OBSERVED
-              on one. Only a regulation genuinely states a start — which is why
-              that case keeps precisely that meaning, and may name a day months
-              ahead.
-
-              THE SERVER CHOOSES WHICH QUESTION, this file owns the words, and
-              nothing about the stored column or its requiredness moved. Before
-              a source type is chosen the neutral wording is shown, because a
-              sharper one would be a guess.
+              SIMPROK NEEDS CONTEXT, NOT JUST A NUMBER (§14) — said once, at the
+              top of the section that asks for it, instead of being inferred
+              from a grid of unexplained boxes.
             */}
-            <label>
-              {temporalCopy.label}
-              <input
-                type="date"
-                value={metadata.effectiveDate ?? ''}
-                aria-describedby="simprok-effective-date-help"
-                onChange={(event) => updateMetadataField('effectiveDate', event.target.value || undefined)}
-              />
-            </label>
-            <p id="simprok-effective-date-help" className="simprok-field-help">
-              {temporalCopy.help}
+            <p className="bp-field__help" style={{ marginBottom: '12px' }}>
+              SIMPROK sudah membaca angkanya. Yang belum diketahui adalah dari
+              mana harga ini berasal dan kapan berlaku — konteks itu tidak bisa
+              ditebak dari isi berkas.
             </p>
-            {/*
-              A SECOND, DIFFERENT DATE FACT — and it gets its own label for
-              exactly that reason.
 
-              "Tanggal Berlaku" above is the source's own effective-start fact.
-              This one is advice: when should somebody look at this price again.
-              One ambiguous date box carrying both meanings is how a hard
-              boundary and a recommendation get confused, and the two are not
-              interchangeable — only the first is enforced anywhere.
+            <div className="bp-filters" style={{ border: 'none', padding: 0 }}>
+              {/*
+                TWO QUESTIONS, BECAUSE THERE ARE TWO FACTS.
 
-              OPTIONAL, AND NEVER FILLED IN BY SIMPROK. There is no canonical
-              policy stating how long any source stays fresh, so an empty box
-              stays empty rather than being quietly populated with an invented
-              horizon.
-            */}
-            {/*
-              AND IT IS ONLY WORTH ASKING FOR DATA THAT AGES IN SILENCE.
+                "Jenis Sumber Harga" was briefly deleted from this form on the
+                reasoning that an origin implies exactly one type, so asking twice
+                was asking a question with one answer. That reasoning was wrong, and
+                Owner law says so in as many words
+                (BASIC-PRICE-MASTER-DECISION §10):
 
-              An uploaded workbook is a snapshot: nothing will ever update it,
-              so "check this again around here" genuinely helps. A live
-              system-to-system feed is the opposite — its freshness is a fact
-              about actual synchronisation, and asking a person to PREDICT when
-              a machine-updated price goes stale manufactures precision nobody
-              has. The reason is said out loud rather than left as a control
-              that quietly vanished.
+                    SOURCE_TYPE != SOURCE_ORIGIN
 
-              THE INGESTION CHANNEL DECIDES, NEVER THE SOURCE FAMILY. A
-              supplier's price list emailed as a spreadsheet and uploaded by
-              hand is still a snapshot, however "supplier" the source is.
-            */}
-            {reverificationOffered ? (
-              <>
-                <label>
-                  {REVERIFICATION_LABEL} (opsional)
+                "Asal Sumber" is WHO the price came from in the world. "Jenis
+                Sumber" is WHAT KIND OF STATEMENT the document is. A government
+                agency can publish a market survey; a supplier can circulate a
+                regulated tariff. Deleting the second question did not simplify the
+                form, it made those documents undescribable — and the server then
+                filled the gap with a guess.
+              */}
+              <div className="bp-field">
+                <label className="bp-field__label" htmlFor="bp-src-origin">Asal data</label>
+                <select
+                  id="bp-src-origin"
+                  className="bp-select"
+                  value={metadata.sourceOrigin ?? ''}
+                  onChange={(event) => updateMetadataField('sourceOrigin', (event.target.value || undefined) as PriceSourceOrigin | undefined)}
+                >
+                  <option value="">— Belum dipilih —</option>
+                  {SOURCE_ORIGIN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+
+              <div className="bp-field">
+                <label className="bp-field__label" htmlFor="bp-src-type">Metode perolehan</label>
+                <select
+                  id="bp-src-type"
+                  className="bp-select"
+                  value={metadata.sourceType ?? ''}
+                  onChange={(event) => updateMetadataField('sourceType', (event.target.value || undefined) as PriceSourceType | undefined)}
+                >
+                  <option value="">— Belum dipilih —</option>
+                  {SOURCE_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+
+              {/*
+                WHO PUBLISHED THIS PRICE — the question nothing was asking.
+
+                The batch has carried sourceOrganizationName and sourceVendorName
+                since RM-02, and the Basic Price Explorer reads them for its
+                SUMBER column — but NO control anywhere ever set either. So every
+                imported price told the Owner "Sumber tidak tersedia", not because
+                the projection dropped it, but because nobody had ever been asked.
+              */}
+              <div className="bp-field">
+                <label className="bp-field__label" htmlFor="bp-src-org">
+                  Nama sumber
+                </label>
+                <input
+                  id="bp-src-org"
+                  className="bp-input"
+                  type="text"
+                  value={metadata.sourceOrganizationName ?? ''}
+                  placeholder="mis. Dinas PUPR Kota Ambon"
+                  onChange={(event) =>
+                    updateMetadataField('sourceOrganizationName', event.target.value || undefined)
+                  }
+                />
+              </div>
+
+              {/*
+                THE SAME REQUIRED DAY, ASKED IN THE WORDS THAT ARE TRUE HERE.
+
+                This read "Tanggal Berlaku" for every source that has ever
+                existed, and for most of the Owner's data that is a false claim: a
+                market survey does not BECOME effective on a day, it was OBSERVED
+                on one. Only a regulation genuinely states a start — which is why
+                that case keeps precisely that meaning, and may name a day months
+                ahead.
+
+                THE SERVER CHOOSES WHICH QUESTION, this file owns the words, and
+                nothing about the stored column or its requiredness moved.
+              */}
+              <div className="bp-field bp-field--date">
+                <label className="bp-field__label" htmlFor="bp-src-date">{temporalCopy.label}</label>
+                <input
+                  id="bp-src-date"
+                  className="bp-input"
+                  type="date"
+                  value={metadata.effectiveDate ?? ''}
+                  aria-describedby="simprok-effective-date-help"
+                  onChange={(event) => updateMetadataField('effectiveDate', event.target.value || undefined)}
+                />
+                {/*
+                  BP-VISUAL-TRUTH-07 §20/§21 — THE EXPLANATION STAYS; IT STOPS
+                  STANDING PERMANENTLY OPEN.
+
+                  This paragraph is the longest text in the form and it sat
+                  under a single date box, making one field roughly three times
+                  the height of its neighbours and pushing the rest of Konteks
+                  Sumber down the page. §20 forbids deleting truthful
+                  explanation to make a screen sparse — so it is not deleted, it
+                  moves behind the SAME disclosure pattern the reverification
+                  field two blocks down already uses. No new component, no new
+                  vocabulary.
+
+                  ACCESSIBILITY IS UNCHANGED. `<details>` keeps its content in
+                  the DOM whether or not it is open, so the `aria-describedby`
+                  above still resolves to this text and a screen-reader user
+                  still hears the description with the field.
+                */}
+                <details className="bp-details">
+                  <summary>{TEMPORAL_HELP_TRIGGER}</summary>
+                  <span id="simprok-effective-date-help" className="bp-field__help">
+                    {temporalCopy.help}
+                  </span>
+                </details>
+              </div>
+
+              {/*
+                A SECOND, DIFFERENT DATE FACT — and it gets its own label for
+                exactly that reason. "Tanggal Berlaku" above is the source's own
+                effective-start fact. This one is advice: when should somebody
+                look at this price again. One ambiguous date box carrying both
+                meanings is how a hard boundary and a recommendation get
+                confused, and only the first is enforced anywhere.
+
+                AND IT IS ONLY WORTH ASKING FOR DATA THAT AGES IN SILENCE. An
+                uploaded workbook is a snapshot; a live system-to-system feed
+                reports its own freshness, and asking a person to PREDICT when a
+                machine-updated price goes stale manufactures precision nobody
+                has. The reason is said out loud rather than left as a control
+                that quietly vanished.
+              */}
+              {reverificationOffered ? (
+                <div className="bp-field">
+                  <label className="bp-field__label" htmlFor="bp-src-review">
+                    {REVERIFICATION_LABEL} (opsional)
+                  </label>
                   <input
+                    id="bp-src-review"
+                    className="bp-input"
                     type="date"
                     value={metadata.reviewDate ?? ''}
                     onChange={(event) =>
                       updateMetadataField('reviewDate', event.target.value || undefined)
                     }
                   />
-                </label>
-                <details>
-                  <summary>{REVERIFICATION_HELP_TRIGGER}</summary>
-                  {REVERIFICATION_HELP_TEXT.map((paragraph) => (
-                    <p key={paragraph}>{paragraph}</p>
-                  ))}
-                </details>
-              </>
-            ) : (
-              <p className="simprok-field-help">{REVERIFICATION_NOT_NEEDED_NOTE}</p>
-            )}
-            {/*
-              WHO PUBLISHED THIS PRICE — the question nothing was asking.
+                  <details className="bp-details">
+                    <summary>{REVERIFICATION_HELP_TRIGGER}</summary>
+                    {REVERIFICATION_HELP_TEXT.map((paragraph) => (
+                      <p key={paragraph}>{paragraph}</p>
+                    ))}
+                  </details>
+                </div>
+              ) : (
+                <p className="bp-field__help">{REVERIFICATION_NOT_NEEDED_NOTE}</p>
+              )}
 
-              The batch has carried sourceOrganizationName and sourceVendorName
-              since RM-02, and the Basic Price Explorer reads them for its
-              source line — but NO control anywhere ever set either. So every
-              imported price told the Owner "Sumber tidak tersedia", not because
-              the projection dropped it, but because nobody had ever been asked.
-
-              One field, because a person has one answer: the institution that
-              issued the list, or the shop that quoted it. SIMPROK does not
-              guess it from the origin, and leaving it blank stays honest —
-              the Explorer keeps saying the source is unavailable rather than
-              inventing a name.
-            */}
-            <label>
-              Nama Sumber (instansi penerbit / pemasok)
-              <input
-                type="text"
-                value={metadata.sourceOrganizationName ?? ''}
-                placeholder="mis. Dinas PUPR Kota Ambon"
-                onChange={(event) =>
-                  updateMetadataField('sourceOrganizationName', event.target.value || undefined)
-                }
-              />
-            </label>
-            <div>
               <RegionSearchSelect
                 selected={region}
                 disabled={isBusy}
@@ -559,37 +696,82 @@ export function BasicPriceImportPage() {
                 }}
               />
             </div>
-            <div aria-label="Yang sudah tersimpan di SIMPROK">
-              Tercatat di SIMPROK
-              {savedMetadataLines(batch).map((line) => (
-                <p key={line}>{line}</p>
-              ))}
+
+            {/*
+              BP-REGION-TRUTH-07S §8 — TWO ANSWERS, AND THE ONE SENTENCE BETWEEN
+              THEM.
+
+              Placed directly under the Wilayah selector because that is the
+              answer being questioned, and shown ONLY when the server says the
+              pair is unproven — which it says only for a source that wrote a
+              region word of its own. A trade-term matrix ("GROSIR", "ECERAN")
+              reaches this line and renders nothing.
+
+              The button states the human's decision; it never sends a region of
+              its own. The server records WHICH Wilayah was confirmed, from the
+              same save, so this form cannot confirm a scope against a place it
+              is not actually saving.
+            */}
+            {regionScopeNotice ? (
+              <div className="bp-field" role="group" aria-label="Peninjauan wilayah sumber">
+                <p className="bp-field__help">{regionScopeNotice.message}</p>
+                <details className="bp-details">
+                  <summary>Mengapa?</summary>
+                  <p>{regionScopeNotice.why}</p>
+                </details>
+                <div className="bp-rowcard__actions">
+                  <button
+                    type="button"
+                    className="bp-btn"
+                    onClick={() => void handleConfirmRegionScope()}
+                    disabled={isBusy || isMetadataDirty}
+                    aria-disabled={isBusy || isMetadataDirty}
+                  >
+                    {regionScopeNotice.actionLabel}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="bp-pop__section">
+              <span className="bp-pop__label">Tercatat di SIMPROK</span>
+              <div className="bp-stack bp-stack--tight" aria-label="Yang sudah tersimpan di SIMPROK">
+                {savedMetadataLines(batch).map((line) => (
+                  <span key={line} className="bp-field__help">{line}</span>
+                ))}
+              </div>
+            </div>
+
+            {/*
+              THE DOOR IS THE SERVER'S VERDICT, NOT THIS FORM'S OPINION.
+              `metadataGateView` reads the batch's own `reviewGate` and combines
+              it with the one fact only the browser knows — whether this form has
+              been edited since the last successful save.
+            */}
+            <p className="bp-field__help" aria-live="polite" style={{ marginTop: '12px' }}>
+              {metadataGate.message}
+            </p>
+            <div className="bp-rowcard__actions">
+              <button
+                type="button"
+                className="bp-btn"
+                onClick={() => void handleSaveMetadata()}
+                disabled={!metadataGate.saveEnabled}
+                aria-disabled={!metadataGate.saveEnabled}
+              >
+                {isBusy ? 'Menyimpan...' : 'Simpan Konteks Sumber'}
+              </button>
+              <button
+                type="button"
+                className="bp-btn bp-btn--primary"
+                onClick={() => navigate(`/basic-price/import/${batch.batchId}/review`)}
+                disabled={!metadataGate.reviewEnabled}
+                aria-disabled={!metadataGate.reviewEnabled}
+              >
+                Lanjut ke Peninjauan Baris
+              </button>
             </div>
           </div>
-
-          {/*
-            THE DOOR IS THE SERVER'S VERDICT, NOT THIS FORM'S OPINION.
-            `metadataGateView` reads the batch's own `reviewGate` and combines
-            it with the one fact only the browser knows — whether this form has
-            been edited since the last successful save.
-          */}
-          <p aria-live="polite" style={{ marginTop: '12px' }}>
-            {metadataGate.message}
-          </p>
-          <button
-            onClick={() => void handleSaveMetadata()}
-            disabled={!metadataGate.saveEnabled}
-            style={{ marginTop: '12px' }}
-          >
-            {isBusy ? 'Menyimpan...' : 'Simpan Metadata'}
-          </button>
-          <button
-            onClick={() => navigate(`/basic-price/import/${batch.batchId}/review`)}
-            disabled={!metadataGate.reviewEnabled}
-            style={{ marginTop: '12px', marginLeft: '8px' }}
-          >
-            Lanjut ke Peninjauan Baris
-          </button>
         </section>
       ) : null}
     </div>

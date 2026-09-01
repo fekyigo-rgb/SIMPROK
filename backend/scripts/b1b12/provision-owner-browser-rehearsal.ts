@@ -50,6 +50,7 @@ import {
   assertB1B12RehearsalTarget,
   assertLiveB1B12RehearsalTarget,
 } from '../../src/rehearsal/b1b12-rehearsal-target';
+import { resolveB1B12RuntimePaths } from '../../src/rehearsal/b1b12-runtime-paths';
 import {
   GOLDEN_FIXTURE_ID,
   GOLDEN_FIXTURE_LABELS,
@@ -62,7 +63,7 @@ import {
   provisionB1B12Section,
 } from '../../test/fixtures/b1b12-section-provisioner';
 
-const SECRETS_DIR = 'C:/Users/asus/SIMPROK-RUNTIME/secrets';
+const { secretsDirectory: SECRETS_DIR } = resolveB1B12RuntimePaths();
 const LOGIN_FILE = `${SECRETS_DIR}/b1b12.owner-login.env`;
 
 async function main(): Promise<void> {
@@ -97,7 +98,9 @@ async function main(): Promise<void> {
     `REHEARSAL TARGET (live)     host=${live.host} port=${live.port} db=${live.databaseName}`,
   );
 
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  const moduleRef = await Test.createTestingModule({
+    imports: [AppModule],
+  }).compile();
   const app = moduleRef.createNestApplication();
   await app.init();
 

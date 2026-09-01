@@ -13,6 +13,7 @@ import {
 } from '../api/basicPriceWorkflow';
 import { ReviewerSearchSelect } from '../components/basic-price/ReviewerSearchSelect';
 import { computeReviewActionViewModel } from '../utils/reviewActionViewModel';
+import '../styles/basicPrice.css';
 import {
   acceptNeedsExplicitGeneralRegion,
   banner,
@@ -120,10 +121,13 @@ export function BasicPriceReviewDetailPage() {
 
   if (loadState === 'loading' && !detail) {
     return (
-      <div className="simprok-rab-workspace">
-        <header className="simprok-rab-workspace__header">
-          <h1>Detail Review Harga Dasar</h1>
-          <p role="status">Memuat detail review...</p>
+      <div className="bp-room">
+        <header className="bp-head">
+          <div>
+            <div className="bp-head__crumb">SIMPROK / Basic Price / Pengajuan</div>
+            <h1 className="bp-head__title">Detail Pengajuan Harga</h1>
+            <p className="bp-head__sub" role="status">Memuat detail review...</p>
+          </div>
         </header>
       </div>
     );
@@ -131,13 +135,16 @@ export function BasicPriceReviewDetailPage() {
 
   if (loadState === 'error' && !detail) {
     return (
-      <div className="simprok-rab-workspace">
-        <div className="simprok-rab-focus-nav">
-          <button onClick={() => navigate('/basic-price/reviews')}><ArrowLeft size={17} /> Kembali ke Antrean</button>
+      <div className="bp-room">
+        <div className="bp-head__doors">
+          <button type="button" className="bp-btn bp-btn--sm" onClick={() => navigate('/basic-price/reviews')}><ArrowLeft size={14} /> Antrean Pengajuan</button>
         </div>
-        <header className="simprok-rab-workspace__header">
-          <h1>Detail Review Harga Dasar</h1>
-          <p role="alert">{loadError}</p>
+        <header className="bp-head">
+          <div>
+            <div className="bp-head__crumb">SIMPROK / Basic Price / Pengajuan</div>
+            <h1 className="bp-head__title">Detail Pengajuan Harga</h1>
+            <p className="bp-note bp-note--danger" role="alert">{loadError}</p>
+          </div>
         </header>
       </div>
     );
@@ -156,28 +163,31 @@ export function BasicPriceReviewDetailPage() {
   const needsGeneralRegion = acceptNeedsExplicitGeneralRegion(detail.region);
 
   return (
-    <div className="simprok-rab-workspace">
-      <div className="simprok-rab-focus-nav" aria-label="Navigasi Detail Review">
-        <button onClick={() => navigate('/basic-price/reviews')} title="Kembali ke Antrean">
-          <ArrowLeft size={17} /> Kembali ke Antrean
+    <div className="bp-room">
+      <div className="bp-head__doors" aria-label="Navigasi Detail Review">
+        <button type="button" className="bp-btn bp-btn--sm" onClick={() => navigate('/basic-price/reviews')} title="Kembali ke antrean pengajuan">
+          <ArrowLeft size={14} /> Antrean Pengajuan
+        </button>
+        <button type="button" className="bp-btn bp-btn--link" onClick={() => navigate('/basic-price')} title="Kembali ke daftar Basic Price">
+          Basic Price →
         </button>
       </div>
 
-      <header className="simprok-rab-workspace__header">
+      <header className="bp-head">
         <div>
-          <div className="simprok-rab-workspace__eyebrow">SIMPROK / Basic Price / Review</div>
-          <h1>{resourceLabel(detail.resource)}</h1>
-          <p>
+          <div className="bp-head__crumb">SIMPROK / Basic Price / Pengajuan</div>
+          <h1 className="bp-head__title">{resourceLabel(detail.resource)}</h1>
+          <p className="bp-head__sub">
             Wilayah: {regionLabel(detail.region)} · Harga saat ini: {formatPrice(detail.currentPrice)}
           </p>
-          <p>
-            Status submission: {submissionStatusLabel(detail.submissionStatus)} · SLA: {slaStateLabel(detail.slaState)} ·
+          <p className="bp-head__sub">
+            Keputusan: {submissionStatusLabel(detail.submissionStatus)} · SLA: {slaStateLabel(detail.slaState)} ·
             Reviewer: {reviewerLabel(detail.assignedReviewer)}
           </p>
         </div>
         {status.kind !== 'idle' ? (
           <span
-            className="simprok-rab-workspace__status"
+            className={`bp-note ${status.kind === 'error' ? 'bp-note--danger' : status.kind === 'success' ? 'bp-note--ok' : 'bp-note--info'}`}
             role={status.kind === 'error' ? 'alert' : 'status'}
           >
             {status.text}
@@ -186,19 +196,29 @@ export function BasicPriceReviewDetailPage() {
       </header>
 
       {reviewAction.showReadOnlyMessage ? (
-        <p className="simprok-rab-card">
+        <p className="bp-note">
           Anda memiliki akses melihat, tetapi tidak memiliki kewenangan memutuskan review ini.
         </p>
       ) : null}
 
+      {/*
+        §16 — THE HUMAN-DECISION BOUNDARY, NAMED.
+
+        Everything above this line is what SIMPROK and the importer produced.
+        Everything below it is a governed act by THIS person, under
+        BASIC_PRICE_VERIFY, recorded against their name. The page used to run
+        the two together, so a curator met three action cards with no sentence
+        saying the decision was theirs to make.
+      */}
       {reviewAction.showActionArea ? (
         <>
+          <p className="bp-section-title">Keputusan Anda</p>
           {reviewAction.showAcceptAction ? (
             // Color Lock: Accept is a trusted/positive action, not an error —
             // uses the neutral engineering-blue-bordered card, never the
             // critical-red validation-alert style.
-            <section className="simprok-rab-card" aria-label="Terima harga">
-              <strong>Terima (verifikasi) harga</strong>
+            <section className="bp-note" aria-label="Terima harga">
+              <strong className="bp-section-title">Terima (verifikasi) harga</strong>
               {needsGeneralRegion ? (
                 <label>
                   <input
@@ -209,11 +229,14 @@ export function BasicPriceReviewDetailPage() {
                   Tidak ada wilayah — verifikasi sebagai harga umum (tanpa wilayah)
                 </label>
               ) : null}
-              <label>
-                Catatan (opsional)
-                <input type="text" value={acceptNote} onChange={(event) => setAcceptNote(event.target.value)} />
-              </label>
+              <div className="bp-field">
+                <label className="bp-field__label" htmlFor="bp-accept-note">Catatan (opsional)</label>
+                <input id="bp-accept-note" className="bp-input" type="text" value={acceptNote} onChange={(event) => setAcceptNote(event.target.value)} />
+              </div>
               <button
+                type="button"
+                className="bp-btn bp-btn--primary"
+                aria-disabled={busy || (needsGeneralRegion && !explicitGeneralRegion)}
                 disabled={busy || (needsGeneralRegion && !explicitGeneralRegion)}
                 onClick={() =>
                   void runAction(
@@ -230,13 +253,16 @@ export function BasicPriceReviewDetailPage() {
           {reviewAction.showRejectAction ? (
             // Color Lock: rejection is the one action Owner's lock explicitly
             // allows as critical-red — this is the only section that keeps it.
-            <section className="simprok-rab-validation-alert" aria-label="Tolak harga">
-              <strong>Tolak harga</strong>
-              <label>
-                Alasan penolakan (wajib)
-                <input type="text" value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} />
-              </label>
+            <section className="bp-note bp-note--danger" aria-label="Tolak harga">
+              <strong className="bp-section-title">Tolak harga</strong>
+              <div className="bp-field">
+                <label className="bp-field__label" htmlFor="bp-reject-note">Alasan penolakan (wajib)</label>
+                <input id="bp-reject-note" className="bp-input" type="text" value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} />
+              </div>
               <button
+                type="button"
+                className="bp-btn bp-btn--danger-quiet"
+                aria-disabled={busy || !canReject(rejectNote)}
                 disabled={busy || !canReject(rejectNote)}
                 onClick={() =>
                   void runAction(
@@ -252,16 +278,19 @@ export function BasicPriceReviewDetailPage() {
 
           {reviewAction.showReassignAction ? (
             // Color Lock: reassignment is neutral/informational, not an error.
-            <section className="simprok-rab-card" aria-label="Alihkan review">
-              <strong>Alihkan ke reviewer lain</strong>
+            <section className="bp-note" aria-label="Alihkan review">
+              <strong className="bp-section-title">Alihkan ke reviewer lain</strong>
               {reviewAction.showReviewerSelector ? (
                 <ReviewerSearchSelect selected={reassignTarget} disabled={busy} onSelect={setReassignTarget} />
               ) : null}
-              <label>
-                Catatan (opsional)
-                <input type="text" value={reassignNote} onChange={(event) => setReassignNote(event.target.value)} />
-              </label>
+              <div className="bp-field">
+                <label className="bp-field__label" htmlFor="bp-reassign-note">Catatan (opsional)</label>
+                <input id="bp-reassign-note" className="bp-input" type="text" value={reassignNote} onChange={(event) => setReassignNote(event.target.value)} />
+              </div>
               <button
+                type="button"
+                className="bp-btn"
+                aria-disabled={busy}
                 disabled={busy}
                 onClick={() =>
                   void runAction(
@@ -284,11 +313,11 @@ export function BasicPriceReviewDetailPage() {
       ) : null}
 
       {!actionable ? (
-        <p>Review ini sudah tidak dapat diubah ({slaStateLabel(detail.slaState)}).</p>
+        <p className="bp-note">Review ini sudah tidak dapat diubah ({slaStateLabel(detail.slaState)}).</p>
       ) : null}
 
-      <section aria-label="Riwayat keputusan" style={{ marginTop: '16px' }}>
-        <strong>Riwayat keputusan</strong>
+      <section aria-label="Riwayat keputusan">
+        <strong className="bp-section-title">Riwayat keputusan</strong>
         {detail.decisions.length === 0 ? (
           <p>Belum ada keputusan tercatat.</p>
         ) : (

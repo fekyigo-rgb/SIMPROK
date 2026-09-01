@@ -37,15 +37,21 @@ import {
   parseGovernedEnvFile,
 } from '../../src/rehearsal/b1b12-rehearsal-environment';
 import { parseRehearsalTargetFromUrl } from '../../src/rehearsal/b1b12-rehearsal-target';
+import { resolveB1B12RuntimePaths } from '../../src/rehearsal/b1b12-runtime-paths';
 
-const GOVERNED_ENV_FILE =
-  'C:/Users/asus/SIMPROK-RUNTIME/secrets/b1b12.backend.env';
+const {
+  backendEnvFile: GOVERNED_ENV_FILE,
+  rehearsalDatabaseLogFile: REHEARSAL_DATABASE_LOG_FILE,
+  rehearsalPgDataDirectory: REHEARSAL_PGDATA,
+} = resolveB1B12RuntimePaths();
 const BACKEND_ROOT = resolve(__dirname, '..', '..');
 const PG_CTL = 'C:\\Program Files\\PostgreSQL\\17\\bin\\pg_ctl.exe';
-const REHEARSAL_PGDATA =
-  'C:\\Users\\asus\\SIMPROK-RUNTIME\\rehearsal-rm03d1\\pgdata';
 
-function reachable(host: string, port: number, timeoutMs = 3000): Promise<boolean> {
+function reachable(
+  host: string,
+  port: number,
+  timeoutMs = 3000,
+): Promise<boolean> {
   return new Promise((resolveReachable) => {
     const socket = connect({ host, port });
     const finish = (result: boolean) => {
@@ -83,7 +89,7 @@ async function main(): Promise<void> {
     console.error(
       `STOP_REHEARSAL_DB_UNREACHABLE: nothing is listening on ${target.host}:${target.port}\n` +
         'Start the rehearsal cluster first:\n' +
-        `  & "${PG_CTL}" start -D "${REHEARSAL_PGDATA}" -l "C:\\Users\\asus\\SIMPROK-RUNTIME\\runtime-logs\\rehearsal-55433.log"`,
+        `  & "${PG_CTL}" start -D "${REHEARSAL_PGDATA}" -l "${REHEARSAL_DATABASE_LOG_FILE}"`,
     );
     process.exitCode = 1;
     return;

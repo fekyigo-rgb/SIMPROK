@@ -260,14 +260,14 @@ test("S-6. mixed: eight stored, five still actionable — never thirteen", () =>
   // AND EACH ROW SAYS ITS OWN TRUTH — this half of S-6 was itself the defect.
   //
   // It used to expect the five unsaved-but-PROVEN rows to read
-  // `Perlu ditinjau`, which is what the code did and what a reader would
+  // `Perlu konfirmasi`, which is what the code did and what a reader would
   // understand as "SIMPROK needs your attention". SIMPROK needed nothing: it
   // had proved both identity legs, the summary said so, and the button offered
   // to store them. The test was pinning the contradiction rather than catching
   // it. It is now the regression lock for the repair.
   assert.equal(rowStateLabel(rows[0]), "Tersimpan di ruang kerja");
   assert.equal(rowStateLabel(rows[8]), "Dikenali otomatis");
-  assert.notEqual(rowStateLabel(rows[8]), "Perlu ditinjau");
+  assert.notEqual(rowStateLabel(rows[8]), "Perlu konfirmasi");
 });
 
 /* ── §18 CURATION SEPARATION ─────────────────────────────────────────────── */
@@ -380,7 +380,7 @@ test("S-12. stored and pending can never describe the same rows at once", () => 
  *
  * `rowStateLabel` knew only two levels: already-stored, else the raw status. So
  * a row SIMPROK had fully proved, and which needed no `Selesaikan` click at
- * all, fell through to `Perlu ditinjau` — "SIMPROK needs your attention" — while
+ * all, fell through to `Perlu konfirmasi` — "SIMPROK needs your attention" — while
  * the summary above it said `13 dikenali otomatis` and the button offered to
  * store those very thirteen. Of the three, the sentence a person believes is
  * the one printed on the row in front of them.
@@ -411,7 +411,7 @@ test("P-2. machine proof outranks the raw status when nothing is stored yet", ()
   });
   assert.equal(rowStateLabel(proven), "Dikenali otomatis");
   // THE DEFECT, BANNED BY NAME. This is what the Owner's screen showed.
-  assert.notEqual(rowStateLabel(proven), "Perlu ditinjau");
+  assert.notEqual(rowStateLabel(proven), "Perlu konfirmasi");
   assert.equal(proven.status, "NEEDS_REVIEW");
 });
 
@@ -436,7 +436,7 @@ test("P-4. a row SIMPROK could not decide still asks for the human", () => {
     status: "NEEDS_REVIEW",
     machineProposal: proposal(false, 2, "LITER"),
   });
-  assert.equal(rowStateLabel(attention), "Perlu ditinjau");
+  assert.equal(rowStateLabel(attention), "Perlu konfirmasi");
 });
 
 test("P-5. a row SIMPROK could not recognise at all is still honest about it", () => {
@@ -444,10 +444,10 @@ test("P-5. a row SIMPROK could not recognise at all is still honest about it", (
     status: "NEEDS_REVIEW",
     machineProposal: proposal(false, 0, null),
   });
-  assert.equal(rowStateLabel(unknown), "Perlu ditinjau");
+  assert.equal(rowStateLabel(unknown), "Perlu konfirmasi");
   // And a row nobody asked about is not silently promoted either.
   const notAsked = baseRow({ status: "NEEDS_REVIEW", machineProposal: null });
-  assert.equal(rowStateLabel(notAsked), "Perlu ditinjau");
+  assert.equal(rowStateLabel(notAsked), "Perlu konfirmasi");
 });
 
 test("P-6. a rejected row stays rejected, and a submitted row names its destination", () => {
@@ -565,7 +565,7 @@ test("P-6c. the presentation precedence ladder holds top to bottom", () => {
         machineProposal: proposal(true),
       }),
       expected: "Dikenali otomatis",
-      beats: "Perlu ditinjau",
+      beats: "Perlu konfirmasi",
     },
     {
       rung: "4 RAW_STATUS",
@@ -576,7 +576,7 @@ test("P-6c. the presentation precedence ladder holds top to bottom", () => {
       }),
       // Nothing stronger is true, so the honest raw sentence survives — a row
       // SIMPROK could not decide must keep asking for the person.
-      expected: "Perlu ditinjau",
+      expected: "Perlu konfirmasi",
       beats: null,
     },
   ];
@@ -600,7 +600,7 @@ test("P-6c. the presentation precedence ladder holds top to bottom", () => {
       "Ditolak",
       "Sudah diusulkan ke SIMPROK",
       "Dikenali otomatis",
-      "Perlu ditinjau",
+      "Perlu konfirmasi",
     ].filter((word) => word !== label);
     for (const other of others) {
       assert.doesNotMatch(label, new RegExp(other, "u"), `${rung}: two stories`);
@@ -654,7 +654,7 @@ test("P-8. pre-save: summary and rows tell the SAME story about the same thirtee
     assert.equal(rowStateLabel(row), "Dikenali otomatis");
   }
   // And the rows that genuinely need a person still say so.
-  assert.equal(rowStateLabel(rows[13]), "Perlu ditinjau");
+  assert.equal(rowStateLabel(rows[13]), "Perlu konfirmasi");
 
   // One press would store exactly those thirteen, and nothing is stored yet.
   const view = oneActionAcceptanceView(batch, new Set());
@@ -695,7 +695,7 @@ test("P-9. post-save: nothing on screen still calls the stored thirteen pending"
   }
   // None of the weaker, now-stale readings survives anywhere on that screen.
   assert.doesNotMatch(screen, /13 dikenali otomatis/u);
-  assert.doesNotMatch(screen, /Perlu ditinjau/u);
+  assert.doesNotMatch(screen, /Perlu konfirmasi/u);
   assert.doesNotMatch(screen, /Siap disimpan/u);
   assert.doesNotMatch(screen, DESTINATIONLESS);
   assert.equal(view.offered, false);
@@ -703,7 +703,7 @@ test("P-9. post-save: nothing on screen still calls the stored thirteen pending"
 
 /**
  * MIXED. Eight stored, five proven-but-unstored — and the five must not be
- * demoted to `Perlu ditinjau` just because the batch is half done.
+ * demoted to `Perlu konfirmasi` just because the batch is half done.
  */
 test("P-10. mixed: stored rows and understood rows each keep their own sentence", () => {
   const storedRows = Array.from({ length: 8 }, (_unused, i) => provenRow(`s${i}`, true));
@@ -725,7 +725,7 @@ test("P-10. mixed: stored rows and understood rows each keep their own sentence"
   }
   for (const row of provenRows) {
     assert.equal(rowStateLabel(row), "Dikenali otomatis");
-    assert.notEqual(rowStateLabel(row), "Perlu ditinjau");
+    assert.notEqual(rowStateLabel(row), "Perlu konfirmasi");
   }
   assert.equal(oneActionAcceptanceView(batch, new Set()).rowCount, 5);
 });

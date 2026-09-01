@@ -534,7 +534,47 @@ describe('BasicPriceService', () => {
       expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
     });
 
-    it('applies sourceName as a real-provenance-chain filter (never fabricated)', async () => {
+    /**
+     * BP-UX-FINAL-01C GAP-A — RESTATED, NEVER WEAKENED.
+     *
+     * The original assertion pinned `where.sourceSubmission`, which reached ONE
+     * of the two lawful provenance chains. Every intent it expressed is still
+     * checked below — the catalog chain, both name columns, case-insensitive
+     * contains, and "never fabricated" — and two properties are ADDED that the
+     * old shape could not express: the private chain is reached too, and the
+     * fragment lands in `AND` rather than on a key that could collide with
+     * tenant isolation.
+     */
+    /** ONE cast, at the mock boundary, so every read below is typed. */
+    const listWhere = (): { AND?: Array<Record<string, unknown>> } =>
+      (
+        prisma.basicPrice.findMany.mock.calls[0] as [
+          { where: { AND?: Array<Record<string, unknown>> } },
+        ]
+      )[0].where;
+
+    const sourceNameFragmentOf = (where: {
+      AND?: Array<Record<string, unknown>>;
+    }) => {
+      const fragment = (where.AND ?? []).find(
+        (member) =>
+          Array.isArray((member as { OR?: unknown[] }).OR) &&
+          JSON.stringify(member).includes('sourceVendorName'),
+      ) as { OR: Array<Record<string, unknown>> } | undefined;
+      expect(fragment).toBeDefined();
+      return fragment!;
+    };
+
+    const batchNameMatch = (name: string) => ({
+      is: {
+        OR: [
+          { sourceVendorName: { contains: name, mode: 'insensitive' } },
+          { sourceOrganizationName: { contains: name, mode: 'insensitive' } },
+        ],
+      },
+    });
+
+    it('applies sourceName across BOTH real provenance chains (never fabricated)', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
       prisma.basicPrice.count.mockResolvedValue(1);
 
@@ -542,38 +582,56 @@ describe('BasicPriceService', () => {
         sourceName: 'Toko Jaya',
       });
 
-      expect(prisma.basicPrice.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            sourceSubmission: {
-              is: {
-                importRow: {
-                  is: {
-                    batch: {
-                      is: {
-                        OR: [
-                          {
-                            sourceVendorName: {
-                              contains: 'Toko Jaya',
-                              mode: 'insensitive',
-                            },
-                          },
-                          {
-                            sourceOrganizationName: {
-                              contains: 'Toko Jaya',
-                              mode: 'insensitive',
-                            },
-                          },
-                        ],
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          }),
-        }),
-      );
+      const fragment = sourceNameFragmentOf(listWhere());
+
+      // A1 — the CATALOG chain, byte-for-byte what it always was.
+      expect(fragment.OR).toContainEqual({
+        sourceSubmission: {
+          is: { importRow: { is: { batch: batchNameMatch('Toko Jaya') } } },
+        },
+      });
+
+      // A2 — and the PRIVATE chain, which was missing entirely. On the Owner's
+      // canonical database every Basic Price is WORKSPACE_PRIVATE, so without
+      // this branch the filter matched nothing at all, for every row, always.
+      expect(fragment.OR).toContainEqual({
+        sourceImportRow: { is: { batch: batchNameMatch('Toko Jaya') } },
+      });
+
+      expect(fragment.OR).toHaveLength(2);
+    });
+
+    it('A5 — the sourceName filter cannot clobber the eligibility OR', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        sourceName: 'Toko Jaya',
+      });
+
+      const where = listWhere();
+      // THE line this whole repair could have got catastrophically wrong:
+      // assigning `where.OR` here would DELETE tenant isolation rather than
+      // narrow the result. The two-branch eligibility predicate must survive
+      // a source-name search completely unchanged.
+      expectTwoBranchEligibility(where);
+    });
+
+    it('A5 — a sourceName search narrows only; it never widens tenancy', async () => {
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, { sourceName: 'Tim' });
+
+      const fragment = JSON.stringify(sourceNameFragmentOf(listWhere()));
+      for (const forbidden of [
+        'workspaceId',
+        'assetScope',
+        'status',
+        'verificationStatus',
+      ]) {
+        expect(fragment).not.toContain(forbidden);
+      }
     });
 
     it('rejects year combined with dateFrom/dateTo as an ambiguous time filter (400)', async () => {
@@ -744,6 +802,7 @@ describe('BasicPriceService', () => {
       // correction has replaced, a human has withdrawn, or that merely copies
       // one of those.
       expect(Object.keys(where).sort()).toEqual([
+        'AND',
         'NOT',
         'OR',
         'promotedFrom',
@@ -754,26 +813,60 @@ describe('BasicPriceService', () => {
       expect(where.NOT).toEqual({
         promotedFrom: { is: { workspaceId } },
       });
-      // Exact-id lineage, and nothing else — never a date, a value or a
-      // resource heuristic standing in for a human's correction decision.
-      expect(where.supersededBy).toEqual({ is: null });
-      // BP-CORR-01B TEMPORAL — the Explorer has no business date of its own, so
-      // it states the PRESENT instant explicitly rather than omitting one. The
-      // omitted form used to mean "a withdrawal exists at some point, therefore
-      // not current", which removed a future-dated withdrawal's price before
-      // its own effective date.
-      const withdrawnNow = (
-        where.publicationAudits as { none?: WithdrawnAuditFilter }
+      // BP-CORR-01B TEMPORAL — this list has no business date of its own, so it
+      // states the PRESENT instant explicitly rather than omitting one.
+      const governedNone = (
+        where.publicationAudits as {
+          none?: { OR?: Record<string, unknown>[] };
+        }
       ).none;
+      const withdrawnNow = governedNone?.OR?.find(
+        (member) => member.action === 'WITHDRAWN',
+      ) as WithdrawnAuditFilter | undefined;
       expect(withdrawnNow?.action).toBe('WITHDRAWN');
       expect(withdrawnNow?.effectiveAt?.lte).toBeInstanceOf(Date);
-      // Never the recording timestamp — that is when SIMPROK learned the fact,
-      // not when the fact became true.
       expect(withdrawnNow?.createdAt).toBeUndefined();
+
+      const supersededNow = governedNone?.OR?.find(
+        (member) => member.action === 'SUPERSEDED',
+      ) as { action: string; createdAt?: { lte: Date } } | undefined;
+      expect(supersededNow?.action).toBe('SUPERSEDED');
+      expect(supersededNow?.createdAt?.lte).toBeInstanceOf(Date);
+
+      // BP-UX-FINAL-01D / BP-DETAIL-MAINT-02 — integrity guard timed by the
+      // successor's `createdAt` when no SUPERSEDED audit exists. Same `asOf`.
+      expect(where.supersededBy).toEqual({
+        isNot: {
+          OR: [
+            {
+              AND: [
+                { verificationStatus: { not: 'UNVERIFIED' } },
+                {
+                  supersedes: {
+                    is: { publicationAudits: { none: { action: 'SUPERSEDED' } } },
+                  },
+                },
+              ],
+            },
+            {
+              AND: [
+                { verificationStatus: 'UNVERIFIED' },
+                { createdAt: { lte: supersededNow?.createdAt?.lte } },
+              ],
+            },
+          ],
+        },
+      });
 
       const origin = (where.promotedFrom as { isNot?: OriginCurrentnessFilter })
         .isNot;
-      expect(origin?.OR?.[0]).toEqual({ supersededBy: { isNot: null } });
+      // The origin inherits reason 1's clock exactly, rather than the old
+      // absolute `supersededBy isNot null` — otherwise a descendant would
+      // vanish from every historical answer the moment its origin was
+      // corrected today.
+      expect(JSON.stringify(origin?.OR?.[0])).toContain('"SUPERSEDED"');
+      expect(JSON.stringify(origin?.OR?.[0])).toContain('"createdAt"');
+      expect(origin?.OR?.[0]).not.toEqual({ supersededBy: { isNot: null } });
       // The origin is judged on the SAME clock and the SAME field as the row.
       const originWithdrawn = origin?.OR?.[1]?.publicationAudits?.some;
       expect(originWithdrawn?.action).toBe('WITHDRAWN');

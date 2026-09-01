@@ -413,6 +413,13 @@ describe('ProjectAhspService E1A', () => {
       lte: new Date('2026-08-04T00:00:00.000Z'),
     });
     expect(where.AND).toEqual([
+      {
+        OR: [
+          { supersedesBasicPriceId: null },
+          { verificationStatus: { not: 'UNVERIFIED' } },
+          { createdAt: { lte: new Date('2026-08-04T00:00:00.000Z') } },
+        ],
+      },
       { OR: [{ validUntil: null }, { validUntil: { gte: new Date('2026-08-04T00:00:00.000Z') } }] },
     ]);
   });

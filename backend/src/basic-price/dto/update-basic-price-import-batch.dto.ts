@@ -1,4 +1,13 @@
-import { IsOptional, IsString, IsUUID, IsEnum, IsBoolean, IsDateString, IsInt, Matches } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsUUID,
+  IsEnum,
+  IsBoolean,
+  IsDateString,
+  IsInt,
+  Matches,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 import {
   PriceSourceType,
@@ -72,26 +81,49 @@ export class UpdateBasicPriceImportBatchDto {
 
    */
 
-
   @IsOptional() @IsString() @Matches(NON_BLANK) sourcePeriodLabel?: string;
-  @IsOptional() @IsEnum(PriceSourcePeriodGranularity) sourcePeriodGranularity?: PriceSourcePeriodGranularity;
+  @IsOptional()
+  @IsEnum(PriceSourcePeriodGranularity)
+  sourcePeriodGranularity?: PriceSourcePeriodGranularity;
 
+  @IsOptional()
+  @IsEnum(PriceEffectiveDateProvenance)
+  effectiveDateProvenance?: PriceEffectiveDateProvenance;
 
-  @IsOptional() @IsEnum(PriceEffectiveDateProvenance) effectiveDateProvenance?: PriceEffectiveDateProvenance;
-
-
-  @IsOptional() @IsString() @Matches(NON_BLANK) effectiveDateDerivationRule?: string;
-
-
+  @IsOptional()
+  @IsString()
+  @Matches(NON_BLANK)
+  effectiveDateDerivationRule?: string;
 
   @IsOptional() @IsEnum(PriceSourceType) sourceType?: PriceSourceType;
   @IsOptional() @IsEnum(PriceSourceOrigin) sourceOrigin?: PriceSourceOrigin;
   @IsOptional() @IsString() sourceOrganizationName?: string;
   @IsOptional() @IsString() sourceVendorName?: string;
 
-  @IsOptional() @Transform(toBoolean) @IsBoolean() priceCoverageDeclared?: boolean;
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  priceCoverageDeclared?: boolean;
   @IsOptional() @Transform(toBoolean) @IsBoolean() transportIncluded?: boolean;
   @IsOptional() @Transform(toBoolean) @IsBoolean() loadingIncluded?: boolean;
   @IsOptional() @Transform(toBoolean) @IsBoolean() unloadingIncluded?: boolean;
   @IsOptional() @Transform(toBoolean) @IsBoolean() deliveredToProject?: boolean;
+
+  /**
+   * BP-REGION-TRUTH-07S §8 — "YES, THIS SOURCE SCOPE IS THIS REGION."
+   *
+   * A human decision about the batch's CURRENT region, and deliberately NOT a
+   * region id. The caller states the INTENT; the server records WHICH Region the
+   * intent was about, taken from the same merged state this request produces. A
+   * browser therefore cannot confirm a scope against a region other than the one
+   * it is actually saving, which is the whole point of asking.
+   *
+   * Sending `false` withdraws a previous confirmation. Omitting it changes
+   * nothing — and a confirmation is silently reopened anyway whenever the region
+   * itself moves, because an answer about one place proves nothing about another.
+   */
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  confirmRegionScopeCompatibility?: boolean;
 }

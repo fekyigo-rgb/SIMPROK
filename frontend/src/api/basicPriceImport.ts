@@ -81,6 +81,15 @@ export interface BasicPriceImportMetadata {
   loadingIncluded?: boolean;
   unloadingIncluded?: boolean;
   deliveredToProject?: boolean;
+  /**
+   * BP-REGION-TRUTH-07S §8 — "yes, this source scope is this Wilayah."
+   *
+   * An INTENT, not a region: the server pairs it with the Wilayah the batch
+   * actually holds when the save lands, so a form cannot confirm a scope
+   * against a place it is not saving. Never sent by the metadata form itself —
+   * only by the explicit review action.
+   */
+  confirmRegionScopeCompatibility?: boolean;
 }
 
 /**
@@ -152,7 +161,7 @@ export class ImportRequestError extends Error {
 async function parseOrThrow(response: Response): Promise<BasicPriceImportBatchSummary> {
   if (!response.ok) {
     const raw = await response.text();
-    let body: ({ message?: unknown } & IntakeRefusalDetails) | null = null;
+    let body: ({ message?: unknown } & IntakeRefusalDetails) | null;
     try {
       body = JSON.parse(raw) as { message?: unknown } & IntakeRefusalDetails;
     } catch {
@@ -213,6 +222,8 @@ export interface BasicPriceIntakeSelection {
   /** For a source whose name/unit columns carry no header at all. */
   selectedNameColumn?: number;
   selectedUnitColumn?: number;
+  /** BP-KDN-01 — confirm an ambiguous KDN-like column. Never required. */
+  selectedKdnColumn?: number;
 }
 
 export async function previewBasicPriceImport(
@@ -316,6 +327,176 @@ export interface KeepBatchPrivateResult {
   createdCount: number;
   alreadyPrivateCount: number;
   prices: PrivateBasicPriceItem[];
+}
+
+export interface EnrichBasicPriceKdnResult {
+  basicPriceId: string;
+  kdnPercent: string;
+  unchanged: boolean;
+}
+
+/**
+ * BP-DETAIL-CHANGE-01 / BP-KDN-01 — fill a previously unknown %KDN on an
+ * existing private price. Same `POST /basic-price-imports/prices/:priceId/kdn`
+ * the review path already has. Does not mint a Basic Price and does not
+ * touch money. Catalog / foreign-workspace rows fail closed as 404.
+ */
+export async function enrichBasicPriceKdn(
+  priceId: string,
+  kdnPercent: string,
+  reason: string,
+  expectedKdnPercent?: string | null,
+): Promise<EnrichBasicPriceKdnResult> {
+  const response = await apiFetch(`/basic-price-imports/prices/${priceId}/kdn`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      kdnPercent,
+      reason,
+      ...(expectedKdnPercent !== undefined ? { expectedKdnPercent } : {}),
+    }),
+  });
+  if (!response.ok) {
+    throw new ImportRequestError(response.status, await response.text());
+  }
+  return response.json() as Promise<EnrichBasicPriceKdnResult>;
+}
+
+export async function enrichCatalogBasicPriceKdn(
+  priceId: string,
+  kdnPercent: string,
+  reason: string,
+  expectedKdnPercent?: string | null,
+): Promise<EnrichBasicPriceKdnResult> {
+  const response = await apiFetch(
+    `/basic-price-imports/prices/${priceId}/catalog-kdn`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kdnPercent,
+        reason,
+        ...(expectedKdnPercent !== undefined ? { expectedKdnPercent } : {}),
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new ImportRequestError(response.status, await response.text());
+  }
+  return response.json() as Promise<EnrichBasicPriceKdnResult>;
+}
+
+export interface CorrectPrivateBasicPriceResult {
+  basicPriceId: string;
+  value: string;
+  unchanged: boolean;
+}
+
+export async function correctPrivateBasicPrice(
+  priceId: string,
+  expectedValue: string,
+  proposedValue: string,
+  reason: string,
+): Promise<CorrectPrivateBasicPriceResult> {
+  const response = await apiFetch(
+    `/basic-price-imports/prices/${priceId}/corrections`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedValue, proposedValue, reason }),
+    },
+  );
+  if (!response.ok) {
+    throw new ImportRequestError(response.status, await response.text());
+  }
+  return response.json() as Promise<CorrectPrivateBasicPriceResult>;
+}
+
+export async function observePrivateBasicPrice(
+  priceId: string,
+  expectedValue: string,
+  proposedValue: string,
+  effectiveDate: string,
+  reason: string,
+  evidence?: { sameSource?: boolean; sourceIdentityName?: string },
+): Promise<CorrectPrivateBasicPriceResult> {
+  const response = await apiFetch(
+    `/basic-price-imports/prices/${priceId}/observations`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expectedValue,
+        proposedValue,
+        effectiveDate,
+        reason,
+        ...(evidence?.sameSource === undefined
+          ? {}
+          : { sameSource: evidence.sameSource }),
+        ...(evidence?.sourceIdentityName
+          ? { sourceIdentityName: evidence.sourceIdentityName }
+          : {}),
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new ImportRequestError(response.status, await response.text());
+  }
+  return response.json() as Promise<CorrectPrivateBasicPriceResult>;
+}
+
+export async function observePrivateKdn(
+  priceId: string,
+  expectedValue: string,
+  expectedKdnPercent: string,
+  proposedKdnPercent: string,
+  effectiveDate: string,
+  reason: string,
+): Promise<CorrectPrivateBasicPriceResult> {
+  const response = await apiFetch(
+    `/basic-price-imports/prices/${priceId}/kdn-observations`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expectedValue,
+        expectedKdnPercent,
+        proposedKdnPercent,
+        effectiveDate,
+        reason,
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new ImportRequestError(response.status, await response.text());
+  }
+  return response.json() as Promise<CorrectPrivateBasicPriceResult>;
+}
+
+export async function correctPrivateKdn(
+  priceId: string,
+  expectedValue: string,
+  expectedKdnPercent: string,
+  proposedKdnPercent: string,
+  reason: string,
+): Promise<CorrectPrivateBasicPriceResult> {
+  const response = await apiFetch(
+    `/basic-price-imports/prices/${priceId}/kdn-corrections`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expectedValue,
+        expectedKdnPercent,
+        proposedKdnPercent,
+        reason,
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new ImportRequestError(response.status, await response.text());
+  }
+  return response.json() as Promise<CorrectPrivateBasicPriceResult>;
 }
 
 /**

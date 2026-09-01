@@ -73,7 +73,20 @@ $FrontendRoot = Join-Path (Split-Path -Parent $BackendRoot) 'frontend'
 # uses, under their own b1b12- names. A rehearsal that dies in a console the
 # operator has since closed leaves nothing to read, which is the same
 # detective-work problem this launcher exists to end.
-$LogRoot = 'C:\Users\asus\SIMPROK-RUNTIME\runtime-logs'
+$RuntimeRootOverride = $env:SIMPROK_RUNTIME_ROOT
+if ([string]::IsNullOrWhiteSpace($RuntimeRootOverride)) {
+  $RuntimeRoot = Join-Path $env:USERPROFILE 'SIMPROK-RUNTIME'
+}
+else {
+  $RuntimeRoot = $RuntimeRootOverride.Trim()
+  $RuntimeRootIsRooted = [System.IO.Path]::IsPathRooted($RuntimeRoot)
+  $RuntimeRootIsDriveAbsolute = $RuntimeRoot -match '^[A-Za-z]:[\\/]'
+  $RuntimeRootIsUncAbsolute = $RuntimeRoot -match '^[\\/]{2}[^\\/]+[\\/]+[^\\/]+'
+  if (-not $RuntimeRootIsRooted -or -not ($RuntimeRootIsDriveAbsolute -or $RuntimeRootIsUncAbsolute)) {
+    throw 'STOP_B1B12_RUNTIME_ROOT_NOT_ABSOLUTE: SIMPROK_RUNTIME_ROOT must be an absolute path when provided.'
+  }
+}
+$LogRoot = Join-Path $RuntimeRoot 'runtime-logs'
 New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
 
 Write-Output 'SIMPROK B1B12 - rehearsal runtime'

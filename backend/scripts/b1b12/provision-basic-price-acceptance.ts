@@ -10,6 +10,7 @@ import {
   assertLiveB1B12RehearsalTarget,
   parseRehearsalTargetFromUrl,
 } from '../../src/rehearsal/b1b12-rehearsal-target';
+import { resolveB1B12RuntimePaths } from '../../src/rehearsal/b1b12-runtime-paths';
 
 /**
  * B1B12 — an EMPTY, ISOLATED workspace for Basic Price acceptance.
@@ -78,9 +79,8 @@ import {
  *   npm run b1b12:acceptance:workspace
  */
 
-const GOVERNED_ENV_FILE =
-  'C:/Users/asus/SIMPROK-RUNTIME/secrets/b1b12.backend.env';
-const SECRETS_DIR = 'C:/Users/asus/SIMPROK-RUNTIME/secrets';
+const { backendEnvFile: GOVERNED_ENV_FILE, secretsDirectory: SECRETS_DIR } =
+  resolveB1B12RuntimePaths();
 
 /**
  * TWO FILES, AND THE PER-TAG ONE IS THE RECORD.

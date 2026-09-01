@@ -145,4 +145,10 @@ export class PreviewBasicPriceImportDto {
    */
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) selectedNameColumn?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) selectedUnitColumn?: number;
+  /**
+   * BP-KDN-01 — confirm an ambiguous/conflict KDN-like column. Optional.
+   * Ignored when the document already proved a CLEAR KDN heading. Never
+   * required for a lawful price import.
+   */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) selectedKdnColumn?: number;
 }

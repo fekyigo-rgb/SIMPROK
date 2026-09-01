@@ -26,6 +26,7 @@ import {
   assertLiveB1B12RehearsalTarget,
   parseRehearsalTargetFromUrl,
 } from '../../src/rehearsal/b1b12-rehearsal-target';
+import { resolveB1B12RuntimePaths } from '../../src/rehearsal/b1b12-runtime-paths';
 
 /**
  * B1B12 — give the rehearsal database the reference knowledge the Owner's
@@ -74,8 +75,7 @@ import {
  *       --workspace-id=<rehearsal workspace uuid>
  */
 
-const GOVERNED_ENV_FILE =
-  'C:/Users/asus/SIMPROK-RUNTIME/secrets/b1b12.backend.env';
+const { backendEnvFile: GOVERNED_ENV_FILE } = resolveB1B12RuntimePaths();
 const REPO_ROOT = resolve(__dirname, '..', '..', '..');
 const INVENTORY_PATH = resolve(
   REPO_ROOT,

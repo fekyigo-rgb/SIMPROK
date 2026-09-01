@@ -36,7 +36,10 @@ test("R-1 EXACT: already identical, skip is primary, no fabricated diff", () => 
   assert.ok(view);
   assert.equal(view.kind, "ALREADY_IDENTICAL");
   assert.equal(view.title, "Data ini sudah pernah diimpor.");
-  assert.match(view.body, /sudah pernah diimpor/u);
+  // BP-VISUAL-TRUTH-07 §22 — the body no longer repeats the heading; it carries
+  // only what the heading cannot say, which is what continuing would do.
+  assert.doesNotMatch(view.body, /sudah pernah diimpor/u);
+  assert.match(view.body, /Tidak ada perubahan yang terdeteksi/u);
   assert.equal(view.primary.action, "USE_EXISTING");
   assert.equal(view.primary.label, "Gunakan yang sudah ada");
   assert.equal(view.secondary, null);
@@ -53,7 +56,8 @@ test("R-2 INTERPRETATION_UPDATE: one decision, reading difference only", () => {
   assert.equal(view.primary.label, "Gunakan pembaruan ini");
   assert.equal(view.secondary?.action, "USE_EXISTING");
   assert.equal(view.secondary?.label, "Gunakan yang sudah ada");
-  assert.equal(view.differenceNote, "Cara pembacaan berbeda.");
+  // §22 — the chip names the AXIS; the body keeps the explanation.
+  assert.equal(view.differenceNote, "Perbedaan: cara pembacaan");
   assert.match(view.body, /cara pembacaannya sekarang berbeda/u);
   assert.equal(view.historyNote, "Data sebelumnya tetap tersimpan sebagai riwayat.");
   assert.doesNotMatch(view.body, /27|3 resources|harga berubah/u);
@@ -63,7 +67,7 @@ test("R-2 INTERPRETATION_UPDATE: one decision, reading difference only", () => {
 test("R-7 SOURCE_UPDATE copy names different source content, never a filename", () => {
   const view = reimportDecisionView(SOURCE);
   assert.ok(view);
-  assert.equal(view.differenceNote, "Isi sumber berbeda.");
+  assert.equal(view.differenceNote, "Perbedaan: isi sumber");
   assert.match(view.body, /isi data sekarang berbeda/u);
   assert.doesNotMatch(view.body, /nama berkas|filename|\.xlsx/iu);
 });

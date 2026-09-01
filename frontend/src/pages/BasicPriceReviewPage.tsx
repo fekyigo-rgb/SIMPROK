@@ -11,6 +11,8 @@ import {
 } from '../api/basicPriceImport';
 import type { ResourceLookupItem, UnitLookupItem } from '../api/basicPriceImport';
 import { CatalogSearchSelect } from '../components/basic-price/CatalogSearchSelect';
+import { BasicPriceJourneyStepper } from '../components/basic-price/BasicPriceJourneyStepper';
+import { ROW_TONE_CLASS, reviewCounters, rowTone } from '../utils/basicPriceJourney';
 import {
   batchStatusLabel,
   collisionWarningLabel,
@@ -29,9 +31,13 @@ import {
   proposalBlockSentence,
   rowActionFailureMessage,
   rowMachineNarrative,
+  rowNoteDisclosure,
   rowNoteLines,
+  rowReviewFactsLine,
   rowSectionDisplay,
   rowStateLabel,
+  staleRowRecoveryMessage,
+  WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
 } from '../utils/basicPriceImportDisplay';
@@ -39,6 +45,7 @@ import {
 // rather than re-spelled, so both rooms hide technical text under one title.
 import { TECHNICAL_DETAIL_TITLE } from '../utils/rabTraceDisplay';
 import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
+import '../styles/basicPrice.css';
 
 interface RowDraft {
   resource: ResourceLookupItem | null;
@@ -46,9 +53,18 @@ interface RowDraft {
   resourcePending: boolean;
   unitPending: boolean;
   reason: string;
+  /** Reason field stays hidden until the reviewer opens Tolak. */
+  rejectOpen: boolean;
 }
 
-const emptyDraft: RowDraft = { resource: null, unit: null, resourcePending: false, unitPending: false, reason: '' };
+const emptyDraft: RowDraft = {
+  resource: null,
+  unit: null,
+  resourcePending: false,
+  unitPending: false,
+  reason: '',
+  rejectOpen: false,
+};
 
 /**
  * A failed lifecycle action, in words — using the server's own named reason
@@ -115,6 +131,22 @@ const rowFailure = (action: 'RESOLVE' | 'REJECT', sourceRowNumber: number, error
  * ambiguous aliases are shown as evidence and NEVER pre-selected; raw UUID
  * entry is still not exposed; and nothing on this page decides what a unit or a
  * resource means.
+ *
+ * BP-UX-FINAL-01 §15/§16 — MACHINE TRUTH AND HUMAN JUDGEMENT, TOLD APART BY
+ * SIGHT.
+ *
+ * Every row used to render as `simprok-rab-validation-alert` — a warning card —
+ * whether SIMPROK had proved it, was waiting on a person, or had been turned
+ * down. On the Owner's eighty-six-row workbook that meant eighty-six alerts for
+ * a file that had been read successfully. Rows now carry the tone of what they
+ * actually are (`rowTone`): quiet green for machine-proven and for finished
+ * work, gold for the rows that genuinely need a person, red ONLY for a row a
+ * human rejected.
+ *
+ * NO VERDICT MOVED. `rowTone` reads `rowMachineState`, `status` and
+ * `savedAsPrivatePrice` — three existing server facts — and decides nothing.
+ * The evidence a reviewer needs to choose is still on the row; only the
+ * technical vocabulary stays folded away, exactly as before.
  */
 export function BasicPriceReviewPage() {
   const { batchId } = useParams<{ batchId: string }>();
@@ -135,8 +167,8 @@ export function BasicPriceReviewPage() {
    * would erase the only acknowledgement they get — the exact silence this
    * whole repair exists to remove.
    */
-  const loadBatch = async (announceProgress = true) => {
-    if (!batchId) return;
+  const loadBatch = async (announceProgress = true): Promise<boolean> => {
+    if (!batchId) return false;
     try {
       const result = await getBasicPriceImportBatch(batchId);
       setBatch(result);
@@ -164,6 +196,16 @@ export function BasicPriceReviewPage() {
         return next;
       });
       if (announceProgress) setStatusMessage(formatBatchProgress(result));
+      /**
+       * BP-VISUAL-TRUTH-07 §14 — WHETHER THE READ ACTUALLY HAPPENED, ANSWERED.
+       *
+       * This function handles its own failure and returns either way, so a
+       * caller had no way to distinguish "the newest state is on screen" from
+       * "the read failed and the screen is unchanged". The stale-recovery path
+       * must not tell a person SIMPROK has loaded the newest version when it
+       * has not — so the fact is now returned rather than inferred.
+       */
+      return true;
     } catch (error) {
       // The API client already parsed a status and a body; a bare `catch {}`
       // threw both away and told everyone to reload — including the reviewer
@@ -173,6 +215,7 @@ export function BasicPriceReviewPage() {
           ? importRequestMessage(error.httpStatus)
           : 'Gagal memuat batch. Muat ulang halaman untuk mencoba lagi.',
       );
+      return false;
     }
   };
 
@@ -206,11 +249,71 @@ export function BasicPriceReviewPage() {
    */
   const editedRowIds = (): string[] => [...touchedRowIds];
 
+  /**
+   * BP-VISUAL-TRUTH-07 §14 — WHAT HAPPENS AFTER A WRITE IS REFUSED FOR BEING
+   * STALE.
+   *
+   * THE PROTECTION ITSELF IS UNTOUCHED AND MUST STAY THAT WAY. The row carries
+   * a version, the endpoint compares it, and a mismatch is a 409 that writes
+   * nothing (`ROW_VERSION_STALE`). No retry, no replay, no "try again with the
+   * new version" — a stale decision is a decision made against facts that have
+   * since changed, and re-sending it automatically is precisely the last-write-
+   * wins behaviour the version exists to prevent.
+   *
+   * WHAT WAS MISSING WAS THE RECOVERY. The old path stated the refusal and
+   * stopped, telling the reviewer to reload the page. On a workbook of 894 rows
+   * that means discarding every unsaved selection on screen to repair one row.
+   * So SIMPROK now fetches the current truth ITSELF — the same `loadBatch` read
+   * every other path uses, no new endpoint — and the row redraws at its newest
+   * version and newest state.
+   *
+   * THE REVIEWER'S OWN WORK IS KEPT, AS A DRAFT AND ONLY AS A DRAFT. The draft
+   * map is deliberately NOT cleared here (the success path clears it; this one
+   * must not), so the Item SIMPROK and Satuan they had chosen are still in the
+   * boxes. Nothing is submitted on their behalf: the next write is a fresh
+   * press against the refreshed version, which is an explicit reconfirmation by
+   * a person who has now seen what changed.
+   *
+   * ONLY 409 MEANS THIS. A 401, 403, 404 or 500 is a different fact with a
+   * different sentence, and refreshing on those would be noise.
+   */
+  const recoverFromRowFailure = async (
+    action: 'RESOLVE' | 'REJECT',
+    row: BasicPriceImportRowSummary,
+    error: unknown,
+  ): Promise<string> => {
+    const httpStatus = error instanceof ImportRequestError ? error.httpStatus : 0;
+    if (httpStatus !== 409) return rowFailure(action, row.sourceRowNumber, error);
+    /**
+     * `false` because THIS function owns the sentence. `loadBatch` would
+     * otherwise announce the batch's progress tally, which would be overwritten
+     * a line later — the same status-flicker the announce flag exists to stop.
+     */
+    const refreshed = await loadBatch(false);
+    if (!refreshed) {
+      /**
+       * THE REFRESH IS THE COURTESY, NOT THE SAFETY. The write was refused
+       * either way; what is lost here is only SIMPROK's ability to repair the
+       * screen. So the reviewer is told to reload themselves — and is NOT told
+       * that the newest version is on screen, because it is not.
+       *
+       * `loadBatch` never throws; it handles its own failure and reports it,
+       * which is why this reads a returned fact rather than catching one. It
+       * has already put its own reason on the status line (expired session,
+       * missing authority, fault); that sentence is replaced here because the
+       * person's actual question is what happened to their DECISION, and the
+       * answer — refused as stale, nothing saved — is the one they can act on.
+       */
+      return rowFailure(action, row.sourceRowNumber, error);
+    }
+    return staleRowRecoveryMessage(row.sourceRowNumber);
+  };
+
   const handleResolve = async (row: BasicPriceImportRowSummary) => {
     if (!batchId) return;
     const draft = draftFor(row.id);
     if (!draft.resource || !draft.unit || draft.resourcePending || draft.unitPending) {
-      setStatusMessage('Pilih satu Resource Katalog dan satu Satuan Kanonik sebelum menyelesaikan baris.');
+      setStatusMessage('Pilih satu Item SIMPROK dan satu Satuan standar sebelum mengonfirmasi pilihan.');
       return;
     }
     setIsBusy(true);
@@ -224,7 +327,7 @@ export function BasicPriceReviewPage() {
       await loadBatch();
       setStatusMessage(`Baris ${row.sourceRowNumber} diperbarui.`);
     } catch (error) {
-      setStatusMessage(rowFailure('RESOLVE', row.sourceRowNumber, error));
+      setStatusMessage(await recoverFromRowFailure('RESOLVE', row, error));
     } finally {
       setIsBusy(false);
     }
@@ -233,6 +336,11 @@ export function BasicPriceReviewPage() {
   const handleReject = async (row: BasicPriceImportRowSummary) => {
     if (!batchId) return;
     const draft = draftFor(row.id);
+    if (!draft.rejectOpen) {
+      updateDraft(row.id, { rejectOpen: true });
+      setStatusMessage(`Tuliskan alasan penolakan untuk baris ${row.sourceRowNumber}.`);
+      return;
+    }
     if (!draft.reason.trim()) {
       setStatusMessage('Alasan penolakan wajib diisi.');
       return;
@@ -243,7 +351,7 @@ export function BasicPriceReviewPage() {
       await loadBatch();
       setStatusMessage(`Baris ${row.sourceRowNumber} ditolak.`);
     } catch (error) {
-      setStatusMessage(rowFailure('REJECT', row.sourceRowNumber, error));
+      setStatusMessage(await recoverFromRowFailure('REJECT', row, error));
     } finally {
       setIsBusy(false);
     }
@@ -333,12 +441,12 @@ export function BasicPriceReviewPage() {
 
   if (!batch) {
     return (
-      <div className="simprok-rab-workspace">
-        <header className="simprok-rab-workspace__header">
+      <div className="bp-room">
+        <header className="bp-head">
           <div>
-            <div className="simprok-rab-workspace__eyebrow">SIMPROK / Basic Price / Peninjauan</div>
-            <h1>Peninjauan Batch Basic Price</h1>
-            <p>{statusMessage}</p>
+            <div className="bp-head__crumb">SIMPROK / Basic Price / Peninjauan</div>
+            <h1 className="bp-head__title">Tinjau Daftar Harga</h1>
+            <p className="bp-head__sub" role="status">{statusMessage}</p>
           </div>
         </header>
       </div>
@@ -352,39 +460,73 @@ export function BasicPriceReviewPage() {
   const oneActionRowCount = oneAction.rowCount;
   /** Non-null only when there is genuinely nothing left for this press to do. */
   const alreadyStored = alreadyStoredNotice(oneAction);
+  const counters = reviewCounters(batch);
 
   return (
-    <div className="simprok-rab-workspace">
+    <div className="bp-room">
       {/*
         BACK TO THIS BATCH, not back to an empty upload form. Every reason an
         action is blocked below except "no rows finished yet" is a missing batch
         fact, and the only place to state one is the import room — which, until
         the batch could be reopened, meant starting the whole upload again.
       */}
-      <div className="simprok-rab-focus-nav" aria-label="Navigasi Peninjauan Basic Price">
+      <div className="bp-head__doors" aria-label="Navigasi Peninjauan Basic Price">
         <button
+          type="button"
+          className="bp-btn bp-btn--sm"
           onClick={() => navigate(`/basic-price/import/${batch.batchId}`)}
           title="Kembali ke data batch"
           aria-label="Kembali ke data batch"
         >
-          <ArrowLeft size={17} /> Data Batch
+          <ArrowLeft size={14} /> Data Batch
+        </button>
+        <button
+          type="button"
+          className="bp-btn bp-btn--link"
+          onClick={() => navigate('/basic-price')}
+          title="Kembali ke daftar Basic Price"
+        >
+          Basic Price →
         </button>
       </div>
 
-      <header className="simprok-rab-workspace__header">
+      <header className="bp-head">
         <div>
-          <div className="simprok-rab-workspace__eyebrow">SIMPROK / Basic Price / Peninjauan</div>
-          <h1>Peninjauan Batch Basic Price</h1>
-          <p>{batchStatusLabel(batch.status)} — {formatBatchProgress(batch)}</p>
-          {/*
-            INT-CONNECT-01 — attention, directed. Reported from the server's own
-            tally and the rows already on this page; no count here is predicted
-            and none is hard-coded.
-          */}
-          <p aria-label="Ringkasan kerja SIMPROK">{formatMachineFirstSummary(batch)}</p>
+          <div className="bp-head__crumb">SIMPROK / Basic Price / Peninjauan</div>
+          <h1 className="bp-head__title">Tinjau Daftar Harga</h1>
+          <p className="bp-head__sub">
+            {batchStatusLabel(batch.status)} — {formatBatchProgress(batch)}
+          </p>
         </div>
-        <span className="simprok-rab-workspace__status">{statusMessage}</span>
       </header>
+
+      <BasicPriceJourneyStepper batch={batch} />
+
+      {/*
+        INT-CONNECT-01 — attention, directed. Reported from the server's own
+        tally and the rows already on this page; no count here is predicted and
+        none is hard-coded. `reviewCounters` renders only fields the payload
+        carries — see §15's "do not invent counts".
+      */}
+      <ul className="bp-counters" aria-label="Ringkasan kerja SIMPROK">
+        {counters.map((counter) => (
+          <li
+            key={counter.key}
+            className={`bp-counter ${counter.tone === 'ok' ? 'bp-counter--ok' : counter.tone === 'attention' ? 'bp-counter--attention' : ''}`}
+          >
+            <div className="bp-counter__value">{counter.value}</div>
+            <div className="bp-counter__label">{counter.label}</div>
+          </li>
+        ))}
+      </ul>
+
+      <p className="bp-field__help" aria-label="Ringkasan kerja SIMPROK dalam kalimat">
+        {formatMachineFirstSummary(batch)}
+      </p>
+
+      <p className="bp-note bp-note--info" aria-live="polite">
+        {statusMessage}
+      </p>
 
       {/*
         THE TWO ACTIONS, NAMED FOR WHAT THEY ACTUALLY DO.
@@ -393,14 +535,10 @@ export function BasicPriceReviewPage() {
         was untrue twice over. It did not save anything — `/submit` creates
         PriceSubmissions for a curator to judge and no usable price at all — and
         it was the ONLY way out of this room, so a person who simply wanted
-        their own imported prices had no action that gave them any. On the
-        Owner's real 86-row workbook it was also disabled, because six finished
-        rows out of eighty-six leaves the batch NEEDS_REVIEW; a disabled button
-        swallows the click, so pressing it produced no request, no message and
-        no outcome whatsoever.
+        their own imported prices had no action that gave them any.
 
-        Now: SIMPAN & GUNAKAN is primary and incremental — the six finished rows
-        become usable prices immediately and the remaining eighty stay workable.
+        Now: SIMPAN & GUNAKAN is primary and incremental — the finished rows
+        become usable prices immediately and the remaining ones stay workable.
         USULKAN KE SIMPROK is optional, terminal and separately labelled, and it
         is offered only for the source families SIMPROK actually routes to
         community curation.
@@ -408,9 +546,16 @@ export function BasicPriceReviewPage() {
         NEITHER BUTTON DECIDES ITS OWN AVAILABILITY. `batch.actions` is the
         server's verdict, from the same law its writers enforce, and when an
         action is not offered the REASON is rendered as a sentence instead of
-        being lost inside a boolean. `aria-disabled` accompanies `disabled` so
-        the existing toolbar styling greys the control it has always styled by
-        that attribute — a door that cannot be opened must not look open.
+        being lost inside a boolean. `aria-disabled` accompanies `disabled` so a
+        door that cannot be opened does not look open.
+
+        THE CLASS NAME STAYS `simprok-rab-toolbar` DELIBERATELY.
+        `basicPriceReviewPageLaw.test.ts` HS-12 anchors the disabled/aria-disabled
+        parity guard to this exact selector, and that guard exists because a
+        fully-coloured button once sat over a door that could not open. Renaming
+        it would silently delete the guard rather than move it. Its Basic-Price
+        appearance is re-stated from `.bp-room .simprok-rab-toolbar` in
+        basicPrice.css, which touches nothing outside this room.
       */}
       <section className="simprok-rab-toolbar" aria-label="Aksi Batch">
         {/*
@@ -419,32 +564,19 @@ export function BasicPriceReviewPage() {
           It used to read `readyForSubmissionRows` alone, which on a fresh batch
           is zero — so the Owner saw `Simpan & Gunakan (0 siap)` beside thirteen
           rows SIMPROK had already proven, and the only way to make the number
-          move was thirteen `Selesaikan` clicks. The rows SIMPROK can bind on
-          this press are part of what the press will save, so they are part of
-          the number.
+          move was thirteen `Selesaikan` clicks.
 
-          The action is OFFERED as soon as either half has something to do. The
-          `privateUse` verdict still governs the keep step; a batch with nothing
-          ready but thirteen proven rows is now honestly actionable.
-        */}
-        {/*
-          AND A ROW ALREADY STORED IS NOT NEW WORK.
-
-          The count above was `readyForSubmissionRows + machineProven`, and a
-          kept row never leaves READY_FOR_SUBMISSION — so after a successful
-          save the button went on offering to store the very thirteen prices the
-          status line beside it had just announced were stored. The first term
-          is now the server's `actionableRows` (ready MINUS already private), so
-          when the work is done the count is genuinely zero.
-
-          WHEN THERE IS NOTHING LEFT TO PRESS, THE ROOM SAYS SO. A greyed-out
-          button leaves a person to work out why by themselves; one plain
-          sentence tells them their prices exist and are usable.
+          AND A ROW ALREADY STORED IS NOT NEW WORK. The first term is the
+          server's `actionableRows` (ready MINUS already private), so when the
+          work is done the count is genuinely zero — and when there is nothing
+          left to press, the room says so in a sentence instead of leaving a
+          greyed-out control nobody can explain.
         */}
         {alreadyStored ? (
-          <p className="simprok-rab-toolbar-note">{alreadyStored}</p>
+          <p className="bp-note bp-note--ok">{alreadyStored}</p>
         ) : (
           <button
+            className="bp-btn bp-btn--primary"
             onClick={() => void handleKeepPrivate()}
             disabled={!oneActionOffered || isBusy}
             aria-disabled={!oneActionOffered || isBusy}
@@ -455,6 +587,7 @@ export function BasicPriceReviewPage() {
         )}
         {batch.actions.simprokProposal.offered ? (
           <button
+            className="bp-btn"
             onClick={() => void handleSubmitBatch()}
             disabled={isBusy}
             aria-disabled={isBusy}
@@ -473,26 +606,23 @@ export function BasicPriceReviewPage() {
         GATED ON THE SAME VERDICT AS THE BUTTON, which it was not. This read the
         RAW server flag while the control beside it read `oneAction.offered` —
         and those two deliberately differ, because the server counts only rows a
-        human has already finished. On the Owner's own batch (13 proven rows,
-        none finished by hand) the page therefore rendered an ENABLED
-        `Simpan & Gunakan (13 siap)` directly above `Simpan & Gunakan belum
-        bisa: Belum ada baris yang selesai` — a denial of the very action the
-        button was offering, and false the moment it was shown. One screen, one
-        story: if the press is offered, the room says nothing about why it is
-        not.
+        human has already finished. On the Owner's own batch the page therefore
+        rendered an ENABLED `Simpan & Gunakan (13 siap)` directly above
+        `Simpan & Gunakan belum bisa: Belum ada baris yang selesai` — a denial of
+        the very action the button was offering. One screen, one story.
       */}
       {!oneActionOffered && !alreadyStored && privateUseBlockSentence(batch.actions.privateUse.reasonCode) ? (
-        <p role="status" aria-label="Alasan Simpan dan Gunakan belum tersedia">
+        <p className="bp-note bp-note--attention" role="status" aria-label="Alasan Simpan dan Gunakan belum tersedia">
           Simpan &amp; Gunakan belum bisa: {privateUseBlockSentence(batch.actions.privateUse.reasonCode)}
         </p>
       ) : null}
       {!batch.actions.simprokProposal.offered && proposalBlockSentence(batch.actions.simprokProposal.reasonCode) ? (
-        <p role="status" aria-label="Status usulan ke SIMPROK">
+        <p className="bp-note" role="status" aria-label="Status usulan ke SIMPROK">
           {proposalBlockSentence(batch.actions.simprokProposal.reasonCode)}
         </p>
       ) : null}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '16px' }}>
+      <div className="bp-stack">
         {batch.rows.map((row) => {
           const draft = draftFor(row.id);
           const mutable = isRowMutable(row);
@@ -502,20 +632,28 @@ export function BasicPriceReviewPage() {
           // own, so what the pure test asserts is what the reviewer reads.
           const narrative = rowMachineNarrative(row);
           const notes = rowNoteLines(row);
+          const noteDisclosure = rowNoteDisclosure(notes);
           const blockReason = completionBlockReason(row, {
             resource: draft.resource !== null,
             unit: draft.unit !== null,
             busy: isBusy || draft.resourcePending || draft.unitPending,
           });
           return (
-            <section key={row.id} className="simprok-rab-validation-alert" aria-label={`Baris ${row.sourceRowNumber}`}>
-              <strong>
-                Baris {row.sourceRowNumber} [{rowSectionDisplay(row)}] — {row.name} — {rowStateLabel(row)}
-              </strong>
-              <p>
-                Kode: {row.code ?? '—'} · Satuan mentah: {row.unit ?? '—'} · Harga: {row.rawPriceDisplayText ?? '—'}
-                {row.proposedCanonicalPrice ? ` (Rp ${row.proposedCanonicalPrice})` : ''}
-              </p>
+            <section
+              key={row.id}
+              className={`bp-rowcard ${ROW_TONE_CLASS[rowTone(row)]}`}
+              aria-label={`Baris ${row.sourceRowNumber}`}
+            >
+              <div className="bp-rowcard__head">
+                <span className="bp-rowcard__name">
+                  {row.name}{' '}
+                  <span className="bp-rowcard__num">
+                    #{row.sourceRowNumber} · {rowSectionDisplay(row)}
+                  </span>
+                </span>
+                <span className="bp-rowcard__num">{rowStateLabel(row)}</span>
+              </div>
+              <p className="bp-rowcard__facts">{rowReviewFactsLine(row)}</p>
               {/*
                 The row's own notes, in words. What has a sentence is said; what
                 does not is COUNTED and disclosed as a count.
@@ -523,21 +661,39 @@ export function BasicPriceReviewPage() {
                 Detail Teknis is not a licence to print enums. An earlier version
                 of this block put untranslated codes there, on the reasoning that
                 a disclosure is not the first read — but a site engineer cannot
-                act on `SOMETHING_NEW_FROM_INTAKE` wherever it appears on the
-                page. So the notice names HOW MANY facts are still unexplained
-                and nothing else. The codes stay on the row, in the payload, for
-                logs and audit; they have simply stopped being rendered.
+                act on a raw code wherever it appears on the page. So the notice
+                names HOW MANY facts are still unexplained and nothing else. The
+                codes stay on the row, in the payload, for logs and audit; they
+                have simply stopped being rendered.
               */}
-              {notes.human.map((note) => (
-                <p key={note}>Catatan: {note}</p>
-              ))}
+              {/*
+                BP-VISUAL-TRUTH-07 §17/§20 — the instruction stays on the card;
+                the reasons behind it wait to be asked for. Nothing is dropped:
+                `rowNoteDisclosure` splits the SAME list this block used to
+                print in full, in the same server-given order.
+              */}
+              {noteDisclosure.primary ? (
+                <p className="bp-rowcard__facts">Catatan: {noteDisclosure.primary}</p>
+              ) : null}
+              {noteDisclosure.secondary.length > 0 ? (
+                <details className="bp-details">
+                  <summary>{WHY_DISCLOSURE_TITLE}</summary>
+                  {noteDisclosure.secondary.map((note) => (
+                    <p className="bp-rowcard__facts" key={note}>{note}</p>
+                  ))}
+                </details>
+              ) : null}
               {notes.technicalNotice ? (
-                <details>
+                <details className="bp-details">
                   <summary>{TECHNICAL_DETAIL_TITLE}</summary>
                   <p>{notes.technicalNotice}</p>
                 </details>
               ) : null}
-              {collisionLabel ? <p role="alert">⚠ {collisionLabel}</p> : null}
+              {collisionLabel ? (
+                <p className="bp-note bp-note--attention" role="alert">
+                  {collisionLabel}
+                </p>
+              ) : null}
 
               {/*
                 INT-CONNECT-01 — VISIBLE ACCOUNTABILITY, LAYERED, AND HUMAN.
@@ -566,7 +722,7 @@ export function BasicPriceReviewPage() {
                 the printed text by the narrative's own key/text split.
               */}
               {narrative ? (
-                <div aria-label={`Hasil SIMPROK baris ${row.sourceRowNumber}`} style={{ marginTop: '8px' }}>
+                <div className="bp-rowcard__machine" aria-label={`Hasil SIMPROK baris ${row.sourceRowNumber}`}>
                   <strong>
                     {narrative.state === 'PROVEN' ? '✓ ' : ''}
                     {narrative.stateLabel}
@@ -583,9 +739,8 @@ export function BasicPriceReviewPage() {
                 </div>
               ) : null}
 
-
               {mutable ? (
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-end', marginTop: '8px' }}>
+                <div className="bp-rowcard__actions">
                   {/* A family SIMPROK could not map is passed as NO type filter,
                       never as one of the three it knows — see rowSectionDisplay. */}
                   <CatalogSearchSelect
@@ -612,25 +767,57 @@ export function BasicPriceReviewPage() {
                     already filled by the time a human arrives, and that a
                     disabled button now explains itself instead of leaving the
                     reviewer to guess which of two empty boxes it meant.
+
+                    ONE STRONG ACTION PER ROW (§15). This is the decision;
+                    `Tolak` is the rare exception and reads as one.
+
+                    BP-VISUAL-TRUTH-07 §15 — AND IT NAMES THE ACT, NOT THE
+                    OUTCOME. It read `Selesaikan`, which a person reasonably
+                    takes to mean the item is finished — so the Owner pressed it
+                    expecting completion and got a row that still had to be
+                    saved. The state machine underneath was right and is
+                    untouched; only the verb changed, to the one thing this
+                    press actually does: it confirms the identity chosen above.
+                    What comes after keeps its own words — the row then reads
+                    `Siap disimpan`, and `Tersimpan di ruang kerja` once stored.
                   */}
                   <button
+                    className="bp-btn bp-btn--primary"
                     onClick={() => void handleResolve(row)}
                     disabled={blockReason !== null}
-                    title={blockReason ?? 'Konfirmasi identitas baris ini'}
+                    aria-disabled={blockReason !== null}
+                    title={blockReason ?? 'Konfirmasi Item SIMPROK dan Satuan untuk baris ini'}
                   >
-                    Selesaikan
+                    Konfirmasi pilihan
                   </button>
-                  {blockReason ? <p role="status">{blockReason}</p> : null}
-                  <label>
-                    Alasan tolak
-                    <input
-                      type="text"
-                      placeholder="Alasan penolakan"
-                      value={draft.reason}
-                      onChange={(event) => updateDraft(row.id, { reason: event.target.value })}
-                    />
-                  </label>
-                  <button onClick={() => void handleReject(row)} disabled={isBusy}>Tolak</button>
+                  {draft.rejectOpen ? (
+                    <div className="bp-field">
+                      <label className="bp-field__label" htmlFor={`bp-reject-${row.id}`}>
+                        Alasan tolak
+                      </label>
+                      <input
+                        id={`bp-reject-${row.id}`}
+                        className="bp-input"
+                        type="text"
+                        placeholder="Mengapa baris ini ditolak?"
+                        value={draft.reason}
+                        onChange={(event) => updateDraft(row.id, { reason: event.target.value })}
+                      />
+                    </div>
+                  ) : null}
+                  <button
+                    className="bp-btn bp-btn--danger-quiet"
+                    onClick={() => void handleReject(row)}
+                    disabled={isBusy}
+                    aria-disabled={isBusy}
+                  >
+                    Tolak
+                  </button>
+                  {blockReason ? (
+                    <p className="bp-field__help" role="status">
+                      {blockReason}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </section>

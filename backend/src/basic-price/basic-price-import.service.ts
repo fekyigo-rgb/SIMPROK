@@ -28,6 +28,7 @@ import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
+import { toDecimalString2 } from '../common/money';
 import { batchTemporalQuestions } from './basic-price-temporal-question.law';
 import {
   assertTemporalProvenanceCoherent,
@@ -93,6 +94,108 @@ const FINGERPRINT_METADATA_KEYS = [
   'deliveredToProject',
 ] as const;
 
+type FingerprintMetadataKey = (typeof FINGERPRINT_METADATA_KEYS)[number];
+
+/**
+ * Every shape an identity-bearing metadata value actually arrives in. `Date` is
+ * here for exactly one reason: `effectiveDate` is an ISO string on a preview
+ * DTO and a `Date` on the stored row, and both must hash identically.
+ *
+ * Stated as a closed union rather than `unknown` so a value with no meaningful
+ * string form can never be silently interpolated into an identity.
+ */
+type FingerprintMetadataValue = string | number | boolean | Date | null;
+
+/**
+ * The identity-bearing metadata, from EITHER side of the batch's life: a
+ * preview DTO or the stored row.
+ */
+type FingerprintMetadata = Partial<
+  Record<FingerprintMetadataKey, FingerprintMetadataValue | undefined>
+>;
+
+/**
+ * THE UTC DAY A DATE FACT NAMES — the ONE spelling of `effectiveDate` inside a
+ * fingerprint, whichever shape it arrived in.
+ *
+ * WHY THIS IS NOT COSMETIC. The fingerprint used to be computed only from the
+ * preview DTO, where the date is a string, and was interpolated raw. Once the
+ * SAME fingerprint must also be recomputable from the STORED row — which is
+ * what makes identity describe final facts rather than preview-time ones — the
+ * two shapes have to agree by construction. `String(new Date(...))` would
+ * produce "Fri Aug 28 2026 ..." against the DTO's "2026-08-28" and mint a
+ * different batch for a date nobody changed.
+ *
+ * A calendar day is also the honest granularity: an effective date is a day, so
+ * the same day described as "2026-08-28" and as an instant within it is one
+ * fact, not two. Every DTO in this repository already sends the plain day form,
+ * so this is a no-op for existing callers and changes no stored fingerprint.
+ *
+ * An unparseable value is passed through verbatim rather than silently becoming
+ * "Invalid Date": validation rejects those at the boundary, and a serializer is
+ * the wrong place to start inventing verdicts about them.
+ */
+function fingerprintUtcDay(value: FingerprintMetadataValue): string {
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime())
+    ? String(value)
+    : date.toISOString().slice(0, 10);
+}
+
+/**
+ * The metadata half of the fingerprint string, in the ONE declared order.
+ *
+ * Absent and null are both the empty string, exactly as before: a fact nobody
+ * stated reads the same whether it was omitted or explicitly cleared.
+ */
+function fingerprintMetadataPart(metadata: FingerprintMetadata): string {
+  return FINGERPRINT_METADATA_KEYS.map((key) => {
+    const value = metadata[key];
+    if (value === null || value === undefined) return `${key}:`;
+    // A FACT SITTING AT ITS COLUMN DEFAULT IS NOT A STATED FACT.
+    //
+    // `priceCoverageDeclared` is the one key here whose column is NOT NULL with
+    // a default, so intake writes `false` both when a caller says false and
+    // when a caller says nothing. Once stored, those two are indistinguishable
+    // — the database kept no record of which happened.
+    //
+    // The fingerprint must therefore read `false` the same way it reads absent,
+    // or the SAME batch would hash one way from a preview DTO (where unstated
+    // is undefined) and another from its own stored row (where unstated became
+    // false). That divergence is not hypothetical: it is exactly what made a
+    // finalized batch's identity fail to equal the identity a direct read of
+    // the same facts mints.
+    //
+    // No stored fingerprint moves. Every caller in this repository omits the
+    // key, which already hashed as empty, and `true` is untouched — only the
+    // unrepresentable middle collapses onto the absence it is stored as.
+    if (key === 'priceCoverageDeclared' && value === false) return `${key}:`;
+    if (key === 'effectiveDate') return `${key}:${fingerprintUtcDay(value)}`;
+    return `${key}:${String(value)}`;
+  }).join('|');
+}
+
+/**
+ * USI-01 intake identity, stated as FLAT FACTS rather than as a reading.
+ *
+ * Every one of these is persisted on the batch, which is the property that lets
+ * a finalized batch recompute its own identity without re-reading a single byte
+ * of the source. `intakeIdentitySegments` below maps a live reading onto this
+ * same shape, so there is exactly ONE segment builder and no second engine.
+ */
+interface IntakeIdentityFacts {
+  regionScopeLabel: string | null;
+  ingestionChannel: string;
+  connectorId: string | null;
+  externalSourceId: string | null;
+  externalRecordId: string | null;
+  externalVersion: string | null;
+  interpretationResourceNameColumn: number | null;
+  interpretationSourceUnitColumn: number | null;
+  interpretationDeclaredSection: string | null;
+  interpretationKdnColumn: number | null;
+}
+
 /**
  * USI-01 — INTAKE IDENTITY BEYOND THE WORKBOOK.
  *
@@ -108,17 +211,14 @@ const FINGERPRINT_METADATA_KEYS = [
  * column, and a supplier-sent artifact is not the same arrival as the identical
  * bytes a human uploaded.
  */
-function intakeIdentitySegments(
-  knowledge: BasicPriceImportKnowledgeObject,
-  envelope: SourceEnvelope,
-): string[] {
+function intakeIdentitySegmentsOf(facts: IntakeIdentityFacts): string[] {
   const segments: string[] = [];
-  if (knowledge.regionScopeLabel !== null)
-    segments.push(`regionScopeLabel:${knowledge.regionScopeLabel}`);
-  if (envelope.ingestionChannel !== 'USER_UPLOAD')
-    segments.push(`ingestionChannel:${envelope.ingestionChannel}`);
-  if (envelope.connectorId !== null)
-    segments.push(`ingestionConnectorId:${envelope.connectorId}`);
+  if (facts.regionScopeLabel !== null)
+    segments.push(`regionScopeLabel:${facts.regionScopeLabel}`);
+  if (facts.ingestionChannel !== 'USER_UPLOAD')
+    segments.push(`ingestionChannel:${facts.ingestionChannel}`);
+  if (facts.connectorId !== null)
+    segments.push(`ingestionConnectorId:${facts.connectorId}`);
 
   // USI-01R §11 — SOURCE OBSERVATION IDENTITY, NOT DELIVERY IDENTITY.
   //
@@ -130,12 +230,12 @@ function intakeIdentitySegments(
   // `externalVersion` IS present, and is what makes a supplier's genuinely
   // newer price a new observation rather than a rejected duplicate (OBS-02,
   // LAW 2.5).
-  if (envelope.externalSourceId !== null)
-    segments.push(`externalSourceId:${envelope.externalSourceId}`);
-  if (envelope.externalRecordId !== null)
-    segments.push(`externalRecordId:${envelope.externalRecordId}`);
-  if (envelope.externalVersion !== null)
-    segments.push(`externalVersion:${envelope.externalVersion}`);
+  if (facts.externalSourceId !== null)
+    segments.push(`externalSourceId:${facts.externalSourceId}`);
+  if (facts.externalRecordId !== null)
+    segments.push(`externalRecordId:${facts.externalRecordId}`);
+  if (facts.externalVersion !== null)
+    segments.push(`externalVersion:${facts.externalVersion}`);
 
   /**
    * THE SAME BYTES READ WITH A DIFFERENT LAWFUL INTERPRETATION ARE NOT THE SAME
@@ -166,19 +266,82 @@ function intakeIdentitySegments(
    * poisoned batch keeps its rows, its fingerprint and its history untouched;
    * retiring it is a separate Owner decision and nothing here performs one.
    */
-  const interpretation = knowledge.interpretation;
-  if (interpretation !== null) {
-    // A FIXED ORDER, NOT THE OBJECT'S. Two identical interpretations must
-    // produce one identical string, so the sequence is written out rather than
-    // inherited from however the fields happen to be declared.
-    if (interpretation.resourceNameColumn !== null)
-      segments.push(`resourceNameColumn:${interpretation.resourceNameColumn}`);
-    if (interpretation.sourceUnitColumn !== null)
-      segments.push(`sourceUnitColumn:${interpretation.sourceUnitColumn}`);
-    if (interpretation.declaredSection !== null)
-      segments.push(`declaredSection:${interpretation.declaredSection}`);
-  }
+  // A FIXED ORDER, NOT THE OBJECT'S. Two identical interpretations must
+  // produce one identical string, so the sequence is written out rather than
+  // inherited from however the fields happen to be declared.
+  //
+  // FLAT, AND EQUIVALENT TO THE READING IT REPLACED. The reading's
+  // `interpretation` is null wherever the document decided everything, and each
+  // field below is pushed only when it says something — so "no interpretation"
+  // and "an interpretation that states nothing" produce the same empty result,
+  // exactly as before. That equivalence is what lets the stored columns stand in
+  // for the reading when a finalized batch recomputes its own identity.
+  if (facts.interpretationResourceNameColumn !== null)
+    segments.push(
+      `resourceNameColumn:${facts.interpretationResourceNameColumn}`,
+    );
+  if (facts.interpretationSourceUnitColumn !== null)
+    segments.push(`sourceUnitColumn:${facts.interpretationSourceUnitColumn}`);
+  if (facts.interpretationDeclaredSection !== null)
+    segments.push(`declaredSection:${facts.interpretationDeclaredSection}`);
+  if (facts.interpretationKdnColumn !== null)
+    segments.push(`kdnColumn:${facts.interpretationKdnColumn}`);
   return segments;
+}
+
+/** The same segments, read off a LIVE reading rather than a stored batch. */
+function intakeIdentitySegments(
+  knowledge: BasicPriceImportKnowledgeObject,
+  envelope: SourceEnvelope,
+): string[] {
+  return intakeIdentitySegmentsOf({
+    regionScopeLabel: knowledge.regionScopeLabel,
+    ingestionChannel: envelope.ingestionChannel,
+    connectorId: envelope.connectorId,
+    externalSourceId: envelope.externalSourceId,
+    externalRecordId: envelope.externalRecordId,
+    externalVersion: envelope.externalVersion,
+    interpretationResourceNameColumn:
+      knowledge.interpretation?.resourceNameColumn ?? null,
+    interpretationSourceUnitColumn:
+      knowledge.interpretation?.sourceUnitColumn ?? null,
+    interpretationDeclaredSection:
+      knowledge.interpretation?.declaredSection ?? null,
+    interpretationKdnColumn: knowledge.interpretation?.kdnColumn ?? null,
+  });
+}
+
+/**
+ * THE FINGERPRINT STRING — ONE ENGINE, TWO CALLERS.
+ *
+ * `preview` hashes a reading; `updateBatchMetadata` re-hashes a finalized batch.
+ * Both go through here, so a batch that finalizes its Region computes the SAME
+ * identity a fresh read of the same file under the same facts would — which is
+ * the entire invariant, and one a second implementation could not hold.
+ */
+function fingerprintOf(input: {
+  workspaceId: string;
+  organizationId: string;
+  sourceSha256: string;
+  sheetName: string;
+  parserContractVersion: string;
+  metadata: FingerprintMetadata;
+  intakeSegments: string[];
+}): string {
+  return createHash('sha256')
+    .update(
+      [
+        input.workspaceId,
+        input.organizationId,
+        input.sourceSha256,
+        input.sheetName,
+        input.parserContractVersion,
+        fingerprintMetadataPart(input.metadata),
+        ...input.intakeSegments,
+      ].join('|'),
+    )
+    .digest('hex')
+    .toUpperCase();
 }
 
 /**
@@ -229,6 +392,34 @@ export function compareSourceVersions(
 
   // An opaque vendor token. SIMPROK does not rank what it cannot read.
   return 'ORDER_UNKNOWN';
+}
+
+/**
+ * BP-REGION-TRUTH-07U — THE VERDICT TRAVELS OUT OF THE TRANSACTION; THE QUERY
+ * THAT NAMES THE WINNER DOES NOT TRAVEL INTO IT.
+ *
+ * WHAT WENT WRONG. `workspaceId_importFingerprint` refuses a second batch that
+ * finalizes onto an identity another batch already holds — correctly, and by
+ * the database rather than by a check that could be raced past. But the moment
+ * PostgreSQL raises that error the whole transaction is ABORTED: every further
+ * statement on the same connection is refused with SQLSTATE 25P02, "current
+ * transaction is aborted, commands ignored until end of transaction block". A
+ * JavaScript `catch` does not undo that — it catches the exception, not the
+ * server-side transaction state. So the recovery read that existed to tell the
+ * person WHICH batch already holds this identity was itself the statement that
+ * turned a lawful 409 into a 500.
+ *
+ * WHAT THIS IS. A sentinel that carries the one fact the recovery needs — the
+ * identity that lost — up past the transaction boundary, so the read happens on
+ * a fresh connection AFTER the failed transaction has rolled back and ended.
+ * The refusal is unchanged: still one statement, still one verdict, still no
+ * retry and no merge. Only the place the winner's name is fetched from moves.
+ */
+class BatchIdentityCollision extends Error {
+  constructor(readonly importFingerprint: string) {
+    super('BATCH_IDENTITY_ALREADY_EXISTS');
+    this.name = 'BatchIdentityCollision';
+  }
 }
 
 @Injectable()
@@ -473,27 +664,18 @@ export class BasicPriceImportService {
     metadata: PreviewBasicPriceImportDto,
     envelope: SourceEnvelope,
   ): string {
-    const metadataPart = FINGERPRINT_METADATA_KEYS.map((key) => {
-      const value = metadata[key];
-      return `${key}:${value ?? ''}`;
-    }).join('|');
-    return createHash('sha256')
-      .update(
-        [
-          workspaceId,
-          organizationId,
-          knowledge.sourceSha256,
-          knowledge.sheetName,
-          // The knowledge object's OWN contract, not a module constant: each
-          // structure has its own parser contract, and two structures read out
-          // of one file are two different readings of it.
-          knowledge.parserContractVersion,
-          metadataPart,
-          ...intakeIdentitySegments(knowledge, envelope),
-        ].join('|'),
-      )
-      .digest('hex')
-      .toUpperCase();
+    return fingerprintOf({
+      workspaceId,
+      organizationId,
+      sourceSha256: knowledge.sourceSha256,
+      sheetName: knowledge.sheetName,
+      // The knowledge object's OWN contract, not a module constant: each
+      // structure has its own parser contract, and two structures read out
+      // of one file are two different readings of it.
+      parserContractVersion: knowledge.parserContractVersion,
+      metadata,
+      intakeSegments: intakeIdentitySegments(knowledge, envelope),
+    });
   }
 
   /**
@@ -678,6 +860,7 @@ export class BasicPriceImportService {
         interpretationResourceNameColumn: true,
         interpretationSourceUnitColumn: true,
         interpretationDeclaredSection: true,
+        interpretationKdnColumn: true,
         createdAt: true,
       },
       orderBy: INTERPRETATION_SIBLING_ORDER_BY,
@@ -690,6 +873,7 @@ export class BasicPriceImportService {
         resourceNameColumn: sibling.interpretationResourceNameColumn,
         sourceUnitColumn: sibling.interpretationSourceUnitColumn,
         declaredSection: sibling.interpretationDeclaredSection,
+        kdnColumn: sibling.interpretationKdnColumn,
       })),
       params.incoming,
     );
@@ -751,6 +935,7 @@ export class BasicPriceImportService {
           options.knowledge.interpretation?.sourceUnitColumn ?? null,
         declaredSection:
           options.knowledge.interpretation?.declaredSection ?? null,
+        kdnColumn: options.knowledge.interpretation?.kdnColumn ?? null,
       };
       interpretationSiblingId = await this.findOwnedInterpretationSibling({
         workspaceId: options.envelope.workspaceId,
@@ -819,6 +1004,25 @@ export class BasicPriceImportService {
       effectiveDateDerivationRule?: string | null;
       regionId: string | null;
       /**
+       * WHICH price column of a multi-jurisdiction source this batch read —
+       * the source's own wording, never a canonical Region name. Optional on
+       * the way in so every existing caller and fixture keeps compiling; a
+       * caller that does not carry it projects null, which is the honest
+       * answer for a source that offered only one column.
+       */
+      sourceRegionScopeLabel?: string | null;
+      /**
+       * BP-REGION-TRUTH-07S — whether the SOURCE called that scope a place, and
+       * which canonical Region a human has reconciled it against.
+       *
+       * Optional for the same compile-compatibility reason as the label above,
+       * and absent reads as "not stated" all the way down to the action law —
+       * so a fixture that carries neither raises no question, which is the
+       * correct verdict for a source that proved no geography.
+       */
+      sourceRegionScopeGeographicEvidence?: string | null;
+      regionScopeConfirmedRegionId?: string | null;
+      /**
        * THE SOURCE CLASSIFICATION, ON THE WAY OUT AS WELL AS IN.
        *
        * These two were writable through `PATCH :batchId` and readable nowhere.
@@ -839,6 +1043,9 @@ export class BasicPriceImportService {
       version: number;
       /** Transport fact, server-set. Says nothing about origin or trust. */
       ingestionChannel?: string | null;
+      kdnMappingStatus?: string | null;
+      interpretationKdnColumn?: number | null;
+      kdnMappingCandidates?: unknown;
     },
     rows: Array<{
       id: string;
@@ -849,6 +1056,9 @@ export class BasicPriceImportService {
       rawUnitText?: string | null;
       rawPriceDisplayText?: string | null;
       proposedCanonicalPrice?: { toString(): string } | null;
+      proposedCanonicalKdn?: { toString(): string } | null;
+      kdnReasonCode?: string | null;
+      sourceKdnHeaderText?: string | null;
       // USI-01R — null when the source stated a category SIMPROK could not map.
       sourceSection: string | null;
       sourceSectionProvenance?: string | null;
@@ -925,10 +1135,45 @@ export class BasicPriceImportService {
        */
       reviewDate: batch.reviewDate ?? null,
       regionId: batch.regionId,
+      /**
+       * BP-VISUAL-TRUTH-07 §7 — WHICH PRICE COLUMN THIS BATCH WAS READ FROM,
+       * said out loud, because it is NOT the same fact as `regionId`.
+       *
+       * THE DEFECT THIS CLOSES. A regional-matrix workbook offers one price
+       * column per jurisdiction, and intake asks which one to read. That answer
+       * is the source's OWN wording ("TELUK AMBON") and it lands here. The
+       * canonical Region a person separately chooses ("Kecamatan Teluk Ambon
+       * Baguala, Kota Ambon") lands in `regionId`. Two different questions,
+       * two different columns in the database, and both correct — but this one
+       * was never projected, so the review room could only ever read back the
+       * canonical Region. The Owner answered the COLUMN question, was shown the
+       * REGION answer under the same word "Wilayah", and could only conclude
+       * SIMPROK had swapped one region for another.
+       *
+       * Nothing about identity changes here. The column label has been an
+       * identity axis on the fingerprint (`intakeIdentitySegments`) and on the
+       * comparable-sibling lookup since USI-01; this merely stops hiding a fact
+       * the batch already stores, so the two answers can be told apart by the
+       * person who gave them.
+       */
+      sourceRegionScopeLabel: batch.sourceRegionScopeLabel ?? null,
       sourceType: batch.sourceType,
       sourceOrigin: batch.sourceOrigin,
       sourceOrganizationName: batch.sourceOrganizationName,
       version: batch.version,
+      /**
+       * BP-KDN-01 — optional KDN column mapping. NEVER fail-stops a lawful
+       * price import. NEEDS_REVIEW means SIMPROK will not guess; the price
+       * rows still exist. ESTABLISHED means a CLEAR heading or a human
+       * confirmation. ABSENT means the source stated no KDN column.
+       */
+      kdnMapping: {
+        status: batch.kdnMappingStatus ?? 'ABSENT',
+        confirmedColumn: batch.interpretationKdnColumn ?? null,
+        candidates: Array.isArray(batch.kdnMappingCandidates)
+          ? batch.kdnMappingCandidates
+          : [],
+      },
       /**
        * WHAT THIS BATCH MAY DO NEXT, AND WHY NOT WHEN IT MAY NOT.
        *
@@ -962,6 +1207,15 @@ export class BasicPriceImportService {
         // not measure it, which is what keeps an unasked question from becoming
         // a verdict about work that may already be done.
         alreadyPrivateRows,
+        // BP-REGION-TRUTH-07S — the source's own geographic claim about this
+        // batch's scope, and whether a human has reconciled it with the Region
+        // above. Read from the stored batch, so the verdict is about PERSISTED
+        // truth exactly like every other fact this gate consumes.
+        sourceRegionScopeLabel: batch.sourceRegionScopeLabel ?? null,
+        sourceRegionScopeGeographicEvidence:
+          batch.sourceRegionScopeGeographicEvidence ?? null,
+        regionScopeConfirmedRegionId:
+          batch.regionScopeConfirmedRegionId ?? null,
       }),
       totalRows: rows.length,
       needsReviewRows: rows.filter((r) => r.status === 'NEEDS_REVIEW').length,
@@ -1024,6 +1278,13 @@ export class BasicPriceImportService {
         proposedCanonicalPrice: r.proposedCanonicalPrice
           ? r.proposedCanonicalPrice.toString()
           : null,
+        proposedCanonicalKdn:
+          r.proposedCanonicalKdn === null ||
+          r.proposedCanonicalKdn === undefined
+            ? null
+            : toDecimalString2(r.proposedCanonicalKdn.toString()),
+        kdnReasonCode: r.kdnReasonCode ?? null,
+        sourceKdnHeaderText: r.sourceKdnHeaderText ?? null,
         section: r.sourceSection,
         // USI-01R — the review UI must be able to show WHO decided a row's
         // resource family, and what the source itself called it.
@@ -1143,6 +1404,7 @@ export class BasicPriceImportService {
       declaredSection: metadata.declaredSection ?? null,
       selectedNameColumn: metadata.selectedNameColumn ?? null,
       selectedUnitColumn: metadata.selectedUnitColumn ?? null,
+      selectedKdnColumn: metadata.selectedKdnColumn ?? null,
     });
     const organizationId = envelope.organizationId;
 
@@ -1214,185 +1476,229 @@ export class BasicPriceImportService {
     }
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
-        const batch = await tx.basicPriceImportBatch.create({
-          data: {
-            workspaceId,
-            organizationId,
-            uploadedByAccountId: envelope.actorAccountId,
-            sourceFileName: knowledge.fileName,
-            sourceSha256: knowledge.sourceSha256,
-            sourceByteLength: envelope.byteSize,
-            selectedSheetName: knowledge.sheetName,
-            parserContractVersion: knowledge.parserContractVersion,
-            // USI-01 — how the bytes arrived, and how this batch's row
-            // locators are spelled. Both are provenance, neither is trust.
-            sourceLocatorDialect: knowledge.locatorDialect,
-            sourceRegionScopeLabel: knowledge.regionScopeLabel,
-            // WHICH INTERPRETATION PRODUCED THESE ROWS. Recorded from the
-            // reading itself, so a batch can answer the question later instead
-            // of a reader inferring column roles from cell addresses. Null
-            // throughout wherever the document decided everything.
-            interpretationResourceNameColumn:
-              knowledge.interpretation?.resourceNameColumn ?? null,
-            interpretationSourceUnitColumn:
-              knowledge.interpretation?.sourceUnitColumn ?? null,
-            interpretationDeclaredSection:
-              knowledge.interpretation?.declaredSection ?? null,
-            // Where the original bytes are retained, beside the hash that
-            // identifies them.
-            sourceStorageRef,
-            // USI-01R2 §6A — which OBSERVATION of a source stream this is.
-            sourceObservationKey: observation.observationKey,
-            ingestionChannel: envelope.ingestionChannel,
-            ingestionConnectorId: envelope.connectorId,
-            // USI-01R §10 — transmission evidence, kept but never identity.
-            ingestionDeliveryId: envelope.deliveryId,
-            // ...and the source's own observation identity, which IS.
-            ingestionExternalSourceId: envelope.externalSourceId,
-            ingestionExternalRecordId: envelope.externalRecordId,
-            ingestionExternalVersion: envelope.externalVersion,
-            sourceObservedAt: envelope.sourceObservedAt,
-            regionId: metadata.regionId ?? null,
-            effectiveDate: metadata.effectiveDate
-              ? new Date(metadata.effectiveDate)
-              : null,
-            sourceType: metadata.sourceType ?? null,
-            sourceOrigin: metadata.sourceOrigin ?? null,
-            sourceOrganizationName: metadata.sourceOrganizationName ?? null,
-            sourceVendorName: metadata.sourceVendorName ?? null,
-            // RM-03D1 — temporal provenance. Null means unknown, which never
-            // reads as "the source stated this date".
-            sourcePeriodLabel: metadata.sourcePeriodLabel ?? null,
-            sourcePeriodGranularity: metadata.sourcePeriodGranularity ?? null,
-            effectiveDateProvenance: metadata.effectiveDateProvenance ?? null,
-            effectiveDateDerivationRule:
-              metadata.effectiveDateDerivationRule ?? null,
-            priceCoverageDeclared: metadata.priceCoverageDeclared ?? false,
-            transportIncluded: metadata.transportIncluded ?? null,
-            loadingIncluded: metadata.loadingIncluded ?? null,
-            unloadingIncluded: metadata.unloadingIncluded ?? null,
-            deliveredToProject: metadata.deliveredToProject ?? null,
-            importFingerprint: fingerprint,
-            // Every row is created NEEDS_REVIEW below (resolution is always
-            // a separate human step) — the batch reflects that immediately,
-            // consistent with state machine A's automatic transition chain.
-            status: 'NEEDS_REVIEW',
-          },
-        });
-
-        /**
-         * ONE WRITE PER CHUNK, NOT ONE PER ROW.
-         *
-         * THIS LINE USED TO BE `await tx.basicPriceImportRow.create()` INSIDE A
-         * LOOP, and the Owner's real Ambon workbook is what proved it wrong:
-         * 934 rows meant 934 sequential round-trips inside an interactive
-         * transaction whose timeout is 5 seconds, and the upload died on
-         * Prisma P2028 — "transaction already closed", 5010 ms elapsed. The
-         * batch had already been written when the loop ran out of time, so the
-         * whole transaction rolled back and the Owner's browser was answered
-         * 500 by a workbook SIMPROK had read perfectly.
-         *
-         * The defect was never the timeout. A per-row write is an N+1 against
-         * the database, and raising the clock would only move the row count at
-         * which the same upload fails — while making every failure slower.
-         *
-         * IDS ARE MINTED HERE, and that is what keeps SOURCE ORDER exact.
-         * `createMany` returns a COUNT rather than rows, so the written rows
-         * have to be reassembled from something. Minting the ids in source
-         * order makes that reassembly proven rather than assumed: the array
-         * index IS the source position, and the read-back is keyed by id.
-         *
-         * AN EARLIER VERSION OF THIS NOTE JUSTIFIED IT BY CLAIMING "there is no
-         * unique index on (batchId, sourceRowNumber)". THAT WAS FALSE — the
-         * constraint is declared at prisma/schema.prisma, `@@unique([batchId,
-         * sourceRowNumber])` on BasicPriceImportRow — and so was the reasoning
-         * built on it, that a source "may legitimately state a row number
-         * twice": `sourceRowNumber` is the reader's PHYSICAL row number within
-         * the one selected table, unique by construction.
-         *
-         * The IMPLEMENTATION was never wrong and is unchanged. Ordering by a
-         * column would still be a second thing to trust where minting needs
-         * none, and it would still make source order depend on a constraint
-         * rather than on the read itself. Only the stated reason was wrong, and
-         * only the stated reason has changed.
-         *
-         * CHUNKED because PostgreSQL binds at most 65535 parameters per
-         * statement, and this table writes ~30 columns per row. At the reader's
-         * 20 000-row ceiling a single statement would exceed that limit and
-         * fail on the largest sources — the ones this repair exists for.
-         */
-        const rowIds = knowledge.rows.map(() => randomUUID());
-        const rowsToCreate = knowledge.rows.map((row, index) => ({
-          id: rowIds[index],
-          batchId: batch.id,
-          // USI-01R GAP B — a row whose family the source stated, together
-          // with WHO decided it and the source's own words either way.
-          sourceSection: row.sourceSection,
-          sourceSectionProvenance: row.sourceSectionProvenance,
-          rawSourceCategoryCode: row.rawSourceCategoryCode,
-          rawSourceCategoryName: row.rawSourceCategoryName,
-          sourceRowNumber: row.sourceRowNumber,
-          sourceCodeCellAddress: row.sourceCodeCellAddress,
-          sourceNameCellAddress: row.sourceNameCellAddress,
-          sourceUnitCellAddress: row.sourceUnitCellAddress,
-          sourcePriceCellAddress: row.sourcePriceCellAddress,
-          rawResourceCodeText: row.rawResourceCodeText,
-          rawResourceNameText: row.rawResourceNameText,
-          rawUnitText: row.rawUnitText,
-          rawPriceCellType: row.rawPriceCellType,
-          rawPriceNumericRoundTripString: row.rawPriceNumericRoundTripString,
-          rawPriceTextValue: row.rawPriceTextValue,
-          rawPriceFormulaText: row.rawPriceFormulaText,
-          rawPriceCachedResultRoundTripString:
-            row.rawPriceCachedResultRoundTripString,
-          rawPriceFormulaError: row.rawPriceFormulaError,
-          rawPriceNumberFormat: row.rawPriceNumberFormat,
-          rawPriceDisplayText: row.rawPriceDisplayText,
-          // LAW 2 — everything the source said that this domain has no
-          // field for, kept verbatim rather than discarded.
-          rawSourceContext: row.rawSourceContext ?? Prisma.DbNull,
-          proposedCanonicalPrice: row.proposedCanonicalPrice,
-          canonicalRoundingMode: row.canonicalRoundingMode,
-          resolutionStatus: 'UNRESOLVED' as const,
-          status: 'NEEDS_REVIEW' as const,
-          reasonCodes: [...row.warnings, ...row.errors],
-        }));
-
-        for (
-          let start = 0;
-          start < rowsToCreate.length;
-          start += IMPORT_ROW_INSERT_CHUNK
-        ) {
-          await tx.basicPriceImportRow.createMany({
-            data: rowsToCreate.slice(start, start + IMPORT_ROW_INSERT_CHUNK),
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const batch = await tx.basicPriceImportBatch.create({
+            data: {
+              workspaceId,
+              organizationId,
+              uploadedByAccountId: envelope.actorAccountId,
+              sourceFileName: knowledge.fileName,
+              sourceSha256: knowledge.sourceSha256,
+              sourceByteLength: envelope.byteSize,
+              selectedSheetName: knowledge.sheetName,
+              parserContractVersion: knowledge.parserContractVersion,
+              // USI-01 — how the bytes arrived, and how this batch's row
+              // locators are spelled. Both are provenance, neither is trust.
+              sourceLocatorDialect: knowledge.locatorDialect,
+              sourceRegionScopeLabel: knowledge.regionScopeLabel,
+              // BP-REGION-TRUTH-07S — HOW the scope was read, and whether the
+              // SOURCE called it a place. Both were computed at intake and
+              // discarded here; a batch could say which column it read but not
+              // whether that column meant a jurisdiction at all. Recorded from
+              // the reading itself, never inferred later.
+              sourceRegionScopeKind: knowledge.regionScopeKind,
+              sourceRegionScopeGeographicEvidence:
+                knowledge.regionScopeGeographicEvidence,
+              // WHICH INTERPRETATION PRODUCED THESE ROWS. Recorded from the
+              // reading itself, so a batch can answer the question later instead
+              // of a reader inferring column roles from cell addresses. Null
+              // throughout wherever the document decided everything.
+              interpretationResourceNameColumn:
+                knowledge.interpretation?.resourceNameColumn ?? null,
+              interpretationSourceUnitColumn:
+                knowledge.interpretation?.sourceUnitColumn ?? null,
+              interpretationDeclaredSection:
+                knowledge.interpretation?.declaredSection ?? null,
+              interpretationKdnColumn:
+                knowledge.interpretation?.kdnColumn ?? null,
+              kdnMappingStatus:
+                knowledge.kdnMapping.status === 'ESTABLISHED'
+                  ? 'ESTABLISHED'
+                  : knowledge.kdnMapping.status === 'NEEDS_REVIEW'
+                    ? 'NEEDS_REVIEW'
+                    : 'ABSENT',
+              kdnMappingCandidates:
+                knowledge.kdnMapping.status === 'NEEDS_REVIEW'
+                  ? knowledge.kdnMapping.candidates.map((candidate) => ({
+                      columnNumber: candidate.columnNumber,
+                      headerText: candidate.headerText,
+                      kind: candidate.kind,
+                    }))
+                  : Prisma.DbNull,
+              // Where the original bytes are retained, beside the hash that
+              // identifies them.
+              sourceStorageRef,
+              // USI-01R2 §6A — which OBSERVATION of a source stream this is.
+              sourceObservationKey: observation.observationKey,
+              ingestionChannel: envelope.ingestionChannel,
+              ingestionConnectorId: envelope.connectorId,
+              // USI-01R §10 — transmission evidence, kept but never identity.
+              ingestionDeliveryId: envelope.deliveryId,
+              // ...and the source's own observation identity, which IS.
+              ingestionExternalSourceId: envelope.externalSourceId,
+              ingestionExternalRecordId: envelope.externalRecordId,
+              ingestionExternalVersion: envelope.externalVersion,
+              sourceObservedAt: envelope.sourceObservedAt,
+              regionId: metadata.regionId ?? null,
+              effectiveDate: metadata.effectiveDate
+                ? new Date(metadata.effectiveDate)
+                : null,
+              sourceType: metadata.sourceType ?? null,
+              sourceOrigin: metadata.sourceOrigin ?? null,
+              sourceOrganizationName: metadata.sourceOrganizationName ?? null,
+              sourceVendorName: metadata.sourceVendorName ?? null,
+              // RM-03D1 — temporal provenance. Null means unknown, which never
+              // reads as "the source stated this date".
+              sourcePeriodLabel: metadata.sourcePeriodLabel ?? null,
+              sourcePeriodGranularity: metadata.sourcePeriodGranularity ?? null,
+              effectiveDateProvenance: metadata.effectiveDateProvenance ?? null,
+              effectiveDateDerivationRule:
+                metadata.effectiveDateDerivationRule ?? null,
+              priceCoverageDeclared: metadata.priceCoverageDeclared ?? false,
+              transportIncluded: metadata.transportIncluded ?? null,
+              loadingIncluded: metadata.loadingIncluded ?? null,
+              unloadingIncluded: metadata.unloadingIncluded ?? null,
+              deliveredToProject: metadata.deliveredToProject ?? null,
+              importFingerprint: fingerprint,
+              // Every row is created NEEDS_REVIEW below (resolution is always
+              // a separate human step) — the batch reflects that immediately,
+              // consistent with state machine A's automatic transition chain.
+              status: 'NEEDS_REVIEW',
+            },
           });
-        }
 
-        // The read-back IS the count check: it proves both that every row this
-        // request wrote is on record, and that nothing else is in the batch.
-        const persistedRows = await tx.basicPriceImportRow.findMany({
-          where: { batchId: batch.id },
-        });
-        if (persistedRows.length !== rowsToCreate.length)
-          throw new ConflictException('IMPORT_ROW_COUNT_MISMATCH');
+          /**
+           * ONE WRITE PER CHUNK, NOT ONE PER ROW.
+           *
+           * THIS LINE USED TO BE `await tx.basicPriceImportRow.create()` INSIDE A
+           * LOOP, and the Owner's real Ambon workbook is what proved it wrong:
+           * 934 rows meant 934 sequential round-trips inside an interactive
+           * transaction whose timeout is 5 seconds, and the upload died on
+           * Prisma P2028 — "transaction already closed", 5010 ms elapsed. The
+           * batch had already been written when the loop ran out of time, so the
+           * whole transaction rolled back and the Owner's browser was answered
+           * 500 by a workbook SIMPROK had read perfectly.
+           *
+           * The defect was never the timeout. A per-row write is an N+1 against
+           * the database, and raising the clock would only move the row count at
+           * which the same upload fails — while making every failure slower.
+           *
+           * IDS ARE MINTED HERE, and that is what keeps SOURCE ORDER exact.
+           * `createMany` returns a COUNT rather than rows, so the written rows
+           * have to be reassembled from something. Minting the ids in source
+           * order makes that reassembly proven rather than assumed: the array
+           * index IS the source position, and the read-back is keyed by id.
+           *
+           * AN EARLIER VERSION OF THIS NOTE JUSTIFIED IT BY CLAIMING "there is no
+           * unique index on (batchId, sourceRowNumber)". THAT WAS FALSE — the
+           * constraint is declared at prisma/schema.prisma, `@@unique([batchId,
+           * sourceRowNumber])` on BasicPriceImportRow — and so was the reasoning
+           * built on it, that a source "may legitimately state a row number
+           * twice": `sourceRowNumber` is the reader's PHYSICAL row number within
+           * the one selected table, unique by construction.
+           *
+           * The IMPLEMENTATION was never wrong and is unchanged. Ordering by a
+           * column would still be a second thing to trust where minting needs
+           * none, and it would still make source order depend on a constraint
+           * rather than on the read itself. Only the stated reason was wrong, and
+           * only the stated reason has changed.
+           *
+           * CHUNKED because PostgreSQL binds at most 65535 parameters per
+           * statement, and this table writes ~30 columns per row. At the reader's
+           * 20 000-row ceiling a single statement would exceed that limit and
+           * fail on the largest sources — the ones this repair exists for.
+           */
+          const rowIds = knowledge.rows.map(() => randomUUID());
+          const rowsToCreate = knowledge.rows.map((row, index) => ({
+            id: rowIds[index],
+            batchId: batch.id,
+            // USI-01R GAP B — a row whose family the source stated, together
+            // with WHO decided it and the source's own words either way.
+            sourceSection: row.sourceSection,
+            sourceSectionProvenance: row.sourceSectionProvenance,
+            rawSourceCategoryCode: row.rawSourceCategoryCode,
+            rawSourceCategoryName: row.rawSourceCategoryName,
+            sourceRowNumber: row.sourceRowNumber,
+            sourceCodeCellAddress: row.sourceCodeCellAddress,
+            sourceNameCellAddress: row.sourceNameCellAddress,
+            sourceUnitCellAddress: row.sourceUnitCellAddress,
+            sourcePriceCellAddress: row.sourcePriceCellAddress,
+            sourceKdnCellAddress: row.sourceKdnCellAddress,
+            sourceKdnHeaderText: row.sourceKdnHeaderText,
+            rawResourceCodeText: row.rawResourceCodeText,
+            rawResourceNameText: row.rawResourceNameText,
+            rawUnitText: row.rawUnitText,
+            rawPriceCellType: row.rawPriceCellType,
+            rawPriceNumericRoundTripString: row.rawPriceNumericRoundTripString,
+            rawPriceTextValue: row.rawPriceTextValue,
+            rawPriceFormulaText: row.rawPriceFormulaText,
+            rawPriceCachedResultRoundTripString:
+              row.rawPriceCachedResultRoundTripString,
+            rawPriceFormulaError: row.rawPriceFormulaError,
+            rawPriceNumberFormat: row.rawPriceNumberFormat,
+            rawPriceDisplayText: row.rawPriceDisplayText,
+            // LAW 2 — everything the source said that this domain has no
+            // field for, kept verbatim rather than discarded.
+            rawSourceContext: row.rawSourceContext ?? Prisma.DbNull,
+            proposedCanonicalPrice: row.proposedCanonicalPrice,
+            canonicalRoundingMode: row.canonicalRoundingMode,
+            proposedCanonicalKdn: row.proposedCanonicalKdn,
+            rawKdnTextValue: row.rawKdnTextValue,
+            rawKdnNumericRoundTripString: row.rawKdnNumericRoundTripString,
+            rawKdnDisplayText: row.rawKdnDisplayText,
+            kdnReasonCode: row.kdnReasonCode,
+            resolutionStatus: 'UNRESOLVED' as const,
+            status: 'NEEDS_REVIEW' as const,
+            reasonCodes: [
+              ...row.warnings,
+              ...row.errors,
+              ...(row.kdnReasonCode ? [row.kdnReasonCode] : []),
+            ],
+          }));
 
-        const persistedById = new Map(persistedRows.map((r) => [r.id, r]));
-        const createdRows: Prisma.BasicPriceImportRowGetPayload<
-          Record<string, never>
-        >[] = [];
-        for (const id of rowIds) {
-          const persisted = persistedById.get(id);
-          if (!persisted)
+          for (
+            let start = 0;
+            start < rowsToCreate.length;
+            start += IMPORT_ROW_INSERT_CHUNK
+          ) {
+            await tx.basicPriceImportRow.createMany({
+              data: rowsToCreate.slice(start, start + IMPORT_ROW_INSERT_CHUNK),
+            });
+          }
+
+          // The read-back IS the count check: it proves both that every row this
+          // request wrote is on record, and that nothing else is in the batch.
+          const persistedRows = await tx.basicPriceImportRow.findMany({
+            where: { batchId: batch.id },
+          });
+          if (persistedRows.length !== rowsToCreate.length)
             throw new ConflictException('IMPORT_ROW_COUNT_MISMATCH');
-          createdRows.push(persisted);
-        }
 
-        return this.presentIntake(batch, createdRows, observation, {
-          ...presentOptions,
-          exactReplay: false,
-        });
-      });
+          const persistedById = new Map(persistedRows.map((r) => [r.id, r]));
+          const createdRows: Prisma.BasicPriceImportRowGetPayload<
+            Record<string, never>
+          >[] = [];
+          for (const id of rowIds) {
+            const persisted = persistedById.get(id);
+            if (!persisted)
+              throw new ConflictException('IMPORT_ROW_COUNT_MISMATCH');
+            createdRows.push(persisted);
+          }
+
+          return this.presentIntake(batch, createdRows, observation, {
+            ...presentOptions,
+            exactReplay: false,
+          });
+        },
+        {
+          // Chunked row insert plus fingerprint work routinely exceeds Prisma's
+          // 5s interactive default on a loaded e2e machine. Timeout is not a
+          // second intake engine — it is the same write finishing lawfully.
+          timeout: 30_000,
+          maxWait: 30_000,
+        },
+      );
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -1474,208 +1780,473 @@ export class BasicPriceImportService {
       if (!provided.has(key)) return undefined;
       return value === undefined ? undefined : value;
     };
-    return this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<
-        Array<{
-          id: string;
-          workspaceId: string;
-          status: string;
-          version: number;
-          uploadedByAccountId: string;
-          effectiveDate: Date | null;
-          sourcePeriodLabel: string | null;
-          sourcePeriodGranularity: string | null;
-          effectiveDateProvenance: string | null;
-          effectiveDateDerivationRule: string | null;
-          // Read under the SAME lock the write takes, because the source
-          // classification is now judged on the MERGED state: a patch that
-          // moves only the origin has to be checked against the type already
-          // stored, and reading that outside the lock would judge a value
-          // another writer could have changed.
-          sourceType: string | null;
-          sourceOrigin: string | null;
-        }>
-      >(
-        Prisma.sql`SELECT "id", "workspaceId", "status", "version", "uploadedByAccountId",
+    /**
+     * BP-REGION-TRUTH-07U — THE COLLISION IS ANSWERED FROM OUTSIDE THE
+     * TRANSACTION IT KILLED.
+     *
+     * The refusal itself is decided inside, by the unique constraint, exactly as
+     * before. Only the read that names the batch which already holds this
+     * identity happens here — on the pooled client, after `$transaction` has
+     * rolled back and released the connection, which is the first moment
+     * PostgreSQL will answer a question at all. One extra read, on the refusal
+     * path only; the success path is untouched.
+     */
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const locked = await tx.$queryRaw<
+          Array<{
+            id: string;
+            workspaceId: string;
+            status: string;
+            version: number;
+            uploadedByAccountId: string;
+            effectiveDate: Date | null;
+            sourcePeriodLabel: string | null;
+            sourcePeriodGranularity: string | null;
+            effectiveDateProvenance: string | null;
+            effectiveDateDerivationRule: string | null;
+            // Read under the SAME lock the write takes, because the source
+            // classification is now judged on the MERGED state: a patch that
+            // moves only the origin has to be checked against the type already
+            // stored, and reading that outside the lock would judge a value
+            // another writer could have changed.
+            sourceType: string | null;
+            sourceOrigin: string | null;
+            /**
+             * BP-REGION-TRUTH-07S §12 — EVERYTHING THIS BATCH'S IDENTITY IS MADE
+             * OF, read under the SAME lock the write takes.
+             *
+             * `importFingerprint` is recomputed below from the MERGED final state,
+             * so every input it consumes has to be the state no concurrent writer
+             * can move underneath it. Reading them outside the lock would compute
+             * an identity for facts that were true a moment ago.
+             *
+             * It costs no extra round trip — these columns join a SELECT that was
+             * already being issued for the lock itself.
+             */
+            organizationId: string;
+            importFingerprint: string;
+            sourceSha256: string;
+            selectedSheetName: string;
+            parserContractVersion: string;
+            regionId: string | null;
+            sourceOrganizationName: string | null;
+            sourceVendorName: string | null;
+            priceCoverageDeclared: boolean;
+            transportIncluded: boolean | null;
+            loadingIncluded: boolean | null;
+            unloadingIncluded: boolean | null;
+            deliveredToProject: boolean | null;
+            sourceRegionScopeLabel: string | null;
+            sourceRegionScopeGeographicEvidence: string | null;
+            regionScopeConfirmedRegionId: string | null;
+            ingestionChannel: string;
+            ingestionConnectorId: string | null;
+            ingestionExternalSourceId: string | null;
+            ingestionExternalRecordId: string | null;
+            ingestionExternalVersion: string | null;
+            interpretationResourceNameColumn: number | null;
+            interpretationSourceUnitColumn: number | null;
+            interpretationDeclaredSection: string | null;
+            interpretationKdnColumn: number | null;
+          }>
+        >(
+          Prisma.sql`SELECT "id", "workspaceId", "status", "version", "uploadedByAccountId",
                           "effectiveDate", "sourcePeriodLabel", "sourcePeriodGranularity",
                           "effectiveDateProvenance", "effectiveDateDerivationRule",
-                          "sourceType", "sourceOrigin"
+                          "sourceType", "sourceOrigin",
+                          "organizationId", "importFingerprint", "sourceSha256",
+                          "selectedSheetName", "parserContractVersion", "regionId",
+                          "sourceOrganizationName", "sourceVendorName",
+                          "priceCoverageDeclared", "transportIncluded", "loadingIncluded",
+                          "unloadingIncluded", "deliveredToProject",
+                          "sourceRegionScopeLabel", "sourceRegionScopeGeographicEvidence",
+                          "regionScopeConfirmedRegionId",
+                          "ingestionChannel", "ingestionConnectorId",
+                          "ingestionExternalSourceId", "ingestionExternalRecordId",
+                          "ingestionExternalVersion",
+                          "interpretationResourceNameColumn", "interpretationSourceUnitColumn",
+                          "interpretationDeclaredSection", "interpretationKdnColumn"
                      FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
-      );
-      const batch = locked[0];
-      if (!batch || batch.workspaceId !== workspaceId)
-        throw new NotFoundException('Batch not found');
-      assertBatchOwnedByCaller(batch, currentAccountId, 'Batch not found');
-      if (batch.version !== dto.version)
-        throw new ConflictException('BATCH_VERSION_STALE');
-      if (
-        batch.status !== 'NEEDS_REVIEW' &&
-        batch.status !== 'READY_FOR_REVIEW'
-      ) {
-        throw new ConflictException('BATCH_NOT_MUTABLE');
-      }
+        );
+        const batch = locked[0];
+        if (!batch || batch.workspaceId !== workspaceId)
+          throw new NotFoundException('Batch not found');
+        assertBatchOwnedByCaller(batch, currentAccountId, 'Batch not found');
+        if (batch.version !== dto.version)
+          throw new ConflictException('BATCH_VERSION_STALE');
+        if (
+          batch.status !== 'NEEDS_REVIEW' &&
+          batch.status !== 'READY_FOR_REVIEW'
+        ) {
+          throw new ConflictException('BATCH_NOT_MUTABLE');
+        }
 
-      // RM-03D1 — an incomplete DERIVED provenance is refused here with a named
-      // error rather than reaching the CHECK constraint as a raw 500. The
-      // constraint stays as the last word for any writer that never asks; this
-      // just gives the human at the boundary a usable answer. Merged state, not
-      // the patch alone: a field the caller omitted keeps its stored value.
-      // RM-03D1 — A CHANGED DATE INVALIDATES THE DECISION THAT EXPLAINED THE OLD
-      // ONE. A provenance claim belongs to the fact it described: "derived from
-      // TA 2024 by PERIOD_START" explains 2024-01-01 and nothing else. Letting a
-      // date-only PATCH slide the old claim onto a new date is exactly how a
-      // structurally perfect falsehood is born, and SIMPROK must not guess the
-      // replacement decision either. So the caller states it, or nothing moves.
-      //
-      // Unknown stays unknown: if the stored provenance is already NULL there is
-      // no decision to invalidate, and a date-only change stays honest.
-      const requestedEffectiveDate = provided?.has('effectiveDate')
-        ? dto.effectiveDate
-          ? new Date(dto.effectiveDate)
-          : null
-        : undefined;
-      const finalEffectiveDate =
-        requestedEffectiveDate === undefined
-          ? batch.effectiveDate
-          : requestedEffectiveDate;
-      const dateChanged =
-        requestedEffectiveDate !== undefined &&
-        (batch.effectiveDate === null) !== (finalEffectiveDate === null)
-          ? true
-          : requestedEffectiveDate !== undefined &&
-              batch.effectiveDate &&
-              finalEffectiveDate
-            ? !isSameUtcDay(batch.effectiveDate, finalEffectiveDate)
-            : false;
-      const provenanceDecisionSupplied = Boolean(
-        provided?.has('effectiveDateProvenance'),
-      );
-      if (
-        dateChanged &&
-        batch.effectiveDateProvenance !== null &&
-        !provenanceDecisionSupplied
-      ) {
-        throw new ConflictException({
-          statusCode: 409,
-          error: 'Conflict',
-          message: 'TEMPORAL_PROVENANCE_DECISION_REQUIRED',
-          storedEffectiveDate: batch.effectiveDate
-            ? batch.effectiveDate.toISOString().slice(0, 10)
-            : null,
-          requestedEffectiveDate: finalEffectiveDate
-            ? finalEffectiveDate.toISOString().slice(0, 10)
-            : null,
-          storedEffectiveDateProvenance: batch.effectiveDateProvenance,
-        });
-      }
-
-      // Exactly the state the update below will produce: a cleared field is
-      // validated as cleared, not as its stale stored value.
-      const merged = <T>(
-        key: keyof UpdateBasicPriceImportBatchDto,
-        next: T | null | undefined,
-        stored: T | null,
-      ): T | null => {
-        const patched = patch(key, next);
-        return patched === undefined ? stored : patched;
-      };
-      assertTemporalProvenanceCoherent({
-        sourceOrigin: null,
-        sourceType: null,
-        effectiveDate: finalEffectiveDate,
-        sourcePeriodLabel: merged(
-          'sourcePeriodLabel',
-          dto.sourcePeriodLabel,
-          batch.sourcePeriodLabel,
-        ),
-        sourcePeriodGranularity: merged(
-          'sourcePeriodGranularity',
-          dto.sourcePeriodGranularity,
-          batch.sourcePeriodGranularity,
-        ),
-        effectiveDateProvenance: merged(
-          'effectiveDateProvenance',
-          dto.effectiveDateProvenance,
-          batch.effectiveDateProvenance,
-        ),
-        effectiveDateDerivationRule: merged(
-          'effectiveDateDerivationRule',
-          dto.effectiveDateDerivationRule,
-          batch.effectiveDateDerivationRule,
-        ),
-      });
-
-      // SOURCE FACTS ARE STORED AS STATED. No derivation, no pair test: the
-      // two axes are independent, so there is no combination of stated values
-      // for this method to argue with. An UNSTATED fact stays unstated, and the
-      // action gates fail closed on it — which is where fail-closed belongs.
-
-      const updated = await tx.basicPriceImportBatch.update({
-        where: { id: batchId },
-        // THE REGION ITSELF, ON THE WAY BACK OUT OF THE SAVE.
+        // RM-03D1 — an incomplete DERIVED provenance is refused here with a named
+        // error rather than reaching the CHECK constraint as a raw 500. The
+        // constraint stays as the last word for any writer that never asks; this
+        // just gives the human at the boundary a usable answer. Merged state, not
+        // the patch alone: a field the caller omitted keeps its stored value.
+        // RM-03D1 — A CHANGED DATE INVALIDATES THE DECISION THAT EXPLAINED THE OLD
+        // ONE. A provenance claim belongs to the fact it described: "derived from
+        // TA 2024 by PERIOD_START" explains 2024-01-01 and nothing else. Letting a
+        // date-only PATCH slide the old claim onto a new date is exactly how a
+        // structurally perfect falsehood is born, and SIMPROK must not guess the
+        // replacement decision either. So the caller states it, or nothing moves.
         //
-        // `savedMetadataLines` — the "Tercatat di SIMPROK" block that makes
-        // metadata persistence provable through the product — is documented to
-        // read the SERVER's answer and never the form's own state. For every
-        // other field it can. For the region it could not: `regionId` alone is
-        // a UUID no room may print at a person, so the line degraded to
-        // "sudah dipilih" until the next reload. The read path already shapes
-        // the region exactly this way; the save now answers with the same
-        // fact, so what a person is told they saved is a PLACE.
-        include: { region: { select: { id: true, code: true, name: true } } },
-        data: {
-          regionId: dto.regionId ?? undefined,
-          effectiveDate: dto.effectiveDate
+        // Unknown stays unknown: if the stored provenance is already NULL there is
+        // no decision to invalidate, and a date-only change stays honest.
+        const requestedEffectiveDate = provided?.has('effectiveDate')
+          ? dto.effectiveDate
             ? new Date(dto.effectiveDate)
-            : undefined,
-          /**
-           * SOFT RE-VERIFICATION, under the SAME omitted-means-unchanged rule
-           * as every other field here — `patch` is what lets a person CLEAR it
-           * by sending an explicit null, which matters because "I no longer
-           * think this needs re-checking" is a real decision, and a field that
-           * can only ever be set would silently make the first guess permanent.
-           *
-           * Nothing derives this. An absent value stays absent.
-           */
-          reviewDate: patch(
-            'reviewDate',
-            dto.reviewDate ? new Date(dto.reviewDate) : dto.reviewDate,
+            : null
+          : undefined;
+        const finalEffectiveDate =
+          requestedEffectiveDate === undefined
+            ? batch.effectiveDate
+            : requestedEffectiveDate;
+        const dateChanged =
+          requestedEffectiveDate !== undefined &&
+          (batch.effectiveDate === null) !== (finalEffectiveDate === null)
+            ? true
+            : requestedEffectiveDate !== undefined &&
+                batch.effectiveDate &&
+                finalEffectiveDate
+              ? !isSameUtcDay(batch.effectiveDate, finalEffectiveDate)
+              : false;
+        const provenanceDecisionSupplied = Boolean(
+          provided?.has('effectiveDateProvenance'),
+        );
+        if (
+          dateChanged &&
+          batch.effectiveDateProvenance !== null &&
+          !provenanceDecisionSupplied
+        ) {
+          throw new ConflictException({
+            statusCode: 409,
+            error: 'Conflict',
+            message: 'TEMPORAL_PROVENANCE_DECISION_REQUIRED',
+            storedEffectiveDate: batch.effectiveDate
+              ? batch.effectiveDate.toISOString().slice(0, 10)
+              : null,
+            requestedEffectiveDate: finalEffectiveDate
+              ? finalEffectiveDate.toISOString().slice(0, 10)
+              : null,
+            storedEffectiveDateProvenance: batch.effectiveDateProvenance,
+          });
+        }
+
+        // Exactly the state the update below will produce: a cleared field is
+        // validated as cleared, not as its stale stored value.
+        const merged = <T>(
+          key: keyof UpdateBasicPriceImportBatchDto,
+          next: T | null | undefined,
+          stored: T | null,
+        ): T | null => {
+          const patched = patch(key, next);
+          return patched === undefined ? stored : patched;
+        };
+        assertTemporalProvenanceCoherent({
+          sourceOrigin: null,
+          sourceType: null,
+          effectiveDate: finalEffectiveDate,
+          sourcePeriodLabel: merged(
+            'sourcePeriodLabel',
+            dto.sourcePeriodLabel,
+            batch.sourcePeriodLabel,
           ),
-          sourceType: dto.sourceType ?? undefined,
-          sourceOrigin: dto.sourceOrigin ?? undefined,
-          sourceOrganizationName: dto.sourceOrganizationName ?? undefined,
-          sourceVendorName: dto.sourceVendorName ?? undefined,
-          // RM-03D1 — temporal provenance, under the same
-          // omitted-means-unchanged rule as every other field here.
-          sourcePeriodLabel: patch('sourcePeriodLabel', dto.sourcePeriodLabel),
-          sourcePeriodGranularity: patch(
+          sourcePeriodGranularity: merged(
             'sourcePeriodGranularity',
             dto.sourcePeriodGranularity,
+            batch.sourcePeriodGranularity,
           ),
-          effectiveDateProvenance: patch(
+          effectiveDateProvenance: merged(
             'effectiveDateProvenance',
             dto.effectiveDateProvenance,
+            batch.effectiveDateProvenance,
           ),
-          effectiveDateDerivationRule: patch(
+          effectiveDateDerivationRule: merged(
             'effectiveDateDerivationRule',
             dto.effectiveDateDerivationRule,
+            batch.effectiveDateDerivationRule,
           ),
-          priceCoverageDeclared: dto.priceCoverageDeclared ?? undefined,
-          transportIncluded: dto.transportIncluded ?? undefined,
-          loadingIncluded: dto.loadingIncluded ?? undefined,
-          unloadingIncluded: dto.unloadingIncluded ?? undefined,
-          deliveredToProject: dto.deliveredToProject ?? undefined,
-          version: { increment: 1 },
+        });
+
+        // SOURCE FACTS ARE STORED AS STATED. No derivation, no pair test: the
+        // two axes are independent, so there is no combination of stated values
+        // for this method to argue with. An UNSTATED fact stays unstated, and the
+        // action gates fail closed on it — which is where fail-closed belongs.
+
+        /**
+         * BP-REGION-TRUTH-07S §12 — IDENTITY MUST DESCRIBE FINAL FACTS.
+         *
+         * THE DEFECT THIS CLOSES, IN THE LIFECYCLE THAT ACTUALLY HAPPENS. The
+         * import page reads a new file with DELIBERATELY EMPTY context —
+         * `handleFileChosen` clears metadata first, so that a second workbook can
+         * never inherit the first one's provenance. The batch is therefore minted
+         * with `regionId: null`, and `regionId` is a FINGERPRINT input. The Region
+         * is chosen afterwards, in a form that only exists once the batch does,
+         * and saved through this method — which updated the column and left the
+         * fingerprint describing a batch that had no region.
+         *
+         * WHAT THAT COST A USER. Re-uploading the same workbook to import a
+         * SECOND jurisdiction re-previewed with empty context too, recomputed the
+         * SAME stale fingerprint, matched the first batch and was handed it back
+         * as an exact replay. The second region was unreachable through the
+         * product: the file had been imported, so it could never be imported
+         * again — for anywhere. The fingerprint existed precisely to keep those
+         * two imports apart and was instead the thing collapsing them.
+         *
+         * WHY RECOMPUTE, AND NOT LOOSEN. Dropping `regionId` from the fingerprint
+         * would have made the collapse permanent and lawful. Deferring identity
+         * until finalization would rebuild the intake door. Recomputation reuses
+         * the ONE existing engine over facts this batch already stores — no byte
+         * of the source is re-read, and nothing here hashes anything of its own.
+         *
+         * MERGED STATE, MATCHED TO THE WRITE BELOW rather than to the validation
+         * above: the identity must describe what is actually stored, so each value
+         * is computed with the same omitted-means-unchanged rule its column uses.
+         */
+        const finalRegionId = dto.regionId ?? batch.regionId;
+        const finalMetadata: FingerprintMetadata = {
+          regionId: finalRegionId,
+          effectiveDate: dto.effectiveDate
+            ? new Date(dto.effectiveDate)
+            : batch.effectiveDate,
+          sourceType: dto.sourceType ?? batch.sourceType,
+          sourceOrigin: dto.sourceOrigin ?? batch.sourceOrigin,
+          sourceOrganizationName:
+            dto.sourceOrganizationName ?? batch.sourceOrganizationName,
+          sourceVendorName: dto.sourceVendorName ?? batch.sourceVendorName,
+          sourcePeriodLabel: merged(
+            'sourcePeriodLabel',
+            dto.sourcePeriodLabel,
+            batch.sourcePeriodLabel,
+          ),
+          sourcePeriodGranularity: merged(
+            'sourcePeriodGranularity',
+            dto.sourcePeriodGranularity,
+            batch.sourcePeriodGranularity,
+          ),
+          effectiveDateProvenance: merged(
+            'effectiveDateProvenance',
+            dto.effectiveDateProvenance,
+            batch.effectiveDateProvenance,
+          ),
+          effectiveDateDerivationRule: merged(
+            'effectiveDateDerivationRule',
+            dto.effectiveDateDerivationRule,
+            batch.effectiveDateDerivationRule,
+          ),
+          priceCoverageDeclared:
+            dto.priceCoverageDeclared ?? batch.priceCoverageDeclared,
+          transportIncluded: dto.transportIncluded ?? batch.transportIncluded,
+          loadingIncluded: dto.loadingIncluded ?? batch.loadingIncluded,
+          unloadingIncluded: dto.unloadingIncluded ?? batch.unloadingIncluded,
+          deliveredToProject:
+            dto.deliveredToProject ?? batch.deliveredToProject,
+        };
+        const finalFingerprint = fingerprintOf({
+          workspaceId,
+          organizationId: batch.organizationId,
+          sourceSha256: batch.sourceSha256,
+          sheetName: batch.selectedSheetName,
+          parserContractVersion: batch.parserContractVersion,
+          metadata: finalMetadata,
+          // The reading is over; these are the facts it left behind. See
+          // `intakeIdentitySegmentsOf` for why the stored columns are exactly
+          // equivalent to the reading that wrote them.
+          intakeSegments: intakeIdentitySegmentsOf({
+            regionScopeLabel: batch.sourceRegionScopeLabel,
+            ingestionChannel: batch.ingestionChannel,
+            connectorId: batch.ingestionConnectorId,
+            externalSourceId: batch.ingestionExternalSourceId,
+            externalRecordId: batch.ingestionExternalRecordId,
+            externalVersion: batch.ingestionExternalVersion,
+            interpretationResourceNameColumn:
+              batch.interpretationResourceNameColumn,
+            interpretationSourceUnitColumn:
+              batch.interpretationSourceUnitColumn,
+            interpretationDeclaredSection: batch.interpretationDeclaredSection,
+            interpretationKdnColumn: batch.interpretationKdnColumn,
+          }),
+        });
+
+        /**
+         * BP-REGION-TRUTH-07S §8 — THE CONFIRMATION, RECORDED AS THE REGION IT
+         * WAS GIVEN ABOUT.
+         *
+         * A CHANGED REGION REOPENS THE QUESTION BY CONSTRUCTION, and not by a
+         * rule written here: the stored value is compared against the batch's
+         * current region by `regionScopeCompatibilityUnproven`, so moving the
+         * region simply stops matching. This is the same shape as the temporal
+         * provenance law above — a decision belongs to the fact it explained, and
+         * sliding it onto a new fact is how a structurally perfect falsehood is
+         * born.
+         *
+         * Only an explicit `false` withdraws one. An omitted field is silent.
+         */
+        const confirmedRegionId =
+          dto.confirmRegionScopeCompatibility === undefined
+            ? undefined
+            : dto.confirmRegionScopeCompatibility
+              ? finalRegionId
+              : null;
+
+        /**
+         * A THUNK, NOT AN INLINE AWAIT — so the write can be attempted inside a
+         * `try` without the argument literal leaving this call site. Hoisting the
+         * arguments into a variable instead would cost Prisma's `include`
+         * inference, and the region this method answers with would silently
+         * degrade to `unknown`.
+         */
+        const writeBatch = () =>
+          tx.basicPriceImportBatch.update({
+            where: { id: batchId },
+            // THE REGION ITSELF, ON THE WAY BACK OUT OF THE SAVE.
+            //
+            // `savedMetadataLines` — the "Tercatat di SIMPROK" block that makes
+            // metadata persistence provable through the product — is documented to
+            // read the SERVER's answer and never the form's own state. For every
+            // other field it can. For the region it could not: `regionId` alone is
+            // a UUID no room may print at a person, so the line degraded to
+            // "sudah dipilih" until the next reload. The read path already shapes
+            // the region exactly this way; the save now answers with the same
+            // fact, so what a person is told they saved is a PLACE.
+            include: {
+              region: { select: { id: true, code: true, name: true } },
+            },
+            data: {
+              regionId: dto.regionId ?? undefined,
+              effectiveDate: dto.effectiveDate
+                ? new Date(dto.effectiveDate)
+                : undefined,
+              /**
+               * SOFT RE-VERIFICATION, under the SAME omitted-means-unchanged rule
+               * as every other field here — `patch` is what lets a person CLEAR it
+               * by sending an explicit null, which matters because "I no longer
+               * think this needs re-checking" is a real decision, and a field that
+               * can only ever be set would silently make the first guess permanent.
+               *
+               * Nothing derives this. An absent value stays absent.
+               */
+              reviewDate: patch(
+                'reviewDate',
+                dto.reviewDate ? new Date(dto.reviewDate) : dto.reviewDate,
+              ),
+              sourceType: dto.sourceType ?? undefined,
+              sourceOrigin: dto.sourceOrigin ?? undefined,
+              sourceOrganizationName: dto.sourceOrganizationName ?? undefined,
+              sourceVendorName: dto.sourceVendorName ?? undefined,
+              // RM-03D1 — temporal provenance, under the same
+              // omitted-means-unchanged rule as every other field here.
+              sourcePeriodLabel: patch(
+                'sourcePeriodLabel',
+                dto.sourcePeriodLabel,
+              ),
+              sourcePeriodGranularity: patch(
+                'sourcePeriodGranularity',
+                dto.sourcePeriodGranularity,
+              ),
+              effectiveDateProvenance: patch(
+                'effectiveDateProvenance',
+                dto.effectiveDateProvenance,
+              ),
+              effectiveDateDerivationRule: patch(
+                'effectiveDateDerivationRule',
+                dto.effectiveDateDerivationRule,
+              ),
+              priceCoverageDeclared: dto.priceCoverageDeclared ?? undefined,
+              transportIncluded: dto.transportIncluded ?? undefined,
+              loadingIncluded: dto.loadingIncluded ?? undefined,
+              unloadingIncluded: dto.unloadingIncluded ?? undefined,
+              deliveredToProject: dto.deliveredToProject ?? undefined,
+              regionScopeConfirmedRegionId: confirmedRegionId,
+              /**
+               * WRITTEN ONLY WHEN IT ACTUALLY MOVED. An unchanged batch keeps the
+               * exact string it has always had, so a metadata save that touches no
+               * identity-bearing fact cannot perturb identity — and the collision
+               * path below stays reserved for the case that genuinely means
+               * something.
+               */
+              importFingerprint:
+                finalFingerprint === batch.importFingerprint
+                  ? undefined
+                  : finalFingerprint,
+              version: { increment: 1 },
+            },
+          });
+
+        /**
+         * BP-REGION-TRUTH-07S §13 — TWO BATCHES MAY NOT FINALIZE INTO ONE
+         * IDENTITY, AND THE DATABASE IS WHAT SAYS SO.
+         *
+         * Once identity is recomputed on finalization, two separately previewed
+         * batches of the same file CAN converge: preview mints each with an empty
+         * context, and naming the same Region and date for both makes them, at
+         * that moment, the same import truth. `workspaceId_importFingerprint` is
+         * unique precisely to forbid that, so the second save loses by
+         * construction rather than by a check that could be raced past.
+         *
+         * REFUSED, NOT MERGED, NOT RETRIED. Folding the loser into the winner
+         * would discard whichever row decisions the user had made in it; retrying
+         * would loop against a constraint that is stating a fact. The transaction
+         * rolls back, so the batch keeps its version, its metadata and its rows
+         * exactly as they were — and the person is told which batch already holds
+         * this identity. One statement, one verdict, no backoff.
+         */
+        let updated: Awaited<ReturnType<typeof writeBatch>>;
+        try {
+          updated = await writeBatch();
+        } catch (error) {
+          if (
+            !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+            error.code !== 'P2002'
+          ) {
+            throw error;
+          }
+          /**
+           * BP-REGION-TRUTH-07U — NOTHING MORE IS ASKED OF THIS CONNECTION.
+           *
+           * The write above has already aborted the transaction server-side, so
+           * the read that names the winning batch cannot be issued here. It is
+           * issued by the handler below, once the rollback has actually happened.
+           */
+          throw new BatchIdentityCollision(finalFingerprint);
+        }
+        const rows = await tx.basicPriceImportRow.findMany({
+          where: { batchId },
+        });
+        return {
+          ...this.summarize(updated, rows),
+          region: updated.region ?? null,
+        };
+      });
+    } catch (error) {
+      if (!(error instanceof BatchIdentityCollision)) throw error;
+      /**
+       * REFUSED, NOT MERGED, NOT RETRIED — and now also NOT GUESSED AT. The
+       * failed transaction has ended, so this read runs on a healthy
+       * connection and can actually answer WHICH batch the person already has.
+       * If it cannot be found, the answer is an honest null rather than a
+       * second attempt.
+       */
+      const owner = await this.prisma.basicPriceImportBatch.findUnique({
+        where: {
+          workspaceId_importFingerprint: {
+            workspaceId,
+            importFingerprint: error.importFingerprint,
+          },
         },
+        select: { id: true },
       });
-      const rows = await tx.basicPriceImportRow.findMany({
-        where: { batchId },
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        message: 'BATCH_IDENTITY_ALREADY_EXISTS',
+        existingBatchId: owner?.id ?? null,
       });
-      return {
-        ...this.summarize(updated, rows),
-        region: updated.region ?? null,
-      };
-    });
+    }
   }
 
   async getBatch(
