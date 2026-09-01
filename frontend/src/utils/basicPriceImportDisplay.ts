@@ -761,6 +761,56 @@ export const proposalBlockSentence = (
 ): string | null => (reasonCode ? (PROPOSAL_BLOCK_SENTENCES[reasonCode] ?? null) : null);
 
 /**
+ * BP-SHARED-PROPOSAL-01 — whether community curation is a lawful path for this
+ * batch at all, separate from whether the submit endpoint would accept NOW.
+ *
+ * `simprokProposal.offered` is the WRITE verdict. Collapsing "not offered now"
+ * into "this family is never curated" hid the optional Usulkan door on the
+ * Owner's FIELD_PRICE Community Survey batch (`BATCH_NOT_READY_FOR_REVIEW`).
+ *
+ * Uses ONLY server fields. Never invents eligibility the payload did not name.
+ */
+export function communityCurationPathApplies(
+  proposal: BatchLifecycleActions['simprokProposal'],
+  proposed: boolean,
+): boolean {
+  if (proposed || proposal.offered) return true;
+  if (proposal.reasonCode === 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION') {
+    return false;
+  }
+  return proposal.sourceFamily === 'FIELD_PRICE';
+}
+
+export type ProposalDoorView = {
+  /** Show the Usulkan control. Distinct from whether a press is lawful yet. */
+  visible: boolean;
+  /** True only when the server would accept submit now (`offered`). */
+  enabled: boolean;
+};
+
+/**
+ * Door EXISTS vs door OPENS. Visibility follows community routing; enablement
+ * follows the server's write verdict. Never enables when `offered` is false.
+ */
+export function proposalDoorView(
+  proposal: BatchLifecycleActions['simprokProposal'],
+): ProposalDoorView {
+  if (proposal.offered) {
+    return { visible: true, enabled: true };
+  }
+  if (proposal.reasonCode === 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION') {
+    return { visible: false, enabled: false };
+  }
+  if (proposal.reasonCode === 'ALREADY_PROPOSED') {
+    return { visible: false, enabled: false };
+  }
+  if (proposal.sourceFamily === 'FIELD_PRICE') {
+    return { visible: true, enabled: false };
+  }
+  return { visible: false, enabled: false };
+}
+
+/**
  * CATALOG VOCABULARY — the words for the three enums the search selector shows.
  *
  * The reviewer was reading rows like `SEMEN PC — MATERIAL — Zak` and

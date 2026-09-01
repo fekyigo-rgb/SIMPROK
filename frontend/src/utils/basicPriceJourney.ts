@@ -32,6 +32,8 @@
 // whose source family is not routed to curation says so instead of showing
 // three steps it will never take.
 import {
+  communityCurationPathApplies,
+  proposalBlockSentence,
   rowMachineState,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
@@ -157,15 +159,25 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
 
   // 4. PROPOSE — optional, and honest about being unavailable.
   //
-  // `NOT_OFFERED` is reached when the server does not offer the proposal AND
-  // nothing has ever been proposed: for the Owner's own government/regulation
-  // batch that is the correct, permanent answer, and drawing it as "coming
-  // later" would promise a door that will never open.
+  // BP-SHARED-PROPOSAL-01 — `offered === false` is NOT always "never routed".
+  // Write-not-ready (e.g. BATCH_NOT_READY_FOR_REVIEW on FIELD_PRICE) means the
+  // door exists but cannot be pressed yet. `NOT_OFFERED` / "tidak dirutekan"
+  // is reserved for families the server marks as never community-curated.
+  const curationApplies = communityCurationPathApplies(proposal, proposed);
+
   const propose: JourneyStage = proposed
     ? stage('PROPOSE', 'DONE', `${batch.submittedRows} harga sudah diusulkan ke SIMPROK.`, true)
     : proposal.offered
       ? stage('PROPOSE', 'CURRENT', 'Opsional: usulkan batch ini ke kurasi SIMPROK.', true)
-      : stage('PROPOSE', 'NOT_OFFERED', 'Batch ini tidak dirutekan ke kurasi SIMPROK.', true);
+      : curationApplies
+        ? stage(
+            'PROPOSE',
+            'CURRENT',
+            proposalBlockSentence(proposal.reasonCode) ??
+              'Opsional: usulkan batch ini ke kurasi SIMPROK setelah semua baris siap.',
+            true,
+          )
+        : stage('PROPOSE', 'NOT_OFFERED', 'Batch ini tidak dirutekan ke kurasi SIMPROK.', true);
 
   /*
    * BP-UX-FINAL-01C GAP-F — "LATER" AND "NOT AT ALL" ARE DIFFERENT TRUTHS.
@@ -182,11 +194,10 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
    * fact — this batch does not take that path — and it must be stated once,
    * consistently, rather than at the first step and then forgotten.
    *
-   * The condition is the SERVER's: `simprokProposal.offered === false` with
-   * nothing ever proposed. A batch that HAS been proposed keeps its real
-   * progress, whatever the flag says afterwards.
+   * BP-SHARED-PROPOSAL-01 — curationApplies follows server sourceFamily /
+   * reasonCode, not only `offered`. A batch that HAS been proposed keeps its
+   * real progress, whatever the flag says afterwards.
    */
-  const curationApplies = proposed || proposal.offered;
 
   // 5. VERIFY — a real PriceSubmission is genuinely waiting for a curator once
   // rows have been proposed. Before that there is nothing to verify.
@@ -213,7 +224,13 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
 
   return {
     stages: [file, source, rows, propose, verify, publish],
-    note: journeyNote({ kept, proposed, closed, proposalOffered: proposal.offered }),
+    note: journeyNote({
+      kept,
+      proposed,
+      closed,
+      proposalOffered: proposal.offered,
+      curationApplies,
+    }),
   };
 }
 
@@ -231,6 +248,7 @@ function journeyNote(facts: {
   proposed: boolean;
   closed: boolean;
   proposalOffered: boolean;
+  curationApplies: boolean;
 }): string | null {
   if (facts.kept > 0 && facts.proposed) {
     return `${facts.kept} harga sudah tersimpan dan bisa dipakai sekarang di ruang kerja ini. Usulan ke SIMPROK berjalan terpisah.`;
@@ -241,8 +259,13 @@ function journeyNote(facts: {
   if (facts.closed) {
     return 'Batch ini sudah ditutup. Tidak ada baris baru yang bisa diputuskan di sini.';
   }
-  if (!facts.proposalOffered) {
+  // "Tidak berlaku untuk sumber ini" only when the family is never curated —
+  // not when the write is merely blocked (FIELD_PRICE + BATCH_NOT_READY).
+  if (!facts.curationApplies) {
     return 'Harga yang selesai ditinjau langsung tersimpan untuk ruang kerja ini. Kurasi SIMPROK tidak berlaku untuk sumber ini.';
+  }
+  if (!facts.proposalOffered) {
+    return 'Menyimpan untuk ruang kerja ini dan mengusulkan ke SIMPROK adalah dua jalur terpisah — usulan menunggu semua baris selesai.';
   }
   return 'Menyimpan untuk ruang kerja ini dan mengusulkan ke SIMPROK adalah dua jalur terpisah — keduanya boleh dilakukan.';
 }

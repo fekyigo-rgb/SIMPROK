@@ -28,6 +28,7 @@ import {
   machinePickedUnit,
   oneActionAcceptanceView,
   privateUseBlockSentence,
+  proposalDoorView,
   proposalBlockSentence,
   rowActionFailureMessage,
   rowMachineNarrative,
@@ -461,6 +462,7 @@ export function BasicPriceReviewPage() {
   /** Non-null only when there is genuinely nothing left for this press to do. */
   const alreadyStored = alreadyStoredNotice(oneAction);
   const counters = reviewCounters(batch);
+  const proposalDoor = proposalDoorView(batch.actions.simprokProposal);
 
   return (
     <div className="bp-room">
@@ -585,12 +587,19 @@ export function BasicPriceReviewPage() {
             Simpan &amp; Gunakan ({oneActionRowCount})
           </button>
         )}
-        {batch.actions.simprokProposal.offered ? (
+        {/*
+          BP-SHARED-PROPOSAL-01 — door EXISTS vs door OPENS.
+          `proposalDoor` reads only server fields. Enablement stays bound to
+          `simprokProposal.offered` (write would accept now). Visibility keeps
+          the optional Usulkan control when FIELD_PRICE is merely not-ready yet,
+          so "tidak dirutekan" is never used for a community-survey batch.
+        */}
+        {proposalDoor.visible ? (
           <button
             className="bp-btn"
             onClick={() => void handleSubmitBatch()}
-            disabled={isBusy}
-            aria-disabled={isBusy}
+            disabled={!proposalDoor.enabled || isBusy}
+            aria-disabled={!proposalDoor.enabled || isBusy}
             title="Usulkan batch ini ke SIMPROK untuk diperiksa bersama"
           >
             Usulkan juga ke SIMPROK

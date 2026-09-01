@@ -236,6 +236,33 @@ test('F3. a batch that WAS proposed keeps its real curation progress', () => {
   assert.equal(stageBy(proposedThenClosed, 'PUBLISH').state, 'UPCOMING');
 });
 
+test('BP-SHARED-PROPOSAL-01. FIELD_PRICE not-ready is CURRENT with row-block truth, not "tidak dirutekan"', () => {
+  // Exact Owner IKK shape: Community Survey / FIELD_PRICE / BATCH_NOT_READY.
+  const ownerIkk = batchOf({
+    status: 'NEEDS_REVIEW',
+    needsReviewRows: 67,
+    readyForSubmissionRows: 17,
+    alreadyPrivateRows: 17,
+    actions: {
+      ...batchOf().actions,
+      simprokProposal: {
+        offered: false,
+        reasonCode: 'BATCH_NOT_READY_FOR_REVIEW',
+        sourceFamily: 'FIELD_PRICE',
+      },
+    },
+  }) as BasicPriceImportBatchSummary;
+
+  const propose = stageBy(ownerIkk, 'PROPOSE');
+  assert.equal(propose.state, 'CURRENT');
+  assert.equal(propose.optional, true);
+  assert.match(propose.hint, /belum diputuskan/u);
+  assert.doesNotMatch(propose.hint, /tidak dirutekan/u);
+  assert.equal(stageBy(ownerIkk, 'VERIFY').state, 'UPCOMING');
+  assert.equal(stageBy(ownerIkk, 'PUBLISH').state, 'UPCOMING');
+  assert.doesNotMatch(journeyView(ownerIkk).note ?? '', /tidak berlaku untuk sumber ini/u);
+});
+
 test('F5. the private path is stated as usable NOW, not as pending', () => {
   const view = journeyView(notRoutedBatch());
   assert.match(view.note ?? '', /langsung tersimpan untuk ruang kerja ini/u);
