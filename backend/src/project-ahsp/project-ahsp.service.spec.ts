@@ -10,6 +10,8 @@ import {
   E1A_RESOLUTION_POLICY_VERSION,
 } from './ahsp-resource-resolution.orchestrator';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { BoqUnitCompatibilityService } from '../unit-kernel/boq-unit-compatibility.service';
+import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 
 describe('ProjectAhspService E1A', () => {
   const workspaceId = '20000000-0000-4000-8000-000000000001';
@@ -102,6 +104,11 @@ describe('ProjectAhspService E1A', () => {
         findFirst: jest.fn().mockResolvedValue({
           id: selectionInput.boqItemId,
           itemType: 'WORK_ITEM',
+          // KAMUS_UNIT_KERNEL_01A — the BOQ side of the bind-time unit gate.
+          // It matches this fixture's AHSP `outputUnit` because every case in
+          // this file except the unit cases is about something OTHER than
+          // units, and those cases must keep proving what they always proved.
+          unit: 'M1',
         }),
         update: jest.fn().mockResolvedValue({}),
       },
@@ -182,6 +189,13 @@ describe('ProjectAhspService E1A', () => {
       lifecycle as any,
       identity,
       new AhspResourceResolutionOrchestrator(eligibility, units as any, identity),
+      // KAMUS_UNIT_KERNEL_01A: the REAL compatibility service, for the same
+      // reason the real eligibility policy and the real orchestrator are used
+      // above. A stub here could only assert the verdict this spec already
+      // believed in, whereas the shipped service is exactly what must run —
+      // and it is built on the SAME unit stub, so the unit authority stays
+      // singular in the test as it is in production.
+      new BoqUnitCompatibilityService(units as any),
     );
   });
 
@@ -561,7 +575,14 @@ describe('ProjectAhspService E1A', () => {
     prisma.$transaction.mockImplementation((callback: any) => callback(tx));
     jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({ ...input, status: 'UNRESOLVED', reasonCodes: ['NO_PRICE'], explanation: 'none' }));
     await service.selectForBoqItem(selectionInput);
-    expect(units.resolve).toHaveBeenCalledTimes(2);
+    // Three unit questions are asked on this path now, not two: the
+    // KAMUS_UNIT_KERNEL_01A bind gate asks the first one, and the AHSP and
+    // candidate resource units are still asked after it. The number is not the
+    // claim — WHERE they land is. All three arrive at this one UnitKernelService
+    // double, the bind gate included, because it reaches the kernel only through
+    // BoqUnitCompatibilityService. A second conversion implementation anywhere on
+    // this path would show up here as a question that never arrived.
+    expect(units.resolve).toHaveBeenCalledTimes(3);
   });
 
   it('O-03 successor: UNRESOLVED is persisted without selected evidence', async () => {
@@ -797,5 +818,294 @@ describe('ProjectAhspService E1A', () => {
     expect(persisted.status).toBe('UNRESOLVED');
     expect(persisted.reasonCodes).toContain('RESOURCE_NOT_FOUND');
     expect(persisted.selectedBasicPriceId).toBeNull();
+  });
+
+  /**
+   * KAMUS_UNIT_KERNEL_01A x E1A — THE bind-time unit gate.
+   *
+   * `selectForBoqItem` is the only place an AHSP becomes attached to a BOQ
+   * WORK_ITEM (`boqItem.update` sets `ahspVersionId` + `workingOccurrenceId`);
+   * every other write of that pointer is a carry-forward or a clear. So this is
+   * the boundary the gate has to hold, and these cases are about the gate
+   * itself: which verdict it consumes, which question it asks, what it refuses,
+   * and what it leaves untouched when it refuses.
+   *
+   * The verdict is never stubbed. The REAL BoqUnitCompatibilityService runs on
+   * the SAME `units` double the rest of this file drives, so what these tests
+   * steer is the Unit Kernel ANSWER, and the classification of that answer is
+   * the shipped one. A stubbed verdict would prove the service was called and
+   * nothing about whether the right thing was called with the right facts.
+   */
+  describe('bind-time BOQ/AHSP unit compatibility', () => {
+    /** One Unit Kernel answer, in the shape the kernel actually returns. */
+    const unitAnswer = (over: Record<string, unknown> = {}) => ({
+      status: 'RESOLVED',
+      sourceUnitDefinition: { id: 'unit-boq', code: 'M1' },
+      targetUnitDefinition: { id: 'unit-ahsp', code: 'M1' },
+      conversionRuleId: null,
+      conversionRuleVersion: null,
+      quantityFactor: '1',
+      priceOperation: 'IDENTITY',
+      reasonCodes: [],
+      rawSourceUnit: 'M1',
+      rawTargetUnit: 'M1',
+      ...over,
+    });
+
+    /**
+     * Steers ONLY the gate's answer. The gate runs before
+     * resolveVersionResources, so it is always Unit Kernel question #1, and
+     * every later question keeps the default this file already established.
+     */
+    const gateAnswer = (over: Record<string, unknown>) =>
+      units.resolve.mockResolvedValueOnce(unitAnswer(over));
+
+    const select = (over: Partial<typeof selectionInput> = {}) =>
+      service.selectForBoqItem({ ...selectionInput, ...over });
+
+    it('U-01 COMPATIBLE_EXACT binds: the occurrence is created and the row points at it', async () => {
+      const { tx, created } = makeSuccessTx();
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+      await select();
+
+      expect(created.data).toBeDefined();
+      expect(tx.boqItem.update).toHaveBeenCalledWith({
+        where: { id: selectionInput.boqItemId },
+        data: {
+          ahspVersionId: selectionInput.ahspVersionId,
+          workingOccurrenceId: 'occurrence-new',
+        },
+      });
+    });
+
+    /**
+     * The gate consumes the service's verdict and does not re-narrow it. A
+     * convertible pair is one the compatibility authority itself calls
+     * COMPATIBLE, so refusing it here would be this call site inventing a
+     * second, stricter unit law of its own — exactly the duplication this
+     * connection exists to avoid.
+     */
+    it('U-02 COMPATIBLE_CONVERTIBLE binds too — the verdict is consumed, not re-decided', async () => {
+      const { tx, created } = makeSuccessTx();
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+      gateAnswer({
+        quantityFactor: '50',
+        conversionRuleId: 'conversion-rule-1',
+        priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+      });
+
+      await select();
+
+      expect(created.data).toBeDefined();
+      expect(tx.boqItem.update).toHaveBeenCalled();
+    });
+
+    it('U-03 NOT_CONVERTIBLE refuses the bind with the shipped Unit Kernel reason code', async () => {
+      const { tx, created } = makeSuccessTx();
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+      gateAnswer({ status: 'NOT_CONVERTIBLE', reasonCodes: ['NOT_CONVERTIBLE'] });
+
+      const attempt = select();
+      await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+      await expect(attempt).rejects.toThrow(UNIT_REASON.BOQ_UNIT_INCOMPATIBLE);
+      expect(created.data).toBeUndefined();
+      expect(tx.projectAhspOccurrence.create).not.toHaveBeenCalled();
+      expect(tx.boqItem.update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * NEEDS_REVIEW is NOT PROVEN, never "proven different" — and an unproven
+     * unit is not a fact a binding may be made on. It fails closed exactly as
+     * NOT_CONVERTIBLE does. What the reviewer is told differs; what is allowed
+     * does not.
+     */
+    it.each([
+      ['unknown spelling', { status: 'NEEDS_REVIEW', reasonCodes: ['UNKNOWN_UNIT_ALIAS'] }],
+      ['ambiguous spelling', { status: 'NEEDS_REVIEW', reasonCodes: ['AMBIGUOUS_UNIT_ALIAS'] }],
+      ['context required', { status: 'NEEDS_REVIEW', reasonCodes: ['CONTEXT_REQUIRED_UNIT_ALIAS'] }],
+    ])(
+      'U-04 NEEDS_REVIEW (%s) fails closed rather than binding on an unproven unit',
+      async (_label, answer) => {
+        const { tx, created } = makeSuccessTx();
+        prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+        gateAnswer(answer);
+
+        await expect(select()).rejects.toThrow(UNIT_REASON.BOQ_UNIT_INCOMPATIBLE);
+        expect(created.data).toBeUndefined();
+        expect(tx.boqItem.update).not.toHaveBeenCalled();
+      },
+    );
+
+    /**
+     * An AHSP with no output unit has nothing to be compatible WITH. The
+     * eligibility predicate already excludes such versions, so this proves the
+     * gate is independently fail-closed rather than leaning on that filter —
+     * and that it never reaches the Unit Kernel at all, because there is no
+     * second unit to ask about.
+     */
+    it('U-05 a missing AHSP output unit fails closed without asking the Unit Kernel anything', async () => {
+      const { tx, created } = makeSuccessTx();
+      tx.aHSPVersion.findFirst.mockResolvedValue({
+        id: selectionInput.ahspVersionId,
+        outputUnit: null,
+        resources: [resource('resource-1')],
+        ahsp: { ownershipType: 'USER_ASSET' },
+      });
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+      await expect(select()).rejects.toThrow(UNIT_REASON.BOQ_UNIT_INCOMPATIBLE);
+      expect(units.resolve).not.toHaveBeenCalled();
+      expect(created.data).toBeUndefined();
+      expect(tx.boqItem.update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The exact question, in the exact direction, about the exact two rows this
+     * transaction read under this workspace's scope. Distinct spellings are the
+     * point: with 'M1' on both sides a swapped argument order would still pass,
+     * and a swapped order is precisely how a unit gate quietly starts answering
+     * a different question than the one it claims to answer.
+     */
+    it('U-06 asks the compatibility authority about THIS row and THIS version, source-then-target', async () => {
+      const { tx } = makeSuccessTx();
+      tx.boqItem.findFirst.mockResolvedValue({
+        id: selectionInput.boqItemId,
+        itemType: 'WORK_ITEM',
+        unit: 'SAK',
+      });
+      tx.aHSPVersion.findFirst.mockResolvedValue({
+        id: selectionInput.ahspVersionId,
+        outputUnit: 'KG',
+        resources: [resource('resource-1')],
+        ahsp: { ownershipType: 'USER_ASSET' },
+      });
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+
+      await select();
+
+      // BOQ unit is the source, AHSP output unit is the target — the order
+      // BoqUnitCompatibilityService itself asks in.
+      expect(units.resolve).toHaveBeenNthCalledWith(1, 'SAK', 'KG');
+      // Both facts came from the workspace/project-scoped reads already made on
+      // this transaction, not from a second lookup the gate did for itself.
+      expect(tx.boqItem.findFirst).toHaveBeenCalledTimes(1);
+      expect(tx.aHSPVersion.findFirst).toHaveBeenCalledTimes(1);
+      expect(
+        JSON.stringify(tx.aHSPVersion.findFirst.mock.calls[0][0].where),
+      ).toContain(workspaceId);
+      expect(tx.boqItem.findFirst.mock.calls[0][0].where).toMatchObject({
+        id: selectionInput.boqItemId,
+        boqStructureId: 'structure-1',
+      });
+    });
+
+    /**
+     * A refusal must cost nothing downstream. The gate sits before
+     * resolveVersionResources, so on refusal Resource Identity is never
+     * consulted, no Basic Price row is even READ (let alone written), the price
+     * kernel never runs, and no occurrence is left for the Cost Kernel to find.
+     * There is nothing to roll back because nothing was started.
+     */
+    it('U-07 a refusal reads no Basic Price, runs no price kernel, and writes nothing', async () => {
+      const { tx, created } = makeSuccessTx();
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+      const priceKernel = jest.spyOn(kernel, 'resolveAhspResourcePrice');
+      gateAnswer({ status: 'NOT_CONVERTIBLE', reasonCodes: ['NOT_CONVERTIBLE'] });
+
+      await expect(select()).rejects.toThrow(UNIT_REASON.BOQ_UNIT_INCOMPATIBLE);
+
+      expect(priceKernel).not.toHaveBeenCalled();
+      expect(tx.basicPrice.findMany).not.toHaveBeenCalled();
+      expect(tx.basicPrice.findFirst).not.toHaveBeenCalled();
+      expect(tx.resourceCatalog.findMany).not.toHaveBeenCalled();
+      expect(tx.projectAhspOccurrence.create).not.toHaveBeenCalled();
+      expect(tx.boqItem.update).not.toHaveBeenCalled();
+      expect(created.data).toBeUndefined();
+    });
+
+    /**
+     * One command binds one row, so "sibling continuation" here means the
+     * refused row must not fabricate or corrupt anything for the next row: the
+     * refusal performs no row write at all, and the following lawful selection
+     * still binds exactly as it did before this gate existed.
+     */
+    it('U-08 a refused row writes nothing and does not spoil the next lawful row', async () => {
+      const refused = makeSuccessTx();
+      refused.tx.boqItem.findFirst.mockResolvedValue({
+        id: '60000000-0000-4000-8000-000000000002',
+        itemType: 'WORK_ITEM',
+        unit: 'PERSON_DAY',
+      });
+      prisma.$transaction.mockImplementation((callback: any) => callback(refused.tx));
+      gateAnswer({ status: 'NOT_CONVERTIBLE', reasonCodes: ['NOT_CONVERTIBLE'] });
+
+      await expect(
+        select({
+          boqItemId: '60000000-0000-4000-8000-000000000002',
+          idempotencyKey: 'e1a-key-sibling-refused',
+        }),
+      ).rejects.toThrow(UNIT_REASON.BOQ_UNIT_INCOMPATIBLE);
+      expect(refused.tx.boqItem.update).not.toHaveBeenCalled();
+      expect(refused.tx.projectAhspOccurrence.create).not.toHaveBeenCalled();
+
+      const lawful = makeSuccessTx();
+      prisma.$transaction.mockImplementation((callback: any) => callback(lawful.tx));
+
+      await select({ idempotencyKey: 'e1a-key-sibling-lawful' });
+
+      expect(lawful.created.data).toBeDefined();
+      expect(lawful.tx.boqItem.update).toHaveBeenCalledWith({
+        where: { id: selectionInput.boqItemId },
+        data: {
+          ahspVersionId: selectionInput.ahspVersionId,
+          workingOccurrenceId: 'occurrence-new',
+        },
+      });
+    });
+
+    /**
+     * Idempotency is untouched. A replay returns the stored occurrence from
+     * above the gate, which is the correct place for it: a replay must return
+     * what the original request returned, and re-asking a question the original
+     * already answered is how a "repeat" quietly becomes a new decision. The
+     * gate answer here is set to REFUSE, so if the replay path had drifted
+     * below the gate this test would fail rather than pass quietly.
+     */
+    it('U-09 an idempotent replay returns the stored occurrence without re-asking the unit question', async () => {
+      const { tx } = makeSuccessTx();
+      const stored = {
+        id: 'occurrence-existing',
+        requestPayloadHash: requestHash(),
+        resourceResolutions: [],
+      };
+      tx.projectAhspOccurrence.findFirst.mockResolvedValue(stored);
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+      gateAnswer({ status: 'NOT_CONVERTIBLE', reasonCodes: ['NOT_CONVERTIBLE'] });
+
+      await expect(select()).resolves.toBe(stored);
+      expect(units.resolve).not.toHaveBeenCalled();
+      expect(tx.boqItem.update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The gate must not overtake refusals that were already correct. An
+     * incompatible unit on a row that is not a WORK_ITEM is still reported as
+     * "not a work item", because that is the true first reason the request
+     * cannot proceed.
+     */
+    it('U-10 existing earlier refusals keep their own reason codes', async () => {
+      const { tx } = makeSuccessTx();
+      tx.boqItem.findFirst.mockResolvedValue({
+        id: selectionInput.boqItemId,
+        itemType: 'FOLDER',
+        unit: 'PERSON_DAY',
+      });
+      prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+      gateAnswer({ status: 'NOT_CONVERTIBLE', reasonCodes: ['NOT_CONVERTIBLE'] });
+
+      await expect(select()).rejects.toThrow('BOQ_ITEM_NOT_WORK_ITEM');
+      expect(units.resolve).not.toHaveBeenCalled();
+    });
   });
 });

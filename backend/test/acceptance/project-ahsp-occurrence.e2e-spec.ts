@@ -1104,4 +1104,181 @@ describe('Project AHSP whole-version selection (e2e)', () => {
         .expect(404);
     });
   });
+
+  /**
+   * KAMUS_UNIT_KERNEL_01A — the bind-time unit gate, decided by the REAL Unit
+   * Kernel reference data rather than by a stubbed verdict.
+   *
+   * Every selection above binds an 'M1' row to an AHSP whose outputUnit is
+   * 'M1', so the whole file so far has only ever proven the COMPATIBLE side.
+   * The rows below carry units the shipped alias and conversion tables
+   * genuinely refuse, so these refusals are decided by the same data
+   * production decides on.
+   *
+   * Both cases here are the NEEDS_REVIEW class — 'OH' and 'M1' are each a
+   * known canonical unit with no active rule carrying one across to the other
+   * (CONVERSION_RULE_NOT_FOUND), and an unheard-of spelling is
+   * UNKNOWN_UNIT_ALIAS. The NOT_CONVERTIBLE class needs a seeded
+   * NOT_CONVERTIBLE conversion rule to exist and is proven at service level
+   * instead; inventing such a rule here would be manufacturing unit evidence.
+   * What these prove is the property the boundary actually owes: an unproven
+   * unit pair does not bind.
+   *
+   * TEST_ONLY_SYNTHETIC_FIXTURE=YES  PRODUCTION_TRUTH=NO
+   */
+  describe('bind-time BOQ/AHSP unit compatibility', () => {
+    /** Governed unit, no active rule carrying PERSON_DAY across to M1. */
+    let unprovenPairBoqItemId: string;
+    /** A spelling the alias table has never heard of. */
+    let unknownUnitBoqItemId: string;
+
+    const countOccurrences = () =>
+      prisma.projectAhspOccurrence.count({ where: { projectId } });
+
+    const readItem = (id: string) =>
+      prisma.boqItem.findUniqueOrThrow({
+        where: { id },
+        select: { ahspVersionId: true, workingOccurrenceId: true, unit: true },
+      });
+
+    beforeAll(async () => {
+      const structure = await prisma.boqStructure.findFirstOrThrow({
+        where: { projectId, name: WORKING_DRAFT_STRUCTURE_NAME },
+      });
+      // 'OH' is the labour unit this file's own AHSP resources are written in,
+      // so it is certainly governed by the alias table. It simply is not an M1
+      // and nothing in the conversion table claims it can become one.
+      unprovenPairBoqItemId = (
+        await prisma.boqItem.create({
+          data: {
+            boqStructureId: structure.id,
+            wbsCode: '8.1',
+            name: `${tag} Unproven Unit Pair Item`,
+            itemType: 'WORK_ITEM',
+            quantity: '1.000000',
+            unit: 'OH',
+          },
+        })
+      ).id;
+      unknownUnitBoqItemId = (
+        await prisma.boqItem.create({
+          data: {
+            boqStructureId: structure.id,
+            wbsCode: '8.2',
+            name: `${tag} Unknown Unit Item`,
+            itemType: 'WORK_ITEM',
+            quantity: '1.000000',
+            unit: `${tag}-NOT-A-UNIT`,
+          },
+        })
+      ).id;
+    });
+
+    it('refuses a unit pair the Unit Kernel cannot carry across, and binds nothing', async () => {
+      const before = await countOccurrences();
+
+      const response = await select(
+        `${tag}-unit-unproven-pair`,
+        wholeVersionId,
+        token,
+        unprovenPairBoqItemId,
+      ).expect(409);
+      expect(response.body.message).toBe('BOQ_UNIT_INCOMPATIBLE');
+
+      // No occurrence, and the row is still unbound: the refusal happened
+      // before anything was written, so there is nothing to have rolled back.
+      expect(await countOccurrences()).toBe(before);
+      const item = await readItem(unprovenPairBoqItemId);
+      expect(item.ahspVersionId).toBeNull();
+      expect(item.workingOccurrenceId).toBeNull();
+      // And the user's own unit was not quietly rewritten to make it fit.
+      expect(item.unit).toBe('OH');
+    });
+
+    it('fails closed on a unit spelling the Unit Kernel does not know', async () => {
+      const before = await countOccurrences();
+
+      const response = await select(
+        `${tag}-unit-unknown`,
+        wholeVersionId,
+        token,
+        unknownUnitBoqItemId,
+      ).expect(409);
+      expect(response.body.message).toBe('BOQ_UNIT_INCOMPATIBLE');
+
+      expect(await countOccurrences()).toBe(before);
+      const item = await readItem(unknownUnitBoqItemId);
+      expect(item.ahspVersionId).toBeNull();
+      expect(item.workingOccurrenceId).toBeNull();
+      expect(item.unit).toBe(`${tag}-NOT-A-UNIT`);
+    });
+
+    it('leaves the AHSP master, its version and its resources untouched by a refusal', async () => {
+      const version = await prisma.aHSPVersion.findUniqueOrThrow({
+        where: { id: wholeVersionId },
+        include: { resources: { orderBy: { id: 'asc' } } },
+      });
+
+      await select(
+        `${tag}-unit-no-master-mutation`,
+        wholeVersionId,
+        token,
+        unprovenPairBoqItemId,
+      ).expect(409);
+
+      const after = await prisma.aHSPVersion.findUniqueOrThrow({
+        where: { id: wholeVersionId },
+        include: { resources: { orderBy: { id: 'asc' } } },
+      });
+      expect(after.outputUnit).toBe(version.outputUnit);
+      expect(after.updatedAt).toEqual(version.updatedAt);
+      expect(after.resources).toEqual(version.resources);
+    });
+
+    it('moves no Basic Price on a refusal', async () => {
+      const before = await prisma.basicPrice.findMany({
+        where: { workspaceId },
+        orderBy: { id: 'asc' },
+      });
+
+      await select(
+        `${tag}-unit-no-basic-price`,
+        wholeVersionId,
+        token,
+        unprovenPairBoqItemId,
+      ).expect(409);
+
+      expect(
+        await prisma.basicPrice.findMany({
+          where: { workspaceId },
+          orderBy: { id: 'asc' },
+        }),
+      ).toEqual(before);
+    });
+
+    /**
+     * Sibling continuation. One refused row must not become a refused BOQ: the
+     * lawful row selects immediately afterwards and binds exactly as it always
+     * did, on the same project, in the same working draft.
+     */
+    it('lets an unrelated lawful row bind normally right after a refusal', async () => {
+      await select(
+        `${tag}-unit-sibling-refused`,
+        wholeVersionId,
+        token,
+        unprovenPairBoqItemId,
+      ).expect(409);
+
+      const response = await select(
+        `${tag}-unit-sibling-lawful`,
+        wholeVersionId,
+        token,
+        boqItemId,
+      ).expect(201);
+
+      const item = await readItem(boqItemId);
+      expect(item.workingOccurrenceId).toBe(response.body.id);
+      expect(item.ahspVersionId).toBe(wholeVersionId);
+    });
+  });
 });

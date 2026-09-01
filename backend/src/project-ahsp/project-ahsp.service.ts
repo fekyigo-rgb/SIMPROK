@@ -21,6 +21,11 @@ import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibil
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
+import {
+  BOQ_UNIT_COMPATIBILITY,
+  BoqUnitCompatibilityService,
+} from '../unit-kernel/boq-unit-compatibility.service';
+import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import {
@@ -58,6 +63,7 @@ export class ProjectAhspService {
     private readonly lifecycle: RabLifecyclePolicyService,
     private readonly identity: ResourceIdentityResolutionService,
     private readonly resolution: AhspResourceResolutionOrchestrator,
+    private readonly unitCompatibility: BoqUnitCompatibilityService,
   ) {}
 
   async listEligibleVersions(workspaceId: string, asOfRaw: string) {
@@ -202,6 +208,42 @@ export class ProjectAhspService {
       });
       if (!version || version.resources.length === 0) {
         throw new NotFoundException('ELIGIBLE_AHSP_VERSION_NOT_FOUND');
+      }
+
+      // KAMUS_UNIT_KERNEL_01A — the bind-time unit gate, and the ONE place a
+      // unit question is asked on this path. THE existing
+      // BoqUnitCompatibilityService answers it; this call site does not read
+      // the alias table, does not compare unit strings, and does not re-derive
+      // any part of the verdict. Unit Kernel stays the sole unit authority and
+      // that service stays its only BOQ/AHSP compatibility projection.
+      //
+      // It runs HERE for two reasons. Both units are known by this line and
+      // both were read on the transaction that locked the project, so the
+      // verdict is about the exact facts the binding would be made from. And
+      // it precedes resolveVersionResources, so a refused selection never
+      // reaches Resource Identity, never reads a Basic Price, and never
+      // creates an occurrence — the throw leaves nothing to undo rather than
+      // something to roll back.
+      const compatibility = await this.unitCompatibility.evaluate(
+        version.outputUnit,
+        item.unit,
+      );
+      // The service's own two COMPATIBLE verdicts, and nothing else, permit a
+      // bind. NEEDS_REVIEW and NOT_CONVERTIBLE are both refused, and refused
+      // identically: NEEDS_REVIEW means NOT PROVEN, never 'proven different',
+      // and neither is a fact this path may bind on. Listing the two accepted
+      // statuses rather than excluding the two rejected ones is deliberate —
+      // a verdict this code has never heard of must fail closed, not slip
+      // through an exclusion list nobody updated.
+      if (
+        compatibility.status !== BOQ_UNIT_COMPATIBILITY.COMPATIBLE_EXACT &&
+        compatibility.status !== BOQ_UNIT_COMPATIBILITY.COMPATIBLE_CONVERTIBLE
+      ) {
+        // The reason code the Unit Kernel contract already ships for exactly
+        // this fact, raised through the same ConflictException(<CODE>) shape
+        // every other refusal on this command already uses. No second error
+        // vocabulary is minted here.
+        throw new ConflictException(UNIT_REASON.BOQ_UNIT_INCOMPATIBLE);
       }
 
       // THE shared Golden Thread resolution authority. The occurrence path and
