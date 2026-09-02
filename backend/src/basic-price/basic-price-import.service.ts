@@ -2389,6 +2389,9 @@ export class BasicPriceImportService {
           // exactly as it is on every other path.
           importFingerprint: string;
           version: number;
+          sourceRegionScopeLabel: string | null;
+          sourceRegionScopeGeographicEvidence: string | null;
+          regionScopeConfirmedRegionId: string | null;
         }>
       >(
         Prisma.sql`SELECT * FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
@@ -2434,6 +2437,14 @@ export class BasicPriceImportService {
         sourceOrigin: batch.sourceOrigin,
         sourceType: batch.sourceType,
         readyForSubmissionRows: readyRows.length,
+        // SAME THREE FACTS THE REVIEW GATE READS. SELECT * already loaded
+        // them; omitting them here made submit accept an unconfirmed
+        // geography the door had already refused.
+        sourceRegionScopeLabel: batch.sourceRegionScopeLabel ?? null,
+        sourceRegionScopeGeographicEvidence:
+          batch.sourceRegionScopeGeographicEvidence ?? null,
+        regionScopeConfirmedRegionId:
+          batch.regionScopeConfirmedRegionId ?? null,
       });
       if (blocked) {
         throw new ConflictException(blocked);
