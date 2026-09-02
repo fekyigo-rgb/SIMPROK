@@ -340,7 +340,7 @@ async function computePlan(
     })),
   ];
 
-  const grantActions = [];
+  const grantActions: Bp02Plan['grantActions'] = [];
   for (const grant of desiredGrants) {
     const roleId = roleByCode.get(grant.roleCode)?.id;
     const permissionId = permissionByCode.get(grant.permissionCode)?.id;
