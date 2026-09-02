@@ -458,6 +458,59 @@ describe('BasicPriceImportService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
+    it('rejects an unconfirmed geographic scope even when regionId is set', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              {
+                ...lockedBatch,
+                sourceRegionScopeLabel: 'SIRIMAU',
+                sourceRegionScopeGeographicEvidence: 'KECAMATAN',
+                regionScopeConfirmedRegionId: null,
+              },
+            ]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-1' }]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toMatchObject({
+        message: 'REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_SUBMISSION',
+      });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts the same geography after the human confirmed this Region', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              {
+                ...lockedBatch,
+                sourceRegionScopeLabel: 'SIRIMAU',
+                sourceRegionScopeGeographicEvidence: 'KECAMATAN',
+                regionScopeConfirmedRegionId: 'region-01',
+              },
+            ]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-1' }]);
+          return Promise.resolve([]);
+        },
+      );
+      const result = await service.submitBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
+      expect(tx.priceSubmission.create).toHaveBeenCalled();
+      expect(result).toBeDefined();
+    });
+
     it('rejects when sourceOrigin is missing (structural PriceSubmission requirement, never fabricated)', async () => {
       tx.$queryRaw.mockImplementation(
         (query: { strings?: readonly string[] }) => {

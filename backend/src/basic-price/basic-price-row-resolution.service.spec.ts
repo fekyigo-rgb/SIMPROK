@@ -1967,7 +1967,7 @@ describe('BasicPriceRowResolutionService', () => {
       );
     });
 
-    it('T2 — an unknown source unit refuses the choice and writes nothing', async () => {
+    it('T2 — an unknown source unit refuses the choice and writes nothing when the kernel cannot represent the selected target', async () => {
       kernelAnswers({
         status: 'NEEDS_REVIEW',
         priceOperation: null,
@@ -1986,6 +1986,104 @@ describe('BasicPriceRowResolutionService', () => {
           resourceContext: 'MATERIAL',
         },
       });
+      nothingWasWritten();
+    });
+
+    it('T2h — Kayu Dolken: unknown source spelling "Batang" plus a kernel-represented human UnitDefinition is IDENTITY, not incompatibility', async () => {
+      // The source wrote "Batang". No UnitAlias exists for that spelling, so
+      // the kernel cannot prove it. The reviewer has already named UNIT
+      // (the canonical COUNT "each"), which the kernel CAN represent. That
+      // explicit decision interprets the unknown source spelling; it does
+      // not convert Batang into metres, mutate rawUnitText, or invent a
+      // quantity factor. The next conversion question, if any, is separate.
+      rowIs({
+        rawUnitText: 'Batang',
+        rawResourceNameText: 'Dolken kayu ø 8-10cm panjang 4 m',
+      });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-01',
+        code: 'UNIT',
+      });
+      kernelAnswers({
+        status: 'NEEDS_REVIEW',
+        priceOperation: null,
+        reasonCodes: ['UNKNOWN_UNIT_ALIAS'],
+        explanation: 'Satu atau lebih alias unit tidak dikenal.',
+        sourceUnitDefinition: null,
+        targetUnitDefinition: { id: 'unit-01', code: 'UNIT' },
+      });
+
+      const result = await resolve();
+
+      expect(result.status).toBe('READY_FOR_SUBMISSION');
+      expect(unitKernel.resolve).toHaveBeenCalledWith(
+        'Batang',
+        'UNIT',
+        'resource-01',
+        'MATERIAL',
+      );
+      expect(tx.basicPriceImportRow.update).toHaveBeenCalledTimes(1);
+      const [[firstUpdate]] = tx.basicPriceImportRow.update.mock.calls as Array<
+        [{ data: Record<string, unknown> }]
+      >;
+      const written = firstUpdate.data;
+      expect(written).toMatchObject({
+        resourceCatalogId: 'resource-01',
+        unitDefinitionId: 'unit-01',
+        resolvedResourceType: 'MATERIAL',
+        status: 'READY_FOR_SUBMISSION',
+      });
+      expect(written).not.toHaveProperty('rawUnitText');
+      expect(written).not.toHaveProperty('proposedCanonicalPrice');
+      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledTimes(
+        1,
+      );
+    });
+
+    it('T2i — unknown source still refuses when the kernel represented a DIFFERENT target than the one the human selected', async () => {
+      kernelAnswers({
+        status: 'NEEDS_REVIEW',
+        priceOperation: null,
+        reasonCodes: ['UNKNOWN_UNIT_ALIAS'],
+        explanation: 'Satu atau lebih alias unit tidak dikenal.',
+        sourceUnitDefinition: null,
+        targetUnitDefinition: { id: 'unit-other', code: 'M1' },
+      });
+
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution: { reasonCodes: ['UNKNOWN_UNIT_ALIAS'] },
+      });
+      nothingWasWritten();
+    });
+
+    it('T2j — an ambiguous alias is still refused even when the selected target is represented', async () => {
+      kernelAnswers({
+        status: 'NEEDS_REVIEW',
+        priceOperation: null,
+        reasonCodes: ['AMBIGUOUS_UNIT_ALIAS'],
+        explanation:
+          'Satu atau lebih alias unit memiliki lebih dari satu pemetaan aktif.',
+        targetUnitDefinition: { id: 'unit-01', code: 'ZAK' },
+      });
+
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+        unitResolution: { reasonCodes: ['AMBIGUOUS_UNIT_ALIAS'] },
+      });
+      nothingWasWritten();
+    });
+
+    it('T2k — a second save of the same correction is refused as not mutable, so no duplicate mapping is written', async () => {
+      rowIs({
+        status: 'READY_FOR_SUBMISSION',
+        rawUnitText: 'Batang',
+        rawResourceNameText: 'Dolken kayu ø 8-10cm panjang 4 m',
+        resourceCatalogId: 'resource-01',
+        unitDefinitionId: 'unit-01',
+      });
+
+      await expect(resolve()).rejects.toThrow('ROW_NOT_MUTABLE');
       nothingWasWritten();
     });
 
