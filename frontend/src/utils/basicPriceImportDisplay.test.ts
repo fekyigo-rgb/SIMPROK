@@ -9,6 +9,8 @@ import {
   metadataSaveFailureMessage,
   privateUseBlockSentence,
   proposalBlockSentence,
+  proposalDoorView,
+  communityCurationPathApplies,
   blockingFactLabel,
   completionBlockReason,
   humanFact,
@@ -213,6 +215,63 @@ test("every proposal reason the server can send has an Indonesian sentence", () 
 test("no block sentence is produced when nothing is blocking", () => {
   assert.equal(privateUseBlockSentence(null), null);
   assert.equal(proposalBlockSentence(null), null);
+});
+
+test("BP-SHARED-PROPOSAL-01. proposalDoorView keeps the door when FIELD_PRICE is not ready yet", () => {
+  // Owner IKK Community Survey: offered=false, BATCH_NOT_READY, FIELD_PRICE.
+  // Door must remain visible; press stays bound to offered=false.
+  const door = proposalDoorView({
+    offered: false,
+    reasonCode: "BATCH_NOT_READY_FOR_REVIEW",
+    sourceFamily: "FIELD_PRICE",
+  });
+  assert.equal(door.visible, true);
+  assert.equal(door.enabled, false);
+});
+
+test("BP-SHARED-PROPOSAL-01. proposalDoorView hides the door for families never curated", () => {
+  const door = proposalDoorView({
+    offered: false,
+    reasonCode: "SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION",
+    sourceFamily: "GOVERNMENT",
+  });
+  assert.equal(door.visible, false);
+  assert.equal(door.enabled, false);
+});
+
+test("BP-SHARED-PROPOSAL-01. proposalDoorView enables only when the server offers write", () => {
+  const door = proposalDoorView({
+    offered: true,
+    reasonCode: null,
+    sourceFamily: "FIELD_PRICE",
+  });
+  assert.equal(door.visible, true);
+  assert.equal(door.enabled, true);
+});
+
+test("BP-SHARED-PROPOSAL-01. communityCurationPathApplies does not invent routing", () => {
+  assert.equal(
+    communityCurationPathApplies(
+      {
+        offered: false,
+        reasonCode: "BATCH_NOT_READY_FOR_REVIEW",
+        sourceFamily: null,
+      },
+      false,
+    ),
+    false,
+  );
+  assert.equal(
+    communityCurationPathApplies(
+      {
+        offered: false,
+        reasonCode: "BATCH_NOT_READY_FOR_REVIEW",
+        sourceFamily: "FIELD_PRICE",
+      },
+      false,
+    ),
+    true,
+  );
 });
 
 test("the reason the button shows beforehand is the reason a failure shows afterwards", () => {
