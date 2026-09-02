@@ -250,6 +250,40 @@ describe('BasicPricePrivateAssetService', () => {
       expect(tx.basicPrice.create).not.toHaveBeenCalled();
     });
 
+    it('UNCONFIRMED REGION — SIRIMAU under Baguala cannot be kept private', async () => {
+      makeTx({
+        batch: {
+          ...baseBatch(),
+          sourceRegionScopeLabel: 'SIRIMAU',
+          sourceRegionScopeGeographicEvidence: 'KECAMATAN',
+          regionScopeConfirmedRegionId: null,
+        },
+      });
+
+      await expect(
+        service.keepBatchPrivate({ batchId, actor }),
+      ).rejects.toMatchObject({
+        message: 'REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_PRIVATE_USE',
+      });
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('CONFIRMED REGION — the same geography may pass when the human confirmed this Region', async () => {
+      makeTx({
+        batch: {
+          ...baseBatch(),
+          sourceRegionScopeLabel: 'SIRIMAU',
+          sourceRegionScopeGeographicEvidence: 'KECAMATAN',
+          regionScopeConfirmedRegionId: regionId,
+        },
+      });
+
+      const result = await service.keepBatchPrivate({ batchId, actor });
+
+      expect(result.createdCount).toBe(1);
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
+    });
+
     it('refuses a row with no resolved resource identity or no canonical price', async () => {
       for (const broken of [
         { resourceCatalogId: null },

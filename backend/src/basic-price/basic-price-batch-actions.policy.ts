@@ -89,10 +89,11 @@ export interface BatchLifecycleFacts {
    * BP-REGION-TRUTH-07S — THE SOURCE'S OWN GEOGRAPHIC CLAIM ABOUT THIS BATCH'S
    * PRICE SCOPE, and whether a human has reconciled it with `regionId`.
    *
-   * All optional, and absent reads as "not stated" — so every existing caller
-   * keeps compiling and keeps its current verdict. A path that does not read
-   * these facts cannot raise the question, which is correct: an unasked
-   * question may not become a verdict.
+   * Optional on the type so a read path that never loaded them still compiles.
+   * Absence means "not asked", which cannot raise the unconfirmed-geography
+   * question. Price and proposal WRITERS must pass the persisted values —
+   * the same three facts the review gate already reads — or they would mint
+   * a price the room had already refused.
    */
   sourceRegionScopeLabel?: string | null;
   sourceRegionScopeGeographicEvidence?: string | null;
