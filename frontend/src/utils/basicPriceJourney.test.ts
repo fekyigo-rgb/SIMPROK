@@ -236,6 +236,62 @@ test('F3. a batch that WAS proposed keeps its real curation progress', () => {
   assert.equal(stageBy(proposedThenClosed, 'PUBLISH').state, 'UPCOMING');
 });
 
+test('BP-UX-REPAIR-01. BATCH_NOT_READY does not rewind Lengkapi Sumber', () => {
+  // CASE A — IKK shape: source already accepted, rows still open.
+  const notReady = batchOf({
+    status: 'NEEDS_REVIEW',
+    needsReviewRows: 67,
+    readyForSubmissionRows: 17,
+    alreadyPrivateRows: 17,
+    submittedRows: 0,
+    actions: {
+      ...batchOf().actions,
+      simprokProposal: {
+        offered: false,
+        reasonCode: 'BATCH_NOT_READY_FOR_REVIEW',
+        sourceFamily: 'FIELD_PRICE',
+      },
+    },
+  }) as BasicPriceImportBatchSummary;
+
+  assert.equal(stageBy(notReady, 'SOURCE').state, 'DONE');
+  assert.doesNotMatch(stageBy(notReady, 'SOURCE').hint, /lengkapi konteks/iu);
+  assert.equal(stageBy(notReady, 'PROPOSE').state, 'CURRENT');
+  assert.match(stageBy(notReady, 'PROPOSE').hint, /belum diputuskan/u);
+});
+
+test('BP-UX-REPAIR-01. SUBMITTED must not show Lengkapi Sumber as still running', () => {
+  // CASE B — ACC-02 live shape: terminal propose, review room shut
+  // (`reviewAllowed: false`) even though source was already accepted.
+  const acc02 = batchOf({
+    status: 'SUBMITTED',
+    needsReviewRows: 0,
+    readyForSubmissionRows: 0,
+    submittedRows: 3,
+    actions: {
+      ...batchOf().actions,
+      reviewGate: gate({
+        reviewAllowed: false,
+        metadataComplete: false,
+        metadataCoherent: false,
+      }),
+      simprokProposal: {
+        offered: false,
+        reasonCode: 'ALREADY_PROPOSED',
+        sourceFamily: 'FIELD_PRICE',
+      },
+    },
+  }) as BasicPriceImportBatchSummary;
+
+  const source = stageBy(acc02, 'SOURCE');
+  assert.equal(source.state, 'DONE');
+  assert.doesNotMatch(source.hint, /sedang berjalan/iu);
+  assert.doesNotMatch(source.hint, /lengkapi konteks/iu);
+  assert.doesNotMatch(source.hint, /belum/iu);
+  assert.equal(stageBy(acc02, 'PROPOSE').state, 'DONE');
+  assert.equal(acc02.actions.simprokProposal.offered, false);
+});
+
 test('BP-SHARED-PROPOSAL-01. FIELD_PRICE not-ready is CURRENT with row-block truth, not "tidak dirutekan"', () => {
   // Exact Owner IKK shape: Community Survey / FIELD_PRICE / BATCH_NOT_READY.
   const ownerIkk = batchOf({

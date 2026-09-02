@@ -143,11 +143,21 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
   // that is present but self-contradictory is ATTENTION, not "belum lengkap":
   // the review gate reports those as two different reason codes and the
   // stepper must not collapse them back into one.
-  const source: JourneyStage = gate.reviewAllowed
-    ? stage('SOURCE', 'DONE', 'Konteks sumber sudah lengkap dan diterima SIMPROK.')
-    : gate.metadataComplete && !gate.metadataCoherent
-      ? stage('SOURCE', 'ATTENTION', 'Konteks sumber sudah diisi tetapi belum konsisten.')
-      : stage('SOURCE', 'CURRENT', 'Lengkapi konteks sumber sebelum peninjauan baris dibuka.');
+  //
+  // BP-UX-REPAIR-01 — SUBMITTED / already-proposed is terminal. After submit
+  // the server may send `reviewAllowed: false` because the review room is
+  // shut, not because source context is missing. Rewinding this stage to
+  // CURRENT ("Lengkapi konteks sumber sebelum peninjauan dibuka") told a
+  // closed batch it was still waiting on step 2. Canonical signals:
+  // `status` in CLOSED_STATUSES, or `submittedRows > 0`.
+  const source: JourneyStage =
+    closed || proposed
+      ? stage('SOURCE', 'DONE', 'Konteks sumber sudah lengkap dan diterima SIMPROK.')
+      : gate.reviewAllowed
+        ? stage('SOURCE', 'DONE', 'Konteks sumber sudah lengkap dan diterima SIMPROK.')
+        : gate.metadataComplete && !gate.metadataCoherent
+          ? stage('SOURCE', 'ATTENTION', 'Konteks sumber sudah diisi tetapi belum konsisten.')
+          : stage('SOURCE', 'CURRENT', 'Lengkapi konteks sumber sebelum peninjauan baris dibuka.');
 
   // 3. ROWS — decided rows versus rows still waiting for a human.
   const rows: JourneyStage =
