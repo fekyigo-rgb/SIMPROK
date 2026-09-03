@@ -12,6 +12,7 @@ The Owner ratifies the following Product Law:
 2. **Strict separation = YES.** Platform Governance must remain strictly separate from Owner/DIRECTOR, Workspace RBAC, and Project Authority.
 3. **Vocabulary separation = YES.** `Authority`, `Permission`, and `Approval Requirement` remain distinct concepts. They must not be merged merely to solve platform governance.
 4. **Current Platform Authority Holder = PERSON (`Account`).** Platform Authority is attached directly to the platform person/principal represented by `Account`. It is not attached to a Platform Seat/Office in the current Product Law.
+5. **Grant / Revoke = OWNER-AUTHORIZED CEREMONY.** Granting and revoking Platform Authority is an Owner-authorized governance ceremony. It is not itself a Platform Authority held by a person.
 
 ## 2. Canonical Boundary
 
@@ -96,7 +97,7 @@ At minimum, the eventual implementation must be able to prove from authoritative
 - revocation event/time when applicable;
 - reason/history sufficient to explain the governance change.
 
-## 7. Grant / Revoke Law
+## 7. Grant / Revoke Law — OWNER LOCKED
 
 Platform Authority must never be auto-granted by:
 
@@ -113,67 +114,51 @@ Platform Authority must never be auto-granted by:
 - subscription;
 - ordinary bootstrap.
 
-Every Platform Authority grant must be an explicit, authorized governance act.
+Every Platform Authority grant and revoke must be an explicit, Owner-authorized governance act.
 
-The exact grantor and revoker authority remain an implementation-preparation/governance sub-question and must be proven before live grant/revoke implementation. No role or person is implicitly granted that power by this document merely by title.
+No person receives a grant-platform-authority or revoke-platform-authority power merely by receiving Platform Authority. Platform Authority must not recursively delegate Platform Authority.
 
-## 8. Implementation Gate
+The ceremony must produce independently auditable provenance for the grant/revoke act. The technical representation of that ceremony is intentionally **not** prescribed by this Product Law.
 
-This Product Law now resolves the **holder question** but does **not** by itself authorize a schema or implementation choice.
+## 8. Holder / Actor / Grantor / Revoker
 
-Before implementation, the exact lawful binding of `Account` to the existing `Authority` vocabulary must be reconciled against the canonical architecture using existing machinery first.
+These concepts remain distinct:
 
-No option such as:
+- **Holder** = Account that currently possesses the Platform Authority.
+- **Actor** = Account that performs a governance action.
+- **Grantor** = the Owner-authorized source/actor of a grant ceremony.
+- **Revoker** = the Owner-authorized source/actor of a revoke ceremony.
 
-- nullable `Position.workspaceId`;
-- repurposing `Position`;
-- repurposing `PositionAssignment`;
-- repurposing `PositionAuthority`;
-- magic platform Workspace;
-- Workspace Role/Permission elevation;
-- DIRECTOR/SUPER_ADMIN elevation;
-- second Authority engine/resolver;
-- permanent out-of-band governance;
+The technical implementation must never infer Holder merely from Actor, Workspace membership, role, or permission.
 
-is authorized by this record.
+## 9. No workspace sentinel
 
-The implementation must remain the smallest semantic change that realizes:
+`workspaceId = NULL` must never be used as an identity/holder sentinel for Platform Governance. Existing NULL workspace semantics for Official/Shared Knowledge remain unchanged.
 
-`Account (Person) -> existing Authority`
+## 10. No implementation shape pre-approved
 
-while preserving all existing Workspace and Project isolation.
+This Product Law does not pre-approve a particular table/model, schema relation, resolver, service, guard, endpoint, or migration.
 
-## 9. Current Gate State
+The implementation gate must first prove the smallest safe mechanism for:
 
-- Platform Governance Product Law: **LOCKED**.
-- Strict separation: **LOCKED**.
-- Vocabulary separation: **LOCKED**.
-- Platform Authority holder = `Account` / Person: **LOCKED**.
-- Seat/Office as current holder: **NOT THE CURRENT LAW**.
-- Structural gap for platform-level authority representation: **PROVEN** in the current implementation.
-- Exact Account↔Authority binding implementation: **NOT YET AUTHORIZED**.
-- Platform-scoped audit implementation: **NOT YET AUTHORIZED**.
-- Grantor/revoker implementation authority: **NOT YET AUTHORIZED**.
-- Schema change: **NOT AUTHORIZED by this record**.
-- Migration: **NOT AUTHORIZED by this record**.
-- New authority engine/resolver: **NOT AUTHORIZED**.
-- AHSP reopening: **NOT AUTHORIZED**.
-- Publication/shared-promotion activation: **NOT AUTHORIZED** until the governance implementation boundary is separately proven.
+1. current Account → Platform Authority state;
+2. Owner-authorized grant/revoke provenance;
+3. revocation and re-grant history;
+4. fail-closed resolution;
+5. platform-scoped audit independent of Workspace authority;
+6. isolation from Workspace RBAC and Project Authority.
 
-## 10. Required Next Gate
+Current-state and historical provenance are mandatory semantic responsibilities. Whether they are implemented as one or multiple persistence capabilities is an implementation decision and is **not** locked by this Product Law.
 
-The next gate is now a narrow **PLATFORM GOVERNANCE IMPLEMENTATION BOUNDARY PROOF** and must determine, using existing machinery first:
+## 11. Publication Boundary
 
-1. the smallest lawful Account↔Authority binding;
-2. whether any existing entity can safely carry that binding without semantic collision;
-3. the minimum auditable grant/revoke state and history;
-4. the minimum platform-scoped audit mechanism;
-5. the exact authorization boundary for grant/revoke;
-6. the smallest implementation that realizes this law without creating a second authority system or weakening Workspace/Project isolation.
+Platform Authority may eventually authorize a governance action, but it must never imply automatic AHSP publication. Publication remains separately governed and fail-closed.
 
-The next gate must be **READ / ANALYZE / PROVE ONLY** unless separately authorized to implement.
+## 12. Future Evolution
 
-## 11. Preservation Lock
+The PERSON/Account holder decision and Owner-authorized ceremony are the current law. A later Owner decision may evolve the holder model to a platform-native Seat/Office and/or introduce delegated governance if evidence warrants it. Such changes require a new explicit Product-Law decision and implementation gate. No delegated grant/revoke authority is authorized now.
+
+## 13. Preservation Lock
 
 The following must remain untouched unless a future gate provides concrete contrary evidence and explicit authorization:
 
@@ -191,6 +176,6 @@ The following must remain untouched unless a future gate provides concrete contr
 
 No closed machine is to be rebuilt merely to accommodate Platform Governance.
 
-**Owner decision:** Platform Governance YES; strict separation YES; `Authority` / `Permission` / `Approval Requirement` remain distinct; current Platform Authority Holder = PERSON (`Account`).
+**Owner decision:** Platform Governance YES; strict separation YES; `Authority` / `Permission` / `Approval Requirement` remain distinct; current Platform Authority Holder = PERSON (`Account`); grant/revoke = Owner-authorized ceremony, not a Platform Authority held by a person.
 
 Soli Deo Gloria.
