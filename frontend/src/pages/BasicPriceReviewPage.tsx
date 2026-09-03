@@ -541,8 +541,9 @@ export function BasicPriceReviewPage() {
 
         Now: SIMPAN & GUNAKAN is primary and incremental — the finished rows
         become usable prices immediately and the remaining ones stay workable.
-        USULKAN KE SIMPROK is optional, terminal and separately labelled, and it
-        is offered only for the source families SIMPROK actually routes to
+        USULKAN KE SIMPROK is optional, incremental for eligible rows only, and
+        separately labelled. Unresolved rows stay open and may be proposed later.
+        It is offered only for the source families SIMPROK actually routes to
         community curation.
 
         NEITHER BUTTON DECIDES ITS OWN AVAILABILITY. `batch.actions` is the
@@ -600,9 +601,14 @@ export function BasicPriceReviewPage() {
             onClick={() => void handleSubmitBatch()}
             disabled={!proposalDoor.enabled || isBusy}
             aria-disabled={!proposalDoor.enabled || isBusy}
-            title="Usulkan batch ini ke SIMPROK untuk diperiksa bersama"
+            title={
+              proposalDoor.enabled
+                ? 'Hanya baris yang sudah siap. Baris lain tetap terbuka dan dapat diusulkan kemudian.'
+                : 'Usulkan baris yang sudah siap ke SIMPROK untuk diperiksa bersama'
+            }
           >
             Usulkan juga ke SIMPROK
+            {proposalDoor.enabled ? ` (${batch.readyForSubmissionRows})` : ''}
           </button>
         ) : null}
       </section>

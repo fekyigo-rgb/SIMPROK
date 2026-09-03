@@ -735,7 +735,7 @@ const PROPOSAL_BLOCK_SENTENCES: Record<ProposalNotOfferedReason, string> = {
   SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION:
     'Harga dari sumber ini disimpan apa adanya beserta sumbernya, bukan diusulkan untuk diperiksa bersama. Usulan bersama hanya untuk harga lapangan atau komunitas.',
   BATCH_NOT_READY_FOR_REVIEW:
-    'Masih ada baris yang belum diputuskan. Usulan ke SIMPROK menutup batch ini, jadi semua baris harus selesai dulu.',
+    'Batch ini belum berada di jendela peninjauan, jadi usulan belum dapat dilakukan.',
   EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION:
     'Tanggal berlaku harga belum diisi. Lengkapi dulu di halaman Impor.',
   REGION_REQUIRED_BEFORE_SUBMISSION:
@@ -749,7 +749,7 @@ const PROPOSAL_BLOCK_SENTENCES: Record<ProposalNotOfferedReason, string> = {
   REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_SUBMISSION:
     'Wilayah pada sumber belum dapat dipastikan sesuai dengan Wilayah SIMPROK. Tinjau wilayah dulu di halaman Impor.',
   NO_ROWS_READY_FOR_SUBMISSION:
-    'Belum ada baris yang siap diusulkan.',
+    'Belum ada baris yang siap diusulkan. Baris yang masih ditinjau dapat diusulkan setelah dikonfirmasi.',
 };
 
 export const privateUseBlockSentence = (

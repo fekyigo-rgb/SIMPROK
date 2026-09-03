@@ -603,10 +603,10 @@ describe('RM02B Basic Price import (e2e)', () => {
         .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
         .send({ version: row.version, resourceCatalogId: RESOURCE_LABOR_ID, unitDefinitionId: personDayUnitId })
         .expect(201);
-      // Every other row must also leave NEEDS_REVIEW so the batch genuinely
-      // reaches READY_FOR_REVIEW -- otherwise submit's very first check
-      // (BATCH_NOT_READY_FOR_REVIEW) would 409 before ever reaching the
-      // effectiveDate/regionId/sourceOrigin checks this test means to prove.
+      // Partial proposal no longer requires every neighbour to leave
+      // NEEDS_REVIEW first. This scenario still rejects the other rows so
+      // the batch is fully decided — it is proving the metadata gate, not
+      // the all-rows-ready gate.
       for (const other of otherRows) {
         await request(app.getHttpServer())
           .post(`/basic-price-imports/${preview.body.batchId}/rows/${other.id}/reject`)
@@ -692,6 +692,72 @@ describe('RM02B Basic Price import (e2e)', () => {
       const second = await request(app.getHttpServer()).post(submitPath).set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A).expect(201);
       expect(second.body.status).toBe('PARTIALLY_SUBMITTED');
       expect(await prisma.priceSubmission.count({ where: { resourceId: RESOURCE_LABOR_ID } })).toBe(1);
+    });
+
+    it('proposes only READY_FOR_SUBMISSION rows while unresolved neighbours stay open', async () => {
+      const buffer = await buildBasicPriceXlsx();
+      const preview = await previewFile(
+        buffer,
+        'submit-partial-wave',
+        assignedToken,
+        {
+          effectiveDate: '2026-07-25',
+          regionId: REGION_ID,
+          sourceOrigin: 'FIELD_REPORT',
+          sourceType: 'MARKET_SURVEY',
+        },
+      ).expect(201);
+      const row = preview.body.rows.find((r: { sourceRowNumber: number }) => r.sourceRowNumber === 9);
+      const otherRows = preview.body.rows.filter((r: { sourceRowNumber: number }) => r.sourceRowNumber !== 9);
+      expect(otherRows.length).toBeGreaterThan(0);
+
+      await request(app.getHttpServer())
+        .post(`/basic-price-imports/${preview.body.batchId}/rows/${row.id}/resolve`)
+        .set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A)
+        .send({ version: row.version, resourceCatalogId: RESOURCE_LABOR_ID, unitDefinitionId: personDayUnitId })
+        .expect(201);
+
+      const submitPath = `/basic-price-imports/${preview.body.batchId}/submit`;
+      const first = await request(app.getHttpServer())
+        .post(submitPath)
+        .set('Authorization', `Bearer ${assignedToken}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(201);
+
+      expect(first.body.status).toBe('NEEDS_REVIEW');
+      expect(first.body.submittedRows).toBe(1);
+      expect(first.body.needsReviewRows).toBe(otherRows.length);
+
+      const submittedRow = await prisma.basicPriceImportRow.findUniqueOrThrow({
+        where: { id: row.id },
+      });
+      expect(submittedRow.status).toBe('SUBMISSION_CREATED');
+      expect(submittedRow.priceSubmissionId).toBeTruthy();
+      expect(
+        await prisma.basicPrice.count({
+          where: { sourceSubmissionId: submittedRow.priceSubmissionId! },
+        }),
+      ).toBe(0);
+
+      for (const other of otherRows) {
+        const leftover = await prisma.basicPriceImportRow.findUniqueOrThrow({
+          where: { id: other.id },
+        });
+        expect(leftover.status).toBe('NEEDS_REVIEW');
+        expect(leftover.priceSubmissionId).toBeNull();
+      }
+
+      const replay = await request(app.getHttpServer())
+        .post(submitPath)
+        .set('Authorization', `Bearer ${assignedToken}`)
+        .set('x-workspace-id', WORKSPACE_A)
+        .expect(409);
+      expect(replay.body.message).toBe('NO_ROWS_READY_FOR_SUBMISSION');
+      expect(
+        await prisma.priceSubmission.count({
+          where: { id: submittedRow.priceSubmissionId! },
+        }),
+      ).toBe(1);
     });
   });
 

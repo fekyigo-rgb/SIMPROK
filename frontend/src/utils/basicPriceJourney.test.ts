@@ -236,8 +236,9 @@ test('F3. a batch that WAS proposed keeps its real curation progress', () => {
   assert.equal(stageBy(proposedThenClosed, 'PUBLISH').state, 'UPCOMING');
 });
 
-test('BP-UX-REPAIR-01. BATCH_NOT_READY does not rewind Lengkapi Sumber', () => {
-  // CASE A — IKK shape: source already accepted, rows still open.
+test('BP-UX-REPAIR-01. a part-finished FIELD_PRICE batch does not rewind Lengkapi Sumber', () => {
+  // CASE A — IKK shape after BP-CONTINUATION-02: 17 ready, 67 still open,
+  // proposal offered NOW. Source must stay DONE.
   const notReady = batchOf({
     status: 'NEEDS_REVIEW',
     needsReviewRows: 67,
@@ -247,8 +248,8 @@ test('BP-UX-REPAIR-01. BATCH_NOT_READY does not rewind Lengkapi Sumber', () => {
     actions: {
       ...batchOf().actions,
       simprokProposal: {
-        offered: false,
-        reasonCode: 'BATCH_NOT_READY_FOR_REVIEW',
+        offered: true,
+        reasonCode: null,
         sourceFamily: 'FIELD_PRICE',
       },
     },
@@ -257,7 +258,7 @@ test('BP-UX-REPAIR-01. BATCH_NOT_READY does not rewind Lengkapi Sumber', () => {
   assert.equal(stageBy(notReady, 'SOURCE').state, 'DONE');
   assert.doesNotMatch(stageBy(notReady, 'SOURCE').hint, /lengkapi konteks/iu);
   assert.equal(stageBy(notReady, 'PROPOSE').state, 'CURRENT');
-  assert.match(stageBy(notReady, 'PROPOSE').hint, /belum diputuskan/u);
+  assert.match(stageBy(notReady, 'PROPOSE').hint, /17 baris siap diusulkan/u);
 });
 
 test('BP-UX-REPAIR-01. SUBMITTED must not show Lengkapi Sumber as still running', () => {
@@ -292,8 +293,7 @@ test('BP-UX-REPAIR-01. SUBMITTED must not show Lengkapi Sumber as still running'
   assert.equal(acc02.actions.simprokProposal.offered, false);
 });
 
-test('BP-SHARED-PROPOSAL-01. FIELD_PRICE not-ready is CURRENT with row-block truth, not "tidak dirutekan"', () => {
-  // Exact Owner IKK shape: Community Survey / FIELD_PRICE / BATCH_NOT_READY.
+test('BP-SHARED-PROPOSAL-01. FIELD_PRICE with ready rows offers CURRENT propose, not "tidak dirutekan"', () => {
   const ownerIkk = batchOf({
     status: 'NEEDS_REVIEW',
     needsReviewRows: 67,
@@ -302,8 +302,8 @@ test('BP-SHARED-PROPOSAL-01. FIELD_PRICE not-ready is CURRENT with row-block tru
     actions: {
       ...batchOf().actions,
       simprokProposal: {
-        offered: false,
-        reasonCode: 'BATCH_NOT_READY_FOR_REVIEW',
+        offered: true,
+        reasonCode: null,
         sourceFamily: 'FIELD_PRICE',
       },
     },
@@ -312,11 +312,34 @@ test('BP-SHARED-PROPOSAL-01. FIELD_PRICE not-ready is CURRENT with row-block tru
   const propose = stageBy(ownerIkk, 'PROPOSE');
   assert.equal(propose.state, 'CURRENT');
   assert.equal(propose.optional, true);
-  assert.match(propose.hint, /belum diputuskan/u);
+  assert.match(propose.hint, /17 baris siap diusulkan/u);
   assert.doesNotMatch(propose.hint, /tidak dirutekan/u);
+  assert.doesNotMatch(propose.hint, /semua baris/u);
   assert.equal(stageBy(ownerIkk, 'VERIFY').state, 'UPCOMING');
   assert.equal(stageBy(ownerIkk, 'PUBLISH').state, 'UPCOMING');
   assert.doesNotMatch(journeyView(ownerIkk).note ?? '', /tidak berlaku untuk sumber ini/u);
+});
+
+test('BP-CONTINUATION-02. after a partial wave, propose stays open for later eligible rows', () => {
+  const afterWave = batchOf({
+    status: 'NEEDS_REVIEW',
+    needsReviewRows: 70,
+    readyForSubmissionRows: 0,
+    submittedRows: 16,
+    actions: {
+      ...batchOf().actions,
+      simprokProposal: {
+        offered: false,
+        reasonCode: 'NO_ROWS_READY_FOR_SUBMISSION',
+        sourceFamily: 'FIELD_PRICE',
+      },
+    },
+  }) as BasicPriceImportBatchSummary;
+
+  assert.equal(stageBy(afterWave, 'PROPOSE').state, 'CURRENT');
+  assert.match(stageBy(afterWave, 'PROPOSE').hint, /16 harga sudah diusulkan/u);
+  assert.match(stageBy(afterWave, 'PROPOSE').hint, /setelah dikonfirmasi/u);
+  assert.equal(stageBy(afterWave, 'VERIFY').state, 'CURRENT');
 });
 
 test('F5. the private path is stated as usable NOW, not as pending', () => {

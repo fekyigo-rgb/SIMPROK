@@ -2339,31 +2339,29 @@ export class BasicPriceImportService {
   }
 
   /**
-   * PROPOSE THIS BATCH TO SIMPROK'S CURATION (state machine A:
-   * READY_FOR_REVIEW -> APPROVED_FOR_SUBMISSION -> SUBMITTED /
-   * PARTIALLY_SUBMITTED).
+   * PROPOSE ELIGIBLE ROWS TO SIMPROK'S CURATION.
    *
-   * TERMINAL, AND THAT IS WHY IT KEEPS THE STRICT GATE. It freezes the batch,
-   * so it legitimately requires every row to have been decided first — which
-   * is exactly what READY_FOR_REVIEW means. Its sibling `keepBatchPrivate` is
-   * incremental and deliberately does NOT require that; the two are not
-   * exclusive and a batch may do both.
+   * ROW-SCOPED. It creates one PriceSubmission plus its review per
+   * READY_FOR_SUBMISSION row that has not already been submitted. Unresolved,
+   * rejected, and already-submitted rows are never selected.
+   *
+   * NOT BATCH-TERMINAL WHILE WORK REMAINS. A batch still in NEEDS_REVIEW may
+   * be proposed: finished neighbours do not wait for unfinished ones. The
+   * batch stays NEEDS_REVIEW so remaining rows can still be resolved and
+   * proposed later. It only moves to SUBMITTED / PARTIALLY_SUBMITTED when
+   * zero rows remain NEEDS_REVIEW — the existing full-batch close.
    *
    * WHAT IT IS NOT. It is not "save my prices". It creates no BasicPrice at
-   * all: one PriceSubmission plus its review per ready row, for a human
-   * curator to judge. A user whose prices must simply become usable wants
-   * `keepBatchPrivate`, and the review room now offers that as the primary
-   * action rather than presenting this one as the only way out.
+   * all: a curator still judges. It does not auto-verify or auto-publish.
+   * `keepBatchPrivate` remains the independent default right.
    *
-   * PRECONDITIONS ARE NOT STATED HERE ANY MORE. They live in
-   * `basic-price-batch-actions.policy.ts` alongside the private path's, so the
-   * room that decides whether to OFFER this action reads the same law this
-   * method enforces — including that sourceOrigin must be set (PriceSubmission
-   * .sourceOrigin has no schema default and is never fabricated) and that the
-   * (origin, type) pair must be coherent.
+   * PRECONDITIONS live in `basic-price-batch-actions.policy.ts` so the room
+   * that OFFER this action reads the same law this method enforces.
    *
-   * Idempotent: already-submitted batches return their existing state, never
-   * re-process.
+   * Idempotent on a closed batch (SUBMITTED / PARTIALLY_SUBMITTED /
+   * APPROVED_FOR_SUBMISSION): return existing state, never re-process.
+   * A repeat press on an open batch with no remaining ready rows is refused
+   * as NO_ROWS_READY_FOR_SUBMISSION — not a second submission.
    */
   async submitBatch(
     workspaceId: string,
@@ -2414,7 +2412,7 @@ export class BasicPriceImportService {
         return this.summarize(batch, rows);
       }
       const readyRows = await tx.$queryRaw<Array<{ id: string }>>(
-        Prisma.sql`SELECT "id" FROM "basic_price_import_rows" WHERE "batchId" = ${batchId}::uuid AND "status" = 'READY_FOR_SUBMISSION' FOR UPDATE`,
+        Prisma.sql`SELECT "id" FROM "basic_price_import_rows" WHERE "batchId" = ${batchId}::uuid AND "status" = 'READY_FOR_SUBMISSION' AND "priceSubmissionId" IS NULL FOR UPDATE`,
       );
 
       // ONE STATEMENT OF THE PRECONDITIONS, read by this writer and by the
@@ -2450,10 +2448,16 @@ export class BasicPriceImportService {
         throw new ConflictException(blocked);
       }
 
-      await tx.basicPriceImportBatch.update({
-        where: { id: batchId },
-        data: { status: 'APPROVED_FOR_SUBMISSION' },
+      const remainingNeedsReview = await tx.basicPriceImportRow.count({
+        where: { batchId, status: 'NEEDS_REVIEW' },
       });
+      const freezeBatch = remainingNeedsReview === 0;
+      if (freezeBatch) {
+        await tx.basicPriceImportBatch.update({
+          where: { id: batchId },
+          data: { status: 'APPROVED_FOR_SUBMISSION' },
+        });
+      }
 
       for (const { id: rowId } of readyRows) {
         const row = await tx.basicPriceImportRow.findUniqueOrThrow({
@@ -2461,6 +2465,8 @@ export class BasicPriceImportService {
         });
         if (!row.resourceCatalogId || !row.proposedCanonicalPrice)
           throw new ConflictException('ROW_NOT_RESOLVED');
+        if (row.priceSubmissionId)
+          throw new ConflictException('ROW_ALREADY_SUBMITTED');
 
         const submission = await tx.priceSubmission.create({
           data: {
@@ -2524,6 +2530,20 @@ export class BasicPriceImportService {
         });
       }
 
+      const finalRows = await tx.basicPriceImportRow.findMany({
+        where: { batchId },
+      });
+      const submittedThisWave = readyRows.filter((ready) => {
+        const row = finalRows.find((candidate) => candidate.id === ready.id);
+        return row?.status === 'SUBMISSION_CREATED';
+      }).length;
+      if (submittedThisWave !== readyRows.length)
+        throw new ConflictException('ROW_SUBMISSION_COUNT_MISMATCH');
+
+      if (!freezeBatch) {
+        return this.summarize(batch, finalRows);
+      }
+
       const rejectedCount = await tx.basicPriceImportRow.count({
         where: { batchId, status: 'REJECTED' },
       });
@@ -2533,15 +2553,6 @@ export class BasicPriceImportService {
         where: { id: batchId },
         data: { status: finalStatus, reviewedAt: new Date() },
       });
-
-      const finalRows = await tx.basicPriceImportRow.findMany({
-        where: { batchId },
-      });
-      const finalSubmittedCount = finalRows.filter(
-        (r) => r.status === 'SUBMISSION_CREATED',
-      ).length;
-      if (finalSubmittedCount !== readyRows.length)
-        throw new ConflictException('ROW_SUBMISSION_COUNT_MISMATCH');
 
       return this.summarize(finalBatch, finalRows);
     });
