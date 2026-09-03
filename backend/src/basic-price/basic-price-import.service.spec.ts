@@ -525,7 +525,57 @@ describe('BasicPriceImportService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('rejects a batch not in READY_FOR_REVIEW', async () => {
+    it('accepts a batch still NEEDS_REVIEW when ready rows exist', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              { ...lockedBatch, status: 'NEEDS_REVIEW' },
+            ]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-1' }]);
+          return Promise.resolve([]);
+        },
+      );
+      tx.basicPriceImportRow.count.mockImplementation(
+        ({ where }: { where: { status?: string } }) =>
+          Promise.resolve(where.status === 'NEEDS_REVIEW' ? 70 : 0),
+      );
+      tx.basicPriceImportRow.findMany.mockResolvedValue([
+        { id: 'row-1', status: 'SUBMISSION_CREATED' },
+        { id: 'row-unresolved', status: 'NEEDS_REVIEW' },
+      ]);
+
+      const result = await service.submitBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
+
+      expect(tx.priceSubmission.create).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('NEEDS_REVIEW');
+      expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a batch not yet in the review window', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([{ ...lockedBatch, status: 'PREVIEWED' }]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-1' }]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects NEEDS_REVIEW when no row is ready (CASE 1)', async () => {
       tx.$queryRaw.mockImplementation(
         (query: { strings?: readonly string[] }) => {
           const sql = query?.strings?.join('') ?? '';
@@ -538,7 +588,76 @@ describe('BasicPriceImportService', () => {
       );
       await expect(
         service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
-      ).rejects.toBeInstanceOf(ConflictException);
+      ).rejects.toMatchObject({ message: 'NO_ROWS_READY_FOR_SUBMISSION' });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('does not duplicate when the same open-batch wave is pressed again', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              { ...lockedBatch, status: 'NEEDS_REVIEW' },
+            ]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toMatchObject({ message: 'NO_ROWS_READY_FOR_SUBMISSION' });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('second wave submits only newly ready rows, not already submitted ones', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              { ...lockedBatch, status: 'NEEDS_REVIEW' },
+            ]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-new' }]);
+          return Promise.resolve([]);
+        },
+      );
+      tx.basicPriceImportRow.findUniqueOrThrow.mockResolvedValue({
+        id: 'row-new',
+        resourceCatalogId: 'resource-02',
+        proposedCanonicalPrice: '1000.00',
+        effectiveDateOverride: null,
+      });
+      tx.basicPriceImportRow.count.mockImplementation(
+        ({ where }: { where: { status?: string } }) =>
+          Promise.resolve(where.status === 'NEEDS_REVIEW' ? 60 : 0),
+      );
+      tx.basicPriceImportRow.findMany.mockResolvedValue([
+        { id: 'row-1', status: 'SUBMISSION_CREATED' },
+        { id: 'row-new', status: 'SUBMISSION_CREATED' },
+        { id: 'row-unresolved', status: 'NEEDS_REVIEW' },
+      ]);
+
+      const result = await service.submitBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
+
+      expect(tx.priceSubmission.create).toHaveBeenCalledTimes(1);
+      expect(tx.priceSubmission.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ resourceId: 'resource-02' }),
+        }),
+      );
+      expect(tx.basicPriceImportRow.update).toHaveBeenCalledWith({
+        where: { id: 'row-new' },
+        data: {
+          priceSubmissionId: 'submission-1',
+          status: 'SUBMISSION_CREATED',
+        },
+      });
+      expect(result.status).toBe('NEEDS_REVIEW');
     });
 
     it('creates exactly one PriceSubmission + Revision + Audit per READY_FOR_SUBMISSION row, links it back to the row', async () => {
@@ -612,7 +731,10 @@ describe('BasicPriceImportService', () => {
     });
 
     it('final batch status is PARTIALLY_SUBMITTED when some rows were rejected', async () => {
-      tx.basicPriceImportRow.count.mockResolvedValue(1); // one REJECTED row exists
+      tx.basicPriceImportRow.count.mockImplementation(
+        ({ where }: { where: { status?: string } }) =>
+          Promise.resolve(where.status === 'REJECTED' ? 1 : 0),
+      );
       const result = await service.submitBatch(
         WORKSPACE_ID,
         'batch-01',

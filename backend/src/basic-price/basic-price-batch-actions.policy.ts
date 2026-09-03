@@ -203,9 +203,10 @@ export type ProposalNotOfferedReason = 'ALREADY_PROPOSED' | ProposalBlockReason;
  * Nothing about a finished row depends on its neighbours. The private writer
  * selects `READY_FOR_SUBMISSION` rows only, and re-checks each row's own
  * resource identity and canonical price before writing it. The batch-wide gate
- * was guarding the TERMINAL action's invariant ("this batch is done"), which
- * private use never claimed. `SIMPROK_PROPOSAL` keeps that gate below,
- * unchanged.
+ * was guarding a TERMINAL invariant ("this batch is done"). Private use never
+ * claimed that invariant. `SIMPROK_PROPOSAL` now uses the same mutable window:
+ * proposing eligible rows does not require every neighbour to have been
+ * decided, and does not freeze remaining `NEEDS_REVIEW` rows.
  */
 const MUTABLE_BATCH_STATUSES = new Set<string>([
   'NEEDS_REVIEW',
@@ -521,7 +522,12 @@ export function proposalBlockReason(
       return 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION';
     }
   }
-  if (facts.status !== 'READY_FOR_REVIEW') {
+  // SAME MUTABLE WINDOW AS PRIVATE USE. READY_FOR_REVIEW used to be an
+  // absolute requirement because proposal froze the batch. Eligible rows are
+  // now proposed without waiting for unresolved neighbours, so NEEDS_REVIEW
+  // is lawful when readyForSubmissionRows > 0. BATCH_NOT_READY_FOR_REVIEW
+  // remains only for statuses outside that window (PREVIEWED, closed, …).
+  if (!MUTABLE_BATCH_STATUSES.has(facts.status)) {
     return 'BATCH_NOT_READY_FOR_REVIEW';
   }
   if (!facts.effectiveDate) {

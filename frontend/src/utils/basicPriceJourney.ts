@@ -175,19 +175,38 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
   // is reserved for families the server marks as never community-curated.
   const curationApplies = communityCurationPathApplies(proposal, proposed);
 
-  const propose: JourneyStage = proposed
-    ? stage('PROPOSE', 'DONE', `${batch.submittedRows} harga sudah diusulkan ke SIMPROK.`, true)
-    : proposal.offered
-      ? stage('PROPOSE', 'CURRENT', 'Opsional: usulkan batch ini ke kurasi SIMPROK.', true)
-      : curationApplies
+  const propose: JourneyStage = proposal.offered
+    ? stage(
+        'PROPOSE',
+        'CURRENT',
+        batch.submittedRows > 0
+          ? `${batch.submittedRows} harga sudah diusulkan. ${batch.readyForSubmissionRows} baris siap diusulkan lagi.`
+          : `${batch.readyForSubmissionRows} baris siap diusulkan ke kurasi SIMPROK.`,
+        true,
+      )
+    : proposal.reasonCode === 'ALREADY_PROPOSED'
+      ? stage(
+          'PROPOSE',
+          'DONE',
+          `${batch.submittedRows} harga sudah diusulkan ke SIMPROK.`,
+          true,
+        )
+      : proposed
         ? stage(
             'PROPOSE',
             'CURRENT',
-            proposalBlockSentence(proposal.reasonCode) ??
-              'Opsional: usulkan batch ini ke kurasi SIMPROK setelah semua baris siap.',
+            `${batch.submittedRows} harga sudah diusulkan. Baris yang masih ditinjau dapat diusulkan setelah dikonfirmasi.`,
             true,
           )
-        : stage('PROPOSE', 'NOT_OFFERED', 'Batch ini tidak dirutekan ke kurasi SIMPROK.', true);
+        : curationApplies
+          ? stage(
+              'PROPOSE',
+              'CURRENT',
+              proposalBlockSentence(proposal.reasonCode) ??
+                'Opsional: usulkan baris yang sudah siap ke kurasi SIMPROK.',
+              true,
+            )
+          : stage('PROPOSE', 'NOT_OFFERED', 'Batch ini tidak dirutekan ke kurasi SIMPROK.', true);
 
   /*
    * BP-UX-FINAL-01C GAP-F — "LATER" AND "NOT AT ALL" ARE DIFFERENT TRUTHS.
@@ -275,7 +294,7 @@ function journeyNote(facts: {
     return 'Harga yang selesai ditinjau langsung tersimpan untuk ruang kerja ini. Kurasi SIMPROK tidak berlaku untuk sumber ini.';
   }
   if (!facts.proposalOffered) {
-    return 'Menyimpan untuk ruang kerja ini dan mengusulkan ke SIMPROK adalah dua jalur terpisah — usulan menunggu semua baris selesai.';
+    return 'Menyimpan untuk ruang kerja ini dan mengusulkan ke SIMPROK adalah dua jalur terpisah — usulan hanya untuk baris yang sudah siap.';
   }
   return 'Menyimpan untuk ruang kerja ini dan mengusulkan ke SIMPROK adalah dua jalur terpisah — keduanya boleh dilakukan.';
 }
