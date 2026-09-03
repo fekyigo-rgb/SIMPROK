@@ -39,6 +39,10 @@ model Account {
   projectTimeZoneEvents                       ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions               AhspResourceIdentityDecision[]       @relation("AhspResourceIdentityDecisionActor")
   ingestionConnectorsActingFor                IngestionConnector[]                 @relation("IngestionConnectorActsOnBehalfOf")
+  /// Platform governance, as SUBJECT and as EXECUTOR — two distinct roles that
+  /// must never collapse into one relation.
+  platformAuthoritiesHeld                     PlatformGovernanceDecision[]         @relation("PlatformGovernanceHolder")
+  platformGovernanceCeremoniesExecuted        PlatformGovernanceDecision[]         @relation("PlatformGovernanceExecutor")
 
   @@map("accounts")
 }
@@ -1050,8 +1054,11 @@ model Authority {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  positionAuthorities PositionAuthority[]
-  approvalMatrices    ApprovalMatrix[]
+  positionAuthorities         PositionAuthority[]
+  approvalMatrices            ApprovalMatrix[]
+  /// The SAME vocabulary, now also reachable at platform scope. Nothing about
+  /// this model changes: `code` was already globally unique with no workspace.
+  platformGovernanceDecisions PlatformGovernanceDecision[]
 
   @@map("authorities")
 }
@@ -1072,6 +1079,116 @@ model PositionAuthority {
   @@index([authorityId])
   @@index([isActive])
   @@map("position_authorities")
+}
+
+// =====================================================
+// SECTION D.2: PLATFORM GOVERNANCE (ABOVE WORKSPACE)
+// =====================================================
+
+/// The verb of ONE platform governance ceremony. Not a status, and not a second
+/// authority vocabulary: the power itself is always an existing `Authority`.
+///
+/// `IngestionConnectorStatus { ACTIVE, REVOKED }` was inspected and deliberately
+/// NOT reused — it names the lifecycle of an ingestion credential, and giving a
+/// governance decision an "ingestion connector status" would change its meaning.
+enum PlatformGovernanceDecisionType {
+  GRANT
+  REVOKE
+}
+
+/// PLATFORM GOVERNANCE — WHO MAY ACT ON SIMPROK'S OWN KNOWLEDGE.
+///
+/// OWNER-LOCKED PRODUCT LAW. SIMPROK has a governance layer ABOVE Workspace for
+/// knowledge SIMPROK itself owns (the Official/Shared Repository — the models
+/// whose `workspaceId` is nullable). That layer is strictly separate from
+/// Owner/DIRECTOR, from Workspace RBAC, and from Project Authority.
+///
+/// THE SUBJECT IS AN ACCOUNT, DELIBERATELY. `Account` is the only workspace-
+/// independent principal in SIMPROK (`memberships` is a list relation, so an
+/// Account can exist with no workspace at all). Every other candidate is tenant-
+/// bound: `Position.workspaceId` and `Role.workspaceId` are NOT NULL, and
+/// `PositionAssignment` reaches a holder only through `User`, which cannot exist
+/// without a `WorkspaceMembership`. Nothing here touches that chain — Position,
+/// PositionAssignment and PositionAuthority keep their exact existing meaning and
+/// remain the WORKSPACE authority machinery.
+///
+/// THE OBJECT IS AN EXISTING `Authority`. Its `code` is already globally unique
+/// with no workspace, so the vocabulary is already platform-scoped. No second
+/// authority vocabulary is introduced.
+///
+/// STATE AND HISTORY ARE ONE STRUCTURE. This follows the pattern
+/// `AhspResourceIdentityDecision` and `ProjectAhspOccurrence` already prove:
+/// history is APPENDED, never rewritten; the highest generation for a subject is
+/// the current truth; superseded generations never silently revive. A GRANT at
+/// the highest generation means the authority is held; a REVOKE at the highest
+/// generation means it is not. Re-granting after a revoke is simply the next
+/// generation, so `grant -> revoke -> grant` is fully representable without
+/// mutating anything.
+///
+/// GRANTING IS NOT ITSELF AN AUTHORITY. Holding a platform authority confers no
+/// power to grant or revoke one. Every row here is written under an explicit
+/// Owner-authorized ceremony, and `ownerAuthorizationReference` is the
+/// accountability record of that ceremony — see its own note below.
+model PlatformGovernanceDecision {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// THE HOLDER — the person who receives or loses the authority.
+  holderAccountId String @db.Uuid
+  /// THE POWER — an existing canonical Authority. Never a new vocabulary.
+  authorityId     String @db.Uuid
+
+  decision PlatformGovernanceDecisionType
+
+  /// Lineage, mirroring AhspResourceIdentityDecision. Highest generation = current.
+  generation         Int     @default(1)
+  previousDecisionId String? @db.Uuid
+
+  /// THE EXECUTING ACTOR — who performed the ceremony. Deliberately a SEPARATE
+  /// column from `holderAccountId`: the person who executes a grant is not
+  /// thereby its subject, and overloading one field would destroy that fact.
+  executedByAccountId String @db.Uuid
+
+  /// THE OWNER AUTHORIZATION REFERENCE — an OPAQUE, Owner-issued accountability
+  /// reference, persisted as provenance.
+  ///
+  /// NOT MACHINE-VERIFIED, and SIMPROK must never claim otherwise. This column
+  /// supports the statement "this governance action was executed under Owner
+  /// authorization reference X". It does NOT support "SIMPROK verified that X was
+  /// issued by the Owner". There is no signature, no key registry and no
+  /// authorization service behind it, by Owner decision. What IS enforced is that
+  /// it must be present and non-blank: an unattributable governance act is
+  /// refused rather than recorded.
+  ownerAuthorizationReference String
+
+  /// Why this ceremony happened. Provenance for a human reading history later.
+  reason String? @db.Text
+
+  /// REPLAY PROTECTION, following ProjectAhspOccurrence's convention. The same
+  /// command submitted twice resolves to the SAME generation instead of creating
+  /// a second authoritative truth.
+  idempotencyKey     String @unique
+  /// A digest of the command's meaning. A second request bearing an existing
+  /// idempotency key but a DIFFERENT fingerprint is a different command wearing
+  /// a used name, and is refused rather than treated as a replay.
+  commandFingerprint String
+
+  decidedAt DateTime @default(now())
+
+  holderAccount     Account                      @relation("PlatformGovernanceHolder", fields: [holderAccountId], references: [id], onDelete: Restrict)
+  authority         Authority                    @relation(fields: [authorityId], references: [id], onDelete: Restrict)
+  executedByAccount Account                      @relation("PlatformGovernanceExecutor", fields: [executedByAccountId], references: [id], onDelete: Restrict)
+  previousDecision  PlatformGovernanceDecision?  @relation("PlatformGovernanceLineage", fields: [previousDecisionId], references: [id], onDelete: Restrict)
+  nextDecisions     PlatformGovernanceDecision[] @relation("PlatformGovernanceLineage")
+
+  /// THE CONCURRENCY INVARIANT. Two writers racing for the same next generation
+  /// cannot both win; the loser re-reads and either resolves idempotently or
+  /// returns a conflict. Duplicate authoritative truth is unrepresentable.
+  @@unique([holderAccountId, authorityId, generation])
+  /// The only read shape the resolver uses: newest decision for one exact
+  /// subject. Bounded and indexed — never a scan, never "load all history".
+  @@index([holderAccountId, authorityId, generation(sort: Desc)])
+  @@index([authorityId])
+  @@map("platform_governance_decisions")
 }
 
 // =====================================================

@@ -74,9 +74,27 @@ describe('BP-CAT-01D authority grant path', () => {
 
   it('NO production code path can attach an Authority to a Position', () => {
     // The Authority chain (Position -> PositionAuthority -> Authority) is the
-    // other mechanism that could carry decision authority. It is currently
-    // inert: AuthorityService.createAuthority and assignAuthority both throw
-    // unconditionally, and no guard or resolver anywhere reads PositionAuthority.
+    // other mechanism that could carry decision authority.
+    //
+    // PLATFORM-AUTHORITY RECONCILIATION — this comment used to say the chain was
+    // "inert" and that "no guard or resolver anywhere reads PositionAuthority".
+    // The second half was FALSE and mattered: ProgressAuthorityService reads and
+    // ENFORCES on it (progress-authority.service.ts:165 raw SQL, :204
+    // positionAuthority.findFirst, :245 approvalMatrix.count), the acceptance
+    // seed writes both models (prisma/seed-acceptance.ts:999,1005), and the
+    // models exist at schema.prisma:1097,1111. A reader who believed the old
+    // wording would conclude the chain is dead and rebuild it — the exact
+    // duplication this suite exists to prevent.
+    //
+    // What is TRUE, and is what these assertions actually protect: the chain is
+    // READ in production but never WRITTEN there. Its four writers/readers in
+    // AuthorityService throw unconditionally (authority.service.ts:103-117) —
+    // and note their message, "Authority model is missing from Prisma Schema",
+    // is itself false. So repairing AuthorityService would create production
+    // writers and turn THIS TEST RED. That is by design: per the docblock above,
+    // adding a grant path is a decision to be made deliberately, with the
+    // authority re-adjudicated first. The red test is the adjudication trigger,
+    // not an obstacle to route around.
     expect(writersOf('positionAuthority')).toEqual([]);
     expect(writersOf('authority')).toEqual([]);
   });
@@ -94,6 +112,35 @@ describe('BP-CAT-01D authority grant path', () => {
     );
     // It must not have quietly become a Nest provider that a controller can inject.
     expect(planner).not.toContain('@Injectable');
+  });
+
+  it('the only PlatformGovernanceDecision writer is the platform governance service', () => {
+    // PLATFORM GOVERNANCE — this suite is a CENSUS of authority grant paths, and
+    // platform governance created a new one. Leaving it uncensused would make
+    // the census quietly incomplete, which is the one thing it cannot be.
+    //
+    // Platform authority binds an Account directly to an existing Authority,
+    // deliberately bypassing the Position chain — so the assertions above about
+    // `positionAuthority` say nothing about it. This is its equivalent: exactly
+    // one production writer, and it is the narrow governance service. A second
+    // writer appearing anywhere is a new grant path, and this is where that
+    // decision surfaces.
+    expect(writersOf('platformGovernanceDecision')).toEqual([
+      'platform-governance/platform-governance.service.ts',
+    ]);
+
+    const service = readFileSync(
+      join(sourceRoot, 'platform-governance', 'platform-governance.service.ts'),
+      'utf8',
+    );
+    // It must not have quietly acquired an HTTP surface: a grant is an Owner
+    // ceremony performed out of band, not a route anyone can call.
+    expect(service).not.toMatch(/@(Controller|Post|Get|Patch|Put|Delete)\(/);
+    const module = readFileSync(
+      join(sourceRoot, 'platform-governance', 'platform-governance.module.ts'),
+      'utf8',
+    );
+    expect(module).not.toContain('controllers');
   });
 
   it('BASIC_PRICE_PROMOTE_SHARED is governed-activation only — never baseline, never seeded', () => {
