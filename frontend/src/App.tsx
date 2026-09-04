@@ -9,6 +9,7 @@ import { ProjectAhspSnapshotPage } from './pages/ProjectAhspSnapshotPage';
 import { ProjectDetailDoorPage } from './pages/ProjectDetailDoorPage';
 import { ProjectNotesPage } from './pages/ProjectNotesPage';
 import { ProjectListPage } from './pages/ProjectListPage';
+import { AhspRoomPage } from './pages/AhspRoomPage';
 import { BasicPriceExplorerPage } from './pages/BasicPriceExplorerPage';
 import { BasicPriceImportPage } from './pages/BasicPriceImportPage';
 import { BasicPriceReviewPage } from './pages/BasicPriceReviewPage';
@@ -43,6 +44,7 @@ function App() {
               <Route path="project/:projectId/rab" element={<PermissionRoute permission="RAB_VIEW"><ProjectRabDoorPage /></PermissionRoute>} />
               <Route path="project/:projectId/rab/workspace" element={<PermissionRoute permission="RAB_DRAFT_EDIT"><RabWorkspacePage /></PermissionRoute>} />
               <Route path="project/:projectId/rab/ahsp-snapshot" element={<ProjectAhspSnapshotPage />} />
+              <Route path="ahsp" element={<PermissionRoute permission="AHSP_VIEW"><AhspRoomPage /></PermissionRoute>} />
               <Route path="basic-price" element={<BasicPriceExplorerPage />} />
               <Route path="basic-price/import" element={<PermissionRoute permission="BASIC_PRICE_IMPORT"><BasicPriceImportPage /></PermissionRoute>} />
               {/* Reopen an existing batch to read or repair its metadata. Same

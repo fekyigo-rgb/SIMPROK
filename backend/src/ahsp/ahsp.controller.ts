@@ -65,6 +65,31 @@ export class AhspController {
     return { module: 'ahsp', status: 'ok' };
   }
 
+  /**
+   * THE standalone AHSP discovery door — the one the sidebar opens.
+   *
+   * It answers the question a user asks OUTSIDE a project: 'what AHSP is
+   * visible to my workspace'. That is a different contract from the RAB
+   * picker, which asks 'what may this BOQ item bind to right now', and the two
+   * are deliberately not sharing a query: binding eligibility is a security
+   * invariant tied to what selectForBoqItem revalidates, and a display surface
+   * must never be able to pull on it.
+   *
+   * Workspace comes from the guard-verified context, exactly as every other
+   * route here reads it — never from the client, so no caller can name another
+   * tenant's workspace and read its AHSP.
+   */
+  @Get()
+  @Permissions('AHSP_VIEW')
+  async list(@Req() request: any) {
+    const workspaceId: string | undefined =
+      request.workspaceContext?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
+    return this.ahspService.list(workspaceId);
+  }
+
   @Post()
   @Permissions('AHSP_MANAGE')
   async create(@Req() request: any, @Body() body: CreateAhspDto) {

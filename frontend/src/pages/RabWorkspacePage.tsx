@@ -23,7 +23,6 @@ import {
   LockKeyhole,
   Printer,
   Save,
-  Search,
   Sparkles,
   Minus,
   Plus,
@@ -1932,9 +1931,6 @@ export function RabWorkspacePage() {
           <input ref={importInputRef} hidden type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void previewImport(file); }} />
           <button onClick={() => importInputRef.current?.click()} disabled={!projectId || !canEditDraft || isImporting} title="Import BOQ XLSX" aria-label="Import BOQ">
             <FileInput size={17} /> Import BOQ
-          </button>
-          <button onClick={() => navigate('/first-real-input-preview?tab=ahsp')} title="Preview Cari AHSP (Data Contoh)" aria-label="Preview Cari AHSP" data-route="/?ruang=cari-ahsp">
-            <Search size={17} /> Cari AHSP (Preview)
           </button>
           <button onClick={() => openPlaceholder('Export')} title="Export - belum tersambung" aria-label="Export - belum tersambung" data-route="/?ruang=export-rab">
             <FileDown size={17} /> Export

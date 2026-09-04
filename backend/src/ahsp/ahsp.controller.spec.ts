@@ -9,12 +9,24 @@ import { AhspController } from './ahsp.controller';
 import { AhspService } from './services/ahsp.service';
 import { AhspVersionService } from './services/ahsp-version.service';
 import { AhspSnapshotService } from './services/ahsp-snapshot.service';
+import { AhspCanonicalAdmissionService } from './import/ahsp-canonical-admission.service';
+import { UniversalAhspIntakeService } from './intake/universal-ahsp-intake.service';
 import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
+import { PERMISSIONS_KEY } from '../common/decorators/permissions.decorator';
 
 describe('AhspController', () => {
   let controller: AhspController;
 
+  // AHSP-WAVE2 — the universal intake door. Stubbed here for the same reason
+  // every other authority is: this suite proves the controller's guards and its
+  // actor/workspace provenance, not what the intake finds.
+  const universalIntakeService = {
+    preview: jest.fn(),
+    admit: jest.fn(),
+  };
+
   const ahspService = {
+    list: jest.fn(),
     create: jest.fn(),
     getById: jest.fn(),
     update: jest.fn(),
@@ -208,6 +220,56 @@ describe('AhspController', () => {
       // The writer must never have been reached: no actorless AHSP, and no
       // quiet fall back to the body actor.
       expect(ahspService.create).not.toHaveBeenCalled();
+    });
+  });
+  /**
+   * THE standalone AHSP discovery door.
+   *
+   * These prove the door is a door: it is reachable, it is guarded by the
+   * permission the rest of this controller already uses, it takes its workspace
+   * from the verified context rather than the caller, and it does not shadow or
+   * get shadowed by its two neighbours.
+   */
+  describe('workspace AHSP discovery door', () => {
+    it('is GET on the collection path, distinct from health and :id', () => {
+      expect(Reflect.getMetadata('path', AhspController.prototype.list)).toBe('/');
+      expect(Reflect.getMetadata('method', AhspController.prototype.list)).toBe(0);
+      expect(Reflect.getMetadata('path', AhspController.prototype.healthCheck)).toBe('health');
+      expect(Reflect.getMetadata('path', AhspController.prototype.getById)).toBe(':id');
+    });
+
+    it('requires the existing canonical AHSP_VIEW permission', () => {
+      expect(Reflect.getMetadata(PERMISSIONS_KEY, AhspController.prototype.list)).toEqual([
+        'AHSP_VIEW',
+      ]);
+    });
+
+    it('reads the workspace from the guard-verified context', async () => {
+      ahspService.list.mockResolvedValue([]);
+      await controller.list({ workspaceContext: { workspaceId: 'ws-golden-01' } });
+      expect(ahspService.list).toHaveBeenCalledWith('ws-golden-01');
+    });
+
+    it('refuses without a workspace context and never takes one from the caller', async () => {
+      // A forged query/body workspace must not become the tenant boundary, and
+      // an absent context is a refusal rather than an unscoped read.
+      await expect(
+        controller.list({ query: { workspaceId: 'ws-other' }, body: { workspaceId: 'ws-other' } }),
+      ).rejects.toThrow('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+      expect(ahspService.list).not.toHaveBeenCalled();
+    });
+
+    it('returns what the service returned, unreshaped', async () => {
+      const rows = [{ id: 'ahsp-1', workType: 'Concrete Work' }];
+      ahspService.list.mockResolvedValue(rows);
+      await expect(controller.list(requestWithContext)).resolves.toBe(rows);
+    });
+
+    it('leaves the neighbouring routes working', async () => {
+      expect(controller.healthCheck()).toEqual({ module: 'ahsp', status: 'ok' });
+      ahspService.getById.mockResolvedValue({ id: 'ahsp-01' });
+      await controller.getById(requestWithContext, 'ahsp-01');
+      expect(ahspService.getById).toHaveBeenCalledWith('ahsp-01', 'ws-a');
     });
   });
 });

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../utils/apiClient';
 import { RabWorkspacePage } from './RabWorkspacePage';
 import {
@@ -150,6 +150,16 @@ export function ObservatoryPage() {
 
   if (placeholderRoom === 'ruang-kerja-rab') {
     return <RabWorkspacePage />;
+  }
+
+  // SINGLE AHSP DOOR — ?ruang=ahsp was the placeholder while no AHSP room
+  // existed. One exists now, so this URL leads there instead of rendering a
+  // Beranda that still says AHSP is waiting for an engine — a claim that has
+  // stopped being true. It REDIRECTS rather than renders: two pages that both
+  // answer to AHSP is the second room the single-door law forbids. Every other
+  // ruang= value still falls through to the honest placeholder below.
+  if (placeholderRoom === 'ahsp') {
+    return <Navigate to="/ahsp" replace />;
   }
 
   return (

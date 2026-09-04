@@ -18,6 +18,7 @@ describe('AhspService', () => {
   let prisma: {
     aHSP: {
       findFirst: jest.Mock;
+      findMany: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
     };
@@ -49,6 +50,7 @@ describe('AhspService', () => {
     prisma = {
       aHSP: {
         findFirst: jest.fn(),
+        findMany: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
       },
@@ -207,6 +209,75 @@ describe('AhspService', () => {
       before: ahsp,
       after: updatedAhsp,
       reason: 'correct method name',
+    });
+  });
+  /**
+   * WORKSPACE AHSP DISCOVERY — visibility, not bindability.
+   *
+   * The room this feeds is the standalone AHSP door. It must show a workspace
+   * everything it may see and nothing belonging to anyone else, and it must not
+   * borrow the RAB binding predicate to decide that.
+   */
+  describe('list', () => {
+    it('asks for exactly the rows getById would already allow', async () => {
+      prisma.aHSP.findMany.mockResolvedValue([]);
+      await service.list('workspace-1');
+      const where = prisma.aHSP.findMany.mock.calls[0][0].where;
+      expect(where).toEqual({
+        deletedAt: null,
+        OR: [{ workspaceId: 'workspace-1' }, { workspaceId: null }],
+      });
+    });
+
+    it('never reads AHSP belonging to another tenant', async () => {
+      prisma.aHSP.findMany.mockResolvedValue([]);
+      await service.list('workspace-1');
+      const where = prisma.aHSP.findMany.mock.calls[0][0].where;
+      // The ONLY non-null workspace the query may name is the caller's. A
+      // second workspace id appearing here is a cross-tenant read.
+      const named = JSON.stringify(where).match(/workspace-[a-z0-9]+/g) ?? [];
+      expect([...new Set(named)]).toEqual(['workspace-1']);
+      // NULL is the Official Repository, not a wildcard: it is a literal, and it
+      // is the same literal getById accepts.
+      expect(JSON.stringify(where)).toContain('"workspaceId":null');
+    });
+
+    it('returns stored columns only — nothing derived', async () => {
+      prisma.aHSP.findMany.mockResolvedValue([]);
+      await service.list('workspace-1');
+      const select = prisma.aHSP.findMany.mock.calls[0][0].select;
+      expect(select._count).toEqual({ select: { versions: true } });
+      expect(Object.keys(select).sort()).toEqual([
+        '_count',
+        'archivedAt',
+        'id',
+        'locationType',
+        'methodName',
+        'methodType',
+        'ownershipType',
+        'reviewStatus',
+        'updatedAt',
+        'workType',
+        'workspaceId',
+      ]);
+    });
+
+    it('hands back exactly what the database returned', async () => {
+      const rows = [{ id: 'ahsp-1', workType: 'Concrete Work' }];
+      prisma.aHSP.findMany.mockResolvedValue(rows);
+      await expect(service.list('workspace-1')).resolves.toBe(rows);
+    });
+
+    it('borrows no part of the RAB binding predicate', async () => {
+      prisma.aHSP.findMany.mockResolvedValue([]);
+      await service.list('workspace-1');
+      const query = JSON.stringify(prisma.aHSP.findMany.mock.calls[0][0]);
+      // Bindability requires a priceable version; visibility does not. If any
+      // of these appear, discovery has been coupled to selectForBoqItem's
+      // security invariant.
+      for (const bindingOnly of ['outputUnit', 'effectiveDate', 'expiredDate', 'PUBLISHED']) {
+        expect(query).not.toContain(bindingOnly);
+      }
     });
   });
 });
