@@ -103,17 +103,26 @@ export class BasicPriceImportLookupService {
     const offset = (page - 1) * limit;
     const where: Prisma.RegionWhereInput = {
       isActive: true,
+      ...(dto.parentId ? { parentId: dto.parentId } : {}),
+      ...(dto.administrativeLevel
+        ? { administrativeLevel: dto.administrativeLevel }
+        : {}),
       ...(q
         ? {
             OR: [
               { code: { contains: q, mode: Prisma.QueryMode.insensitive } },
               { name: { contains: q, mode: Prisma.QueryMode.insensitive } },
+              {
+                parent: {
+                  name: { contains: q, mode: Prisma.QueryMode.insensitive },
+                },
+              },
             ],
           }
         : {}),
     };
 
-    const [items, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.prisma.region.findMany({
         where,
         // BY NAME, because a person is looking for a PLACE. Ordering by `code`
@@ -124,10 +133,26 @@ export class BasicPriceImportLookupService {
         orderBy: [{ name: 'asc' }, { code: 'asc' }],
         skip: offset,
         take: limit,
-        select: { id: true, code: true, name: true },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          administrativeLevel: true,
+          parentId: true,
+          parent: { select: { name: true } },
+        },
       }),
       this.prisma.region.count({ where }),
     ]);
+
+    const items = rows.map((row) => ({
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      administrativeLevel: row.administrativeLevel,
+      parentId: row.parentId,
+      parentName: row.parent?.name ?? null,
+    }));
 
     return { items, page, limit, total, hasNext: offset + items.length < total };
   }

@@ -1,6 +1,7 @@
 import {
   evaluateBatchLifecycleActions,
   familyOffersCommunityCuration,
+  privatePriceProposalBlockReason,
   privateUseBlockReason,
   proposalBlockReason,
   type BatchLifecycleFacts,
@@ -135,15 +136,29 @@ describe('proposalBlockReason', () => {
   });
 
   /**
-   * THE GATE THAT STAYS STRICT, and why that is not the same defect. Proposing
-   * is TERMINAL — it freezes the batch — so it legitimately requires every row
-   * to have been decided. What was wrong was never this gate; it was that this
-   * was the only action the room offered.
+   * THE GATE THAT MATCHES PRIVATE USE, for the same Owner law. Proposing
+   * used to freeze the batch, so it required every row to have been decided.
+   * Eligible rows do not depend on their neighbours: 16 READY_FOR_SUBMISSION
+   * of 86 may be proposed while 70 remain NEEDS_REVIEW.
    */
-  it('refuses a batch whose rows are not all decided', () => {
-    expect(proposalBlockReason(lawful({ status: 'NEEDS_REVIEW' }))).toBe(
+  it('accepts a batch still NEEDS_REVIEW when finished rows are ready to propose', () => {
+    expect(
+      proposalBlockReason(lawful({ status: 'NEEDS_REVIEW' })),
+    ).toBeNull();
+  });
+
+  it('still refuses a batch outside the review window', () => {
+    expect(proposalBlockReason(lawful({ status: 'PREVIEWED' }))).toBe(
       'BATCH_NOT_READY_FOR_REVIEW',
     );
+  });
+
+  it('blocks when no row is ready, even if the batch is still open', () => {
+    expect(
+      proposalBlockReason(
+        lawful({ status: 'NEEDS_REVIEW', readyForSubmissionRows: 0 }),
+      ),
+    ).toBe('NO_ROWS_READY_FOR_SUBMISSION');
   });
 
   it('names each missing fact rather than failing generically', () => {
@@ -233,7 +248,7 @@ describe('evaluateBatchLifecycleActions', () => {
    * fully described field-survey batch. Before this law the room offered one
    * button, and it was inert.
    */
-  it('offers private use, and explains the proposal, on a part-finished batch', () => {
+  it('offers private use AND proposal on a part-finished batch', () => {
     const actions = evaluateBatchLifecycleActions(
       lawful({ status: 'NEEDS_REVIEW', readyForSubmissionRows: 6 }),
     );
@@ -241,10 +256,8 @@ describe('evaluateBatchLifecycleActions', () => {
     expect(actions.privateUse.offered).toBe(true);
     expect(actions.privateUse.reasonCode).toBeNull();
 
-    expect(actions.simprokProposal.offered).toBe(false);
-    expect(actions.simprokProposal.reasonCode).toBe(
-      'BATCH_NOT_READY_FOR_REVIEW',
-    );
+    expect(actions.simprokProposal.offered).toBe(true);
+    expect(actions.simprokProposal.reasonCode).toBeNull();
     expect(actions.simprokProposal.sourceFamily).toBe('FIELD_PRICE');
   });
 
@@ -318,5 +331,56 @@ describe('evaluateBatchLifecycleActions', () => {
         actions.simprokProposal.reasonCode === null,
       );
     }
+  });
+});
+
+describe('privatePriceProposalBlockReason', () => {
+  const lawfulPrivate = {
+    sourceOrigin: 'FIELD_REPORT',
+    sourceType: 'MARKET_SURVEY',
+    regionId: 'region-01',
+    effectiveDate: new Date('2024-01-01T00:00:00.000Z'),
+    resourceId: 'resource-01',
+  };
+
+  it('accepts an eligible field-report private price', () => {
+    expect(privatePriceProposalBlockReason(lawfulPrivate)).toBeNull();
+  });
+
+  it('reuses the same family route as batch proposal', () => {
+    expect(
+      privatePriceProposalBlockReason({
+        ...lawfulPrivate,
+        sourceOrigin: 'GOVERNMENT',
+      }),
+    ).toBe('SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION');
+    expect(
+      privatePriceProposalBlockReason({
+        ...lawfulPrivate,
+        sourceOrigin: 'STORE',
+      }),
+    ).toBe('SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION');
+  });
+
+  it('does not demand a mutable batch window — the price is already stored', () => {
+    expect(privatePriceProposalBlockReason(lawfulPrivate)).toBeNull();
+  });
+
+  it('fails closed when identity facts are missing', () => {
+    expect(
+      privatePriceProposalBlockReason({ ...lawfulPrivate, regionId: null }),
+    ).toBe('REGION_REQUIRED_BEFORE_SUBMISSION');
+    expect(
+      privatePriceProposalBlockReason({
+        ...lawfulPrivate,
+        effectiveDate: null,
+      }),
+    ).toBe('EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION');
+    expect(
+      privatePriceProposalBlockReason({
+        ...lawfulPrivate,
+        resourceId: null,
+      }),
+    ).toBe('NO_ROWS_READY_FOR_SUBMISSION');
   });
 });

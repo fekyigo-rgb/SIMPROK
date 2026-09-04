@@ -36,6 +36,7 @@ import {
 } from './basic-price-private-asset.service';
 import {
   evaluateBatchLifecycleActions,
+  privatePriceProposalBlockReason,
   proposalBlockReason,
 } from './basic-price-batch-actions.policy';
 import {
@@ -1094,27 +1095,20 @@ export class BasicPriceImportService {
      */
     proposals?: ReadonlyMap<string, BasicPriceRowMachineProposal>,
     /**
-     * WHICH of this batch's rows already exist as WORKSPACE_PRIVATE prices.
+     * WHICH of this batch's rows already exist as WORKSPACE_PRIVATE prices,
+     * keyed by import-row id so a later optional enrichment can name the
+     * existing writer (`enrichKdn`) without a second lookup.
      *
-     * OPTIONAL, AND ABSENCE MEANS NOT ASKED — the same neutrality rule
-     * `proposals` follows, and for the same reason: only the review read path
-     * pays for it, and a projection that never asked has no basis to claim that
-     * nothing is stored. Undefined therefore travels to the policy as
-     * undefined, where it suppresses the already-stored verdict entirely rather
-     * than defaulting to a zero that would be wrong by exactly the number of
-     * prices that do exist.
-     *
-     * A SET RATHER THAN A COUNT, because the count could only ever correct a
-     * button, and the sentence a person actually reads sits on the ROW. The
-     * count is still published, derived from this — `sourceImportRowId` is
-     * `@unique`, so the two can never disagree.
+     * OPTIONAL, AND ABSENCE MEANS NOT ASKED — same neutrality as `proposals`.
      */
-    privateRowIds?: ReadonlySet<string>,
+    privatePriceByRowId?: ReadonlyMap<string, string>,
   ) {
     // ONE FACT, TWO SHAPES. The count the action projection needs and the
     // per-row flag the row label needs are the SAME truth, so it is derived
     // once and never measured twice.
-    const alreadyPrivateRows = privateRowIds ? privateRowIds.size : undefined;
+    const alreadyPrivateRows = privatePriceByRowId
+      ? privatePriceByRowId.size
+      : undefined;
     const machineRows = rows.filter(
       (r) => proposals?.get(r.id)?.identityPairProven === true,
     ).length;
@@ -1318,7 +1312,8 @@ export class BasicPriceImportService {
          * the stricter null-means-unasked rule, because a count feeds a policy
          * verdict and a flag feeds a label.
          */
-        savedAsPrivatePrice: privateRowIds?.has(r.id) ?? false,
+        savedAsPrivatePrice: privatePriceByRowId?.has(r.id) ?? false,
+        privateBasicPriceId: privatePriceByRowId?.get(r.id) ?? null,
       })),
     };
   }
@@ -2324,46 +2319,47 @@ export class BasicPriceImportService {
      */
     const privatePriceRows = await this.prisma.basicPrice.findMany({
       where: { workspaceId, sourceImportRow: { batchId } },
-      select: { sourceImportRowId: true },
+      select: { id: true, sourceImportRowId: true },
     });
-    const privateRowIds = new Set(
+    const privatePriceByRowId = new Map(
       privatePriceRows
-        .map((price) => price.sourceImportRowId)
-        .filter((rowId): rowId is string => rowId !== null),
+        .filter(
+          (price): price is { id: string; sourceImportRowId: string } =>
+            price.sourceImportRowId !== null,
+        )
+        .map((price) => [price.sourceImportRowId, price.id]),
     );
 
     return {
-      ...this.summarize(batch, rows, proposals, privateRowIds),
+      ...this.summarize(batch, rows, proposals, privatePriceByRowId),
       region: batch.region ?? null,
     };
   }
 
   /**
-   * PROPOSE THIS BATCH TO SIMPROK'S CURATION (state machine A:
-   * READY_FOR_REVIEW -> APPROVED_FOR_SUBMISSION -> SUBMITTED /
-   * PARTIALLY_SUBMITTED).
+   * PROPOSE ELIGIBLE ROWS TO SIMPROK'S CURATION.
    *
-   * TERMINAL, AND THAT IS WHY IT KEEPS THE STRICT GATE. It freezes the batch,
-   * so it legitimately requires every row to have been decided first — which
-   * is exactly what READY_FOR_REVIEW means. Its sibling `keepBatchPrivate` is
-   * incremental and deliberately does NOT require that; the two are not
-   * exclusive and a batch may do both.
+   * ROW-SCOPED. It creates one PriceSubmission plus its review per
+   * READY_FOR_SUBMISSION row that has not already been submitted. Unresolved,
+   * rejected, and already-submitted rows are never selected.
+   *
+   * NOT BATCH-TERMINAL WHILE WORK REMAINS. A batch still in NEEDS_REVIEW may
+   * be proposed: finished neighbours do not wait for unfinished ones. The
+   * batch stays NEEDS_REVIEW so remaining rows can still be resolved and
+   * proposed later. It only moves to SUBMITTED / PARTIALLY_SUBMITTED when
+   * zero rows remain NEEDS_REVIEW — the existing full-batch close.
    *
    * WHAT IT IS NOT. It is not "save my prices". It creates no BasicPrice at
-   * all: one PriceSubmission plus its review per ready row, for a human
-   * curator to judge. A user whose prices must simply become usable wants
-   * `keepBatchPrivate`, and the review room now offers that as the primary
-   * action rather than presenting this one as the only way out.
+   * all: a curator still judges. It does not auto-verify or auto-publish.
+   * `keepBatchPrivate` remains the independent default right.
    *
-   * PRECONDITIONS ARE NOT STATED HERE ANY MORE. They live in
-   * `basic-price-batch-actions.policy.ts` alongside the private path's, so the
-   * room that decides whether to OFFER this action reads the same law this
-   * method enforces — including that sourceOrigin must be set (PriceSubmission
-   * .sourceOrigin has no schema default and is never fabricated) and that the
-   * (origin, type) pair must be coherent.
+   * PRECONDITIONS live in `basic-price-batch-actions.policy.ts` so the room
+   * that OFFER this action reads the same law this method enforces.
    *
-   * Idempotent: already-submitted batches return their existing state, never
-   * re-process.
+   * Idempotent on a closed batch (SUBMITTED / PARTIALLY_SUBMITTED /
+   * APPROVED_FOR_SUBMISSION): return existing state, never re-process.
+   * A repeat press on an open batch with no remaining ready rows is refused
+   * as NO_ROWS_READY_FOR_SUBMISSION — not a second submission.
    */
   async submitBatch(
     workspaceId: string,
@@ -2389,6 +2385,9 @@ export class BasicPriceImportService {
           // exactly as it is on every other path.
           importFingerprint: string;
           version: number;
+          sourceRegionScopeLabel: string | null;
+          sourceRegionScopeGeographicEvidence: string | null;
+          regionScopeConfirmedRegionId: string | null;
         }>
       >(
         Prisma.sql`SELECT * FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`,
@@ -2411,7 +2410,7 @@ export class BasicPriceImportService {
         return this.summarize(batch, rows);
       }
       const readyRows = await tx.$queryRaw<Array<{ id: string }>>(
-        Prisma.sql`SELECT "id" FROM "basic_price_import_rows" WHERE "batchId" = ${batchId}::uuid AND "status" = 'READY_FOR_SUBMISSION' FOR UPDATE`,
+        Prisma.sql`SELECT "id" FROM "basic_price_import_rows" WHERE "batchId" = ${batchId}::uuid AND "status" = 'READY_FOR_SUBMISSION' AND "priceSubmissionId" IS NULL FOR UPDATE`,
       );
 
       // ONE STATEMENT OF THE PRECONDITIONS, read by this writer and by the
@@ -2434,15 +2433,29 @@ export class BasicPriceImportService {
         sourceOrigin: batch.sourceOrigin,
         sourceType: batch.sourceType,
         readyForSubmissionRows: readyRows.length,
+        // SAME THREE FACTS THE REVIEW GATE READS. SELECT * already loaded
+        // them; omitting them here made submit accept an unconfirmed
+        // geography the door had already refused.
+        sourceRegionScopeLabel: batch.sourceRegionScopeLabel ?? null,
+        sourceRegionScopeGeographicEvidence:
+          batch.sourceRegionScopeGeographicEvidence ?? null,
+        regionScopeConfirmedRegionId:
+          batch.regionScopeConfirmedRegionId ?? null,
       });
       if (blocked) {
         throw new ConflictException(blocked);
       }
 
-      await tx.basicPriceImportBatch.update({
-        where: { id: batchId },
-        data: { status: 'APPROVED_FOR_SUBMISSION' },
+      const remainingNeedsReview = await tx.basicPriceImportRow.count({
+        where: { batchId, status: 'NEEDS_REVIEW' },
       });
+      const freezeBatch = remainingNeedsReview === 0;
+      if (freezeBatch) {
+        await tx.basicPriceImportBatch.update({
+          where: { id: batchId },
+          data: { status: 'APPROVED_FOR_SUBMISSION' },
+        });
+      }
 
       for (const { id: rowId } of readyRows) {
         const row = await tx.basicPriceImportRow.findUniqueOrThrow({
@@ -2450,58 +2463,24 @@ export class BasicPriceImportService {
         });
         if (!row.resourceCatalogId || !row.proposedCanonicalPrice)
           throw new ConflictException('ROW_NOT_RESOLVED');
+        if (row.priceSubmissionId)
+          throw new ConflictException('ROW_ALREADY_SUBMITTED');
 
-        const submission = await tx.priceSubmission.create({
-          data: {
-            workspaceId: batch.workspaceId,
-            organizationId: batch.organizationId,
-            resourceId: row.resourceCatalogId,
-            regionId: batch.regionId,
-            reportedByAccountId: batch.uploadedByAccountId,
-            // Both halves cast from the raw-SQL read's `string` to the enum the
-            // column actually holds. No fallback on either: the gate above
-            // already refused an absent or incoherent classification, so this
-            // is the batch's stated truth or the submission never happened.
-            sourceOrigin: batch.sourceOrigin as PriceSourceOrigin,
-            sourceType: batch.sourceType as PriceSourceType,
-            status: 'SUBMITTED',
-          },
-        });
-
-        const revision = await tx.priceSubmissionRevision.create({
-          data: {
-            submissionId: submission.id,
-            revisionNumber: 1,
-            value: new Prisma.Decimal(row.proposedCanonicalPrice),
-            effectiveDate: row.effectiveDateOverride ?? batch.effectiveDate,
-            validationPassed: true,
-          },
-        });
-
-        await tx.priceSubmission.update({
-          where: { id: submission.id },
-          data: { currentRevisionId: revision.id },
-        });
-
-        await tx.priceSubmissionAudit.create({
-          data: {
-            submissionId: submission.id,
-            fromStatus: null,
-            toStatus: 'SUBMITTED',
-            actorType: 'SYSTEM',
-            actorAccountId: null,
-            reason: `RM02_IMPORT_SUBMISSION; batchId:${batch.id}; rowId:${row.id}`,
-          },
-        });
-
-        // RM-02D2A-1 Work Package A: create the PriceSubmissionReview in the
-        // SAME transaction, via the one canonical helper. If review creation
-        // fails, this whole batch-submission transaction rolls back — no
-        // PriceSubmission is ever left orphaned without a review.
-        await this.reviewService.createReviewWithinTransaction(tx, {
-          id: submission.id,
+        // SAME writer as Detail → Usulkan ke SIMPROK. Both halves of origin
+        // and type are cast from the raw-SQL read: the gate above already
+        // refused an absent or incoherent classification.
+        const submission = await this.writeCommunityPriceSubmission(tx, {
           workspaceId: batch.workspaceId,
           organizationId: batch.organizationId,
+          resourceId: row.resourceCatalogId,
+          regionId: batch.regionId as string,
+          reportedByAccountId: batch.uploadedByAccountId,
+          sourceOrigin: batch.sourceOrigin as PriceSourceOrigin,
+          sourceType: batch.sourceType as PriceSourceType,
+          value: row.proposedCanonicalPrice,
+          effectiveDate:
+            row.effectiveDateOverride ?? (batch.effectiveDate as Date),
+          auditReason: `RM02_IMPORT_SUBMISSION; batchId:${batch.id}; rowId:${row.id}`,
         });
 
         await tx.basicPriceImportRow.update({
@@ -2511,6 +2490,20 @@ export class BasicPriceImportService {
             status: 'SUBMISSION_CREATED',
           },
         });
+      }
+
+      const finalRows = await tx.basicPriceImportRow.findMany({
+        where: { batchId },
+      });
+      const submittedThisWave = readyRows.filter((ready) => {
+        const row = finalRows.find((candidate) => candidate.id === ready.id);
+        return row?.status === 'SUBMISSION_CREATED';
+      }).length;
+      if (submittedThisWave !== readyRows.length)
+        throw new ConflictException('ROW_SUBMISSION_COUNT_MISMATCH');
+
+      if (!freezeBatch) {
+        return this.summarize(batch, finalRows);
       }
 
       const rejectedCount = await tx.basicPriceImportRow.count({
@@ -2523,16 +2516,246 @@ export class BasicPriceImportService {
         data: { status: finalStatus, reviewedAt: new Date() },
       });
 
-      const finalRows = await tx.basicPriceImportRow.findMany({
-        where: { batchId },
-      });
-      const finalSubmittedCount = finalRows.filter(
-        (r) => r.status === 'SUBMISSION_CREATED',
-      ).length;
-      if (finalSubmittedCount !== readyRows.length)
-        throw new ConflictException('ROW_SUBMISSION_COUNT_MISMATCH');
-
       return this.summarize(finalBatch, finalRows);
     });
+  }
+
+  /**
+   * BP-PRIVATE-PROPOSAL-01 — propose ONE already-usable WORKSPACE_PRIVATE
+   * price through the SAME PriceSubmission + review helper `submitBatch`
+   * uses. Missing caller, not a second engine.
+   *
+   * Does not create a BasicPrice. Does not set `sourceSubmissionId` on the
+   * private row (that channel is catalog publication evidence). Does not
+   * auto-verify, auto-publish, or convert private → catalog. Does not freeze
+   * the import batch: neighbours may still be resolved later.
+   */
+  async submitPrivatePrice(
+    workspaceId: string,
+    basicPriceId: string,
+    currentAccountId: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<
+        Array<{
+          id: string;
+          workspaceId: string | null;
+          organizationId: string | null;
+          assetScope: string;
+          resourceId: string;
+          regionId: string | null;
+          sourceOrigin: string | null;
+          sourceType: string | null;
+          value: Prisma.Decimal;
+          effectiveDate: Date;
+          sourceImportRowId: string | null;
+          status: string;
+        }>
+      >(
+        Prisma.sql`SELECT "id", "workspaceId", "organizationId", "assetScope",
+                          "resourceId", "regionId", "sourceOrigin", "sourceType",
+                          "value", "effectiveDate", "sourceImportRowId",
+                          "status", "verificationStatus"
+                     FROM "basic_prices"
+                    WHERE "id" = ${basicPriceId}::uuid
+                    FOR UPDATE`,
+      );
+      const price = locked[0];
+      if (
+        !price ||
+        price.workspaceId !== workspaceId ||
+        price.assetScope !== 'WORKSPACE_PRIVATE'
+      ) {
+        throw new NotFoundException('BasicPrice not found');
+      }
+      const publishedTrust = String(
+        (price as Record<string, unknown>)['verificationStatus'] ?? '',
+      );
+      if (price.status === 'PUBLISHED' || publishedTrust === 'PUBLISHED') {
+        throw new ConflictException('AUTO_PUBLISH_FORBIDDEN');
+      }
+
+      const successor = await tx.basicPrice.findFirst({
+        where: { supersedesBasicPriceId: price.id },
+        select: { id: true },
+      });
+      if (successor) {
+        throw new ConflictException('PRICE_NO_LONGER_CURRENT');
+      }
+
+      const blocked = privatePriceProposalBlockReason({
+        sourceOrigin: price.sourceOrigin,
+        sourceType: price.sourceType,
+        regionId: price.regionId,
+        effectiveDate: price.effectiveDate,
+        resourceId: price.resourceId,
+      });
+      if (blocked) {
+        throw new ConflictException(blocked);
+      }
+
+      const PRIVATE_PROPOSAL_REASON = `PRIVATE_PRICE_PROPOSAL; basicPriceId:${price.id}`;
+
+      if (price.sourceImportRowId) {
+        const row = await tx.basicPriceImportRow.findUnique({
+          where: { id: price.sourceImportRowId },
+        });
+        if (!row) {
+          throw new ConflictException('ROW_NOT_RESOLVED');
+        }
+        if (row.priceSubmissionId) {
+          return {
+            basicPriceId: price.id,
+            submissionId: row.priceSubmissionId,
+            alreadyProposed: true,
+            status: price.status,
+            assetScope: price.assetScope,
+          };
+        }
+
+        const batch = await tx.basicPriceImportBatch.findUniqueOrThrow({
+          where: { id: row.batchId },
+        });
+        if (batch.workspaceId !== workspaceId) {
+          throw new NotFoundException('BasicPrice not found');
+        }
+
+        const submission = await this.writeCommunityPriceSubmission(tx, {
+          workspaceId: batch.workspaceId,
+          organizationId: batch.organizationId,
+          resourceId: price.resourceId,
+          regionId: price.regionId as string,
+          reportedByAccountId: currentAccountId,
+          sourceOrigin: price.sourceOrigin as PriceSourceOrigin,
+          sourceType: price.sourceType as PriceSourceType,
+          value: price.value,
+          effectiveDate: price.effectiveDate,
+          auditReason: `${PRIVATE_PROPOSAL_REASON}; batchId:${batch.id}; rowId:${row.id}`,
+        });
+
+        await tx.basicPriceImportRow.update({
+          where: { id: row.id },
+          data: {
+            priceSubmissionId: submission.id,
+            status: 'SUBMISSION_CREATED',
+          },
+        });
+
+        return {
+          basicPriceId: price.id,
+          submissionId: submission.id,
+          alreadyProposed: false,
+          status: price.status,
+          assetScope: price.assetScope,
+        };
+      }
+
+      const existingAudit = await tx.priceSubmissionAudit.findFirst({
+        where: { reason: PRIVATE_PROPOSAL_REASON },
+        select: { submissionId: true },
+      });
+      if (existingAudit) {
+        return {
+          basicPriceId: price.id,
+          submissionId: existingAudit.submissionId,
+          alreadyProposed: true,
+          status: price.status,
+          assetScope: price.assetScope,
+        };
+      }
+
+      if (!price.organizationId) {
+        throw new ConflictException('NO_ROWS_READY_FOR_SUBMISSION');
+      }
+
+      const submission = await this.writeCommunityPriceSubmission(tx, {
+        workspaceId,
+        organizationId: price.organizationId,
+        resourceId: price.resourceId,
+        regionId: price.regionId as string,
+        reportedByAccountId: currentAccountId,
+        sourceOrigin: price.sourceOrigin as PriceSourceOrigin,
+        sourceType: price.sourceType as PriceSourceType,
+        value: price.value,
+        effectiveDate: price.effectiveDate,
+        auditReason: PRIVATE_PROPOSAL_REASON,
+      });
+
+      return {
+        basicPriceId: price.id,
+        submissionId: submission.id,
+        alreadyProposed: false,
+        status: price.status,
+        assetScope: price.assetScope,
+      };
+    });
+  }
+
+  /**
+   * THE ONE PriceSubmission write used by batch submit and by the private
+   * Detail caller. Creates submission + revision + audit + review. Never
+   * writes a BasicPrice and never publishes.
+   */
+  private async writeCommunityPriceSubmission(
+    tx: Prisma.TransactionClient,
+    input: {
+      workspaceId: string;
+      organizationId: string;
+      resourceId: string;
+      regionId: string;
+      reportedByAccountId: string;
+      sourceOrigin: PriceSourceOrigin;
+      sourceType: PriceSourceType;
+      value: Prisma.Decimal | string;
+      effectiveDate: Date;
+      auditReason: string;
+    },
+  ): Promise<{ id: string }> {
+    const submission = await tx.priceSubmission.create({
+      data: {
+        workspaceId: input.workspaceId,
+        organizationId: input.organizationId,
+        resourceId: input.resourceId,
+        regionId: input.regionId,
+        reportedByAccountId: input.reportedByAccountId,
+        sourceOrigin: input.sourceOrigin,
+        sourceType: input.sourceType,
+        status: 'SUBMITTED',
+      },
+    });
+
+    const revision = await tx.priceSubmissionRevision.create({
+      data: {
+        submissionId: submission.id,
+        revisionNumber: 1,
+        value: new Prisma.Decimal(input.value),
+        effectiveDate: input.effectiveDate,
+        validationPassed: true,
+      },
+    });
+
+    await tx.priceSubmission.update({
+      where: { id: submission.id },
+      data: { currentRevisionId: revision.id },
+    });
+
+    await tx.priceSubmissionAudit.create({
+      data: {
+        submissionId: submission.id,
+        fromStatus: null,
+        toStatus: 'SUBMITTED',
+        actorType: 'SYSTEM',
+        actorAccountId: null,
+        reason: input.auditReason,
+      },
+    });
+
+    await this.reviewService.createReviewWithinTransaction(tx, {
+      id: submission.id,
+      workspaceId: input.workspaceId,
+      organizationId: input.organizationId,
+    });
+
+    return submission;
   }
 }

@@ -89,10 +89,11 @@ export interface BatchLifecycleFacts {
    * BP-REGION-TRUTH-07S — THE SOURCE'S OWN GEOGRAPHIC CLAIM ABOUT THIS BATCH'S
    * PRICE SCOPE, and whether a human has reconciled it with `regionId`.
    *
-   * All optional, and absent reads as "not stated" — so every existing caller
-   * keeps compiling and keeps its current verdict. A path that does not read
-   * these facts cannot raise the question, which is correct: an unasked
-   * question may not become a verdict.
+   * Optional on the type so a read path that never loaded them still compiles.
+   * Absence means "not asked", which cannot raise the unconfirmed-geography
+   * question. Price and proposal WRITERS must pass the persisted values —
+   * the same three facts the review gate already reads — or they would mint
+   * a price the room had already refused.
    */
   sourceRegionScopeLabel?: string | null;
   sourceRegionScopeGeographicEvidence?: string | null;
@@ -202,9 +203,10 @@ export type ProposalNotOfferedReason = 'ALREADY_PROPOSED' | ProposalBlockReason;
  * Nothing about a finished row depends on its neighbours. The private writer
  * selects `READY_FOR_SUBMISSION` rows only, and re-checks each row's own
  * resource identity and canonical price before writing it. The batch-wide gate
- * was guarding the TERMINAL action's invariant ("this batch is done"), which
- * private use never claimed. `SIMPROK_PROPOSAL` keeps that gate below,
- * unchanged.
+ * was guarding a TERMINAL invariant ("this batch is done"). Private use never
+ * claimed that invariant. `SIMPROK_PROPOSAL` now uses the same mutable window:
+ * proposing eligible rows does not require every neighbour to have been
+ * decided, and does not freeze remaining `NEEDS_REVIEW` rows.
  */
 const MUTABLE_BATCH_STATUSES = new Set<string>([
   'NEEDS_REVIEW',
@@ -491,6 +493,61 @@ export function familyOffersCommunityCuration(family: SourceFamily): boolean {
 }
 
 /**
+ * Preconditions of proposing ONE already-usable private Basic Price.
+ *
+ * SAME FAMILY ROUTE AND SAME IDENTITY GATES as `proposalBlockReason`.
+ * Batch-window codes (`BATCH_NOT_READY_FOR_REVIEW`, `NO_ROWS_READY_FOR_SUBMISSION`)
+ * do not apply: the price is already stored and usable. Geography confirmation
+ * lived on the batch at keep-private time; this caller does not re-open it.
+ */
+export interface PrivatePriceProposalFacts {
+  sourceOrigin: string | null;
+  sourceType: string | null;
+  regionId: string | null;
+  effectiveDate: Date | null;
+  resourceId: string | null;
+}
+
+export function privatePriceProposalBlockReason(
+  facts: PrivatePriceProposalFacts,
+): PrivatePriceProposalBlockReason | null {
+  if (facts.sourceOrigin) {
+    const family = sourceFamilyOfOrigin(
+      facts.sourceOrigin as PriceSourceOrigin,
+    );
+    if (family && !familyOffersCommunityCuration(family)) {
+      return 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION';
+    }
+  }
+  if (!facts.effectiveDate) {
+    return 'EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION';
+  }
+  if (!facts.regionId) {
+    return 'REGION_REQUIRED_BEFORE_SUBMISSION';
+  }
+  if (!facts.sourceOrigin) {
+    return 'SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION';
+  }
+  if (!facts.sourceType) {
+    return 'SOURCE_TYPE_REQUIRED_BEFORE_SUBMISSION';
+  }
+  if (!facts.resourceId) {
+    return 'NO_ROWS_READY_FOR_SUBMISSION';
+  }
+  return null;
+}
+
+export type PrivatePriceProposalBlockReason = Extract<
+  ProposalBlockReason,
+  | 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION'
+  | 'EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION'
+  | 'REGION_REQUIRED_BEFORE_SUBMISSION'
+  | 'SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION'
+  | 'SOURCE_TYPE_REQUIRED_BEFORE_SUBMISSION'
+  | 'NO_ROWS_READY_FOR_SUBMISSION'
+>;
+
+/**
  * Preconditions of proposing this batch to curation. `null` means the endpoint
  * accepts the call — and `submitBatch` consumes THIS, so a reason returned here
  * is a reason the write boundary actually enforces.
@@ -520,7 +577,12 @@ export function proposalBlockReason(
       return 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION';
     }
   }
-  if (facts.status !== 'READY_FOR_REVIEW') {
+  // SAME MUTABLE WINDOW AS PRIVATE USE. READY_FOR_REVIEW used to be an
+  // absolute requirement because proposal froze the batch. Eligible rows are
+  // now proposed without waiting for unresolved neighbours, so NEEDS_REVIEW
+  // is lawful when readyForSubmissionRows > 0. BATCH_NOT_READY_FOR_REVIEW
+  // remains only for statuses outside that window (PREVIEWED, closed, …).
+  if (!MUTABLE_BATCH_STATUSES.has(facts.status)) {
     return 'BATCH_NOT_READY_FOR_REVIEW';
   }
   if (!facts.effectiveDate) {

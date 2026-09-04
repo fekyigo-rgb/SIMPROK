@@ -26,12 +26,14 @@ describe('BasicPriceImportService', () => {
       createMany: jest.Mock;
       count: jest.Mock;
       findMany: jest.Mock;
+      findUnique: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
     };
     priceSubmission: { create: jest.Mock; update: jest.Mock };
     priceSubmissionRevision: { create: jest.Mock };
-    priceSubmissionAudit: { create: jest.Mock };
+    priceSubmissionAudit: { create: jest.Mock; findFirst: jest.Mock };
+    basicPrice: { findFirst: jest.Mock };
     $queryRaw: jest.Mock;
   };
   let prisma: {
@@ -74,12 +76,14 @@ describe('BasicPriceImportService', () => {
         createMany: jest.fn(),
         count: jest.fn(),
         findMany: jest.fn(),
+        findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
       },
       priceSubmission: { create: jest.fn(), update: jest.fn() },
       priceSubmissionRevision: { create: jest.fn() },
-      priceSubmissionAudit: { create: jest.fn() },
+      priceSubmissionAudit: { create: jest.fn(), findFirst: jest.fn() },
+      basicPrice: { findFirst: jest.fn() },
       $queryRaw: jest.fn(),
     };
     prisma = {
@@ -458,6 +462,59 @@ describe('BasicPriceImportService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
+    it('rejects an unconfirmed geographic scope even when regionId is set', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              {
+                ...lockedBatch,
+                sourceRegionScopeLabel: 'SIRIMAU',
+                sourceRegionScopeGeographicEvidence: 'KECAMATAN',
+                regionScopeConfirmedRegionId: null,
+              },
+            ]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-1' }]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toMatchObject({
+        message: 'REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_SUBMISSION',
+      });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts the same geography after the human confirmed this Region', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              {
+                ...lockedBatch,
+                sourceRegionScopeLabel: 'SIRIMAU',
+                sourceRegionScopeGeographicEvidence: 'KECAMATAN',
+                regionScopeConfirmedRegionId: 'region-01',
+              },
+            ]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-1' }]);
+          return Promise.resolve([]);
+        },
+      );
+      const result = await service.submitBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
+      expect(tx.priceSubmission.create).toHaveBeenCalled();
+      expect(result).toBeDefined();
+    });
+
     it('rejects when sourceOrigin is missing (structural PriceSubmission requirement, never fabricated)', async () => {
       tx.$queryRaw.mockImplementation(
         (query: { strings?: readonly string[] }) => {
@@ -472,7 +529,57 @@ describe('BasicPriceImportService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('rejects a batch not in READY_FOR_REVIEW', async () => {
+    it('accepts a batch still NEEDS_REVIEW when ready rows exist', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              { ...lockedBatch, status: 'NEEDS_REVIEW' },
+            ]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-1' }]);
+          return Promise.resolve([]);
+        },
+      );
+      tx.basicPriceImportRow.count.mockImplementation(
+        ({ where }: { where: { status?: string } }) =>
+          Promise.resolve(where.status === 'NEEDS_REVIEW' ? 70 : 0),
+      );
+      tx.basicPriceImportRow.findMany.mockResolvedValue([
+        { id: 'row-1', status: 'SUBMISSION_CREATED' },
+        { id: 'row-unresolved', status: 'NEEDS_REVIEW' },
+      ]);
+
+      const result = await service.submitBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
+
+      expect(tx.priceSubmission.create).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('NEEDS_REVIEW');
+      expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a batch not yet in the review window', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([{ ...lockedBatch, status: 'PREVIEWED' }]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-1' }]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects NEEDS_REVIEW when no row is ready (CASE 1)', async () => {
       tx.$queryRaw.mockImplementation(
         (query: { strings?: readonly string[] }) => {
           const sql = query?.strings?.join('') ?? '';
@@ -485,7 +592,76 @@ describe('BasicPriceImportService', () => {
       );
       await expect(
         service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
-      ).rejects.toBeInstanceOf(ConflictException);
+      ).rejects.toMatchObject({ message: 'NO_ROWS_READY_FOR_SUBMISSION' });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('does not duplicate when the same open-batch wave is pressed again', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              { ...lockedBatch, status: 'NEEDS_REVIEW' },
+            ]);
+          return Promise.resolve([]);
+        },
+      );
+      await expect(
+        service.submitBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID),
+      ).rejects.toMatchObject({ message: 'NO_ROWS_READY_FOR_SUBMISSION' });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('second wave submits only newly ready rows, not already submitted ones', async () => {
+      tx.$queryRaw.mockImplementation(
+        (query: { strings?: readonly string[] }) => {
+          const sql = query?.strings?.join('') ?? '';
+          if (sql.includes('basic_price_import_batches'))
+            return Promise.resolve([
+              { ...lockedBatch, status: 'NEEDS_REVIEW' },
+            ]);
+          if (sql.includes('"status" = \'READY_FOR_SUBMISSION\''))
+            return Promise.resolve([{ id: 'row-new' }]);
+          return Promise.resolve([]);
+        },
+      );
+      tx.basicPriceImportRow.findUniqueOrThrow.mockResolvedValue({
+        id: 'row-new',
+        resourceCatalogId: 'resource-02',
+        proposedCanonicalPrice: '1000.00',
+        effectiveDateOverride: null,
+      });
+      tx.basicPriceImportRow.count.mockImplementation(
+        ({ where }: { where: { status?: string } }) =>
+          Promise.resolve(where.status === 'NEEDS_REVIEW' ? 60 : 0),
+      );
+      tx.basicPriceImportRow.findMany.mockResolvedValue([
+        { id: 'row-1', status: 'SUBMISSION_CREATED' },
+        { id: 'row-new', status: 'SUBMISSION_CREATED' },
+        { id: 'row-unresolved', status: 'NEEDS_REVIEW' },
+      ]);
+
+      const result = await service.submitBatch(
+        WORKSPACE_ID,
+        'batch-01',
+        ACCOUNT_ID,
+      );
+
+      expect(tx.priceSubmission.create).toHaveBeenCalledTimes(1);
+      expect(tx.priceSubmission.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ resourceId: 'resource-02' }),
+        }),
+      );
+      expect(tx.basicPriceImportRow.update).toHaveBeenCalledWith({
+        where: { id: 'row-new' },
+        data: {
+          priceSubmissionId: 'submission-1',
+          status: 'SUBMISSION_CREATED',
+        },
+      });
+      expect(result.status).toBe('NEEDS_REVIEW');
     });
 
     it('creates exactly one PriceSubmission + Revision + Audit per READY_FOR_SUBMISSION row, links it back to the row', async () => {
@@ -559,7 +735,10 @@ describe('BasicPriceImportService', () => {
     });
 
     it('final batch status is PARTIALLY_SUBMITTED when some rows were rejected', async () => {
-      tx.basicPriceImportRow.count.mockResolvedValue(1); // one REJECTED row exists
+      tx.basicPriceImportRow.count.mockImplementation(
+        ({ where }: { where: { status?: string } }) =>
+          Promise.resolve(where.status === 'REJECTED' ? 1 : 0),
+      );
       const result = await service.submitBatch(
         WORKSPACE_ID,
         'batch-01',
@@ -901,6 +1080,148 @@ describe('BasicPriceImportService', () => {
         ),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('submitPrivatePrice', () => {
+    const PRICE_ID = 'bp-private-01';
+    const lockedPrivate = {
+      id: PRICE_ID,
+      workspaceId: WORKSPACE_ID,
+      organizationId: ORGANIZATION_ID,
+      assetScope: 'WORKSPACE_PRIVATE',
+      resourceId: 'resource-01',
+      regionId: 'region-01',
+      sourceOrigin: 'FIELD_REPORT',
+      sourceType: 'MARKET_SURVEY',
+      value: '137500.00',
+      effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+      sourceImportRowId: 'row-1',
+      status: 'UNPUBLISHED',
+      verificationStatus: 'UNVERIFIED',
+    };
+
+    beforeEach(() => {
+      tx.priceSubmission.create.mockResolvedValue({ id: 'submission-1' });
+      tx.priceSubmissionRevision.create.mockResolvedValue({
+        id: 'revision-1',
+      });
+      tx.priceSubmission.update.mockResolvedValue({});
+      tx.priceSubmissionAudit.create.mockResolvedValue({});
+      tx.priceSubmissionAudit.findFirst.mockResolvedValue(null);
+      tx.basicPrice.findFirst.mockResolvedValue(null);
+      tx.basicPriceImportRow.findUnique.mockResolvedValue({
+        id: 'row-1',
+        batchId: 'batch-01',
+        priceSubmissionId: null,
+        resourceCatalogId: 'resource-01',
+        proposedCanonicalPrice: '137500.00',
+      });
+      tx.basicPriceImportBatch.findUniqueOrThrow.mockResolvedValue({
+        id: 'batch-01',
+        workspaceId: WORKSPACE_ID,
+        organizationId: ORGANIZATION_ID,
+      });
+      tx.basicPriceImportRow.update.mockResolvedValue({});
+      tx.$queryRaw.mockResolvedValue([lockedPrivate]);
+    });
+
+    it('creates one PriceSubmission via the same writer and leaves the private price unpublished', async () => {
+      const result = await service.submitPrivatePrice(
+        WORKSPACE_ID,
+        PRICE_ID,
+        ACCOUNT_ID,
+      );
+
+      expect(tx.priceSubmission.create).toHaveBeenCalledTimes(1);
+      expect(reviewService.createReviewWithinTransaction).toHaveBeenCalledWith(
+        tx,
+        {
+          id: 'submission-1',
+          workspaceId: WORKSPACE_ID,
+          organizationId: ORGANIZATION_ID,
+        },
+      );
+      expect(result).toEqual({
+        basicPriceId: PRICE_ID,
+        submissionId: 'submission-1',
+        alreadyProposed: false,
+        status: 'UNPUBLISHED',
+        assetScope: 'WORKSPACE_PRIVATE',
+      });
+      expect(tx.basicPriceImportRow.update).toHaveBeenCalledWith({
+        where: { id: 'row-1' },
+        data: {
+          priceSubmissionId: 'submission-1',
+          status: 'SUBMISSION_CREATED',
+        },
+      });
+      expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent when the import row already has a submission', async () => {
+      tx.basicPriceImportRow.findUnique.mockResolvedValue({
+        id: 'row-1',
+        batchId: 'batch-01',
+        priceSubmissionId: 'submission-existing',
+      });
+
+      const result = await service.submitPrivatePrice(
+        WORKSPACE_ID,
+        PRICE_ID,
+        ACCOUNT_ID,
+      );
+
+      expect(result.alreadyProposed).toBe(true);
+      expect(result.submissionId).toBe('submission-existing');
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a government private price with the same family code as batch proposal', async () => {
+      tx.$queryRaw.mockResolvedValue([
+        { ...lockedPrivate, sourceOrigin: 'GOVERNMENT' },
+      ]);
+
+      await expect(
+        service.submitPrivatePrice(WORKSPACE_ID, PRICE_ID, ACCOUNT_ID),
+      ).rejects.toMatchObject({
+        message: 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION',
+      });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('hides catalog and foreign-workspace prices as not found', async () => {
+      tx.$queryRaw.mockResolvedValue([
+        { ...lockedPrivate, assetScope: 'SIMPROK_CATALOG' },
+      ]);
+      await expect(
+        service.submitPrivatePrice(WORKSPACE_ID, PRICE_ID, ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      tx.$queryRaw.mockResolvedValue([
+        { ...lockedPrivate, workspaceId: 'other-ws' },
+      ]);
+      await expect(
+        service.submitPrivatePrice(WORKSPACE_ID, PRICE_ID, ACCOUNT_ID),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('refuses a superseded private price', async () => {
+      tx.basicPrice.findFirst.mockResolvedValue({ id: 'successor' });
+      await expect(
+        service.submitPrivatePrice(WORKSPACE_ID, PRICE_ID, ACCOUNT_ID),
+      ).rejects.toMatchObject({ message: 'PRICE_NO_LONGER_CURRENT' });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a published private price instead of echoing publication as a proposal result', async () => {
+      tx.$queryRaw.mockResolvedValue([
+        { ...lockedPrivate, status: 'PUBLISHED', verificationStatus: 'PUBLISHED' },
+      ]);
+      await expect(
+        service.submitPrivatePrice(WORKSPACE_ID, PRICE_ID, ACCOUNT_ID),
+      ).rejects.toMatchObject({ message: 'AUTO_PUBLISH_FORBIDDEN' });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
     });
   });
 });

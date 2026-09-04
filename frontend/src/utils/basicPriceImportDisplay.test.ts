@@ -9,6 +9,8 @@ import {
   metadataSaveFailureMessage,
   privateUseBlockSentence,
   proposalBlockSentence,
+  proposalDoorView,
+  communityCurationPathApplies,
   blockingFactLabel,
   completionBlockReason,
   humanFact,
@@ -26,6 +28,18 @@ import {
   isRowMutable,
   machinePickedResource,
   machinePickedUnit,
+  optionalRowCanEnrichKdnNow,
+  optionalRowKdnIncomplete,
+  optionalRowKdnState,
+  optionalEnrichmentBlockedCapabilities,
+  optionalEnrichmentPanelOffered,
+  OPTIONAL_KDN_INCOMPLETE,
+  OPTIONAL_ENRICHMENT_EMPTY,
+  OPTIONAL_ENRICHMENT_UNAVAILABLE_REASON,
+  rowIdentityAdmissionOffered,
+  rowIdentityAdmissionBlockReason,
+  IDENTITY_ADMISSION_LABEL,
+  IDENTITY_ADMISSION_HELP,
   rowMachineState,
   rowSectionDisplay,
   rowSectionLabel,
@@ -213,6 +227,83 @@ test("every proposal reason the server can send has an Indonesian sentence", () 
 test("no block sentence is produced when nothing is blocking", () => {
   assert.equal(privateUseBlockSentence(null), null);
   assert.equal(proposalBlockSentence(null), null);
+});
+
+test("unconfirmed region save keeps the action in this room, not back at Import", () => {
+  const sentence = privateUseBlockSentence(
+    "REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_PRIVATE_USE",
+  );
+  assert.match(sentence ?? "", /belum dapat dipastikan/);
+  assert.match(sentence ?? "", /Tinjau wilayah/);
+  assert.doesNotMatch(sentence ?? "", /halaman Impor/);
+  const proposal = proposalBlockSentence(
+    "REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_SUBMISSION",
+  );
+  assert.doesNotMatch(proposal ?? "", /halaman Impor/);
+});
+
+test("a missing Region still sends the person to Import to pick one", () => {
+  assert.match(
+    privateUseBlockSentence("REGION_REQUIRED_BEFORE_PRIVATE_USE") ?? "",
+    /halaman Impor/,
+  );
+});
+
+test("BP-SHARED-PROPOSAL-01. proposalDoorView keeps the door when FIELD_PRICE is not ready yet", () => {
+  // Owner IKK Community Survey: offered=false, BATCH_NOT_READY, FIELD_PRICE.
+  // Door must remain visible; press stays bound to offered=false.
+  const door = proposalDoorView({
+    offered: false,
+    reasonCode: "BATCH_NOT_READY_FOR_REVIEW",
+    sourceFamily: "FIELD_PRICE",
+  });
+  assert.equal(door.visible, true);
+  assert.equal(door.enabled, false);
+});
+
+test("BP-SHARED-PROPOSAL-01. proposalDoorView hides the door for families never curated", () => {
+  const door = proposalDoorView({
+    offered: false,
+    reasonCode: "SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION",
+    sourceFamily: "GOVERNMENT",
+  });
+  assert.equal(door.visible, false);
+  assert.equal(door.enabled, false);
+});
+
+test("BP-SHARED-PROPOSAL-01. proposalDoorView enables only when the server offers write", () => {
+  const door = proposalDoorView({
+    offered: true,
+    reasonCode: null,
+    sourceFamily: "FIELD_PRICE",
+  });
+  assert.equal(door.visible, true);
+  assert.equal(door.enabled, true);
+});
+
+test("BP-SHARED-PROPOSAL-01. communityCurationPathApplies does not invent routing", () => {
+  assert.equal(
+    communityCurationPathApplies(
+      {
+        offered: false,
+        reasonCode: "BATCH_NOT_READY_FOR_REVIEW",
+        sourceFamily: null,
+      },
+      false,
+    ),
+    false,
+  );
+  assert.equal(
+    communityCurationPathApplies(
+      {
+        offered: false,
+        reasonCode: "BATCH_NOT_READY_FOR_REVIEW",
+        sourceFamily: "FIELD_PRICE",
+      },
+      false,
+    ),
+    true,
+  );
 });
 
 test("the reason the button shows beforehand is the reason a failure shows afterwards", () => {
@@ -1301,7 +1392,7 @@ test("a row failure only blames a stale row when the status actually means that"
 
 test("a row failure always names the row and never claims the decision was saved", () => {
   for (const status of [0, 401, 403, 404, 409, 500]) {
-    for (const action of ["RESOLVE", "REJECT"] as const) {
+    for (const action of ["RESOLVE", "REJECT", "ADMIT"] as const) {
       const message = rowActionFailureMessage(action, 42, status);
       assert.match(message, /^Gagal /, "a failure must open as a failure");
       assert.match(message, /baris 42/, "the reviewer must know WHICH row");
@@ -1348,4 +1439,128 @@ test("every unit dimension and kind has a word — none falls through to its enu
   for (const kind of ["CANONICAL", "COMMERCIAL_PACKAGE", "CONTEXTUAL"] as const) {
     assert.doesNotMatch(unitKindLabel(kind), /[A-Z]{3,}/, `${kind} has no word`);
   }
+});
+
+test("optional KDN incompleteness never claims a silent zero", () => {
+  assert.equal(optionalRowKdnIncomplete(baseRow()), true);
+  assert.equal(optionalRowKdnIncomplete(baseRow({ proposedCanonicalKdn: null })), true);
+  assert.equal(optionalRowKdnIncomplete(baseRow({ proposedCanonicalKdn: "0.00" })), false);
+  assert.equal(optionalRowKdnIncomplete(baseRow({ proposedCanonicalKdn: "72.50" })), false);
+  assert.match(OPTIONAL_KDN_INCOMPLETE, /tidak menghalangi/u);
+});
+
+test("optional KDN enrich is live only after the private price exists", () => {
+  assert.equal(optionalRowCanEnrichKdnNow(baseRow()), false);
+  assert.equal(
+    optionalRowCanEnrichKdnNow(
+      baseRow({ savedAsPrivatePrice: true, privateBasicPriceId: "bp-1" }),
+    ),
+    true,
+  );
+  assert.equal(
+    optionalRowCanEnrichKdnNow(
+      baseRow({
+        proposedCanonicalKdn: "72.50",
+        savedAsPrivatePrice: true,
+        privateBasicPriceId: "bp-1",
+      }),
+    ),
+    false,
+  );
+});
+
+test("optional enrichment distinguishes available, empty-optional, and missing authority", () => {
+  assert.equal(optionalRowKdnState(baseRow()), "OPTIONAL_EMPTY");
+  assert.equal(optionalRowKdnState(baseRow({ proposedCanonicalKdn: "72.50" })), "AVAILABLE");
+  assert.equal(OPTIONAL_ENRICHMENT_EMPTY, "Belum dilengkapi — Opsional");
+  const blocked = optionalEnrichmentBlockedCapabilities();
+  assert.ok(blocked.length >= 2);
+  for (const gap of blocked) {
+    assert.equal(gap.state, "AUTHORITY_ABSENT");
+    assert.equal(gap.reason, OPTIONAL_ENRICHMENT_UNAVAILABLE_REASON);
+  }
+  assert.equal(optionalEnrichmentPanelOffered(baseRow({ proposedCanonicalKdn: "72.50" })), true);
+  assert.match(OPTIONAL_ENRICHMENT_UNAVAILABLE_REASON, /belum ada authority\/schema/u);
+});
+
+test("identity admission is offered only when the existing authority is exhausted", () => {
+  const exhausted = baseRow({ machineProposal: unknownProposal() });
+  assert.equal(rowIdentityAdmissionOffered(exhausted), true);
+  assert.equal(rowIdentityAdmissionOffered(baseRow({ machineProposal: attentionProposal() })), false);
+  assert.equal(rowIdentityAdmissionOffered(baseRow({ machineProposal: provenProposal() })), false);
+  assert.equal(rowIdentityAdmissionOffered(baseRow({ machineProposal: null })), false);
+  assert.equal(
+    rowIdentityAdmissionOffered(baseRow({ status: "READY_FOR_SUBMISSION", machineProposal: unknownProposal() })),
+    false,
+  );
+  // Candidates — even one — are a review, never an admit.
+  const oneCandidate = unknownProposal();
+  oneCandidate.resource.candidates = [
+    {
+      resourceCatalogId: "c1",
+      name: "Batu Pecah 5/7",
+      code: null,
+      type: "MATERIAL",
+      baseUnit: "M3",
+      evidence: ["NAME_TOKEN_CONTAINMENT"],
+      specificationUnproved: false,
+      unprovedSpecificationFacts: [],
+      hasPriorHumanDecision: false,
+    },
+  ];
+  assert.equal(rowIdentityAdmissionOffered(baseRow({ machineProposal: oneCandidate })), false);
+});
+
+test("identity admission does not invent a second gate over optional enrichment", () => {
+  const exhausted = baseRow({
+    machineProposal: unknownProposal(),
+    proposedCanonicalKdn: null,
+  });
+  assert.equal(optionalRowKdnIncomplete(exhausted), true);
+  assert.equal(rowIdentityAdmissionOffered(exhausted), true);
+});
+
+test("identity admission names the act and refuses to fire without a unit and a reason", () => {
+  assert.equal(IDENTITY_ADMISSION_LABEL, "Sahkan sebagai item baru");
+  assert.match(IDENTITY_ADMISSION_HELP, /bukan dari tebakan/u);
+  assert.equal(
+    rowIdentityAdmissionBlockReason({
+      unitSelected: false,
+      unitPending: false,
+      reasonFilled: false,
+      admitOpen: false,
+      busy: false,
+    }),
+    "Pilih satu Satuan standar sebelum mengesahkan item baru.",
+  );
+  assert.equal(
+    rowIdentityAdmissionBlockReason({
+      unitSelected: true,
+      unitPending: false,
+      reasonFilled: false,
+      admitOpen: false,
+      busy: false,
+    }),
+    null,
+  );
+  assert.match(
+    rowIdentityAdmissionBlockReason({
+      unitSelected: true,
+      unitPending: false,
+      reasonFilled: false,
+      admitOpen: true,
+      busy: false,
+    }) ?? "",
+    /alasan/u,
+  );
+  assert.equal(
+    rowIdentityAdmissionBlockReason({
+      unitSelected: true,
+      unitPending: false,
+      reasonFilled: true,
+      admitOpen: true,
+      busy: false,
+    }),
+    null,
+  );
 });

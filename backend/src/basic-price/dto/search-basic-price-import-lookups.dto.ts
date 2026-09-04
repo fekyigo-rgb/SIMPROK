@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
-import { ResourceType, UnitDimension, UnitKind } from '@prisma/client';
+import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { RegionAdministrativeLevel, ResourceType, UnitDimension, UnitKind } from '@prisma/client';
 
 class SearchBasicPriceImportLookupPageDto {
   @IsOptional()
@@ -39,8 +39,18 @@ export class SearchUnitDefinitionDto extends SearchBasicPriceImportLookupPageDto
 }
 
 /**
- * RM-02D2A2 — Region is a canonical GLOBAL entity (no workspaceId). The only
- * filter beyond the optional `q` (code or name) is the always-on active-list
- * scope applied in the service; the DTO carries no workspace or scope input.
+ * RM-02D2A2 — Region is a canonical GLOBAL entity (no workspaceId). The
+ * always-on filter is isActive. Optional `q` matches code/name/parent name.
+ * Optional parentId / administrativeLevel let a caller walk the existing
+ * Kemendagri tree WITHOUT a second Region engine. They return empty when
+ * the national master is absent; they do not invent villages.
  */
-export class SearchRegionDto extends SearchBasicPriceImportLookupPageDto {}
+export class SearchRegionDto extends SearchBasicPriceImportLookupPageDto {
+  @IsOptional()
+  @IsUUID()
+  parentId?: string;
+
+  @IsOptional()
+  @IsEnum(RegionAdministrativeLevel)
+  administrativeLevel?: RegionAdministrativeLevel;
+}

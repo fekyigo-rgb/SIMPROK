@@ -332,14 +332,14 @@ test("ACTION-01: the row button names the act, not a finished outcome", () => {
 test("DISCLOSE-01: one instruction stays visible and the rest of the reasoning waits to be asked for", () => {
   const split = rowNoteDisclosure({
     human: [
-      "Item belum dikenali. Pilih Item SIMPROK yang sesuai, atau tolak baris ini.",
+      "Item belum dikenali sebagai Resource Identity yang sudah ada. Pilih Item SIMPROK yang sesuai, sahkan sebagai item baru, atau tolak baris ini.",
       "Satuan belum dikenali.",
       "Ada lebih dari satu kandidat yang sama kuat.",
     ],
   });
   assert.equal(
     split.primary,
-    "Item belum dikenali. Pilih Item SIMPROK yang sesuai, atau tolak baris ini.",
+    "Item belum dikenali sebagai Resource Identity yang sudah ada. Pilih Item SIMPROK yang sesuai, sahkan sebagai item baru, atau tolak baris ini.",
   );
   assert.equal(split.secondary.length, 2);
   // NOTHING IS DROPPED — the split is lossless.
@@ -389,8 +389,11 @@ test("BANNER-02: an interpretation update names the axis without restating its o
 test("STEPPER-01: the optional SIMPROK proposal is never drawn as required for private use", () => {
   // `optional: true` on PROPOSE, and a curation tail that says NOT_OFFERED
   // rather than UPCOMING when this batch will never take that path.
+  // BP-SHARED-PROPOSAL-01 — curationApplies follows communityCurationPathApplies
+  // (server family/reason), not only `offered`, so FIELD_PRICE not-ready is not
+  // falsely labelled "tidak dirutekan".
   assert.match(journey, /optional: boolean/);
   assert.match(journey, /'PROPOSE', 'NOT_OFFERED'/);
   assert.match(journey, /'VERIFY', 'NOT_OFFERED'/);
-  assert.match(journey, /const curationApplies = proposed \|\| proposal\.offered/);
+  assert.match(journey, /communityCurationPathApplies\(proposal, proposed\)/);
 });

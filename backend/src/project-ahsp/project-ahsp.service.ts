@@ -20,7 +20,13 @@ import { resolveAhspResourcePrice } from '../ahsp/price-resolution/ahsp-resource
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { monetaryUnitIdentity } from '../project/monetary-unit-identity';
 import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
+import {
+  BOQ_UNIT_COMPATIBILITY,
+  BoqUnitCompatibilityService,
+} from '../unit-kernel/boq-unit-compatibility.service';
+import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import {
@@ -58,6 +64,7 @@ export class ProjectAhspService {
     private readonly lifecycle: RabLifecyclePolicyService,
     private readonly identity: ResourceIdentityResolutionService,
     private readonly resolution: AhspResourceResolutionOrchestrator,
+    private readonly unitCompatibility: BoqUnitCompatibilityService,
   ) {}
 
   async listEligibleVersions(workspaceId: string, asOfRaw: string) {
@@ -202,6 +209,54 @@ export class ProjectAhspService {
       });
       if (!version || version.resources.length === 0) {
         throw new NotFoundException('ELIGIBLE_AHSP_VERSION_NOT_FOUND');
+      }
+
+      // KAMUS_UNIT_KERNEL_01A — the bind-time unit gate, and the ONE place a
+      // unit question is asked on this path. THE existing
+      // BoqUnitCompatibilityService answers the Unit Kernel half; this call
+      // site does not read the alias table, does not compare unit strings, and
+      // does not re-derive any part of that verdict. Unit Kernel stays the sole
+      // unit authority and that service stays its only BOQ/AHSP compatibility
+      // projection.
+      //
+      // It runs HERE for two reasons. Both units are known by this line and
+      // both were read on the transaction that locked the project, so the
+      // verdict is about the exact facts the binding would be made from. And it
+      // precedes resolveVersionResources, so a refused selection never reaches
+      // Resource Identity, never reads a Basic Price, and never creates an
+      // occurrence — the throw leaves nothing to undo rather than something to
+      // roll back.
+      const compatibility = await this.unitCompatibility.evaluate(
+        version.outputUnit,
+        item.unit,
+      );
+      // ONE accepted status, named rather than excluded: a verdict this code
+      // has never heard of must fail closed, not slip through an exclusion list
+      // nobody updated. COMPATIBLE_CONVERTIBLE is refused with NEEDS_REVIEW and
+      // NOT_CONVERTIBLE because SIMPROK has no conversion arithmetic to price
+      // it — unit_conversion_rules is empty, and a bind whose money can never
+      // be computed is a false door, not a feature.
+      if (compatibility.status !== BOQ_UNIT_COMPATIBILITY.COMPATIBLE_EXACT) {
+        // The reason code the Unit Kernel contract already ships for exactly
+        // this fact, raised through the same ConflictException(<CODE>) shape
+        // every other refusal on this command already uses. No second error
+        // vocabulary is minted here.
+        throw new ConflictException(UNIT_REASON.BOQ_UNIT_INCOMPATIBLE);
+      }
+      // AND the monetary half, which COMPATIBLE_EXACT does not imply. That
+      // status means the two spellings resolve to one canonical unit
+      // definition; the calculation chain instead requires one normalized
+      // STRING. The seeded dictionary holds 26 alias pairs where those two
+      // facts disagree — "OH" vs "Orang/Hari", "M" vs "M1" — and binding on
+      // any of them would persist a relationship that can never produce money.
+      // This is THE same function the Cost Kernel itself asks, so what binds
+      // here is exactly what calculates there.
+      const monetaryIdentity = monetaryUnitIdentity(
+        item.unit,
+        version.outputUnit,
+      );
+      if (!monetaryIdentity.admissible) {
+        throw new ConflictException(monetaryIdentity.refusal);
       }
 
       // THE shared Golden Thread resolution authority. The occurrence path and
