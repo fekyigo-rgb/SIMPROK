@@ -9,7 +9,7 @@ import {
   CostKernelInput,
   CalculatedResource,
 } from './cost-kernel.contracts';
-import { normalizeUnitAlias } from '../unit-kernel/unit-normalization';
+import { monetaryUnitIdentity } from './monetary-unit-identity';
 
 const fail = (
   boqItemId: string,
@@ -67,14 +67,6 @@ const parseNonNegativeDecimal = (value: string): Prisma.Decimal | null => {
   }
 };
 
-/**
- * Identity comparison only (BOQ unit vs AHSP output unit), via the existing
- * canonical unit-kernel string primitive. M1/m1/M¹ normalize equal; "M" and
- * "M1" stay distinct because unit-kernel treats them as separate canonical
- * dimensional codes — this must never widen into alias/conversion lookup.
- */
-const exactUnit = (value: string) => normalizeUnitAlias(value);
-
 /** Pure Grade A arithmetic over already-frozen resource resolutions. */
 export function calculateCostKernel(
   input: CostKernelInput,
@@ -88,16 +80,13 @@ export function calculateCostKernel(
     return fail(input.boqItemId, COST_CALCULATION_REASON.OWNERSHIP_MISMATCH);
   if (!input.ahspVersionId)
     return fail(input.boqItemId, COST_CALCULATION_REASON.MISSING_AHSP_VERSION);
-  if (!input.outputUnit?.trim())
-    return fail(
-      input.boqItemId,
-      COST_CALCULATION_REASON.MISSING_AHSP_OUTPUT_UNIT,
-    );
-  if (exactUnit(input.boqUnit) !== exactUnit(input.outputUnit))
-    return fail(
-      input.boqItemId,
-      COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH,
-    );
+  // THE monetary unit fact, asked here exactly as it was asked inline before:
+  // same two refusals, same codes, same order, same position in the gate
+  // sequence. The BOQ/AHSP bind boundary now asks this identical function, so a
+  // bind can never be admitted on a unit relationship this calculation refuses.
+  const unitIdentity = monetaryUnitIdentity(input.boqUnit, input.outputUnit);
+  if (!unitIdentity.admissible)
+    return fail(input.boqItemId, unitIdentity.refusal);
   if (input.occurrenceCount === 0 || !input.occurrenceId)
     return fail(input.boqItemId, COST_CALCULATION_REASON.OCCURRENCE_NOT_FOUND);
   if (input.occurrenceCount !== 1)
@@ -149,7 +138,7 @@ export function calculateCostKernel(
     ahspVersionId: input.ahspVersionId,
     occurrenceId: input.occurrenceId,
     volume: volume.toString(),
-    outputUnit: input.outputUnit,
+    outputUnit: unitIdentity.outputUnit,
     resources,
     ahspUnitPrice: ahspUnitPrice.toString(),
     lineTotal: volume.mul(ahspUnitPrice).toString(),

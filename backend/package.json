@@ -41,7 +41,9 @@
     "verify:equivalence:271": "tsx scripts/verify-equivalence-271.ts",
     "test:openai:smoke": "tsx scripts/openai-smoke.ts",
     "gate:post-recovery": "npm run build && npm run test && npm run test:e2e && npm --prefix ../frontend run build",
-    "b1b12:acceptance:workspace": "tsx scripts/b1b12/provision-basic-price-acceptance.ts"
+    "b1b12:acceptance:workspace": "tsx scripts/b1b12/provision-basic-price-acceptance.ts",
+    "db:provision:platform-authorities": "tsx prisma/seed-platform-authorities.ts",
+    "platform-governance:ceremony": "tsx scripts/platform-governance/ceremony.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
