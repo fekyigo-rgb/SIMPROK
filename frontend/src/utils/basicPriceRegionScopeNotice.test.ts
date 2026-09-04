@@ -161,3 +161,10 @@ test("the new block reasons exist in the server's own law", () => {
     "REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_PRIVATE_USE",
   );
 });
+
+test("Tinjau Hasil now hosts the same confirm action Import already had", () => {
+  const review = readFileSync("src/pages/BasicPriceReviewPage.tsx", "utf8");
+  assert.match(review, /regionScopeNoticeView/);
+  assert.match(review, /confirmRegionScopeCompatibility: true/);
+  assert.match(review, /handleConfirmRegionScope/);
+});

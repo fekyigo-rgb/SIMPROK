@@ -346,3 +346,27 @@ test('DETAIL-CHG-14 the door label is compact and contains no internal id', () =
   assert.equal(DETAIL_CHANGE_DOOR_LABEL, 'Lengkapi / Ajukan perubahan');
   assert.doesNotMatch(DETAIL_CHANGE_DOOR_LABEL, /[0-9a-f-]{8}/iu);
 });
+
+test('DETAIL-PROPOSE-01 field-report private price offers Usulkan ke SIMPROK', () => {
+  const offer = detailSubjectOffers({
+    ...privateReady,
+    sourceOrigin: 'FIELD_REPORT',
+  }).find((item) => item.subject === 'PROPOSAL');
+  assert.equal(offer?.kind, 'LIVE');
+  if (offer?.kind === 'LIVE') {
+    assert.equal(offer.action, 'PROPOSE_PRIVATE');
+    assert.equal(offer.writer, 'submitPrivatePrice');
+    assert.equal(offer.verb, 'Usulkan ke SIMPROK');
+  }
+});
+
+test('DETAIL-PROPOSE-02 government private price stays honest, not a second engine', () => {
+  const offer = detailSubjectOffers({
+    ...privateReady,
+    sourceOrigin: 'GOVERNMENT',
+  }).find((item) => item.subject === 'PROPOSAL');
+  assert.equal(offer?.kind, 'HONEST');
+  if (offer?.kind === 'HONEST') {
+    assert.equal(offer.action, 'FAMILY_NOT_ROUTED');
+  }
+});

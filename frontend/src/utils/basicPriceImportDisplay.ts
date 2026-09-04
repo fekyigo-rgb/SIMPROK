@@ -126,6 +126,13 @@ export interface BasicPriceImportRowSummary {
   rawPriceDisplayText: string | null;
   proposedCanonicalPrice: string | null;
   /**
+   * Optional %KDN already projected by the server. Null means unknown, never
+   * a silent zero, and never a proposal/private-use gate.
+   */
+  proposedCanonicalKdn?: string | null;
+  kdnReasonCode?: string | null;
+  sourceKdnHeaderText?: string | null;
+  /**
    * USI-01R — NULL when the source stated a resource family SIMPROK could not
    * safely map. The backend has allowed null since USI-01R while this contract
    * still promised one of three values, which let the review room read an
@@ -156,6 +163,11 @@ export interface BasicPriceImportRowSummary {
    * asks; absent reads as not-stored, which is what every other path renders.
    */
   savedAsPrivatePrice?: boolean;
+  /**
+   * The existing private Basic Price for this row, when the review read asked.
+   * Used only to call the existing KDN enrich writer. Never shown as a UUID.
+   */
+  privateBasicPriceId?: string | null;
   /**
    * INT-CONNECT-01 — what the canonical authorities already proved about this
    * row, or NULL when they were not consulted (any non-review read path, and
@@ -717,7 +729,7 @@ const PRIVATE_USE_BLOCK_SENTENCES: Record<PrivateUseBlockReason, string> = {
    * sentence is only the reason the save is waiting.
    */
   REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_PRIVATE_USE:
-    'Wilayah pada sumber belum dapat dipastikan sesuai dengan Wilayah SIMPROK. Tinjau wilayah dulu di halaman Impor.',
+    'Wilayah pada sumber belum dapat dipastikan sesuai dengan Wilayah SIMPROK. Tinjau wilayah dulu.',
   NO_ROWS_READY_FOR_PRIVATE_USE:
     'Belum ada baris yang siap disimpan. Konfirmasi pilihan pada setidaknya satu baris untuk melanjutkan.',
   // NOT A REFUSAL. The work is done, and the room says so instead of offering
@@ -747,7 +759,7 @@ const PROPOSAL_BLOCK_SENTENCES: Record<ProposalNotOfferedReason, string> = {
   // The same unproven pair as the private door, in the proposal's own words.
   // An unreconciled geography must not reach SIMPROK's curation either.
   REGION_SCOPE_COMPATIBILITY_UNCONFIRMED_BEFORE_SUBMISSION:
-    'Wilayah pada sumber belum dapat dipastikan sesuai dengan Wilayah SIMPROK. Tinjau wilayah dulu di halaman Impor.',
+    'Wilayah pada sumber belum dapat dipastikan sesuai dengan Wilayah SIMPROK. Tinjau wilayah dulu.',
   NO_ROWS_READY_FOR_SUBMISSION:
     'Belum ada baris yang siap diusulkan. Baris yang masih ditinjau dapat diusulkan setelah dikonfirmasi.',
 };
@@ -893,6 +905,114 @@ export const rowReviewFactsLine = (row: BasicPriceImportRowSummary): string => {
   const price = priceSource ? `Harga Rp ${priceSource}` : 'Harga tidak tercantum';
   return `${code} · ${unit} · ${price}`;
 };
+
+export const OPTIONAL_KDN_INCOMPLETE =
+  'Data opsional belum lengkap: %KDN. Kekosongan ini tidak menghalangi baris yang sudah siap.';
+
+export const OPTIONAL_KDN_AFTER_KEEP =
+  'Lengkapi Data setelah Simpan & Gunakan, di Detail harga. Baris yang sudah siap tetap dapat diproses sekarang.';
+
+export const OPTIONAL_ENRICHMENT_GAPS = [
+  'detail wilayah / alamat sumber',
+  'detail lokasi',
+] as const;
+
+export const OPTIONAL_ENRICHMENT_UNAVAILABLE_REASON =
+  'Capability belum tersedia karena belum ada authority/schema.';
+
+export const OPTIONAL_ENRICHMENT_EMPTY =
+  'Belum dilengkapi — Opsional';
+
+export type OptionalEnrichmentState = 'AVAILABLE' | 'OPTIONAL_EMPTY' | 'AUTHORITY_ABSENT';
+
+export function optionalRowKdnIncomplete(
+  row: Pick<BasicPriceImportRowSummary, 'proposedCanonicalKdn'>,
+): boolean {
+  return row.proposedCanonicalKdn == null;
+}
+
+export function optionalRowKdnState(
+  row: Pick<BasicPriceImportRowSummary, 'proposedCanonicalKdn'>,
+): OptionalEnrichmentState {
+  return optionalRowKdnIncomplete(row) ? 'OPTIONAL_EMPTY' : 'AVAILABLE';
+}
+
+export function optionalEnrichmentBlockedCapabilities(): ReadonlyArray<{
+  label: string;
+  state: 'AUTHORITY_ABSENT';
+  reason: string;
+}> {
+  return OPTIONAL_ENRICHMENT_GAPS.map((label) => ({
+    label,
+    state: 'AUTHORITY_ABSENT' as const,
+    reason: OPTIONAL_ENRICHMENT_UNAVAILABLE_REASON,
+  }));
+}
+
+export function optionalEnrichmentPanelOffered(
+  row: Pick<BasicPriceImportRowSummary, 'proposedCanonicalKdn'>,
+): boolean {
+  return optionalRowKdnIncomplete(row) || OPTIONAL_ENRICHMENT_GAPS.length > 0;
+}
+
+export function optionalRowCanEnrichKdnNow(
+  row: Pick<
+    BasicPriceImportRowSummary,
+    'proposedCanonicalKdn' | 'savedAsPrivatePrice' | 'privateBasicPriceId'
+  >,
+): boolean {
+  return (
+    optionalRowKdnIncomplete(row) &&
+    row.savedAsPrivatePrice === true &&
+    Boolean(row.privateBasicPriceId)
+  );
+}
+
+/**
+ * RM-03D1 — whether Tinjau Hasil may offer "Sahkan sebagai item baru".
+ *
+ * Mirrors `BasicPriceRowResolutionService.isIdentityExhausted` using only the
+ * facts the review room already receives. Candidates, NEEDS_REVIEW, or a
+ * resolved identity all mean the authority is not exhausted — the existing
+ * admit-resource writer would 409 RESOURCE_IDENTITY_NOT_EXHAUSTED. This helper
+ * does not invent a second gate; it only decides whether the existing writer
+ * may be shown.
+ */
+export function rowIdentityAdmissionOffered(
+  row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
+): boolean {
+  if (row.status !== 'NEEDS_REVIEW') return false;
+  const resource = row.machineProposal?.resource;
+  if (!resource) return false;
+  return (
+    resource.status === 'UNRESOLVED' &&
+    resource.reasonCodes.includes('RESOURCE_NOT_FOUND') &&
+    resource.candidates.length === 0 &&
+    resource.resourceCatalogId === null &&
+    resource.authority === null
+  );
+}
+
+export const IDENTITY_ADMISSION_LABEL = 'Sahkan sebagai item baru';
+
+export const IDENTITY_ADMISSION_HELP =
+  'Item ini belum ada sebagai Resource Identity kanonik. Pengesahan membentuk identitas baru dari nama sumber, bukan dari tebakan kecocokan katalog.';
+
+export function rowIdentityAdmissionBlockReason(input: {
+  unitSelected: boolean;
+  unitPending: boolean;
+  reasonFilled: boolean;
+  admitOpen: boolean;
+  busy: boolean;
+}): string | null {
+  if (input.busy) return 'Sedang memproses...';
+  if (input.unitPending) return 'Tunggu pencarian satuan selesai.';
+  if (!input.unitSelected)
+    return 'Pilih satu Satuan standar sebelum mengesahkan item baru.';
+  if (input.admitOpen && !input.reasonFilled)
+    return 'Tuliskan alasan mengapa item ini disahkan sebagai Resource Identity baru.';
+  return null;
+}
 
 /**
  * SOURCE VOCABULARY, IN ONE PLACE.
@@ -1119,11 +1239,16 @@ export const regionScopeNoticeView = (
  * means it.
  */
 export const rowActionFailureMessage = (
-  action: 'RESOLVE' | 'REJECT',
+  action: 'RESOLVE' | 'REJECT' | 'ADMIT',
   sourceRowNumber: number,
   httpStatus: number,
 ): string => {
-  const what = action === 'RESOLVE' ? 'menyelesaikan' : 'menolak';
+  const what =
+    action === 'RESOLVE'
+      ? 'menyelesaikan'
+      : action === 'REJECT'
+        ? 'menolak'
+        : 'mengesahkan item baru pada';
   const lead = `Gagal ${what} baris ${sourceRowNumber}.`;
   if (httpStatus === 401) return `${lead} Sesi Anda sudah berakhir — masuk kembali lalu ulangi.`;
   if (httpStatus === 403)
@@ -1335,7 +1460,7 @@ const BLOCKING_FACT_LABELS: Record<string, string> = {
   UNIT_NOT_REPRESENTABLE_BY_UNIT_AUTHORITY:
     'Satuan kanonik itu belum dapat dibuktikan oleh otoritas satuan.',
   RESOURCE_NOT_FOUND:
-    'Item belum dikenali. Pilih Item SIMPROK yang sesuai, atau tolak baris ini.',
+    'Item belum dikenali sebagai Resource Identity yang sudah ada. Pilih Item SIMPROK yang sesuai, sahkan sebagai item baru, atau tolak baris ini.',
   MULTIPLE_CANDIDATES_NEEDS_REVIEW: 'Ada lebih dari satu kandidat yang sama kuat.',
   STRONG_CANDIDATE_NEEDS_REVIEW: 'Ada satu kandidat kuat yang masih perlu ditegaskan.',
   SPECIFICATION_UNPROVED: 'Entri katalog menyebut hal yang tidak disebut sumber.',

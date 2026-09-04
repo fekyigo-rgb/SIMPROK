@@ -1817,19 +1817,40 @@ model BasicPrice {
 // for the full design contract this section implements verbatim.
 // =====================================================
 
-model Region {
-  id        String   @id @default(uuid()) @db.Uuid
-  code      String   @unique
-  name      String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+/// Kemendagri administrative depth. NULL on every Region that existed before
+/// hierarchy was representable — those rows keep their id/code/name and are
+/// still valid Basic Price Regions. NULL is UNKNOWN depth, never "not a place".
+enum RegionAdministrativeLevel {
+  COUNTRY
+  PROVINCE
+  REGENCY_CITY
+  DISTRICT
+  VILLAGE
+}
 
+model Region {
+  id                    String                       @id @default(uuid()) @db.Uuid
+  code                  String                       @unique
+  name                  String
+  isActive              Boolean                      @default(true)
+  /// Optional Kemendagri depth. Existing live rows (Jakarta Selatan, Baguala)
+  /// stay NULL until a governed provisioner pass states the level. Never guessed.
+  administrativeLevel   RegionAdministrativeLevel?
+  /// Optional parent Region. RESTRICT: a parent that still has children cannot
+  /// be deleted out from under them. Self-parent is refused by CHECK. Existing
+  /// rows keep parentId NULL — their IDs and references are unchanged.
+  parentId              String?                      @db.Uuid
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+
+  parent                  Region?                    @relation("RegionHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children                Region[]                   @relation("RegionHierarchy")
   basicPrices             BasicPrice[]
   priceSubmissions        PriceSubmission[]
   basicPriceImportBatches BasicPriceImportBatch[]
   projectAhspOccurrences  ProjectAhspOccurrence[]
 
+  @@index([parentId])
   @@map("regions")
 }
 

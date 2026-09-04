@@ -310,6 +310,15 @@
   background: var(--simprok-white);
 }
 
+/*
+ * BP-UX-DETAIL-ANCHOR-01 — do not clip the under-row panel.
+ * `overflow-x: auto` otherwise pairs `overflow-y` to auto (CSS overflow
+ * pairing) and can hide the panel that sits in the next table row.
+ */
+.bp-tablewrap:has(tr.bp-detail-anchor) {
+  overflow: visible;
+}
+
 .bp-table {
   width: 100%;
   border-collapse: collapse;
@@ -344,6 +353,11 @@
 
 .bp-table tbody tr:hover {
   background: var(--simprok-bright-sky-blue-50);
+}
+
+.bp-table tbody tr.bp-row--open {
+  background: var(--simprok-bright-sky-blue-50);
+  box-shadow: inset 3px 0 0 var(--simprok-authority-navy-900);
 }
 
 /* The row's first-read identity. */
@@ -615,6 +629,12 @@
   border-radius: var(--radius-md);
   box-shadow: var(--elevation-1);
   overflow: hidden;
+}
+
+tr.bp-detail-anchor > td {
+  padding: var(--space-2) 0 var(--space-3);
+  background: var(--simprok-white);
+  border-bottom: 1px solid var(--simprok-bright-sky-blue-100);
 }
 
 .bp-detail__head {
@@ -1270,6 +1290,11 @@
     border: 1px solid var(--simprok-engineering-blue-200);
     border-radius: var(--radius-md);
     background: var(--simprok-white);
+  }
+
+  .bp-table tbody tr.bp-row--open {
+    background: var(--simprok-bright-sky-blue-50);
+    box-shadow: inset 3px 0 0 var(--simprok-authority-navy-900);
   }
 
   .bp-table tbody td {

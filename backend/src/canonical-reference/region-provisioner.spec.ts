@@ -133,6 +133,49 @@ describe('RM-03D0 Region provisioner', () => {
       await buildRegionPlan(client, { regionCode: CODE, regionName: NAME });
       expect(Object.keys(client.region)).toEqual(['findMany']);
     });
+
+    it('omitting hierarchy keeps the historical plan JSON', async () => {
+      const plan = await buildRegionPlan(readClient([]), {
+        regionCode: CODE,
+        regionName: NAME,
+      });
+      expect(canonicalRegionPlanJson(plan)).not.toContain('parentRegionId');
+      expect(canonicalRegionPlanJson(plan)).not.toContain('administrativeLevel');
+    });
+
+    it('plans CREATE under an existing Kemendagri parent', async () => {
+      const parent = existing({ id: 'parent-1', code: '31', name: 'DKI Jakarta' });
+      const plan = await buildRegionPlan(readClient([parent]), {
+        regionCode: CODE,
+        regionName: NAME,
+        parentRegionCode: '31',
+        administrativeLevel: 'REGENCY_CITY',
+      });
+      expect(plan.disposition).toBe('CREATE_REGION');
+      expect(plan.parentRegionId).toBe('parent-1');
+      expect(plan.administrativeLevel).toBe('REGENCY_CITY');
+    });
+
+    it('refuses a parent that does not exist', async () => {
+      await expect(
+        buildRegionPlan(readClient([]), {
+          regionCode: CODE,
+          regionName: NAME,
+          parentRegionCode: '31',
+        }),
+      ).rejects.toThrow(/STOP_REGION_PARENT_NOT_FOUND/);
+    });
+
+    it('refuses COUNTRY with a parent', async () => {
+      await expect(
+        buildRegionPlan(readClient([]), {
+          regionCode: 'ID',
+          regionName: 'Indonesia',
+          parentRegionCode: '31',
+          administrativeLevel: 'COUNTRY',
+        }),
+      ).rejects.toThrow(/STOP_REGION_COUNTRY_HAS_PARENT/);
+    });
   });
 
   describe('conflicting truth fails closed — never a repair', () => {

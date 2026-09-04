@@ -10,6 +10,10 @@
  * mirror and must stay in parity.
  */
 
+import { PriceSourceOrigin } from '@prisma/client';
+import { familyOffersCommunityCuration } from './basic-price-batch-actions.policy';
+import { sourceFamilyOfOrigin } from './basic-price-source-family.util';
+
 export const DETAIL_CHANGE_DOOR_LABEL = 'Lengkapi / Ajukan Perubahan';
 
 export const CATALOG_REVIEW_PATH = '/basic-price/reviews';
@@ -203,6 +207,19 @@ export type DetailSubjectOffer =
       message: string;
     }
   | {
+      subject: 'PROPOSAL';
+      kind: 'LIVE';
+      action: 'PROPOSE_PRIVATE';
+      verb: 'Usulkan ke SIMPROK';
+      writer: 'submitPrivatePrice';
+    }
+  | {
+      subject: 'PROPOSAL';
+      kind: 'HONEST';
+      action: 'FAMILY_NOT_ROUTED' | 'PRIVATE_NO_AUTHORITY' | 'ALREADY_PROPOSED';
+      message: string;
+    }
+  | {
       subject: 'SOURCE' | 'IDENTITY' | 'DATE';
       kind: 'HONEST';
       message: string;
@@ -220,6 +237,8 @@ export interface DetailChangeActorFacts {
   canPublish: boolean;
   canVerify: boolean;
   canPromoteShared: boolean;
+  sourceOrigin?: string | null;
+  alreadyProposed?: boolean;
 }
 
 export const KDN_CATALOG_NO_WRITER =
@@ -233,6 +252,15 @@ export const PRICE_PRIVATE_NO_AUTHORITY =
 
 export const PRICE_CATALOG_NO_AUTHORITY =
   'Harga katalog SIMPROK tidak diubah langsung dari ruang kerja biasa.';
+
+export const PROPOSAL_FAMILY_NOT_ROUTED =
+  'Sumber harga ini tidak diusulkan lewat kurasi lapangan SIMPROK. Harga tetap dapat digunakan sebagai milik ruang kerja.';
+
+export const PROPOSAL_PRIVATE_NO_AUTHORITY =
+  'Mengusulkan harga ke SIMPROK membutuhkan kewenangan pengajuan Basic Price di ruang kerja ini.';
+
+export const PROPOSAL_ALREADY_SENT =
+  'Harga ini sudah diusulkan ke SIMPROK. Status usulan ada di Pengajuan harga.';
 
 export const IDENTITY_NO_PATCH =
   'Satuan, sumber daya, dan wilayah tidak diubah lewat patch generik. Itu observasi atau identitas baru.';
@@ -364,6 +392,42 @@ export function detailSubjectOffers(
       kind: 'HONEST',
       action: 'PRIVATE_NO_AUTHORITY',
       message: PRICE_PRIVATE_NO_AUTHORITY,
+    });
+  }
+
+  if (privateAsset && input.alreadyProposed) {
+    offers.push({
+      subject: 'PROPOSAL',
+      kind: 'HONEST',
+      action: 'ALREADY_PROPOSED',
+      message: PROPOSAL_ALREADY_SENT,
+    });
+  } else if (privateAsset && input.canSubmit && input.sourceOrigin) {
+    const family = sourceFamilyOfOrigin(
+      input.sourceOrigin as PriceSourceOrigin,
+    );
+    if (family && familyOffersCommunityCuration(family)) {
+      offers.push({
+        subject: 'PROPOSAL',
+        kind: 'LIVE',
+        action: 'PROPOSE_PRIVATE',
+        verb: 'Usulkan ke SIMPROK',
+        writer: 'submitPrivatePrice',
+      });
+    } else if (family) {
+      offers.push({
+        subject: 'PROPOSAL',
+        kind: 'HONEST',
+        action: 'FAMILY_NOT_ROUTED',
+        message: PROPOSAL_FAMILY_NOT_ROUTED,
+      });
+    }
+  } else if (privateAsset && !input.canSubmit) {
+    offers.push({
+      subject: 'PROPOSAL',
+      kind: 'HONEST',
+      action: 'PRIVATE_NO_AUTHORITY',
+      message: PROPOSAL_PRIVATE_NO_AUTHORITY,
     });
   }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileInput, RefreshCw } from 'lucide-react';
 import {
@@ -182,6 +182,11 @@ export function BasicPriceExplorerPage() {
   const [reloadNonce, setReloadNonce] = useState(0);
   const [state, setState] = useState<ListState>({ kind: 'loading' });
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
+  /**
+   * SAVE FEEDBACK LIVES WITH THE OPEN ROW. One notice, cleared on Tutup /
+   * another Lihat, so a correction confirmation cannot stack.
+   */
+  const [detailNotice, setDetailNotice] = useState<string | null>(null);
   const requestGate = useRef(createLatestRequestGate());
 
   useEffect(() => {
@@ -271,12 +276,14 @@ export function BasicPriceExplorerPage() {
     // row it describes may no longer be there, so the panel closes rather than
     // lingering over a table that no longer contains its subject.
     setOpenDetailId(null);
+    setDetailNotice(null);
   };
 
   const resetFilters = () => {
     setDraft(EMPTY_DRAFT);
     setPage(1);
     setOpenDetailId(null);
+    setDetailNotice(null);
   };
 
   const reload = () => setReloadNonce((n) => n + 1);
@@ -285,6 +292,14 @@ export function BasicPriceExplorerPage() {
     state.kind === 'ready' && openDetailId
       ? (state.items.find((item) => item.basicPriceId === openDetailId) ?? null)
       : null;
+
+  useEffect(() => {
+    if (!openDetailId) return;
+    const selectedRow = document.querySelector(`[data-bp-row-id="${openDetailId}"]`);
+    if (selectedRow instanceof HTMLElement) {
+      selectedRow.scrollIntoView({ block: 'nearest' });
+    }
+  }, [openDetailId]);
 
   return (
     <div className="bp-room">
@@ -550,24 +565,6 @@ export function BasicPriceExplorerPage() {
         </div>
       ) : null}
 
-      {openDetailItem && state.kind === 'ready' ? (
-        /*
-          §5.4 — DETAIL INHERITS THE LIST'S LENS, never a fresh present-tense
-          one. `openDetailItem` is by construction a row of `state.items`, so
-          the panel and the row it came from are read in the same instant.
-        */
-        <BasicPriceDetailPanel
-          item={openDetailItem}
-          formatDate={formatDate}
-          onClose={() => setOpenDetailId(null)}
-          temporal={state.temporal}
-          onCurrentChanged={(successorId) => {
-            setOpenDetailId(successorId);
-            reload();
-          }}
-        />
-      ) : null}
-
       {state.kind === 'ready' && state.items.length > 0 ? (
         <>
           <div className="bp-tablewrap">
@@ -592,7 +589,11 @@ export function BasicPriceExplorerPage() {
               </thead>
               <tbody>
                 {state.items.map((item) => (
-                  <tr key={item.basicPriceId}>
+                  <Fragment key={item.basicPriceId}>
+                  <tr
+                    className={openDetailId === item.basicPriceId ? 'bp-row--open' : undefined}
+                    data-bp-row-id={item.basicPriceId}
+                  >
                     {/*
                       NAME FIRST (§7). `resourceLabel` leads with the code,
                       which is right for a one-line label and wrong for a table
@@ -658,17 +659,46 @@ export function BasicPriceExplorerPage() {
                         type="button"
                         className="bp-btn bp-btn--link"
                         aria-expanded={openDetailId === item.basicPriceId}
-                        onClick={() =>
+                        onClick={() => {
+                          setDetailNotice(null);
                           setOpenDetailId((current) =>
                             current === item.basicPriceId ? null : item.basicPriceId,
-                          )
-                        }
+                          );
+                        }}
                         title={`Lihat detail ${item.resource.name}`}
                       >
                         {openDetailId === item.basicPriceId ? 'Tutup' : 'Lihat'}
                       </button>
                     </td>
                   </tr>
+                  {openDetailItem && openDetailId === item.basicPriceId ? (
+                    <tr className="bp-detail-anchor">
+                      <td colSpan={7}>
+                        {/*
+                          BP-UX-DETAIL-ANCHOR-01 — Detail sits under THIS row,
+                          not above the table. Same panel, same openDetailId,
+                          same list lens.
+                        */}
+                        <BasicPriceDetailPanel
+                          item={openDetailItem}
+                          formatDate={formatDate}
+                          temporal={state.temporal}
+                          notice={detailNotice}
+                          onClose={() => {
+                            setOpenDetailId(null);
+                            setDetailNotice(null);
+                          }}
+                          onSavedNotice={(notice) => setDetailNotice(notice)}
+                          onCurrentChanged={(successorId, notice) => {
+                            setOpenDetailId(successorId);
+                            setDetailNotice(notice ?? 'Perubahan harga berhasil disimpan.');
+                            reload();
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

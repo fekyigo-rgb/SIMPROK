@@ -228,6 +228,35 @@ test("X-15. Detail is a layered panel over the SAME projection the row used", ()
   assert.match(renderable, /<BasicPriceDetailPanel\s+item=\{openDetailItem\}/u);
 });
 
+test("X-15b. BP-UX-DETAIL-ANCHOR-01 Detail sits under the opened row, not above the table", () => {
+  const panelAt = page.indexOf("<BasicPriceDetailPanel");
+  const tbodyAt = page.indexOf("<tbody>");
+  const tbodyEnd = page.indexOf("</tbody>");
+  assert.ok(panelAt > tbodyAt, "the panel must be rendered inside the table body");
+  assert.ok(panelAt < tbodyEnd, "the panel must close before the table body ends");
+  assert.match(page, /className="bp-detail-anchor"/u);
+  assert.match(page, /colSpan=\{7\}/u);
+  assert.match(
+    renderable,
+    /className=\{openDetailId === item\.basicPriceId \? 'bp-row--open' : undefined\}/u,
+  );
+  assert.match(renderable, /data-bp-row-id=\{item\.basicPriceId\}/u);
+  assert.match(renderable, /aria-expanded=\{openDetailId === item\.basicPriceId\}/u);
+  assert.match(renderable, /openDetailId === item\.basicPriceId \? 'Tutup' : 'Lihat'/u);
+  assert.doesNotMatch(page, /Set<string>|openDetailIds/u);
+  assert.match(renderable, /notice=\{detailNotice\}/u);
+  assert.match(
+    page,
+    /setDetailNotice\(notice \?\? 'Perubahan harga berhasil disimpan\.'\)/u,
+  );
+  const css = readFileSync("src/styles/basicPrice.css", "utf8");
+  assert.match(
+    css,
+    /\.bp-tablewrap:has\(tr\.bp-detail-anchor\)\s*\{[\s\S]*overflow:\s*visible/u,
+    "an open under-row panel must not be clipped by the table wrap",
+  );
+});
+
 test("X-16. the list itself never fetches a detail — no N+1 on page load", () => {
   // The Explorer stays exactly ONE paginated request. History and evidence are
   // read only when a person opens a chip or the panel; prefetching twenty rows

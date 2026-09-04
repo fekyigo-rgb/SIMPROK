@@ -89,6 +89,15 @@ export const PRICE_PRIVATE_NO_AUTHORITY =
 export const PRICE_CATALOG_NO_AUTHORITY =
   'Harga katalog SIMPROK tidak diubah langsung dari ruang kerja biasa.';
 
+export const PROPOSAL_FAMILY_NOT_ROUTED =
+  'Sumber harga ini tidak diusulkan lewat kurasi lapangan SIMPROK. Harga tetap dapat digunakan sebagai milik ruang kerja.';
+
+export const PROPOSAL_PRIVATE_NO_AUTHORITY =
+  'Mengusulkan harga ke SIMPROK membutuhkan kewenangan pengajuan Basic Price di ruang kerja ini.';
+
+export const PROPOSAL_ALREADY_SENT =
+  'Harga ini sudah diusulkan ke SIMPROK. Status usulan ada di Pengajuan harga.';
+
 export const IDENTITY_NO_PATCH =
   'Satuan, sumber daya, dan wilayah tidak diubah lewat patch generik. Itu observasi atau identitas baru.';
 
@@ -238,6 +247,19 @@ export type DetailSubjectOffer =
       message: string;
     }
   | {
+      subject: 'PROPOSAL';
+      kind: 'LIVE';
+      action: 'PROPOSE_PRIVATE';
+      verb: 'Usulkan ke SIMPROK';
+      writer: 'submitPrivatePrice';
+    }
+  | {
+      subject: 'PROPOSAL';
+      kind: 'HONEST';
+      action: 'FAMILY_NOT_ROUTED' | 'PRIVATE_NO_AUTHORITY' | 'ALREADY_PROPOSED';
+      message: string;
+    }
+  | {
       subject: 'SOURCE' | 'IDENTITY' | 'DATE';
       kind: 'HONEST';
       message: string;
@@ -255,6 +277,8 @@ export interface DetailChangeActorFacts {
   canPublish: boolean;
   canVerify: boolean;
   canPromoteShared: boolean;
+  sourceOrigin?: string | null;
+  alreadyProposed?: boolean;
 }
 
 function catalogKdnWriter(
@@ -387,7 +411,45 @@ export function detailSubjectOffers(
     });
   }
 
+  if (privateAsset && input.alreadyProposed) {
+    offers.push({
+      subject: 'PROPOSAL',
+      kind: 'HONEST',
+      action: 'ALREADY_PROPOSED',
+      message: PROPOSAL_ALREADY_SENT,
+    });
+  } else if (privateAsset && input.canSubmit && input.sourceOrigin) {
+    if (originOffersCommunityCuration(input.sourceOrigin)) {
+      offers.push({
+        subject: 'PROPOSAL',
+        kind: 'LIVE',
+        action: 'PROPOSE_PRIVATE',
+        verb: 'Usulkan ke SIMPROK',
+        writer: 'submitPrivatePrice',
+      });
+    } else {
+      offers.push({
+        subject: 'PROPOSAL',
+        kind: 'HONEST',
+        action: 'FAMILY_NOT_ROUTED',
+        message: PROPOSAL_FAMILY_NOT_ROUTED,
+      });
+    }
+  } else if (privateAsset && !input.canSubmit) {
+    offers.push({
+      subject: 'PROPOSAL',
+      kind: 'HONEST',
+      action: 'PRIVATE_NO_AUTHORITY',
+      message: PROPOSAL_PRIVATE_NO_AUTHORITY,
+    });
+  }
+
   return offers;
+}
+
+/** Mirror of backend `familyOffersCommunityCuration` over origin, not family. */
+function originOffersCommunityCuration(origin: string): boolean {
+  return origin === 'FIELD_REPORT' || origin === 'COMMUNITY_REPORT';
 }
 
 export function detailChangeDoorLive(
