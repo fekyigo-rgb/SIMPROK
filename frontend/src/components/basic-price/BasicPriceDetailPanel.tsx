@@ -55,7 +55,6 @@ import {
   type DetailSubjectOffer,
 } from '../../utils/basicPriceDetailChange';
 import {
-  CORRECTION_HISTORY_HELP,
   CORRECTION_HISTORY_PARTIAL_NOTE,
   CORRECTION_HISTORY_UNAVAILABLE,
   FRESHNESS_VIEW_LABELS,
@@ -421,7 +420,6 @@ export function BasicPriceDetailPanel({
           <span className="bp-pop__label">
             {correctionHistoryLabel(Boolean(corrections?.truncated))}
           </span>
-          <p className="bp-field__help">{CORRECTION_HISTORY_HELP}</p>
           <div className="bp-history" style={{ marginBottom: '12px' }}>
             {correctionRows.map((entry) => (
               <div className="bp-history__row" key={entry.key}>
