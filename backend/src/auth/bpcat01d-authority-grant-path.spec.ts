@@ -95,8 +95,38 @@ describe('BP-CAT-01D authority grant path', () => {
     // adding a grant path is a decision to be made deliberately, with the
     // authority re-adjudicated first. The red test is the adjudication trigger,
     // not an obstacle to route around.
-    expect(writersOf('positionAuthority')).toEqual([]);
+    // THE ADJUDICATION HAPPENED, AND THIS IS ITS RECORD.
+    //
+    // The paragraph above says a grant path must be adjudicated before it
+    // exists, and that the red test is the trigger. It was: the Owner ruled that
+    // RAB approval requires an Authority (a Permission alone is not legitimacy),
+    // that the canonical carrier is this exact chain, and that its one missing
+    // piece was a governed writer coupled to provenance. O1 is that writer.
+    //
+    // So this is no longer "nobody writes it". It is the STRONGER claim: exactly
+    // one production file may, and here is its name. A second writer — including
+    // a repaired AuthorityService — still turns this red.
+    expect(writersOf('positionAuthority')).toEqual([
+      'authority-governance/authority-governance.service.ts',
+    ]);
+    // The VOCABULARY is still never written in production. O1 grants existing
+    // authorities to seats; it never invents one.
     expect(writersOf('authority')).toEqual([]);
+  });
+
+  it('the ONE authority grant writer couples every grant to immutable provenance', () => {
+    // A writer of position_authorities that did not also append provenance would
+    // be a state-without-history bypass — the exact defect O1 exists to close.
+    const grantWriters = writersOf('positionAuthority');
+    expect(grantWriters).toHaveLength(1);
+
+    const source = readFileSync(join(sourceRoot, grantWriters[0]), 'utf8');
+    expect(source).toMatch(/authorityGovernanceDecision\.create\s*\(/);
+    expect(source).toMatch(/\$transaction\s*\(/);
+    // And it never rewrites what it has written.
+    expect(source).not.toMatch(
+      /authorityGovernanceDecision\.(update|updateMany|delete|deleteMany)/,
+    );
   });
 
   it('the only RolePermission writer is the unwired activation planner', () => {

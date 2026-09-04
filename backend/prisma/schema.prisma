@@ -43,6 +43,9 @@ model Account {
   /// must never collapse into one relation.
   platformAuthoritiesHeld                     PlatformGovernanceDecision[]         @relation("PlatformGovernanceHolder")
   platformGovernanceCeremoniesExecuted        PlatformGovernanceDecision[]         @relation("PlatformGovernanceExecutor")
+  /// EXECUTOR ONLY — never the subject. An Account performs an authority
+  /// ceremony; the Position receives the power. The two never collapse.
+  authorityGovernanceCeremoniesExecuted       AuthorityGovernanceDecision[]        @relation("AuthorityGovernanceExecutor")
 
   @@map("accounts")
 }
@@ -276,6 +279,11 @@ model Position {
   projectRisks        ProjectRisk[]
   formalDecisions     FormalDecision[]
   progressAuditEvents ProgressAuditEvent[] @relation("ProgressAuditPosition")
+  /// THE SEAT AS SUBJECT. A Position is granted or loses an Authority; the
+  /// person occupying it reaches that power through PositionAssignment. This is
+  /// the governed history of those grants — never the current state, which
+  /// remains `positionAuthorities`.
+  authorityGovernanceDecisions AuthorityGovernanceDecision[]
 
   @@index([workspaceId])
   @@map("positions")
@@ -1059,6 +1067,10 @@ model Authority {
   /// The SAME vocabulary, now also reachable at platform scope. Nothing about
   /// this model changes: `code` was already globally unique with no workspace.
   platformGovernanceDecisions PlatformGovernanceDecision[]
+  /// The governed HISTORY of this power being granted to, or revoked from, a
+  /// Position. Current state stays in `positionAuthorities`; this is why it is
+  /// what it is.
+  authorityGovernanceDecisions AuthorityGovernanceDecision[]
 
   @@map("authorities")
 }
@@ -1189,6 +1201,83 @@ model PlatformGovernanceDecision {
   @@index([holderAccountId, authorityId, generation(sort: Desc)])
   @@index([authorityId])
   @@map("platform_governance_decisions")
+}
+
+// =====================================================
+// SECTION D.3: AUTHORITY GOVERNANCE PROVENANCE
+// =====================================================
+
+/// WHY A POSITION HOLDS A POWER — the governed history of that fact.
+///
+/// `PositionAuthority` answers "does this seat hold this power NOW". It is, and
+/// remains, the ONLY input the authority resolver reads. It cannot answer "by
+/// whose authorization did it come to?" — with one row per (position, authority)
+/// it toggles, so GRANT -> REVOKE -> GRANT leaves a row indistinguishable from a
+/// grant that was never revoked. That history had no home. This is the home.
+///
+/// TWO CARRIERS, ONE TRUTH EACH. Current state and history are different
+/// questions, not duplicate truth: the resolver never reads this table, and this
+/// table never decides an entitlement. They are written in ONE transaction —
+/// provenance without state, or state without provenance, is a defect.
+///
+/// GRANTING IS NOT ITSELF AN AUTHORITY, exactly as platform governance already
+/// states. A row here records that a ceremony happened under an Owner
+/// authorization reference; it confers nothing by existing.
+///
+/// SCOPE. Workspace is DERIVED through `Position.workspaceId` — storing it would
+/// duplicate a fact the foreign key already fixes. There is deliberately NO
+/// `projectId`: a grant is workspace-scoped, and whether it applies to a given
+/// project is resolved at READ time by the existing ProjectAssignment join.
+model AuthorityGovernanceDecision {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// THE SEAT — a Position receives or loses the power, never a person.
+  positionId  String @db.Uuid
+  /// THE POWER — an existing canonical Authority. Never a new vocabulary.
+  authorityId String @db.Uuid
+
+  action AuthorityGovernanceAction
+
+  /// Lineage, mirroring PlatformGovernanceDecision. Highest generation = latest
+  /// governance act. Prior generations are never edited and never deleted.
+  generation         Int     @default(1)
+  previousDecisionId String? @db.Uuid
+
+  /// THE HAND — the Account that executed the ceremony. Distinct from the seat
+  /// that receives the power, always, so a self-grant is still two facts.
+  executedByAccountId String @db.Uuid
+
+  /// Opaque accountability record. SIMPROK states the ceremony was executed
+  /// under this reference; it does NOT claim to have verified who issued it.
+  ownerAuthorizationReference String
+
+  reason String? @db.Text
+
+  /// Replay identity. The fingerprint digests the command's MEANING, so the same
+  /// key carrying a different command is a conflict, never an answer.
+  idempotencyKey     String @unique
+  commandFingerprint String
+
+  decidedAt DateTime @default(now())
+
+  position         Position                     @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  authority        Authority                    @relation(fields: [authorityId], references: [id], onDelete: Restrict)
+  executedBy       Account                      @relation("AuthorityGovernanceExecutor", fields: [executedByAccountId], references: [id], onDelete: Restrict)
+  previousDecision AuthorityGovernanceDecision? @relation("AuthorityGovernanceLineage", fields: [previousDecisionId], references: [id], onDelete: Restrict)
+  nextDecisions    AuthorityGovernanceDecision[] @relation("AuthorityGovernanceLineage")
+
+  /// THE CONCURRENCY INVARIANT. Two writers racing for the same next generation
+  /// cannot both win — a duplicate governance act is unrepresentable, not merely
+  /// avoided.
+  @@unique([positionId, authorityId, generation])
+  @@index([positionId, authorityId, generation(sort: Desc)])
+  @@index([authorityId])
+  @@map("authority_governance_decisions")
+}
+
+enum AuthorityGovernanceAction {
+  GRANT
+  REVOKE
 }
 
 // =====================================================
