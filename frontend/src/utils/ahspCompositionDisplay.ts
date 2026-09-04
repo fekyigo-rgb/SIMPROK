@@ -104,6 +104,69 @@ export const formatCoefficient = (value: string | number | null | undefined): st
   return trimmed === '' || trimmed === '-' ? '0' : trimmed;
 };
 
+/**
+ * THE stored AHSP recipe on a definition (GET /ahsp/:id versions.resources).
+ *
+ * This is not the RAB occurrence panel. Occurrence rows carry project-bound
+ * identity trust. Definition rows are the analysis as stored: a resource
+ * identity string, a type, a unit, a coefficient. Nothing here is resolved
+ * against the catalogue, so this helper never invents a trust state.
+ */
+export type AhspDefinitionResourceWire = {
+  resourceId?: string | null;
+  resourceType?: string | null;
+  baseUnit?: string | null;
+  coefficient?: string | number | null;
+};
+
+export type AhspDefinitionComponentRow = {
+  name: string;
+  unit: string;
+  coefficient: string;
+};
+
+export type AhspDefinitionComponentGroup = {
+  key: AhspComponentGroup['key'] | 'UNGROUPED';
+  label: string;
+  rows: AhspDefinitionComponentRow[];
+};
+
+const toDefinitionRow = (
+  row: AhspDefinitionResourceWire,
+): AhspDefinitionComponentRow => ({
+  name: (row.resourceId ?? '').trim() || 'Tanpa nama',
+  unit: (row.baseUnit ?? '').trim() || '—',
+  coefficient: formatCoefficient(row.coefficient),
+});
+
+export const groupAhspDefinitionResources = (
+  resources: readonly AhspDefinitionResourceWire[] | null | undefined,
+): AhspDefinitionComponentGroup[] => {
+  const rows = resources ?? [];
+  const grouped: AhspDefinitionComponentGroup[] = GROUPS.map((group) => ({
+    key: group.key,
+    label: group.label,
+    rows: rows
+      .filter((row) =>
+        group.sourceTypes.includes(String(row.resourceType ?? '').toUpperCase()),
+      )
+      .map(toDefinitionRow),
+  }));
+  const known = new Set(GROUPS.flatMap((group) => [...group.sourceTypes]));
+  const ungrouped = rows.filter(
+    (row) => !known.has(String(row.resourceType ?? '').toUpperCase()),
+  );
+  if (ungrouped.length === 0) return grouped;
+  return [
+    ...grouped,
+    {
+      key: 'UNGROUPED',
+      label: 'Tipe tidak dikenali',
+      rows: ungrouped.map(toDefinitionRow),
+    },
+  ];
+};
+
 export const groupAhspComposition = (
   resolutions: readonly AhspResolutionWire[] | null | undefined,
 ): AhspComponentGroup[] => {
@@ -137,6 +200,10 @@ export const groupAhspComposition = (
 /** True when the analysis states no components at all — used to stay honest. */
 export const hasAnyComponent = (groups: readonly AhspComponentGroup[]): boolean =>
   groups.some((group) => group.rows.length > 0);
+
+export const hasAnyDefinitionComponent = (
+  groups: readonly AhspDefinitionComponentGroup[],
+): boolean => groups.some((group) => group.rows.length > 0);
 
 /**
  * EXCEPTION-FIRST across the whole analysis.

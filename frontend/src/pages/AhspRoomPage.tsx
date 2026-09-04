@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { apiFetch } from '../utils/apiClient';
 
 /**
@@ -105,6 +106,18 @@ export function AhspRoomPage() {
         </p>
       </header>
 
+      <section
+        className="simprok-honest-frame"
+        aria-label="Impor AHSP menunggu mesin"
+        style={{ marginBottom: 'var(--space-5)' }}
+      >
+        <span className="simprok-honest-frame__badge">Menunggu mesin</span>
+        <p>
+          Impor AHSP belum tersambung ke Universal Intake yang sudah ada. Pintu
+          ini tidak dibuka, dan tidak ada mesin impor kedua.
+        </p>
+      </section>
+
       {state.phase === 'LOADING' ? (
         <p role="status" style={{ color: MUTED }}>
           Memuat daftar AHSP…
@@ -144,7 +157,14 @@ export function AhspRoomPage() {
           <tbody>
             {state.rows.map((row) => (
               <tr key={row.id}>
-                <td style={cell}>{orDash(row.workType)}</td>
+                <td style={cell}>
+                  <Link
+                    to={'/ahsp/' + row.id}
+                    style={{ color: NAVY, fontWeight: 600, textDecoration: 'none' }}
+                  >
+                    {orDash(row.workType)}
+                  </Link>
+                </td>
                 <td style={cell}>{orDash(row.methodName)}</td>
                 <td style={cell}>{orDash(row.methodType)}</td>
                 <td style={cell}>{orDash(row.locationType)}</td>

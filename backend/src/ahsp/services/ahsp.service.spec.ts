@@ -164,7 +164,12 @@ describe('AhspService', () => {
         id: ahsp.id,
         deletedAt: null,
       },
-      include: { versions: true },
+      include: {
+        versions: {
+          orderBy: { versionNumber: 'desc' },
+          include: { resources: true },
+        },
+      },
     });
   });
 
