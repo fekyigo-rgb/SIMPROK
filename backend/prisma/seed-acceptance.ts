@@ -1017,6 +1017,45 @@ async function main() {
     });
   }
 
+  // ── PLATFORM GOVERNANCE AUTHORITY VOCABULARY ────────────────────────────
+  //
+  // Owner-locked: exactly three platform-scoped governance powers, in the SAME
+  // canonical `Authority` vocabulary as the project authorities above. No second
+  // vocabulary, no new table, no new provisioning mechanism.
+  //
+  // A SEPARATE LOOP, DELIBERATELY. The loop above binds each authority to
+  // `progressAuthorityPosition` via `positionAuthority` — correct there, because
+  // a field-progress authority IS held through a workspace Position. Adding
+  // these three to that loop would give every platform power a workspace seat
+  // and destroy the isolation Owner law requires. They are seeded as authorities
+  // and nothing else: no Position, no PositionAuthority, no workspace, no Role,
+  // no Permission, no ApprovalMatrix.
+  //
+  // A holder acquires one ONLY through the PlatformGovernanceDecision ceremony.
+  // Seeding the vocabulary grants nobody anything.
+  for (const platformAuthority of [
+    {
+      code: 'PLATFORM_KNOWLEDGE_ADMIT',
+      name: 'Admit Knowledge Into SIMPROK Shared Knowledge',
+    },
+    {
+      code: 'PLATFORM_KNOWLEDGE_PUBLISH',
+      name: 'Publish Validated Knowledge Into SIMPROK Shared State',
+    },
+    {
+      code: 'PLATFORM_KNOWLEDGE_WITHDRAW',
+      name: 'Withdraw Published Knowledge From SIMPROK Shared State',
+    },
+  ]) {
+    // Idempotent on the code, exactly as the loop above is. `Authority.code` is
+    // globally unique, so re-seeding can never produce a duplicate row.
+    await prisma.authority.upsert({
+      where: { code: platformAuthority.code },
+      update: { name: platformAuthority.name },
+      create: platformAuthority,
+    });
+  }
+
   for (const policy of [
     {
       id: ids.approvalProgressVerifyCombined,
