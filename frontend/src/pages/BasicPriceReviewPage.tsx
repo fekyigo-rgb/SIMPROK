@@ -28,6 +28,7 @@ import {
   machinePickedUnit,
   oneActionAcceptanceView,
   privateUseBlockSentence,
+  proposalDoorView,
   proposalBlockSentence,
   rowActionFailureMessage,
   rowMachineNarrative,
@@ -461,6 +462,7 @@ export function BasicPriceReviewPage() {
   /** Non-null only when there is genuinely nothing left for this press to do. */
   const alreadyStored = alreadyStoredNotice(oneAction);
   const counters = reviewCounters(batch);
+  const proposalDoor = proposalDoorView(batch.actions.simprokProposal);
 
   return (
     <div className="bp-room">
@@ -539,8 +541,9 @@ export function BasicPriceReviewPage() {
 
         Now: SIMPAN & GUNAKAN is primary and incremental — the finished rows
         become usable prices immediately and the remaining ones stay workable.
-        USULKAN KE SIMPROK is optional, terminal and separately labelled, and it
-        is offered only for the source families SIMPROK actually routes to
+        USULKAN KE SIMPROK is optional, incremental for eligible rows only, and
+        separately labelled. Unresolved rows stay open and may be proposed later.
+        It is offered only for the source families SIMPROK actually routes to
         community curation.
 
         NEITHER BUTTON DECIDES ITS OWN AVAILABILITY. `batch.actions` is the
@@ -585,15 +588,27 @@ export function BasicPriceReviewPage() {
             Simpan &amp; Gunakan ({oneActionRowCount})
           </button>
         )}
-        {batch.actions.simprokProposal.offered ? (
+        {/*
+          BP-SHARED-PROPOSAL-01 — door EXISTS vs door OPENS.
+          `proposalDoor` reads only server fields. Enablement stays bound to
+          `simprokProposal.offered` (write would accept now). Visibility keeps
+          the optional Usulkan control when FIELD_PRICE is merely not-ready yet,
+          so "tidak dirutekan" is never used for a community-survey batch.
+        */}
+        {proposalDoor.visible ? (
           <button
             className="bp-btn"
             onClick={() => void handleSubmitBatch()}
-            disabled={isBusy}
-            aria-disabled={isBusy}
-            title="Usulkan batch ini ke SIMPROK untuk diperiksa bersama"
+            disabled={!proposalDoor.enabled || isBusy}
+            aria-disabled={!proposalDoor.enabled || isBusy}
+            title={
+              proposalDoor.enabled
+                ? 'Hanya baris yang sudah siap. Baris lain tetap terbuka dan dapat diusulkan kemudian.'
+                : 'Usulkan baris yang sudah siap ke SIMPROK untuk diperiksa bersama'
+            }
           >
             Usulkan juga ke SIMPROK
+            {proposalDoor.enabled ? ` (${batch.readyForSubmissionRows})` : ''}
           </button>
         ) : null}
       </section>

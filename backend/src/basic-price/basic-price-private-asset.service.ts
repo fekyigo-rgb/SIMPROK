@@ -297,12 +297,17 @@ export class BasicPricePrivateAssetService {
             effectiveDateDerivationRule: string | null;
             /** Soft re-verification, human-stated on the metadata form. */
             reviewDate: Date | null;
+            sourceRegionScopeLabel: string | null;
+            sourceRegionScopeGeographicEvidence: string | null;
+            regionScopeConfirmedRegionId: string | null;
           }>
         >(
           Prisma.sql`SELECT "id", "workspaceId", "organizationId", "status", "effectiveDate",
                           "regionId", "sourceType", "sourceOrigin", "uploadedByAccountId",
                           "sourcePeriodLabel", "sourcePeriodGranularity", "effectiveDateProvenance", "effectiveDateDerivationRule",
-                          "reviewDate"
+                          "reviewDate",
+                          "sourceRegionScopeLabel", "sourceRegionScopeGeographicEvidence",
+                          "regionScopeConfirmedRegionId"
                      FROM "basic_price_import_batches"
                     WHERE "id" = ${batchId}::uuid
                     FOR UPDATE`,
@@ -349,6 +354,16 @@ export class BasicPricePrivateAssetService {
           sourceOrigin: batch.sourceOrigin,
           sourceType: batch.sourceType,
           readyForSubmissionRows: readyRows.length,
+          // SAME THREE FACTS THE REVIEW GATE READS. Omitting them made the
+          // writer skip REGION_SCOPE_COMPATIBILITY_UNCONFIRMED while the
+          // review room refused — a private price could be minted under a
+          // Region the source never confirmed. The law is unchanged; only
+          // the persisted geography now reaches it.
+          sourceRegionScopeLabel: batch.sourceRegionScopeLabel ?? null,
+          sourceRegionScopeGeographicEvidence:
+            batch.sourceRegionScopeGeographicEvidence ?? null,
+          regionScopeConfirmedRegionId:
+            batch.regionScopeConfirmedRegionId ?? null,
         });
         if (blocked) {
           // RM-03D1 — sourceType is a REQUIRED truth, not a defaulted one. This

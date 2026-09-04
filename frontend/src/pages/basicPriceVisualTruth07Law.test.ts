@@ -389,8 +389,11 @@ test("BANNER-02: an interpretation update names the axis without restating its o
 test("STEPPER-01: the optional SIMPROK proposal is never drawn as required for private use", () => {
   // `optional: true` on PROPOSE, and a curation tail that says NOT_OFFERED
   // rather than UPCOMING when this batch will never take that path.
+  // BP-SHARED-PROPOSAL-01 — curationApplies follows communityCurationPathApplies
+  // (server family/reason), not only `offered`, so FIELD_PRICE not-ready is not
+  // falsely labelled "tidak dirutekan".
   assert.match(journey, /optional: boolean/);
   assert.match(journey, /'PROPOSE', 'NOT_OFFERED'/);
   assert.match(journey, /'VERIFY', 'NOT_OFFERED'/);
-  assert.match(journey, /const curationApplies = proposed \|\| proposal\.offered/);
+  assert.match(journey, /communityCurationPathApplies\(proposal, proposed\)/);
 });

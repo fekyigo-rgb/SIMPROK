@@ -141,9 +141,13 @@ test("HS-10. both actions take their availability from the server's verdict", ()
   // computes no precondition of its own — HS-9 guards that — and the button and
   // the refusal line now read the SAME derived verdict, which is what stopped
   // the room offering an action and denying it in the same breath.
+  //
+  // BP-SHARED-PROPOSAL-01 — proposal visibility may use `proposalDoorView`, but
+  // enablement remains the server's `simprokProposal.offered` (via enabled).
   assert.match(page, /oneActionAcceptanceView\(batch, touchedRowIds\)/);
   assert.match(renderable, /oneActionOffered/);
-  assert.match(renderable, /batch\.actions\.simprokProposal\.offered/);
+  assert.match(page, /proposalDoorView\(batch\.actions\.simprokProposal\)/);
+  assert.match(renderable, /proposalDoor\.enabled/);
 });
 
 test("HS-11. no toolbar control is disabled without a reason on screen", () => {

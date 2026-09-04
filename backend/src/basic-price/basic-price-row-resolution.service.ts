@@ -24,6 +24,7 @@ import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
   UNIT_KERNEL_POLICY_VERSION,
   UNIT_PRICE_OPERATION,
+  UNIT_REASON,
   UNIT_RESOLUTION_STATUS,
 } from '../unit-kernel/unit-kernel.contracts';
 
@@ -487,7 +488,7 @@ export class BasicPriceRowResolutionService {
    */
   private async assertSelectedUnitProvenBySourceUnit(
     row: { rawUnitText: string | null; sourceSection: ResourceType },
-    unitDefinition: { code: string },
+    unitDefinition: { id: string; code: string },
     resourceCatalogId?: string,
   ): Promise<void> {
     const rawSourceUnit = row.rawUnitText?.trim() ?? '';
@@ -551,7 +552,29 @@ export class BasicPriceRowResolutionService {
       priceOperation: proof.priceOperation,
     };
 
-    if (proof.status !== UNIT_RESOLUTION_STATUS.RESOLVED)
+    // HUMAN_BY_EXCEPTION — unknown SOURCE SPELLING is not an incompatible unit.
+    //
+    // The kernel looks up both spellings as aliases. `Batang` / `btg` with no
+    // UnitAlias yields UNKNOWN_UNIT_ALIAS even when the reviewer has already
+    // named a live UnitDefinition whose own code the kernel can represent.
+    // Treating that as UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE refused a
+    // lawful source-unit interpretation and conflated "dictionary has not
+    // heard this spelling" with "this price cannot be stored per the unit
+    // the human chose".
+    //
+    // RAW `rawUnitText` is not mutated. Conversion is not invented: this is
+    // IDENTITY (price stays per the chosen unit). The selected unit must
+    // still be a unit the kernel can represent, so a guessed UUID cannot
+    // sneak through. AMBIGUOUS / FOREIGN_CONTEXT / CONTEXT_REQUIRED and
+    // conversion-not-found stay refused — they are different material facts.
+    const humanInterpretedUnknownSource =
+      proof.status === UNIT_RESOLUTION_STATUS.NEEDS_REVIEW &&
+      proof.reasonCodes.length === 1 &&
+      proof.reasonCodes[0] === UNIT_REASON.UNKNOWN_UNIT_ALIAS &&
+      proof.targetUnitDefinition?.id === unitDefinition.id &&
+      proof.priceOperation === null;
+
+    if (proof.status !== UNIT_RESOLUTION_STATUS.RESOLVED && !humanInterpretedUnknownSource)
       throw new ConflictException({
         statusCode: 409,
         error: 'Conflict',
@@ -571,7 +594,13 @@ export class BasicPriceRowResolutionService {
     // missing arithmetic here. This is the fail-closed half of "SIMPROK
     // menghitung, manusia memutuskan": it will not quietly decide that a
     // per-sack price is a per-cubic-metre price.
-    if (proof.priceOperation !== UNIT_PRICE_OPERATION.IDENTITY)
+    //
+    // Human interpretation of an unknown source spelling is IDENTITY, not a
+    // conversion: skip this gate when the kernel never produced a factor.
+    if (
+      !humanInterpretedUnknownSource &&
+      proof.priceOperation !== UNIT_PRICE_OPERATION.IDENTITY
+    )
       throw new ConflictException({
         statusCode: 409,
         error: 'Conflict',
