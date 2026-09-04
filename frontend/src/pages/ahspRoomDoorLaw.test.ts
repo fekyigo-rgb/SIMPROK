@@ -110,7 +110,10 @@ test("C the room consumes the workspace discovery endpoint", () => {
 
 test("C the room opens the existing definition by id, never a project bind", () => {
   assert.ok(room.includes("to={'/ahsp/' + row.id}"), "a row must open GET /ahsp/:id");
-  assert.ok(room.includes("Menunggu mesin"), "import stays honest until intake is connected");
+  assert.ok(room.includes("method: 'POST'"), "workspace create uses existing POST /ahsp");
+  assert.ok(room.includes("WAVE2"), "file intake absence must be named");
+  assert.ok(!room.includes("Menunggu mesin"), "do not leave a fake waiting door");
+  assert.ok(!room.includes("createImportJob"), "do not wire the pending-job stub");
 });
 
 test("C the room sends no workspace of its own — the server decides tenancy", () => {

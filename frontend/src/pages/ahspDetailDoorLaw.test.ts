@@ -35,6 +35,17 @@ test("detail asks GET /ahsp/:id, the existing definition", () => {
   assert.ok(!detail.includes("fixture"));
 });
 
+test("detail activates existing governed routes, never a second engine", () => {
+  assert.ok(detail.includes("'/ahsp/' + state.ahsp.id + '/approve'"));
+  assert.ok(detail.includes("'/ahsp/' + state.ahsp.id + '/archive'"));
+  assert.ok(detail.includes("'/ahsp/' + state.ahsp.id + '/transfer'"));
+  assert.ok(detail.includes("'/ahsp/' + ahspId + '/versions'"));
+  assert.ok(detail.includes("'/ahsp/versions/' + selectedVersion.id + '/retire'"));
+  assert.ok(detail.includes("'/ahsp/versions/' + selectedVersion.id + '/snapshot'"));
+  assert.ok(detail.includes("APPROVED_COMMUNITY_ASSET"));
+  assert.ok(!detail.includes("SIMPROK_ASSET"));
+});
+
 test("detail is not a second sidebar door", () => {
   assert.equal((sidebar.match(/name: 'AHSP'/g) ?? []).length, 1);
   assert.ok(!sidebar.includes("path: '/ahsp/"));
