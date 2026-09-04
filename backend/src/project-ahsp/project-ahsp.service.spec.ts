@@ -10,6 +10,7 @@ import {
   E1A_RESOLUTION_POLICY_VERSION,
 } from './ahsp-resource-resolution.orchestrator';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { BoqUnitCompatibilityService } from '../unit-kernel/boq-unit-compatibility.service';
 
 describe('ProjectAhspService E1A', () => {
   const workspaceId = '20000000-0000-4000-8000-000000000001';
@@ -102,6 +103,10 @@ describe('ProjectAhspService E1A', () => {
         findFirst: jest.fn().mockResolvedValue({
           id: selectionInput.boqItemId,
           itemType: 'WORK_ITEM',
+          // The bind now asks a unit question, so the BOQ item must carry the
+          // unit it has always had in the database. Matching the AHSP output
+          // unit keeps every pre-existing case below on its original path.
+          unit: 'M1',
         }),
         update: jest.fn().mockResolvedValue({}),
       },
@@ -182,6 +187,11 @@ describe('ProjectAhspService E1A', () => {
       lifecycle as any,
       identity,
       new AhspResourceResolutionOrchestrator(eligibility, units as any, identity),
+      // The REAL compatibility service over the SAME unit stub, for the same
+      // reason the real eligibility policy and real identity service are used
+      // above: a stub here could only assert the classification this spec
+      // already believed in, not the one that ships.
+      new BoqUnitCompatibilityService(units as any),
     );
   });
 
@@ -561,7 +571,12 @@ describe('ProjectAhspService E1A', () => {
     prisma.$transaction.mockImplementation((callback: any) => callback(tx));
     jest.spyOn(kernel, 'resolveAhspResourcePrice').mockImplementation((input: any) => ({ ...input, status: 'UNRESOLVED', reasonCodes: ['NO_PRICE'], explanation: 'none' }));
     await service.selectForBoqItem(selectionInput);
-    expect(units.resolve).toHaveBeenCalledTimes(2);
+    // Three now, not two, and the third is the point of this test rather than a
+    // violation of it: the bind-time unit gate asks the SAME Unit Kernel the
+    // resolver asks. A duplicate conversion implementation would have shown up
+    // as unchanged count with new behaviour, not as one more call to the one
+    // authority.
+    expect(units.resolve).toHaveBeenCalledTimes(3);
   });
 
   it('O-03 successor: UNRESOLVED is persisted without selected evidence', async () => {
@@ -797,5 +812,136 @@ describe('ProjectAhspService E1A', () => {
     expect(persisted.status).toBe('UNRESOLVED');
     expect(persisted.reasonCodes).toContain('RESOURCE_NOT_FOUND');
     expect(persisted.selectedBasicPriceId).toBeNull();
+  });
+  /**
+   * BOQ↔AHSP MONETARY BIND LAW — what may become PERSISTED monetary truth.
+   *
+   * Two gates stand here, and they are not the same question. The Unit Kernel
+   * decides whether two spellings mean one canonical unit; the Cost Kernel
+   * decides whether money can currently be computed across them. Those verdicts
+   * disagree on 26 seeded alias pairs, so binding on the first alone would
+   * persist relationships the calculation chain refuses forever — a door that
+   * opens onto no money. Both must pass, and both must pass BEFORE anything is
+   * written.
+   */
+  describe('monetary bind law', () => {
+    const arrange = (boqUnit: string, outputUnit: string | null) => {
+      const made = makeSuccessTx();
+      made.tx.boqItem.findFirst.mockResolvedValue({
+        id: selectionInput.boqItemId,
+        itemType: 'WORK_ITEM',
+        unit: boqUnit,
+      });
+      made.tx.aHSPVersion.findFirst.mockResolvedValue({
+        id: selectionInput.ahspVersionId,
+        outputUnit,
+        resources: [resource('resource-1')],
+        ahsp: { ownershipType: 'USER_ASSET' },
+      });
+      prisma.$transaction.mockImplementation((callback: any) => callback(made.tx));
+      return made.tx;
+    };
+    // Nothing may reach the database on a refusal. This is law H expressed as an
+    // assertion: refusal BEFORE persistence, never persist-then-roll-back.
+    const nothingPersisted = (tx: any) => {
+      expect(tx.projectAhspOccurrence.create).not.toHaveBeenCalled();
+      expect(tx.boqItem.update).not.toHaveBeenCalled();
+    };
+
+    it('A: binds when the BOQ unit and the AHSP output unit are monetarily identical', async () => {
+      const tx = arrange('M1', 'M1');
+      await service.selectForBoqItem(selectionInput);
+      expect(tx.projectAhspOccurrence.create).toHaveBeenCalled();
+      expect(tx.boqItem.update).toHaveBeenCalled();
+    });
+
+    it('D: refuses COMPATIBLE_EXACT whose raw units are not monetarily identical', async () => {
+      // THE case this whole gate exists for. "OH" and "Orang/Hari" are one
+      // canonical PERSON_DAY in the Unit Kernel — the stub returns exactly that
+      // verdict — but the Cost Kernel compares normalized STRINGS and refuses.
+      // Alias equivalence is not monetary truth.
+      const tx = arrange('OH', 'Orang/Hari');
+      await expect(service.selectForBoqItem(selectionInput)).rejects.toMatchObject({
+        message: 'BOQ_AHSP_UNIT_MISMATCH',
+      });
+      nothingPersisted(tx);
+    });
+
+    it('B: refuses units that are not normalized-identical', async () => {
+      const tx = arrange('M1', 'M2');
+      await expect(service.selectForBoqItem(selectionInput)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      nothingPersisted(tx);
+    });
+
+    // Every blank form is refused before any write, and the two gates split the
+    // work exactly as their contracts say: an absent output unit is a Unit
+    // Kernel fact (AHSP_OUTPUT_UNIT_UNRESOLVED, surfaced as BOQ_UNIT_INCOMPATIBLE),
+    // while a unit that is present but blank passes that gate and is caught by
+    // the monetary fact under its own distinct missing-unit code. Asserting the
+    // codes rather than just the type is what keeps that split honest.
+    it.each([
+      [null, 'BOQ_UNIT_INCOMPATIBLE'],
+      ['', 'BOQ_UNIT_INCOMPATIBLE'],
+      ['   ', 'MISSING_AHSP_OUTPUT_UNIT'],
+    ])(
+      'C: refuses a blank or absent AHSP output unit (%s) before any write',
+      async (blank, message) => {
+        const tx = arrange('M1', blank as string | null);
+        await expect(service.selectForBoqItem(selectionInput)).rejects.toMatchObject({
+          message,
+        });
+        nothingPersisted(tx);
+      },
+    );
+
+    it('E: refuses COMPATIBLE_CONVERTIBLE — there is no conversion arithmetic to price it', async () => {
+      const tx = arrange('M1', 'M1');
+      units.resolve.mockResolvedValueOnce({
+        status: 'RESOLVED',
+        sourceUnitDefinition: { id: 'unit-1', code: 'SAK' },
+        targetUnitDefinition: { id: 'unit-2', code: 'KG' },
+        conversionRuleId: 'rule-1',
+        conversionRuleVersion: 1,
+        quantityFactor: '40',
+        priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+      });
+      await expect(service.selectForBoqItem(selectionInput)).rejects.toMatchObject({
+        message: 'BOQ_UNIT_INCOMPATIBLE',
+      });
+      nothingPersisted(tx);
+    });
+
+    it.each([['NEEDS_REVIEW'], ['NOT_CONVERTIBLE']])(
+      'F/G: refuses a %s unit relationship',
+      async (status) => {
+        const tx = arrange('M1', 'M1');
+        units.resolve.mockResolvedValueOnce({
+          status,
+          sourceUnitDefinition: null,
+          targetUnitDefinition: null,
+          conversionRuleId: null,
+          quantityFactor: null,
+          reasonCodes: ['UNKNOWN_UNIT_ALIAS'],
+        });
+        await expect(service.selectForBoqItem(selectionInput)).rejects.toMatchObject({
+          message: 'BOQ_UNIT_INCOMPATIBLE',
+        });
+        nothingPersisted(tx);
+      },
+    );
+
+    it('J: a refused bind never reaches Resource Identity or Basic Price', async () => {
+      const tx = arrange('OH', 'Orang/Hari');
+      await expect(service.selectForBoqItem(selectionInput)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      // The gate precedes resolveVersionResources, so a refusal leaves nothing
+      // to undo rather than something to roll back.
+      expect(tx.resourceCatalog.findMany).not.toHaveBeenCalled();
+      expect(tx.basicPrice.findMany).not.toHaveBeenCalled();
+      nothingPersisted(tx);
+    });
   });
 });
