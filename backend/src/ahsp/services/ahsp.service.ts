@@ -103,6 +103,52 @@ export class AhspService {
     return ahsp;
   }
 
+  /**
+   * THE workspace AHSP visibility list — discovery, not bindability.
+   *
+   * This is getById's own tenant rule, asked for many rows instead of one. That
+   * rule is already stated twice in production and identically both times: a row
+   * is visible when it is not deleted AND it either belongs to this workspace or
+   * belongs to none (workspaceId NULL is the Official Repository). getById
+   * enforces it above; rab-intelligence-proposal.service.ts asks the same
+   * `deletedAt: null` + `OR: [{ workspaceId }, { workspaceId: null }]` of the
+   * same model. So this list widens nothing: every row it can return is a row
+   * getById would already hand the same caller.
+   *
+   * It is deliberately NOT listEligibleVersions. That method answers 'which AHSP
+   * VERSIONS may bind to a BOQ item' — it requires an output unit and resources
+   * because a version without them cannot be PRICED, and its own contract says
+   * the picker set must stay exactly what selectForBoqItem revalidates. Asking
+   * it here would answer 'what may I bind right now' to someone who asked 'what
+   * AHSP do I have', hiding their own half-composed work, and would tie a
+   * display surface to a binding-security invariant.
+   *
+   * Every selected field is a stored column. Nothing is derived, counted by
+   * hand, or inferred — the version count comes from the database.
+   */
+  async list(workspaceId: string) {
+    return this.prisma.aHSP.findMany({
+      where: {
+        deletedAt: null,
+        OR: [{ workspaceId }, { workspaceId: null }],
+      },
+      select: {
+        id: true,
+        workspaceId: true,
+        workType: true,
+        methodType: true,
+        locationType: true,
+        methodName: true,
+        ownershipType: true,
+        reviewStatus: true,
+        archivedAt: true,
+        updatedAt: true,
+        _count: { select: { versions: true } },
+      },
+      orderBy: [{ workType: 'asc' }, { methodName: 'asc' }],
+    });
+  }
+
   async update(id: string, updateData: UpdateAhspDto, userId: string, reason: string, workspaceId?: string) {
     const ahsp = await this.getById(id, workspaceId);
 

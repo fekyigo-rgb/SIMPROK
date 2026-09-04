@@ -23,7 +23,7 @@ const navItems = [
   { name: 'Monitoring', path: '/field', icon: Activity, routeLabel: 'Ruang monitoring dan laporan progress' },
   { name: 'Recovery', path: '/?ruang=recovery', icon: RefreshCcw, routeLabel: 'Placeholder Recovery' },
   { name: 'Insight / War Room', path: '/?ruang=insight-war-room', icon: BarChart3, routeLabel: 'Placeholder Insight / War Room' },
-  { name: 'AHSP', path: '/?ruang=ahsp', icon: BookOpen, routeLabel: 'Placeholder AHSP' },
+  { name: 'AHSP', path: '/ahsp', icon: BookOpen, routeLabel: 'Ruang AHSP' },
   { name: 'Basic Price', path: '/basic-price', icon: PackageSearch, routeLabel: 'Ruang Basic Price' },
   { name: 'Peralatan', path: '/?ruang=peralatan', icon: Pickaxe, routeLabel: 'Placeholder Peralatan' },
   { name: 'Personel', path: '/?ruang=personel', icon: Users, routeLabel: 'Placeholder Personel' },
