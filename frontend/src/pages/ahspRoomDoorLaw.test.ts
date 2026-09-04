@@ -62,6 +62,13 @@ test("A App routes /ahsp to the room behind the backend's own permission", () =>
   );
 });
 
+test("A App routes /ahsp/:ahspId to the existing definition, not a second room", () => {
+  assert.match(
+    app,
+    /path="ahsp\/:ahspId" element=\{<PermissionRoute permission="AHSP_VIEW"><AhspDetailPage \/><\/PermissionRoute>\}/,
+  );
+});
+
 // ── B: no second room ────────────────────────────────────────────────────────
 
 test("B exactly one file renders the AHSP room", () => {
@@ -99,6 +106,14 @@ test("C the room consumes the workspace discovery endpoint", () => {
   assert.ok(!room.includes("ahsp-occurrences"), "must not borrow the RAB picker");
   assert.ok(!room.includes("eligible-versions"), "must not borrow binding eligibility");
   assert.ok(!room.includes("ahsp-snapshot"), "must not borrow the project snapshot");
+});
+
+test("C the room opens the existing definition by id, never a project bind", () => {
+  assert.ok(room.includes("to={'/ahsp/' + row.id}"), "a row must open GET /ahsp/:id");
+  assert.ok(room.includes("method: 'POST'"), "workspace create uses existing POST /ahsp");
+  assert.ok(room.includes("WAVE2"), "file intake absence must be named");
+  assert.ok(!room.includes("Menunggu mesin"), "do not leave a fake waiting door");
+  assert.ok(!room.includes("createImportJob"), "do not wire the pending-job stub");
 });
 
 test("C the room sends no workspace of its own — the server decides tenancy", () => {

@@ -90,12 +90,20 @@ export class AhspService {
   }
 
   async getById(id: string, workspaceId?: string) {
+    // THE same definition the list already proved visible. Versions and their
+    // stored resources travel with it so the room detail can show the recipe
+    // without a second query, a second service, or the RAB occurrence path.
     const ahsp = await this.prisma.aHSP.findFirst({
       where: {
         id,
         deletedAt: null,
       },
-      include: { versions: true }
+      include: {
+        versions: {
+          orderBy: { versionNumber: 'desc' },
+          include: { resources: true },
+        },
+      },
     });
     if (!ahsp || (ahsp.workspaceId !== null && ahsp.workspaceId !== workspaceId)) {
       throw new NotFoundException('AHSP not found');

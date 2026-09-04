@@ -9,21 +9,11 @@ import { AhspController } from './ahsp.controller';
 import { AhspService } from './services/ahsp.service';
 import { AhspVersionService } from './services/ahsp-version.service';
 import { AhspSnapshotService } from './services/ahsp-snapshot.service';
-import { AhspCanonicalAdmissionService } from './import/ahsp-canonical-admission.service';
-import { UniversalAhspIntakeService } from './intake/universal-ahsp-intake.service';
 import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
 import { PERMISSIONS_KEY } from '../common/decorators/permissions.decorator';
 
 describe('AhspController', () => {
   let controller: AhspController;
-
-  // AHSP-WAVE2 — the universal intake door. Stubbed here for the same reason
-  // every other authority is: this suite proves the controller's guards and its
-  // actor/workspace provenance, not what the intake finds.
-  const universalIntakeService = {
-    preview: jest.fn(),
-    admit: jest.fn(),
-  };
 
   const ahspService = {
     list: jest.fn(),
