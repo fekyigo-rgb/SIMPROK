@@ -65,9 +65,19 @@ export class RegionProvisionError extends Error {
   }
 }
 
+export type RegionAdministrativeLevel =
+  | 'COUNTRY'
+  | 'PROVINCE'
+  | 'REGENCY_CITY'
+  | 'DISTRICT'
+  | 'VILLAGE';
+
 export interface RegionDesignation {
   regionCode: string;
   regionName: string;
+  /** Optional Kemendagri parent code. Omitted plans hash exactly as before. */
+  parentRegionCode?: string;
+  administrativeLevel?: RegionAdministrativeLevel;
 }
 
 export interface RegionRow {
@@ -86,6 +96,8 @@ export interface RegionPlan {
   existingRegionId: string | null;
   expectedCreateCount: number;
   expectedReuseCount: number;
+  parentRegionId?: string;
+  administrativeLevel?: RegionAdministrativeLevel;
 }
 
 /** Structural read surface — a test supplies a plain object, never a database. */
@@ -125,6 +137,63 @@ export function assertRegionDesignation(
     );
   }
   return { regionCode, regionName };
+}
+
+async function resolveRegionHierarchy(
+  client: RegionQueryClient,
+  designation: RegionDesignation,
+): Promise<Pick<RegionPlan, 'parentRegionId' | 'administrativeLevel'>> {
+  const parentRegionCode = designation.parentRegionCode;
+  const administrativeLevel = designation.administrativeLevel;
+  if (parentRegionCode !== undefined) {
+    if (typeof parentRegionCode !== 'string' || parentRegionCode.length === 0) {
+      throw new RegionProvisionError(
+        'STOP_REGION_PARENT_CODE_REQUIRED',
+        'parentRegionCode, when supplied, must be an explicit existing Region code.',
+      );
+    }
+    if (parentRegionCode === designation.regionCode) {
+      throw new RegionProvisionError(
+        'STOP_REGION_PARENT_SELF',
+        'A Region cannot be its own parent.',
+      );
+    }
+  }
+  if (administrativeLevel === 'COUNTRY' && parentRegionCode) {
+    throw new RegionProvisionError(
+      'STOP_REGION_COUNTRY_HAS_PARENT',
+      'COUNTRY has no Kemendagri parent.',
+    );
+  }
+
+  const hierarchy: Pick<RegionPlan, 'parentRegionId' | 'administrativeLevel'> =
+    {};
+  if (administrativeLevel) {
+    hierarchy.administrativeLevel = administrativeLevel;
+  }
+  if (!parentRegionCode) {
+    return hierarchy;
+  }
+
+  const parents = await client.region.findMany({
+    where: { OR: [{ code: parentRegionCode }] },
+    select: { id: true, code: true, name: true, isActive: true },
+  });
+  const parent = parents.find((row) => row.code === parentRegionCode);
+  if (!parent) {
+    throw new RegionProvisionError(
+      'STOP_REGION_PARENT_NOT_FOUND',
+      `Parent Region code "${parentRegionCode}" does not exist. Provision the parent first.`,
+    );
+  }
+  if (!parent.isActive) {
+    throw new RegionProvisionError(
+      'STOP_REGION_PARENT_INACTIVE',
+      `Parent Region code "${parentRegionCode}" exists but is inactive.`,
+    );
+  }
+  hierarchy.parentRegionId = parent.id;
+  return hierarchy;
 }
 
 /**
@@ -168,6 +237,8 @@ export async function buildRegionPlan(
     );
   }
 
+  const hierarchy = await resolveRegionHierarchy(client, designation);
+
   if (byCode) {
     return {
       planContractVersion: REGION_PLAN_CONTRACT_VERSION,
@@ -177,6 +248,7 @@ export async function buildRegionPlan(
       existingRegionId: byCode.id,
       expectedCreateCount: 0,
       expectedReuseCount: 1,
+      ...hierarchy,
     };
   }
 
@@ -188,6 +260,7 @@ export async function buildRegionPlan(
     existingRegionId: null,
     expectedCreateCount: 1,
     expectedReuseCount: 0,
+    ...hierarchy,
   };
 }
 
@@ -206,6 +279,12 @@ export function canonicalRegionPlanJson(plan: RegionPlan): string {
       existingRegionId: plan.existingRegionId,
       expectedCreateCount: plan.expectedCreateCount,
       expectedReuseCount: plan.expectedReuseCount,
+      ...(plan.parentRegionId
+        ? { parentRegionId: plan.parentRegionId }
+        : {}),
+      ...(plan.administrativeLevel
+        ? { administrativeLevel: plan.administrativeLevel }
+        : {}),
     },
     null,
     2,
@@ -236,7 +315,12 @@ export interface RegionApplyResult {
 export interface RegionTransactionClient extends RegionQueryClient {
   region: RegionQueryClient['region'] & {
     create(args: {
-      data: { code: string; name: string };
+      data: {
+        code: string;
+        name: string;
+        parentId?: string;
+        administrativeLevel?: RegionAdministrativeLevel;
+      };
       select: { id: true; code: true; name: true; isActive: true };
     }): Promise<RegionRow>;
   };
@@ -314,6 +398,8 @@ export async function applyRegionPlan(
     const plan = await buildRegionPlan(tx, {
       regionCode: params.regionCode,
       regionName: params.regionName,
+      parentRegionCode: params.parentRegionCode,
+      administrativeLevel: params.administrativeLevel,
     });
     const planSha256 = computeRegionPlanHash(plan);
 
@@ -337,7 +423,14 @@ export async function applyRegionPlan(
     }
 
     const created = await tx.region.create({
-      data: { code: plan.regionCode, name: plan.regionName },
+      data: {
+        code: plan.regionCode,
+        name: plan.regionName,
+        ...(plan.parentRegionId ? { parentId: plan.parentRegionId } : {}),
+        ...(plan.administrativeLevel
+          ? { administrativeLevel: plan.administrativeLevel }
+          : {}),
+      },
       select: { id: true, code: true, name: true, isActive: true },
     });
 

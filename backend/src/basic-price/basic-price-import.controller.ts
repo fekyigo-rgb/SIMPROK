@@ -337,6 +337,30 @@ export class BasicPriceImportController {
   }
 
   /**
+   * Missing caller of the SAME proposal authority as `:batchId/submit`.
+   *
+   * A WORKSPACE_PRIVATE price that is already usable may be offered to
+   * SIMPROK without re-import. Same BASIC_PRICE_SUBMIT, same
+   * PriceSubmission + review helper, no auto-publish, no private→catalog
+   * conversion. Declared before `prices/:priceId/kdn` so the two-segment
+   * price path stays one family of callers, not a second engine.
+   */
+  @Post('prices/:priceId/submit')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async submitPrivatePrice(
+    @Req() request: any,
+    @Param('priceId') priceId: string,
+  ) {
+    const workspaceId: string = request.workspaceContext?.workspaceId;
+    const currentAccountId: string = request.user.id;
+    return this.importService.submitPrivatePrice(
+      workspaceId,
+      priceId,
+      currentAccountId,
+    );
+  }
+
+  /**
    * RM-03C — keep the caller's OWN resolved rows as workspace-private Basic
    * Prices, usable by this workspace immediately.
    *

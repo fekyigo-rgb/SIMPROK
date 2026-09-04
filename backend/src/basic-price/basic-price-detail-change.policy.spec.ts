@@ -402,5 +402,33 @@ describe('BP-DETAIL-CHANGE-01 / BP-DETAIL-MAINT-02 classification and door polic
     expect(importController).toMatch(
       /@Post\('prices\/:priceId\/kdn-corrections'\)/,
     );
+    expect(importController).toMatch(
+      /@Post\('prices\/:priceId\/submit'\)/,
+    );
+  });
+
+  it('DETAIL-PROPOSE-01 — field-report private price with submit offers Usulkan ke SIMPROK', () => {
+    const offer = detailSubjectOffers({
+      ...privateReady,
+      sourceOrigin: 'FIELD_REPORT',
+    }).find((item) => item.subject === 'PROPOSAL');
+    expect(offer).toEqual({
+      subject: 'PROPOSAL',
+      kind: 'LIVE',
+      action: 'PROPOSE_PRIVATE',
+      verb: 'Usulkan ke SIMPROK',
+      writer: 'submitPrivatePrice',
+    });
+  });
+
+  it('DETAIL-PROPOSE-02 — government private price is honest, not a second door', () => {
+    const offer = detailSubjectOffers({
+      ...privateReady,
+      sourceOrigin: 'GOVERNMENT',
+    }).find((item) => item.subject === 'PROPOSAL');
+    expect(offer?.kind).toBe('HONEST');
+    if (offer?.kind === 'HONEST') {
+      expect(offer.action).toBe('FAMILY_NOT_ROUTED');
+    }
   });
 });

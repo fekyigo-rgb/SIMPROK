@@ -16,6 +16,7 @@ import {
   isReviewActionAvailable,
   regionLabel,
   regionOptionLabel,
+  regionOptionLabels,
   resourceLabel,
   reviewerLabel,
   successBanner,
@@ -39,6 +40,38 @@ test("regionOptionLabel never shows a bare UUID", () => {
   const label = regionOptionLabel({ id: "ffffffff-ffff-4fff-8fff-ffffffffffff", code: "ID-JB", name: "Jawa Barat" });
   assert.equal(label, "ID-JB — Jawa Barat");
   assert.ok(!label.includes("ffff"));
+});
+
+test("regionOptionLabels uses parent name, not an invented place, when names collide", () => {
+  const labels = regionOptionLabels([
+    {
+      id: "a",
+      code: "3174",
+      name: "Jakarta Selatan",
+      parentName: "DKI Jakarta",
+    },
+    {
+      id: "b",
+      code: "3171",
+      name: "Jakarta Selatan",
+    },
+  ]);
+  assert.equal(labels.get("a"), "Jakarta Selatan (DKI Jakarta)");
+  assert.equal(labels.get("b"), "Jakarta Selatan (3171)");
+});
+
+test("regionOptionLabels keeps a unique live Region as a plain name", () => {
+  const labels = regionOptionLabels([
+    {
+      id: "655440a8-6b34-4545-bf0f-f10f31d42173",
+      code: "8171030",
+      name: "Kecamatan Teluk Ambon Baguala, Kota Ambon",
+    },
+  ]);
+  assert.equal(
+    labels.get("655440a8-6b34-4545-bf0f-f10f31d42173"),
+    "Kecamatan Teluk Ambon Baguala, Kota Ambon",
+  );
 });
 
 test("reviewerLabel shows fullName (email), or an honest unassigned label", () => {

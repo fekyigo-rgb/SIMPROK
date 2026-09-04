@@ -5,6 +5,11 @@ import {
   regionOptionLabels,
 } from '../../utils/basicPriceWorkflowDisplay';
 import { createLatestRequestGate } from '../../utils/catalogSearch';
+import {
+  REGION_SEARCH_PLACEHOLDER,
+  regionSearchAfterClear,
+  regionSearchShouldReloadOnFocus,
+} from '../../utils/regionSearchRecovery';
 
 interface RegionSearchSelectProps {
   selected: RegionLookupItem | null;
@@ -119,11 +124,18 @@ export function RegionSearchSelect({ selected, disabled = false, onSelect }: Reg
           aria-autocomplete="list"
           disabled={disabled}
           value={selected ? regionChosenLabel(selected) : query}
-          placeholder="Ketik nama wilayah, misalnya Ambon"
+          placeholder={REGION_SEARCH_PLACEHOLDER}
           onFocus={() => {
             setHasInteracted(true);
             setOpen(true);
-            if (!selected && state === 'idle' && results.length === 0) void runSearch('');
+            if (
+              regionSearchShouldReloadOnFocus({
+                hasSelection: selected !== null,
+                panelState: state,
+              })
+            ) {
+              void runSearch(query.trim());
+            }
           }}
           onChange={(event) => changeQuery(event.target.value)}
         />
@@ -133,8 +145,14 @@ export function RegionSearchSelect({ selected, disabled = false, onSelect }: Reg
             className="bp-btn bp-btn--link bp-region-clear"
             onClick={() => {
               onSelect(null);
-              setQuery('');
-              setOpen(false);
+              const recovery = regionSearchAfterClear();
+              requestGate.current.invalidate();
+              setResults([]);
+              setState('idle');
+              setHasInteracted(true);
+              setQuery(recovery.query);
+              setOpen(recovery.open);
+              if (recovery.reload) void runSearch(recovery.query);
             }}
             title="Ganti wilayah"
             aria-label="Ganti wilayah"
@@ -179,6 +197,7 @@ export function RegionSearchSelect({ selected, disabled = false, onSelect }: Reg
                       onClick={() => {
                         onSelect(region);
                         setQuery('');
+                        setResults([]);
                         setState('idle');
                         setOpen(false);
                       }}

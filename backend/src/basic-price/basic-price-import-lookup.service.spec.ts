@@ -123,12 +123,30 @@ describe('BasicPriceImportLookupService', () => {
   });
 
   describe('searchRegions (RM-02D2A2)', () => {
-    it('returns only id/code/name for active regions and derives total/hasNext', async () => {
-      regionFindMany.mockResolvedValue([{ id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' }]);
+    it('returns active regions with optional parent identity and derives total/hasNext', async () => {
+      regionFindMany.mockResolvedValue([
+        {
+          id: 'reg1',
+          code: 'ID-JK',
+          name: 'DKI Jakarta',
+          administrativeLevel: null,
+          parentId: null,
+          parent: null,
+        },
+      ]);
       regionCount.mockResolvedValue(3);
 
       await expect(service.searchRegions({ q: '', page: 1, limit: 1 })).resolves.toEqual({
-        items: [{ id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' }],
+        items: [
+          {
+            id: 'reg1',
+            code: 'ID-JK',
+            name: 'DKI Jakarta',
+            administrativeLevel: null,
+            parentId: null,
+            parentName: null,
+          },
+        ],
         page: 1,
         limit: 1,
         total: 3,
@@ -137,7 +155,14 @@ describe('BasicPriceImportLookupService', () => {
 
       const args = regionFindMany.mock.calls[0][0];
       expect(args.where).toEqual({ isActive: true });
-      expect(args.select).toEqual({ id: true, code: true, name: true });
+      expect(args.select).toEqual({
+        id: true,
+        code: true,
+        name: true,
+        administrativeLevel: true,
+        parentId: true,
+        parent: { select: { name: true } },
+      });
       expect(args.take).toBe(1);
       expect(args.skip).toBe(0);
     });
@@ -152,7 +177,92 @@ describe('BasicPriceImportLookupService', () => {
       expect(args.where.isActive).toBe(true);
       expect(JSON.stringify(args.where.OR)).toContain('insensitive');
       expect(JSON.stringify(args.where.OR)).toContain('jak');
+      expect(JSON.stringify(args.where.OR)).toContain('parent');
       expect(args.skip).toBe(20);
+    });
+
+    it('returns every matching Region rather than auto-selecting one', async () => {
+      regionFindMany.mockResolvedValue([
+        {
+          id: 'a',
+          code: '3174',
+          name: 'Jakarta Selatan',
+          administrativeLevel: 'REGENCY_CITY',
+          parentId: 'p1',
+          parent: { name: 'DKI Jakarta' },
+        },
+        {
+          id: 'b',
+          code: '3171',
+          name: 'Jakarta Selatan',
+          administrativeLevel: null,
+          parentId: null,
+          parent: null,
+        },
+      ]);
+      regionCount.mockResolvedValue(2);
+
+      const page = await service.searchRegions({ q: 'Jakarta Selatan', page: 1, limit: 20 });
+      expect(page.items).toHaveLength(2);
+      expect(page.items.map((item) => item.id).sort()).toEqual(['a', 'b']);
+      expect(page.items.find((item) => item.id === 'a')?.parentName).toBe('DKI Jakarta');
+    });
+
+    it('still resolves the live Permanent Region names', async () => {
+      regionFindMany.mockResolvedValue([
+        {
+          id: '8ef1d647-0828-43c6-9941-f0b88a1fd8a1',
+          code: '3171',
+          name: 'Jakarta Selatan',
+          administrativeLevel: null,
+          parentId: null,
+          parent: null,
+        },
+      ]);
+      regionCount.mockResolvedValue(1);
+      await expect(
+        service.searchRegions({ q: 'Jakarta Selatan', page: 1, limit: 20 }),
+      ).resolves.toMatchObject({
+        items: [{ id: '8ef1d647-0828-43c6-9941-f0b88a1fd8a1', name: 'Jakarta Selatan' }],
+        total: 1,
+      });
+
+      regionFindMany.mockResolvedValue([
+        {
+          id: '655440a8-6b34-4545-bf0f-f10f31d42173',
+          code: '8171030',
+          name: 'Kecamatan Teluk Ambon Baguala, Kota Ambon',
+          administrativeLevel: null,
+          parentId: null,
+          parent: null,
+        },
+      ]);
+      regionCount.mockResolvedValue(1);
+      await expect(
+        service.searchRegions({ q: 'Baguala', page: 1, limit: 20 }),
+      ).resolves.toMatchObject({
+        items: [
+          {
+            id: '655440a8-6b34-4545-bf0f-f10f31d42173',
+            name: 'Kecamatan Teluk Ambon Baguala, Kota Ambon',
+          },
+        ],
+      });
+    });
+
+    it('walks existing parent-child identity without inventing a second Region engine', async () => {
+      regionFindMany.mockResolvedValue([]);
+      regionCount.mockResolvedValue(0);
+      await service.searchRegions({
+        parentId: '8ef1d647-0828-43c6-9941-f0b88a1fd8a1',
+        administrativeLevel: 'DISTRICT',
+        page: 1,
+        limit: 20,
+      });
+      const args = regionFindMany.mock.calls[0][0];
+      expect(args.where.isActive).toBe(true);
+      expect(args.where.parentId).toBe('8ef1d647-0828-43c6-9941-f0b88a1fd8a1');
+      expect(args.where.administrativeLevel).toBe('DISTRICT');
     });
   });
 });

@@ -292,6 +292,30 @@ export async function rejectBasicPriceImportRow(
   if (!response.ok) throw new ImportRequestError(response.status, await response.text());
 }
 
+/**
+ * RM-03D1 — existing admit-resource writer. The body must not name the
+ * resource: name, type, and source code come from the import row. The reviewer
+ * supplies only the canonical unit and the reason they are creating rather
+ * than choosing.
+ */
+export async function admitResourceForImportRow(
+  batchId: string,
+  rowId: string,
+  version: number,
+  unitDefinitionId: string,
+  reason: string,
+): Promise<void> {
+  const response = await apiFetch(
+    `/basic-price-imports/${batchId}/rows/${rowId}/admit-resource`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version, unitDefinitionId, reason }),
+    },
+  );
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+}
+
 export async function submitBasicPriceImportBatch(batchId: string): Promise<BasicPriceImportBatchSummary> {
   const response = await apiFetch(`/basic-price-imports/${batchId}/submit`, { method: 'POST' });
   return parseOrThrow(response);
@@ -360,6 +384,31 @@ export async function enrichBasicPriceKdn(
     throw new ImportRequestError(response.status, await response.text());
   }
   return response.json() as Promise<EnrichBasicPriceKdnResult>;
+}
+
+export interface SubmitPrivatePriceResult {
+  basicPriceId: string;
+  submissionId: string;
+  alreadyProposed: boolean;
+  status: string;
+  assetScope: string;
+}
+
+/**
+ * Same BASIC_PRICE_SUBMIT / PriceSubmission writer as batch Usulkan.
+ * Does not publish. Does not convert the private price into catalog truth.
+ */
+export async function submitPrivateBasicPrice(
+  priceId: string,
+): Promise<SubmitPrivatePriceResult> {
+  const response = await apiFetch(
+    `/basic-price-imports/prices/${priceId}/submit`,
+    { method: 'POST' },
+  );
+  if (!response.ok) {
+    throw new ImportRequestError(response.status, await response.text());
+  }
+  return response.json() as Promise<SubmitPrivatePriceResult>;
 }
 
 export async function enrichCatalogBasicPriceKdn(

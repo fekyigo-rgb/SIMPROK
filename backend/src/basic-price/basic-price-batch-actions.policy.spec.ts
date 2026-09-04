@@ -1,6 +1,7 @@
 import {
   evaluateBatchLifecycleActions,
   familyOffersCommunityCuration,
+  privatePriceProposalBlockReason,
   privateUseBlockReason,
   proposalBlockReason,
   type BatchLifecycleFacts,
@@ -330,5 +331,56 @@ describe('evaluateBatchLifecycleActions', () => {
         actions.simprokProposal.reasonCode === null,
       );
     }
+  });
+});
+
+describe('privatePriceProposalBlockReason', () => {
+  const lawfulPrivate = {
+    sourceOrigin: 'FIELD_REPORT',
+    sourceType: 'MARKET_SURVEY',
+    regionId: 'region-01',
+    effectiveDate: new Date('2024-01-01T00:00:00.000Z'),
+    resourceId: 'resource-01',
+  };
+
+  it('accepts an eligible field-report private price', () => {
+    expect(privatePriceProposalBlockReason(lawfulPrivate)).toBeNull();
+  });
+
+  it('reuses the same family route as batch proposal', () => {
+    expect(
+      privatePriceProposalBlockReason({
+        ...lawfulPrivate,
+        sourceOrigin: 'GOVERNMENT',
+      }),
+    ).toBe('SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION');
+    expect(
+      privatePriceProposalBlockReason({
+        ...lawfulPrivate,
+        sourceOrigin: 'STORE',
+      }),
+    ).toBe('SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION');
+  });
+
+  it('does not demand a mutable batch window — the price is already stored', () => {
+    expect(privatePriceProposalBlockReason(lawfulPrivate)).toBeNull();
+  });
+
+  it('fails closed when identity facts are missing', () => {
+    expect(
+      privatePriceProposalBlockReason({ ...lawfulPrivate, regionId: null }),
+    ).toBe('REGION_REQUIRED_BEFORE_SUBMISSION');
+    expect(
+      privatePriceProposalBlockReason({
+        ...lawfulPrivate,
+        effectiveDate: null,
+      }),
+    ).toBe('EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION');
+    expect(
+      privatePriceProposalBlockReason({
+        ...lawfulPrivate,
+        resourceId: null,
+      }),
+    ).toBe('NO_ROWS_READY_FOR_SUBMISSION');
   });
 });

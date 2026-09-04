@@ -493,6 +493,61 @@ export function familyOffersCommunityCuration(family: SourceFamily): boolean {
 }
 
 /**
+ * Preconditions of proposing ONE already-usable private Basic Price.
+ *
+ * SAME FAMILY ROUTE AND SAME IDENTITY GATES as `proposalBlockReason`.
+ * Batch-window codes (`BATCH_NOT_READY_FOR_REVIEW`, `NO_ROWS_READY_FOR_SUBMISSION`)
+ * do not apply: the price is already stored and usable. Geography confirmation
+ * lived on the batch at keep-private time; this caller does not re-open it.
+ */
+export interface PrivatePriceProposalFacts {
+  sourceOrigin: string | null;
+  sourceType: string | null;
+  regionId: string | null;
+  effectiveDate: Date | null;
+  resourceId: string | null;
+}
+
+export function privatePriceProposalBlockReason(
+  facts: PrivatePriceProposalFacts,
+): PrivatePriceProposalBlockReason | null {
+  if (facts.sourceOrigin) {
+    const family = sourceFamilyOfOrigin(
+      facts.sourceOrigin as PriceSourceOrigin,
+    );
+    if (family && !familyOffersCommunityCuration(family)) {
+      return 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION';
+    }
+  }
+  if (!facts.effectiveDate) {
+    return 'EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION';
+  }
+  if (!facts.regionId) {
+    return 'REGION_REQUIRED_BEFORE_SUBMISSION';
+  }
+  if (!facts.sourceOrigin) {
+    return 'SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION';
+  }
+  if (!facts.sourceType) {
+    return 'SOURCE_TYPE_REQUIRED_BEFORE_SUBMISSION';
+  }
+  if (!facts.resourceId) {
+    return 'NO_ROWS_READY_FOR_SUBMISSION';
+  }
+  return null;
+}
+
+export type PrivatePriceProposalBlockReason = Extract<
+  ProposalBlockReason,
+  | 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION'
+  | 'EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION'
+  | 'REGION_REQUIRED_BEFORE_SUBMISSION'
+  | 'SOURCE_ORIGIN_REQUIRED_BEFORE_SUBMISSION'
+  | 'SOURCE_TYPE_REQUIRED_BEFORE_SUBMISSION'
+  | 'NO_ROWS_READY_FOR_SUBMISSION'
+>;
+
+/**
  * Preconditions of proposing this batch to curation. `null` means the endpoint
  * accepts the call — and `submitBatch` consumes THIS, so a reason returned here
  * is a reason the write boundary actually enforces.

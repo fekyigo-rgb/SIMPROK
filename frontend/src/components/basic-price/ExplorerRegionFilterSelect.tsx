@@ -5,6 +5,10 @@ import {
   regionOptionLabels,
 } from '../../utils/basicPriceExplorerDisplay';
 import { createLatestRequestGate } from '../../utils/catalogSearch';
+import {
+  regionSearchAfterClear,
+  regionSearchShouldReloadOnFocus,
+} from '../../utils/regionSearchRecovery';
 
 interface ExplorerRegionFilterSelectProps {
   selected: RegionLookupItem | null;
@@ -128,7 +132,14 @@ export function ExplorerRegionFilterSelect({
           onFocus={() => {
             setHasInteracted(true);
             setOpen(true);
-            if (!selected && state === 'idle' && results.length === 0) void runSearch('');
+            if (
+              regionSearchShouldReloadOnFocus({
+                hasSelection: selected !== null,
+                panelState: state,
+              })
+            ) {
+              void runSearch(query.trim());
+            }
           }}
           onChange={(event) => changeQuery(event.target.value)}
         />
@@ -138,8 +149,14 @@ export function ExplorerRegionFilterSelect({
             className="bp-btn bp-btn--link bp-region-clear"
             onClick={() => {
               onSelect(null);
-              setQuery('');
-              setOpen(false);
+              const recovery = regionSearchAfterClear();
+              requestGate.current.invalidate();
+              setResults([]);
+              setState('idle');
+              setHasInteracted(true);
+              setQuery(recovery.query);
+              setOpen(recovery.open);
+              if (recovery.reload) void runSearch(recovery.query);
             }}
             title="Hapus filter wilayah"
             aria-label="Hapus filter wilayah"
@@ -173,6 +190,7 @@ export function ExplorerRegionFilterSelect({
                       onClick={() => {
                         onSelect(region);
                         setQuery('');
+                        setResults([]);
                         setState('idle');
                         setOpen(false);
                       }}

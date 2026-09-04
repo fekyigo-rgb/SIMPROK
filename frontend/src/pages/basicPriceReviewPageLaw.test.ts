@@ -272,3 +272,65 @@ test("HS-13e. the room never offers an action and denies it in the same breath",
     "the raw server flag must not gate the refusal line any more",
   );
 });
+
+test("HS-15. Lengkapi Data is optional and does not gate Simpan or Usulkan", () => {
+  assert.match(page, /Lengkapi Data/u);
+  assert.match(page, /OPTIONAL_KDN_INCOMPLETE/u);
+  assert.match(page, /optionalRowKdnIncomplete/u);
+  assert.doesNotMatch(
+    page,
+    /optionalRowKdnIncomplete\(row\)\s*&&/u,
+    "missing optional KDN must not be combined into a gate",
+  );
+});
+
+test("HS-17. Lengkapi Data names blocked capabilities instead of inventing fields", () => {
+  assert.match(page, /optionalEnrichmentBlockedCapabilities/);
+  assert.match(renderable, /gap\.reason/);
+  assert.doesNotMatch(renderable, /alamat sumber"/);
+  assert.doesNotMatch(renderable, /<input[^>]*alamat/i);
+});
+
+test("HS-18. Tinjau Hasil offers the existing Tinjau wilayah confirm at the blocked Simpan, without loosening the gate", () => {
+  assert.match(page, /updateBasicPriceImportBatch/);
+  assert.match(page, /regionScopeNoticeView/);
+  assert.match(page, /handleConfirmRegionScope/);
+  assert.match(renderable, /confirmRegionScopeCompatibility: true/);
+  assert.match(renderable, /\{regionScopeNotice\.actionLabel\}/);
+  assert.match(renderable, /aria-label="Peninjauan wilayah sumber"/);
+  assert.match(
+    renderable,
+    /onClick=\{\(\) => void handleConfirmRegionScope\(\)\}/,
+  );
+  const loadEffect = renderable.slice(
+    renderable.indexOf("useEffect"),
+    renderable.indexOf("}, [batchId]"),
+  );
+  assert.doesNotMatch(
+    loadEffect,
+    /confirmRegionScopeCompatibility|handleConfirmRegionScope/,
+    "confirmation is a human press, never an effect",
+  );
+  assert.doesNotMatch(
+    renderable,
+    /privateUseBlockReason\s*=/,
+    "this page must not rewrite the save gate",
+  );
+  assert.match(
+    renderable,
+    /disabled=\{!oneActionOffered \|\| isBusy\}/,
+    "Simpan remains bound to the existing oneAction verdict",
+  );
+});
+
+test("HS-16. Tinjau Hasil offers existing resource admission only when identity is exhausted", () => {
+  assert.match(page, /admitResourceForImportRow/);
+  assert.match(page, /rowIdentityAdmissionOffered/);
+  assert.match(renderable, /admissionOffered/);
+  assert.match(renderable, /\{IDENTITY_ADMISSION_LABEL\}/);
+  assert.doesNotMatch(
+    renderable,
+    /admitResourceForImportRow\([^)]*name/,
+    "admission must not send a client-invented resource name",
+  );
+});

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { enrichBasicPriceKdn, enrichCatalogBasicPriceKdn, correctPrivateBasicPrice, observePrivateBasicPrice, observePrivateKdn, correctPrivateKdn, ImportRequestError } from '../../api/basicPriceImport';
+import { enrichBasicPriceKdn, enrichCatalogBasicPriceKdn, correctPrivateBasicPrice, observePrivateBasicPrice, observePrivateKdn, correctPrivateKdn, submitPrivateBasicPrice, ImportRequestError } from '../../api/basicPriceImport';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   cakupanLabel,
@@ -47,6 +47,8 @@ import {
   detailSubjectOffers,
   kdnCompletionDoor,
   kdnEnrichmentRefusalLabel,
+  PROPOSAL_ALREADY_SENT,
+  PROPOSAL_FAMILY_NOT_ROUTED,
   priceCorrectionRefusalLabel,
   priceRouteLabel,
   type DetailChangeIntent,
@@ -71,7 +73,10 @@ interface BasicPriceDetailPanelProps {
   formatDate: (iso: string) => string;
   onClose: () => void;
   temporal: TemporalContext;
-  onCurrentChanged?: (successorId: string) => void;
+  onCurrentChanged?: (successorId: string, notice?: string) => void;
+  /** Truthful after-save sentence. Empty/null means nothing to announce. */
+  notice?: string | null;
+  onSavedNotice?: (notice: string) => void;
 }
 
 type TabKey = 'RINGKASAN' | 'SUMBER' | 'RIWAYAT';
@@ -120,10 +125,13 @@ export function BasicPriceDetailPanel({
   onClose,
   temporal,
   onCurrentChanged,
+  notice,
+  onSavedNotice,
 }: BasicPriceDetailPanelProps) {
   const [tab, setTab] = useState<TabKey>('RINGKASAN');
   const [detailEpoch, setDetailEpoch] = useState(0);
   const [changeOpen, setChangeOpen] = useState(false);
+  const [alreadyProposed, setAlreadyProposed] = useState(false);
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const detail = useBasicPriceDetail(item.basicPriceId, detailEpoch);
@@ -148,6 +156,8 @@ export function BasicPriceDetailPanel({
     canPublish: hasPermission('BASIC_PRICE_PUBLISH'),
     canVerify: hasPermission('BASIC_PRICE_VERIFY'),
     canPromoteShared: hasPermission('BASIC_PRICE_PROMOTE_SHARED'),
+    sourceOrigin: item.sourceOrigin,
+    alreadyProposed,
   });
   const changeDoorLive = detailChangeDoorLive(changeOffers);
   const freshness = FRESHNESS_VIEW_LABELS[freshnessView(item)];
@@ -176,6 +186,22 @@ export function BasicPriceDetailPanel({
           </div>
         </div>
         <div className="bp-detail__head-actions">
+          {alreadyProposed ? (
+            <p className="bp-field__help" role="status" aria-live="polite">
+              {PROPOSAL_ALREADY_SENT}
+            </p>
+          ) : detail.kind === 'ready' &&
+            changeOffers.some(
+              (offer) =>
+                offer.subject === 'PROPOSAL' &&
+                offer.kind === 'LIVE' &&
+                offer.action === 'PROPOSE_PRIVATE',
+            ) ? (
+            <PrivateProposalButton
+              basicPriceId={item.basicPriceId}
+              onProposed={() => setAlreadyProposed(true)}
+            />
+          ) : null}
           {detail.kind === 'ready' && changeOffers.length > 0 ? (
             <button
               type="button"
@@ -195,6 +221,12 @@ export function BasicPriceDetailPanel({
           </button>
         </div>
       </div>
+
+      {notice ? (
+        <p className="bp-note bp-note--info" role="status" aria-live="polite">
+          {notice}
+        </p>
+      ) : null}
 
       <div className="bp-tabs" role="tablist" aria-label="Bagian detail harga">
         {TABS.map((entry) => (
@@ -226,11 +258,12 @@ export function BasicPriceDetailPanel({
             forgetBasicPriceDetail(item.basicPriceId);
             setDetailEpoch((current) => current + 1);
             setChangeOpen(false);
+            onSavedNotice?.('Data opsional berhasil disimpan.');
           }}
           onCurrentChanged={(successorId) => {
             forgetBasicPriceDetail(item.basicPriceId);
             setChangeOpen(false);
-            onCurrentChanged?.(successorId);
+            onCurrentChanged?.(successorId, 'Perubahan harga berhasil disimpan.');
           }}
           onDismiss={() => setChangeOpen(false)}
         />
@@ -548,6 +581,74 @@ function DetailChangeSheet({
       ))}
     </div>
   );
+}
+
+function PrivateProposalButton({
+  basicPriceId,
+  onProposed,
+}: {
+  basicPriceId: string;
+  onProposed: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  const handleSubmit = async () => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      const result = await submitPrivateBasicPrice(basicPriceId);
+      if (result.status === 'PUBLISHED') {
+        setRefusal('Usulan tidak boleh menerbitkan harga secara otomatis.');
+        return;
+      }
+      onProposed();
+    } catch (error) {
+      if (error instanceof ImportRequestError) {
+        setRefusal(privateProposalRefusalLabel(error.httpStatus, error.detail));
+      } else {
+        setRefusal(privateProposalRefusalLabel(0, ''));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <button
+        type="button"
+        className="bp-btn bp-btn--sm"
+        disabled={busy}
+        aria-disabled={busy}
+        onClick={() => void handleSubmit()}
+        title="Usulkan harga ini ke SIMPROK tanpa mengubahnya menjadi harga terbit"
+      >
+        Usulkan ke SIMPROK
+      </button>
+      {refusal ? (
+        <p className="bp-field__help" role="status">
+          {refusal}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function privateProposalRefusalLabel(status: number, detail: string): string {
+  if (status === 409 && /ALREADY|ROW_ALREADY_SUBMITTED/u.test(detail)) {
+    return PROPOSAL_ALREADY_SENT;
+  }
+  if (status === 409 && /SOURCE_FAMILY_NOT_ROUTED/u.test(detail)) {
+    return PROPOSAL_FAMILY_NOT_ROUTED;
+  }
+  if (status === 409 && /PRICE_NO_LONGER_CURRENT/u.test(detail)) {
+    return 'Harga ini sudah dikoreksi. Tinjau versi terbaru sebelum mengusulkan.';
+  }
+  if (status === 403 || status === 404) {
+    return 'Harga ini tidak dapat diusulkan dari ruang kerja Anda.';
+  }
+  return 'Usulan ke SIMPROK belum berhasil. Coba lagi.';
 }
 
 function KdnCompletionForm({

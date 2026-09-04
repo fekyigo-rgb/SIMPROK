@@ -4,9 +4,12 @@ import { ArrowLeft } from 'lucide-react';
 import {
   smartSaveBatch,
   getBasicPriceImportBatch,
+  updateBasicPriceImportBatch,
   rejectBasicPriceImportRow,
   resolveBasicPriceImportRow,
+  admitResourceForImportRow,
   submitBasicPriceImportBatch,
+  enrichBasicPriceKdn,
   ImportRequestError,
 } from '../api/basicPriceImport';
 import type { ResourceLookupItem, UnitLookupItem } from '../api/basicPriceImport';
@@ -27,9 +30,22 @@ import {
   machinePickedResource,
   machinePickedUnit,
   oneActionAcceptanceView,
+  optionalRowCanEnrichKdnNow,
+  optionalRowKdnIncomplete,
+  optionalEnrichmentPanelOffered,
+  optionalEnrichmentBlockedCapabilities,
+  OPTIONAL_KDN_AFTER_KEEP,
+  OPTIONAL_KDN_INCOMPLETE,
+  OPTIONAL_ENRICHMENT_EMPTY,
+  rowIdentityAdmissionOffered,
+  rowIdentityAdmissionBlockReason,
+  IDENTITY_ADMISSION_LABEL,
+  IDENTITY_ADMISSION_HELP,
   privateUseBlockSentence,
   proposalDoorView,
   proposalBlockSentence,
+  regionScopeNoticeView,
+  metadataSaveFailureMessage,
   rowActionFailureMessage,
   rowMachineNarrative,
   rowNoteDisclosure,
@@ -56,6 +72,9 @@ interface RowDraft {
   reason: string;
   /** Reason field stays hidden until the reviewer opens Tolak. */
   rejectOpen: boolean;
+  /** Reason field stays hidden until the reviewer opens admission. */
+  admitOpen: boolean;
+  admitReason: string;
 }
 
 const emptyDraft: RowDraft = {
@@ -65,6 +84,8 @@ const emptyDraft: RowDraft = {
   unitPending: false,
   reason: '',
   rejectOpen: false,
+  admitOpen: false,
+  admitReason: '',
 };
 
 /**
@@ -102,7 +123,11 @@ const smartSaveFailure = (error: unknown): string =>
     : smartSaveFailureMessage(0, '');
 
 /** Same discipline for a single row's decision: known status, or nothing claimed. */
-const rowFailure = (action: 'RESOLVE' | 'REJECT', sourceRowNumber: number, error: unknown) =>
+const rowFailure = (
+  action: 'RESOLVE' | 'REJECT' | 'ADMIT',
+  sourceRowNumber: number,
+  error: unknown,
+) =>
   rowActionFailureMessage(
     action,
     sourceRowNumber,
@@ -279,7 +304,7 @@ export function BasicPriceReviewPage() {
    * different sentence, and refreshing on those would be noise.
    */
   const recoverFromRowFailure = async (
-    action: 'RESOLVE' | 'REJECT',
+    action: 'RESOLVE' | 'REJECT' | 'ADMIT',
     row: BasicPriceImportRowSummary,
     error: unknown,
   ): Promise<string> => {
@@ -353,6 +378,92 @@ export function BasicPriceReviewPage() {
       setStatusMessage(`Baris ${row.sourceRowNumber} ditolak.`);
     } catch (error) {
       setStatusMessage(await recoverFromRowFailure('REJECT', row, error));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  /**
+   * RM-03D1 — CONNECT the existing admit-resource writer. The page never
+   * names the resource: name, type, and source code stay on the row. The
+   * reviewer supplies only the canonical unit and the reason they are
+   * creating rather than choosing. The door is shown only when the existing
+   * identity authority is exhausted — candidates stay a review, not an admit.
+   */
+  const handleAdmit = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId) return;
+    const draft = draftFor(row.id);
+    const block = rowIdentityAdmissionBlockReason({
+      unitSelected: Boolean(draft.unit),
+      unitPending: draft.unitPending,
+      reasonFilled: Boolean(draft.admitReason.trim()),
+      admitOpen: draft.admitOpen,
+      busy: isBusy,
+    });
+    if (!draft.admitOpen) {
+      if (block) {
+        setStatusMessage(block);
+        return;
+      }
+      updateDraft(row.id, { admitOpen: true });
+      setStatusMessage(
+        `Tuliskan alasan pengesahan item baru untuk baris ${row.sourceRowNumber}.`,
+      );
+      return;
+    }
+    if (block || !draft.unit) {
+      setStatusMessage(block ?? IDENTITY_ADMISSION_HELP);
+      return;
+    }
+    setIsBusy(true);
+    try {
+      await admitResourceForImportRow(
+        batchId,
+        row.id,
+        row.version,
+        draft.unit.id,
+        draft.admitReason.trim(),
+      );
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      await loadBatch();
+      setStatusMessage(`Baris ${row.sourceRowNumber} disahkan sebagai item baru.`);
+    } catch (error) {
+      setStatusMessage(await recoverFromRowFailure('ADMIT', row, error));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  /**
+   * BP-REGION-TRUTH-07S — THE SAME CONFIRMATION, AT THE BLOCKED SAVE.
+   *
+   * Import already records `confirmRegionScopeCompatibility`. Tinjau Hasil used
+   * to print the refusal and send the reviewer away, so the existing action was
+   * unreachable from the button that was actually disabled. This sends the
+   * identical intent against the Wilayah already saved on the batch. It does
+   * not pick a Region, does not confirm a dirty form, and does not open Simpan
+   * by itself — the server re-evaluates `privateUseBlockReason` after reload.
+   */
+  const handleConfirmRegionScope = async () => {
+    if (!batch) return;
+    setIsBusy(true);
+    setStatusMessage('Mencatat peninjauan wilayah...');
+    try {
+      const updated = await updateBasicPriceImportBatch(batch.batchId, batch.version, {
+        confirmRegionScopeCompatibility: true,
+      });
+      setBatch(updated);
+      setStatusMessage('Peninjauan wilayah tercatat.');
+    } catch (error) {
+      setStatusMessage(
+        error instanceof ImportRequestError
+          ? metadataSaveFailureMessage(error.httpStatus, error.detail)
+          : 'Peninjauan tidak sampai ke SIMPROK. Periksa koneksi lalu coba lagi. Tidak ada yang tersimpan.',
+      );
     } finally {
       setIsBusy(false);
     }
@@ -463,6 +574,7 @@ export function BasicPriceReviewPage() {
   const alreadyStored = alreadyStoredNotice(oneAction);
   const counters = reviewCounters(batch);
   const proposalDoor = proposalDoorView(batch.actions.simprokProposal);
+  const regionScopeNotice = regionScopeNoticeView(batch);
 
   return (
     <div className="bp-room">
@@ -631,6 +743,28 @@ export function BasicPriceReviewPage() {
           Simpan &amp; Gunakan belum bisa: {privateUseBlockSentence(batch.actions.privateUse.reasonCode)}
         </p>
       ) : null}
+      {regionScopeNotice ? (
+        <div className="bp-field" role="group" aria-label="Peninjauan wilayah sumber">
+          <p className="bp-field__help">
+            {regionScopeNotice.sourceLabel} · {regionScopeNotice.regionLabel}
+          </p>
+          <details className="bp-details">
+            <summary>Mengapa?</summary>
+            <p>{regionScopeNotice.why}</p>
+          </details>
+          <div className="bp-rowcard__actions">
+            <button
+              type="button"
+              className="bp-btn"
+              onClick={() => void handleConfirmRegionScope()}
+              disabled={isBusy}
+              aria-disabled={isBusy}
+            >
+              {regionScopeNotice.actionLabel}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {!batch.actions.simprokProposal.offered && proposalBlockSentence(batch.actions.simprokProposal.reasonCode) ? (
         <p className="bp-note" role="status" aria-label="Status usulan ke SIMPROK">
           {proposalBlockSentence(batch.actions.simprokProposal.reasonCode)}
@@ -653,6 +787,16 @@ export function BasicPriceReviewPage() {
             unit: draft.unit !== null,
             busy: isBusy || draft.resourcePending || draft.unitPending,
           });
+          const admissionOffered = rowIdentityAdmissionOffered(row);
+          const admitBlock = admissionOffered
+            ? rowIdentityAdmissionBlockReason({
+                unitSelected: draft.unit !== null,
+                unitPending: draft.unitPending,
+                reasonFilled: Boolean(draft.admitReason.trim()),
+                admitOpen: draft.admitOpen,
+                busy: isBusy,
+              })
+            : null;
           return (
             <section
               key={row.id}
@@ -669,6 +813,42 @@ export function BasicPriceReviewPage() {
                 <span className="bp-rowcard__num">{rowStateLabel(row)}</span>
               </div>
               <p className="bp-rowcard__facts">{rowReviewFactsLine(row)}</p>
+              {row.proposedCanonicalKdn ? (
+                <p className="bp-rowcard__facts">
+                  KDN: {row.proposedCanonicalKdn.replace('.', ',')}%
+                </p>
+              ) : optionalRowKdnIncomplete(row) ? (
+                <p className="bp-field__help">{OPTIONAL_KDN_INCOMPLETE}</p>
+              ) : null}
+              {optionalEnrichmentPanelOffered(row) ? (
+                <details className="bp-details">
+                  <summary>Lengkapi Data</summary>
+                  {optionalRowCanEnrichKdnNow(row) && row.privateBasicPriceId ? (
+                    <>
+                      <p className="bp-field__help">{OPTIONAL_ENRICHMENT_EMPTY}</p>
+                      <ReviewOptionalKdnForm
+                        priceId={row.privateBasicPriceId}
+                        onSaved={() => {
+                          setStatusMessage(
+                            `Baris ${row.sourceRowNumber}: data opsional disimpan. Baris yang sudah siap tetap dapat diproses.`,
+                          );
+                          void loadBatch(false);
+                        }}
+                      />
+                    </>
+                  ) : optionalRowKdnIncomplete(row) ? (
+                    <>
+                      <p className="bp-field__help">{OPTIONAL_ENRICHMENT_EMPTY}</p>
+                      <p className="bp-field__help">{OPTIONAL_KDN_AFTER_KEEP}</p>
+                    </>
+                  ) : null}
+                  {optionalEnrichmentBlockedCapabilities().map((gap) => (
+                    <p key={gap.label} className="bp-field__help">
+                      {gap.label}: {gap.reason}
+                    </p>
+                  ))}
+                </details>
+              ) : null}
               {/*
                 The row's own notes, in words. What has a sentence is said; what
                 does not is COUNTED and disclosed as a count.
@@ -805,6 +985,42 @@ export function BasicPriceReviewPage() {
                   >
                     Konfirmasi pilihan
                   </button>
+                  {admissionOffered ? (
+                    <>
+                      <p className="bp-field__help">{IDENTITY_ADMISSION_HELP}</p>
+                      {draft.admitOpen ? (
+                        <div className="bp-field">
+                          <label className="bp-field__label" htmlFor={`bp-admit-${row.id}`}>
+                            Alasan sahkan item baru
+                          </label>
+                          <input
+                            id={`bp-admit-${row.id}`}
+                            className="bp-input"
+                            type="text"
+                            placeholder="Mengapa item ini belum ada di katalog SIMPROK?"
+                            value={draft.admitReason}
+                            onChange={(event) =>
+                              updateDraft(row.id, { admitReason: event.target.value })
+                            }
+                          />
+                        </div>
+                      ) : null}
+                      <button
+                        className="bp-btn"
+                        onClick={() => void handleAdmit(row)}
+                        disabled={admitBlock !== null}
+                        aria-disabled={admitBlock !== null}
+                        title={admitBlock ?? IDENTITY_ADMISSION_LABEL}
+                      >
+                        {IDENTITY_ADMISSION_LABEL}
+                      </button>
+                      {admitBlock ? (
+                        <p className="bp-field__help" role="status">
+                          {admitBlock}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : null}
                   {draft.rejectOpen ? (
                     <div className="bp-field">
                       <label className="bp-field__label" htmlFor={`bp-reject-${row.id}`}>
@@ -839,6 +1055,74 @@ export function BasicPriceReviewPage() {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function ReviewOptionalKdnForm({
+  priceId,
+  onSaved,
+}: {
+  priceId: string;
+  onSaved: () => void;
+}) {
+  const [kdnPercent, setKdnPercent] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      await enrichBasicPriceKdn(
+        priceId,
+        kdnPercent,
+        'Pelengkapan %KDN opsional',
+        null,
+      );
+      onSaved();
+    } catch (error) {
+      if (error instanceof ImportRequestError) {
+        setRefusal(
+          error.httpStatus === 409
+            ? 'KDN yang sudah tercatat tidak ditimpa diam-diam.'
+            : 'Pelengkapan KDN belum berhasil. Coba lagi.',
+        );
+      } else {
+        setRefusal('Pelengkapan KDN belum berhasil. Coba lagi.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bp-field">
+      <label className="bp-field__label" htmlFor={`bp-optional-kdn-${priceId}`}>
+        %KDN (opsional)
+      </label>
+      <input
+        id={`bp-optional-kdn-${priceId}`}
+        className="bp-input"
+        type="text"
+        inputMode="decimal"
+        value={kdnPercent}
+        onChange={(event) => setKdnPercent(event.target.value)}
+      />
+      <button
+        type="button"
+        className="bp-btn bp-btn--sm"
+        disabled={busy}
+        aria-disabled={busy}
+        onClick={() => void handleSave()}
+      >
+        Simpan
+      </button>
+      {refusal ? (
+        <p className="bp-field__help" role="status">
+          {refusal}
+        </p>
+      ) : null}
     </div>
   );
 }

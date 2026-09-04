@@ -75,6 +75,9 @@ export interface RegionLookupItem {
   id: string;
   code: string;
   name: string;
+  administrativeLevel?: string | null;
+  parentId?: string | null;
+  parentName?: string | null;
 }
 
 // ── Human-readable labels (never a raw UUID) ─────────────────────────────────
@@ -103,16 +106,13 @@ export const regionOptionLabel = (region: RegionLookupItem): string =>
  * A person looking for a PLACE was asked to choose between three fixture
  * identities. That is the implementation's mental model, not theirs.
  *
- * THE RULE: the NAME is the answer. The code appears only when the name alone
- * cannot tell two candidates in THIS list apart — which is why this takes the
- * whole list rather than one item. Disambiguation is earned per result set,
- * never paid for on every row.
+ * THE RULE: the NAME is the answer. When two candidates in THIS list share a
+ * name, the disambiguator is a fact SIMPROK already holds: the parent Region
+ * name when one exists, otherwise the code. A prettier invented province would
+ * be a fabricated place, which the region provisioner refuses to allow.
  *
- * IT INVENTS NOTHING. `Region` carries only id/code/name — no province, no
- * parent — so the code is the only disambiguator that EXISTS; a prettier one
- * would have to be fabricated, and a fabricated place is exactly what the
- * region provisioner refuses to allow. Where names are already distinct,
- * nobody sees a code at all.
+ * Hierarchy is optional. Existing rows may have no parent; they still resolve
+ * by name, and colliding names still fall back to code rather than auto-select.
  */
 export const regionOptionLabels = (
   regions: readonly RegionLookupItem[],
@@ -123,11 +123,13 @@ export const regionOptionLabels = (
   }
   const labels = new Map<string, string>();
   for (const region of regions) {
+    const parent = region.parentName?.trim() ?? '';
+    const distinct = (nameCounts.get(region.name) ?? 0) <= 1;
     labels.set(
       region.id,
-      (nameCounts.get(region.name) ?? 0) > 1
-        ? `${region.name} (${region.code})`
-        : region.name,
+      distinct
+        ? region.name
+        : `${region.name} (${parent || region.code})`,
     );
   }
   return labels;
