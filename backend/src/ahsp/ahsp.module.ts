@@ -5,14 +5,25 @@ import { AhspSnapshotService } from './services/ahsp-snapshot.service';
 import { AhspImportService } from './services/ahsp-import.service';
 import { AhspAuditService } from './services/ahsp-audit.service';
 import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
+import { AhspDocumentCanonicalizationService } from './services/ahsp-document-canonicalization.service';
 import { AhspController } from './ahsp.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
+import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 
 @Module({
   imports: [PrismaModule, UnitKernelModule],
   controllers: [AhspController],
-  providers: [AhspService, AhspVersionService, AhspSnapshotService, AhspImportService, AhspAuditService, TrustedAhspActorService],
+  providers: [
+    AhspService,
+    AhspVersionService,
+    AhspSnapshotService,
+    AhspImportService,
+    AhspAuditService,
+    TrustedAhspActorService,
+    AhspDocumentCanonicalizationService,
+    ResourceIdentityResolutionService,
+  ],
   exports: [AhspService, AhspVersionService, AhspSnapshotService],
 })
 export class AhspModule {}

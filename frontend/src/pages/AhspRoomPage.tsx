@@ -6,32 +6,21 @@ import { useAuth } from '../contexts/AuthContext';
 /**
  * THE standalone AHSP room — the one door the sidebar opens.
  *
- * It answers the question asked OUTSIDE a project: "what AHSP is visible to my
- * workspace". That is a different contract from the RAB picker, which asks
- * "what may this BOQ item bind to right now", and the two deliberately do not
- * share a query — binding eligibility is a security invariant tied to what
- * selectForBoqItem revalidates, and a display surface must never pull on it.
+ * It answers: "AHSP resmi apa yang tersedia dan masih berlaku?"
+ * It does not answer how SIMPROK interprets method or terrain, and it does
+ * not present historical revisions as alternative AHSPs.
  *
- * Every column is a stored database column returned by GET /ahsp. The version
- * number is counted by the database, not here. Nothing on this page is derived,
- * inferred, or supplied by a fixture.
- *
- * Create uses existing POST /ahsp. File intake is not opened: WAVE2 is absent
- * from canonical main, and USI-01 is the Basic Price engine.
+ * Discovery still uses GET /ahsp — visibility, not RAB bindability. Create
+ * uses existing POST /ahsp. Schema still requires methodType/locationType;
+ * they are sent as unspecified fillers, never shown as official AHSP facts.
  */
 
 type AhspRow = {
   id: string;
   workspaceId: string | null;
   workType: string | null;
-  methodType: string | null;
-  locationType: string | null;
   methodName: string | null;
-  ownershipType: string | null;
-  reviewStatus: string | null;
   archivedAt: string | null;
-  updatedAt: string | null;
-  _count?: { versions: number } | null;
 };
 
 type RoomState =
@@ -41,18 +30,6 @@ type RoomState =
 
 const NAVY = 'var(--simprok-authority-navy-800)';
 const MUTED = 'var(--simprok-engineering-blue-500)';
-
-const METHOD_TYPES = ['MANUAL', 'MECHANICAL', 'SEMI_MECHANICAL', 'CHEMICAL', 'OTHER'] as const;
-const LOCATION_TYPES = [
-  'GENERAL',
-  'URBAN',
-  'RURAL',
-  'MOUNTAIN',
-  'SWAMP',
-  'COASTAL',
-  'OFFSHORE',
-  'OTHER',
-] as const;
 
 const cell: React.CSSProperties = {
   padding: 'var(--space-3)',
@@ -67,8 +44,11 @@ const orDash = (value: string | number | null | undefined) =>
     String(value)
   );
 
-const originLabel = (workspaceId: string | null) =>
-  workspaceId === null ? 'Repositori Resmi' : 'Workspace ini';
+const ownershipLabel = (workspaceId: string | null) =>
+  workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya';
+
+const availabilityLabel = (archivedAt: string | null) =>
+  archivedAt ? 'Tidak berlaku' : 'Tersedia';
 
 export function AhspRoomPage() {
   const navigate = useNavigate();
@@ -77,10 +57,27 @@ export function AhspRoomPage() {
   const [state, setState] = useState<RoomState>({ phase: 'LOADING' });
   const [workType, setWorkType] = useState('');
   const [methodName, setMethodName] = useState('');
-  const [methodType, setMethodType] = useState<(typeof METHOD_TYPES)[number]>('MANUAL');
-  const [locationType, setLocationType] = useState<(typeof LOCATION_TYPES)[number]>('GENERAL');
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<null | {
+    status: string;
+    reasonCodes: string[];
+    document: { regulationReference: { raw: string } | null; effectiveDate: string | null };
+    workItems: Array<{
+      status: string;
+      reasonCodes: string[];
+      workType: { raw: string } | null;
+      methodName: { raw: string } | null;
+      resources: Array<{ rawName: string | null; group: string | null; coefficient: number | null }>;
+    }>;
+  }>(null);
+  const [commitResult, setCommitResult] = useState<null | {
+    written: Array<{ ahspId: string; workType: string }>;
+    skipped: Array<{ workType: string | null; reasonCodes: string[] }>;
+  }>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -124,12 +121,12 @@ export function AhspRoomPage() {
         body: JSON.stringify({
           workType: workType.trim(),
           methodName: methodName.trim(),
-          methodType,
-          locationType,
+          methodType: 'OTHER',
+          locationType: 'OTHER',
         }),
       });
       if (!response.ok) {
-        setCreateError('AHSP workspace tidak dapat dibuat (HTTP ' + response.status + ').');
+        setCreateError('AHSP milik Anda tidak dapat dibuat (HTTP ' + response.status + ').');
         return;
       }
       const created = (await response.json()) as { id?: string };
@@ -139,9 +136,57 @@ export function AhspRoomPage() {
       }
       navigate('/ahsp/' + created.id);
     } catch {
-      setCreateError('AHSP workspace tidak dapat dihubungi.');
+      setCreateError('AHSP milik Anda tidak dapat dihubungi.');
     } finally {
       setCreating(false);
+    }
+  };
+
+  const previewDocument = async () => {
+    if (!canManage || !file || importing) return;
+    setImporting(true);
+    setImportError(null);
+    setCommitResult(null);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const response = await apiFetch('/ahsp/document/preview', { method: 'POST', body });
+      if (!response.ok) {
+        setImportError('Dokumen AHSP tidak dapat dipahami (HTTP ' + response.status + ').');
+        return;
+      }
+      setPreview(await response.json());
+    } catch {
+      setImportError('Dokumen AHSP tidak dapat dihubungi.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const commitDocument = async () => {
+    if (!canManage || !file || importing) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const response = await apiFetch('/ahsp/document/commit', { method: 'POST', body });
+      if (!response.ok) {
+        setImportError('AHSP terbukti tidak dapat disimpan (HTTP ' + response.status + ').');
+        return;
+      }
+      const data = await response.json();
+      setCommitResult(data);
+      setPreview(data.knowledge ?? preview);
+      const reload = await apiFetch('/ahsp');
+      if (reload.ok) {
+        const rows = await reload.json();
+        setState({ phase: 'READY', rows: Array.isArray(rows) ? rows : [] });
+      }
+    } catch {
+      setImportError('AHSP terbukti tidak dapat dihubungi.');
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -153,34 +198,108 @@ export function AhspRoomPage() {
           AHSP
         </h1>
         <p style={{ fontSize: 'var(--text-sm)', color: NAVY, margin: 0 }}>
-          Analisa Harga Satuan Pekerjaan yang tersedia dalam workspace ini.
+          AHSP yang terlihat di workspace ini. Bukan tafsir metode atau lokasi SIMPROK.
         </p>
       </header>
 
-      <section
-        className="simprok-honest-frame"
-        aria-label="Impor berkas AHSP tidak dihidupkan"
-        style={{ marginBottom: 'var(--space-5)' }}
-      >
-        <span className="simprok-honest-frame__badge">Tidak dihidupkan</span>
-        <p>
-          Impor berkas AHSP tidak dibuka. WAVE2 tidak ada di canonical main.
-          USI-01 adalah mesin Basic Price, bukan mesin AHSP. Tidak ada importer
-          kedua.
-        </p>
-      </section>
+      {canManage ? (
+        <section aria-label="Baca dokumen AHSP resmi" style={{ marginBottom: 'var(--space-5)' }}>
+          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
+            Dokumen AHSP resmi
+          </h2>
+          <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
+            SIMPROK membaca grid yang sudah ada, memahami analisa, dan hanya
+            menulis fakta yang terbukti. Yang ambigu tidak disimpan. Tanggal
+            berlaku tidak dikarang menjadi hari ini.
+          </p>
+          <input
+            type="file"
+            accept=".xlsx"
+            aria-label="Berkas AHSP resmi"
+            onChange={(event) => {
+              setFile(event.target.files?.[0] ?? null);
+              setPreview(null);
+              setCommitResult(null);
+            }}
+          />
+          <div style={{ marginTop: 'var(--space-3)' }}>
+            <button
+              type="button"
+              disabled={!file || importing}
+              onClick={() => void previewDocument()}
+              style={{
+                background: 'var(--simprok-trust-blue-500)',
+                color: '#FFFFFF',
+                border: 0,
+                padding: 'var(--space-2) var(--space-4)',
+                marginRight: 'var(--space-2)',
+              }}
+            >
+              {importing ? 'Membaca…' : 'Pahami dokumen'}
+            </button>
+            <button
+              type="button"
+              disabled={!file || importing || !preview}
+              onClick={() => void commitDocument()}
+              style={{
+                background: 'var(--simprok-authority-navy-800)',
+                color: '#FFFFFF',
+                border: 0,
+                padding: 'var(--space-2) var(--space-4)',
+              }}
+            >
+              Simpan yang terbukti
+            </button>
+          </div>
+          {importError ? (
+            <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
+              {importError}
+            </p>
+          ) : null}
+          {preview ? (
+            <div style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: NAVY }}>
+              <p>
+                {preview.workItems.length} pekerjaan. Terbukti:{' '}
+                {preview.workItems.filter((item) => item.status === 'READY').length}. Belum terbukti:{' '}
+                {preview.workItems.filter((item) => item.status !== 'READY').length}.
+              </p>
+              <p>
+                Peraturan:{' '}
+                {preview.document.regulationReference?.raw ?? 'tidak terbukti'}
+                . Tanggal berlaku: {preview.document.effectiveDate ?? 'tidak terbukti dari dokumen'}.
+              </p>
+              <ul>
+                {preview.workItems.map((item, index) => (
+                  <li key={index}>
+                    {item.status === 'READY' ? 'Terbukti' : 'Belum terbukti'}:{' '}
+                    {item.workType?.raw ?? '—'} — {item.methodName?.raw ?? '—'}
+                    {item.status !== 'READY' ? ` (${item.reasonCodes.join(', ')})` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {commitResult ? (
+            <p style={{ fontSize: 'var(--text-sm)', color: NAVY }}>
+              Tersimpan: {commitResult.written.length}. Tidak disimpan:{' '}
+              {commitResult.skipped.length}.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       {canManage ? (
         <form
-          aria-label="Buat AHSP workspace"
+          aria-label="Buat AHSP milik saya"
           onSubmit={createWorkspaceAhsp}
           style={{ maxWidth: '36rem', marginBottom: 'var(--space-6)' }}
         >
           <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
-            Buat AHSP workspace
+            AHSP Milik Saya
           </h2>
           <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
-            Memakai POST /ahsp yang sudah ada. Bukan impor berkas, bukan Repositori Resmi.
+            Untuk AHSP sah yang belum ada di pustaka SIMPROK, jika tidak
+            berasal dari dokumen analisa.
           </p>
           <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
             Jenis pekerjaan
@@ -192,45 +311,15 @@ export function AhspRoomPage() {
               style={{ display: 'block', width: '100%', color: NAVY }}
             />
           </label>
-          <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
-            Uraian / metode
+          <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
+            Uraian
             <input
               required
               value={methodName}
               onChange={(event) => setMethodName(event.target.value)}
-              aria-label="Uraian metode"
+              aria-label="Uraian AHSP"
               style={{ display: 'block', width: '100%', color: NAVY }}
             />
-          </label>
-          <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
-            Tipe metode
-            <select
-              value={methodType}
-              onChange={(event) => setMethodType(event.target.value as (typeof METHOD_TYPES)[number])}
-              aria-label="Tipe metode"
-              style={{ display: 'block', color: NAVY }}
-            >
-              {METHOD_TYPES.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
-            Lokasi
-            <select
-              value={locationType}
-              onChange={(event) => setLocationType(event.target.value as (typeof LOCATION_TYPES)[number])}
-              aria-label="Lokasi"
-              style={{ display: 'block', color: NAVY }}
-            >
-              {LOCATION_TYPES.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
           </label>
           {createError ? (
             <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
@@ -247,7 +336,7 @@ export function AhspRoomPage() {
               padding: 'var(--space-2) var(--space-4)',
             }}
           >
-            {creating ? 'Menyimpan…' : 'Simpan AHSP workspace'}
+            {creating ? 'Menyimpan…' : 'Simpan AHSP milik saya'}
           </button>
         </form>
       ) : null}
@@ -274,18 +363,15 @@ export function AhspRoomPage() {
 
       {state.phase === 'READY' && state.rows.length > 0 ? (
         <table
-          aria-label="Daftar AHSP workspace"
+          aria-label="Daftar AHSP yang tersedia"
           style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}
         >
           <thead>
             <tr style={{ textAlign: 'left', color: NAVY }}>
               <th style={cell}>Jenis Pekerjaan</th>
-              <th style={cell}>Metode</th>
-              <th style={cell}>Tipe</th>
-              <th style={cell}>Lokasi</th>
-              <th style={cell}>Asal</th>
-              <th style={cell}>Status Tinjauan</th>
-              <th style={cell}>Versi</th>
+              <th style={cell}>Uraian</th>
+              <th style={cell}>Kepemilikan</th>
+              <th style={cell}>Ketersediaan</th>
             </tr>
           </thead>
           <tbody>
@@ -300,14 +386,8 @@ export function AhspRoomPage() {
                   </Link>
                 </td>
                 <td style={cell}>{orDash(row.methodName)}</td>
-                <td style={cell}>{orDash(row.methodType)}</td>
-                <td style={cell}>{orDash(row.locationType)}</td>
-                <td style={cell}>{originLabel(row.workspaceId)}</td>
-                <td style={{ ...cell, color: NAVY }}>
-                  {orDash(row.reviewStatus)}
-                  {row.archivedAt ? <span style={{ color: MUTED }}> · Diarsipkan</span> : null}
-                </td>
-                <td style={cell}>{orDash(row._count?.versions)}</td>
+                <td style={cell}>{ownershipLabel(row.workspaceId)}</td>
+                <td style={{ ...cell, color: NAVY }}>{availabilityLabel(row.archivedAt)}</td>
               </tr>
             ))}
           </tbody>

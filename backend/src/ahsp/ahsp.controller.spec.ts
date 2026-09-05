@@ -10,6 +10,7 @@ import { AhspService } from './services/ahsp.service';
 import { AhspVersionService } from './services/ahsp-version.service';
 import { AhspSnapshotService } from './services/ahsp-snapshot.service';
 import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
+import { AhspDocumentCanonicalizationService } from './services/ahsp-document-canonicalization.service';
 import { PERMISSIONS_KEY } from '../common/decorators/permissions.decorator';
 
 describe('AhspController', () => {
@@ -34,6 +35,10 @@ describe('AhspController', () => {
   const ahspSnapshotService = {
     createSnapshot: jest.fn(),
   };
+  const documents = {
+    previewUpload: jest.fn(),
+    commitUpload: jest.fn(),
+  };
 
   /** RM-03B: the actor is server-derived; the controller never reads body.userId. */
   const TRUSTED_ACTOR_ID = 'trusted-user-a';
@@ -54,6 +59,7 @@ describe('AhspController', () => {
         { provide: AhspVersionService, useValue: ahspVersionService },
         { provide: AhspSnapshotService, useValue: ahspSnapshotService },
         { provide: TrustedAhspActorService, useValue: trustedActorService },
+        { provide: AhspDocumentCanonicalizationService, useValue: documents },
         // PermissionsGuard requires Reflector + WorkspacePermissionResolverService at instantiation time.
         // We provide minimal stubs so NestJS DI can resolve the guard in unit test context.
         // Guard logic itself is not under test here — we only verify class-level metadata.
@@ -210,6 +216,62 @@ describe('AhspController', () => {
       // The writer must never have been reached: no actorless AHSP, and no
       // quiet fall back to the body actor.
       expect(ahspService.create).not.toHaveBeenCalled();
+    });
+
+    it('previewDocument uses the guard workspace and JWT account, never a client workspace', async () => {
+      const file = { buffer: Buffer.from('xlsx'), originalname: 'AHSP ok(1).xlsx' };
+      await controller.previewDocument(
+        { ...requestWithContext, user: { id: 'account-a' } },
+        file,
+      );
+      expect(documents.previewUpload).toHaveBeenCalledWith({
+        file,
+        workspaceId: 'ws-a',
+        actorAccountId: 'account-a',
+      });
+    });
+
+    it('document preview and commit require the existing AHSP_MANAGE permission', () => {
+      expect(Reflect.getMetadata(PERMISSIONS_KEY, AhspController.prototype.previewDocument)).toEqual([
+        'AHSP_MANAGE',
+      ]);
+      expect(Reflect.getMetadata(PERMISSIONS_KEY, AhspController.prototype.commitDocument)).toEqual([
+        'AHSP_MANAGE',
+      ]);
+    });
+
+    it('document preview refuses without a workspace and never reads a client workspace', async () => {
+      const file = { buffer: Buffer.from('xlsx'), originalname: 'AHSP.xlsx' };
+      await expect(
+        controller.previewDocument(
+          { query: { workspaceId: 'ws-other' }, body: { workspaceId: 'ws-other' }, user: { id: 'account-a' } },
+          file,
+        ),
+      ).rejects.toThrow('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+      expect(documents.previewUpload).not.toHaveBeenCalled();
+    });
+
+    it('document commit refuses without a workspace and does not write', async () => {
+      const file = { buffer: Buffer.from('xlsx'), originalname: 'AHSP.xlsx' };
+      await expect(
+        controller.commitDocument({ user: { id: 'account-a' } }, file),
+      ).rejects.toThrow('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+      expect(trustedActorService.resolveActorUserId).not.toHaveBeenCalled();
+      expect(documents.commitUpload).not.toHaveBeenCalled();
+    });
+
+    it('commitDocument attributes the write to the trusted actor', async () => {
+      const file = { buffer: Buffer.from('xlsx'), originalname: 'AHSP ok(1).xlsx' };
+      await controller.commitDocument(
+        { ...requestWithContext, user: { id: 'account-a' } },
+        file,
+      );
+      expect(documents.commitUpload).toHaveBeenCalledWith({
+        file,
+        workspaceId: 'ws-a',
+        actorAccountId: 'account-a',
+        userId: TRUSTED_ACTOR_ID,
+      });
     });
   });
   /**

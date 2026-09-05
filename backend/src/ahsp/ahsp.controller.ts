@@ -8,8 +8,11 @@ import {
   Param,
   Req,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
   BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
@@ -19,6 +22,11 @@ import { AhspVersionService } from './services/ahsp-version.service';
 import type { CreateAhspVersionDto } from './services/ahsp-version.service';
 import { AhspSnapshotService } from './services/ahsp-snapshot.service';
 import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
+import {
+  AHSP_DOCUMENT_MAX_BYTES,
+  AhspDocumentCanonicalizationService,
+  isAhspIntakeError,
+} from './services/ahsp-document-canonicalization.service';
 import { RetireAhspVersionDto } from './dto/retire-ahsp-version.dto';
 import { OwnershipType } from '@prisma/client';
 
@@ -37,6 +45,7 @@ export class AhspController {
     private readonly ahspVersionService: AhspVersionService,
     private readonly ahspSnapshotService: AhspSnapshotService,
     private readonly trustedActor: TrustedAhspActorService,
+    private readonly documents: AhspDocumentCanonicalizationService,
   ) {}
 
   /**
@@ -88,6 +97,44 @@ export class AhspController {
       throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
     }
     return this.ahspService.list(workspaceId);
+  }
+
+  @Post('document/preview')
+  @Permissions('AHSP_MANAGE')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: AHSP_DOCUMENT_MAX_BYTES } }))
+  async previewDocument(@Req() request: any, @UploadedFile() file: { buffer?: Buffer; originalname?: string; mimetype?: string }) {
+    const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
+    if (!workspaceId) throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    try {
+      return await this.documents.previewUpload({
+        file,
+        workspaceId,
+        actorAccountId: request.user?.id,
+      });
+    } catch (error) {
+      if (isAhspIntakeError(error)) throw new BadRequestException(error.code);
+      throw error;
+    }
+  }
+
+  @Post('document/commit')
+  @Permissions('AHSP_MANAGE')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: AHSP_DOCUMENT_MAX_BYTES } }))
+  async commitDocument(@Req() request: any, @UploadedFile() file: { buffer?: Buffer; originalname?: string; mimetype?: string }) {
+    const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
+    if (!workspaceId) throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    const userId = await this.resolveActor(request);
+    try {
+      return await this.documents.commitUpload({
+        file,
+        workspaceId,
+        actorAccountId: request.user?.id,
+        userId,
+      });
+    } catch (error) {
+      if (isAhspIntakeError(error)) throw new BadRequestException(error.code);
+      throw error;
+    }
   }
 
   @Post()
