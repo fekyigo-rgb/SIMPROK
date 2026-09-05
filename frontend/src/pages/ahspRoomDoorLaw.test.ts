@@ -111,7 +111,11 @@ test("C the room consumes the workspace discovery endpoint", () => {
 test("C the room opens the existing definition by id, never a project bind", () => {
   assert.ok(room.includes("to={'/ahsp/' + row.id}"), "a row must open GET /ahsp/:id");
   assert.ok(room.includes("method: 'POST'"), "workspace create uses existing POST /ahsp");
-  assert.ok(room.includes("WAVE2"), "file intake absence must be named");
+  assert.ok(room.includes("/ahsp/document/preview"), "document understanding uses the existing AHSP door");
+  assert.ok(room.includes("/ahsp/document/commit"), "canonical write stays on the existing AHSP door");
+  assert.ok(room.includes("Terbukti:"), "preview must count READY items");
+  assert.ok(room.includes("Belum terbukti:"), "preview must count unresolved items");
+  assert.ok(!room.includes("WAVE2"), "file understanding is no longer named as absent");
   assert.ok(!room.includes("Menunggu mesin"), "do not leave a fake waiting door");
   assert.ok(!room.includes("createImportJob"), "do not wire the pending-job stub");
 });
@@ -137,7 +141,30 @@ test("an API failure is never rendered as an empty room", () => {
 test("the room invents no data", () => {
   assert.ok(!room.includes("fixture"), "no fixture may stand in for database truth");
   assert.ok(!/const\s+\w*[Rr]ows\s*[:=]\s*\[\s*\{/.test(room), "no hardcoded AHSP rows");
-  // The version count is the database's, never counted in the browser.
-  assert.ok(room.includes("_count?.versions"), "version count comes from the payload");
-  assert.ok(!room.includes(".length}"), "no count may be derived for display");
+  assert.ok(!room.includes("_count?.versions"), "historical revision count is not an AHSP fact");
+});
+
+test("the room does not present SIMPROK interpretation as official AHSP identity", () => {
+  assert.ok(!room.includes("Tipe metode"));
+  assert.ok(!room.includes("Tipe Metode"));
+  assert.ok(!room.includes("aria-label=\"Lokasi\""));
+  assert.ok(!room.includes(">Lokasi<"));
+  assert.ok(!room.includes(">Asal<"));
+  assert.ok(!room.includes("MANUAL"));
+  assert.ok(!room.includes("MOUNTAIN"));
+  assert.ok(!room.includes("Pilih Version"));
+  assert.ok(!room.includes("Gunakan Version"));
+});
+
+test("the room names private AHSP as milik pengguna, not as a version picker", () => {
+  assert.ok(room.includes("AHSP Milik Saya"));
+  assert.ok(room.includes("AHSP Saya"));
+  assert.ok(room.includes("terlihat di workspace ini"));
+  assert.ok(!room.includes("eligible-versions"));
+});
+
+test("the fixture preview is not a second AHSP room or menu", () => {
+  assert.ok(!sidebar.includes("first-real-input-preview"));
+  assert.ok(!sidebar.includes("FirstRealInput"));
+  assert.equal((sidebar.match(/name: 'AHSP'/g) ?? []).length, 1);
 });
