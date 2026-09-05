@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { LocationType, MethodType } from '@prisma/client';
 import { IntakeError } from '../../universal-intake/intake-errors';
 import { ReaderRegistry } from '../../universal-intake/readers/reader-registry';
 import {
@@ -25,10 +26,16 @@ import {
   AhspResourceKnowledge,
   AhspWorkItemKnowledge,
 } from '../document/ahsp-document-knowledge';
-import { AHSP_PARENT_IDENTITY_FILLER, AhspService } from './ahsp.service';
+import { AhspService } from './ahsp.service';
 import { AhspVersionService } from './ahsp-version.service';
 
 export const AHSP_DOCUMENT_MAX_BYTES = MAX_ENVELOPE_BYTES;
+
+/** Schema-required parent identity when the document does not state method/location. Not an official fact. */
+const AHSP_PARENT_IDENTITY_FILLER = {
+  methodType: MethodType.OTHER,
+  locationType: LocationType.OTHER,
+} as const;
 
 const GROUP_TO_CONTEXT: Record<
   AhspResourceGroup,
@@ -135,8 +142,8 @@ export class AhspDocumentCanonicalizationService {
     userId: string,
   ): Promise<AhspDocumentCommitResult> {
     const knowledge = await this.preview(envelope);
-    const skipped: AhspDocumentCommitResult['skipped'] = [];
-    const written: AhspDocumentCommitResult['written'] = [];
+    const skipped: Array<AhspDocumentCommitResult['skipped'][number]> = [];
+    const written: Array<AhspDocumentCommitResult['written'][number]> = [];
     for (const item of knowledge.workItems) {
       if (item.status !== 'READY' || !item.workType || !item.methodName) {
         skipped.push({
