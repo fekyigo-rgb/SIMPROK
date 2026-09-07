@@ -243,8 +243,24 @@ export class AhspDocumentCanonicalizationService {
     for (const resource of item.resources) {
       resources.push(await this.resolveResource(resource, evidence));
     }
-    if (resources.some((resource) => resource.status !== 'READY')) {
-      reasons.push(AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED);
+    // EVERY reason a component was held back travels up to the work item.
+    //
+    // This used to be one blanket "any resource is not READY -> the resources
+    // are unresolved", which told the reader the wrong thing about a component
+    // whose UNIT was the problem. Naming the codes fixes that, but it must name
+    // ALL of them: listing only the two identity codes left an item whose
+    // component unit was unknown carrying no reason whatsoever, and commit()
+    // then reported it as generic ambiguity — the one thing it was not. The
+    // reader is told which of the three questions is still open, in the source's
+    // own terms, and never asked to accept a guess in place of an answer.
+    for (const code of [
+      AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,
+      AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED,
+      AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED,
+    ] as const) {
+      if (resources.some((resource) => resource.reasonCodes.includes(code))) {
+        reasons.push(code);
+      }
     }
     const unique = [...new Set(reasons)];
     const ready =
@@ -296,20 +312,49 @@ export class AhspDocumentCanonicalizationService {
       rawUnit: resource.rawUnit,
       resourceType: resource.group,
     });
-    if (identity.status !== 'RESOLVED' || !identity.resolvedResourceCatalogId) {
+    const identityCandidates = [
+      ...new Set(
+        (identity.candidates ?? [])
+          .map((candidate) => candidate.name.trim())
+          .filter((name) => name.length > 0),
+      ),
+    ];
+    if (identity.status === 'RESOLVED' && identity.resolvedResourceCatalogId) {
+      return {
+        ...resource,
+        resolvedResourceCatalogId: identity.resolvedResourceCatalogId,
+        resolvedBaseUnit: resource.rawUnit,
+        identityCandidates: [],
+      };
+    }
+    // WHY THE CONDITION IS "candidates exist", NOT "status is NEEDS_REVIEW".
+    //
+    // The identity kernel also returns candidates on UNRESOLVED verdicts —
+    // SPECIFICATION_CONFLICT and RESOURCE_TYPE_MISMATCH both name the rows they
+    // held back. Keying this branch on NEEDS_REVIEW alone sent those through the
+    // "nothing matched" wording below, so the reader was told SIMPROK found no
+    // such resource when it had in fact found several and could say which.
+    // Whether SIMPROK has something to show is a question about candidates, so
+    // it is asked of the candidates.
+    if (identityCandidates.length > 0) {
       return {
         ...resource,
         status: 'UNRESOLVED',
+        identityCandidates,
         reasonCodes: [
           ...resource.reasonCodes,
-          AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED,
+          AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,
         ],
       };
     }
     return {
       ...resource,
-      resolvedResourceCatalogId: identity.resolvedResourceCatalogId,
-      resolvedBaseUnit: resource.rawUnit,
+      status: 'UNRESOLVED',
+      identityCandidates,
+      reasonCodes: [
+        ...resource.reasonCodes,
+        AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED,
+      ],
     };
   }
 }

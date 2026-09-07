@@ -105,3 +105,43 @@ test("components are grouped from stored version resources", () => {
 test("the reader can return to the canonical list", () => {
   assert.ok(detail.includes('to="/ahsp"'));
 });
+
+// ── Validity is not completeness ─────────────────────────────────────────────
+
+test("an AHSP with no formula yet is not declared out of force", () => {
+  // The two states are separately labelled and separately worded.
+  assert.ok(detail.includes('aria-label="AHSP belum memiliki rumus"'));
+  assert.ok(detail.includes("Belum ada rumus"));
+  assert.ok(detail.includes('aria-label="AHSP tidak berlaku"'));
+  assert.ok(detail.includes("Tidak berlaku"));
+  // The merged condition that answered both questions with one badge is gone.
+  assert.ok(
+    !detail.includes("archived || !currentVersion || isHistoricalStatus"),
+    "a missing recipe must not be routed through the out-of-force branch",
+  );
+  // Out of force is reserved for a withdrawn or superseded definition.
+  assert.ok(detail.includes("archived || isHistoricalStatus(currentVersion.status)"));
+});
+
+test("no expiry is invented for either state", () => {
+  assert.ok(!detail.includes("Berlaku sampai"));
+  assert.ok(!detail.includes("Kedaluwarsa"));
+  assert.ok(!detail.includes("expiredDate ?"));
+});
+
+// ── The recipe's proven identity survives the editor ─────────────────────────
+
+test("a saved component is named, never re-typed as an identifier", () => {
+  assert.ok(detail.includes("resolveDefinitionResourceName"));
+  assert.ok(detail.includes("row.stored ? ("), "a saved row and a new row are not the same control");
+  assert.ok(detail.includes("stored: true"), "rows seeded from the saved recipe are marked as such");
+  assert.ok(
+    !detail.includes("value={row.resourceId}\n"),
+    "the stored identity is not bound to an unconditional text input",
+  );
+});
+
+test("the update payload still sends the stored identity, not the displayed name", () => {
+  assert.ok(detail.includes("resourceId: row.resourceId.trim()"));
+  assert.ok(!detail.includes("resourceId: row.resourceName"));
+});

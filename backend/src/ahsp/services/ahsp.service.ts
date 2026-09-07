@@ -116,7 +116,50 @@ export class AhspService {
     if (!ahsp || (ahsp.workspaceId !== null && ahsp.workspaceId !== workspaceId)) {
       throw new NotFoundException('AHSP not found');
     }
-    return ahsp;
+    return this.withCatalogResourceNames(ahsp, workspaceId);
+  }
+
+  /**
+   * Presentation names from the existing ResourceCatalog. Not a second identity
+   * engine: stored resourceId stays the write contract. Official catalog rows
+   * (workspaceId null) remain visible beside this workspace's own rows.
+   */
+  private async withCatalogResourceNames<
+    T extends {
+      versions: Array<{
+        resources: Array<{ resourceId: string } & Record<string, unknown>>;
+      }>;
+    },
+  >(ahsp: T, workspaceId?: string): Promise<T> {
+    const ids = [
+      ...new Set(
+        ahsp.versions.flatMap((version) =>
+          version.resources.map((row) => row.resourceId).filter(isCatalogUuid),
+        ),
+      ),
+    ];
+    if (ids.length === 0) return ahsp;
+    const catalog = await this.prisma.resourceCatalog.findMany({
+      where: {
+        id: { in: ids },
+        status: 'ACTIVE',
+        OR: workspaceId
+          ? [{ workspaceId }, { workspaceId: null }]
+          : [{ workspaceId: null }],
+      },
+      select: { id: true, name: true },
+    });
+    const names = new Map(catalog.map((row) => [row.id, row.name]));
+    return {
+      ...ahsp,
+      versions: ahsp.versions.map((version) => ({
+        ...version,
+        resources: version.resources.map((row) => ({
+          ...row,
+          resourceName: names.get(row.resourceId) ?? null,
+        })),
+      })),
+    };
   }
 
   /**
@@ -334,4 +377,11 @@ export class AhspService {
 
     return transferred;
   }
+}
+
+const CATALOG_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isCatalogUuid(value: string): boolean {
+  return CATALOG_UUID.test(value);
 }

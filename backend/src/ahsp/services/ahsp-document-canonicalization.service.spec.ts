@@ -197,6 +197,104 @@ describe('AhspDocumentCanonicalizationService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(ahspService.create).not.toHaveBeenCalled();
   });
+
+  /**
+   * UNRESOLVED IS "NOT YET PROVED", NEVER "NOT THERE".
+   *
+   * The identity kernel returns candidates on NEEDS_REVIEW and on two of its
+   * UNRESOLVED verdicts (SPECIFICATION_CONFLICT, RESOURCE_TYPE_MISMATCH). Every
+   * one of those is SIMPROK having found something, so all of them must reach
+   * the reader as a found-something, not as a nothing-found.
+   */
+  async function commitWithCandidateVerdict(status: string) {
+    identity.resolve.mockResolvedValue({
+      status,
+      resolvedResourceCatalogId: null,
+      candidates: [
+        { name: 'Pekerja', resourceCatalogId: 'catalog-a' },
+        { name: 'Pekerja Terampil', resourceCatalogId: 'catalog-b' },
+      ],
+    });
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    const result = await service.commit(envelope, 'user-1');
+    const item = result.knowledge.workItems.find(
+      (candidate) => candidate.workType?.raw === '1.7.7.1.1.b (a)',
+    );
+    expect(item?.status).toBe('UNRESOLVED');
+    expect(item?.reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,
+    );
+    // The catalogue names SIMPROK narrowed to are carried, never asserted as
+    // the identity — nothing is written and no catalogue id is stored.
+    expect(item?.resources[0]?.identityCandidates).toEqual([
+      'Pekerja',
+      'Pekerja Terampil',
+    ]);
+    expect(item?.resources[0]?.resolvedResourceCatalogId).toBeNull();
+    expect(result.written).toEqual([]);
+    expect(versionService.createVersion).not.toHaveBeenCalled();
+  }
+
+  it('reports candidates found on a NEEDS_REVIEW verdict', async () => {
+    await commitWithCandidateVerdict('NEEDS_REVIEW');
+  });
+
+  it('reports candidates found on an UNRESOLVED verdict', async () => {
+    await commitWithCandidateVerdict('UNRESOLVED');
+  });
+
+  it('says nothing was found only when the kernel truly found nothing', async () => {
+    identity.resolve.mockResolvedValue({
+      status: 'UNRESOLVED',
+      resolvedResourceCatalogId: null,
+      candidates: [],
+    });
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    const result = await service.commit(envelope, 'user-1');
+
+    const item = result.knowledge.workItems.find(
+      (candidate) => candidate.workType?.raw === '1.7.7.1.1.b (a)',
+    );
+    expect(item?.reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED,
+    );
+    expect(item?.reasonCodes).not.toContain(
+      AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,
+    );
+  });
+
+  /**
+   * A component held back by its UNIT must say so. This regressed into a work
+   * item carrying no reason at all, which commit() then reported as generic
+   * ambiguity — telling the reader the document was unclear when SIMPROK knew
+   * exactly which question was open.
+   */
+  it('names an unknown component unit instead of falling back to ambiguity', async () => {
+    units.resolve.mockImplementation((raw: string) =>
+      Promise.resolve(
+        raw.trim().toUpperCase() === 'M3'
+          ? resolvedUnit()
+          : { status: 'NEEDS_REVIEW', sourceUnitDefinition: null },
+      ),
+    );
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    const result = await service.commit(envelope, 'user-1');
+
+    const item = result.knowledge.workItems.find(
+      (candidate) => candidate.workType?.raw === '1.7.7.1.1.b (a)',
+    );
+    expect(item?.status).toBe('UNRESOLVED');
+    expect(item?.reasonCodes).toContain(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
+    expect(result.skipped).not.toHaveLength(0);
+    expect(
+      result.skipped.every(
+        (skipped) =>
+          !skipped.reasonCodes.includes(
+            AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY,
+          ),
+      ),
+    ).toBe(true);
+  });
 });
 
 const BINA_MARGA_PATHS = [
@@ -275,8 +373,12 @@ const POSITIVE_PATHS = [
   'C:/SIMPROK/data/first-real-input/Copy of AHSP ok(1).xlsx',
   'C:/SIMPROK/Copy of AHSP ok(1).xlsx',
 ];
+// RE-PINNED. The Owner corrected three coefficients in this real input file,
+// so its bytes changed and this guard fired exactly as designed. The pin and the
+// counts below now describe the file as it stands; the guard's purpose — this
+// test speaks for ONE known file, not for any spreadsheet — is unchanged.
 const POSITIVE_SHA256 =
-  'c072b8f6599bfd1a59ecdf2405e9309714e0112fee264d18d915e3a9e60aa192';
+  'dc30dd94c921fb612d4b6c6cb2d9e6b29241d2b8dd12714223624b9039f74552';
 const positivePath = POSITIVE_PATHS.find((path) => existsSync(path)) ?? '';
 const describePositiveCommit = positivePath ? describe : describe.skip;
 

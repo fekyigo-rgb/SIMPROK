@@ -320,8 +320,12 @@ const POSITIVE_PATHS = [
   'C:/SIMPROK/data/first-real-input/Copy of AHSP ok(1).xlsx',
   'C:/SIMPROK/Copy of AHSP ok(1).xlsx',
 ];
+// RE-PINNED. The Owner corrected three coefficients in this real input file,
+// so its bytes changed and this guard fired exactly as designed. The pin and the
+// counts below now describe the file as it stands; the guard's purpose — this
+// test speaks for ONE known file, not for any spreadsheet — is unchanged.
 const POSITIVE_SHA256 =
-  'c072b8f6599bfd1a59ecdf2405e9309714e0112fee264d18d915e3a9e60aa192';
+  'dc30dd94c921fb612d4b6c6cb2d9e6b29241d2b8dd12714223624b9039f74552';
 const positivePath = POSITIVE_PATHS.find((path) => existsSync(path)) ?? '';
 const describePositive = positivePath ? describe : describe.skip;
 
@@ -342,12 +346,16 @@ describePositive('AHSP positive source — Copy of AHSP ok(1).xlsx', () => {
     expect(penggalian?.resources.map((r) => r.rawName)).toEqual(['Pekerja', 'Mandor']);
     expect(penggalian?.resources.map((r) => r.rawUnit)).toEqual(['OH', 'OH']);
     expect(penggalian?.resources.map((r) => r.coefficient)).toEqual([0.4, 0.04]);
-    expect(knowledge.workItems.filter((item) => item.status === 'READY')).toHaveLength(13);
+    // 16 of 17, and one still short of a coefficient — the correction the Owner
+    // made to this file. Understanding is asserted here on the SOURCE alone;
+    // whether a resource can be proved against the catalogue is the
+    // canonicalisation suite's question, not this one's.
+    expect(knowledge.workItems.filter((item) => item.status === 'READY')).toHaveLength(16);
     expect(
       knowledge.workItems.filter((item) =>
         item.reasonCodes.includes(AHSP_DOCUMENT_REASON.INVALID_COEFFICIENT),
       ),
-    ).toHaveLength(4);
+    ).toHaveLength(1);
     expect(
       knowledge.workItems.filter((item) =>
         item.reasonCodes.includes(AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT),
