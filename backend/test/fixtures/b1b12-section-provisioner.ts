@@ -28,11 +28,18 @@ import {
  *
  * EVERY FIGURE IS PRODUCED BY SIMPROK. This module writes no unit price, no
  * line total and no recap. It creates prerequisite reference data (workspace,
- * region, catalog, Basic Price through its real lifecycle, AHSP versions) and
- * then drives the SAME production routes the browser drives:
+ * region, catalog, Basic Price through its real lifecycle) and then drives
+ * the SAME production routes the browser drives:
+ *   POST /ahsp
+ *   POST /ahsp/:id/versions
  *   PUT  /projects/:id/boq/draft
  *   POST /projects/:id/ahsp-occurrences/boq-items/:id/select-ahsp
  *   POST /projects/:id/boq/items/:id/cost-calculation/persist
+ *
+ * AHSP parent and version used to be Prisma-injected so the RAB thread could
+ * run without an AHSP room. That injection is no longer the writer: create
+ * and version append go through AhspService / AhspVersionService. The Golden
+ * workbook reader remains TEST_FIXTURE_ONLY evidence, not a second importer.
  */
 
 export interface MaterialisedRow {
@@ -175,6 +182,10 @@ export async function provisionB1B12Section(
     'PROJECT_VIEW',
     'RAB_VIEW',
     'AHSP_VIEW',
+    // Canonical AHSP create/version is AHSP_MANAGE. The RAB thread already
+    // had AHSP_VIEW for binding; without MANAGE the fixture had to inject
+    // parent rows through Prisma and never called the production writer.
+    'AHSP_MANAGE',
     // THE BASIC PRICE DOOR, MADE EXERCISABLE.
     //
     // This fixture granted only BASIC_PRICE_VERIFY and BASIC_PRICE_PUBLISH — the
@@ -358,42 +369,42 @@ export async function provisionB1B12Section(
     await publishFieldPrice(catalog.id, identity.publishedUnitPrice);
   }
 
-  // ── One immutable AHSP version per B-item, from the pack's own identity ──
+  // ── One current AHSP snapshot per B-item, through the canonical writer ──
   for (const item of golden.items) {
-    const ahsp = await prisma.aHSP.create({
-      data: {
-        workspaceId,
+    const created = await request(app.getHttpServer())
+      .post('/ahsp')
+      .set('Authorization', `Bearer ${editorToken}`)
+      .set('x-workspace-id', workspaceId)
+      .send({
         workType: item.officialDescription,
-        methodType: 'MANUAL',
-        locationType: 'GENERAL',
         methodName: `${item.code} ${item.item}`,
-      },
-    });
-    const version = await prisma.aHSPVersion.create({
-      data: {
-        ahspId: ahsp.id,
-        workspaceId,
-        versionNumber: 1,
+        methodType: 'OTHER',
+        locationType: 'OTHER',
+      })
+      .expect(201);
+
+    const version = await request(app.getHttpServer())
+      .post(`/ahsp/${created.body.id}/versions`)
+      .set('Authorization', `Bearer ${editorToken}`)
+      .set('x-workspace-id', workspaceId)
+      .send({
         outputUnit: item.canonicalUnit,
-        effectiveDate: PRICE_EFFECTIVE_DATE,
+        effectiveDate: PRICE_EFFECTIVE_DATE.toISOString(),
         regulationReference:
           `AHSP Bina Marga 2026 ${item.code} · ${item.item} · ` +
           `${item.goldenPackStatus} · ${GOLDEN_FIXTURE_ID}`,
-      },
-    });
-    versionIdByItem.set(item.item, version.id);
+        resources: golden.resources
+          .filter((resource) => resource.item === item.item)
+          .map((resource) => ({
+            resourceId: resource.canonicalCandidate,
+            resourceType: resource.resourceType,
+            coefficient: Number(resource.coefficient),
+            baseUnit: resource.rawUnit,
+          })),
+      })
+      .expect(201);
 
-    for (const resource of golden.resources.filter((r) => r.item === item.item)) {
-      await prisma.aHSPResource.create({
-        data: {
-          ahspVersionId: version.id,
-          resourceId: resource.canonicalCandidate,
-          resourceType: resource.resourceType as never,
-          coefficient: resource.coefficient,
-          baseUnit: resource.rawUnit,
-        },
-      });
-    }
+    versionIdByItem.set(item.item, version.body.id);
   }
 
   // ── The BOQ section, through the route the RAB workspace itself calls ──

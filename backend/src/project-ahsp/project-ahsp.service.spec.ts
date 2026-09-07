@@ -112,11 +112,16 @@ describe('ProjectAhspService E1A', () => {
       },
       region: { findFirst: jest.fn().mockResolvedValue({ id: selectionInput.referenceRegionId }) },
       aHSPVersion: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: selectionInput.ahspVersionId,
-          outputUnit: 'M1',
-          resources,
-          ahsp: ownershipType === null ? null : { ownershipType },
+        findFirst: jest.fn(async ({ where }: { where?: { versionNumber?: { gt?: number } } } = {}) => {
+          if (where?.versionNumber?.gt != null) return null;
+          return {
+            id: selectionInput.ahspVersionId,
+            ahspId: 'ahsp-parent-1',
+            versionNumber: 1,
+            outputUnit: 'M1',
+            resources,
+            ahsp: ownershipType === null ? null : { ownershipType },
+          };
         }),
       },
       resourceCatalog: { findMany: jest.fn().mockResolvedValue([catalog]) },
@@ -134,6 +139,22 @@ describe('ProjectAhspService E1A', () => {
       },
     };
     return { tx, created, catalog, price };
+  };
+
+  const stubCurrentAhspVersion = (
+    tx: { aHSPVersion: { findFirst: jest.Mock } },
+    row: Record<string, unknown>,
+  ) => {
+    tx.aHSPVersion.findFirst.mockImplementation(
+      async ({ where }: { where?: { versionNumber?: { gt?: number } } } = {}) => {
+        if (where?.versionNumber?.gt != null) return null;
+        return {
+          ahspId: 'ahsp-parent-1',
+          versionNumber: 1,
+          ...row,
+        };
+      },
+    );
   };
 
   beforeEach(() => {
@@ -257,10 +278,123 @@ describe('ProjectAhspService E1A', () => {
     });
   });
 
+  it('Q-current: two PUBLISHED snapshots of one parent collapse to the higher versionNumber', async () => {
+    const parent = {
+      id: 'ahsp-parent',
+      workType: 'Pasangan Bata',
+      methodName: 'Manual',
+      workspaceId: null,
+      ownershipType: 'SIMPROK_ASSET',
+    };
+    prisma.aHSPVersion.findMany.mockResolvedValue([
+      {
+        id: 'v5',
+        versionNumber: 5,
+        status: 'PUBLISHED',
+        outputUnit: 'M1',
+        effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+        expiredDate: null,
+        ahsp: parent,
+        _count: { resources: 1 },
+      },
+      {
+        id: 'v4',
+        versionNumber: 4,
+        status: 'PUBLISHED',
+        outputUnit: 'M1',
+        effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+        expiredDate: null,
+        ahsp: parent,
+        _count: { resources: 1 },
+      },
+    ]);
+    const listed = await service.listEligibleVersions(workspaceId, '2026-08-04');
+    expect(listed.map((row: { id: string }) => row.id)).toEqual(['v5']);
+  });
+
+  it('Q-current-parents: two parents each keep their own current snapshot', async () => {
+    const listedShape = (id: string, parentId: string, versionNumber: number) => ({
+      id,
+      versionNumber,
+      status: 'PUBLISHED',
+      outputUnit: 'M1',
+      effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+      expiredDate: null,
+      ahsp: {
+        id: parentId,
+        workType: parentId,
+        methodName: parentId,
+        workspaceId: null,
+        ownershipType: 'SIMPROK_ASSET',
+      },
+      _count: { resources: 1 },
+    });
+    prisma.aHSPVersion.findMany.mockResolvedValue([
+      listedShape('a-current', 'parent-a', 2),
+      listedShape('a-old', 'parent-a', 1),
+      listedShape('b-current', 'parent-b', 1),
+    ]);
+    const listed = await service.listEligibleVersions(workspaceId, '2026-08-04');
+    expect(listed.map((row: { id: string }) => row.id).sort()).toEqual([
+      'a-current',
+      'b-current',
+    ]);
+  });
+
+  it('Q-current-dates: a higher expired revision never reaches currentness; WHERE already excluded it', async () => {
+    const parent = {
+      id: 'ahsp-parent',
+      workType: 'Pasangan Bata',
+      methodName: 'Manual',
+      workspaceId: null,
+      ownershipType: 'SIMPROK_ASSET',
+    };
+    prisma.aHSPVersion.findMany.mockResolvedValue([
+      {
+        id: 'v4-in-date',
+        versionNumber: 4,
+        status: 'PUBLISHED',
+        outputUnit: 'M1',
+        effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+        expiredDate: null,
+        ahsp: parent,
+        _count: { resources: 1 },
+      },
+    ]);
+    const listed = await service.listEligibleVersions(workspaceId, '2026-08-04');
+    expect(listed.map((row: { id: string }) => row.id)).toEqual(['v4-in-date']);
+    const where = prisma.aHSPVersion.findMany.mock.calls[0][0].where;
+    expect(where.effectiveDate.lte).toEqual(new Date('2026-08-04T00:00:00.000Z'));
+    expect(JSON.stringify(where.AND[0])).toContain('expiredDate');
+  });
+
   it('region query returns active regions only', async () => {
     await service.listActiveRegions();
     expect(prisma.region.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { isActive: true } }),
+    );
+  });
+
+  it('S-current: a stale eligible snapshot of the same parent is not bindable for new use', async () => {
+    const { tx } = makeSuccessTx();
+    tx.aHSPVersion.findFirst = jest.fn(async ({ where }: { where?: { versionNumber?: { gt?: number } } }) => {
+      if (where?.versionNumber?.gt != null) {
+        return { id: 'newer-published' };
+      }
+      return {
+        id: selectionInput.ahspVersionId,
+        ahspId: 'ahsp-parent-1',
+        versionNumber: 4,
+        outputUnit: 'M1',
+        resources: [resource('resource-1')],
+        ahsp: { ownershipType: 'USER_ASSET' },
+      };
+    });
+    prisma.$transaction.mockImplementation(async (callback: (client: typeof tx) => unknown) =>
+      callback(tx),
+    );
+    await expect(service.selectForBoqItem(selectionInput)).rejects.toBeInstanceOf(
+      NotFoundException,
     );
   });
 
@@ -662,7 +796,7 @@ describe('ProjectAhspService E1A', () => {
     const { tx, created, catalog } = makeSuccessTx();
     // The AHSP says one thing, the catalog is spelled another — the exact-name
     // path alone could never join these two.
-    tx.aHSPVersion.findFirst.mockResolvedValue({
+    stubCurrentAhspVersion(tx, {
       id: selectionInput.ahspVersionId,
       outputUnit: 'M1',
       resources: [{ ...resource('resource-1'), resourceId: 'Kawat bendrat' }],
@@ -707,7 +841,7 @@ describe('ProjectAhspService E1A', () => {
 
   it('RM03D1: an unproven identity is persisted as a reviewable exception, never as "not found"', async () => {
     const { tx, created, catalog } = makeSuccessTx();
-    tx.aHSPVersion.findFirst.mockResolvedValue({
+    stubCurrentAhspVersion(tx, {
       id: selectionInput.ahspVersionId,
       outputUnit: 'M1',
       resources: [{ ...resource('resource-1'), resourceId: 'Portland Cement' }],
@@ -738,7 +872,7 @@ describe('ProjectAhspService E1A', () => {
 
   it('RM03D1: an exact name whose catalog row claims more than the source lets no money through', async () => {
     const { tx, created, catalog } = makeSuccessTx();
-    tx.aHSPVersion.findFirst.mockResolvedValue({
+    stubCurrentAhspVersion(tx, {
       id: selectionInput.ahspVersionId,
       outputUnit: 'M1',
       resources: [{ ...resource('resource-1'), resourceId: 'Baja tulangan' }],
@@ -773,7 +907,7 @@ describe('ProjectAhspService E1A', () => {
     // one to a resource. Taking the code from the candidate catalog row would
     // make the evidence prove itself, so the channel is passed through empty.
     const { tx, catalog } = makeSuccessTx();
-    tx.aHSPVersion.findFirst.mockResolvedValue({
+    stubCurrentAhspVersion(tx, {
       id: selectionInput.ahspVersionId,
       outputUnit: 'M1',
       resources: [{ ...resource('resource-1'), resourceId: 'Kawat bendrat' }],
@@ -796,7 +930,7 @@ describe('ProjectAhspService E1A', () => {
 
   it('RM03D1: a genuinely unknown resource is still reported as not found, with no candidates', async () => {
     const { tx, created, catalog } = makeSuccessTx();
-    tx.aHSPVersion.findFirst.mockResolvedValue({
+    stubCurrentAhspVersion(tx, {
       id: selectionInput.ahspVersionId,
       outputUnit: 'M1',
       resources: [{ ...resource('resource-1'), resourceId: 'Geotextile Woven' }],
@@ -832,7 +966,7 @@ describe('ProjectAhspService E1A', () => {
         itemType: 'WORK_ITEM',
         unit: boqUnit,
       });
-      made.tx.aHSPVersion.findFirst.mockResolvedValue({
+      stubCurrentAhspVersion(made.tx, {
         id: selectionInput.ahspVersionId,
         outputUnit,
         resources: [resource('resource-1')],

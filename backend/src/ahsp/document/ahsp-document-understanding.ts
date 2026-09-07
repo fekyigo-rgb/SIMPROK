@@ -435,7 +435,7 @@ function parseBlock(
       };
   const outputUnitRaw = readOutputUnit(table, bodyRows);
   const reasons: AhspDocumentReasonCode[] = [...identity.reasons];
-  if (!outputUnitRaw) reasons.push(AHSP_DOCUMENT_REASON.MISSING_UNIT);
+  if (!outputUnitRaw) reasons.push(AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT);
   if (columns.ambiguous) reasons.push(AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY);
 
   let group: AhspResourceGroup | null = null;

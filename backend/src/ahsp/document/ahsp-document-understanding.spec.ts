@@ -151,7 +151,8 @@ describe('AHSP document understanding', () => {
     expect(item.workType?.raw).toBe('B.13');
     expect(item.methodName?.raw).toBe('Pekerjaan saluran contoh');
     expect(item.outputUnitRaw).toBeNull();
-    expect(item.reasonCodes).toContain(AHSP_DOCUMENT_REASON.MISSING_UNIT);
+    expect(item.reasonCodes).toContain(AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT);
+    expect(item.reasonCodes).not.toContain(AHSP_DOCUMENT_REASON.MISSING_UNIT);
     expect(item.status).toBe('UNRESOLVED');
     expect(item.resources[0]).toMatchObject({
       group: 'LABOR',
@@ -208,6 +209,74 @@ describe('AHSP document understanding', () => {
     expect(pekerja?.status).toBe('READY');
   });
 
+  it('keeps a missing resource satuan as MISSING_UNIT, not as a missing output unit', async () => {
+    const { knowledge } = await understandBuffer(
+      await buildAhspAnalisaXlsx((sheet) => {
+        sheet.getCell('F10').value = null;
+      }),
+      'missing-resource-unit.xlsx',
+    );
+    const pekerja = knowledge.workItems[0].resources.find((r) => r.rawName === 'Pekerja');
+    expect(pekerja?.reasonCodes).toContain(AHSP_DOCUMENT_REASON.MISSING_UNIT);
+    expect(pekerja?.reasonCodes).not.toContain(AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT);
+    expect(knowledge.workItems[0].outputUnitRaw?.raw).toBe('m3');
+    expect(knowledge.workItems[0].reasonCodes).toContain(AHSP_DOCUMENT_REASON.MISSING_UNIT);
+    expect(knowledge.workItems[0].reasonCodes).not.toContain(
+      AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT,
+    );
+  });
+
+  it('does not copy a resource satuan onto the work output unit', async () => {
+    const { knowledge } = await understandBuffer(
+      await buildAhspAnalisaXlsx((sheet) => {
+        sheet.getCell('B21').value = 'HARGA SATUAN PEKERJAAN (D + E)';
+        sheet.getCell('F10').value = 'OH';
+        sheet.getCell('F11').value = 'm3';
+      }),
+      'no-guessed-output-unit.xlsx',
+    );
+    const item = knowledge.workItems[0];
+    expect(item.outputUnitRaw).toBeNull();
+    expect(item.reasonCodes).toContain(AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT);
+    expect(item.status).toBe('UNRESOLVED');
+    expect(item.resources[0]).toMatchObject({ rawUnit: 'OH', status: 'READY' });
+    expect(item.resources[1]).toMatchObject({ rawUnit: 'm3', status: 'READY' });
+  });
+
+  it('keeps a proven sibling when another item is unresolved', async () => {
+    const { knowledge } = await understandBuffer(
+      await buildAhspAnalisaXlsx((sheet) => {
+        sheet.getCell('A23').value = 'B.99';
+        sheet.getCell('C23').value = 'Pekerjaan tanpa satuan hasil';
+        sheet.getCell('A24').value = 'No.';
+        sheet.getCell('B24').value = 'Uraian';
+        sheet.getCell('E24').value = 'Kode';
+        sheet.getCell('F24').value = 'Satuan';
+        sheet.getCell('G24').value = 'Koefisien';
+        sheet.getCell('B27').value = 'Tenaga Kerja';
+        sheet.getCell('B28').value = 'Pekerja';
+        sheet.getCell('E28').value = 'L.01';
+        sheet.getCell('F28').value = 'OH';
+        sheet.getCell('G28').value = 0.5;
+        sheet.getCell('B31').value = 'HARGA SATUAN PEKERJAAN (D + E)';
+      }),
+      'mixed-ready-unresolved.xlsx',
+    );
+    expect(knowledge.workItems).toHaveLength(2);
+    const proven = knowledge.workItems.find((item) => item.workType?.raw === '1.7.7.1.1.b (a)');
+    const unresolved = knowledge.workItems.find((item) => item.workType?.raw === 'B.99');
+    expect(proven?.status).toBe('READY');
+    expect(proven?.outputUnitRaw?.raw).toBe('m3');
+    expect(unresolved?.status).toBe('UNRESOLVED');
+    expect(unresolved?.reasonCodes).toContain(AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT);
+    expect(unresolved?.resources[0]).toMatchObject({
+      rawName: 'Pekerja',
+      coefficient: 0.5,
+      status: 'READY',
+    });
+    expect(knowledge.status).toBe('READY');
+  });
+
   it('does not invent methodType or locationType and does not hardcode B1B12 columns', () => {
     const source = readFileSync(join(__dirname, 'ahsp-document-understanding.ts'), 'utf8');
     expect(source).not.toMatch(/methodType/);
@@ -244,5 +313,45 @@ describeGolden('AHSP official source — AHSP ok(1).xlsx', () => {
     );
     expect(missingCoef?.status).toBe('UNRESOLVED');
     expect(missingCoef?.resources.some((r) => r.coefficient === null)).toBe(true);
+  });
+});
+
+const POSITIVE_PATHS = [
+  'C:/SIMPROK/data/first-real-input/Copy of AHSP ok(1).xlsx',
+  'C:/SIMPROK/Copy of AHSP ok(1).xlsx',
+];
+const POSITIVE_SHA256 =
+  'c072b8f6599bfd1a59ecdf2405e9309714e0112fee264d18d915e3a9e60aa192';
+const positivePath = POSITIVE_PATHS.find((path) => existsSync(path)) ?? '';
+const describePositive = positivePath ? describe : describe.skip;
+
+describePositive('AHSP positive source — Copy of AHSP ok(1).xlsx', () => {
+  it('reads explicit output units from the named Owner file, not from resource satuan', async () => {
+    const bytes = readFileSync(positivePath);
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(POSITIVE_SHA256);
+    const { knowledge, read } = await understandBuffer(bytes, 'Copy of AHSP ok(1).xlsx');
+    expect(read.readerId).toBe('XLSX_EXCELJS');
+    expect(knowledge.workItems).toHaveLength(17);
+    expect(knowledge.workItems.filter((item) => item.outputUnitRaw !== null)).toHaveLength(17);
+    const penggalian = knowledge.workItems.find(
+      (item) => item.workType?.raw === '1.7.7.1.1.b (a)',
+    );
+    expect(penggalian?.status).toBe('READY');
+    expect(penggalian?.outputUnitRaw?.raw).toBe('m3');
+    expect(penggalian?.outputUnitRaw?.raw).not.toBe('OH');
+    expect(penggalian?.resources.map((r) => r.rawName)).toEqual(['Pekerja', 'Mandor']);
+    expect(penggalian?.resources.map((r) => r.rawUnit)).toEqual(['OH', 'OH']);
+    expect(penggalian?.resources.map((r) => r.coefficient)).toEqual([0.4, 0.04]);
+    expect(knowledge.workItems.filter((item) => item.status === 'READY')).toHaveLength(13);
+    expect(
+      knowledge.workItems.filter((item) =>
+        item.reasonCodes.includes(AHSP_DOCUMENT_REASON.INVALID_COEFFICIENT),
+      ),
+    ).toHaveLength(4);
+    expect(
+      knowledge.workItems.filter((item) =>
+        item.reasonCodes.includes(AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT),
+      ),
+    ).toHaveLength(0);
   });
 });

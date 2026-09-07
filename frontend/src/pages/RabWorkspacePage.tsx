@@ -1236,7 +1236,7 @@ export function RabWorkspacePage() {
     // frozen RAB is protected by the code and not only by the screen.
     if (!canEditDraft) return;
     if (!projectId || !selectedItem || !selectedAhspVersionId || !selectedRegionId) {
-      setStatusMessage('Pilih AHSP Version dan Region terlebih dahulu.');
+      setStatusMessage('Pilih AHSP dan Region terlebih dahulu.');
       return;
     }
     setIsSelectingAhsp(true);
@@ -3084,14 +3084,14 @@ export function RabWorkspacePage() {
               ) : null}
             </div>
             <div className="simprok-persist-action" aria-label="Pilihan AHSP kontekstual">
-              <label htmlFor="simprok-ahsp-version-selector">AHSP Version</label>
+              <label htmlFor="simprok-ahsp-version-selector">AHSP</label>
               <select
                 id="simprok-ahsp-version-selector"
                 value={selectedAhspVersionId}
                 onChange={(event) => setSelectedAhspVersionId(event.target.value)}
                 disabled={!canEditDraft || isSelectingAhsp}
               >
-                <option value="">Pilih AHSP Version</option>
+                <option value="">Pilih AHSP</option>
                 {eligibleAhspVersions.map((version) => (
                   <option key={version.id} value={version.id}>
                     {formatAhspVersionOption(version)}

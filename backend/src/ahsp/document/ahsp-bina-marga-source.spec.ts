@@ -85,7 +85,7 @@ describeOfficial('AHSP BINA MARGA.xlsx — official real source', () => {
       coefficient: 0.0389,
     });
     expect(first?.outputUnitRaw).toBeNull();
-    expect(first?.reasonCodes).toEqual([AHSP_DOCUMENT_REASON.MISSING_UNIT]);
+    expect(first?.reasonCodes).toEqual([AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT]);
     expect(first?.status).toBe('UNRESOLVED');
     expect(first?.workType?.locator).toBe('B3');
     const hsp = read.tables[0].rows.find(
@@ -110,7 +110,8 @@ describeOfficial('AHSP BINA MARGA.xlsx — official real source', () => {
     expect(resourceRows.filter((row) => row.status === 'READY').length).toBeGreaterThan(1000);
     expect(resourceRows.some((row) => row.rawCode === 'L01')).toBe(true);
     expect(resourceRows.some((row) => row.rawUnit === "M'")).toBe(true);
-    expect(countReasons(knowledge.workItems)[AHSP_DOCUMENT_REASON.MISSING_UNIT]).toBe(71);
+    expect(countReasons(knowledge.workItems)[AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT]).toBe(71);
+    expect(countReasons(knowledge.workItems)[AHSP_DOCUMENT_REASON.MISSING_UNIT]).toBeUndefined();
     expect(resourceRows.filter((row) => row.rawName === 'MATERIAL')).toHaveLength(0);
   });
 });

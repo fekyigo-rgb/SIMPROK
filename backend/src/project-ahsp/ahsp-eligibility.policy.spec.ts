@@ -1,8 +1,11 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { AhspVersionStatus } from '@prisma/client';
 import {
   AHSP_ORIGIN,
   buildEligibleAhspVersionWhere,
   classifyAhspOrigin,
+  pickCurrentApplicableAhspVersions,
 } from './ahsp-eligibility.policy';
 
 /**
@@ -153,5 +156,84 @@ describe('classifyAhspOrigin — honest labelling', () => {
 
   it('never calls a private asset published', () => {
     expect(classifyAhspOrigin(ownAsset, WS)).not.toContain('PUBLISH');
+  });
+});
+
+describe('pickCurrentApplicableAhspVersions — one current snapshot per parent', () => {
+  const row = (
+    id: string,
+    parentId: string,
+    versionNumber: number,
+  ) => ({ id, versionNumber, ahsp: { id: parentId } });
+
+  it('keeps only the highest versionNumber of one parent', () => {
+    expect(
+      pickCurrentApplicableAhspVersions([
+        row('v4', 'ahsp-a', 4),
+        row('v5', 'ahsp-a', 5),
+      ]).map((version) => version.id),
+    ).toEqual(['v5']);
+  });
+
+  it('does not collapse snapshots that belong to different parents', () => {
+    expect(
+      pickCurrentApplicableAhspVersions([
+        row('a1', 'ahsp-a', 1),
+        row('b1', 'ahsp-b', 1),
+      ]).map((version) => version.id),
+    ).toEqual(['a1', 'b1']);
+  });
+
+  it('does not mutate the input rows', () => {
+    const versions = [row('v1', 'ahsp-a', 1), row('v2', 'ahsp-a', 2)];
+    pickCurrentApplicableAhspVersions(versions);
+    expect(versions.map((version) => version.id)).toEqual(['v1', 'v2']);
+  });
+
+  it('has no date or regulation fields — those belong to the WHERE, not this projection', () => {
+    const src = readFileSync(join(__dirname, 'ahsp-eligibility.policy.ts'), 'utf8');
+    const picker = src.slice(
+      src.indexOf('export const pickCurrentApplicableAhspVersions'),
+      src.indexOf('export const classifyAhspOrigin'),
+    );
+    expect(picker).not.toContain('effectiveDate');
+    expect(picker).not.toContain('expiredDate');
+    expect(picker).not.toContain('regulationReference');
+    expect(picker).toContain('versionNumber');
+  });
+});
+
+describe('RAB lock stays on lawful-formula eligibility, not current-applicable projection', () => {
+  it('does not import pickCurrentApplicableAhspVersions', () => {
+    const src = readFileSync(
+      join(__dirname, '../project/rab-lock.service.ts'),
+      'utf8',
+    );
+    expect(src).toContain('buildEligibleAhspVersionWhere');
+    expect(src).not.toContain('pickCurrentApplicableAhspVersions');
+  });
+});
+
+describe('AHSP identity unique is schema filler, not user-facing currentness', () => {
+  it('still uniquely keys parent rows on methodType and locationType', () => {
+    const schema = readFileSync(
+      join(__dirname, '../../prisma/schema.prisma'),
+      'utf8',
+    );
+    expect(schema).toContain(
+      '@@unique([workspaceId, workType, methodType, locationType, methodName])',
+    );
+    expect(schema).toContain('@@unique([ahspId, versionNumber])');
+  });
+
+  it('application create identity does not include methodType or locationType', () => {
+    const src = readFileSync(
+      join(__dirname, '../ahsp/services/ahsp.service.ts'),
+      'utf8',
+    );
+    expect(src).toContain('AHSP_PARENT_IDENTITY_FILLER');
+    expect(src).toContain('AHSP_SOURCE_IDENTITY_EXISTS');
+    expect(src).toContain('methodType: MethodType.OTHER');
+    expect(src).toContain('locationType: LocationType.OTHER');
   });
 });

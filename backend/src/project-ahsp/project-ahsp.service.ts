@@ -15,6 +15,7 @@ import { createHash } from 'crypto';
 import {
   buildEligibleAhspVersionWhere,
   classifyAhspOrigin,
+  pickCurrentApplicableAhspVersions,
 } from './ahsp-eligibility.policy';
 import { resolveAhspResourcePrice } from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
@@ -99,7 +100,12 @@ export class ProjectAhspService {
     // RM-03B: every row carries its own origin so the picker can tell a user
     // "this is your own AHSP" vs "this is the SIMPROK catalog" without the
     // frontend having to re-derive tenancy rules it should not own.
-    return versions.map(({ ahsp, ...version }) => ({
+    //
+    // Current-applicable projection: several PUBLISHED (or private) snapshots
+    // of one parent may still be lawful formulas, but new use is offered only
+    // the current one. The WHERE above is unchanged so RAB lock can still
+    // recognise a historical binding as a lawful formula.
+    return pickCurrentApplicableAhspVersions(versions).map(({ ahsp, ...version }) => ({
       ...version,
       origin: classifyAhspOrigin({ status: version.status, ahsp }, workspaceId),
       ahsp: {
@@ -190,10 +196,9 @@ export class ProjectAhspService {
       });
       if (!region) throw new NotFoundException('REFERENCE_REGION_NOT_FOUND');
 
-      // RM-03B: the SAME predicate the picker used. Building both from one
-      // function is the security property, not a tidiness one — if the list
-      // could offer a version this revalidation would not accept (or worse,
-      // vice versa), the gap between them would be the privilege escalation.
+      // RM-03B: the SAME lawful-formula predicate the picker queried. New-use
+      // currentness is re-checked below (no newer eligible sibling), matching
+      // pickCurrentApplicableAhspVersions on the list path.
       const version = await tx.aHSPVersion.findFirst({
         where: {
           ...buildEligibleAhspVersionWhere(input.workspaceId, asOf),
@@ -208,6 +213,18 @@ export class ProjectAhspService {
         },
       });
       if (!version || version.resources.length === 0) {
+        throw new NotFoundException('ELIGIBLE_AHSP_VERSION_NOT_FOUND');
+      }
+
+      const newerApplicable = await tx.aHSPVersion.findFirst({
+        where: {
+          ...buildEligibleAhspVersionWhere(input.workspaceId, asOf),
+          ahspId: version.ahspId,
+          versionNumber: { gt: version.versionNumber },
+        },
+        select: { id: true },
+      });
+      if (newerApplicable) {
         throw new NotFoundException('ELIGIBLE_AHSP_VERSION_NOT_FOUND');
       }
 

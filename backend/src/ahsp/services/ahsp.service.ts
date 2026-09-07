@@ -20,6 +20,18 @@ export interface UpdateAhspDto {
   methodName?: string;
 }
 
+/**
+ * Parent AHSP identity is source names in a workspace, not SIMPROK's method
+ * or terrain classification. Schema still requires NOT NULL methodType and
+ * locationType; OTHER is the non-interpretive filler. Callers may send
+ * MANUAL/MOUNTAIN; those values are never persisted as identity and never
+ * distinguish two parents.
+ */
+export const AHSP_PARENT_IDENTITY_FILLER = {
+  methodType: MethodType.OTHER,
+  locationType: LocationType.OTHER,
+} as const;
+
 @Injectable()
 export class AhspService {
   private readonly policy = new AhspOwnershipPolicy();
@@ -58,27 +70,23 @@ export class AhspService {
   }
 
   async create(data: CreateAhspDto) {
-    if (!data.workspaceId) {
-      const duplicate = await this.prisma.aHSP.findFirst({
-        where: {
-          workspaceId: null,
-          workType: data.workType,
-          methodType: data.methodType,
-          locationType: data.locationType,
-          methodName: data.methodName,
-          deletedAt: null,
-        }
-      });
-      if (duplicate) throw new ConflictException('AHSP Official already exists.');
-    }
+    const sourceIdentity = {
+      workspaceId: data.workspaceId ?? null,
+      workType: data.workType,
+      methodName: data.methodName,
+      deletedAt: null,
+    };
+    const duplicate = await this.prisma.aHSP.findFirst({
+      where: sourceIdentity,
+    });
+    if (duplicate) throw new ConflictException('AHSP_SOURCE_IDENTITY_EXISTS');
 
     const ahsp = await this.prisma.aHSP.create({
       data: {
         workspaceId: data.workspaceId,
         workType: data.workType,
-        methodType: data.methodType,
-        locationType: data.locationType,
         methodName: data.methodName,
+        ...AHSP_PARENT_IDENTITY_FILLER,
         createdByUserId: data.userId,
         ownershipType: 'USER_ASSET',
         reviewStatus: 'PENDING',
@@ -164,11 +172,15 @@ export class AhspService {
     this.runPolicy(p => p.canUpdate(ahsp as AhspEntity, reason));
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // HTTP PATCH forwards the raw body, which still carries reason/userId and
+      // may carry methodType/locationType. Parent identity is source names only;
+      // classification and request metadata must never be persisted here.
+      const identitySafe: { workType?: string; methodName?: string } = {};
+      if (updateData.workType !== undefined) identitySafe.workType = updateData.workType;
+      if (updateData.methodName !== undefined) identitySafe.methodName = updateData.methodName;
       const updatedAhsp = await tx.aHSP.update({
         where: { id },
-        data: {
-          ...updateData,
-        },
+        data: identitySafe,
       });
 
       await this.audit.logAction({
