@@ -78,9 +78,23 @@ test("interpretation and internal governance are not official AHSP facts", () =>
   assert.ok(!detail.includes("Disetujui oleh"));
   assert.ok(!detail.includes("Dipindahkan oleh"));
   assert.ok(detail.includes("Riwayat"));
-  assert.ok(detail.includes("Bukan alternatif AHSP"));
-  assert.ok(detail.includes("ruang kerja RAB"));
+  assert.ok(detail.includes("AHSP yang saat ini digunakan SIMPROK"));
+  assert.ok(detail.includes("Riwayat perubahan AHSP"));
+  assert.ok(!detail.includes("ruang kerja RAB"));
   assert.ok(!detail.includes("yang dipakai untuk penggunaan baru"));
+  assert.ok(!detail.includes("Ketersediaan"));
+  assert.ok(!detail.includes("Halaman"));
+  assert.ok(!detail.includes("Bagian"));
+  assert.ok(!detail.includes("Berlaku sampai"));
+  assert.ok(!detail.includes("Usulkan ke SIMPROK"));
+});
+
+test("update AHSP is an editor of the current recipe, not a blank composer", () => {
+  assert.ok(detail.includes("draftsFromVersion"));
+  assert.ok(detail.includes("row.coefficient > 0"));
+  assert.ok(detail.includes("setResourceDrafts(draftsFromVersion(current))"));
+  assert.ok(!detail.includes("setOutputUnit('')"));
+  assert.ok(!detail.includes("setResourceDrafts([emptyResource()])"));
 });
 
 test("components are grouped from stored version resources", () => {

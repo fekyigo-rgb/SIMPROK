@@ -113,9 +113,14 @@ test("C the room opens the existing definition by id, never a project bind", () 
   assert.ok(room.includes("method: 'POST'"), "workspace create uses existing POST /ahsp");
   assert.ok(room.includes("/ahsp/document/preview"), "document understanding uses the existing AHSP door");
   assert.ok(room.includes("/ahsp/document/commit"), "canonical write stays on the existing AHSP door");
-  assert.ok(room.includes("Dikenali:"), "preview must count recognized work items separately from READY");
-  assert.ok(room.includes("Terbukti:"), "preview must count READY items");
-  assert.ok(room.includes("Belum terbukti:"), "preview must count unresolved items");
+  assert.ok(room.includes("pekerjaan dikenali"), "preview must count recognized work items");
+  assert.ok(room.includes("siap digunakan"), "preview must count READY items without calling them Terbukti in the list");
+  assert.ok(room.includes("masih perlu dilengkapi"), "preview must count unresolved items without dumping reason codes");
+  assert.ok(room.includes("item.status === 'READY'"), "Dikenali vs Terbukti stays a status distinction, not a new engine");
+  assert.ok(!room.includes("MISSING_OUTPUT_UNIT"), "reason codes are not the room's user language");
+  assert.ok(!room.includes("RESOURCE_UNRESOLVED"));
+  assert.ok(!room.includes("INVALID_COEFFICIENT"));
+  assert.ok(!room.includes("MISSING_WORK_ITEM"));
   assert.ok(!room.includes("WAVE2"), "file understanding is no longer named as absent");
   assert.ok(!room.includes("Menunggu mesin"), "do not leave a fake waiting door");
   assert.ok(!room.includes("createImportJob"), "do not wire the pending-job stub");
@@ -143,7 +148,7 @@ test("the room invents no data", () => {
   assert.ok(!room.includes("fixture"), "no fixture may stand in for database truth");
   assert.ok(!/const\s+\w*[Rr]ows\s*[:=]\s*\[\s*\{/.test(room), "no hardcoded AHSP rows");
   assert.ok(!room.includes("_count?.versions"), "historical revision count is not an AHSP fact");
-  assert.ok(room.includes("state.rows.map((row)"), "the list is persisted GET /ahsp rows");
+  assert.ok(room.includes("visibleRows.map((row)"), "the list is persisted GET /ahsp rows, filtered in the room");
   assert.ok(
     room.includes("const reload = await apiFetch('/ahsp')"),
     "after commit the room reloads the live list, not a fixture",
@@ -165,7 +170,12 @@ test("the room does not present SIMPROK interpretation as official AHSP identity
 test("the room names private AHSP as milik pengguna, not as a version picker", () => {
   assert.ok(room.includes("AHSP Milik Saya"));
   assert.ok(room.includes("AHSP Saya"));
-  assert.ok(room.includes("terlihat di workspace ini"));
+  assert.ok(room.includes("Pustaka SIMPROK"));
+  assert.ok(room.includes("AHSP yang tersedia"));
+  assert.ok(room.includes("Cari AHSP"));
+  assert.ok(!room.includes("Ketersediaan"));
+  assert.ok(!room.includes("Cipta Karya"));
+  assert.ok(!room.includes("Bina Marga"));
   assert.ok(!room.includes("eligible-versions"));
 });
 
