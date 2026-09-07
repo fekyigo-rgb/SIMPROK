@@ -259,7 +259,7 @@ export function AhspRoomPage() {
           {preview ? (
             <div style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: NAVY }}>
               <p>
-                {preview.workItems.length} pekerjaan. Terbukti:{' '}
+                Dikenali: {preview.workItems.length}. Terbukti:{' '}
                 {preview.workItems.filter((item) => item.status === 'READY').length}. Belum terbukti:{' '}
                 {preview.workItems.filter((item) => item.status !== 'READY').length}.
               </p>

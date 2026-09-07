@@ -113,6 +113,7 @@ test("C the room opens the existing definition by id, never a project bind", () 
   assert.ok(room.includes("method: 'POST'"), "workspace create uses existing POST /ahsp");
   assert.ok(room.includes("/ahsp/document/preview"), "document understanding uses the existing AHSP door");
   assert.ok(room.includes("/ahsp/document/commit"), "canonical write stays on the existing AHSP door");
+  assert.ok(room.includes("Dikenali:"), "preview must count recognized work items separately from READY");
   assert.ok(room.includes("Terbukti:"), "preview must count READY items");
   assert.ok(room.includes("Belum terbukti:"), "preview must count unresolved items");
   assert.ok(!room.includes("WAVE2"), "file understanding is no longer named as absent");
@@ -142,6 +143,11 @@ test("the room invents no data", () => {
   assert.ok(!room.includes("fixture"), "no fixture may stand in for database truth");
   assert.ok(!/const\s+\w*[Rr]ows\s*[:=]\s*\[\s*\{/.test(room), "no hardcoded AHSP rows");
   assert.ok(!room.includes("_count?.versions"), "historical revision count is not an AHSP fact");
+  assert.ok(room.includes("state.rows.map((row)"), "the list is persisted GET /ahsp rows");
+  assert.ok(
+    room.includes("const reload = await apiFetch('/ahsp')"),
+    "after commit the room reloads the live list, not a fixture",
+  );
 });
 
 test("the room does not present SIMPROK interpretation as official AHSP identity", () => {

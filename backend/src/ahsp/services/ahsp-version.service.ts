@@ -40,6 +40,7 @@ export class AhspVersionService {
     const outputResolution = await this.units.resolve(data.outputUnit, data.outputUnit);
     if (outputResolution.status !== 'RESOLVED' || !outputResolution.sourceUnitDefinition)
       throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
+    const outputUnitDefinitionId = outputResolution.sourceUnitDefinition.id;
 
     const ahsp = await this.prisma.aHSP.findUnique({ where: { id: ahspId } });
     if (!ahsp) throw new NotFoundException('AHSP not found');
@@ -53,36 +54,92 @@ export class AhspVersionService {
       throw new NotFoundException('AHSP not found');
     }
 
-    const lastVersion = await this.prisma.aHSPVersion.findFirst({
-      where: { ahspId },
-      orderBy: { versionNumber: 'desc' }
-    });
-    const versionNumber = lastVersion ? lastVersion.versionNumber + 1 : 1;
+    // Append a new revision, then retire prior private revisions so the new
+    // one is the only current applicable AHSP. History is kept: SUPERSEDED
+    // versions remain readable and already-bound occurrences keep their
+    // ahspVersionId. PUBLISHED catalog rows are not withdrawn here — that is
+    // a different authority, the same boundary retireVersion already keeps.
+    return this.prisma.$transaction(async (tx) => {
+      const lastVersion = await tx.aHSPVersion.findFirst({
+        where: { ahspId },
+        orderBy: { versionNumber: 'desc' },
+      });
+      const versionNumber = lastVersion ? lastVersion.versionNumber + 1 : 1;
 
-    const version = await this.prisma.aHSPVersion.create({
-      data: {
-        ahspId,
-        workspaceId: data.workspaceId || ahsp.workspaceId,
-        versionNumber,
-        status: AhspVersionStatus.DRAFT,
-        regulationReference: data.regulationReference,
-        effectiveDate: data.effectiveDate,
-        outputUnit: data.outputUnit,
-        outputUnitDefinitionId: outputResolution.sourceUnitDefinition.id,
-        resources: {
-          create: data.resources.map(r => ({
-            resourceId: r.resourceId,
-            resourceType: r.resourceType,
-            coefficient: r.coefficient,
-            baseUnit: r.baseUnit
-          }))
+      const version = await tx.aHSPVersion.create({
+        data: {
+          ahspId,
+          workspaceId: data.workspaceId || ahsp.workspaceId,
+          versionNumber,
+          status: AhspVersionStatus.DRAFT,
+          regulationReference: data.regulationReference,
+          effectiveDate: data.effectiveDate,
+          outputUnit: data.outputUnit,
+          outputUnitDefinitionId,
+          resources: {
+            create: data.resources.map(r => ({
+              resourceId: r.resourceId,
+              resourceType: r.resourceType,
+              coefficient: r.coefficient,
+              baseUnit: r.baseUnit,
+            })),
+          },
+        },
+        include: { resources: true },
+      });
+
+      await this.audit.logAction(
+        {
+          ahspId,
+          ahspVersionId: version.id,
+          action: 'AHSPVersionCreated',
+          who: data.userId,
+          after: version,
+        },
+        tx,
+      );
+
+      const callerOwnsPrivateParent =
+        ahsp.ownershipType === 'USER_ASSET' &&
+        ahsp.workspaceId !== null &&
+        ahsp.workspaceId === data.workspaceId;
+      if (callerOwnsPrivateParent) {
+        const predecessors = await tx.aHSPVersion.findMany({
+          where: {
+            ahspId,
+            id: { not: version.id },
+            workspaceId: data.workspaceId,
+            status: {
+              notIn: [
+                AhspVersionStatus.PUBLISHED,
+                AhspVersionStatus.SUPERSEDED,
+                AhspVersionStatus.ARCHIVED,
+              ],
+            },
+          },
+        });
+        for (const predecessor of predecessors) {
+          const superseded = await tx.aHSPVersion.update({
+            where: { id: predecessor.id },
+            data: { status: AhspVersionStatus.SUPERSEDED },
+          });
+          await this.audit.logAction(
+            {
+              ahspId,
+              ahspVersionId: predecessor.id,
+              action: 'AHSPVersionSUPERSEDED',
+              who: data.userId,
+              before: predecessor,
+              after: superseded,
+              reason: 'AHSP_UPDATED',
+            },
+            tx,
+          );
         }
-      },
-      include: { resources: true }
-    });
+      }
 
-    await this.audit.logAction({ ahspId, ahspVersionId: version.id, action: 'AHSPVersionCreated', who: data.userId, after: version });
-    return version;
+      return version;
+    });
   }
 
   async updateStatus(versionId: string, newStatus: AhspVersionStatus, userId: string, reason?: string) {

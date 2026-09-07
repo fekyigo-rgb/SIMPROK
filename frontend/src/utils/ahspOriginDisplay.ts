@@ -36,7 +36,7 @@ export const formatAhspVersionOption = (version: {
   outputUnit: string;
   ahsp: { workType: string; methodName: string };
 }): string =>
-  `[${describeAhspOrigin(version.origin)}] ${version.ahsp.workType} — ${version.ahsp.methodName} · v${version.versionNumber} · ${version.outputUnit}`;
+  `[${describeAhspOrigin(version.origin)}] ${version.ahsp.workType} — ${version.ahsp.methodName} · ${version.outputUnit}`;
 
 /**
  * True only for a genuinely private asset. Used to decide whether to show the

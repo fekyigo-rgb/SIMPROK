@@ -12,10 +12,12 @@ import {
 /**
  * THE room's own detail — not a second AHSP room, not the RAB preview.
  *
- * Reads GET /ahsp/:id. Mutations call the existing AhspController routes:
- * approve, archive, transfer, createVersion, retire, snapshot. Official
- * Repository rows (workspaceId null) stay read-only here because withdrawing
- * national reference data is not one workspace's decision.
+ * Reads GET /ahsp/:id. Update appends a historical revision through the
+ * existing POST /ahsp/:id/versions route. Historical revisions stay visible
+ * as provenance, never as alternative AHSPs to activate.
+ *
+ * Internal curation (approve / archive / transfer / retire / snapshot) stays
+ * on the existing API. It is not AHSP identity for an ordinary user.
  */
 
 type AhspVersion = {
@@ -35,17 +37,8 @@ type AhspDetail = {
   id: string;
   workspaceId: string | null;
   workType: string | null;
-  methodType: string | null;
-  locationType: string | null;
   methodName: string | null;
-  ownershipType: string | null;
-  reviewStatus: string | null;
   archivedAt: string | null;
-  approvedAt: string | null;
-  approvedByName: string | null;
-  approvedByEmail: string | null;
-  ownershipTransferredAt: string | null;
-  ownershipTransferredByName: string | null;
   versions?: AhspVersion[] | null;
 };
 
@@ -80,9 +73,6 @@ const orDash = (value: string | number | null | undefined) =>
     <>{String(value)}</>
   );
 
-const originLabel = (workspaceId: string | null) =>
-  workspaceId === null ? 'Repositori Resmi' : 'Workspace ini';
-
 const field: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '11rem 1fr',
@@ -102,30 +92,29 @@ const emptyResource = (): ResourceDraft => ({
   baseUnit: '',
 });
 
+const isHistoricalStatus = (status: string | null | undefined) =>
+  status === 'SUPERSEDED' || status === 'ARCHIVED';
+
+const formatStoredDate = (value: string | null) => {
+  if (!value) return null;
+  const day = value.slice(0, 10);
+  return day.length === 10 ? day : value;
+};
+
 export function AhspDetailPage() {
   const { ahspId } = useParams<{ ahspId: string }>();
   const { hasPermission } = useAuth();
   const canManage = hasPermission('AHSP_MANAGE');
-  const canApprove = hasPermission('AHSP_APPROVE');
   const [state, setState] = useState<DetailState>({ phase: 'LOADING' });
-  const [versionId, setVersionId] = useState<string | null>(null);
-  const [reason, setReason] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [outputUnit, setOutputUnit] = useState('');
   const [regulationReference, setRegulationReference] = useState('');
+  const [effectiveDate, setEffectiveDate] = useState('');
   const [resourceDrafts, setResourceDrafts] = useState<ResourceDraft[]>([emptyResource()]);
 
-  const applyPayload = useCallback((data: AhspDetail, preserveVersionId: string | null) => {
+  const applyPayload = useCallback((data: AhspDetail) => {
     setState({ phase: 'READY', ahsp: data });
-    const versions = data.versions ?? [];
-    const keep =
-      preserveVersionId && versions.some((version) => version.id === preserveVersionId)
-        ? preserveVersionId
-        : versions[0]
-          ? versions[0].id
-          : null;
-    setVersionId(keep);
   }, []);
 
   useEffect(() => {
@@ -155,7 +144,7 @@ export function AhspDetailPage() {
         }
         const data = (await response.json()) as AhspDetail;
         if (!active) return;
-        applyPayload(data, null);
+        applyPayload(data);
       } catch {
         if (!active) return;
         setState({ phase: 'FAILED', message: 'AHSP tidak dapat dihubungi.' });
@@ -167,47 +156,30 @@ export function AhspDetailPage() {
     };
   }, [ahspId, applyPayload]);
 
-  const selectedVersion = useMemo(() => {
+  const currentVersion = useMemo(() => {
     if (state.phase !== 'READY') return null;
     const versions = state.ahsp.versions ?? [];
-    return versions.find((version) => version.id === versionId) ?? versions[0] ?? null;
-  }, [state, versionId]);
+    return versions[0] ?? null;
+  }, [state]);
+
+  const historicalVersions = useMemo(() => {
+    if (state.phase !== 'READY') return [];
+    return (state.ahsp.versions ?? []).slice(1);
+  }, [state]);
 
   const groups: AhspDefinitionComponentGroup[] = useMemo(
-    () => groupAhspDefinitionResources(selectedVersion?.resources),
-    [selectedVersion],
+    () => groupAhspDefinitionResources(currentVersion?.resources),
+    [currentVersion],
   );
 
-  const reload = async (preserveVersionId: string | null) => {
+  const reload = async () => {
     if (!ahspId) return;
     const response = await apiFetch('/ahsp/' + ahspId);
     if (!response.ok) {
       setActionError('AHSP tidak dapat dibaca ulang (HTTP ' + response.status + ').');
       return;
     }
-    applyPayload((await response.json()) as AhspDetail, preserveVersionId);
-  };
-
-  const runAction = async (path: string, body: Record<string, unknown>, preserveVersionId: string | null) => {
-    if (busy) return;
-    setBusy(true);
-    setActionError(null);
-    try {
-      const response = await apiFetch(path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) {
-        setActionError('Tindakan ditolak (HTTP ' + response.status + ').');
-        return;
-      }
-      await reload(preserveVersionId);
-    } catch {
-      setActionError('Tindakan tidak dapat dihubungi.');
-    } finally {
-      setBusy(false);
-    }
+    applyPayload((await response.json()) as AhspDetail);
   };
 
   const addVersion = async (event: React.FormEvent) => {
@@ -230,20 +202,21 @@ export function AhspDetailPage() {
         body: JSON.stringify({
           outputUnit: outputUnit.trim(),
           regulationReference: regulationReference.trim() || undefined,
+          effectiveDate: effectiveDate.trim() ? new Date(effectiveDate.trim()).toISOString() : undefined,
           resources,
         }),
       });
       if (!response.ok) {
-        setActionError('Versi tidak dapat dibuat (HTTP ' + response.status + ').');
+        setActionError('Pembaruan AHSP tidak dapat disimpan (HTTP ' + response.status + ').');
         return;
       }
-      const created = (await response.json()) as { id?: string };
-      await reload(typeof created.id === 'string' ? created.id : null);
+      await reload();
       setOutputUnit('');
       setRegulationReference('');
+      setEffectiveDate('');
       setResourceDrafts([emptyResource()]);
     } catch {
-      setActionError('Versi tidak dapat dihubungi.');
+      setActionError('Pembaruan AHSP tidak dapat dihubungi.');
     } finally {
       setBusy(false);
     }
@@ -251,10 +224,6 @@ export function AhspDetailPage() {
 
   const workspaceOwned = state.phase === 'READY' && state.ahsp.workspaceId !== null;
   const archived = state.phase === 'READY' && Boolean(state.ahsp.archivedAt);
-  const approved = state.phase === 'READY' && state.ahsp.reviewStatus === 'APPROVED';
-  const userAsset = state.phase === 'READY' && state.ahsp.ownershipType === 'USER_ASSET';
-  const retired =
-    selectedVersion?.status === 'SUPERSEDED' || selectedVersion?.status === 'ARCHIVED';
 
   return (
     <main aria-label="Detail AHSP" style={{ padding: 'var(--space-6, 1.5rem)' }}>
@@ -288,10 +257,6 @@ export function AhspDetailPage() {
 
           <section aria-label="Identitas AHSP" style={{ maxWidth: '48rem', marginBottom: 'var(--space-6)' }}>
             <div style={field}>
-              <p style={labelStyle}>Kode AHSP</p>
-              <p style={valueStyle}>{orDash(null)}</p>
-            </div>
-            <div style={field}>
               <p style={labelStyle}>Uraian</p>
               <p style={valueStyle}>{orDash(state.ahsp.methodName)}</p>
             </div>
@@ -300,218 +265,126 @@ export function AhspDetailPage() {
               <p style={valueStyle}>{orDash(state.ahsp.workType)}</p>
             </div>
             <div style={field}>
-              <p style={labelStyle}>Bidang</p>
-              <p style={valueStyle}>{orDash(null)}</p>
-            </div>
-            <div style={field}>
-              <p style={labelStyle}>Tipe metode</p>
-              <p style={valueStyle}>{orDash(state.ahsp.methodType)}</p>
-            </div>
-            <div style={field}>
-              <p style={labelStyle}>Lokasi</p>
-              <p style={valueStyle}>{orDash(state.ahsp.locationType)}</p>
-            </div>
-            <div style={field}>
-              <p style={labelStyle}>Asal</p>
-              <p style={valueStyle}>{originLabel(state.ahsp.workspaceId)}</p>
-            </div>
-            <div style={field}>
               <p style={labelStyle}>Kepemilikan</p>
-              <p style={valueStyle}>{orDash(state.ahsp.ownershipType)}</p>
-            </div>
-            <div style={field}>
-              <p style={labelStyle}>Status tinjauan</p>
               <p style={valueStyle}>
-                {orDash(state.ahsp.reviewStatus)}
-                {state.ahsp.archivedAt ? <span style={{ color: MUTED }}> · Diarsipkan</span> : null}
+                {state.ahsp.workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya'}
               </p>
             </div>
             <div style={field}>
-              <p style={labelStyle}>Disetujui oleh</p>
-              <p style={valueStyle}>{orDash(state.ahsp.approvedByName)}</p>
+              <p style={labelStyle}>Ketersediaan</p>
+              <p style={valueStyle}>{state.ahsp.archivedAt ? 'Tidak berlaku' : 'Tersedia'}</p>
             </div>
             <div style={field}>
-              <p style={labelStyle}>Dipindahkan oleh</p>
-              <p style={valueStyle}>{orDash(state.ahsp.ownershipTransferredByName)}</p>
+              <p style={labelStyle}>Satuan</p>
+              <p style={valueStyle}>{orDash(currentVersion?.outputUnit)}</p>
+            </div>
+            <div style={field}>
+              <p style={labelStyle}>Sumber / peraturan</p>
+              <p style={valueStyle}>{orDash(currentVersion?.regulationReference)}</p>
+            </div>
+            <div style={field}>
+              <p style={labelStyle}>Halaman</p>
+              <p style={valueStyle}>{orDash(currentVersion?.regulationPage)}</p>
+            </div>
+            <div style={field}>
+              <p style={labelStyle}>Bagian</p>
+              <p style={valueStyle}>{orDash(currentVersion?.regulationSection)}</p>
+            </div>
+            <div style={field}>
+              <p style={labelStyle}>Berlaku dari</p>
+              <p style={valueStyle}>{orDash(formatStoredDate(currentVersion?.effectiveDate ?? null))}</p>
+            </div>
+            <div style={field}>
+              <p style={labelStyle}>Berlaku sampai</p>
+              <p style={valueStyle}>{orDash(formatStoredDate(currentVersion?.expiredDate ?? null))}</p>
             </div>
           </section>
 
-          {workspaceOwned && !archived ? (
-            <section aria-label="Tata kelola AHSP" style={{ maxWidth: '48rem', marginBottom: 'var(--space-6)' }}>
-              <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
-                Tata kelola
-              </h2>
-              <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
-                Memakai rute AhspController yang sudah ada. Bukan katalog kedua,
-                bukan Repositori Resmi. Alih kepemilikan mengubah ownershipType
-                setelah disetujui, bukan workspaceId.
-              </p>
-              <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
-                Alasan (wajib untuk arsip, alih kepemilikan, dan tarik versi)
-                <textarea
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                  aria-label="Alasan tata kelola"
-                  rows={2}
-                  style={{ display: 'block', width: '100%', color: NAVY }}
-                />
-              </label>
-              {canApprove && !approved ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  style={actionButton}
-                  onClick={() => void runAction('/ahsp/' + state.ahsp.id + '/approve', {}, versionId)}
-                >
-                  Setujui
-                </button>
-              ) : null}
-              {canManage ? (
-                <button
-                  type="button"
-                  disabled={busy || reason.trim() === ''}
-                  style={actionButton}
-                  onClick={() =>
-                    void runAction('/ahsp/' + state.ahsp.id + '/archive', { reason: reason.trim() }, versionId)
-                  }
-                >
-                  Arsipkan
-                </button>
-              ) : null}
-              {canManage && approved && userAsset ? (
-                <button
-                  type="button"
-                  disabled={busy || reason.trim() === ''}
-                  style={actionButton}
-                  onClick={() =>
-                    void runAction(
-                      '/ahsp/' + state.ahsp.id + '/transfer',
-                      { reason: reason.trim(), targetOwnershipType: 'APPROVED_COMMUNITY_ASSET' },
-                      versionId,
-                    )
-                  }
-                >
-                  Alihkan ke aset komunitas yang disetujui
-                </button>
-              ) : null}
-              {actionError ? (
-                <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
-                  {actionError}
-                </p>
-              ) : null}
-            </section>
-          ) : null}
-
-          <section aria-label="Versi AHSP" style={{ marginBottom: 'var(--space-6)' }}>
-            <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>Versi</h2>
-            {!state.ahsp.versions || state.ahsp.versions.length === 0 ? (
-              <section className="simprok-honest-frame" aria-label="Versi AHSP kosong">
+          <section aria-label="AHSP yang berlaku" style={{ marginBottom: 'var(--space-6)' }}>
+            <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
+              AHSP yang berlaku
+            </h2>
+            {!currentVersion ? (
+              <section className="simprok-honest-frame" aria-label="AHSP belum lengkap">
                 <span className="simprok-honest-frame__badge">Belum ada data</span>
-                <p>AHSP ini belum memiliki versi.</p>
+                <p>AHSP ini belum memiliki rumus yang tersimpan.</p>
+              </section>
+            ) : isHistoricalStatus(currentVersion.status) ? (
+              <section className="simprok-honest-frame" aria-label="AHSP tidak berlaku">
+                <span className="simprok-honest-frame__badge">Tidak berlaku</span>
+                <p>Tidak ada AHSP berlaku. Riwayat tetap disimpan untuk audit.</p>
               </section>
             ) : (
-              <>
-                <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
-                  Versi yang ditampilkan
-                  <select
-                    aria-label="Versi AHSP"
-                    value={selectedVersion?.id ?? ''}
-                    onChange={(event) => setVersionId(event.target.value)}
-                    style={{ display: 'block', marginTop: 'var(--space-1)', color: NAVY }}
-                  >
-                    {state.ahsp.versions.map((version) => (
-                      <option key={version.id} value={version.id}>
-                        {version.versionNumber == null ? '—' : 'Versi ' + version.versionNumber}
-                        {version.status ? ' · ' + version.status : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div style={field}>
-                  <p style={labelStyle}>Status versi</p>
-                  <p style={valueStyle}>{orDash(selectedVersion?.status)}</p>
-                </div>
-                <div style={field}>
-                  <p style={labelStyle}>Satuan output</p>
-                  <p style={valueStyle}>{orDash(selectedVersion?.outputUnit)}</p>
-                </div>
-                <div style={field}>
-                  <p style={labelStyle}>Sumber / peraturan</p>
-                  <p style={valueStyle}>{orDash(selectedVersion?.regulationReference)}</p>
-                </div>
-                <div style={field}>
-                  <p style={labelStyle}>Halaman</p>
-                  <p style={valueStyle}>{orDash(selectedVersion?.regulationPage)}</p>
-                </div>
-                <div style={field}>
-                  <p style={labelStyle}>Bagian</p>
-                  <p style={valueStyle}>{orDash(selectedVersion?.regulationSection)}</p>
-                </div>
-                {workspaceOwned && canManage && selectedVersion && !retired ? (
-                  <div style={{ marginTop: 'var(--space-3)' }}>
-                    <button
-                      type="button"
-                      disabled={busy || reason.trim() === ''}
-                      style={actionButton}
-                      onClick={() =>
-                        void runAction(
-                          '/ahsp/versions/' + selectedVersion.id + '/retire',
-                          { status: 'SUPERSEDED', reason: reason.trim() },
-                          selectedVersion.id,
-                        )
-                      }
-                    >
-                      Tarik versi (diganti)
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy || reason.trim() === ''}
-                      style={actionButton}
-                      onClick={() =>
-                        void runAction(
-                          '/ahsp/versions/' + selectedVersion.id + '/retire',
-                          { status: 'ARCHIVED', reason: reason.trim() },
-                          selectedVersion.id,
-                        )
-                      }
-                    >
-                      Tarik versi (diarsipkan)
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      style={actionButton}
-                      onClick={() =>
-                        void runAction(
-                          '/ahsp/versions/' + selectedVersion.id + '/snapshot',
-                          {},
-                          selectedVersion.id,
-                        )
-                      }
-                    >
-                      Bekukan versi ini
-                    </button>
-                  </div>
-                ) : null}
-              </>
+              <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 0 }}>
+                Ini rumus AHSP terkini yang tercatat pada identitas ini. Pemilihan
+                untuk pekerjaan RAB dilakukan di ruang kerja RAB, bukan di layar ini.
+              </p>
             )}
           </section>
 
-          {workspaceOwned && canManage && !archived ? (
-            <form aria-label="Tambah versi AHSP" onSubmit={addVersion} style={{ marginBottom: 'var(--space-6)' }}>
+          {historicalVersions.length > 0 ? (
+            <section aria-label="Riwayat AHSP" style={{ marginBottom: 'var(--space-6)' }}>
               <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
-                Tambah versi
+                Riwayat
               </h2>
               <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
-                Memakai POST /ahsp/:id/versions. Satuan output diselesaikan Unit Kernel yang sudah ada.
+                Jejak historis untuk audit. Bukan alternatif AHSP yang dapat dipilih.
+              </p>
+              <table
+                style={{ width: '100%', maxWidth: '48rem', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}
+              >
+                <thead>
+                  <tr style={{ textAlign: 'left', color: NAVY }}>
+                    <th style={{ padding: 'var(--space-2)', borderBottom: '1px solid var(--simprok-engineering-blue-100)' }}>
+                      Sumber / peraturan
+                    </th>
+                    <th style={{ padding: 'var(--space-2)', borderBottom: '1px solid var(--simprok-engineering-blue-100)' }}>
+                      Berlaku dari
+                    </th>
+                    <th style={{ padding: 'var(--space-2)', borderBottom: '1px solid var(--simprok-engineering-blue-100)' }}>
+                      Jejak
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historicalVersions.map((version) => (
+                    <tr key={version.id}>
+                      <td style={{ padding: 'var(--space-2)', borderBottom: '1px solid var(--simprok-engineering-blue-100)', color: NAVY }}>
+                        {version.regulationReference || '—'}
+                      </td>
+                      <td style={{ padding: 'var(--space-2)', borderBottom: '1px solid var(--simprok-engineering-blue-100)' }}>
+                        {formatStoredDate(version.effectiveDate) || '—'}
+                      </td>
+                      <td style={{ padding: 'var(--space-2)', borderBottom: '1px solid var(--simprok-engineering-blue-100)' }}>
+                        {version.status === 'SUPERSEDED'
+                          ? 'Diganti'
+                          : version.status === 'ARCHIVED'
+                            ? 'Diarsipkan'
+                            : 'Riwayat'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          ) : null}
+
+          {workspaceOwned && canManage && !archived ? (
+            <form aria-label="Update AHSP" onSubmit={addVersion} style={{ marginBottom: 'var(--space-6)' }}>
+              <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
+                Update AHSP
+              </h2>
+              <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
+                Memperbarui AHSP dari sumber sah terbaru. Jejak sebelumnya tetap
+                tersimpan dan tidak dihapus.
               </p>
               <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
-                Satuan output
+                Satuan
                 <input
                   required
                   value={outputUnit}
                   onChange={(event) => setOutputUnit(event.target.value)}
-                  aria-label="Satuan output versi"
+                  aria-label="Satuan AHSP"
                   style={{ display: 'block', color: NAVY }}
                 />
               </label>
@@ -520,8 +393,18 @@ export function AhspDetailPage() {
                 <input
                   value={regulationReference}
                   onChange={(event) => setRegulationReference(event.target.value)}
-                  aria-label="Sumber peraturan versi"
+                  aria-label="Sumber peraturan AHSP"
                   style={{ display: 'block', width: '100%', maxWidth: '36rem', color: NAVY }}
+                />
+              </label>
+              <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
+                Tanggal berlaku menurut sumber
+                <input
+                  type="date"
+                  value={effectiveDate}
+                  onChange={(event) => setEffectiveDate(event.target.value)}
+                  aria-label="Tanggal berlaku menurut sumber"
+                  style={{ display: 'block', color: NAVY }}
                 />
               </label>
               {resourceDrafts.map((row, index) => (
@@ -542,7 +425,7 @@ export function AhspDetailPage() {
                     style={{ marginRight: 'var(--space-2)', color: NAVY }}
                   />
                   <select
-                    aria-label={'Tipe sumber daya ' + (index + 1)}
+                    aria-label={'Jenis sumber daya ' + (index + 1)}
                     value={row.resourceType}
                     onChange={(event) => {
                       const next = [...resourceDrafts];
@@ -554,9 +437,9 @@ export function AhspDetailPage() {
                     }}
                     style={{ marginRight: 'var(--space-2)', color: NAVY }}
                   >
-                    <option value="LABOR">LABOR</option>
-                    <option value="MATERIAL">MATERIAL</option>
-                    <option value="EQUIPMENT">EQUIPMENT</option>
+                    <option value="LABOR">Tenaga</option>
+                    <option value="MATERIAL">Bahan</option>
+                    <option value="EQUIPMENT">Peralatan</option>
                   </select>
                   <input
                     placeholder="Satuan"
@@ -590,24 +473,35 @@ export function AhspDetailPage() {
                 Tambah baris komponen
               </button>
               <button type="submit" disabled={busy} style={actionButton}>
-                Simpan versi
+                Update AHSP
               </button>
+              {actionError ? (
+                <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
+                  {actionError}
+                </p>
+              ) : null}
             </form>
+          ) : null}
+
+          {actionError && !(workspaceOwned && canManage && !archived) ? (
+            <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
+              {actionError}
+            </p>
           ) : null}
 
           <section aria-label="Komponen pembentuk">
             <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
               Komponen pembentuk
             </h2>
-            {!selectedVersion ? (
+            {!currentVersion ? (
               <section className="simprok-honest-frame" aria-label="Komponen AHSP kosong">
                 <span className="simprok-honest-frame__badge">Belum ada data</span>
-                <p>Komponen tidak dapat ditampilkan karena versi belum ada.</p>
+                <p>Komponen tidak dapat ditampilkan karena rumus belum ada.</p>
               </section>
             ) : !hasAnyDefinitionComponent(groups) ? (
               <section className="simprok-honest-frame" aria-label="Komponen AHSP kosong">
                 <span className="simprok-honest-frame__badge">Belum ada data</span>
-                <p>Versi ini belum menyatakan komponen tenaga, bahan, atau peralatan.</p>
+                <p>AHSP ini belum menyatakan komponen tenaga, bahan, atau peralatan.</p>
               </section>
             ) : (
               groups.map((group) => (
