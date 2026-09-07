@@ -10,8 +10,11 @@ import { readFileSync } from "node:fs";
  */
 
 const NEWLINE = String.fromCharCode(10);
+const CARRIAGE_RETURN = String.fromCharCode(13);
 const codeOnly = (source: string) =>
   source
+    .split(CARRIAGE_RETURN)
+    .join("")
     .split(NEWLINE)
     .filter((line) => {
       const t = line.trim();
@@ -132,12 +135,36 @@ test("no expiry is invented for either state", () => {
 // ── The recipe's proven identity survives the editor ─────────────────────────
 
 test("a saved component is named, never re-typed as an identifier", () => {
-  assert.ok(detail.includes("resolveDefinitionResourceName"));
-  assert.ok(detail.includes("row.stored ? ("), "a saved row and a new row are not the same control");
   assert.ok(detail.includes("stored: true"), "rows seeded from the saved recipe are marked as such");
+
+  // A saved row and a row the author adds are not the same control.
+  const guard = detail.indexOf("row.stored ? (");
+  assert.ok(guard > -1, "a saved row must be distinguished from one the author adds");
+  const elseBranch = detail.indexOf(") : (", guard);
+  assert.ok(elseBranch > guard, "the guard must have both branches");
+
+  // A saved component states its NAME, through the one shared naming rule.
+  const savedBranch = detail.slice(guard, elseBranch);
   assert.ok(
-    !detail.includes("value={row.resourceId}\n"),
-    "the stored identity is not bound to an unconditional text input",
+    savedBranch.includes("resolveDefinitionResourceName"),
+    "a saved component must be named by the same rule the recipe table uses",
+  );
+  assert.ok(
+    !savedBranch.includes("<input"),
+    "a saved component's identity must never be typed",
+  );
+
+  // THE REGRESSION THIS FORBIDS: an identity control that is always a text
+  // box. Asserting the binding is simply absent would condemn the legitimate
+  // control a NEW row still needs, and asserting it with a trailing newline
+  // held only on a CRLF checkout. The law is about WHERE the control lives,
+  // so position is what is measured.
+  const binding = "value={row.resourceId}";
+  const bindings = detail.split(binding).length - 1;
+  assert.equal(bindings, 1, "exactly one control may bind the stored identity");
+  assert.ok(
+    detail.indexOf(binding) > elseBranch,
+    "the stored identity must not be bound to an unconditional text input",
   );
 });
 
