@@ -21,3 +21,18 @@ test("the mapper does not invent units", () => {
   assert.ok(!source.includes("m3"));
   assert.ok(!source.includes("OH"));
 });
+
+test("candidates found is not reported as nothing found", () => {
+  const copy = explainAhspItemReasons(["RESOURCE_CANDIDATES_FOUND", "RESOURCE_UNRESOLVED"]);
+  assert.match(copy, /menemukan/);
+  assert.match(copy, /belum terbukti/);
+  assert.doesNotMatch(copy, /tidak ada|tidak ditemukan/i);
+  assert.doesNotMatch(copy, /RESOURCE_CANDIDATES_FOUND/);
+});
+
+test("an unknown component unit is named as a unit question, not as ambiguity", () => {
+  assert.equal(
+    explainAhspItemReasons(["UNIT_UNRESOLVED"]),
+    "Satuan komponen belum dikenali dalam data SIMPROK.",
+  );
+});

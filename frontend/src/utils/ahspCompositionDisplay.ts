@@ -114,6 +114,14 @@ export const formatCoefficient = (value: string | number | null | undefined): st
  */
 export type AhspDefinitionResourceWire = {
   resourceId?: string | null;
+  /**
+   * The catalogue's own name for `resourceId`, supplied by GET /ahsp/:id.
+   *
+   * It is PRESENTATION ONLY. `resourceId` remains the write contract, so a
+   * missing name never changes what a save sends back. Null when the row is not
+   * catalogue-bound, or when the catalogue row is no longer readable here.
+   */
+  resourceName?: string | null;
   resourceType?: string | null;
   baseUnit?: string | null;
   coefficient?: string | number | null;
@@ -131,10 +139,42 @@ export type AhspDefinitionComponentGroup = {
   rows: AhspDefinitionComponentRow[];
 };
 
+/**
+ * A catalogue id, as stored. Recognising it is the ONLY thing this pattern is
+ * used for — it is never parsed, never rebuilt, and never treated as identity.
+ */
+const CATALOG_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * THE one rule for what a stored component is called on screen.
+ *
+ * A recipe written straight into the workspace stores the resource's own name
+ * in `resourceId`, so it is already readable. A recipe canonicalised from an
+ * official document stores a catalogue id there instead — an internal handle
+ * that means nothing to a reader and must never be shown as a name.
+ *
+ * When the catalogue name is missing the row still appears, described as
+ * unnamed rather than dropped or labelled "not found": the component IS part of
+ * the analysis, and only its name is unavailable here.
+ *
+ * Exported because the update editor must call a component exactly what the
+ * table below calls it. Two spellings of this rule would be two truths.
+ */
+export const resolveDefinitionResourceName = (
+  row: AhspDefinitionResourceWire,
+): string => {
+  const catalogName = (row.resourceName ?? '').trim();
+  if (catalogName !== '') return catalogName;
+  const stored = (row.resourceId ?? '').trim();
+  if (stored === '') return 'Tanpa nama';
+  return CATALOG_UUID.test(stored) ? 'Nama sumber daya belum tersedia' : stored;
+};
+
 const toDefinitionRow = (
   row: AhspDefinitionResourceWire,
 ): AhspDefinitionComponentRow => ({
-  name: (row.resourceId ?? '').trim() || 'Tanpa nama',
+  name: resolveDefinitionResourceName(row),
   unit: (row.baseUnit ?? '').trim() || '—',
   coefficient: formatCoefficient(row.coefficient),
 });

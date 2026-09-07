@@ -8,6 +8,7 @@ import {
   groupAhspDefinitionResources,
   hasAnyComponent,
   hasAnyDefinitionComponent,
+  resolveDefinitionResourceName,
   summariseAhspComposition,
 } from "./ahspCompositionDisplay.ts";
 import { toResourceTrust } from "./rabResourceTrust.ts";
@@ -261,4 +262,60 @@ test("an unknown definition type stays visible instead of being dropped", () => 
   assert.equal(groups[3].key, "UNGROUPED");
   assert.equal(groups[3].rows[0].name, "Sesuatu");
   assert.equal(hasAnyDefinitionComponent(groups), true);
+});
+
+/**
+ * WHAT A STORED COMPONENT IS CALLED.
+ *
+ * A canonicalised recipe stores a catalogue id where a hand-written one stores
+ * the resource's own name. Both must read as a name; neither may read as an id.
+ */
+
+test("the catalogue name is what a canonicalised component is called", () => {
+  assert.equal(
+    resolveDefinitionResourceName({
+      resourceId: "6f2b1c4a-9d3e-4a71-b8c2-5e7f0a1d2b3c",
+      resourceName: "Pekerja",
+    }),
+    "Pekerja",
+  );
+});
+
+test("a stored catalogue id is never shown as a name", () => {
+  const name = resolveDefinitionResourceName({
+    resourceId: "6f2b1c4a-9d3e-4a71-b8c2-5e7f0a1d2b3c",
+    resourceName: null,
+  });
+  assert.ok(!name.includes("6f2b1c4a"), "an internal handle must not reach the reader");
+  assert.equal(name, "Nama sumber daya belum tersedia");
+});
+
+test("an unnamed component says its name is missing, never that it does not exist", () => {
+  const name = resolveDefinitionResourceName({
+    resourceId: "6f2b1c4a-9d3e-4a71-b8c2-5e7f0a1d2b3c",
+    resourceName: "   ",
+  });
+  assert.doesNotMatch(name, /tidak ada|tidak ditemukan|tidak dikenali/i);
+});
+
+test("a hand-written recipe keeps stating its own resource name", () => {
+  assert.equal(
+    resolveDefinitionResourceName({ resourceId: "Pekerja", resourceName: null }),
+    "Pekerja",
+  );
+  assert.equal(resolveDefinitionResourceName({ resourceId: "  ", resourceName: null }), "Tanpa nama");
+});
+
+test("the grouped table calls a component exactly what the naming rule calls it", () => {
+  const [tenaga] = groupAhspDefinitionResources([
+    {
+      resourceId: "6f2b1c4a-9d3e-4a71-b8c2-5e7f0a1d2b3c",
+      resourceName: "Mandor",
+      resourceType: "LABOR",
+      baseUnit: "OH",
+      coefficient: "0.040000",
+    },
+  ]);
+  assert.equal(tenaga.rows[0].name, "Mandor");
+  assert.equal(tenaga.rows[0].coefficient, "0.04");
 });

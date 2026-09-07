@@ -10,8 +10,11 @@ import { readFileSync } from "node:fs";
  */
 
 const NEWLINE = String.fromCharCode(10);
+const CARRIAGE_RETURN = String.fromCharCode(13);
 const codeOnly = (source: string) =>
   source
+    .split(CARRIAGE_RETURN)
+    .join("")
     .split(NEWLINE)
     .filter((line) => {
       const t = line.trim();
@@ -104,4 +107,68 @@ test("components are grouped from stored version resources", () => {
 
 test("the reader can return to the canonical list", () => {
   assert.ok(detail.includes('to="/ahsp"'));
+});
+
+// ── Validity is not completeness ─────────────────────────────────────────────
+
+test("an AHSP with no formula yet is not declared out of force", () => {
+  // The two states are separately labelled and separately worded.
+  assert.ok(detail.includes('aria-label="AHSP belum memiliki rumus"'));
+  assert.ok(detail.includes("Belum ada rumus"));
+  assert.ok(detail.includes('aria-label="AHSP tidak berlaku"'));
+  assert.ok(detail.includes("Tidak berlaku"));
+  // The merged condition that answered both questions with one badge is gone.
+  assert.ok(
+    !detail.includes("archived || !currentVersion || isHistoricalStatus"),
+    "a missing recipe must not be routed through the out-of-force branch",
+  );
+  // Out of force is reserved for a withdrawn or superseded definition.
+  assert.ok(detail.includes("archived || isHistoricalStatus(currentVersion.status)"));
+});
+
+test("no expiry is invented for either state", () => {
+  assert.ok(!detail.includes("Berlaku sampai"));
+  assert.ok(!detail.includes("Kedaluwarsa"));
+  assert.ok(!detail.includes("expiredDate ?"));
+});
+
+// ── The recipe's proven identity survives the editor ─────────────────────────
+
+test("a saved component is named, never re-typed as an identifier", () => {
+  assert.ok(detail.includes("stored: true"), "rows seeded from the saved recipe are marked as such");
+
+  // A saved row and a row the author adds are not the same control.
+  const guard = detail.indexOf("row.stored ? (");
+  assert.ok(guard > -1, "a saved row must be distinguished from one the author adds");
+  const elseBranch = detail.indexOf(") : (", guard);
+  assert.ok(elseBranch > guard, "the guard must have both branches");
+
+  // A saved component states its NAME, through the one shared naming rule.
+  const savedBranch = detail.slice(guard, elseBranch);
+  assert.ok(
+    savedBranch.includes("resolveDefinitionResourceName"),
+    "a saved component must be named by the same rule the recipe table uses",
+  );
+  assert.ok(
+    !savedBranch.includes("<input"),
+    "a saved component's identity must never be typed",
+  );
+
+  // THE REGRESSION THIS FORBIDS: an identity control that is always a text
+  // box. Asserting the binding is simply absent would condemn the legitimate
+  // control a NEW row still needs, and asserting it with a trailing newline
+  // held only on a CRLF checkout. The law is about WHERE the control lives,
+  // so position is what is measured.
+  const binding = "value={row.resourceId}";
+  const bindings = detail.split(binding).length - 1;
+  assert.equal(bindings, 1, "exactly one control may bind the stored identity");
+  assert.ok(
+    detail.indexOf(binding) > elseBranch,
+    "the stored identity must not be bound to an unconditional text input",
+  );
+});
+
+test("the update payload still sends the stored identity, not the displayed name", () => {
+  assert.ok(detail.includes("resourceId: row.resourceId.trim()"));
+  assert.ok(!detail.includes("resourceId: row.resourceName"));
 });

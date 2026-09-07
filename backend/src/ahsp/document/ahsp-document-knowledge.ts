@@ -16,6 +16,7 @@ export const AHSP_DOCUMENT_REASON = {
   MISSING_OUTPUT_UNIT: 'MISSING_OUTPUT_UNIT',
   INVALID_COEFFICIENT: 'INVALID_COEFFICIENT',
   RESOURCE_UNRESOLVED: 'RESOURCE_UNRESOLVED',
+  RESOURCE_CANDIDATES_FOUND: 'RESOURCE_CANDIDATES_FOUND',
   UNIT_UNRESOLVED: 'UNIT_UNRESOLVED',
   AUTHORITY_UNPROVEN: 'AUTHORITY_UNPROVEN',
   CURRENTNESS_UNPROVEN: 'CURRENTNESS_UNPROVEN',
@@ -49,6 +50,11 @@ export interface AhspResourceKnowledge {
   readonly coefficientEvidence: AhspSourceLocator | null;
   readonly resolvedResourceCatalogId: string | null;
   readonly resolvedBaseUnit: string | null;
+  /**
+   * Catalog names the existing Resource Identity kernel already found.
+   * Never an asserted identity. Empty when investigation produced none.
+   */
+  readonly identityCandidates?: readonly string[];
 }
 
 export interface AhspWorkItemKnowledge {

@@ -16,6 +16,11 @@ const REASON_COPY: Record<string, string> = {
   MISSING_OUTPUT_UNIT: 'Satuan hasil pekerjaan belum tertera di dokumen.',
   INVALID_COEFFICIENT: 'Koefisien belum lengkap atau tidak sah.',
   RESOURCE_UNRESOLVED: 'Komponen belum dapat dicocokkan dengan data SIMPROK.',
+  // "Belum terbukti" is not "tidak ada". When the identity kernel narrowed the
+  // question to real catalogue rows, saying nothing was found would be false —
+  // and it would hide the fact that a human can settle this in seconds.
+  RESOURCE_CANDIDATES_FOUND:
+    'SIMPROK menemukan kemungkinan padanan untuk komponen ini, tetapi identitasnya belum terbukti.',
   UNIT_UNRESOLVED: 'Satuan komponen belum dikenali dalam data SIMPROK.',
   AUTHORITY_UNPROVEN: 'Peraturan pada dokumen belum terbukti.',
   CURRENTNESS_UNPROVEN: 'Tanggal berlaku belum tertera di dokumen.',

@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   groupAhspDefinitionResources,
   hasAnyDefinitionComponent,
+  resolveDefinitionResourceName,
   type AhspDefinitionComponentGroup,
   type AhspDefinitionResourceWire,
 } from '../utils/ahspCompositionDisplay';
@@ -52,7 +53,22 @@ type DetailState =
   | { phase: 'FAILED'; message: string };
 
 type ResourceDraft = {
+  /**
+   * THE write contract, carried through the editor untouched.
+   *
+   * For a canonicalised recipe this is a catalogue id, which is why it is no
+   * longer typed into by hand: editing it would silently repoint the component
+   * at nothing, and there is no identity resolver on this surface to catch it.
+   */
   resourceId: string;
+  /** Presentation only — what the catalogue calls resourceId, when it can. */
+  resourceName: string | null;
+  /**
+   * True for a row seeded from the saved recipe. Such a row keeps its proven
+   * identity and shows its name; a row the author adds here still states its
+   * own resource, exactly as before.
+   */
+  stored: boolean;
   resourceType: 'LABOR' | 'MATERIAL' | 'EQUIPMENT';
   coefficient: string;
   baseUnit: string;
@@ -91,6 +107,8 @@ const valueStyle: CSSProperties = { color: NAVY, margin: 0 };
 
 const emptyResource = (): ResourceDraft => ({
   resourceId: '',
+  resourceName: null,
+  stored: false,
   resourceType: 'LABOR',
   coefficient: '',
   baseUnit: '',
@@ -107,6 +125,8 @@ const draftsFromVersion = (version: AhspVersion | null): ResourceDraft[] => {
   if (resources.length === 0) return [emptyResource()];
   return resources.map((row) => ({
     resourceId: (row.resourceId ?? '').trim(),
+    resourceName: row.resourceName ?? null,
+    stored: true,
     resourceType:
       row.resourceType === 'MATERIAL' || row.resourceType === 'EQUIPMENT'
         ? row.resourceType
@@ -342,14 +362,28 @@ export function AhspDetailPage() {
             <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
               AHSP yang berlaku
             </h2>
-            {archived || !currentVersion || isHistoricalStatus(currentVersion.status) ? (
+            {/*
+              MISSING A FORMULA IS NOT BEING OUT OF FORCE.
+
+              These two used to share one badge, so an AHSP whose recipe had
+              simply never been written was announced as "Tidak berlaku" — a
+              statement about authority that nobody had made. They are different
+              questions with different answers: one is answered by writing the
+              recipe, the other only by the authority that withdrew the AHSP.
+              No expiry is invented for either.
+            */}
+            {!currentVersion ? (
+              <section className="simprok-honest-frame" aria-label="AHSP belum memiliki rumus">
+                <span className="simprok-honest-frame__badge">Belum ada rumus</span>
+                <p>
+                  AHSP ini belum memiliki rumus yang tersimpan. Yang belum ada adalah
+                  rumusnya — keberlakuannya tidak sedang dinyatakan gugur.
+                </p>
+              </section>
+            ) : archived || isHistoricalStatus(currentVersion.status) ? (
               <section className="simprok-honest-frame" aria-label="AHSP tidak berlaku">
                 <span className="simprok-honest-frame__badge">Tidak berlaku</span>
-                <p>
-                  {!currentVersion
-                    ? 'AHSP ini belum memiliki rumus yang tersimpan.'
-                    : 'AHSP ini tidak digunakan untuk pilihan baru.'}
-                </p>
+                <p>AHSP ini tidak digunakan untuk pilihan baru.</p>
               </section>
             ) : (
               <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 0 }}>
@@ -444,17 +478,37 @@ export function AhspDetailPage() {
                   style={{ border: '1px solid var(--simprok-engineering-blue-100)', marginBottom: 'var(--space-2)', padding: 'var(--space-3)' }}
                 >
                   <legend style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>Komponen {index + 1}</legend>
-                  <input
-                    placeholder="Sumber daya"
-                    aria-label={'Sumber daya ' + (index + 1)}
-                    value={row.resourceId}
-                    onChange={(event) => {
-                      const next = [...resourceDrafts];
-                      next[index] = { ...row, resourceId: event.target.value };
-                      setResourceDrafts(next);
-                    }}
-                    style={{ marginRight: 'var(--space-2)', color: NAVY }}
-                  />
+                  {/*
+                    A saved component is NAMED here, not re-typed. Its stored
+                    identity is a catalogue handle: showing it would put an
+                    internal id in front of the reader, and letting it be edited
+                    would let a keystroke detach the component from the resource
+                    it was proven to be. The name comes from the same one rule
+                    the table below uses, so both call it the same thing.
+                  */}
+                  {row.stored ? (
+                    <span
+                      aria-label={'Sumber daya ' + (index + 1)}
+                      style={{ marginRight: 'var(--space-2)', color: NAVY }}
+                    >
+                      {resolveDefinitionResourceName({
+                        resourceId: row.resourceId,
+                        resourceName: row.resourceName,
+                      })}
+                    </span>
+                  ) : (
+                    <input
+                      placeholder="Sumber daya"
+                      aria-label={'Sumber daya ' + (index + 1)}
+                      value={row.resourceId}
+                      onChange={(event) => {
+                        const next = [...resourceDrafts];
+                        next[index] = { ...row, resourceId: event.target.value };
+                        setResourceDrafts(next);
+                      }}
+                      style={{ marginRight: 'var(--space-2)', color: NAVY }}
+                    />
+                  )}
                   <select
                     aria-label={'Kelompok ' + (index + 1)}
                     value={row.resourceType}
