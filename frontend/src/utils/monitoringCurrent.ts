@@ -76,6 +76,54 @@ export interface MonitoringItem {
   sortOrder: number;
   planned: { quantity: string; unit: string };
   weight: MonitoringRowWeight;
+
+  /**
+   * Backend-authoritative official calculation truth.
+   *
+   * This is deliberately separate from `actual`.
+   * `actual` is record context; these fields are calculation facts.
+   */
+  currentOfficialQuantity:
+    | {
+        state:
+          | 'NOT_YET_RECORDED'
+          | 'NO_ELIGIBLE_CURRENT_FACT'
+          | 'INVALID_LINEAGE'
+          | 'INVALID_NUMERIC_FACT'
+          | 'SEMANTICS_UNPROVEN';
+      }
+    | {
+        state: 'INCOMPLETE';
+        knownEligibleQuantitySubtotal: string;
+      }
+    | {
+        state: 'COMPLETE';
+        currentOfficialQuantity: string;
+      };
+
+  currentOfficialItemProgress:
+    | {
+        state:
+          | 'NOT_YET_RECORDED'
+          | 'NO_ELIGIBLE_CURRENT_FACT'
+          | 'INVALID_LINEAGE'
+          | 'INVALID_NUMERIC_FACT'
+          | 'SEMANTICS_UNPROVEN';
+      }
+    | {
+        state: 'INCOMPLETE';
+        knownProgressSubtotalPercent?: string;
+      }
+    | {
+        state: 'UNAVAILABLE';
+        reason: string;
+      }
+    | {
+        state: 'COMPLETE';
+        rawPhysicalProgressPercent: string;
+        boundedContributionProgressPercent: string;
+      };
+
   actual: MonitoringActual | null;
 }
 
@@ -100,6 +148,25 @@ export interface MonitoringResponse {
   } | null;
   freshness: MonitoringFreshness;
   weight: MonitoringProjectWeight;
+
+  /**
+   * Backend-authoritative project-level RAB-weighted physical progress.
+   * Frontend renders the supplied state/value and performs no calculation.
+   */
+  currentOfficialRabWeightedPhysicalProgress:
+    | {
+        state: 'COMPLETE';
+        currentOfficialRabWeightedPhysicalProgressPercent: string;
+      }
+    | {
+        state: 'INCOMPLETE';
+        knownWeightedContributionSubtotalPercent: string;
+      }
+    | {
+        state: 'UNAVAILABLE';
+        reason: string;
+      };
+
   items: MonitoringItem[];
   unavailable: string[];
 }
