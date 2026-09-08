@@ -11,6 +11,12 @@ export interface CreateAhspDto {
   locationType: LocationType;
   methodName: string;
   userId: string;
+  // Owner-approved descriptive attributes (optional). Non-interpretive: what the
+  // source states, never SIMPROK's method/terrain classification.
+  code?: string | null;
+  fieldCategory?: string | null;
+  subCategory?: string | null;
+  classification?: string | null;
 }
 
 export interface UpdateAhspDto {
@@ -86,6 +92,10 @@ export class AhspService {
         workspaceId: data.workspaceId,
         workType: data.workType,
         methodName: data.methodName,
+        code: data.code ?? null,
+        fieldCategory: data.fieldCategory ?? null,
+        subCategory: data.subCategory ?? null,
+        classification: data.classification ?? null,
         ...AHSP_PARENT_IDENTITY_FILLER,
         createdByUserId: data.userId,
         ownershipType: 'USER_ASSET',
@@ -117,6 +127,26 @@ export class AhspService {
       throw new NotFoundException('AHSP not found');
     }
     return this.withCatalogResourceNames(ahsp, workspaceId);
+  }
+
+  /**
+   * The detail read for the room's own detail view: the same tenant-scoped
+   * definition getById proves, plus the creator's email resolved through the
+   * existing relation for the "Dibuat oleh" line. A thin wrapper so getById (and
+   * every mutation's audit snapshot) keeps its exact shape.
+   */
+  async getDetail(id: string, workspaceId?: string) {
+    const ahsp = await this.getById(id, workspaceId);
+    let createdByEmail: string | null = null;
+    const createdByUserId = (ahsp as { createdByUserId?: string | null }).createdByUserId;
+    if (createdByUserId) {
+      const creator = await this.prisma.user.findUnique({
+        where: { id: createdByUserId },
+        include: { membership: { include: { account: { select: { email: true } } } } },
+      });
+      createdByEmail = creator?.membership?.account?.email ?? null;
+    }
+    return { ...ahsp, createdByEmail };
   }
 
   /**
@@ -198,10 +228,23 @@ export class AhspService {
         methodType: true,
         locationType: true,
         methodName: true,
+        code: true,
+        fieldCategory: true,
+        subCategory: true,
+        classification: true,
         ownershipType: true,
         reviewStatus: true,
+        proposedAt: true,
         archivedAt: true,
         updatedAt: true,
+        // The applicable version's Satuan and Dasar for the list columns — the
+        // newest version, the same "current" the detail shows. Read-only, no
+        // second query per row.
+        versions: {
+          orderBy: { versionNumber: 'desc' },
+          take: 1,
+          select: { outputUnit: true, regulationReference: true },
+        },
         _count: { select: { versions: true } },
       },
       orderBy: [{ workType: 'asc' }, { methodName: 'asc' }],
@@ -315,6 +358,10 @@ export class AhspService {
     // Run policy validation
     this.runPolicy(p => p.canApprove(ahsp as AhspEntity));
 
+    // A human other than the author decides. The creator (and whoever proposed
+    // it) may not approve their own AHSP — acceptance is never a self-decision.
+    this.ensureNotSelfDecision(ahsp, userId);
+
     const user = await this.getUserDetails(userId);
 
     const approved = await this.prisma.$transaction(async (tx) => {
@@ -341,6 +388,91 @@ export class AhspService {
     });
 
     return approved;
+  }
+
+  /**
+   * "Usulkan ke SIMPROK" — submit a workspace-owned AHSP for human review.
+   *
+   * This is a WORKFLOW state change on the canonical AHSP, not a copy and not a
+   * publish: it records that the AHSP was submitted (proposedAt + who/when) and
+   * leaves reviewStatus PENDING for a reviewer to decide. Nothing becomes shared
+   * or canonical here; acceptance stays a separate human decision (approve).
+   */
+  async propose(id: string, userId: string, workspaceId?: string) {
+    const ahsp = await this.getById(id, workspaceId);
+
+    this.runPolicy(p => p.canPropose(ahsp as AhspEntity));
+
+    const user = await this.getUserDetails(userId);
+
+    const proposed = await this.prisma.$transaction(async (tx) => {
+      const updatedAhsp = await tx.aHSP.update({
+        where: { id },
+        data: {
+          proposedAt: new Date(),
+          proposedByUserId: userId,
+          proposedByName: user.fullName,
+          proposedByEmail: user.membership?.account?.email || null,
+          reviewStatus: 'PENDING',
+        },
+      });
+
+      await this.audit.logAction({
+        ahspId: id,
+        action: 'AHSPProposed',
+        who: userId,
+        before: ahsp,
+        after: updatedAhsp,
+      });
+
+      return updatedAhsp;
+    });
+
+    return proposed;
+  }
+
+  /**
+   * A reviewer declines a proposed AHSP. The outcome rides the existing
+   * reviewStatus (-> REJECTED); the reason and decider are recorded in the audit
+   * trail. Not a self-decision, and never auto-anything.
+   */
+  async reject(id: string, userId: string, reason: string, workspaceId?: string) {
+    const ahsp = await this.getById(id, workspaceId);
+
+    this.runPolicy(p => p.canApprove(ahsp as AhspEntity));
+    this.ensureNotSelfDecision(ahsp, userId);
+
+    const rejected = await this.prisma.$transaction(async (tx) => {
+      const updatedAhsp = await tx.aHSP.update({
+        where: { id },
+        data: { reviewStatus: 'REJECTED' },
+      });
+
+      await this.audit.logAction({
+        ahspId: id,
+        action: 'AHSPRejected',
+        who: userId,
+        before: ahsp,
+        after: updatedAhsp,
+        reason,
+      });
+
+      return updatedAhsp;
+    });
+
+    return rejected;
+  }
+
+  private ensureNotSelfDecision(
+    ahsp: { createdByUserId?: string | null; proposedByUserId?: string | null },
+    userId: string,
+  ): void {
+    if (
+      (ahsp.createdByUserId && ahsp.createdByUserId === userId) ||
+      (ahsp.proposedByUserId && ahsp.proposedByUserId === userId)
+    ) {
+      throw new ForbiddenException('AHSP_SELF_DECISION_FORBIDDEN');
+    }
   }
 
   async transfer(id: string, targetOwnershipType: OwnershipType, userId: string, reason: string, workspaceId?: string) {

@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -118,6 +119,10 @@ describe('AhspService', () => {
         workspaceId: undefined,
         workType: ahsp.workType,
         methodName: ahsp.methodName,
+        code: null,
+        fieldCategory: null,
+        subCategory: null,
+        classification: null,
         methodType: MethodType.OTHER,
         locationType: LocationType.OTHER,
         createdByUserId: ahsp.createdByUserId,
@@ -364,13 +369,19 @@ describe('AhspService', () => {
       expect(Object.keys(select).sort()).toEqual([
         '_count',
         'archivedAt',
+        'classification',
+        'code',
+        'fieldCategory',
         'id',
         'locationType',
         'methodName',
         'methodType',
         'ownershipType',
+        'proposedAt',
         'reviewStatus',
+        'subCategory',
         'updatedAt',
+        'versions',
         'workType',
         'workspaceId',
       ]);
@@ -382,16 +393,104 @@ describe('AhspService', () => {
       await expect(service.list('workspace-1')).resolves.toBe(rows);
     });
 
-    it('borrows no part of the RAB binding predicate', async () => {
+    it('shows the applicable Satuan/Dasar for display without borrowing the RAB binding predicate', async () => {
       prisma.aHSP.findMany.mockResolvedValue([]);
       await service.list('workspace-1');
-      const query = JSON.stringify(prisma.aHSP.findMany.mock.calls[0][0]);
-      // Bindability requires a priceable version; visibility does not. If any
-      // of these appear, discovery has been coupled to selectForBoqItem's
-      // security invariant.
-      for (const bindingOnly of ['outputUnit', 'effectiveDate', 'expiredDate', 'PUBLISHED']) {
+      const call = prisma.aHSP.findMany.mock.calls[0][0];
+      // Satuan and Dasar are shown from the newest version — DISPLAY only: take
+      // the single newest version and read just its output unit and regulation
+      // reference. There is no where-filter to a priceable version, so discovery
+      // still returns every AHSP the caller may see (including half-composed
+      // ones), never selectForBoqItem's narrowed, security-bearing set.
+      expect(call.select.versions).toEqual({
+        orderBy: { versionNumber: 'desc' },
+        take: 1,
+        select: { outputUnit: true, regulationReference: true },
+      });
+      expect(call.select.versions.where).toBeUndefined();
+      // The binding predicate's date/status invariants never appear anywhere,
+      // and the WHERE clause stays pure visibility — no version pricing filter.
+      const query = JSON.stringify(call);
+      for (const bindingOnly of ['effectiveDate', 'expiredDate', 'PUBLISHED']) {
         expect(query).not.toContain(bindingOnly);
       }
+      expect(JSON.stringify(call.where)).not.toContain('outputUnit');
+    });
+  });
+
+  describe('propose / reject — the Usulkan ke SIMPROK lifecycle', () => {
+    const reviewer = { fullName: 'Reviewer Satu', membership: { account: { email: 'reviewer@simprok.id' } } };
+
+    it('propose records the submission and keeps it PENDING — never auto-publishes', async () => {
+      prisma.aHSP.findFirst.mockResolvedValue(ahsp);
+      prisma.user.findUnique.mockResolvedValue({ fullName: 'Pemilik', membership: { account: { email: 'owner@simprok.id' } } });
+      prisma.aHSP.update.mockResolvedValue({ ...ahsp, proposedAt: new Date() });
+
+      await service.propose(ahsp.id, ahsp.createdByUserId, ahsp.workspaceId);
+
+      const data = prisma.aHSP.update.mock.calls[0][0].data;
+      expect(data.proposedAt).toBeInstanceOf(Date);
+      expect(data.proposedByUserId).toBe(ahsp.createdByUserId);
+      expect(data.reviewStatus).toBe('PENDING');
+      // No auto-publish: proposing never approves nor changes ownership.
+      expect(data.reviewStatus).not.toBe('APPROVED');
+      expect(data.ownershipType).toBeUndefined();
+      expect(audit.logAction).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'AHSPProposed', ahspId: ahsp.id }),
+      );
+    });
+
+    it('refuses a second submission for an already-proposed AHSP', async () => {
+      prisma.aHSP.findFirst.mockResolvedValue({ ...ahsp, proposedAt: new Date() });
+      await expect(
+        service.propose(ahsp.id, ahsp.createdByUserId, ahsp.workspaceId),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.aHSP.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses to propose an AHSP that is not the workspace owner own asset', async () => {
+      prisma.aHSP.findFirst.mockResolvedValue({ ...ahsp, ownershipType: 'SIMPROK_ASSET' });
+      await expect(
+        service.propose(ahsp.id, ahsp.createdByUserId, ahsp.workspaceId),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('forbids the creator from approving their own AHSP (no self-decision)', async () => {
+      prisma.aHSP.findFirst.mockResolvedValue({ ...ahsp, proposedByUserId: ahsp.createdByUserId });
+      await expect(
+        service.approve(ahsp.id, ahsp.createdByUserId, ahsp.workspaceId),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.aHSP.update).not.toHaveBeenCalled();
+    });
+
+    it('lets a different reviewer approve — recorded, still a human decision', async () => {
+      prisma.aHSP.findFirst.mockResolvedValue({ ...ahsp, proposedByUserId: ahsp.createdByUserId });
+      prisma.user.findUnique.mockResolvedValue(reviewer);
+      prisma.aHSP.update.mockResolvedValue({ ...ahsp, reviewStatus: 'APPROVED' });
+      await service.approve(ahsp.id, 'reviewer-9', ahsp.workspaceId);
+      expect(prisma.aHSP.update.mock.calls[0][0].data.reviewStatus).toBe('APPROVED');
+      expect(audit.logAction).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'AHSPApproved' }),
+      );
+    });
+
+    it('reject records the decision as REJECTED and never publishes', async () => {
+      prisma.aHSP.findFirst.mockResolvedValue({ ...ahsp, proposedByUserId: ahsp.createdByUserId });
+      prisma.aHSP.update.mockResolvedValue({ ...ahsp, reviewStatus: 'REJECTED' });
+      await service.reject(ahsp.id, 'reviewer-9', 'Komponen belum lengkap', ahsp.workspaceId);
+      const data = prisma.aHSP.update.mock.calls[0][0].data;
+      expect(data.reviewStatus).toBe('REJECTED');
+      expect(data.ownershipType).toBeUndefined();
+      expect(audit.logAction).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'AHSPRejected', reason: 'Komponen belum lengkap' }),
+      );
+    });
+
+    it('forbids the creator from rejecting their own AHSP', async () => {
+      prisma.aHSP.findFirst.mockResolvedValue(ahsp);
+      await expect(
+        service.reject(ahsp.id, ahsp.createdByUserId, 'nope', ahsp.workspaceId),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 });
