@@ -22,7 +22,16 @@ describe('AhspDocumentCanonicalizationService', () => {
     loadEvidence: jest.fn(),
     resolve: jest.fn(),
   };
-  const prisma = {};
+  // The sighting memory the service now writes proved readings into. Typed, so
+  // the assertions below read real fields rather than poking at `any`.
+  type SightingWrite = {
+    data: Array<Record<string, unknown>>;
+    skipDuplicates: boolean;
+  };
+  const sightings = {
+    createMany: jest.fn<Promise<void>, [SightingWrite]>(),
+  };
+  const prisma = { resourceSourceIdentity: sightings };
   let service: AhspDocumentCanonicalizationService;
 
   beforeEach(() => {
@@ -295,6 +304,127 @@ describe('AhspDocumentCanonicalizationService', () => {
       ),
     ).toBe(true);
   });
+
+  /**
+   * SIMPROK WORKS HARDER BEFORE IT ASKS A PERSON.
+   *
+   * An unknown component UNIT used to end the investigation for that component:
+   * its identity was never searched, so candidates the catalogue could have
+   * offered were never found. "Which resource is this" and "what measure is it
+   * in" are different questions, and failing the second is no reason to stop
+   * asking the first.
+   */
+  it('still searches identity when the component unit is unknown', async () => {
+    units.resolve.mockImplementation((raw: string) =>
+      Promise.resolve(
+        raw.trim().toUpperCase() === 'M3'
+          ? resolvedUnit()
+          : { status: 'NEEDS_REVIEW', sourceUnitDefinition: null },
+      ),
+    );
+    identity.resolve.mockResolvedValue({
+      status: 'NEEDS_REVIEW',
+      resolvedResourceCatalogId: null,
+      candidates: [
+        { name: 'Pekerja Terampil', resourceCatalogId: 'catalog-b' },
+      ],
+    });
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    const result = await service.commit(envelope, 'user-1');
+    const item = result.knowledge.workItems.find(
+      (candidate) => candidate.workType?.raw === '1.7.7.1.1.b (a)',
+    );
+
+    // The identity engine WAS asked, and what it found reached the knowledge.
+    expect(identity.resolve).toHaveBeenCalled();
+    expect(item?.resources[0]?.identityCandidates).toEqual([
+      'Pekerja Terampil',
+    ]);
+    expect(item?.reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,
+    );
+    // The unknown unit is still stated, and still blocks the write.
+    expect(item?.reasonCodes).toContain(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
+    expect(result.written).toEqual([]);
+    expect(versionService.createVersion).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Identity proved while the unit is not: the catalogue id is kept, the base
+   * unit is NOT invented, and the component still cannot be written.
+   */
+  it('keeps a proved identity without asserting an unproved base unit', async () => {
+    units.resolve.mockImplementation((raw: string) =>
+      Promise.resolve(
+        raw.trim().toUpperCase() === 'M3'
+          ? resolvedUnit()
+          : { status: 'NEEDS_REVIEW', sourceUnitDefinition: null },
+      ),
+    );
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    const result = await service.commit(envelope, 'user-1');
+    const item = result.knowledge.workItems.find(
+      (candidate) => candidate.workType?.raw === '1.7.7.1.1.b (a)',
+    );
+
+    expect(item?.resources[0]?.resolvedResourceCatalogId).toBe(
+      'catalog-pekerja',
+    );
+    expect(item?.resources[0]?.resolvedBaseUnit).toBeNull();
+    expect(item?.reasonCodes).toContain(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
+    expect(result.written).toEqual([]);
+  });
+
+  /**
+   * SIMPROK LEARNS FROM AN AHSP IT ACCEPTED.
+   *
+   * The sighting memory is what turns an abbreviation or a variant spelling
+   * proved once into a candidate the identity kernel can nominate next time.
+   * The AHSP door only ever read it; a committed reading is now written back
+   * through the same table and the same contract Basic Price already uses.
+   */
+  it('records a proved reading into the existing sighting memory', async () => {
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    await service.commit(envelope, 'user-1');
+
+    expect(sightings.createMany).toHaveBeenCalledTimes(1);
+    const call = sightings.createMany.mock.calls[0][0];
+    expect(call.skipDuplicates).toBe(true);
+    const row = call.data[0];
+    expect(row.resourceCatalogId).toBe('catalog-pekerja');
+    expect(row.workspaceId).toBe(envelope.workspaceId);
+    expect(row.sourceSha256).toBe(envelope.contentDigestSha256);
+    expect(row.sourceFileName).toBe(envelope.fileName);
+    expect(typeof row.parserContractVersion).toBe('string');
+    expect(row.sourceRowNumber).toBeGreaterThan(0);
+    expect(row.sourceSection).toBe('LABOR');
+    // The RAW spelling is what makes the memory useful — never a tidied one.
+    expect(row.rawName).toBe('Pekerja');
+    expect(typeof row.sourceNameCellAddress).toBe('string');
+  });
+
+  it('remembers only readings whose identity was proved', async () => {
+    identity.resolve.mockResolvedValue({
+      status: 'NEEDS_REVIEW',
+      resolvedResourceCatalogId: null,
+      candidates: [
+        { name: 'Pekerja Terampil', resourceCatalogId: 'catalog-b' },
+      ],
+    });
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    await service.commit(envelope, 'user-1');
+
+    // Nothing was proved, so nothing is remembered — a candidate is not a fact.
+    expect(sightings.createMany).not.toHaveBeenCalled();
+  });
+
+  it('learns nothing from a preview — understanding is not acceptance', async () => {
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    await service.preview(envelope);
+
+    expect(sightings.createMany).not.toHaveBeenCalled();
+    expect(versionService.createVersion).not.toHaveBeenCalled();
+  });
 });
 
 const BINA_MARGA_PATHS = [
@@ -341,7 +471,7 @@ describeBinaMargaCommit('AhspDocumentCanonicalizationService — official Bina M
       versionService as any,
       units as any,
       identity as any,
-      {} as any,
+      { resourceSourceIdentity: { createMany: jest.fn() } } as any,
     );
   });
 
@@ -430,7 +560,7 @@ describePositiveCommit('AhspDocumentCanonicalizationService — Copy of AHSP ok(
       versionService as any,
       units as any,
       identity as any,
-      {} as any,
+      { resourceSourceIdentity: { createMany: jest.fn() } } as any,
     );
   });
 
