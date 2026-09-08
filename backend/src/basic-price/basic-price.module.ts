@@ -18,6 +18,7 @@ import { BasicPriceSmartSaveService } from './basic-price-smart-save.service';
 import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
 import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { ResourceAdmissionService } from '../resource-catalog/resource-admission.service';
 import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 import { UniversalIntakeModule } from '../universal-intake/universal-intake.module';
 import { BasicPriceSupplierBridgeService } from './basic-price-supplier-bridge.service';
@@ -59,6 +60,10 @@ import { BasicPriceSourceArchiveService } from './basic-price-source-archive.ser
     // so both consumers judge identity with one kernel and one evidence law —
     // there is no second matcher anywhere in this module.
     ResourceIdentityResolutionService,
+    // THE one canonical mint authority. Basic Price admission now delegates its
+    // ResourceCatalog + ResourceSourceIdentity mint here instead of inlining it,
+    // so the same code admits a new resource for AHSP and BOQ too.
+    ResourceAdmissionService,
   ],
   exports: [BasicPriceService, BasicPriceEligibilityPolicy],
 })
