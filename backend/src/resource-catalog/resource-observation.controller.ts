@@ -43,11 +43,15 @@ export class ResourceObservationController {
     return actor;
   }
 
-  /** The observations still awaiting a human decision. */
+  /**
+   * The observations still awaiting a human decision, each enriched with the
+   * live candidates and a suggested unit so the curator has what both decisions
+   * need — the same authorities, never a second matcher.
+   */
   @Get()
   @Permissions('AHSP_RESOURCE_IDENTITY_DECIDE')
   async list(@Req() request: any) {
-    return this.observations.listOpen(this.workspaceId(request));
+    return this.observations.listOpenForCuration(this.workspaceId(request));
   }
 
   /** Human maps this observation to an existing canonical resource. */

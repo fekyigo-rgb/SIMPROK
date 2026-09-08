@@ -16,6 +16,7 @@ describe('ResourceObservationService', () => {
   let prisma: any;
   let admission: any;
   let unitKernel: any;
+  let identity: any;
   let service: ResourceObservationService;
 
   const OBSERVATION = {
@@ -62,12 +63,20 @@ describe('ResourceObservationService', () => {
       admitObservedResource: jest.fn().mockResolvedValue({ id: 'cat-new' }),
     };
     unitKernel = {
-      resolve: jest.fn().mockResolvedValue({ status: 'RESOLVED' }),
+      resolve: jest.fn().mockResolvedValue({
+        status: 'RESOLVED',
+        sourceUnitDefinition: { id: 'unit-m3', code: 'M3' },
+      }),
+    };
+    identity = {
+      loadEvidence: jest.fn().mockResolvedValue({}),
+      resolve: jest.fn().mockResolvedValue({ candidates: [] }),
     };
     service = new ResourceObservationService(
       prisma,
       admission as ResourceAdmissionService,
       unitKernel,
+      identity,
     );
   });
 
@@ -118,6 +127,26 @@ describe('ResourceObservationService', () => {
     ]);
     expect(result).toEqual({ persisted: 0 });
     expect(prisma.observedResource.createMany).not.toHaveBeenCalled();
+  });
+
+  // A — the curator sees live candidates (name + id), and nothing is auto-selected.
+  it('A: listOpenForCuration surfaces candidates as evidence, never a resolved identity', async () => {
+    prisma.observedResource.findMany.mockResolvedValue([OBSERVATION]);
+    identity.resolve.mockResolvedValue({
+      candidates: [
+        { resourceCatalogId: 'cat-x', name: 'Kerikil / Agregat', extra: 'ignored' },
+      ],
+    });
+    const list = await service.listOpenForCuration('ws-1');
+    expect(list).toHaveLength(1);
+    expect(list[0].candidates).toEqual([
+      { resourceCatalogId: 'cat-x', name: 'Kerikil / Agregat' },
+    ]);
+    // A suggested unit for curate-new, from the Unit Kernel — not invented here.
+    expect(list[0].suggestedUnitDefinitionId).toBe('unit-m3');
+    // Still OBSERVED — the read decides nothing.
+    expect(list[0].status).toBe('OBSERVED');
+    expect((list[0] as any).resolvedResourceCatalogId).toBeUndefined();
   });
 
   // D — a human maps the observation to an existing canonical resource.

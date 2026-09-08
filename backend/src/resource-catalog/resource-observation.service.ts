@@ -14,6 +14,7 @@ import {
   ResourceAdmissionService,
   ResourceProvenanceAlreadyBoundError,
 } from './resource-admission.service';
+import { ResourceIdentityResolutionService } from './resource-identity-resolution.service';
 
 /**
  * THE shared, domain-neutral lifecycle for a resource an import SAW but could
@@ -55,6 +56,7 @@ export class ResourceObservationService {
     private readonly prisma: PrismaService,
     private readonly admission: ResourceAdmissionService,
     private readonly unitKernel: UnitKernelService,
+    private readonly identity: ResourceIdentityResolutionService,
   ) {}
 
   /**
@@ -103,6 +105,62 @@ export class ResourceObservationService {
       where: { workspaceId, status: ObservedResourceStatus.OBSERVED },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /**
+   * The open observations, each enriched for a human curator with what the
+   * shared authorities say RIGHT NOW: the live identity candidates (name +
+   * catalog id, so "this is an existing resource" can carry the id the mint
+   * safety needs) and the unit the Unit Kernel can currently prove for the
+   * observed spelling (so "genuinely new" can name a canonical unit).
+   *
+   * This is a READ. It resolves through the ONE identity kernel and the ONE
+   * Unit Kernel — never a second matcher — and it changes nothing: candidates
+   * are suggestions, not identity, and no catalog is written here. Evidence is
+   * loaded ONCE for the workspace and every observation resolved against it.
+   */
+  async listOpenForCuration(workspaceId: string) {
+    const observations = await this.listOpen(workspaceId);
+    if (observations.length === 0) return [];
+    const evidence = await this.identity.loadEvidence(this.prisma, workspaceId);
+    return Promise.all(
+      observations.map(async (observation) => {
+        const resolution = await this.identity.resolve(evidence, {
+          rawName: observation.rawName,
+          rawCode: observation.rawCode,
+          rawUnit: observation.rawUnit,
+          resourceType: observation.resourceType,
+        });
+        const candidates = resolution.candidates.map((candidate) => ({
+          resourceCatalogId: candidate.resourceCatalogId,
+          name: candidate.name,
+        }));
+        let suggestedUnitDefinitionId: string | null = null;
+        if (observation.rawUnit) {
+          const unit = await this.unitKernel.resolve(
+            observation.rawUnit,
+            observation.rawUnit,
+          );
+          if (
+            unit.status === UNIT_RESOLUTION_STATUS.RESOLVED &&
+            unit.sourceUnitDefinition
+          ) {
+            suggestedUnitDefinitionId = unit.sourceUnitDefinition.id;
+          }
+        }
+        return {
+          id: observation.id,
+          rawName: observation.rawName,
+          rawCode: observation.rawCode,
+          rawUnit: observation.rawUnit,
+          resourceType: observation.resourceType,
+          origin: observation.origin,
+          status: observation.status,
+          candidates,
+          suggestedUnitDefinitionId,
+        };
+      }),
+    );
   }
 
   /**
