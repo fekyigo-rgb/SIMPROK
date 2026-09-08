@@ -118,11 +118,12 @@ const privateBranch = (
 });
 
 /**
- * The single eligibility predicate. `listEligibleVersions` and the
- * `selectForBoqItem` revalidation both build their query from THIS function, so
- * the list a user is offered and the set the server will actually accept can
- * never drift apart. Drift between those two is a privilege-escalation shape:
- * anything reachable by the picker must be exactly what the binding revalidates.
+ * The lawful-formula predicate. `listEligibleVersions`, `selectForBoqItem`,
+ * and RAB lock all start from THIS function so completeness, dates, catalog
+ * PUBLISHED, and private-unretired cannot drift. New-use currentness is a
+ * separate projection (`pickCurrentApplicableAhspVersions` / a newer-sibling
+ * check). Lock must NOT apply that projection, or a historical binding would
+ * fail the moment a newer snapshot existed.
  */
 export const buildEligibleAhspVersionWhere = (
   workspaceId: string,
@@ -134,6 +135,41 @@ export const buildEligibleAhspVersionWhere = (
     { OR: [catalogBranch(workspaceId), privateBranch(workspaceId)] },
   ],
 });
+
+/**
+ * NEW-USE CURRENTNESS — one applicable snapshot per parent AHSP.
+ *
+ * `buildEligibleAhspVersionWhere` answers "is this row still a lawful formula"
+ * (complete, in date, catalog-published or private-unretired). RAB lock and
+ * already-bound occurrences must keep asking THAT question, or a line priced
+ * against an older snapshot would fail closed the moment a newer sibling
+ * existed.
+ *
+ * New selection is a different question: among those already-lawful rows,
+ * one parent may offer only one snapshot. `versionNumber` is NOT regulation
+ * authority and is NOT the date window — `createVersion` assigns it as the
+ * append ordinal of snapshots on that parent (`last + 1`). After the WHERE
+ * above has applied source dates and lifecycle, the highest ordinal is the
+ * latest recorded revision of that parent. An expired higher number never
+ * reaches this function because WHERE already excluded it.
+ */
+export const pickCurrentApplicableAhspVersions = <
+  T extends { id: string; versionNumber: number; ahsp: { id: string } },
+>(
+  versions: T[],
+): T[] => {
+  const currentByParent = new Map<string, T>();
+  for (const version of versions) {
+    const current = currentByParent.get(version.ahsp.id);
+    if (!current || version.versionNumber > current.versionNumber) {
+      currentByParent.set(version.ahsp.id, version);
+    }
+  }
+  const currentIds = new Set(
+    [...currentByParent.values()].map((version) => version.id),
+  );
+  return versions.filter((version) => currentIds.has(version.id));
+};
 
 /**
  * Which origin a row actually came from, for honest display. Derived from the

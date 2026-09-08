@@ -104,6 +104,109 @@ export const formatCoefficient = (value: string | number | null | undefined): st
   return trimmed === '' || trimmed === '-' ? '0' : trimmed;
 };
 
+/**
+ * THE stored AHSP recipe on a definition (GET /ahsp/:id versions.resources).
+ *
+ * This is not the RAB occurrence panel. Occurrence rows carry project-bound
+ * identity trust. Definition rows are the analysis as stored: a resource
+ * identity string, a type, a unit, a coefficient. Nothing here is resolved
+ * against the catalogue, so this helper never invents a trust state.
+ */
+export type AhspDefinitionResourceWire = {
+  resourceId?: string | null;
+  /**
+   * The catalogue's own name for `resourceId`, supplied by GET /ahsp/:id.
+   *
+   * It is PRESENTATION ONLY. `resourceId` remains the write contract, so a
+   * missing name never changes what a save sends back. Null when the row is not
+   * catalogue-bound, or when the catalogue row is no longer readable here.
+   */
+  resourceName?: string | null;
+  resourceType?: string | null;
+  baseUnit?: string | null;
+  coefficient?: string | number | null;
+};
+
+export type AhspDefinitionComponentRow = {
+  name: string;
+  unit: string;
+  coefficient: string;
+};
+
+export type AhspDefinitionComponentGroup = {
+  key: AhspComponentGroup['key'] | 'UNGROUPED';
+  label: string;
+  rows: AhspDefinitionComponentRow[];
+};
+
+/**
+ * A catalogue id, as stored. Recognising it is the ONLY thing this pattern is
+ * used for — it is never parsed, never rebuilt, and never treated as identity.
+ */
+const CATALOG_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * THE one rule for what a stored component is called on screen.
+ *
+ * A recipe written straight into the workspace stores the resource's own name
+ * in `resourceId`, so it is already readable. A recipe canonicalised from an
+ * official document stores a catalogue id there instead — an internal handle
+ * that means nothing to a reader and must never be shown as a name.
+ *
+ * When the catalogue name is missing the row still appears, described as
+ * unnamed rather than dropped or labelled "not found": the component IS part of
+ * the analysis, and only its name is unavailable here.
+ *
+ * Exported because the update editor must call a component exactly what the
+ * table below calls it. Two spellings of this rule would be two truths.
+ */
+export const resolveDefinitionResourceName = (
+  row: AhspDefinitionResourceWire,
+): string => {
+  const catalogName = (row.resourceName ?? '').trim();
+  if (catalogName !== '') return catalogName;
+  const stored = (row.resourceId ?? '').trim();
+  if (stored === '') return 'Tanpa nama';
+  return CATALOG_UUID.test(stored) ? 'Nama sumber daya belum tersedia' : stored;
+};
+
+const toDefinitionRow = (
+  row: AhspDefinitionResourceWire,
+): AhspDefinitionComponentRow => ({
+  name: resolveDefinitionResourceName(row),
+  unit: (row.baseUnit ?? '').trim() || '—',
+  coefficient: formatCoefficient(row.coefficient),
+});
+
+export const groupAhspDefinitionResources = (
+  resources: readonly AhspDefinitionResourceWire[] | null | undefined,
+): AhspDefinitionComponentGroup[] => {
+  const rows = resources ?? [];
+  const grouped: AhspDefinitionComponentGroup[] = GROUPS.map((group) => ({
+    key: group.key,
+    label: group.label,
+    rows: rows
+      .filter((row) =>
+        group.sourceTypes.includes(String(row.resourceType ?? '').toUpperCase()),
+      )
+      .map(toDefinitionRow),
+  }));
+  const known = new Set(GROUPS.flatMap((group) => [...group.sourceTypes]));
+  const ungrouped = rows.filter(
+    (row) => !known.has(String(row.resourceType ?? '').toUpperCase()),
+  );
+  if (ungrouped.length === 0) return grouped;
+  return [
+    ...grouped,
+    {
+      key: 'UNGROUPED',
+      label: 'Tipe tidak dikenali',
+      rows: ungrouped.map(toDefinitionRow),
+    },
+  ];
+};
+
 export const groupAhspComposition = (
   resolutions: readonly AhspResolutionWire[] | null | undefined,
 ): AhspComponentGroup[] => {
@@ -137,6 +240,10 @@ export const groupAhspComposition = (
 /** True when the analysis states no components at all — used to stay honest. */
 export const hasAnyComponent = (groups: readonly AhspComponentGroup[]): boolean =>
   groups.some((group) => group.rows.length > 0);
+
+export const hasAnyDefinitionComponent = (
+  groups: readonly AhspDefinitionComponentGroup[],
+): boolean => groups.some((group) => group.rows.length > 0);
 
 /**
  * EXCEPTION-FIRST across the whole analysis.

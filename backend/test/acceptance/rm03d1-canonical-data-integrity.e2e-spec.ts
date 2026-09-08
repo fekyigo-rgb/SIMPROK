@@ -36,10 +36,11 @@ const PROJECT_ID = '44000000-0000-4000-8000-000000000006';
 const STRUCTURE_ID = '44000000-0000-4000-8000-000000000007';
 const BOQ_ITEM_ID = '44000000-0000-4000-8000-000000000008';
 const PUBLISHED_VERSION_ID = '44000000-0000-4000-8000-000000000009';
+const REGION_ID = '44000000-0000-4000-8000-00000000000a';
+const PUBLISHED_AHSP_ID = '44000000-0000-4000-8000-00000000000b';
 // This suite owns its region too. Borrowing whatever region happened to be in
 // the database made it depend on another suite's fixtures still existing, and
 // when none did, beforeAll threw before its cleanup ids were assigned.
-const REGION_ID = '44000000-0000-4000-8000-00000000000a';
 
 // AHSP_VIEW/AHSP_MANAGE are deliberately NOT active-membership baseline codes,
 // so this suite grants them through a real role — the same pattern
@@ -213,13 +214,13 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
       },
       update: {},
     });
-    // Two complete, currently-eligible private versions of the same AHSP: one to
-    // retire, one that must be untouched by that act. Plus a PUBLISHED version,
-    // which this route must refuse outright.
+    // Two complete private versions of the same AHSP: RETIRE is the current
+    // applicable snapshot (higher versionNumber); KEEP is historical provenance
+    // until RETIRE is withdrawn. PUBLISHED lives on a separate parent so it
+    // cannot steal currentness from this retirement pair.
     for (const [id, versionNumber, status] of [
       [VERSION_KEEP_ID, 1, 'DRAFT'],
       [VERSION_RETIRE_ID, 2, 'DRAFT'],
-      [PUBLISHED_VERSION_ID, 3, 'PUBLISHED'],
     ] as const) {
       await prisma.aHSPVersion.upsert({
         where: { id },
@@ -246,6 +247,43 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
         update: { status },
       });
     }
+    await prisma.aHSP.upsert({
+      where: { id: PUBLISHED_AHSP_ID },
+      create: {
+        id: PUBLISHED_AHSP_ID,
+        workspaceId: WORKSPACE_A,
+        workType: 'RM03D1 Published Work',
+        methodType: 'MANUAL',
+        locationType: 'GENERAL',
+        methodName: 'Integrity published fixture',
+        ownershipType: 'USER_ASSET',
+      },
+      update: {},
+    });
+    await prisma.aHSPVersion.upsert({
+      where: { id: PUBLISHED_VERSION_ID },
+      create: {
+        id: PUBLISHED_VERSION_ID,
+        ahspId: PUBLISHED_AHSP_ID,
+        workspaceId: WORKSPACE_A,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveDate: new Date('2023-08-30T00:00:00.000Z'),
+        outputUnit: 'm3',
+        outputUnitDefinitionId: m3UnitId,
+        resources: {
+          create: [
+            {
+              resourceId: 'RM03D1 Integrity Material',
+              resourceType: 'MATERIAL',
+              coefficient: 1,
+              baseUnit: 'm3',
+            },
+          ],
+        },
+      },
+      update: { status: 'PUBLISHED' },
+    });
   };
 
   beforeEach(async () => {
@@ -276,9 +314,9 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
 
   afterAll(async () => {
     await releaseOccurrences();
-    await prisma.aHSPAuditLog.deleteMany({ where: { ahspId: AHSP_ID } });
-    await prisma.aHSPVersion.deleteMany({ where: { ahspId: AHSP_ID } });
-    await prisma.aHSP.deleteMany({ where: { id: AHSP_ID } });
+    await prisma.aHSPAuditLog.deleteMany({ where: { ahspId: { in: [AHSP_ID, PUBLISHED_AHSP_ID] } } });
+    await prisma.aHSPVersion.deleteMany({ where: { ahspId: { in: [AHSP_ID, PUBLISHED_AHSP_ID] } } });
+    await prisma.aHSP.deleteMany({ where: { id: { in: [AHSP_ID, PUBLISHED_AHSP_ID] } } });
     await prisma.boqItem.deleteMany({ where: { boqStructureId: STRUCTURE_ID } });
     await prisma.boqStructure.deleteMany({ where: { id: STRUCTURE_ID } });
     if (assignmentId) {
@@ -335,10 +373,10 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
   const auditCount = () =>
     prisma.aHSPAuditLog.count({ where: { ahspVersionId: VERSION_RETIRE_ID } });
 
-  it('A: a retired version leaves the SAME eligible-version read the product selects from, and the sibling stays', async () => {
+  it('A: a retired current snapshot leaves the SAME eligible-version read, and the sibling becomes current', async () => {
     const before = await eligibleVersionIds();
     expect(before).toContain(VERSION_RETIRE_ID);
-    expect(before).toContain(VERSION_KEEP_ID);
+    expect(before).not.toContain(VERSION_KEEP_ID);
 
     const response = await retire(
       VERSION_RETIRE_ID,
@@ -353,11 +391,13 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     // Retirement is version-scoped: it must never take the parent's other
     // versions down with it, which is what archiving the AHSP would do.
     expect(after).toContain(VERSION_KEEP_ID);
+    const kept = await prisma.aHSPVersion.findUniqueOrThrow({ where: { id: VERSION_KEEP_ID } });
+    expect(kept.status).toBe('DRAFT');
   });
 
   it('B: binding a retired version through the normal path ALWAYS fails closed — no conditional skip', async () => {
     // The fixture guarantees a real WORK_ITEM, so this proof is unconditional.
-    await bind(VERSION_KEEP_ID, `RM03D1-BIND-OK-${Date.now()}`).expect(201);
+    await bind(VERSION_RETIRE_ID, `RM03D1-BIND-OK-${Date.now()}`).expect(201);
 
     await retire(VERSION_RETIRE_ID, 'SUPERSEDED', 'replaced by a corrected-evidence version').expect(201);
 

@@ -20,6 +20,18 @@ export interface UpdateAhspDto {
   methodName?: string;
 }
 
+/**
+ * Parent AHSP identity is source names in a workspace, not SIMPROK's method
+ * or terrain classification. Schema still requires NOT NULL methodType and
+ * locationType; OTHER is the non-interpretive filler. Callers may send
+ * MANUAL/MOUNTAIN; those values are never persisted as identity and never
+ * distinguish two parents.
+ */
+export const AHSP_PARENT_IDENTITY_FILLER = {
+  methodType: MethodType.OTHER,
+  locationType: LocationType.OTHER,
+} as const;
+
 @Injectable()
 export class AhspService {
   private readonly policy = new AhspOwnershipPolicy();
@@ -58,27 +70,23 @@ export class AhspService {
   }
 
   async create(data: CreateAhspDto) {
-    if (!data.workspaceId) {
-      const duplicate = await this.prisma.aHSP.findFirst({
-        where: {
-          workspaceId: null,
-          workType: data.workType,
-          methodType: data.methodType,
-          locationType: data.locationType,
-          methodName: data.methodName,
-          deletedAt: null,
-        }
-      });
-      if (duplicate) throw new ConflictException('AHSP Official already exists.');
-    }
+    const sourceIdentity = {
+      workspaceId: data.workspaceId ?? null,
+      workType: data.workType,
+      methodName: data.methodName,
+      deletedAt: null,
+    };
+    const duplicate = await this.prisma.aHSP.findFirst({
+      where: sourceIdentity,
+    });
+    if (duplicate) throw new ConflictException('AHSP_SOURCE_IDENTITY_EXISTS');
 
     const ahsp = await this.prisma.aHSP.create({
       data: {
         workspaceId: data.workspaceId,
         workType: data.workType,
-        methodType: data.methodType,
-        locationType: data.locationType,
         methodName: data.methodName,
+        ...AHSP_PARENT_IDENTITY_FILLER,
         createdByUserId: data.userId,
         ownershipType: 'USER_ASSET',
         reviewStatus: 'PENDING',
@@ -90,17 +98,68 @@ export class AhspService {
   }
 
   async getById(id: string, workspaceId?: string) {
+    // THE same definition the list already proved visible. Versions and their
+    // stored resources travel with it so the room detail can show the recipe
+    // without a second query, a second service, or the RAB occurrence path.
     const ahsp = await this.prisma.aHSP.findFirst({
       where: {
         id,
         deletedAt: null,
       },
-      include: { versions: true }
+      include: {
+        versions: {
+          orderBy: { versionNumber: 'desc' },
+          include: { resources: true },
+        },
+      },
     });
     if (!ahsp || (ahsp.workspaceId !== null && ahsp.workspaceId !== workspaceId)) {
       throw new NotFoundException('AHSP not found');
     }
-    return ahsp;
+    return this.withCatalogResourceNames(ahsp, workspaceId);
+  }
+
+  /**
+   * Presentation names from the existing ResourceCatalog. Not a second identity
+   * engine: stored resourceId stays the write contract. Official catalog rows
+   * (workspaceId null) remain visible beside this workspace's own rows.
+   */
+  private async withCatalogResourceNames<
+    T extends {
+      versions: Array<{
+        resources: Array<{ resourceId: string } & Record<string, unknown>>;
+      }>;
+    },
+  >(ahsp: T, workspaceId?: string): Promise<T> {
+    const ids = [
+      ...new Set(
+        ahsp.versions.flatMap((version) =>
+          version.resources.map((row) => row.resourceId).filter(isCatalogUuid),
+        ),
+      ),
+    ];
+    if (ids.length === 0) return ahsp;
+    const catalog = await this.prisma.resourceCatalog.findMany({
+      where: {
+        id: { in: ids },
+        status: 'ACTIVE',
+        OR: workspaceId
+          ? [{ workspaceId }, { workspaceId: null }]
+          : [{ workspaceId: null }],
+      },
+      select: { id: true, name: true },
+    });
+    const names = new Map(catalog.map((row) => [row.id, row.name]));
+    return {
+      ...ahsp,
+      versions: ahsp.versions.map((version) => ({
+        ...version,
+        resources: version.resources.map((row) => ({
+          ...row,
+          resourceName: names.get(row.resourceId) ?? null,
+        })),
+      })),
+    };
   }
 
   /**
@@ -156,11 +215,15 @@ export class AhspService {
     this.runPolicy(p => p.canUpdate(ahsp as AhspEntity, reason));
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // HTTP PATCH forwards the raw body, which still carries reason/userId and
+      // may carry methodType/locationType. Parent identity is source names only;
+      // classification and request metadata must never be persisted here.
+      const identitySafe: { workType?: string; methodName?: string } = {};
+      if (updateData.workType !== undefined) identitySafe.workType = updateData.workType;
+      if (updateData.methodName !== undefined) identitySafe.methodName = updateData.methodName;
       const updatedAhsp = await tx.aHSP.update({
         where: { id },
-        data: {
-          ...updateData,
-        },
+        data: identitySafe,
       });
 
       await this.audit.logAction({
@@ -314,4 +377,11 @@ export class AhspService {
 
     return transferred;
   }
+}
+
+const CATALOG_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isCatalogUuid(value: string): boolean {
+  return CATALOG_UUID.test(value);
 }

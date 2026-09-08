@@ -73,6 +73,7 @@ describe('GHX-01 governed human Resource Identity decision (e2e)', () => {
   // ---- ahsp ----
   let ahspId: string;
   let globalAhspId: string;
+  const createdAhspIds: string[] = [];
   const version: Record<string, string> = {};
   /** rawAhspResourceRef -> AHSPResource.id, per version key. */
   const ahspResourceId: Record<string, Record<string, string>> = {};
@@ -515,11 +516,27 @@ describe('GHX-01 governed human Resource Identity decision (e2e)', () => {
       versionNumber: number,
       resources: Array<{ resourceId: string; baseUnit: string; coefficient?: string }>,
     ) => {
+      let parentId = owningAhspId;
+      let parentVersionNumber = versionNumber;
+      if (ws !== null) {
+        const parent = await prisma.aHSP.create({
+          data: {
+            workspaceId: ws,
+            workType: `${tag} Work`,
+            methodType: 'MANUAL',
+            locationType: 'GENERAL',
+            methodName: `${tag}-${key}`,
+          },
+        });
+        parentId = parent.id;
+        parentVersionNumber = 1;
+        createdAhspIds.push(parent.id);
+      }
       const created = await prisma.aHSPVersion.create({
         data: {
-          ahspId: owningAhspId,
+          ahspId: parentId,
           workspaceId: ws,
-          versionNumber,
+          versionNumber: parentVersionNumber,
           status: 'PUBLISHED',
           effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
           outputUnit: 'M1',
@@ -718,7 +735,7 @@ describe('GHX-01 governed human Resource Identity decision (e2e)', () => {
 
   afterAll(async () => {
     const allProjectIds = [projectId, projectTwoId, projectBId].filter(Boolean);
-    const allAhspIds = [ahspId, globalAhspId].filter(Boolean);
+    const allAhspIds = [ahspId, globalAhspId, ...createdAhspIds].filter(Boolean);
     const allStructureIds = [structureId, structureTwoId, structureBId].filter(
       Boolean,
     );

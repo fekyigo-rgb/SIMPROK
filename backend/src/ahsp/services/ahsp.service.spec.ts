@@ -109,8 +109,6 @@ describe('AhspService', () => {
       where: {
         workspaceId: null,
         workType: ahsp.workType,
-        methodType: ahsp.methodType,
-        locationType: ahsp.locationType,
         methodName: ahsp.methodName,
         deletedAt: null,
       },
@@ -119,9 +117,9 @@ describe('AhspService', () => {
       data: {
         workspaceId: undefined,
         workType: ahsp.workType,
-        methodType: ahsp.methodType,
-        locationType: ahsp.locationType,
         methodName: ahsp.methodName,
+        methodType: MethodType.OTHER,
+        locationType: LocationType.OTHER,
         createdByUserId: ahsp.createdByUserId,
         ownershipType: 'USER_ASSET',
         reviewStatus: 'PENDING',
@@ -152,6 +150,59 @@ describe('AhspService', () => {
     expect(audit.logAction).not.toHaveBeenCalled();
   });
 
+  it('create does not treat caller methodType or locationType as parent identity', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue(null);
+    prisma.aHSP.create.mockResolvedValue({
+      ...ahsp,
+      methodType: MethodType.OTHER,
+      locationType: LocationType.OTHER,
+    });
+    audit.logAction.mockResolvedValue({ id: 'audit-1' });
+
+    await service.create({
+      workspaceId: ahsp.workspaceId,
+      workType: ahsp.workType,
+      methodType: MethodType.MECHANICAL,
+      locationType: LocationType.MOUNTAIN,
+      methodName: ahsp.methodName,
+      userId: ahsp.createdByUserId,
+    });
+
+    expect(prisma.aHSP.findFirst).toHaveBeenCalledWith({
+      where: {
+        workspaceId: ahsp.workspaceId,
+        workType: ahsp.workType,
+        methodName: ahsp.methodName,
+        deletedAt: null,
+      },
+    });
+    expect(prisma.aHSP.create.mock.calls[0][0].data.methodType).toBe(MethodType.OTHER);
+    expect(prisma.aHSP.create.mock.calls[0][0].data.locationType).toBe(LocationType.OTHER);
+    expect(JSON.stringify(prisma.aHSP.findFirst.mock.calls[0][0].where)).not.toContain('MECHANICAL');
+    expect(JSON.stringify(prisma.aHSP.findFirst.mock.calls[0][0].where)).not.toContain('MOUNTAIN');
+  });
+
+  it('create refuses a second parent that differs only by method or location classification', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue({
+      ...ahsp,
+      methodType: MethodType.MANUAL,
+      locationType: LocationType.GENERAL,
+    });
+
+    await expect(
+      service.create({
+        workspaceId: ahsp.workspaceId,
+        workType: ahsp.workType,
+        methodType: MethodType.SEMI_MECHANICAL,
+        locationType: LocationType.COASTAL,
+        methodName: ahsp.methodName,
+        userId: ahsp.createdByUserId,
+      }),
+    ).rejects.toMatchObject({ message: 'AHSP_SOURCE_IDENTITY_EXISTS' });
+
+    expect(prisma.aHSP.create).not.toHaveBeenCalled();
+  });
+
   it('getById returns an AHSP scoped to the requested workspace', async () => {
     prisma.aHSP.findFirst.mockResolvedValue(ahsp);
 
@@ -164,7 +215,12 @@ describe('AhspService', () => {
         id: ahsp.id,
         deletedAt: null,
       },
-      include: { versions: true },
+      include: {
+        versions: {
+          orderBy: { versionNumber: 'desc' },
+          include: { resources: true },
+        },
+      },
     });
   });
 
@@ -210,6 +266,64 @@ describe('AhspService', () => {
       after: updatedAhsp,
       reason: 'correct method name',
     });
+  });
+
+  it('update cannot rewrite parent identity through methodType or locationType', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue(ahsp);
+    prisma.aHSP.update.mockResolvedValue(ahsp);
+    audit.logAction.mockResolvedValue({ id: 'audit-1' });
+
+    await service.update(
+      ahsp.id,
+      {
+        methodName: 'Updated method',
+        methodType: MethodType.CHEMICAL,
+        locationType: LocationType.OFFSHORE,
+      },
+      ahsp.createdByUserId,
+      'reclassify',
+      ahsp.workspaceId,
+    );
+
+    expect(prisma.aHSP.update).toHaveBeenCalledWith({
+      where: { id: ahsp.id },
+      data: {
+        methodName: 'Updated method',
+      },
+    });
+    const persisted = prisma.aHSP.update.mock.calls[0][0].data;
+    expect(persisted).not.toHaveProperty('methodType');
+    expect(persisted).not.toHaveProperty('locationType');
+  });
+
+  it('update persists only source-name identity fields from a raw HTTP body', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue(ahsp);
+    prisma.aHSP.update.mockResolvedValue(ahsp);
+    audit.logAction.mockResolvedValue({ id: 'audit-1' });
+
+    await service.update(
+      ahsp.id,
+      {
+        methodName: 'Updated method',
+        methodType: MethodType.CHEMICAL,
+        locationType: LocationType.OFFSHORE,
+        reason: 'reclassify',
+        userId: 'forged-actor',
+      } as any,
+      ahsp.createdByUserId,
+      'reclassify',
+      ahsp.workspaceId,
+    );
+
+    expect(prisma.aHSP.update).toHaveBeenCalledWith({
+      where: { id: ahsp.id },
+      data: {
+        methodName: 'Updated method',
+      },
+    });
+    expect(Object.keys(prisma.aHSP.update.mock.calls[0][0].data).sort()).toEqual([
+      'methodName',
+    ]);
   });
   /**
    * WORKSPACE AHSP DISCOVERY — visibility, not bindability.

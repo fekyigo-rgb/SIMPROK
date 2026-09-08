@@ -1,32 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '../utils/apiClient';
+import { useAuth } from '../contexts/AuthContext';
+import { explainAhspItemReasons } from '../utils/ahspDocumentUserCopy';
 
 /**
  * THE standalone AHSP room — the one door the sidebar opens.
  *
- * It answers the question asked OUTSIDE a project: "what AHSP is visible to my
- * workspace". That is a different contract from the RAB picker, which asks
- * "what may this BOQ item bind to right now", and the two deliberately do not
- * share a query — binding eligibility is a security invariant tied to what
- * selectForBoqItem revalidates, and a display surface must never pull on it.
- *
- * Every column is a stored database column returned by GET /ahsp. The version
- * number is counted by the database, not here. Nothing on this page is derived,
- * inferred, or supplied by a fixture.
+ * Discovery still uses GET /ahsp. Import still uses POST /ahsp/document/preview
+ * and /commit. Create still uses POST /ahsp. Schema fillers methodType /
+ * locationType are sent, never shown.
  */
 
 type AhspRow = {
   id: string;
   workspaceId: string | null;
   workType: string | null;
-  methodType: string | null;
-  locationType: string | null;
   methodName: string | null;
-  ownershipType: string | null;
-  reviewStatus: string | null;
   archivedAt: string | null;
-  updatedAt: string | null;
-  _count?: { versions: number } | null;
 };
 
 type RoomState =
@@ -34,10 +25,17 @@ type RoomState =
   | { phase: 'READY'; rows: AhspRow[] }
   | { phase: 'FAILED'; message: string };
 
+type PreviewItem = {
+  status: string;
+  reasonCodes: string[];
+  workType: { raw: string } | null;
+  methodName: { raw: string } | null;
+};
+
 const NAVY = 'var(--simprok-authority-navy-800)';
 const MUTED = 'var(--simprok-engineering-blue-500)';
 
-const cell: React.CSSProperties = {
+const cell: CSSProperties = {
   padding: 'var(--space-3)',
   borderBottom: '1px solid var(--simprok-engineering-blue-100)',
   verticalAlign: 'top',
@@ -50,15 +48,43 @@ const orDash = (value: string | number | null | undefined) =>
     String(value)
   );
 
-/**
- * A NULL workspaceId is the Official Repository, which is why the backend lets
- * every workspace see it. Saying so is more honest than printing an empty cell.
- */
-const originLabel = (workspaceId: string | null) =>
-  workspaceId === null ? 'Repositori Resmi' : 'Workspace ini';
+const ownershipLabel = (workspaceId: string | null) =>
+  workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya';
+
+const primaryButton: CSSProperties = {
+  background: 'var(--simprok-trust-blue-500)',
+  color: '#FFFFFF',
+  border: 0,
+  padding: 'var(--space-2) var(--space-4)',
+  marginRight: 'var(--space-2)',
+};
+
+const navyButton: CSSProperties = {
+  ...primaryButton,
+  background: NAVY,
+};
 
 export function AhspRoomPage() {
+  const navigate = useNavigate();
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission('AHSP_MANAGE');
   const [state, setState] = useState<RoomState>({ phase: 'LOADING' });
+  const [query, setQuery] = useState('');
+  const [workType, setWorkType] = useState('');
+  const [methodName, setMethodName] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<null | {
+    document: { regulationReference: { raw: string } | null; effectiveDate: string | null };
+    workItems: PreviewItem[];
+  }>(null);
+  const [commitResult, setCommitResult] = useState<null | {
+    written: Array<{ ahspId: string; workType: string }>;
+    skipped: Array<{ workType: string | null; reasonCodes: string[] }>;
+  }>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -67,9 +93,6 @@ export function AhspRoomPage() {
         const response = await apiFetch('/ahsp');
         if (!response.ok) {
           if (!active) return;
-          // A refused or broken request is a FAILURE, never an empty room.
-          // Rendering "belum ada AHSP" for a 403 would report an authorization
-          // fact as a data fact, and send the user looking for AHSP that exists.
           setState({
             phase: 'FAILED',
             message:
@@ -93,17 +116,173 @@ export function AhspRoomPage() {
     };
   }, []);
 
+  const visibleRows = useMemo(() => {
+    if (state.phase !== 'READY') return [];
+    const needle = query.trim().toLowerCase();
+    if (!needle) return state.rows;
+    return state.rows.filter((row) => {
+      const hay = `${row.workType ?? ''} ${row.methodName ?? ''}`.toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [state, query]);
+
+  const createWorkspaceAhsp = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!canManage || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const response = await apiFetch('/ahsp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workType: workType.trim(),
+          methodName: methodName.trim(),
+          methodType: 'OTHER',
+          locationType: 'OTHER',
+        }),
+      });
+      if (!response.ok) {
+        setCreateError('AHSP milik Anda tidak dapat dibuat (HTTP ' + response.status + ').');
+        return;
+      }
+      const created = (await response.json()) as { id?: string };
+      if (typeof created.id !== 'string' || created.id === '') {
+        setCreateError('Server tidak mengembalikan identitas AHSP yang baru dibuat.');
+        return;
+      }
+      navigate('/ahsp/' + created.id);
+    } catch {
+      setCreateError('AHSP milik Anda tidak dapat dihubungi.');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const previewDocument = async () => {
+    if (!canManage || !file || importing) return;
+    setImporting(true);
+    setImportError(null);
+    setCommitResult(null);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const response = await apiFetch('/ahsp/document/preview', { method: 'POST', body });
+      if (!response.ok) {
+        setImportError('Dokumen AHSP tidak dapat dipahami (HTTP ' + response.status + ').');
+        return;
+      }
+      setPreview(await response.json());
+    } catch {
+      setImportError('Dokumen AHSP tidak dapat dihubungi.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const commitDocument = async () => {
+    if (!canManage || !file || importing) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const response = await apiFetch('/ahsp/document/commit', { method: 'POST', body });
+      if (!response.ok) {
+        setImportError('AHSP terbukti tidak dapat disimpan (HTTP ' + response.status + ').');
+        return;
+      }
+      const data = await response.json();
+      setCommitResult(data);
+      setPreview(data.knowledge ?? preview);
+      const reload = await apiFetch('/ahsp');
+      if (reload.ok) {
+        const rows = await reload.json();
+        setState({ phase: 'READY', rows: Array.isArray(rows) ? rows : [] });
+      }
+    } catch {
+      setImportError('AHSP terbukti tidak dapat dihubungi.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const recognized = preview?.workItems.length ?? 0;
+  const ready = preview?.workItems.filter((item) => item.status === 'READY').length ?? 0;
+  const unresolved = preview ? recognized - ready : 0;
+
   return (
     <main aria-label="Ruang AHSP" style={{ padding: 'var(--space-6, 1.5rem)' }}>
       <header style={{ marginBottom: 'var(--space-5)' }}>
-        <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 0 }}>SIMPROK / AHSP</p>
-        <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: NAVY, margin: 'var(--space-1) 0' }}>
+        <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: NAVY, margin: 0 }}>
           AHSP
         </h1>
-        <p style={{ fontSize: 'var(--text-sm)', color: NAVY, margin: 0 }}>
-          Analisa Harga Satuan Pekerjaan yang tersedia dalam workspace ini.
-        </p>
       </header>
+
+      {canManage ? (
+        <section aria-label="Import AHSP" style={{ marginBottom: 'var(--space-6)' }}>
+          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
+            Import AHSP
+          </h2>
+          <input
+            type="file"
+            accept=".xlsx"
+            aria-label="Berkas AHSP resmi"
+            onChange={(event) => {
+              setFile(event.target.files?.[0] ?? null);
+              setPreview(null);
+              setCommitResult(null);
+            }}
+          />
+          <div style={{ marginTop: 'var(--space-3)' }}>
+            <button
+              type="button"
+              disabled={!file || importing}
+              onClick={() => void previewDocument()}
+              style={primaryButton}
+            >
+              {importing ? 'Membaca…' : 'Pahami dokumen'}
+            </button>
+            <button
+              type="button"
+              disabled={!file || importing || !preview}
+              onClick={() => void commitDocument()}
+              style={navyButton}
+            >
+              Simpan yang terbukti
+            </button>
+          </div>
+          {importError ? (
+            <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
+              {importError}
+            </p>
+          ) : null}
+          {preview ? (
+            <div style={{ marginTop: 'var(--space-4)', fontSize: 'var(--text-sm)', color: NAVY }}>
+              <p style={{ margin: '0 0 var(--space-2)' }}>
+                {recognized} pekerjaan dikenali. {ready} pekerjaan siap digunakan.{' '}
+                {unresolved} pekerjaan masih perlu dilengkapi.
+              </p>
+              <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
+                {preview.workItems.map((item, index) => (
+                  <li key={index} style={{ marginBottom: 'var(--space-1)' }}>
+                    {item.workType?.raw ?? '—'} — {item.methodName?.raw ?? '—'}
+                    {item.status === 'READY'
+                      ? ' · siap digunakan'
+                      : ` · ${explainAhspItemReasons(item.reasonCodes)}`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {commitResult ? (
+            <p style={{ fontSize: 'var(--text-sm)', color: NAVY, marginTop: 'var(--space-3)' }}>
+              {commitResult.written.length} pekerjaan disimpan.{' '}
+              {commitResult.skipped.length} pekerjaan belum disimpan.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       {state.phase === 'LOADING' ? (
         <p role="status" style={{ color: MUTED }}>
@@ -118,46 +297,99 @@ export function AhspRoomPage() {
         </section>
       ) : null}
 
-      {state.phase === 'READY' && state.rows.length === 0 ? (
-        <section className="simprok-honest-frame" aria-label="AHSP kosong">
-          <span className="simprok-honest-frame__badge">Belum ada data</span>
-          <p>Belum ada AHSP yang tersedia dalam workspace ini.</p>
+      {state.phase === 'READY' ? (
+        <section aria-label="AHSP yang tersedia">
+          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
+            AHSP yang tersedia
+          </h2>
+          <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
+            Cari
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label="Cari AHSP"
+              placeholder="Jenis pekerjaan atau uraian"
+              style={{ display: 'block', width: '100%', maxWidth: '24rem', color: NAVY, marginTop: 'var(--space-1)' }}
+            />
+          </label>
+          {state.rows.length === 0 ? (
+            <section className="simprok-honest-frame" aria-label="AHSP kosong">
+              <span className="simprok-honest-frame__badge">Belum ada data</span>
+              <p>Belum ada AHSP yang tersedia dalam workspace ini.</p>
+            </section>
+          ) : visibleRows.length === 0 ? (
+            <p style={{ color: MUTED, fontSize: 'var(--text-sm)' }}>Tidak ada AHSP yang cocok dengan pencarian ini.</p>
+          ) : (
+            <table
+              aria-label="Daftar AHSP yang tersedia"
+              style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}
+            >
+              <thead>
+                <tr style={{ textAlign: 'left', color: NAVY }}>
+                  <th style={cell}>Jenis Pekerjaan</th>
+                  <th style={cell}>Uraian</th>
+                  <th style={cell}>Kepemilikan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((row) => (
+                  <tr key={row.id}>
+                    <td style={cell}>
+                      <Link
+                        to={'/ahsp/' + row.id}
+                        style={{ color: NAVY, fontWeight: 600, textDecoration: 'none' }}
+                      >
+                        {orDash(row.workType)}
+                      </Link>
+                    </td>
+                    <td style={cell}>{orDash(row.methodName)}</td>
+                    <td style={cell}>{ownershipLabel(row.workspaceId)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </section>
       ) : null}
 
-      {state.phase === 'READY' && state.rows.length > 0 ? (
-        <table
-          aria-label="Daftar AHSP workspace"
-          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}
+      {canManage ? (
+        <form
+          aria-label="Buat AHSP milik saya"
+          onSubmit={createWorkspaceAhsp}
+          style={{ maxWidth: '36rem', marginTop: 'var(--space-6)' }}
         >
-          <thead>
-            <tr style={{ textAlign: 'left', color: NAVY }}>
-              <th style={cell}>Jenis Pekerjaan</th>
-              <th style={cell}>Metode</th>
-              <th style={cell}>Tipe</th>
-              <th style={cell}>Lokasi</th>
-              <th style={cell}>Asal</th>
-              <th style={cell}>Status Tinjauan</th>
-              <th style={cell}>Versi</th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.rows.map((row) => (
-              <tr key={row.id}>
-                <td style={cell}>{orDash(row.workType)}</td>
-                <td style={cell}>{orDash(row.methodName)}</td>
-                <td style={cell}>{orDash(row.methodType)}</td>
-                <td style={cell}>{orDash(row.locationType)}</td>
-                <td style={cell}>{originLabel(row.workspaceId)}</td>
-                <td style={{ ...cell, color: NAVY }}>
-                  {orDash(row.reviewStatus)}
-                  {row.archivedAt ? <span style={{ color: MUTED }}> · Diarsipkan</span> : null}
-                </td>
-                <td style={cell}>{orDash(row._count?.versions)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
+            AHSP Milik Saya
+          </h2>
+          <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
+            Jenis pekerjaan
+            <input
+              required
+              value={workType}
+              onChange={(event) => setWorkType(event.target.value)}
+              aria-label="Jenis pekerjaan"
+              style={{ display: 'block', width: '100%', color: NAVY }}
+            />
+          </label>
+          <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
+            Uraian
+            <input
+              required
+              value={methodName}
+              onChange={(event) => setMethodName(event.target.value)}
+              aria-label="Uraian AHSP"
+              style={{ display: 'block', width: '100%', color: NAVY }}
+            />
+          </label>
+          {createError ? (
+            <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
+              {createError}
+            </p>
+          ) : null}
+          <button type="submit" disabled={creating} style={primaryButton}>
+            {creating ? 'Menyimpan…' : 'Simpan AHSP milik saya'}
+          </button>
+        </form>
       ) : null}
     </main>
   );

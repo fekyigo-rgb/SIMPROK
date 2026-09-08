@@ -18,10 +18,12 @@ describe('AhspVersionService', () => {
     };
     aHSPVersion: {
       findFirst: jest.Mock;
+      findMany: jest.Mock;
       create: jest.Mock;
       findUnique: jest.Mock;
       update: jest.Mock;
     };
+    $transaction: jest.Mock;
   };
   let audit: {
     logAction: jest.Mock;
@@ -31,6 +33,7 @@ describe('AhspVersionService', () => {
   const ahsp = {
     id: 'ahsp-1',
     workspaceId: 'workspace-1',
+    ownershipType: 'USER_ASSET',
     workType: 'Concrete Work',
     methodType: MethodType.MANUAL,
     locationType: LocationType.GENERAL,
@@ -62,11 +65,16 @@ describe('AhspVersionService', () => {
       },
       aHSPVersion: {
         findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
         findUnique: jest.fn(),
         update: jest.fn(),
       },
+      $transaction: jest.fn(),
     };
+    prisma.$transaction.mockImplementation(async (callback: (client: typeof prisma) => unknown) =>
+      callback(prisma),
+    );
     audit = {
       logAction: jest.fn(),
     };
@@ -150,16 +158,89 @@ describe('AhspVersionService', () => {
       },
       include: { resources: true },
     });
-    expect(audit.logAction).toHaveBeenCalledWith({
-      ahspId: ahsp.id,
-      ahspVersionId: version.id,
-      action: 'AHSPVersionCreated',
-      who: 'user-1',
-      after: {
-        ...version,
-        versionNumber: 2,
+    expect(audit.logAction).toHaveBeenCalledWith(
+      {
+        ahspId: ahsp.id,
+        ahspVersionId: version.id,
+        action: 'AHSPVersionCreated',
+        who: 'user-1',
+        after: {
+          ...version,
+          versionNumber: 2,
+        },
+      },
+      prisma,
+    );
+    expect(prisma.aHSPVersion.findMany).toHaveBeenCalledWith({
+      where: {
+        ahspId: ahsp.id,
+        id: { not: version.id },
+        workspaceId: ahsp.workspaceId,
+        status: {
+          notIn: [
+            AhspVersionStatus.PUBLISHED,
+            AhspVersionStatus.SUPERSEDED,
+            AhspVersionStatus.ARCHIVED,
+          ],
+        },
       },
     });
+    expect(prisma.aHSPVersion.update).not.toHaveBeenCalled();
+  });
+
+  it('createVersion supersedes prior private revisions and leaves PUBLISHED catalog rows', async () => {
+    const priorDraft = { ...version, id: 'version-prior-draft', status: AhspVersionStatus.DRAFT };
+    const created = { ...version, id: 'version-new', versionNumber: 2 };
+    units.resolve.mockResolvedValue({ status: 'RESOLVED', sourceUnitDefinition: { id: 'unit-m3' } });
+    prisma.aHSP.findUnique.mockResolvedValue(ahsp);
+    prisma.aHSPVersion.findFirst.mockResolvedValue(version);
+    prisma.aHSPVersion.create.mockResolvedValue(created);
+    prisma.aHSPVersion.findMany.mockResolvedValue([priorDraft]);
+    prisma.aHSPVersion.update.mockResolvedValue({
+      ...priorDraft,
+      status: AhspVersionStatus.SUPERSEDED,
+    });
+    audit.logAction.mockResolvedValue({ id: 'audit-1' });
+
+    await expect(
+      service.createVersion(ahsp.id, {
+        workspaceId: ahsp.workspaceId,
+        resources: [{ ...resource, conversionFactor: undefined }],
+        outputUnit: 'M3',
+        userId: 'user-1',
+      }),
+    ).resolves.toEqual(created);
+
+    expect(prisma.aHSPVersion.update).toHaveBeenCalledWith({
+      where: { id: priorDraft.id },
+      data: { status: AhspVersionStatus.SUPERSEDED },
+    });
+    expect(audit.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ahspVersionId: priorDraft.id,
+        action: 'AHSPVersionSUPERSEDED',
+        reason: 'AHSP_UPDATED',
+      }),
+      prisma,
+    );
+  });
+
+  it('createVersion does not supersede Official Repository revisions', async () => {
+    units.resolve.mockResolvedValue({ status: 'RESOLVED', sourceUnitDefinition: { id: 'unit-m3' } });
+    prisma.aHSP.findUnique.mockResolvedValue({ ...ahsp, workspaceId: null });
+    prisma.aHSPVersion.findFirst.mockResolvedValue(null);
+    prisma.aHSPVersion.create.mockResolvedValue({ ...version, workspaceId: null });
+    audit.logAction.mockResolvedValue({ id: 'audit-1' });
+
+    await service.createVersion(ahsp.id, {
+      workspaceId: 'workspace-1',
+      resources: [{ ...resource, conversionFactor: undefined }],
+      outputUnit: 'M3',
+      userId: 'user-1',
+    });
+
+    expect(prisma.aHSPVersion.findMany).not.toHaveBeenCalled();
+    expect(prisma.aHSPVersion.update).not.toHaveBeenCalled();
   });
 
   it('updateStatus updates a version status and returns the Prisma result', async () => {

@@ -36,6 +36,7 @@ describe('Project AHSP whole-version selection (e2e)', () => {
   let regionId: string;
   let otherRegionId: string;
   let boqItemId: string;
+  let structureId: string;
   let wholeVersionId: string;
   let multipleVersionId: string;
   let unresolvedVersionId: string;
@@ -137,6 +138,7 @@ describe('Project AHSP whole-version selection (e2e)', () => {
         status: 'DRAFT',
       },
     });
+    structureId = structure.id;
     const item = await prisma.boqItem.create({
       data: {
         boqStructureId: structure.id,
@@ -313,22 +315,21 @@ describe('Project AHSP whole-version selection (e2e)', () => {
     regionId = region.id;
     otherRegionId = otherRegion.id;
 
-    const ahsp = await prisma.aHSP.create({
-      data: {
-        workspaceId,
-        workType: `${tag} Work`,
-        methodType: 'MANUAL',
-        locationType: 'GENERAL',
-        methodName: tag,
-      },
-    });
-    ahspId = ahsp.id;
-    const createVersion = async (versionNumber: number, names: string[]) => {
+    const createPublishedRecipe = async (suffix: string, names: string[]) => {
+      const parent = await prisma.aHSP.create({
+        data: {
+          workspaceId,
+          workType: `${tag} Work`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: `${tag} ${suffix}`,
+        },
+      });
       const version = await prisma.aHSPVersion.create({
         data: {
-          ahspId,
+          ahspId: parent.id,
           workspaceId,
-          versionNumber,
+          versionNumber: 1,
           status: 'PUBLISHED',
           effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
           outputUnit: 'M1',
@@ -343,16 +344,17 @@ describe('Project AHSP whole-version selection (e2e)', () => {
         },
         include: { resources: true },
       });
-      return version;
+      return { parent, version };
     };
-    const whole = await createVersion(1, [`${tag} Current`, `${tag} Expired`]);
-    const multiple = await createVersion(2, [`${tag} Multiple`]);
-    const unresolved = await createVersion(3, [`${tag} Missing`]);
-    const lineage = await createVersion(4, [`${tag} Lineage`]);
-    wholeVersionId = whole.id;
-    multipleVersionId = multiple.id;
-    unresolvedVersionId = unresolved.id;
-    lineageVersionId = lineage.id;
+    const whole = await createPublishedRecipe('Whole', [`${tag} Current`, `${tag} Expired`]);
+    const multiple = await createPublishedRecipe('Multiple', [`${tag} Multiple`]);
+    const unresolved = await createPublishedRecipe('Unresolved', [`${tag} Missing`]);
+    const lineage = await createPublishedRecipe('Lineage', [`${tag} Lineage`]);
+    ahspId = lineage.parent.id;
+    wholeVersionId = whole.version.id;
+    multipleVersionId = multiple.version.id;
+    unresolvedVersionId = unresolved.version.id;
+    lineageVersionId = lineage.version.id;
 
     const createCatalog = (suffix: string) =>
       prisma.resourceCatalog.create({
@@ -862,6 +864,119 @@ describe('Project AHSP whole-version selection (e2e)', () => {
       .expect(404);
   });
 
+  describe('one current PUBLISHED snapshot per parent', () => {
+    let stalePublishedId: string;
+    let currentPublishedId: string;
+    let dualItemId: string;
+    let historicalOccurrenceId: string;
+
+    beforeAll(async () => {
+      const parent = await prisma.aHSP.create({
+        data: {
+          workspaceId,
+          workType: `${tag} Dual Work`,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName: `${tag} Dual`,
+        },
+      });
+      const stale = await prisma.aHSPVersion.create({
+        data: {
+          ahspId: parent.id,
+          workspaceId,
+          versionNumber: 1,
+          status: 'PUBLISHED',
+          effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+          outputUnit: 'M1',
+          resources: {
+            create: [
+              {
+                resourceId: `${tag} Current`,
+                resourceType: 'LABOR',
+                coefficient: '1.000000',
+                baseUnit: 'OH',
+              },
+            ],
+          },
+        },
+      });
+      stalePublishedId = stale.id;
+      const dualItem = await prisma.boqItem.create({
+        data: {
+          boqStructureId: structureId,
+          wbsCode: '1.dual',
+          name: `${tag} Dual Item`,
+          itemType: 'WORK_ITEM',
+          quantity: '1.000000',
+          unit: 'M1',
+        },
+      });
+      dualItemId = dualItem.id;
+      const bound = await select(
+        `${tag}-dual-historical`,
+        stalePublishedId,
+        token,
+        dualItemId,
+      ).expect(201);
+      historicalOccurrenceId = bound.body.id;
+      const current = await prisma.aHSPVersion.create({
+        data: {
+          ahspId: parent.id,
+          workspaceId,
+          versionNumber: 2,
+          status: 'PUBLISHED',
+          effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+          outputUnit: 'M1',
+          resources: {
+            create: [
+              {
+                resourceId: `${tag} Current`,
+                resourceType: 'LABOR',
+                coefficient: '1.000000',
+                baseUnit: 'OH',
+              },
+            ],
+          },
+        },
+      });
+      currentPublishedId = current.id;
+    });
+
+    it('does not offer the older PUBLISHED snapshot as a new-use choice', async () => {
+      const response = await request(app.getHttpServer())
+        .get(
+          `/projects/${projectId}/ahsp-occurrences/eligible-versions?businessPricingAsOfDate=${asOfDate}`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      const ids = (response.body as Array<{ id: string }>).map((row) => row.id);
+      expect(ids).toContain(currentPublishedId);
+      expect(ids).not.toContain(stalePublishedId);
+    });
+
+    it('refuses a new bind to the older PUBLISHED snapshot', async () => {
+      await select(
+        `${tag}-dual-stale-bind`,
+        stalePublishedId,
+        token,
+        dualItemId,
+      ).expect(404);
+    });
+
+    it('keeps the historical occurrence that already bound the older snapshot', async () => {
+      const visible = await request(app.getHttpServer())
+        .get(`/projects/${projectId}/ahsp-occurrences/${historicalOccurrenceId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(visible.body.id).toBe(historicalOccurrenceId);
+      expect(visible.body.ahspVersionId).toBe(stalePublishedId);
+      const stillThere = await prisma.aHSPVersion.findUniqueOrThrow({
+        where: { id: stalePublishedId },
+      });
+      expect(stillThere.status).toBe('PUBLISHED');
+    });
+  });
+
   /**
    * RM-03B — workspace-private AHSP.
    *
@@ -1050,6 +1165,8 @@ describe('Project AHSP whole-version selection (e2e)', () => {
       });
       expect(created.createdByUserId).toBe(manageUserId);
       expect(created.createdByUserId).not.toBe(otherRealUserId);
+      expect(created.methodType).toBe('OTHER');
+      expect(created.locationType).toBe('OTHER');
 
       // The audit row must tell the same story — no split identity where the
       // persisted creator and the audit actor disagree.
@@ -1078,6 +1195,108 @@ describe('Project AHSP whole-version selection (e2e)', () => {
         where: { id: response.body.id },
       });
       expect(created.createdByUserId).toBe(manageUserId);
+      expect(created.methodType).toBe('OTHER');
+      expect(created.locationType).toBe('OTHER');
+    });
+
+    it('does not create a second parent when only method or location classification differs', async () => {
+      const workType = `${tag} Same Source`;
+      const methodName = `${tag}-same-source`;
+      await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          workType,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName,
+        })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          workType,
+          methodType: 'MECHANICAL',
+          locationType: 'MOUNTAIN',
+          methodName,
+        })
+        .expect(409);
+    });
+
+    it('does not create a second parent when only location classification differs', async () => {
+      const workType = `${tag} Same Location Source`;
+      const methodName = `${tag}-same-location-source`;
+      await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          workType,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName,
+        })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          workType,
+          methodType: 'MANUAL',
+          locationType: 'MOUNTAIN',
+          methodName,
+        })
+        .expect(409);
+    });
+
+    it('PATCH cannot rewrite parent identity through methodType or locationType', async () => {
+      const workType = `${tag} Patch Identity`;
+      const methodName = `${tag}-patch-identity`;
+      const created = await request(app.getHttpServer())
+        .post('/ahsp')
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          workType,
+          methodType: 'MANUAL',
+          locationType: 'GENERAL',
+          methodName,
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .patch(`/ahsp/${created.body.id}`)
+        .set('Authorization', `Bearer ${manageToken}`)
+        .set('x-workspace-id', workspaceId)
+        .send({
+          methodType: 'CHEMICAL',
+          locationType: 'OFFSHORE',
+          reason: 'reclassify method and location',
+        })
+        .expect(200);
+
+      const after = await prisma.aHSP.findUniqueOrThrow({
+        where: { id: created.body.id },
+      });
+      expect(after.id).toBe(created.body.id);
+      expect(after.workType).toBe(workType);
+      expect(after.methodName).toBe(methodName);
+      expect(after.methodType).toBe('OTHER');
+      expect(after.locationType).toBe('OTHER');
+
+      const siblings = await prisma.aHSP.count({
+        where: {
+          workspaceId,
+          workType,
+          methodName,
+          deletedAt: null,
+        },
+      });
+      expect(siblings).toBe(1);
     });
 
     it('refuses to append a version to another workspace AHSP', async () => {

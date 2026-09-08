@@ -66,6 +66,8 @@ export function Sidebar() {
           const Icon = item.icon;
           const isActive = item.path === '/'
             ? location.pathname === '/' && !location.search
+            : item.path === '/ahsp'
+              ? location.pathname === '/ahsp' || location.pathname.startsWith('/ahsp/')
             : location.pathname + location.search === item.path || location.pathname === item.path;
           return (
             <Link 

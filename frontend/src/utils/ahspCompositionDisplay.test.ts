@@ -5,7 +5,10 @@ import {
   attentionComponents,
   formatCoefficient,
   groupAhspComposition,
+  groupAhspDefinitionResources,
   hasAnyComponent,
+  hasAnyDefinitionComponent,
+  resolveDefinitionResourceName,
   summariseAhspComposition,
 } from "./ahspCompositionDisplay.ts";
 import { toResourceTrust } from "./rabResourceTrust.ts";
@@ -227,4 +230,92 @@ test("reads lowercase source types the same way", () => {
     { rawAhspResourceRef: "Pekerja", rawAhspResourceType: "labor", ahspUnit: "OH", ahspCoefficient: "1" },
   ]);
   assert.equal(groups[0].rows.length, 1);
+});
+
+test("definition resources reuse the same Tenaga/Bahan/Peralatan groups", () => {
+  const groups = groupAhspDefinitionResources([
+    { resourceId: "Pekerja", resourceType: "LABOR", baseUnit: "OH", coefficient: "0.660000" },
+    { resourceId: "Semen", resourceType: "MATERIAL", baseUnit: "kg", coefficient: "1.200000" },
+    { resourceId: "Molen", resourceType: "EQUIPMENT", baseUnit: "jam", coefficient: "0.100000" },
+  ]);
+  assert.deepEqual(
+    groups.map((g) => g.key),
+    ["TENAGA", "BAHAN", "PERALATAN"],
+  );
+  assert.equal(groups[0].rows[0].name, "Pekerja");
+  assert.equal(groups[0].rows[0].coefficient, "0.66");
+  assert.equal(groups[1].rows[0].unit, "kg");
+  assert.equal(hasAnyDefinitionComponent(groups), true);
+});
+
+test("definition resources never invent a trust state", () => {
+  const [tenaga] = groupAhspDefinitionResources([
+    { resourceId: "Pekerja", resourceType: "LABOR", baseUnit: "OH", coefficient: "1" },
+  ]);
+  assert.deepEqual(Object.keys(tenaga.rows[0]).sort(), ["coefficient", "name", "unit"]);
+});
+
+test("an unknown definition type stays visible instead of being dropped", () => {
+  const groups = groupAhspDefinitionResources([
+    { resourceId: "Sesuatu", resourceType: "OTHER", baseUnit: "x", coefficient: "1" },
+  ]);
+  assert.equal(groups[3].key, "UNGROUPED");
+  assert.equal(groups[3].rows[0].name, "Sesuatu");
+  assert.equal(hasAnyDefinitionComponent(groups), true);
+});
+
+/**
+ * WHAT A STORED COMPONENT IS CALLED.
+ *
+ * A canonicalised recipe stores a catalogue id where a hand-written one stores
+ * the resource's own name. Both must read as a name; neither may read as an id.
+ */
+
+test("the catalogue name is what a canonicalised component is called", () => {
+  assert.equal(
+    resolveDefinitionResourceName({
+      resourceId: "6f2b1c4a-9d3e-4a71-b8c2-5e7f0a1d2b3c",
+      resourceName: "Pekerja",
+    }),
+    "Pekerja",
+  );
+});
+
+test("a stored catalogue id is never shown as a name", () => {
+  const name = resolveDefinitionResourceName({
+    resourceId: "6f2b1c4a-9d3e-4a71-b8c2-5e7f0a1d2b3c",
+    resourceName: null,
+  });
+  assert.ok(!name.includes("6f2b1c4a"), "an internal handle must not reach the reader");
+  assert.equal(name, "Nama sumber daya belum tersedia");
+});
+
+test("an unnamed component says its name is missing, never that it does not exist", () => {
+  const name = resolveDefinitionResourceName({
+    resourceId: "6f2b1c4a-9d3e-4a71-b8c2-5e7f0a1d2b3c",
+    resourceName: "   ",
+  });
+  assert.doesNotMatch(name, /tidak ada|tidak ditemukan|tidak dikenali/i);
+});
+
+test("a hand-written recipe keeps stating its own resource name", () => {
+  assert.equal(
+    resolveDefinitionResourceName({ resourceId: "Pekerja", resourceName: null }),
+    "Pekerja",
+  );
+  assert.equal(resolveDefinitionResourceName({ resourceId: "  ", resourceName: null }), "Tanpa nama");
+});
+
+test("the grouped table calls a component exactly what the naming rule calls it", () => {
+  const [tenaga] = groupAhspDefinitionResources([
+    {
+      resourceId: "6f2b1c4a-9d3e-4a71-b8c2-5e7f0a1d2b3c",
+      resourceName: "Mandor",
+      resourceType: "LABOR",
+      baseUnit: "OH",
+      coefficient: "0.040000",
+    },
+  ]);
+  assert.equal(tenaga.rows[0].name, "Mandor");
+  assert.equal(tenaga.rows[0].coefficient, "0.04");
 });
