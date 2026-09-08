@@ -20,6 +20,11 @@ import { findProvenanceCandidate } from './basic-price-source-provenance.service
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { ResourceIdentityResolution } from '../resource-catalog/resource-identity-resolution.kernel';
+import {
+  ResourceAdmissionService,
+  ResourceAdmissionNotExhaustedError,
+  ResourceProvenanceAlreadyBoundError,
+} from '../resource-catalog/resource-admission.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
   UNIT_KERNEL_POLICY_VERSION,
@@ -28,28 +33,10 @@ import {
   UNIT_RESOLUTION_STATUS,
 } from '../unit-kernel/unit-kernel.contracts';
 
-/**
- * FNV-1a 32-bit, narrowed to a signed int4 because that is what
- * `pg_advisory_xact_lock(int4, int4)` accepts.
- *
- * Deterministic and dependency-free on purpose: the same workspace and resource
- * type must produce the same lock in every process and every replica, and a
- * hash collision only ever over-serializes two unrelated admissions, which is
- * safe.
- */
-export function advisoryLockKey(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash | 0;
-}
-
-/** Namespace half of the advisory lock — "this is a resource admission". */
-export const RESOURCE_ADMISSION_LOCK_NAMESPACE = advisoryLockKey(
-  'RM03D1_REVIEWED_RESOURCE_ADMISSION',
-);
+// The advisory-lock helpers that once lived here now belong to the ONE mint
+// authority (ResourceAdmissionService), so Basic Price and every other caller
+// serialize on the same (workspace, resourceType) lock. See
+// resource-admission.service.ts (resourceAdmissionLockKey / namespace).
 
 /**
  * How many machine-proven rows one transaction binds at a time.
@@ -97,6 +84,9 @@ export class BasicPriceRowResolutionService {
     // path records the same machine verdict the review room displayed, rather
     // than a second matcher's opinion of it.
     private readonly proposals: BasicPriceRowResolutionProposalService,
+    // THE one canonical mint authority. Basic Price no longer mints inline; it
+    // and AHSP and BOQ all admit a genuinely-new resource through this.
+    private readonly admission: ResourceAdmissionService,
   ) {}
 
   private async assertBatchRowMutable(
@@ -949,13 +939,9 @@ export class BasicPriceRowResolutionService {
   private static isIdentityExhausted(
     identity: ResourceIdentityResolution,
   ): boolean {
-    return (
-      identity.status === 'UNRESOLVED' &&
-      identity.reasonCodes.includes('RESOURCE_NOT_FOUND') &&
-      identity.candidates.length === 0 &&
-      identity.resolvedResourceCatalogId === null &&
-      identity.authority === null
-    );
+    // ONE predicate. The mint authority owns the definition of "exhausted"; this
+    // pre-lock refusal must agree with the under-lock one by construction.
+    return ResourceAdmissionService.isIdentityExhausted(identity);
   }
 
   /**
@@ -1150,47 +1136,6 @@ export class BasicPriceRowResolutionService {
         )
           throw BasicPriceRowResolutionService.identityRefusal(preLockIdentity);
 
-        // SERIALIZATION. The row lock above protects one row, which is not
-        // enough: two DIFFERENT rows — or two different batches — can each ask
-        // for a genuinely-new resource, both read "not found" before either
-        // commits, and both create one.
-        //
-        // THE DOMAIN IS (workspace, resource type) AND DELIBERATELY NOT THE
-        // RESOURCE NAME. Keying on the name looks tighter and is wrong, because
-        // it assumes what this whole slice exists to deny: that two spellings
-        // are two resources. "Semen Portland" and "Semen Portlan" would hash to
-        // two different locks, run in parallel, and each re-prove against a
-        // catalog that did not yet contain the other — so both would be
-        // admitted, and the identity authority would afterwards nominate each
-        // as a candidate for the other. RESOURCE NAME != RESOURCE IDENTITY has
-        // to hold in the serialization boundary too, and the only boundary that
-        // can honour it without a second matcher is one wider than any name.
-        //
-        // Deriving a cleverer key from stems, codes or similarity would be
-        // exactly the duplicate intelligence law this must not grow. Admission
-        // is a rare human exception path, so a workspace-and-type domain costs
-        // nothing real and fails safe.
-        //
-        // Transaction-scoped: deterministic, held only for this transaction,
-        // released automatically on commit or rollback, and needing no schema,
-        // no application mutex and no external infrastructure.
-        const lockKey = advisoryLockKey(`${workspaceId}|${row.sourceSection}`);
-        // $executeRaw, not $queryRaw: the function returns SQL `void`, which
-        // has no Prisma type to deserialize into.
-        await tx.$executeRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(${RESOURCE_ADMISSION_LOCK_NAMESPACE}::int4, ${lockKey}::int4)`,
-        );
-
-        // SECOND authoritative pass, and the only one that may authorize a
-        // create. Evidence is re-loaded from scratch inside this transaction
-        // after the lock, so if a concurrent request admitted this resource
-        // while we waited, we now see it as a real candidate and refuse —
-        // handing the caller the identity that already exists instead of a
-        // duplicate.
-        const identity = await this.resolveRowIdentity(tx, workspaceId, row);
-        if (!BasicPriceRowResolutionService.isIdentityExhausted(identity))
-          throw BasicPriceRowResolutionService.identityRefusal(identity);
-
         // Full provenance needs two facts the mutability check does not carry:
         // the row's own cell addresses, and the batch's file name.
         const evidence = await tx.basicPriceImportRow.findUniqueOrThrow({
@@ -1203,55 +1148,42 @@ export class BasicPriceRowResolutionService {
           },
         });
 
-        const catalog = await tx.resourceCatalog.create({
-          data: {
+        // THE ONE canonical mint authority. The (workspace, type) advisory lock,
+        // the under-lock exhaustion re-proof, and the ResourceCatalog +
+        // ResourceSourceIdentity creates all live there now, so Basic Price,
+        // AHSP and BOQ admit a genuinely-new resource through the same code.
+        // Behaviour is unchanged from the former inline body: same lock domain,
+        // same exhaustion predicate, same two rows, same P2002 refusal — only
+        // lifted out. The pre-lock cheap refusal above still runs first.
+        const catalog = await this.admission
+          .admitObservedResource(tx, {
             workspaceId,
-            // Exactly what the source says. Not normalized, not tidied.
-            name: row.rawResourceNameText,
-            // The source's own section decides the class, so a LABOR row can
-            // never admit a MATERIAL, whatever anyone asks for.
-            type: row.sourceSection,
+            rawName: row.rawResourceNameText,
+            rawCode: row.rawResourceCodeText,
+            rawUnit: row.rawUnitText,
+            resourceType: row.sourceSection,
             baseUnit: unitDefinition.code,
-            // Only if the source genuinely supplies one. No code is invented,
-            // and none is borrowed from a lookalike.
-            code: row.rawResourceCodeText ?? null,
-            // No specification is asserted: the source stated none.
-          },
-        });
-
-        try {
-          await tx.resourceSourceIdentity.create({
-            data: {
-              resourceCatalogId: catalog.id,
-              workspaceId,
+            provenance: {
               sourceSha256: row.batch.sourceSha256,
               sourceFileName: evidence.batch.sourceFileName,
               parserContractVersion: row.batch.parserContractVersion,
               sheetName: row.batch.selectedSheetName,
               sourceRowNumber: row.sourceRowNumber,
-              sourceSection: row.sourceSection,
-              sourceCodeCellAddress: evidence.sourceCodeCellAddress,
               sourceNameCellAddress: evidence.sourceNameCellAddress,
+              sourceCodeCellAddress: evidence.sourceCodeCellAddress,
               sourceUnitCellAddress: evidence.sourceUnitCellAddress,
-              rawCode: row.rawResourceCodeText,
-              rawName: row.rawResourceNameText,
-              rawUnit: row.rawUnitText,
             },
+          })
+          .catch((error: unknown) => {
+            // Preserve Basic Price's exact external contract.
+            if (error instanceof ResourceAdmissionNotExhaustedError)
+              throw BasicPriceRowResolutionService.identityRefusal(
+                error.resolution,
+              );
+            if (error instanceof ResourceProvenanceAlreadyBoundError)
+              throw new ConflictException('RESOURCE_PROVENANCE_ALREADY_BOUND');
+            throw error;
           });
-        } catch (error) {
-          // This exact source row is already bound to some other catalog entry
-          // (the provenance model is unique per workspace/file/sheet/row/parser).
-          // The identity authority did not surface it — an inactive resource is
-          // not a candidate — but admission must not quietly steal the binding.
-          // Rethrowing aborts the whole transaction, so the catalog row created
-          // moments ago never exists.
-          if (
-            error instanceof Prisma.PrismaClientKnownRequestError &&
-            error.code === 'P2002'
-          )
-            throw new ConflictException('RESOURCE_PROVENANCE_ALREADY_BOUND');
-          throw error;
-        }
 
         // Same path a chosen resource takes, so the mapping decision reads the
         // same way. Excluding the row we just created leaves zero candidates and

@@ -26,6 +26,7 @@ import { BasicPriceModule } from './basic-price/basic-price.module';
 import { IntelligenceModule } from './intelligence/intelligence.module';
 import { ProjectAhspModule } from './project-ahsp/project-ahsp.module';
 import { UnitKernelModule } from './unit-kernel/unit-kernel.module';
+import { ResourceCatalogModule } from './resource-catalog/resource-catalog.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { UnitKernelModule } from './unit-kernel/unit-kernel.module';
     RealityIntakeModule,
     ProjectAhspModule,
     UnitKernelModule,
+    ResourceCatalogModule,
   ],
   controllers: [AppController],
   providers: [

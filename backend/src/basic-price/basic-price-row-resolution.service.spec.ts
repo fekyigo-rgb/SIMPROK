@@ -4,6 +4,7 @@ import { Prisma, ResourceType } from '@prisma/client';
 import { BasicPriceRowResolutionService } from './basic-price-row-resolution.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { ResourceAdmissionService } from '../resource-catalog/resource-admission.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { BasicPriceRowResolutionProposalService } from './basic-price-row-resolution-proposal.service';
 
@@ -174,6 +175,9 @@ describe('BasicPriceRowResolutionService', () => {
             }),
           },
         },
+        // THE one canonical mint authority the service now delegates admission
+        // to. The real service over mocked evidence — never a stub of the mint.
+        ResourceAdmissionService,
       ],
     }).compile();
 
