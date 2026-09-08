@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Layers, Users, Package, Wrench, FileText, Info, Pencil, History, ArrowLeft, Send, MoreHorizontal } from 'lucide-react';
+import { Layers, Users, Package, Wrench, FileText, Info, Pencil, History, ArrowLeft, Send, MoreHorizontal, BadgeCheck } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -404,19 +404,6 @@ export function AhspDetailPage() {
                     AHSP Saya
                   </span>
                 ) : null}
-                {outOfForce ? (
-                  <span
-                    style={{
-                      background: 'var(--simprok-engineering-blue-100)',
-                      color: MUTED,
-                      borderRadius: '999px',
-                      padding: '0.15rem 0.6rem',
-                      fontSize: 'var(--text-sm)',
-                    }}
-                  >
-                    Tidak berlaku
-                  </span>
-                ) : null}
               </div>
               {ahsp.classification ? (
                 <p style={{ margin: 'var(--space-1) 0 0', color: MUTED, fontSize: 'var(--text-sm)' }}>{ahsp.classification}</p>
@@ -557,6 +544,40 @@ export function AhspDetailPage() {
               </section>
             </aside>
           </div>
+
+          {/*
+            AHSP YANG BERLAKU — an Owner-approved section, and a locked law.
+            Validity is not completeness: a missing recipe is answered by writing
+            it, not by declaring the AHSP out of force; "Tidak berlaku" is
+            reserved for a withdrawn or superseded definition (currentness law).
+            No expiry date is invented for any state.
+          */}
+          <section aria-label="AHSP yang berlaku" style={{ ...CARD, marginTop: 'var(--space-4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
+              <span style={ICON_TILE}><BadgeCheck size={16} /></span>
+              <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: 0 }}>AHSP yang berlaku</h2>
+            </div>
+            {!currentVersion ? (
+              <div aria-label="AHSP belum memiliki rumus">
+                <span className="simprok-honest-frame__badge">Belum ada rumus</span>
+                <p style={{ color: MUTED, fontSize: 'var(--text-sm)', margin: 'var(--space-1) 0 0' }}>
+                  AHSP ini belum memiliki rumus yang tersimpan. Yang belum ada adalah rumusnya —
+                  keberlakuannya tidak sedang dinyatakan gugur.
+                </p>
+              </div>
+            ) : outOfForce ? (
+              <div aria-label="AHSP tidak berlaku">
+                <span className="simprok-honest-frame__badge">Tidak berlaku</span>
+                <p style={{ color: MUTED, fontSize: 'var(--text-sm)', margin: 'var(--space-1) 0 0' }}>
+                  AHSP ini tidak digunakan untuk pilihan baru.
+                </p>
+              </div>
+            ) : (
+              <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 0 }}>
+                AHSP yang saat ini digunakan SIMPROK.
+              </p>
+            )}
+          </section>
 
           {/* Lower accordions: Update AHSP + Riwayat AHSP */}
           {workspaceOwned && canManage && !archived ? (

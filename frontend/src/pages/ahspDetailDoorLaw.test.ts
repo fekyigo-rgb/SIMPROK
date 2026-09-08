@@ -111,16 +111,24 @@ test("the reader can return to the canonical list", () => {
 
 // ── Validity is not completeness (preserved semantic, new presentation) ──────
 
-test("a missing formula reads as incomplete, not as out of force", () => {
-  // Completeness: an empty recipe says the formula is not there.
-  assert.ok(detail.includes("rumus belum ada"));
-  // Out-of-force is a separate, authority-driven statement, shown only for a
-  // withdrawn or superseded definition — never for a merely empty one.
+test("the AHSP yang berlaku section is present and validity is not completeness", () => {
+  // Owner-approved section, and a locked law.
+  assert.ok(detail.includes('aria-label="AHSP yang berlaku"'));
+  // In force: the current AHSP SIMPROK uses — an authority statement, no expiry.
+  assert.ok(detail.includes("AHSP yang saat ini digunakan SIMPROK"));
+  // Completeness (a missing recipe) is its OWN state, worded as incompleteness,
+  // never as out-of-force.
+  assert.ok(detail.includes('aria-label="AHSP belum memiliki rumus"'));
+  assert.ok(detail.includes("Belum ada rumus"));
+  // Out-of-force is reserved for a withdrawn/superseded definition.
+  assert.ok(detail.includes('aria-label="AHSP tidak berlaku"'));
   assert.ok(detail.includes("Tidak berlaku"));
   assert.ok(detail.includes("isHistoricalStatus(currentVersion?.status)"));
+  // The merged condition that answered both with one badge stays gone.
   assert.ok(!detail.includes("archived || !currentVersion || isHistoricalStatus"));
-  // No invented expiry.
+  // No invented expiry for any state.
   assert.ok(!detail.includes("Kedaluwarsa"));
+  assert.ok(!detail.includes("Berlaku sampai"));
 });
 
 // ── The recipe's proven identity survives the editor ─────────────────────────
