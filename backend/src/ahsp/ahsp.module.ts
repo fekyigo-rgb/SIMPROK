@@ -10,6 +10,8 @@ import { AhspController } from './ahsp.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { ResourceAdmissionService } from '../resource-catalog/resource-admission.service';
+import { ResourceObservationService } from '../resource-catalog/resource-observation.service';
 
 @Module({
   imports: [PrismaModule, UnitKernelModule],
@@ -23,6 +25,10 @@ import { ResourceIdentityResolutionService } from '../resource-catalog/resource-
     TrustedAhspActorService,
     AhspDocumentCanonicalizationService,
     ResourceIdentityResolutionService,
+    // Shared new-resource lifecycle: AHSP records observations through the ONE
+    // shared service, which mints through the ONE admission authority.
+    ResourceAdmissionService,
+    ResourceObservationService,
   ],
   exports: [AhspService, AhspVersionService, AhspSnapshotService],
 })

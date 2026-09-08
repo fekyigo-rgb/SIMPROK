@@ -66,6 +66,7 @@ function locatorOf(
   return {
     sheetName: table.name,
     locator: formatLocator(table.locatorDialect, row.number, columnNumber),
+    rowNumber: row.number,
     raw,
   };
 }

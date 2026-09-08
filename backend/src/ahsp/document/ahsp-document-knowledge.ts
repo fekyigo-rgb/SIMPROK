@@ -33,6 +33,12 @@ export type AhspResourceGroup = 'LABOR' | 'MATERIAL' | 'EQUIPMENT';
 export interface AhspSourceLocator {
   readonly sheetName: string;
   readonly locator: string;
+  /**
+   * The source row this fact was read from. Carried so an observation this
+   * document produces can be admitted later: the shared canonical memory
+   * (ResourceSourceIdentity) is keyed on the source row.
+   */
+  readonly rowNumber: number;
   readonly raw: string;
 }
 

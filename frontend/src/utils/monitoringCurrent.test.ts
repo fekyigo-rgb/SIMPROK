@@ -32,6 +32,12 @@ const item = (
     subtree: { state: 'NOT_APPLICABLE', percentage: null, reason: null },
     cumulative: { state: 'AVAILABLE', percentage: '10', reason: null },
   },
+  currentOfficialQuantity: {
+    state: 'NOT_YET_RECORDED',
+  },
+  currentOfficialItemProgress: {
+    state: 'NOT_YET_RECORDED',
+  },
   actual: {
     state: 'NOT_YET_RECORDED',
     effectiveRecord: null,
@@ -250,8 +256,13 @@ test('H2-A0-11 the shell neither consumes legacy reality nor paints later truth'
     /Kurva S|plannedWeight|planned-to-date|Forecast|Recovery|CPM/,
   );
   assert.doesNotMatch(page, />\s*Network\s*</);
-  assert.match(page, /bukan persentase kemajuan proyek/);
-  assert.match(page, /bukan\s+total realisasi, realisasi kumulatif, atau persentase kemajuan\s+proyek/);
+  assert.match(page, /Realisasi Terakhir yang Berlaku/);
+  assert.match(
+    page,
+    /Realisasi Terakhir yang Berlaku adalah catatan aktual[\s\S]*?perhitungan dan Progress fisik resmi/,
+  );
+  assert.match(page, /Progress fisik resmi RAB/);
+  assert.match(page, /Progress fisik resmi/);
   assert.match(page, /Catat \/ Kelola Actual/);
   assert.match(page, /Lihat Riwayat Actual/);
   assert.match(page, /hasPermission\('FIELD_PROGRESS_SUBMIT'\)/);
@@ -365,4 +376,207 @@ test('H2-A1-4 coverage language is bounded and never presented as project progre
   assert.match(page, /Bobot kumulatif RAB/);
   assert.match(page, /bukan persentase kemajuan/);
   assert.doesNotMatch(page, /planned-to-date|ahead|behind|On Track/);
+});
+
+/* OFFICIAL_TRUTH_CONTRACT_GUARDS_V1 */
+
+test('OFFICIAL-1 official quantity COMPLETE preserves exact zero', () => {
+  const monitored = item({
+    id: 'official-zero',
+    name: 'Official Zero',
+    currentOfficialQuantity: {
+      state: 'COMPLETE',
+      currentOfficialQuantity: '0',
+    },
+  });
+
+  assert.equal(
+    monitored.currentOfficialQuantity.state,
+    'COMPLETE',
+  );
+
+  assert.equal(
+    monitored.currentOfficialQuantity.currentOfficialQuantity,
+    '0',
+  );
+});
+
+test('OFFICIAL-2 INCOMPLETE remains distinct from unavailable and zero', () => {
+  const monitored = item({
+    id: 'official-incomplete',
+    name: 'Official Incomplete',
+    currentOfficialQuantity: {
+      state: 'INCOMPLETE',
+      knownEligibleQuantitySubtotal: '12.500000',
+    },
+  });
+
+  assert.equal(
+    monitored.currentOfficialQuantity.state,
+    'INCOMPLETE',
+  );
+
+  assert.equal(
+    monitored.currentOfficialQuantity.knownEligibleQuantitySubtotal,
+    '12.500000',
+  );
+});
+
+test('OFFICIAL-3 Law-1 no eligible fact remains explicit', () => {
+  const monitored = item({
+    id: 'official-no-fact',
+    name: 'Official No Fact',
+    currentOfficialQuantity: {
+      state: 'NO_ELIGIBLE_CURRENT_FACT',
+    },
+  });
+
+  assert.equal(
+    monitored.currentOfficialQuantity.state,
+    'NO_ELIGIBLE_CURRENT_FACT',
+  );
+
+  assert.notEqual(
+    monitored.currentOfficialQuantity.state,
+    'NOT_YET_RECORDED',
+  );
+});
+
+test('OFFICIAL-4 invalid lineage remains fail-closed', () => {
+  const monitored = item({
+    id: 'official-invalid-lineage',
+    name: 'Official Invalid Lineage',
+    currentOfficialQuantity: {
+      state: 'INVALID_LINEAGE',
+    },
+  });
+
+  assert.equal(
+    monitored.currentOfficialQuantity.state,
+    'INVALID_LINEAGE',
+  );
+});
+
+test('OFFICIAL-5 official item progress consumes backend result without recalculation', () => {
+  const monitored = item({
+    id: 'official-progress',
+    name: 'Official Progress',
+    currentOfficialItemProgress: {
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '37.500000',
+      boundedContributionProgressPercent: '37.500000',
+    },
+  });
+
+  assert.equal(
+    monitored.currentOfficialItemProgress.state,
+    'COMPLETE',
+  );
+
+  assert.equal(
+    monitored.currentOfficialItemProgress.boundedContributionProgressPercent,
+    '37.500000',
+  );
+});
+
+test('OFFICIAL-6 official item progress preserves UNAVAILABLE reason', () => {
+  const monitored = item({
+    id: 'official-unavailable',
+    name: 'Official Unavailable',
+    currentOfficialItemProgress: {
+      state: 'UNAVAILABLE',
+      reason: 'PLANNED_QUANTITY_ZERO',
+    },
+  });
+
+  assert.equal(
+    monitored.currentOfficialItemProgress.state,
+    'UNAVAILABLE',
+  );
+
+  assert.equal(
+    monitored.currentOfficialItemProgress.reason,
+    'PLANNED_QUANTITY_ZERO',
+  );
+});
+
+test('OFFICIAL-7 record context and official calculation truth remain separate', () => {
+  const monitored = item({
+    id: 'official-separation',
+    name: 'Official Separation',
+    actual: {
+      state: 'RECORDED',
+      lifecycleState: 'VERIFIED',
+      effectiveRecord: {
+        id: 'record-1',
+        installedQuantity: '5',
+        workDate: '2026-08-31T00:00:00.000Z',
+        notes: null,
+        captureMethod: 'FIELD_MEASUREMENT',
+        evidenceReferences: [],
+        recordedByAccountId: null,
+        supersedesEntryId: null,
+        recordedAt: '2026-08-31T01:00:00.000Z',
+      },
+    },
+    currentOfficialQuantity: {
+      state: 'COMPLETE',
+      currentOfficialQuantity: '7',
+    },
+  });
+
+  assert.equal(
+    effectiveActual(monitored)?.installedQuantity,
+    '5',
+  );
+
+  assert.equal(
+    monitored.currentOfficialQuantity.state,
+    'COMPLETE',
+  );
+
+  assert.equal(
+    monitored.currentOfficialQuantity.currentOfficialQuantity,
+    '7',
+  );
+});
+
+test('OFFICIAL-8 page consumes official truth while retaining effective record context', () => {
+  const page = readFileSync(
+    'src/pages/field/ProjectWorkPage.tsx',
+    'utf8',
+  );
+
+  assert.match(page, /officialQuantityLabel\(/);
+  assert.match(page, /officialItemProgressLabel\(/);
+  assert.match(page, /officialProjectProgressLabel\(/);
+  assert.match(page, /effectiveActual\(row\)/);
+  assert.match(page, /effectiveActual\(selected\)/);
+
+  assert.doesNotMatch(
+    page,
+    /actual\.latestRecord/,
+  );
+});
+
+test('OFFICIAL-9 page does not introduce frontend progress arithmetic', () => {
+  const page = readFileSync(
+    'src/pages/field/ProjectWorkPage.tsx',
+    'utf8',
+  );
+
+  assert.doesNotMatch(
+    page,
+    /currentOfficialQuantity[^;\n]*(\/|\*|\+|-)/,
+  );
+
+  assert.doesNotMatch(
+    page,
+    /currentOfficial.*planned\.quantity/,
+  );
+
+  assert.doesNotMatch(
+    page,
+    /parseFloat|parseInt|Number\([^)]*currentOfficial|Math\./,
+  );
 });

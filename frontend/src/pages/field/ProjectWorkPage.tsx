@@ -17,6 +17,7 @@ import {
   selectedWorkItem,
   weightCompletenessExplanation,
   weightCompletenessLabel,
+  type MonitoringItem,
   type MonitoringProject,
   type MonitoringResponse,
 } from '../../utils/monitoringCurrent';
@@ -57,6 +58,66 @@ function actualQuantity(
 ): string {
   if (state === 'UNAVAILABLE') return 'TIDAK TERSEDIA';
   return quantity === undefined ? 'BELUM DICATAT' : `${quantity} ${unit}`.trim();
+}
+
+function officialQuantityLabel(
+  fact: MonitoringItem['currentOfficialQuantity'],
+  unit: string,
+): string {
+  switch (fact.state) {
+    case 'COMPLETE':
+      return `${fact.currentOfficialQuantity} ${unit}`.trim();
+    case 'INCOMPLETE':
+      return `Belum lengkap — subtotal ${fact.knownEligibleQuantitySubtotal} ${unit}`.trim();
+    case 'NOT_YET_RECORDED':
+      return 'BELUM DICATAT';
+    case 'NO_ELIGIBLE_CURRENT_FACT':
+      return 'TIDAK ADA FAKTA BERLAKU';
+    case 'INVALID_LINEAGE':
+      return 'LINEAGE TIDAK VALID';
+    case 'INVALID_NUMERIC_FACT':
+      return 'FAKTA NUMERIK TIDAK VALID';
+    case 'SEMANTICS_UNPROVEN':
+      return 'SEMANTIK BELUM TERBUKTI';
+  }
+}
+
+function officialItemProgressLabel(
+  fact: MonitoringItem['currentOfficialItemProgress'],
+): string {
+  switch (fact.state) {
+    case 'COMPLETE':
+      return `${fact.boundedContributionProgressPercent}%`;
+    case 'INCOMPLETE':
+      return fact.knownProgressSubtotalPercent === undefined
+        ? 'BELUM LENGKAP'
+        : `BELUM LENGKAP — subtotal ${fact.knownProgressSubtotalPercent}%`;
+    case 'UNAVAILABLE':
+      return `TIDAK TERSEDIA — ${fact.reason}`;
+    case 'NOT_YET_RECORDED':
+      return 'BELUM DICATAT';
+    case 'NO_ELIGIBLE_CURRENT_FACT':
+      return 'TIDAK ADA FAKTA BERLAKU';
+    case 'INVALID_LINEAGE':
+      return 'LINEAGE TIDAK VALID';
+    case 'INVALID_NUMERIC_FACT':
+      return 'FAKTA NUMERIK TIDAK VALID';
+    case 'SEMANTICS_UNPROVEN':
+      return 'SEMANTIK BELUM TERBUKTI';
+  }
+}
+
+function officialProjectProgressLabel(
+  fact: MonitoringResponse['currentOfficialRabWeightedPhysicalProgress'],
+): string {
+  switch (fact.state) {
+    case 'COMPLETE':
+      return `${fact.currentOfficialRabWeightedPhysicalProgressPercent}%`;
+    case 'INCOMPLETE':
+      return `BELUM LENGKAP — subtotal ${fact.knownWeightedContributionSubtotalPercent}%`;
+    case 'UNAVAILABLE':
+      return `TIDAK TERSEDIA — ${fact.reason}`;
+  }
 }
 
 export function ProjectWorkPage() {
@@ -456,6 +517,14 @@ export function ProjectWorkPage() {
                     </dd>
                   </div>
                   <div>
+                    <dt>Progress fisik resmi RAB</dt>
+                    <dd>
+                      {officialProjectProgressLabel(
+                        monitoring.currentOfficialRabWeightedPhysicalProgress,
+                      )}
+                    </dd>
+                  </div>
+                  <div>
                     <dt>Data pekerjaan sampai</dt>
                     <dd>{dataThrough}</dd>
                   </div>
@@ -488,6 +557,23 @@ export function ProjectWorkPage() {
                   <div>
                     <dt>Bobot kumulatif RAB</dt>
                     <dd>{formatWeightPercentage(selected.weight.cumulative)}</dd>
+                  </div>
+                  <div>
+                    <dt>Volume resmi untuk perhitungan</dt>
+                    <dd>
+                      {officialQuantityLabel(
+                        selected.currentOfficialQuantity,
+                        selected.planned.unit,
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Progress fisik resmi</dt>
+                    <dd>
+                      {officialItemProgressLabel(
+                        selected.currentOfficialItemProgress,
+                      )}
+                    </dd>
                   </div>
                   <div>
                     <dt>Status Realisasi</dt>
@@ -531,9 +617,10 @@ export function ProjectWorkPage() {
                   </div>
                 </dl>
                 <p className="h2a0-semantics">
-                  Nilai ini adalah catatan realisasi yang saat ini berlaku, bukan
-                  total realisasi, realisasi kumulatif, atau persentase kemajuan
-                  proyek.
+                  Realisasi Terakhir yang Berlaku adalah catatan aktual yang
+                  saat ini berlaku. Nilai ini berbeda dari Volume resmi untuk
+                  perhitungan dan Progress fisik resmi yang ditetapkan oleh
+                  aturan perhitungan backend.
                 </p>
                 <p className="h2a1-weight-note">
                   Bobot menunjukkan kontribusi nilai item terhadap total nilai dasar

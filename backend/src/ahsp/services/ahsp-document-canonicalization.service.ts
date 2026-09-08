@@ -17,6 +17,10 @@ import {
   ResourceIdentityEvidence,
   ResourceIdentityResolutionService,
 } from '../../resource-catalog/resource-identity-resolution.service';
+import {
+  ObserveResourceInput,
+  ResourceObservationService,
+} from '../../resource-catalog/resource-observation.service';
 import { understandAhspDocument } from '../document/ahsp-document-understanding';
 import {
   AHSP_DOCUMENT_REASON,
@@ -69,6 +73,9 @@ export class AhspDocumentCanonicalizationService {
     private readonly units: UnitKernelService,
     private readonly identity: ResourceIdentityResolutionService,
     private readonly prisma: PrismaService,
+    // Shared, domain-neutral home for a resource this import SAW but could not
+    // prove. AHSP contributes observations; it does not own the lifecycle.
+    private readonly observations: ResourceObservationService,
   ) {}
 
   private readonly readers = ReaderRegistry.default();
@@ -196,7 +203,55 @@ export class AhspDocumentCanonicalizationService {
         throw error;
       }
     }
+    // A resource this document SAW but could not prove is not lost. It is
+    // persisted as a shared observation for later human curation — the exact
+    // same lifecycle Basic Price feeds, through the one shared service. Proven
+    // resources need no observation (they are already canonical); only the
+    // unresolved ones are recorded, best-effort so a persistence hiccup never
+    // fails an otherwise-good commit.
+    await this.observeUnresolved(knowledge, envelope.workspaceId).catch(
+      () => undefined,
+    );
+
     return { knowledge, written, skipped };
+  }
+
+  /**
+   * Persist every resource the identity authority did NOT resolve as a shared
+   * ObservedResource. Candidates travel as evidence, never as identity. Nothing
+   * here mints or asserts anything; a human curates later.
+   */
+  private async observeUnresolved(
+    knowledge: AhspDocumentKnowledge,
+    workspaceId: string,
+  ): Promise<void> {
+    const inputs: ObserveResourceInput[] = [];
+    for (const item of knowledge.workItems) {
+      for (const resource of item.resources) {
+        if (resource.resolvedResourceCatalogId) continue;
+        if (!resource.rawName || !resource.group) continue;
+        inputs.push({
+          workspaceId,
+          origin: 'AHSP_IMPORT',
+          rawName: resource.rawName,
+          rawCode: resource.rawCode,
+          rawUnit: resource.rawUnit,
+          resourceType: resource.group,
+          candidates: resource.identityCandidates ?? [],
+          provenance: {
+            sourceSha256: knowledge.source.contentDigestSha256,
+            sourceFileName: knowledge.source.fileName,
+            parserContractVersion: knowledge.source.readerContractVersion,
+            sheetName: resource.nameEvidence?.sheetName ?? null,
+            sourceRowNumber: resource.nameEvidence?.rowNumber ?? null,
+            sourceNameCellAddress: resource.nameEvidence?.locator ?? null,
+            sourceCodeCellAddress: resource.codeEvidence?.locator ?? null,
+            sourceUnitCellAddress: resource.unitEvidence?.locator ?? null,
+          },
+        });
+      }
+    }
+    if (inputs.length > 0) await this.observations.observeMany(inputs);
   }
 
   private async resolveKnowledge(

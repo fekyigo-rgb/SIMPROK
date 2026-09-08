@@ -3,6 +3,12 @@ import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import { explainAhspItemReasons } from '../utils/ahspDocumentUserCopy';
+import {
+  describeCuratableObservation,
+  previewCandidateNames,
+  type CuratableObservationWire,
+  type PreviewResourceWire,
+} from '../utils/resourceObservationDisplay';
 
 /**
  * THE standalone AHSP room — the one door the sidebar opens.
@@ -30,6 +36,7 @@ type PreviewItem = {
   reasonCodes: string[];
   workType: { raw: string } | null;
   methodName: { raw: string } | null;
+  resources?: PreviewResourceWire[];
 };
 
 const NAVY = 'var(--simprok-authority-navy-800)';
@@ -68,6 +75,10 @@ export function AhspRoomPage() {
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const canManage = hasPermission('AHSP_MANAGE');
+  const canCurate = hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE');
+  const [observations, setObservations] = useState<CuratableObservationWire[]>([]);
+  const [curationBusyId, setCurationBusyId] = useState<string | null>(null);
+  const [curationError, setCurationError] = useState<string | null>(null);
   const [state, setState] = useState<RoomState>({ phase: 'LOADING' });
   const [query, setQuery] = useState('');
   const [workType, setWorkType] = useState('');
@@ -200,10 +211,73 @@ export function AhspRoomPage() {
         const rows = await reload.json();
         setState({ phase: 'READY', rows: Array.isArray(rows) ? rows : [] });
       }
+      // Committing stages the unproven resources as observations; surface them.
+      await loadObservations();
     } catch {
       setImportError('AHSP terbukti tidak dapat dihubungi.');
     } finally {
       setImporting(false);
+    }
+  };
+
+  const loadObservations = async () => {
+    if (!canCurate) return;
+    try {
+      const response = await apiFetch('/resource-observations');
+      if (!response.ok) return;
+      const data = await response.json();
+      setObservations(Array.isArray(data) ? data : []);
+    } catch {
+      // A curation-list read failure is never rendered as "no work to review".
+    }
+  };
+
+  useEffect(() => {
+    void loadObservations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canCurate]);
+
+  const curateExisting = async (id: string, selectedResourceCatalogId: string) => {
+    if (curationBusyId) return;
+    setCurationBusyId(id);
+    setCurationError(null);
+    try {
+      const response = await apiFetch('/resource-observations/' + id + '/curate-existing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selectedResourceCatalogId }),
+      });
+      if (!response.ok) {
+        setCurationError('Keputusan belum dapat disimpan. Coba lagi.');
+        return;
+      }
+      await loadObservations();
+    } catch {
+      setCurationError('Keputusan tidak dapat dihubungi.');
+    } finally {
+      setCurationBusyId(null);
+    }
+  };
+
+  const curateNew = async (id: string, unitDefinitionId: string) => {
+    if (curationBusyId) return;
+    setCurationBusyId(id);
+    setCurationError(null);
+    try {
+      const response = await apiFetch('/resource-observations/' + id + '/curate-new', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unitDefinitionId }),
+      });
+      if (!response.ok) {
+        setCurationError('Sumber daya baru belum dapat ditetapkan. Coba lagi.');
+        return;
+      }
+      await loadObservations();
+    } catch {
+      setCurationError('Penetapan sumber daya baru tidak dapat dihubungi.');
+    } finally {
+      setCurationBusyId(null);
     }
   };
 
@@ -264,14 +338,28 @@ export function AhspRoomPage() {
                 {unresolved} pekerjaan masih perlu dilengkapi.
               </p>
               <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
-                {preview.workItems.map((item, index) => (
-                  <li key={index} style={{ marginBottom: 'var(--space-1)' }}>
-                    {item.workType?.raw ?? '—'} — {item.methodName?.raw ?? '—'}
-                    {item.status === 'READY'
-                      ? ' · siap digunakan'
-                      : ` · ${explainAhspItemReasons(item.reasonCodes)}`}
-                  </li>
-                ))}
+                {preview.workItems.map((item, index) => {
+                  const candidateNames =
+                    item.status === 'READY' ? [] : previewCandidateNames(item.resources);
+                  return (
+                    <li key={index} style={{ marginBottom: 'var(--space-2)' }}>
+                      {item.workType?.raw ?? '—'} — {item.methodName?.raw ?? '—'}
+                      {item.status === 'READY'
+                        ? ' · siap digunakan'
+                        : ` · ${explainAhspItemReasons(item.reasonCodes)}`}
+                      {candidateNames.length > 0 ? (
+                        <span style={{ display: 'block', color: MUTED }}>
+                          SIMPROK menemukan kemungkinan padanan:{' '}
+                          {candidateNames.slice(0, 4).join(', ')}
+                          {candidateNames.length > 4
+                            ? `, dan ${candidateNames.length - 4} lainnya`
+                            : ''}
+                          . Simpan untuk meninjaunya di bawah.
+                        </span>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ) : null}
@@ -281,6 +369,73 @@ export function AhspRoomPage() {
               {commitResult.skipped.length} pekerjaan belum disimpan.
             </p>
           ) : null}
+        </section>
+      ) : null}
+
+      {canCurate && observations.length > 0 ? (
+        <section aria-label="Sumber daya untuk ditinjau" style={{ marginBottom: 'var(--space-6)' }}>
+          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>
+            Sumber daya untuk ditinjau
+          </h2>
+          <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
+            SIMPROK menyimpan sumber daya yang belum dapat dipastikan. Pilih padanan yang
+            tepat, atau usulkan sebagai sumber daya baru.
+          </p>
+          {curationError ? (
+            <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
+              {curationError}
+            </p>
+          ) : null}
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {observations.map((observation) => {
+              const view = describeCuratableObservation(observation);
+              const busy = curationBusyId === view.id;
+              return (
+                <li
+                  key={view.id}
+                  aria-label={'Tinjau ' + view.title}
+                  style={{
+                    marginBottom: 'var(--space-4)',
+                    paddingBottom: 'var(--space-3)',
+                    borderBottom: '1px solid var(--simprok-engineering-blue-100)',
+                  }}
+                >
+                  <span style={{ fontWeight: 600, color: NAVY }}>{view.title}</span>
+                  {view.candidateLine ? (
+                    <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>
+                      {view.candidateLine}
+                    </span>
+                  ) : null}
+                  <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>
+                    {view.guidance}
+                  </span>
+                  <div>
+                    {view.candidateChoices.map((choice) => (
+                      <button
+                        key={choice.resourceCatalogId}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void curateExisting(view.id, choice.resourceCatalogId)}
+                        style={{ ...primaryButton, marginBottom: 'var(--space-2)' }}
+                      >
+                        Ini padanannya: {choice.name}
+                      </button>
+                    ))}
+                    {view.canProposeNew && view.newUnitDefinitionId ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void curateNew(view.id, view.newUnitDefinitionId as string)}
+                        style={navyButton}
+                      >
+                        Tetapkan sebagai sumber daya baru
+                      </button>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         </section>
       ) : null}
 
