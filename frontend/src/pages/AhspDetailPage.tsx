@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { Layers, Users, Package, Wrench, FileText, Info, Pencil, History, ArrowLeft, Send, MoreHorizontal } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -9,25 +10,16 @@ import {
   type AhspDefinitionComponentGroup,
   type AhspDefinitionResourceWire,
 } from '../utils/ahspCompositionDisplay';
+import { describeAhspProposalStatus, canProposeAhsp, formatIndoDate } from '../utils/ahspProposalStatus';
 
 /**
- * THE room's own detail — not a second AHSP room, not the RAB preview.
+ * THE room's own detail — the Owner-approved detail view.
  *
- * Reads GET /ahsp/:id. Update appends a historical revision through the
- * existing POST /ahsp/:id/versions route. Historical revisions stay visible
- * as provenance, never as alternative AHSPs to activate.
- *
- * Schema fillers and provenance internals (page, section, expiredDate,
- * methodType, locationType) stay stored. They are not shown as AHSP facts.
- *
- * Internal curation (approve / archive / transfer / retire / snapshot) stays
- * on the existing API. It is not AHSP identity for an ordinary user. There is
- * no AHSP "Usulkan ke SIMPROK" user-proposal workflow on this surface.
- *
- * VISUAL: the mockup's shape — components on the left, the AHSP's own
- * information on the right, and the maintenance surfaces (history, update)
- * folded away at the bottom until asked for. The truth, the endpoints and the
- * honesty rules are unchanged; only the arrangement is.
+ * Reads GET /ahsp/:id (definition + versions + resources + createdByEmail).
+ * Update appends a revision through the existing POST /ahsp/:id/versions route;
+ * "Usulkan ke SIMPROK" submits the AHSP for human review through the existing
+ * POST /ahsp/:id/propose route — it never publishes. All data is backend truth;
+ * this file only arranges it into the Owner mockup and speaks plain Indonesian.
  */
 
 type AhspVersion = {
@@ -36,10 +28,7 @@ type AhspVersion = {
   status: string | null;
   outputUnit: string | null;
   regulationReference: string | null;
-  regulationPage: string | null;
-  regulationSection: string | null;
   effectiveDate: string | null;
-  expiredDate: string | null;
   resources?: AhspDefinitionResourceWire[] | null;
 };
 
@@ -48,6 +37,16 @@ type AhspDetail = {
   workspaceId: string | null;
   workType: string | null;
   methodName: string | null;
+  code: string | null;
+  fieldCategory: string | null;
+  subCategory: string | null;
+  classification: string | null;
+  ownershipType: string | null;
+  reviewStatus: string | null;
+  proposedAt: string | null;
+  createdByEmail: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
   archivedAt: string | null;
   versions?: AhspVersion[] | null;
 };
@@ -58,21 +57,8 @@ type DetailState =
   | { phase: 'FAILED'; message: string };
 
 type ResourceDraft = {
-  /**
-   * THE write contract, carried through the editor untouched.
-   *
-   * For a canonicalised recipe this is a catalogue id, which is why it is no
-   * longer typed into by hand: editing it would silently repoint the component
-   * at nothing, and there is no identity resolver on this surface to catch it.
-   */
   resourceId: string;
-  /** Presentation only — what the catalogue calls resourceId, when it can. */
   resourceName: string | null;
-  /**
-   * True for a row seeded from the saved recipe. Such a row keeps its proven
-   * identity and shows its name; a row the author adds here still states its
-   * own resource, exactly as before.
-   */
   stored: boolean;
   resourceType: 'LABOR' | 'MATERIAL' | 'EQUIPMENT';
   coefficient: string;
@@ -81,15 +67,48 @@ type ResourceDraft = {
 
 const NAVY = 'var(--simprok-authority-navy-800)';
 const MUTED = 'var(--simprok-engineering-blue-500)';
+const BLUE = 'var(--simprok-trust-blue-500)';
 const HAIRLINE = '1px solid var(--simprok-engineering-blue-100)';
-
-const actionButton: CSSProperties = {
-  background: 'var(--simprok-trust-blue-500)',
+const CARD: CSSProperties = {
+  background: '#FFFFFF',
+  border: HAIRLINE,
+  borderRadius: '12px',
+  padding: 'var(--space-5, 1.25rem)',
+};
+const ICON_TILE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '2rem',
+  height: '2rem',
+  borderRadius: '8px',
+  background: 'var(--simprok-engineering-blue-100)',
+  color: BLUE,
+  flex: '0 0 auto',
+};
+const outlineButton: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  background: '#FFFFFF',
+  color: NAVY,
+  border: HAIRLINE,
+  borderRadius: '8px',
+  padding: 'var(--space-2) var(--space-4)',
+  cursor: 'pointer',
+  fontSize: 'var(--text-sm)',
+};
+const primaryButton: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  background: BLUE,
   color: '#FFFFFF',
   border: 0,
+  borderRadius: '8px',
   padding: 'var(--space-2) var(--space-4)',
-  marginRight: 'var(--space-2)',
-  marginBottom: 'var(--space-2)',
+  cursor: 'pointer',
+  fontSize: 'var(--text-sm)',
 };
 
 const orDash = (value: string | number | null | undefined) =>
@@ -98,47 +117,6 @@ const orDash = (value: string | number | null | undefined) =>
   ) : (
     <>{String(value)}</>
   );
-
-const field: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '7.5rem 1fr',
-  gap: 'var(--space-3)',
-  padding: 'var(--space-2) 0',
-  borderBottom: HAIRLINE,
-  fontSize: 'var(--text-sm)',
-};
-
-const labelStyle: CSSProperties = { color: MUTED, margin: 0 };
-const valueStyle: CSSProperties = { color: NAVY, margin: 0 };
-
-const panelHeading: CSSProperties = {
-  fontSize: 'var(--text-base)',
-  fontWeight: 600,
-  color: NAVY,
-  margin: '0 0 var(--space-2)',
-};
-
-const sectionHeading: CSSProperties = {
-  fontSize: 'var(--text-lg)',
-  color: NAVY,
-  margin: '0 0 var(--space-2)',
-};
-
-const th: CSSProperties = { padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE };
-const td: CSSProperties = { padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE };
-
-const tableStyle: CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-  fontSize: 'var(--text-sm)',
-};
-
-const foldSummary: CSSProperties = {
-  cursor: 'pointer',
-  fontSize: 'var(--text-lg)',
-  color: NAVY,
-  padding: 'var(--space-2) 0',
-};
 
 const emptyResource = (): ResourceDraft => ({
   resourceId: '',
@@ -182,10 +160,10 @@ const historyStatusLabel = (status: string | null | undefined) => {
 const isHistoricalStatus = (status: string | null | undefined) =>
   status === 'SUPERSEDED' || status === 'ARCHIVED';
 
-const formatStoredDate = (value: string | null) => {
-  if (!value) return null;
-  const day = value.slice(0, 10);
-  return day.length === 10 ? day : value;
+const GROUP_ICON: Record<string, ReactNode> = {
+  TENAGA: <Users size={16} />,
+  BAHAN: <Package size={16} />,
+  PERALATAN: <Wrench size={16} />,
 };
 
 export function AhspDetailPage() {
@@ -195,6 +173,7 @@ export function AhspDetailPage() {
   const [state, setState] = useState<DetailState>({ phase: 'LOADING' });
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [proposing, setProposing] = useState(false);
   const [outputUnit, setOutputUnit] = useState('');
   const [regulationReference, setRegulationReference] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
@@ -250,8 +229,7 @@ export function AhspDetailPage() {
 
   const currentVersion = useMemo(() => {
     if (state.phase !== 'READY') return null;
-    const versions = state.ahsp.versions ?? [];
-    return versions[0] ?? null;
+    return (state.ahsp.versions ?? [])[0] ?? null;
   }, [state]);
 
   const historicalVersions = useMemo(() => {
@@ -272,6 +250,24 @@ export function AhspDetailPage() {
       return;
     }
     applyPayload((await response.json()) as AhspDetail);
+  };
+
+  const proposeToSimprok = async () => {
+    if (!ahspId || proposing) return;
+    setProposing(true);
+    setActionError(null);
+    try {
+      const response = await apiFetch('/ahsp/' + ahspId + '/propose', { method: 'POST' });
+      if (!response.ok) {
+        setActionError('Usulan belum dapat dikirim. Coba lagi sebentar.');
+        return;
+      }
+      await reload();
+    } catch {
+      setActionError('Usulan tidak dapat dihubungi.');
+    } finally {
+      setProposing(false);
+    }
   };
 
   const addVersion = async (event: FormEvent) => {
@@ -329,18 +325,33 @@ export function AhspDetailPage() {
     }
   };
 
-  const workspaceOwned = state.phase === 'READY' && state.ahsp.workspaceId !== null;
-  const archived = state.phase === 'READY' && Boolean(state.ahsp.archivedAt);
-  const sourceDate = formatStoredDate(currentVersion?.effectiveDate ?? null);
+  const ahsp = state.phase === 'READY' ? state.ahsp : null;
+  const workspaceOwned = ahsp?.workspaceId != null;
+  const archived = Boolean(ahsp?.archivedAt);
+  const outOfForce = archived || isHistoricalStatus(currentVersion?.status);
+  const title = ahsp?.methodName || ahsp?.workType || 'AHSP';
+  const proposalStatus = ahsp ? describeAhspProposalStatus(ahsp) : '';
+  const showPropose = Boolean(ahsp && canManage && canProposeAhsp(ahsp));
+
+  const infoRow = (label: string, value: ReactNode) => (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '11rem 0.5rem 1fr',
+        gap: 'var(--space-2)',
+        padding: 'var(--space-2) 0',
+        borderBottom: HAIRLINE,
+        fontSize: 'var(--text-sm)',
+      }}
+    >
+      <span style={{ color: MUTED }}>{label}</span>
+      <span style={{ color: MUTED }}>:</span>
+      <span style={{ color: NAVY }}>{value}</span>
+    </div>
+  );
 
   return (
     <main aria-label="Detail AHSP" style={{ padding: 'var(--space-5, 1.25rem)' }}>
-      <p style={{ fontSize: 'var(--text-sm)', margin: 0 }}>
-        <Link to="/ahsp" style={{ color: 'var(--simprok-trust-blue-500)' }}>
-          ← AHSP
-        </Link>
-      </p>
-
       {state.phase === 'LOADING' ? (
         <p role="status" style={{ color: MUTED }}>
           Memuat detail AHSP…
@@ -354,31 +365,93 @@ export function AhspDetailPage() {
         </section>
       ) : null}
 
-      {state.phase === 'READY' ? (
+      {ahsp ? (
         <>
-          <header style={{ margin: 'var(--space-3) 0 var(--space-4)' }}>
-            <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: NAVY, margin: 0 }}>
-              {state.ahsp.methodName || state.ahsp.workType || 'AHSP'}
-            </h1>
-          </header>
+          {/* Breadcrumb */}
+          <nav aria-label="Jejak navigasi" style={{ fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
+            <span>Beranda</span>
+            <span style={{ margin: '0 var(--space-2)' }}>›</span>
+            <Link to="/ahsp" style={{ color: MUTED, textDecoration: 'none' }}>AHSP</Link>
+            <span style={{ margin: '0 var(--space-2)' }}>›</span>
+            <span style={{ color: NAVY }}>{title}</span>
+          </nav>
 
-          {/*
-            TWO COLUMNS ON A WIDE SCREEN, STACKED ON A NARROW ONE.
-            Left: the components that make up the AHSP — the working surface.
-            Right: the AHSP's own information and whether it is in force.
-            flexWrap does the responsiveness without a media query.
-          */}
-          <div
+          {/* Header */}
+          <header
             style={{
               display: 'flex',
               flexWrap: 'wrap',
+              gap: 'var(--space-3)',
               alignItems: 'flex-start',
-              gap: 'var(--space-5)',
+              justifyContent: 'space-between',
               marginBottom: 'var(--space-4)',
             }}
           >
-            <section aria-label="Komponen pembentuk" style={{ flex: '1 1 30rem', minWidth: 0 }}>
-              <h2 style={sectionHeading}>Komponen pembentuk AHSP</h2>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+                <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: NAVY, margin: 0 }}>{title}</h1>
+                {workspaceOwned ? (
+                  <span
+                    style={{
+                      background: 'rgba(46, 158, 107, 0.12)',
+                      color: '#2E9E6B',
+                      borderRadius: '999px',
+                      padding: '0.15rem 0.6rem',
+                      fontSize: 'var(--text-sm)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    AHSP Saya
+                  </span>
+                ) : null}
+                {outOfForce ? (
+                  <span
+                    style={{
+                      background: 'var(--simprok-engineering-blue-100)',
+                      color: MUTED,
+                      borderRadius: '999px',
+                      padding: '0.15rem 0.6rem',
+                      fontSize: 'var(--text-sm)',
+                    }}
+                  >
+                    Tidak berlaku
+                  </span>
+                ) : null}
+              </div>
+              {ahsp.classification ? (
+                <p style={{ margin: 'var(--space-1) 0 0', color: MUTED, fontSize: 'var(--text-sm)' }}>{ahsp.classification}</p>
+              ) : null}
+            </div>
+            <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+              <Link to="/ahsp" style={outlineButton}>
+                <ArrowLeft size={16} /> Kembali
+              </Link>
+              {showPropose ? (
+                <button type="button" onClick={() => void proposeToSimprok()} disabled={proposing} style={primaryButton}>
+                  <Send size={16} /> {proposing ? 'Mengirim…' : 'Usulkan ke SIMPROK'}
+                </button>
+              ) : null}
+              {canManage ? (
+                <button type="button" aria-label="Tindakan lain" style={{ ...outlineButton, padding: 'var(--space-2)' }} disabled>
+                  <MoreHorizontal size={16} />
+                </button>
+              ) : null}
+            </div>
+          </header>
+
+          {actionError ? (
+            <p role="alert" style={{ color: '#C0392B', fontSize: 'var(--text-sm)', margin: '0 0 var(--space-3)' }}>
+              {actionError}
+            </p>
+          ) : null}
+
+          {/* Two columns: components (left) + information (right) */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-5)', alignItems: 'flex-start' }}>
+            <section aria-label="Komponen Pembentuk AHSP" style={{ ...CARD, flex: '1 1 30rem', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+                <span style={ICON_TILE}><Layers size={16} /></span>
+                <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: 0 }}>Komponen Pembentuk AHSP</h2>
+              </div>
               {!currentVersion ? (
                 <section className="simprok-honest-frame" aria-label="Komponen AHSP kosong">
                   <span className="simprok-honest-frame__badge">Belum ada data</span>
@@ -391,33 +464,33 @@ export function AhspDetailPage() {
                 </section>
               ) : (
                 groups.map((group) => (
-                  <section
-                    key={group.key}
-                    aria-label={group.label}
-                    style={{ marginBottom: 'var(--space-4)' }}
-                  >
-                    <h3 style={{ fontSize: 'var(--text-sm)', color: NAVY, margin: '0 0 var(--space-1)' }}>
-                      {group.label} · {group.rows.length}
-                    </h3>
+                  <section key={group.key} aria-label={group.label} style={{ marginBottom: 'var(--space-5)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-2)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                        <span style={{ ...ICON_TILE, width: '1.6rem', height: '1.6rem' }}>{GROUP_ICON[group.key] ?? <Package size={14} />}</span>
+                        <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: NAVY, margin: 0 }}>{group.label}</h3>
+                      </div>
+                      <span style={{ color: MUTED, fontSize: 'var(--text-sm)' }}>{group.rows.length} komponen</span>
+                    </div>
                     {group.rows.length === 0 ? (
                       <p style={{ color: MUTED, fontSize: 'var(--text-sm)', margin: 0 }}>—</p>
                     ) : (
-                      <table style={tableStyle}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
                         <thead>
-                          <tr style={{ textAlign: 'left', color: NAVY }}>
-                            <th style={{ ...th, width: '2.5rem' }}>No.</th>
-                            <th style={th}>Uraian</th>
-                            <th style={th}>Satuan</th>
-                            <th style={th}>Koefisien</th>
+                          <tr style={{ textAlign: 'left', color: MUTED, background: 'var(--simprok-engineering-blue-100)' }}>
+                            <th style={{ padding: 'var(--space-1) var(--space-2)', width: '2.5rem' }}>No.</th>
+                            <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Uraian</th>
+                            <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Satuan</th>
+                            <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Koefisien</th>
                           </tr>
                         </thead>
                         <tbody>
                           {group.rows.map((row, index) => (
                             <tr key={group.key + '-' + index}>
-                              <td style={{ ...td, color: MUTED }}>{index + 1}</td>
-                              <td style={{ ...td, color: NAVY }}>{row.name}</td>
-                              <td style={td}>{row.unit}</td>
-                              <td style={td}>{row.coefficient}</td>
+                              <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE, color: MUTED }}>{index + 1}</td>
+                              <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE, color: NAVY }}>{row.name}</td>
+                              <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{row.unit}</td>
+                              <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{row.coefficient}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -428,170 +501,103 @@ export function AhspDetailPage() {
               )}
             </section>
 
-            <aside style={{ flex: '1 1 20rem', minWidth: 0 }}>
-              <section aria-label="Informasi AHSP" style={{ marginBottom: 'var(--space-4)' }}>
-                <h2 style={panelHeading}>Informasi AHSP</h2>
-                <div style={field}>
-                  <p style={labelStyle}>Jenis pekerjaan</p>
-                  <p style={valueStyle}>{orDash(state.ahsp.workType)}</p>
+            <aside style={{ flex: '1 1 20rem', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+              <section aria-label="Informasi AHSP" style={CARD}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
+                  <span style={ICON_TILE}><FileText size={16} /></span>
+                  <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: 0 }}>Informasi AHSP</h2>
                 </div>
-                <div style={field}>
-                  <p style={labelStyle}>Uraian</p>
-                  <p style={valueStyle}>{orDash(state.ahsp.methodName)}</p>
-                </div>
-                <div style={field}>
-                  <p style={labelStyle}>Satuan</p>
-                  <p style={valueStyle}>{orDash(currentVersion?.outputUnit)}</p>
-                </div>
-                <div style={field}>
-                  <p style={labelStyle}>Sumber / peraturan</p>
-                  <p style={valueStyle}>{orDash(currentVersion?.regulationReference)}</p>
-                </div>
-                {sourceDate ? (
-                  <div style={field}>
-                    <p style={labelStyle}>Tanggal sumber</p>
-                    <p style={valueStyle}>{sourceDate}</p>
-                  </div>
-                ) : null}
-                <div style={field}>
-                  <p style={labelStyle}>Sumber</p>
-                  <p style={valueStyle}>
-                    {state.ahsp.workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya'}
-                  </p>
-                </div>
+                {infoRow('Kode', orDash(ahsp.code))}
+                {infoRow('Jenis Pekerjaan', orDash(ahsp.workType))}
+                {infoRow('Uraian', orDash(ahsp.methodName))}
+                {infoRow('Satuan', orDash(currentVersion?.outputUnit))}
+                {infoRow('Bidang / Kategori', orDash(ahsp.fieldCategory))}
+                {infoRow('Subkategori', orDash(ahsp.subCategory))}
+                {infoRow('Jenis Pekerjaan (klasifikasi)', orDash(ahsp.classification))}
+                {infoRow('Dasar AHSP', orDash(currentVersion?.regulationReference))}
+                {infoRow('Sumber', ahsp.workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya')}
+                {infoRow(
+                  'Status Usulan',
+                  <span
+                    style={{
+                      background: 'var(--simprok-engineering-blue-100)',
+                      color: NAVY,
+                      borderRadius: '999px',
+                      padding: '0.1rem 0.55rem',
+                      fontSize: 'var(--text-sm)',
+                    }}
+                  >
+                    {proposalStatus}
+                  </span>,
+                )}
+                {infoRow('Dibuat oleh', orDash(ahsp.createdByEmail))}
+                {infoRow('Tanggal dibuat', formatIndoDate(ahsp.createdAt))}
+                {infoRow('Terakhir diperbarui', formatIndoDate(ahsp.updatedAt))}
+                {infoRow('Keterangan', <span style={{ color: MUTED }}>—</span>)}
               </section>
 
-              <section aria-label="AHSP yang berlaku">
-                <h2 style={panelHeading}>AHSP yang berlaku</h2>
-                {/*
-                  MISSING A FORMULA IS NOT BEING OUT OF FORCE.
-
-                  These two used to share one badge, so an AHSP whose recipe had
-                  simply never been written was announced as "Tidak berlaku" — a
-                  statement about authority that nobody had made. They are different
-                  questions with different answers: one is answered by writing the
-                  recipe, the other only by the authority that withdrew the AHSP.
-                  No expiry is invented for either.
-                */}
-                {!currentVersion ? (
-                  <section className="simprok-honest-frame" aria-label="AHSP belum memiliki rumus">
-                    <span className="simprok-honest-frame__badge">Belum ada rumus</span>
-                    <p>
-                      AHSP ini belum memiliki rumus yang tersimpan. Yang belum ada adalah
-                      rumusnya — keberlakuannya tidak sedang dinyatakan gugur.
-                    </p>
-                  </section>
-                ) : archived || isHistoricalStatus(currentVersion.status) ? (
-                  <section className="simprok-honest-frame" aria-label="AHSP tidak berlaku">
-                    <span className="simprok-honest-frame__badge">Tidak berlaku</span>
-                    <p>AHSP ini tidak digunakan untuk pilihan baru.</p>
-                  </section>
-                ) : (
-                  <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 0 }}>
-                    AHSP yang saat ini digunakan SIMPROK.
+              <section
+                aria-label="Tentang AHSP Ini"
+                style={{
+                  background: 'var(--simprok-engineering-blue-100)',
+                  borderRadius: '12px',
+                  padding: 'var(--space-4)',
+                  display: 'flex',
+                  gap: 'var(--space-3)',
+                }}
+              >
+                <span style={{ color: BLUE, flex: '0 0 auto' }}><Info size={18} /></span>
+                <div>
+                  <p style={{ margin: '0 0 var(--space-1)', fontWeight: 600, color: NAVY, fontSize: 'var(--text-sm)' }}>Tentang AHSP Ini</p>
+                  <p style={{ margin: 0, color: MUTED, fontSize: 'var(--text-sm)' }}>
+                    AHSP ini berisi komponen tenaga kerja, bahan, dan peralatan untuk pekerjaan {title}. Harga
+                    satuan dihitung terpisah pada modul RAB menggunakan harga sumber yang berlaku.
                   </p>
-                )}
+                </div>
               </section>
             </aside>
           </div>
 
-          {historicalVersions.length > 0 ? (
-            <details style={{ borderTop: HAIRLINE, marginTop: 'var(--space-3)' }}>
-              <summary aria-label="Riwayat AHSP" style={foldSummary}>
-                Riwayat
-              </summary>
-              <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
-                Riwayat perubahan AHSP.
-              </p>
-              <table style={{ ...tableStyle, maxWidth: '48rem' }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', color: NAVY }}>
-                    <th style={th}>Sumber / Peraturan</th>
-                    <th style={th}>Berlaku dari</th>
-                    <th style={th}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historicalVersions.map((version) => (
-                    <tr key={version.id}>
-                      <td style={{ ...td, color: NAVY }}>{version.regulationReference || '—'}</td>
-                      <td style={td}>{formatStoredDate(version.effectiveDate) || '—'}</td>
-                      <td style={td}>{historyStatusLabel(version.status)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </details>
-          ) : null}
-
+          {/* Lower accordions: Update AHSP + Riwayat AHSP */}
           {workspaceOwned && canManage && !archived ? (
-            <details style={{ borderTop: HAIRLINE, marginTop: 'var(--space-3)' }}>
-              <summary style={foldSummary}>Update AHSP</summary>
-              <form aria-label="Update AHSP" onSubmit={addVersion} style={{ marginTop: 'var(--space-2)' }}>
-                <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
-                  Perbarui rumus. Jejak sebelumnya tetap tersimpan.
-                </p>
+            <details style={{ ...CARD, marginTop: 'var(--space-4)' }}>
+              <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                <span style={ICON_TILE}><Pencil size={16} /></span>
+                <span>
+                  <span style={{ display: 'block', fontWeight: 600, color: NAVY }}>Update AHSP</span>
+                  <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>
+                    Klik untuk mengubah informasi AHSP (detail, komponen, dan lainnya).
+                  </span>
+                </span>
+              </summary>
+              <form aria-label="Update AHSP" onSubmit={addVersion} style={{ marginTop: 'var(--space-4)' }}>
                 <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
                   Satuan
-                  <input
-                    required
-                    value={outputUnit}
-                    onChange={(event) => setOutputUnit(event.target.value)}
-                    aria-label="Satuan AHSP"
-                    style={{ display: 'block', color: NAVY }}
-                  />
+                  <input required value={outputUnit} onChange={(e) => setOutputUnit(e.target.value)} aria-label="Satuan AHSP" style={{ display: 'block', color: NAVY }} />
                 </label>
                 <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
                   Sumber / peraturan
-                  <input
-                    value={regulationReference}
-                    onChange={(event) => setRegulationReference(event.target.value)}
-                    aria-label="Sumber peraturan AHSP"
-                    style={{ display: 'block', width: '100%', maxWidth: '36rem', color: NAVY }}
-                  />
+                  <input value={regulationReference} onChange={(e) => setRegulationReference(e.target.value)} aria-label="Sumber peraturan AHSP" style={{ display: 'block', width: '100%', maxWidth: '36rem', color: NAVY }} />
                 </label>
                 <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
                   Tanggal sumber
-                  <input
-                    type="date"
-                    value={effectiveDate}
-                    onChange={(event) => setEffectiveDate(event.target.value)}
-                    aria-label="Tanggal sumber"
-                    style={{ display: 'block', color: NAVY }}
-                  />
+                  <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} aria-label="Tanggal sumber" style={{ display: 'block', color: NAVY }} />
                 </label>
                 {resourceDrafts.map((row, index) => (
-                  <fieldset
-                    key={index}
-                    style={{ border: HAIRLINE, marginBottom: 'var(--space-2)', padding: 'var(--space-3)' }}
-                  >
+                  <fieldset key={index} style={{ border: HAIRLINE, borderRadius: '8px', marginBottom: 'var(--space-2)', padding: 'var(--space-3)' }}>
                     <legend style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>Komponen {index + 1}</legend>
-                    {/*
-                      A saved component is NAMED here, not re-typed. Its stored
-                      identity is a catalogue handle: showing it would put an
-                      internal id in front of the reader, and letting it be edited
-                      would let a keystroke detach the component from the resource
-                      it was proven to be. The name comes from the same one rule
-                      the table above uses, so both call it the same thing.
-                    */}
                     {row.stored ? (
-                      <span
-                        aria-label={'Sumber daya ' + (index + 1)}
-                        style={{ marginRight: 'var(--space-2)', color: NAVY }}
-                      >
-                        {resolveDefinitionResourceName({
-                          resourceId: row.resourceId,
-                          resourceName: row.resourceName,
-                        })}
+                      <span aria-label={'Sumber daya ' + (index + 1)} style={{ marginRight: 'var(--space-2)', color: NAVY }}>
+                        {resolveDefinitionResourceName({ resourceId: row.resourceId, resourceName: row.resourceName })}
                       </span>
                     ) : (
                       <input
                         placeholder="Sumber daya"
                         aria-label={'Sumber daya ' + (index + 1)}
                         value={row.resourceId}
-                        onChange={(event) => {
+                        onChange={(e) => {
                           const next = [...resourceDrafts];
-                          next[index] = { ...row, resourceId: event.target.value };
+                          next[index] = { ...row, resourceId: e.target.value };
                           setResourceDrafts(next);
                         }}
                         style={{ marginRight: 'var(--space-2)', color: NAVY }}
@@ -600,12 +606,9 @@ export function AhspDetailPage() {
                     <select
                       aria-label={'Kelompok ' + (index + 1)}
                       value={row.resourceType}
-                      onChange={(event) => {
+                      onChange={(e) => {
                         const next = [...resourceDrafts];
-                        next[index] = {
-                          ...row,
-                          resourceType: event.target.value as ResourceDraft['resourceType'],
-                        };
+                        next[index] = { ...row, resourceType: e.target.value as ResourceDraft['resourceType'] };
                         setResourceDrafts(next);
                       }}
                       style={{ marginRight: 'var(--space-2)', color: NAVY }}
@@ -618,9 +621,9 @@ export function AhspDetailPage() {
                       placeholder="Satuan"
                       aria-label={'Satuan komponen ' + (index + 1)}
                       value={row.baseUnit}
-                      onChange={(event) => {
+                      onChange={(e) => {
                         const next = [...resourceDrafts];
-                        next[index] = { ...row, baseUnit: event.target.value };
+                        next[index] = { ...row, baseUnit: e.target.value };
                         setResourceDrafts(next);
                       }}
                       style={{ marginRight: 'var(--space-2)', color: NAVY }}
@@ -629,38 +632,53 @@ export function AhspDetailPage() {
                       placeholder="Koefisien"
                       aria-label={'Koefisien ' + (index + 1)}
                       value={row.coefficient}
-                      onChange={(event) => {
+                      onChange={(e) => {
                         const next = [...resourceDrafts];
-                        next[index] = { ...row, coefficient: event.target.value };
+                        next[index] = { ...row, coefficient: e.target.value };
                         setResourceDrafts(next);
                       }}
                       style={{ color: NAVY }}
                     />
                   </fieldset>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => setResourceDrafts([...resourceDrafts, emptyResource()])}
-                  style={{ ...actionButton, background: NAVY }}
-                >
+                <button type="button" onClick={() => setResourceDrafts([...resourceDrafts, emptyResource()])} style={{ ...outlineButton, marginRight: 'var(--space-2)' }}>
                   Tambah baris komponen
                 </button>
-                <button type="submit" disabled={busy} style={actionButton}>
-                  Update AHSP
-                </button>
-                {actionError ? (
-                  <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
-                    {actionError}
-                  </p>
-                ) : null}
+                <button type="submit" disabled={busy} style={primaryButton}>Update AHSP</button>
               </form>
             </details>
           ) : null}
 
-          {actionError && !(workspaceOwned && canManage && !archived) ? (
-            <p role="alert" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
-              {actionError}
-            </p>
+          {historicalVersions.length > 0 ? (
+            <details style={{ ...CARD, marginTop: 'var(--space-3)' }}>
+              <summary aria-label="Riwayat AHSP" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                <span style={ICON_TILE}><History size={16} /></span>
+                <span>
+                  <span style={{ display: 'block', fontWeight: 600, color: NAVY }}>Riwayat AHSP</span>
+                  <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>
+                    Lihat daftar perubahan yang pernah dilakukan pada AHSP ini.
+                  </span>
+                </span>
+              </summary>
+              <table style={{ width: '100%', maxWidth: '48rem', borderCollapse: 'collapse', fontSize: 'var(--text-sm)', marginTop: 'var(--space-3)' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: MUTED, background: 'var(--simprok-engineering-blue-100)' }}>
+                    <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Sumber / Peraturan</th>
+                    <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Berlaku dari</th>
+                    <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historicalVersions.map((version) => (
+                    <tr key={version.id}>
+                      <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE, color: NAVY }}>{version.regulationReference || '—'}</td>
+                      <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{formatIndoDate(version.effectiveDate)}</td>
+                      <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{historyStatusLabel(version.status)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
           ) : null}
         </>
       ) : null}

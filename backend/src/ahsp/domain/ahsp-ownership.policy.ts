@@ -3,6 +3,7 @@ export interface AhspEntity {
   reviewStatus: 'PENDING' | 'APPROVED' | 'REJECTED';
   archivedAt: Date | null;
   deletedAt: Date | null;
+  proposedAt?: Date | null;
 }
 
 export class OwnershipViolationError extends Error {
@@ -76,6 +77,21 @@ export class AhspOwnershipPolicy {
   canApprove(ahsp: AhspEntity): boolean {
     this.ensureNotDeleted(ahsp, 'approve');
     this.ensureNotArchived(ahsp, 'approve');
+    return true;
+  }
+
+  canPropose(ahsp: AhspEntity): boolean {
+    this.ensureNotDeleted(ahsp, 'propose');
+    this.ensureNotArchived(ahsp, 'propose');
+    if (ahsp.ownershipType !== 'USER_ASSET') {
+      throw new OwnershipViolationError('Only a workspace-owned AHSP can be proposed to SIMPROK.');
+    }
+    if (ahsp.reviewStatus === 'APPROVED') {
+      throw new OwnershipViolationError('This AHSP has already been accepted.');
+    }
+    if (ahsp.proposedAt) {
+      throw new OwnershipViolationError('This AHSP has already been proposed and is under review.');
+    }
     return true;
   }
 

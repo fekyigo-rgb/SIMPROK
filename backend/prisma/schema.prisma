@@ -717,6 +717,16 @@ model AHSP {
   methodType   MethodType
   locationType LocationType
   methodName   String
+
+  // Owner-approved descriptive attributes shown on the detail view (Kode,
+  // Bidang/Kategori, Subkategori, Jenis Pekerjaan klasifikasi). Additive and
+  // nullable — what the source states, not SIMPROK's own method/terrain
+  // classification (which stay the OTHER fillers above).
+  code           String?
+  fieldCategory  String?
+  subCategory    String?
+  classification String?
+
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
@@ -728,6 +738,14 @@ model AHSP {
   approvedByUserId String?   @db.Uuid
   approvedByName   String?
   approvedByEmail  String?
+
+  // "Usulkan ke SIMPROK" submission marker. proposedAt NULL = "Belum diusulkan".
+  // The review OUTCOME stays on reviewStatus + approvedBy above; this only
+  // records that (and by whom/when) the AHSP was submitted for human review.
+  proposedAt       DateTime?
+  proposedByUserId String?   @db.Uuid
+  proposedByName   String?
+  proposedByEmail  String?
 
   ownershipTransferredAt       DateTime?
   ownershipTransferredByUserId String?   @db.Uuid
@@ -764,6 +782,7 @@ model AHSP {
   @@index([workspaceId, reviewStatus])
   @@index([deletedAt])
   @@index([archivedAt])
+  @@index([proposedAt])
   @@map("ahsps")
 }
 

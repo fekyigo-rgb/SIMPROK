@@ -20,10 +20,13 @@ describe('AhspController', () => {
     list: jest.fn(),
     create: jest.fn(),
     getById: jest.fn(),
+    getDetail: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
     archive: jest.fn(),
     approve: jest.fn(),
+    reject: jest.fn(),
+    propose: jest.fn(),
     transfer: jest.fn(),
   };
 
@@ -93,11 +96,11 @@ describe('AhspController', () => {
     const request = {
       workspaceContext: { workspaceId: 'ws-golden-01' },
     };
-    ahspService.getById.mockResolvedValue({ id: 'ahsp-01' });
+    ahspService.getDetail.mockResolvedValue({ id: 'ahsp-01' });
 
     await controller.getById(request, 'ahsp-01');
 
-    expect(ahspService.getById).toHaveBeenCalledWith('ahsp-01', 'ws-golden-01');
+    expect(ahspService.getDetail).toHaveBeenCalledWith('ahsp-01', 'ws-golden-01');
   });
 
   it('healthCheck returns module ok status', () => {
@@ -319,9 +322,9 @@ describe('AhspController', () => {
 
     it('leaves the neighbouring routes working', async () => {
       expect(controller.healthCheck()).toEqual({ module: 'ahsp', status: 'ok' });
-      ahspService.getById.mockResolvedValue({ id: 'ahsp-01' });
+      ahspService.getDetail.mockResolvedValue({ id: 'ahsp-01' });
       await controller.getById(requestWithContext, 'ahsp-01');
-      expect(ahspService.getById).toHaveBeenCalledWith('ahsp-01', 'ws-a');
+      expect(ahspService.getDetail).toHaveBeenCalledWith('ahsp-01', 'ws-a');
     });
   });
 });

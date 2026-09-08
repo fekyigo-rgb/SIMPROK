@@ -172,7 +172,7 @@ export class AhspController {
   @Permissions('AHSP_VIEW')
   async getById(@Req() request: any, @Param('id') id: string) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
-    return this.ahspService.getById(id, workspaceId);
+    return this.ahspService.getDetail(id, workspaceId);
   }
 
   @Patch(':id')
@@ -233,6 +233,32 @@ export class AhspController {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
     const actorUserId = await this.resolveActor(request);
     return this.ahspService.transfer(id, body.targetOwnershipType, actorUserId, body.reason, workspaceId);
+  }
+
+  /**
+   * "Usulkan ke SIMPROK" — the workspace owner submits their AHSP for human
+   * review. Records the submission; never approves or publishes. The reviewer's
+   * decision stays on the separate approve/reject routes below.
+   */
+  @Post(':id/propose')
+  @Permissions('AHSP_MANAGE')
+  async propose(@Req() request: any, @Param('id') id: string) {
+    const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
+    const actorUserId = await this.resolveActor(request);
+    return this.ahspService.propose(id, actorUserId, workspaceId);
+  }
+
+  /** A reviewer declines a proposed AHSP (-> Ditolak). Separate authority. */
+  @Post(':id/reject')
+  @Permissions('AHSP_APPROVE')
+  async reject(
+    @Req() request: any,
+    @Param('id') id: string,
+    @Body() body: { userId?: string; reason: string },
+  ) {
+    const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
+    const actorUserId = await this.resolveActor(request);
+    return this.ahspService.reject(id, actorUserId, body.reason, workspaceId);
   }
 
   // ─────────────────────────────────────────────
