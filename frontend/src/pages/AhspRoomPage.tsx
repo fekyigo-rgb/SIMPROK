@@ -43,7 +43,7 @@ const NAVY = 'var(--simprok-authority-navy-800)';
 const MUTED = 'var(--simprok-engineering-blue-500)';
 
 const cell: CSSProperties = {
-  padding: 'var(--space-3)',
+  padding: 'var(--space-1) var(--space-2)',
   borderBottom: '1px solid var(--simprok-engineering-blue-100)',
   verticalAlign: 'top',
 };
@@ -71,6 +71,18 @@ const navyButton: CSSProperties = {
   background: NAVY,
 };
 
+const foldSummary: CSSProperties = {
+  cursor: 'pointer',
+  fontSize: 'var(--text-lg)',
+  color: NAVY,
+  padding: 'var(--space-2) 0',
+};
+
+const controlInput: CSSProperties = {
+  color: NAVY,
+  padding: 'var(--space-1) var(--space-2)',
+};
+
 export function AhspRoomPage() {
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
@@ -81,6 +93,7 @@ export function AhspRoomPage() {
   const [curationError, setCurationError] = useState<string | null>(null);
   const [state, setState] = useState<RoomState>({ phase: 'LOADING' });
   const [query, setQuery] = useState('');
+  const [source, setSource] = useState<'ALL' | 'SIMPROK' | 'MINE'>('ALL');
   const [workType, setWorkType] = useState('');
   const [methodName, setMethodName] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
@@ -109,7 +122,7 @@ export function AhspRoomPage() {
             message:
               response.status === 401 || response.status === 403
                 ? 'Workspace aktif Anda tidak memiliki kewenangan untuk membuka daftar AHSP.'
-                : 'Daftar AHSP tidak dapat dibaca (HTTP ' + response.status + ').',
+                : 'Daftar AHSP belum dapat dibaca. Coba lagi sebentar.',
           });
           return;
         }
@@ -130,12 +143,14 @@ export function AhspRoomPage() {
   const visibleRows = useMemo(() => {
     if (state.phase !== 'READY') return [];
     const needle = query.trim().toLowerCase();
-    if (!needle) return state.rows;
     return state.rows.filter((row) => {
+      if (source === 'SIMPROK' && row.workspaceId !== null) return false;
+      if (source === 'MINE' && row.workspaceId === null) return false;
+      if (!needle) return true;
       const hay = `${row.workType ?? ''} ${row.methodName ?? ''}`.toLowerCase();
       return hay.includes(needle);
     });
-  }, [state, query]);
+  }, [state, query, source]);
 
   const createWorkspaceAhsp = async (event: FormEvent) => {
     event.preventDefault();
@@ -154,7 +169,7 @@ export function AhspRoomPage() {
         }),
       });
       if (!response.ok) {
-        setCreateError('AHSP milik Anda tidak dapat dibuat (HTTP ' + response.status + ').');
+        setCreateError('AHSP milik Anda belum dapat dibuat. Periksa isian lalu coba lagi.');
         return;
       }
       const created = (await response.json()) as { id?: string };
@@ -180,7 +195,7 @@ export function AhspRoomPage() {
       body.append('file', file);
       const response = await apiFetch('/ahsp/document/preview', { method: 'POST', body });
       if (!response.ok) {
-        setImportError('Dokumen AHSP tidak dapat dipahami (HTTP ' + response.status + ').');
+        setImportError('Dokumen AHSP belum dapat dipahami. Periksa berkas lalu coba lagi.');
         return;
       }
       setPreview(await response.json());
@@ -200,7 +215,7 @@ export function AhspRoomPage() {
       body.append('file', file);
       const response = await apiFetch('/ahsp/document/commit', { method: 'POST', body });
       if (!response.ok) {
-        setImportError('AHSP terbukti tidak dapat disimpan (HTTP ' + response.status + ').');
+        setImportError('AHSP terbukti belum dapat disimpan. Coba lagi sebentar.');
         return;
       }
       const data = await response.json();
@@ -286,18 +301,22 @@ export function AhspRoomPage() {
   const unresolved = preview ? recognized - ready : 0;
 
   return (
-    <main aria-label="Ruang AHSP" style={{ padding: 'var(--space-6, 1.5rem)' }}>
-      <header style={{ marginBottom: 'var(--space-5)' }}>
+    <main aria-label="Ruang AHSP" style={{ padding: 'var(--space-5, 1.25rem)' }}>
+      <header style={{ marginBottom: 'var(--space-4)' }}>
         <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: NAVY, margin: 0 }}>
           AHSP
         </h1>
+        <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 'var(--space-1) 0 0' }}>
+          Analisa Harga Satuan Pekerjaan yang digunakan SIMPROK.
+        </p>
       </header>
 
       {canManage ? (
-        <section aria-label="Import AHSP" style={{ marginBottom: 'var(--space-6)' }}>
-          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
-            Import AHSP
-          </h2>
+        <details style={{ marginBottom: 'var(--space-4)', borderBottom: '1px solid var(--simprok-engineering-blue-100)', paddingBottom: 'var(--space-2)' }}>
+          <summary style={foldSummary}>Import AHSP</summary>
+          <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 'var(--space-1) 0 var(--space-3)' }}>
+            Pahami dokumen AHSP resmi (.xlsx), lalu simpan yang sudah terbukti.
+          </p>
           <input
             type="file"
             accept=".xlsx"
@@ -369,7 +388,7 @@ export function AhspRoomPage() {
               {commitResult.skipped.length} pekerjaan belum disimpan.
             </p>
           ) : null}
-        </section>
+        </details>
       ) : null}
 
       {canCurate && observations.length > 0 ? (
@@ -457,23 +476,38 @@ export function AhspRoomPage() {
           <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
             AHSP yang tersedia
           </h2>
-          <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
-            Cari
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              aria-label="Cari AHSP"
-              placeholder="Jenis pekerjaan atau uraian"
-              style={{ display: 'block', width: '100%', maxWidth: '24rem', color: NAVY, marginTop: 'var(--space-1)' }}
-            />
-          </label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)', alignItems: 'flex-end', marginBottom: 'var(--space-3)' }}>
+            <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, flex: '1 1 20rem' }}>
+              Cari
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label="Cari AHSP"
+                placeholder="Cari jenis atau uraian pekerjaan"
+                style={{ ...controlInput, display: 'block', width: '100%', marginTop: 'var(--space-1)' }}
+              />
+            </label>
+            <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, flex: '0 1 14rem' }}>
+              Sumber
+              <select
+                value={source}
+                onChange={(event) => setSource(event.target.value as 'ALL' | 'SIMPROK' | 'MINE')}
+                aria-label="Saring sumber AHSP"
+                style={{ ...controlInput, display: 'block', width: '100%', marginTop: 'var(--space-1)' }}
+              >
+                <option value="ALL">Semua sumber</option>
+                <option value="SIMPROK">Pustaka SIMPROK</option>
+                <option value="MINE">AHSP Saya</option>
+              </select>
+            </label>
+          </div>
           {state.rows.length === 0 ? (
             <section className="simprok-honest-frame" aria-label="AHSP kosong">
               <span className="simprok-honest-frame__badge">Belum ada data</span>
               <p>Belum ada AHSP yang tersedia dalam workspace ini.</p>
             </section>
           ) : visibleRows.length === 0 ? (
-            <p style={{ color: MUTED, fontSize: 'var(--text-sm)' }}>Tidak ada AHSP yang cocok dengan pencarian ini.</p>
+            <p style={{ color: MUTED, fontSize: 'var(--text-sm)' }}>Tidak ada AHSP yang cocok dengan pencarian atau saringan ini.</p>
           ) : (
             <table
               aria-label="Daftar AHSP yang tersedia"
@@ -483,7 +517,8 @@ export function AhspRoomPage() {
                 <tr style={{ textAlign: 'left', color: NAVY }}>
                   <th style={cell}>Jenis Pekerjaan</th>
                   <th style={cell}>Uraian</th>
-                  <th style={cell}>Kepemilikan</th>
+                  <th style={cell}>Sumber</th>
+                  <th style={cell}>Aksi</th>
                 </tr>
               </thead>
               <tbody>
@@ -499,6 +534,14 @@ export function AhspRoomPage() {
                     </td>
                     <td style={cell}>{orDash(row.methodName)}</td>
                     <td style={cell}>{ownershipLabel(row.workspaceId)}</td>
+                    <td style={cell}>
+                      <Link
+                        to={'/ahsp/' + row.id}
+                        style={{ color: 'var(--simprok-trust-blue-500)', textDecoration: 'none' }}
+                      >
+                        Lihat
+                      </Link>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -508,14 +551,13 @@ export function AhspRoomPage() {
       ) : null}
 
       {canManage ? (
-        <form
-          aria-label="Buat AHSP milik saya"
-          onSubmit={createWorkspaceAhsp}
-          style={{ maxWidth: '36rem', marginTop: 'var(--space-6)' }}
-        >
-          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-3)' }}>
-            AHSP Milik Saya
-          </h2>
+        <details style={{ marginTop: 'var(--space-4)', borderTop: '1px solid var(--simprok-engineering-blue-100)', paddingTop: 'var(--space-2)' }}>
+          <summary style={foldSummary}>AHSP Milik Saya</summary>
+          <form
+            aria-label="Buat AHSP milik saya"
+            onSubmit={createWorkspaceAhsp}
+            style={{ maxWidth: '36rem', marginTop: 'var(--space-2)' }}
+          >
           <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
             Jenis pekerjaan
             <input
@@ -544,7 +586,8 @@ export function AhspRoomPage() {
           <button type="submit" disabled={creating} style={primaryButton}>
             {creating ? 'Menyimpan…' : 'Simpan AHSP milik saya'}
           </button>
-        </form>
+          </form>
+        </details>
       ) : null}
     </main>
   );
