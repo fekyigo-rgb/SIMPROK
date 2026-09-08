@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { LocationType, MethodType } from '@prisma/client';
+import { LocationType, MethodType, Prisma } from '@prisma/client';
 import { IntakeError } from '../../universal-intake/intake-errors';
 import { ReaderRegistry } from '../../universal-intake/readers/reader-registry';
 import {
@@ -151,6 +151,7 @@ export class AhspDocumentCanonicalizationService {
     const knowledge = await this.preview(envelope);
     const skipped: Array<AhspDocumentCommitResult['skipped'][number]> = [];
     const written: Array<AhspDocumentCommitResult['written'][number]> = [];
+    const sightings: Prisma.ResourceSourceIdentityCreateManyInput[] = [];
     for (const item of knowledge.workItems) {
       if (item.status !== 'READY' || !item.workType || !item.methodName) {
         skipped.push({
@@ -191,6 +192,9 @@ export class AhspDocumentCanonicalizationService {
           ahspId: parent.id,
           versionId: version.id,
         });
+        sightings.push(
+          ...this.sightingsFor(item, knowledge, envelope.workspaceId),
+        );
       } catch (error) {
         if (error instanceof ConflictException) {
           skipped.push({
@@ -212,6 +216,11 @@ export class AhspDocumentCanonicalizationService {
     await this.observeUnresolved(knowledge, envelope.workspaceId).catch(
       () => undefined,
     );
+    // Every PROVED reading in an accepted analysis enriches the shared sighting
+    // memory (ResourceSourceIdentity), so a spelling proved once is recognised
+    // the next time. Best-effort, exactly like the observation above: learning
+    // must never fail an otherwise-good commit.
+    await this.rememberProvenReadings(sightings).catch(() => undefined);
 
     return { knowledge, written, skipped };
   }
@@ -252,6 +261,96 @@ export class AhspDocumentCanonicalizationService {
       }
     }
     if (inputs.length > 0) await this.observations.observeMany(inputs);
+  }
+
+  /**
+   * WHAT SIMPROK LEARNS FROM AN AHSP IT ACCEPTED.
+   *
+   * ResourceSourceIdentity is the platform's existing memory of how the real
+   * world SPELLS a resource it has already proved: the Basic Price intake and
+   * the catalogue bootstrap both write it, and the identity kernel reads it back
+   * as SOURCE_SIGHTING_NAME_MATCH / SOURCE_CODE_MATCH when nominating candidates
+   * for a name it has not seen exactly before.
+   *
+   * The AHSP door only ever READ that memory. Every official analysis the Owner
+   * imported taught the platform nothing, so an abbreviation or a variant
+   * spelling proved in one AHSP was a stranger again in the next. This is the
+   * missing wire, not a new mechanism: same table, same contract, same fields as
+   * the writer Basic Price already uses.
+   *
+   * ONLY PROVED READINGS ARE RECORDED. The row's catalogue id is the one the
+   * identity kernel resolved, so nothing here asserts an identity — it records
+   * that a proved identity was written this way, in this file, at this row.
+   */
+  private sightingsFor(
+    item: AhspWorkItemKnowledge,
+    knowledge: AhspDocumentKnowledge,
+    workspaceId: string,
+  ): Prisma.ResourceSourceIdentityCreateManyInput[] {
+    const rows: Prisma.ResourceSourceIdentityCreateManyInput[] = [];
+    for (const resource of item.resources) {
+      const name = resource.nameEvidence;
+      if (
+        !resource.resolvedResourceCatalogId ||
+        !resource.group ||
+        !resource.rawName ||
+        !name
+      ) {
+        continue;
+      }
+      rows.push({
+        resourceCatalogId: resource.resolvedResourceCatalogId,
+        workspaceId,
+        sourceSha256: knowledge.source.contentDigestSha256,
+        sourceFileName: knowledge.source.fileName,
+        parserContractVersion: knowledge.source.readerContractVersion,
+        sheetName: name.sheetName,
+        sourceRowNumber: name.rowNumber,
+        sourceSection: resource.group,
+        sourceCodeCellAddress: resource.codeEvidence?.locator ?? null,
+        sourceNameCellAddress: name.locator,
+        sourceUnitCellAddress: resource.unitEvidence?.locator ?? null,
+        rawCode: resource.rawCode,
+        rawName: resource.rawName,
+        rawUnit: resource.rawUnit,
+      });
+    }
+    return rows;
+  }
+
+  /**
+   * Additive only, and never at the canonical write's expense.
+   *
+   * The memory is keyed on workspace + file digest + sheet + row + parser, so
+   * re-importing the same document must not fail: `skipDuplicates` leaves an
+   * existing reading exactly as it stands rather than rebinding it. A sighting
+   * is EVIDENCE the kernel weighs, never authority, so declining to overwrite
+   * one costs a little learning and can corrupt nothing.
+   */
+  private async rememberProvenReadings(
+    rows: Prisma.ResourceSourceIdentityCreateManyInput[],
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    // One document can read the same row only once, but two work items may
+    // legitimately quote it; the key is unique, so the duplicate is dropped here
+    // rather than left for the database to reject.
+    const seen = new Set<string>();
+    const unique = rows.filter((row) => {
+      const key = [
+        row.workspaceId,
+        row.sourceSha256,
+        row.sheetName,
+        row.sourceRowNumber,
+        row.parserContractVersion,
+      ].join(' ');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    await this.prisma.resourceSourceIdentity.createMany({
+      data: unique,
+      skipDuplicates: true,
+    });
   }
 
   private async resolveKnowledge(
@@ -339,28 +438,36 @@ export class AhspDocumentCanonicalizationService {
     resource: AhspResourceKnowledge,
     evidence: ResourceIdentityEvidence,
   ): Promise<AhspResourceKnowledge> {
-    if (
-      resource.status !== 'READY' ||
-      !resource.rawName ||
-      !resource.rawUnit ||
-      !resource.group ||
-      resource.coefficient === null
-    ) {
+    // A component the source never named cannot be searched for at all. That is
+    // the ONLY thing that stops the investigation before it starts.
+    if (!resource.rawName || !resource.group) {
       return resource;
     }
-    const unit = await this.units.resolve(
-      resource.rawUnit,
-      resource.rawUnit,
-      undefined,
-      GROUP_TO_CONTEXT[resource.group],
-    );
-    if (unit.status !== UNIT_RESOLUTION_STATUS.RESOLVED) {
-      return {
-        ...resource,
-        status: 'UNRESOLVED',
-        reasonCodes: [...resource.reasonCodes, AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED],
-      };
+
+    const reasonCodes = [...resource.reasonCodes];
+    const unitResolved =
+      resource.rawUnit !== null &&
+      (
+        await this.units.resolve(
+          resource.rawUnit,
+          resource.rawUnit,
+          undefined,
+          GROUP_TO_CONTEXT[resource.group],
+        )
+      ).status === UNIT_RESOLUTION_STATUS.RESOLVED;
+    if (resource.rawUnit !== null && !unitResolved) {
+      reasonCodes.push(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
     }
+
+    // WHY THE SEARCH CONTINUES PAST AN UNKNOWN UNIT.
+    //
+    // This used to return here, so a component whose unit spelling SIMPROK had
+    // never seen was never even asked about — its identity went unsearched, its
+    // candidates undiscovered, and the reader was left with nothing to act on
+    // for a resource the catalogue may well already hold. "Which resource is
+    // this" and "what measure is it in" are different questions; failing the
+    // second is no reason to stop asking the first. Nothing below is claimed:
+    // an unproven unit still blocks READY, so no such component can be written.
     const identity = await this.identity.resolve(evidence, {
       rawName: resource.rawName,
       rawCode: resource.rawCode,
@@ -375,10 +482,15 @@ export class AhspDocumentCanonicalizationService {
       ),
     ];
     if (identity.status === 'RESOLVED' && identity.resolvedResourceCatalogId) {
+      // Identity proved. The base unit is only carried when the Unit authority
+      // proved it too — knowing WHICH resource this is never licenses asserting
+      // what measure it is in.
       return {
         ...resource,
+        status: unitResolved ? resource.status : 'UNRESOLVED',
+        reasonCodes,
         resolvedResourceCatalogId: identity.resolvedResourceCatalogId,
-        resolvedBaseUnit: resource.rawUnit,
+        resolvedBaseUnit: unitResolved ? resource.rawUnit : null,
         identityCandidates: [],
       };
     }
@@ -397,19 +509,18 @@ export class AhspDocumentCanonicalizationService {
         status: 'UNRESOLVED',
         identityCandidates,
         reasonCodes: [
-          ...resource.reasonCodes,
+          ...reasonCodes,
           AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,
         ],
       };
     }
+    // Searched and found nothing this catalogue can offer. The component stays
+    // in the knowledge with its evidence: not proved is not "does not exist".
     return {
       ...resource,
       status: 'UNRESOLVED',
       identityCandidates,
-      reasonCodes: [
-        ...resource.reasonCodes,
-        AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED,
-      ],
+      reasonCodes: [...reasonCodes, AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED],
     };
   }
 }
