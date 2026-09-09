@@ -22,6 +22,24 @@ describe('UnitKernelService', () => {
     expect(result).toMatchObject({ status: 'RESOLVED', quantityFactor: '1', priceOperation: UNIT_PRICE_OPERATION.IDENTITY });
   });
 
+  // 20260908120000_person_hour_orang_jam_vocabulary — the orang-jam family is the
+  // exact mirror of the OH family above: "orang" pins it to a PERSON hour, so it is
+  // context-free and resolves to PERSON_HOUR identity, never to the day.
+  const personHour = unit('person-hour', 'PERSON_HOUR', 'PERSON_TIME');
+  it.each(['OJ', 'Org/Jam', 'Orang/Jam'])('%s to PERSON_HOUR resolves identity factor 1', async (raw) => {
+    prisma.unitAlias.findMany.mockResolvedValueOnce([alias('source', raw, personHour)]).mockResolvedValueOnce([alias('target', 'PERSON_HOUR', personHour)]);
+    const result = await service.resolve(raw, 'PERSON_HOUR');
+    expect(result).toMatchObject({ status: 'RESOLVED', quantityFactor: '1', priceOperation: UNIT_PRICE_OPERATION.IDENTITY });
+  });
+
+  it('OH and OJ are distinct units — a person-day is never auto-converted to a person-hour', async () => {
+    // OH -> PERSON_DAY, OJ -> PERSON_HOUR: different canonical ids, and no governed
+    // conversion rule exists, so it fails closed rather than inventing 8 hours a day.
+    prisma.unitAlias.findMany.mockResolvedValueOnce([alias('source', 'OH', personDay)]).mockResolvedValueOnce([alias('target', 'OJ', personHour)]);
+    const result = await service.resolve('OH', 'OJ');
+    expect(result).toMatchObject({ status: 'NEEDS_REVIEW', reasonCodes: [UNIT_REASON.CONVERSION_RULE_NOT_FOUND] });
+  });
+
   it('unknown alias fails closed', async () => {
     prisma.unitAlias.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([alias('target', 'KG', kg)]);
     expect(await service.resolve('mystery', 'KG')).toMatchObject({ status: 'NEEDS_REVIEW', reasonCodes: [UNIT_REASON.UNKNOWN_UNIT_ALIAS] });

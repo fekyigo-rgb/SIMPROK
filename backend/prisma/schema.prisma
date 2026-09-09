@@ -101,6 +101,7 @@ model Workspace {
   ahspVersions                    AHSPVersion[]
   ahspSnapshots                   AHSPSnapshot[]
   resourceCatalogs                ResourceCatalog[]
+  observedResources               ObservedResource[]
   basicPrices                     BasicPrice[]
   priceSubmissions                PriceSubmission[]
   priceSubmissionReviews          PriceSubmissionReview[]
@@ -716,6 +717,16 @@ model AHSP {
   methodType   MethodType
   locationType LocationType
   methodName   String
+
+  // Owner-approved descriptive attributes shown on the detail view (Kode,
+  // Bidang/Kategori, Subkategori, Jenis Pekerjaan klasifikasi). Additive and
+  // nullable — what the source states, not SIMPROK's own method/terrain
+  // classification (which stay the OTHER fillers above).
+  code           String?
+  fieldCategory  String?
+  subCategory    String?
+  classification String?
+
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
@@ -727,6 +738,14 @@ model AHSP {
   approvedByUserId String?   @db.Uuid
   approvedByName   String?
   approvedByEmail  String?
+
+  // "Usulkan ke SIMPROK" submission marker. proposedAt NULL = "Belum diusulkan".
+  // The review OUTCOME stays on reviewStatus + approvedBy above; this only
+  // records that (and by whom/when) the AHSP was submitted for human review.
+  proposedAt       DateTime?
+  proposedByUserId String?   @db.Uuid
+  proposedByName   String?
+  proposedByEmail  String?
 
   ownershipTransferredAt       DateTime?
   ownershipTransferredByUserId String?   @db.Uuid
@@ -763,6 +782,7 @@ model AHSP {
   @@index([workspaceId, reviewStatus])
   @@index([deletedAt])
   @@index([archivedAt])
+  @@index([proposedAt])
   @@map("ahsps")
 }
 
@@ -1321,6 +1341,7 @@ model ResourceCatalog {
   importRowResourceMappings      BasicPriceImportRowResourceMapping[]
 
   ahspResourceIdentityDecisions AhspResourceIdentityDecision[]
+  observedResources             ObservedResource[]
 
   // NOTE: the former @@unique([workspaceId, code]) is replaced by a manual
   // partial unique index in the migration SQL (RM-02C1a) because `code` is
@@ -1328,6 +1349,86 @@ model ResourceCatalog {
   // in the schema DSL. See migration 20260727..._rm02c1a_resource_identity_schema_foundation.
   @@index([workspaceId])
   @@map("resource_catalogs")
+}
+
+/// SHARED-OBSERVED-RESOURCE-01 — the ONE domain-neutral home for a resource a
+/// document import SAW but could not yet prove a canonical identity for.
+///
+/// WHY THIS EXISTS (proven by the Shared Intelligence audit): the identity
+/// authority (ResourceIdentityResolutionService), the canonical resource
+/// (ResourceCatalog) and the shared spelling memory (ResourceSourceIdentity)
+/// already exist and are shared. What did NOT exist was a place for an
+/// OBSERVED-but-unproven resource to survive the request and await human
+/// curation, decoupled from any one domain: Basic Price could admit a new
+/// resource only inside a BasicPriceImportRow, and the project-AHSP GHX decision
+/// only chooses among EXISTING candidates. This model is that missing middle,
+/// and it is deliberately ONE shared concept — never AhspObservedResource /
+/// BasicPriceObservedResource / BoqObservedResource. `origin` is a provenance
+/// TAG for where the observation came from, never a behavioural branch.
+///
+/// IT IS NOT AN IDENTITY. Candidates captured here are evidence, never a
+/// binding; a resolved/admitted catalog id appears only AFTER a human decision.
+/// Canonical minting still flows through the one authority
+/// (ResourceAdmissionService), which writes ResourceCatalog + ResourceSourceIdentity.
+model ObservedResource {
+  id          String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+
+  /// Provenance tag only ('AHSP_IMPORT' | 'BASIC_PRICE' | 'BOQ' | ...). Never a
+  /// dispatch/branch key — the lifecycle is identical whatever wrote it.
+  origin String
+
+  /// The source facts, exactly as written. rawName is always present; a resource
+  /// with no name cannot be searched for and is never observed.
+  rawName      String
+  rawCode      String?
+  rawUnit      String?
+  resourceType ResourceType
+
+  /// Source provenance (present for real document imports; null for hand-built).
+  sourceSha256          String? @db.VarChar(64)
+  sourceFileName        String?
+  parserContractVersion String?
+  sheetName             String?
+  sourceRowNumber       Int?
+  sourceCodeCellAddress String?
+  sourceNameCellAddress String?
+  sourceUnitCellAddress String?
+
+  /// The candidate names the identity kernel nominated at observation time.
+  /// EVIDENCE ONLY — never an asserted identity, never auto-selected.
+  candidatesJson Json?
+
+  status                    ObservedResourceStatus @default(OBSERVED)
+  /// Set ONLY after a human decision (chose an existing row, or confirmed new).
+  resolvedResourceCatalogId String?                @db.Uuid
+  decidedByAccountId        String?                @db.Uuid
+  decidedAt                 DateTime?
+  reason                    String?                @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace               Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  resolvedResourceCatalog ResourceCatalog? @relation(fields: [resolvedResourceCatalogId], references: [id], onDelete: Restrict)
+
+  /// One import row is observed once. Nulls in provenance make hand-built rows
+  /// distinct (Postgres NULL semantics), which is correct: only a real,
+  /// fully-located source row dedupes on re-import.
+  @@unique([workspaceId, sourceSha256, sheetName, sourceRowNumber, rawName, resourceType])
+  @@index([workspaceId, status])
+  @@map("observed_resources")
+}
+
+/// OBSERVED = seen, not yet decided. RESOLVED_EXISTING = a human mapped it to an
+/// existing ResourceCatalog row. ADMITTED_NEW = a human confirmed it genuinely
+/// new and the one admission authority minted a ResourceCatalog. DISMISSED = a
+/// human judged it not a real resource. Never auto-promoted.
+enum ObservedResourceStatus {
+  OBSERVED
+  RESOLVED_EXISTING
+  ADMITTED_NEW
+  DISMISSED
 }
 
 /// RM-02C1a: provenance-only evidence of where a resource row was seen in a
