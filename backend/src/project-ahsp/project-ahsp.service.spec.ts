@@ -12,6 +12,20 @@ import {
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { BoqUnitCompatibilityService } from '../unit-kernel/boq-unit-compatibility.service';
 
+/**
+ * The AHSP eligibility WHERE is a list of AND clauses. These read it by what a
+ * clause CONTAINS rather than by where it sits, so adding a date clause can
+ * never silently unhook an assertion that was really about origins.
+ */
+const ahspClauseWith = (where: any, field: string) =>
+  (where.AND as any[]).find(
+    (clause) =>
+      Array.isArray(clause.OR) && clause.OR.some((b: any) => field in b),
+  );
+const ahspOriginClause = (where: any) => ahspClauseWith(where, 'status');
+const ahspDateClause = (where: any, field: string) =>
+  ahspClauseWith(where, field);
+
 describe('ProjectAhspService E1A', () => {
   const workspaceId = '20000000-0000-4000-8000-000000000001';
   let prisma: any;
@@ -230,10 +244,17 @@ describe('ProjectAhspService E1A', () => {
   it('Q-01 eligible query is tenant/date scoped; catalog still requires PUBLISHED', async () => {
     await service.listEligibleVersions(workspaceId, '2026-08-04');
     const where = prisma.aHSPVersion.findMany.mock.calls[0][0].where;
-    expect(where.effectiveDate.lte).toEqual(new Date('2026-08-04T00:00:00.000Z'));
+    // A NULL effective date is an unknown start, not a disqualifying one; a
+    // PROVEN date later than the as-of still keeps the version out.
+    expect(ahspDateClause(where, 'effectiveDate')).toEqual({
+      OR: [
+        { effectiveDate: null },
+        { effectiveDate: { lte: new Date('2026-08-04T00:00:00.000Z') } },
+      ],
+    });
     expect(JSON.stringify(where)).toContain(workspaceId);
 
-    const [, originBranch] = where.AND;
+    const originBranch = ahspOriginClause(where);
     const [catalog, priv] = originBranch.OR;
     expect(catalog.status).toBe('PUBLISHED');
     // The private branch must never accept a retired version.
@@ -243,7 +264,7 @@ describe('ProjectAhspService E1A', () => {
   it('Q-01b the private branch is scoped to this workspace by strict equality, never to null', async () => {
     await service.listEligibleVersions(workspaceId, '2026-08-04');
     const where = prisma.aHSPVersion.findMany.mock.calls[0][0].where;
-    const [, originBranch] = where.AND;
+    const originBranch = ahspOriginClause(where);
     const [, priv] = originBranch.OR;
 
     // Both the version AND its owning AHSP must belong to this exact
@@ -262,7 +283,7 @@ describe('ProjectAhspService E1A', () => {
   it('Q-01c SUPERSEDED is not eligible through either origin', async () => {
     await service.listEligibleVersions(workspaceId, '2026-08-04');
     const where = prisma.aHSPVersion.findMany.mock.calls[0][0].where;
-    const [, originBranch] = where.AND;
+    const originBranch = ahspOriginClause(where);
     const [catalog, priv] = originBranch.OR;
     // Catalog: only the exact literal PUBLISHED passes.
     expect(catalog.status).toBe('PUBLISHED');
@@ -364,8 +385,17 @@ describe('ProjectAhspService E1A', () => {
     const listed = await service.listEligibleVersions(workspaceId, '2026-08-04');
     expect(listed.map((row: { id: string }) => row.id)).toEqual(['v4-in-date']);
     const where = prisma.aHSPVersion.findMany.mock.calls[0][0].where;
-    expect(where.effectiveDate.lte).toEqual(new Date('2026-08-04T00:00:00.000Z'));
-    expect(JSON.stringify(where.AND[0])).toContain('expiredDate');
+    // A NULL effective date is an unknown start, not a disqualifying one; a
+    // PROVEN date later than the as-of still keeps the version out.
+    expect(ahspDateClause(where, 'effectiveDate')).toEqual({
+      OR: [
+        { effectiveDate: null },
+        { effectiveDate: { lte: new Date('2026-08-04T00:00:00.000Z') } },
+      ],
+    });
+    expect(JSON.stringify(ahspDateClause(where, 'expiredDate'))).toContain(
+      'expiredDate',
+    );
   });
 
   it('region query returns active regions only', async () => {

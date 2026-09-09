@@ -246,7 +246,17 @@ describe('RabLockService', () => {
     arrange();
     await lock();
     const where = tx.aHSPVersion.findFirst.mock.calls[0][0].where;
-    expect(where.effectiveDate).toEqual({ lte: asOfDate });
+    // The date window is asked with THIS line's as-of, never "today". A NULL
+    // effectiveDate is an unknown start and does not disqualify; a proven start
+    // later than this line's as-of still does.
+    const effectiveClause = (where.AND as any[]).find(
+      (clause: any) =>
+        Array.isArray(clause.OR) &&
+        clause.OR.some((branch: any) => 'effectiveDate' in branch),
+    );
+    expect(effectiveClause).toEqual({
+      OR: [{ effectiveDate: null }, { effectiveDate: { lte: asOfDate } }],
+    });
   });
 
   // ── T10 ────────────────────────────────────────────────────────────────────
