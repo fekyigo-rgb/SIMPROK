@@ -13,8 +13,9 @@ This index does not restate full product laws. Its purpose is to prevent duplica
 5. `SIMPROK_BASIC_PRICE_AHSP_IMPLEMENTATION_BLUEPRINT.md`
 6. `SIMPROK_RAB_TRANSITION_INTERACTION_SYNTHESIS_AND_UNCERTAINTY_LAW.md`
 7. `../product-intelligence/P7C_PRODUCT_INTELLIGENCE_LAW.md`
-8. applicable implementation-gate documents
-9. current repository, database, runtime, and browser evidence.
+8. `SIMPROK_AHSP_DETAIL_UI_OWNER_LOCK.md`
+9. applicable implementation-gate documents
+10. current repository, database, runtime, and browser evidence.
 
 ## Normative Ownership
 
@@ -26,6 +27,7 @@ This index does not restate full product laws. Its purpose is to prevent duplica
 | Basic Price–AHSP placement, selection, conversion, snapshot | BP–AHSP Owner Lock + Blueprint |
 | Ruang Transisi, Ruang Interaksi, no-BOQ/has-BOQ UX journeys, synthesis/enrichment/recalculation, uncertainty UX | `SIMPROK_RAB_TRANSITION_INTERACTION_SYNTHESIS_AND_UNCERTAINTY_LAW.md` |
 | Broad Product Intelligence design | `../product-intelligence/P7C_PRODUCT_INTELLIGENCE_LAW.md` — currently DRAFT unless status changes through Owner PASS |
+| AHSP Detail UI and presentation rules | `SIMPROK_AHSP_DETAIL_UI_OWNER_LOCK.md` |
 | Implemented/live status | repository, database, runtime, and browser evidence |
 
 ## Reading and Conflict Law
