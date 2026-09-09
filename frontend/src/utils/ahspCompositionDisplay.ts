@@ -105,6 +105,31 @@ export const formatCoefficient = (value: string | number | null | undefined): st
 };
 
 /**
+ * THE reverse of formatCoefficient: what an author typed, read back as a number.
+ *
+ * Indonesian authors write a decimal with a comma ("0,04"), which `Number()`
+ * turns into NaN. A coefficient that cannot be read is NOT a licence to drop the
+ * component — dropping it would delete a proven part of the recipe and leave a
+ * partial analysis stored as the whole truth. So this answers null, and the
+ * caller REFUSES the save rather than quietly saving less than it was given.
+ *
+ * Only a finite value GREATER than zero is a coefficient: a component that
+ * consumes nothing is a claim no author makes by mistyping a field.
+ */
+export const parseCoefficientInput = (
+  raw: string | number | null | undefined,
+): number | null => {
+  const text = String(raw ?? '').trim();
+  if (text === '') return null;
+  // One decimal separator, comma or dot. No thousands grouping and no exponent:
+  // a coefficient is written plainly, and anything else is not understood here.
+  if (!/^\d+([.,]\d+)?$/u.test(text)) return null;
+  const value = Number(text.replace(',', '.'));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return value;
+};
+
+/**
  * THE stored AHSP recipe on a definition (GET /ahsp/:id versions.resources).
  *
  * This is not the RAB occurrence panel. Occurrence rows carry project-bound
