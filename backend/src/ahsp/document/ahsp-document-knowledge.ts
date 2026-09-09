@@ -4,6 +4,8 @@
  * a locator is not a fact.
  */
 
+import type { AhspIdentityMatch, AhspIdentityVerdict } from './ahsp-identity-classifier';
+
 export const AHSP_DOCUMENT_CONTRACT_VERSION = 'AHSP_DOCUMENT_USI01_V1';
 
 export const AHSP_DOCUMENT_REASON = {
@@ -21,6 +23,8 @@ export const AHSP_DOCUMENT_REASON = {
   AUTHORITY_UNPROVEN: 'AUTHORITY_UNPROVEN',
   CURRENTNESS_UNPROVEN: 'CURRENTNESS_UNPROVEN',
   DUPLICATE_IDENTITY: 'DUPLICATE_IDENTITY',
+  /** An existing AHSP may be the same work — surfaced for a human decision, never auto-actioned. */
+  IDENTITY_POSSIBLE_MATCH: 'IDENTITY_POSSIBLE_MATCH',
 } as const;
 
 export type AhspDocumentReasonCode =
@@ -74,6 +78,14 @@ export interface AhspWorkItemKnowledge {
   readonly effectiveDate: string | null;
   readonly sheetName: string;
   readonly resources: readonly AhspResourceKnowledge[];
+  /**
+   * AHSP-WHOLE identity comparison against what SIMPROK already holds. Optional
+   * and additive: absent (or DISTINCT) means nothing to decide, and the reader
+   * sees exactly what it saw before. IDENTICAL/POSSIBLY_IDENTICAL carry the
+   * matched AHSP(s) as EVIDENCE for a human decision — never an auto-action.
+   */
+  readonly identityVerdict?: AhspIdentityVerdict;
+  readonly identityMatches?: readonly AhspIdentityMatch[];
 }
 
 export interface AhspDocumentKnowledge {

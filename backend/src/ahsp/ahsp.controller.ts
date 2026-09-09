@@ -27,8 +27,25 @@ import {
   AhspDocumentCanonicalizationService,
   isAhspIntakeError,
 } from './services/ahsp-document-canonicalization.service';
+import type { AhspImportDecision } from './services/ahsp-document-canonicalization.service';
 import { RetireAhspVersionDto } from './dto/retire-ahsp-version.dto';
 import { OwnershipType } from '@prisma/client';
+
+/**
+ * Parse the optional multipart `decisions` field into import decisions, failing
+ * SAFE: anything that is not a well-formed JSON array degrades to no decisions,
+ * so the commit holds every flagged AHSP for the human rather than throwing or
+ * silently writing. The service re-validates each entry, so this only shapes.
+ */
+function parseAhspImportDecisions(raw: unknown): AhspImportDecision[] {
+  if (typeof raw !== 'string' || raw.trim() === '') return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as AhspImportDecision[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * AHSP Controller — Golden Path v0 Slice A
@@ -124,12 +141,18 @@ export class AhspController {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
     if (!workspaceId) throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
     const userId = await this.resolveActor(request);
+    // Human duplicate decisions arrive as a JSON text field alongside the file
+    // (multipart). There is no global ValidationPipe here, so a malformed value
+    // degrades to "no decision" — never a throw, never a silent write; the
+    // service already re-derives the verdict and holds anything undecided.
+    const decisions = parseAhspImportDecisions(request.body?.decisions);
     try {
       return await this.documents.commitUpload({
         file,
         workspaceId,
         actorAccountId: request.user?.id,
         userId,
+        decisions,
       });
     } catch (error) {
       if (isAhspIntakeError(error)) throw new BadRequestException(error.code);

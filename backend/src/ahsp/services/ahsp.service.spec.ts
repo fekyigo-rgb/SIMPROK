@@ -8,6 +8,7 @@ import {
   LocationType,
   MethodType,
   OwnershipType,
+  Prisma,
   ReviewStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -106,12 +107,14 @@ describe('AhspService', () => {
       }),
     ).resolves.toEqual(ahsp);
 
+    // The pre-check now mirrors the DB @@unique EXACTLY (no deletedAt filter),
+    // so a soft-deleted twin — which still holds the unique index — is caught as
+    // a clean 409 instead of a raw P2002 / HTTP 500.
     expect(prisma.aHSP.findFirst).toHaveBeenCalledWith({
       where: {
         workspaceId: null,
         workType: ahsp.workType,
         methodName: ahsp.methodName,
-        deletedAt: null,
       },
     });
     expect(prisma.aHSP.create).toHaveBeenCalledWith({
@@ -178,7 +181,6 @@ describe('AhspService', () => {
         workspaceId: ahsp.workspaceId,
         workType: ahsp.workType,
         methodName: ahsp.methodName,
-        deletedAt: null,
       },
     });
     expect(prisma.aHSP.create.mock.calls[0][0].data.methodType).toBe(MethodType.OTHER);
@@ -206,6 +208,63 @@ describe('AhspService', () => {
     ).rejects.toMatchObject({ message: 'AHSP_SOURCE_IDENTITY_EXISTS' });
 
     expect(prisma.aHSP.create).not.toHaveBeenCalled();
+  });
+
+  it('create translates a race-condition Prisma P2002 into a clean 409, never a 500', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue(null); // pre-check passes...
+    prisma.aHSP.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '5.0.0',
+      }),
+    );
+    await expect(
+      service.create({
+        workspaceId: 'workspace-1',
+        workType: ahsp.workType,
+        methodType: MethodType.OTHER,
+        locationType: LocationType.OTHER,
+        methodName: ahsp.methodName,
+        userId: 'user-1',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(audit.logAction).not.toHaveBeenCalled();
+  });
+
+  it('loadIdentitySurface reads the workspace + Official Repository WITHOUT filtering deletedAt', async () => {
+    prisma.aHSP.findMany.mockResolvedValue([
+      {
+        id: 'a1',
+        workspaceId: 'workspace-1',
+        workType: 'Galian',
+        methodName: 'Galian biasa',
+        code: 'B.3',
+        deletedAt: null,
+      },
+    ]);
+    const surface = await service.loadIdentitySurface('workspace-1');
+    expect(prisma.aHSP.findMany).toHaveBeenCalledWith({
+      where: { OR: [{ workspaceId: 'workspace-1' }, { workspaceId: null }] },
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        workspaceId: true,
+        workType: true,
+        methodName: true,
+        code: true,
+        deletedAt: true,
+      },
+    });
+    expect(surface).toEqual([
+      {
+        ahspId: 'a1',
+        workspaceId: 'workspace-1',
+        workType: 'Galian',
+        methodName: 'Galian biasa',
+        code: 'B.3',
+        deletedAt: null,
+      },
+    ]);
   });
 
   it('getById returns an AHSP scoped to the requested workspace', async () => {

@@ -274,6 +274,8 @@ describe('AhspController', () => {
         workspaceId: 'ws-a',
         actorAccountId: 'account-a',
         userId: TRUSTED_ACTOR_ID,
+        // No multipart `decisions` field on this request -> an empty, safe default.
+        decisions: [],
       });
     });
   });

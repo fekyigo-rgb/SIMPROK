@@ -25,6 +25,7 @@ const REASON_COPY: Record<string, string> = {
   AUTHORITY_UNPROVEN: 'Peraturan pada dokumen belum terbukti.',
   CURRENTNESS_UNPROVEN: 'Tanggal berlaku belum tertera di dokumen.',
   DUPLICATE_IDENTITY: 'Pekerjaan ini sudah ada di SIMPROK.',
+  IDENTITY_POSSIBLE_MATCH: 'Menunggu keputusan Anda: kemungkinan sama dengan pekerjaan yang sudah ada.',
 };
 
 export const explainAhspItemReasons = (codes: readonly string[] | undefined): string => {
