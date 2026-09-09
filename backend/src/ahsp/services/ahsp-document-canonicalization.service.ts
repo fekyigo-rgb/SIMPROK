@@ -32,8 +32,22 @@ import {
 } from '../document/ahsp-document-knowledge';
 import { AhspService } from './ahsp.service';
 import { AhspVersionService } from './ahsp-version.service';
+import { AhspAuditService } from './ahsp-audit.service';
+import { RealityNormalizationEngine } from './reality-normalization.engine';
+import {
+  classifyAhspIdentity,
+  type AhspIdentityRow,
+} from '../document/ahsp-identity-classifier';
 
 export const AHSP_DOCUMENT_MAX_BYTES = MAX_ENVELOPE_BYTES;
+
+/** A human's decision on an AHSP the identity classifier flagged. Travels from Import Review to commit. */
+export type AhspImportDecisionAction = 'USE_EXISTING' | 'KEEP_SEPARATE' | 'SKIP';
+export interface AhspImportDecision {
+  readonly workType: string;
+  readonly methodName: string;
+  readonly action: AhspImportDecisionAction;
+}
 
 /** Schema-required parent identity when the document does not state method/location. Not an official fact. */
 const AHSP_PARENT_IDENTITY_FILLER = {
@@ -76,6 +90,12 @@ export class AhspDocumentCanonicalizationService {
     // Shared, domain-neutral home for a resource this import SAW but could not
     // prove. AHSP contributes observations; it does not own the lifecycle.
     private readonly observations: ResourceObservationService,
+    // The one AHSP normalization home — powers the POSSIBLY signal of the AHSP
+    // identity classifier. No second normalizer or matcher is created here.
+    private readonly norm: RealityNormalizationEngine,
+    // The one AHSP provenance mechanism — records a human's duplicate decision.
+    // No second audit/provenance store is created.
+    private readonly audit: AhspAuditService,
   ) {}
 
   private readonly readers = ReaderRegistry.default();
@@ -112,8 +132,10 @@ export class AhspDocumentCanonicalizationService {
     workspaceId: string;
     actorAccountId: string;
     userId: string;
+    /** Human decisions from Import Review for AHSPs the classifier flagged. */
+    decisions?: readonly AhspImportDecision[];
   }): Promise<AhspDocumentCommitResult> {
-    return this.commit(await this.envelopeFromUpload(params), params.userId);
+    return this.commit(await this.envelopeFromUpload(params), params.userId, params.decisions ?? []);
   }
 
   async preview(envelope: SourceEnvelope): Promise<AhspDocumentKnowledge> {
@@ -147,11 +169,21 @@ export class AhspDocumentCanonicalizationService {
   async commit(
     envelope: SourceEnvelope,
     userId: string,
+    decisions: readonly AhspImportDecision[] = [],
   ): Promise<AhspDocumentCommitResult> {
     const knowledge = await this.preview(envelope);
+    const decisionByItem = this.decisionMap(decisions);
     const skipped: Array<AhspDocumentCommitResult['skipped'][number]> = [];
     const written: Array<AhspDocumentCommitResult['written'][number]> = [];
     const sightings: Prisma.ResourceSourceIdentityCreateManyInput[] = [];
+    // Two provenance writes, two durability contracts, both written inline beside
+    // the item they describe:
+    //  - KEEP_SEPARATE: best-effort (its own catch), exactly like the observation
+    //    and sighting writes below. The row already carries a durable AHSPCreated
+    //    entry, so losing this note corrupts nothing and must never fail a commit.
+    //  - USE_EXISTING: DURABLE (see recordUseExisting). Nothing is created for a
+    //    use-existing decision, so that audit row is the ONLY trace that a human
+    //    weighed a duplicate — its failure surfaces rather than being swallowed.
     for (const item of knowledge.workItems) {
       if (item.status !== 'READY' || !item.workType || !item.methodName) {
         skipped.push({
@@ -163,6 +195,49 @@ export class AhspDocumentCanonicalizationService {
         });
         continue;
       }
+
+      const verdict = item.identityVerdict ?? 'DISTINCT';
+      const decision = decisionByItem.get(
+        item.workType.raw + '\u0000' + item.methodName.raw,
+      );
+      const primaryMatch = item.identityMatches?.[0];
+
+      // IDENTICAL — an AHSP with this exact identity already holds it (a
+      // soft-deleted twin counts, because it still occupies the @@unique index).
+      // NEVER create: that is both the ONE-TRUTH law and the fix for the raw
+      // P2002/500. Nothing is auto-merged — the human adopts the existing AHSP or
+      // leaves it, and the choice is recorded, never inferred.
+      if (verdict === 'IDENTICAL') {
+        if (decision === 'USE_EXISTING') {
+          await this.recordUseExisting(item, knowledge, userId);
+        }
+        skipped.push({
+          workType: item.workType.raw,
+          methodName: item.methodName.raw,
+          reasonCodes: [AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY],
+        });
+        continue;
+      }
+
+      // POSSIBLY_IDENTICAL — a look-alike exists but identity is NOT proven. It
+      // is never silently created: the human must explicitly keep it separate.
+      // Absent that decision it is HELD (surfaced, not written, not lost) so the
+      // human can still decide. similarity is evidence, never an auto-action.
+      if (verdict === 'POSSIBLY_IDENTICAL' && decision !== 'KEEP_SEPARATE') {
+        if (decision === 'USE_EXISTING') {
+          await this.recordUseExisting(item, knowledge, userId);
+        }
+        skipped.push({
+          workType: item.workType.raw,
+          methodName: item.methodName.raw,
+          reasonCodes: [AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH],
+        });
+        continue;
+      }
+
+      // DISTINCT, or POSSIBLY with an explicit human KEEP_SEPARATE (its identity
+      // differs from every existing one, so a distinct row is lawful) — the
+      // existing canonical write path, unchanged.
       try {
         const parent = await this.ahspService.create({
           workspaceId: envelope.workspaceId,
@@ -192,6 +267,21 @@ export class AhspDocumentCanonicalizationService {
           ahspId: parent.id,
           versionId: version.id,
         });
+        if (verdict === 'POSSIBLY_IDENTICAL') {
+          // Record that a possible twin was SHOWN and deliberately kept separate.
+          // Written right beside the row it describes, so it can never be stranded
+          // by an unrelated failure later in the loop. Best-effort: the row already
+          // carries a durable AHSPCreated entry, so losing this note corrupts
+          // nothing and must never fail an otherwise-good commit.
+          await this.audit
+            .logAction({
+              ahspId: parent.id,
+              action: 'AHSPImportKeptSeparate',
+              who: userId,
+              before: this.decisionProvenance(item, knowledge),
+            })
+            .catch(() => undefined);
+        }
         sightings.push(
           ...this.sightingsFor(item, knowledge, envelope.workspaceId),
         );
@@ -223,6 +313,86 @@ export class AhspDocumentCanonicalizationService {
     await this.rememberProvenReadings(sightings).catch(() => undefined);
 
     return { knowledge, written, skipped };
+  }
+
+  /** Index human decisions by the work item's source-name identity (stable across the preview and commit uploads of the same file). Malformed entries are ignored, never trusted. */
+  private decisionMap(
+    decisions: readonly AhspImportDecision[],
+  ): Map<string, AhspImportDecisionAction> {
+    const map = new Map<string, AhspImportDecisionAction>();
+    for (const decision of decisions) {
+      if (
+        decision &&
+        typeof decision.workType === 'string' &&
+        typeof decision.methodName === 'string' &&
+        (decision.action === 'USE_EXISTING' ||
+          decision.action === 'KEEP_SEPARATE' ||
+          decision.action === 'SKIP')
+      ) {
+        map.set(decision.workType + '\u0000' + decision.methodName, decision.action);
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Record a human's "use the one that already exists" decision — or record that it
+   * could not be honoured. Nothing is ever created here.
+   *
+   * TWO RULES, enforced HERE because `decisions` is free-form request input and the
+   * browser is never the authority on truth:
+   *  - exactly ONE candidate. With several look-alikes SIMPROK cannot know which one
+   *    the human meant, and adopting whichever sorted first would manufacture a
+   *    certainty nobody stated.
+   *  - the twin must be LIVE. A soft-deleted AHSP cannot be adopted here; reviving
+   *    it is a separate, governed action.
+   * When a rule refuses the choice, the ACT of choosing is still recorded, so a
+   * human decision is never silently erased.
+   *
+   * DURABLE: awaited and uncaught. For a use-existing decision nothing is created,
+   * so this row is the only trace that a human weighed a duplicate — losing it
+   * silently is the one thing that must not happen. NOTE: commit() is not wrapped in
+   * a transaction, so items written EARLIER in the loop stay written if this throws;
+   * what is guaranteed is that the failure surfaces instead of being swallowed.
+   */
+  private async recordUseExisting(
+    item: AhspWorkItemKnowledge,
+    knowledge: AhspDocumentKnowledge,
+    userId: string,
+  ): Promise<void> {
+    const matches = item.identityMatches ?? [];
+    const primaryMatch = matches[0];
+    if (!primaryMatch) return;
+    const honoured = matches.length === 1 && !primaryMatch.deleted;
+    await this.audit.logAction({
+      ahspId: primaryMatch.ahspId,
+      action: honoured
+        ? 'AHSPImportUsedExisting'
+        : 'AHSPImportUsedExistingRefused',
+      who: userId,
+      before: this.decisionProvenance(item, knowledge),
+    });
+  }
+
+  /** The reconstructable record of a duplicate decision for AHSPAuditLog: what was imported, from where, the verdict, and the AHSP(s) it was weighed against. */
+  private decisionProvenance(
+    item: AhspWorkItemKnowledge,
+    knowledge: AhspDocumentKnowledge,
+  ): Record<string, unknown> {
+    return {
+      importedWorkType: item.workType?.raw ?? null,
+      importedMethodName: item.methodName?.raw ?? null,
+      sourceFileName: knowledge.source.fileName,
+      sourceSha256: knowledge.source.contentDigestSha256,
+      identityVerdict: item.identityVerdict ?? null,
+      matches: (item.identityMatches ?? []).map((match) => ({
+        ahspId: match.ahspId,
+        workType: match.workType,
+        methodName: match.methodName,
+        signal: match.signal,
+        deleted: match.deleted,
+      })),
+    };
   }
 
   /**
@@ -359,9 +529,14 @@ export class AhspDocumentCanonicalizationService {
   ): Promise<AhspDocumentKnowledge> {
     if (knowledge.workItems.length === 0) return knowledge;
     const loaded = await this.identity.loadEvidence(this.prisma, workspaceId);
+    // The AHSP-whole identity surface, loaded ONCE per document (mirroring the
+    // resource-identity load-once step above), never per work item — the
+    // workspace's AHSPs plus the Official Repository, indexed for the classifier.
+    const identitySurface = await this.ahspService.loadIdentitySurface(workspaceId);
     const workItems: AhspWorkItemKnowledge[] = [];
     for (const item of knowledge.workItems) {
-      workItems.push(await this.resolveWorkItem(item, loaded));
+      const resolved = await this.resolveWorkItem(item, loaded);
+      workItems.push(this.classifyItemIdentity(resolved, identitySurface, workspaceId));
     }
     const anyReady = workItems.some((item) => item.status === 'READY');
     return {
@@ -374,6 +549,38 @@ export class AhspDocumentCanonicalizationService {
             ? 'READY'
             : 'UNRESOLVED',
     };
+  }
+
+  /**
+   * Attach the AHSP-WHOLE identity verdict to a work item via the pure
+   * classifier and the surface loaded once. It reads only the item's own source
+   * names (the document importer extracts no AHSP code), passes the ONE
+   * normalization home's methods, and NEVER changes readiness — sameness and
+   * readiness are different questions. DISTINCT (or an unnamed item) is left as
+   * it was, so a reader with nothing to decide sees exactly what it saw before.
+   */
+  private classifyItemIdentity(
+    item: AhspWorkItemKnowledge,
+    surface: readonly AhspIdentityRow[],
+    workspaceId: string,
+  ): AhspWorkItemKnowledge {
+    if (!item.workType || !item.methodName) return item;
+    const classification = classifyAhspIdentity(
+      { workspaceId, workType: item.workType.raw, methodName: item.methodName.raw },
+      surface,
+      {
+        name: (raw) => this.norm.normalizeName(raw),
+        code: (raw) => this.norm.normalizeCode(raw),
+      },
+    );
+    if (classification.verdict === 'DISTINCT') {
+      return { ...item, identityVerdict: 'DISTINCT', identityMatches: [] };
+    }
+    const matches =
+      classification.verdict === 'IDENTICAL' && classification.exactMatch
+        ? [classification.exactMatch]
+        : classification.possibleMatches;
+    return { ...item, identityVerdict: classification.verdict, identityMatches: matches };
   }
 
   private async resolveWorkItem(

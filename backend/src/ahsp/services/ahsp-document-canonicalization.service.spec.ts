@@ -6,6 +6,7 @@ import { UNIT_RESOLUTION_STATUS } from '../../unit-kernel/unit-kernel.contracts'
 import { buildAhspAnalisaXlsx } from '../document/ahsp-analisa-xlsx.fixture';
 import { AHSP_DOCUMENT_REASON } from '../document/ahsp-document-knowledge';
 import { AhspDocumentCanonicalizationService } from './ahsp-document-canonicalization.service';
+import { RealityNormalizationEngine } from './reality-normalization.engine';
 
 function resolvedUnit() {
   return {
@@ -15,7 +16,7 @@ function resolvedUnit() {
 }
 
 describe('AhspDocumentCanonicalizationService', () => {
-  const ahspService = { create: jest.fn() };
+  const ahspService = { create: jest.fn(), loadIdentitySurface: jest.fn() };
   const versionService = { createVersion: jest.fn() };
   const units = { resolve: jest.fn() };
   const identity = {
@@ -32,6 +33,9 @@ describe('AhspDocumentCanonicalizationService', () => {
     createMany: jest.fn<Promise<void>, [SightingWrite]>(),
   };
   const prisma = { resourceSourceIdentity: sightings };
+  const observations = { observeMany: jest.fn() };
+  const norm = new RealityNormalizationEngine();
+  const audit = { logAction: jest.fn() };
   let service: AhspDocumentCanonicalizationService;
 
   beforeEach(() => {
@@ -47,13 +51,19 @@ describe('AhspDocumentCanonicalizationService', () => {
       resolvedResourceCatalogId: 'catalog-pekerja',
     });
     ahspService.create.mockResolvedValue({ id: 'ahsp-1' });
+    ahspService.loadIdentitySurface.mockResolvedValue([]);
     versionService.createVersion.mockResolvedValue({ id: 'ver-1' });
+    observations.observeMany.mockResolvedValue(undefined);
+    audit.logAction.mockResolvedValue(undefined);
     service = new AhspDocumentCanonicalizationService(
       ahspService as any,
       versionService as any,
       units as any,
       identity as any,
       prisma as any,
+      observations as any,
+      norm as any,
+      audit as any,
     );
   });
 
@@ -132,6 +142,235 @@ describe('AhspDocumentCanonicalizationService', () => {
     expect(versionService.createVersion).not.toHaveBeenCalled();
     expect(result.skipped[0].reasonCodes).toContain(
       AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY,
+    );
+  });
+
+  // ── AHSP identity / duplicate intelligence (three-state, human decides) ────
+
+  const FIXTURE_WS = '11111111-1111-4111-8111-111111111111';
+  const FIXTURE_WORKTYPE = '1.7.7.1.1.b (a)';
+  const FIXTURE_METHOD =
+    'Penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3';
+  const surfaceRow = (over: Record<string, unknown>) => ({
+    ahspId: 'existing-1',
+    workspaceId: FIXTURE_WS,
+    workType: FIXTURE_WORKTYPE,
+    methodName: FIXTURE_METHOD,
+    code: null,
+    deletedAt: null,
+    ...over,
+  });
+
+  it('attaches the IDENTICAL verdict to the preview so the human can decide before commit', async () => {
+    ahspService.loadIdentitySurface.mockResolvedValue([surfaceRow({})]);
+    const knowledge = await service.preview(await envelopeFrom(await buildAhspAnalisaXlsx()));
+    expect(knowledge.workItems[0].identityVerdict).toBe('IDENTICAL');
+    expect(knowledge.workItems[0].identityMatches?.[0]?.ahspId).toBe('existing-1');
+  });
+
+  it('an IDENTICAL item is NEVER created and NEVER throws — it surfaces DUPLICATE_IDENTITY', async () => {
+    ahspService.loadIdentitySurface.mockResolvedValue([surfaceRow({})]);
+    const result = await service.commit(await envelopeFrom(await buildAhspAnalisaXlsx()), 'user-1');
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0].reasonCodes).toContain(AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY);
+  });
+
+  it('F: a SOFT-DELETED exact twin is IDENTICAL and never reaches create (no P2002/500 path)', async () => {
+    ahspService.loadIdentitySurface.mockResolvedValue([
+      surfaceRow({ deletedAt: new Date('2020-01-01T00:00:00.000Z') }),
+    ]);
+    const result = await service.commit(await envelopeFrom(await buildAhspAnalisaXlsx()), 'user-1');
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(result.skipped[0].reasonCodes).toContain(AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY);
+  });
+
+  it('G: USE_EXISTING on an IDENTICAL item creates nothing and records provenance on the existing AHSP', async () => {
+    ahspService.loadIdentitySurface.mockResolvedValue([surfaceRow({})]);
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'USE_EXISTING' }],
+    );
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(result.written).toEqual([]);
+    expect(audit.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ ahspId: 'existing-1', action: 'AHSPImportUsedExisting', who: 'user-1' }),
+    );
+  });
+
+  it('G2: a USE_EXISTING decision is DURABLE — a failed provenance write surfaces, never silently swallowed', async () => {
+    // Nothing is created for use-existing, so this audit row is the ONLY trace of
+    // the human's duplicate decision. If it cannot be written, the commit must
+    // fail (the human retries) rather than lose the decision.
+    ahspService.loadIdentitySurface.mockResolvedValue([surfaceRow({})]);
+    audit.logAction.mockRejectedValueOnce(new Error('audit down'));
+    await expect(
+      service.commit(
+        await envelopeFrom(await buildAhspAnalisaXlsx()),
+        'user-1',
+        [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'USE_EXISTING' }],
+      ),
+    ).rejects.toThrow('audit down');
+    // NOTE: this document holds a single IDENTICAL item, so asserting that create
+    // was not called would be vacuous here (no path could call it). What this test
+    // genuinely proves is that the rejection PROPAGATES instead of being swallowed.
+    // commit() is not transactional: items written earlier in a longer document
+    // stay written, which recordUseExisting's docstring states plainly.
+  });
+
+  it('G3: a KEEP_SEPARATE enrichment audit stays best-effort — its failure never fails an otherwise-good commit', async () => {
+    // The kept-separate row already carries a durable AHSPCreated entry, so losing
+    // the enrichment note corrupts nothing and must not fail the commit.
+    ahspService.loadIdentitySurface.mockResolvedValue([
+      surfaceRow({ methodName: 'penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3' }),
+    ]);
+    audit.logAction.mockRejectedValue(new Error('audit down'));
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'KEEP_SEPARATE' }],
+    );
+    expect(result.written).toHaveLength(1);
+  });
+
+  it('G4: USE_EXISTING against a SOFT-DELETED twin adopts nothing, but the human decision is RECORDED as refused, never erased', async () => {
+    // `decisions` is free-form multipart input, so the "a deleted twin cannot be
+    // adopted" rule the display enforces must also hold when the request is crafted.
+    ahspService.loadIdentitySurface.mockResolvedValue([
+      surfaceRow({ deletedAt: new Date('2020-01-01T00:00:00.000Z') }),
+    ]);
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'USE_EXISTING' }],
+    );
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(result.written).toEqual([]);
+    // never claims the deleted AHSP was adopted...
+    expect(audit.logAction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'AHSPImportUsedExisting' }),
+    );
+    // ...but the act of choosing is still reconstructable.
+    expect(audit.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'AHSPImportUsedExistingRefused', who: 'user-1' }),
+    );
+    expect(result.skipped[0].reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY,
+    );
+  });
+
+  it('G5: USE_EXISTING with MORE THAN ONE candidate is REFUSED server-side — SIMPROK never adopts whichever sorted first', async () => {
+    // The display withholds the action when there are several look-alikes; because
+    // `decisions` is free-form input the same rule must hold here, or a crafted
+    // request would record an adoption of whichever ahspId sorted first.
+    ahspService.loadIdentitySurface.mockResolvedValue([
+      surfaceRow({ ahspId: 'aaa-first-by-sort', workType: '1.7.7.1.1.B (A)' }),
+      surfaceRow({ ahspId: 'zzz-last-by-sort', workType: '1.7.7.1.1.b (A)' }),
+    ]);
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'USE_EXISTING' }],
+    );
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(audit.logAction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'AHSPImportUsedExisting' }),
+    );
+    expect(audit.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'AHSPImportUsedExistingRefused' }),
+    );
+    expect(result.skipped[0].reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH,
+    );
+  });
+
+  it('POSSIBLY is HELD by default — never auto-created, surfaced for a human decision', async () => {
+    ahspService.loadIdentitySurface.mockResolvedValue([
+      surfaceRow({ methodName: 'penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3' }),
+    ]);
+    const result = await service.commit(await envelopeFrom(await buildAhspAnalisaXlsx()), 'user-1');
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(result.skipped[0].reasonCodes).toContain(AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH);
+  });
+
+  it('H: KEEP_SEPARATE on a POSSIBLY item creates the distinct row and records provenance on the new AHSP', async () => {
+    ahspService.loadIdentitySurface.mockResolvedValue([
+      surfaceRow({ methodName: 'penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3' }),
+    ]);
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'KEEP_SEPARATE' }],
+    );
+    expect(ahspService.create).toHaveBeenCalledTimes(1);
+    expect(result.written).toHaveLength(1);
+    expect(audit.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ ahspId: 'ahsp-1', action: 'AHSPImportKeptSeparate', who: 'user-1' }),
+    );
+  });
+
+  // ── K: a decision can never outlive the document it was made for ──────────
+
+  it('K1: a decision for a work item that is NOT in this document is ignored — the item stays HELD', async () => {
+    ahspService.loadIdentitySurface.mockResolvedValue([
+      surfaceRow({ methodName: 'penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3' }),
+    ]);
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      // A stale decision carried over from some OTHER document.
+      [{ workType: 'Pekerjaan Lain', methodName: 'Uraian lain sama sekali', action: 'KEEP_SEPARATE' }],
+    );
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0].reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH,
+    );
+  });
+
+  it('K2: KEEP_SEPARATE is IGNORED when the backend re-derives the item as IDENTICAL — a decision can never bypass identity law', async () => {
+    // The verdict is re-derived server-side, so a decision that arrived from a
+    // stale preview (when the item still looked POSSIBLY) cannot force a second
+    // row onto an identity that already exists.
+    ahspService.loadIdentitySurface.mockResolvedValue([surfaceRow({})]);
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'KEEP_SEPARATE' }],
+    );
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0].reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY,
+    );
+  });
+
+  // ── L: decision keys cannot collide across a different name split ─────────
+
+  it('L: a decision whose (workType, methodName) split merely CONCATENATES the same never applies to another item', async () => {
+    // Under a plain-space separator these two keys are byte-identical:
+    //   '1.7.7.1.1.b (a)'            + ' ' + 'Penggalian 1 m3 tanah biasa ...'
+    //   '1.7.7.1.1.b (a) Penggalian' + ' ' + '1 m3 tanah biasa ...'
+    // The decision map keys on a character a source name can never contain, so the
+    // decision below must NOT reach the real item, which therefore stays HELD.
+    const splitWorkType = FIXTURE_WORKTYPE + ' Penggalian';
+    const splitMethodName = FIXTURE_METHOD.replace(/^Penggalian /, '');
+    expect(splitWorkType + ' ' + splitMethodName).toBe(
+      FIXTURE_WORKTYPE + ' ' + FIXTURE_METHOD,
+    );
+    ahspService.loadIdentitySurface.mockResolvedValue([
+      surfaceRow({ methodName: 'penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3' }),
+    ]);
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [{ workType: splitWorkType, methodName: splitMethodName, action: 'KEEP_SEPARATE' }],
+    );
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0].reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH,
     );
   });
 
@@ -435,7 +674,7 @@ const binaMargaPath = BINA_MARGA_PATHS.find((path) => existsSync(path)) ?? '';
 const describeBinaMargaCommit = binaMargaPath ? describe : describe.skip;
 
 describeBinaMargaCommit('AhspDocumentCanonicalizationService — official Bina Marga commit safety', () => {
-  const ahspService = { create: jest.fn() };
+  const ahspService = { create: jest.fn(), loadIdentitySurface: jest.fn() };
   const versionService = { createVersion: jest.fn() };
   const units = { resolve: jest.fn() };
   const identity = {
@@ -466,12 +705,16 @@ describeBinaMargaCommit('AhspDocumentCanonicalizationService — official Bina M
       status: 'RESOLVED',
       resolvedResourceCatalogId: 'catalog-pekerja',
     });
+    ahspService.loadIdentitySurface.mockResolvedValue([]);
     service = new AhspDocumentCanonicalizationService(
       ahspService as any,
       versionService as any,
       units as any,
       identity as any,
       { resourceSourceIdentity: { createMany: jest.fn() } } as any,
+      { observeMany: jest.fn() } as any,
+      new RealityNormalizationEngine() as any,
+      { logAction: jest.fn() } as any,
     );
   });
 
@@ -513,7 +756,7 @@ const positivePath = POSITIVE_PATHS.find((path) => existsSync(path)) ?? '';
 const describePositiveCommit = positivePath ? describe : describe.skip;
 
 describePositiveCommit('AhspDocumentCanonicalizationService — Copy of AHSP ok(1).xlsx positive path', () => {
-  const ahspService = { create: jest.fn() };
+  const ahspService = { create: jest.fn(), loadIdentitySurface: jest.fn() };
   const versionService = { createVersion: jest.fn() };
   const units = { resolve: jest.fn() };
   const identity = {
@@ -554,6 +797,7 @@ describePositiveCommit('AhspDocumentCanonicalizationService — Copy of AHSP ok(
       },
     );
     ahspService.create.mockResolvedValue({ id: 'ahsp-positive-1' });
+    ahspService.loadIdentitySurface.mockResolvedValue([]);
     versionService.createVersion.mockResolvedValue({ id: 'ver-positive-1' });
     service = new AhspDocumentCanonicalizationService(
       ahspService as any,
@@ -561,6 +805,9 @@ describePositiveCommit('AhspDocumentCanonicalizationService — Copy of AHSP ok(
       units as any,
       identity as any,
       { resourceSourceIdentity: { createMany: jest.fn() } } as any,
+      { observeMany: jest.fn() } as any,
+      new RealityNormalizationEngine() as any,
+      { logAction: jest.fn() } as any,
     );
   });
 

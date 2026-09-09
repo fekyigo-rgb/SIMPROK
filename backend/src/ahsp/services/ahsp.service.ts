@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AhspAuditService } from './ahsp-audit.service';
-import { MethodType, LocationType, OwnershipType, ReviewStatus } from '@prisma/client';
+import { MethodType, LocationType, OwnershipType, ReviewStatus, Prisma } from '@prisma/client';
 import { AhspOwnershipPolicy, OwnershipViolationError, AhspEntity } from '../domain/ahsp-ownership.policy';
+import type { AhspIdentityRow } from '../document/ahsp-identity-classifier';
 
 export interface CreateAhspDto {
   workspaceId?: string;
@@ -76,35 +77,84 @@ export class AhspService {
   }
 
   async create(data: CreateAhspDto) {
-    const sourceIdentity = {
-      workspaceId: data.workspaceId ?? null,
-      workType: data.workType,
-      methodName: data.methodName,
-      deletedAt: null,
-    };
+    // The pre-check mirrors the DB @@unique EXACTLY. It deliberately does NOT
+    // filter deletedAt: a soft-deleted twin still occupies the unique index, so
+    // surfacing it as a clean 409 here is what stops a raw Prisma P2002 becoming
+    // an HTTP 500 when the create below would otherwise collide with it.
     const duplicate = await this.prisma.aHSP.findFirst({
-      where: sourceIdentity,
+      where: {
+        workspaceId: data.workspaceId ?? null,
+        workType: data.workType,
+        methodName: data.methodName,
+      },
     });
     if (duplicate) throw new ConflictException('AHSP_SOURCE_IDENTITY_EXISTS');
 
-    const ahsp = await this.prisma.aHSP.create({
-      data: {
-        workspaceId: data.workspaceId,
-        workType: data.workType,
-        methodName: data.methodName,
-        code: data.code ?? null,
-        fieldCategory: data.fieldCategory ?? null,
-        subCategory: data.subCategory ?? null,
-        classification: data.classification ?? null,
-        ...AHSP_PARENT_IDENTITY_FILLER,
-        createdByUserId: data.userId,
-        ownershipType: 'USER_ASSET',
-        reviewStatus: 'PENDING',
-      },
-    });
+    let ahsp;
+    try {
+      ahsp = await this.prisma.aHSP.create({
+        data: {
+          workspaceId: data.workspaceId,
+          workType: data.workType,
+          methodName: data.methodName,
+          code: data.code ?? null,
+          fieldCategory: data.fieldCategory ?? null,
+          subCategory: data.subCategory ?? null,
+          classification: data.classification ?? null,
+          ...AHSP_PARENT_IDENTITY_FILLER,
+          createdByUserId: data.userId,
+          ownershipType: 'USER_ASSET',
+          reviewStatus: 'PENDING',
+        },
+      });
+    } catch (error) {
+      // Race backstop: if a twin is inserted between the pre-check and this
+      // create, the unique index throws P2002. Translate it to the same clean
+      // 409 rather than leaking a raw database error as a 500. No auto-revive.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('AHSP_SOURCE_IDENTITY_EXISTS');
+      }
+      throw error;
+    }
 
     await this.audit.logAction({ ahspId: ahsp.id, action: 'AHSPCreated', who: data.userId, after: ahsp });
     return ahsp;
+  }
+
+  /**
+   * The read-only AHSP-identity surface for the duplicate classifier: every AHSP
+   * this workspace could collide with, PLUS the Official Repository (workspaceId
+   * null) — the same tenancy clause `list` uses, but deliberately WIDER than
+   * `list` in one respect: it drops the `deletedAt: null` filter that every other
+   * AHSP read enforces. That is required, not accidental — a soft-deleted twin
+   * still holds the @@unique index, so it must be visible here to be surfaced as
+   * IDENTICAL(deleted) instead of exploding into a P2002. Consequently a deleted
+   * AHSP's names can reach the reader as a "this already exists" reference; the
+   * display bars adopting it. Projection only; it mints, writes, decides nothing.
+   */
+  async loadIdentitySurface(workspaceId: string): Promise<AhspIdentityRow[]> {
+    const rows = await this.prisma.aHSP.findMany({
+      where: { OR: [{ workspaceId }, { workspaceId: null }] },
+      // Stable order so the classifier's exact-match find() is deterministic
+      // regardless of storage order (its POSSIBLY matches sort by id too).
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        workspaceId: true,
+        workType: true,
+        methodName: true,
+        code: true,
+        deletedAt: true,
+      },
+    });
+    return rows.map((row) => ({
+      ahspId: row.id,
+      workspaceId: row.workspaceId,
+      workType: row.workType,
+      methodName: row.methodName,
+      code: row.code,
+      deletedAt: row.deletedAt,
+    }));
   }
 
   async getById(id: string, workspaceId?: string) {

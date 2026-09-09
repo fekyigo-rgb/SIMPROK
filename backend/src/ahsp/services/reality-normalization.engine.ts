@@ -23,4 +23,19 @@ export class RealityNormalizationEngine {
     if (!rawCode) return '';
     return rawCode.trim().toUpperCase();
   }
+
+  /**
+   * Deterministic, CONSERVATIVE work-name normalization for AHSP identity
+   * COMPARISON only (it is evidence, never truth). It folds ONLY case and
+   * whitespace — the harmless textual differences that never change the meaning
+   * of a construction work. It does NOT strip words, expand abbreviations, or
+   * touch digits, so meaning-bearing differences stay distinguishable:
+   * "galian manual" vs "galian mekanis", "beton bertulang" vs "beton", and
+   * "10 cm" vs "20 cm" all normalize to distinct strings. Byte-exact identity
+   * (the @@unique key) is unchanged; this only powers the POSSIBLY signal.
+   */
+  normalizeName(rawName: string): string {
+    if (!rawName) return '';
+    return rawName.trim().replace(/\s+/g, ' ').toLowerCase();
+  }
 }
