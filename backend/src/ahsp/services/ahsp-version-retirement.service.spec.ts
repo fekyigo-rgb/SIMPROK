@@ -246,9 +246,17 @@ describe('AhspVersionService — retirement (RM-03D1)', () => {
     );
 
     const where: any = buildEligibleAhspVersionWhere(WORKSPACE, new Date('2026-08-08'));
-    const privateBranch = where.AND[1].OR[1];
+    // Located by what it contains, not by index: the origin clause is the only
+    // one whose branches carry a `status`. Retirement is a STATUS exclusion, so
+    // no date clause can ever reach or relax it.
+    const originClause = (where.AND as any[]).find(
+      (clause: any) =>
+        Array.isArray(clause.OR) &&
+        clause.OR.some((branch: any) => 'status' in branch),
+    );
+    const [catalogBranch, privateBranch] = originClause.OR;
     expect(privateBranch.status).toEqual({ notIn: PRIVATE_UNUSABLE_VERSION_STATUSES });
     // And a retired version can never satisfy the catalog branch either.
-    expect(where.AND[1].OR[0].status).toBe('PUBLISHED');
+    expect(catalogBranch.status).toBe('PUBLISHED');
   });
 });

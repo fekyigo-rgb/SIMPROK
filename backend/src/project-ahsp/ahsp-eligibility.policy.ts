@@ -62,9 +62,12 @@ export const PRIVATE_UNUSABLE_VERSION_STATUSES: AhspVersionStatus[] = [
  * Completeness conditions shared by both origins. These are the Owner law's
  * "wajib lengkap ... dan compatible" expressed as data: a version with no
  * output unit or no resources cannot be priced at all, whoever owns it.
+ *
+ * `effectiveDate` is deliberately NOT one of these. It is a date condition, not
+ * a completeness condition, and it now lives beside the `expiredDate` clause in
+ * the builder where the other date lives — see the note there.
  */
-const sharedCompleteness = (asOf: Date) => ({
-  effectiveDate: { lte: asOf },
+const sharedCompleteness = () => ({
   outputUnit: { not: null },
   resources: { some: {} },
 });
@@ -129,8 +132,21 @@ export const buildEligibleAhspVersionWhere = (
   workspaceId: string,
   asOf: Date,
 ): Prisma.AHSPVersionWhereInput => ({
-  ...sharedCompleteness(asOf),
+  ...sharedCompleteness(),
   AND: [
+    // AN AHSP IS A FORMULA BORN OF A REGULATION, NOT A DATED PRICE.
+    //
+    // A NULL effectiveDate means the source never stated when the analysis began
+    // to apply — it does NOT mean the analysis has stopped applying. Treating the
+    // absence of a date as "not in force" made every document-imported AHSP
+    // permanently invisible to selection, which is not a law this repository ever
+    // stated: it disqualified on unknown, not on evidence.
+    //
+    // What still disqualifies is a date that IS proven and has not arrived yet, so
+    // a version whose effectiveDate lies in the future stays out. This mirrors the
+    // expiredDate clause immediately below, where a NULL has always meant "no
+    // proven end" rather than "expired". Unknown is unknown on both ends.
+    { OR: [{ effectiveDate: null }, { effectiveDate: { lte: asOf } }] },
     { OR: [{ expiredDate: null }, { expiredDate: { gte: asOf } }] },
     { OR: [catalogBranch(workspaceId), privateBranch(workspaceId)] },
   ],

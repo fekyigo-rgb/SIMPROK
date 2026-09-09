@@ -22,9 +22,19 @@ const WS = 'workspace-a';
 const OTHER_WS = 'workspace-b';
 const AS_OF = new Date('2026-08-04T00:00:00.000Z');
 
+/** Find a clause in the AND list by what it CONTAINS, never by where it sits. */
+const clauseWith = (where: any, key: string) =>
+  (where.AND as any[]).find(
+    (clause) =>
+      Array.isArray(clause.OR) && clause.OR.some((branch: any) => key in branch),
+  );
+
 const branches = (workspaceId = WS) => {
   const where = buildEligibleAhspVersionWhere(workspaceId, AS_OF);
-  const originBranch = (where.AND as any[])[1];
+  // Located by structure, not by index: only the origin clause's branches carry
+  // a `status`. Position was never part of the contract, so the tests no longer
+  // bind to it — adding a date clause must not silently unhook them.
+  const originBranch = clauseWith(where, 'status');
   const [catalog, priv] = originBranch.OR;
   return { where, catalog, priv };
 };
@@ -50,14 +60,21 @@ describe('buildEligibleAhspVersionWhere — catalog route semantics are unchange
     expect((catalog.ahsp as any).is.deletedAt).toBeNull();
   });
 
-  it('keeps the shared completeness and date scope at the top level', () => {
+  it('keeps the shared completeness and date scope, both origins alike', () => {
     const { where } = branches();
-    expect(where.effectiveDate).toEqual({ lte: AS_OF });
+    // Completeness is what cannot be priced at all: no unit, or no components.
     expect(where.outputUnit).toEqual({ not: null });
     expect(where.resources).toEqual({ some: {} });
-    expect((where.AND as any[])[0]).toEqual({
+    // Both dates are scoped the same way: a NULL is an unknown bound, never a
+    // disqualifying one. A PROVEN date outside the window still disqualifies.
+    expect(clauseWith(where, 'effectiveDate')).toEqual({
+      OR: [{ effectiveDate: null }, { effectiveDate: { lte: AS_OF } }],
+    });
+    expect(clauseWith(where, 'expiredDate')).toEqual({
       OR: [{ expiredDate: null }, { expiredDate: { gte: AS_OF } }],
     });
+    // effectiveDate is no longer a bare top-level equality condition.
+    expect(where.effectiveDate).toBeUndefined();
   });
 });
 
@@ -235,5 +252,79 @@ describe('AHSP identity unique is schema filler, not user-facing currentness', (
     expect(src).toContain('AHSP_SOURCE_IDENTITY_EXISTS');
     expect(src).toContain('methodType: MethodType.OTHER');
     expect(src).toContain('locationType: LocationType.OTHER');
+  });
+});
+
+/**
+ * AN UNPROVEN DATE IS UNKNOWN, NEVER EXPIRED.
+ *
+ * An AHSP is a formula born of a regulation, not a dated price. A source that
+ * never stated when its analysis began to apply has not thereby stated that the
+ * analysis stopped applying — so a NULL effectiveDate must not remove a version
+ * from selection. What still removes it is a date that IS proven and has not
+ * arrived. Each test below fails if that distinction is lost.
+ */
+describe('buildEligibleAhspVersionWhere — an unknown effective date does not disqualify', () => {
+  const dateClause = (field: string) =>
+    clauseWith(buildEligibleAhspVersionWhere(WS, AS_OF), field);
+
+  it('1+2. admits an unknown start AND a proven start already reached', () => {
+    expect(dateClause('effectiveDate')).toEqual({
+      OR: [{ effectiveDate: null }, { effectiveDate: { lte: AS_OF } }],
+    });
+  });
+
+  it('3. still refuses a start that is proven and has NOT arrived', () => {
+    const clause = dateClause('effectiveDate');
+    const proven = clause.OR.find((b: any) => b.effectiveDate !== null);
+    // `lte` is what keeps a future-dated version out; `lt`/absence would not.
+    expect(proven).toEqual({ effectiveDate: { lte: AS_OF } });
+    expect(JSON.stringify(clause)).not.toContain('gte');
+  });
+
+  it('4+5. the end of the window is scoped exactly as before — unknown end admitted, proven past end refused', () => {
+    expect(dateClause('expiredDate')).toEqual({
+      OR: [{ expiredDate: null }, { expiredDate: { gte: AS_OF } }],
+    });
+  });
+
+  it('6+7. SUPERSEDED and ARCHIVED remain refused, whatever the dates say', () => {
+    // The refusal is a status exclusion on the private branch, independent of
+    // either date clause — relaxing a date can never reach it.
+    expect((branches().priv.status as any).notIn).toEqual([
+      AhspVersionStatus.SUPERSEDED,
+      AhspVersionStatus.ARCHIVED,
+    ]);
+    expect(JSON.stringify(branches().priv.status)).not.toContain('null');
+  });
+
+  it('8. Official/Public semantics are untouched — the catalog branch still demands PUBLISHED and its own tenant clause', () => {
+    const { catalog } = branches();
+    expect(catalog.status).toBe(AhspVersionStatus.PUBLISHED);
+    expect(catalog.OR).toEqual([{ workspaceId: WS }, { workspaceId: null }]);
+    expect((catalog.ahsp as any).is.OR).toEqual([
+      { workspaceId: WS },
+      { workspaceId: null },
+    ]);
+    expect((catalog.ahsp as any).is.deletedAt).toBeNull();
+  });
+
+  it('9. completeness still means unit + components, and nothing was widened besides the one date', () => {
+    const where = buildEligibleAhspVersionWhere(WS, AS_OF);
+    expect(where.outputUnit).toEqual({ not: null });
+    expect(where.resources).toEqual({ some: {} });
+    // Exactly three AND clauses: the two date windows and the origin choice.
+    expect((where.AND as any[]).length).toBe(3);
+  });
+
+  it('9b. binding history is not re-judged: lock does not apply new-use currentness', () => {
+    // A pinned occurrence must not move when a newer sibling appears, so the
+    // lock path deliberately uses the predicate WITHOUT the currentness pick.
+    const lock = readFileSync(
+      join(__dirname, '../project/rab-lock.service.ts'),
+      'utf8',
+    );
+    expect(lock).toContain('buildEligibleAhspVersionWhere');
+    expect(lock).not.toContain('pickCurrentApplicableAhspVersions');
   });
 });
