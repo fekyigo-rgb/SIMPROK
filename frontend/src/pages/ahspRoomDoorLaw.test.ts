@@ -87,15 +87,14 @@ test("C the room consumes the workspace discovery endpoint, not the RAB picker",
   assert.ok(!room.includes("ahsp-snapshot"));
 });
 
-test("C rows open the existing definition; import uses the existing AHSP door", () => {
+test("C rows open the existing definition; import is a SEPARATE door, not inline", () => {
   assert.ok(room.includes("to={'/ahsp/' + row.id}"));
   assert.ok(room.includes("method: 'POST'"));
-  assert.ok(room.includes("/ahsp/document/preview"));
-  assert.ok(room.includes("/ahsp/document/commit"));
-  assert.ok(room.includes("pekerjaan dikenali"));
-  assert.ok(room.includes("siap digunakan"));
-  assert.ok(room.includes("masih perlu dilengkapi"));
-  assert.ok(room.includes("item.status === 'READY'"));
+  // Gap F: import moved to its own door; the list no longer dumps the pipeline.
+  assert.ok(room.includes("navigate('/ahsp/import')"));
+  assert.ok(!room.includes("/ahsp/document/preview"));
+  assert.ok(!room.includes("/ahsp/document/commit"));
+  assert.ok(!room.includes("pekerjaan dikenali"));
   // Reason codes are never the room's user language.
   assert.ok(!room.includes("MISSING_OUTPUT_UNIT"));
   assert.ok(!room.includes("RESOURCE_UNRESOLVED"));
@@ -151,7 +150,7 @@ test("the room invents no data — the list is persisted GET /ahsp rows", () => 
   assert.ok(!room.includes("fixture"));
   assert.ok(!/const\s+\w*[Rr]ows\s*[:=]\s*\[\s*\{/.test(room));
   assert.ok(room.includes("pageRows.map((row)"));
-  assert.ok(room.includes("const reload = await apiFetch('/ahsp')"));
+  assert.ok(room.includes("apiFetch('/ahsp')"));
 });
 
 test("the room does not present SIMPROK interpretation as official AHSP identity", () => {
@@ -166,7 +165,9 @@ test("the room does not present SIMPROK interpretation as official AHSP identity
 });
 
 test("the room keeps the private-vs-catalog vocabulary and the canonical labels", () => {
-  assert.ok(room.includes("AHSP Milik Saya"));
+  // Gap D: the redundant "AHSP Milik Saya" accordion is removed from below the
+  // table; manual create moved to the Import/Add door. Ownership words remain.
+  assert.ok(!room.includes("AHSP Milik Saya"));
   assert.ok(room.includes("AHSP Saya"));
   assert.ok(room.includes("Pustaka SIMPROK"));
   assert.ok(room.includes("AHSP yang tersedia"));
