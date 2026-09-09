@@ -94,7 +94,10 @@ test("the Owner-approved fields and status are present, in human words", () => {
 
 test("update AHSP is an editor of the current recipe, not a blank composer", () => {
   assert.ok(detail.includes("draftsFromVersion"));
-  assert.ok(detail.includes("row.coefficient > 0"));
+  // "a coefficient must be greater than zero" still holds; it now lives in
+  // parseCoefficientInput (ahspCompositionDisplay), which is unit-tested, instead
+  // of an inline filter that silently discarded whatever failed it.
+  assert.ok(detail.includes("parseCoefficientInput"));
   assert.ok(detail.includes("setResourceDrafts(draftsFromVersion(current))"));
   assert.ok(!detail.includes("setOutputUnit('')"));
   assert.ok(!detail.includes("setResourceDrafts([emptyResource()])"));
@@ -150,4 +153,26 @@ test("a saved component is named, never re-typed as an identifier", () => {
 test("the update payload still sends the stored identity, not the displayed name", () => {
   assert.ok(detail.includes("resourceId: row.resourceId.trim()"));
   assert.ok(!detail.includes("resourceId: row.resourceName"));
+});
+
+// ── An update sends the WHOLE recipe, so nothing may be dropped in silence ───
+
+test("a component the form cannot read STOPS the save — it is never silently dropped", () => {
+  // The old handler mapped with Number() and then .filter()ed the failures away,
+  // so a stored component whose coefficient was typed "0,04" vanished from the
+  // recipe while the author was told the update succeeded.
+  assert.ok(!detail.includes("Number(row.coefficient)"));
+  assert.ok(detail.includes("parseCoefficientInput(row.coefficient)"));
+  // The unreadable row is named, and the refusal says what SIMPROK will not do.
+  assert.ok(detail.includes("belum dapat dibaca"));
+  assert.ok(detail.includes("tidak menyimpan sebagian resep"));
+  // A stored row can never be treated as an unused slot.
+  assert.ok(detail.includes("row.stored ||"));
+});
+
+test("an untouched form does not write a revision — history states real changes only", () => {
+  assert.ok(detail.includes("const unchanged ="));
+  assert.ok(detail.includes("Belum ada perubahan untuk disimpan"));
+  // Fail-open: only an exact match counts as unchanged, so doubt never blocks a save.
+  assert.ok(detail.includes("stored.length === resources.length"));
 });

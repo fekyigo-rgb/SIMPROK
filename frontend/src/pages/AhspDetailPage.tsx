@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   groupAhspDefinitionResources,
   hasAnyDefinitionComponent,
+  parseCoefficientInput,
   resolveDefinitionResourceName,
   type AhspDefinitionComponentGroup,
   type AhspDefinitionResourceWire,
@@ -282,26 +283,71 @@ export function AhspDetailPage() {
     event.preventDefault();
     if (!ahspId || busy) return;
     const unit = outputUnit.trim();
-    const resources = resourceDrafts
-      .map((row) => ({
-        resourceId: row.resourceId.trim(),
-        resourceType: row.resourceType,
-        coefficient: Number(row.coefficient),
-        baseUnit: row.baseUnit.trim(),
-      }))
-      .filter(
-        (row) =>
-          row.resourceId !== '' &&
-          row.baseUnit !== '' &&
-          Number.isFinite(row.coefficient) &&
-          row.coefficient > 0,
-      );
+    // AN UPDATE SENDS THE WHOLE RECIPE, so a row this form cannot read would be
+    // stored as a component that no longer exists. Dropping it silently is the
+    // one thing that must not happen: the author would be told the update
+    // succeeded while SIMPROK quietly kept less than it was given.
+    //
+    // A row the author has not started (never stored, all three fields blank) is
+    // an unused slot, not a loss — it is left out without comment. Anything else
+    // that cannot be read stops the save and is named, so nothing is guessed and
+    // nothing disappears.
+    const slots = resourceDrafts.map((row, index) => ({ row, index }));
+    const started = slots.filter(
+      ({ row }) =>
+        row.stored ||
+        row.resourceId.trim() !== '' ||
+        row.baseUnit.trim() !== '' ||
+        String(row.coefficient).trim() !== '',
+    );
     if (unit === '') {
       setActionError('Satuan AHSP diperlukan.');
       return;
     }
+    const unreadable = started.find(
+      ({ row }) =>
+        row.resourceId.trim() === '' ||
+        row.baseUnit.trim() === '' ||
+        parseCoefficientInput(row.coefficient) === null,
+    );
+    if (unreadable) {
+      setActionError(
+        `Komponen ${unreadable.index + 1} belum dapat dibaca. Lengkapi sumber daya, satuan, dan koefisien (angka lebih besar dari 0) — SIMPROK tidak menyimpan sebagian resep.`,
+      );
+      return;
+    }
+    const resources = started.map(({ row }) => ({
+      resourceId: row.resourceId.trim(),
+      resourceType: row.resourceType,
+      coefficient: parseCoefficientInput(row.coefficient) as number,
+      baseUnit: row.baseUnit.trim(),
+    }));
     if (resources.length === 0) {
       setActionError('Isi paling sedikit satu komponen dengan sumber daya, satuan, dan koefisien.');
+      return;
+    }
+    // A revision is a statement that something changed. Saving an untouched form
+    // would supersede the current analysis and write a "Diganti" line into the
+    // history for a change nobody made. Deliberately FAIL-OPEN: only a recipe
+    // that matches the stored one in every part is treated as unchanged, so any
+    // doubt lets the save through rather than blocking the author.
+    const stored = currentVersion?.resources ?? [];
+    const unchanged =
+      currentVersion != null &&
+      (currentVersion.outputUnit ?? '') === unit &&
+      (currentVersion.regulationReference ?? '') === regulationReference.trim() &&
+      toDateInput(currentVersion.effectiveDate) === effectiveDate.trim() &&
+      stored.length === resources.length &&
+      stored.every((row, index) => {
+        const sent = resources[index];
+        return (
+          (row.resourceId ?? '').trim() === sent.resourceId &&
+          (row.baseUnit ?? '').trim() === sent.baseUnit &&
+          parseCoefficientInput(row.coefficient) === sent.coefficient
+        );
+      });
+    if (unchanged) {
+      setActionError('Belum ada perubahan untuk disimpan.');
       return;
     }
     setBusy(true);

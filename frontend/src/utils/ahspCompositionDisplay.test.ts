@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   attentionComponents,
   formatCoefficient,
+  parseCoefficientInput,
   groupAhspComposition,
   groupAhspDefinitionResources,
   hasAnyComponent,
@@ -318,4 +319,26 @@ test("the grouped table calls a component exactly what the naming rule calls it"
   ]);
   assert.equal(tenaga.rows[0].name, "Mandor");
   assert.equal(tenaga.rows[0].coefficient, "0.04");
+});
+
+// ── A coefficient the form cannot read must never cost a component ───────────
+
+test('parseCoefficientInput reads an Indonesian comma decimal, not just a dot', () => {
+  assert.equal(parseCoefficientInput('0,04'), 0.04);
+  assert.equal(parseCoefficientInput('0.04'), 0.04);
+  assert.equal(parseCoefficientInput('1'), 1);
+  assert.equal(parseCoefficientInput('12,5'), 12.5);
+  assert.equal(parseCoefficientInput(0.4), 0.4);
+});
+
+test('parseCoefficientInput answers null for anything it cannot read — the caller refuses the save', () => {
+  for (const bad of ['', '   ', 'abc', '0', '0,0', '-1', '-0,5', '1.2.3', '1,2,3', '1e3', '1 000', null, undefined]) {
+    assert.equal(parseCoefficientInput(bad), null, 'must not read ' + JSON.stringify(bad));
+  }
+});
+
+test('what formatCoefficient shows, parseCoefficientInput can read back', () => {
+  // The stored decimal is round-tripped, so seeding the editor never breaks it.
+  assert.equal(parseCoefficientInput(formatCoefficient('0.040000')), 0.04);
+  assert.equal(parseCoefficientInput(formatCoefficient('0.750000')), 0.75);
 });
