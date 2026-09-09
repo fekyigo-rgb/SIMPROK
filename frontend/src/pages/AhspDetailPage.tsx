@@ -11,6 +11,8 @@ import {
   type AhspDefinitionResourceWire,
 } from '../utils/ahspCompositionDisplay';
 import { describeAhspProposalStatus, canProposeAhsp, formatIndoDate } from '../utils/ahspProposalStatus';
+import { USULKAN_TOOLTIP } from '../utils/ahspProposalCopy';
+import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
 
 /**
  * THE room's own detail — the Owner-approved detail view.
@@ -174,6 +176,7 @@ export function AhspDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [proposing, setProposing] = useState(false);
+  const [showProposeConfirm, setShowProposeConfirm] = useState(false);
   const [outputUnit, setOutputUnit] = useState('');
   const [regulationReference, setRegulationReference] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
@@ -268,6 +271,11 @@ export function AhspDetailPage() {
     } finally {
       setProposing(false);
     }
+  };
+
+  const confirmProposeToSimprok = async () => {
+    await proposeToSimprok();
+    setShowProposeConfirm(false);
   };
 
   const addVersion = async (event: FormEvent) => {
@@ -414,7 +422,7 @@ export function AhspDetailPage() {
                 <ArrowLeft size={16} /> Kembali
               </Link>
               {showPropose ? (
-                <button type="button" onClick={() => void proposeToSimprok()} disabled={proposing} style={primaryButton}>
+                <button type="button" title={USULKAN_TOOLTIP} onClick={() => setShowProposeConfirm(true)} disabled={proposing} style={primaryButton}>
                   <Send size={16} /> {proposing ? 'Mengirim…' : 'Usulkan ke SIMPROK'}
                 </button>
               ) : null}
@@ -703,6 +711,13 @@ export function AhspDetailPage() {
           ) : null}
         </>
       ) : null}
+
+      <UsulkanSimprokDialog
+        open={showProposeConfirm}
+        busy={proposing}
+        onCancel={() => setShowProposeConfirm(false)}
+        onConfirm={() => void confirmProposeToSimprok()}
+      />
     </main>
   );
 }

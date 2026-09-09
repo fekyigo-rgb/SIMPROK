@@ -1,24 +1,24 @@
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { BookOpen, Plus, Search, RefreshCw, Eye, MoreHorizontal, Trash2, Send, Download, X, ChevronsUpDown } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
-import { explainAhspItemReasons } from '../utils/ahspDocumentUserCopy';
 import { canProposeAhsp } from '../utils/ahspProposalStatus';
-import {
-  describeCuratableObservation,
-  previewCandidateNames,
-  type CuratableObservationWire,
-  type PreviewResourceWire,
-} from '../utils/resourceObservationDisplay';
+import { USULKAN_TOOLTIP } from '../utils/ahspProposalCopy';
+import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
+import { BIDANG, JENIS_PEKERJAAN, mergeVocabulary, subkategoriForBidang } from '../constructionTaxonomy';
 
 /**
  * THE standalone AHSP room — the one door the sidebar opens, in the Owner
- * mockup's shape. Discovery uses GET /ahsp; import uses POST /ahsp/document
- * preview and /commit; create uses POST /ahsp; "Usulkan ke SIMPROK" uses the
- * existing POST /ahsp/:id/propose lifecycle. All rows are persisted GET /ahsp
- * truth, filtered and paged in the room. Schema fillers methodType/locationType
- * are sent on create, never shown.
+ * mockup's shape. Discovery uses GET /ahsp; "Usulkan ke SIMPROK" uses the
+ * existing POST /ahsp/:id/propose lifecycle (behind an Owner-locked tooltip +
+ * confirmation). Import and unresolved-resource curation live behind their OWN
+ * door (/ahsp/import) so this list stays a clean library, never a process dump.
+ *
+ * The Bidang/Subkategori/Jenis filters draw their vocabulary from the ONE shared
+ * construction taxonomy (constructionTaxonomy.ts), merged with values actually
+ * present in the data so no stored value is ever hidden. The taxonomy guides
+ * discovery; the persisted GET /ahsp rows remain the AHSP source of truth.
  */
 
 type AhspRow = {
@@ -41,14 +41,6 @@ type RoomState =
   | { phase: 'LOADING' }
   | { phase: 'READY'; rows: AhspRow[] }
   | { phase: 'FAILED'; message: string };
-
-type PreviewItem = {
-  status: string;
-  reasonCodes: string[];
-  workType: { raw: string } | null;
-  methodName: { raw: string } | null;
-  resources?: PreviewResourceWire[];
-};
 
 const NAVY = 'var(--simprok-authority-navy-800)';
 const MUTED = 'var(--simprok-engineering-blue-500)';
@@ -74,9 +66,6 @@ export function AhspRoomPage() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission('AHSP_MANAGE');
   const canCurate = hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE');
-  const [observations, setObservations] = useState<CuratableObservationWire[]>([]);
-  const [curationBusyId, setCurationBusyId] = useState<string | null>(null);
-  const [curationError, setCurationError] = useState<string | null>(null);
   const [state, setState] = useState<RoomState>({ phase: 'LOADING' });
   const [query, setQuery] = useState('');
   const [source, setSource] = useState<'ALL' | 'SIMPROK' | 'MINE'>('ALL');
@@ -88,16 +77,7 @@ export function AhspRoomPage() {
   const [page, setPage] = useState(0);
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
-  const [showImport, setShowImport] = useState(false);
-  const [workType, setWorkType] = useState('');
-  const [methodName, setMethodName] = useState('');
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<null | { workItems: PreviewItem[] }>(null);
-  const [commitResult, setCommitResult] = useState<null | { written: unknown[]; skipped: unknown[] }>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [showProposeConfirm, setShowProposeConfirm] = useState(false);
 
   const loadList = async (): Promise<AhspRow[] | null> => {
     const response = await apiFetch('/ahsp');
@@ -137,15 +117,22 @@ export function AhspRoomPage() {
   }, []);
 
   const allRows = useMemo(() => (state.phase === 'READY' ? state.rows : []), [state]);
-  const options = useMemo(
-    () => ({
+
+  // The union of every curated Subkategori — the option set when no Bidang is chosen.
+  const allCuratedSub = useMemo(() => BIDANG.flatMap((b) => subkategoriForBidang(b)), []);
+
+  const options = useMemo(() => {
+    // Subkategori is context-aware: curated to the chosen Bidang, then merged with
+    // the Subkategori values that Bidang's rows actually carry (never hidden).
+    const rowsForSub = bidang ? allRows.filter((r) => (r.fieldCategory ?? '') === bidang) : allRows;
+    const curatedSub = bidang ? subkategoriForBidang(bidang) : allCuratedSub;
+    return {
       dasar: distinct(allRows.map((r) => r.versions?.[0]?.regulationReference)),
-      bidang: distinct(allRows.map((r) => r.fieldCategory)),
-      subkategori: distinct(allRows.map((r) => r.subCategory)),
-      jenis: distinct(allRows.map((r) => r.workType)),
-    }),
-    [allRows],
-  );
+      bidang: mergeVocabulary(BIDANG, allRows.map((r) => r.fieldCategory)),
+      subkategori: mergeVocabulary(curatedSub, rowsForSub.map((r) => r.subCategory)),
+      jenis: mergeVocabulary(JENIS_PEKERJAAN, allRows.map((r) => r.workType)),
+    };
+  }, [allRows, bidang, allCuratedSub]);
 
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -198,6 +185,7 @@ export function AhspRoomPage() {
   const clearSelection = () => setSelected(new Set());
 
   const selectedRows = allRows.filter((r) => selected.has(r.id));
+  const proposableCount = selectedRows.filter((r) => canProposeAhsp(r)).length;
 
   const refreshAfterMutation = async () => {
     const rows = await loadList();
@@ -224,6 +212,20 @@ export function AhspRoomPage() {
     } finally {
       setSelectionBusy(false);
     }
+  };
+
+  const confirmPropose = async () => {
+    await bulkPropose();
+    setShowProposeConfirm(false);
+  };
+
+  const openProposeConfirm = () => {
+    if (proposableCount === 0) {
+      setSelectionError('Tidak ada AHSP terpilih yang dapat diusulkan (hanya AHSP Saya yang belum diusulkan).');
+      return;
+    }
+    setSelectionError(null);
+    setShowProposeConfirm(true);
   };
 
   const bulkDelete = async () => {
@@ -272,147 +274,6 @@ export function AhspRoomPage() {
     URL.revokeObjectURL(url);
   };
 
-  const createWorkspaceAhsp = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!canManage || creating) return;
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const response = await apiFetch('/ahsp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workType: workType.trim(), methodName: methodName.trim(), methodType: 'OTHER', locationType: 'OTHER' }),
-      });
-      if (!response.ok) {
-        setCreateError('AHSP milik Anda belum dapat dibuat. Periksa isian lalu coba lagi.');
-        return;
-      }
-      const created = (await response.json()) as { id?: string };
-      if (typeof created.id !== 'string' || created.id === '') {
-        setCreateError('Server tidak mengembalikan identitas AHSP yang baru dibuat.');
-        return;
-      }
-      navigate('/ahsp/' + created.id);
-    } catch {
-      setCreateError('AHSP milik Anda tidak dapat dihubungi.');
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const previewDocument = async () => {
-    if (!canManage || !file || importing) return;
-    setImporting(true);
-    setImportError(null);
-    setCommitResult(null);
-    try {
-      const body = new FormData();
-      body.append('file', file);
-      const response = await apiFetch('/ahsp/document/preview', { method: 'POST', body });
-      if (!response.ok) {
-        setImportError('Dokumen AHSP belum dapat dipahami. Periksa berkas lalu coba lagi.');
-        return;
-      }
-      setPreview(await response.json());
-    } catch {
-      setImportError('Dokumen AHSP tidak dapat dihubungi.');
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const commitDocument = async () => {
-    if (!canManage || !file || importing) return;
-    setImporting(true);
-    setImportError(null);
-    try {
-      const body = new FormData();
-      body.append('file', file);
-      const response = await apiFetch('/ahsp/document/commit', { method: 'POST', body });
-      if (!response.ok) {
-        setImportError('AHSP terbukti belum dapat disimpan. Coba lagi sebentar.');
-        return;
-      }
-      const data = await response.json();
-      setCommitResult(data);
-      setPreview(data.knowledge ?? preview);
-      const reload = await apiFetch('/ahsp');
-      if (reload.ok) {
-        const rows = await reload.json();
-        setState({ phase: 'READY', rows: Array.isArray(rows) ? rows : [] });
-      }
-      await loadObservations();
-    } catch {
-      setImportError('AHSP terbukti tidak dapat dihubungi.');
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const loadObservations = async () => {
-    if (!canCurate) return;
-    try {
-      const response = await apiFetch('/resource-observations');
-      if (!response.ok) return;
-      const data = await response.json();
-      setObservations(Array.isArray(data) ? data : []);
-    } catch {
-      // A curation-list read failure is never rendered as "no work to review".
-    }
-  };
-
-  useEffect(() => {
-    void loadObservations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canCurate]);
-
-  const curateExisting = async (id: string, selectedResourceCatalogId: string) => {
-    if (curationBusyId) return;
-    setCurationBusyId(id);
-    setCurationError(null);
-    try {
-      const response = await apiFetch('/resource-observations/' + id + '/curate-existing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selectedResourceCatalogId }),
-      });
-      if (!response.ok) {
-        setCurationError('Keputusan belum dapat disimpan. Coba lagi.');
-        return;
-      }
-      await loadObservations();
-    } catch {
-      setCurationError('Keputusan tidak dapat dihubungi.');
-    } finally {
-      setCurationBusyId(null);
-    }
-  };
-
-  const curateNew = async (id: string, unitDefinitionId: string) => {
-    if (curationBusyId) return;
-    setCurationBusyId(id);
-    setCurationError(null);
-    try {
-      const response = await apiFetch('/resource-observations/' + id + '/curate-new', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ unitDefinitionId }),
-      });
-      if (!response.ok) {
-        setCurationError('Sumber daya baru belum dapat ditetapkan. Coba lagi.');
-        return;
-      }
-      await loadObservations();
-    } catch {
-      setCurationError('Penetapan sumber daya baru tidak dapat dihubungi.');
-    } finally {
-      setCurationBusyId(null);
-    }
-  };
-
-  const recognized = preview?.workItems.length ?? 0;
-  const ready = preview?.workItems.filter((item) => item.status === 'READY').length ?? 0;
-  const unresolved = preview ? recognized - ready : 0;
   const sortHint = <ChevronsUpDown size={12} style={{ verticalAlign: 'middle', opacity: 0.5 }} />;
 
   return (
@@ -425,107 +286,19 @@ export function AhspRoomPage() {
             Standar harga satuan pekerjaan untuk mendukung penyusunan dan analisis proyek.
           </p>
         </div>
-        {canManage ? (
+        {canManage || canCurate ? (
           <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-            <a href="https://docs.simprok.id/ahsp" target="_blank" rel="noreferrer" style={outlineButton}>
-              <BookOpen size={16} /> Panduan AHSP
-            </a>
-            <button type="button" onClick={() => setShowImport((v) => !v)} style={primaryButton}>
+            {canManage ? (
+              <a href="https://docs.simprok.id/ahsp" target="_blank" rel="noreferrer" style={outlineButton}>
+                <BookOpen size={16} /> Panduan AHSP
+              </a>
+            ) : null}
+            <button type="button" onClick={() => navigate('/ahsp/import')} style={primaryButton}>
               <Plus size={16} /> Import AHSP
             </button>
           </div>
         ) : null}
       </header>
-
-      {/* Import panel (revealed by the Import AHSP action) */}
-      {canManage && showImport ? (
-        <section aria-label="Import AHSP" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
-          <input
-            type="file"
-            accept=".xlsx"
-            aria-label="Berkas AHSP resmi"
-            onChange={(event) => {
-              setFile(event.target.files?.[0] ?? null);
-              setPreview(null);
-              setCommitResult(null);
-            }}
-          />
-          <div style={{ marginTop: 'var(--space-3)' }}>
-            <button type="button" disabled={!file || importing} onClick={() => void previewDocument()} style={{ ...primaryButton, marginRight: 'var(--space-2)' }}>
-              {importing ? 'Membaca…' : 'Pahami dokumen'}
-            </button>
-            <button type="button" disabled={!file || importing || !preview} onClick={() => void commitDocument()} style={outlineButton}>
-              Simpan yang terbukti
-            </button>
-          </div>
-          {importError ? <p role="alert" style={{ color: RED, fontSize: 'var(--text-sm)' }}>{importError}</p> : null}
-          {preview ? (
-            <div style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: NAVY }}>
-              <p style={{ margin: '0 0 var(--space-2)' }}>
-                {recognized} pekerjaan dikenali. {ready} pekerjaan siap digunakan. {unresolved} pekerjaan masih perlu dilengkapi.
-              </p>
-              <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
-                {preview.workItems.map((item, index) => {
-                  const candidateNames = item.status === 'READY' ? [] : previewCandidateNames(item.resources);
-                  return (
-                    <li key={index} style={{ marginBottom: 'var(--space-2)' }}>
-                      {item.workType?.raw ?? '—'} — {item.methodName?.raw ?? '—'}
-                      {item.status === 'READY' ? ' · siap digunakan' : ` · ${explainAhspItemReasons(item.reasonCodes)}`}
-                      {candidateNames.length > 0 ? (
-                        <span style={{ display: 'block', color: MUTED }}>
-                          SIMPROK menemukan kemungkinan padanan: {candidateNames.slice(0, 4).join(', ')}
-                          {candidateNames.length > 4 ? `, dan ${candidateNames.length - 4} lainnya` : ''}. Simpan untuk meninjaunya di bawah.
-                        </span>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ) : null}
-          {commitResult ? (
-            <p style={{ fontSize: 'var(--text-sm)', color: NAVY, marginTop: 'var(--space-3)' }}>
-              {commitResult.written.length} pekerjaan disimpan. {commitResult.skipped.length} pekerjaan belum disimpan.
-            </p>
-          ) : null}
-        </section>
-      ) : null}
-
-      {/* Curation queue — the shared observed-resource lifecycle (only when there is work) */}
-      {canCurate && observations.length > 0 ? (
-        <section aria-label="Sumber daya untuk ditinjau" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
-          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>Sumber daya untuk ditinjau</h2>
-          <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
-            SIMPROK menyimpan sumber daya yang belum dapat dipastikan. Pilih padanan yang tepat, atau usulkan sebagai sumber daya baru.
-          </p>
-          {curationError ? <p role="alert" style={{ color: RED, fontSize: 'var(--text-sm)' }}>{curationError}</p> : null}
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {observations.map((observation) => {
-              const view = describeCuratableObservation(observation);
-              const busy = curationBusyId === view.id;
-              return (
-                <li key={view.id} aria-label={'Tinjau ' + view.title} style={{ marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-3)', borderBottom: HAIRLINE }}>
-                  <span style={{ fontWeight: 600, color: NAVY }}>{view.title}</span>
-                  {view.candidateLine ? <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{view.candidateLine}</span> : null}
-                  <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>{view.guidance}</span>
-                  <div>
-                    {view.candidateChoices.map((choice) => (
-                      <button key={choice.resourceCatalogId} type="button" disabled={busy} onClick={() => void curateExisting(view.id, choice.resourceCatalogId)} style={{ ...primaryButton, marginRight: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
-                        Ini padanannya: {choice.name}
-                      </button>
-                    ))}
-                    {view.canProposeNew && view.newUnitDefinitionId ? (
-                      <button type="button" disabled={busy} onClick={() => void curateNew(view.id, view.newUnitDefinitionId as string)} style={outlineButton}>
-                        Tetapkan sebagai sumber daya baru
-                      </button>
-                    ) : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ) : null}
 
       {state.phase === 'LOADING' ? <p role="status" style={{ color: MUTED }}>Memuat daftar AHSP…</p> : null}
 
@@ -571,7 +344,7 @@ export function AhspRoomPage() {
                 </select>
               </label>
               <label style={labelStyle}>Bidang / Kategori
-                <select value={bidang} onChange={(e) => { setBidang(e.target.value); setPage(0); }} aria-label="Saring bidang AHSP" style={controlBox}>
+                <select value={bidang} onChange={(e) => { setBidang(e.target.value); setSubkategori(''); setPage(0); }} aria-label="Saring bidang AHSP" style={controlBox}>
                   <option value="">Semua Bidang</option>
                   {options.bidang.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
@@ -599,7 +372,7 @@ export function AhspRoomPage() {
                 <button type="button" disabled={selectionBusy} onClick={() => void bulkDelete()} style={{ ...outlineButton, color: RED, borderColor: RED }}>
                   <Trash2 size={14} /> Hapus
                 </button>
-                <button type="button" disabled={selectionBusy} onClick={() => void bulkPropose()} style={primaryButton}>
+                <button type="button" disabled={selectionBusy} title={USULKAN_TOOLTIP} onClick={openProposeConfirm} style={primaryButton}>
                   <Send size={14} /> {selectionBusy ? 'Memproses…' : 'Usulkan ke SIMPROK'}
                 </button>
                 <button type="button" onClick={exportSelection} style={outlineButton}>
@@ -677,27 +450,15 @@ export function AhspRoomPage() {
               </>
             )}
           </section>
-
-          {/* Manual create — existing capability, folded away below the list */}
-          {canManage ? (
-            <details style={{ ...CARD, marginTop: 'var(--space-4)' }}>
-              <summary style={{ cursor: 'pointer', fontWeight: 600, color: NAVY }}>AHSP Milik Saya</summary>
-              <form aria-label="Buat AHSP milik saya" onSubmit={createWorkspaceAhsp} style={{ maxWidth: '36rem', marginTop: 'var(--space-3)' }}>
-                <label style={labelStyle}>Jenis pekerjaan
-                  <input required value={workType} onChange={(event) => setWorkType(event.target.value)} aria-label="Jenis pekerjaan" style={controlBox} />
-                </label>
-                <label style={{ ...labelStyle, marginTop: 'var(--space-3)' }}>Uraian
-                  <input required value={methodName} onChange={(event) => setMethodName(event.target.value)} aria-label="Uraian AHSP" style={controlBox} />
-                </label>
-                {createError ? <p role="alert" style={{ color: RED, fontSize: 'var(--text-sm)' }}>{createError}</p> : null}
-                <button type="submit" disabled={creating} style={{ ...primaryButton, marginTop: 'var(--space-3)' }}>
-                  {creating ? 'Menyimpan…' : 'Simpan AHSP milik saya'}
-                </button>
-              </form>
-            </details>
-          ) : null}
         </>
       ) : null}
+
+      <UsulkanSimprokDialog
+        open={showProposeConfirm}
+        busy={selectionBusy}
+        onCancel={() => setShowProposeConfirm(false)}
+        onConfirm={() => void confirmPropose()}
+      />
     </main>
   );
 }
