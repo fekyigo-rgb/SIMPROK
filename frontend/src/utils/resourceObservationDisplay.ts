@@ -98,6 +98,95 @@ export const describeCuratableObservation = (
   };
 };
 
+/**
+ * Collision-proof separator for the grouping key, the same character and the
+ * same reason as the import page's own decision key: a real space would let two
+ * different field combinations flatten to one string, and the null character
+ * never appears in source text.
+ */
+const QUESTION_FIELD_SEPARATOR = '\u0000';
+
+/** One question, and every observation that asked it. */
+export interface ObservationGroup {
+  /** The question itself, shaped exactly as a lone observation would be. */
+  view: ObservationView;
+  /**
+   * Every observation posing this identical question, in first-seen order. The
+   * curator answers once; the answer is recorded against each of these, so each
+   * keeps its own decision row, its own actor and its own provenance.
+   */
+  ids: string[];
+  /** How many times it was asked. 1 means a lone observation. */
+  occurrences: number;
+}
+
+/**
+ * AUTOMATION BEFORE HUMAN INTERVENTION — the law this page already applies to
+ * identical AHSP items, applied to the resources beneath them.
+ *
+ * One official document quotes "Alat Bantu (Ls)" once per analysis, so a real
+ * import can put the SAME question on screen sixty-six times. Answering it
+ * sixty-six times is not sixty-six judgments; it is one judgment and sixty-five
+ * repetitions, and repetition is machine work. The rows are folded into one
+ * question with an honest count.
+ *
+ * WHAT MAY BE FOLDED IS DELIBERATELY NARROW. Two observations join a group only
+ * when EVERY input the decision depends on is identical: the raw name exactly as
+ * written, the source code, the unit as written, the resource class, the unit the
+ * Unit authority proved, and the exact candidate set the identity authority
+ * nominated. Anything less would merge two questions that are not the same
+ * question — and a differing candidate set means SIMPROK found different
+ * evidence, which is precisely when a human must look twice.
+ *
+ * The raw name is compared as written rather than case-folded: the reader is
+ * shown one spelling, and it must be the spelling the source actually used.
+ *
+ * NOTHING IS DECIDED HERE. No candidate is selected, no group is answered on the
+ * reader's behalf, and a lone observation is still its own group of one.
+ */
+export const groupIdenticalObservations = (
+  observations: readonly CuratableObservationWire[] | null | undefined,
+): ObservationGroup[] => {
+  const groups: ObservationGroup[] = [];
+  const byQuestion = new Map<string, ObservationGroup>();
+
+  for (const observation of observations ?? []) {
+    if (!observation?.id) continue;
+    const view = describeCuratableObservation(observation);
+    // The null character never appears in source text, so no combination of
+    // fields can collide with a different combination.
+    const question = [
+      (observation.rawName ?? '').trim(),
+      (observation.rawCode ?? '').trim(),
+      (observation.rawUnit ?? '').trim(),
+      (observation.resourceType ?? '').trim(),
+      observation.suggestedUnitDefinitionId ?? '',
+      view.candidateChoices.map((c) => c.resourceCatalogId).join(QUESTION_FIELD_SEPARATOR),
+    ].join(QUESTION_FIELD_SEPARATOR);
+
+    const existing = byQuestion.get(question);
+    if (existing) {
+      existing.ids.push(observation.id);
+      existing.occurrences += 1;
+      continue;
+    }
+    const group: ObservationGroup = { view, ids: [observation.id], occurrences: 1 };
+    byQuestion.set(question, group);
+    groups.push(group);
+  }
+
+  return groups;
+};
+
+/**
+ * How the count is said out loud, or null for a question asked once — where a
+ * count would be noise rather than information.
+ */
+export const observationOccurrenceLine = (group: ObservationGroup): string | null =>
+  group.occurrences > 1
+    ? 'Ditemukan ' + group.occurrences + ' kali dalam dokumen. Satu keputusan berlaku untuk semuanya.'
+    : null;
+
 /** Wire shape of a preview work item's resource (from GET /ahsp/document/preview). */
 export interface PreviewResourceWire {
   rawName?: string | null;
