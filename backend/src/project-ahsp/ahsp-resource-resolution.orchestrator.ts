@@ -14,6 +14,7 @@ import {
 } from '../basic-price/basic-price-currentness';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { isResourceCatalogIdShape } from '../resource-catalog/resource-identity-resolution.kernel';
 
 /**
  * RM-03D2 advanced this from V1.
@@ -131,6 +132,13 @@ for (const resource of version.resources) {
   // source fact being resolved. Never from client input, and never from the
   // resource's spelling: a different AHSPResource that happens to read the same
   // cannot borrow this one's governed decision.
+  //
+  // Shape only. Whether that id actually exists, is ACTIVE, is reachable from
+  // this workspace and states the right class is the identity authority's
+  // question, and it is asked — and refused — there, never here.
+  const canonicalCatalogId = isResourceCatalogIdShape(resource.resourceId)
+    ? resource.resourceId
+    : null;
   const identity = await this.identity.resolve(
     {
       ...identityEvidence,
@@ -141,10 +149,21 @@ for (const resource of version.resources) {
       },
     },
     {
-      rawName: resource.resourceId,
+      // `AHSPResource.resourceId` is ONE column carrying TWO kinds of fact. A
+      // hand-built recipe keeps the source's own words there; a document-
+      // canonicalised one stores the ResourceCatalog id the import already
+      // proved — and that kind of row has no name column at all, so there is
+      // no spelling to look for. Sending the id through `rawName` asked the
+      // catalog for a resource literally NAMED "cb50aeab-…", which is why an
+      // identity SIMPROK had already established came back RESOURCE_NOT_FOUND.
+      //
+      // Each fact now travels its own channel. Nothing else about the question
+      // changes, and a row of the first kind reaches the kernel exactly as before.
+      rawName: canonicalCatalogId === null ? resource.resourceId : '',
       rawCode: null,
       rawUnit: resource.baseUnit,
       resourceType: resource.resourceType,
+      resourceCatalogId: canonicalCatalogId,
     },
     tx,
   );
@@ -284,11 +303,16 @@ for (const resource of version.resources) {
       // own unit is NOT the same fact as a lone exact name match, and the
       // persisted reasonCodes must not say it was.
       identityReason:
-        identity.authority === 'VERIFIED_MAPPING_REUSED'
-          ? 'VERIFIED_MAPPING_REUSED'
-          : identity.authority === 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT'
-            ? 'EXACT_RESOURCE_NAME_MATCH_WITH_UNIT_CONTEXT'
-            : 'EXACT_RESOURCE_NAME_MATCH',
+        identity.authority === 'CATALOG_ID_REFERENCE_VALIDATED'
+          ? // An identifier was validated; no name was read. Reporting this as
+            // a name match would put a comparison that never happened into the
+            // persisted reasonCodes.
+            'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED'
+          : identity.authority === 'VERIFIED_MAPPING_REUSED'
+            ? 'VERIFIED_MAPPING_REUSED'
+            : identity.authority === 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT'
+              ? 'EXACT_RESOURCE_NAME_MATCH_WITH_UNIT_CONTEXT'
+              : 'EXACT_RESOURCE_NAME_MATCH',
     },
     validatedUnitResolution: {
       status: unitResolution?.status ?? 'NEEDS_REVIEW',

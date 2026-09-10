@@ -1,5 +1,6 @@
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { AhspResourceResolutionOrchestrator } from './ahsp-resource-resolution.orchestrator';
+import { resolveResourceIdentity } from '../resource-catalog/resource-identity-resolution.kernel';
 
 /**
  * B1B12-BROWSER-BRIDGE — the AHSP occurrence path must ask the unit question
@@ -274,5 +275,133 @@ describe('AHSP resource resolution — trusted unit context', () => {
     expect(resolution.reasonCodes).toContain('UNIT_NOT_SUPPORTED');
     expect(resolution.adaptedPriceValue).toBeNull();
     expect(resolution.selectedBasicPriceId).toBeNull();
+  });
+});
+
+/**
+ * THE WIRING, pinned with the REAL identity kernel.
+ *
+ * Everything above stubs identity on purpose. That is right for a unit-context
+ * proof and wrong for this one: the defect being closed here IS the wiring — one
+ * argument at one call site — so a stub would pin nothing. A canonical
+ * ResourceCatalog id stored in `AHSPResource.resourceId` used to be handed to
+ * the NAME channel, and the kernel truthfully answered RESOURCE_NOT_FOUND for a
+ * resource named "cb50aeab-…". These run the real kernel so that regression
+ * cannot come back silently.
+ */
+const CATALOG_UUID_PEKERJA = {
+  id: '11111111-1111-4111-8111-111111111111',
+  code: 'L01',
+  name: 'Pekerja',
+  type: 'LABOR',
+  baseUnit: 'jam',
+  status: 'ACTIVE',
+  specifications: null,
+} as const;
+
+const PRICE_UUID_PEKERJA = {
+  id: 'price-uuid-pekerja',
+  resourceId: CATALOG_UUID_PEKERJA.id,
+  value: { toString: () => '27643.54' },
+  sourceOrigin: 'FIELD_REPORTED',
+  freshnessStatus: 'CURRENT',
+  effectiveDate: new Date('2026-08-12T00:00:00.000Z'),
+  resource: { baseUnit: 'jam' },
+} as const;
+
+function makeRealIdentityOrchestrator() {
+  const eligibility = { usableWhere: () => ({}) } as any;
+  const identity = {
+    loadEvidence: async () => ({
+      catalogCandidates: [CATALOG_UUID_PEKERJA],
+      sourceSightings: [],
+      reviewedMappings: [],
+    }),
+    // THE REAL KERNEL. No stub, no shortcut.
+    resolve: (evidence: any, reference: any) =>
+      resolveResourceIdentity({
+        catalogCandidates: evidence.catalogCandidates,
+        sourceSightings: [],
+        reviewedMappings: [],
+        reference,
+      }),
+  } as any;
+  return new AhspResourceResolutionOrchestrator(
+    eligibility,
+    makeUnitKernel(),
+    identity,
+  );
+}
+
+const runReal = (resourceId: string) =>
+  makeRealIdentityOrchestrator().resolveVersionResources(
+    {
+      basicPrice: {
+        findMany: async () => [PRICE_UUID_PEKERJA],
+        findFirst: async ({ where }: any) =>
+          where.id === PRICE_UUID_PEKERJA.id ? PRICE_UUID_PEKERJA : null,
+      },
+    } as any,
+    {
+      workspaceId: 'workspace-fixture',
+      projectId: 'project-fixture',
+      referenceRegionId: 'region-fixture',
+      asOf: new Date('2026-08-13T00:00:00.000Z'),
+      version: {
+        id: 'version-fixture',
+        resources: [
+          {
+            id: 'ahsp-resource-canonicalised',
+            resourceId,
+            resourceType: 'LABOR',
+            coefficient: '0.2914',
+            baseUnit: 'jam',
+          },
+        ],
+      },
+    } as any,
+  );
+
+describe('AHSP resource resolution — canonical id consumption (real kernel)', () => {
+  it('a stored canonical ResourceCatalog id RESOLVES, and is recorded as a validated identifier — not a name match', async () => {
+    const [resolution] = await runReal(CATALOG_UUID_PEKERJA.id);
+
+    expect(resolution.status).toBe('RESOLVED');
+    expect(resolution.resourceCatalogId).toBe(CATALOG_UUID_PEKERJA.id);
+    expect(resolution.reasonCodes).toContain(
+      'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED',
+    );
+    // The borrowing this seam exists to refuse: no name was compared, so the
+    // persisted audit trail must not say one was.
+    expect(resolution.reasonCodes).not.toContain('EXACT_RESOURCE_NAME_MATCH');
+    expect(resolution.explanation).toContain('validasi pengenal');
+  });
+
+  it('the raw AHSP reference is still recorded verbatim — provenance is not rewritten', async () => {
+    const [resolution] = await runReal(CATALOG_UUID_PEKERJA.id);
+
+    // What the row says is what the audit trail keeps saying, unchanged by this
+    // seam. Only the QUESTION asked of the identity authority changed.
+    expect(resolution.rawAhspResourceRef).toBe(CATALOG_UUID_PEKERJA.id);
+    expect(resolution.ahspUnit).toBe('jam');
+  });
+
+  it('a UUID-shaped id that names nothing stays UNRESOLVED and is never retried as a name', async () => {
+    const [resolution] = await runReal('22222222-2222-4222-8222-222222222222');
+
+    expect(resolution.status).toBe('UNRESOLVED');
+    expect(resolution.resourceCatalogId).toBeNull();
+    expect(resolution.reasonCodes).toContain('RESOURCE_NOT_FOUND');
+  });
+
+  it('a plain source name still travels the name channel and resolves as before', async () => {
+    const [resolution] = await runReal('Pekerja');
+
+    expect(resolution.status).toBe('RESOLVED');
+    expect(resolution.resourceCatalogId).toBe(CATALOG_UUID_PEKERJA.id);
+    expect(resolution.reasonCodes).toContain('EXACT_RESOURCE_NAME_MATCH');
+    expect(resolution.reasonCodes).not.toContain(
+      'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED',
+    );
   });
 });

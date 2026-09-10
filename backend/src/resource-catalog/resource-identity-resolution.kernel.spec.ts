@@ -1447,3 +1447,219 @@ describe('resolveResourceIdentity — prior human decision determinism', () => {
     expect(result.authority).not.toBe('VERIFIED_MAPPING_REUSED');
   });
 });
+
+/**
+ * LEVEL 0 — a canonical ResourceCatalog id, VALIDATED rather than matched.
+ *
+ * The defect this closes: `AHSPResource.resourceId` is one column holding two
+ * kinds of fact, and a document-canonicalised row stores the catalog id the
+ * import already proved. That id used to be handed to the NAME channel, so the
+ * kernel searched for a resource literally named "cat-pekerja" and truthfully
+ * answered RESOURCE_NOT_FOUND — an identity SIMPROK had already established,
+ * thrown away and re-asked in a channel that cannot carry it.
+ *
+ * These prove the seam asserts only what the stored fact already asserted, and
+ * prove just as hard what it must never become: a way to reach a row that is
+ * retired, foreign, of the wrong class, or simply gone.
+ */
+describe('resolveResourceIdentity — LEVEL 0: canonical id reference', () => {
+  const CATALOG_RETIRED: IdentityCatalogCandidate = {
+    id: 'cat-retired',
+    code: null,
+    name: 'Semen lama',
+    type: 'MATERIAL',
+    baseUnit: 'Kg',
+    status: 'RETIRED',
+  };
+
+  const byId = (
+    resourceCatalogId: string | null,
+    over: Partial<ResourceIdentityResolutionInput['reference']> = {},
+    catalogCandidates: IdentityCatalogCandidate[] = [
+      ...ALL_CATALOG,
+      CATALOG_RETIRED,
+    ],
+  ) =>
+    resolveResourceIdentity({
+      catalogCandidates,
+      sourceSightings: [],
+      reviewedMappings: [],
+      reference: {
+        rawName: '',
+        rawCode: null,
+        rawUnit: 'OH',
+        resourceType: 'LABOR',
+        resourceCatalogId,
+        ...over,
+      },
+    });
+
+  // ---------- TEST 1 — the act ----------
+  it('1. a known ACTIVE, in-scope, class-matching id RESOLVES — and says it validated an identifier', () => {
+    const result = byId(CATALOG_PEKERJA.id);
+
+    expect(result.status).toBe('RESOLVED');
+    expect(result.authority).toBe('CATALOG_ID_REFERENCE_VALIDATED');
+    expect(result.resolvedResourceCatalogId).toBe(CATALOG_PEKERJA.id);
+    expect(result.reasonCodes).toEqual([
+      'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED',
+    ]);
+  });
+
+  it('1b. it resolves with NO name at all — proving no spelling was needed or read', () => {
+    // The canonicalised AHSP row has no name column. If this needed a name, the
+    // seam would not actually serve the rows it was built for.
+    const result = byId(CATALOG_PEKERJA.id, { rawName: '' });
+
+    expect(result.status).toBe('RESOLVED');
+    expect(result.resolvedResourceCatalogId).toBe(CATALOG_PEKERJA.id);
+  });
+
+  it('1c. the explanation states validation and never claims a name/alias comparison', () => {
+    const result = byId(CATALOG_PEKERJA.id);
+
+    expect(result.explanation).toContain('MEMVALIDASI');
+    expect(result.explanation).toContain('Tidak ada pencocokan nama');
+    // The forbidden borrowing, asserted as an absence: reporting this as an
+    // exact name match would put a comparison that never happened into the
+    // persisted audit trail.
+    expect(result.authority).not.toBe('EXACT_CANONICAL_MATCH');
+    expect(result.reasonCodes).not.toContain('EXACT_CANONICAL_MATCH');
+  });
+
+  it('1d. it asserts IDENTITY ONLY — no candidate set is dressed up as a search', () => {
+    const result = byId(CATALOG_PEKERJA.id);
+
+    expect(result.candidates).toEqual([]);
+  });
+
+  // ---------- TEST 2 — the name path is untouched ----------
+  it('2. an ordinary raw name still resolves by EXACT_CANONICAL_MATCH, unchanged', () => {
+    const result = run({
+      reference: {
+        rawName: 'Pekerja',
+        rawCode: 'L.01',
+        rawUnit: 'OH',
+        resourceType: 'LABOR',
+      },
+    });
+
+    expect(result.status).toBe('RESOLVED');
+    expect(result.authority).toBe('EXACT_CANONICAL_MATCH');
+    expect(result.reasonCodes).toEqual(['EXACT_CANONICAL_MATCH']);
+  });
+
+  it('2b. an absent id and an explicitly null/blank id are all the old behaviour, byte for byte', () => {
+    const reference = {
+      rawName: 'Pekerja',
+      rawCode: 'L.01',
+      rawUnit: 'OH',
+      resourceType: 'LABOR',
+    };
+    const withoutField = run({ reference });
+    const withNull = run({
+      reference: { ...reference, resourceCatalogId: null },
+    });
+    const withBlank = run({
+      reference: { ...reference, resourceCatalogId: '   ' },
+    });
+
+    expect(withNull).toEqual(withoutField);
+    expect(withBlank).toEqual(withoutField);
+  });
+
+  // ---------- TEST 3 — unknown stays unknown ----------
+  it('3. a genuinely unknown raw name is still UNRESOLVED, and nothing is fabricated', () => {
+    const result = run({
+      reference: {
+        rawName: 'Bahan yang tidak ada di katalog mana pun',
+        rawCode: null,
+        rawUnit: 'Kg',
+        resourceType: 'MATERIAL',
+      },
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.reasonCodes).toContain('RESOURCE_NOT_FOUND');
+  });
+
+  // ---------- TEST 4 — ambiguity still belongs to a human ----------
+  it('4. an ambiguous name still goes to the existing human path, never auto-mapped', () => {
+    const result = run({
+      reference: {
+        rawName: 'Semen',
+        rawCode: null,
+        rawUnit: 'Kg',
+        resourceType: 'MATERIAL',
+      },
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.authority).not.toBe('CATALOG_ID_REFERENCE_VALIDATED');
+  });
+
+  // ---------- TEST 5 — THE FAIL-CLOSED CORE ----------
+  it('5. a DANGLING id refuses — and is never retried as a name, even when that name would have matched', () => {
+    // The sharpest form of the rule. `rawName` here is a spelling that resolves
+    // perfectly on its own; if the seam ever fell back to the name levels this
+    // would come back RESOLVED and the refusal would be silently undone.
+    const result = byId('cat-does-not-exist', {
+      rawName: 'Pekerja',
+      rawCode: 'L.01',
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.authority).toBeNull();
+    expect(result.reasonCodes).toEqual(['RESOURCE_NOT_FOUND']);
+  });
+
+  it('5b. a RETIRED (non-ACTIVE) row refuses, and is not retried as a name either', () => {
+    const result = byId(CATALOG_RETIRED.id, {
+      rawName: 'Pekerja',
+      resourceType: 'MATERIAL',
+      rawUnit: 'Kg',
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.reasonCodes).toEqual(['RESOURCE_NOT_FOUND']);
+  });
+
+  // ---------- TEST 6 — tenant boundary ----------
+  it('6. an id outside this workspace evidence boundary can never resolve', () => {
+    // Tenant scope is enforced where it already was — the evidence loader hands
+    // this kernel only rows reachable from the caller's workspace. A foreign id
+    // is therefore simply ABSENT here, and absence refuses.
+    const result = byId(CATALOG_PEKERJA.id, { rawName: 'Pekerja' }, [
+      CATALOG_SEMEN_PORTLAN,
+      CATALOG_TANAH_BIASA,
+    ]);
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.reasonCodes).toEqual(['RESOURCE_NOT_FOUND']);
+  });
+
+  // ---------- TEST 7 — class guard ----------
+  it('7. an id whose class contradicts the AHSP line refuses, naming the contradiction', () => {
+    // A proven id must still not turn a MATERIAL line into a LABOR one.
+    const result = byId(CATALOG_PEKERJA.id, {
+      resourceType: 'MATERIAL',
+      rawUnit: 'Kg',
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.reasonCodes).toEqual(['RESOURCE_TYPE_MISMATCH']);
+  });
+
+  it('7b. class matching stays case/whitespace tolerant, exactly as the name levels are', () => {
+    const result = byId(CATALOG_PEKERJA.id, { resourceType: ' labor ' });
+
+    expect(result.status).toBe('RESOLVED');
+    expect(result.resolvedResourceCatalogId).toBe(CATALOG_PEKERJA.id);
+  });
+});
