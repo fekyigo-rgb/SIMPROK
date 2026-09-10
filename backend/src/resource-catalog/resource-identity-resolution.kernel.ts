@@ -60,6 +60,26 @@ export interface RawResourceReference {
   readonly rawCode: string | null;
   readonly rawUnit: string | null;
   readonly resourceType: string;
+  /**
+   * A canonical ResourceCatalog id the CALLER already holds, when the stored
+   * fact IS an identity rather than a spelling.
+   *
+   * IN-MEMORY ONLY — no column, no schema, no migration. It exists because
+   * `AHSPResource.resourceId` is polymorphic: a manually-built recipe keeps the
+   * source's own words there, while a document-canonicalised one stores the
+   * catalog id the import already proved. `AHSPResource` has NO name column, so
+   * for the second kind there is no spelling to search for at all. Passing that
+   * id through `rawName` asked the catalog for a resource literally NAMED
+   * "cb50aeab-…" and got RESOURCE_NOT_FOUND — an identity that was already
+   * proven, thrown away and re-asked in a channel that cannot express it.
+   *
+   * IT GRANTS NO NEW MATCHING POWER. Nothing is compared, ranked, scored or
+   * guessed here: the id is DEREFERENCED against the same tenant-scoped
+   * candidate set this kernel was already handed, and it must still survive the
+   * ACTIVE and type guards every other road obeys. When it is absent every
+   * verdict below is byte-identical to before.
+   */
+  readonly resourceCatalogId?: string | null;
 }
 
 export interface IdentityCatalogCandidate {
@@ -250,8 +270,14 @@ export interface ResourceIdentityResolutionInput {
 export type ResourceIdentityStatus = 'RESOLVED' | 'NEEDS_REVIEW' | 'UNRESOLVED';
 
 /**
- * Which authority actually settled the identity. Only the first two may ever
- * accompany RESOLVED — that is the whole precision guarantee.
+ * Which authority actually settled the identity. Only the roads listed BEFORE
+ * `EVIDENCE_CANDIDATE` may ever accompany RESOLVED — that is the whole
+ * precision guarantee.
+ *
+ * (This sentence used to say "the first two". That had already been overtaken
+ * by GHX-01, which resolves as `VERIFIED_MAPPING_REUSED`, so the count was
+ * stale before this change and is restated here as a boundary rather than a
+ * number. The guarantee itself is unchanged: nothing below that line asserts.)
  */
 export type ResourceIdentityAuthority =
   | 'EXACT_CANONICAL_MATCH'
@@ -282,6 +308,21 @@ export type ResourceIdentityAuthority =
    * still cannot produce it.
    */
   | 'VERIFIED_MAPPING_REUSED'
+  /**
+   * The caller handed in a canonical ResourceCatalog id and it VALIDATED: the
+   * row exists inside this workspace's own evidence boundary, it is ACTIVE, and
+   * its class matches the class the AHSP line states.
+   *
+   * NAMED FOR WHAT ACTUALLY HAPPENED. No name was read, no alias consulted, no
+   * candidate ranked — so this must never be reported as `EXACT_CANONICAL_MATCH`,
+   * which would claim a spelling comparison that never took place. It asserts
+   * nothing the stored fact did not already assert; it only stops SIMPROK from
+   * forgetting an identity it had already proven.
+   *
+   * It settles IDENTITY ONLY. Unit law, price law and eligibility run afterwards
+   * exactly as before and may still fail closed on this very row.
+   */
+  | 'CATALOG_ID_REFERENCE_VALIDATED'
   | 'EVIDENCE_CANDIDATE'
   | 'HUMAN_REVIEW_REQUIRED';
 
@@ -295,6 +336,12 @@ export type ResourceIdentityReasonCode =
   | 'SPECIFICATION_UNPROVED'
   | 'SPECIFICATION_CONFLICT'
   | 'RESOURCE_NOT_FOUND'
+  /**
+   * A canonical ResourceCatalog id was supplied and proved out: present in this
+   * workspace's evidence boundary, ACTIVE, class matching. Says exactly how the
+   * identity was established — by validating an identifier, not by reading a name.
+   */
+  | 'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED'
   // ---- RM-03D2: exact-representation tie, decided or refused by unit context ----
   /** The tie was settled: source unit matched exactly one representation. */
   | 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT'
@@ -631,11 +678,125 @@ function isActive(candidate: IdentityCatalogCandidate): boolean {
 export function resolveResourceIdentity(
   input: ResourceIdentityResolutionInput,
 ): ResourceIdentityResolution {
+  // LEVEL 0 — the caller already holds the identity, so there is nothing to
+  // search for. TERMINAL IN BOTH DIRECTIONS: see the note on the function.
+  const byCatalogId = resolveByCatalogIdReference(input);
+  if (byCatalogId !== null) return byCatalogId;
+
   // MACHINE FIRST, ALWAYS. Every deterministic level runs to completion before a
   // human decision is even looked at, so a machine-proven identity can never be
   // overridden by memory — the branch below is unreachable when it resolved.
   const machine = resolveByMachineEvidence(input);
   return applyVerifiedIdentityDecision(machine, input);
+}
+
+/**
+ * The shape of a ResourceCatalog id, so a caller holding ONE polymorphic column
+ * can tell "this is an identity" from "this is what the source wrote".
+ *
+ * Exported because `AHSPResource.resourceId` stores both kinds, and the rule for
+ * telling them apart must have ONE spelling. It answers a question about the
+ * STRING only — never whether the row exists, is active, or is reachable. Those
+ * remain this kernel's to decide, below.
+ */
+const RESOURCE_CATALOG_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isResourceCatalogIdShape(value: string): boolean {
+  return RESOURCE_CATALOG_ID.test(value);
+}
+
+/**
+ * LEVEL 0 — a canonical id, VALIDATED rather than matched.
+ *
+ * Returns `null` when the caller supplied no id, and every verdict below is then
+ * byte-identical to what it always was. That is the whole compatibility story.
+ *
+ * When an id IS supplied this level is TERMINAL — it either asserts or refuses,
+ * and never hands the question down to the name levels. That is deliberate and
+ * it is the fail-closed half of this seam: a dangling, retired, foreign or
+ * wrong-class id must NOT be retried as a spelling, because the id is a UUID and
+ * "search the catalog for a resource named cb50aeab-…" is exactly the defect
+ * this level exists to end. A caller that cannot prove its id gets UNRESOLVED
+ * and the human path, never a consolation match.
+ *
+ * WHAT IT MAY ASSERT is bounded by the same three guards every other road obeys:
+ *   1. the row is inside the candidate set the caller was given — and that set is
+ *      already tenant-scoped by the evidence loader, so a foreign workspace's id
+ *      is simply absent here and can never resolve;
+ *   2. the row is ACTIVE, by the same `isActive` test the name levels use;
+ *   3. the row's class equals the class the AHSP line states, by the same
+ *      `typeMatches` test — so a proven id can still not turn a MATERIAL line
+ *      into a LABOR one.
+ *
+ * It reads no name, consults no alias, ranks nothing and scores nothing.
+ */
+function resolveByCatalogIdReference(
+  input: ResourceIdentityResolutionInput,
+): ResourceIdentityResolution | null {
+  const stated = input.reference.resourceCatalogId?.trim() ?? '';
+  if (stated === '') return null;
+
+  const row = input.catalogCandidates.find(
+    (candidate) => candidate.id === stated,
+  );
+  const type = input.reference.resourceType;
+
+  if (row === undefined) {
+    return {
+      status: 'UNRESOLVED',
+      authority: null,
+      resolvedResourceCatalogId: null,
+      candidates: [],
+      reasonCodes: ['RESOURCE_NOT_FOUND'],
+      explanation:
+        `Referensi identitas ResourceCatalog "${stated}" tidak ditemukan di ` +
+        `dalam ruang kerja ini. Identitas TIDAK ditetapkan, dan referensi ini ` +
+        `tidak diperlakukan sebagai nama sumber daya.`,
+    };
+  }
+  if (!isActive(row)) {
+    return {
+      status: 'UNRESOLVED',
+      authority: null,
+      resolvedResourceCatalogId: null,
+      candidates: [],
+      reasonCodes: ['RESOURCE_NOT_FOUND'],
+      explanation:
+        `Referensi identitas ResourceCatalog "${stated}" menunjuk entri ` +
+        `"${row.name}" yang berstatus ${row.status ?? 'TIDAK DIKETAHUI'} dan ` +
+        `bukan ACTIVE. Identitas TIDAK ditetapkan.`,
+    };
+  }
+  if (!typeMatches(row.type, type)) {
+    return {
+      status: 'UNRESOLVED',
+      authority: null,
+      resolvedResourceCatalogId: null,
+      candidates: [],
+      reasonCodes: ['RESOURCE_TYPE_MISMATCH'],
+      explanation:
+        `Referensi identitas ResourceCatalog "${stated}" menunjuk entri ` +
+        `"${row.name}" berkelas ${row.type}, sedangkan baris AHSP menyatakan ` +
+        `kelas ${type}. Identitas TIDAK ditetapkan.`,
+    };
+  }
+
+  return {
+    status: 'RESOLVED',
+    authority: 'CATALOG_ID_REFERENCE_VALIDATED',
+    resolvedResourceCatalogId: row.id,
+    // Deliberately empty: no candidate set was ever formed. Nothing was
+    // nominated, weighed or shortlisted — one identifier was checked and it
+    // held. Listing the row here would dress a validation up as a search.
+    candidates: [],
+    reasonCodes: ['RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED'],
+    explanation:
+      `Identitas ditetapkan dengan MEMVALIDASI pengenal ResourceCatalog yang ` +
+      `sudah tersimpan: "${stated}" terbukti ada di ruang kerja ini, berstatus ` +
+      `ACTIVE, dan berkelas ${row.type} sesuai baris AHSP — entri "${row.name}". ` +
+      `Tidak ada pencocokan nama atau alias yang dilakukan.`,
+  };
 }
 
 /**

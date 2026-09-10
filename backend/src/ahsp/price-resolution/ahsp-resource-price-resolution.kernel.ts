@@ -113,7 +113,12 @@ export interface AhspResourceResolutionInput {
     readonly identityReason:
       | 'EXACT_RESOURCE_NAME_MATCH'
       | 'EXACT_RESOURCE_NAME_MATCH_WITH_UNIT_CONTEXT'
-      | 'VERIFIED_MAPPING_REUSED';
+      | 'VERIFIED_MAPPING_REUSED'
+      // The identity was already proven upstream and stored as the catalog id;
+      // Resource Identity validated that id rather than reading any name. It is
+      // listed here for one reason only — so the persisted reasonCodes can say
+      // so instead of borrowing a name-match label that would be untrue.
+      | 'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED';
   };
 }
 
@@ -152,6 +157,18 @@ export type ReasonCode =
    * never occurred.
    */
   | 'VERIFIED_MAPPING_REUSED'
+  /**
+   * The identity was NOT worked out here. The AHSP row already carried a
+   * canonical ResourceCatalog id — proven upstream when the document was
+   * canonicalised — and the Resource Identity authority validated that id:
+   * present in this workspace's evidence, ACTIVE, and of the class the AHSP
+   * line states.
+   *
+   * It replaces EXACT_RESOURCE_NAME_MATCH on such a row rather than joining it,
+   * for the same reason RM-03D2's code does: no name was compared, so an audit
+   * trail claiming a name match would describe something that never happened.
+   */
+  | 'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED'
   | 'RESOURCE_TYPE_MATCH'
   /**
    * Preserved verbatim, and still emitted for exactly the case it has always
@@ -409,7 +426,8 @@ function priceAgainstCatalog(
   identityReason:
     | 'EXACT_RESOURCE_NAME_MATCH'
     | 'EXACT_RESOURCE_NAME_MATCH_WITH_UNIT_CONTEXT'
-    | 'VERIFIED_MAPPING_REUSED',
+    | 'VERIFIED_MAPPING_REUSED'
+    | 'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED',
 ): AhspResourceResolutionResult {
   const {
     rawResourceRef,
@@ -626,7 +644,12 @@ function priceAgainstCatalog(
         'canonical yang dinyatakan sumber'
       : identityReason === 'VERIFIED_MAPPING_REUSED'
         ? 'melalui pemetaan yang telah diverifikasi manusia'
-        : 'melalui kecocokan nama tepat';
+        : identityReason === 'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED'
+          ? // Says what happened: an identifier already stored on the AHSP row
+            // was validated. Claiming a name match here would be false.
+            'melalui validasi pengenal ResourceCatalog yang sudah tersimpan ' +
+            '(tanpa pencocokan nama)'
+          : 'melalui kecocokan nama tepat';
 
   // ---- Step 4: RESOLVED — proven identity, price string returned exactly ----
   return {
