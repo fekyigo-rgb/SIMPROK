@@ -58,6 +58,7 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
   let catalogs: Array<typeof KERIKIL>;
   let ledger: Array<Record<string, any>>;
   let failNextCreateWithRace: (() => void) | null;
+  let observationUpdates: Array<Record<string, unknown>>;
   let service: ResourceObservationService;
   let tokens: GhxDecisionContextTokenService;
 
@@ -87,6 +88,7 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
     catalogs = [KERIKIL];
     ledger = [];
     failNextCreateWithRace = null;
+    observationUpdates = [];
     let sequence = 0;
 
     const prisma: any = {
@@ -109,6 +111,7 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
             ) ?? null,
         ),
         update: jest.fn(async (args: any) => {
+          observationUpdates.push(args.data);
           const target = observations.find((o) => o.id === args.where.id)!;
           Object.assign(target, args.data);
           return { ...target };
@@ -589,5 +592,133 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
     ).rejects.toThrow(
       new BadRequestException('SELECTED_RESOURCE_CATALOG_ID_REQUIRED'),
     );
+  });
+
+  it('SUPERSEDE: a different answer is only a candidate — reuse stops until ANOTHER account approves it', async () => {
+    // Two legitimate candidates, so a different answer exists to supersede to.
+    const BATU_PECAH = {
+      ...KERIKIL,
+      id: 'cat-batu-pecah',
+      name: 'Agregat Batu Pecah',
+    };
+    catalogs = [KERIKIL, BATU_PECAH];
+    const offered = await openList(OWNER);
+    await teach(
+      'obs-1',
+      offered.find((row) => row.id === 'obs-1')!.identicalQuestion
+        .decisionContextToken,
+    );
+    const pending = await question(SECOND);
+    await service.approveQuestion({
+      workspaceId: WS,
+      questionKey: pending.questionKey,
+      actorAccountId: SECOND,
+      decisionContextToken: pending.decisionContextToken,
+    });
+    expect(await openList(OWNER)).toHaveLength(0);
+
+    // The effective answer offers a supersede door, listing only OTHER legitimate candidates.
+    const effective = await question(OWNER);
+    expect(effective).toMatchObject({ state: 'EFFECTIVE', canSupersede: true });
+    expect(effective.supersedeCandidates).toEqual([
+      { resourceCatalogId: BATU_PECAH.id, name: BATU_PECAH.name },
+    ]);
+    await expect(
+      service.supersedeQuestion({
+        workspaceId: WS,
+        questionKey: effective.questionKey,
+        actorAccountId: OWNER,
+        decisionContextToken: effective.decisionContextToken,
+        selectedResourceCatalogId: KERIKIL.id,
+        reason: 'same answer',
+      }),
+    ).rejects.toThrow(new ConflictException('SUPERSEDE_SAME_ANSWER'));
+    const superseded = await service.supersedeQuestion({
+      workspaceId: WS,
+      questionKey: effective.questionKey,
+      actorAccountId: OWNER,
+      decisionContextToken: effective.decisionContextToken,
+      selectedResourceCatalogId: BATU_PECAH.id,
+      reason: 'Padanan yang lebih tepat',
+    });
+    expect(superseded).toMatchObject({
+      action: 'SUPERSEDE',
+      generation: 3,
+      state: 'PENDING',
+    });
+
+    // Reuse is SUSPENDED: the identical rows are questions again.
+    const suspended = await openList(OWNER);
+    expect(suspended.map((row) => row.id)).toEqual(['obs-2', 'obs-3']);
+    expect(
+      suspended.every((row) => row.identicalQuestion.state === 'PENDING'),
+    ).toBe(true);
+
+    // The superseder cannot approve their own answer; another account can.
+    const ownView = await question(OWNER);
+    await expect(
+      service.approveQuestion({
+        workspaceId: WS,
+        questionKey: ownView.questionKey,
+        actorAccountId: OWNER,
+        decisionContextToken: ownView.decisionContextToken,
+      }),
+    ).rejects.toThrow(new ConflictException('TEACHER_CANNOT_APPROVE'));
+    const secondView = await question(SECOND);
+    const approved = await service.approveQuestion({
+      workspaceId: WS,
+      questionKey: secondView.questionKey,
+      actorAccountId: SECOND,
+      decisionContextToken: secondView.decisionContextToken,
+    });
+    expect(approved).toMatchObject({ generation: 4, state: 'EFFECTIVE' });
+    expect(
+      (approved as { identityAfterApproval: unknown }).identityAfterApproval,
+    ).toEqual({
+      status: 'RESOLVED',
+      authority: 'VERIFIED_IDENTICAL_QUESTION_REUSED',
+      resolvedResourceCatalogId: BATU_PECAH.id,
+    });
+    expect(await openList(OWNER)).toHaveLength(0);
+    expect(ledger.map((row) => `${row.generation}:${row.action}`)).toEqual([
+      '1:TEACH',
+      '2:APPROVE',
+      '3:SUPERSEDE',
+      '4:APPROVE',
+    ]);
+  });
+
+  it('an observation’s raw question is never rewritten — only its decision fields change', async () => {
+    const offered = await openList(OWNER);
+    const contextOf = (id: string) =>
+      offered.find((row) => row.id === id)!.identicalQuestion
+        .decisionContextToken;
+    await teach('obs-1', contextOf('obs-1'));
+    await teach('obs-2', contextOf('obs-2'));
+    await service.curateExisting({
+      workspaceId: WS,
+      observationId: 'obs-3',
+      selectedResourceCatalogId: KERIKIL.id,
+      actorAccountId: OWNER,
+    });
+    expect(observationUpdates).toHaveLength(3);
+    for (const data of observationUpdates) {
+      expect(Object.keys(data).sort()).toEqual([
+        'decidedAt',
+        'decidedByAccountId',
+        'reason',
+        'resolvedResourceCatalogId',
+        'status',
+      ]);
+    }
+    expect(
+      observations.every(
+        (o) =>
+          o.rawName === 'Agregat kasar' &&
+          o.rawCode === 'M03' &&
+          o.rawUnit === 'M3' &&
+          o.resourceType === 'MATERIAL',
+      ),
+    ).toBe(true);
   });
 });

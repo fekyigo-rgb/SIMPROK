@@ -297,6 +297,7 @@ describe('IQL-01 resolver hook', () => {
     ['whitespace', { rawName: 'AGREGAT  KASAR' }],
     ['absent code', { rawCode: null }],
     ['another unit', { rawUnit: 'Kg' }],
+    ['another class', { resourceType: 'EQUIPMENT' }],
   ])(
     'a near-miss (%s) is a different question and is never answered by memory',
     async (_label, change) => {
