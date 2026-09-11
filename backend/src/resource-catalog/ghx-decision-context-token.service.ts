@@ -167,6 +167,110 @@ export interface GhxDecisionContextExpectation {
   readonly resolutionPolicyVersion: string;
 }
 
+// ---------------------------------------------------------------------------
+// IQL-01 — THE EXACT-QUESTION DECISION CONTEXT. A SECOND PURPOSE, SAME MACHINE.
+//
+// The same key, the same HMAC, the same refusal law — only the subject differs:
+// one exact question (workspace + questionKey), not one AHSP source fact. The
+// claim tuple has a different purpose AND a different length, so a GHX context
+// can never be spent here and an IQL context can never be spent on GHX.
+// ---------------------------------------------------------------------------
+
+export const IQL01_DECISION_CONTEXT_PURPOSE = 'IQL01_DECISION_CONTEXT' as const;
+
+export interface IdenticalQuestionContextClaims {
+  readonly purpose: typeof IQL01_DECISION_CONTEXT_PURPOSE;
+  readonly workspaceId: string;
+  readonly questionKey: string;
+  readonly actorAccountId: string;
+  readonly resolutionPolicyVersion: string;
+  readonly expectedGeneration: number;
+  readonly candidateContextDigest: string;
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+}
+
+export type IdenticalQuestionContextInput = Omit<
+  IdenticalQuestionContextClaims,
+  'purpose' | 'issuedAt' | 'expiresAt'
+>;
+
+export interface IdenticalQuestionContextExpectation {
+  readonly workspaceId: string;
+  readonly questionKey: string;
+  readonly actorAccountId: string;
+  readonly resolutionPolicyVersion: string;
+}
+
+function encodeIdenticalQuestionClaims(
+  claims: IdenticalQuestionContextClaims,
+): string {
+  return base64url(
+    Buffer.from(
+      JSON.stringify([
+        claims.purpose,
+        claims.workspaceId,
+        claims.questionKey,
+        claims.actorAccountId,
+        claims.resolutionPolicyVersion,
+        claims.expectedGeneration,
+        claims.candidateContextDigest,
+        claims.issuedAt,
+        claims.expiresAt,
+      ]),
+      'utf8',
+    ),
+  );
+}
+
+function decodeIdenticalQuestionClaims(
+  payload: string,
+): IdenticalQuestionContextClaims | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length !== 9) return null;
+  const [
+    purpose,
+    workspaceId,
+    questionKey,
+    actorAccountId,
+    resolutionPolicyVersion,
+    expectedGeneration,
+    digest,
+    issuedAt,
+    expiresAt,
+  ] = parsed as unknown[];
+  if (
+    purpose !== IQL01_DECISION_CONTEXT_PURPOSE ||
+    typeof workspaceId !== 'string' ||
+    typeof questionKey !== 'string' ||
+    typeof actorAccountId !== 'string' ||
+    typeof resolutionPolicyVersion !== 'string' ||
+    typeof expectedGeneration !== 'number' ||
+    !Number.isInteger(expectedGeneration) ||
+    typeof digest !== 'string' ||
+    typeof issuedAt !== 'number' ||
+    typeof expiresAt !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    purpose: IQL01_DECISION_CONTEXT_PURPOSE,
+    workspaceId,
+    questionKey,
+    actorAccountId,
+    resolutionPolicyVersion,
+    expectedGeneration,
+    candidateContextDigest: digest,
+    issuedAt,
+    expiresAt,
+  };
+}
+
 @Injectable()
 export class GhxDecisionContextTokenService {
   /**
@@ -270,6 +374,68 @@ export class GhxDecisionContextTokenService {
     if (proven.originResolutionId !== expectation.originResolutionId) refuse('resolution');
     if (proven.actorAccountId !== expectation.actorAccountId) refuse('actor');
     if (proven.resolutionPolicyVersion !== expectation.resolutionPolicyVersion) refuse('policy');
+    if (proven.expiresAt <= nowSeconds) refuse('expired');
+
+    return proven;
+  }
+
+  /** IQL-01 — issue an exact-question decision context. Same key, same TTL. */
+  issueIdenticalQuestionContext(
+    input: IdenticalQuestionContextInput,
+    nowSeconds = Math.floor(Date.now() / 1000),
+  ): string {
+    const claims: IdenticalQuestionContextClaims = {
+      purpose: IQL01_DECISION_CONTEXT_PURPOSE,
+      ...input,
+      issuedAt: nowSeconds,
+      expiresAt: nowSeconds + GHX_DECISION_CONTEXT_TTL_SECONDS,
+    };
+    const payload = encodeIdenticalQuestionClaims(claims);
+    return `${payload}.${this.sign(payload)}`;
+  }
+
+  /**
+   * IQL-01 — verify an exact-question decision context under the same law as
+   * `verify`: integrity first, then every binding, then expiry, one opaque
+   * refusal message.
+   */
+  verifyIdenticalQuestionContext(
+    token: string,
+    expectation: IdenticalQuestionContextExpectation,
+    nowSeconds = Math.floor(Date.now() / 1000),
+  ): IdenticalQuestionContextClaims {
+    const refuse = (reason: string): never => {
+      this.logger.debug(`identical-question context refused: ${reason}`);
+      throw new UnauthorizedException('DECISION_CONTEXT_TOKEN_INVALID');
+    };
+
+    if (typeof token !== 'string' || token.length === 0) refuse('missing');
+    const separator = token.lastIndexOf('.');
+    if (separator < 1) refuse('malformed');
+
+    const payload = token.slice(0, separator);
+    const provided = Buffer.from(token.slice(separator + 1), 'utf8');
+    const expected = Buffer.from(this.sign(payload), 'utf8');
+    if (
+      provided.length !== expected.length ||
+      !timingSafeEqual(provided, expected)
+    ) {
+      refuse('signature');
+    }
+
+    // A GHX context fails here: a different purpose and a different tuple.
+    const claims = decodeIdenticalQuestionClaims(payload);
+    if (claims === null) refuse('claims');
+
+    const proven = claims as IdenticalQuestionContextClaims;
+    if (proven.workspaceId !== expectation.workspaceId) refuse('workspace');
+    if (proven.questionKey !== expectation.questionKey) refuse('question');
+    if (proven.actorAccountId !== expectation.actorAccountId) refuse('actor');
+    if (
+      proven.resolutionPolicyVersion !== expectation.resolutionPolicyVersion
+    ) {
+      refuse('policy');
+    }
     if (proven.expiresAt <= nowSeconds) refuse('expired');
 
     return proven;

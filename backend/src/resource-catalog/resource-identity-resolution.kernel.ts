@@ -233,6 +233,13 @@ export interface VerifiedIdentityDecisionFact {
   readonly decidedAt: string;
   readonly generation: number;
   readonly reason: string | null;
+  /**
+   * WHICH governed memory the fact came from. Absent means SOURCE_FACT — the
+   * GHX-01 decision about one AHSP source fact — so every existing caller is
+   * unchanged. IDENTICAL_QUESTION is an APPROVED IQL-01 exact-question answer,
+   * and is judged by `isIdenticalQuestionDecidable`.
+   */
+  readonly scope?: 'SOURCE_FACT' | 'IDENTICAL_QUESTION';
 }
 
 export interface ResourceIdentityResolutionInput {
@@ -309,6 +316,17 @@ export type ResourceIdentityAuthority =
    */
   | 'VERIFIED_MAPPING_REUSED'
   /**
+   * IQL-01 — an APPROVED exact-question answer, reused for a question that is
+   * byte-for-byte identical (name, code, unit, class, workspace) and whose
+   * candidate context has not changed.
+   *
+   * Like VERIFIED_MAPPING_REUSED it is HUMAN-VERIFIED, never machine-proven, and
+   * it settles only which of the machine's own candidates was meant. It is a
+   * separate authority so a reader can tell "this source fact was decided" from
+   * "this exact question was decided before".
+   */
+  | 'VERIFIED_IDENTICAL_QUESTION_REUSED'
+  /**
    * The caller handed in a canonical ResourceCatalog id and it VALIDATED: the
    * row exists inside this workspace's own evidence boundary, it is ACTIVE, and
    * its class matches the class the AHSP line states.
@@ -329,6 +347,7 @@ export type ResourceIdentityAuthority =
 export type ResourceIdentityReasonCode =
   | 'EXACT_CANONICAL_MATCH'
   | 'VERIFIED_MAPPING_REUSED'
+  | 'VERIFIED_IDENTICAL_QUESTION_REUSED'
   | 'STRONG_CANDIDATE_NEEDS_REVIEW'
   | 'MULTIPLE_CANDIDATES_NEEDS_REVIEW'
   | 'REVIEWED_MAPPING_CONFLICT'
@@ -833,6 +852,40 @@ export function isHumanDecidable(result: ResourceIdentityResolution): boolean {
   );
 }
 
+/**
+ * IQL-01 — ONE strong candidate, and nothing else wrong with the verdict.
+ *
+ * Deterministic, and deliberately exact: the reason codes must be EXACTLY
+ * {STRONG_CANDIDATE_NEEDS_REVIEW}. That excludes, by construction, the Level 1
+ * and 1b refusals (which always carry SPECIFICATION_UNPROVED), a reviewed-mapping
+ * conflict, and every UNRESOLVED or RESOLVED verdict.
+ *
+ * The existing GHX predicate treats a single candidate as never ambiguous. For
+ * an exact-question memory the question is different: a human already
+ * confirmed that this ONE machine-nominated row is what this exact wording
+ * means, and nothing but that same wording, with that same candidate, may reuse
+ * the answer.
+ */
+export function isSingleStrongCandidate(
+  result: ResourceIdentityResolution,
+): boolean {
+  return (
+    result.status === 'NEEDS_REVIEW' &&
+    result.authority === 'EVIDENCE_CANDIDATE' &&
+    result.reasonCodes.length === 1 &&
+    result.reasonCodes[0] === 'STRONG_CANDIDATE_NEEDS_REVIEW' &&
+    result.candidates.length === 1 &&
+    result.candidates[0].specificationUnproved === false
+  );
+}
+
+/** IQL-01 — the verdicts an exact-question answer may settle. */
+export function isIdenticalQuestionDecidable(
+  result: ResourceIdentityResolution,
+): boolean {
+  return isHumanDecidable(result) || isSingleStrongCandidate(result);
+}
+
 function applyVerifiedIdentityDecision(
   machine: ResourceIdentityResolution,
   input: ResourceIdentityResolutionInput,
@@ -850,7 +903,11 @@ function applyVerifiedIdentityDecision(
   // them would then have crossed the hard type boundary. A candidate list can
   // mean "these were nominated" or "these were ruled out", and only the first
   // is a question a human may answer.
-  if (!isHumanDecidable(machine)) return machine;
+  const identicalQuestion = decision.scope === 'IDENTICAL_QUESTION';
+  const decidable = identicalQuestion
+    ? isIdenticalQuestionDecidable(machine)
+    : isHumanDecidable(machine);
+  if (!decidable) return machine;
 
   const chosen = machine.candidates.find(
     (candidate) => candidate.resourceCatalogId === decision.resourceCatalogId,
@@ -859,6 +916,28 @@ function applyVerifiedIdentityDecision(
   // Fail closed to the machine's own verdict rather than widening the candidate set.
   if (!chosen) return machine;
   if (chosen.specificationUnproved) return machine;
+
+  if (identicalQuestion) {
+    return {
+      status: 'RESOLVED',
+      authority: 'VERIFIED_IDENTICAL_QUESTION_REUSED',
+      resolvedResourceCatalogId: chosen.resourceCatalogId,
+      candidates: machine.candidates,
+      reasonCodes: ['VERIFIED_IDENTICAL_QUESTION_REUSED'],
+      explanation:
+        `Mesin tidak dapat menetapkan identitas sendiri: ${machine.explanation} ` +
+        `Pembelajaran pertanyaan identik yang telah disetujui (generasi ` +
+        `${decision.generation}, akun ${decision.decidedByAccountId}, ` +
+        `${decision.decidedAt}) memilih "${chosen.name}" ` +
+        `(${chosen.resourceCatalogId}) di antara kandidat sah yang ditemukan mesin` +
+        (decision.reason === null ? '' : ` — alasan: "${decision.reason}"`) +
+        `. Identitas ini DIVERIFIKASI MANUSIA untuk pertanyaan yang persis sama — ` +
+        `nama, kode, satuan dan kelas yang identik, dengan kandidat yang tidak ` +
+        `berubah — di workspace ini; bukan dibuktikan mesin dan bukan padanan ` +
+        `untuk ejaan lain. Kebenaran unit dan harga tidak ikut terbukti oleh ` +
+        `keputusan ini.`,
+    };
+  }
 
   return {
     status: 'RESOLVED',

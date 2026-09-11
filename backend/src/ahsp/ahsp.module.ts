@@ -13,6 +13,7 @@ import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { ResourceAdmissionService } from '../resource-catalog/resource-admission.service';
 import { ResourceObservationService } from '../resource-catalog/resource-observation.service';
+import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision-context-token.service';
 
 @Module({
   imports: [PrismaModule, UnitKernelModule],
@@ -33,6 +34,9 @@ import { ResourceObservationService } from '../resource-catalog/resource-observa
     // shared service, which mints through the ONE admission authority.
     ResourceAdmissionService,
     ResourceObservationService,
+    // The existing stateless signed-context service the observation lifecycle
+    // now also uses for IQL-01 exact-question decisions.
+    GhxDecisionContextTokenService,
   ],
   exports: [AhspService, AhspVersionService, AhspSnapshotService],
 })

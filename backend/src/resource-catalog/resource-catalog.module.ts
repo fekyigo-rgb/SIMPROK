@@ -5,6 +5,7 @@ import { ResourceIdentityResolutionService } from './resource-identity-resolutio
 import { ResourceAdmissionService } from './resource-admission.service';
 import { ResourceObservationService } from './resource-observation.service';
 import { ResourceObservationController } from './resource-observation.controller';
+import { GhxDecisionContextTokenService } from './ghx-decision-context-token.service';
 
 /**
  * The shared resource-catalog domain: one identity authority, one mint
@@ -20,6 +21,8 @@ import { ResourceObservationController } from './resource-observation.controller
     ResourceIdentityResolutionService,
     ResourceAdmissionService,
     ResourceObservationService,
+    // IQL-01 — the existing stateless signed-context service, second purpose.
+    GhxDecisionContextTokenService,
   ],
   exports: [
     ResourceIdentityResolutionService,
