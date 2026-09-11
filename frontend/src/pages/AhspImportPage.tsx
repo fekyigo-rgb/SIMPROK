@@ -5,10 +5,16 @@ import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import { explainAhspItemReasons } from '../utils/ahspDocumentUserCopy';
 import {
+  IQL_COPY,
+  describeGovernedQuestion,
+  groupCanRemember,
   groupIdenticalObservations,
+  identicalQuestionLine,
+  isGovernedQuestionShown,
   observationOccurrenceLine,
   previewCandidateNames,
   type CuratableObservationWire,
+  type GovernedQuestionWire,
   type PreviewResourceWire,
 } from '../utils/resourceObservationDisplay';
 import {
@@ -49,6 +55,9 @@ const BLUE = 'var(--simprok-trust-blue-500)';
 const RED = '#C0392B';
 // Color Lock: ungu is ONLY SIMPROK recommendation/insight — the POSSIBLY match.
 const UNGU = '#6D4A9E';
+// Color Lock: emas = menunggu approval; abu = tidak berlaku / belum ada mesin.
+const EMAS = '#C77A17';
+const ABU = '#98A2B3';
 const HAIRLINE = '1px solid var(--simprok-engineering-blue-100)';
 const CARD: CSSProperties = { background: '#FFFFFF', border: HAIRLINE, borderRadius: '12px', padding: 'var(--space-4)' };
 const primaryButton: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', background: BLUE, color: '#FFFFFF', border: 0, borderRadius: '8px', padding: 'var(--space-2) var(--space-4)', cursor: 'pointer', fontSize: 'var(--text-sm)' };
@@ -71,6 +80,13 @@ export function AhspImportPage() {
   const [observations, setObservations] = useState<CuratableObservationWire[]>([]);
   const [curationBusyId, setCurationBusyId] = useState<string | null>(null);
   const [curationError, setCurationError] = useState<string | null>(null);
+  // IQL-01 — offering a decision as learning is a separate, explicit choice per question.
+  const [rememberFor, setRememberFor] = useState<Record<string, boolean>>({});
+  const [curationNotice, setCurationNotice] = useState<string | null>(null);
+  const [questions, setQuestions] = useState<GovernedQuestionWire[]>([]);
+  const [questionReasons, setQuestionReasons] = useState<Record<string, string>>({});
+  const [questionBusy, setQuestionBusy] = useState<string | null>(null);
+  const [questionError, setQuestionError] = useState<string | null>(null);
 
   const [workType, setWorkType] = useState('');
   const [methodName, setMethodName] = useState('');
@@ -105,10 +121,24 @@ export function AhspImportPage() {
     }
   };
 
+  // IQL-01 — the governed exact questions, with the doors open to THIS reader.
+  const loadQuestions = async () => {
+    if (!canCurate) return;
+    try {
+      const response = await apiFetch('/resource-observations/questions');
+      if (!response.ok) return;
+      const data = await response.json();
+      setQuestions(Array.isArray(data) ? data : []);
+    } catch {
+      // Never rendered as "nothing to govern".
+    }
+  };
+
   useEffect(() => {
     // On-mount fetch of the standing curation queue; a documented, intentional effect.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadObservations();
+    void loadQuestions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canCurate]);
 
@@ -203,19 +233,22 @@ export function AhspImportPage() {
   const curateGroup = async (
     ids: string[],
     path: string,
-    body: Record<string, string>,
+    // Each row sends its OWN body, so each carries its own signed context.
+    bodyFor: (id: string) => Record<string, unknown>,
     failureWord: string,
+    successNotice: string,
   ) => {
     if (curationBusyId || ids.length === 0) return;
     setCurationBusyId(ids[0]);
     setCurationError(null);
+    setCurationNotice(null);
     let saved = 0;
     try {
       for (const id of ids) {
         const response = await apiFetch('/resource-observations/' + id + path, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify(bodyFor(id)),
         });
         if (!response.ok) break;
         saved += 1;
@@ -226,8 +259,11 @@ export function AhspImportPage() {
             ? failureWord + ' Coba lagi.'
             : saved + ' dari ' + ids.length + ' tersimpan. Sisanya belum — coba lagi.',
         );
+      } else {
+        setCurationNotice(successNotice);
       }
       await loadObservations();
+      await loadQuestions();
     } catch {
       setCurationError(
         saved === 0
@@ -240,11 +276,62 @@ export function AhspImportPage() {
     }
   };
 
-  const curateExisting = (ids: string[], selectedResourceCatalogId: string) =>
-    curateGroup(ids, '/curate-existing', { selectedResourceCatalogId }, 'Keputusan belum dapat disimpan.');
+  const wireById = new Map(observations.map((observation) => [observation.id, observation]));
+
+  const curateExisting = (ids: string[], selectedResourceCatalogId: string, remember: boolean) =>
+    curateGroup(
+      ids,
+      '/curate-existing',
+      (id) =>
+        remember
+          ? {
+              selectedResourceCatalogId,
+              rememberForIdenticalQuestions: true,
+              decisionContextToken: wireById.get(id)?.identicalQuestion?.decisionContextToken,
+            }
+          : { selectedResourceCatalogId },
+      'Keputusan belum dapat disimpan.',
+      remember ? IQL_COPY.rowDecided + ' ' + IQL_COPY.pending : IQL_COPY.rowDecided,
+    );
 
   const curateNew = (ids: string[], unitDefinitionId: string) =>
-    curateGroup(ids, '/curate-new', { unitDefinitionId }, 'Sumber daya baru belum dapat ditetapkan.');
+    curateGroup(ids, '/curate-new', () => ({ unitDefinitionId }), 'Sumber daya baru belum dapat ditetapkan.', IQL_COPY.rowDecided);
+
+  /** IQL-01 — one governance act on one exact question, spending the context the server issued. */
+  const governQuestion = async (
+    questionKey: string,
+    action: 'approve' | 'reject' | 'revoke',
+    token: string,
+  ) => {
+    if (questionBusy) return;
+    const reason = (questionReasons[questionKey] ?? '').trim();
+    if (action !== 'approve' && reason === '') {
+      setQuestionError('Tuliskan alasannya terlebih dahulu.');
+      return;
+    }
+    setQuestionBusy(questionKey);
+    setQuestionError(null);
+    try {
+      const response = await apiFetch('/resource-observations/questions/' + questionKey + '/' + action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action === 'approve' ? { decisionContextToken: token } : { decisionContextToken: token, reason }),
+      });
+      if (!response.ok) {
+        setQuestionError('Keputusan pembelajaran belum dapat disimpan. Muat ulang lalu coba lagi.');
+      } else {
+        setQuestionReasons((prev) => ({ ...prev, [questionKey]: '' }));
+      }
+      await loadQuestions();
+      await loadObservations();
+    } catch {
+      setQuestionError('Keputusan pembelajaran tidak dapat dihubungi.');
+    } finally {
+      setQuestionBusy(null);
+    }
+  };
+
+  const shownQuestions = questions.filter(isGovernedQuestionShown).map(describeGovernedQuestion);
 
   const createWorkspaceAhsp = async (event: FormEvent) => {
     event.preventDefault();
@@ -509,27 +596,100 @@ export function AhspImportPage() {
             SIMPROK menyimpan sumber daya yang belum dapat dipastikan. Pilih padanan yang tepat, atau usulkan sebagai sumber daya baru.
           </p>
           {curationError ? <p role="alert" style={{ color: RED, fontSize: 'var(--text-sm)' }}>{curationError}</p> : null}
+          {curationNotice ? <p role="status" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>{curationNotice}</p> : null}
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {groupIdenticalObservations(observations).map((group) => {
               const view = group.view;
               const busy = curationBusyId === group.ids[0];
               const repeated = observationOccurrenceLine(group);
+              const members = group.ids.map((id) => wireById.get(id));
+              // Offered only when EVERY row carries its own signed context.
+              const canRemember = groupCanRemember(members);
+              const remember = canRemember && rememberFor[group.ids[0]] === true;
+              const learningLine = identicalQuestionLine(members[0]?.identicalQuestion);
               return (
                 <li key={view.id} aria-label={'Tinjau ' + view.title} style={{ marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-3)', borderBottom: HAIRLINE }}>
                   <span style={{ fontWeight: 600, color: NAVY }}>{view.title}</span>
                   {/* Said plainly, because one click will answer for all of them. */}
                   {repeated ? <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{repeated}</span> : null}
                   {view.candidateLine ? <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{view.candidateLine}</span> : null}
+                  {learningLine ? (
+                    <span style={{ display: 'block', color: members[0]?.identicalQuestion?.state === 'PENDING' ? EMAS : ABU, fontSize: 'var(--text-sm)' }}>{learningLine}</span>
+                  ) : null}
                   <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>{view.guidance}</span>
+                  {canRemember ? (
+                    <label style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'flex-start', color: NAVY, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>
+                      <input
+                        type="checkbox"
+                        checked={remember}
+                        disabled={busy}
+                        onChange={(event) => setRememberFor((prev) => ({ ...prev, [group.ids[0]]: event.target.checked }))}
+                      />
+                      <span>{IQL_COPY.remember}</span>
+                    </label>
+                  ) : null}
                   <div>
                     {view.candidateChoices.map((choice) => (
-                      <button key={choice.resourceCatalogId} type="button" disabled={busy} onClick={() => void curateExisting(group.ids, choice.resourceCatalogId)} style={{ ...primaryButton, marginRight: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
+                      <button key={choice.resourceCatalogId} type="button" disabled={busy} onClick={() => void curateExisting(group.ids, choice.resourceCatalogId, remember)} style={{ ...primaryButton, marginRight: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
                         Ini padanannya: {choice.name}
                       </button>
                     ))}
                     {view.canProposeNew && view.newUnitDefinitionId ? (
                       <button type="button" disabled={busy} onClick={() => void curateNew(group.ids, view.newUnitDefinitionId as string)} style={outlineButton}>
                         Tetapkan sebagai sumber daya baru
+                      </button>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* IQL-01 — governed exact-question learning: offered by one person, approved by another. */}
+      {canCurate && shownQuestions.length > 0 ? (
+        <section aria-label="Pembelajaran pertanyaan identik" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
+          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>Pembelajaran pertanyaan identik</h2>
+          <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
+            SIMPROK hanya memakai ulang keputusan untuk pertanyaan yang persis sama, dan hanya setelah disetujui orang lain yang berwenang.
+          </p>
+          {questionError ? <p role="alert" style={{ color: RED, fontSize: 'var(--text-sm)' }}>{questionError}</p> : null}
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {shownQuestions.map((question) => {
+              const busy = questionBusy === question.questionKey;
+              const tone = question.tone === 'PENDING' ? EMAS : question.tone === 'EFFECTIVE' ? NAVY : ABU;
+              const needsReason = question.canReject || question.canRevoke;
+              return (
+                <li key={question.questionKey} aria-label={'Pembelajaran ' + question.title} style={{ marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-3)', borderBottom: HAIRLINE }}>
+                  <span style={{ fontWeight: 600, color: NAVY }}>{question.title}</span>
+                  <span style={{ display: 'block', color: tone, fontSize: 'var(--text-sm)', fontWeight: 600 }}>{question.stateLabel}</span>
+                  {question.answerLine ? <span style={{ display: 'block', color: NAVY, fontSize: 'var(--text-sm)' }}>{question.answerLine}</span> : null}
+                  <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>{question.guidance}</span>
+                  {needsReason ? (
+                    <input
+                      aria-label={'Alasan untuk ' + question.title}
+                      placeholder="Alasan (wajib untuk menolak atau mencabut)"
+                      value={questionReasons[question.questionKey] ?? ''}
+                      disabled={busy}
+                      onChange={(event) => setQuestionReasons((prev) => ({ ...prev, [question.questionKey]: event.target.value }))}
+                      style={{ ...controlBox, maxWidth: '36rem', marginBottom: 'var(--space-2)' }}
+                    />
+                  ) : null}
+                  <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                    {question.canApprove && question.token ? (
+                      <button type="button" disabled={busy} onClick={() => void governQuestion(question.questionKey, 'approve', question.token as string)} style={primaryButton}>
+                        Setujui pembelajaran
+                      </button>
+                    ) : null}
+                    {question.canReject && question.token ? (
+                      <button type="button" disabled={busy} onClick={() => void governQuestion(question.questionKey, 'reject', question.token as string)} style={outlineButton}>
+                        Tolak
+                      </button>
+                    ) : null}
+                    {question.canRevoke && question.token ? (
+                      <button type="button" disabled={busy} onClick={() => void governQuestion(question.questionKey, 'revoke', question.token as string)} style={outlineButton}>
+                        Cabut pembelajaran
                       </button>
                     ) : null}
                   </div>

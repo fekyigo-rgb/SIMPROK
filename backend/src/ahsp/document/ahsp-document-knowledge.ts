@@ -65,6 +65,13 @@ export interface AhspResourceKnowledge {
    * Never an asserted identity. Empty when investigation produced none.
    */
   readonly identityCandidates?: readonly string[];
+  /**
+   * IQL-01 — the APPROVE event whose exact-question answer settled this
+   * identity, when (and only when) that is how it was settled. Present so such
+   * a reading is never written into the case-insensitive sighting memory, and
+   * so a committed analysis can say which governed answer it relied on.
+   */
+  readonly identicalQuestionDecisionId?: string | null;
 }
 
 export interface AhspWorkItemKnowledge {

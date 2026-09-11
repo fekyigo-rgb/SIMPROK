@@ -25,6 +25,21 @@ export interface CuratableObservationWire {
   status?: string | null;
   candidates?: readonly ObservationCandidateWire[] | null;
   suggestedUnitDefinitionId?: string | null;
+  /** IQL-01 — the state of this row's EXACT question, attached by the backend. */
+  identicalQuestion?: IdenticalQuestionWire | null;
+}
+
+/**
+ * IQL-01 — what the backend says about one open row's exact question. The
+ * signed context rides along for the action only; account ids never arrive.
+ */
+export interface IdenticalQuestionWire {
+  questionKey?: string | null;
+  state?: string | null;
+  rememberable?: boolean | null;
+  decisionContextToken?: string | null;
+  pendingAnswerName?: string | null;
+  pendingAuthoredByYou?: boolean | null;
 }
 
 export interface ObservationCandidateChoice {
@@ -220,3 +235,134 @@ export const previewCandidateNames = (
  */
 export const looksLikeInternalIdentifier = (text: string): boolean =>
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i.test(text) || /[A-Z]{4,}_[A-Z]/.test(text);
+
+// ---------------------------------------------------------------------------
+// IQL-01 — GOVERNED EXACT-QUESTION LEARNING, AS THE READER SEES IT.
+//
+// Three different facts that must never blur into one another: a row was
+// decided; that decision was OFFERED as learning; the learning was APPROVED and
+// may be reused. SIMPROK never learns by itself — a person offers, another
+// person approves.
+// ---------------------------------------------------------------------------
+
+export const IQL_COPY = {
+  rowDecided: 'Keputusan baris ini sudah dibuat.',
+  pending:
+    'Keputusan ini sedang diajukan sebagai pembelajaran — menunggu persetujuan.',
+  effective: 'Pembelajaran ini sudah disetujui dan dapat digunakan kembali.',
+  remember:
+    'Ajukan juga sebagai pembelajaran untuk pertanyaan yang persis sama (perlu persetujuan orang lain yang berwenang)',
+  inapplicable:
+    'Pembelajaran sebelumnya untuk pertanyaan ini tidak berlaku lagi karena kandidat atau aturannya berubah.',
+  rejected: 'Pengajuan pembelajaran sebelumnya untuk pertanyaan ini ditolak.',
+  revoked: 'Pembelajaran sebelumnya untuk pertanyaan ini sudah dicabut.',
+} as const;
+
+/** The line under an open question naming its exact-question learning state, or null. */
+export const identicalQuestionLine = (
+  wire: IdenticalQuestionWire | null | undefined,
+): string | null => {
+  switch (wire?.state) {
+    case 'PENDING': {
+      const name = (wire.pendingAnswerName ?? '').trim();
+      return name !== '' ? IQL_COPY.pending + ' Usulan: ' + name + '.' : IQL_COPY.pending;
+    }
+    case 'INAPPLICABLE':
+      return IQL_COPY.inapplicable;
+    case 'REJECTED':
+      return IQL_COPY.rejected;
+    case 'REVOKED':
+      return IQL_COPY.revoked;
+    default:
+      return null;
+  }
+};
+
+/**
+ * Whether one grouped decision may also be offered as learning: EVERY row must
+ * carry its own signed context. Otherwise the offer is simply not shown — the
+ * row decision itself is always available.
+ */
+export const groupCanRemember = (
+  members: ReadonlyArray<CuratableObservationWire | undefined>,
+): boolean =>
+  members.length > 0 &&
+  members.every(
+    (member) =>
+      member?.identicalQuestion?.rememberable === true &&
+      typeof member.identicalQuestion.decisionContextToken === 'string' &&
+      member.identicalQuestion.decisionContextToken.length > 0,
+  );
+
+/** One governed exact question, from GET /resource-observations/questions. */
+export interface GovernedQuestionWire {
+  questionKey: string;
+  rawName: string;
+  rawCode?: string | null;
+  rawUnit?: string | null;
+  state?: string | null;
+  answer?: { resourceCatalogId: string; name: string } | null;
+  authoredByYou?: boolean | null;
+  canApprove?: boolean | null;
+  canReject?: boolean | null;
+  canRevoke?: boolean | null;
+  decisionContextToken?: string | null;
+}
+
+export type GovernedQuestionTone = 'PENDING' | 'EFFECTIVE' | 'MUTED';
+
+export interface GovernedQuestionView {
+  questionKey: string;
+  /** The exact question as the source wrote it — code included, because it is part of the question. */
+  title: string;
+  answerLine: string | null;
+  stateLabel: string;
+  tone: GovernedQuestionTone;
+  guidance: string;
+  canApprove: boolean;
+  canReject: boolean;
+  canRevoke: boolean;
+  token: string | null;
+}
+
+/** Only these states belong on the governance list; history stays on the server. */
+export const isGovernedQuestionShown = (wire: GovernedQuestionWire): boolean =>
+  wire.state === 'PENDING' || wire.state === 'EFFECTIVE' || wire.state === 'INAPPLICABLE';
+
+export const describeGovernedQuestion = (wire: GovernedQuestionWire): GovernedQuestionView => {
+  const unit = (wire.rawUnit ?? '').trim();
+  const code = (wire.rawCode ?? '').trim();
+  const title =
+    wire.rawName + (unit !== '' ? ' (' + unit + ')' : '') + (code !== '' ? ' · kode ' + code : '');
+  const answerName = (wire.answer?.name ?? '').trim();
+  const token =
+    typeof wire.decisionContextToken === 'string' && wire.decisionContextToken.length > 0
+      ? wire.decisionContextToken
+      : null;
+  const pending = wire.state === 'PENDING';
+  const effective = wire.state === 'EFFECTIVE';
+  const guidance = pending
+    ? wire.authoredByYou
+      ? 'Anda yang mengajukan pembelajaran ini, jadi persetujuannya harus datang dari orang lain yang berwenang.'
+      : 'Periksa usulan ini: setujui bila benar, atau tolak dengan alasan.'
+    : effective
+      ? IQL_COPY.effective
+      : IQL_COPY.inapplicable;
+  return {
+    questionKey: wire.questionKey,
+    title,
+    answerLine: answerName !== '' ? 'Padanan: ' + answerName : null,
+    stateLabel: pending
+      ? 'Menunggu persetujuan'
+      : effective
+        ? 'Disetujui — dapat digunakan kembali'
+        : 'Tidak berlaku lagi',
+    tone: pending ? 'PENDING' : effective ? 'EFFECTIVE' : 'MUTED',
+    guidance,
+    // A door is shown only when the server both allows it AND issued the context for it.
+    canApprove: token !== null && wire.canApprove === true && wire.authoredByYou !== true,
+    canReject: token !== null && wire.canReject === true,
+    canRevoke: token !== null && wire.canRevoke === true,
+    token,
+  };
+};

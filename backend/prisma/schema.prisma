@@ -38,6 +38,7 @@ model Account {
   progressAuditEvents                         ProgressAuditEvent[]                 @relation("ProgressAuditActor")
   projectTimeZoneEvents                       ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions               AhspResourceIdentityDecision[]       @relation("AhspResourceIdentityDecisionActor")
+  resourceIdentityQuestionDecisions           ResourceIdentityQuestionDecision[]   @relation("ResourceIdentityQuestionDecisionActor")
   ingestionConnectorsActingFor                IngestionConnector[]                 @relation("IngestionConnectorActsOnBehalfOf")
   /// Platform governance, as SUBJECT and as EXECUTOR — two distinct roles that
   /// must never collapse into one relation.
@@ -113,6 +114,7 @@ model Workspace {
   progressAuditEvents             ProgressAuditEvent[]             @relation("ProgressAuditWorkspace")
   projectTimeZoneEvents           ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions   AhspResourceIdentityDecision[]
+  resourceIdentityQuestionDecisions ResourceIdentityQuestionDecision[]
   ingestionConnectors             IngestionConnector[]
 
   @@index([organizationId])
@@ -929,6 +931,84 @@ model AhspResourceIdentityDecision {
   @@map("ahsp_resource_identity_decisions")
 }
 
+/// IQL-01 — the governance verb of ONE exact-question learning event.
+///
+/// A dedicated enum, as PlatformGovernanceDecisionType and
+/// AuthorityGovernanceAction are: borrowing another domain's verbs would change
+/// their meaning.
+enum ResourceIdentityQuestionAction {
+  TEACH
+  APPROVE
+  REJECT
+  SUPERSEDE
+  REVOKE
+}
+
+/// IQL-01 — GOVERNED EXACT-QUESTION LEARNING MEMORY.
+///
+/// A sibling of AhspResourceIdentityDecision inside the same governed decision
+/// memory (CAP-GHX-01), for a different SUBJECT: not one AHSP source fact, but
+/// one EXACTLY identical resource question inside one workspace — the
+/// `questionKey` digest of (workspaceId, resourceType, rawName, rawCode,
+/// rawUnit), exact bytes, no normalization. It is consumed only through the
+/// existing Resource Identity kernel; it proves nothing about unit or price.
+///
+/// A HUMAN DECISION IS NOT LEARNING. TEACH records that an authorized human
+/// offered one row decision as a learning CANDIDATE; it is never effective.
+/// Only an APPROVE by a DIFFERENT authorized account makes it effective, and
+/// only while its candidate context and policy still apply. REJECT and REVOKE
+/// leave no memory; a superseded or revoked answer never revives.
+///
+/// APPEND-ONLY, ONE CURRENT TRUTH. Every governance act is the next generation
+/// for (workspaceId, questionKey); the highest generation is the current state.
+/// A database trigger refuses UPDATE and DELETE outright.
+///
+/// NOTHING CANONICAL IS COPIED. The raw question and its source provenance are
+/// read through `originObservation`; the organization through the workspace.
+model ResourceIdentityQuestionDecision {
+  id          String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  /// sha256 hex of the exact question tuple. A fingerprint of the QUESTION,
+  /// never evidence of identity.
+  questionKey String @db.VarChar(64)
+
+  /// Lineage. Highest generation = current state. NOT NULL <=> generation > 1.
+  generation         Int
+  previousDecisionId String?                        @db.Uuid
+  action             ResourceIdentityQuestionAction
+
+  /// The ANSWER, carried only by TEACH and SUPERSEDE. APPROVE, REJECT and
+  /// REVOKE judge the answer their `previousDecision` carries.
+  selectedResourceCatalogId String? @db.Uuid
+  /// Applicability evidence for the answer (existing candidateContextDigest).
+  candidateContextDigest    String?
+  resolutionPolicyVersion   String?
+
+  /// Provenance on every event: the observation through which the question
+  /// was answered. Judging events copy their answer's origin.
+  originObservationId String   @db.Uuid
+  decidedByAccountId  String   @db.Uuid
+  decidedAt           DateTime @default(now())
+  /// Required for REJECT, SUPERSEDE and REVOKE.
+  reason              String?  @db.Text
+
+  workspace               Workspace                          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  previousDecision        ResourceIdentityQuestionDecision?  @relation("ResourceIdentityQuestionDecisionLineage", fields: [previousDecisionId], references: [id], onDelete: Restrict)
+  nextDecisions           ResourceIdentityQuestionDecision[] @relation("ResourceIdentityQuestionDecisionLineage")
+  selectedResourceCatalog ResourceCatalog?                   @relation(fields: [selectedResourceCatalogId], references: [id], onDelete: Restrict)
+  originObservation       ObservedResource                   @relation(fields: [originObservationId], references: [id], onDelete: Restrict)
+  decidedByAccount        Account                            @relation("ResourceIdentityQuestionDecisionActor", fields: [decidedByAccountId], references: [id], onDelete: Restrict)
+
+  /// THE concurrency invariant: two writers cannot both take the next
+  /// generation, so two current answers are unrepresentable.
+  @@unique([workspaceId, questionKey, generation])
+  /// The one read shape: newest event for one exact question.
+  @@index([workspaceId, questionKey, generation(sort: Desc)])
+  @@index([selectedResourceCatalogId])
+  @@index([originObservationId])
+  @@map("resource_identity_question_decisions")
+}
+
 model AHSPSourceDocument {
   id         String     @id @default(uuid()) @db.Uuid
   sourceType SourceType
@@ -1342,6 +1422,7 @@ model ResourceCatalog {
 
   ahspResourceIdentityDecisions AhspResourceIdentityDecision[]
   observedResources             ObservedResource[]
+  resourceIdentityQuestionDecisions ResourceIdentityQuestionDecision[]
 
   // NOTE: the former @@unique([workspaceId, code]) is replaced by a manual
   // partial unique index in the migration SQL (RM-02C1a) because `code` is
@@ -1411,6 +1492,9 @@ model ObservedResource {
 
   workspace               Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   resolvedResourceCatalog ResourceCatalog? @relation(fields: [resolvedResourceCatalogId], references: [id], onDelete: Restrict)
+  /// IQL-01 — governance events whose provenance is this observation. A
+  /// relation only: no column on this table changes.
+  identityQuestionDecisions ResourceIdentityQuestionDecision[]
 
   /// One import row is observed once. Nulls in provenance make hand-built rows
   /// distinct (Postgres NULL semantics), which is correct: only a real,

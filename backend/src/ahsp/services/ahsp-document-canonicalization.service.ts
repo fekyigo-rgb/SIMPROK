@@ -21,6 +21,7 @@ import {
   ObserveResourceInput,
   ResourceObservationService,
 } from '../../resource-catalog/resource-observation.service';
+import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
 import { understandAhspDocument } from '../document/ahsp-document-understanding';
 import {
   AHSP_DOCUMENT_REASON,
@@ -282,6 +283,14 @@ export class AhspDocumentCanonicalizationService {
             })
             .catch(() => undefined);
         }
+        const recorded = written[written.length - 1];
+        await this.recordIdenticalQuestionReuse(
+          item,
+          knowledge,
+          recorded.ahspId,
+          recorded.versionId,
+          userId,
+        );
         sightings.push(
           ...this.sightingsFor(item, knowledge, envelope.workspaceId),
         );
@@ -374,6 +383,73 @@ export class AhspDocumentCanonicalizationService {
     });
   }
 
+  /**
+   * IQL-01 — a committed analysis whose component identity came from an
+   * APPROVED exact-question answer says so, through the one AHSP provenance
+   * channel. The AHSP row stores only a catalog id, so without this entry a
+   * later reader could not tell a human-verified reuse from a machine-proven
+   * match. DURABLE, like recordUseExisting: it is the only trace.
+   */
+  private async recordIdenticalQuestionReuse(
+    item: AhspWorkItemKnowledge,
+    knowledge: AhspDocumentKnowledge,
+    ahspId: string,
+    ahspVersionId: string,
+    userId: string,
+  ): Promise<void> {
+    const reused = item.resources.filter(
+      (resource) => resource.identicalQuestionDecisionId,
+    );
+    if (reused.length === 0) return;
+    await this.audit.logAction({
+      ahspId,
+      ahspVersionId,
+      action: 'AHSPImportIdentityFromQuestionDecision',
+      who: userId,
+      after: {
+        sourceFileName: knowledge.source.fileName,
+        sourceSha256: knowledge.source.contentDigestSha256,
+        resources: reused.map((resource) => ({
+          rawName: resource.rawName,
+          rawCode: resource.rawCode,
+          rawUnit: resource.rawUnit,
+          group: resource.group,
+          resourceCatalogId: resource.resolvedResourceCatalogId,
+          approvalDecisionId: resource.identicalQuestionDecisionId,
+        })),
+      },
+    });
+  }
+
+  /**
+   * IQL-01 — the APPROVE event behind an identity the kernel settled as an
+   * exact-question reuse, read from the evidence already loaded. Null for
+   * every other authority.
+   */
+  private identicalQuestionApprovalId(
+    authority: string | null,
+    resource: AhspResourceKnowledge,
+    evidence: ResourceIdentityEvidence,
+  ): string | null {
+    const scope = evidence.identicalQuestionScope;
+    if (
+      authority !== 'VERIFIED_IDENTICAL_QUESTION_REUSED' ||
+      !scope ||
+      !resource.rawName ||
+      !resource.group
+    ) {
+      return null;
+    }
+    const key = identicalQuestionKey({
+      workspaceId: scope.workspaceId,
+      resourceType: resource.group,
+      rawName: resource.rawName,
+      rawCode: resource.rawCode,
+      rawUnit: resource.rawUnit,
+    });
+    return evidence.identicalQuestionDecisions?.get(key)?.id ?? null;
+  }
+
   /** The reconstructable record of a duplicate decision for AHSPAuditLog: what was imported, from where, the verdict, and the AHSP(s) it was weighed against. */
   private decisionProvenance(
     item: AhspWorkItemKnowledge,
@@ -451,6 +527,11 @@ export class AhspDocumentCanonicalizationService {
    * ONLY PROVED READINGS ARE RECORDED. The row's catalogue id is the one the
    * identity kernel resolved, so nothing here asserts an identity — it records
    * that a proved identity was written this way, in this file, at this row.
+   *
+   * NEVER A READING SETTLED BY AN IQL-01 EXACT-QUESTION ANSWER. Sightings are
+   * matched case- and whitespace-insensitively, so recording one would let an
+   * answer approved for ONE exact wording nominate candidates for its variants
+   * — and would outlive a REVOKE. Exact-question memory stays exact.
    */
   private sightingsFor(
     item: AhspWorkItemKnowledge,
@@ -462,6 +543,7 @@ export class AhspDocumentCanonicalizationService {
       const name = resource.nameEvidence;
       if (
         !resource.resolvedResourceCatalogId ||
+        resource.identicalQuestionDecisionId ||
         !resource.group ||
         !resource.rawName ||
         !name
@@ -528,7 +610,30 @@ export class AhspDocumentCanonicalizationService {
     workspaceId: string,
   ): Promise<AhspDocumentKnowledge> {
     if (knowledge.workItems.length === 0) return knowledge;
-    const loaded = await this.identity.loadEvidence(this.prisma, workspaceId);
+    // IQL-01 — the exact questions this document asks, so an APPROVED
+    // exact-question answer can be reused. One bounded preload; the same
+    // wording, code, unit and class, byte for byte, or nothing.
+    const identicalQuestionKeys = knowledge.workItems.flatMap((item) =>
+      item.resources.flatMap((resource) =>
+        resource.rawName && resource.group
+          ? [
+              identicalQuestionKey({
+                workspaceId,
+                resourceType: resource.group,
+                rawName: resource.rawName,
+                rawCode: resource.rawCode,
+                rawUnit: resource.rawUnit,
+              }),
+            ]
+          : [],
+      ),
+    );
+    const loaded = await this.identity.loadEvidence(
+      this.prisma,
+      workspaceId,
+      undefined,
+      { identicalQuestionKeys },
+    );
     // The AHSP-whole identity surface, loaded ONCE per document (mirroring the
     // resource-identity load-once step above), never per work item — the
     // workspace's AHSPs plus the Official Repository, indexed for the classifier.
@@ -692,6 +797,11 @@ export class AhspDocumentCanonicalizationService {
       // Identity proved. The base unit is only carried when the Unit authority
       // proved it too — knowing WHICH resource this is never licenses asserting
       // what measure it is in.
+      const approvalId = this.identicalQuestionApprovalId(
+        identity.authority,
+        resource,
+        evidence,
+      );
       return {
         ...resource,
         status: unitResolved ? resource.status : 'UNRESOLVED',
@@ -699,6 +809,9 @@ export class AhspDocumentCanonicalizationService {
         resolvedResourceCatalogId: identity.resolvedResourceCatalogId,
         resolvedBaseUnit: unitResolved ? resource.rawUnit : null,
         identityCandidates: [],
+        // Present ONLY when an IQL-01 answer settled it, so every other
+        // reading is byte-for-byte what it was.
+        ...(approvalId ? { identicalQuestionDecisionId: approvalId } : {}),
       };
     }
     // WHY THE CONDITION IS "candidates exist", NOT "status is NEEDS_REVIEW".

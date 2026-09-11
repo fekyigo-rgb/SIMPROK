@@ -11,9 +11,15 @@ import {
   VerifiedIdentityDecisionFact,
   isExactRepresentationTie,
   isHumanDecidable,
+  isIdenticalQuestionDecidable,
   resolveResourceIdentity,
 } from './resource-identity-resolution.kernel';
 import { candidateContextDigest } from './ghx-candidate-context';
+import {
+  IQL01_IDENTICAL_QUESTION_POLICY_VERSION,
+  identicalQuestionKey,
+  isSameIdenticalQuestion,
+} from './identical-question-key';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
   UNIT_ALIAS_CONTEXT,
@@ -33,6 +39,40 @@ export interface GhxLatestDecision {
   readonly generation: number;
   readonly reason: string | null;
   readonly resolutionPolicyVersion: string;
+}
+
+/**
+ * IQL-01 — the newest governance event for one exact question, as preloaded,
+ * with the answer it follows (and that answer's origin observation, which holds
+ * the raw question the key was derived from).
+ */
+export interface IdenticalQuestionLatestEvent {
+  readonly id: string;
+  readonly questionKey: string;
+  readonly generation: number;
+  readonly action: string;
+  readonly selectedResourceCatalogId: string | null;
+  readonly candidateContextDigest: string | null;
+  readonly resolutionPolicyVersion: string | null;
+  readonly decidedByAccountId: string;
+  readonly decidedAt: Date;
+  readonly previousDecision: {
+    readonly id: string;
+    readonly generation: number;
+    readonly action: string;
+    readonly selectedResourceCatalogId: string | null;
+    readonly candidateContextDigest: string | null;
+    readonly resolutionPolicyVersion: string | null;
+    readonly decidedByAccountId: string;
+    readonly reason: string | null;
+    readonly originObservation: {
+      readonly workspaceId: string;
+      readonly resourceType: string;
+      readonly rawName: string;
+      readonly rawCode: string | null;
+      readonly rawUnit: string | null;
+    };
+  } | null;
 }
 
 export interface ResourceIdentityEvidence {
@@ -94,13 +134,29 @@ export interface ResourceIdentityEvidence {
    * consulted, which is correct rather than degraded.
    */
   readonly ghxLatestDecisions?: ReadonlyMap<string, GhxLatestDecision>;
+  /**
+   * IQL-01 — the workspace an exact-question answer may be reused in. Present
+   * only when the caller opted in; absent means no exact-question memory is
+   * consulted at all, exactly as before.
+   */
+  readonly identicalQuestionScope?: { readonly workspaceId: string };
+  /**
+   * IQL-01 — newest event per questionKey, PRELOADED ONCE by the caller's
+   * opt-in (one bounded query, like the GHX preload). Only an APPROVE here can
+   * ever be reused; a TEACH, REJECT, SUPERSEDE or REVOKE never is.
+   */
+  readonly identicalQuestionDecisions?: ReadonlyMap<
+    string,
+    IdenticalQuestionLatestEvent
+  >;
 }
 
 export type EvidenceClient = Pick<
   Prisma.TransactionClient,
   'resourceCatalog' | 'resourceSourceIdentity' | 'basicPriceImportRowResourceMapping'
 > &
-  Partial<Pick<Prisma.TransactionClient, 'ahspResourceIdentityDecision'>>;
+  Partial<Pick<Prisma.TransactionClient, 'ahspResourceIdentityDecision'>> &
+  Partial<Pick<Prisma.TransactionClient, 'resourceIdentityQuestionDecision'>>;
 
 /**
  * The client the RM-03D2 canonical-unit read runs on. Kept separate from
@@ -181,6 +237,12 @@ export class ResourceIdentityResolutionService {
      * front. Omitted → no governed memory is preloaded and none is consulted.
      */
     ghxAhspResourceIds?: ReadonlyArray<string>,
+    /**
+     * IQL-01 — the exact questions this evidence set will be asked about.
+     * Supplied by the AHSP document import and the curation queue. Omitted →
+     * no exact-question memory is preloaded and none is consulted.
+     */
+    options?: { readonly identicalQuestionKeys?: ReadonlyArray<string> },
   ): Promise<ResourceIdentityEvidence> {
     const [catalogRows, sightingRows, mappingRows] = await Promise.all([
       client.resourceCatalog.findMany({
@@ -261,7 +323,60 @@ export class ResourceIdentityResolutionService {
           })
         : [];
 
+    // IQL-01 — the same bounded shape: newest event per exact question, with
+    // the answer it follows. Strict workspace equality; never an OR with null.
+    const wantedQuestions = options?.identicalQuestionKeys;
+    const questionKeys = [...new Set(wantedQuestions ?? [])];
+    const questionRows =
+      questionKeys.length > 0 && client.resourceIdentityQuestionDecision
+        ? await client.resourceIdentityQuestionDecision.findMany({
+            where: { workspaceId, questionKey: { in: questionKeys } },
+            orderBy: [{ questionKey: 'asc' }, { generation: 'desc' }],
+            distinct: ['questionKey'],
+            select: {
+              id: true,
+              questionKey: true,
+              generation: true,
+              action: true,
+              selectedResourceCatalogId: true,
+              candidateContextDigest: true,
+              resolutionPolicyVersion: true,
+              decidedByAccountId: true,
+              decidedAt: true,
+              previousDecision: {
+                select: {
+                  id: true,
+                  generation: true,
+                  action: true,
+                  selectedResourceCatalogId: true,
+                  candidateContextDigest: true,
+                  resolutionPolicyVersion: true,
+                  decidedByAccountId: true,
+                  reason: true,
+                  originObservation: {
+                    select: {
+                      workspaceId: true,
+                      resourceType: true,
+                      rawName: true,
+                      rawCode: true,
+                      rawUnit: true,
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : [];
+
     return {
+      ...(wantedQuestions === undefined
+        ? {}
+        : {
+            identicalQuestionScope: { workspaceId },
+            identicalQuestionDecisions: new Map(
+              questionRows.map((row) => [row.questionKey, row]),
+            ),
+          }),
       ghxLatestDecisions: new Map(
         decisionRows.map((row) => [row.ahspResourceId, row]),
       ),
@@ -354,7 +469,7 @@ export class ResourceIdentityResolutionService {
     // exact-representation tie or from evidence candidates. Returning early here
     // would have made governed memory reachable from only one kind of question.
     if (!isExactRepresentationTie(first)) {
-      return this.applyGovernedHumanDecision(
+      return this.applyGovernedMemory(
         first,
         { reference, canonicalUnitIdentities: [] },
         evidence,
@@ -366,7 +481,7 @@ export class ResourceIdentityResolutionService {
     // anyway would be a round-trip that provably cannot change the verdict —
     // and on the RAB pre-lock path it would spend it inside the freeze window.
     if (reference.rawUnit === null || reference.rawUnit.trim() === '') {
-      return this.applyGovernedHumanDecision(
+      return this.applyGovernedMemory(
         first,
         { reference, canonicalUnitIdentities: [] },
         evidence,
@@ -455,11 +570,121 @@ export class ResourceIdentityResolutionService {
       canonicalUnitIdentities,
     });
 
-    return this.applyGovernedHumanDecision(
+    return this.applyGovernedMemory(
       withUnitContext,
       { reference, canonicalUnitIdentities },
       evidence,
     );
+  }
+
+  /**
+   * Governed human memory, in the ONE fixed order: the GHX source-fact decision
+   * first, then the IQL-01 exact-question answer. Each is a no-op unless its
+   * caller opted in, and neither can touch a verdict the machine resolved.
+   */
+  private applyGovernedMemory(
+    machine: ResourceIdentityResolution,
+    kernelInput: {
+      reference: RawResourceReference;
+      canonicalUnitIdentities: ReadonlyArray<CanonicalUnitIdentityFact>;
+    },
+    evidence: ResourceIdentityEvidence,
+  ): ResourceIdentityResolution {
+    const afterSourceFact = this.applyGovernedHumanDecision(
+      machine,
+      kernelInput,
+      evidence,
+    );
+    return this.applyIdenticalQuestionDecision(
+      afterSourceFact,
+      kernelInput,
+      evidence,
+    );
+  }
+
+  /**
+   * IQL-01 — THE ONE PLACE an exact-question answer becomes an identity.
+   *
+   * Every condition below is necessary; any failure returns the verdict it was
+   * given, unchanged:
+   *   - the caller opted in, and nothing (machine or GHX) already resolved it;
+   *   - the verdict is one an exact-question answer may settle;
+   *   - the NEWEST event for this exact question is an APPROVE of an answer —
+   *     never a TEACH, REJECT, SUPERSEDE or REVOKE, never an older generation;
+   *   - the answer's origin observation states byte-for-byte this question;
+   *   - the answer was recorded under the current policy;
+   *   - the live candidate context is the one the answer was given under.
+   * The kernel then re-applies candidate membership and the specification
+   * guard before it asserts anything. Like the GHX seam it takes no client:
+   * everything it reads was preloaded under the caller's snapshot.
+   */
+  private applyIdenticalQuestionDecision(
+    current: ResourceIdentityResolution,
+    kernelInput: {
+      reference: RawResourceReference;
+      canonicalUnitIdentities: ReadonlyArray<CanonicalUnitIdentityFact>;
+    },
+    evidence: ResourceIdentityEvidence,
+  ): ResourceIdentityResolution {
+    const scope = evidence.identicalQuestionScope;
+    const decisions = evidence.identicalQuestionDecisions;
+    if (!scope || !decisions || decisions.size === 0) return current;
+    if (current.status === 'RESOLVED') return current;
+    if (!isIdenticalQuestionDecidable(current)) return current;
+
+    const reference = kernelInput.reference;
+    const question = {
+      workspaceId: scope.workspaceId,
+      resourceType: reference.resourceType,
+      rawName: reference.rawName,
+      rawCode: reference.rawCode,
+      rawUnit: reference.rawUnit,
+    };
+    const latest = decisions.get(identicalQuestionKey(question));
+    if (!latest || latest.action !== 'APPROVE') return current;
+    const answer = latest.previousDecision;
+    if (
+      !answer ||
+      (answer.action !== 'TEACH' && answer.action !== 'SUPERSEDE') ||
+      !answer.selectedResourceCatalogId
+    ) {
+      return current;
+    }
+    if (!isSameIdenticalQuestion(answer.originObservation, question)) {
+      return current;
+    }
+    if (
+      answer.resolutionPolicyVersion !== IQL01_IDENTICAL_QUESTION_POLICY_VERSION
+    ) {
+      return current;
+    }
+    const liveDigest = candidateContextDigest(
+      current.candidates.map((candidate) => ({
+        resourceCatalogId: candidate.resourceCatalogId,
+        name: candidate.name,
+        type: candidate.type,
+        baseUnit: candidate.baseUnit,
+        specifications: candidate.specifications,
+      })),
+    );
+    if (liveDigest !== answer.candidateContextDigest) return current;
+
+    const fact: VerifiedIdentityDecisionFact = {
+      resourceCatalogId: answer.selectedResourceCatalogId,
+      decidedByAccountId: latest.decidedByAccountId,
+      decidedAt: latest.decidedAt.toISOString(),
+      generation: latest.generation,
+      reason: answer.reason,
+      scope: 'IDENTICAL_QUESTION',
+    };
+    return resolveResourceIdentity({
+      reference,
+      catalogCandidates: evidence.catalogCandidates,
+      sourceSightings: evidence.sourceSightings,
+      reviewedMappings: evidence.reviewedMappings,
+      canonicalUnitIdentities: kernelInput.canonicalUnitIdentities,
+      verifiedIdentityDecision: fact,
+    });
   }
 
   /**

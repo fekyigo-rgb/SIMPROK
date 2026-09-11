@@ -1,4 +1,5 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { GhxDecisionContextTokenService } from './ghx-decision-context-token.service';
 import { ResourceObservationService } from './resource-observation.service';
 import {
   ResourceAdmissionNotExhaustedError,
@@ -77,6 +78,8 @@ describe('ResourceObservationService', () => {
       admission as ResourceAdmissionService,
       unitKernel,
       identity,
+      // IQL-01 signed contexts — unused by these pre-IQL scenarios.
+      new GhxDecisionContextTokenService(),
     );
   });
 
