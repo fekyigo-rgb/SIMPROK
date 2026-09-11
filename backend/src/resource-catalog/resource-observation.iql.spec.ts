@@ -25,6 +25,8 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
   const OWNER = 'acct-owner';
   const SECOND = 'acct-second';
   const THIRD = 'acct-third';
+  /** The second holder: may judge (approve / reject), never curate or teach. */
+  const VERIFIER = 'acct-bp-verifier';
   const ORIGINAL_SECRET = process.env.GHX_DECISION_CONTEXT_SECRET;
 
   const KERIKIL = {
@@ -276,8 +278,9 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
       rememberForIdenticalQuestions: true,
       decisionContextToken: token,
     });
-  const question = async (actor: string) =>
-    (await service.listQuestions(WS, actor))[0];
+  /** A curator (AHSP_RESOURCE_IDENTITY_DECIDE) unless told otherwise. */
+  const question = async (actor: string, authority = { mayDecide: true }) =>
+    (await service.listQuestions(WS, actor, authority))[0];
 
   it('offers learning on every open row of the question, with its own signed context', async () => {
     const rows = await openList(OWNER);
@@ -686,6 +689,94 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
       '3:SUPERSEDE',
       '4:APPROVE',
     ]);
+  });
+
+  it('the SECOND HOLDER (judging only) approves a pending candidate — and is never offered REVOKE or SUPERSEDE', async () => {
+    const JUDGE_ONLY = { mayDecide: false };
+    // Two legitimate candidates, so SUPERSEDE is a real door — for a curator.
+    catalogs = [
+      KERIKIL,
+      { ...KERIKIL, id: 'cat-batu-pecah', name: 'Agregat Batu Pecah' },
+    ];
+    const offered = await openList(OWNER);
+    await teach(
+      'obs-1',
+      offered.find((row) => row.id === 'obs-1')!.identicalQuestion
+        .decisionContextToken,
+    );
+
+    const pending = await question(VERIFIER, JUDGE_ONLY);
+    expect(pending).toMatchObject({
+      state: 'PENDING',
+      authoredByYou: false,
+      canApprove: true,
+      canReject: true,
+      canRevoke: false,
+      canSupersede: false,
+    });
+    expect(typeof pending.decisionContextToken).toBe('string');
+
+    const approved = await service.approveQuestion({
+      workspaceId: WS,
+      questionKey: pending.questionKey,
+      actorAccountId: VERIFIER,
+      decisionContextToken: pending.decisionContextToken,
+    });
+    expect(approved).toMatchObject({
+      action: 'APPROVE',
+      generation: 2,
+      state: 'EFFECTIVE',
+    });
+    expect(
+      (approved as { identityAfterApproval: unknown }).identityAfterApproval,
+    ).toEqual({
+      status: 'RESOLVED',
+      authority: 'VERIFIED_IDENTICAL_QUESTION_REUSED',
+      resolvedResourceCatalogId: KERIKIL.id,
+    });
+    expect(
+      ledger.map((row) => `${row.action}:${row.decidedByAccountId}`),
+    ).toEqual([`TEACH:${OWNER}`, `APPROVE:${VERIFIER}`]);
+
+    // Effective now: the judge has nothing left to judge — no door, no context.
+    const judged = await question(VERIFIER, JUDGE_ONLY);
+    expect(judged).toMatchObject({
+      state: 'EFFECTIVE',
+      canApprove: false,
+      canReject: false,
+      canRevoke: false,
+      canSupersede: false,
+      decisionContextToken: null,
+      supersedeCandidates: [],
+    });
+    // A curator keeps every door the law gives it.
+    expect(await question(OWNER)).toMatchObject({
+      state: 'EFFECTIVE',
+      canRevoke: true,
+      canSupersede: true,
+    });
+  });
+
+  it('the SECOND HOLDER can REJECT a pending candidate — it leaves no memory', async () => {
+    await teach('obs-1', await tokenFor('obs-1'));
+    const pending = await question(VERIFIER, { mayDecide: false });
+    const rejected = await service.rejectQuestion({
+      workspaceId: WS,
+      questionKey: pending.questionKey,
+      actorAccountId: VERIFIER,
+      decisionContextToken: pending.decisionContextToken,
+      reason: 'Padanan belum tepat',
+    });
+    expect(rejected).toMatchObject({
+      action: 'REJECT',
+      generation: 2,
+      state: 'REJECTED',
+    });
+    const rows = await openList(OWNER);
+    expect(rows.map((row) => row.id)).toEqual(['obs-2', 'obs-3']);
+    expect(
+      rows.every((row) => row.identicalQuestion.state === 'REJECTED'),
+    ).toBe(true);
   });
 
   it('an observation’s raw question is never rewritten — only its decision fields change', async () => {

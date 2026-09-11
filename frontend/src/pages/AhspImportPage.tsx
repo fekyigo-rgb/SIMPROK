@@ -70,6 +70,9 @@ export function AhspImportPage() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission('AHSP_MANAGE');
   const canCurate = hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE');
+  // IQL-01 second holder: may JUDGE pending learning candidates here — nothing else.
+  const canSeeQuestions = canCurate || hasPermission('AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE');
+  const canViewAhsp = hasPermission('AHSP_VIEW');
 
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<null | { workItems: PreviewItem[] }>(null);
@@ -123,7 +126,7 @@ export function AhspImportPage() {
 
   // IQL-01 — the governed exact questions, with the doors open to THIS reader.
   const loadQuestions = async () => {
-    if (!canCurate) return;
+    if (!canSeeQuestions) return;
     try {
       const response = await apiFetch('/resource-observations/questions');
       if (!response.ok) return;
@@ -140,7 +143,7 @@ export function AhspImportPage() {
     void loadObservations();
     void loadQuestions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canCurate]);
+  }, [canCurate, canSeeQuestions]);
 
   const previewDocument = async () => {
     if (!canManage || !file || importing) return;
@@ -406,7 +409,8 @@ export function AhspImportPage() {
   return (
     <main aria-label="Import AHSP" style={{ padding: 'var(--space-5, 1.25rem)' }}>
       <nav aria-label="Jejak navigasi" style={{ fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
-        <Link to="/ahsp" style={{ color: MUTED, textDecoration: 'none' }}>AHSP</Link>
+        {/* A door only for whoever may open it — the second holder may judge here, not browse AHSP. */}
+        {canViewAhsp ? <Link to="/ahsp" style={{ color: MUTED, textDecoration: 'none' }}>AHSP</Link> : <span>AHSP</span>}
         <span style={{ margin: '0 var(--space-2)' }}>›</span>
         <span style={{ color: NAVY }}>Import AHSP</span>
       </nav>
@@ -418,9 +422,11 @@ export function AhspImportPage() {
             Unggah dokumen resmi, pahami isinya, tinjau hasilnya, lalu simpan yang terbukti.
           </p>
         </div>
-        <Link to="/ahsp" style={outlineButton}>
-          <ArrowLeft size={16} /> Kembali ke Daftar AHSP
-        </Link>
+        {canViewAhsp ? (
+          <Link to="/ahsp" style={outlineButton}>
+            <ArrowLeft size={16} /> Kembali ke Daftar AHSP
+          </Link>
+        ) : null}
       </header>
 
       {!canManage && !canCurate ? (
@@ -648,7 +654,7 @@ export function AhspImportPage() {
       ) : null}
 
       {/* IQL-01 — governed exact-question learning: offered by one person, approved by another. */}
-      {canCurate && shownQuestions.length > 0 ? (
+      {canSeeQuestions && shownQuestions.length > 0 ? (
         <section aria-label="Pembelajaran pertanyaan identik" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
           <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>Pembelajaran pertanyaan identik</h2>
           <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>

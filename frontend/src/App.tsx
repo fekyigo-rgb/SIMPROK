@@ -47,7 +47,7 @@ function App() {
               <Route path="project/:projectId/rab/workspace" element={<PermissionRoute permission="RAB_DRAFT_EDIT"><RabWorkspacePage /></PermissionRoute>} />
               <Route path="project/:projectId/rab/ahsp-snapshot" element={<ProjectAhspSnapshotPage />} />
               <Route path="ahsp" element={<PermissionRoute permission="AHSP_VIEW"><AhspRoomPage /></PermissionRoute>} />
-              <Route path="ahsp/import" element={<PermissionRoute permission="AHSP_VIEW"><AhspImportPage /></PermissionRoute>} />
+              <Route path="ahsp/import" element={<PermissionRoute permission={['AHSP_VIEW', 'AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE']}><AhspImportPage /></PermissionRoute>} />
               <Route path="ahsp/:ahspId" element={<PermissionRoute permission="AHSP_VIEW"><AhspDetailPage /></PermissionRoute>} />
               <Route path="basic-price" element={<BasicPriceExplorerPage />} />
               <Route path="basic-price/import" element={<PermissionRoute permission="BASIC_PRICE_IMPORT"><BasicPriceImportPage /></PermissionRoute>} />

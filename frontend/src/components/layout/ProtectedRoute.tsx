@@ -46,9 +46,10 @@ const accessDeniedMessage = (permissionState: 'ERROR' | 'READY'): string =>
  * capability fetch is IDLE/LOADING/ERROR — never renders children or an
  * "Access Denied" verdict from a state that isn't actually known yet.
  * Backend PermissionsGuard remains the real security decision; this only
- * controls what's visible/enterable in the UI.
+ * controls what's visible/enterable in the UI. Several codes mean ANY of them,
+ * exactly like the backend @Permissions contract.
  */
-export function PermissionRoute({ permission, children }: { permission: string; children: ReactNode }) {
+export function PermissionRoute({ permission, children }: { permission: string | readonly string[]; children: ReactNode }) {
   const { permissionState, hasPermission, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -60,7 +61,8 @@ export function PermissionRoute({ permission, children }: { permission: string; 
     );
   }
 
-  if (hasPermission(permission)) {
+  const codes: readonly string[] = typeof permission === 'string' ? [permission] : permission;
+  if (codes.some((code) => hasPermission(code))) {
     return <>{children}</>;
   }
 
