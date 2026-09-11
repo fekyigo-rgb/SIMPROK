@@ -328,6 +328,80 @@ describe('resolveResourceIdentity — authority hierarchy', () => {
     ).toContain('NAME_TOKEN_CONTAINMENT');
   });
 
+  it('D3. wording that differs (5–7 vs 5/7) nominates the existing identity, never auto-asserts it', () => {
+    const catalog: IdentityCatalogCandidate = {
+      id: 'cat-batu-pecah-5-7',
+      code: null,
+      name: 'Batu Pecah 5/7',
+      type: 'MATERIAL',
+      baseUnit: 'M³',
+      status: 'ACTIVE',
+    };
+    const result = run({
+      catalogCandidates: [catalog],
+      reference: {
+        rawName: 'Batu Pecah 5–7 cm (Makadam)',
+        rawCode: null,
+        rawUnit: 'm3',
+        resourceType: 'MATERIAL',
+      },
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.candidates.map((c) => c.name)).toContain('Batu Pecah 5/7');
+    expect(result.reasonCodes).not.toContain('RESOURCE_NOT_FOUND');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+  });
+
+  it('D3b. AHSP wording that is not identical still nominates the same canonical identity', () => {
+    const catalog: IdentityCatalogCandidate = {
+      id: 'cat-batu-pecah-5-7',
+      code: null,
+      name: 'Batu Pecah 5/7',
+      type: 'MATERIAL',
+      baseUnit: 'M³',
+      status: 'ACTIVE',
+    };
+    const result = run({
+      catalogCandidates: [catalog],
+      reference: {
+        rawName: 'Batu Pecah ukuran 5-7',
+        rawCode: null,
+        rawUnit: 'm3',
+        resourceType: 'MATERIAL',
+      },
+    });
+
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.candidates[0].resourceCatalogId).toBe(catalog.id);
+    expect(result.resolvedResourceCatalogId).toBeNull();
+  });
+
+  it('D3c. disjoint designations are a specification conflict, not a new identity and not a guess', () => {
+    const catalog: IdentityCatalogCandidate = {
+      id: 'cat-batu-pecah-5-7',
+      code: null,
+      name: 'Batu Pecah 5/7',
+      type: 'MATERIAL',
+      baseUnit: 'M³',
+      status: 'ACTIVE',
+    };
+    const result = run({
+      catalogCandidates: [catalog],
+      reference: {
+        rawName: 'Batu Pecah 2–3 cm',
+        rawCode: null,
+        rawUnit: 'm3',
+        resourceType: 'MATERIAL',
+      },
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toContain('SPECIFICATION_CONFLICT');
+    expect(result.reasonCodes).not.toContain('RESOURCE_NOT_FOUND');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+  });
+
   // ---------- E. MULTIPLE PLAUSIBLE ----------
   it('E. two plausible cements are both shown and neither is chosen', () => {
     const result = run({
@@ -644,6 +718,49 @@ describe('resolveResourceIdentity — authority hierarchy', () => {
     expect(result.reasonCodes).toEqual(['RESOURCE_NOT_FOUND']);
     expect(result.candidates).toHaveLength(0);
     expect(result.explanation).toContain('kode sumber');
+  });
+
+  it('H2b. a genuinely new resource is NOT_FOUND even when a similarly themed catalog row exists', () => {
+    const catalog: IdentityCatalogCandidate = {
+      id: 'cat-batu-pecah-5-7',
+      code: null,
+      name: 'Batu Pecah 5/7',
+      type: 'MATERIAL',
+      baseUnit: 'M³',
+      status: 'ACTIVE',
+    };
+    const result = run({
+      catalogCandidates: [catalog],
+      reference: {
+        rawName: 'Geotextile Woven Grade X',
+        rawCode: null,
+        rawUnit: 'M²',
+        resourceType: 'MATERIAL',
+      },
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toEqual(['RESOURCE_NOT_FOUND']);
+    expect(result.candidates).toHaveLength(0);
+    expect(result.resolvedResourceCatalogId).toBeNull();
+  });
+
+  it('H3. absence from the current catalog is UNRESOLVED, never a closed-universe reject', () => {
+    const result = run({
+      catalogCandidates: [],
+      reference: {
+        rawName: 'Geotextile Woven Grade X',
+        rawCode: null,
+        rawUnit: 'M²',
+        resourceType: 'MATERIAL',
+      },
+    });
+
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.reasonCodes).toEqual(['RESOURCE_NOT_FOUND']);
+    expect(result.candidates).toHaveLength(0);
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.authority).toBeNull();
   });
 
   // ---------- K. SOURCE CODE COLLISION ----------
