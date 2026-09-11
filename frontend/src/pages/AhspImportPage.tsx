@@ -5,7 +5,8 @@ import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import { explainAhspItemReasons } from '../utils/ahspDocumentUserCopy';
 import {
-  describeCuratableObservation,
+  groupIdenticalObservations,
+  observationOccurrenceLine,
   previewCandidateNames,
   type CuratableObservationWire,
   type PreviewResourceWire,
@@ -190,49 +191,60 @@ export function AhspImportPage() {
     }
   };
 
-  const curateExisting = async (id: string, selectedResourceCatalogId: string) => {
-    if (curationBusyId) return;
-    setCurationBusyId(id);
+  /**
+   * Record ONE human answer against every observation that asked that identical
+   * question, through the SAME per-observation endpoint as before. Each row still
+   * gets its own decision record, its own actor and its own provenance — what
+   * stops repeating is the asking, not the recording.
+   *
+   * Partial outcomes are told, never rounded up: if some rows refuse, the ones
+   * that were saved stay saved and the reader is told exactly how many were not.
+   */
+  const curateGroup = async (
+    ids: string[],
+    path: string,
+    body: Record<string, string>,
+    failureWord: string,
+  ) => {
+    if (curationBusyId || ids.length === 0) return;
+    setCurationBusyId(ids[0]);
     setCurationError(null);
+    let saved = 0;
     try {
-      const response = await apiFetch('/resource-observations/' + id + '/curate-existing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selectedResourceCatalogId }),
-      });
-      if (!response.ok) {
-        setCurationError('Keputusan belum dapat disimpan. Coba lagi.');
-        return;
+      for (const id of ids) {
+        const response = await apiFetch('/resource-observations/' + id + path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) break;
+        saved += 1;
+      }
+      if (saved < ids.length) {
+        setCurationError(
+          saved === 0
+            ? failureWord + ' Coba lagi.'
+            : saved + ' dari ' + ids.length + ' tersimpan. Sisanya belum — coba lagi.',
+        );
       }
       await loadObservations();
     } catch {
-      setCurationError('Keputusan tidak dapat dihubungi.');
+      setCurationError(
+        saved === 0
+          ? 'Keputusan tidak dapat dihubungi.'
+          : saved + ' dari ' + ids.length + ' tersimpan sebelum sambungan terputus.',
+      );
+      await loadObservations();
     } finally {
       setCurationBusyId(null);
     }
   };
 
-  const curateNew = async (id: string, unitDefinitionId: string) => {
-    if (curationBusyId) return;
-    setCurationBusyId(id);
-    setCurationError(null);
-    try {
-      const response = await apiFetch('/resource-observations/' + id + '/curate-new', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ unitDefinitionId }),
-      });
-      if (!response.ok) {
-        setCurationError('Sumber daya baru belum dapat ditetapkan. Coba lagi.');
-        return;
-      }
-      await loadObservations();
-    } catch {
-      setCurationError('Penetapan sumber daya baru tidak dapat dihubungi.');
-    } finally {
-      setCurationBusyId(null);
-    }
-  };
+  const curateExisting = (ids: string[], selectedResourceCatalogId: string) =>
+    curateGroup(ids, '/curate-existing', { selectedResourceCatalogId }, 'Keputusan belum dapat disimpan.');
+
+  const curateNew = (ids: string[], unitDefinitionId: string) =>
+    curateGroup(ids, '/curate-new', { unitDefinitionId }, 'Sumber daya baru belum dapat ditetapkan.');
 
   const createWorkspaceAhsp = async (event: FormEvent) => {
     event.preventDefault();
@@ -498,22 +510,25 @@ export function AhspImportPage() {
           </p>
           {curationError ? <p role="alert" style={{ color: RED, fontSize: 'var(--text-sm)' }}>{curationError}</p> : null}
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {observations.map((observation) => {
-              const view = describeCuratableObservation(observation);
-              const busy = curationBusyId === view.id;
+            {groupIdenticalObservations(observations).map((group) => {
+              const view = group.view;
+              const busy = curationBusyId === group.ids[0];
+              const repeated = observationOccurrenceLine(group);
               return (
                 <li key={view.id} aria-label={'Tinjau ' + view.title} style={{ marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-3)', borderBottom: HAIRLINE }}>
                   <span style={{ fontWeight: 600, color: NAVY }}>{view.title}</span>
+                  {/* Said plainly, because one click will answer for all of them. */}
+                  {repeated ? <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{repeated}</span> : null}
                   {view.candidateLine ? <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{view.candidateLine}</span> : null}
                   <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>{view.guidance}</span>
                   <div>
                     {view.candidateChoices.map((choice) => (
-                      <button key={choice.resourceCatalogId} type="button" disabled={busy} onClick={() => void curateExisting(view.id, choice.resourceCatalogId)} style={{ ...primaryButton, marginRight: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
+                      <button key={choice.resourceCatalogId} type="button" disabled={busy} onClick={() => void curateExisting(group.ids, choice.resourceCatalogId)} style={{ ...primaryButton, marginRight: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
                         Ini padanannya: {choice.name}
                       </button>
                     ))}
                     {view.canProposeNew && view.newUnitDefinitionId ? (
-                      <button type="button" disabled={busy} onClick={() => void curateNew(view.id, view.newUnitDefinitionId as string)} style={outlineButton}>
+                      <button type="button" disabled={busy} onClick={() => void curateNew(group.ids, view.newUnitDefinitionId as string)} style={outlineButton}>
                         Tetapkan sebagai sumber daya baru
                       </button>
                     ) : null}

@@ -49,8 +49,15 @@ test("curation is gated on the governed identity-decision permission", () => {
   assert.ok(importPage.includes("canCurate"));
 });
 
+// LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION named `describeCuratableObservation`
+// directly. The page now reaches it through `groupIdenticalObservations`, exported
+// from the SAME module, whose returned `view` is produced by exactly that function.
+// The law under test — candidates and copy come from the shared display module
+// rather than being hand-rolled in the page — is unchanged, and is held more
+// tightly than before: the page now takes the grouping from that module too and
+// formats nothing of its own. TEST_WEAKENING=NO.
 test("candidates and copy come from the shared display module, by name", () => {
-  assert.ok(importPage.includes("describeCuratableObservation"));
+  assert.ok(importPage.includes("groupIdenticalObservations"));
   assert.ok(importPage.includes("previewCandidateNames"));
   assert.ok(importPage.includes("Sumber daya untuk ditinjau"));
   assert.ok(importPage.includes("Ini padanannya"));
