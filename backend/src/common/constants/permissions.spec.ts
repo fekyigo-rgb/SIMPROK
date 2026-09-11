@@ -83,6 +83,16 @@ describe('Permissions Catalog', () => {
     );
   });
 
+  it('IQL-01 second-holder judging authority is governed activation only, never baseline or seeded', () => {
+    const code = PERMISSIONS.AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE;
+    expect(GOVERNED_ACTIVATION_PERMISSION_CODES).toContain(code);
+    expect(ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES).not.toContain(code);
+    expect(SEEDED_PERMISSION_CODES).not.toContain(code);
+    expect(PERMISSION_CATALOG.find((entry) => entry.code === code)?.state).toBe(
+      PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    );
+  });
+
   it("every catalog entry's declared state matches its categorization list", () => {
     const stateByCode = new Map(
       PERMISSION_CATALOG.map((entry) => [entry.code, entry.state]),

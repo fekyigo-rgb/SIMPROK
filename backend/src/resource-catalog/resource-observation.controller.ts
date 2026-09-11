@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { ResourceObservationService } from './resource-observation.service';
 
@@ -20,14 +21,20 @@ import { ResourceObservationService } from './resource-observation.service';
  * row, or confirm genuinely new). Minting still happens in the ONE admission
  * authority. Guarded by the SAME governed permission the project-AHSP identity
  * decision already uses — deciding a resource's identity is one authority,
- * whatever surface asks.
+ * whatever surface asks. The ONE exception is JUDGING a pending IQL-01
+ * candidate (list, approve, reject), which the second holder's narrower
+ * AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE also opens — never deciding rows,
+ * teaching, revoking or superseding.
  *
  * Workspace comes from the guard-verified context only, never the client.
  */
 @Controller('resource-observations')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ResourceObservationController {
-  constructor(private readonly observations: ResourceObservationService) {}
+  constructor(
+    private readonly observations: ResourceObservationService,
+    private readonly permissions: WorkspacePermissionResolverService,
+  ) {}
 
   private workspaceId(request: any): string {
     const workspaceId: string | undefined =
@@ -59,21 +66,35 @@ export class ResourceObservationController {
 
   /**
    * IQL-01 — the exact questions this workspace has governed, with their
-   * state, history and the doors open to THIS actor. Same authority as
-   * curation: deciding a resource's identity is one authority.
+   * state, history and the doors open to THIS actor. Curators and the second
+   * holder may both look; only a curator is offered REVOKE / SUPERSEDE.
    */
   @Get('questions')
-  @Permissions('AHSP_RESOURCE_IDENTITY_DECIDE')
+  @Permissions(
+    'AHSP_RESOURCE_IDENTITY_DECIDE',
+    'AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE',
+  )
   async listQuestions(@Req() request: any) {
-    return this.observations.listQuestions(
-      this.workspaceId(request),
-      this.actor(request),
+    const workspaceId = this.workspaceId(request);
+    const actorAccountId = this.actor(request);
+    // The ONE permission authority the guard itself used — never a second query.
+    const effective = await this.permissions.resolve(
+      actorAccountId,
+      workspaceId,
     );
+    return this.observations.listQuestions(workspaceId, actorAccountId, {
+      mayDecide:
+        effective?.permissions.includes('AHSP_RESOURCE_IDENTITY_DECIDE') ??
+        false,
+    });
   }
 
   /** IQL-01 — approve a pending exact-question candidate (never its own author). */
   @Post('questions/:questionKey/approve')
-  @Permissions('AHSP_RESOURCE_IDENTITY_DECIDE')
+  @Permissions(
+    'AHSP_RESOURCE_IDENTITY_DECIDE',
+    'AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE',
+  )
   async approveQuestion(
     @Req() request: any,
     @Param('questionKey') questionKey: string,
@@ -90,7 +111,10 @@ export class ResourceObservationController {
 
   /** IQL-01 — reject a pending exact-question candidate. A reason is required. */
   @Post('questions/:questionKey/reject')
-  @Permissions('AHSP_RESOURCE_IDENTITY_DECIDE')
+  @Permissions(
+    'AHSP_RESOURCE_IDENTITY_DECIDE',
+    'AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE',
+  )
   async rejectQuestion(
     @Req() request: any,
     @Param('questionKey') questionKey: string,

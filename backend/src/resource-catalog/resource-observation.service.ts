@@ -529,8 +529,16 @@ export class ResourceObservationService {
    * Every exact question this workspace has governed: its current state, its
    * full history, and — for THIS actor — the doors governance allows. A READ:
    * nothing is written, and account ids never leave the server.
+   *
+   * `authority.mayDecide` is whether the actor holds full identity curation.
+   * A second holder who may only judge sees APPROVE / REJECT for a pending
+   * candidate, and never a REVOKE or SUPERSEDE door its routes would refuse.
    */
-  async listQuestions(workspaceId: string, actorAccountId: string) {
+  async listQuestions(
+    workspaceId: string,
+    actorAccountId: string,
+    authority: { mayDecide: boolean },
+  ) {
     const rows = await this.prisma.resourceIdentityQuestionDecision.findMany({
       where: { workspaceId },
       orderBy: [{ questionKey: 'asc' }, { generation: 'asc' }],
@@ -592,8 +600,9 @@ export class ResourceObservationService {
         const mayApprove =
           state.kind === 'PENDING' && authoredBy !== actorAccountId;
         const mayReject = state.kind === 'PENDING';
-        const mayRevoke = state.kind === 'APPROVED';
+        const mayRevoke = authority.mayDecide && state.kind === 'APPROVED';
         const maySupersede =
+          authority.mayDecide &&
           label === 'EFFECTIVE' &&
           verdict.status !== 'RESOLVED' &&
           isIdenticalQuestionDecidable(verdict);

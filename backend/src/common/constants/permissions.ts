@@ -104,6 +104,27 @@ export const PERMISSIONS = {
    * role is introduced — this composes with the existing guard stack.
    */
   AHSP_RESOURCE_IDENTITY_DECIDE: 'AHSP_RESOURCE_IDENTITY_DECIDE',
+
+  /**
+   * IQL-01 — authority to JUDGE one pending exact-question learning candidate:
+   * APPROVE it (the only act that makes it effective) or REJECT it. The second
+   * holder of the TEACHER ≠ APPROVER law — nothing more.
+   *
+   * WHY NO EXISTING CODE WAS REUSED, having checked each:
+   *   AHSP_RESOURCE_IDENTITY_DECIDE is full identity curation: decide every
+   *     queue row, TEACH, REVOKE, SUPERSEDE. Granting it to a second holder
+   *     would make that holder a teacher too — far wider than judging.
+   *   BASIC_PRICE_VERIFY accepts or rejects Basic Price reviews. Reusing it
+   *     would silently turn every Basic Price verifier, in every environment,
+   *     into an AHSP identity approver — a cross-domain widening.
+   *   AHSP_APPROVE approves an AHSP DEFINITION, not what a resource IS.
+   *
+   * GOVERNED ACTIVATION, and never an ACTIVE_MEMBERSHIP baseline. No new role:
+   * it is granted to an EXISTING role (in the Owner workspace, the existing
+   * BASIC_PRICE_VERIFIER) through the existing Role -> RolePermission chain.
+   */
+  AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE:
+    'AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE',
 } as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -387,6 +408,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
       'Settle one genuinely ambiguous AHSP resource identity by selecting among the legitimate candidates the machine could not separate.',
     note: 'GHX-01. Curation authority — NEVER part of the ACTIVE_MEMBERSHIP_BASELINE. Workspace-scoped like every SIMPROK permission, which is exactly why the decision it authorizes reuses at workspace scope and never wider. It authorizes CHOOSING between bounded candidates; it can never manufacture a catalog identity, bypass tenant/type/specification law, override a machine-proven truth, or make an unproven unit canonical.',
   },
+  {
+    code: PERMISSIONS.AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE,
+    domain: PERMISSION_DOMAINS.AHSP,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Approve or reject one pending IQL-01 exact-question learning candidate taught by another account.',
+    note: 'IQL-01 second holder. Judging only: it cannot decide queue rows, TEACH, REVOKE or SUPERSEDE, and the teacher of a candidate can never approve it (TEACHER_CANNOT_APPROVE). NEVER part of the ACTIVE_MEMBERSHIP_BASELINE; granted to an existing role through a governed activation per environment.',
+  },
 ] as const;
 
 export const SEEDED_PERMISSION_CODES: readonly PermissionCode[] = [
@@ -428,6 +457,7 @@ export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,
   PERMISSIONS.BASIC_PRICE_PROMOTE_SHARED,
   PERMISSIONS.AHSP_RESOURCE_IDENTITY_DECIDE,
+  PERMISSIONS.AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE,
 ];
 
 // Permission codes granted structurally, by WorkspacePermissionResolverService

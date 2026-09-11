@@ -27,11 +27,28 @@ const app = codeOnly(readFileSync("src/App.tsx", "utf8"));
 const importPage = codeOnly(readFileSync("src/pages/AhspImportPage.tsx", "utf8"));
 const room = codeOnly(readFileSync("src/pages/AhspRoomPage.tsx", "utf8"));
 
-test("App routes /ahsp/import behind the AHSP permission, as its own door", () => {
+// LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION was permission="AHSP_VIEW" only.
+// IQL-01 SECOND HOLDER (Owner ruling): the EXISTING pending-learning queue on
+// this door must be reachable by the second holder, who may JUDGE a candidate
+// but is deliberately NOT given AHSP_VIEW — no wider authority than IQL-01
+// needs. NEW_EXPECTATION: AHSP_VIEW, or exactly the one judging code, nothing
+// else; every other section keeps its own gate (asserted in the next test).
+// TEST_WEAKENING=NO.
+test("App routes /ahsp/import behind the AHSP permission — or exactly the IQL-01 judging authority — as its own door", () => {
   assert.match(
     app,
-    /path="ahsp\/import" element=\{<PermissionRoute permission="AHSP_VIEW"><AhspImportPage \/><\/PermissionRoute>\}/,
+    /path="ahsp\/import" element=\{<PermissionRoute permission=\{\['AHSP_VIEW', 'AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE'\]\}><AhspImportPage \/><\/PermissionRoute>\}/,
   );
+});
+
+test("the second holder reaches ONLY the learning card: import, curation and create keep their own gates", () => {
+  assert.ok(importPage.includes("hasPermission('AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE')"));
+  assert.ok(importPage.includes("canSeeQuestions && shownQuestions.length > 0 ? ("));
+  assert.ok(importPage.includes("canCurate && observations.length > 0 ? ("));
+  assert.ok(importPage.includes("{canManage ? ("));
+  // No door that lands on a refusal: the list links exist only for AHSP readers.
+  assert.ok(importPage.includes('canViewAhsp ? <Link to="/ahsp"'));
+  assert.ok(importPage.includes("canViewAhsp ? ("));
 });
 
 test("the room's Import action navigates to the door — it no longer toggles an inline panel", () => {
