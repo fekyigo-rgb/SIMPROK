@@ -29,6 +29,12 @@ import {
   resolveProjectPresentationStatus,
   type RabLifecycleFactsWire,
 } from '../utils/rabLockDisplay';
+import {
+  RAB_APPROVAL_COPY,
+  rabApprovalRefusalMessage,
+  resolveRabApprovalDoor,
+  type RabApprovalGateWire,
+} from '../utils/rabApprovalDisplay';
 
 type RabStatus = 'Draft' | 'Terkunci' | 'Approved' | 'Selesai';
 type PanelMode = 'compact' | 'wide' | 'collapsed';
@@ -175,6 +181,14 @@ export function ProjectRabDoorPage() {
   const [activeSupport, setActiveSupport] = useState('Spesifikasi Teknis');
   const [addendumOpen, setAddendumOpen] = useState(false);
   const [officialActionMessage, setOfficialActionMessage] = useState('');
+  /**
+   * PAB-03 — the approval door. `approvalGate` is the SERVER's answer about
+   * this reader and this RAB; it is never inferred locally, so the screen can
+   * never offer an act the command would refuse.
+   */
+  const [approvalGate, setApprovalGate] = useState<RabApprovalGateWire | null>(null);
+  const [approvalConfirmOpen, setApprovalConfirmOpen] = useState(false);
+  const [isApproving, setIsApproving] = useState(false);
   const rabDocumentRef = useRef<HTMLDivElement>(null);
   const [rabDocumentSize, setRabDocumentSize] = useState({ width: 1180, height: 240 });
   
@@ -200,6 +214,18 @@ export function ProjectRabDoorPage() {
         // The RAB's own lifecycle, from the server policy. Project.status
         // answers a different question and must not be asked this one.
         setRabLifecycle((projData?.rabLifecycle as RabLifecycleFactsWire) ?? null);
+
+        // PAB-03 — who may approve, and whether this RAB is approvable at all.
+        // A failure here closes the door rather than opening it: an unknown
+        // gate must never render as an available act.
+        try {
+          const gateResponse = await apiFetch(`/projects/${projectId}/rab/approval`);
+          setApprovalGate(
+            gateResponse.ok ? ((await gateResponse.json()) as RabApprovalGateWire) : null,
+          );
+        } catch {
+          setApprovalGate(null);
+        }
 
         setProject({
           name: projData?.name || 'Nama proyek belum tersedia',
@@ -287,6 +313,8 @@ export function ProjectRabDoorPage() {
    * contradicted the lock chip on the very same screen.
    */
   const rabFrozen = presentation.status === 'TERKUNCI' || presentation.status === 'APPROVED';
+  /** PAB-03 — the door, derived from the SERVER's gate and nothing else. */
+  const approvalDoor = useMemo(() => resolveRabApprovalDoor(approvalGate), [approvalGate]);
   /**
    * `presentation.label` is a fact about the DOCUMENT, not about a row. Printed
    * once per row it repeated the same word twelve times and said nothing a
@@ -410,6 +438,60 @@ export function ProjectRabDoorPage() {
     setZoom(Math.min(140, Math.max(80, nextZoom)));
   };
 
+  /**
+   * PAB-03 — THE ONE HUMAN DECISION.
+   *
+   * Everything mechanical that follows — resolving the authority, finding the
+   * current Position holder, validating the tenant, creating the ACTIVE
+   * baseline and binding its lineage to this RAB — happens on the server, in
+   * one transaction. The Owner is never asked to do any of it, and never sees
+   * a second screen to "finish" the approval.
+   */
+  const handleApproveRab = async () => {
+    if (!projectId || isApproving) return;
+    setApprovalConfirmOpen(false);
+    setIsApproving(true);
+    try {
+      const response = await apiFetch(`/projects/${projectId}/rab/approve`, {
+        method: 'POST',
+      });
+      const payload = await response.json().catch(() => null);
+
+      if (response.ok && payload?.status === 'APPROVED') {
+        // Report the SERVER's truth back into the screen rather than guessing
+        // a new state: the status chip, the baseline line and the closed door
+        // all follow from these same facts.
+        setRabLifecycle((current) => ({
+          ...(current ?? {}),
+          approvedRabCount: 1,
+          lockedRabCount: 0,
+          activeBaselineCount: 1,
+        }));
+        setApprovalGate({
+          rabStatus: 'APPROVED',
+          canApprove: false,
+          blocker: 'ACTIVE_BASELINE_EXISTS',
+          activeBaselineCount: 1,
+          authorizedPositions: approvalGate?.authorizedPositions ?? [],
+        });
+        showOfficialActionMessage(RAB_APPROVAL_COPY.approvedNote);
+        return;
+      }
+
+      // A refusal is information, not an error to swallow: the RAB stays
+      // exactly as it was and the Owner is told why in their own words.
+      showOfficialActionMessage(
+        response.ok
+          ? rabApprovalRefusalMessage(payload?.reason)
+          : rabApprovalRefusalMessage(payload?.message),
+      );
+    } catch {
+      showOfficialActionMessage(RAB_APPROVAL_COPY.failed);
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
   const showOfficialActionMessage = (message: string) => {
     setOfficialActionMessage(message);
   };
@@ -517,6 +599,41 @@ export function ProjectRabDoorPage() {
               <dd style={{ margin: 0, color: '#16294B' }}>{statusMechanismCopy}</dd>
             </dl>
           ) : null}
+          {/*
+            PAB-03 — the approval door, where the status already lives.
+            Exactly three states, never a fourth: an OPEN blue action, an
+            HONEST grey sentence naming who may act instead, or nothing at
+            all when approval is not this screen's business. There is no
+            "create baseline", no "select authority", no approver picker —
+            SIMPROK already knows all of it.
+          */}
+          {approvalDoor.visible ? (
+            approvalDoor.enabled ? (
+              <button
+                type="button"
+                className="simprok-rab-button"
+                onClick={() => setApprovalConfirmOpen(true)}
+                disabled={isApproving}
+                aria-label={RAB_APPROVAL_COPY.action}
+              >
+                {isApproving ? RAB_APPROVAL_COPY.working : RAB_APPROVAL_COPY.action}
+              </button>
+            ) : (
+              <p
+                className="simprok-rab-approval-blocker"
+                role="status"
+                style={{ margin: '0.5rem 0 0', color: '#98A2B3', fontSize: 'var(--text-sm)' }}
+              >
+                {approvalDoor.message}
+                {approvalDoor.authorizedLabel ? (
+                  <>
+                    <br />
+                    <span style={{ color: '#16294B' }}>{approvalDoor.authorizedLabel}</span>
+                  </>
+                ) : null}
+              </p>
+            )
+          ) : null}
           {!archived ? (
             <button type="button" className="simprok-rab-button simprok-rab-button--gold" onClick={handleAddendumAction}>
               Ajukan Perubahan / Addendum
@@ -524,6 +641,31 @@ export function ProjectRabDoorPage() {
           ) : null}
         </aside>
       </section>
+
+      {approvalConfirmOpen ? (
+        <div
+          className="simprok-rab-official-message"
+          role="alertdialog"
+          aria-label={RAB_APPROVAL_COPY.action}
+          style={{ display: 'grid', gap: '0.5rem' }}
+        >
+          <strong style={{ color: '#16294B' }}>{RAB_APPROVAL_COPY.action}</strong>
+          <span>{RAB_APPROVAL_COPY.confirm}</span>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              type="button"
+              className="simprok-rab-button"
+              onClick={handleApproveRab}
+              disabled={isApproving}
+            >
+              {RAB_APPROVAL_COPY.confirmAccept}
+            </button>
+            <button type="button" onClick={() => setApprovalConfirmOpen(false)}>
+              {RAB_APPROVAL_COPY.confirmCancel}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {officialActionMessage ? (
         <div className="simprok-rab-official-message">
