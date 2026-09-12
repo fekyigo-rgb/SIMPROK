@@ -152,6 +152,89 @@ describe('ResourceObservationService', () => {
     expect((list[0] as any).resolvedResourceCatalogId).toBeUndefined();
   });
 
+  /**
+   * PAB-04 — THE CLASS TRAVELS WITH THE QUESTION.
+   *
+   * Real AHSP documents write an hour as "jam" for BOTH a labourer and a
+   * machine — in the Owner's own Bina Marga workbook, "Pekerja / jam" sits
+   * under TENAGA and "Dump Truck / jam" under PERALATAN, in the same file.
+   * The Unit Kernel catalogues that honestly: "jam" has two context-scoped
+   * aliases (PERSON_HOUR under LABOR, EQUIPMENT_HOUR under EQUIPMENT) and no
+   * context-free one, so asked WITHOUT a class it must refuse.
+   *
+   * The refusal was never the defect. Asking without the class was, because
+   * the class is already on the observation row.
+   */
+  it('PAB-04: asks the Unit Kernel with the observation own class, so an hour can be answered', async () => {
+    prisma.observedResource.findMany.mockResolvedValue([
+      { ...OBSERVATION, rawUnit: 'jam', resourceType: 'EQUIPMENT' },
+    ]);
+    unitKernel.resolve.mockResolvedValue({
+      status: 'RESOLVED',
+      sourceUnitDefinition: { id: 'unit-equipment-hour', code: 'EQUIPMENT_HOUR' },
+    });
+
+    const list = await service.listOpenForCuration('ws-1');
+
+    expect(unitKernel.resolve).toHaveBeenCalledWith(
+      'jam',
+      'jam',
+      undefined,
+      'EQUIPMENT',
+    );
+    expect(list[0].suggestedUnitDefinitionId).toBe('unit-equipment-hour');
+  });
+
+  it('PAB-04: the same spelling under a different class is asked as a different question', async () => {
+    prisma.observedResource.findMany.mockResolvedValue([
+      { ...OBSERVATION, rawUnit: 'jam', resourceType: 'LABOR' },
+    ]);
+    unitKernel.resolve.mockResolvedValue({
+      status: 'RESOLVED',
+      sourceUnitDefinition: { id: 'unit-person-hour', code: 'PERSON_HOUR' },
+    });
+
+    const list = await service.listOpenForCuration('ws-1');
+
+    expect(unitKernel.resolve).toHaveBeenCalledWith('jam', 'jam', undefined, 'LABOR');
+    expect(list[0].suggestedUnitDefinitionId).toBe('unit-person-hour');
+  });
+
+  /**
+   * FAIL-CLOSED IS PRESERVED. Supplying context is not the same as forcing an
+   * answer: when the kernel still cannot prove the unit, the suggestion stays
+   * null. Nothing here invents a unit, and nothing downgrades the kernel's
+   * verdict.
+   */
+  it('PAB-04: a unit the kernel still cannot prove yields no suggestion', async () => {
+    prisma.observedResource.findMany.mockResolvedValue([
+      { ...OBSERVATION, rawUnit: 'Ls', resourceType: 'EQUIPMENT' },
+    ]);
+    unitKernel.resolve.mockResolvedValue({
+      status: 'NEEDS_REVIEW',
+      sourceUnitDefinition: null,
+    });
+
+    const list = await service.listOpenForCuration('ws-1');
+
+    expect(list[0].suggestedUnitDefinitionId).toBeNull();
+  });
+
+  /**
+   * NO CLASS, NO CONTEXT — never a guessed one. An unrecognised class must
+   * yield undefined so a context-scoped alias stays ineligible, exactly as the
+   * shared mapper's contract promises.
+   */
+  it('PAB-04: an unrecognised class supplies no context rather than a default', async () => {
+    prisma.observedResource.findMany.mockResolvedValue([
+      { ...OBSERVATION, rawUnit: 'jam', resourceType: 'SOMETHING_ELSE' },
+    ]);
+
+    await service.listOpenForCuration('ws-1');
+
+    expect(unitKernel.resolve).toHaveBeenCalledWith('jam', 'jam', undefined, undefined);
+  });
+
   // D — a human maps the observation to an existing canonical resource.
   it('D: curateExisting records the chosen existing catalog id, minting nothing', async () => {
     const updated = await service.curateExisting({
@@ -193,7 +276,11 @@ describe('ResourceObservationService', () => {
       actorAccountId: 'acct-1',
       reason: 'genuinely new',
     });
-    expect(unitKernel.resolve).toHaveBeenCalledWith('M3', 'M3');
+    // PAB-04: the admission proof now carries the observation's own class,
+    // like every other unit question on this path. Behaviour is unchanged for
+    // M3 — a canonical code with a context-free self-alias resolves either
+    // way — but the question is no longer asked with less than SIMPROK knows.
+    expect(unitKernel.resolve).toHaveBeenCalledWith('M3', 'M3', undefined, 'MATERIAL');
     expect(admission.admitObservedResource).toHaveBeenCalledTimes(1);
     const admitArgs = admission.admitObservedResource.mock.calls[0][1];
     expect(admitArgs).toMatchObject({

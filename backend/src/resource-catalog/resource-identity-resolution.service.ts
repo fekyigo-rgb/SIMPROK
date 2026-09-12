@@ -21,10 +21,7 @@ import {
   isSameIdenticalQuestion,
 } from './identical-question-key';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
-import {
-  UNIT_ALIAS_CONTEXT,
-  UnitAliasContext,
-} from '../unit-kernel/unit-kernel.contracts';
+import { trustedUnitContext } from '../unit-kernel/unit-kernel.contracts';
 
 /**
  * Everything the identity kernel is allowed to see, loaded ONCE for a whole
@@ -180,20 +177,10 @@ type UnitEvidenceClient = Pick<Prisma.TransactionClient, 'unitAlias'>;
 export const RESOURCE_IDENTITY_POLICY_VERSION =
   'RM03D2_RESOURCE_IDENTITY_EVIDENCE_V2';
 
-/**
- * The only unit context this service will ever supply: the resource's own
- * governed class. Never the raw name, never the candidate's name, never a
- * guess — UNIT_ALIAS_CONTEXT's own contract says context must come from a
- * classification the system already holds. An unrecognised class yields no
- * context at all, which is fail-closed: a context-scoped alias then stays
- * ineligible rather than defaulting to whichever row is found first.
- */
-function trustedUnitContext(resourceType: string): UnitAliasContext | undefined {
-  const upper = resourceType.trim().toUpperCase();
-  return upper in UNIT_ALIAS_CONTEXT
-    ? UNIT_ALIAS_CONTEXT[upper as keyof typeof UNIT_ALIAS_CONTEXT]
-    : undefined;
-}
+// The only unit context this service will ever supply is the resource's own
+// governed class, and the mapping now has ONE home — the module that owns the
+// vocabulary. The local copy this file used to carry is gone; the behaviour it
+// described is unchanged and is documented on the shared function.
 
 /**
  * RM-03D1 — the ONE place that gathers resource-identity evidence and asks the
