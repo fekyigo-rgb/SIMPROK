@@ -618,7 +618,16 @@ export function AhspImportPage() {
                   <span style={{ fontWeight: 600, color: NAVY }}>{view.title}</span>
                   {/* Said plainly, because one click will answer for all of them. */}
                   {repeated ? <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{repeated}</span> : null}
+                  {/* WHAT SIMPROK UNDERSTOOD, FIRST. A row can be fully
+                      understood — class, unit, source code — and still not be
+                      identified. Saying so before asking anything is what stops
+                      the screen reading as "which one do you think this is?". */}
+                  <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{view.understanding}</span>
                   {view.candidateLine ? <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{view.candidateLine}</span> : null}
+                  {/* Nominations too weak to act on are SHOWN and never offered:
+                      hiding them would make SIMPROK look like it had not looked,
+                      offering them would make a shared word look like an answer. */}
+                  {view.weakPossibilityLine ? <span style={{ display: 'block', color: ABU, fontSize: 'var(--text-sm)' }}>{view.weakPossibilityLine}</span> : null}
                   {learningLine ? (
                     <span style={{ display: 'block', color: members[0]?.identicalQuestion?.state === 'PENDING' ? EMAS : ABU, fontSize: 'var(--text-sm)' }}>{learningLine}</span>
                   ) : null}
@@ -635,9 +644,19 @@ export function AhspImportPage() {
                     </label>
                   ) : null}
                   <div>
+                    {/* The label asks the reader to CONFIRM what SIMPROK found,
+                        and never asserts the match on SIMPROK's behalf. Only
+                        candidates the kernel backed with evidence it can name
+                        reach this list at all; a shared-word nomination is not
+                        rendered as a button anywhere. */}
                     {view.candidateChoices.map((choice) => (
                       <button key={choice.resourceCatalogId} type="button" disabled={busy} onClick={() => void curateExisting(group.ids, choice.resourceCatalogId, remember)} style={{ ...primaryButton, marginRight: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
-                        Ini padanannya: {choice.name}
+                        Benar, ini sama dengan: {choice.name}
+                        {choice.unprovedFacts.length > 0 ? (
+                          <span style={{ display: 'block', fontWeight: 400, fontSize: 'var(--text-sm)' }}>
+                            Belum dinyatakan sumber: {choice.unprovedFacts.join(', ')}
+                          </span>
+                        ) : null}
                       </button>
                     ))}
                     {view.canProposeNew && view.newUnitDefinitionId ? (

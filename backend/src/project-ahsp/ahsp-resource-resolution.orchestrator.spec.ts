@@ -1,4 +1,5 @@
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { identicalQuestionKey } from '../resource-catalog/identical-question-key';
 import { AhspResourceResolutionOrchestrator } from './ahsp-resource-resolution.orchestrator';
 import { resolveResourceIdentity } from '../resource-catalog/resource-identity-resolution.kernel';
 
@@ -402,6 +403,154 @@ describe('AHSP resource resolution — canonical id consumption (real kernel)', 
     expect(resolution.reasonCodes).toContain('EXACT_RESOURCE_NAME_MATCH');
     expect(resolution.reasonCodes).not.toContain(
       'RESOURCE_CATALOG_ID_ACTIVE_AND_SCOPED',
+    );
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACG-01 CLOSURE 1 — THE OCCURRENCE PATH ASKS WITH THE FACTS THE LINE CARRIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('AHSP occurrence — source facts reach the identity question', () => {
+  /** Capture exactly what the orchestrator asks, without deciding anything. */
+  function spyOrchestrator() {
+    const seen: { references: any[]; evidenceOptions: any[] } = {
+      references: [],
+      evidenceOptions: [],
+    };
+    const identity = {
+      loadEvidence: async (
+        _tx: any,
+        _workspaceId: string,
+        _ghxIds: readonly string[],
+        options?: unknown,
+      ) => {
+        seen.evidenceOptions.push(options);
+        return { catalogCandidates: [], sourceSightings: [], reviewedMappings: [] };
+      },
+      resolve: (_evidence: any, reference: any) => {
+        seen.references.push(reference);
+        return {
+          status: 'UNRESOLVED',
+          authority: null,
+          resolvedResourceCatalogId: null,
+          candidates: [],
+          reasonCodes: ['RESOURCE_NOT_FOUND'],
+          explanation: '',
+        };
+      },
+    };
+    const orchestrator = new AhspResourceResolutionOrchestrator(
+      { usableWhere: () => ({}) } as any,
+      new UnitKernelService({} as any),
+      identity as any,
+    );
+    return { orchestrator, seen };
+  }
+
+  const tx = { basicPrice: { findMany: async () => [] } } as any;
+
+  it('sends the code the SOURCE stated, not null, when the line carries one', async () => {
+    const { orchestrator, seen } = spyOrchestrator();
+    await orchestrator.resolveVersionResources(tx, {
+      workspaceId: 'workspace-fixture',
+      projectId: 'project-fixture',
+      referenceRegionId: 'region-fixture',
+      asOf: new Date('2026-08-13T00:00:00.000Z'),
+      version: {
+        id: 'version-fixture',
+        resources: [
+          {
+            id: 'ahsp-resource-dt',
+            resourceId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+            resourceType: 'EQUIPMENT',
+            coefficient: '0.1707',
+            baseUnit: 'EQUIPMENT_HOUR',
+            rawName: 'Dump Truck',
+            rawCode: 'E.13.b',
+            rawUnit: 'Jam',
+          },
+        ],
+      },
+    } as any);
+
+    expect(seen.references).toHaveLength(1);
+    expect(seen.references[0]).toMatchObject({
+      rawName: 'Dump Truck',
+      rawCode: 'E.13.b',
+      rawUnit: 'Jam',
+      resourceType: 'EQUIPMENT',
+      // The proved catalog id still travels its own channel.
+      resourceCatalogId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+    });
+  });
+
+  it('a line with no stored source facts behaves exactly as before — nothing is invented', async () => {
+    const { orchestrator, seen } = spyOrchestrator();
+    await orchestrator.resolveVersionResources(tx, {
+      workspaceId: 'workspace-fixture',
+      projectId: 'project-fixture',
+      referenceRegionId: 'region-fixture',
+      asOf: new Date('2026-08-13T00:00:00.000Z'),
+      version: {
+        id: 'version-fixture',
+        resources: [
+          {
+            id: 'ahsp-resource-legacy',
+            resourceId: 'Pekerja',
+            resourceType: 'LABOR',
+            coefficient: '0.4',
+            baseUnit: 'OH',
+          },
+        ],
+      },
+    } as any);
+
+    expect(seen.references[0]).toMatchObject({
+      rawName: 'Pekerja',
+      rawCode: null,
+      rawUnit: 'OH',
+      resourceCatalogId: null,
+    });
+  });
+
+  it('IQL-01 is consulted with the SAME question the kernel is asked', async () => {
+    const { orchestrator, seen } = spyOrchestrator();
+    const resource = {
+      id: 'ahsp-resource-dt',
+      resourceId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+      resourceType: 'EQUIPMENT',
+      coefficient: '0.1707',
+      baseUnit: 'EQUIPMENT_HOUR',
+      rawName: 'Dump Truck',
+      rawCode: 'E.13.b',
+      rawUnit: 'Jam',
+    };
+    await orchestrator.resolveVersionResources(tx, {
+      workspaceId: 'workspace-fixture',
+      projectId: 'project-fixture',
+      referenceRegionId: 'region-fixture',
+      asOf: new Date('2026-08-13T00:00:00.000Z'),
+      version: { id: 'version-fixture', resources: [resource] },
+    } as any);
+
+    // The ledger is consulted at all...
+    expect(seen.evidenceOptions[0]).toBeDefined();
+    const keys = seen.evidenceOptions[0].identicalQuestionKeys;
+    expect(keys).toHaveLength(1);
+
+    // ...and with the byte-for-byte question the kernel was handed. A ledger
+    // consulted with a DIFFERENT question is worse than not consulting it.
+    const reference = seen.references[0];
+    expect(keys[0]).toBe(
+      identicalQuestionKey({
+        workspaceId: 'workspace-fixture',
+        resourceType: reference.resourceType,
+        rawName: reference.rawName,
+        rawCode: reference.rawCode,
+        rawUnit: reference.rawUnit,
+      }),
     );
   });
 });

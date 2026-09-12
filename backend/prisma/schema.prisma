@@ -830,6 +830,42 @@ model AHSPResource {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
+  /// ACG-01 CLOSURE 1 — THE SOURCE FACTS THIS LINE WAS BORN FROM.
+  ///
+  /// `resourceId` is ONE column carrying TWO kinds of fact: a hand-built
+  /// recipe keeps the source's own words there, while a document-canonicalised
+  /// row stores the ResourceCatalog id the import already proved. For the second
+  /// kind the source spelling, its code and its locator were simply gone — so an
+  /// accepted AHSP line could not be traced back to the document row it came
+  /// from, and the occurrence path had to ask the identity kernel with
+  /// `rawCode: null` even when the document plainly stated one.
+  ///
+  /// These columns carry those facts beside the line rather than inventing a
+  /// second provenance system: every name is exactly the one ObservedResource
+  /// and ResourceSourceIdentity already use, so ONE vocabulary describes source
+  /// provenance everywhere it is recorded.
+  ///
+  /// ALL NULLABLE, AND NULL MEANS UNKNOWN. A hand-built AHSP supplies none of
+  /// them and stays lawful; a document import supplies whatever the source
+  /// actually stated and nothing more. Nothing here is defaulted, inferred or
+  /// back-filled — an absent fact stays absent.
+  ///
+  /// NO originObservationId. ObservedResource is written only for resources the
+  /// import could NOT resolve, while an AHSPResource row exists only for a work
+  /// item whose resources ALL resolved. The two sets are disjoint by
+  /// construction, so such a column would be null for every row ever written.
+  rawName               String?
+  rawCode               String?
+  rawUnit               String?
+  sourceSha256          String? @db.VarChar(64)
+  sourceFileName        String?
+  parserContractVersion String?
+  sheetName             String?
+  sourceRowNumber       Int?
+  sourceNameCellAddress String?
+  sourceCodeCellAddress String?
+  sourceUnitCellAddress String?
+
   ahspVersion                    AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Cascade)
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
   /// GHX-01 — governed human identity decisions about THIS source fact.
@@ -837,6 +873,7 @@ model AHSPResource {
 
   @@index([ahspVersionId])
   @@index([resourceId])
+  @@index([rawCode])
   @@map("ahsp_resources")
 }
 

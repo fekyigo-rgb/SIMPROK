@@ -15,6 +15,7 @@ import {
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { isResourceCatalogIdShape } from '../resource-catalog/resource-identity-resolution.kernel';
+import { identicalQuestionKey } from '../resource-catalog/identical-question-key';
 
 /**
  * RM-03D2 advanced this from V1.
@@ -72,6 +73,44 @@ export class AhspResourceResolutionOrchestrator {
     private readonly identity: ResourceIdentityResolutionService,
   ) {}
 
+  /**
+   * ACG-01 CLOSURE 1 — THE SOURCE FACTS THIS LINE CARRIES, DERIVED ONCE.
+   *
+   * The identity question and the IQL-01 exact-question key MUST be built from
+   * the same values or the ledger is consulted with a question nobody asked.
+   * So they are derived here, once, and both callers read this.
+   *
+   * `resourceId` is one column holding two kinds of fact: a hand-built recipe
+   * keeps the source's own words there, a document-canonicalised row holds the
+   * catalog id the import proved. Since CLOSURE 1 the document row also carries
+   * its real spelling, code and unit, so the raw channel no longer has to be
+   * emptied to keep the id channel honest — each fact travels its own way.
+   *
+   * Nothing is back-filled: a line with no stored source facts (every row
+   * written before the migration, and every hand-built recipe) behaves exactly
+   * as it did before.
+   */
+  private sourceFacts(resource: any): {
+    rawName: string;
+    rawCode: string | null;
+    rawUnit: string | null;
+    resourceType: string;
+    resourceCatalogId: string | null;
+  } {
+    const canonicalCatalogId = isResourceCatalogIdShape(resource.resourceId)
+      ? resource.resourceId
+      : null;
+    return {
+      rawName:
+        resource.rawName ??
+        (canonicalCatalogId === null ? resource.resourceId : ''),
+      rawCode: resource.rawCode ?? null,
+      rawUnit: resource.rawUnit ?? resource.baseUnit,
+      resourceType: resource.resourceType,
+      resourceCatalogId: canonicalCatalogId,
+    };
+  }
+
   async resolveVersionResources(
     tx: any,
     input: ResolveVersionResourcesInput,
@@ -81,10 +120,30 @@ export class AhspResourceResolutionOrchestrator {
     // GHX-01: the version's AHSP source facts are known up front, so governed
     // human decisions for all of them are preloaded in ONE bounded query here
     // rather than one query per ambiguous row inside the loop below.
+    // IQL-01: the exact questions this version is about to ask, so an answer a
+    // human already gave and a second holder already APPROVED is consulted here
+    // instead of being asked again. The keys are built from the SAME facts the
+    // kernel is handed below (sourceFacts), because an exact-question ledger
+    // consulted with a different question is worse than not consulting it.
+    //
+    // Until CLOSURE 1 this could not work at all: the occurrence question always
+    // carried rawCode null while the import-side question carried the document's
+    // code, so the two keys could not be equal for any row that stated one.
+    const identicalQuestionKeys = version.resources.map((resource: any) => {
+      const facts = this.sourceFacts(resource);
+      return identicalQuestionKey({
+        workspaceId: input.workspaceId,
+        resourceType: facts.resourceType,
+        rawName: facts.rawName,
+        rawCode: facts.rawCode,
+        rawUnit: facts.rawUnit,
+      });
+    });
     const identityEvidence = await this.identity.loadEvidence(
       tx,
       input.workspaceId,
       version.resources.map((resource: any) => resource.id),
+      { identicalQuestionKeys },
     );
 
     const priceRows = await tx.basicPrice.findMany({
@@ -136,9 +195,8 @@ for (const resource of version.resources) {
   // Shape only. Whether that id actually exists, is ACTIVE, is reachable from
   // this workspace and states the right class is the identity authority's
   // question, and it is asked — and refused — there, never here.
-  const canonicalCatalogId = isResourceCatalogIdShape(resource.resourceId)
-    ? resource.resourceId
-    : null;
+  const facts = this.sourceFacts(resource);
+  const canonicalCatalogId = facts.resourceCatalogId;
   const identity = await this.identity.resolve(
     {
       ...identityEvidence,
@@ -149,21 +207,21 @@ for (const resource of version.resources) {
       },
     },
     {
-      // `AHSPResource.resourceId` is ONE column carrying TWO kinds of fact. A
-      // hand-built recipe keeps the source's own words there; a document-
-      // canonicalised one stores the ResourceCatalog id the import already
-      // proved — and that kind of row has no name column at all, so there is
-      // no spelling to look for. Sending the id through `rawName` asked the
-      // catalog for a resource literally NAMED "cb50aeab-…", which is why an
-      // identity SIMPROK had already established came back RESOURCE_NOT_FOUND.
+      // Each fact travels its own channel: the catalog id the import proved
+      // goes through `resourceCatalogId`, and what the DOCUMENT said goes
+      // through the raw channels. Sending the id through `rawName` used to ask
+      // the catalog for a resource literally NAMED "cb50aeab-…", which is why
+      // an identity SIMPROK had already established came back
+      // RESOURCE_NOT_FOUND.
       //
-      // Each fact now travels its own channel. Nothing else about the question
-      // changes, and a row of the first kind reaches the kernel exactly as before.
-      rawName: canonicalCatalogId === null ? resource.resourceId : '',
-      rawCode: null,
-      rawUnit: resource.baseUnit,
-      resourceType: resource.resourceType,
-      resourceCatalogId: canonicalCatalogId,
+      // ACG-01 CLOSURE 1 — the code channel is no longer forced empty. It is
+      // the code the SOURCE stated, read back from the row, and it is evidence
+      // only: the kernel compares it against codes it has SEEN BEFORE in
+      // sightings and reviewed mappings, never against ResourceCatalog.code,
+      // and every such nomination still passes the type and specification
+      // guards in note(). A shared code therefore cannot outrank a stated
+      // specification, and code equality never becomes identity.
+      ...facts,
     },
     tx,
   );

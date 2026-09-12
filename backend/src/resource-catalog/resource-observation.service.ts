@@ -291,9 +291,29 @@ export class ResourceObservationService {
           latest: evidence.identicalQuestionDecisions?.get(questionKey) ?? null,
           actorAccountId,
         });
+        // ACG-01 CLOSURE 4 — WHY, NOT JUST WHICH.
+        //
+        // The identity kernel already describes every candidate it nominates:
+        // the class it holds, the unit it is measured in, the code SIMPROK has
+        // seen for it, WHICH evidence nominated it, and which of its own claims
+        // the source never stated. Two of those nine facts used to reach the
+        // curator, so a row nominated only because it shares one five-letter
+        // token with the source name ("Tanah Biasa" / "Klem biasa") arrived
+        // looking exactly like a row a human had already bound to that code.
+        //
+        // Nothing is recomputed and nothing is re-ranked here: this is the
+        // kernel's own description, carried instead of discarded. The decision
+        // about what is strong enough to act on is made from these facts in the
+        // reader's own view-model, never by inventing a score in this seam.
         const candidates = resolution.candidates.map((candidate) => ({
           resourceCatalogId: candidate.resourceCatalogId,
           name: candidate.name,
+          code: candidate.code,
+          type: candidate.type,
+          baseUnit: candidate.baseUnit,
+          evidence: candidate.evidence,
+          specificationUnproved: candidate.specificationUnproved,
+          unprovedSpecificationFacts: candidate.unprovedSpecificationFacts,
         }));
         let suggestedUnitDefinitionId: string | null = null;
         if (observation.rawUnit) {

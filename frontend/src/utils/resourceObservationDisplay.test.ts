@@ -227,7 +227,11 @@ test("G8: grouping decides NOTHING — every candidate is still offered, none is
   ]);
   // Nothing in the group marks a winner.
   assert.equal(Object.prototype.hasOwnProperty.call(groups[0], "selected"), false);
-  assert.match(groups[0].view.guidance, /Pilih padanan/u);
+  // ACG-01 CLOSURE 4: the guidance no longer says "pilih padanan yang paling
+  // sesuai" — that asked the reader to judge a list SIMPROK had not judged. It
+  // now asks for a CONFIRMATION and still names no winner. TEST_WEAKENING=NO.
+  assert.match(groups[0].view.guidance, /membutuhkan konfirmasi Anda/u);
+  assert.ok(!/Pilih padanan/u.test(groups[0].view.guidance));
 });
 
 test("G9: an unanswerable observation still refuses to offer 'new' — fail-closed survives folding", () => {
@@ -247,4 +251,86 @@ test("G10: empty and malformed input yield nothing rather than a fabricated grou
   assert.deepEqual(groupIdenticalObservations(undefined), []);
   // An observation with no id cannot be acted on, so it is not offered as work.
   assert.deepEqual(groupIdenticalObservations([obs({ id: "" })]), []);
+});
+
+
+// ---------------- ACG-01 CLOSURE 4: evidence strength is honest ----------------
+
+test("C4-1: a nomination whose ONLY evidence is a shared word is shown, never offered", () => {
+  const view = describeCuratableObservation(
+    obs({
+      rawName: "Tanah Biasa",
+      resourceType: "MATERIAL",
+      candidates: [
+        { resourceCatalogId: "cat-klem", name: "Klem biasa", evidence: ["NAME_TOKEN_STEM_SHARED"] },
+        { resourceCatalogId: "cat-paku", name: "Paku biasa", evidence: ["NAME_TOKEN_STEM_SHARED"] },
+      ],
+    }),
+  );
+  // Not actionable...
+  assert.deepEqual(view.candidateChoices, []);
+  // ...but not hidden either.
+  assert.deepEqual(view.weakPossibilities, ["Klem biasa", "Paku biasa"]);
+  assert.match(view.weakPossibilityLine ?? "", /belum cukup kuat untuk dipilih/u);
+  assert.match(view.guidance, /Belum ditemukan padanan yang dapat dibuktikan/u);
+});
+
+test("C4-2: evidence SIMPROK can name makes a candidate confirmable", () => {
+  const view = describeCuratableObservation(
+    obs({
+      rawName: "Dump Truck",
+      resourceType: "EQUIPMENT",
+      candidates: [
+        { resourceCatalogId: "cat-dt", name: "Dump Truck 3-4 m3", evidence: ["SOURCE_CODE_MATCH"] },
+        { resourceCatalogId: "cat-wt", name: "Water Tank Truck", evidence: ["NAME_TOKEN_STEM_SHARED"] },
+      ],
+    }),
+  );
+  assert.deepEqual(view.candidateChoices.map((c) => c.name), ["Dump Truck 3-4 m3"]);
+  assert.deepEqual(view.weakPossibilities, ["Water Tank Truck"]);
+  assert.match(view.guidance, /membutuhkan konfirmasi Anda/u);
+});
+
+test("C4-3: a candidate with no evidence list is the kernel's own finding, and stays confirmable", () => {
+  const view = describeCuratableObservation(
+    obs({ candidates: [{ resourceCatalogId: "cat-a", name: "Semen Portland" }] }),
+  );
+  assert.deepEqual(view.candidateChoices.map((c) => c.name), ["Semen Portland"]);
+  assert.deepEqual(view.weakPossibilities, []);
+});
+
+test("C4-4: what the catalogue claims but the source never stated is named, not hidden", () => {
+  const view = describeCuratableObservation(
+    obs({
+      rawName: "Pipa porous",
+      candidates: [
+        {
+          resourceCatalogId: "cat-p",
+          name: "Pipa porous 6 inch",
+          evidence: ["NAME_TOKEN_CONTAINMENT"],
+          specificationUnproved: true,
+          unprovedSpecificationFacts: ["6"],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(view.candidateChoices[0].unprovedFacts, ["6"]);
+});
+
+test("C4-5: SIMPROK states what it understood before it asks anything", () => {
+  const understood = describeCuratableObservation(
+    obs({ rawName: "Wheel Loader", rawUnit: "Jam", rawCode: "E15", resourceType: "EQUIPMENT" }),
+  );
+  assert.match(understood.understanding, /peralatan/u);
+  assert.match(understood.understanding, /Jam/u);
+  assert.match(understood.understanding, /E15/u);
+  // No internal vocabulary reaches the reader.
+  for (const word of ["EQUIPMENT", "UNRESOLVED", "IQL", "catalog", "kernel"]) {
+    assert.ok(!understood.understanding.includes(word), word);
+  }
+
+  const blind = describeCuratableObservation(
+    obs({ rawName: "?", rawUnit: null, rawCode: null, resourceType: null }),
+  );
+  assert.match(blind.understanding, /Data sumber belum cukup/u);
 });
