@@ -246,6 +246,18 @@ export class AhspDocumentCanonicalizationService {
           methodName: item.methodName.raw,
           methodType: AHSP_PARENT_IDENTITY_FILLER.methodType,
           locationType: AHSP_PARENT_IDENTITY_FILLER.locationType,
+          // ACG-01 CLOSURE 2 — the source's own item code, recorded as the code
+          // it is. It already travels in `workType` because that is the column
+          // AHSP identity is keyed on, but a reader asking "what is this item's
+          // code?" had no column to read and no way to tell a code from a work
+          // type. Additive and evidential: identity is untouched, and nothing
+          // downstream treats this as a canonical key.
+          //
+          // Bidang / Divisi / Jenis Pekerjaan stay NULL here on purpose. The
+          // parser contract carries no such fact, so supplying one would mean
+          // inferring it from a document heading — context invented rather than
+          // read. See the closure report for the exact narrow blocker.
+          code: item.workType.raw,
           userId,
         });
         const version = await this.versionService.createVersion(parent.id, {
@@ -255,11 +267,26 @@ export class AhspDocumentCanonicalizationService {
           regulationReference:
             item.regulationReference?.raw ??
             knowledge.document.regulationReference?.raw,
+          // CLOSURE 1 — what the document actually said about this line, kept
+          // beside the identity the import proved. `resourceId` still carries
+          // the catalog id exactly as before; these columns are what makes that
+          // id traceable back to the row it was read from.
           resources: item.resources.map((resource) => ({
             resourceId: resource.resolvedResourceCatalogId!,
             resourceType: resource.group!,
             coefficient: resource.coefficient!,
             baseUnit: resource.resolvedBaseUnit ?? resource.rawUnit!,
+            rawName: resource.rawName,
+            rawCode: resource.rawCode,
+            rawUnit: resource.rawUnit,
+            sourceSha256: knowledge.source.contentDigestSha256,
+            sourceFileName: knowledge.source.fileName,
+            parserContractVersion: knowledge.source.readerContractVersion,
+            sheetName: resource.nameEvidence?.sheetName ?? null,
+            sourceRowNumber: resource.nameEvidence?.rowNumber ?? null,
+            sourceNameCellAddress: resource.nameEvidence?.locator ?? null,
+            sourceCodeCellAddress: resource.codeEvidence?.locator ?? null,
+            sourceUnitCellAddress: resource.unitEvidence?.locator ?? null,
           })),
         });
         written.push({

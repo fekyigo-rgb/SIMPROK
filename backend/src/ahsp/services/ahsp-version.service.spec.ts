@@ -152,6 +152,21 @@ describe('AhspVersionService', () => {
               resourceType: resource.resourceType,
               coefficient: resource.coefficient,
               baseUnit: resource.baseUnit,
+              // ACG-01 CLOSURE 1 — a hand-built recipe states no source facts,
+              // and each one is written as an explicit NULL. Never omitted and
+              // never borrowed from another column: NULL here means "the source
+              // did not say", which is exactly true of a recipe typed by hand.
+              rawName: null,
+              rawCode: null,
+              rawUnit: null,
+              sourceSha256: null,
+              sourceFileName: null,
+              parserContractVersion: null,
+              sheetName: null,
+              sourceRowNumber: null,
+              sourceNameCellAddress: null,
+              sourceCodeCellAddress: null,
+              sourceUnitCellAddress: null,
             },
           ],
         },

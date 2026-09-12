@@ -4,7 +4,29 @@ import { AhspAuditService } from './ahsp-audit.service';
 import { AhspVersionStatus, Prisma } from '@prisma/client';
 import { UnitKernelService } from '../../unit-kernel/unit-kernel.service';
 
-export interface CreateAhspResourceInput {
+/**
+ * ACG-01 CLOSURE 1 — the source facts a resource line was born from.
+ *
+ * Every field is optional and every one means "the source stated this". A
+ * hand-built recipe supplies none of them and is unchanged; a document import
+ * supplies exactly what its parser read and nothing more. Nothing here is ever
+ * derived from another field.
+ */
+export interface AhspResourceSourceProvenance {
+  rawName?: string | null;
+  rawCode?: string | null;
+  rawUnit?: string | null;
+  sourceSha256?: string | null;
+  sourceFileName?: string | null;
+  parserContractVersion?: string | null;
+  sheetName?: string | null;
+  sourceRowNumber?: number | null;
+  sourceNameCellAddress?: string | null;
+  sourceCodeCellAddress?: string | null;
+  sourceUnitCellAddress?: string | null;
+}
+
+export interface CreateAhspResourceInput extends AhspResourceSourceProvenance {
   resourceId: string;
   resourceType: string;
   coefficient: number;
@@ -77,11 +99,26 @@ export class AhspVersionService {
           outputUnit: data.outputUnit,
           outputUnitDefinitionId,
           resources: {
+            // CLOSURE 1 — the source facts travel WITH the line. `?? null` and
+            // never a fallback to another column: an absent code is absent, not
+            // the name, and not an empty string. The database CHECK refuses a
+            // locator that cannot name the document it came from.
             create: data.resources.map(r => ({
               resourceId: r.resourceId,
               resourceType: r.resourceType,
               coefficient: r.coefficient,
               baseUnit: r.baseUnit,
+              rawName: r.rawName ?? null,
+              rawCode: r.rawCode ?? null,
+              rawUnit: r.rawUnit ?? null,
+              sourceSha256: r.sourceSha256 ?? null,
+              sourceFileName: r.sourceFileName ?? null,
+              parserContractVersion: r.parserContractVersion ?? null,
+              sheetName: r.sheetName ?? null,
+              sourceRowNumber: r.sourceRowNumber ?? null,
+              sourceNameCellAddress: r.sourceNameCellAddress ?? null,
+              sourceCodeCellAddress: r.sourceCodeCellAddress ?? null,
+              sourceUnitCellAddress: r.sourceUnitCellAddress ?? null,
             })),
           },
         },

@@ -104,6 +104,57 @@ describe('AhspDocumentCanonicalizationService', () => {
     );
   });
 
+  /**
+   * ACG-01 CLOSURE 1 — WHAT THE DOCUMENT SAID SURVIVES THE WRITE.
+   *
+   * Before this closure an accepted line kept only the catalog id the import
+   * had proved, so the spelling, the code and the cell it was read from were
+   * gone the moment the row was written — and the occurrence path had to ask
+   * the identity kernel with rawCode null even for a document that stated one.
+   */
+  it('CLOSURE 1: an accepted resource keeps the source facts it was born from', async () => {
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    await service.commit(envelope, 'user-1');
+
+    const written = versionService.createVersion.mock.calls[0][1].resources[0];
+    // The identity the import proved is unchanged...
+    expect(written.resourceId).toBe('catalog-pekerja');
+    // ...and now travels beside what the document actually said.
+    expect(written.rawName).toBe('Pekerja');
+    expect(written.rawUnit).toBe('OH');
+    expect(written.sourceSha256).toEqual(expect.any(String));
+    expect(written.sourceFileName).toEqual(expect.any(String));
+    expect(written.parserContractVersion).toEqual(expect.any(String));
+    expect(written.sheetName).toEqual(expect.any(String));
+    expect(typeof written.sourceRowNumber).toBe('number');
+    expect(written.sourceNameCellAddress).toEqual(expect.any(String));
+  });
+
+  /**
+   * CLOSURE 2 — the source's own item code is recorded AS a code.
+   *
+   * It already travelled in `workType` because that is what AHSP identity is
+   * keyed on, but no column said "this is the item's code", so no reader could
+   * tell a code from a work type. Identity is untouched; this is evidence.
+   */
+  it('CLOSURE 2: the item code the source stated is recorded on the AHSP', async () => {
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    await service.commit(envelope, 'user-1');
+
+    const created = ahspService.create.mock.calls[0][0];
+    expect(created.code).toBe('1.7.7.1.1.b (a)');
+    // Identity keys are unchanged — the code is additive, never a new key.
+    expect(created.workType).toBe('1.7.7.1.1.b (a)');
+    expect(created.methodName).toBe(
+      'Penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3',
+    );
+    // Context SIMPROK cannot read from this source stays absent rather than
+    // being inferred from a heading.
+    expect(created.fieldCategory ?? null).toBeNull();
+    expect(created.subCategory ?? null).toBeNull();
+    expect(created.classification ?? null).toBeNull();
+  });
+
   it('does not write when resource identity is unresolved', async () => {
     identity.resolve.mockResolvedValue({
       status: 'NEEDS_REVIEW',

@@ -60,8 +60,45 @@ test("candidates and copy come from the shared display module, by name", () => {
   assert.ok(importPage.includes("groupIdenticalObservations"));
   assert.ok(importPage.includes("previewCandidateNames"));
   assert.ok(importPage.includes("Sumber daya untuk ditinjau"));
-  assert.ok(importPage.includes("Ini padanannya"));
   assert.ok(importPage.includes("Tetapkan sebagai sumber daya baru"));
+});
+
+/**
+ * ACG-01 CLOSURE 4 — THE LABEL CHANGED, AND THIS RECORDS WHY.
+ *
+ * This suite used to assert the page contained "Ini padanannya". That label was
+ * printed on EVERY nominated row, including one nominated for no reason beyond
+ * sharing a single five-letter word with the source name — "Tanah Biasa" beside
+ * "Klem biasa", "Dump Truck" beside "Water Tank Truck". SIMPROK was declaring an
+ * equivalence it had never proved, on its own behalf, and the reader was left to
+ * referee a list the machine had not refereed.
+ *
+ * The page now CONFIRMS rather than declares, and a shared-word nomination is
+ * not rendered as a button at all. The law this file protects — that copy and
+ * candidates come from the shared display module and the page formats nothing of
+ * its own — is unchanged and is asserted above. TEST_WEAKENING=NO.
+ */
+test("SIMPROK asks for confirmation and never declares a match on its own behalf", () => {
+  assert.ok(
+    !importPage.includes("Ini padanannya"),
+    "the page must not assert an equivalence SIMPROK has not proved",
+  );
+  assert.ok(importPage.includes("Benar, ini sama dengan"));
+});
+
+test("a nomination too weak to act on is shown but never actionable", () => {
+  // It is rendered as a sentence...
+  assert.ok(importPage.includes("view.weakPossibilityLine"));
+  // ...and only confirmable candidates are ever turned into buttons.
+  assert.ok(importPage.includes("view.candidateChoices.map"));
+  assert.ok(
+    !importPage.includes("view.weakPossibilities.map"),
+    "weak possibilities must never become clickable choices",
+  );
+});
+
+test("what SIMPROK understood is stated before anything is asked of the reader", () => {
+  assert.ok(importPage.includes("view.understanding"));
 });
 
 test("curate-existing carries a catalogue id, curate-new carries a proven unit", () => {

@@ -8,11 +8,55 @@
  * reason string, or UUID reach the reader.
  */
 
-/** One candidate the identity authority nominated: a name plus its catalogue id. */
+/**
+ * One candidate the identity authority nominated, described the way the kernel
+ * described it. `evidence` is WHY it was nominated — the kernel's own reason
+ * codes, never a score computed here.
+ */
 export interface ObservationCandidateWire {
   resourceCatalogId: string;
   name: string;
+  code?: string | null;
+  type?: string | null;
+  baseUnit?: string | null;
+  evidence?: readonly string[] | null;
+  /** The candidate claims something the source never stated. */
+  specificationUnproved?: boolean | null;
+  /** Exactly which claims are unsupported — a diameter, a grade, a finish. */
+  unprovedSpecificationFacts?: readonly string[] | null;
 }
+
+/**
+ * EVIDENCE STRENGTH, READ FROM THE KERNEL'S OWN REASONS.
+ *
+ * CONFIRMABLE — SIMPROK has seen this exact fact bound to this catalogue row
+ *   before, or a person already decided it: a code it has recorded, a reviewed
+ *   mapping, a previous sighting of the same name, or the source name fully
+ *   containing the candidate's words.
+ *
+ * WEAK — the ONLY reason is that the two names happen to share one long word.
+ *   "Tanah Biasa" and "Klem biasa" share "biasa"; "Dump Truck" and "Water Tank
+ *   Truck" share "truck". That is a reason to look, never a reason to choose,
+ *   so it is shown and is deliberately NOT actionable.
+ */
+const CONFIRMABLE_EVIDENCE = [
+  'SOURCE_CODE_MATCH',
+  'REVIEWED_MAPPING_CODE_MATCH',
+  'REVIEWED_MAPPING_NAME_MATCH',
+  'SOURCE_SIGHTING_NAME_MATCH',
+  'NAME_TOKEN_CONTAINMENT',
+];
+
+export const isConfirmableCandidate = (
+  candidate: ObservationCandidateWire,
+): boolean => {
+  const evidence = candidate.evidence ?? [];
+  // No evidence list at all means the kernel handed this row over as its own
+  // single finding (an exact or representation-tie candidate), not as a token
+  // guess — those are confirmable. An EMPTY list is the same fact.
+  if (evidence.length === 0) return true;
+  return evidence.some((kind) => CONFIRMABLE_EVIDENCE.includes(kind));
+};
 
 /** An open observation, enriched by GET /resource-observations for curation. */
 export interface CuratableObservationWire {
@@ -45,22 +89,43 @@ export interface IdenticalQuestionWire {
 export interface ObservationCandidateChoice {
   resourceCatalogId: string;
   name: string;
+  /** What the catalogue row claims that the source never stated, if anything. */
+  unprovedFacts: readonly string[];
 }
 
 export interface ObservationView {
   id: string;
   /** rawName, with the unit as written appended — what the reader recognises. */
   title: string;
-  /** Candidate NAMES only, in order, de-duplicated. Never ids. */
+  /**
+   * Candidates a person may actually act on. A row nominated only because it
+   * shares a word with the source name never appears here.
+   */
   candidateChoices: ObservationCandidateChoice[];
-  /** One human sentence naming the candidates, or null when there are none. */
+  /**
+   * Nominations too weak to act on, kept VISIBLE so SIMPROK never hides what it
+   * looked at — but never offered as an answer.
+   */
+  weakPossibilities: string[];
+  /** One human sentence naming the actionable candidates, or null when none. */
   candidateLine: string | null;
+  /** One sentence for the weak ones, or null when there are none. */
+  weakPossibilityLine: string | null;
+  /** What SIMPROK understood about the row, before any identity question. */
+  understanding: string;
   /** True when the Unit Kernel proved a unit, so "genuinely new" can be offered. */
   canProposeNew: boolean;
   newUnitDefinitionId: string | null;
   /** What the curator should do, in plain language. */
   guidance: string;
 }
+
+/** The source's own class, in the reader's words. Never an internal enum. */
+const CLASS_WORD: Record<string, string> = {
+  LABOR: 'tenaga kerja',
+  MATERIAL: 'bahan',
+  EQUIPMENT: 'peralatan',
+};
 
 const trimmedName = (name: string): string => name.trim();
 
@@ -74,12 +139,21 @@ export const describeCuratableObservation = (
 ): ObservationView => {
   const seen = new Set<string>();
   const candidateChoices: ObservationCandidateChoice[] = [];
+  const weakPossibilities: string[] = [];
   for (const candidate of observation.candidates ?? []) {
     const name = trimmedName(candidate?.name ?? '');
     if (name === '' || !candidate?.resourceCatalogId) continue;
     if (seen.has(name)) continue;
     seen.add(name);
-    candidateChoices.push({ resourceCatalogId: candidate.resourceCatalogId, name });
+    if (isConfirmableCandidate(candidate)) {
+      candidateChoices.push({
+        resourceCatalogId: candidate.resourceCatalogId,
+        name,
+        unprovedFacts: candidate.unprovedSpecificationFacts ?? [],
+      });
+    } else {
+      weakPossibilities.push(name);
+    }
   }
 
   const names = candidateChoices.map((c) => c.name);
@@ -93,12 +167,46 @@ export const describeCuratableObservation = (
         '.'
       : null;
 
-  const guidance =
-    names.length > 0
-      ? 'Pilih padanan yang paling sesuai, atau usulkan sebagai sumber daya baru.'
-      : 'SIMPROK belum menemukan padanan yang dapat dipastikan. Anda dapat mengusulkan sumber daya ini sebagai sumber daya baru untuk ditinjau.';
+  // SHOWN, NEVER OFFERED. Hiding these would make SIMPROK look like it had not
+  // looked; offering them would make a shared word look like an answer.
+  const weakShown = weakPossibilities.slice(0, 4);
+  const weakRest = weakPossibilities.length - weakShown.length;
+  const weakPossibilityLine =
+    weakPossibilities.length > 0
+      ? 'Beberapa kemungkinan ditemukan, tetapi belum cukup kuat untuk dipilih: ' +
+        weakShown.join(', ') +
+        (weakRest > 0 ? ', dan ' + weakRest + ' lainnya' : '') +
+        '.'
+      : null;
 
   const unit = (observation.rawUnit ?? '').trim();
+  const classWord = CLASS_WORD[(observation.resourceType ?? '').trim().toUpperCase()] ?? null;
+
+  // WHAT SIMPROK UNDERSTOOD, said before anything is asked of the reader. A row
+  // can be fully understood — its class, its unit, its code — and still not be
+  // identified, and saying so is the difference between a system that explains
+  // itself and one that hands over a list.
+  const knownFacts: string[] = [];
+  if (classWord) knownFacts.push('jenis ' + classWord);
+  if (unit !== '') knownFacts.push('satuan ' + unit);
+  const code = (observation.rawCode ?? '').trim();
+  if (code !== '') knownFacts.push('kode sumber ' + code);
+  const understanding =
+    knownFacts.length > 0
+      ? 'SIMPROK memahami item ini sebagai ' + knownFacts.join(', ') + '.'
+      : 'Data sumber belum cukup untuk memastikan jenis item ini.';
+
+  // THE HUMAN IS NOT THE MATCHER. The old wording ("pilih padanan yang paling
+  // sesuai") asked the reader to judge a list SIMPROK had not judged. Each
+  // sentence below states what SIMPROK could and could not prove, and asks for
+  // a decision only where one is genuinely required.
+  const guidance =
+    names.length > 0
+      ? 'SIMPROK membutuhkan konfirmasi Anda: item ini cocok dengan data yang sudah ada, tetapi kecocokannya belum dapat dipastikan sendiri oleh SIMPROK.'
+      : weakPossibilities.length > 0
+        ? 'Belum ditemukan padanan yang dapat dibuktikan. Anda dapat mengusulkan item ini sebagai sumber daya baru untuk ditinjau.'
+        : 'SIMPROK belum menemukan padanan yang dapat dipastikan. Anda dapat mengusulkan sumber daya ini sebagai sumber daya baru untuk ditinjau.';
+
   const title =
     unit !== '' ? observation.rawName + ' (' + unit + ')' : observation.rawName;
 
@@ -106,7 +214,10 @@ export const describeCuratableObservation = (
     id: observation.id,
     title,
     candidateChoices,
+    weakPossibilities,
     candidateLine,
+    weakPossibilityLine,
+    understanding,
     canProposeNew: Boolean(observation.suggestedUnitDefinitionId),
     newUnitDefinitionId: observation.suggestedUnitDefinitionId ?? null,
     guidance,
