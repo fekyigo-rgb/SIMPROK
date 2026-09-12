@@ -33,6 +33,41 @@ export const PERMISSIONS = {
   RAB_VIEW: 'RAB_VIEW',
   RAB_DRAFT_EDIT: 'RAB_DRAFT_EDIT',
 
+  /**
+   * PAB-03 — authority to perform the human approval that turns a LOCKED RAB
+   * into the project's APPROVED plan and its ACTIVE ProjectBaseline.
+   *
+   * NOT A NEW VOCABULARY. `RAB_APPROVE` is the code canonical Product Law
+   * already names (docs/project-memory/SIMPROK_PROJECT_RAB_AUTHORITY_UNIT_LAW.md
+   * B.1, and SIMPROK_RAB_PEKERJAAN_NAVIGATION_LIFECYCLE_LAW.md B); this entry
+   * registers that declared name in the existing catalog mechanism rather
+   * than inventing one of its own.
+   *
+   * WHY NO EXISTING CODE WAS REUSED, having checked each:
+   *   RAB_DRAFT_EDIT authors the draft and performs the LOCK. Reusing it
+   *     would mean everyone who may write a RAB may also approve their own —
+   *     the exact collapse of the ceremony this code exists to keep apart,
+   *     and already rejected by Product Law B.1, which names RAB_LOCK and
+   *     RAB_APPROVE as separate meanings.
+   *   RAB_VIEW is a read.
+   *   PROJECT_CREATE creates a container; Product Law B.2 names borrowing it
+   *     for write acts as existing permission DEBT, never a precedent.
+   *   AHSP_APPROVE approves an AHSP DEFINITION in the catalog domain, not a
+   *     project's plan.
+   *
+   * PERMISSION IS NOT AUTHORITY. Holding this code is the APPLICATION gate
+   * only. The same command separately requires organizational legitimacy
+   * through the existing Position -> PositionAuthority -> Authority(code
+   * 'RAB_APPROVE') chain, checked transactionally by RabApprovalService.
+   * Neither gate can ever stand in for the other.
+   *
+   * GOVERNED ACTIVATION, and never an ACTIVE_MEMBERSHIP baseline: approving a
+   * project's plan is authority, not ordinary workspace membership. No
+   * canonical seed grants it, so every environment fail-closes (403) until a
+   * governed activation grants it deliberately.
+   */
+  RAB_APPROVE: 'RAB_APPROVE',
+
   OBSERVATORY_VIEW: 'OBSERVATORY_VIEW',
 
   // Golden Path v0 — AHSP domain
@@ -288,6 +323,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
       'Edit an authorized project RAB draft, including approved BOQ import.',
   },
   {
+    code: PERMISSIONS.RAB_APPROVE,
+    domain: PERMISSION_DOMAINS.PROJECT,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      "Perform the human approval that turns a LOCKED RAB into the project's APPROVED plan and its ACTIVE baseline.",
+    note: "PAB-03. The code is the one canonical Product Law already names (RAB_AUTHORITY_UNIT_LAW B.1) — registered here, not invented. Guard-enforced on POST /projects/:projectId/rab/approve. It is the APPLICATION gate only: the same command separately requires the existing Position -> PositionAuthority -> Authority('RAB_APPROVE') legitimacy, so permission alone can never approve a RAB. NEVER part of the ACTIVE_MEMBERSHIP_BASELINE, and granted by no canonical seed.",
+  },
+  {
     code: PERMISSIONS.OBSERVATORY_VIEW,
     domain: PERMISSION_DOMAINS.OBSERVATORY,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
@@ -452,6 +495,7 @@ export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.FIELD_PROGRESS_VERIFY,
   PERMISSIONS.FIELD_PROGRESS_ACCEPT,
   PERMISSIONS.PROJECT_SETTINGS_MANAGE,
+  PERMISSIONS.RAB_APPROVE,
   PERMISSIONS.BASIC_PRICE_VERIFY,
   PERMISSIONS.BASIC_PRICE_PUBLISH,
   PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,

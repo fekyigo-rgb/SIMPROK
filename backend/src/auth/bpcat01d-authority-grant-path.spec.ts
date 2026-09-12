@@ -194,6 +194,55 @@ describe('BP-CAT-01D authority grant path', () => {
     ]);
   });
 
+  /**
+   * PAB-03 — THE TWO GATES STAY TWO GATES.
+   *
+   * The census above proves exactly one production writer may grant an
+   * Authority to a Position. These two prove the other half of the same
+   * property: that holding an Authority is still not a permission, and that
+   * the RAB approval this milestone added cannot be reached by either gate
+   * alone.
+   */
+  it('permission resolution never derives a permission from the Authority chain', () => {
+    // THE LOAD-BEARING SEPARATION. Effective permissions are
+    // BASELINE union role-granted. A PositionAuthority row is neither, so a
+    // governed Authority grant — the one write authority-governance may
+    // perform — can never hand out a permission code as a side effect.
+    const resolver = readFileSync(
+      join(sourceRoot, 'auth', 'workspace-permission-resolver.service.ts'),
+      'utf8',
+    );
+    expect(resolver).not.toContain('positionAuthority');
+    expect(resolver).not.toContain('positionAssignment');
+    expect(resolver).not.toContain('authorityGovernanceDecision');
+  });
+
+  it('RAB approval requires BOTH a permission and a legitimate authority', () => {
+    // RAB_APPROVE the PERMISSION is the application gate, and is
+    // governed-activation only: no canonical seed grants it, and it is not in
+    // the membership baseline, so it cannot be acquired from inside a
+    // workspace. RAB_APPROVE the AUTHORITY is organizational legitimacy and is
+    // reachable only through the single governed writer censused above.
+    // Neither can stand in for the other.
+    expect(GOVERNED_ACTIVATION_PERMISSION_CODES).toContain(PERMISSIONS.RAB_APPROVE);
+    expect(ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES).not.toContain(
+      PERMISSIONS.RAB_APPROVE,
+    );
+    expect(SEEDED_PERMISSION_CODES).not.toContain(PERMISSIONS.RAB_APPROVE);
+
+    // And the approval command really does consult the authority chain rather
+    // than trusting the guard alone.
+    const approval = readFileSync(
+      join(sourceRoot, 'project', 'rab-approval.service.ts'),
+      'utf8',
+    );
+    expect(approval).toContain('requireWithinTransaction');
+    // It reads the chain; it must never write it.
+    expect(writersOf('positionAuthority')).not.toContain(
+      'project/rab-approval.service.ts',
+    );
+  });
+
   it('no canonical seed grants the promotion authority to any role', () => {
     const seed = readFileSync(
       join(sourceRoot, '..', 'prisma', 'seed-rbac-permissions.ts'),
