@@ -3,10 +3,10 @@ import { ResourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
-  UNIT_ALIAS_CONTEXT,
   UNIT_KERNEL_POLICY_VERSION,
   UNIT_RESOLUTION_STATUS,
   UnitAliasContext,
+  trustedUnitContext,
 } from '../unit-kernel/unit-kernel.contracts';
 import {
   RESOURCE_IDENTITY_POLICY_VERSION,
@@ -274,21 +274,10 @@ export interface BasicPriceRowProposalInput {
   rawUnitText: string | null;
 }
 
-/**
- * The row's own governed class, mapped to the only unit context this seam will
- * ever supply — exactly as `ResourceIdentityResolutionService` does it. An
- * unknown class yields NO context, which is fail-closed: a context-scoped alias
- * then stays ineligible instead of defaulting to whichever row is found first.
- */
-function trustedUnitContext(
-  section: ResourceType | null,
-): UnitAliasContext | undefined {
-  if (section === null) return undefined;
-  const upper = String(section).trim().toUpperCase();
-  return upper in UNIT_ALIAS_CONTEXT
-    ? UNIT_ALIAS_CONTEXT[upper as keyof typeof UNIT_ALIAS_CONTEXT]
-    : undefined;
-}
+// This file used to carry its own copy of the class -> unit-context mapping,
+// and said so ("exactly as ResourceIdentityResolutionService does it"). Two
+// copies of one rule is one copy too many, so both now call the shared
+// function. Its null/unknown handling is identical, so nothing here changes.
 
 @Injectable()
 export class BasicPriceRowResolutionProposalService {

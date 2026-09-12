@@ -7,7 +7,10 @@ import {
 import { ObservedResourceStatus, Prisma, ResourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
-import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
+import {
+  UNIT_RESOLUTION_STATUS,
+  trustedUnitContext,
+} from '../unit-kernel/unit-kernel.contracts';
 import {
   AdmitObservedResourceInput,
   ResourceAdmissionNotExhaustedError,
@@ -294,9 +297,21 @@ export class ResourceObservationService {
         }));
         let suggestedUnitDefinitionId: string | null = null;
         if (observation.rawUnit) {
+          // THE CLASS IS ALREADY ON THE ROW, so ask the kernel the whole
+          // question. Without it, a spelling whose every meaning is
+          // context-scoped — "jam", catalogued as PERSON_HOUR under LABOR and
+          // EQUIPMENT_HOUR under EQUIPMENT — has no eligible alias at all and
+          // comes back ambiguous. The kernel was right to refuse: it was asked
+          // "what is an hour?" when the caller already knew whose hour it was.
+          //
+          // This suggestion is a SUGGESTION. It never admits a resource and
+          // never asserts identity; it only stops the curation screen
+          // dead-ending on rows the kernel could always have answered.
           const unit = await this.unitKernel.resolve(
             observation.rawUnit,
             observation.rawUnit,
+            undefined,
+            trustedUnitContext(observation.resourceType),
           );
           if (
             unit.status === UNIT_RESOLUTION_STATUS.RESOLVED &&
@@ -406,6 +421,12 @@ export class ResourceObservationService {
         const unitProof = await this.unitKernel.resolve(
           unitDefinition.code,
           unitDefinition.code,
+          undefined,
+          // Behaviour-neutral against today's vocabulary — every canonical code
+          // carries a context-free self-alias — but asked the same way as every
+          // other proof on this path, so a future canonical unit catalogued
+          // only under a context cannot silently fail this admission gate.
+          trustedUnitContext(observation.resourceType),
         );
         if (unitProof.status !== UNIT_RESOLUTION_STATUS.RESOLVED) {
           throw new ConflictException(

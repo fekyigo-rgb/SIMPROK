@@ -25,6 +25,35 @@ export const UNIT_ALIAS_CONTEXT = {
 export type UnitAliasContext =
   (typeof UNIT_ALIAS_CONTEXT)[keyof typeof UNIT_ALIAS_CONTEXT];
 
+/**
+ * Map a resource's OWN GOVERNED CLASS to the unit context it may be asked
+ * about. This is the only sanctioned way to obtain a UnitAliasContext.
+ *
+ * WHY IT LIVES HERE. Three call sites had each written this same four-line
+ * function privately (resource-identity-resolution, basic-price row proposal,
+ * and an equivalent Record in ahsp-document-canonicalization), and none of
+ * them exported it — so the next caller that needed it had to either write a
+ * fourth copy or go without context entirely. Going without is what the
+ * Resource Observation path did. The mapping belongs to the module that owns
+ * the vocabulary it maps INTO, so that there is exactly one of it.
+ *
+ * FAIL-CLOSED BY CONSTRUCTION. An unrecognised, empty or absent class yields
+ * NO context — never a default and never a guess. Supplying no context is
+ * always legal: a context-scoped alias then stays ineligible rather than
+ * resolving to whichever row happens to be found first. Widening this to read
+ * a resource NAME would break the contract above it: "Excavator" and
+ * "Pekerja" are text; the class is a fact.
+ */
+export function trustedUnitContext(
+  resourceClass: string | null | undefined,
+): UnitAliasContext | undefined {
+  if (typeof resourceClass !== 'string') return undefined;
+  const upper = resourceClass.trim().toUpperCase();
+  return upper in UNIT_ALIAS_CONTEXT
+    ? UNIT_ALIAS_CONTEXT[upper as keyof typeof UNIT_ALIAS_CONTEXT]
+    : undefined;
+}
+
 export const UNIT_REASON = {
   EXACT_UNIT_IDENTITY: 'EXACT_UNIT_IDENTITY',
   EXACT_UNIT_ALIAS_EQUIVALENCE: 'EXACT_UNIT_ALIAS_EQUIVALENCE',
