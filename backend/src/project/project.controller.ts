@@ -41,6 +41,8 @@ import { RabEditableLifecycleGuard } from './rab-editable-lifecycle.guard';
 import { RabKernelPersistenceService } from './rab-kernel-persistence.service';
 import { PersistedCalculationService } from './persisted-calculation.service';
 import { RabLockService } from './rab-lock.service';
+import { RabApprovalService } from './rab-approval.service';
+import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -55,6 +57,8 @@ export class ProjectController {
     private readonly rabKernelPersistenceService: RabKernelPersistenceService,
     private readonly persistedCalculationService: PersistedCalculationService,
     private readonly rabLockService: RabLockService,
+    private readonly rabApprovalService: RabApprovalService,
+    private readonly permissionResolver: WorkspacePermissionResolverService,
   ) {}
 
   /**
@@ -93,6 +97,93 @@ export class ProjectController {
       projectId,
       workspaceId,
       actorAccountId,
+    });
+  }
+
+  /**
+   * PAB-03 — READ. What the approval door should say to this reader.
+   *
+   * RAB_VIEW, not RAB_APPROVE: this returns no decision and performs no act,
+   * so gating it behind the approval permission would hide the governance
+   * blocker from exactly the people who need to read it — a project member
+   * seeing "no Position holds RAB approval authority in this organization
+   * yet" is how that gets configured at all.
+   */
+  @Get(':projectId/rab/approval')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.RAB_VIEW)
+  async readRabApprovalGate(
+    @Req() request: any,
+    @Param('projectId') projectId: string,
+  ) {
+    const projectAccess = request.projectAccess;
+    if (!projectAccess?.workspaceId) {
+      throw new BadRequestException('Trusted project workspace is required');
+    }
+    const actorAccountId = request.user?.id;
+    if (!actorAccountId) {
+      throw new InternalServerErrorException(
+        'Trusted account context is missing',
+      );
+    }
+    // THE one permission authority, shared with PermissionsGuard and
+    // GET /auth/capabilities — never a second RBAC query of this route's own.
+    const effective = await this.permissionResolver.resolve(
+      actorAccountId,
+      projectAccess.workspaceId,
+    );
+    if (!effective) {
+      throw new ForbiddenException('You do not have access to this workspace');
+    }
+    return this.rabApprovalService.describeApprovalGate(
+      projectId,
+      projectAccess,
+      actorAccountId,
+      effective.permissions,
+    );
+  }
+
+  /**
+   * PAB-03 — LOCKED -> APPROVED, and the ACTIVE ProjectBaseline, as one act.
+   *
+   * TWO GATES, NEITHER SUFFICIENT ALONE. RAB_APPROVE here is the APPLICATION
+   * gate. Organizational legitimacy is a separate question, answered inside
+   * the service's own transaction by the existing
+   * Position -> PositionAuthority -> Authority chain — so a user holding the
+   * permission without the configured authority is refused, and so is the
+   * configured holder without the permission.
+   *
+   * NO RabEditableLifecycleGuard, for the same reason the lock route carries
+   * none: that guard refuses whenever canEditDraft is false, which is already
+   * true of every LOCKED RAB this command exists to act on.
+   */
+  @Post(':projectId/rab/approve')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.RAB_APPROVE)
+  async approveRab(
+    @Req() request: any,
+    @Param('projectId') projectId: string,
+    @Body('justification') justification?: string,
+  ) {
+    const projectAccess = request.projectAccess;
+    if (!projectAccess?.workspaceId) {
+      throw new BadRequestException('Trusted project workspace is required');
+    }
+    // Both halves of the identity are server-derived: the workspace and the
+    // project assignment from the guard-resolved context, the actor from the
+    // verified JWT. Nothing that steers this approval comes from the body.
+    const actorAccountId = request.user?.id;
+    if (!actorAccountId) {
+      throw new InternalServerErrorException(
+        'Trusted account context is missing',
+      );
+    }
+    return this.rabApprovalService.approveLockedRab({
+      projectId,
+      workspaceId: projectAccess.workspaceId,
+      actorAccountId,
+      projectAccess,
+      justification: typeof justification === 'string' ? justification : null,
     });
   }
 
