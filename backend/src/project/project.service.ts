@@ -354,14 +354,16 @@ export class ProjectService {
 
   getReality(projectId: string) {
     void projectId;
-    // Compatibility-only read surface. Official Actual calculation eligibility
-    // is an Owner Product Gate, so this route must not select a lifecycle state,
-    // derive progress/deviation, or persist a signal before that law exists.
+    // Compatibility-only legacy read surface.
+    // Current Official Progress is owned by canonical Monitoring.
+    // This route must not derive or persist time-based deviation because the
+    // approved time-phased planning source and cut-off/as-of selection law
+    // are not yet complete for official comparison.
     return {
       available: false,
       status: 'UNAVAILABLE',
       message:
-        'Perhitungan progress dan deviasi resmi belum diaktifkan sampai Owner menetapkan kelayakan Actual untuk perhitungan resmi',
+        'Endpoint Reality lama ini tidak menghitung progress atau deviasi. Gunakan Monitoring untuk melihat Current Official Progress. Deviasi berbasis waktu belum tersedia karena sumber rencana waktu resmi dan aturan cut-off/as-of belum lengkap.',
       data: null,
     };
   }
