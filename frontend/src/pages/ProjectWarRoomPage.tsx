@@ -191,10 +191,7 @@ export function ProjectWarRoomPage() {
               </div>
               <div role="status" style={{ padding: 'var(--space-4)', backgroundColor: 'var(--simprok-surface-light)', border: '1px solid var(--simprok-engineering-blue-200)', borderRadius: 'var(--radius-sm)' }}>
                 <p style={{ margin: 0, color: 'var(--simprok-engineering-blue-900)', fontWeight: 'var(--weight-semibold)' }}>
-                  {reality?.message ?? 'Perhitungan progress dan deviasi resmi belum diaktifkan sampai Owner menetapkan kelayakan Actual untuk perhitungan resmi.'}
-                </p>
-                <p style={{ margin: 'var(--space-2) 0 0', fontSize: 'var(--text-sm)', color: 'var(--simprok-text-light)' }}>
-                  Actual lapangan yang tercatat tetap dapat ditinjau melalui Monitoring tanpa menjadikannya angka kemajuan resmi.
+                  {reality?.message ?? 'Endpoint Reality lama ini tidak menghitung progress atau deviasi. Gunakan Monitoring untuk melihat Current Official Progress. Deviasi berbasis waktu belum tersedia karena sumber rencana waktu resmi dan aturan cut-off/as-of belum lengkap.'}
                 </p>
               </div>
 

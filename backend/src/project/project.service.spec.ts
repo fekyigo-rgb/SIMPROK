@@ -1225,7 +1225,7 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
   });
 });
 
-describe('ProjectService getReality pre-MON-04 containment', () => {
+describe('ProjectService getReality legacy containment', () => {
   function createHarness() {
     const prisma = {
       progressReport: {
@@ -1279,7 +1279,7 @@ describe('ProjectService getReality pre-MON-04 containment', () => {
       available: false,
       status: 'UNAVAILABLE',
       message:
-        'Perhitungan progress dan deviasi resmi belum diaktifkan sampai Owner menetapkan kelayakan Actual untuk perhitungan resmi',
+        'Endpoint Reality lama ini tidak menghitung progress atau deviasi. Gunakan Monitoring untuk melihat Current Official Progress. Deviasi berbasis waktu belum tersedia karena sumber rencana waktu resmi dan aturan cut-off/as-of belum lengkap.',
       data: null,
     });
     expect(result).not.toHaveProperty('overallActualProgress');
