@@ -289,11 +289,18 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
       expect(row.identicalQuestion.state).toBe('NONE');
       expect(row.identicalQuestion.rememberable).toBe(true);
       expect(typeof row.identicalQuestion.decisionContextToken).toBe('string');
+      // Offered, so there is no refusal to name.
+      expect(row.identicalQuestion.notRememberableReason).toBeNull();
     }
     // No actor → nothing is offered (and the row list itself is unchanged).
     const anonymous = await openList();
     expect(
       anonymous.every((row) => row.identicalQuestion.rememberable === false),
+    ).toBe(true);
+    expect(
+      anonymous.every(
+        (row) => row.identicalQuestion.notRememberableReason === 'NO_ACTOR',
+      ),
     ).toBe(true);
   });
 
@@ -337,6 +344,7 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
     expect(pendingRows[0].identicalQuestion).toMatchObject({
       state: 'PENDING',
       rememberable: false,
+      notRememberableReason: 'CANDIDATE_PENDING',
       pendingAnswerName: 'Kerikil / Agregat',
       pendingAuthoredByYou: true,
     });
@@ -546,6 +554,207 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
     expect(ledger).toHaveLength(0);
   });
 
+  /**
+   * ACG-01.1 — ONE official line, ONE chosen row, SEVERAL catalogues.
+   *
+   * "Pipa porous diameter 6"" is the source. The 4" pipe is the row a person
+   * might choose for it; the generic "Pipa porous" is a row the kernel really
+   * does nominate for that wording; the rest are ordinary unrelated rows.
+   */
+  const PIPA_4 = {
+    ...KERIKIL,
+    id: 'cat-pipa-4',
+    name: 'Pipa porous diameter 4"',
+    baseUnit: 'M1',
+  };
+  const PIPA_GENERIC = {
+    ...KERIKIL,
+    id: 'cat-pipa',
+    name: 'Pipa porous',
+    baseUnit: 'M1',
+  };
+  const UNRELATED = [
+    {
+      ...KERIKIL,
+      id: 'cat-mandor',
+      name: 'Mandor',
+      type: 'LABOR',
+      baseUnit: 'OH',
+    },
+    { ...KERIKIL, id: 'cat-semen', name: 'Semen Portland', baseUnit: 'KG' },
+  ];
+  const pipaObservation = () =>
+    observation('obs-pipa', {
+      rawName: 'Pipa porous diameter 6"',
+      rawCode: 'M25a',
+      rawUnit: "M'",
+    });
+
+  /**
+   * ACG-01.1 — CANDIDATE REFUSED IS NOT RESOURCE REFUSED, through the REAL kernel.
+   *
+   * An official "Pipa porous diameter 6"" row meets a catalogue that holds only
+   * the 4" pipe. The kernel examines the 4" row and rules it out on the stated
+   * diameter. That row can never become this resource's identity — not even by
+   * a direct request to the plain decision door — and the 6" resource itself is
+   * untouched: still OBSERVED, still unbound, still in the queue.
+   */
+  it('ACG-01.1: a specification-conflicted row cannot be recorded, and the source resource stays open', async () => {
+    catalogs = [KERIKIL, PIPA_4];
+    observations.push(pipaObservation());
+
+    const listed = (await openList(OWNER)).find((row) => row.id === 'obs-pipa');
+    expect(listed?.identityVerdict).toEqual({
+      status: 'UNRESOLVED',
+      reasonCodes: ['SPECIFICATION_CONFLICT'],
+      exhausted: false,
+    });
+    expect(listed?.candidates.map((c) => c.resourceCatalogId)).toEqual([
+      PIPA_4.id,
+    ]);
+
+    await expect(
+      service.curateExisting({
+        workspaceId: WS,
+        observationId: 'obs-pipa',
+        selectedResourceCatalogId: PIPA_4.id,
+        actorAccountId: OWNER,
+      }),
+    ).rejects.toThrow(new ConflictException('IDENTITY_CANDIDATE_RULED_OUT'));
+
+    // No false binding was written, and the reality is still there.
+    expect(observationUpdates).toHaveLength(0);
+    expect(observations.find((o) => o.id === 'obs-pipa')).toMatchObject({
+      status: 'OBSERVED',
+      resolvedResourceCatalogId: null,
+      decidedByAccountId: null,
+    });
+    expect((await openList(OWNER)).some((row) => row.id === 'obs-pipa')).toBe(
+      true,
+    );
+
+    // The unrelated, nominated question on the same page is unaffected.
+    const nominated = await service.curateExisting({
+      workspaceId: WS,
+      observationId: 'obs-1',
+      selectedResourceCatalogId: KERIKIL.id,
+      actorAccountId: OWNER,
+    });
+    expect(nominated.status).toBe('RESOLVED_EXISTING');
+  });
+
+  /**
+   * ACG-01.1 R1 — A REFUSAL IS NOT UNDONE BY AN UNRELATED SIBLING ROW.
+   *
+   * The same official 6" line, the same chosen 4" pipe, three catalogues: the
+   * ruled-out row alone; the ruled-out row beside a generic "Pipa porous" the
+   * kernel DOES nominate; and both beside unrelated rows. What the machine says
+   * OUTWARDLY differs — once a nomination exists the answer is NEEDS_REVIEW and
+   * the 4" pipe is not mentioned at all — but the chosen row is ruled out on its
+   * own stated diameter in every one of them, so the door refuses in every one
+   * of them.
+   *
+   * ELIGIBILITY OF THE CHOSEN ROW MAY NOT DEPEND ON WHICH OTHER ROWS A
+   * WORKSPACE HAPPENS TO OWN.
+   */
+  it('ACG-01.1: a ruled-out row stays refused when the kernel nominates a sibling', async () => {
+    const shapes = [
+      { label: 'A — the ruled-out row alone', rows: [PIPA_4], listed: true },
+      {
+        label: 'B — a nominated sibling beside it',
+        rows: [PIPA_4, PIPA_GENERIC],
+        listed: false,
+      },
+      {
+        label: 'C — a nominated sibling and unrelated rows',
+        rows: [PIPA_4, PIPA_GENERIC, ...UNRELATED],
+        listed: false,
+      },
+    ];
+
+    for (const shape of shapes) {
+      observations.length = 0;
+      observations.push(pipaObservation());
+      catalogs = [...shape.rows];
+      observationUpdates.length = 0;
+      const catalogueSize = catalogs.length;
+
+      const open = (await openList(OWNER)).find((row) => row.id === 'obs-pipa');
+      expect([shape.label, open?.identityVerdict.status]).toEqual([
+        shape.label,
+        shape.listed ? 'UNRESOLVED' : 'NEEDS_REVIEW',
+      ]);
+      expect([
+        shape.label,
+        open?.candidates.some((c) => c.resourceCatalogId === PIPA_4.id) ??
+          false,
+      ]).toEqual([shape.label, shape.listed]);
+
+      await expect(
+        service.curateExisting({
+          workspaceId: WS,
+          observationId: 'obs-pipa',
+          selectedResourceCatalogId: PIPA_4.id,
+          actorAccountId: OWNER,
+        }),
+      ).rejects.toThrow(new ConflictException('IDENTITY_CANDIDATE_RULED_OUT'));
+
+      // Refused BEFORE persistence: no update was even attempted.
+      expect([shape.label, observationUpdates.length]).toEqual([
+        shape.label,
+        0,
+      ]);
+      expect(observations[0]).toMatchObject({
+        status: 'OBSERVED',
+        resolvedResourceCatalogId: null,
+        decidedByAccountId: null,
+        decidedAt: null,
+      });
+      // Nothing was minted, nothing was learned, and the reality is still here.
+      expect([shape.label, catalogs.length]).toEqual([
+        shape.label,
+        catalogueSize,
+      ]);
+      expect([shape.label, ledger.length]).toEqual([shape.label, 0]);
+      expect((await openList(OWNER)).some((row) => row.id === 'obs-pipa')).toBe(
+        true,
+      );
+    }
+  });
+
+  /**
+   * ACG-01.1 R1 — POSITIVE CONTROL: A NARROWER QUESTION IS NOT A STRICTER LAW.
+   *
+   * Same source, same catalogue that refuses the 4" pipe: the row the kernel
+   * NOMINATES is still the human's to confirm, and so is an unrelated question
+   * on the same page. Only the refused row is refused.
+   */
+  it('ACG-01.1: the nominated row is still recorded, ruled-out sibling and all', async () => {
+    catalogs = [KERIKIL, PIPA_4, PIPA_GENERIC, ...UNRELATED];
+    observations.push(pipaObservation());
+
+    const saved = await service.curateExisting({
+      workspaceId: WS,
+      observationId: 'obs-pipa',
+      selectedResourceCatalogId: PIPA_GENERIC.id,
+      actorAccountId: OWNER,
+    });
+    expect(saved).toMatchObject({
+      status: 'RESOLVED_EXISTING',
+      resolvedResourceCatalogId: PIPA_GENERIC.id,
+    });
+
+    const other = await service.curateExisting({
+      workspaceId: WS,
+      observationId: 'obs-1',
+      selectedResourceCatalogId: KERIKIL.id,
+      actorAccountId: OWNER,
+    });
+    expect(other.status).toBe('RESOLVED_EXISTING');
+    // A refusal is not learning, and neither is a plain confirmation.
+    expect(ledger).toHaveLength(0);
+  });
+
   it('another actor’s context, or another question’s, can never be spent', async () => {
     const ownersToken = await tokenFor('obs-1', OWNER);
     await expect(teach('obs-1', ownersToken, SECOND)).rejects.toThrow(
@@ -563,6 +772,15 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
     expect(
       rows.every((row) => row.identicalQuestion.rememberable === false),
     ).toBe(true);
+    // Said as what it is: the machine proved it, so there is nothing to learn.
+    expect(
+      rows.every(
+        (row) =>
+          row.identicalQuestion.notRememberableReason === 'IDENTITY_PROVEN' &&
+          row.identityVerdict.status === 'RESOLVED' &&
+          row.identityVerdict.exhausted === false,
+      ),
+    ).toBe(true);
   });
 
   it('with no signing secret the curation list still works — learning is simply not offered', async () => {
@@ -571,6 +789,13 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
     expect(rows).toHaveLength(3);
     expect(
       rows.every((row) => row.identicalQuestion.rememberable === false),
+    ).toBe(true);
+    expect(
+      rows.every(
+        (row) =>
+          row.identicalQuestion.notRememberableReason ===
+          'LEARNING_NOT_CONFIGURED',
+      ),
     ).toBe(true);
   });
 

@@ -855,6 +855,14 @@ export class AhspDocumentCanonicalizationService {
         ...resource,
         status: 'UNRESOLVED',
         identityCandidates,
+        // ACG-01.1 — FOUND IS NOT OFFERED. A resolved verdict returned above, so
+        // an UNRESOLVED verdict that still lists rows is listing what it RULED
+        // OUT. Carried as a fact beside the names, so the reader is never told a
+        // refused row is a possible match — and never that the source resource
+        // itself was refused.
+        ...(identity.status === 'UNRESOLVED'
+          ? { identityCandidatesRuledOut: true as const }
+          : {}),
         reasonCodes: [
           ...reasonCodes,
           AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,

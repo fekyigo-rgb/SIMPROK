@@ -66,6 +66,15 @@ export interface AhspResourceKnowledge {
    */
   readonly identityCandidates?: readonly string[];
   /**
+   * ACG-01.1 — true when the names above are rows the kernel RULED OUT (its
+   * verdict was UNRESOLVED: a stated specification conflict or a class
+   * mismatch). Found and examined, so still "found something" — but never a
+   * possible match, and never a judgement on this source resource, which stays
+   * accepted. Absent whenever the names were nominated (or none were found), so
+   * every other reading is byte-for-byte what it was.
+   */
+  readonly identityCandidatesRuledOut?: true;
+  /**
    * IQL-01 — the APPROVE event whose exact-question answer settled this
    * identity, when (and only when) that is how it was settled. Present so such
    * a reading is never written into the case-insensitive sighting memory, and
