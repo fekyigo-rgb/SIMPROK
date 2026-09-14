@@ -30,6 +30,14 @@ test("candidates found is not reported as nothing found", () => {
   assert.doesNotMatch(copy, /RESOURCE_CANDIDATES_FOUND/);
 });
 
+// ACG-01.1 — the same code is carried when every row found was ruled out, so the
+// sentence must be true for both: related data was found, and nothing is offered.
+test("candidates found never calls a (possibly ruled-out) row a possible match", () => {
+  const copy = explainAhspItemReasons(["RESOURCE_CANDIDATES_FOUND"]);
+  assert.doesNotMatch(copy, /kemungkinan padanan/);
+  assert.doesNotMatch(copy, /ditolak/);
+});
+
 test("an unknown component unit is named as a unit question, not as ambiguity", () => {
   assert.equal(
     explainAhspItemReasons(["UNIT_UNRESOLVED"]),

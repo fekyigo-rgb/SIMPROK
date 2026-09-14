@@ -5,8 +5,19 @@ import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import { canProposeAhsp } from '../utils/ahspProposalStatus';
 import { USULKAN_TOOLTIP } from '../utils/ahspProposalCopy';
+import { presentAhspIdentity } from '../utils/ahspIdentityDisplay';
+import {
+  NETWORK_FAILURE,
+  describeBulkDelete,
+  describeBulkPropose,
+  readApiFailure,
+  type ActionOutcome,
+  type ApiFailure,
+} from '../utils/ahspActionFeedback';
 import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
+import { ActionOutcomeNotice } from '../components/ahsp/ActionOutcomeNotice';
 import { BIDANG, JENIS_PEKERJAAN, mergeVocabulary, subkategoriForBidang } from '../constructionTaxonomy';
+import '../styles/ahsp.css';
 
 /**
  * THE standalone AHSP room — the one door the sidebar opens, in the Owner
@@ -44,14 +55,10 @@ type RoomState =
 
 const NAVY = 'var(--simprok-authority-navy-800)';
 const MUTED = 'var(--simprok-engineering-blue-500)';
-const BLUE = 'var(--simprok-trust-blue-500)';
-const RED = '#C0392B';
 const HAIRLINE = '1px solid var(--simprok-engineering-blue-100)';
 const CARD: CSSProperties = { background: '#FFFFFF', border: HAIRLINE, borderRadius: '12px', padding: 'var(--space-4)' };
 const th: CSSProperties = { padding: 'var(--space-2)', textAlign: 'left', color: MUTED, fontWeight: 600, whiteSpace: 'nowrap' };
 const td: CSSProperties = { padding: 'var(--space-2)', borderTop: HAIRLINE, verticalAlign: 'top', color: NAVY };
-const primaryButton: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', background: BLUE, color: '#FFFFFF', border: 0, borderRadius: '8px', padding: 'var(--space-2) var(--space-4)', cursor: 'pointer', fontSize: 'var(--text-sm)' };
-const outlineButton: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', background: '#FFFFFF', color: NAVY, border: HAIRLINE, borderRadius: '8px', padding: 'var(--space-2) var(--space-4)', cursor: 'pointer', fontSize: 'var(--text-sm)' };
 const controlBox: CSSProperties = { color: NAVY, padding: 'var(--space-2)', border: HAIRLINE, borderRadius: '8px', background: '#FFFFFF', width: '100%' };
 const labelStyle: CSSProperties = { display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-1)' };
 
@@ -75,8 +82,11 @@ export function AhspRoomPage() {
   const [jenis, setJenis] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(0);
-  const [selectionBusy, setSelectionBusy] = useState(false);
-  const [selectionError, setSelectionError] = useState<string | null>(null);
+  // Which bulk request is running, so each button tells the truth about itself.
+  const [selectionAction, setSelectionAction] = useState<'PROPOSE' | 'DELETE' | null>(null);
+  const selectionBusy = selectionAction !== null;
+  // What the last bulk action actually did — shown where the selection bar was.
+  const [selectionOutcome, setSelectionOutcome] = useState<ActionOutcome | null>(null);
   const [showProposeConfirm, setShowProposeConfirm] = useState(false);
 
   const loadList = async (): Promise<AhspRow[] | null> => {
@@ -130,7 +140,8 @@ export function AhspRoomPage() {
       dasar: distinct(allRows.map((r) => r.versions?.[0]?.regulationReference)),
       bidang: mergeVocabulary(BIDANG, allRows.map((r) => r.fieldCategory)),
       subkategori: mergeVocabulary(curatedSub, rowsForSub.map((r) => r.subCategory)),
-      jenis: mergeVocabulary(JENIS_PEKERJAAN, allRows.map((r) => r.workType)),
+      // A recorded source code is never offered as a Jenis Pekerjaan.
+      jenis: mergeVocabulary(JENIS_PEKERJAAN, allRows.map((r) => presentAhspIdentity(r).workType)),
     };
   }, [allRows, bidang, allCuratedSub]);
 
@@ -142,7 +153,7 @@ export function AhspRoomPage() {
       if (dasar && (row.versions?.[0]?.regulationReference ?? '') !== dasar) return false;
       if (bidang && (row.fieldCategory ?? '') !== bidang) return false;
       if (subkategori && (row.subCategory ?? '') !== subkategori) return false;
-      if (jenis && (row.workType ?? '') !== jenis) return false;
+      if (jenis && (presentAhspIdentity(row).workType ?? '') !== jenis) return false;
       if (!needle) return true;
       const hay = `${row.code ?? ''} ${row.workType ?? ''} ${row.methodName ?? ''}`.toLowerCase();
       return hay.includes(needle);
@@ -187,30 +198,74 @@ export function AhspRoomPage() {
   const selectedRows = allRows.filter((r) => selected.has(r.id));
   const proposableCount = selectedRows.filter((r) => canProposeAhsp(r)).length;
 
-  const refreshAfterMutation = async () => {
-    const rows = await loadList();
+  // After a bulk action the list is re-read, and only the rows that did NOT go
+  // through stay selected — so what is still selected is exactly what is left to do.
+  const refreshAfterMutation = async (stillSelected: ReadonlySet<string>) => {
+    const rows = await loadList().catch(() => null);
     if (rows) setState({ phase: 'READY', rows });
-    clearSelection();
+    setSelected(new Set(stillSelected));
+  };
+
+  /**
+   * Send one request per row and COUNT what the server answered. A refusal is a
+   * refusal even when the loop keeps going; nothing is rounded up to success.
+   */
+  const sendForEach = async (
+    rows: AhspRow[],
+    send: (row: AhspRow) => Promise<Response>,
+  ): Promise<{ succeeded: number; failedIds: Set<string>; failure: ApiFailure | null }> => {
+    let succeeded = 0;
+    let failure: ApiFailure | null = null;
+    const failedIds = new Set<string>();
+    for (const row of rows) {
+      try {
+        const response = await send(row);
+        if (response.ok) {
+          succeeded += 1;
+        } else {
+          failedIds.add(row.id);
+          failure = failure ?? (await readApiFailure(response));
+        }
+      } catch {
+        failedIds.add(row.id);
+        failure = failure ?? NETWORK_FAILURE;
+      }
+    }
+    return { succeeded, failedIds, failure };
+  };
+
+  const nothingProposable: ActionOutcome = {
+    kind: 'FAILURE',
+    lines: [
+      { tone: 'FAILURE', text: 'Tidak ada AHSP terpilih yang dapat diusulkan.' },
+      { tone: 'NOTE', text: 'Hanya AHSP Saya yang belum diusulkan yang dapat diusulkan ke SIMPROK. Belum ada yang dikirim.' },
+    ],
   };
 
   const bulkPropose = async () => {
     if (selectionBusy) return;
     const proposable = selectedRows.filter((r) => canProposeAhsp(r));
     if (proposable.length === 0) {
-      setSelectionError('Tidak ada AHSP terpilih yang dapat diusulkan (hanya AHSP Saya yang belum diusulkan).');
+      setSelectionOutcome(nothingProposable);
       return;
     }
-    setSelectionBusy(true);
-    setSelectionError(null);
+    setSelectionAction('PROPOSE');
+    setSelectionOutcome(null);
     try {
-      for (const row of proposable) {
-        await apiFetch('/ahsp/' + row.id + '/propose', { method: 'POST' });
-      }
-      await refreshAfterMutation();
-    } catch {
-      setSelectionError('Usulan tidak dapat dihubungi.');
+      const { succeeded, failedIds, failure } = await sendForEach(proposable, (row) =>
+        apiFetch('/ahsp/' + row.id + '/propose', { method: 'POST' }),
+      );
+      await refreshAfterMutation(failedIds);
+      setSelectionOutcome(
+        describeBulkPropose({
+          succeeded,
+          failed: failedIds.size,
+          notApplicable: selectedRows.length - proposable.length,
+          failure,
+        }),
+      );
     } finally {
-      setSelectionBusy(false);
+      setSelectionAction(null);
     }
   };
 
@@ -221,10 +276,10 @@ export function AhspRoomPage() {
 
   const openProposeConfirm = () => {
     if (proposableCount === 0) {
-      setSelectionError('Tidak ada AHSP terpilih yang dapat diusulkan (hanya AHSP Saya yang belum diusulkan).');
+      setSelectionOutcome(nothingProposable);
       return;
     }
-    setSelectionError(null);
+    setSelectionOutcome(null);
     setShowProposeConfirm(true);
   };
 
@@ -232,21 +287,20 @@ export function AhspRoomPage() {
     if (selectionBusy || selectedRows.length === 0) return;
     const reason = window.prompt(`Hapus ${selectedRows.length} AHSP terpilih? Tuliskan alasan penghapusan:`);
     if (reason == null || reason.trim() === '') return;
-    setSelectionBusy(true);
-    setSelectionError(null);
+    setSelectionAction('DELETE');
+    setSelectionOutcome(null);
     try {
-      for (const row of selectedRows) {
-        await apiFetch('/ahsp/' + row.id, {
+      const { succeeded, failedIds, failure } = await sendForEach(selectedRows, (row) =>
+        apiFetch('/ahsp/' + row.id, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reason: reason.trim() }),
-        });
-      }
-      await refreshAfterMutation();
-    } catch {
-      setSelectionError('Penghapusan tidak dapat dihubungi.');
+        }),
+      );
+      await refreshAfterMutation(failedIds);
+      setSelectionOutcome(describeBulkDelete({ succeeded, failed: failedIds.size, notApplicable: 0, failure }));
     } finally {
-      setSelectionBusy(false);
+      setSelectionAction(null);
     }
   };
 
@@ -256,9 +310,10 @@ export function AhspRoomPage() {
     const escape = (v: string) => '"' + v.replace(/"/g, '""') + '"';
     const lines = [header.map(escape).join(',')];
     for (const r of selectedRows) {
+      const identity = presentAhspIdentity(r);
       lines.push([
-        r.code ?? '',
-        r.workType ?? '',
+        identity.code ?? '',
+        identity.workType ?? '',
         r.methodName ?? '',
         r.versions?.[0]?.outputUnit ?? '',
         r.fieldCategory ?? '',
@@ -289,11 +344,11 @@ export function AhspRoomPage() {
         {canManage || canCurate ? (
           <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
             {canManage ? (
-              <a href="https://docs.simprok.id/ahsp" target="_blank" rel="noreferrer" style={outlineButton}>
+              <a href="https://docs.simprok.id/ahsp" target="_blank" rel="noreferrer" className="ahsp-action ahsp-action--outline">
                 <BookOpen size={16} /> Panduan AHSP
               </a>
             ) : null}
-            <button type="button" onClick={() => navigate('/ahsp/import')} style={primaryButton}>
+            <button type="button" onClick={() => navigate('/ahsp/import')} className="ahsp-action ahsp-action--primary">
               <Plus size={16} /> Import AHSP
             </button>
           </div>
@@ -313,8 +368,8 @@ export function AhspRoomPage() {
         <>
           {/* Search + filter control area */}
           <section aria-label="Pencarian dan saringan AHSP" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
-            <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
-              <div style={{ position: 'relative', flex: '1 1 24rem' }}>
+            <div className="ahsp-search-row">
+              <div className="ahsp-search-row__field">
                 <Search size={16} style={{ position: 'absolute', left: '0.6rem', top: '50%', transform: 'translateY(-50%)', color: MUTED }} />
                 <input
                   value={query}
@@ -324,8 +379,8 @@ export function AhspRoomPage() {
                   style={{ ...controlBox, paddingLeft: '2rem' }}
                 />
               </div>
-              <button type="button" style={primaryButton} onClick={() => setPage(0)}>Cari</button>
-              <button type="button" onClick={resetFilters} style={{ ...outlineButton, marginLeft: 'auto', border: 0, color: BLUE }}>
+              <button type="button" className="ahsp-action ahsp-action--primary" onClick={() => setPage(0)}>Cari</button>
+              <button type="button" onClick={resetFilters} className="ahsp-action ahsp-action--quiet ahsp-search-row__reset">
                 <RefreshCw size={14} /> Reset Filter
               </button>
             </div>
@@ -368,23 +423,27 @@ export function AhspRoomPage() {
           {selected.size > 0 ? (
             <section aria-label="Tindakan AHSP terpilih" style={{ ...CARD, marginBottom: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 600, color: NAVY }}>{selected.size} AHSP dipilih</span>
-              <div style={{ display: 'flex', gap: 'var(--space-2)', marginLeft: 'auto', flexWrap: 'wrap' }}>
-                <button type="button" disabled={selectionBusy} onClick={() => void bulkDelete()} style={{ ...outlineButton, color: RED, borderColor: RED }}>
-                  <Trash2 size={14} /> Hapus
+              <div className="ahsp-action-row" style={{ marginLeft: 'auto' }}>
+                <button type="button" className="ahsp-action ahsp-action--danger" disabled={selectionBusy} aria-busy={selectionAction === 'DELETE' || undefined} onClick={() => void bulkDelete()}>
+                  {selectionAction === 'DELETE' ? null : <Trash2 size={14} />} {selectionAction === 'DELETE' ? 'Menghapus…' : 'Hapus'}
                 </button>
-                <button type="button" disabled={selectionBusy} title={USULKAN_TOOLTIP} onClick={openProposeConfirm} style={primaryButton}>
-                  <Send size={14} /> {selectionBusy ? 'Memproses…' : 'Usulkan ke SIMPROK'}
+                <button type="button" className="ahsp-action ahsp-action--primary" disabled={selectionBusy} aria-busy={selectionAction === 'PROPOSE' || undefined} title={USULKAN_TOOLTIP} onClick={openProposeConfirm}>
+                  {selectionAction === 'PROPOSE' ? null : <Send size={14} />} {selectionAction === 'PROPOSE' ? 'Memproses…' : 'Usulkan ke SIMPROK'}
                 </button>
-                <button type="button" onClick={exportSelection} style={outlineButton}>
+                <button type="button" className="ahsp-action ahsp-action--outline" disabled={selectionBusy} onClick={exportSelection}>
                   <Download size={14} /> Export
                 </button>
-                <button type="button" aria-label="Batalkan pilihan" onClick={clearSelection} style={{ ...outlineButton, padding: 'var(--space-2)' }}>
+                <button type="button" className="ahsp-action ahsp-action--outline" disabled={selectionBusy} aria-label="Batalkan pilihan" onClick={clearSelection}>
                   <X size={14} />
                 </button>
               </div>
             </section>
           ) : null}
-          {selectionError ? <p role="alert" style={{ color: RED, fontSize: 'var(--text-sm)', margin: '0 0 var(--space-2)' }}>{selectionError}</p> : null}
+          {selectionOutcome ? (
+            <div style={{ margin: '0 0 var(--space-3)' }}>
+              <ActionOutcomeNotice outcome={selectionOutcome} onDismiss={() => setSelectionOutcome(null)} />
+            </div>
+          ) : null}
 
           {/* Table */}
           <section aria-label="AHSP yang tersedia" style={CARD}>
@@ -413,26 +472,31 @@ export function AhspRoomPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {pageRows.map((row) => (
-                        <tr key={row.id}>
-                          <td style={td}>
-                            <input type="checkbox" aria-label={'Pilih ' + (row.methodName ?? row.workType ?? row.id)} checked={selected.has(row.id)} onChange={() => toggleSelect(row.id)} />
-                          </td>
-                          <td style={td}>{orDash(row.code)}</td>
-                          <td style={td}>{orDash(row.workType)}</td>
-                          <td style={td}>{orDash(row.methodName)}</td>
-                          <td style={td}>{orDash(row.versions?.[0]?.outputUnit)}</td>
-                          <td style={td}>{orDash(row.fieldCategory)}</td>
-                          <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                            <Link to={'/ahsp/' + row.id} style={{ ...outlineButton, padding: '0.2rem 0.6rem', textDecoration: 'none' }}>
-                              <Eye size={14} /> Lihat
-                            </Link>
-                            <button type="button" aria-label="Tindakan lain" style={{ ...outlineButton, padding: '0.2rem 0.4rem', marginLeft: 'var(--space-2)' }} disabled>
-                              <MoreHorizontal size={14} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      {pageRows.map((row) => {
+                        // Kode and Jenis Pekerjaan are named from ONE mapping: a recorded
+                        // source code is shown as the code, never again as a work type.
+                        const identity = presentAhspIdentity(row);
+                        return (
+                          <tr key={row.id}>
+                            <td style={td}>
+                              <input type="checkbox" aria-label={'Pilih ' + (row.methodName ?? row.workType ?? row.id)} checked={selected.has(row.id)} onChange={() => toggleSelect(row.id)} />
+                            </td>
+                            <td style={td}>{orDash(identity.code)}</td>
+                            <td style={td}>{orDash(identity.workType)}</td>
+                            <td style={td}>{orDash(row.methodName)}</td>
+                            <td style={td}>{orDash(row.versions?.[0]?.outputUnit)}</td>
+                            <td style={td}>{orDash(row.fieldCategory)}</td>
+                            <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                              <Link to={'/ahsp/' + row.id} className="ahsp-action ahsp-action--outline ahsp-action--compact">
+                                <Eye size={14} /> Lihat
+                              </Link>
+                              <button type="button" aria-label="Tindakan lain" className="ahsp-action ahsp-action--outline ahsp-action--compact" style={{ marginLeft: 'var(--space-2)' }} disabled>
+                                <MoreHorizontal size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -442,9 +506,9 @@ export function AhspRoomPage() {
                     Menampilkan {rangeStart} - {rangeEnd} dari {visibleRows.length} data
                   </span>
                   <div style={{ display: 'flex', gap: 'var(--space-1)', alignItems: 'center' }}>
-                    <button type="button" aria-label="Halaman sebelumnya" disabled={safePage === 0} onClick={() => setPage(safePage - 1)} style={{ ...outlineButton, padding: '0.25rem 0.6rem' }}>‹</button>
+                    <button type="button" aria-label="Halaman sebelumnya" disabled={safePage === 0} onClick={() => setPage(safePage - 1)} className="ahsp-action ahsp-action--outline ahsp-action--compact">‹</button>
                     <span style={{ color: NAVY, fontSize: 'var(--text-sm)', padding: '0 var(--space-2)' }}>{safePage + 1} / {pageCount}</span>
-                    <button type="button" aria-label="Halaman berikutnya" disabled={safePage >= pageCount - 1} onClick={() => setPage(safePage + 1)} style={{ ...outlineButton, padding: '0.25rem 0.6rem' }}>›</button>
+                    <button type="button" aria-label="Halaman berikutnya" disabled={safePage >= pageCount - 1} onClick={() => setPage(safePage + 1)} className="ahsp-action ahsp-action--outline ahsp-action--compact">›</button>
                   </div>
                 </div>
               </>

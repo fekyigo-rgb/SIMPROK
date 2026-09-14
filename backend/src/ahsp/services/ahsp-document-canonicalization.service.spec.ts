@@ -542,6 +542,97 @@ describe('AhspDocumentCanonicalizationService', () => {
     await commitWithCandidateVerdict('UNRESOLVED');
   });
 
+  /**
+   * ACG-01.1 — FOUND IS NOT OFFERED. The found-something contract above is kept
+   * byte for byte; beside it, the names an UNRESOLVED verdict lists are marked as
+   * rows the kernel RULED OUT, so no reader can present them as possible matches
+   * — and nothing about the source resource itself changes.
+   */
+  it('ACG-01.1: marks the names an UNRESOLVED verdict lists as ruled out, and only those', async () => {
+    const firstResource = async () => {
+      const knowledge = await service.preview(
+        await envelopeFrom(await buildAhspAnalisaXlsx()),
+      );
+      const item = knowledge.workItems.find(
+        (candidate) => candidate.workType?.raw === '1.7.7.1.1.b (a)',
+      );
+      return { item, resource: item?.resources[0] };
+    };
+
+    identity.resolve.mockResolvedValue({
+      status: 'UNRESOLVED',
+      resolvedResourceCatalogId: null,
+      candidates: [
+        { name: 'Pekerja Terampil', resourceCatalogId: 'catalog-b' },
+      ],
+    });
+    const ruledOut = await firstResource();
+    expect(ruledOut.resource?.identityCandidates).toEqual(['Pekerja Terampil']);
+    expect(ruledOut.resource?.identityCandidatesRuledOut).toBe(true);
+    expect(ruledOut.resource?.rawName).toBe('Pekerja');
+    expect(ruledOut.item?.reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,
+    );
+
+    identity.resolve.mockResolvedValue({
+      status: 'NEEDS_REVIEW',
+      resolvedResourceCatalogId: null,
+      candidates: [
+        { name: 'Pekerja Terampil', resourceCatalogId: 'catalog-b' },
+      ],
+    });
+    const nominated = await firstResource();
+    expect(nominated.resource?.identityCandidates).toEqual([
+      'Pekerja Terampil',
+    ]);
+    expect(nominated.resource).not.toHaveProperty('identityCandidatesRuledOut');
+  });
+
+  /**
+   * ACG-01.1 — SOURCE REALITY SURVIVES A REFUSED CANDIDATE.
+   *
+   * The preview only marks the candidate as ruled out; the SAVE is what stores
+   * the source resource. This proves the import stores it exactly as it stores
+   * any other unresolved line — same source facts, same locator, and the names
+   * the kernel examined carried along — so a person can still review it.
+   */
+  it('ACG-01.1: the import STORES a resource whose candidates were ruled out', async () => {
+    identity.resolve.mockResolvedValue({
+      status: 'UNRESOLVED',
+      resolvedResourceCatalogId: null,
+      candidates: [
+        { name: 'Pekerja Terampil', resourceCatalogId: 'catalog-b' },
+      ],
+    });
+
+    await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+    );
+
+    expect(observations.observeMany).toHaveBeenCalledTimes(1);
+    const stored = observations.observeMany.mock.calls[0][0] as Array<
+      Record<string, any>
+    >;
+    const pekerja = stored.find((input) => input.rawName === 'Pekerja');
+    expect(pekerja).toMatchObject({
+      origin: 'AHSP_IMPORT',
+      rawName: 'Pekerja',
+      resourceType: 'LABOR',
+      candidates: ['Pekerja Terampil'],
+    });
+    // Its locator — where the document said it — is stored with it.
+    expect(pekerja?.provenance).toMatchObject({
+      sourceFileName: expect.any(String),
+      parserContractVersion: expect.any(String),
+      sheetName: expect.any(String),
+      sourceRowNumber: expect.any(Number),
+    });
+    // Nothing about a refused candidate marks the resource itself as refused.
+    expect(pekerja).not.toHaveProperty('status');
+    expect(pekerja).not.toHaveProperty('identityCandidatesRuledOut');
+  });
+
   it('says nothing was found only when the kernel truly found nothing', async () => {
     identity.resolve.mockResolvedValue({
       status: 'UNRESOLVED',

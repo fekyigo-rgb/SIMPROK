@@ -79,6 +79,71 @@ export type IdenticalQuestionStateLabel =
   | 'REJECTED'
   | 'REVOKED';
 
+/** Why an open row's decision may not also be offered as learning — one per refusal branch. */
+export type NotRememberableReason =
+  | 'NO_ACTOR'
+  | 'CANDIDATE_PENDING'
+  | 'IDENTITY_PROVEN'
+  | 'NOT_DECIDABLE'
+  | 'LEARNING_NOT_CONFIGURED';
+
+/** The two ways the identity kernel's own verdict refuses a chosen catalogue row. */
+export type KernelIdentityRefusal =
+  | 'IDENTITY_CANDIDATE_RULED_OUT'
+  | 'IDENTITY_PROVEN_OTHERWISE';
+
+/**
+ * ACG-01.1 — A KERNEL REFUSAL IS NOT BYPASSED AT THE WRITE.
+ *
+ * CANDIDATE REFUSED IS NOT RESOURCE REFUSED. This judges the CHOSEN ROW, never
+ * the source resource: whatever it answers, the observation stays accepted.
+ *
+ * Two answer shapes mean the machine REFUSED the chosen row, and both are read
+ * from its OWN answer — nothing is re-derived or re-scored here:
+ *  - UNRESOLVED with that row listed: the row was RULED OUT (a stated
+ *    specification conflict, a class mismatch). The kernel lists such rows so a
+ *    person can see what was examined — "these were ruled out", never "choose
+ *    one of these".
+ *  - RESOLVED on another row: the machine proved ONE identity, and a proven
+ *    identity is never reconsidered; any other row contradicts it.
+ *
+ * WHICH ANSWER IS ASKED MATTERS, AND ONE ANSWER IS NOT ENOUGH. The kernel lists
+ * the rows it ruled out only when nothing else survived: as soon as any other
+ * row is nominated, the answer is NEEDS_REVIEW listing the survivors and the
+ * refused row is simply absent from it. Read against that answer alone, a row
+ * the kernel ruled out would pass this door whenever an unrelated sibling row
+ * happened to be nominated — eligibility of the chosen row would depend on
+ * which OTHER rows the catalogue holds. So the caller asks the SAME machinery a
+ * second question — this wording against the CHOSEN ROW ALONE — and applies
+ * this same predicate to that answer too (see refusalOfSelection).
+ *
+ * Everything else stays the human judgment it already was: a nominated
+ * candidate, or a row the kernel cannot connect to this wording at all (the
+ * kernel not finding a row is not the kernel refusing it).
+ */
+export function kernelRefusalOfSelection(
+  verdict: Pick<
+    ResourceIdentityResolution,
+    'status' | 'resolvedResourceCatalogId' | 'candidates'
+  >,
+  selectedResourceCatalogId: string,
+): KernelIdentityRefusal | null {
+  if (verdict.status === 'RESOLVED') {
+    return verdict.resolvedResourceCatalogId === selectedResourceCatalogId
+      ? null
+      : 'IDENTITY_PROVEN_OTHERWISE';
+  }
+  if (
+    verdict.status === 'UNRESOLVED' &&
+    verdict.candidates.some(
+      (candidate) => candidate.resourceCatalogId === selectedResourceCatalogId,
+    )
+  ) {
+    return 'IDENTITY_CANDIDATE_RULED_OUT';
+  }
+  return null;
+}
+
 function isRetryableQuestionWrite(error: unknown): boolean {
   if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
   if (error.code === '40001' || error.code === 'P2034') return true;
@@ -340,6 +405,16 @@ export class ResourceObservationService {
             suggestedUnitDefinitionId = unit.sourceUnitDefinition.id;
           }
         }
+        // ACG-01 OWNER BROWSER GAP — THE VERDICT, NOT ONLY ITS LIST.
+        //
+        // A candidate list means "these were nominated" under NEEDS_REVIEW and
+        // "these were ruled out" under UNRESOLVED (a stated specification
+        // conflict, a class mismatch). Without the verdict the reader could not
+        // tell the two apart, so a row the kernel had RULED OUT was offered as
+        // "Benar, ini sama dengan…". And "genuinely new" is admitted only when
+        // identity is exhausted — the SAME predicate curateNew re-proves below —
+        // so without it every row that still had a candidate offered a door that
+        // could only be refused. Carried, never recomputed: nothing here decides.
         return {
           id: observation.id,
           rawName: observation.rawName,
@@ -349,6 +424,11 @@ export class ResourceObservationService {
           origin: observation.origin,
           status: observation.status,
           candidates,
+          identityVerdict: {
+            status: resolution.status,
+            reasonCodes: [...resolution.reasonCodes],
+            exhausted: ResourceAdmissionService.isIdentityExhausted(resolution),
+          },
           suggestedUnitDefinitionId,
           identicalQuestion,
         };
@@ -361,7 +441,9 @@ export class ResourceObservationService {
    * HUMAN DECISION — this observation is one SIMPROK already has. Record the
    * chosen existing ResourceCatalog identity on the observation. Mints nothing.
    * The chosen id must be a real, ACTIVE catalog row the workspace may see
-   * (its own or a global one).
+   * (its own or a global one), and — ACG-01.1 — never a row the identity kernel
+   * refused for this wording (see kernelRefusalOfSelection). A refusal leaves
+   * the observation exactly as it was: the source resource stays OBSERVED.
    *
    * IQL-01: with `rememberForIdenticalQuestions === true` the SAME row decision
    * is also offered as an exact-question learning CANDIDATE (a TEACH). That is
@@ -379,33 +461,50 @@ export class ResourceObservationService {
     if (params.rememberForIdenticalQuestions === true) {
       return this.curateExistingAndTeach(params);
     }
-    return this.prisma.$transaction(async (tx) => {
-      const observation = await this.loadOpen(
-        tx,
-        params.workspaceId,
-        params.observationId,
-      );
-      const catalog = await tx.resourceCatalog.findFirst({
-        where: {
-          id: params.selectedResourceCatalogId,
-          status: 'ACTIVE',
-          OR: [{ workspaceId: params.workspaceId }, { workspaceId: null }],
-        },
-        select: { id: true },
-      });
-      if (!catalog)
-        throw new ConflictException('SELECTED_RESOURCE_NOT_VISIBLE');
-      return tx.observedResource.update({
-        where: { id: observation.id },
-        data: {
-          status: ObservedResourceStatus.RESOLVED_EXISTING,
-          resolvedResourceCatalogId: catalog.id,
-          decidedByAccountId: params.actorAccountId,
-          decidedAt: new Date(),
-          reason: params.reason ?? null,
-        },
-      });
-    });
+    return this.prisma.$transaction(
+      async (txc) => {
+        const tx = txc as Prisma.TransactionClient;
+        const observation = await this.loadOpen(
+          tx,
+          params.workspaceId,
+          params.observationId,
+        );
+        const catalog = await tx.resourceCatalog.findFirst({
+          where: {
+            id: params.selectedResourceCatalogId,
+            status: 'ACTIVE',
+            OR: [{ workspaceId: params.workspaceId }, { workspaceId: null }],
+          },
+          select: { id: true },
+        });
+        if (!catalog)
+          throw new ConflictException('SELECTED_RESOURCE_NOT_VISIBLE');
+        // ACG-01.1 — the machine's own answer for THIS wording, read inside the
+        // same transaction as the write. The screen no longer offers a refused
+        // row, but a direct request must not be able to persist one either —
+        // and not when an unrelated sibling row keeps the refusal off the list.
+        const refusal = await this.refusalOfSelection(
+          tx,
+          params.workspaceId,
+          this.referenceOf(observation),
+          catalog.id,
+        );
+        if (refusal) throw new ConflictException(refusal);
+        return tx.observedResource.update({
+          where: { id: observation.id },
+          data: {
+            status: ObservedResourceStatus.RESOLVED_EXISTING,
+            resolvedResourceCatalogId: catalog.id,
+            decidedByAccountId: params.actorAccountId,
+            decidedAt: new Date(),
+            reason: params.reason ?? null,
+          },
+        });
+      },
+      // Loading the workspace's evidence is the same read the TEACH path does
+      // under this same budget; the default 5s would time it out on a large catalogue.
+      { timeout: 20_000, maxWait: 20_000 },
+    );
   }
 
   /**
@@ -1047,6 +1146,9 @@ export class ResourceObservationService {
       questionKey,
       state: this.stateLabel(state, () => candidateDigestOf(resolution)),
       rememberable: false,
+      // WHY learning is not offered — each early return below, said out loud
+      // instead of left for the reader to guess. Describes; decides nothing.
+      notRememberableReason: null as NotRememberableReason | null,
       decisionContextToken: null as string | null,
       pendingAnswerName: pending
         ? (resolution.candidates.find(
@@ -1059,12 +1161,15 @@ export class ResourceObservationService {
         actorAccountId !== undefined &&
         pending.decidedByAccountId === actorAccountId,
     };
-    if (!actorAccountId || state.kind === 'PENDING') return view;
-    if (
-      resolution.status === 'RESOLVED' ||
-      !isIdenticalQuestionDecidable(resolution)
-    ) {
-      return view;
+    if (!actorAccountId) return { ...view, notRememberableReason: 'NO_ACTOR' };
+    if (state.kind === 'PENDING') {
+      return { ...view, notRememberableReason: 'CANDIDATE_PENDING' };
+    }
+    if (resolution.status === 'RESOLVED') {
+      return { ...view, notRememberableReason: 'IDENTITY_PROVEN' };
+    }
+    if (!isIdenticalQuestionDecidable(resolution)) {
+      return { ...view, notRememberableReason: 'NOT_DECIDABLE' };
     }
     const token = this.issueQuestionContext({
       workspaceId: params.workspaceId,
@@ -1074,7 +1179,7 @@ export class ResourceObservationService {
       candidateContextDigest: candidateDigestOf(resolution),
     });
     return token === null
-      ? view
+      ? { ...view, notRememberableReason: 'LEARNING_NOT_CONFIGURED' }
       : { ...view, rememberable: true, decisionContextToken: token };
   }
 
@@ -1153,6 +1258,54 @@ export class ResourceObservationService {
       throw new ConflictException('CANDIDATE_NOT_LEGITIMATE_FOR_LEARNING');
     }
     return liveDigest;
+  }
+
+  /**
+   * ACG-01.1 — IS THE CHOSEN ROW REFUSED BY THE MACHINE'S OWN ANSWER?
+   *
+   * ONE evidence set, ONE canonical machine, ONE predicate, two questions:
+   *   1. this wording against the WHOLE catalogue — the answer the queue shows;
+   *   2. this wording against the CHOSEN ROW ALONE — the answer no unrelated
+   *      row can change.
+   * The second question exists because the first one hides refusals: the kernel
+   * reports the rows it ruled out only when nothing else survived. Asking it
+   * about the chosen row by itself puts that row's own evidence back in front of
+   * the same kernel, with the same sightings, the same reviewed mappings and the
+   * same proven unit facts. Nothing is re-derived, re-scored or re-matched here;
+   * the catalogue is simply narrowed to the row the human actually chose.
+   *
+   * A row ruled out on its own evidence stays ruled out however many siblings
+   * the catalogue holds. A row the machine nominates, proves, or cannot connect
+   * to this wording is left exactly as answerable as it was.
+   */
+  private async refusalOfSelection(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    reference: RawResourceReference,
+    selectedResourceCatalogId: string,
+  ): Promise<KernelIdentityRefusal | null> {
+    const evidence = await this.identity.loadEvidence(tx, workspaceId);
+    const whole = await this.identity.resolve(evidence, reference, tx);
+    const refusedByWhole = kernelRefusalOfSelection(
+      whole,
+      selectedResourceCatalogId,
+    );
+    if (refusedByWhole) return refusedByWhole;
+    // MACHINE FIRST — a proven identity is never reconsidered. If the machine
+    // PROVED this very row for this wording, no narrower question may unprove
+    // it; the whole-catalogue answer above already refused every other row.
+    if (whole.status === 'RESOLVED') return null;
+    const alone = await this.identity.resolve(
+      {
+        ...evidence,
+        catalogCandidates: evidence.catalogCandidates.filter(
+          (candidate) => candidate.id === selectedResourceCatalogId,
+        ),
+      },
+      reference,
+      tx,
+    );
+    return kernelRefusalOfSelection(alone, selectedResourceCatalogId);
   }
 
   /** The machine's own verdict for a question — no governed memory applied. */

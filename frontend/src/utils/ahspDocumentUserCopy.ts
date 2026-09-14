@@ -17,10 +17,12 @@ const REASON_COPY: Record<string, string> = {
   INVALID_COEFFICIENT: 'Koefisien belum lengkap atau tidak sah.',
   RESOURCE_UNRESOLVED: 'Komponen belum dapat dicocokkan dengan data SIMPROK.',
   // "Belum terbukti" is not "tidak ada". When the identity kernel narrowed the
-  // question to real catalogue rows, saying nothing was found would be false —
-  // and it would hide the fact that a human can settle this in seconds.
+  // question to real catalogue rows, saying nothing was found would be false.
+  // ACG-01.1: this code is also carried when every row found was RULED OUT, so
+  // the sentence names what is true in both cases — related catalogue data was
+  // found — and never calls a refused row a possible match.
   RESOURCE_CANDIDATES_FOUND:
-    'SIMPROK menemukan kemungkinan padanan untuk komponen ini, tetapi identitasnya belum terbukti.',
+    'SIMPROK menemukan data katalog yang berkaitan dengan komponen ini, tetapi identitasnya belum terbukti.',
   UNIT_UNRESOLVED: 'Satuan komponen belum dikenali dalam data SIMPROK.',
   AUTHORITY_UNPROVEN: 'Peraturan pada dokumen belum terbukti.',
   CURRENTNESS_UNPROVEN: 'Tanggal berlaku belum tertera di dokumen.',

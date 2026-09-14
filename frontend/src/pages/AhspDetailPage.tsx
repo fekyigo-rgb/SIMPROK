@@ -13,6 +13,7 @@ import {
 } from '../utils/ahspCompositionDisplay';
 import { describeAhspProposalStatus, canProposeAhsp, formatIndoDate } from '../utils/ahspProposalStatus';
 import { USULKAN_TOOLTIP } from '../utils/ahspProposalCopy';
+import { presentAhspIdentity } from '../utils/ahspIdentityDisplay';
 import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
 
 /**
@@ -548,8 +549,9 @@ export function AhspDetailPage() {
                   <span style={ICON_TILE}><FileText size={16} /></span>
                   <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: 0 }}>Informasi AHSP</h2>
                 </div>
-                {infoRow('Kode', orDash(ahsp.code))}
-                {infoRow('Jenis Pekerjaan', orDash(ahsp.workType))}
+                {/* ONE mapping with the room: a recorded source code is the code, never a work type. */}
+                {infoRow('Kode', orDash(presentAhspIdentity(ahsp).code))}
+                {infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
                 {infoRow('Uraian', orDash(ahsp.methodName))}
                 {infoRow('Satuan', orDash(currentVersion?.outputUnit))}
                 {infoRow('Bidang / Kategori', orDash(ahsp.fieldCategory))}

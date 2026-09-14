@@ -1,6 +1,9 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { GhxDecisionContextTokenService } from './ghx-decision-context-token.service';
-import { ResourceObservationService } from './resource-observation.service';
+import {
+  ResourceObservationService,
+  kernelRefusalOfSelection,
+} from './resource-observation.service';
 import {
   ResourceAdmissionNotExhaustedError,
   ResourceAdmissionService,
@@ -70,8 +73,38 @@ describe('ResourceObservationService', () => {
       }),
     };
     identity = {
-      loadEvidence: jest.fn().mockResolvedValue({}),
-      resolve: jest.fn().mockResolvedValue({ candidates: [] }),
+      // A well-formed evidence set: the plain door narrows this catalogue to
+      // the chosen row to ask the machine about that row alone, so an empty
+      // stand-in would hide the seam rather than test it.
+      loadEvidence: jest.fn().mockResolvedValue({
+        catalogCandidates: [
+          'cat-existing',
+          'cat-unp',
+          'cat-other',
+          'cat-proven',
+          'cat-x',
+        ].map((id) => ({
+          id,
+          code: null,
+          name: id,
+          type: 'MATERIAL',
+          baseUnit: 'M3',
+          status: 'ACTIVE',
+          specifications: null,
+        })),
+        sourceSightings: [],
+        reviewedMappings: [],
+      }),
+      // A well-formed kernel verdict: the list now carries the verdict itself,
+      // so the fixture must be the shape the kernel really returns.
+      resolve: jest.fn().mockResolvedValue({
+        status: 'UNRESOLVED',
+        authority: null,
+        resolvedResourceCatalogId: null,
+        candidates: [],
+        reasonCodes: ['RESOURCE_NOT_FOUND'],
+        explanation: '',
+      }),
     };
     service = new ResourceObservationService(
       prisma,
@@ -136,6 +169,10 @@ describe('ResourceObservationService', () => {
   it('A: listOpenForCuration surfaces candidates as evidence, never a resolved identity', async () => {
     prisma.observedResource.findMany.mockResolvedValue([OBSERVATION]);
     identity.resolve.mockResolvedValue({
+      status: 'NEEDS_REVIEW',
+      authority: 'EVIDENCE_CANDIDATE',
+      resolvedResourceCatalogId: null,
+      reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
       candidates: [
         { resourceCatalogId: 'cat-x', name: 'Kerikil / Agregat', extra: 'ignored' },
       ],
@@ -150,6 +187,81 @@ describe('ResourceObservationService', () => {
     // Still OBSERVED — the read decides nothing.
     expect(list[0].status).toBe('OBSERVED');
     expect((list[0] as any).resolvedResourceCatalogId).toBeUndefined();
+  });
+
+  /**
+   * ACG-01 OWNER BROWSER GAP — a candidate list is read WITH its verdict.
+   *
+   * Under UNRESOLVED the kernel lists the rows it RULED OUT (a stated
+   * specification conflict, a class mismatch) so a human can see them; under
+   * NEEDS_REVIEW it lists nominations. The verdict travels with the list so the
+   * reader can never offer a ruled-out row as an answer, and "genuinely new" is
+   * offered from the SAME exhaustion predicate curateNew re-proves.
+   */
+  it('ACG-01: a ruled-out list travels with its verdict, and is never called exhausted', async () => {
+    prisma.observedResource.findMany.mockResolvedValue([OBSERVATION]);
+    identity.resolve.mockResolvedValue({
+      status: 'UNRESOLVED',
+      authority: null,
+      resolvedResourceCatalogId: null,
+      candidates: [
+        {
+          resourceCatalogId: 'cat-unp',
+          name: 'Besi UNP 100.50.5',
+          evidence: [],
+        },
+      ],
+      reasonCodes: ['SPECIFICATION_CONFLICT'],
+    });
+
+    const [row] = await service.listOpenForCuration('ws-1', 'acct-1');
+
+    expect(row.identityVerdict).toEqual({
+      status: 'UNRESOLVED',
+      reasonCodes: ['SPECIFICATION_CONFLICT'],
+      exhausted: false,
+    });
+    // The list itself is unchanged — shown, never removed.
+    expect(row.candidates.map((candidate) => candidate.name)).toEqual([
+      'Besi UNP 100.50.5',
+    ]);
+    // Nothing about learning is decided here: the refusal is only named.
+    expect(row.identicalQuestion).toMatchObject({
+      rememberable: false,
+      notRememberableReason: 'NOT_DECIDABLE',
+      decisionContextToken: null,
+    });
+  });
+
+  it('ACG-01: only a genuinely-not-found verdict is exhausted — the one curateNew accepts', async () => {
+    prisma.observedResource.findMany.mockResolvedValue([OBSERVATION]);
+    identity.resolve.mockResolvedValue({
+      status: 'UNRESOLVED',
+      authority: null,
+      resolvedResourceCatalogId: null,
+      candidates: [],
+      reasonCodes: ['RESOURCE_NOT_FOUND'],
+    });
+
+    const [row] = await service.listOpenForCuration('ws-1');
+
+    expect(row.identityVerdict).toEqual({
+      status: 'UNRESOLVED',
+      reasonCodes: ['RESOURCE_NOT_FOUND'],
+      exhausted: true,
+    });
+    expect(row.identityVerdict.exhausted).toBe(
+      ResourceAdmissionService.isIdentityExhausted({
+        status: 'UNRESOLVED',
+        authority: null,
+        resolvedResourceCatalogId: null,
+        candidates: [],
+        reasonCodes: ['RESOURCE_NOT_FOUND'],
+        explanation: '',
+      }),
+    );
+    // No known actor: learning is not offered, and the reason says exactly that.
+    expect(row.identicalQuestion.notRememberableReason).toBe('NO_ACTOR');
   });
 
   /**
@@ -265,6 +377,184 @@ describe('ResourceObservationService', () => {
       }),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.observedResource.update).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ACG-01.1 — A KERNEL REFUSAL IS NOT BYPASSED AT THE WRITE.
+   *
+   * The screen no longer offers a row the kernel refused, but the plain
+   * decision door used to check only that the row was ACTIVE and visible, so a
+   * direct request could still record it as this resource's identity. The
+   * machine's answer for the observation's own wording is now read inside the
+   * write — TWICE: once against the whole catalogue, and once against the
+   * CHOSEN ROW ALONE, because the kernel stops reporting a row it ruled out as
+   * soon as it has some other row to nominate. The SOURCE RESOURCE is never
+   * what is refused: it stays OBSERVED.
+   *
+   * These cases pin the WIRING with a stubbed resolver. The machine behaviour
+   * itself — which rows the real kernel rules out, and that an unrelated
+   * sibling row cannot change that — is proved against the REAL kernel in
+   * resource-observation.iql.spec.ts and in the acceptance e2e.
+   */
+  const plainDecision = (selectedResourceCatalogId: string) =>
+    service.curateExisting({
+      workspaceId: 'ws-1',
+      observationId: 'obs-1',
+      selectedResourceCatalogId,
+      actorAccountId: 'acct-1',
+    });
+
+  it('ACG-01.1: a row the kernel RULED OUT can never be persisted as the identity', async () => {
+    prisma.resourceCatalog.findFirst.mockResolvedValue({ id: 'cat-unp' });
+    identity.resolve.mockResolvedValue({
+      status: 'UNRESOLVED',
+      authority: null,
+      resolvedResourceCatalogId: null,
+      candidates: [{ resourceCatalogId: 'cat-unp', name: 'Besi UNP 100.50.5' }],
+      reasonCodes: ['SPECIFICATION_CONFLICT'],
+    });
+
+    await expect(plainDecision('cat-unp')).rejects.toThrow(
+      new ConflictException('IDENTITY_CANDIDATE_RULED_OUT'),
+    );
+    // The verdict came from the machine, for THIS observation's own wording.
+    expect(identity.resolve).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        rawName: OBSERVATION.rawName,
+        rawCode: OBSERVATION.rawCode,
+        rawUnit: OBSERVATION.rawUnit,
+        resourceType: OBSERVATION.resourceType,
+      }),
+      expect.anything(),
+    );
+    // Nothing written: the source resource stays accepted and unresolved.
+    expect(prisma.observedResource.update).not.toHaveBeenCalled();
+  });
+
+  it('ACG-01.1: a row other than the identity the machine PROVED is refused', async () => {
+    prisma.resourceCatalog.findFirst.mockResolvedValue({ id: 'cat-other' });
+    identity.resolve.mockResolvedValue({
+      status: 'RESOLVED',
+      authority: 'EXACT_CANONICAL_MATCH',
+      resolvedResourceCatalogId: 'cat-proven',
+      candidates: [
+        { resourceCatalogId: 'cat-proven', name: 'Agregat XYZ Premium' },
+      ],
+      reasonCodes: ['EXACT_CANONICAL_MATCH'],
+    });
+
+    await expect(plainDecision('cat-other')).rejects.toThrow(
+      new ConflictException('IDENTITY_PROVEN_OTHERWISE'),
+    );
+    expect(prisma.observedResource.update).not.toHaveBeenCalled();
+
+    // Confirming the proven identity itself stays possible.
+    prisma.resourceCatalog.findFirst.mockResolvedValue({ id: 'cat-proven' });
+    await expect(plainDecision('cat-proven')).resolves.toMatchObject({
+      status: 'RESOLVED_EXISTING',
+      resolvedResourceCatalogId: 'cat-proven',
+    });
+  });
+
+  it('ACG-01.1: the door asks about the CHOSEN ROW ALONE, and refuses on that answer', async () => {
+    prisma.resourceCatalog.findFirst.mockResolvedValue({ id: 'cat-unp' });
+    // The whole-catalogue answer nominates a DIFFERENT row and never mentions
+    // the chosen one — exactly the shape that used to let a refused row through.
+    identity.resolve
+      .mockResolvedValueOnce({
+        status: 'NEEDS_REVIEW',
+        authority: 'EVIDENCE_CANDIDATE',
+        resolvedResourceCatalogId: null,
+        candidates: [{ resourceCatalogId: 'cat-x', name: 'Besi UNP' }],
+        reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
+      })
+      .mockResolvedValueOnce({
+        status: 'UNRESOLVED',
+        authority: null,
+        resolvedResourceCatalogId: null,
+        candidates: [
+          { resourceCatalogId: 'cat-unp', name: 'Besi UNP 100.50.5' },
+        ],
+        reasonCodes: ['SPECIFICATION_CONFLICT'],
+      });
+
+    await expect(plainDecision('cat-unp')).rejects.toThrow(
+      new ConflictException('IDENTITY_CANDIDATE_RULED_OUT'),
+    );
+    expect(prisma.observedResource.update).not.toHaveBeenCalled();
+
+    // ONE evidence load, two questions, the same wording — and the second one
+    // is the same evidence with the catalogue narrowed to the chosen row.
+    expect(identity.loadEvidence).toHaveBeenCalledTimes(1);
+    expect(identity.resolve).toHaveBeenCalledTimes(2);
+    const [whole, alone] = identity.resolve.mock.calls;
+    expect(
+      whole[0].catalogCandidates.map((row: { id: string }) => row.id),
+    ).toEqual(['cat-existing', 'cat-unp', 'cat-other', 'cat-proven', 'cat-x']);
+    expect(
+      alone[0].catalogCandidates.map((row: { id: string }) => row.id),
+    ).toEqual(['cat-unp']);
+    // Same question, same sightings, same reviewed mappings — only the
+    // catalogue is narrowed. Nothing is re-derived or re-scored.
+    expect(alone[1]).toEqual(whole[1]);
+    expect(alone[0].sourceSightings).toBe(whole[0].sourceSightings);
+    expect(alone[0].reviewedMappings).toBe(whole[0].reviewedMappings);
+  });
+
+  it('ACG-01.1: a nominated candidate is still a human decision the door records', async () => {
+    prisma.resourceCatalog.findFirst.mockResolvedValue({ id: 'cat-x' });
+    identity.resolve.mockResolvedValue({
+      status: 'NEEDS_REVIEW',
+      authority: 'EVIDENCE_CANDIDATE',
+      resolvedResourceCatalogId: null,
+      candidates: [{ resourceCatalogId: 'cat-x', name: 'Kerikil / Agregat' }],
+      reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
+    });
+
+    await expect(plainDecision('cat-x')).resolves.toMatchObject({
+      status: 'RESOLVED_EXISTING',
+      resolvedResourceCatalogId: 'cat-x',
+    });
+  });
+
+  it('ACG-01.1: the kernel NOT FINDING a row is not the kernel refusing it — human judgment stays', async () => {
+    // Default verdict: UNRESOLVED / RESOURCE_NOT_FOUND with nothing listed. A
+    // person may know an alias the kernel cannot connect; that is not a refusal.
+    await expect(plainDecision('cat-existing')).resolves.toMatchObject({
+      status: 'RESOLVED_EXISTING',
+      resolvedResourceCatalogId: 'cat-existing',
+    });
+  });
+
+  it('ACG-01.1: the refusal rule reads only the verdict — pure and exhaustive', () => {
+    const candidate = (id: string) => ({ resourceCatalogId: id }) as never;
+    const verdict = (
+      status: 'UNRESOLVED' | 'NEEDS_REVIEW' | 'RESOLVED',
+      resolvedResourceCatalogId: string | null,
+      id: string,
+    ) => ({ status, resolvedResourceCatalogId, candidates: [candidate(id)] });
+    // UNRESOLVED lists only what it ruled out.
+    expect(
+      kernelRefusalOfSelection(verdict('UNRESOLVED', null, 'a'), 'a'),
+    ).toBe('IDENTITY_CANDIDATE_RULED_OUT');
+    expect(
+      kernelRefusalOfSelection(verdict('UNRESOLVED', null, 'a'), 'b'),
+    ).toBeNull();
+    // NEEDS_REVIEW lists nominations — never a refusal, whatever is chosen.
+    // That is exactly WHY the door asks a second time about the chosen row
+    // alone: this predicate judges ONE answer, and one answer can hide a
+    // refusal behind an unrelated nomination.
+    expect(
+      kernelRefusalOfSelection(verdict('NEEDS_REVIEW', null, 'a'), 'a'),
+    ).toBeNull();
+    // RESOLVED refuses every row but the proven one.
+    expect(
+      kernelRefusalOfSelection(verdict('RESOLVED', 'p', 'p'), 'p'),
+    ).toBeNull();
+    expect(kernelRefusalOfSelection(verdict('RESOLVED', 'p', 'p'), 'q')).toBe(
+      'IDENTITY_PROVEN_OTHERWISE',
+    );
   });
 
   // E — a human confirms genuinely new; the ONE authority mints it.
