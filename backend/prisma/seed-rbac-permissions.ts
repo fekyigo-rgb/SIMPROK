@@ -61,6 +61,16 @@ export const CANONICAL_PERMISSIONS: readonly CanonicalPermissionDefinition[] = [
   { code: PERMISSIONS.RAB_VIEW, name: 'View RAB', description: 'View RAB drafts and bounded import previews.' },
   { code: PERMISSIONS.RAB_DRAFT_EDIT, name: 'Edit RAB Draft', description: 'Edit RAB drafts and approve bounded BOQ imports.' },
   {
+    code: PERMISSIONS.EXECUTION_PLAN_EDIT,
+    name: 'Edit Execution Plan Draft',
+    description: 'Create or revise the DRAFT official Execution Plan for an assigned project.',
+  },
+  {
+    code: PERMISSIONS.EXECUTION_PLAN_LOCK,
+    name: 'Lock Execution Plan',
+    description: 'Invoke the final Execution Plan lock for an assigned project.',
+  },
+  {
     code: PERMISSIONS.OBSERVATORY_VIEW,
     name: 'View Observatory',
     description: 'View workspace-scoped Observatory or portfolio intelligence data.',

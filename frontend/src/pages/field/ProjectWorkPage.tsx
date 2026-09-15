@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
+import type { ExecutionPlanResponse } from '../../utils/executionPlan';
 import {
   actualStateLabel,
   buildMonitoringRows,
@@ -21,6 +22,7 @@ import {
   type MonitoringProject,
   type MonitoringResponse,
 } from '../../utils/monitoringCurrent';
+import { ExecutionPlanReadinessPanel } from './ExecutionPlanReadinessPanel';
 import './ProjectWorkPage.css';
 
 type ErrorKind =
@@ -128,6 +130,8 @@ export function ProjectWorkPage() {
   const returnItemId = searchParams.get('item');
   const [project, setProject] = useState<MonitoringProject | null>(null);
   const [monitoring, setMonitoring] = useState<MonitoringResponse | null>(null);
+  const [executionPlan, setExecutionPlan] = useState<ExecutionPlanResponse | null>(null);
+  const [executionPlanRefresh, setExecutionPlanRefresh] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const [errorProjectId, setErrorProjectId] = useState<string | null>(null);
@@ -144,22 +148,30 @@ export function ProjectWorkPage() {
       apiFetch(`/projects/${projectId}/progress/monitoring`, {
         signal: controller.signal,
       }),
+      apiFetch(`/projects/${projectId}/execution-plan`, {
+        signal: controller.signal,
+      }),
     ])
-      .then(async ([projectResponse, monitoringResponse]) => {
+      .then(async ([projectResponse, monitoringResponse, executionPlanResponse]) => {
         if (!projectResponse.ok) {
           throw new MonitoringRequestError(projectResponse.status);
         }
         if (!monitoringResponse.ok) {
           throw new MonitoringRequestError(monitoringResponse.status);
         }
+        if (!executionPlanResponse.ok) {
+          throw new MonitoringRequestError(executionPlanResponse.status);
+        }
         return Promise.all([
           projectResponse.json() as Promise<MonitoringProject>,
           monitoringResponse.json() as Promise<MonitoringResponse>,
+          executionPlanResponse.json() as Promise<ExecutionPlanResponse>,
         ]);
       })
-      .then(([projectData, monitoringData]) => {
+      .then(([projectData, monitoringData, executionPlanData]) => {
         setProject(projectData);
         setMonitoring(monitoringData);
+        setExecutionPlan(executionPlanData);
         setSelectedId(
           monitoringData.items.some(
             (item) =>
@@ -186,10 +198,11 @@ export function ProjectWorkPage() {
         setLoadedProjectId(null);
         setProject(null);
         setMonitoring(null);
+        setExecutionPlan(null);
       });
 
     return () => controller.abort();
-  }, [token, projectId, returnItemId]);
+  }, [token, projectId, returnItemId, executionPlanRefresh]);
 
   const rows = useMemo(
     () => buildMonitoringRows(monitoring?.items ?? []),
@@ -265,7 +278,7 @@ export function ProjectWorkPage() {
     );
   }
 
-  if (!project || !monitoring) return null;
+  if (!project || !monitoring || !executionPlan) return null;
 
   const selectedRecordedAt =
     selected?.actual?.state === 'NOT_YET_RECORDED'
@@ -307,6 +320,12 @@ export function ProjectWorkPage() {
           )}
         </div>
       </header>
+
+      <ExecutionPlanReadinessPanel
+        projectId={project.id}
+        executionPlan={executionPlan}
+        onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
+      />
 
       <section className="h2a0-context-strip" aria-label="Konteks Monitoring">
         <div>

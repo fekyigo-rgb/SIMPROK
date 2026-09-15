@@ -525,6 +525,46 @@ describe('Progress Security (e2e)', () => {
         data: { positionId: progressPosition.id, authorityId: authority.id },
       });
     }
+    await prisma.executionPlanVersion.create({
+      data: {
+        projectId: projectAId,
+        baselineId: baselineAId,
+        versionNumber: 1,
+        status: 'LOCKED',
+        revision: 1,
+        createdByAccountId: submitAccount.id,
+        lastEditedByAccountId: submitAccount.id,
+        lastEditedAt: new Date('2026-08-01T00:00:00.000Z'),
+        lockedAt: new Date('2026-08-01T00:00:00.000Z'),
+        lockedByAccountId: submitAccount.id,
+        lockedByPositionId: progressPosition.id,
+        lockedFromRevision: 1,
+        lockedFromProjectStatus: 'ACTIVE',
+        lockedAuthorityCode: 'EXECUTION_PLAN_LOCK',
+        distributions: {
+          create: [
+            {
+              boqItemId: boqItemAId,
+              periodStartDate: new Date('2026-08-01T00:00:00.000Z'),
+              periodEndDate: new Date('2026-08-31T00:00:00.000Z'),
+              plannedIncrementalQuantity: '10',
+            },
+            {
+              boqItemId: boqItemNoActualId,
+              periodStartDate: new Date('2026-08-01T00:00:00.000Z'),
+              periodEndDate: new Date('2026-08-31T00:00:00.000Z'),
+              plannedIncrementalQuantity: '5',
+            },
+            {
+              boqItemId: boqItemRecordedZeroId,
+              periodStartDate: new Date('2026-08-01T00:00:00.000Z'),
+              periodEndDate: new Date('2026-08-31T00:00:00.000Z'),
+              plannedIncrementalQuantity: '4',
+            },
+          ],
+        },
+      },
+    });
     const verifyPolicy = await prisma.approvalMatrix.create({
       data: {
         workspaceId: workspaceAId,
@@ -577,6 +617,16 @@ describe('Progress Security (e2e)', () => {
       },
     });
     await prisma.progressReport.deleteMany({
+      where: { projectId: { in: [projectAId, projectBId] } },
+    });
+    await prisma.executionPlanDistribution.deleteMany({
+      where: {
+        executionPlanVersion: {
+          projectId: { in: [projectAId, projectBId] },
+        },
+      },
+    });
+    await prisma.executionPlanVersion.deleteMany({
       where: { projectId: { in: [projectAId, projectBId] } },
     });
     await prisma.$executeRawUnsafe(
@@ -3842,6 +3892,41 @@ describe('Progress Security (e2e)', () => {
         versionNumber: 2,
         status: 'ACTIVE',
         approvedAt: new Date(),
+      },
+    });
+    await prisma.executionPlanVersion.create({
+      data: {
+        projectId: projectAId,
+        baselineId: law3Baseline.id,
+        versionNumber: 2,
+        status: 'LOCKED',
+        revision: 1,
+        createdByAccountId: submitAccountId,
+        lastEditedByAccountId: submitAccountId,
+        lastEditedAt: new Date('2026-08-01T00:00:00.000Z'),
+        lockedAt: new Date('2026-08-01T00:00:00.000Z'),
+        lockedByAccountId: submitAccountId,
+        lockedByPositionId: (
+          await prisma.position.findFirstOrThrow({
+            where: {
+              workspaceId: workspaceAId,
+              code: 'PROGRESS_AUTHORITY_TEST',
+            },
+          })
+        ).id,
+        lockedFromRevision: 1,
+        lockedFromProjectStatus: 'ACTIVE',
+        lockedAuthorityCode: 'EXECUTION_PLAN_LOCK',
+        distributions: {
+          create: [itemA, itemB, provenZero, zeroWeightUnresolved].map(
+            (item) => ({
+              boqItemId: item.id,
+              periodStartDate: new Date('2026-08-01T00:00:00.000Z'),
+              periodEndDate: new Date('2026-08-31T00:00:00.000Z'),
+              plannedIncrementalQuantity: '10',
+            }),
+          ),
+        },
       },
     });
 
