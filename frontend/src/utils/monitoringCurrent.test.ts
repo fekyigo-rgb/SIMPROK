@@ -253,8 +253,9 @@ test('H2-A0-11 the shell neither consumes legacy reality nor paints later truth'
   assert.doesNotMatch(page, /\/reality|ProjectWarRoomPage|DeviationService/);
   assert.doesNotMatch(
     page,
-    /Kurva S|plannedWeight|planned-to-date|Forecast|Recovery|CPM/,
+    /Kurva S Realisasi|planned-to-date|Forecast|Recovery|CPM/,
   );
+  assert.match(page, /ExecutionPlanReadinessPanel/);
   assert.doesNotMatch(page, />\s*Network\s*</);
   assert.match(page, /Realisasi Terakhir yang Berlaku/);
   assert.match(

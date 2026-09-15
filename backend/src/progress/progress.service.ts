@@ -373,6 +373,42 @@ export class ProgressService {
     return { id: rows[0].id, boqStructureId: rab.boqStructureId };
   }
 
+  /**
+   * MON-04 execution boundary. A new Actual may enter only after the same
+   * atomic act has locked the official plan and activated the Project. The
+   * Project share lock is intentionally acquired before Baseline/plan reads,
+   * matching ExecutionPlanService's Project-first lock order.
+   */
+  private async requireExecutionProjectActive(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+  ): Promise<void> {
+    const rows = await tx.$queryRaw<Array<{ status: string }>>(
+      Prisma.sql`SELECT "status" FROM "projects" WHERE "id" = ${projectId}::uuid FOR SHARE`,
+    );
+    if (rows.length !== 1 || rows[0].status !== 'ACTIVE') {
+      throw new ConflictException('EXECUTION_PLAN_NOT_LOCKED');
+    }
+  }
+
+  private async requireLockedExecutionPlanForWrite(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    baselineId: string,
+  ): Promise<void> {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id"
+                   FROM "execution_plan_versions"
+                  WHERE "projectId" = ${projectId}::uuid
+                    AND "baselineId" = ${baselineId}::uuid
+                    AND "status" = 'LOCKED'
+                  FOR SHARE`,
+    );
+    if (rows.length !== 1) {
+      throw new ConflictException('EXECUTION_PLAN_NOT_LOCKED');
+    }
+  }
+
   private async lockSemanticContextWorkItems(
     tx: Prisma.TransactionClient,
     boqStructureId: string,
@@ -937,7 +973,13 @@ export class ProgressService {
           ...actor,
           roleInProject: transactionalActor.roleInProject,
         };
+        await this.requireExecutionProjectActive(tx, projectId);
         const baseline = await this.activeBaselineForWrite(tx, projectId);
+        await this.requireLockedExecutionPlanForWrite(
+          tx,
+          projectId,
+          baseline.id,
+        );
         const itemIds = [
           ...new Set(dto.entries.map((entry) => entry.boqItemId)),
         ];

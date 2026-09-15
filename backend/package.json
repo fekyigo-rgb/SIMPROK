@@ -43,6 +43,7 @@
     "gate:post-recovery": "npm run build && npm run test && npm run test:e2e && npm --prefix ../frontend run build",
     "b1b12:acceptance:workspace": "tsx scripts/b1b12/provision-basic-price-acceptance.ts",
     "db:provision:platform-authorities": "tsx prisma/seed-platform-authorities.ts",
+    "db:provision:execution-plan-authority": "tsx prisma/seed-execution-plan-authority.ts",
     "platform-governance:ceremony": "tsx scripts/platform-governance/ceremony.ts"
   },
   "dependencies": {

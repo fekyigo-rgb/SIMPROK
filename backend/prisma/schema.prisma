@@ -36,6 +36,9 @@ model Account {
   capturedProjectAhspOccurrences              ProjectAhspOccurrence[]              @relation("ProjectAhspOccurrenceContextCapturedBy")
   recordedProgressEntries                     ProgressEntry[]                      @relation("ProgressEntryRecorder")
   progressAuditEvents                         ProgressAuditEvent[]                 @relation("ProgressAuditActor")
+  executionPlansCreated                       ExecutionPlanVersion[]               @relation("ExecutionPlanCreatedBy")
+  executionPlansEdited                        ExecutionPlanVersion[]               @relation("ExecutionPlanLastEditedBy")
+  executionPlansLocked                        ExecutionPlanVersion[]               @relation("ExecutionPlanLockedBy")
   projectTimeZoneEvents                       ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions               AhspResourceIdentityDecision[]       @relation("AhspResourceIdentityDecisionActor")
   resourceIdentityQuestionDecisions           ResourceIdentityQuestionDecision[]   @relation("ResourceIdentityQuestionDecisionActor")
@@ -91,31 +94,31 @@ model Workspace {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization                    Organization                     @relation(fields: [organizationId], references: [id])
-  memberships                     WorkspaceMembership[]
-  roles                           Role[]
-  positions                       Position[]
-  approvalMatrices                ApprovalMatrix[]
-  projects                        Project[]
-  stakeholderBridges              ProjectStakeholder[]
-  ahsps                           AHSP[]
-  ahspVersions                    AHSPVersion[]
-  ahspSnapshots                   AHSPSnapshot[]
-  resourceCatalogs                ResourceCatalog[]
-  observedResources               ObservedResource[]
-  basicPrices                     BasicPrice[]
-  priceSubmissions                PriceSubmission[]
-  priceSubmissionReviews          PriceSubmissionReview[]
-  intelligenceEvidence            IntelligenceEvidence[]
-  projectAhspOccurrences          ProjectAhspOccurrence[]
-  resourceSourceIdentities        ResourceSourceIdentity[]
-  basicPriceSourceEquivalences    BasicPriceSourceEquivalence[]
-  basicPriceProvenanceCorrections BasicPriceProvenanceCorrection[]
-  progressAuditEvents             ProgressAuditEvent[]             @relation("ProgressAuditWorkspace")
-  projectTimeZoneEvents           ProjectTimeZoneEvent[]
-  ahspResourceIdentityDecisions   AhspResourceIdentityDecision[]
+  organization                      Organization                       @relation(fields: [organizationId], references: [id])
+  memberships                       WorkspaceMembership[]
+  roles                             Role[]
+  positions                         Position[]
+  approvalMatrices                  ApprovalMatrix[]
+  projects                          Project[]
+  stakeholderBridges                ProjectStakeholder[]
+  ahsps                             AHSP[]
+  ahspVersions                      AHSPVersion[]
+  ahspSnapshots                     AHSPSnapshot[]
+  resourceCatalogs                  ResourceCatalog[]
+  observedResources                 ObservedResource[]
+  basicPrices                       BasicPrice[]
+  priceSubmissions                  PriceSubmission[]
+  priceSubmissionReviews            PriceSubmissionReview[]
+  intelligenceEvidence              IntelligenceEvidence[]
+  projectAhspOccurrences            ProjectAhspOccurrence[]
+  resourceSourceIdentities          ResourceSourceIdentity[]
+  basicPriceSourceEquivalences      BasicPriceSourceEquivalence[]
+  basicPriceProvenanceCorrections   BasicPriceProvenanceCorrection[]
+  progressAuditEvents               ProgressAuditEvent[]               @relation("ProgressAuditWorkspace")
+  projectTimeZoneEvents             ProjectTimeZoneEvent[]
+  ahspResourceIdentityDecisions     AhspResourceIdentityDecision[]
   resourceIdentityQuestionDecisions ResourceIdentityQuestionDecision[]
-  ingestionConnectors             IngestionConnector[]
+  ingestionConnectors               IngestionConnector[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -272,16 +275,17 @@ model Position {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  workspace           Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  parentPosition      Position?            @relation("PositionToParent", fields: [parentPositionId], references: [id])
-  childPositions      Position[]           @relation("PositionToParent")
-  assignments         PositionAssignment[]
-  approvalMatrices    ApprovalMatrix[]
-  positionAuthorities PositionAuthority[]
-  projectBaselines    ProjectBaseline[]
-  projectRisks        ProjectRisk[]
-  formalDecisions     FormalDecision[]
-  progressAuditEvents ProgressAuditEvent[] @relation("ProgressAuditPosition")
+  workspace                    Workspace                     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parentPosition               Position?                     @relation("PositionToParent", fields: [parentPositionId], references: [id])
+  childPositions               Position[]                    @relation("PositionToParent")
+  assignments                  PositionAssignment[]
+  approvalMatrices             ApprovalMatrix[]
+  positionAuthorities          PositionAuthority[]
+  projectBaselines             ProjectBaseline[]
+  projectRisks                 ProjectRisk[]
+  formalDecisions              FormalDecision[]
+  progressAuditEvents          ProgressAuditEvent[]          @relation("ProgressAuditPosition")
+  lockedExecutionPlans         ExecutionPlanVersion[]        @relation("ExecutionPlanLockedByPosition")
   /// THE SEAT AS SUBJECT. A Position is granted or loses an Authority; the
   /// person occupying it reaches that power through PositionAssignment. This is
   /// the governed history of those grants — never the current state, which
@@ -376,6 +380,7 @@ model Project {
   ahspOccurrences      ProjectAhspOccurrence[]
   progressAuditEvents  ProgressAuditEvent[]
   timeZoneEvents       ProjectTimeZoneEvent[]
+  executionPlans       ExecutionPlanVersion[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -729,8 +734,8 @@ model AHSP {
   subCategory    String?
   classification String?
 
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   ownershipType OwnershipType @default(USER_ASSET)
   reviewStatus  ReviewStatus  @default(PENDING)
@@ -1199,11 +1204,11 @@ model Authority {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  positionAuthorities         PositionAuthority[]
-  approvalMatrices            ApprovalMatrix[]
+  positionAuthorities          PositionAuthority[]
+  approvalMatrices             ApprovalMatrix[]
   /// The SAME vocabulary, now also reachable at platform scope. Nothing about
   /// this model changes: `code` was already globally unique with no workspace.
-  platformGovernanceDecisions PlatformGovernanceDecision[]
+  platformGovernanceDecisions  PlatformGovernanceDecision[]
   /// The governed HISTORY of this power being granted to, or revoked from, a
   /// Position. Current state stays in `positionAuthorities`; this is why it is
   /// what it is.
@@ -1397,10 +1402,10 @@ model AuthorityGovernanceDecision {
 
   decidedAt DateTime @default(now())
 
-  position         Position                     @relation(fields: [positionId], references: [id], onDelete: Cascade)
-  authority        Authority                    @relation(fields: [authorityId], references: [id], onDelete: Restrict)
-  executedBy       Account                      @relation("AuthorityGovernanceExecutor", fields: [executedByAccountId], references: [id], onDelete: Restrict)
-  previousDecision AuthorityGovernanceDecision? @relation("AuthorityGovernanceLineage", fields: [previousDecisionId], references: [id], onDelete: Restrict)
+  position         Position                      @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  authority        Authority                     @relation(fields: [authorityId], references: [id], onDelete: Restrict)
+  executedBy       Account                       @relation("AuthorityGovernanceExecutor", fields: [executedByAccountId], references: [id], onDelete: Restrict)
+  previousDecision AuthorityGovernanceDecision?  @relation("AuthorityGovernanceLineage", fields: [previousDecisionId], references: [id], onDelete: Restrict)
   nextDecisions    AuthorityGovernanceDecision[] @relation("AuthorityGovernanceLineage")
 
   /// THE CONCURRENCY INVARIANT. Two writers racing for the same next generation
@@ -1457,8 +1462,8 @@ model ResourceCatalog {
   sourceIdentities               ResourceSourceIdentity[]
   importRowResourceMappings      BasicPriceImportRowResourceMapping[]
 
-  ahspResourceIdentityDecisions AhspResourceIdentityDecision[]
-  observedResources             ObservedResource[]
+  ahspResourceIdentityDecisions     AhspResourceIdentityDecision[]
+  observedResources                 ObservedResource[]
   resourceIdentityQuestionDecisions ResourceIdentityQuestionDecision[]
 
   // NOTE: the former @@unique([workspaceId, code]) is replaced by a manual
@@ -1527,8 +1532,8 @@ model ObservedResource {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace               Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  resolvedResourceCatalog ResourceCatalog? @relation(fields: [resolvedResourceCatalogId], references: [id], onDelete: Restrict)
+  workspace                 Workspace                          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  resolvedResourceCatalog   ResourceCatalog?                   @relation(fields: [resolvedResourceCatalogId], references: [id], onDelete: Restrict)
   /// IQL-01 — governance events whose provenance is this observation. A
   /// relation only: no column on this table changes.
   identityQuestionDecisions ResourceIdentityQuestionDecision[]
@@ -2257,22 +2262,22 @@ enum RegionAdministrativeLevel {
 }
 
 model Region {
-  id                    String                       @id @default(uuid()) @db.Uuid
-  code                  String                       @unique
-  name                  String
-  isActive              Boolean                      @default(true)
+  id                  String                     @id @default(uuid()) @db.Uuid
+  code                String                     @unique
+  name                String
+  isActive            Boolean                    @default(true)
   /// Optional Kemendagri depth. Existing live rows (Jakarta Selatan, Baguala)
   /// stay NULL until a governed provisioner pass states the level. Never guessed.
-  administrativeLevel   RegionAdministrativeLevel?
+  administrativeLevel RegionAdministrativeLevel?
   /// Optional parent Region. RESTRICT: a parent that still has children cannot
   /// be deleted out from under them. Self-parent is refused by CHECK. Existing
   /// rows keep parentId NULL — their IDs and references are unchanged.
-  parentId              String?                      @db.Uuid
-  createdAt             DateTime                     @default(now())
-  updatedAt             DateTime                     @updatedAt
+  parentId            String?                    @db.Uuid
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
 
-  parent                  Region?                    @relation("RegionHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
-  children                Region[]                   @relation("RegionHierarchy")
+  parent                  Region?                 @relation("RegionHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children                Region[]                @relation("RegionHierarchy")
   basicPrices             BasicPrice[]
   priceSubmissions        PriceSubmission[]
   basicPriceImportBatches BasicPriceImportBatch[]
@@ -2555,7 +2560,7 @@ model BasicPriceImportBatch {
   /// NULLABLE AND NEVER DERIVED. SIMPROK does not compute a freshness horizon —
   /// no canonical policy states one — so this is null unless a person stated it,
   /// and null means "nobody said", never "expired".
-  reviewDate                  DateTime?
+  reviewDate DateTime?
 
   sourceType             PriceSourceType?
   sourceOrigin           PriceSourceOrigin?
@@ -2595,7 +2600,7 @@ model BasicPriceImportBatch {
   /// is absent, or when mapping still needs review. Fingerprint input only
   /// in the human-confirmed case, same law as selectedNameColumn.
   interpretationKdnColumn          Int?
-  kdnMappingStatus                 BasicPriceKdnMappingStatus @default(ABSENT)
+  kdnMappingStatus                 BasicPriceKdnMappingStatus  @default(ABSENT)
   /// Candidate KDN-like columns awaiting a human, verbatim headers. Null
   /// when mapping is ABSENT or ESTABLISHED. Never used as a KDN value.
   kdnMappingCandidates             Json?
@@ -2719,8 +2724,8 @@ model BasicPriceImportRow {
   /// the batch has no established KDN column (absent or still in review).
   /// Dedicated fields, never rawSourceContext: that JSON is evidence that
   /// no calculation may read.
-  sourceKdnCellAddress String?
-  sourceKdnHeaderText  String?
+  sourceKdnCellAddress   String?
+  sourceKdnHeaderText    String?
 
   rawResourceCodeText String?
   rawResourceNameText String
@@ -2753,16 +2758,16 @@ model BasicPriceImportRow {
   /// price, a unit or an identity out of here.
   rawSourceContext Json?
 
-  proposedCanonicalPrice Decimal? @db.Decimal(18, 2)
-  canonicalRoundingMode  String?
+  proposedCanonicalPrice       Decimal? @db.Decimal(18, 2)
+  canonicalRoundingMode        String?
   /// Exact canonical %KDN (`Decimal(5, 2)`), or null when unknown/invalid.
   /// Invalid values keep their raw text and a `kdnReasonCode`; they never
   /// become 0.00 and never block an otherwise lawful price.
-  proposedCanonicalKdn   Decimal? @db.Decimal(5, 2)
-  rawKdnTextValue        String?
+  proposedCanonicalKdn         Decimal? @db.Decimal(5, 2)
+  rawKdnTextValue              String?
   rawKdnNumericRoundTripString String?
-  rawKdnDisplayText      String?
-  kdnReasonCode          String?
+  rawKdnDisplayText            String?
+  kdnReasonCode                String?
 
   resourceCatalogId    String?       @db.Uuid
   resolvedResourceType ResourceType?
@@ -2940,12 +2945,12 @@ model BasicPriceProvenanceCorrection {
 }
 
 model BasicPricePublicationAudit {
-  id             String   @id @default(uuid()) @db.Uuid
-  basicPriceId   String   @db.Uuid
+  id             String    @id @default(uuid()) @db.Uuid
+  basicPriceId   String    @db.Uuid
   action         String
-  actorAccountId String   @db.Uuid
-  reason         String?  @db.Text
-  createdAt      DateTime @default(now())
+  actorAccountId String    @db.Uuid
+  reason         String?   @db.Text
+  createdAt      DateTime  @default(now())
   /// BP-CORR-01B TEMPORAL — WHEN THIS GOVERNED EVENT BECAME TRUE, which is not
   /// the same fact as `createdAt`.
   ///
@@ -3184,15 +3189,16 @@ model BoqItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  boqStructure          BoqStructure           @relation(fields: [boqStructureId], references: [id], onDelete: Cascade)
-  parent                BoqItem?               @relation("BoqItemToParent", fields: [parentId], references: [id])
-  children              BoqItem[]              @relation("BoqItemToParent")
-  wbsNode               WbsNode?               @relation(fields: [wbsNodeId], references: [id])
-  ahspVersion           AHSPVersion?           @relation(fields: [ahspVersionId], references: [id])
-  ahspSnapshot          AHSPSnapshot?          @relation(fields: [ahspSnapshotId], references: [id])
-  calculationOccurrence ProjectAhspOccurrence? @relation("BoqItemCalculationOccurrence", fields: [calculationOccurrenceId], references: [id], onDelete: Restrict)
-  workingOccurrence     ProjectAhspOccurrence? @relation("BoqItemWorkingOccurrence", fields: [workingOccurrenceId], references: [id], onDelete: Restrict)
-  progressEntries       ProgressEntry[]
+  boqStructure               BoqStructure                @relation(fields: [boqStructureId], references: [id], onDelete: Cascade)
+  parent                     BoqItem?                    @relation("BoqItemToParent", fields: [parentId], references: [id])
+  children                   BoqItem[]                   @relation("BoqItemToParent")
+  wbsNode                    WbsNode?                    @relation(fields: [wbsNodeId], references: [id])
+  ahspVersion                AHSPVersion?                @relation(fields: [ahspVersionId], references: [id])
+  ahspSnapshot               AHSPSnapshot?               @relation(fields: [ahspSnapshotId], references: [id])
+  calculationOccurrence      ProjectAhspOccurrence?      @relation("BoqItemCalculationOccurrence", fields: [calculationOccurrenceId], references: [id], onDelete: Restrict)
+  workingOccurrence          ProjectAhspOccurrence?      @relation("BoqItemWorkingOccurrence", fields: [workingOccurrenceId], references: [id], onDelete: Restrict)
+  progressEntries            ProgressEntry[]
+  executionPlanDistributions ExecutionPlanDistribution[]
 
   @@index([boqStructureId])
   @@index([parentId])
@@ -3267,13 +3273,88 @@ model ProjectBaseline {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  rabDocument     RabDocument      @relation(fields: [rabDocumentId], references: [id])
-  approvedBy      Position?        @relation(fields: [approvedByPositionId], references: [id])
+  project         Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  rabDocument     RabDocument            @relation(fields: [rabDocumentId], references: [id])
+  approvedBy      Position?              @relation(fields: [approvedByPositionId], references: [id])
   progressReports ProgressReport[]
+  executionPlans  ExecutionPlanVersion[]
 
+  @@unique([id, projectId])
   @@index([projectId])
   @@map("project_baselines")
+}
+
+// =====================================================
+// SECTION J: MONITORING & DEVIATION DOMAIN
+// =====================================================
+
+// =====================================================
+// SECTION I.1: OFFICIAL EXECUTION PLAN FOUNDATION
+// =====================================================
+
+enum ExecutionPlanStatus {
+  DRAFT
+  LOCKED
+}
+
+model ExecutionPlanVersion {
+  id                      String              @id @default(uuid()) @db.Uuid
+  projectId               String              @db.Uuid
+  baselineId              String              @db.Uuid
+  versionNumber           Int
+  status                  ExecutionPlanStatus @default(DRAFT)
+  revision                Int                 @default(1)
+  predecessorId           String?             @db.Uuid
+  createdByAccountId      String              @db.Uuid
+  lastEditedByAccountId   String              @db.Uuid
+  lastEditedAt            DateTime            @default(now())
+  lockedAt                DateTime?
+  lockedByAccountId       String?             @db.Uuid
+  lockedByPositionId      String?             @db.Uuid
+  lockedFromRevision      Int?
+  lockedFromProjectStatus ProjectStatus?
+  lockedAuthorityCode     String?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  project          Project                     @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  baseline         ProjectBaseline             @relation(fields: [baselineId, projectId], references: [id, projectId], onDelete: Restrict)
+  predecessor      ExecutionPlanVersion?       @relation("ExecutionPlanPredecessor", fields: [predecessorId], references: [id], onDelete: Restrict)
+  successors       ExecutionPlanVersion[]      @relation("ExecutionPlanPredecessor")
+  createdBy        Account                     @relation("ExecutionPlanCreatedBy", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  lastEditedBy     Account                     @relation("ExecutionPlanLastEditedBy", fields: [lastEditedByAccountId], references: [id], onDelete: Restrict)
+  lockedBy         Account?                    @relation("ExecutionPlanLockedBy", fields: [lockedByAccountId], references: [id], onDelete: Restrict)
+  lockedByPosition Position?                   @relation("ExecutionPlanLockedByPosition", fields: [lockedByPositionId], references: [id], onDelete: Restrict)
+  distributions    ExecutionPlanDistribution[]
+
+  @@unique([projectId, versionNumber])
+  @@index([projectId, baselineId, status])
+  @@index([baselineId])
+  @@index([predecessorId])
+  @@index([createdByAccountId])
+  @@index([lastEditedByAccountId])
+  @@index([lockedByAccountId])
+  @@index([lockedByPositionId])
+  @@map("execution_plan_versions")
+}
+
+model ExecutionPlanDistribution {
+  id                         String   @id @default(uuid()) @db.Uuid
+  executionPlanVersionId     String   @db.Uuid
+  boqItemId                  String   @db.Uuid
+  periodStartDate            DateTime @db.Date
+  periodEndDate              DateTime @db.Date
+  plannedIncrementalQuantity Decimal  @db.Decimal(18, 6)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  executionPlanVersion ExecutionPlanVersion @relation(fields: [executionPlanVersionId], references: [id], onDelete: Restrict)
+  boqItem              BoqItem              @relation(fields: [boqItemId], references: [id], onDelete: Restrict)
+
+  @@index([executionPlanVersionId, boqItemId])
+  @@index([boqItemId])
+  @@index([executionPlanVersionId, periodEndDate])
+  @@map("execution_plan_distributions")
 }
 
 // =====================================================
