@@ -3,6 +3,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
 import {
   executionPlanBlockerLabel,
+  executionPlanCurveUnavailableLabel,
+  executionPlanPeriodCountLabel,
   executionPlanStatusLabel,
   type ExecutionPlanResponse,
 } from '../../utils/executionPlan';
@@ -210,14 +212,14 @@ export function ExecutionPlanReadinessPanel({
           <div className="execution-plan-table-scroll">
             <table>
               <thead>
-                <tr><th>WBS / Pekerjaan</th><th>Volume Baseline</th><th>Periode</th></tr>
+                <tr><th>WBS / Pekerjaan</th><th>Volume Baseline</th><th>Periode Rencana</th></tr>
               </thead>
               <tbody>
                 {executionPlan.workPlan.map((row) => (
                   <tr key={row.boqItemId}>
                     <td>{row.wbsCode} · {row.name}</td>
                     <td>{row.baselineQuantity} {row.unit}</td>
-                    <td>{row.distributionCount}</td>
+                    <td>{executionPlanPeriodCountLabel(row.distributionCount)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -233,7 +235,11 @@ export function ExecutionPlanReadinessPanel({
             Dibentuk SIMPROK dari kuantitas incremental dan bobot RAB resmi; bukan titik kurva yang diedit manual.
           </p>
           {executionPlan.plannedCurve.state === 'UNAVAILABLE' ? (
-            <p>Kurva belum tersedia: {executionPlan.plannedCurve.reason}.</p>
+            <p>
+              {executionPlanCurveUnavailableLabel(
+                executionPlan.plannedCurve.reason,
+              )}
+            </p>
           ) : (
             <div className="execution-plan-curve" data-state={executionPlan.plannedCurve.state}>
               {executionPlan.plannedCurve.points.map((point) => (

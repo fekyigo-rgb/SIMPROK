@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   executionPlanBlockerLabel,
+  executionPlanCurveUnavailableLabel,
+  executionPlanPeriodCountLabel,
   executionPlanStatusLabel,
 } from './executionPlan.ts';
 
@@ -34,12 +36,66 @@ test('missing distribution is explained without becoming zero', () => {
   assert.doesNotMatch(label, /0|nol/i);
 });
 
+test('curve reasons stay machine-readable in state but human-readable in the panel', () => {
+  assert.equal(
+    executionPlanCurveUnavailableLabel('H2A1_WEIGHT_UNAVAILABLE'),
+    'Kurva S Rencana belum tersedia karena bobot RAB resmi belum lengkap.',
+  );
+  assert.equal(
+    executionPlanCurveUnavailableLabel(
+      'LEGACY_ACTIVE_PROJECT_REQUIRES_PLAN_ADOPTION',
+    ),
+    'Proyek ini sudah aktif sebelum Rencana Pelaksanaan resmi tersedia di SIMPROK. Lengkapi dan kunci Rencana Pelaksanaan untuk melanjutkan pencatatan realisasi baru.',
+  );
+  assert.equal(
+    executionPlanCurveUnavailableLabel('UNRECOGNIZED_INTERNAL_REASON'),
+    'Kurva S Rencana belum tersedia karena data rencana belum lengkap.',
+  );
+
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  assert.match(panel, /executionPlanCurveUnavailableLabel/);
+  assert.doesNotMatch(panel, /plannedCurve\.reason\}/);
+  assert.doesNotMatch(
+    executionPlanCurveUnavailableLabel('H2A1_WEIGHT_UNAVAILABLE'),
+    /H2A1_WEIGHT_UNAVAILABLE/,
+  );
+  assert.doesNotMatch(
+    executionPlanCurveUnavailableLabel(
+      'LEGACY_ACTIVE_PROJECT_REQUIRES_PLAN_ADOPTION',
+    ),
+    /LEGACY_ACTIVE_PROJECT_REQUIRES_PLAN_ADOPTION/,
+  );
+});
+
+test('period count distinguishes missing planning from positive interval counts', () => {
+  assert.equal(executionPlanPeriodCountLabel(0), 'Belum dilengkapi');
+  assert.equal(executionPlanPeriodCountLabel(1), '1 periode');
+  assert.equal(executionPlanPeriodCountLabel(2), '2 periode');
+
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  assert.match(panel, /Periode Rencana/);
+  assert.match(panel, /executionPlanPeriodCountLabel\(row\.distributionCount\)/);
+  assert.doesNotMatch(panel, /<td>\{row\.distributionCount\}<\/td>/);
+});
+
 test('legacy ACTIVE adoption is truthful and does not invent a second lifecycle', () => {
   assert.equal(
     executionPlanBlockerLabel({
       code: 'LEGACY_ACTIVE_PROJECT_REQUIRES_PLAN_ADOPTION',
     }),
-    'Proyek ini sudah aktif sebelum Rencana Pelaksanaan resmi tersedia di SIMPROK. Susun dan kunci Rencana Pelaksanaan untuk melanjutkan pencatatan realisasi baru.',
+    'Proyek ini sudah aktif sebelum Rencana Pelaksanaan resmi tersedia di SIMPROK. Lengkapi dan kunci Rencana Pelaksanaan untuk melanjutkan pencatatan realisasi baru.',
+  );
+  assert.equal(
+    executionPlanBlockerLabel({
+      code: 'EXECUTION_PLAN_DRAFT_NOT_FOUND',
+    }),
+    'Rencana Pelaksanaan belum dilengkapi.',
   );
 
   const panel = readFileSync(

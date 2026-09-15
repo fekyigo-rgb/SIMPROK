@@ -103,32 +103,53 @@ export function executionPlanStatusLabel(
   return labels[state];
 }
 
+const EXECUTION_PLAN_BLOCKER_LABELS: Readonly<Record<string, string>> = {
+  NO_ACTIVE_BASELINE: 'Baseline aktif belum tersedia.',
+  MULTIPLE_ACTIVE_BASELINES:
+    'Terdapat lebih dari satu Baseline aktif. Penguncian dihentikan.',
+  EXECUTION_PLAN_DRAFT_NOT_FOUND: 'Rencana Pelaksanaan belum dilengkapi.',
+  ACTIVE_PROJECT_WITHOUT_LOCKED_PLAN:
+    'Proyek aktif ini belum mempunyai Rencana Pelaksanaan terkunci.',
+  LEGACY_ACTIVE_PROJECT_REQUIRES_PLAN_ADOPTION:
+    'Proyek ini sudah aktif sebelum Rencana Pelaksanaan resmi tersedia di SIMPROK. Lengkapi dan kunci Rencana Pelaksanaan untuk melanjutkan pencatatan realisasi baru.',
+  PROJECT_NOT_PLANNED: 'Proyek tidak lagi berada pada tahap perencanaan.',
+  NO_REQUIRED_WORK_ITEMS: 'Baseline belum mempunyai item pekerjaan berkuantitas positif.',
+  MISSING_WORK_ITEM_DISTRIBUTION: 'Distribusi waktu item pekerjaan belum tersedia.',
+  PLANNED_QUANTITY_INCOMPLETE: 'Jumlah rencana item belum mencapai volume Baseline.',
+  PLANNED_QUANTITY_EXCEEDS_BASELINE: 'Jumlah rencana item melebihi volume Baseline.',
+  INVALID_DISTRIBUTION_WORK_ITEM: 'Distribusi mengacu pada item di luar Baseline aktif.',
+  INVALID_DISTRIBUTION_DATE: 'Rentang tanggal rencana tidak valid.',
+  INVALID_DISTRIBUTION_QUANTITY: 'Kuantitas rencana harus lebih besar dari nol.',
+  DISTRIBUTION_INTERVAL_OVERLAP: 'Periode rencana untuk item yang sama saling tumpang tindih.',
+  H2A1_WEIGHT_UNAVAILABLE:
+    'Kurva S Rencana belum tersedia karena bobot RAB resmi belum lengkap.',
+  LOCKED_PLAN_PROJECT_NOT_ACTIVE:
+    'Integritas eksekusi tidak konsisten: plan terkunci tetapi proyek belum aktif.',
+};
+
+export function executionPlanCurveUnavailableLabel(
+  reason: string | null,
+): string {
+  if (reason && EXECUTION_PLAN_BLOCKER_LABELS[reason]) {
+    return executionPlanBlockerLabel({ code: reason });
+  }
+  return 'Kurva S Rencana belum tersedia karena data rencana belum lengkap.';
+}
+
+export function executionPlanPeriodCountLabel(
+  distributionCount: number,
+): string {
+  return distributionCount === 0
+    ? 'Belum dilengkapi'
+    : String(distributionCount) + ' periode';
+}
+
 export function executionPlanBlockerLabel(
   blocker: ExecutionPlanBlocker,
 ): string {
-  const labels: Record<string, string> = {
-    NO_ACTIVE_BASELINE: 'Baseline aktif belum tersedia.',
-    MULTIPLE_ACTIVE_BASELINES:
-      'Terdapat lebih dari satu Baseline aktif. Penguncian dihentikan.',
-    EXECUTION_PLAN_DRAFT_NOT_FOUND: 'Draft Rencana Pelaksanaan belum disusun.',
-    ACTIVE_PROJECT_WITHOUT_LOCKED_PLAN:
-      'Proyek aktif ini belum mempunyai Rencana Pelaksanaan terkunci.',
-    LEGACY_ACTIVE_PROJECT_REQUIRES_PLAN_ADOPTION:
-      'Proyek ini sudah aktif sebelum Rencana Pelaksanaan resmi tersedia di SIMPROK. Susun dan kunci Rencana Pelaksanaan untuk melanjutkan pencatatan realisasi baru.',
-    PROJECT_NOT_PLANNED: 'Proyek tidak lagi berada pada tahap perencanaan.',
-    NO_REQUIRED_WORK_ITEMS: 'Baseline belum mempunyai item pekerjaan berkuantitas positif.',
-    MISSING_WORK_ITEM_DISTRIBUTION: 'Distribusi waktu item pekerjaan belum tersedia.',
-    PLANNED_QUANTITY_INCOMPLETE: 'Jumlah rencana item belum mencapai volume Baseline.',
-    PLANNED_QUANTITY_EXCEEDS_BASELINE: 'Jumlah rencana item melebihi volume Baseline.',
-    INVALID_DISTRIBUTION_WORK_ITEM: 'Distribusi mengacu pada item di luar Baseline aktif.',
-    INVALID_DISTRIBUTION_DATE: 'Rentang tanggal rencana tidak valid.',
-    INVALID_DISTRIBUTION_QUANTITY: 'Kuantitas rencana harus lebih besar dari nol.',
-    DISTRIBUTION_INTERVAL_OVERLAP: 'Periode rencana untuk item yang sama saling tumpang tindih.',
-    H2A1_WEIGHT_UNAVAILABLE: 'Bobot RAB resmi belum lengkap untuk membentuk Kurva S Rencana.',
-    LOCKED_PLAN_PROJECT_NOT_ACTIVE:
-      'Integritas eksekusi tidak konsisten: plan terkunci tetapi proyek belum aktif.',
-  };
-  const base = labels[blocker.code] ?? 'Rencana belum memenuhi syarat penguncian.';
+  const base =
+    EXECUTION_PLAN_BLOCKER_LABELS[blocker.code] ??
+    'Rencana belum memenuhi syarat penguncian.';
   if (!blocker.boqItemId) return base;
   const quantities =
     blocker.expectedQuantity && blocker.plannedQuantity
