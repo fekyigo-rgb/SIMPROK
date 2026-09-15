@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../../src/app.module';
@@ -137,6 +137,21 @@ interface Law1MonitoringBody {
     reason: string | null;
   };
   items: Law1MonitoringItem[];
+  actualTemporal?: {
+    mode: 'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE';
+    cutoffDate: string;
+    baseline: {
+      id: string;
+      versionNumber: number;
+      approvedAt: string;
+    } | null;
+    items: Array<{
+      boqItemId: string;
+      officialQuantity: Law1MonitoringQuantity;
+      officialPhysicalProgress: Law2MonitoringProgress;
+    }>;
+    officialRabWeightedPhysicalProgress: Law3MonitoringProgress;
+  };
 }
 
 describe('Progress Security (e2e)', () => {
@@ -1082,6 +1097,7 @@ describe('Progress Security (e2e)', () => {
     const body = res.body;
     expect(body.projectId).toBe(projectAId);
     expect(body.baseline).toMatchObject({ id: baselineAId, versionNumber: 1 });
+    expect(body).not.toHaveProperty('actualTemporal');
     expect(body.weight).toEqual({
       basis: 'ACTIVE_BASELINE_RAB_TOTAL_BASE_COST',
       completeness: 'COMPLETE',
@@ -1264,7 +1280,9 @@ describe('Progress Security (e2e)', () => {
 
     try {
       const res = await request(app.getHttpServer())
-        .get(`/projects/${projectAId}/progress/monitoring`)
+        .get(
+          `/projects/${projectAId}/progress/monitoring?cutoffDate=2026-09-07`,
+        )
         .set('Authorization', `Bearer ${token}`)
         .set('x-workspace-id', workspaceAId)
         .expect(409);
@@ -1287,7 +1305,9 @@ describe('Progress Security (e2e)', () => {
 
     try {
       const res = await request(app.getHttpServer())
-        .get(`/projects/${projectAId}/progress/monitoring`)
+        .get(
+          `/projects/${projectAId}/progress/monitoring?cutoffDate=2026-09-07`,
+        )
         .set('Authorization', `Bearer ${token}`)
         .set('x-workspace-id', workspaceAId)
         .expect(200);
@@ -1308,6 +1328,16 @@ describe('Progress Security (e2e)', () => {
           weightedWorkItemCount: 0,
           unavailableWorkItemCount: 0,
         },
+        actualTemporal: {
+          mode: 'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE',
+          cutoffDate: '2026-09-07',
+          baseline: null,
+          items: [],
+          officialRabWeightedPhysicalProgress: {
+            state: 'UNAVAILABLE',
+            reason: 'BASELINE_VALUE_UNAVAILABLE',
+          },
+        },
       });
     } finally {
       await prisma.projectBaseline.update({
@@ -1317,10 +1347,32 @@ describe('Progress Security (e2e)', () => {
     }
   });
 
+  it('6e. Monitoring rejects every supplied invalid or ambiguous cutoff instead of falling back to Current', async () => {
+    const token = await login(userViewEmail);
+    const invalidUrls = [
+      `/projects/${projectAId}/progress/monitoring?cutoffDate=2026-09-31`,
+      `/projects/${projectAId}/progress/monitoring?cutoffDate=0099-01-01`,
+      `/projects/${projectAId}/progress/monitoring?cutoffDate=2026-09-07T00%3A00%3A00.000Z`,
+      `/projects/${projectAId}/progress/monitoring?cutoffDate=2026-09-07&cutoffDate=2026-09-08`,
+      `/projects/${projectAId}/progress/monitoring?cutoffDate[value]=2026-09-07`,
+    ];
+
+    for (const url of invalidUrls) {
+      const response = await request(app.getHttpServer())
+        .get(url)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(400);
+      expect((response.body as ErrorResponseBody).message).toBe(
+        'INVALID_PROJECT_BUSINESS_CUTOFF',
+      );
+    }
+  });
+
   it('7. non-assigned user -> GET /monitoring is rejected', async () => {
     const token = await login(userNoAccessEmail);
     await request(app.getHttpServer())
-      .get(`/projects/${projectAId}/progress/monitoring`)
+      .get(`/projects/${projectAId}/progress/monitoring?cutoffDate=2026-09-07`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(403);
@@ -1329,7 +1381,7 @@ describe('Progress Security (e2e)', () => {
   it('8. cross-tenant user -> GET /monitoring is rejected', async () => {
     const token = await login(userCrossEmail);
     await request(app.getHttpServer())
-      .get(`/projects/${projectAId}/progress/monitoring`)
+      .get(`/projects/${projectAId}/progress/monitoring?cutoffDate=2026-09-07`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
       .expect(404);
@@ -4148,5 +4200,375 @@ describe('Progress Security (e2e)', () => {
       },
     });
     expect(law3Baseline.status).toBe('ACTIVE');
+  });
+
+  it('MON04 temporal consumer - one cutoff composes current leaves, LAW2, and LAW3 without writes or predecessor resurrection', async () => {
+    const token = await login(userSubmitEmail);
+    const previousActiveBaseline =
+      await prisma.projectBaseline.findFirstOrThrow({
+        where: { projectId: projectAId, status: 'ACTIVE' },
+      });
+    await prisma.projectBaseline.update({
+      where: { id: previousActiveBaseline.id },
+      data: { status: 'DRAFT' },
+    });
+
+    const structure = await prisma.boqStructure.create({
+      data: {
+        projectId: projectAId,
+        name: 'MON04 temporal consumer E2E BOQ',
+        version: 101,
+      },
+    });
+    const createTemporalItem = async (params: {
+      name: string;
+      wbsCode: string;
+      lineTotal: string;
+      sortOrder: number;
+    }) =>
+      prisma.boqItem.create({
+        data: {
+          boqStructureId: structure.id,
+          wbsCode: params.wbsCode,
+          name: params.name,
+          itemType: 'WORK_ITEM',
+          quantity: '10',
+          unit: 'm3',
+          unitPrice: '10',
+          lineTotal: params.lineTotal,
+          priceOrigin: 'MANUAL_CLIENT',
+          sortOrder: params.sortOrder,
+        },
+      });
+    const timeline = await createTemporalItem({
+      name: 'Temporal current seven cutoff three',
+      wbsCode: 'TEMP-1',
+      lineTotal: '40',
+      sortOrder: 1,
+    });
+    const overPlanned = await createTemporalItem({
+      name: 'Temporal raw over one hundred',
+      wbsCode: 'TEMP-2',
+      lineTotal: '20',
+      sortOrder: 2,
+    });
+    const missing = await createTemporalItem({
+      name: 'Temporal missing',
+      wbsCode: 'TEMP-3',
+      lineTotal: '10',
+      sortOrder: 3,
+    });
+    const submitted = await createTemporalItem({
+      name: 'Temporal submitted',
+      wbsCode: 'TEMP-4',
+      lineTotal: '10',
+      sortOrder: 4,
+    });
+    const semanticUnproven = await createTemporalItem({
+      name: 'Temporal semantic unproven',
+      wbsCode: 'TEMP-5',
+      lineTotal: '10',
+      sortOrder: 5,
+    });
+    const incomplete = await createTemporalItem({
+      name: 'Temporal incomplete',
+      wbsCode: 'TEMP-6',
+      lineTotal: '10',
+      sortOrder: 6,
+    });
+    const provenZero = await createTemporalItem({
+      name: 'Temporal proven zero',
+      wbsCode: 'TEMP-7',
+      lineTotal: '0',
+      sortOrder: 7,
+    });
+    const workItems = [
+      timeline,
+      overPlanned,
+      missing,
+      submitted,
+      semanticUnproven,
+      incomplete,
+      provenZero,
+    ];
+    const rab = await prisma.rabDocument.create({
+      data: {
+        projectId: projectAId,
+        boqStructureId: structure.id,
+        name: 'MON04 temporal consumer E2E RAB',
+        version: 101,
+        totalBaseCost: '100',
+        totalFinalCost: '100',
+        status: 'APPROVED',
+      },
+    });
+    const baseline = await prisma.projectBaseline.create({
+      data: {
+        projectId: projectAId,
+        rabDocumentId: rab.id,
+        versionNumber: 101,
+        status: 'ACTIVE',
+        approvedAt: new Date('2026-09-01T00:00:00.000Z'),
+      },
+    });
+    const progressPosition = await prisma.position.findFirstOrThrow({
+      where: {
+        workspaceId: workspaceAId,
+        code: 'PROGRESS_AUTHORITY_TEST',
+      },
+    });
+    await prisma.executionPlanVersion.create({
+      data: {
+        projectId: projectAId,
+        baselineId: baseline.id,
+        versionNumber: 101,
+        status: 'LOCKED',
+        revision: 1,
+        createdByAccountId: submitAccountId,
+        lastEditedByAccountId: submitAccountId,
+        lastEditedAt: new Date('2026-09-01T00:00:00.000Z'),
+        lockedAt: new Date('2026-09-01T00:00:00.000Z'),
+        lockedByAccountId: submitAccountId,
+        lockedByPositionId: progressPosition.id,
+        lockedFromRevision: 1,
+        lockedFromProjectStatus: 'ACTIVE',
+        lockedAuthorityCode: 'EXECUTION_PLAN_LOCK',
+        distributions: {
+          create: workItems.map((item) => ({
+            boqItemId: item.id,
+            periodStartDate: new Date('2026-09-01T00:00:00.000Z'),
+            periodEndDate: new Date('2026-09-30T00:00:00.000Z'),
+            plannedIncrementalQuantity: '10',
+          })),
+        },
+      },
+    });
+
+    const attestCurrentLeaves = async (
+      boqItemId: string,
+      entryIds: string[],
+    ) => {
+      const history = await semanticHistory(token, boqItemId);
+      const contextDigest = semanticContextDigest(history);
+      for (const entryId of entryIds) {
+        await attestSemantics(token, entryId, contextDigest).expect(201);
+      }
+    };
+    const proveQuantity = async (
+      boqItemId: string,
+      quantity: string,
+      workDate: string,
+    ) => {
+      const entryId = await submitSemanticRoot(
+        token,
+        boqItemId,
+        quantity,
+        workDate,
+      );
+      await transitionSemanticRoot(token, entryId, 'verify');
+      await attestCurrentLeaves(boqItemId, [entryId]);
+      return entryId;
+    };
+
+    const timelineSep05 = await submitSemanticRoot(
+      token,
+      timeline.id,
+      '3',
+      '2026-09-05',
+    );
+    const timelineSep09 = await submitSemanticRoot(
+      token,
+      timeline.id,
+      '4',
+      '2026-09-09',
+    );
+    await transitionSemanticRoot(token, timelineSep05, 'verify');
+    await transitionSemanticRoot(token, timelineSep09, 'verify');
+    await attestCurrentLeaves(timeline.id, [timelineSep05, timelineSep09]);
+    await proveQuantity(overPlanned.id, '15', '2026-09-05');
+    await submitSemanticRoot(token, submitted.id, '6', '2026-09-05');
+    const unprovenEntry = await submitSemanticRoot(
+      token,
+      semanticUnproven.id,
+      '5',
+      '2026-09-05',
+    );
+    await transitionSemanticRoot(token, unprovenEntry, 'verify');
+    const incompleteProven = await submitSemanticRoot(
+      token,
+      incomplete.id,
+      '3',
+      '2026-09-05',
+    );
+    await submitSemanticRoot(token, incomplete.id, '4', '2026-09-05');
+    await transitionSemanticRoot(token, incompleteProven, 'verify');
+    await attestCurrentLeaves(incomplete.id, [incompleteProven]);
+    await proveQuantity(provenZero.id, '0', '2026-09-05');
+
+    const readBusinessTruth = async () =>
+      JSON.stringify({
+        project: await prisma.project.findUniqueOrThrow({
+          where: { id: projectAId },
+        }),
+        baseline: await prisma.projectBaseline.findUniqueOrThrow({
+          where: { id: baseline.id },
+        }),
+        rab: await prisma.rabDocument.findUniqueOrThrow({
+          where: { id: rab.id },
+        }),
+        boqItems: await prisma.boqItem.findMany({
+          where: { boqStructureId: structure.id },
+          orderBy: { id: 'asc' },
+        }),
+        reports: await prisma.progressReport.findMany({
+          where: { projectId: projectAId, baselineId: baseline.id },
+          orderBy: { id: 'asc' },
+        }),
+        entries: await prisma.progressEntry.findMany({
+          where: { progressReport: { baselineId: baseline.id } },
+          orderBy: { id: 'asc' },
+        }),
+        audits: await prisma.progressAuditEvent.findMany({
+          where: {
+            projectId: projectAId,
+            progressEntry: { progressReport: { baselineId: baseline.id } },
+          },
+          orderBy: { id: 'asc' },
+        }),
+        deviations: await prisma.deviationSignal.findMany({
+          where: { projectId: projectAId },
+          orderBy: { id: 'asc' },
+        }),
+      });
+    const monitoring = (cutoffDate: string) =>
+      request(app.getHttpServer())
+        .get(
+          `/projects/${projectAId}/progress/monitoring?cutoffDate=${cutoffDate}`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+
+    const truthBeforeRead = await readBusinessTruth();
+    const cutoff07Response = await monitoring('2026-09-07');
+    const inclusiveResponse = await monitoring('2026-09-05');
+    const truthAfterRead = await readBusinessTruth();
+    const cutoff07 = cutoff07Response.body as unknown as Law1MonitoringBody;
+    const inclusive = inclusiveResponse.body as unknown as Law1MonitoringBody;
+    const currentRow = (boqItemId: string) =>
+      cutoff07.items.find((item) => item.id === boqItemId);
+    const temporalRow = (body: Law1MonitoringBody, boqItemId: string) =>
+      body.actualTemporal?.items.find((item) => item.boqItemId === boqItemId);
+
+    expect(truthAfterRead).toBe(truthBeforeRead);
+    expect(cutoff07.actualTemporal).toMatchObject({
+      mode: 'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE',
+      cutoffDate: '2026-09-07',
+      baseline: { id: baseline.id, versionNumber: 101 },
+      officialRabWeightedPhysicalProgress: {
+        state: 'INCOMPLETE',
+        knownWeightedContributionSubtotalPercent: '32',
+      },
+    });
+    expect(currentRow(timeline.id)?.currentOfficialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '7',
+    });
+    expect(temporalRow(cutoff07, timeline.id)).toEqual({
+      boqItemId: timeline.id,
+      officialQuantity: {
+        state: 'COMPLETE',
+        currentOfficialQuantity: '3',
+      },
+      officialPhysicalProgress: {
+        state: 'COMPLETE',
+        rawPhysicalProgressPercent: '30',
+        boundedContributionProgressPercent: '30',
+      },
+    });
+    expect(temporalRow(inclusive, timeline.id)?.officialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '3',
+    });
+    expect(
+      temporalRow(cutoff07, overPlanned.id)?.officialPhysicalProgress,
+    ).toEqual({
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '150',
+      boundedContributionProgressPercent: '100',
+    });
+    expect(temporalRow(cutoff07, missing.id)?.officialQuantity).toEqual({
+      state: 'NOT_YET_RECORDED',
+    });
+    expect(temporalRow(cutoff07, submitted.id)?.officialQuantity).toEqual({
+      state: 'NO_ELIGIBLE_CURRENT_FACT',
+    });
+    expect(
+      temporalRow(cutoff07, semanticUnproven.id)?.officialQuantity,
+    ).toEqual({ state: 'SEMANTICS_UNPROVEN' });
+    expect(temporalRow(cutoff07, incomplete.id)?.officialQuantity).toEqual({
+      state: 'INCOMPLETE',
+      knownEligibleQuantitySubtotal: '3',
+    });
+    expect(temporalRow(cutoff07, provenZero.id)?.officialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '0',
+    });
+
+    const correction = await request(app.getHttpServer())
+      .post(
+        `/projects/${projectAId}/progress/entries/${timelineSep05}/corrections`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({
+        commandId: randomUUID(),
+        installedQuantity: '2',
+        workDate: '2026-09-10',
+        captureMethod: 'FIELD_MEASUREMENT',
+        reasonCode: 'MEASUREMENT_UPDATE',
+        reasonText: 'Temporal placement correction',
+      })
+      .expect(201);
+    const correctionId = (correction.body as EntryResponseBody).entryId;
+
+    const beforeCorrectionProof = (await monitoring('2026-09-07'))
+      .body as unknown as Law1MonitoringBody;
+    expect(
+      temporalRow(beforeCorrectionProof, timeline.id)?.officialQuantity,
+    ).toEqual({ state: 'SEMANTICS_UNPROVEN' });
+
+    await transitionSemanticRoot(token, correctionId, 'verify');
+    await attestCurrentLeaves(timeline.id, [timelineSep09, correctionId]);
+    const corrected = (await monitoring('2026-09-07'))
+      .body as unknown as Law1MonitoringBody;
+    const correctedCurrent = corrected.items.find(
+      (item) => item.id === timeline.id,
+    );
+
+    expect(correctedCurrent?.currentOfficialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '6',
+    });
+    expect(temporalRow(corrected, timeline.id)?.officialQuantity).toEqual({
+      state: 'COMPLETE',
+      currentOfficialQuantity: '0',
+    });
+    expect(
+      corrected.actualTemporal?.officialRabWeightedPhysicalProgress,
+    ).toEqual({
+      state: 'INCOMPLETE',
+      knownWeightedContributionSubtotalPercent: '20',
+    });
+    expect(
+      await prisma.progressEntry.findUniqueOrThrow({
+        where: { id: timelineSep05 },
+        select: { id: true, installedQuantity: true, workDate: true },
+      }),
+    ).toMatchObject({
+      id: timelineSep05,
+      installedQuantity: new Prisma.Decimal(3),
+      workDate: new Date('2026-09-05T00:00:00.000Z'),
+    });
   });
 });

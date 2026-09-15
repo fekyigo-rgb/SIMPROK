@@ -34,7 +34,9 @@ export interface ActualTemporalOfficialQuantityInput<
 
 const PROJECT_BUSINESS_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-const projectBusinessDateWire = (value: string): string | null => {
+export const projectBusinessDateWire = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+
   const match = PROJECT_BUSINESS_DATE.exec(value);
   if (!match) return null;
 

@@ -47,6 +47,16 @@ import {
   calculateCurrentOfficialRabWeightedPhysicalProgress,
   type CurrentOfficialRabWeightedPhysicalProgressResult,
 } from './progress-current-rab-weighted-physical-progress.policy';
+import {
+  ACTUAL_TEMPORAL_TRUTH_MODE,
+  calculateActualTemporalOfficialQuantity,
+  projectBusinessDateWire,
+} from './progress-actual-temporal-quantity.policy';
+
+type MonitoringReadClient = Pick<
+  Prisma.TransactionClient,
+  'project' | 'projectBaseline' | 'boqItem' | 'progressEntry'
+>;
 
 type CurrentOfficialQuantityResponse =
   | Exclude<
@@ -90,6 +100,27 @@ type CurrentOfficialRabWeightedPhysicalProgressResponse =
       state: 'INCOMPLETE';
       knownWeightedContributionSubtotalPercent: string;
     };
+
+const serializeCurrentOfficialQuantity = (
+  result: CurrentOfficialQuantityResult,
+): CurrentOfficialQuantityResponse => {
+  if (result.state === 'COMPLETE') {
+    return {
+      state: 'COMPLETE',
+      currentOfficialQuantity: result.currentOfficialQuantity.toString(),
+    };
+  }
+
+  if (result.state === 'INCOMPLETE') {
+    return {
+      state: 'INCOMPLETE',
+      knownEligibleQuantitySubtotal:
+        result.knownEligibleQuantitySubtotal.toString(),
+    };
+  }
+
+  return result;
+};
 
 const serializeWorkItemCurrentPhysicalProgress = (
   result: WorkItemCurrentPhysicalProgressResult,
@@ -627,18 +658,38 @@ export class ProgressService {
     throw params.error;
   }
 
-  async getMonitoring(projectId: string) {
+  async getMonitoring(projectId: string, cutoffDate?: unknown) {
+    if (cutoffDate === undefined) {
+      return this.getMonitoringFromClient(this.prisma, projectId);
+    }
+
+    const validCutoffDate = projectBusinessDateWire(cutoffDate);
+    if (validCutoffDate === null) {
+      throw new BadRequestException('INVALID_PROJECT_BUSINESS_CUTOFF');
+    }
+
+    return this.prisma.$transaction(
+      (tx) => this.getMonitoringFromClient(tx, projectId, validCutoffDate),
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+  }
+
+  private async getMonitoringFromClient(
+    db: MonitoringReadClient,
+    projectId: string,
+    cutoffDate?: string,
+  ) {
     const unavailable = [
       'plannedStart',
       'plannedFinish',
       'plannedDuration',
       'plannedWeight',
     ] as const;
-    const project = await this.prisma.project.findUnique({
+    const project = await db.project.findUnique({
       where: { id: projectId },
       select: { timeZone: true },
     });
-    const activeBaselines = await this.prisma.projectBaseline.findMany({
+    const activeBaselines = await db.projectBaseline.findMany({
       where: { projectId, status: 'ACTIVE' },
       orderBy: { versionNumber: 'desc' },
       take: 2,
@@ -657,16 +708,18 @@ export class ProgressService {
           projectWeight: weight.project,
           workItems: [],
         });
+      const baselineResponse = baseline
+        ? {
+            id: baseline.id,
+            versionNumber: baseline.versionNumber,
+            approvedAt: baseline.approvedAt,
+          }
+        : null;
+
       return {
         projectId,
         projectTimeZone: project?.timeZone ?? null,
-        baseline: baseline
-          ? {
-              id: baseline.id,
-              versionNumber: baseline.versionNumber,
-              approvedAt: baseline.approvedAt,
-            }
-          : null,
+        baseline: baselineResponse,
         items: [],
         freshness: {
           dataThrough: { state: 'UNAVAILABLE' as const, workDate: null },
@@ -680,10 +733,24 @@ export class ProgressService {
           serializeCurrentOfficialRabWeightedPhysicalProgress(
             currentOfficialRabWeightedPhysicalProgress,
           ),
+        ...(cutoffDate === undefined
+          ? {}
+          : {
+              actualTemporal: {
+                mode: ACTUAL_TEMPORAL_TRUTH_MODE,
+                cutoffDate,
+                baseline: baselineResponse,
+                items: [],
+                officialRabWeightedPhysicalProgress:
+                  serializeCurrentOfficialRabWeightedPhysicalProgress(
+                    currentOfficialRabWeightedPhysicalProgress,
+                  ),
+              },
+            }),
         unavailable,
       };
     }
-    const items = await this.prisma.boqItem.findMany({
+    const items = await db.boqItem.findMany({
       where: { boqStructureId: baseline.rabDocument.boqStructureId },
       orderBy: { sortOrder: 'asc' },
     });
@@ -694,7 +761,7 @@ export class ProgressService {
       baseline.rabDocument.totalBaseCost,
     );
     const entries = workItemIds.length
-      ? await this.prisma.progressEntry.findMany({
+      ? await db.progressEntry.findMany({
           where: {
             boqItemId: { in: workItemIds },
             progressReport: {
@@ -791,6 +858,90 @@ export class ProgressService {
         projectWeight: weight.project,
         workItems: law3WorkItems,
       });
+    const actualTemporal =
+      cutoffDate === undefined
+        ? undefined
+        : (() => {
+            const temporalTruthByWorkItem = new Map<
+              string,
+              {
+                rawQuantityResult: CurrentOfficialQuantityResult;
+                rawItemProgressResult: WorkItemCurrentPhysicalProgressResult;
+              }
+            >();
+            const temporalLaw3WorkItems = workItems.map((item) => {
+              const temporalQuantityResult =
+                calculateActualTemporalOfficialQuantity({
+                  scope: {
+                    projectId,
+                    activeBaselineId: baseline.id,
+                    boqItemId: item.id,
+                  },
+                  entries: entriesByWorkItem.get(item.id) ?? [],
+                  cutoffDate,
+                });
+
+              if (temporalQuantityResult.state === 'UNAVAILABLE') {
+                throw new Error('VALIDATED_TEMPORAL_CUTOFF_REQUIRED');
+              }
+
+              const temporalItemProgressResult =
+                calculateWorkItemCurrentPhysicalProgress({
+                  currentOfficialQuantity: temporalQuantityResult,
+                  plannedQuantity: item.quantity,
+                  plannedUnit: item.unit,
+                });
+              const itemWeight = weight.rows.get(item.id);
+
+              if (!itemWeight) {
+                throw new Error('H2A1_WORK_ITEM_WEIGHT_PROJECTION_REQUIRED');
+              }
+
+              temporalTruthByWorkItem.set(item.id, {
+                rawQuantityResult: temporalQuantityResult,
+                rawItemProgressResult: temporalItemProgressResult,
+              });
+
+              return {
+                boqItemId: item.id,
+                rabWeight: itemWeight.own,
+                currentOfficialItemProgress: temporalItemProgressResult,
+              };
+            });
+            const officialRabWeightedPhysicalProgress =
+              calculateCurrentOfficialRabWeightedPhysicalProgress({
+                projectWeight: weight.project,
+                workItems: temporalLaw3WorkItems,
+              });
+
+            return {
+              mode: ACTUAL_TEMPORAL_TRUTH_MODE,
+              cutoffDate,
+              baseline: {
+                id: baseline.id,
+                versionNumber: baseline.versionNumber,
+                approvedAt: baseline.approvedAt,
+              },
+              items: workItems.map((item) => {
+                const temporalTruth = temporalTruthByWorkItem.get(item.id)!;
+
+                return {
+                  boqItemId: item.id,
+                  officialQuantity: serializeCurrentOfficialQuantity(
+                    temporalTruth.rawQuantityResult,
+                  ),
+                  officialPhysicalProgress:
+                    serializeWorkItemCurrentPhysicalProgress(
+                      temporalTruth.rawItemProgressResult,
+                    ),
+                };
+              }),
+              officialRabWeightedPhysicalProgress:
+                serializeCurrentOfficialRabWeightedPhysicalProgress(
+                  officialRabWeightedPhysicalProgress,
+                ),
+            };
+          })();
     const effectiveRecords = [...effectiveByItem.values()];
     const latestWorkDate = effectiveRecords.reduce<Date | null>(
       (latest, entry) =>
@@ -838,6 +989,7 @@ export class ProgressService {
         serializeCurrentOfficialRabWeightedPhysicalProgress(
           currentOfficialRabWeightedPhysicalProgress,
         ),
+      ...(actualTemporal === undefined ? {} : { actualTemporal }),
       items: items.map((item) => {
         const effective = effectiveByItem.get(item.id);
 
@@ -851,19 +1003,7 @@ export class ProgressService {
             currentTruthByWorkItem.get(item.id)!;
 
           currentOfficialQuantityResponse =
-            rawQuantityResult.state === 'COMPLETE'
-              ? {
-                  ...rawQuantityResult,
-                  currentOfficialQuantity:
-                    rawQuantityResult.currentOfficialQuantity.toString(),
-                }
-              : rawQuantityResult.state === 'INCOMPLETE'
-                ? {
-                    ...rawQuantityResult,
-                    knownEligibleQuantitySubtotal:
-                      rawQuantityResult.knownEligibleQuantitySubtotal.toString(),
-                  }
-                : rawQuantityResult;
+            serializeCurrentOfficialQuantity(rawQuantityResult);
 
           currentOfficialItemProgressResponse =
             serializeWorkItemCurrentPhysicalProgress(rawItemProgressResult);

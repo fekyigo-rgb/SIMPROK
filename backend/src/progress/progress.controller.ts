@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -6,6 +7,7 @@ import {
   UseGuards,
   Request,
   Param,
+  Query,
 } from '@nestjs/common';
 import { ProgressService } from './progress.service';
 import {
@@ -33,8 +35,15 @@ export class ProgressController {
 
   @Get('monitoring')
   @Permissions('PROJECT_VIEW')
-  async getMonitoring(@Param('projectId') projectId: string) {
-    return this.progressService.getMonitoring(projectId);
+  async getMonitoring(
+    @Param('projectId') projectId: string,
+    @Query() query: Record<string, unknown>,
+  ) {
+    if (Object.keys(query).some((key) => key.startsWith('cutoffDate['))) {
+      throw new BadRequestException('INVALID_PROJECT_BUSINESS_CUTOFF');
+    }
+
+    return this.progressService.getMonitoring(projectId, query.cutoffDate);
   }
 
   @Post('field')
