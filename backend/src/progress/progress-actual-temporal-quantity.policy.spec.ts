@@ -257,13 +257,18 @@ describe('MON-04 Actual temporal quantity v1', () => {
     }
   });
 
-  it('does not place an eligible fact whose Project Business workDate is missing', () => {
-    const current = prove([entry('undated', '3', null)]);
-    const result = project(current, '2026-09-07');
+  it('does not place an eligible fact whose Project Business workDate is missing or outside the canonical domain', () => {
+    const missing = prove([entry('undated', '3', null)]);
+    const invalid = prove([entry('invalid-date', '3', '0099-01-01')]);
 
-    expect(result.state).toBe('INCOMPLETE');
-    if (result.state === 'INCOMPLETE') {
-      expect(result.knownEligibleQuantitySubtotal.toString()).toBe('0');
+    for (const result of [
+      project(missing, '2026-09-07'),
+      project(invalid, '2026-09-07'),
+    ]) {
+      expect(result.state).toBe('INCOMPLETE');
+      if (result.state === 'INCOMPLETE') {
+        expect(result.knownEligibleQuantitySubtotal.toString()).toBe('0');
+      }
     }
   });
 
@@ -395,6 +400,10 @@ describe('MON-04 Actual temporal quantity v1', () => {
       reason: 'INVALID_PROJECT_BUSINESS_CUTOFF',
     });
     expect(project(current, '2026-09-07T00:00:00.000Z')).toEqual({
+      state: 'UNAVAILABLE',
+      reason: 'INVALID_PROJECT_BUSINESS_CUTOFF',
+    });
+    expect(project(current, '0099-01-01')).toEqual({
       state: 'UNAVAILABLE',
       reason: 'INVALID_PROJECT_BUSINESS_CUTOFF',
     });

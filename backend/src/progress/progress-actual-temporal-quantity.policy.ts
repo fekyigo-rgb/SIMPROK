@@ -32,16 +32,21 @@ export interface ActualTemporalOfficialQuantityInput<
   cutoffDate: string;
 }
 
-const PROJECT_BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const PROJECT_BUSINESS_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-const validProjectBusinessDate = (value: string): boolean => {
-  if (!PROJECT_BUSINESS_DATE.test(value)) return false;
+const projectBusinessDateWire = (value: string): string | null => {
+  const match = PROJECT_BUSINESS_DATE.exec(value);
+  if (!match) return null;
 
-  const date = new Date(`${value}T00:00:00.000Z`);
-  return (
-    !Number.isNaN(date.getTime()) &&
-    date.toISOString() === `${value}T00:00:00.000Z`
-  );
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+    ? value
+    : null;
 };
 
 const workDateWire = (value: Date | null): string | null => {
@@ -49,7 +54,9 @@ const workDateWire = (value: Date | null): string | null => {
 
   const wire = value.toISOString();
   const businessDate = wire.slice(0, 10);
-  return wire === `${businessDate}T00:00:00.000Z` ? businessDate : null;
+  return wire === `${businessDate}T00:00:00.000Z`
+    ? projectBusinessDateWire(businessDate)
+    : null;
 };
 
 /**
@@ -74,7 +81,7 @@ export function calculateActualTemporalOfficialQuantity<
 >(
   input: Readonly<ActualTemporalOfficialQuantityInput<T>>,
 ): ActualTemporalOfficialQuantityResult {
-  if (!validProjectBusinessDate(input.cutoffDate)) {
+  if (projectBusinessDateWire(input.cutoffDate) === null) {
     return {
       state: 'UNAVAILABLE',
       reason: 'INVALID_PROJECT_BUSINESS_CUTOFF',
