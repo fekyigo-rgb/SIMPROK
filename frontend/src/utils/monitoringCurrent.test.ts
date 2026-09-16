@@ -455,6 +455,99 @@ test('MON04 chart projects canonical dates without inventing or joining unknown 
   assert.doesNotMatch(chartBlock, /\.sort\(|new Set|interpolat/i);
 });
 
+test('MON04 chart holds the previous value until the next canonical boundary', () => {
+  const points: MonitoringProgressComparisonPoint[] = [
+    {
+      cutoffDate: '2026-09-01',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '10',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '5',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
+    },
+    {
+      cutoffDate: '2026-09-10',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '30',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '25',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
+    },
+  ];
+  const chart = monitoringComparisonChartProjection(points);
+  const [first, second] = chart.points;
+
+  assert.deepEqual(
+    chart.points.map((point) => point.cutoffDate),
+    points.map((point) => point.cutoffDate),
+  );
+  assert.deepEqual(chart.plannedSegments, [
+    {
+      from: { x: first.x, y: first.plannedY },
+      to: { x: second.x, y: first.plannedY },
+    },
+    {
+      from: { x: second.x, y: first.plannedY },
+      to: { x: second.x, y: second.plannedY },
+    },
+  ]);
+  assert.deepEqual(chart.actualSegments, [
+    {
+      from: { x: first.x, y: first.actualY },
+      to: { x: second.x, y: first.actualY },
+    },
+    {
+      from: { x: second.x, y: first.actualY },
+      to: { x: second.x, y: second.actualY },
+    },
+  ]);
+  for (const [segments, previousY, currentY] of [
+    [chart.plannedSegments, first.plannedY, second.plannedY],
+    [chart.actualSegments, first.actualY, second.actualY],
+  ] as const) {
+    assert.equal(
+      segments.some(
+        (segment) =>
+          segment.from.x === first.x &&
+          segment.from.y === previousY &&
+          segment.to.x === second.x &&
+          segment.to.y === currentY,
+      ),
+      false,
+    );
+  }
+
+  const equal = monitoringComparisonChartProjection([
+    points[0],
+    {
+      ...points[1],
+      planned: points[0].planned,
+      actual: points[0].actual,
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
+    },
+  ]);
+  assert.deepEqual(equal.plannedSegments, [
+    {
+      from: { x: equal.points[0].x, y: equal.points[0].plannedY },
+      to: { x: equal.points[1].x, y: equal.points[0].plannedY },
+    },
+  ]);
+  assert.deepEqual(equal.actualSegments, [
+    {
+      from: { x: equal.points[0].x, y: equal.points[0].actualY },
+      to: { x: equal.points[1].x, y: equal.points[0].actualY },
+    },
+  ]);
+});
+
 test('H2-A0-9 the shell states project scope, Terkini, and both freshness meanings', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
   assert.match(page, /SELURUH PROYEK/);

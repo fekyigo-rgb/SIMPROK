@@ -716,10 +716,17 @@ export function monitoringComparisonChartProjection(
         previousY !== null &&
         currentY !== null
       ) {
+        const boundaryAtPreviousValue = { x: current.x, y: previousY };
         segments.push({
           from: { x: previous.x, y: previousY },
-          to: { x: current.x, y: currentY },
+          to: boundaryAtPreviousValue,
         });
+        if (currentY !== previousY) {
+          segments.push({
+            from: boundaryAtPreviousValue,
+            to: { x: current.x, y: currentY },
+          });
+        }
       }
     }
     return segments;
