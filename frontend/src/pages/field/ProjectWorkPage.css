@@ -29,6 +29,11 @@
 .execution-plan table { width: 100%; border-collapse: collapse; font-size: .76rem; }
 .execution-plan th, .execution-plan td { padding: .55rem .6rem; border-bottom: 1px solid #e6eef3; color: #304f62; text-align: left; }
 .execution-plan th { color: #617887; font-size: .65rem; text-transform: uppercase; }
+.execution-plan-schedule { min-width: 1120px; }
+.execution-plan-realization-value { color: #123b58; font-weight: 750; white-space: nowrap; }
+.execution-plan-fact-state { display: grid; gap: .08rem; min-width: 120px; line-height: 1.25; }
+.execution-plan-fact-state + .execution-plan-fact-state { margin-top: .32rem; }
+.execution-plan-fact-state small { color: #617887; font-size: .58rem; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
 .execution-plan-curve { display: grid; gap: .45rem; margin-top: .75rem; }
 .execution-plan-curve > div { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem .65rem; border-left: 3px solid #0284c7; background: #f0f9ff; color: #24566f; font-size: .76rem; }
 .execution-plan-curve small { color: #92400e; }

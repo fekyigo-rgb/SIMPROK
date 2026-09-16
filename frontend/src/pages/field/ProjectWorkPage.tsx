@@ -12,13 +12,15 @@ import {
   formatWeightPercentage,
   formatProjectBusinessDate,
   lastRecordedLabel,
+  monitoringWorkItemsById,
+  officialItemProgressLabel,
+  officialQuantityLabel,
   progressDetailPath,
   recordedAtLabel,
   rowWeightPresentation,
   selectedWorkItem,
   weightCompletenessExplanation,
   weightCompletenessLabel,
-  type MonitoringItem,
   type MonitoringProject,
   type MonitoringResponse,
 } from '../../utils/monitoringCurrent';
@@ -60,53 +62,6 @@ function actualQuantity(
 ): string {
   if (state === 'UNAVAILABLE') return 'TIDAK TERSEDIA';
   return quantity === undefined ? 'BELUM DICATAT' : `${quantity} ${unit}`.trim();
-}
-
-function officialQuantityLabel(
-  fact: MonitoringItem['currentOfficialQuantity'],
-  unit: string,
-): string {
-  switch (fact.state) {
-    case 'COMPLETE':
-      return `${fact.currentOfficialQuantity} ${unit}`.trim();
-    case 'INCOMPLETE':
-      return `Belum lengkap — subtotal ${fact.knownEligibleQuantitySubtotal} ${unit}`.trim();
-    case 'NOT_YET_RECORDED':
-      return 'BELUM DICATAT';
-    case 'NO_ELIGIBLE_CURRENT_FACT':
-      return 'TIDAK ADA FAKTA BERLAKU';
-    case 'INVALID_LINEAGE':
-      return 'LINEAGE TIDAK VALID';
-    case 'INVALID_NUMERIC_FACT':
-      return 'FAKTA NUMERIK TIDAK VALID';
-    case 'SEMANTICS_UNPROVEN':
-      return 'SEMANTIK BELUM TERBUKTI';
-  }
-}
-
-function officialItemProgressLabel(
-  fact: MonitoringItem['currentOfficialItemProgress'],
-): string {
-  switch (fact.state) {
-    case 'COMPLETE':
-      return `${fact.boundedContributionProgressPercent}%`;
-    case 'INCOMPLETE':
-      return fact.knownProgressSubtotalPercent === undefined
-        ? 'BELUM LENGKAP'
-        : `BELUM LENGKAP — subtotal ${fact.knownProgressSubtotalPercent}%`;
-    case 'UNAVAILABLE':
-      return `TIDAK TERSEDIA — ${fact.reason}`;
-    case 'NOT_YET_RECORDED':
-      return 'BELUM DICATAT';
-    case 'NO_ELIGIBLE_CURRENT_FACT':
-      return 'TIDAK ADA FAKTA BERLAKU';
-    case 'INVALID_LINEAGE':
-      return 'LINEAGE TIDAK VALID';
-    case 'INVALID_NUMERIC_FACT':
-      return 'FAKTA NUMERIK TIDAK VALID';
-    case 'SEMANTICS_UNPROVEN':
-      return 'SEMANTIK BELUM TERBUKTI';
-  }
 }
 
 function officialProjectProgressLabel(
@@ -206,6 +161,10 @@ export function ProjectWorkPage() {
 
   const rows = useMemo(
     () => buildMonitoringRows(monitoring?.items ?? []),
+    [monitoring?.items],
+  );
+  const realizationByBoqItemId = useMemo(
+    () => monitoringWorkItemsById(monitoring?.items ?? []),
     [monitoring?.items],
   );
   const selected = useMemo(
@@ -324,6 +283,7 @@ export function ProjectWorkPage() {
       <ExecutionPlanReadinessPanel
         projectId={project.id}
         executionPlan={executionPlan}
+        realizationByBoqItemId={realizationByBoqItemId}
         onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
       />
 
