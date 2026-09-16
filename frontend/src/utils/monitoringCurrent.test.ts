@@ -10,7 +10,9 @@ import {
   formatWeightPercentage,
   lastRecordedLabel,
   lifecycleLabel,
+  monitoringWorkItemsById,
   progressDetailPath,
+  scheduleRealizationPresentation,
   recordedAtLabel,
   rowWeightPresentation,
   selectedWorkItem,
@@ -379,6 +381,167 @@ test('H2-A1-4 coverage language is bounded and never presented as project progre
   assert.doesNotMatch(page, /planned-to-date|ahead|behind|On Track/);
 });
 
+/* SCHEDULE_REALIZATION_PRESENTATION_V1 */
+
+test('SCHEDULE-REALIZATION-1 lookup uses exact BoqItem identity and never WBS/name fallback', () => {
+  const workA = item({ id: 'boq-a', name: 'Same Name' });
+  const workB = item({ id: 'boq-b', name: 'Same Name' });
+  const folder = item({
+    id: 'folder-a',
+    name: 'Same Name',
+    itemType: 'FOLDER',
+    actual: null,
+  });
+  const lookup = monitoringWorkItemsById([workB, folder, workA]);
+
+  assert.equal(lookup.get('boq-a'), workA);
+  assert.equal(lookup.get('boq-b'), workB);
+  assert.equal(lookup.has('folder-a'), false);
+  assert.equal(lookup.get('missing'), undefined);
+});
+
+test('SCHEDULE-REALIZATION-2 COMPLETE facts preserve exact backend strings and effective work date', () => {
+  const monitored = item({
+    id: 'complete',
+    name: 'Complete',
+    currentOfficialQuantity: {
+      state: 'COMPLETE',
+      currentOfficialQuantity: '12.5',
+    },
+    currentOfficialItemProgress: {
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '125',
+      boundedContributionProgressPercent: '24.000000000000000000',
+    },
+    actual: {
+      state: 'RECORDED',
+      lifecycleState: 'VERIFIED',
+      effectiveRecord: {
+        id: 'effective-complete',
+        installedQuantity: '999',
+        workDate: '2026-09-07T00:00:00.000Z',
+        notes: null,
+        captureMethod: 'FIELD_MEASUREMENT',
+        evidenceReferences: [],
+        recordedByAccountId: null,
+        supersedesEntryId: null,
+        recordedAt: '2026-09-08T01:00:00.000Z',
+      },
+    },
+  });
+
+  assert.deepEqual(scheduleRealizationPresentation(monitored, 'm3'), {
+    currentOfficialQuantity: '12.5 m3',
+    currentOfficialItemProgress: '24.000000000000000000%',
+    effectiveWorkDate: '7 Sep 2026',
+    quantityState: 'Lengkap',
+    progressState: 'Lengkap',
+  });
+});
+
+test('SCHEDULE-REALIZATION-3 lawful COMPLETE zero remains zero', () => {
+  const monitored = item({
+    id: 'zero',
+    name: 'Zero',
+    currentOfficialQuantity: {
+      state: 'COMPLETE',
+      currentOfficialQuantity: '0',
+    },
+    currentOfficialItemProgress: {
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '0',
+      boundedContributionProgressPercent: '0',
+    },
+  });
+  const view = scheduleRealizationPresentation(monitored, 'm3');
+
+  assert.equal(view.currentOfficialQuantity, '0 m3');
+  assert.equal(view.currentOfficialItemProgress, '0%');
+  assert.equal(view.quantityState, 'Lengkap');
+  assert.notEqual(view.currentOfficialQuantity, 'BELUM DICATAT');
+});
+
+test('SCHEDULE-REALIZATION-4 NOT_YET_RECORDED never becomes zero', () => {
+  const view = scheduleRealizationPresentation(
+    item({ id: 'missing', name: 'Missing' }),
+    'm3',
+  );
+
+  assert.equal(view.currentOfficialQuantity, 'BELUM DICATAT');
+  assert.equal(view.currentOfficialItemProgress, 'BELUM DICATAT');
+  assert.equal(view.effectiveWorkDate, 'BELUM DICATAT');
+  assert.equal(view.quantityState, 'Belum dicatat');
+  assert.equal(view.progressState, 'Belum dicatat');
+  assert.doesNotMatch(JSON.stringify(view), /(^|[^0-9])0([^0-9]|$)/);
+});
+
+test('SCHEDULE-REALIZATION-5 INCOMPLETE exposes known subtotals without claiming complete', () => {
+  const view = scheduleRealizationPresentation(
+    item({
+      id: 'incomplete',
+      name: 'Incomplete',
+      currentOfficialQuantity: {
+        state: 'INCOMPLETE',
+        knownEligibleQuantitySubtotal: '4.25',
+      },
+      currentOfficialItemProgress: {
+        state: 'INCOMPLETE',
+        knownProgressSubtotalPercent: '17.5',
+      },
+    }),
+    'm3',
+  );
+
+  assert.equal(view.currentOfficialQuantity, 'Belum lengkap — subtotal 4.25 m3');
+  assert.equal(view.currentOfficialItemProgress, 'BELUM LENGKAP — subtotal 17.5%');
+  assert.equal(view.quantityState, 'Belum lengkap');
+  assert.equal(view.progressState, 'Belum lengkap');
+});
+
+test('SCHEDULE-REALIZATION-6 unavailable and invalid facts remain explicit', () => {
+  const unavailable = scheduleRealizationPresentation(
+    item({
+      id: 'unavailable',
+      name: 'Unavailable',
+      currentOfficialQuantity: { state: 'SEMANTICS_UNPROVEN' },
+      currentOfficialItemProgress: {
+        state: 'UNAVAILABLE',
+        reason: 'PLANNED_QUANTITY_ZERO',
+      },
+      actual: { state: 'UNAVAILABLE', effectiveRecord: null },
+    }),
+    'm3',
+  );
+  assert.deepEqual(unavailable, {
+    currentOfficialQuantity: 'SEMANTIK BELUM TERBUKTI',
+    currentOfficialItemProgress: 'TIDAK TERSEDIA — PLANNED_QUANTITY_ZERO',
+    effectiveWorkDate: 'TIDAK TERSEDIA',
+    quantityState: 'Semantik belum terbukti',
+    progressState: 'Tidak tersedia',
+  });
+
+  const invalid = scheduleRealizationPresentation(
+    item({
+      id: 'invalid',
+      name: 'Invalid',
+      currentOfficialQuantity: { state: 'INVALID_NUMERIC_FACT' },
+      currentOfficialItemProgress: { state: 'INVALID_LINEAGE' },
+    }),
+    'm3',
+  );
+  assert.equal(invalid.currentOfficialQuantity, 'FAKTA NUMERIK TIDAK VALID');
+  assert.equal(invalid.currentOfficialItemProgress, 'LINEAGE TIDAK VALID');
+  assert.equal(invalid.quantityState, 'Fakta numerik tidak valid');
+  assert.equal(invalid.progressState, 'Lineage tidak valid');
+
+  assert.deepEqual(scheduleRealizationPresentation(undefined, 'm3'), {
+    currentOfficialQuantity: 'TIDAK TERSEDIA',
+    currentOfficialItemProgress: 'TIDAK TERSEDIA',
+    effectiveWorkDate: 'TIDAK TERSEDIA',
+    quantityState: 'Tidak tersedia',
+    progressState: 'Tidak tersedia',
+  });
+});
 /* OFFICIAL_TRUTH_CONTRACT_GUARDS_V1 */
 
 test('OFFICIAL-1 official quantity COMPLETE preserves exact zero', () => {

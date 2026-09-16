@@ -129,6 +129,34 @@ test('canonical Monitoring consumes the backend plan API and keeps server author
   assert.doesNotMatch(panel, /Kurva S Realisasi|Forecast|Recovery/);
 });
 
+test('Schedule Rencana reuses parent-owned Monitoring facts by exact BoqItem id', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+
+  assert.match(page, /monitoringWorkItemsById\(monitoring\?\.items \?\? \[\]\)/);
+  assert.match(page, /realizationByBoqItemId=\{realizationByBoqItemId\}/);
+  assert.equal((page.match(/\/progress\/monitoring/g) ?? []).length, 1);
+  assert.match(panel, /Schedule Rencana \+ Realisasi Terkini/);
+  assert.match(
+    panel,
+    /realizationByBoqItemId\.get\(row\.boqItemId\)/,
+  );
+  assert.match(panel, /scheduleRealizationPresentation/);
+  assert.match(panel, /realization\.currentOfficialQuantity/);
+  assert.match(panel, /realization\.currentOfficialItemProgress/);
+  assert.match(panel, /realization\.effectiveWorkDate/);
+  assert.match(panel, /realization\.quantityState/);
+  assert.match(panel, /realization\.progressState/);
+  assert.match(panel, /bukan Actual Start, Actual Finish, atau durasi aktual/);
+  assert.doesNotMatch(panel, /progress\/monitoring/);
+  assert.doesNotMatch(panel, /DeviationSignal|ProgressCard/);
+  assert.doesNotMatch(panel, /parseFloat|parseInt|Math\.|\.toFixed\(/);
+  assert.doesNotMatch(panel, /actual\s*-\s*planned|planned\s*-\s*actual/);
+  assert.doesNotMatch(panel, /\.find\([^)]*(wbsCode|name)/s);
+});
 test('locked UI is read-only by state and no manual curve input exists', () => {
   const panel = readFileSync(
     'src/pages/field/ExecutionPlanReadinessPanel.tsx',

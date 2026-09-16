@@ -213,6 +213,134 @@ export function effectiveActual(
   return item.actual.effectiveRecord;
 }
 
+type MonitoringOfficialFactState =
+  | MonitoringItem['currentOfficialQuantity']['state']
+  | MonitoringItem['currentOfficialItemProgress']['state'];
+
+export interface ScheduleRealizationPresentation {
+  currentOfficialQuantity: string;
+  currentOfficialItemProgress: string;
+  effectiveWorkDate: string;
+  quantityState: string;
+  progressState: string;
+}
+
+export function monitoringWorkItemsById(
+  items: readonly MonitoringItem[],
+): ReadonlyMap<string, MonitoringItem> {
+  return new Map(
+    items
+      .filter((item) => item.itemType === 'WORK_ITEM')
+      .map((item) => [item.id, item] as const),
+  );
+}
+
+export function officialQuantityLabel(
+  fact: MonitoringItem['currentOfficialQuantity'],
+  unit: string,
+): string {
+  switch (fact.state) {
+    case 'COMPLETE':
+      return `${fact.currentOfficialQuantity} ${unit}`.trim();
+    case 'INCOMPLETE':
+      return `Belum lengkap — subtotal ${fact.knownEligibleQuantitySubtotal} ${unit}`.trim();
+    case 'NOT_YET_RECORDED':
+      return 'BELUM DICATAT';
+    case 'NO_ELIGIBLE_CURRENT_FACT':
+      return 'TIDAK ADA FAKTA BERLAKU';
+    case 'INVALID_LINEAGE':
+      return 'LINEAGE TIDAK VALID';
+    case 'INVALID_NUMERIC_FACT':
+      return 'FAKTA NUMERIK TIDAK VALID';
+    case 'SEMANTICS_UNPROVEN':
+      return 'SEMANTIK BELUM TERBUKTI';
+  }
+}
+
+export function officialItemProgressLabel(
+  fact: MonitoringItem['currentOfficialItemProgress'],
+): string {
+  switch (fact.state) {
+    case 'COMPLETE':
+      return `${fact.boundedContributionProgressPercent}%`;
+    case 'INCOMPLETE':
+      return fact.knownProgressSubtotalPercent === undefined
+        ? 'BELUM LENGKAP'
+        : `BELUM LENGKAP — subtotal ${fact.knownProgressSubtotalPercent}%`;
+    case 'UNAVAILABLE':
+      return `TIDAK TERSEDIA — ${fact.reason}`;
+    case 'NOT_YET_RECORDED':
+      return 'BELUM DICATAT';
+    case 'NO_ELIGIBLE_CURRENT_FACT':
+      return 'TIDAK ADA FAKTA BERLAKU';
+    case 'INVALID_LINEAGE':
+      return 'LINEAGE TIDAK VALID';
+    case 'INVALID_NUMERIC_FACT':
+      return 'FAKTA NUMERIK TIDAK VALID';
+    case 'SEMANTICS_UNPROVEN':
+      return 'SEMANTIK BELUM TERBUKTI';
+  }
+}
+
+function officialFactStateLabel(state: MonitoringOfficialFactState): string {
+  switch (state) {
+    case 'COMPLETE':
+      return 'Lengkap';
+    case 'INCOMPLETE':
+      return 'Belum lengkap';
+    case 'UNAVAILABLE':
+      return 'Tidak tersedia';
+    case 'NOT_YET_RECORDED':
+      return 'Belum dicatat';
+    case 'NO_ELIGIBLE_CURRENT_FACT':
+      return 'Tidak ada fakta berlaku';
+    case 'INVALID_LINEAGE':
+      return 'Lineage tidak valid';
+    case 'INVALID_NUMERIC_FACT':
+      return 'Fakta numerik tidak valid';
+    case 'SEMANTICS_UNPROVEN':
+      return 'Semantik belum terbukti';
+  }
+}
+
+export function scheduleRealizationPresentation(
+  item: MonitoringItem | undefined,
+  unit: string,
+): ScheduleRealizationPresentation {
+  if (!item) {
+    return {
+      currentOfficialQuantity: 'TIDAK TERSEDIA',
+      currentOfficialItemProgress: 'TIDAK TERSEDIA',
+      effectiveWorkDate: 'TIDAK TERSEDIA',
+      quantityState: 'Tidak tersedia',
+      progressState: 'Tidak tersedia',
+    };
+  }
+
+  const actual = effectiveActual(item);
+  const formattedWorkDate = formatProjectBusinessDate(actual?.workDate ?? null);
+  const effectiveWorkDate =
+    formattedWorkDate ||
+    (item.actual?.state === 'NOT_YET_RECORDED'
+      ? 'BELUM DICATAT'
+      : 'TIDAK TERSEDIA');
+
+  return {
+    currentOfficialQuantity: officialQuantityLabel(
+      item.currentOfficialQuantity,
+      unit,
+    ),
+    currentOfficialItemProgress: officialItemProgressLabel(
+      item.currentOfficialItemProgress,
+    ),
+    effectiveWorkDate,
+    quantityState: officialFactStateLabel(item.currentOfficialQuantity.state),
+    progressState: officialFactStateLabel(
+      item.currentOfficialItemProgress.state,
+    ),
+  };
+}
+
 /**
  * Display rounding only. Authoritative percentage math is completed by the
  * backend with Prisma.Decimal; this function never chooses a denominator or

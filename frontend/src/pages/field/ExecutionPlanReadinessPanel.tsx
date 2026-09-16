@@ -8,7 +8,12 @@ import {
   executionPlanStatusLabel,
   type ExecutionPlanResponse,
 } from '../../utils/executionPlan';
-import { formatProjectBusinessDate, recordedAtLabel } from '../../utils/monitoringCurrent';
+import {
+  formatProjectBusinessDate,
+  recordedAtLabel,
+  scheduleRealizationPresentation,
+  type MonitoringItem,
+} from '../../utils/monitoringCurrent';
 
 type ReviewView = 'schedule' | 'work-plan' | 'planned-curve';
 
@@ -23,10 +28,12 @@ interface DraftRow {
 export function ExecutionPlanReadinessPanel({
   projectId,
   executionPlan,
+  realizationByBoqItemId,
   onChanged,
 }: {
   projectId: string;
   executionPlan: ExecutionPlanResponse;
+  realizationByBoqItemId: ReadonlyMap<string, MonitoringItem>;
   onChanged: () => void;
 }) {
   const { hasPermission } = useAuth();
@@ -181,24 +188,60 @@ export function ExecutionPlanReadinessPanel({
 
       {view === 'schedule' && (
         <div className="execution-plan-review">
-          <h3>Schedule Rencana</h3>
+          <h3>Schedule Rencana + Realisasi Terkini</h3>
+          <p className="execution-plan-note">
+            Waktu tetap berasal dari rencana resmi. Realisasi menampilkan fakta
+            Current Official terkini, bukan Actual Start, Actual Finish, atau durasi aktual.
+          </p>
           {executionPlan.schedule.length === 0 ? (
             <p>Distribusi waktu belum tersedia.</p>
           ) : (
             <div className="execution-plan-table-scroll">
-              <table>
+              <table className="execution-plan-schedule">
                 <thead>
-                  <tr><th>Pekerjaan</th><th>Mulai</th><th>Selesai</th><th>Rencana</th></tr>
+                  <tr>
+                    <th>Pekerjaan</th>
+                    <th>Rencana Mulai</th>
+                    <th>Rencana Selesai</th>
+                    <th>Rencana</th>
+                    <th>Realisasi Terkini</th>
+                    <th>Progress Terkini</th>
+                    <th>Tanggal Kerja Efektif</th>
+                    <th>Status Fakta</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {executionPlan.schedule.map((row) => (
-                    <tr key={row.boqItemId}>
-                      <td>{row.wbsCode} · {row.name}</td>
-                      <td>{formatProjectBusinessDate(row.plannedStartDate)}</td>
-                      <td>{formatProjectBusinessDate(row.plannedFinishDate)}</td>
-                      <td>{row.plannedQuantity} {row.unit}</td>
-                    </tr>
-                  ))}
+                  {executionPlan.schedule.map((row) => {
+                    const realization = scheduleRealizationPresentation(
+                      realizationByBoqItemId.get(row.boqItemId),
+                      row.unit,
+                    );
+                    return (
+                      <tr key={row.boqItemId}>
+                        <td>{row.wbsCode} · {row.name}</td>
+                        <td>{formatProjectBusinessDate(row.plannedStartDate)}</td>
+                        <td>{formatProjectBusinessDate(row.plannedFinishDate)}</td>
+                        <td>{row.plannedQuantity} {row.unit}</td>
+                        <td className="execution-plan-realization-value">
+                          {realization.currentOfficialQuantity}
+                        </td>
+                        <td className="execution-plan-realization-value">
+                          {realization.currentOfficialItemProgress}
+                        </td>
+                        <td>{realization.effectiveWorkDate}</td>
+                        <td>
+                          <span className="execution-plan-fact-state">
+                            <small>Kuantitas</small>
+                            {realization.quantityState}
+                          </span>
+                          <span className="execution-plan-fact-state">
+                            <small>Progress</small>
+                            {realization.progressState}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
