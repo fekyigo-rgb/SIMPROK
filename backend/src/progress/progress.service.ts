@@ -37,6 +37,7 @@ import {
 } from './progress-semantic-authority.policy';
 import {
   calculateCurrentOfficialQuantity,
+  calculateCurrentOfficialQuantityFromGoverned,
   type CurrentOfficialQuantityResult,
 } from './progress-current-official-quantity.policy';
 import {
@@ -48,8 +49,11 @@ import {
   type CurrentOfficialRabWeightedPhysicalProgressResult,
 } from './progress-current-rab-weighted-physical-progress.policy';
 import {
+  ACTUAL_TEMPORAL_SERIES_BOUNDARY_BASIS,
   ACTUAL_TEMPORAL_TRUTH_MODE,
-  calculateActualTemporalOfficialQuantity,
+  actualTemporalSeriesBoundaries,
+  prepareActualTemporalOfficialQuantity,
+  projectActualTemporalOfficialQuantity,
   projectBusinessDateWire,
 } from './progress-actual-temporal-quantity.policy';
 
@@ -658,7 +662,15 @@ export class ProgressService {
     throw params.error;
   }
 
-  async getMonitoring(projectId: string, cutoffDate?: unknown) {
+  async getMonitoring(
+    projectId: string,
+    cutoffDate?: unknown,
+    includeActualSeries = false,
+  ) {
+    if (includeActualSeries && cutoffDate === undefined) {
+      throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
+    }
+
     if (cutoffDate === undefined) {
       return this.getMonitoringFromClient(this.prisma, projectId);
     }
@@ -669,7 +681,13 @@ export class ProgressService {
     }
 
     return this.prisma.$transaction(
-      (tx) => this.getMonitoringFromClient(tx, projectId, validCutoffDate),
+      (tx) =>
+        this.getMonitoringFromClient(
+          tx,
+          projectId,
+          validCutoffDate,
+          includeActualSeries,
+        ),
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
   }
@@ -678,6 +696,7 @@ export class ProgressService {
     db: MonitoringReadClient,
     projectId: string,
     cutoffDate?: string,
+    includeActualSeries = false,
   ) {
     const unavailable = [
       'plannedStart',
@@ -708,6 +727,10 @@ export class ProgressService {
           projectWeight: weight.project,
           workItems: [],
         });
+      const serializedOfficialRabWeightedPhysicalProgress =
+        serializeCurrentOfficialRabWeightedPhysicalProgress(
+          currentOfficialRabWeightedPhysicalProgress,
+        );
       const baselineResponse = baseline
         ? {
             id: baseline.id,
@@ -730,9 +753,7 @@ export class ProgressService {
         },
         weight: weight.project,
         currentOfficialRabWeightedPhysicalProgress:
-          serializeCurrentOfficialRabWeightedPhysicalProgress(
-            currentOfficialRabWeightedPhysicalProgress,
-          ),
+          serializedOfficialRabWeightedPhysicalProgress,
         ...(cutoffDate === undefined
           ? {}
           : {
@@ -742,9 +763,21 @@ export class ProgressService {
                 baseline: baselineResponse,
                 items: [],
                 officialRabWeightedPhysicalProgress:
-                  serializeCurrentOfficialRabWeightedPhysicalProgress(
-                    currentOfficialRabWeightedPhysicalProgress,
-                  ),
+                  serializedOfficialRabWeightedPhysicalProgress,
+                ...(includeActualSeries
+                  ? {
+                      series: {
+                        boundaryBasis: ACTUAL_TEMPORAL_SERIES_BOUNDARY_BASIS,
+                        points: [
+                          {
+                            cutoffDate,
+                            officialRabWeightedPhysicalProgress:
+                              serializedOfficialRabWeightedPhysicalProgress,
+                          },
+                        ],
+                      },
+                    }
+                  : {}),
               },
             }),
         unavailable,
@@ -811,6 +844,23 @@ export class ProgressService {
       }
     }
 
+    const temporalGovernedByWorkItem =
+      cutoffDate === undefined
+        ? null
+        : new Map(
+            workItems.map((item) => [
+              item.id,
+              prepareActualTemporalOfficialQuantity(
+                {
+                  projectId,
+                  activeBaselineId: baseline.id,
+                  boqItemId: item.id,
+                },
+                entriesByWorkItem.get(item.id) ?? [],
+              ),
+            ]),
+          );
+
     const effectiveByItem = new Map<string, (typeof entries)[number]>();
     for (const workItemId of workItemIds) {
       const effective = this.effectiveEntry(
@@ -827,10 +877,18 @@ export class ProgressService {
       }
     >();
     const law3WorkItems = workItems.map((item) => {
-      const rawQuantityResult = calculateCurrentOfficialQuantity(
-        { projectId, activeBaselineId: baseline.id, boqItemId: item.id },
-        entriesByWorkItem.get(item.id) ?? [],
-      );
+      const governed = temporalGovernedByWorkItem?.get(item.id);
+      const rawQuantityResult =
+        governed === undefined
+          ? calculateCurrentOfficialQuantity(
+              {
+                projectId,
+                activeBaselineId: baseline.id,
+                boqItemId: item.id,
+              },
+              entriesByWorkItem.get(item.id) ?? [],
+            )
+          : calculateCurrentOfficialQuantityFromGoverned(governed);
       const rawItemProgressResult = calculateWorkItemCurrentPhysicalProgress({
         currentOfficialQuantity: rawQuantityResult,
         plannedQuantity: item.quantity,
@@ -858,61 +916,89 @@ export class ProgressService {
         projectWeight: weight.project,
         workItems: law3WorkItems,
       });
+
+    const projectTemporalAtCutoff = (boundaryDate: string) => {
+      if (temporalGovernedByWorkItem === null) {
+        throw new Error('TEMPORAL_GOVERNED_CONTEXT_REQUIRED');
+      }
+
+      const temporalTruthByWorkItem = new Map<
+        string,
+        {
+          rawQuantityResult: CurrentOfficialQuantityResult;
+          rawItemProgressResult: WorkItemCurrentPhysicalProgressResult;
+        }
+      >();
+      const temporalLaw3WorkItems = workItems.map((item) => {
+        const governed = temporalGovernedByWorkItem.get(item.id);
+        if (governed === undefined) {
+          throw new Error('TEMPORAL_GOVERNED_WORK_ITEM_CONTEXT_REQUIRED');
+        }
+
+        const temporalQuantityResult = projectActualTemporalOfficialQuantity({
+          governed,
+          cutoffDate: boundaryDate,
+        });
+
+        if (temporalQuantityResult.state === 'UNAVAILABLE') {
+          throw new Error('VALIDATED_TEMPORAL_CUTOFF_REQUIRED');
+        }
+
+        const temporalItemProgressResult =
+          calculateWorkItemCurrentPhysicalProgress({
+            currentOfficialQuantity: temporalQuantityResult,
+            plannedQuantity: item.quantity,
+            plannedUnit: item.unit,
+          });
+        const itemWeight = weight.rows.get(item.id);
+
+        if (!itemWeight) {
+          throw new Error('H2A1_WORK_ITEM_WEIGHT_PROJECTION_REQUIRED');
+        }
+
+        temporalTruthByWorkItem.set(item.id, {
+          rawQuantityResult: temporalQuantityResult,
+          rawItemProgressResult: temporalItemProgressResult,
+        });
+
+        return {
+          boqItemId: item.id,
+          rabWeight: itemWeight.own,
+          currentOfficialItemProgress: temporalItemProgressResult,
+        };
+      });
+
+      return {
+        temporalTruthByWorkItem,
+        officialRabWeightedPhysicalProgress:
+          calculateCurrentOfficialRabWeightedPhysicalProgress({
+            projectWeight: weight.project,
+            workItems: temporalLaw3WorkItems,
+          }),
+      };
+    };
+    const temporalProjectionCache = new Map<
+      string,
+      ReturnType<typeof projectTemporalAtCutoff>
+    >();
+    const cachedProjectTemporalAtCutoff = (boundaryDate: string) => {
+      const cached = temporalProjectionCache.get(boundaryDate);
+      if (cached) return cached;
+
+      const projection = projectTemporalAtCutoff(boundaryDate);
+      temporalProjectionCache.set(boundaryDate, projection);
+      return projection;
+    };
     const actualTemporal =
       cutoffDate === undefined
         ? undefined
         : (() => {
-            const temporalTruthByWorkItem = new Map<
-              string,
-              {
-                rawQuantityResult: CurrentOfficialQuantityResult;
-                rawItemProgressResult: WorkItemCurrentPhysicalProgressResult;
-              }
-            >();
-            const temporalLaw3WorkItems = workItems.map((item) => {
-              const temporalQuantityResult =
-                calculateActualTemporalOfficialQuantity({
-                  scope: {
-                    projectId,
-                    activeBaselineId: baseline.id,
-                    boqItemId: item.id,
-                  },
-                  entries: entriesByWorkItem.get(item.id) ?? [],
-                  cutoffDate,
-                });
-
-              if (temporalQuantityResult.state === 'UNAVAILABLE') {
-                throw new Error('VALIDATED_TEMPORAL_CUTOFF_REQUIRED');
-              }
-
-              const temporalItemProgressResult =
-                calculateWorkItemCurrentPhysicalProgress({
-                  currentOfficialQuantity: temporalQuantityResult,
-                  plannedQuantity: item.quantity,
-                  plannedUnit: item.unit,
-                });
-              const itemWeight = weight.rows.get(item.id);
-
-              if (!itemWeight) {
-                throw new Error('H2A1_WORK_ITEM_WEIGHT_PROJECTION_REQUIRED');
-              }
-
-              temporalTruthByWorkItem.set(item.id, {
-                rawQuantityResult: temporalQuantityResult,
-                rawItemProgressResult: temporalItemProgressResult,
-              });
-
-              return {
-                boqItemId: item.id,
-                rabWeight: itemWeight.own,
-                currentOfficialItemProgress: temporalItemProgressResult,
-              };
-            });
-            const officialRabWeightedPhysicalProgress =
-              calculateCurrentOfficialRabWeightedPhysicalProgress({
-                projectWeight: weight.project,
-                workItems: temporalLaw3WorkItems,
-              });
+            const temporalProjection =
+              cachedProjectTemporalAtCutoff(cutoffDate);
+            const serializedOfficialRabWeightedPhysicalProgress =
+              serializeCurrentOfficialRabWeightedPhysicalProgress(
+                temporalProjection.officialRabWeightedPhysicalProgress,
+              );
 
             return {
               mode: ACTUAL_TEMPORAL_TRUTH_MODE,
@@ -923,7 +1009,8 @@ export class ProgressService {
                 approvedAt: baseline.approvedAt,
               },
               items: workItems.map((item) => {
-                const temporalTruth = temporalTruthByWorkItem.get(item.id)!;
+                const temporalTruth =
+                  temporalProjection.temporalTruthByWorkItem.get(item.id)!;
 
                 return {
                   boqItemId: item.id,
@@ -937,9 +1024,27 @@ export class ProgressService {
                 };
               }),
               officialRabWeightedPhysicalProgress:
-                serializeCurrentOfficialRabWeightedPhysicalProgress(
-                  officialRabWeightedPhysicalProgress,
-                ),
+                serializedOfficialRabWeightedPhysicalProgress,
+              ...(includeActualSeries
+                ? {
+                    series: {
+                      boundaryBasis: ACTUAL_TEMPORAL_SERIES_BOUNDARY_BASIS,
+                      points: actualTemporalSeriesBoundaries(
+                        [...temporalGovernedByWorkItem!.values()],
+                        cutoffDate,
+                      ).map((boundaryDate) => ({
+                        cutoffDate: boundaryDate,
+                        officialRabWeightedPhysicalProgress:
+                          boundaryDate === cutoffDate
+                            ? serializedOfficialRabWeightedPhysicalProgress
+                            : serializeCurrentOfficialRabWeightedPhysicalProgress(
+                                cachedProjectTemporalAtCutoff(boundaryDate)
+                                  .officialRabWeightedPhysicalProgress,
+                              ),
+                      })),
+                    },
+                  }
+                : {}),
             };
           })();
     const effectiveRecords = [...effectiveByItem.values()];

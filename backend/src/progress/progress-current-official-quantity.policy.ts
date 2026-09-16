@@ -57,6 +57,49 @@ export type CurrentOfficialQuantityResult =
     };
 
 /**
+ * Projects an already-governed LAW 1 context to its Current quantity result.
+ *
+ * Temporal consumers prepare lineage, lifecycle, numeric, and semantic truth
+ * once and may then reuse this exact aggregation without resolving that
+ * governed context again.
+ */
+export function calculateCurrentOfficialQuantityFromGoverned<
+  T extends Law1CalculationEntry,
+>(
+  governed: CurrentGovernedOfficialFactsResult<T>,
+): CurrentOfficialQuantityResult {
+  switch (governed.state) {
+    case 'NOT_YET_RECORDED':
+    case 'NO_ELIGIBLE_CURRENT_FACT':
+    case 'INVALID_LINEAGE':
+    case 'INVALID_NUMERIC_FACT':
+    case 'SEMANTICS_UNPROVEN':
+      return governed;
+    case 'INCOMPLETE':
+    case 'COMPLETE':
+      break;
+  }
+
+  let subtotal = new Prisma.Decimal(0);
+
+  for (const fact of governed.eligibleCurrentFacts) {
+    subtotal = subtotal.plus(fact.quantity);
+  }
+
+  if (governed.state === 'INCOMPLETE') {
+    return {
+      state: 'INCOMPLETE',
+      knownEligibleQuantitySubtotal: subtotal,
+    };
+  }
+
+  return {
+    state: 'COMPLETE',
+    currentOfficialQuantity: subtotal,
+  };
+}
+
+/**
  * Resolves the governed current physical facts used by LAW 1.
  *
  * This is the narrow reusable seam for projections that need the current
@@ -166,43 +209,5 @@ export function calculateCurrentOfficialQuantity(
   entries: readonly Law1CalculationEntry[],
 ): CurrentOfficialQuantityResult {
   const governed = resolveCurrentGovernedOfficialFacts(scope, entries);
-
-  switch (governed.state) {
-    case 'NOT_YET_RECORDED':
-    case 'NO_ELIGIBLE_CURRENT_FACT':
-    case 'INVALID_LINEAGE':
-    case 'INVALID_NUMERIC_FACT':
-    case 'SEMANTICS_UNPROVEN':
-      return governed;
-    case 'INCOMPLETE':
-    case 'COMPLETE':
-      break;
-  }
-
-  /*
-   * PHASE 4 — exact Decimal subtotal.
-   *
-   * No JavaScript Number accumulation and no intermediate rounding.
-   */
-  let subtotal = new Prisma.Decimal(0);
-
-  for (const fact of governed.eligibleCurrentFacts) {
-    subtotal = subtotal.plus(fact.quantity);
-  }
-
-  /*
-   * A distinct current ineligible fact means the quantity layer is not
-   * complete even though the known eligible subtotal is truthful.
-   */
-  if (governed.state === 'INCOMPLETE') {
-    return {
-      state: 'INCOMPLETE',
-      knownEligibleQuantitySubtotal: subtotal,
-    };
-  }
-
-  return {
-    state: 'COMPLETE',
-    currentOfficialQuantity: subtotal,
-  };
+  return calculateCurrentOfficialQuantityFromGoverned(governed);
 }
