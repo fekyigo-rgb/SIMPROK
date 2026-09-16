@@ -2,15 +2,21 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
+  actualComparisonLabel,
   actualStateLabel,
   buildMonitoringRows,
   captureMethodLabel,
   dataThroughLabel,
+  deviationComparisonPresentation,
   effectiveActual,
   formatWeightPercentage,
   lastRecordedLabel,
   lifecycleLabel,
+  monitoringComparisonChartProjection,
+  monitoringComparisonCutoff,
+  monitoringComparisonRequestPath,
   monitoringWorkItemsById,
+  plannedComparisonLabel,
   progressDetailPath,
   scheduleRealizationPresentation,
   recordedAtLabel,
@@ -18,6 +24,7 @@ import {
   selectedWorkItem,
   weightCompletenessLabel,
   type MonitoringItem,
+  type MonitoringProgressComparisonPoint,
 } from './monitoringCurrent.ts';
 
 const item = (
@@ -219,6 +226,233 @@ test('H2-A0-8 the healthy progress-detail door remains exact', () => {
     progressDetailPath('project-1', 'item-1'),
     '/field/project/project-1/progress/item-1',
   );
+});
+
+test('MON04 comparison cutoff uses only the canonical data-through business date', () => {
+  assert.equal(
+    monitoringComparisonCutoff({
+      state: 'RECORDED',
+      workDate: '2026-09-07T00:00:00.000Z',
+    }),
+    '2026-09-07',
+  );
+  assert.equal(
+    monitoringComparisonCutoff({
+      state: 'RECORDED',
+      workDate: '2026-09-07',
+    }),
+    '2026-09-07',
+  );
+  assert.equal(
+    monitoringComparisonCutoff({
+      state: 'RECORDED',
+      workDate: '2026-09-07T01:00:00.000Z',
+    }),
+    null,
+  );
+  assert.equal(
+    monitoringComparisonCutoff({
+      state: 'NOT_YET_RECORDED',
+      workDate: null,
+    }),
+    null,
+  );
+  assert.equal(
+    monitoringComparisonCutoff({ state: 'UNAVAILABLE', workDate: null }),
+    null,
+  );
+
+  const path = monitoringComparisonRequestPath('project-1', '2026-09-07');
+  assert.equal(
+    path,
+    '/projects/project-1/progress/monitoring?cutoffDate=2026-09-07&includeProgressComparison=true',
+  );
+  const query = new URLSearchParams(path.split('?')[1]);
+  assert.deepEqual([...query.entries()], [
+    ['cutoffDate', '2026-09-07'],
+    ['includeProgressComparison', 'true'],
+  ]);
+  assert.equal(query.has('includeActualSeries'), false);
+
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const cutoffBlock = utility.slice(
+    utility.indexOf('export function monitoringComparisonCutoff'),
+    utility.indexOf('export function monitoringComparisonRequestPath'),
+  );
+  assert.doesNotMatch(cutoffBlock, /Date\.now|new Date|toISOString/);
+});
+
+test('MON04 comparison labels preserve zero, uncertainty, and exact Decimal strings', () => {
+  assert.equal(
+    plannedComparisonLabel({
+      state: 'COMPLETE',
+      plannedRabWeightedPhysicalProgressPercent: '0',
+    }),
+    '0%',
+  );
+  assert.equal(
+    actualComparisonLabel({
+      state: 'COMPLETE',
+      currentOfficialRabWeightedPhysicalProgressPercent: '0.000',
+    }),
+    '0.000%',
+  );
+  assert.equal(
+    plannedComparisonLabel({
+      state: 'INCOMPLETE',
+      reason: 'PLANNED_CURVE_INCOMPLETE',
+      knownWeightedPlannedProgressSubtotalPercent: '12.3400',
+    }),
+    'Belum lengkap · subtotal 12.3400%',
+  );
+  assert.equal(
+    actualComparisonLabel({
+      state: 'INCOMPLETE',
+      knownWeightedContributionSubtotalPercent: '9.8700',
+    }),
+    'Belum lengkap · subtotal 9.8700%',
+  );
+  assert.equal(
+    actualComparisonLabel({
+      state: 'UNAVAILABLE',
+      reason: 'BASELINE_VALUE_UNAVAILABLE',
+    }),
+    'Tidak tersedia',
+  );
+
+  assert.deepEqual(
+    deviationComparisonPresentation({ state: 'COMPLETE', value: '-2.0000' }),
+    {
+      value: '-2.0000 pp',
+      meaning: 'Tertinggal dari rencana',
+    },
+  );
+  assert.deepEqual(
+    deviationComparisonPresentation({ state: 'COMPLETE', value: '4.1250' }),
+    {
+      value: '4.1250 pp',
+      meaning: 'Lebih maju dari rencana',
+    },
+  );
+  assert.deepEqual(
+    deviationComparisonPresentation({ state: 'COMPLETE', value: '0.0000' }),
+    {
+      value: '0.0000 pp',
+      meaning: 'Sesuai rencana',
+    },
+  );
+  assert.deepEqual(
+    deviationComparisonPresentation({
+      state: 'UNAVAILABLE',
+      reason: {
+        planned: null,
+        actual: 'ACTUAL_INCOMPLETE',
+      },
+    }),
+    {
+      value: 'Tidak tersedia',
+      meaning: 'Fakta realisasi belum lengkap.',
+    },
+  );
+});
+
+test('MON04 chart projects canonical dates without inventing or joining unknown points', () => {
+  const points: MonitoringProgressComparisonPoint[] = [
+    {
+      cutoffDate: '2026-09-01',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '0',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '0',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '0' },
+    },
+    {
+      cutoffDate: '2026-09-02',
+      planned: {
+        state: 'INCOMPLETE',
+        reason: 'PLANNED_CURVE_INCOMPLETE',
+        knownWeightedPlannedProgressSubtotalPercent: '4',
+      },
+      actual: {
+        state: 'UNAVAILABLE',
+        reason: 'BASELINE_VALUE_UNAVAILABLE',
+      },
+      deviationPercentagePoints: {
+        state: 'UNAVAILABLE',
+        reason: {
+          planned: 'PLANNED_INCOMPLETE',
+          actual: 'ACTUAL_UNAVAILABLE',
+        },
+      },
+    },
+    {
+      cutoffDate: '2026-09-11',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '26.1250',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '24.1250',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-2.0000' },
+    },
+  ];
+  const chart = monitoringComparisonChartProjection(points);
+
+  assert.deepEqual(
+    chart.points.map((point) => point.cutoffDate),
+    points.map((point) => point.cutoffDate),
+  );
+  assert.equal(chart.points[0].plannedY, chart.height - chart.padding);
+  assert.equal(chart.points[0].actualY, chart.height - chart.padding);
+  assert.equal(chart.points[1].plannedY, null);
+  assert.equal(chart.points[1].actualY, null);
+  assert.equal(chart.plannedSegments.length, 0);
+  assert.equal(chart.actualSegments.length, 0);
+
+  const completePoints = points.map((point) => ({
+    ...point,
+    planned: {
+      state: 'COMPLETE' as const,
+      plannedRabWeightedPhysicalProgressPercent: '10',
+    },
+    actual: {
+      state: 'COMPLETE' as const,
+      currentOfficialRabWeightedPhysicalProgressPercent: '10',
+    },
+    deviationPercentagePoints: {
+      state: 'COMPLETE' as const,
+      value: '0',
+    },
+  }));
+  const irregular = monitoringComparisonChartProjection(completePoints);
+  const firstX = irregular.points[0].x;
+  const secondX = irregular.points[1].x;
+  const thirdX = irregular.points[2].x;
+  assert.notEqual(firstX, null);
+  assert.notEqual(secondX, null);
+  assert.notEqual(thirdX, null);
+  assert.ok(
+    secondX! - firstX! < thirdX! - secondX!,
+    'one day must occupy less x-distance than nine days',
+  );
+
+  const single = monitoringComparisonChartProjection([points[0]]);
+  assert.equal(single.points[0].x, single.width / 2);
+  assert.equal(single.plannedSegments.length, 0);
+  assert.equal(single.actualSegments.length, 0);
+
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const chartBlock = utility.slice(
+    utility.indexOf('export function monitoringComparisonChartProjection'),
+    utility.indexOf('export function lastRecordedLabel'),
+  );
+  assert.doesNotMatch(chartBlock, /\.sort\(|new Set|interpolat/i);
 });
 
 test('H2-A0-9 the shell states project scope, Terkini, and both freshness meanings', () => {

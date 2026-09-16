@@ -173,3 +173,103 @@ test('locked UI is read-only by state and no manual curve input exists', () => {
   );
   assert.doesNotMatch(panel, /input[^>]+curve|input[^>]+progress/i);
 });
+
+test('MON04 canonical comparator is parent-owned, optional, and requested once per context', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+
+  assert.match(
+    page,
+    /monitoringComparisonCutoff\(\s*monitoringData\.freshness\.dataThrough/,
+  );
+  assert.match(page, /if \(cutoffDate === null\)/);
+  assert.match(page, /state: 'MISSING_CUTOFF'/);
+  assert.equal(
+    (
+      page.match(
+        /apiFetch\(\s*monitoringComparisonRequestPath\(projectId, cutoffDate\)/g,
+      ) ?? []
+    ).length,
+    1,
+  );
+  assert.match(page, /comparisonRequestRef\.current\?\.key/);
+  assert.match(page, /comparisonRequestKey/);
+  assert.match(page, /catch \(comparisonError\)/);
+  assert.doesNotMatch(page, /includeActualSeries/);
+  assert.doesNotMatch(page, /Date\.now|new Date\(/);
+
+  assert.match(
+    utility,
+    /cutoffDate=' \+\s*cutoffDate \+\s*'&includeProgressComparison=true'/,
+  );
+  assert.doesNotMatch(utility, /includeActualSeries=true/);
+  assert.doesNotMatch(panel, /progress\/monitoring/);
+  assert.match(
+    page,
+    /progressComparisonPresentation=\{progressComparisonPresentation\}/,
+  );
+  assert.match(panel, /type MonitoringProgressComparisonPresentation/);
+});
+
+test('MON04 Kurva S consumes comparison points and preserves Planned-only fallback', () => {
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+
+  assert.match(panel, /Rencana vs Realisasi/);
+  assert.match(panel, /<svg/);
+  assert.match(panel, /comparisonChart\.plannedSegments\.map/);
+  assert.match(panel, /comparisonChart\.actualSegments\.map/);
+  assert.match(panel, /progressComparison\.points\.map/);
+  assert.match(panel, /<th>Tanggal<\/th>/);
+  assert.match(panel, /<th>Rencana<\/th>/);
+  assert.match(panel, /<th>Realisasi<\/th>/);
+  assert.match(panel, /<th>Deviasi<\/th>/);
+  assert.match(panel, /plannedComparisonLabel\(point\.planned\)/);
+  assert.match(panel, /actualComparisonLabel\(point\.actual\)/);
+  assert.match(
+    panel,
+    /deviationComparisonPresentation\(\s*point\.deviationPercentagePoints/,
+  );
+  assert.match(panel, /<time dateTime=\{point\.cutoffDate\}>/);
+  assert.match(panel, /<h3>Kurva S Rencana<\/h3>/);
+  assert.match(panel, /executionPlan\.plannedCurve\.points\.map/);
+  assert.match(
+    panel,
+    /Kurva Realisasi belum tersedia karena belum ada tanggal data[\s\S]*pekerjaan yang berlaku/,
+  );
+  assert.match(panel, /Schedule Rencana \+ Realisasi Terkini/);
+  assert.doesNotMatch(panel, /DeviationSignal|ProgressCard/);
+});
+
+test('MON04 changed production seam contains no duplicate domain calculation', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const production = page + panel + utility;
+
+  assert.doesNotMatch(production, /actual\s*-\s*planned|planned\s*-\s*actual/i);
+  assert.doesNotMatch(production, /quantity\s*\/\s*plannedQuantity/i);
+  assert.doesNotMatch(production, /weight\s*\*|\*\s*weight/i);
+  assert.doesNotMatch(production, /includeActualSeries=true/);
+  assert.doesNotMatch(production, /DeviationSignal|ProgressCard/);
+  assert.doesNotMatch(production, /cumulative[^\n]*reduce|reduce[^\n]*cumulative/i);
+
+  const chartStart = utility.indexOf(
+    'export function monitoringComparisonChartProjection',
+  );
+  const chartEnd = utility.indexOf('export function lastRecordedLabel');
+  const chartBlock = utility.slice(chartStart, chartEnd);
+  assert.match(utility, /Presentation-only SVG projection/);
+  assert.match(chartBlock, /Date\.parse/);
+  assert.match(chartBlock, /Number\(value\)/);
+  assert.doesNotMatch(chartBlock, /deviationPercentagePoints[^\n]*[-+]/);
+});
