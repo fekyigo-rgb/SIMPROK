@@ -5,7 +5,10 @@ import {
 } from '@prisma/client';
 import {
   ACTUAL_TEMPORAL_TRUTH_MODE,
+  actualTemporalSeriesBoundaries,
   calculateActualTemporalOfficialQuantity,
+  prepareActualTemporalOfficialQuantity,
+  projectActualTemporalOfficialQuantity,
 } from './progress-actual-temporal-quantity.policy';
 import type {
   CurrentOfficialQuantityResult,
@@ -439,5 +442,100 @@ describe('MON-04 Actual temporal quantity v1', () => {
         auditCount: candidate.auditEvents.length,
       })),
     ).toEqual(before);
+  });
+
+  it('keeps the wrapper differentially identical to prepare then project', () => {
+    const complete = prove([
+      entry('differential-a', '0.1', '2026-09-05'),
+      entry('differential-b', '0.2', '2026-09-09'),
+    ]);
+    const incomplete = prove(
+      [
+        entry('differential-known', '3', '2026-09-05'),
+        entry('differential-submitted', '4', '2026-09-06', {
+          status: ProgressActualStatus.SUBMITTED,
+        }),
+      ],
+      ['differential-known'],
+    );
+    const cases = [
+      { entries: complete, cutoffDate: '2026-09-07' },
+      { entries: incomplete, cutoffDate: '2026-09-07' },
+      {
+        entries: [entry('differential-unproven', '1', '2026-09-05')],
+        cutoffDate: '2026-09-07',
+      },
+      { entries: [] as Law1CalculationEntry[], cutoffDate: '2026-09-07' },
+      { entries: complete, cutoffDate: '2026-09-31' },
+    ];
+
+    for (const candidate of cases) {
+      expect(
+        projectActualTemporalOfficialQuantity({
+          governed: prepareActualTemporalOfficialQuantity(
+            scope,
+            candidate.entries,
+          ),
+          cutoffDate: candidate.cutoffDate,
+        }),
+      ).toEqual(project(candidate.entries, candidate.cutoffDate));
+    }
+  });
+
+  it('builds unique ascending governed workDate boundaries without resurrecting a corrected predecessor', () => {
+    const current = prove([
+      entry('predecessor', '3', '2026-09-05'),
+      entry('successor', '2', '2026-09-08', {
+        supersedesEntryId: 'predecessor',
+        revision: 2,
+      }),
+      entry('same-day-a', '1', '2026-09-07'),
+      entry('same-day-b', '2', '2026-09-07'),
+      entry('sep-nine', '4', '2026-09-09'),
+      entry('after-cutoff', '5', '2026-09-12'),
+    ]);
+    const forward = prepareActualTemporalOfficialQuantity(scope, current);
+    const reversed = prepareActualTemporalOfficialQuantity(
+      scope,
+      [...current].reverse(),
+    );
+
+    expect(actualTemporalSeriesBoundaries([forward], '2026-09-10')).toEqual([
+      '2026-09-07',
+      '2026-09-08',
+      '2026-09-09',
+      '2026-09-10',
+    ]);
+    expect(actualTemporalSeriesBoundaries([reversed], '2026-09-10')).toEqual(
+      actualTemporalSeriesBoundaries([forward], '2026-09-10'),
+    );
+  });
+
+  it('uses only COMPLETE or INCOMPLETE eligible facts as boundaries and always keeps the requested cutoff', () => {
+    const eligible = entry('boundary-known', '3', '2026-09-05');
+    const submitted = entry('boundary-submitted', '4', '2026-09-06', {
+      status: ProgressActualStatus.SUBMITTED,
+    });
+    const incomplete = prepareActualTemporalOfficialQuantity(
+      scope,
+      prove([eligible, submitted], ['boundary-known']),
+    );
+    const unplaceable = prepareActualTemporalOfficialQuantity(
+      scope,
+      prove([entry('boundary-undated', '1', null)]),
+    );
+    const unproven = prepareActualTemporalOfficialQuantity(scope, [
+      entry('boundary-unproven', '1', '2026-09-04'),
+    ]);
+
+    expect(
+      actualTemporalSeriesBoundaries(
+        [incomplete, unplaceable, unproven],
+        '2026-09-07',
+      ),
+    ).toEqual(['2026-09-05', '2026-09-07']);
+    expect(actualTemporalSeriesBoundaries([], '2026-09-07')).toEqual([
+      '2026-09-07',
+    ]);
   });
 });

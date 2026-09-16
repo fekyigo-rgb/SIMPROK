@@ -43,7 +43,37 @@ export class ProgressController {
       throw new BadRequestException('INVALID_PROJECT_BUSINESS_CUTOFF');
     }
 
-    return this.progressService.getMonitoring(projectId, query.cutoffDate);
+    if (
+      Object.keys(query).some((key) => key.startsWith('includeActualSeries['))
+    ) {
+      throw new BadRequestException('AMBIGUOUS_INCLUDE_ACTUAL_SERIES');
+    }
+
+    const includeActualSeriesValue = query.includeActualSeries;
+    let includeActualSeries = false;
+
+    if (includeActualSeriesValue !== undefined) {
+      if (typeof includeActualSeriesValue !== 'string') {
+        throw new BadRequestException('AMBIGUOUS_INCLUDE_ACTUAL_SERIES');
+      }
+      if (
+        includeActualSeriesValue !== 'true' &&
+        includeActualSeriesValue !== 'false'
+      ) {
+        throw new BadRequestException('INVALID_INCLUDE_ACTUAL_SERIES');
+      }
+      includeActualSeries = includeActualSeriesValue === 'true';
+    }
+
+    if (includeActualSeries && query.cutoffDate === undefined) {
+      throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
+    }
+
+    return this.progressService.getMonitoring(
+      projectId,
+      query.cutoffDate,
+      includeActualSeries,
+    );
   }
 
   @Post('field')

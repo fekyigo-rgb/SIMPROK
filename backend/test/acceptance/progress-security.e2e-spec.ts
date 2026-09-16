@@ -151,6 +151,13 @@ interface Law1MonitoringBody {
       officialPhysicalProgress: Law2MonitoringProgress;
     }>;
     officialRabWeightedPhysicalProgress: Law3MonitoringProgress;
+    series?: {
+      boundaryBasis: 'CURRENT_GOVERNED_WORKDATES_AND_REQUESTED_CUTOFF';
+      points: Array<{
+        cutoffDate: string;
+        officialRabWeightedPhysicalProgress: Law3MonitoringProgress;
+      }>;
+    };
   };
 }
 
@@ -1367,6 +1374,57 @@ describe('Progress Security (e2e)', () => {
         'INVALID_PROJECT_BUSINESS_CUTOFF',
       );
     }
+  });
+
+  it('6f. Monitoring parses includeActualSeries strictly and keeps false backward-compatible', async () => {
+    const token = await login(userViewEmail);
+    const invalidCases = [
+      {
+        query: 'includeActualSeries=true',
+        reason: 'ACTUAL_SERIES_REQUIRES_CUTOFF',
+      },
+      {
+        query: 'cutoffDate=2026-09-07&includeActualSeries=TRUE',
+        reason: 'INVALID_INCLUDE_ACTUAL_SERIES',
+      },
+      {
+        query: 'cutoffDate=2026-09-07&includeActualSeries=1',
+        reason: 'INVALID_INCLUDE_ACTUAL_SERIES',
+      },
+      {
+        query:
+          'cutoffDate=2026-09-07&includeActualSeries=true&includeActualSeries=false',
+        reason: 'AMBIGUOUS_INCLUDE_ACTUAL_SERIES',
+      },
+      {
+        query: 'cutoffDate=2026-09-07&includeActualSeries[value]=true',
+        reason: 'AMBIGUOUS_INCLUDE_ACTUAL_SERIES',
+      },
+      {
+        query: 'cutoffDate=2026-09-07&includeActualSeries[]=true',
+        reason: 'AMBIGUOUS_INCLUDE_ACTUAL_SERIES',
+      },
+    ];
+
+    for (const candidate of invalidCases) {
+      const response = await request(app.getHttpServer())
+        .get(`/projects/${projectAId}/progress/monitoring?${candidate.query}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(400);
+      expect((response.body as ErrorResponseBody).message).toBe(
+        candidate.reason,
+      );
+    }
+
+    const falseResponse = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?includeActualSeries=false`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    expect(falseResponse.body).not.toHaveProperty('actualTemporal');
   });
 
   it('7. non-assigned user -> GET /monitoring is rejected', async () => {
@@ -4448,13 +4506,23 @@ describe('Progress Security (e2e)', () => {
         .set('Authorization', `Bearer ${token}`)
         .set('x-workspace-id', workspaceAId)
         .expect(200);
+    const monitoringSeries = (cutoffDate: string) =>
+      request(app.getHttpServer())
+        .get(
+          `/projects/${projectAId}/progress/monitoring?cutoffDate=${cutoffDate}&includeActualSeries=true`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
 
     const truthBeforeRead = await readBusinessTruth();
     const cutoff07Response = await monitoring('2026-09-07');
     const inclusiveResponse = await monitoring('2026-09-05');
+    const seriesResponse = await monitoringSeries('2026-09-07');
     const truthAfterRead = await readBusinessTruth();
     const cutoff07 = cutoff07Response.body as unknown as Law1MonitoringBody;
     const inclusive = inclusiveResponse.body as unknown as Law1MonitoringBody;
+    const series = seriesResponse.body as unknown as Law1MonitoringBody;
     const currentRow = (boqItemId: string) =>
       cutoff07.items.find((item) => item.id === boqItemId);
     const temporalRow = (body: Law1MonitoringBody, boqItemId: string) =>
@@ -4470,6 +4538,32 @@ describe('Progress Security (e2e)', () => {
         knownWeightedContributionSubtotalPercent: '32',
       },
     });
+    expect(series.actualTemporal?.series).toEqual({
+      boundaryBasis: 'CURRENT_GOVERNED_WORKDATES_AND_REQUESTED_CUTOFF',
+      points: [
+        {
+          cutoffDate: '2026-09-05',
+          officialRabWeightedPhysicalProgress: {
+            state: 'INCOMPLETE',
+            knownWeightedContributionSubtotalPercent: '32',
+          },
+        },
+        {
+          cutoffDate: '2026-09-07',
+          officialRabWeightedPhysicalProgress: {
+            state: 'INCOMPLETE',
+            knownWeightedContributionSubtotalPercent: '32',
+          },
+        },
+      ],
+    });
+    expect(
+      series.actualTemporal?.series?.points.at(-1)
+        ?.officialRabWeightedPhysicalProgress,
+    ).toEqual(series.actualTemporal?.officialRabWeightedPhysicalProgress);
+    expect(series.currentOfficialRabWeightedPhysicalProgress).toEqual(
+      cutoff07.currentOfficialRabWeightedPhysicalProgress,
+    );
     expect(currentRow(timeline.id)?.currentOfficialQuantity).toEqual({
       state: 'COMPLETE',
       currentOfficialQuantity: '7',
