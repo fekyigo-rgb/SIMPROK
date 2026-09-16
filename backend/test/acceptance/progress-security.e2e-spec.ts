@@ -159,6 +159,23 @@ interface Law1MonitoringBody {
       }>;
     };
   };
+  progressComparison?: {
+    mode: 'PLANNED_VS_CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE';
+    cutoffDate: string;
+    baseline: { id: string; versionNumber: number; approvedAt: string } | null;
+    plannedSource: {
+      executionPlanVersionId: string;
+      versionNumber: number;
+      status: 'LOCKED';
+    } | null;
+    boundaryBasis: 'PLANNED_PERIOD_ENDS_AND_GOVERNED_ACTUAL_WORKDATES_AND_REQUESTED_CUTOFF';
+    points: Array<{
+      cutoffDate: string;
+      planned: { state: string; [key: string]: unknown };
+      actual: Law3MonitoringProgress;
+      deviationPercentagePoints: { state: string; [key: string]: unknown };
+    }>;
+  };
 }
 
 describe('Progress Security (e2e)', () => {
@@ -1425,6 +1442,121 @@ describe('Progress Security (e2e)', () => {
       .set('x-workspace-id', workspaceAId)
       .expect(200);
     expect(falseResponse.body).not.toHaveProperty('actualTemporal');
+  });
+
+  it('6g. Monitoring parses includeProgressComparison strictly and keeps false backward-compatible', async () => {
+    const token = await login(userViewEmail);
+    const invalidCases = [
+      {
+        query: 'includeProgressComparison=true',
+        reason: 'PROGRESS_COMPARISON_REQUIRES_CUTOFF',
+      },
+      {
+        query: 'cutoffDate=2026-09-07&includeProgressComparison=TRUE',
+        reason: 'INVALID_INCLUDE_PROGRESS_COMPARISON',
+      },
+      {
+        query: 'cutoffDate=2026-09-07&includeProgressComparison=1',
+        reason: 'INVALID_INCLUDE_PROGRESS_COMPARISON',
+      },
+      {
+        query:
+          'cutoffDate=2026-09-07&includeProgressComparison=true&includeProgressComparison=false',
+        reason: 'AMBIGUOUS_INCLUDE_PROGRESS_COMPARISON',
+      },
+      {
+        query: 'cutoffDate=2026-09-07&includeProgressComparison[value]=true',
+        reason: 'AMBIGUOUS_INCLUDE_PROGRESS_COMPARISON',
+      },
+      {
+        query: 'cutoffDate=2026-09-07&includeProgressComparison[]=true',
+        reason: 'AMBIGUOUS_INCLUDE_PROGRESS_COMPARISON',
+      },
+    ];
+
+    for (const candidate of invalidCases) {
+      const response = await request(app.getHttpServer())
+        .get(`/projects/${projectAId}/progress/monitoring?${candidate.query}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(400);
+      expect((response.body as ErrorResponseBody).message).toBe(
+        candidate.reason,
+      );
+    }
+
+    const falseResponse = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?includeProgressComparison=false`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    expect(falseResponse.body).not.toHaveProperty('progressComparison');
+    expect(falseResponse.body).not.toHaveProperty('actualTemporal');
+  });
+
+  it('6h. guarded Monitoring exposes comparator from the same baseline without writes', async () => {
+    const token = await login(userViewEmail);
+    const plan = await prisma.executionPlanVersion.findFirstOrThrow({
+      where: {
+        projectId: projectAId,
+        baselineId: baselineAId,
+        status: 'LOCKED',
+      },
+    });
+    const fingerprint = async () =>
+      JSON.stringify({
+        plan: await prisma.executionPlanVersion.findUniqueOrThrow({
+          where: { id: plan.id },
+        }),
+        distributions: await prisma.executionPlanDistribution.findMany({
+          where: { executionPlanVersionId: plan.id },
+          orderBy: { id: 'asc' },
+        }),
+        reports: await prisma.progressReport.findMany({
+          where: { projectId: projectAId, baselineId: baselineAId },
+          orderBy: { id: 'asc' },
+        }),
+        entries: await prisma.progressEntry.findMany({
+          where: {
+            progressReport: { projectId: projectAId, baselineId: baselineAId },
+          },
+          orderBy: { id: 'asc' },
+        }),
+      });
+    const before = await fingerprint();
+
+    const response = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?cutoffDate=2026-09-07&includeProgressComparison=true`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const body = response.body as unknown as Law1MonitoringBody;
+    const after = await fingerprint();
+
+    expect(after).toBe(before);
+    expect(body.progressComparison).toMatchObject({
+      mode: 'PLANNED_VS_CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE',
+      cutoffDate: '2026-09-07',
+      baseline: { id: baselineAId, versionNumber: 1 },
+      plannedSource: {
+        executionPlanVersionId: plan.id,
+        versionNumber: 1,
+        status: 'LOCKED',
+      },
+      boundaryBasis:
+        'PLANNED_PERIOD_ENDS_AND_GOVERNED_ACTUAL_WORKDATES_AND_REQUESTED_CUTOFF',
+    });
+    expect(
+      body.progressComparison?.points.map((point) => point.cutoffDate),
+    ).toEqual(['2026-08-31', '2026-09-07']);
+    expect(body.progressComparison?.points.at(-1)?.actual).toEqual(
+      body.actualTemporal?.officialRabWeightedPhysicalProgress,
+    );
+    expect(body.actualTemporal).not.toHaveProperty('series');
   });
 
   it('7. non-assigned user -> GET /monitoring is rejected', async () => {

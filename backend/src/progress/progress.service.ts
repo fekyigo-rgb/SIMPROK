@@ -7,9 +7,11 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import {
+  ExecutionPlanStatus,
   Prisma,
   ProgressActualStatus,
   ProgressAuditOutcome,
+  ProjectStatus,
 } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ProjectAccessContext } from '../auth/project-access-policy.service';
@@ -56,10 +58,27 @@ import {
   projectActualTemporalOfficialQuantity,
   projectBusinessDateWire,
 } from './progress-actual-temporal-quantity.policy';
+import { projectExecutionPlan } from '../execution-plan/execution-plan-projection.policy';
+import { EXECUTION_PLAN_DRAFT_FLOW } from '../execution-plan/execution-plan-adoption.policy';
+import { EXECUTION_PLAN_BLOCKER } from '../execution-plan/execution-plan.contracts';
+import {
+  calculateProgressDeviationPercentagePoints,
+  PROGRESS_COMPARISON_BOUNDARY_BASIS,
+  PROGRESS_COMPARISON_MODE,
+  progressComparisonBoundaries,
+  projectPlannedProgressAtBoundary,
+  type PlannedTemporalProgressResult,
+  type ProgressComparisonPlannedCurve,
+  type ProgressDeviationResult,
+} from './progress-planned-actual-comparison.policy';
 
 type MonitoringReadClient = Pick<
   Prisma.TransactionClient,
-  'project' | 'projectBaseline' | 'boqItem' | 'progressEntry'
+  | 'project'
+  | 'projectBaseline'
+  | 'boqItem'
+  | 'progressEntry'
+  | 'executionPlanVersion'
 >;
 
 type CurrentOfficialQuantityResponse =
@@ -104,6 +123,22 @@ type CurrentOfficialRabWeightedPhysicalProgressResponse =
       state: 'INCOMPLETE';
       knownWeightedContributionSubtotalPercent: string;
     };
+
+type PlannedTemporalProgressResponse =
+  | Exclude<PlannedTemporalProgressResult, { state: 'COMPLETE' | 'INCOMPLETE' }>
+  | {
+      state: 'COMPLETE';
+      plannedRabWeightedPhysicalProgressPercent: string;
+    }
+  | {
+      state: 'INCOMPLETE';
+      reason: string;
+      knownWeightedPlannedProgressSubtotalPercent: string;
+    };
+
+type ProgressDeviationResponse =
+  | Exclude<ProgressDeviationResult, { state: 'COMPLETE' }>
+  | { state: 'COMPLETE'; value: string };
 
 const serializeCurrentOfficialQuantity = (
   result: CurrentOfficialQuantityResult,
@@ -172,6 +207,34 @@ const serializeCurrentOfficialRabWeightedPhysicalProgress = (
 
   return result;
 };
+
+const serializePlannedTemporalProgress = (
+  result: PlannedTemporalProgressResult,
+): PlannedTemporalProgressResponse => {
+  if (result.state === 'COMPLETE') {
+    return {
+      state: 'COMPLETE',
+      plannedRabWeightedPhysicalProgressPercent:
+        result.plannedRabWeightedPhysicalProgressPercent.toString(),
+    };
+  }
+  if (result.state === 'INCOMPLETE') {
+    return {
+      state: 'INCOMPLETE',
+      reason: result.reason,
+      knownWeightedPlannedProgressSubtotalPercent:
+        result.knownWeightedPlannedProgressSubtotalPercent.toString(),
+    };
+  }
+  return result;
+};
+
+const serializeProgressDeviation = (
+  result: ProgressDeviationResult,
+): ProgressDeviationResponse =>
+  result.state === 'COMPLETE'
+    ? { state: 'COMPLETE', value: result.value.toString() }
+    : result;
 
 interface TrustedProgressActor {
   accountId: string;
@@ -666,9 +729,13 @@ export class ProgressService {
     projectId: string,
     cutoffDate?: unknown,
     includeActualSeries = false,
+    includeProgressComparison = false,
   ) {
     if (includeActualSeries && cutoffDate === undefined) {
       throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
+    }
+    if (includeProgressComparison && cutoffDate === undefined) {
+      throw new BadRequestException('PROGRESS_COMPARISON_REQUIRES_CUTOFF');
     }
 
     if (cutoffDate === undefined) {
@@ -687,6 +754,7 @@ export class ProgressService {
           projectId,
           validCutoffDate,
           includeActualSeries,
+          includeProgressComparison,
         ),
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
@@ -697,6 +765,7 @@ export class ProgressService {
     projectId: string,
     cutoffDate?: string,
     includeActualSeries = false,
+    includeProgressComparison = false,
   ) {
     const unavailable = [
       'plannedStart',
@@ -706,7 +775,7 @@ export class ProgressService {
     ] as const;
     const project = await db.project.findUnique({
       where: { id: projectId },
-      select: { timeZone: true },
+      select: { status: true, timeZone: true },
     });
     const activeBaselines = await db.projectBaseline.findMany({
       where: { projectId, status: 'ACTIVE' },
@@ -738,6 +807,43 @@ export class ProgressService {
             approvedAt: baseline.approvedAt,
           }
         : null;
+      const progressComparison =
+        includeProgressComparison && cutoffDate !== undefined
+          ? (() => {
+              const planned = projectPlannedProgressAtBoundary(
+                {
+                  state: 'UNAVAILABLE',
+                  reason:
+                    baseline === null
+                      ? EXECUTION_PLAN_BLOCKER.NO_ACTIVE_BASELINE
+                      : EXECUTION_PLAN_BLOCKER.H2A1_WEIGHT_UNAVAILABLE,
+                  points: [],
+                },
+                cutoffDate,
+              );
+
+              return {
+                mode: PROGRESS_COMPARISON_MODE,
+                cutoffDate,
+                baseline: baselineResponse,
+                plannedSource: null,
+                boundaryBasis: PROGRESS_COMPARISON_BOUNDARY_BASIS,
+                points: [
+                  {
+                    cutoffDate,
+                    planned: serializePlannedTemporalProgress(planned),
+                    actual: serializedOfficialRabWeightedPhysicalProgress,
+                    deviationPercentagePoints: serializeProgressDeviation(
+                      calculateProgressDeviationPercentagePoints(
+                        planned,
+                        currentOfficialRabWeightedPhysicalProgress,
+                      ),
+                    ),
+                  },
+                ],
+              };
+            })()
+          : undefined;
 
       return {
         projectId,
@@ -780,6 +886,7 @@ export class ProgressService {
                   : {}),
               },
             }),
+        ...(progressComparison === undefined ? {} : { progressComparison }),
         unavailable,
       };
     }
@@ -793,6 +900,80 @@ export class ProgressService {
       items,
       baseline.rabDocument.totalBaseCost,
     );
+    const lockedPlanCandidates = includeProgressComparison
+      ? await db.executionPlanVersion.findMany({
+          where: { projectId, status: ExecutionPlanStatus.LOCKED },
+          orderBy: { versionNumber: 'desc' },
+          take: 3,
+          include: {
+            distributions: {
+              orderBy: [
+                { periodStartDate: 'asc' },
+                { periodEndDate: 'asc' },
+                { id: 'asc' },
+              ],
+            },
+          },
+        })
+      : [];
+    let canonicalPlannedCurve: ProgressComparisonPlannedCurve | null = null;
+    let plannedSource: {
+      executionPlanVersionId: string;
+      versionNumber: number;
+      status: typeof ExecutionPlanStatus.LOCKED;
+    } | null = null;
+
+    if (includeProgressComparison) {
+      if (project === null) {
+        canonicalPlannedCurve = {
+          state: 'UNAVAILABLE',
+          reason: EXECUTION_PLAN_BLOCKER.PROJECT_NOT_PLANNED,
+          points: [],
+        };
+      } else if (lockedPlanCandidates.length === 0) {
+        canonicalPlannedCurve = {
+          state: 'UNAVAILABLE',
+          reason: EXECUTION_PLAN_BLOCKER.ACTIVE_PROJECT_WITHOUT_LOCKED_PLAN,
+          points: [],
+        };
+      } else if (lockedPlanCandidates.length > 1) {
+        canonicalPlannedCurve = {
+          state: 'UNAVAILABLE',
+          reason: EXECUTION_PLAN_BLOCKER.AMBIGUOUS_EXECUTION_PLAN_CONTEXT,
+          points: [],
+        };
+      } else {
+        const lockedPlan = lockedPlanCandidates[0];
+        if (lockedPlan.baselineId !== baseline.id) {
+          canonicalPlannedCurve = {
+            state: 'UNAVAILABLE',
+            reason: EXECUTION_PLAN_BLOCKER.BASELINE_BINDING_MISMATCH,
+            points: [],
+          };
+        } else {
+          plannedSource = {
+            executionPlanVersionId: lockedPlan.id,
+            versionNumber: lockedPlan.versionNumber,
+            status: ExecutionPlanStatus.LOCKED,
+          };
+          canonicalPlannedCurve =
+            project.status === ProjectStatus.ACTIVE
+              ? projectExecutionPlan({
+                  projectStatus: project.status,
+                  planStatus: lockedPlan.status,
+                  draftFlow: EXECUTION_PLAN_DRAFT_FLOW.NOT_ELIGIBLE,
+                  totalBaseCost: baseline.rabDocument.totalBaseCost,
+                  items,
+                  distributions: lockedPlan.distributions,
+                }).plannedCurve
+              : {
+                  state: 'UNAVAILABLE',
+                  reason: EXECUTION_PLAN_BLOCKER.LOCKED_PLAN_PROJECT_NOT_ACTIVE,
+                  points: [],
+                };
+        }
+      }
+    }
     const entries = workItemIds.length
       ? await db.progressEntry.findMany({
           where: {
@@ -1047,6 +1228,59 @@ export class ProgressService {
                 : {}),
             };
           })();
+    const progressComparison =
+      includeProgressComparison && cutoffDate !== undefined
+        ? (() => {
+            if (
+              temporalGovernedByWorkItem === null ||
+              canonicalPlannedCurve === null
+            ) {
+              throw new Error('PROGRESS_COMPARISON_CONTEXT_REQUIRED');
+            }
+
+            const actualBoundaries = actualTemporalSeriesBoundaries(
+              [...temporalGovernedByWorkItem.values()],
+              cutoffDate,
+            );
+            const boundaries = progressComparisonBoundaries({
+              plannedCurve: canonicalPlannedCurve,
+              actualBoundaries,
+              cutoffDate,
+            });
+
+            return {
+              mode: PROGRESS_COMPARISON_MODE,
+              cutoffDate,
+              baseline: {
+                id: baseline.id,
+                versionNumber: baseline.versionNumber,
+                approvedAt: baseline.approvedAt,
+              },
+              plannedSource,
+              boundaryBasis: PROGRESS_COMPARISON_BOUNDARY_BASIS,
+              points: boundaries.map((boundaryDate) => {
+                const planned = projectPlannedProgressAtBoundary(
+                  canonicalPlannedCurve!,
+                  boundaryDate,
+                );
+                const actual =
+                  cachedProjectTemporalAtCutoff(
+                    boundaryDate,
+                  ).officialRabWeightedPhysicalProgress;
+
+                return {
+                  cutoffDate: boundaryDate,
+                  planned: serializePlannedTemporalProgress(planned),
+                  actual:
+                    serializeCurrentOfficialRabWeightedPhysicalProgress(actual),
+                  deviationPercentagePoints: serializeProgressDeviation(
+                    calculateProgressDeviationPercentagePoints(planned, actual),
+                  ),
+                };
+              }),
+            };
+          })()
+        : undefined;
     const effectiveRecords = [...effectiveByItem.values()];
     const latestWorkDate = effectiveRecords.reduce<Date | null>(
       (latest, entry) =>
@@ -1095,6 +1329,7 @@ export class ProgressService {
           currentOfficialRabWeightedPhysicalProgress,
         ),
       ...(actualTemporal === undefined ? {} : { actualTemporal }),
+      ...(progressComparison === undefined ? {} : { progressComparison }),
       items: items.map((item) => {
         const effective = effectiveByItem.get(item.id);
 
