@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
-import type { ExecutionPlanResponse } from '../../utils/executionPlan';
+import {
+  periodicScheduleCoherence,
+  periodicSchedulePlanDecision,
+  type ExecutionPlanResponse,
+} from '../../utils/executionPlan';
 import {
   actualStateLabel,
   buildMonitoringRows,
@@ -64,6 +68,16 @@ type PeriodicTemporalLensPresentation =
       lens: Extract<MonitoringTemporalLens, { state: 'UNAVAILABLE' }> }
   | { state: 'INCOHERENT'; requestKey: string }
   | { state: 'ERROR'; requestKey: string; status: number | null };
+
+type PeriodicSchedulePresentation =
+  | { state: 'DISABLED' }
+  | { state: 'NO_PLANNED_SOURCE' | 'CHECKING'; requestKey: string }
+  | {
+      state: 'RESOLVED';
+      requestKey: string;
+      executionPlan: ExecutionPlanResponse;
+    }
+  | { state: 'INCOHERENT' | 'ERROR'; requestKey: string };
 
 class MonitoringRequestError extends Error {
   readonly status: number;
@@ -137,8 +151,18 @@ export function ProjectWorkPage() {
     useState(false);
   const [periodicPresentation, setPeriodicPresentation] =
     useState<PeriodicTemporalLensPresentation>({ state: 'DISABLED' });
+  const [periodicSchedulePresentation, setPeriodicSchedulePresentation] =
+    useState<PeriodicSchedulePresentation>({ state: 'DISABLED' });
+  const [periodicSchedulePlanCache, setPeriodicSchedulePlanCache] =
+    useState<ExecutionPlanResponse | null>(null);
   const [temporalRequestRefresh, setTemporalRequestRefresh] = useState(0);
   const temporalRequestGenerationRef = useRef(0);
+  const periodicScheduleGenerationRef = useRef(0);
+  const periodicScheduleRequestRef = useRef<{
+    key: string;
+    controller: AbortController;
+    promise: Promise<ExecutionPlanResponse>;
+  } | null>(null);
   const temporalProjectRef = useRef<string | null>(null);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const [errorProjectId, setErrorProjectId] = useState<string | null>(null);
@@ -479,6 +503,166 @@ export function ProjectWorkPage() {
     activePeriodicPresentation.state === 'RESOLVED'
       ? activePeriodicPresentation.lens
       : null;
+  const periodicScheduleRequestKey =
+    periodicResolvedResponse && periodicResolvedLens
+      ? [
+          temporalRequestKey,
+          periodicResolvedResponse.projectId,
+          periodicResolvedResponse.baseline?.id ?? 'NO_BASELINE',
+          periodicResolvedResponse.baseline?.versionNumber ?? 'NO_BASELINE_VERSION',
+          periodicResolvedLens.plannedSource?.executionPlanVersionId ??
+            'NO_PLANNED_SOURCE',
+          periodicResolvedLens.plannedSource?.versionNumber ??
+            'NO_PLANNED_SOURCE_VERSION',
+        ].join(':')
+      : null;
+
+  useEffect(() => {
+    const generation = periodicScheduleGenerationRef.current + 1;
+    periodicScheduleGenerationRef.current = generation;
+
+    if (
+      temporalContextMode !== 'PERIODIK' ||
+      !token ||
+      !projectId ||
+      periodicResolvedResponse === null ||
+      periodicResolvedLens === null ||
+      periodicScheduleRequestKey === null
+    ) {
+      periodicScheduleRequestRef.current?.controller.abort();
+      periodicScheduleRequestRef.current = null;
+      return;
+    }
+
+    const decision = periodicSchedulePlanDecision({
+      periodicResponse: periodicResolvedResponse,
+      candidates: [executionPlan, periodicSchedulePlanCache],
+    });
+    if (decision.state === 'NO_PLANNED_SOURCE') {
+      periodicScheduleRequestRef.current?.controller.abort();
+      periodicScheduleRequestRef.current = null;
+      return;
+    }
+    if (decision.state === 'REUSE') {
+      periodicScheduleRequestRef.current?.controller.abort();
+      periodicScheduleRequestRef.current = null;
+      return;
+    }
+
+    const previousRequest = periodicScheduleRequestRef.current;
+    let activeRequest = previousRequest;
+    if (activeRequest?.key !== periodicScheduleRequestKey) {
+      previousRequest?.controller.abort();
+      const controller = new AbortController();
+      const promise = apiFetch(`/projects/${projectId}/execution-plan`, {
+        signal: controller.signal,
+      }).then(async (response) => {
+        if (!response.ok) throw new MonitoringRequestError(response.status);
+        return response.json() as Promise<ExecutionPlanResponse>;
+      });
+      activeRequest = {
+        key: periodicScheduleRequestKey,
+        controller,
+        promise,
+      };
+      periodicScheduleRequestRef.current = activeRequest;
+    }
+
+    let active = true;
+    void activeRequest.promise
+      .then((freshExecutionPlan) => {
+        if (
+          !active ||
+          periodicScheduleGenerationRef.current !== generation ||
+          periodicScheduleRequestRef.current?.key !== periodicScheduleRequestKey
+        ) {
+          return;
+        }
+        const coherence = periodicScheduleCoherence({
+          periodicResponse: periodicResolvedResponse,
+          executionPlan: freshExecutionPlan,
+        });
+        if (coherence.state !== 'COHERENT') {
+          setPeriodicSchedulePresentation({
+            state: 'INCOHERENT',
+            requestKey: periodicScheduleRequestKey,
+          });
+          return;
+        }
+        setPeriodicSchedulePlanCache(freshExecutionPlan);
+        setPeriodicSchedulePresentation({
+          state: 'RESOLVED',
+          requestKey: periodicScheduleRequestKey,
+          executionPlan: freshExecutionPlan,
+        });
+      })
+      .catch((scheduleError: unknown) => {
+        if (
+          !active ||
+          periodicScheduleGenerationRef.current !== generation ||
+          (scheduleError instanceof DOMException &&
+            scheduleError.name === 'AbortError')
+        ) {
+          return;
+        }
+        console.error('Failed to verify Periodic Schedule provenance:', scheduleError);
+        periodicScheduleRequestRef.current = null;
+        setPeriodicSchedulePresentation({
+          state: 'ERROR',
+          requestKey: periodicScheduleRequestKey,
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    token,
+    projectId,
+    temporalContextMode,
+    temporalRequestKey,
+    periodicResolvedResponse,
+    periodicResolvedLens,
+    periodicScheduleRequestKey,
+    executionPlan,
+    periodicSchedulePlanCache,
+  ]);
+
+  useEffect(
+    () => () => periodicScheduleRequestRef.current?.controller.abort(),
+    [],
+  );
+
+  const periodicScheduleImmediateDecision =
+    temporalContextMode === 'PERIODIK' && periodicResolvedResponse
+      ? periodicSchedulePlanDecision({
+          periodicResponse: periodicResolvedResponse,
+          candidates: [executionPlan, periodicSchedulePlanCache],
+        })
+      : null;
+  const activePeriodicSchedulePresentation =
+    periodicScheduleRequestKey === null ||
+    periodicScheduleImmediateDecision === null
+      ? ({ state: 'DISABLED' } as const)
+      : periodicScheduleImmediateDecision.state === 'NO_PLANNED_SOURCE'
+        ? ({
+            state: 'NO_PLANNED_SOURCE',
+            requestKey: periodicScheduleRequestKey,
+          } as const)
+        : periodicScheduleImmediateDecision.state === 'REUSE'
+          ? ({
+              state: 'RESOLVED',
+              requestKey: periodicScheduleRequestKey,
+              executionPlan: periodicScheduleImmediateDecision.executionPlan,
+            } as const)
+          : 'requestKey' in periodicSchedulePresentation &&
+              periodicSchedulePresentation.requestKey ===
+                periodicScheduleRequestKey
+            ? periodicSchedulePresentation
+            : ({
+                state: 'CHECKING',
+                requestKey: periodicScheduleRequestKey,
+              } as const);
 
   const activatePeriodicContext = () => {
     if (temporalContextMode === 'PERIODIK') return;
@@ -702,12 +886,38 @@ export function ProjectWorkPage() {
           progressComparisonPresentation={progressComparisonPresentation}
           onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
         />
-      ) : (
+      ) : activePeriodicSchedulePresentation.state === 'RESOLVED' &&
+        periodicResolvedResponse && periodicResolvedLens ? (
+        <ExecutionPlanReadinessPanel
+          periodicSchedule={{
+            monitoring: periodicResolvedResponse,
+            lens: periodicResolvedLens,
+            executionPlan: activePeriodicSchedulePresentation.executionPlan,
+          }}
+        />
+      ) : periodicResolvedLens ? (
         <section className="h2a0-periodic-deferred" role="status">
-          <strong>Schedule dan Kurva S untuk konteks periode belum diaktifkan.</strong>
-          <span>SIMPROK tidak mencampurkan data Terkini dengan periode yang dipilih.</span>
+          {activePeriodicSchedulePresentation.state === 'NO_PLANNED_SOURCE' && (
+            <strong>
+              Schedule periode belum tersedia karena Rencana Pelaksanaan resmi
+              belum tersedia.
+            </strong>
+          )}
+          {activePeriodicSchedulePresentation.state === 'CHECKING' && (
+            <strong>Memeriksa Rencana Pelaksanaan resmi untuk periode ini...</strong>
+          )}
+          {activePeriodicSchedulePresentation.state === 'INCOHERENT' && (
+            <strong>
+              Schedule periode tidak dapat ditampilkan karena konteks Rencana,
+              RAB, dan periode tidak konsisten.
+            </strong>
+          )}
+          {activePeriodicSchedulePresentation.state === 'ERROR' && (
+            <strong>Schedule periode gagal dimuat. Fakta periode tetap aman.</strong>
+          )}
+          <span>Kurva S untuk konteks periode belum diaktifkan.</span>
         </section>
-      )}
+      ) : null}
 
       {temporalContextMode === 'PERIODIK' && activePeriodicPresentation.state !== 'RESOLVED' ? (
         <section className={`h2a0-periodic-state is-${activePeriodicPresentation.state.toLowerCase()}`}

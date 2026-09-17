@@ -1,3 +1,8 @@
+import type {
+  MonitoringResponse,
+  MonitoringTemporalLens,
+} from './monitoringCurrent';
+
 export type ExecutionPlanReadinessState =
   | 'PLAN_NOT_READY'
   | 'REVISION_IN_PROGRESS'
@@ -89,6 +94,174 @@ export interface ExecutionPlanResponse {
       authorityCode: string;
     } | null;
   };
+}
+
+type ResolvedMonitoringTemporalLens = Extract<
+  MonitoringTemporalLens,
+  { state: 'RESOLVED' }
+>;
+
+export type PeriodicScheduleCoherence =
+  | {
+      state: 'COHERENT';
+      lens: ResolvedMonitoringTemporalLens;
+      executionPlan: ExecutionPlanResponse;
+    }
+  | { state: 'NO_PLANNED_SOURCE' }
+  | {
+      state: 'INCOHERENT';
+      reason:
+        | 'TEMPORAL_LENS_NOT_RESOLVED'
+        | 'PLANNED_SOURCE_STATUS_INVALID'
+        | 'BASELINE_REQUIRED'
+        | 'TEMPORAL_BASELINE_MISMATCH'
+        | 'PROJECT_ID_MISMATCH'
+        | 'EXECUTION_PLAN_BASELINE_MISMATCH'
+        | 'EXECUTION_PLAN_NOT_AVAILABLE'
+        | 'EXECUTION_PLAN_NOT_LOCKED'
+        | 'EXECUTION_PLAN_ID_MISMATCH'
+        | 'EXECUTION_PLAN_VERSION_MISMATCH'
+        | 'DUPLICATE_WORK_ITEM_ID'
+        | 'DUPLICATE_TEMPORAL_ITEM_ID'
+        | 'DUPLICATE_SCHEDULE_ITEM_ID'
+        | 'SCHEDULE_ITEM_NOT_IN_PERIODIC_RAB'
+        | 'SCHEDULE_ITEM_NOT_IN_TEMPORAL_LENS';
+    };
+
+function exactBaselineIdentity(
+  left: MonitoringResponse['baseline'],
+  right: ExecutionPlanResponse['baseline'],
+): boolean {
+  return (
+    left !== null &&
+    right !== null &&
+    left.id === right.id &&
+    left.versionNumber === right.versionNumber &&
+    left.approvedAt === right.approvedAt
+  );
+}
+
+/**
+ * Presentation-integrity gate only. It proves that one locked Schedule read
+ * belongs to the same canonical Periodic Monitoring snapshot; it performs no
+ * quantity, progress, boundary, or date calculation.
+ */
+export function periodicScheduleCoherence(input: {
+  periodicResponse: MonitoringResponse;
+  executionPlan: ExecutionPlanResponse;
+}): PeriodicScheduleCoherence {
+  const lens = input.periodicResponse.temporalLens;
+  if (lens?.state !== 'RESOLVED') {
+    return { state: 'INCOHERENT', reason: 'TEMPORAL_LENS_NOT_RESOLVED' };
+  }
+  if (lens.plannedSource === null) return { state: 'NO_PLANNED_SOURCE' };
+  if (
+    (lens.plannedSource as { status?: unknown }).status !== 'LOCKED'
+  ) {
+    return { state: 'INCOHERENT', reason: 'PLANNED_SOURCE_STATUS_INVALID' };
+  }
+
+  if (input.periodicResponse.baseline === null || lens.baseline === null) {
+    return { state: 'INCOHERENT', reason: 'BASELINE_REQUIRED' };
+  }
+  if (
+    !exactBaselineIdentity(input.periodicResponse.baseline, lens.baseline)
+  ) {
+    return { state: 'INCOHERENT', reason: 'TEMPORAL_BASELINE_MISMATCH' };
+  }
+  if (input.executionPlan.projectId !== input.periodicResponse.projectId) {
+    return { state: 'INCOHERENT', reason: 'PROJECT_ID_MISMATCH' };
+  }
+  if (
+    !exactBaselineIdentity(
+      input.periodicResponse.baseline,
+      input.executionPlan.baseline,
+    )
+  ) {
+    return {
+      state: 'INCOHERENT',
+      reason: 'EXECUTION_PLAN_BASELINE_MISMATCH',
+    };
+  }
+
+  const plan = input.executionPlan.plan;
+  if (plan === null) {
+    return { state: 'INCOHERENT', reason: 'EXECUTION_PLAN_NOT_AVAILABLE' };
+  }
+  if (plan.status !== 'LOCKED') {
+    return { state: 'INCOHERENT', reason: 'EXECUTION_PLAN_NOT_LOCKED' };
+  }
+  if (plan.id !== lens.plannedSource.executionPlanVersionId) {
+    return { state: 'INCOHERENT', reason: 'EXECUTION_PLAN_ID_MISMATCH' };
+  }
+  if (plan.versionNumber !== lens.plannedSource.versionNumber) {
+    return { state: 'INCOHERENT', reason: 'EXECUTION_PLAN_VERSION_MISMATCH' };
+  }
+
+  const workItemIds = new Set<string>();
+  for (const item of input.periodicResponse.items) {
+    if (item.itemType !== 'WORK_ITEM') continue;
+    if (workItemIds.has(item.id)) {
+      return { state: 'INCOHERENT', reason: 'DUPLICATE_WORK_ITEM_ID' };
+    }
+    workItemIds.add(item.id);
+  }
+
+  const temporalItemIds = new Set<string>();
+  for (const item of lens.items) {
+    if (temporalItemIds.has(item.boqItemId)) {
+      return { state: 'INCOHERENT', reason: 'DUPLICATE_TEMPORAL_ITEM_ID' };
+    }
+    temporalItemIds.add(item.boqItemId);
+  }
+
+  const scheduleItemIds = new Set<string>();
+  for (const item of input.executionPlan.schedule) {
+    if (scheduleItemIds.has(item.boqItemId)) {
+      return { state: 'INCOHERENT', reason: 'DUPLICATE_SCHEDULE_ITEM_ID' };
+    }
+    if (!workItemIds.has(item.boqItemId)) {
+      return {
+        state: 'INCOHERENT',
+        reason: 'SCHEDULE_ITEM_NOT_IN_PERIODIC_RAB',
+      };
+    }
+    if (!temporalItemIds.has(item.boqItemId)) {
+      return {
+        state: 'INCOHERENT',
+        reason: 'SCHEDULE_ITEM_NOT_IN_TEMPORAL_LENS',
+      };
+    }
+    scheduleItemIds.add(item.boqItemId);
+  }
+
+  return { state: 'COHERENT', lens, executionPlan: input.executionPlan };
+}
+
+export type PeriodicSchedulePlanDecision =
+  | { state: 'NO_PLANNED_SOURCE' }
+  | { state: 'REUSE'; executionPlan: ExecutionPlanResponse }
+  | { state: 'REFRESH_REQUIRED' };
+
+export function periodicSchedulePlanDecision(input: {
+  periodicResponse: MonitoringResponse;
+  candidates: readonly (ExecutionPlanResponse | null)[];
+}): PeriodicSchedulePlanDecision {
+  const lens = input.periodicResponse.temporalLens;
+  if (lens?.state === 'RESOLVED' && lens.plannedSource === null) {
+    return { state: 'NO_PLANNED_SOURCE' };
+  }
+  for (const candidate of input.candidates) {
+    if (candidate === null) continue;
+    const coherence = periodicScheduleCoherence({
+      periodicResponse: input.periodicResponse,
+      executionPlan: candidate,
+    });
+    if (coherence.state === 'COHERENT') {
+      return { state: 'REUSE', executionPlan: candidate };
+    }
+  }
+  return { state: 'REFRESH_REQUIRED' };
 }
 
 export function executionPlanStatusLabel(
