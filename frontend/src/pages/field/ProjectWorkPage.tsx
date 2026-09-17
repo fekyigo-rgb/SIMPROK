@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
@@ -12,6 +12,8 @@ import {
   formatWeightPercentage,
   formatProjectBusinessDate,
   lastRecordedLabel,
+  monitoringComparisonCutoff,
+  monitoringComparisonRequestPath,
   monitoringWorkItemsById,
   officialItemProgressLabel,
   officialQuantityLabel,
@@ -22,6 +24,7 @@ import {
   weightCompletenessExplanation,
   weightCompletenessLabel,
   type MonitoringProject,
+  type MonitoringProgressComparisonPresentation,
   type MonitoringResponse,
 } from '../../utils/monitoringCurrent';
 import { ExecutionPlanReadinessPanel } from './ExecutionPlanReadinessPanel';
@@ -86,6 +89,16 @@ export function ProjectWorkPage() {
   const [project, setProject] = useState<MonitoringProject | null>(null);
   const [monitoring, setMonitoring] = useState<MonitoringResponse | null>(null);
   const [executionPlan, setExecutionPlan] = useState<ExecutionPlanResponse | null>(null);
+  const [progressComparisonPresentation, setProgressComparisonPresentation] =
+    useState<MonitoringProgressComparisonPresentation>({
+      state: 'PENDING',
+      cutoffDate: null,
+      comparison: null,
+    });
+  const comparisonRequestRef = useRef<{
+    key: string;
+    promise: Promise<MonitoringResponse>;
+  } | null>(null);
   const [executionPlanRefresh, setExecutionPlanRefresh] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
@@ -97,17 +110,28 @@ export function ProjectWorkPage() {
     if (!token || !projectId) return;
 
     const controller = new AbortController();
+    let active = true;
+    setProgressComparisonPresentation({
+      state: 'PENDING',
+      cutoffDate: null,
+      comparison: null,
+    });
 
-    Promise.all([
-      apiFetch(`/projects/${projectId}`, { signal: controller.signal }),
-      apiFetch(`/projects/${projectId}/progress/monitoring`, {
-        signal: controller.signal,
-      }),
-      apiFetch(`/projects/${projectId}/execution-plan`, {
-        signal: controller.signal,
-      }),
-    ])
-      .then(async ([projectResponse, monitoringResponse, executionPlanResponse]) => {
+    const load = async () => {
+      try {
+        const [projectResponse, monitoringResponse, executionPlanResponse] =
+          await Promise.all([
+            apiFetch(`/projects/${projectId}`, {
+              signal: controller.signal,
+            }),
+            apiFetch(`/projects/${projectId}/progress/monitoring`, {
+              signal: controller.signal,
+            }),
+            apiFetch(`/projects/${projectId}/execution-plan`, {
+              signal: controller.signal,
+            }),
+          ]);
+
         if (!projectResponse.ok) {
           throw new MonitoringRequestError(projectResponse.status);
         }
@@ -117,13 +141,15 @@ export function ProjectWorkPage() {
         if (!executionPlanResponse.ok) {
           throw new MonitoringRequestError(executionPlanResponse.status);
         }
-        return Promise.all([
-          projectResponse.json() as Promise<MonitoringProject>,
-          monitoringResponse.json() as Promise<MonitoringResponse>,
-          executionPlanResponse.json() as Promise<ExecutionPlanResponse>,
-        ]);
-      })
-      .then(([projectData, monitoringData, executionPlanData]) => {
+
+        const [projectData, monitoringData, executionPlanData] =
+          await Promise.all([
+            projectResponse.json() as Promise<MonitoringProject>,
+            monitoringResponse.json() as Promise<MonitoringResponse>,
+            executionPlanResponse.json() as Promise<ExecutionPlanResponse>,
+          ]);
+
+        if (!active) return;
         setProject(projectData);
         setMonitoring(monitoringData);
         setExecutionPlan(executionPlanData);
@@ -139,9 +165,85 @@ export function ProjectWorkPage() {
         setErrorProjectId(null);
         setErrorKind(null);
         setErrorStatus(null);
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') return;
+
+        const cutoffDate = monitoringComparisonCutoff(
+          monitoringData.freshness.dataThrough,
+        );
+        if (cutoffDate === null) {
+          setProgressComparisonPresentation({
+            state: 'MISSING_CUTOFF',
+            cutoffDate: null,
+            comparison: null,
+          });
+          return;
+        }
+
+        setProgressComparisonPresentation({
+          state: 'LOADING',
+          cutoffDate,
+          comparison: null,
+        });
+
+        const plan = executionPlanData.plan;
+        const comparisonRequestKey = [
+          projectId,
+          cutoffDate,
+          executionPlanData.baseline?.id ?? 'NO_BASELINE',
+          plan?.id ?? 'NO_PLAN',
+          plan?.status ?? 'NO_PLAN_STATUS',
+          String(plan?.revision ?? 'NO_REVISION'),
+        ].join(':');
+        let comparisonPromise: Promise<MonitoringResponse>;
+        if (comparisonRequestRef.current?.key === comparisonRequestKey) {
+          comparisonPromise = comparisonRequestRef.current.promise;
+        } else {
+          comparisonPromise = apiFetch(
+            monitoringComparisonRequestPath(projectId, cutoffDate),
+          ).then(async (response) => {
+            if (!response.ok) {
+              throw new MonitoringRequestError(response.status);
+            }
+            return response.json() as Promise<MonitoringResponse>;
+          });
+          comparisonRequestRef.current = {
+            key: comparisonRequestKey,
+            promise: comparisonPromise,
+          };
+        }
+
+        try {
+          const comparisonData = await comparisonPromise;
+          if (!active) return;
+          if (comparisonData.progressComparison === undefined) {
+            setProgressComparisonPresentation({
+              state: 'UNAVAILABLE',
+              cutoffDate,
+              comparison: null,
+            });
+            return;
+          }
+          setProgressComparisonPresentation({
+            state: 'AVAILABLE',
+            cutoffDate: comparisonData.progressComparison.cutoffDate,
+            comparison: comparisonData.progressComparison,
+          });
+        } catch (comparisonError) {
+          if (!active) return;
+          console.error(
+            'Failed to fetch optional Monitoring comparison:',
+            comparisonError,
+          );
+          setProgressComparisonPresentation({
+            state: 'UNAVAILABLE',
+            cutoffDate,
+            comparison: null,
+          });
+        }
+      } catch (error: unknown) {
+        if (!active) return;
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
         if (error instanceof MonitoringRequestError) {
           setErrorStatus(error.status);
           setErrorKind(errorKindForStatus(error.status));
@@ -154,9 +256,15 @@ export function ProjectWorkPage() {
         setProject(null);
         setMonitoring(null);
         setExecutionPlan(null);
-      });
+      }
+    };
 
-    return () => controller.abort();
+    void load();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [token, projectId, returnItemId, executionPlanRefresh]);
 
   const rows = useMemo(
@@ -284,6 +392,7 @@ export function ProjectWorkPage() {
         projectId={project.id}
         executionPlan={executionPlan}
         realizationByBoqItemId={realizationByBoqItemId}
+        progressComparisonPresentation={progressComparisonPresentation}
         onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
       />
 

@@ -9,10 +9,15 @@ import {
   type ExecutionPlanResponse,
 } from '../../utils/executionPlan';
 import {
+  actualComparisonLabel,
+  deviationComparisonPresentation,
   formatProjectBusinessDate,
+  monitoringComparisonChartProjection,
+  plannedComparisonLabel,
   recordedAtLabel,
   scheduleRealizationPresentation,
   type MonitoringItem,
+  type MonitoringProgressComparisonPresentation,
 } from '../../utils/monitoringCurrent';
 
 type ReviewView = 'schedule' | 'work-plan' | 'planned-curve';
@@ -29,11 +34,13 @@ export function ExecutionPlanReadinessPanel({
   projectId,
   executionPlan,
   realizationByBoqItemId,
+  progressComparisonPresentation,
   onChanged,
 }: {
   projectId: string;
   executionPlan: ExecutionPlanResponse;
   realizationByBoqItemId: ReadonlyMap<string, MonitoringItem>;
+  progressComparisonPresentation: MonitoringProgressComparisonPresentation;
   onChanged: () => void;
 }) {
   const { hasPermission } = useAuth();
@@ -50,6 +57,22 @@ export function ExecutionPlanReadinessPanel({
   const canLock =
     executionPlan.capabilities.canLock &&
     hasPermission('EXECUTION_PLAN_LOCK');
+  const progressComparison =
+    progressComparisonPresentation.state === 'AVAILABLE'
+      ? progressComparisonPresentation.comparison
+      : null;
+  const comparisonChart = progressComparison
+    ? monitoringComparisonChartProjection(progressComparison.points)
+    : null;
+  const currentComparisonPoint =
+    progressComparison && progressComparison.points.length > 0
+      ? progressComparison.points[progressComparison.points.length - 1]
+      : null;
+  const currentDeviation = currentComparisonPoint
+    ? deviationComparisonPresentation(
+        currentComparisonPoint.deviationPercentagePoints,
+      )
+    : null;
 
   const beginRevision = () => {
     const existing = executionPlan.distributions.map((row) => ({
@@ -169,7 +192,7 @@ export function ExecutionPlanReadinessPanel({
           Rencana Kerja <span>Tinjau</span>
         </button>
         <button type="button" onClick={() => setView('planned-curve')}>
-          Kurva S Rencana <span>Tinjau</span>
+          Kurva S <span>Tinjau</span>
         </button>
       </div>
 
@@ -273,28 +296,261 @@ export function ExecutionPlanReadinessPanel({
 
       {view === 'planned-curve' && (
         <div className="execution-plan-review">
-          <h3>Kurva S Rencana</h3>
-          <p className="execution-plan-note">
-            Dibentuk SIMPROK dari kuantitas incremental dan bobot RAB resmi; bukan titik kurva yang diedit manual.
-          </p>
-          {executionPlan.plannedCurve.state === 'UNAVAILABLE' ? (
-            <p>
-              {executionPlanCurveUnavailableLabel(
-                executionPlan.plannedCurve.reason,
-              )}
-            </p>
-          ) : (
-            <div className="execution-plan-curve" data-state={executionPlan.plannedCurve.state}>
-              {executionPlan.plannedCurve.points.map((point) => (
-                <div key={point.periodEndDate}>
-                  <span>{formatProjectBusinessDate(point.periodEndDate)}</span>
-                  <strong>{point.knownWeightedPlannedProgressPercent}%</strong>
+          {progressComparison && comparisonChart ? (
+            <>
+              <div className="execution-plan-curve-heading">
+                <div>
+                  <h3>Kurva S</h3>
+                  <p>Rencana vs Realisasi</p>
                 </div>
-              ))}
-              {executionPlan.plannedCurve.state === 'INCOMPLETE' && (
-                <small>Subtotal yang diketahui; belum menjadi kurva lengkap.</small>
+                <span>
+                  TERKINI · Data sampai{' '}
+                  {formatProjectBusinessDate(progressComparison.cutoffDate)}
+                </span>
+              </div>
+              <p className="execution-plan-note">
+                Rencana, Realisasi, dan Deviasi berasal dari perbandingan
+                temporal kanonikal backend. Garis terputus saat fakta belum
+                lengkap atau tidak tersedia.
+              </p>
+              <p className="execution-plan-curve-provenance">
+                {progressComparison.baseline
+                  ? 'Baseline v' + progressComparison.baseline.versionNumber
+                  : 'Baseline tidak tersedia'}
+                {' · '}
+                {progressComparison.plannedSource
+                  ? 'Rencana Pelaksanaan v' +
+                    progressComparison.plannedSource.versionNumber
+                  : 'Sumber rencana tidak tersedia'}
+              </p>
+
+              {progressComparison.points.length === 0 ? (
+                <p>Fakta perbandingan temporal belum tersedia.</p>
+              ) : (
+                <>
+                  <div
+                    className="execution-plan-comparison-chart"
+                    data-boundary-basis={progressComparison.boundaryBasis}
+                  >
+                    <div
+                      className="execution-plan-comparison-legend"
+                      aria-label="Legenda Kurva S"
+                    >
+                      <span className="is-planned">Rencana</span>
+                      <span className="is-actual">Realisasi</span>
+                    </div>
+                    <svg
+                      role="img"
+                      aria-label="Kurva S Rencana dan Realisasi terhadap tanggal kerja"
+                      viewBox={
+                        '0 0 ' + comparisonChart.width + ' ' + comparisonChart.height
+                      }
+                    >
+                      <line
+                        className="comparison-axis"
+                        x1={comparisonChart.padding}
+                        y1={comparisonChart.padding}
+                        x2={comparisonChart.padding}
+                        y2={comparisonChart.height - comparisonChart.padding}
+                      />
+                      <line
+                        className="comparison-axis"
+                        x1={comparisonChart.padding}
+                        y1={comparisonChart.height - comparisonChart.padding}
+                        x2={comparisonChart.width - comparisonChart.padding}
+                        y2={comparisonChart.height - comparisonChart.padding}
+                      />
+                      <text x={4} y={comparisonChart.padding + 4}>100%</text>
+                      <text
+                        x={16}
+                        y={comparisonChart.height - comparisonChart.padding + 4}
+                      >
+                        0%
+                      </text>
+                      {comparisonChart.plannedSegments.map((segment, index) => (
+                        <line
+                          key={'planned-' + index}
+                          className="comparison-line is-planned"
+                          x1={segment.from.x}
+                          y1={segment.from.y}
+                          x2={segment.to.x}
+                          y2={segment.to.y}
+                        />
+                      ))}
+                      {comparisonChart.actualSegments.map((segment, index) => (
+                        <line
+                          key={'actual-' + index}
+                          className="comparison-line is-actual"
+                          x1={segment.from.x}
+                          y1={segment.from.y}
+                          x2={segment.to.x}
+                          y2={segment.to.y}
+                        />
+                      ))}
+                      {comparisonChart.points.map((point) => (
+                        <g key={point.cutoffDate}>
+                          {point.x !== null && point.plannedY !== null && (
+                            <circle
+                              className="comparison-point is-planned"
+                              cx={point.x}
+                              cy={point.plannedY}
+                              r={4}
+                            />
+                          )}
+                          {point.x !== null && point.actualY !== null && (
+                            <circle
+                              className="comparison-point is-actual"
+                              cx={point.x}
+                              cy={point.actualY}
+                              r={4}
+                            />
+                          )}
+                        </g>
+                      ))}
+                    </svg>
+                    <div className="execution-plan-comparison-range">
+                      <span>
+                        {formatProjectBusinessDate(
+                          progressComparison.points[0].cutoffDate,
+                        )}
+                      </span>
+                      {progressComparison.points[0].cutoffDate !==
+                        progressComparison.points[
+                          progressComparison.points.length - 1
+                        ].cutoffDate && (
+                        <span>
+                          {formatProjectBusinessDate(
+                            progressComparison.points[
+                              progressComparison.points.length - 1
+                            ].cutoffDate,
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {currentComparisonPoint && currentDeviation && (
+                    <dl className="execution-plan-comparison-current">
+                      <div>
+                        <dt>Rencana</dt>
+                        <dd>
+                          {plannedComparisonLabel(currentComparisonPoint.planned)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Realisasi</dt>
+                        <dd>
+                          {actualComparisonLabel(currentComparisonPoint.actual)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Deviasi</dt>
+                        <dd>{currentDeviation.value}</dd>
+                        <small>{currentDeviation.meaning}</small>
+                      </div>
+                    </dl>
+                  )}
+
+                  <div className="execution-plan-table-scroll">
+                    <table className="execution-plan-comparison-table">
+                      <caption>Detail fakta perbandingan Kurva S</caption>
+                      <thead>
+                        <tr>
+                          <th>Tanggal</th>
+                          <th>Rencana</th>
+                          <th>Realisasi</th>
+                          <th>Deviasi</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {progressComparison.points.map((point) => {
+                          const deviation = deviationComparisonPresentation(
+                            point.deviationPercentagePoints,
+                          );
+                          return (
+                            <tr key={point.cutoffDate}>
+                              <td>
+                                <time dateTime={point.cutoffDate}>
+                                  {formatProjectBusinessDate(point.cutoffDate)}
+                                </time>
+                              </td>
+                              <td data-state={point.planned.state}>
+                                {plannedComparisonLabel(point.planned)}
+                              </td>
+                              <td data-state={point.actual.state}>
+                                {actualComparisonLabel(point.actual)}
+                              </td>
+                              <td
+                                data-state={
+                                  point.deviationPercentagePoints.state
+                                }
+                              >
+                                <strong>{deviation.value}</strong>
+                                <small>{deviation.meaning}</small>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
-            </div>
+            </>
+          ) : (
+            <>
+              <h3>Kurva S Rencana</h3>
+              <p className="execution-plan-note">
+                Dibentuk SIMPROK dari kuantitas incremental dan bobot RAB
+                resmi; bukan titik kurva yang diedit manual.
+              </p>
+              {progressComparisonPresentation.state === 'MISSING_CUTOFF' && (
+                <p className="execution-plan-comparison-state" role="status">
+                  Kurva Realisasi belum tersedia karena belum ada tanggal data
+                  pekerjaan yang berlaku.
+                </p>
+              )}
+              {progressComparisonPresentation.state === 'UNAVAILABLE' && (
+                <p className="execution-plan-comparison-state" role="status">
+                  Perbandingan Rencana dan Realisasi sedang tidak tersedia.
+                  Kurva Rencana tetap ditampilkan.
+                </p>
+              )}
+              {(progressComparisonPresentation.state === 'PENDING' ||
+                progressComparisonPresentation.state === 'LOADING') && (
+                <p className="execution-plan-comparison-state" role="status">
+                  Menyiapkan perbandingan Rencana dan Realisasi terkini…
+                </p>
+              )}
+              {executionPlan.plannedCurve.state === 'UNAVAILABLE' ? (
+                <p>
+                  {executionPlanCurveUnavailableLabel(
+                    executionPlan.plannedCurve.reason,
+                  )}
+                </p>
+              ) : (
+                <div
+                  className="execution-plan-curve"
+                  data-state={executionPlan.plannedCurve.state}
+                >
+                  {executionPlan.plannedCurve.points.map((point) => (
+                    <div key={point.periodEndDate}>
+                      <span>
+                        {formatProjectBusinessDate(point.periodEndDate)}
+                      </span>
+                      <strong>
+                        {point.knownWeightedPlannedProgressPercent}%
+                      </strong>
+                    </div>
+                  ))}
+                  {executionPlan.plannedCurve.state === 'INCOMPLETE' && (
+                    <small>
+                      Subtotal yang diketahui; belum menjadi kurva lengkap.
+                    </small>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
