@@ -15,16 +15,26 @@ import {
   monitoringComparisonChartProjection,
   monitoringComparisonCutoff,
   monitoringComparisonRequestPath,
+  monitoringTemporalBasisLabel,
+  monitoringTemporalGranularityLabel,
+  monitoringTemporalLensRequestPath,
+  monitoringTemporalLensUnavailableMessage,
+  monitoringTemporalPeriodLabel,
   monitoringWorkItemsById,
   plannedComparisonLabel,
+  plannedPeriodQuantityLabel,
   progressDetailPath,
   scheduleRealizationPresentation,
   recordedAtLabel,
   rowWeightPresentation,
   selectedWorkItem,
+  temporalActualQuantityLabel,
+  temporalLensItemsByBoqItemId,
   weightCompletenessLabel,
   type MonitoringItem,
   type MonitoringProgressComparisonPoint,
+  type MonitoringTemporalLensItem,
+  type MonitoringTemporalPeriod,
 } from './monitoringCurrent.ts';
 
 const item = (
@@ -551,7 +561,7 @@ test('MON04 chart holds the previous value until the next canonical boundary', (
 test('H2-A0-9 the shell states project scope, Terkini, and both freshness meanings', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
   assert.match(page, /SELURUH PROYEK/);
-  assert.match(page, />TERKINI</);
+  assert.match(page, />\s*TERKINI\s*</);
   assert.match(page, /Data pekerjaan sampai/);
   assert.match(page, /Terakhir diperbarui/);
   assert.match(page, /effectiveActual\(row\)/);
@@ -1070,4 +1080,151 @@ test('OFFICIAL-9 page does not introduce frontend progress arithmetic', () => {
     page,
     /parseFloat|parseInt|Number\([^)]*currentOfficial|Math\./,
   );
+});
+
+test('MON04-TC-1 Temporal Lens request carries exactly one canonical context', () => {
+  const url = new URL(monitoringTemporalLensRequestPath({
+    projectId: 'project-1', basis: 'WORK_PERIOD', granularity: 'MONTH',
+    referenceDate: '2026-07-20',
+  }), 'https://simprok.test');
+  assert.equal(url.pathname, '/projects/project-1/progress/monitoring');
+  assert.deepEqual([...url.searchParams.entries()], [
+    ['includeTemporalLens', 'true'], ['temporalBasis', 'WORK_PERIOD'],
+    ['temporalGranularity', 'MONTH'], ['temporalReferenceDate', '2026-07-20'],
+  ]);
+  for (const forbidden of ['cutoffDate', 'includeProgressComparison',
+    'includeActualSeries', 'includePeriodWindow', 'periodStartDate', 'periodEndDate']) {
+    assert.equal(url.searchParams.has(forbidden), false);
+  }
+});
+
+test('MON04-TC-2 period labels consume backend identity and ordinal only', () => {
+  const base = { periodIndex: 3, startDate: '2026-06-01', endDate: '2026-06-07' };
+  const workWeek: MonitoringTemporalPeriod = {
+    ...base, basis: 'WORK_PERIOD', granularity: 'WEEK', periodKey: 'WORK-WEEK-3',
+    metadata: { boundaryInclusivity: 'START_AND_END_INCLUSIVE',
+      boundaryRule: 'SEVEN_DAY_WINDOW_FROM_GOVERNED_WORK_PERIOD_ANCHOR',
+      governedWorkPeriodAnchorDate: '2026-05-18' },
+  };
+  const workMonth: MonitoringTemporalPeriod = {
+    ...base, periodIndex: 2, basis: 'WORK_PERIOD', granularity: 'MONTH',
+    periodKey: 'WORK-MONTH-2',
+    metadata: { boundaryInclusivity: 'START_AND_END_INCLUSIVE',
+      boundaryRule: 'ORIGINAL_ANCHOR_ANNIVERSARY_MONTH_WITH_TARGET_CLAMP',
+      governedWorkPeriodAnchorDate: '2026-05-18' },
+  };
+  const calendarWeek: MonitoringTemporalPeriod = {
+    ...base, periodIndex: 36, basis: 'CALENDAR', granularity: 'WEEK',
+    periodKey: '2026-W36',
+    metadata: { boundaryInclusivity: 'START_AND_END_INCLUSIVE',
+      boundaryRule: 'ISO_8601_MONDAY_TO_SUNDAY', isoWeekYear: 2026, isoWeekNumber: 36 },
+  };
+  const calendarMonth: MonitoringTemporalPeriod = {
+    ...base, periodIndex: 24320, basis: 'CALENDAR', granularity: 'MONTH',
+    periodKey: '2026-08',
+    metadata: { boundaryInclusivity: 'START_AND_END_INCLUSIVE',
+      boundaryRule: 'GREGORIAN_CALENDAR_MONTH', calendarYear: 2026, calendarMonth: 8 },
+  };
+  assert.equal(monitoringTemporalPeriodLabel(workWeek), 'Minggu Kerja ke-3');
+  assert.equal(monitoringTemporalPeriodLabel(workMonth), 'Bulan Kerja ke-2');
+  assert.equal(monitoringTemporalPeriodLabel(calendarWeek), 'Minggu Kalender \u00b7 2026-W36');
+  assert.equal(monitoringTemporalPeriodLabel(calendarMonth), 'Agustus 2026');
+  assert.equal(monitoringTemporalBasisLabel('WORK_PERIOD'), 'Waktu Kerja');
+  assert.equal(monitoringTemporalBasisLabel('CALENDAR'), 'Kalender');
+  assert.equal(monitoringTemporalGranularityLabel('WEEK'), 'Mingguan');
+  assert.equal(monitoringTemporalGranularityLabel('MONTH'), 'Bulanan');
+});
+
+test('MON04-TC-3 unavailable reasons are bounded human messages', () => {
+  assert.match(monitoringTemporalLensUnavailableMessage(
+    'GOVERNED_WORK_PERIOD_ANCHOR_REQUIRED'), /Hari Pertama Resmi proyek belum dibuktikan/);
+  assert.match(monitoringTemporalLensUnavailableMessage(
+    'WORK_PERIOD_ANCHOR_PROVENANCE_INVALID'), /bukti Hari Pertama Resmi tidak valid/);
+  assert.match(monitoringTemporalLensUnavailableMessage(
+    'REFERENCE_DATE_BEFORE_GOVERNED_WORK_PERIOD_ANCHOR'), /sebelum Hari Pertama Resmi proyek/);
+  assert.equal(monitoringTemporalLensUnavailableMessage('FUTURE_REASON'),
+    'Konteks periode belum tersedia dari fakta proyek yang sah.');
+});
+
+test('MON04-TC-4 planned and Actual labels preserve incomplete, unknown, and exact zero', () => {
+  assert.equal(plannedPeriodQuantityLabel(
+    { state: 'COMPLETE', plannedQuantity: '0' }, 'm3'), '0 m3');
+  assert.equal(plannedPeriodQuantityLabel({ state: 'INCOMPLETE', reason: 'PLAN_INCOMPLETE',
+    knownPlannedQuantitySubtotal: '2.5' }, 'm3'), 'Belum lengkap \u2014 subtotal 2.5 m3');
+  assert.equal(plannedPeriodQuantityLabel(
+    { state: 'UNAVAILABLE', reason: 'NO_LOCKED_PLAN' }, 'm3'), 'TIDAK TERSEDIA');
+  assert.equal(temporalActualQuantityLabel(
+    { state: 'COMPLETE', currentOfficialQuantity: '0' }, 'm3'), '0 m3');
+  assert.equal(temporalActualQuantityLabel(
+    { state: 'NOT_YET_RECORDED' }, 'm3'), 'BELUM DICATAT');
+  assert.equal(temporalActualQuantityLabel(
+    { state: 'SEMANTICS_UNPROVEN' }, 'm3'), 'SEMANTIK BELUM TERBUKTI');
+});
+
+test('MON04-TC-5 Temporal Lens items join only by canonical boqItemId', () => {
+  const items: MonitoringTemporalLensItem[] = [{
+    boqItemId: 'boq-1',
+    planned: {
+      periodQuantity: { state: 'COMPLETE', plannedQuantity: '4' },
+      cumulativeQuantityThroughEndDate: { state: 'COMPLETE', plannedQuantity: '7' },
+    },
+    actual: {
+      periodOfficialQuantity: { state: 'COMPLETE', currentOfficialQuantity: '3' },
+      cumulativeOfficialQuantityThroughEndDate: {
+        state: 'COMPLETE', currentOfficialQuantity: '5',
+      },
+    },
+  }];
+  const byId = temporalLensItemsByBoqItemId(items);
+  assert.equal(byId.get('boq-1')?.planned.periodQuantity.state, 'COMPLETE');
+  assert.equal(byId.get('missing'), undefined);
+});
+
+test('MON04-TC-6 ProjectWorkPage owns one optional request and retires stale responses', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  assert.match(page, /useState<TemporalContextMode>\('TERKINI'\)/);
+  assert.match(page, /monitoringTemporalLensRequestPath\(\{/);
+  assert.match(page, /const controller = new AbortController\(\)/);
+  assert.match(page, /temporalRequestGenerationRef\.current !== generation/);
+  assert.match(page, /controller\.abort\(\)/);
+  for (const state of ['WAITING_INPUT', 'LOADING', 'RESOLVED', 'UNAVAILABLE', 'ERROR']) {
+    assert.match(page, new RegExp(`state: '${state}'`));
+  }
+  assert.equal((page.match(/monitoringTemporalLensRequestPath\(\{/g) ?? []).length, 1);
+});
+
+test('MON04-TC-7 one Monitoring shell evolves without Current contamination', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  for (const control of ['Waktu Kerja', 'Kalender', 'Mingguan', 'Bulanan']) {
+    assert.match(page, new RegExp(`>\\s*${control}\\s*<`));
+  }
+  assert.match(page, /aria-label="Konteks waktu"/);
+  assert.match(page, /type="date"/);
+  assert.match(page, /Rencana Periode/);
+  assert.match(page, /Realisasi Resmi Periode/);
+  assert.match(page, /Rencana s\.d\. Akhir Periode/);
+  assert.match(page, /Realisasi Resmi s\.d\. Akhir Periode/);
+  assert.match(page, /temporalLensItemsById\.get\(row\.id\)/);
+  assert.match(page, /Kondisi Periode/);
+  assert.match(page, /periodicResolvedLens\.weeklyRecap\.sliceCount/);
+  assert.doesNotMatch(page, /weeklyRecap\.slices\.length/);
+  assert.match(page, /Schedule dan Kurva S untuk konteks periode belum diaktifkan/);
+  assert.match(page, /temporalContextMode === 'TERKINI'[\s\S]*ExecutionPlanReadinessPanel/);
+});
+
+test('MON04-TC-8 candidate contains no frontend temporal or quantity math', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const start = utility.indexOf('export function monitoringTemporalLensRequestPath');
+  const end = utility.indexOf('export function plannedComparisonLabel');
+  const helpers = utility.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  const forbiddenMath = /Date\.now|new Date\(|getDay|getUTCDay|setDate|setUTCDate|getMonth|getUTCMonth|parseFloat\(|Number\(/;
+  assert.doesNotMatch(page, forbiddenMath);
+  assert.doesNotMatch(page,
+    /periodQuantity\s*[/*+-]|plannedQuantity\s*[/*+-]|currentOfficialQuantity\s*[/*+-]/);
+  assert.doesNotMatch(helpers,
+    /Date\.now|new Date\(|getDay|getUTCDay|setDate|setUTCDate|getMonth|getUTCMonth|parseFloat\(|Number\(|Math\./);
+  assert.doesNotMatch(helpers,
+    /cutoffDate|includeProgressComparison|includeActualSeries|includePeriodWindow|periodStartDate|periodEndDate/);
 });
