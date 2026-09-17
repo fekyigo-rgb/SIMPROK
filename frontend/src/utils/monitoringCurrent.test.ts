@@ -1456,6 +1456,10 @@ test('MON04-TC-6 ProjectWorkPage owns one optional request and retires stale res
 
 test('MON04-TC-7 one Monitoring shell evolves without Current contamination', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
   for (const control of ['Waktu Kerja', 'Kalender', 'Mingguan', 'Bulanan']) {
     assert.match(page, new RegExp(`>\\s*${control}\\s*<`));
   }
@@ -1469,8 +1473,9 @@ test('MON04-TC-7 one Monitoring shell evolves without Current contamination', ()
   assert.match(page, /Kondisi Periode/);
   assert.match(page, /periodicResolvedLens\.weeklyRecap\.sliceCount/);
   assert.doesNotMatch(page, /weeklyRecap\.slices\.length/);
-  assert.match(page, /Schedule dan Kurva S untuk konteks periode belum diaktifkan/);
-  assert.match(page, /temporalContextMode === 'TERKINI'[\s\S]*ExecutionPlanReadinessPanel/);
+  assert.match(panel, /Schedule Rencana \+ Realisasi Periode/);
+  assert.match(panel, /Kurva S untuk konteks periode belum diaktifkan/);
+  assert.match(page, /temporalContextMode === 'TERKINI'[\s\S]*onChanged=/);
 });
 
 test('MON04-TC-8 candidate contains no frontend temporal or quantity math', () => {

@@ -13,11 +13,18 @@ import {
   deviationComparisonPresentation,
   formatProjectBusinessDate,
   monitoringComparisonChartProjection,
+  monitoringTemporalPeriodLabel,
+  monitoringWorkItemsById,
   plannedComparisonLabel,
+  plannedPeriodQuantityLabel,
   recordedAtLabel,
   scheduleRealizationPresentation,
+  temporalActualQuantityLabel,
+  temporalLensItemsByBoqItemId,
   type MonitoringItem,
   type MonitoringProgressComparisonPresentation,
+  type MonitoringResponse,
+  type MonitoringTemporalLens,
 } from '../../utils/monitoringCurrent';
 
 type ReviewView = 'schedule' | 'work-plan' | 'planned-curve';
@@ -30,25 +37,156 @@ interface DraftRow {
   plannedIncrementalQuantity: string;
 }
 
-export function ExecutionPlanReadinessPanel({
-  projectId,
-  executionPlan,
-  realizationByBoqItemId,
-  progressComparisonPresentation,
-  onChanged,
-}: {
+interface CurrentExecutionPlanReadinessPanelProps {
   projectId: string;
   executionPlan: ExecutionPlanResponse;
   realizationByBoqItemId: ReadonlyMap<string, MonitoringItem>;
   progressComparisonPresentation: MonitoringProgressComparisonPresentation;
   onChanged: () => void;
-}) {
+}
+
+interface PeriodicExecutionPlanReadinessPanelProps {
+  periodicSchedule: {
+    monitoring: MonitoringResponse;
+    lens: Extract<MonitoringTemporalLens, { state: 'RESOLVED' }>;
+    executionPlan: ExecutionPlanResponse;
+  };
+}
+
+type ExecutionPlanReadinessPanelProps =
+  | CurrentExecutionPlanReadinessPanelProps
+  | PeriodicExecutionPlanReadinessPanelProps;
+
+function PeriodicScheduleReadOnly({
+  monitoring,
+  lens,
+  executionPlan,
+}: PeriodicExecutionPlanReadinessPanelProps['periodicSchedule']) {
+  const periodicItemsById = monitoringWorkItemsById(monitoring.items);
+  const temporalItemsById = temporalLensItemsByBoqItemId(lens.items);
+
+  return (
+    <section
+      className="execution-plan"
+      aria-labelledby="execution-plan-periodic-title"
+    >
+      <div className="execution-plan-heading">
+        <div>
+          <p className="h2a0-eyebrow">Schedule Periode</p>
+          <h2 id="execution-plan-periodic-title">
+            Schedule Rencana + Realisasi Periode
+          </h2>
+          <p className="execution-plan-note">
+            {monitoringTemporalPeriodLabel(lens.period)} {' · '}
+            {formatProjectBusinessDate(lens.period.startDate)} {' - '}
+            {formatProjectBusinessDate(lens.period.endDate)}
+          </p>
+        </div>
+        <strong className="execution-plan-state is-locked">Hanya baca</strong>
+      </div>
+
+      <div className="execution-plan-review">
+        <p className="execution-plan-note">
+          Tanggal rencana berasal dari Rencana Pelaksanaan resmi. Kuantitas
+          periode dan kumulatif berasal dari konteks periode kanonikal yang
+          dipilih, bukan progress, Actual Start, Actual Finish, atau durasi aktual.
+        </p>
+        {executionPlan.schedule.length === 0 ? (
+          <p>Schedule resmi belum mempunyai baris pekerjaan.</p>
+        ) : (
+          <div className="execution-plan-table-scroll">
+            <table className="execution-plan-schedule">
+              <thead>
+                <tr>
+                  <th>Pekerjaan</th>
+                  <th>Rencana Mulai</th>
+                  <th>Rencana Selesai</th>
+                  <th>Rencana Periode</th>
+                  <th>Realisasi Resmi Periode</th>
+                  <th>Rencana s.d. Akhir Periode</th>
+                  <th>Realisasi Resmi s.d. Akhir Periode</th>
+                </tr>
+              </thead>
+              <tbody>
+                {executionPlan.schedule.map((row) => {
+                  const periodicItem = periodicItemsById.get(row.boqItemId)!;
+                  const temporalItem = temporalItemsById.get(row.boqItemId)!;
+                  const unit = periodicItem.planned.unit;
+                  return (
+                    <tr key={row.boqItemId}>
+                      <td>{periodicItem.wbsCode} · {periodicItem.name}</td>
+                      <td>
+                        <time dateTime={row.plannedStartDate}>
+                          {formatProjectBusinessDate(row.plannedStartDate)}
+                        </time>
+                      </td>
+                      <td>
+                        <time dateTime={row.plannedFinishDate}>
+                          {formatProjectBusinessDate(row.plannedFinishDate)}
+                        </time>
+                      </td>
+                      <td>
+                        {plannedPeriodQuantityLabel(
+                          temporalItem.planned.periodQuantity,
+                          unit,
+                        )}
+                      </td>
+                      <td>
+                        {temporalActualQuantityLabel(
+                          temporalItem.actual.periodOfficialQuantity,
+                          unit,
+                        )}
+                      </td>
+                      <td>
+                        {plannedPeriodQuantityLabel(
+                          temporalItem.planned.cumulativeQuantityThroughEndDate,
+                          unit,
+                        )}
+                      </td>
+                      <td>
+                        {temporalActualQuantityLabel(
+                          temporalItem.actual
+                            .cumulativeOfficialQuantityThroughEndDate,
+                          unit,
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <p className="execution-plan-note" role="status">
+        Kurva S untuk konteks periode belum diaktifkan.
+      </p>
+    </section>
+  );
+}
+
+export function ExecutionPlanReadinessPanel(
+  props: ExecutionPlanReadinessPanelProps,
+) {
   const { hasPermission } = useAuth();
   const [view, setView] = useState<ReviewView>('schedule');
   const [editing, setEditing] = useState(false);
   const [draftRows, setDraftRows] = useState<DraftRow[]>([]);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if ('periodicSchedule' in props) {
+    return <PeriodicScheduleReadOnly {...props.periodicSchedule} />;
+  }
+
+  const {
+    projectId,
+    executionPlan,
+    realizationByBoqItemId,
+    progressComparisonPresentation,
+    onChanged,
+  } = props;
 
   const locked = executionPlan.plan?.status === 'LOCKED';
   const canEdit =
