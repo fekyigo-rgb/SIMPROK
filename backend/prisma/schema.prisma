@@ -116,6 +116,7 @@ model Workspace {
   ahspResourceIdentityDecisions   AhspResourceIdentityDecision[]
   resourceIdentityQuestionDecisions ResourceIdentityQuestionDecision[]
   ingestionConnectors             IngestionConnector[]
+  ahspImportJobs                  AHSPImportJob[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -850,10 +851,13 @@ model AHSPResource {
   /// actually stated and nothing more. Nothing here is defaulted, inferred or
   /// back-filled — an absent fact stays absent.
   ///
-  /// NO originObservationId. ObservedResource is written only for resources the
-  /// import could NOT resolve, while an AHSPResource row exists only for a work
-  /// item whose resources ALL resolved. The two sets are disjoint by
-  /// construction, so such a column would be null for every row ever written.
+  /// NO originObservationId — AND NONE IS NEEDED. A document import may write a
+  /// line whose identity is still pending (IMPORT-SEAM-01): the source's own
+  /// words go in `resourceId`, the convention hand-built recipes already use and
+  /// the occurrence path already reads by shape, and the same line is recorded
+  /// as an ObservedResource. Both rows state the same locator — workspace, source
+  /// digest, sheet, row, raw name and class — so they join on facts each side
+  /// already carries, without a pointer column.
   rawName               String?
   rawCode               String?
   rawUnit               String?
@@ -1057,6 +1061,19 @@ model AHSPSourceDocument {
   @@map("ahsp_source_documents")
 }
 
+/// IMPORT-SEAM-02 — THE DURABLE INTAKE JOURNAL OF ONE AHSP DOCUMENT.
+///
+/// A document import used to leave nothing behind for a work item it could not
+/// write: the bytes were never stored and the understanding lived only for the
+/// request, so continuing meant uploading the file again. A job now records the
+/// document as it was READ; its lines record every work item as it was
+/// understood. Nothing here is canonical — an admitted recipe still lives only in
+/// the AHSP tables, written by the same writers.
+///
+/// The first seven columns predate the journal and keep their meaning. A document
+/// job states its workspace, source identity and contract versions together or
+/// not at all (CHECK), and `idempotencyKey` is derived from exactly those facts,
+/// so the same bytes read under the same contracts in one workspace are one job.
 model AHSPImportJob {
   id             String       @id @default(uuid()) @db.Uuid
   ahspId         String?      @db.Uuid
@@ -1066,14 +1083,41 @@ model AHSPImportJob {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
+  /// Tenant scope. Nullable only because a row may predate the journal.
+  workspaceId              String? @db.Uuid
+  sourceSha256             String? @db.VarChar(64)
+  sourceFileName           String?
+  parserContractVersion    String?
+  knowledgeContractVersion String?
+  /// The document-level half of the knowledge as READ — contractVersion, source,
+  /// document, status and reasonCodes; the work items live one per line. Stored
+  /// once, never re-derived.
+  documentKnowledge        Json?
+  createdByUserId          String? @db.Uuid
+
   ahsp      AHSP?                @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  workspace Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   lines     AHSPImportLine[]
   evidences AHSPImportEvidence[]
 
   @@index([ahspId])
+  @@index([workspaceId, createdAt])
   @@map("ahsp_import_jobs")
 }
 
+/// IMPORT-SEAM-02 — ONE WORK ITEM OF A DOCUMENT, AS IT WAS UNDERSTOOD.
+///
+/// `rawData` is the AhspWorkItemKnowledge exactly as the understanding layer
+/// produced it, BEFORE any identity, unit or sameness resolution, so every later
+/// evaluation re-asks today's authorities from the source facts and never from an
+/// earlier answer. It is written once and never rewritten.
+///
+/// `status`: PENDING = accepted and held (a fact the recipe needs is missing,
+/// unproved or awaiting a human decision); COMPLETED = represented in the AHSP
+/// tables (written by this import, or an identical AHSP already holds it);
+/// FAILED = this item's write failed and wrote nothing. `reasonCodes` are the
+/// latest evaluation's reasons; `ahspId`/`ahspVersionId` name what represents the
+/// item — frozen facts of that evaluation, not live pointers.
 model AHSPImportLine {
   id           String       @id @default(uuid()) @db.Uuid
   importJobId  String       @db.Uuid
@@ -1084,9 +1128,16 @@ model AHSPImportLine {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
+  workspaceId   String?  @db.Uuid
+  reasonCodes   String[] @default([])
+  ahspId        String?  @db.Uuid
+  ahspVersionId String?  @db.Uuid
+
   importJob AHSPImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
 
+  @@unique([importJobId, lineNumber])
   @@index([importJobId])
+  @@index([workspaceId, status])
   @@map("ahsp_import_lines")
 }
 

@@ -273,6 +273,16 @@
   color: #c77a17;
 }
 
+/* A list that could not be read says so, with the one safe thing to do about it
+   beside the words — never a red alarm: an unread list is honest uncertainty. */
+.ahsp-read-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+}
+
 .ahsp-choice-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
@@ -317,6 +327,164 @@
     min-height: 44px;
     align-items: center;
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * The import result — received, ready to use, still being completed
+ * ------------------------------------------------------------------------- */
+
+.ahsp-intake-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+}
+
+.ahsp-intake-figure {
+  flex: 1 1 9rem;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+}
+
+.ahsp-intake-figure dt {
+  font-size: var(--text-sm);
+  color: var(--simprok-engineering-blue-500);
+}
+
+.ahsp-intake-figure dd {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--simprok-authority-navy-800);
+}
+
+/* ---------------------------------------------------------------------------
+ * Completion — what an import still needs, one quiet row per question
+ * ------------------------------------------------------------------------- */
+
+.ahsp-completion {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+li.ahsp-completion {
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--simprok-engineering-blue-100);
+}
+
+li.ahsp-completion:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.ahsp-completion--preview {
+  margin-top: var(--space-4);
+}
+
+.ahsp-completion__summary {
+  margin: 0;
+  max-width: 72ch;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--simprok-authority-navy-800);
+  overflow-wrap: anywhere;
+}
+
+.ahsp-attention {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 64rem;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  list-style: none;
+  border-radius: 10px;
+  background: var(--simprok-engineering-blue-50);
+}
+
+.ahsp-attention__row {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-left: var(--space-4);
+}
+
+/* A small dot says what kind of need it is; the words say the rest. */
+.ahsp-attention__row::before {
+  content: '';
+  position: absolute;
+  top: 0.5em;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #98a2b3;
+}
+
+.ahsp-attention__row[data-tone='recheck']::before,
+.ahsp-attention__row[data-tone='decision']::before {
+  background: var(--simprok-trust-blue-500);
+}
+
+.ahsp-attention__row[data-tone='failed']::before {
+  background: #c0392b;
+}
+
+.ahsp-attention__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--simprok-authority-navy-900);
+  overflow-wrap: anywhere;
+}
+
+.ahsp-attention__detail {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--simprok-engineering-blue-700);
+  overflow-wrap: anywhere;
+}
+
+.ahsp-decisions {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.ahsp-decision {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.ahsp-decision__title {
+  font-weight: 600;
+  color: var(--simprok-authority-navy-900);
+  overflow-wrap: anywhere;
+}
+
+.ahsp-detail {
+  display: grid;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--simprok-engineering-blue-100);
+  color: var(--simprok-engineering-blue-700);
+}
+
+.ahsp-detail-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: var(--text-sm);
+  color: var(--simprok-engineering-blue-700);
+}
+
+.ahsp-detail-list > li + li {
+  margin-top: var(--space-1);
 }
 
 /* ---------------------------------------------------------------------------

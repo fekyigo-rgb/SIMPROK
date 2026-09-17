@@ -116,6 +116,71 @@ describeOfficial('AHSP BINA MARGA.xlsx — official real source', () => {
   });
 });
 
+/**
+ * IMPORT-SEAM B8 — the Owner's WORKING copy of the same workbook. It is a
+ * different file from the official source above: the Owner has written each
+ * block's output unit on its own row ("satuan : m") between the title and the
+ * header. Pinned by hash like every real-file proof, so an edit fires the guard.
+ */
+const WORKING_COPY_PATH = 'C:/SIMPROK/AHSP BINA MARGA.xlsx';
+const WORKING_COPY_SHA256 =
+  '5a847e832da61905587b43308a31eaf0fc5c438242f5415d9f50fcb96036e02f';
+const describeWorkingCopy = existsSync(WORKING_COPY_PATH)
+  ? describe
+  : describe.skip;
+
+describeWorkingCopy(
+  'AHSP BINA MARGA.xlsx — Owner working copy with explicit unit rows',
+  () => {
+    it('reads every stated work identity and output unit, and leaves the one unstated unit missing', async () => {
+      const bytes = readFileSync(WORKING_COPY_PATH);
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+        WORKING_COPY_SHA256,
+      );
+      const envelope = testEnvelope(bytes, 'AHSP BINA MARGA.xlsx');
+      const knowledge = understandAhspDocument(
+        await ReaderRegistry.default().read(envelope),
+        envelope,
+      );
+      expect(knowledge.workItems).toHaveLength(71);
+      expect(knowledge.workItems.every((item) => item.workType !== null)).toBe(
+        true,
+      );
+      expect(
+        countReasons(knowledge.workItems)[
+          AHSP_DOCUMENT_REASON.MISSING_WORK_ITEM
+        ],
+      ).toBeUndefined();
+
+      const units = knowledge.workItems.map(
+        (item) => item.outputUnitRaw?.raw ?? null,
+      );
+      expect(units.filter((unit) => unit === 'm')).toHaveLength(69);
+      expect(units.filter((unit) => unit === 'm3')).toHaveLength(1);
+
+      const first = knowledge.workItems.find(
+        (item) => item.workType?.raw === 'B.13',
+      );
+      expect(first?.workType?.locator).toBe('B3');
+      expect(first?.outputUnitRaw).toMatchObject({ raw: 'm', locator: 'B4' });
+
+      // B.83 states no unit anywhere in its block. It is NOT given its siblings' "m".
+      const unstated = knowledge.workItems.find(
+        (item) => item.workType?.raw === 'B.83',
+      );
+      expect(unstated?.outputUnitRaw).toBeNull();
+      expect(unstated?.reasonCodes).toEqual([
+        AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT,
+      ]);
+      expect(
+        countReasons(knowledge.workItems)[
+          AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT
+        ],
+      ).toBe(1);
+    });
+  },
+);
+
 const transcriptionPath = firstExisting(TRANSCRIPTION_PATHS);
 const describeTranscription = transcriptionPath ? describe : describe.skip;
 
@@ -134,3 +199,80 @@ describeTranscription('AHSP Bina Marga 2026 transcription — regression source,
     expect(first?.status).toBe('UNRESOLVED');
   });
 });
+
+/**
+ * CLOSEOUT TASK 4 — the rows this transcription prints that are not components
+ * ("Nota :" notes below each closing total, the next block's title, the
+ * "B. | BANAN" heading) are never read as components; a text coefficient is
+ * never read as a number; and all twelve blocks are still read, and held.
+ */
+describeTranscription(
+  'AHSP Bina Marga 2026 transcription — rows that are not components',
+  () => {
+    it('reads no note, title or unreadable heading as a component, and holds all twelve blocks', async () => {
+      const bytes = readFileSync(transcriptionPath);
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+        TRANSCRIPTION_SHA256,
+      );
+      const envelope = testEnvelope(bytes, 'AHSP Bina Marga 2026 B1-B12.xlsx');
+      const knowledge = understandAhspDocument(
+        await ReaderRegistry.default().read(envelope),
+        envelope,
+      );
+      const items = knowledge.workItems;
+      const byCode = (code: string) =>
+        items.find((item) => item.workType?.raw === code);
+      expect(items).toHaveLength(12);
+      expect(
+        items.every(
+          (item) => item.workType !== null && item.methodName !== null,
+        ),
+      ).toBe(true);
+      expect(items.every((item) => item.status === 'UNRESOLVED')).toBe(true);
+
+      const components = items.flatMap((item) => item.resources);
+      // 184 before: 20 note rows, 3 next-block titles and 2 "BANAN" headings.
+      expect(components).toHaveLength(159);
+      const notes =
+        /^(Satuan dapat berdasarkan|Kuantitas satuan adalah|Biaya satuan sudah termasuk|yang dibayar dari kontrak)/;
+      expect(
+        components.filter((r) => notes.test(r.rawName ?? '')),
+      ).toHaveLength(0);
+      const titles = new Set(items.map((item) => item.methodName?.raw));
+      expect(
+        components.filter((r) => titles.has(r.rawName ?? '')),
+      ).toHaveLength(0);
+      expect(components.filter((r) => r.rawName === 'BANAN')).toHaveLength(0);
+
+      // Pasir in B.3 and B.6 holds its quantity as text; it stays unread.
+      for (const code of ['B.3', 'B.6']) {
+        const pasir = byCode(code)?.resources.filter(
+          (r) => r.rawName === 'Pasir',
+        );
+        expect(pasir).toHaveLength(1);
+        expect(pasir?.[0].coefficient).toBeNull();
+        expect(pasir?.[0].reasonCodes).toContain(
+          AHSP_DOCUMENT_REASON.INVALID_COEFFICIENT,
+        );
+      }
+
+      // The materials under "B. | BANAN" are not filed as labour, nor guessed as bahan.
+      for (const code of ['B.9 (2.3.(1))', 'B.10 (2.3.(2))']) {
+        const item = byCode(code);
+        expect(item?.reasonCodes).toContain(
+          AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY,
+        );
+        const beton = item?.resources.find(
+          (r) => r.rawName === 'Beton f* c 15 MPa',
+        );
+        expect(beton?.group).toBeNull();
+        expect(beton?.status).toBe('UNRESOLVED');
+        expect(
+          item?.resources
+            .filter((r) => r.group === 'LABOR')
+            .map((r) => r.rawName),
+        ).toEqual(['Pekerja', 'Tukang', 'Mandor']);
+      }
+    });
+  },
+);

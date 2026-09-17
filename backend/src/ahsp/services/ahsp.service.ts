@@ -76,12 +76,18 @@ export class AhspService {
     return user;
   }
 
-  async create(data: CreateAhspDto) {
+  /**
+   * `client` lets a caller create the parent INSIDE a transaction it already
+   * holds — the document import writes one work item whole-or-nothing. Omitted,
+   * every existing call site keeps its exact behaviour on the root client.
+   */
+  async create(data: CreateAhspDto, client?: Prisma.TransactionClient) {
+    const db = client ?? this.prisma;
     // The pre-check mirrors the DB @@unique EXACTLY. It deliberately does NOT
     // filter deletedAt: a soft-deleted twin still occupies the unique index, so
     // surfacing it as a clean 409 here is what stops a raw Prisma P2002 becoming
     // an HTTP 500 when the create below would otherwise collide with it.
-    const duplicate = await this.prisma.aHSP.findFirst({
+    const duplicate = await db.aHSP.findFirst({
       where: {
         workspaceId: data.workspaceId ?? null,
         workType: data.workType,
@@ -92,7 +98,7 @@ export class AhspService {
 
     let ahsp;
     try {
-      ahsp = await this.prisma.aHSP.create({
+      ahsp = await db.aHSP.create({
         data: {
           workspaceId: data.workspaceId,
           workType: data.workType,
@@ -117,7 +123,10 @@ export class AhspService {
       throw error;
     }
 
-    await this.audit.logAction({ ahspId: ahsp.id, action: 'AHSPCreated', who: data.userId, after: ahsp });
+    await this.audit.logAction(
+      { ahspId: ahsp.id, action: 'AHSPCreated', who: data.userId, after: ahsp },
+      client,
+    );
     return ahsp;
   }
 

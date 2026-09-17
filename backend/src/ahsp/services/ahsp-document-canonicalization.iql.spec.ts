@@ -3,6 +3,10 @@ import { UNIT_RESOLUTION_STATUS } from '../../unit-kernel/unit-kernel.contracts'
 import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
 import { AhspDocumentCanonicalizationService } from './ahsp-document-canonicalization.service';
 import { RealityNormalizationEngine } from './reality-normalization.engine';
+import {
+  inMemoryImportJournal,
+  transactionalPrisma,
+} from '../../../test/fixtures/ahsp-import-journal.fixture';
 
 /**
  * IQL-01 — the AHSP document import consumes APPROVED exact-question answers
@@ -21,7 +25,7 @@ describe('AhspDocumentCanonicalizationService — IQL-01', () => {
   const units = { resolve: jest.fn() };
   const identity = { loadEvidence: jest.fn(), resolve: jest.fn() };
   const sightings = { createMany: jest.fn() };
-  const prisma = { resourceSourceIdentity: sightings };
+  const { prisma } = transactionalPrisma({ resourceSourceIdentity: sightings });
   const observations = { observeMany: jest.fn() };
   const audit = { logAction: jest.fn() };
   let service: AhspDocumentCanonicalizationService;
@@ -64,6 +68,7 @@ describe('AhspDocumentCanonicalizationService — IQL-01', () => {
       observations as any,
       new RealityNormalizationEngine(),
       audit as any,
+      inMemoryImportJournal() as any,
     );
   });
 

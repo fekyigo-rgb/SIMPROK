@@ -326,7 +326,8 @@ export const describeCuratableObservation = (
   // UNKNOWN IDENTITY IS NOT A REFUSED RESOURCE. Said wherever no identity could
   // be proved, because that is exactly where "SIMPROK belum tahu" could be
   // misread as "SIMPROK menolak".
-  const ACCEPTED = ' Sumber daya dari dokumen sudah diterima; identitas canonical-nya belum dapat dipastikan.';
+  // IMPORT ACCEPTANCE BOUNDARY (B7): said in the reader's words — never "canonical".
+  const ACCEPTED = ' Sumber daya dari dokumen sudah diterima; identitasnya dalam katalog SIMPROK belum dapat dipastikan.';
 
   // THE HUMAN IS NOT THE MATCHER. The old wording ("pilih padanan yang paling
   // sesuai") asked the reader to judge a list SIMPROK had not judged. Each
@@ -458,7 +459,9 @@ export const groupIdenticalObservations = (
  */
 export const observationOccurrenceLine = (group: ObservationGroup): string | null =>
   group.occurrences > 1
-    ? 'Ditemukan ' + group.occurrences + ' kali dalam dokumen. Satu keputusan berlaku untuk semuanya.'
+    ? // The occurrences are of the same QUESTION. Whether they all came from one
+      // document is not a fact this list carries, so it is not claimed here.
+      'Ditemukan ' + group.occurrences + ' kali. Satu keputusan berlaku untuk semuanya.'
     : null;
 
 /** Wire shape of a preview work item's resource (from GET /ahsp/document/preview). */
@@ -765,19 +768,60 @@ export interface ResourceDecisionInput {
   chosenName: string | null;
 }
 
+/**
+ * IMPORT-SEAM-06 — the rows of one question the decision was NOT sent for. A new
+ * resource is admitted once, never once per row (a second admission of the same
+ * identity is refused), so the other rows are not written by the page: what the
+ * refreshed list says about them is reported, and nothing more. `stillWaiting` is
+ * null when the list could not be read again.
+ */
+export interface OtherOccurrences {
+  total: number;
+  stillWaiting: number | null;
+}
+
+const otherOccurrencesLine = (others: OtherOccurrences | null | undefined): string | null => {
+  if (!others || others.total <= 0) return null;
+  if (others.stillWaiting === null) {
+    return 'Daftar tinjauan belum dapat dimuat ulang, jadi keadaan ' + others.total + ' kemunculan lain dari item yang sama belum dapat ditampilkan.';
+  }
+  const noLongerWaiting = others.total - others.stillWaiting;
+  if (others.stillWaiting === 0) {
+    return others.total + ' kemunculan lain dari item yang sama tidak lagi menunggu tinjauan.';
+  }
+  return (
+    (noLongerWaiting > 0 ? noLongerWaiting + ' kemunculan lain dari item yang sama tidak lagi menunggu tinjauan; ' : '') +
+    others.stillWaiting + ' kemunculan lain masih menunggu tinjauan.'
+  );
+};
+
 export const describeResourceDecisionSuccess = (
-  input: ResourceDecisionInput & { rows: number; learning: LearningOutcome | null },
+  input: ResourceDecisionInput & {
+    rows: number;
+    learning: LearningOutcome | null;
+    otherOccurrences?: OtherOccurrences | null;
+  },
 ): ActionOutcome => {
-  const scope = input.rows > 1 ? ' Berlaku untuk ' + input.rows + ' baris dalam dokumen.' : '';
+  const scope = input.rows > 1 ? ' Berlaku untuk ' + input.rows + ' kemunculan pertanyaan yang sama.' : '';
   const detail =
     input.kind === 'EXISTING'
-      ? input.title + ' ditetapkan sama dengan ' + (input.chosenName ?? 'padanan yang dipilih') + '.' + scope
+      ? input.title + ' dicatat sama dengan ' + (input.chosenName ?? 'padanan yang dipilih') + '.' + scope
       : input.title + ' dicatat sebagai sumber daya baru.' + scope;
+  const others = otherOccurrencesLine(input.otherOccurrences);
   return {
     kind: 'SUCCESS',
     lines: [
-      { tone: 'SUCCESS', text: 'Keputusan sumber daya berhasil disimpan.' },
+      { tone: 'SUCCESS', text: 'Pilihan Anda tercatat.' },
       { tone: 'NOTE', text: detail },
+      // WHAT THIS DECISION IS, AND WHAT IT IS NOT. It records the identity of a
+      // resource SIMPROK observed; whether the AHSP that uses it is complete is a
+      // question the import asks again of the recipe itself, and is not answered
+      // by closing this question.
+      {
+        tone: 'NOTE' as const,
+        text: 'Keputusan ini mencatat identitas sumber daya. Kelengkapan AHSP yang memakainya diperiksa lagi pada daftar import.',
+      },
+      ...(others ? [{ tone: 'NOTE' as const, text: others }] : []),
       ...(input.learning ? [LEARNING_LINE[input.learning]] : []),
     ],
   };

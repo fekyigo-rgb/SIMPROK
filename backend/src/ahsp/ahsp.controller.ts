@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   Req,
   UseGuards,
   UseInterceptors,
@@ -46,6 +47,31 @@ function parseAhspImportDecisions(raw: unknown): AhspImportDecision[] {
     return [];
   }
 }
+
+/**
+ * What the guards attach that the import-journal routes read. Declared rather
+ * than read off `any`, the same shape the Basic Price controller declares.
+ */
+interface WorkspaceScopedRequest {
+  user?: { id?: string };
+  workspaceContext?: { workspaceId?: string };
+}
+
+/**
+ * How an AHSP document upload is received — the one place its file name is decoded.
+ *
+ * Browsers put a file's name into the multipart header as raw UTF-8 bytes
+ * (filename="..."). Multer hands header parameters to busboy as latin1 unless
+ * told otherwise, so every non-ASCII name reached the source envelope — and the
+ * import journal's provenance — with each UTF-8 byte turned into its own
+ * character. `defParamCharset` is busboy's own switch for that one decoding step:
+ * ASCII names are unchanged, the file bytes are untouched, and a name that
+ * arrives already decoded (RFC 5987 filename*) is never decoded a second time.
+ */
+export const AHSP_DOCUMENT_UPLOAD_OPTIONS = {
+  limits: { fileSize: AHSP_DOCUMENT_MAX_BYTES },
+  defParamCharset: 'utf8',
+};
 
 /**
  * AHSP Controller — Golden Path v0 Slice A
@@ -118,7 +144,7 @@ export class AhspController {
 
   @Post('document/preview')
   @Permissions('AHSP_MANAGE')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: AHSP_DOCUMENT_MAX_BYTES } }))
+  @UseInterceptors(FileInterceptor('file', AHSP_DOCUMENT_UPLOAD_OPTIONS))
   async previewDocument(@Req() request: any, @UploadedFile() file: { buffer?: Buffer; originalname?: string; mimetype?: string }) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
     if (!workspaceId) throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
@@ -136,7 +162,7 @@ export class AhspController {
 
   @Post('document/commit')
   @Permissions('AHSP_MANAGE')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: AHSP_DOCUMENT_MAX_BYTES } }))
+  @UseInterceptors(FileInterceptor('file', AHSP_DOCUMENT_UPLOAD_OPTIONS))
   async commitDocument(@Req() request: any, @UploadedFile() file: { buffer?: Buffer; originalname?: string; mimetype?: string }) {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
     if (!workspaceId) throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
@@ -158,6 +184,58 @@ export class AhspController {
       if (isAhspIntakeError(error)) throw new BadRequestException(error.code);
       throw error;
     }
+  }
+
+  /**
+   * IMPORT-SEAM-05 — where a reader finds an import again after leaving the page:
+   * the workspace's recent documents and every line still waiting. Without it the
+   * only way back to a held item would be to upload the file again.
+   *
+   * One page at a time, with `nextCursor` naming where the next page begins, so
+   * an import older than the newest twenty is still reachable from here — a
+   * bounded read that can be continued, never one huge read.
+   */
+  @Get('document/jobs')
+  @Permissions('AHSP_MANAGE')
+  async listImportJobs(
+    @Req() request: WorkspaceScopedRequest,
+    @Query('cursor') cursor?: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    // The cursor is request input: only a string is passed on, and the journal
+    // proves its shape before it positions anything.
+    return this.documents.listImportJobs(workspaceId, {
+      cursor: typeof cursor === 'string' && cursor !== '' ? cursor : null,
+    });
+  }
+
+  /**
+   * IMPORT-SEAM-05 — continue an import from its durable journal, WITHOUT the
+   * file: every held line is re-evaluated once, and whatever is now lawful is
+   * written. Decisions travel as they do on commit, and are re-validated there.
+   */
+  @Post('document/jobs/:importJobId/continue')
+  @Permissions('AHSP_MANAGE')
+  async continueImportJob(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('importJobId') importJobId: string,
+    @Body() body: { decisions?: unknown },
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    const userId = await this.resolveActor(request);
+    const decisions = Array.isArray(body?.decisions)
+      ? (body.decisions as AhspImportDecision[])
+      : parseAhspImportDecisions(body?.decisions);
+    return this.documents.continueImportJob({
+      workspaceId,
+      importJobId,
+      userId,
+      decisions,
+    });
   }
 
   @Post()

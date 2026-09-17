@@ -7,6 +7,10 @@ import { buildAhspAnalisaXlsx } from '../document/ahsp-analisa-xlsx.fixture';
 import { AHSP_DOCUMENT_REASON } from '../document/ahsp-document-knowledge';
 import { AhspDocumentCanonicalizationService } from './ahsp-document-canonicalization.service';
 import { RealityNormalizationEngine } from './reality-normalization.engine';
+import {
+  inMemoryImportJournal,
+  transactionalPrisma,
+} from '../../../test/fixtures/ahsp-import-journal.fixture';
 
 function resolvedUnit() {
   return {
@@ -32,10 +36,11 @@ describe('AhspDocumentCanonicalizationService', () => {
   const sightings = {
     createMany: jest.fn<Promise<void>, [SightingWrite]>(),
   };
-  const prisma = { resourceSourceIdentity: sightings };
+  const { prisma } = transactionalPrisma({ resourceSourceIdentity: sightings });
   const observations = { observeMany: jest.fn() };
   const norm = new RealityNormalizationEngine();
   const audit = { logAction: jest.fn() };
+  let journal: ReturnType<typeof inMemoryImportJournal>;
   let service: AhspDocumentCanonicalizationService;
 
   beforeEach(() => {
@@ -55,6 +60,7 @@ describe('AhspDocumentCanonicalizationService', () => {
     versionService.createVersion.mockResolvedValue({ id: 'ver-1' });
     observations.observeMany.mockResolvedValue(undefined);
     audit.logAction.mockResolvedValue(undefined);
+    journal = inMemoryImportJournal();
     service = new AhspDocumentCanonicalizationService(
       ahspService as any,
       versionService as any,
@@ -64,6 +70,7 @@ describe('AhspDocumentCanonicalizationService', () => {
       observations as any,
       norm as any,
       audit as any,
+      journal as any,
     );
   });
 
@@ -88,6 +95,8 @@ describe('AhspDocumentCanonicalizationService', () => {
           'Penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3',
         ahspId: 'ahsp-1',
         versionId: 'ver-1',
+        admission: 'PROVEN',
+        identityPendingResources: 0,
       },
     ]);
     expect(ahspService.create).toHaveBeenCalledTimes(1);
@@ -155,18 +164,45 @@ describe('AhspDocumentCanonicalizationService', () => {
     expect(created.classification ?? null).toBeNull();
   });
 
-  it('does not write when resource identity is unresolved', async () => {
+  // LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION was "does not write when
+  // resource identity is unresolved" (written = [], create not called).
+  // D-1 APPROVED (PM, 2026-09-15): a recipe that is whole except for a
+  // component's catalogue identity is accepted as a private DRAFT carrying the
+  // source's own wording. NEW_EXPECTATION: written as IDENTITY_PENDING with
+  // resourceId = the raw name, never a candidate id; pricing stays gated
+  // downstream. TEST_WEAKENING=NO — the unit, output-unit, coefficient and
+  // duplicate refusals below are unchanged.
+  it('IMPORT-SEAM-01: writes a recipe whose ONLY gap is resource identity, with the source wording as its resourceId', async () => {
     identity.resolve.mockResolvedValue({
       status: 'NEEDS_REVIEW',
       resolvedResourceCatalogId: null,
     });
     const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
     const result = await service.commit(envelope, 'user-1');
-    expect(result.written).toEqual([]);
-    expect(ahspService.create).not.toHaveBeenCalled();
-    expect(result.skipped[0].reasonCodes).toContain(
+    expect(result.written).toEqual([
+      expect.objectContaining({
+        workType: '1.7.7.1.1.b (a)',
+        admission: 'IDENTITY_PENDING',
+        identityPendingResources: 2,
+      }),
+    ]);
+    const resources = versionService.createVersion.mock.calls[0][1].resources;
+    expect(resources.map((resource: any) => resource.resourceId)).toEqual([
+      'Pekerja',
+      'Mandor',
+    ]);
+    const item = result.knowledge.workItems[0];
+    expect(item.status).toBe('UNRESOLVED');
+    expect(item.admission).toBe('IDENTITY_PENDING');
+    expect(item.reasonCodes).toContain(
       AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED,
     );
+    expect(result.summary).toMatchObject({
+      evaluated: 1,
+      identityPending: 1,
+      ready: 0,
+      held: 0,
+    });
   });
 
   it('does not write when the unit kernel cannot resolve', async () => {
@@ -245,29 +281,48 @@ describe('AhspDocumentCanonicalizationService', () => {
     );
     expect(ahspService.create).not.toHaveBeenCalled();
     expect(result.written).toEqual([]);
+    // Written on the item's own transaction, together with its intake line.
     expect(audit.logAction).toHaveBeenCalledWith(
       expect.objectContaining({ ahspId: 'existing-1', action: 'AHSPImportUsedExisting', who: 'user-1' }),
+      expect.anything(),
     );
+    // The live twin now represents the source item.
+    expect([...journal.lines.values()][0]).toMatchObject({
+      status: 'COMPLETED',
+      ahspId: 'existing-1',
+    });
   });
 
-  it('G2: a USE_EXISTING decision is DURABLE — a failed provenance write surfaces, never silently swallowed', async () => {
-    // Nothing is created for use-existing, so this audit row is the ONLY trace of
-    // the human's duplicate decision. If it cannot be written, the commit must
-    // fail (the human retries) rather than lose the decision.
+  // LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION was that a failed USE_EXISTING
+  // audit write REJECTS the whole commit (and, commit not being transactional,
+  // aborts every later item). IMPORT-SEAM-08 (PM B2): isolation is per work item.
+  // NEW_EXPECTATION: the decision's audit row and its intake line share one
+  // transaction, so neither exists alone; the failure is recorded durably on the
+  // line and returned in `failed` — still never swallowed — and the rest of the
+  // document continues. TEST_WEAKENING=NO: the durability law (no silent loss of a
+  // human decision) is asserted on the journal instead of on a thrown error.
+  it('G2: a USE_EXISTING decision is DURABLE — a failed provenance write is recorded and returned, never silently swallowed', async () => {
     ahspService.loadIdentitySurface.mockResolvedValue([surfaceRow({})]);
     audit.logAction.mockRejectedValueOnce(new Error('audit down'));
-    await expect(
-      service.commit(
-        await envelopeFrom(await buildAhspAnalisaXlsx()),
-        'user-1',
-        [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'USE_EXISTING' }],
-      ),
-    ).rejects.toThrow('audit down');
-    // NOTE: this document holds a single IDENTICAL item, so asserting that create
-    // was not called would be vacuous here (no path could call it). What this test
-    // genuinely proves is that the rejection PROPAGATES instead of being swallowed.
-    // commit() is not transactional: items written earlier in a longer document
-    // stay written, which recordUseExisting's docstring states plainly.
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [
+        {
+          workType: FIXTURE_WORKTYPE,
+          methodName: FIXTURE_METHOD,
+          action: 'USE_EXISTING',
+        },
+      ],
+    );
+    expect(result.failed).toEqual([
+      { workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, lineNumber: 1 },
+    ]);
+    expect(result.summary.failed).toBe(1);
+    const line = [...journal.lines.values()][0];
+    expect(line.status).toBe('FAILED');
+    expect(line.errorMessage).toBe('audit down');
+    expect(line.ahspId).toBeNull();
   });
 
   it('G3: a KEEP_SEPARATE enrichment audit stays best-effort — its failure never fails an otherwise-good commit', async () => {
@@ -305,7 +360,13 @@ describe('AhspDocumentCanonicalizationService', () => {
     // ...but the act of choosing is still reconstructable.
     expect(audit.logAction).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'AHSPImportUsedExistingRefused', who: 'user-1' }),
+      expect.anything(),
     );
+    // A deleted twin represents nothing: the source item stays held.
+    expect([...journal.lines.values()][0]).toMatchObject({
+      status: 'PENDING',
+      ahspId: null,
+    });
     expect(result.skipped[0].reasonCodes).toContain(
       AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY,
     );
@@ -330,6 +391,7 @@ describe('AhspDocumentCanonicalizationService', () => {
     );
     expect(audit.logAction).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'AHSPImportUsedExistingRefused' }),
+      expect.anything(),
     );
     expect(result.skipped[0].reasonCodes).toContain(
       AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH,
@@ -524,14 +586,25 @@ describe('AhspDocumentCanonicalizationService', () => {
       AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,
     );
     // The catalogue names SIMPROK narrowed to are carried, never asserted as
-    // the identity — nothing is written and no catalogue id is stored.
+    // the identity — no catalogue id is stored.
     expect(item?.resources[0]?.identityCandidates).toEqual([
       'Pekerja',
       'Pekerja Terampil',
     ]);
     expect(item?.resources[0]?.resolvedResourceCatalogId).toBeNull();
-    expect(result.written).toEqual([]);
-    expect(versionService.createVersion).not.toHaveBeenCalled();
+    // LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION was written = [] and no
+    // createVersion call. D-1 APPROVED: the recipe is whole, so it is accepted
+    // with its identity pending. NEW_EXPECTATION: written, and the stored
+    // resourceId is the SOURCE wording — never any candidate's catalogue id.
+    // TEST_WEAKENING=NO.
+    expect(result.written).toHaveLength(1);
+    const stored = versionService.createVersion.mock.calls[0][1].resources;
+    expect(stored.map((resource: any) => resource.resourceId)).toEqual([
+      'Pekerja',
+      'Mandor',
+    ]);
+    expect(JSON.stringify(stored)).not.toContain('catalog-a');
+    expect(JSON.stringify(stored)).not.toContain('catalog-b');
   }
 
   it('reports candidates found on a NEEDS_REVIEW verdict', async () => {
@@ -853,10 +926,13 @@ describeBinaMargaCommit('AhspDocumentCanonicalizationService — official Bina M
       versionService as any,
       units as any,
       identity as any,
-      { resourceSourceIdentity: { createMany: jest.fn() } } as any,
+      transactionalPrisma({
+        resourceSourceIdentity: { createMany: jest.fn() },
+      }).prisma as any,
       { observeMany: jest.fn() } as any,
       new RealityNormalizationEngine() as any,
       { logAction: jest.fn() } as any,
+      inMemoryImportJournal() as any,
     );
   });
 
@@ -946,10 +1022,13 @@ describePositiveCommit('AhspDocumentCanonicalizationService — Copy of AHSP ok(
       versionService as any,
       units as any,
       identity as any,
-      { resourceSourceIdentity: { createMany: jest.fn() } } as any,
+      transactionalPrisma({
+        resourceSourceIdentity: { createMany: jest.fn() },
+      }).prisma as any,
       { observeMany: jest.fn() } as any,
       new RealityNormalizationEngine() as any,
       { logAction: jest.fn() } as any,
+      inMemoryImportJournal() as any,
     );
   });
 
@@ -974,9 +1053,20 @@ describePositiveCommit('AhspDocumentCanonicalizationService — Copy of AHSP ok(
           'Penggalian 1 m3 tanah biasa sedalam s.d. 1 m untuk volume > 2000 m3',
         ahspId: 'ahsp-positive-1',
         versionId: 'ver-positive-1',
+        admission: 'PROVEN',
+        identityPendingResources: 0,
       },
     ]);
     expect(result.skipped).toHaveLength(16);
+    // Under this spec's unit authority only OH and m3 resolve, so every other
+    // item is HELD on a unit proof — none is written with a guessed unit.
+    expect(result.summary).toMatchObject({
+      evaluated: 17,
+      ready: 1,
+      identityPending: 0,
+      held: 16,
+      failed: 0,
+    });
     expect(ahspService.create).toHaveBeenCalledTimes(1);
     expect(versionService.createVersion).toHaveBeenCalledTimes(1);
     expect(versionService.createVersion.mock.calls[0][1].outputUnit).toBe('m3');

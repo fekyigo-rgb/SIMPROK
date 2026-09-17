@@ -203,6 +203,42 @@ describe('AhspVersionService', () => {
     expect(prisma.aHSPVersion.update).not.toHaveBeenCalled();
   });
 
+  it('IMPORT-SEAM-08: createVersion joins a caller-held transaction instead of opening its own', async () => {
+    units.resolve.mockResolvedValue({
+      status: 'RESOLVED',
+      sourceUnitDefinition: { id: 'unit-m3' },
+    });
+    const tx = {
+      aHSP: { findUnique: jest.fn().mockResolvedValue(ahsp) },
+      aHSPVersion: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn().mockResolvedValue(version),
+        update: jest.fn(),
+      },
+    };
+    await service.createVersion(
+      ahsp.id,
+      {
+        workspaceId: ahsp.workspaceId,
+        resources: [{ ...resource, conversionFactor: undefined }],
+        outputUnit: 'M3',
+        userId: 'user-1',
+      },
+      tx as any,
+    );
+    // The parent is read on the caller's transaction, so a parent created
+    // earlier in that same transaction is visible here.
+    expect(tx.aHSP.findUnique).toHaveBeenCalledWith({ where: { id: ahsp.id } });
+    expect(tx.aHSPVersion.create).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.aHSP.findUnique).not.toHaveBeenCalled();
+    expect(audit.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'AHSPVersionCreated' }),
+      tx,
+    );
+  });
+
   it('createVersion supersedes prior private revisions and leaves PUBLISHED catalog rows', async () => {
     const priorDraft = { ...version, id: 'version-prior-draft', status: AhspVersionStatus.DRAFT };
     const created = { ...version, id: 'version-new', versionNumber: 2 };

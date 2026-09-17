@@ -317,12 +317,15 @@ export class ResourceObservationService {
    * are suggestions, not identity, and no catalog is written here. Evidence is
    * loaded ONCE for the workspace and every observation resolved against it.
    *
-   * IQL-01: a row whose EXACT question is already answered by an APPROVED,
-   * still-applicable exact-question answer is not a question any more, so it is
-   * not listed — nothing is written, and a REVOKE or a changed candidate
-   * context brings it straight back. Every other row carries the state of its
-   * exact question, and — only for a known actor — the signed context that
-   * lets the human offer this decision as a learning candidate.
+   * A row whose identity the machine PROVES today is not a question any more,
+   * so it is not listed: an exact catalogue match, a representation tie settled
+   * by the source's own unit, or (IQL-01) an APPROVED, still-applicable
+   * exact-question answer. Nothing is written — OBSERVED means "seen", and the
+   * decision columns stay reserved for a human decision — so a REVOKE, a retired
+   * catalogue row or a changed candidate context brings it straight back. Every
+   * other row carries the state of its exact question, and — only for a known
+   * actor — the signed context that lets the human offer this decision as a
+   * learning candidate.
    */
   async listOpenForCuration(workspaceId: string, actorAccountId?: string) {
     const observations = await this.listOpen(workspaceId);
@@ -345,7 +348,11 @@ export class ResourceObservationService {
           evidence,
           this.referenceOf(observation),
         );
-        if (resolution.authority === 'VERIFIED_IDENTICAL_QUESTION_REUSED') {
+        // IMPORT-SEAM-06 — MACHINE WORK IS NOT RETURNED TO THE HUMAN. Asking a
+        // person to "confirm" an identity the kernel already proved is the
+        // machine's own repetition handed back as labour; once one admission
+        // makes every identical observation provable, the rest leave the list.
+        if (this.machineProves(resolution)) {
           return null;
         }
         const questionKey = questionKeys.get(observation.id) as string;
@@ -435,6 +442,76 @@ export class ResourceObservationService {
       }),
     );
     return rows.filter((row): row is NonNullable<typeof row> => row !== null);
+  }
+
+  /** IMPORT-SEAM-06 — the one definition of "no longer a question": the kernel proves it today. */
+  private machineProves(resolution: ResourceIdentityResolution): boolean {
+    return resolution.status === 'RESOLVED';
+  }
+
+  /**
+   * AHSP COMPLETION — which exact questions each document's observations still
+   * ask, for the import completion view.
+   *
+   * The SAME projection the curation queue applies above — an observation the
+   * kernel proves today is not a question — asked ONCE per exact question rather
+   * than once per row: the kernel is asked about the question (name, code, unit,
+   * class), never about the row, so every row of one question has one answer.
+   * A read. Nothing is decided, and no candidate, catalogue id or decision token
+   * leaves this method: only which questions are open, and how often each
+   * document asks them.
+   */
+  async openQuestionsBySource(
+    workspaceId: string,
+    sourceSha256s: readonly string[],
+  ): Promise<Map<string, { keys: Set<string>; uses: number }>> {
+    const bySource = new Map<string, { keys: Set<string>; uses: number }>();
+    if (sourceSha256s.length === 0) return bySource;
+    const rows = await this.prisma.observedResource.findMany({
+      where: {
+        workspaceId,
+        status: ObservedResourceStatus.OBSERVED,
+        sourceSha256: { in: [...sourceSha256s] },
+      },
+      select: {
+        workspaceId: true,
+        sourceSha256: true,
+        rawName: true,
+        rawCode: true,
+        rawUnit: true,
+        resourceType: true,
+      },
+    });
+    if (rows.length === 0) return bySource;
+    const keyOf = (row: (typeof rows)[number]) =>
+      identicalQuestionKey(this.questionOf(row));
+    const questions = new Map(rows.map((row) => [keyOf(row), row]));
+    const evidence = await this.identity.loadEvidence(
+      this.prisma,
+      workspaceId,
+      undefined,
+      { identicalQuestionKeys: [...questions.keys()] },
+    );
+    const open = new Set<string>();
+    for (const [key, row] of questions) {
+      const resolution = await this.identity.resolve(
+        evidence,
+        this.referenceOf(row),
+      );
+      if (!this.machineProves(resolution)) open.add(key);
+    }
+    for (const row of rows) {
+      const key = keyOf(row);
+      if (!row.sourceSha256 || !open.has(key)) continue;
+      const entry = bySource.get(row.sourceSha256) ?? {
+        keys: new Set<string>(),
+        uses: 0,
+      };
+      entry.keys.add(key);
+      entry.uses += 1;
+      bySource.set(row.sourceSha256, entry);
+    }
+    return bySource;
   }
 
   /**

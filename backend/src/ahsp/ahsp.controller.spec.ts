@@ -41,6 +41,8 @@ describe('AhspController', () => {
   const documents = {
     previewUpload: jest.fn(),
     commitUpload: jest.fn(),
+    listImportJobs: jest.fn(),
+    continueImportJob: jest.fn(),
   };
 
   /** RM-03B: the actor is server-derived; the controller never reads body.userId. */
@@ -277,6 +279,58 @@ describe('AhspController', () => {
         // No multipart `decisions` field on this request -> an empty, safe default.
         decisions: [],
       });
+    });
+
+    it('IMPORT-SEAM-05: listing and continuing an import require AHSP_MANAGE, like commit', () => {
+      expect(
+        Reflect.getMetadata(
+          PERMISSIONS_KEY,
+          AhspController.prototype.listImportJobs,
+        ),
+      ).toEqual(['AHSP_MANAGE']);
+      expect(
+        Reflect.getMetadata(
+          PERMISSIONS_KEY,
+          AhspController.prototype.continueImportJob,
+        ),
+      ).toEqual(['AHSP_MANAGE']);
+    });
+
+    it('IMPORT-SEAM-05: continuing an import reads the guard workspace and the trusted actor, never the body', async () => {
+      const decisions = [
+        {
+          workType: 'B.13',
+          methodName: 'Gorong-gorong',
+          action: 'KEEP_SEPARATE',
+        },
+      ];
+      await controller.continueImportJob(
+        { ...requestWithContext, user: { id: 'account-a' } },
+        'job-1',
+        { decisions, workspaceId: 'ws-other', userId: 'someone-else' } as any,
+      );
+      expect(documents.continueImportJob).toHaveBeenCalledWith({
+        workspaceId: 'ws-a',
+        importJobId: 'job-1',
+        userId: TRUSTED_ACTOR_ID,
+        decisions,
+      });
+    });
+
+    it('IMPORT-SEAM-05: import listing and continuation refuse without a workspace and do nothing', async () => {
+      await expect(
+        controller.listImportJobs({ user: { id: 'account-a' } }),
+      ).rejects.toThrow('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+      await expect(
+        controller.continueImportJob(
+          { user: { id: 'account-a' } },
+          'job-1',
+          {},
+        ),
+      ).rejects.toThrow('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+      expect(documents.listImportJobs).not.toHaveBeenCalled();
+      expect(documents.continueImportJob).not.toHaveBeenCalled();
+      expect(trustedActorService.resolveActorUserId).not.toHaveBeenCalled();
     });
   });
   /**
