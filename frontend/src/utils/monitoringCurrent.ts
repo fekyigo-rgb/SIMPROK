@@ -202,6 +202,102 @@ export interface MonitoringProgressComparison {
   points: MonitoringProgressComparisonPoint[];
 }
 
+export type MonitoringTemporalBasis = 'CALENDAR' | 'WORK_PERIOD';
+export type MonitoringTemporalGranularity = 'WEEK' | 'MONTH';
+
+type MonitoringTemporalPeriodBase = {
+  periodKey: string;
+  periodIndex: number;
+  startDate: string;
+  endDate: string;
+};
+
+export type MonitoringTemporalPeriod =
+  | (MonitoringTemporalPeriodBase & {
+      basis: 'CALENDAR'; granularity: 'WEEK';
+      metadata: {
+        boundaryInclusivity: 'START_AND_END_INCLUSIVE';
+        boundaryRule: 'ISO_8601_MONDAY_TO_SUNDAY';
+        isoWeekYear: number; isoWeekNumber: number;
+      };
+    })
+  | (MonitoringTemporalPeriodBase & {
+      basis: 'CALENDAR'; granularity: 'MONTH';
+      metadata: {
+        boundaryInclusivity: 'START_AND_END_INCLUSIVE';
+        boundaryRule: 'GREGORIAN_CALENDAR_MONTH';
+        calendarYear: number; calendarMonth: number;
+      };
+    })
+  | (MonitoringTemporalPeriodBase & {
+      basis: 'WORK_PERIOD'; granularity: 'WEEK';
+      metadata: {
+        boundaryInclusivity: 'START_AND_END_INCLUSIVE';
+        boundaryRule: 'SEVEN_DAY_WINDOW_FROM_GOVERNED_WORK_PERIOD_ANCHOR';
+        governedWorkPeriodAnchorDate: string;
+      };
+    })
+  | (MonitoringTemporalPeriodBase & {
+      basis: 'WORK_PERIOD'; granularity: 'MONTH';
+      metadata: {
+        boundaryInclusivity: 'START_AND_END_INCLUSIVE';
+        boundaryRule: 'ORIGINAL_ANCHOR_ANNIVERSARY_MONTH_WITH_TARGET_CLAMP';
+        governedWorkPeriodAnchorDate: string;
+      };
+    });
+
+export type MonitoringPlannedItemQuantity =
+  | { state: 'COMPLETE'; plannedQuantity: string }
+  | { state: 'INCOMPLETE'; reason: string; knownPlannedQuantitySubtotal: string }
+  | { state: 'UNAVAILABLE'; reason: string };
+
+export interface MonitoringTemporalLensItem {
+  boqItemId: string;
+  planned: {
+    periodQuantity: MonitoringPlannedItemQuantity;
+    cumulativeQuantityThroughEndDate: MonitoringPlannedItemQuantity;
+  };
+  actual: {
+    periodOfficialQuantity: MonitoringItem['currentOfficialQuantity'];
+    cumulativeOfficialQuantityThroughEndDate: MonitoringItem['currentOfficialQuantity'];
+  };
+}
+
+export interface MonitoringTemporalLensWeeklyRecap {
+  rule: 'CANONICAL_WEEK_SLICE_RECAP';
+  sliceCount: number;
+  slices: Array<{
+    weekPeriodKey: string;
+    weekPeriodIndex: number;
+    weekStartDate: string;
+    weekEndDate: string;
+    sliceStartDate: string;
+    sliceEndDate: string;
+  }>;
+}
+
+export type MonitoringTemporalLens =
+  | {
+      mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1'; state: 'UNAVAILABLE';
+      basis: MonitoringTemporalBasis; granularity: MonitoringTemporalGranularity;
+      referenceDate: string; reason: string;
+    }
+  | {
+      mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1'; state: 'RESOLVED';
+      basis: MonitoringTemporalBasis; granularity: MonitoringTemporalGranularity;
+      referenceDate: string; period: MonitoringTemporalPeriod;
+      weeklyRecap?: MonitoringTemporalLensWeeklyRecap;
+      baseline: { id: string; versionNumber: number; approvedAt: string } | null;
+      plannedSource: {
+        executionPlanVersionId: string; versionNumber: number; status: 'LOCKED';
+      } | null;
+      plannedContext:
+        | { state: 'COMPLETE' }
+        | { state: 'INCOMPLETE' | 'UNAVAILABLE'; reason: string };
+      actualTruthMode: 'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_EXPLICIT_WORKDATE_WINDOW';
+      items: MonitoringTemporalLensItem[];
+    };
+
 export type MonitoringProgressComparisonPresentation =
   | { state: 'PENDING'; cutoffDate: null; comparison: null }
   | { state: 'LOADING'; cutoffDate: string; comparison: null }
@@ -236,8 +332,96 @@ export interface MonitoringResponse {
   /** Present only on the explicit, cutoff-bound comparison request. */
   progressComparison?: MonitoringProgressComparison;
 
+  /** Present only on an explicit canonical Temporal Lens request. */
+  temporalLens?: MonitoringTemporalLens;
+
   items: MonitoringItem[];
   unavailable: string[];
+}
+
+export type MonitoringTemporalSnapshotCoherence =
+  | {
+      state: 'COHERENT';
+      lens: Extract<MonitoringTemporalLens, { state: 'RESOLVED' }>;
+    }
+  | {
+      state: 'INCOHERENT';
+      reason:
+        | 'PROJECT_ID_MISMATCH'
+        | 'TEMPORAL_LENS_NOT_RESOLVED'
+        | 'BASELINE_MISMATCH'
+        | 'DUPLICATE_WORK_ITEM_ID'
+        | 'DUPLICATE_TEMPORAL_ITEM_ID'
+        | 'TEMPORAL_ITEM_NOT_IN_SNAPSHOT';
+    };
+
+export function monitoringTemporalSnapshotCoherence(input: {
+  requestedProjectId: string;
+  response: MonitoringResponse;
+}): MonitoringTemporalSnapshotCoherence {
+  if (input.response.projectId !== input.requestedProjectId) {
+    return { state: 'INCOHERENT', reason: 'PROJECT_ID_MISMATCH' };
+  }
+
+  const lens = input.response.temporalLens;
+  if (lens?.state !== 'RESOLVED') {
+    return { state: 'INCOHERENT', reason: 'TEMPORAL_LENS_NOT_RESOLVED' };
+  }
+
+  const responseBaseline = input.response.baseline;
+  const lensBaseline = lens.baseline;
+  if (
+    (responseBaseline === null) !== (lensBaseline === null) ||
+    (responseBaseline !== null &&
+      lensBaseline !== null &&
+      (responseBaseline.id !== lensBaseline.id ||
+        responseBaseline.versionNumber !== lensBaseline.versionNumber ||
+        responseBaseline.approvedAt !== lensBaseline.approvedAt))
+  ) {
+    return { state: 'INCOHERENT', reason: 'BASELINE_MISMATCH' };
+  }
+
+  const workItemIds = new Set<string>();
+  for (const item of input.response.items) {
+    if (item.itemType !== 'WORK_ITEM') continue;
+    if (workItemIds.has(item.id)) {
+      return { state: 'INCOHERENT', reason: 'DUPLICATE_WORK_ITEM_ID' };
+    }
+    workItemIds.add(item.id);
+  }
+
+  const temporalItemIds = new Set<string>();
+  for (const item of lens.items) {
+    if (temporalItemIds.has(item.boqItemId)) {
+      return { state: 'INCOHERENT', reason: 'DUPLICATE_TEMPORAL_ITEM_ID' };
+    }
+    if (!workItemIds.has(item.boqItemId)) {
+      return { state: 'INCOHERENT', reason: 'TEMPORAL_ITEM_NOT_IN_SNAPSHOT' };
+    }
+    temporalItemIds.add(item.boqItemId);
+  }
+
+  return { state: 'COHERENT', lens };
+}
+
+export function monitoringActiveSnapshot(input: {
+  mode: 'TERKINI' | 'PERIODIK';
+  currentResponse: MonitoringResponse | null;
+  periodicResponse: MonitoringResponse | null;
+}): MonitoringResponse | null {
+  return input.mode === 'TERKINI'
+    ? input.currentResponse
+    : input.periodicResponse;
+}
+
+export function monitoringPeriodicSnapshotForRequest(input: {
+  activeRequestKey: string;
+  responseRequestKey: string;
+  response: MonitoringResponse;
+}): MonitoringResponse | null {
+  return input.activeRequestKey === input.responseRequestKey
+    ? input.response
+    : null;
 }
 
 export interface MonitoringProject {
@@ -528,6 +712,86 @@ export function monitoringComparisonRequestPath(
     cutoffDate +
     '&includeProgressComparison=true'
   );
+}
+
+export function monitoringTemporalLensRequestPath(input: {
+  projectId: string;
+  basis: MonitoringTemporalBasis;
+  granularity: MonitoringTemporalGranularity;
+  referenceDate: string;
+}): string {
+  const params = new URLSearchParams({
+    includeTemporalLens: 'true',
+    temporalBasis: input.basis,
+    temporalGranularity: input.granularity,
+    temporalReferenceDate: input.referenceDate,
+  });
+  return `/projects/${input.projectId}/progress/monitoring?${params.toString()}`;
+}
+
+export function monitoringTemporalBasisLabel(basis: MonitoringTemporalBasis): string {
+  return basis === 'WORK_PERIOD' ? 'Waktu Kerja' : 'Kalender';
+}
+
+export function monitoringTemporalGranularityLabel(
+  granularity: MonitoringTemporalGranularity,
+): string {
+  return granularity === 'WEEK' ? 'Mingguan' : 'Bulanan';
+}
+
+const INDONESIAN_MONTH_LABELS: Readonly<Record<number, string>> = {
+  1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 'Juni',
+  7: 'Juli', 8: 'Agustus', 9: 'September', 10: 'Oktober',
+  11: 'November', 12: 'Desember',
+};
+
+export function monitoringTemporalPeriodLabel(period: MonitoringTemporalPeriod): string {
+  if (period.basis === 'WORK_PERIOD') {
+    return period.granularity === 'WEEK'
+      ? `Minggu Kerja ke-${period.periodIndex}`
+      : `Bulan Kerja ke-${period.periodIndex}`;
+  }
+  if (period.granularity === 'WEEK') return `Minggu Kalender \u00b7 ${period.periodKey}`;
+  const month = INDONESIAN_MONTH_LABELS[period.metadata.calendarMonth];
+  return month === undefined
+    ? `Bulan Kalender \u00b7 ${period.periodKey}`
+    : `${month} ${period.metadata.calendarYear}`;
+}
+
+export function monitoringTemporalLensUnavailableMessage(reason: string): string {
+  const messages: Readonly<Record<string, string>> = {
+    GOVERNED_WORK_PERIOD_ANCHOR_REQUIRED:
+      'Basis Waktu Kerja belum tersedia karena Hari Pertama Resmi proyek belum dibuktikan.',
+    WORK_PERIOD_ANCHOR_PROVENANCE_INVALID:
+      'Basis Waktu Kerja tidak dapat digunakan karena bukti Hari Pertama Resmi tidak valid.',
+    REFERENCE_DATE_BEFORE_GOVERNED_WORK_PERIOD_ANCHOR:
+      'Tanggal acuan berada sebelum Hari Pertama Resmi proyek.',
+  };
+  return messages[reason] ?? 'Konteks periode belum tersedia dari fakta proyek yang sah.';
+}
+
+export function plannedPeriodQuantityLabel(
+  fact: MonitoringPlannedItemQuantity | undefined,
+  unit: string,
+): string {
+  if (fact === undefined || fact.state === 'UNAVAILABLE') return 'TIDAK TERSEDIA';
+  if (fact.state === 'INCOMPLETE') {
+    return `Belum lengkap \u2014 subtotal ${fact.knownPlannedQuantitySubtotal} ${unit}`.trim();
+  }
+  return `${fact.plannedQuantity} ${unit}`.trim();
+}
+
+export function temporalActualQuantityLabel(
+  fact: MonitoringItem['currentOfficialQuantity'] | undefined,
+  unit: string,
+): string {
+  return fact === undefined ? 'TIDAK TERSEDIA' : officialQuantityLabel(fact, unit);
+}
+
+export function temporalLensItemsByBoqItemId(
+  items: readonly MonitoringTemporalLensItem[],
+): ReadonlyMap<string, MonitoringTemporalLensItem> {
+  return new Map(items.map((item) => [item.boqItemId, item] as const));
 }
 
 export function plannedComparisonLabel(
