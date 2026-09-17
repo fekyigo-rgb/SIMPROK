@@ -1,4 +1,4 @@
-import { ProgressAuditOutcome } from '@prisma/client';
+import { Prisma, ProgressAuditOutcome } from '@prisma/client';
 import {
   projectBusinessDateWire,
   workDateWire,
@@ -39,6 +39,51 @@ export interface WorkPeriodAnchorAuditCandidate {
   reason: string | null;
   metadata: unknown;
   occurredAt: Date;
+}
+
+export const WORK_PERIOD_ANCHOR_EVENT_SELECT = {
+  id: true,
+  projectId: true,
+  targetEntityType: true,
+  targetEntityId: true,
+  action: true,
+  outcome: true,
+  actorAccountId: true,
+  actorMembershipId: true,
+  reason: true,
+  metadata: true,
+  occurredAt: true,
+} satisfies Prisma.ProgressAuditEventSelect;
+
+type WorkPeriodAnchorAuditReader = Pick<
+  Prisma.TransactionClient,
+  'progressAuditEvent'
+>;
+
+export async function loadWorkPeriodAnchorAuditEvents(
+  client: WorkPeriodAnchorAuditReader,
+  projectId: string,
+): Promise<WorkPeriodAnchorAuditCandidate[]> {
+  return client.progressAuditEvent.findMany({
+    where: {
+      projectId,
+      eventType: 'PROJECT_CONFIGURATION',
+      outcome: ProgressAuditOutcome.SUCCESS,
+      action: { in: Object.values(WORK_PERIOD_ANCHOR_ACTION) },
+    },
+    orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+    select: WORK_PERIOD_ANCHOR_EVENT_SELECT,
+  });
+}
+
+export async function readCanonicalWorkPeriodAnchorFromStore(
+  client: WorkPeriodAnchorAuditReader,
+  input: { projectId: string; startDate: Date | null },
+): Promise<CanonicalWorkPeriodAnchor> {
+  return readCanonicalWorkPeriodAnchor({
+    ...input,
+    events: await loadWorkPeriodAnchorAuditEvents(client, input.projectId),
+  });
 }
 
 export type CanonicalWorkPeriodAnchor =
@@ -318,6 +363,33 @@ export function assessActualAnchorCompatibility(input: {
         code: 'WORK_PERIOD_ANCHOR_ACTUAL_FACT_BEFORE_ANCHOR',
         baselineId: input.baselineId,
         ...conflict,
+      }
+    : { state: 'COMPATIBLE' };
+}
+
+export function assessActualPromotionAnchorCompatibility(input: {
+  anchorDate: string;
+  baselineId: string;
+  boqItemId: string;
+  workDate: Date | null;
+}): WorkPeriodAnchorCompatibility {
+  const factDate = workDateWire(input.workDate);
+  if (factDate === null) {
+    return {
+      state: 'UNPROVEN',
+      code: 'WORK_PERIOD_ANCHOR_COMPATIBILITY_UNPROVEN',
+      source: 'ACTUAL',
+      reason: 'UNPLACEABLE_CURRENT_WORK_DATE',
+      boqItemId: input.boqItemId,
+    };
+  }
+  return factDate < input.anchorDate
+    ? {
+        state: 'CONFLICT',
+        code: 'WORK_PERIOD_ANCHOR_ACTUAL_FACT_BEFORE_ANCHOR',
+        baselineId: input.baselineId,
+        boqItemId: input.boqItemId,
+        earliestConflictingDate: factDate,
       }
     : { state: 'COMPATIBLE' };
 }

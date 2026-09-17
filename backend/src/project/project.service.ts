@@ -51,10 +51,13 @@ import {
 } from '../progress/progress-actual-temporal-quantity.policy';
 import {
   WORK_PERIOD_ANCHOR_ACTION,
+  WORK_PERIOD_ANCHOR_EVENT_SELECT,
   WORK_PERIOD_ANCHOR_POLICY_VERSION,
   assessActualAnchorCompatibility,
   assessPlannedAnchorCompatibility,
+  loadWorkPeriodAnchorAuditEvents,
   readCanonicalWorkPeriodAnchor,
+  readCanonicalWorkPeriodAnchorFromStore,
   type CanonicalWorkPeriodAnchor,
   type WorkPeriodAnchorAuditCandidate,
   type WorkPeriodAnchorCompatibility,
@@ -680,20 +683,6 @@ export class ProjectService {
     });
   }
 
-  private readonly workPeriodAnchorEventSelect = {
-    id: true,
-    projectId: true,
-    targetEntityType: true,
-    targetEntityId: true,
-    action: true,
-    outcome: true,
-    actorAccountId: true,
-    actorMembershipId: true,
-    reason: true,
-    metadata: true,
-    occurredAt: true,
-  } as const;
-
   private async workPeriodAnchorCompatibility(
     tx: Prisma.TransactionClient,
     projectId: string,
@@ -900,20 +889,9 @@ export class ProjectService {
       select: { id: true, startDate: true },
     });
     if (!project) throw new NotFoundException('Project not found');
-    const events = await this.prisma.progressAuditEvent.findMany({
-      where: {
-        projectId,
-        eventType: 'PROJECT_CONFIGURATION',
-        outcome: ProgressAuditOutcome.SUCCESS,
-        action: { in: Object.values(WORK_PERIOD_ANCHOR_ACTION) },
-      },
-      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
-      select: this.workPeriodAnchorEventSelect,
-    });
-    return readCanonicalWorkPeriodAnchor({
+    return readCanonicalWorkPeriodAnchorFromStore(this.prisma, {
       projectId,
       startDate: project.startDate,
-      events,
     });
   }
 
@@ -1009,16 +987,7 @@ export class ProjectService {
               commandFingerprint: true,
             },
           });
-          const events = await tx.progressAuditEvent.findMany({
-            where: {
-              projectId,
-              eventType: 'PROJECT_CONFIGURATION',
-              outcome: ProgressAuditOutcome.SUCCESS,
-              action: { in: Object.values(WORK_PERIOD_ANCHOR_ACTION) },
-            },
-            orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
-            select: this.workPeriodAnchorEventSelect,
-          });
+          const events = await loadWorkPeriodAnchorAuditEvents(tx, projectId);
           const current = readCanonicalWorkPeriodAnchor({
             projectId,
             startDate: project.startDate,
@@ -1107,7 +1076,7 @@ export class ProjectService {
               occurredAt: now,
               recordedAt: now,
             },
-            select: this.workPeriodAnchorEventSelect,
+            select: WORK_PERIOD_ANCHOR_EVENT_SELECT,
           });
 
           return readCanonicalWorkPeriodAnchor({

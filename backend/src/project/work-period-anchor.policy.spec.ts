@@ -12,6 +12,7 @@ import {
   WORK_PERIOD_ANCHOR_ACTION,
   WORK_PERIOD_ANCHOR_POLICY_VERSION,
   assessActualAnchorCompatibility,
+  assessActualPromotionAnchorCompatibility,
   assessPlannedAnchorCompatibility,
   readCanonicalWorkPeriodAnchor,
   type WorkPeriodAnchorAuditCandidate,
@@ -336,6 +337,53 @@ describe('MON-04 governed Work Period anchor policy', () => {
       code: 'WORK_PERIOD_ANCHOR_COMPATIBILITY_UNPROVEN',
       source: 'ACTUAL',
       reason: 'SEMANTICS_UNPROVEN',
+      boqItemId,
+    });
+  });
+
+  it('gates only the exact current leaf workDate at Actual semantic promotion', () => {
+    expect(
+      assessActualPromotionAnchorCompatibility({
+        anchorDate: '2026-05-18',
+        baselineId,
+        boqItemId,
+        workDate: businessDate('2026-05-20'),
+      }),
+    ).toEqual({ state: 'COMPATIBLE' });
+    expect(
+      assessActualPromotionAnchorCompatibility({
+        anchorDate: '2026-05-18',
+        baselineId,
+        boqItemId,
+        workDate: businessDate('2026-05-18'),
+      }),
+    ).toEqual({ state: 'COMPATIBLE' });
+    expect(
+      assessActualPromotionAnchorCompatibility({
+        anchorDate: '2026-05-18',
+        baselineId,
+        boqItemId,
+        workDate: businessDate('2026-05-17'),
+      }),
+    ).toEqual({
+      state: 'CONFLICT',
+      code: 'WORK_PERIOD_ANCHOR_ACTUAL_FACT_BEFORE_ANCHOR',
+      baselineId,
+      boqItemId,
+      earliestConflictingDate: '2026-05-17',
+    });
+    expect(
+      assessActualPromotionAnchorCompatibility({
+        anchorDate: '2026-05-18',
+        baselineId,
+        boqItemId,
+        workDate: null,
+      }),
+    ).toEqual({
+      state: 'UNPROVEN',
+      code: 'WORK_PERIOD_ANCHOR_COMPATIBILITY_UNPROVEN',
+      source: 'ACTUAL',
+      reason: 'UNPLACEABLE_CURRENT_WORK_DATE',
       boqItemId,
     });
   });

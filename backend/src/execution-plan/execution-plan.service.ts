@@ -4,11 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import {
-  ExecutionPlanStatus,
-  Prisma,
-  ProjectStatus,
-} from '@prisma/client';
+import { ExecutionPlanStatus, Prisma, ProjectStatus } from '@prisma/client';
 import type { ProjectAccessContext } from '../auth/project-access-policy.service';
 import { PERMISSIONS } from '../common/constants/permissions';
 import { PrismaService } from '../prisma/prisma.service';
@@ -32,6 +28,10 @@ import {
   EXECUTION_PLAN_DRAFT_FLOW,
   executionPlanDraftFlow,
 } from './execution-plan-adoption.policy';
+import {
+  assessPlannedAnchorCompatibility,
+  readCanonicalWorkPeriodAnchorFromStore,
+} from '../project/work-period-anchor.policy';
 
 const PROJECT_BUSINESS_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const HARD_DRAFT_BLOCKERS = new Set<ExecutionPlanBlockerCode>([
@@ -256,10 +256,11 @@ export class ExecutionPlanService {
         lockedByPosition: { select: { id: true, code: true } },
       },
     });
-    const otherBaselinePlanCount =
-      await this.prisma.executionPlanVersion.count({
+    const otherBaselinePlanCount = await this.prisma.executionPlanVersion.count(
+      {
         where: { projectId: project.id, baselineId: { not: baseline.id } },
-      });
+      },
+    );
     const lockedPlans = plans.filter(
       (plan) => plan.status === ExecutionPlanStatus.LOCKED,
     );
@@ -395,8 +396,7 @@ export class ExecutionPlanService {
           unit: item?.unit ?? null,
           periodStartDate: row.periodStartDate.toISOString().slice(0, 10),
           periodEndDate: row.periodEndDate.toISOString().slice(0, 10),
-          plannedIncrementalQuantity:
-            row.plannedIncrementalQuantity.toString(),
+          plannedIncrementalQuantity: row.plannedIncrementalQuantity.toString(),
         };
       }),
       schedule: projection.schedule,
@@ -471,9 +471,7 @@ export class ExecutionPlanService {
           throw new ConflictException('PROJECT_NOT_PLANNED');
         }
         throw new ConflictException(
-          projectPlans.some(
-            (candidate) => candidate.baselineId !== baseline.id,
-          )
+          projectPlans.some((candidate) => candidate.baselineId !== baseline.id)
             ? EXECUTION_PLAN_BLOCKER.BASELINE_BINDING_MISMATCH
             : EXECUTION_PLAN_BLOCKER.AMBIGUOUS_EXECUTION_PLAN_CONTEXT,
         );
@@ -589,9 +587,14 @@ export class ExecutionPlanService {
   ) {
     return this.prisma.$transaction(async (tx) => {
       const lockedProjects = await tx.$queryRaw<
-        Array<{ id: string; workspaceId: string; status: ProjectStatus }>
+        Array<{
+          id: string;
+          workspaceId: string;
+          status: ProjectStatus;
+          startDate: Date | null;
+        }>
       >(
-        Prisma.sql`SELECT "id", "workspaceId", "status" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
+        Prisma.sql`SELECT "id", "workspaceId", "status", "startDate" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
       );
       const project = lockedProjects[0];
       if (!project) throw new NotFoundException('Project not found');
@@ -610,10 +613,9 @@ export class ExecutionPlanService {
         take: 3,
         include: { distributions: true },
       });
-      const otherBaselinePlanCount =
-        await tx.executionPlanVersion.count({
-          where: { projectId, baselineId: { not: baseline.id } },
-        });
+      const otherBaselinePlanCount = await tx.executionPlanVersion.count({
+        where: { projectId, baselineId: { not: baseline.id } },
+      });
       const lockedPlans = plans.filter(
         (plan) => plan.status === ExecutionPlanStatus.LOCKED,
       );
@@ -669,9 +671,7 @@ export class ExecutionPlanService {
       const draftFlow = executionPlanDraftFlow({
         projectStatus: project.status,
         activeBaselineCount: 1,
-        currentBaselinePlanStatuses: plans.map(
-          (candidate) => candidate.status,
-        ),
+        currentBaselinePlanStatuses: plans.map((candidate) => candidate.status),
         otherBaselinePlanCount,
       });
       if (draftFlow === EXECUTION_PLAN_DRAFT_FLOW.NOT_ELIGIBLE) {
@@ -702,6 +702,31 @@ export class ExecutionPlanService {
           code: 'EXECUTION_PLAN_NOT_READY',
           blockers: projection.blockers,
         });
+      }
+
+      const anchor = await readCanonicalWorkPeriodAnchorFromStore(tx, {
+        projectId,
+        startDate: project.startDate,
+      });
+      if (anchor.state === 'INVALID_PROVENANCE') {
+        throw new ConflictException({
+          code: 'WORK_PERIOD_ANCHOR_PROVENANCE_INVALID',
+          reason: anchor.reason,
+        });
+      }
+      if (anchor.state === 'PROVEN') {
+        const compatibility = assessPlannedAnchorCompatibility(
+          anchor.anchorDate,
+          {
+            state: 'AUTHORITATIVE',
+            baselineId: baseline.id,
+            executionPlanVersionId: plan.id,
+            distributions: plan.distributions,
+          },
+        );
+        if (compatibility.state !== 'COMPATIBLE') {
+          throw new ConflictException(compatibility);
+        }
       }
 
       const lockedAt = new Date();

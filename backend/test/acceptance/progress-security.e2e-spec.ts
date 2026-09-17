@@ -4052,6 +4052,360 @@ describe('Progress Security (e2e)', () => {
     expect(await successfulSemanticProofCount([entryId])).toBe(0);
   });
 
+  it('MON04 Day-1 gate preserves raw reality but blocks pre-anchor semantic authority on the current correction leaf', async () => {
+    const token = await login(userSubmitEmail);
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: workspaceAId },
+      select: { organizationId: true },
+    });
+    const membership = await prisma.workspaceMembership.findFirstOrThrow({
+      where: {
+        workspaceId: workspaceAId,
+        accountId: submitAccountId,
+      },
+      select: { id: true },
+    });
+    const position = await prisma.position.findFirstOrThrow({
+      where: {
+        workspaceId: workspaceAId,
+        code: 'PROGRESS_AUTHORITY_TEST',
+      },
+      select: { id: true },
+    });
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: workspaceAId,
+        organizationId: workspace.organizationId,
+        code: `MON04-DAY1-${randomUUID()}`,
+        name: 'MON04 Actual semantic Day-1 gate',
+        status: 'ACTIVE',
+      },
+    });
+    const structure = await prisma.boqStructure.create({
+      data: {
+        projectId: project.id,
+        name: 'MON04 Day-1 BOQ',
+        version: 1,
+      },
+    });
+    const itemNames = [
+      'before',
+      'exact',
+      'after',
+      'moved-out',
+      'moved-in',
+      'invalid-provenance',
+    ];
+    const items = await Promise.all(
+      itemNames.map((name, index) =>
+        prisma.boqItem.create({
+          data: {
+            boqStructureId: structure.id,
+            wbsCode: `DAY1.${index + 1}`,
+            name: `Day-1 ${name}`,
+            itemType: 'WORK_ITEM',
+            quantity: 10,
+            unit: 'm3',
+            unitPrice: 1,
+            lineTotal: 10,
+            priceOrigin: 'MANUAL_CLIENT',
+            sortOrder: index,
+          },
+        }),
+      ),
+    );
+    const rab = await prisma.rabDocument.create({
+      data: {
+        projectId: project.id,
+        boqStructureId: structure.id,
+        name: 'MON04 Day-1 RAB',
+        version: 1,
+        totalBaseCost: 60,
+        totalFinalCost: 60,
+        status: 'APPROVED',
+      },
+    });
+    const baseline = await prisma.projectBaseline.create({
+      data: {
+        projectId: project.id,
+        rabDocumentId: rab.id,
+        versionNumber: 1,
+        status: 'ACTIVE',
+        approvedAt: new Date('2026-05-01T00:00:00.000Z'),
+      },
+    });
+    await prisma.executionPlanVersion.create({
+      data: {
+        projectId: project.id,
+        baselineId: baseline.id,
+        versionNumber: 1,
+        status: 'LOCKED',
+        revision: 1,
+        createdByAccountId: submitAccountId,
+        lastEditedByAccountId: submitAccountId,
+        lastEditedAt: new Date('2026-05-01T00:00:00.000Z'),
+        lockedAt: new Date('2026-05-01T00:00:00.000Z'),
+        lockedByAccountId: submitAccountId,
+        lockedByPositionId: position.id,
+        lockedFromRevision: 1,
+        lockedFromProjectStatus: 'ACTIVE',
+        lockedAuthorityCode: 'EXECUTION_PLAN_LOCK',
+        distributions: {
+          create: items.map((item) => ({
+            boqItemId: item.id,
+            periodStartDate: new Date('2026-05-18T00:00:00.000Z'),
+            periodEndDate: new Date('2026-06-30T00:00:00.000Z'),
+            plannedIncrementalQuantity: '10',
+          })),
+        },
+      },
+    });
+    await prisma.projectAssignment.create({
+      data: {
+        workspaceMembershipId: membership.id,
+        projectId: project.id,
+        roleInProject: 'MEMBER',
+        isPrimaryAssignment: false,
+        status: 'ASSIGNED',
+      },
+    });
+
+    const submit = async (boqItemId: string, workDate: string) => {
+      const response = await request(app.getHttpServer())
+        .post(`/projects/${project.id}/progress/field`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({
+          commandId: randomUUID(),
+          entries: [
+            {
+              boqItemId,
+              installedQuantity: '1',
+              workDate,
+              captureMethod: 'FIELD_MEASUREMENT',
+            },
+          ],
+        })
+        .expect(201);
+      return (response.body as { entryIds: string[] }).entryIds[0];
+    };
+    const verify = (entryId: string) =>
+      request(app.getHttpServer())
+        .post(`/projects/${project.id}/progress/entries/${entryId}/verify`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ commandId: randomUUID(), reason: 'Day-1 semantic gate' })
+        .expect(201);
+    const history = async (boqItemId: string) => {
+      const response = await request(app.getHttpServer())
+        .get(`/projects/${project.id}/progress/items/${boqItemId}/history`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+      return response.body as SemanticHistoryBody;
+    };
+    const attest = (
+      entryId: string,
+      contextDigest: string,
+      commandId = randomUUID(),
+    ) =>
+      request(app.getHttpServer())
+        .post(
+          `/projects/${project.id}/progress/entries/${entryId}/semantic-attestations`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ commandId, contextDigest, confirmed: true });
+    const correct = async (entryId: string, workDate: string) => {
+      const response = await request(app.getHttpServer())
+        .post(`/projects/${project.id}/progress/entries/${entryId}/corrections`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({
+          commandId: randomUUID(),
+          installedQuantity: '1.25',
+          workDate,
+          captureMethod: 'FIELD_MEASUREMENT',
+          reasonCode: 'MEASUREMENT_UPDATE',
+          reasonText: 'Day-1 correction movement',
+        })
+        .expect(201);
+      return (response.body as EntryResponseBody).entryId;
+    };
+
+    try {
+      await request(app.getHttpServer())
+        .patch(`/projects/${project.id}/work-period-anchor`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ commandId: randomUUID(), anchorDate: '2026-05-18' })
+        .expect(200);
+
+      const beforeId = await submit(items[0].id, '2026-05-17');
+      await verify(beforeId);
+      const beforeHistory = await history(items[0].id);
+      const beforeBlocked = await attest(
+        beforeId,
+        semanticContextDigest(beforeHistory),
+      ).expect(409);
+      expect(beforeBlocked.body).toMatchObject({
+        state: 'CONFLICT',
+        code: 'WORK_PERIOD_ANCHOR_ACTUAL_FACT_BEFORE_ANCHOR',
+        baselineId: baseline.id,
+        boqItemId: items[0].id,
+        earliestConflictingDate: '2026-05-17',
+      });
+      expect(
+        await prisma.progressAuditEvent.count({
+          where: {
+            projectId: project.id,
+            progressEntryId: beforeId,
+            action: 'ACTUAL_SEMANTIC_AUTHORITY_CONFIRMED',
+            outcome: 'SUCCESS',
+          },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.progressEntry.findUniqueOrThrow({
+          where: { id: beforeId },
+          select: {
+            status: true,
+            installedQuantity: true,
+            workDate: true,
+            supersedesEntryId: true,
+          },
+        }),
+      ).toMatchObject({
+        status: 'VERIFIED',
+        installedQuantity: new Prisma.Decimal('1'),
+        workDate: new Date('2026-05-17T00:00:00.000Z'),
+        supersedesEntryId: null,
+      });
+
+      for (const [item, workDate] of [
+        [items[1], '2026-05-18'],
+        [items[2], '2026-05-20'],
+      ] as const) {
+        const entryId = await submit(item.id, workDate);
+        await verify(entryId);
+        const currentHistory = await history(item.id);
+        await attest(entryId, semanticContextDigest(currentHistory)).expect(
+          201,
+        );
+      }
+
+      const oldBefore = await submit(items[3].id, '2026-05-05');
+      const correctedAfter = await correct(oldBefore, '2026-05-20');
+      await verify(correctedAfter);
+      const movedOutHistory = await history(items[3].id);
+      expect(movedOutHistory.semanticVerification.currentLeaves).toEqual([
+        expect.objectContaining({
+          id: correctedAfter,
+          supersedesEntryId: oldBefore,
+        }),
+      ]);
+      await attest(
+        correctedAfter,
+        semanticContextDigest(movedOutHistory),
+      ).expect(201);
+
+      const oldAfter = await submit(items[4].id, '2026-05-20');
+      const correctedBefore = await correct(oldAfter, '2026-05-05');
+      await verify(correctedBefore);
+      const movedInHistory = await history(items[4].id);
+      expect(movedInHistory.semanticVerification.currentLeaves).toEqual([
+        expect.objectContaining({
+          id: correctedBefore,
+          supersedesEntryId: oldAfter,
+        }),
+      ]);
+      const correctionBlocked = await attest(
+        correctedBefore,
+        semanticContextDigest(movedInHistory),
+      ).expect(409);
+      expect(correctionBlocked.body).toMatchObject({
+        code: 'WORK_PERIOD_ANCHOR_ACTUAL_FACT_BEFORE_ANCHOR',
+        boqItemId: items[4].id,
+        earliestConflictingDate: '2026-05-05',
+      });
+      expect(
+        await prisma.progressAuditEvent.count({
+          where: {
+            projectId: project.id,
+            progressEntryId: correctedBefore,
+            action: 'ACTUAL_SEMANTIC_AUTHORITY_CONFIRMED',
+            outcome: 'SUCCESS',
+          },
+        }),
+      ).toBe(0);
+
+      const invalidProvenanceEntry = await submit(items[5].id, '2026-05-20');
+      await verify(invalidProvenanceEntry);
+      const invalidHistory = await history(items[5].id);
+      await prisma.project.update({
+        where: { id: project.id },
+        data: { startDate: new Date('2026-05-19T00:00:00.000Z') },
+      });
+      const provenanceBlocked = await attest(
+        invalidProvenanceEntry,
+        semanticContextDigest(invalidHistory),
+      ).expect(409);
+      expect(provenanceBlocked.body).toMatchObject({
+        code: 'WORK_PERIOD_ANCHOR_PROVENANCE_INVALID',
+        reason: 'GOVERNED_ANCHOR_START_DATE_MISMATCH',
+      });
+      expect(
+        await prisma.progressAuditEvent.count({
+          where: {
+            projectId: project.id,
+            progressEntryId: invalidProvenanceEntry,
+            action: 'ACTUAL_SEMANTIC_AUTHORITY_CONFIRMED',
+            outcome: 'SUCCESS',
+          },
+        }),
+      ).toBe(0);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'ALTER TABLE progress_audit_events DISABLE TRIGGER progress_audit_events_immutable_trigger',
+      );
+      try {
+        await prisma.progressAuditEvent.deleteMany({
+          where: { projectId: project.id },
+        });
+      } finally {
+        await prisma.$executeRawUnsafe(
+          'ALTER TABLE progress_audit_events ENABLE TRIGGER progress_audit_events_immutable_trigger',
+        );
+      }
+      await prisma.progressEntry.deleteMany({
+        where: { progressReport: { projectId: project.id } },
+      });
+      await prisma.progressReport.deleteMany({
+        where: { projectId: project.id },
+      });
+      await prisma.executionPlanDistribution.deleteMany({
+        where: { executionPlanVersion: { projectId: project.id } },
+      });
+      await prisma.executionPlanVersion.deleteMany({
+        where: { projectId: project.id },
+      });
+      await prisma.projectAssignment.deleteMany({
+        where: { projectId: project.id },
+      });
+      await prisma.projectBaseline.deleteMany({
+        where: { projectId: project.id },
+      });
+      await prisma.rabDocument.deleteMany({
+        where: { projectId: project.id },
+      });
+      await prisma.boqItem.deleteMany({
+        where: { boqStructureId: structure.id },
+      });
+      await prisma.boqStructure.delete({ where: { id: structure.id } });
+      await prisma.project.delete({ where: { id: project.id } });
+    }
+  });
+
   it('22. history projection is project-assignment and tenant isolated without raw audit internals', async () => {
     const assignedToken = await login(userSubmitEmail);
     const allowed = await request(app.getHttpServer())

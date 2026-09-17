@@ -84,6 +84,10 @@ import {
   type PlannedItemQuantityProjection,
   type ProjectBusinessDateWindow,
 } from './progress-period-window.policy';
+import {
+  assessActualPromotionAnchorCompatibility,
+  readCanonicalWorkPeriodAnchorFromStore,
+} from '../project/work-period-anchor.policy';
 
 type MonitoringReadClient = Pick<
   Prisma.TransactionClient,
@@ -2032,6 +2036,23 @@ export class ProgressService {
     });
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const lockedProjects = await tx.$queryRaw<
+          Array<{ id: string; workspaceId: string; startDate: Date | null }>
+        >(
+          Prisma.sql`SELECT "id", "workspaceId", "startDate"
+                       FROM "projects"
+                      WHERE "id" = ${projectId}::uuid
+                      FOR UPDATE`,
+        );
+        const lockedProject = lockedProjects[0];
+        if (
+          !lockedProject ||
+          lockedProject.id !== access.projectId ||
+          lockedProject.workspaceId !== access.workspaceId
+        ) {
+          throw new NotFoundException('Actual not found');
+        }
+
         const lockedTargetIds = await tx.$queryRaw<Array<{ id: string }>>(
           Prisma.sql`SELECT id
                        FROM progress_entries
@@ -2179,6 +2200,29 @@ export class ProgressService {
         if (confirmedBaseline.id !== baseline.id) {
           throw new ConflictException('SEMANTIC_CONTEXT_STALE');
         }
+
+        const anchor = await readCanonicalWorkPeriodAnchorFromStore(tx, {
+          projectId,
+          startDate: lockedProject.startDate,
+        });
+        if (anchor.state === 'INVALID_PROVENANCE') {
+          throw new ConflictException({
+            code: 'WORK_PERIOD_ANCHOR_PROVENANCE_INVALID',
+            reason: anchor.reason,
+          });
+        }
+        if (anchor.state === 'PROVEN') {
+          const compatibility = assessActualPromotionAnchorCompatibility({
+            anchorDate: anchor.anchorDate,
+            baselineId: baseline.id,
+            boqItemId: target.boqItemId,
+            workDate: currentTarget.workDate,
+          });
+          if (compatibility.state !== 'COMPATIBLE') {
+            throw new ConflictException(compatibility);
+          }
+        }
+
         await this.audit(tx, {
           projectId,
           entryId,
