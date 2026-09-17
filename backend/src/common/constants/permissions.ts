@@ -68,6 +68,13 @@ export const PERMISSIONS = {
    */
   RAB_APPROVE: 'RAB_APPROVE',
 
+  /**
+   * MON-04 execution-plan authoring and final lock are distinct application
+   * acts. Neither code grants organizational decision authority by itself.
+   */
+  EXECUTION_PLAN_EDIT: 'EXECUTION_PLAN_EDIT',
+  EXECUTION_PLAN_LOCK: 'EXECUTION_PLAN_LOCK',
+
   OBSERVATORY_VIEW: 'OBSERVATORY_VIEW',
 
   // Golden Path v0 — AHSP domain
@@ -331,6 +338,22 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     note: "PAB-03. The code is the one canonical Product Law already names (RAB_AUTHORITY_UNIT_LAW B.1) — registered here, not invented. Guard-enforced on POST /projects/:projectId/rab/approve. It is the APPLICATION gate only: the same command separately requires the existing Position -> PositionAuthority -> Authority('RAB_APPROVE') legitimacy, so permission alone can never approve a RAB. NEVER part of the ACTIVE_MEMBERSHIP_BASELINE, and granted by no canonical seed.",
   },
   {
+    code: PERMISSIONS.EXECUTION_PLAN_EDIT,
+    domain: PERMISSION_DOMAINS.PROJECT,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Create or revise the DRAFT official Execution Plan for an assigned project.',
+    note: 'MON-04. Application capability only; DRAFT editing does not grant final-lock authority.',
+  },
+  {
+    code: PERMISSIONS.EXECUTION_PLAN_LOCK,
+    domain: PERMISSION_DOMAINS.PROJECT,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Invoke the final Execution Plan lock for an assigned project.',
+    note: "MON-04. Application gate only; the same command separately requires Position -> PositionAuthority -> Authority('EXECUTION_PLAN_LOCK').",
+  },
+  {
     code: PERMISSIONS.OBSERVATORY_VIEW,
     domain: PERMISSION_DOMAINS.OBSERVATORY,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
@@ -496,6 +519,8 @@ export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.FIELD_PROGRESS_ACCEPT,
   PERMISSIONS.PROJECT_SETTINGS_MANAGE,
   PERMISSIONS.RAB_APPROVE,
+  PERMISSIONS.EXECUTION_PLAN_EDIT,
+  PERMISSIONS.EXECUTION_PLAN_LOCK,
   PERMISSIONS.BASIC_PRICE_VERIFY,
   PERMISSIONS.BASIC_PRICE_PUBLISH,
   PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,

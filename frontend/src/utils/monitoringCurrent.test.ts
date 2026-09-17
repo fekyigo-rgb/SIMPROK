@@ -2,20 +2,29 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
+  actualComparisonLabel,
   actualStateLabel,
   buildMonitoringRows,
   captureMethodLabel,
   dataThroughLabel,
+  deviationComparisonPresentation,
   effectiveActual,
   formatWeightPercentage,
   lastRecordedLabel,
   lifecycleLabel,
+  monitoringComparisonChartProjection,
+  monitoringComparisonCutoff,
+  monitoringComparisonRequestPath,
+  monitoringWorkItemsById,
+  plannedComparisonLabel,
   progressDetailPath,
+  scheduleRealizationPresentation,
   recordedAtLabel,
   rowWeightPresentation,
   selectedWorkItem,
   weightCompletenessLabel,
   type MonitoringItem,
+  type MonitoringProgressComparisonPoint,
 } from './monitoringCurrent.ts';
 
 const item = (
@@ -219,6 +228,326 @@ test('H2-A0-8 the healthy progress-detail door remains exact', () => {
   );
 });
 
+test('MON04 comparison cutoff uses only the canonical data-through business date', () => {
+  assert.equal(
+    monitoringComparisonCutoff({
+      state: 'RECORDED',
+      workDate: '2026-09-07T00:00:00.000Z',
+    }),
+    '2026-09-07',
+  );
+  assert.equal(
+    monitoringComparisonCutoff({
+      state: 'RECORDED',
+      workDate: '2026-09-07',
+    }),
+    '2026-09-07',
+  );
+  assert.equal(
+    monitoringComparisonCutoff({
+      state: 'RECORDED',
+      workDate: '2026-09-07T01:00:00.000Z',
+    }),
+    null,
+  );
+  assert.equal(
+    monitoringComparisonCutoff({
+      state: 'NOT_YET_RECORDED',
+      workDate: null,
+    }),
+    null,
+  );
+  assert.equal(
+    monitoringComparisonCutoff({ state: 'UNAVAILABLE', workDate: null }),
+    null,
+  );
+
+  const path = monitoringComparisonRequestPath('project-1', '2026-09-07');
+  assert.equal(
+    path,
+    '/projects/project-1/progress/monitoring?cutoffDate=2026-09-07&includeProgressComparison=true',
+  );
+  const query = new URLSearchParams(path.split('?')[1]);
+  assert.deepEqual([...query.entries()], [
+    ['cutoffDate', '2026-09-07'],
+    ['includeProgressComparison', 'true'],
+  ]);
+  assert.equal(query.has('includeActualSeries'), false);
+
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const cutoffBlock = utility.slice(
+    utility.indexOf('export function monitoringComparisonCutoff'),
+    utility.indexOf('export function monitoringComparisonRequestPath'),
+  );
+  assert.doesNotMatch(cutoffBlock, /Date\.now|new Date|toISOString/);
+});
+
+test('MON04 comparison labels preserve zero, uncertainty, and exact Decimal strings', () => {
+  assert.equal(
+    plannedComparisonLabel({
+      state: 'COMPLETE',
+      plannedRabWeightedPhysicalProgressPercent: '0',
+    }),
+    '0%',
+  );
+  assert.equal(
+    actualComparisonLabel({
+      state: 'COMPLETE',
+      currentOfficialRabWeightedPhysicalProgressPercent: '0.000',
+    }),
+    '0.000%',
+  );
+  assert.equal(
+    plannedComparisonLabel({
+      state: 'INCOMPLETE',
+      reason: 'PLANNED_CURVE_INCOMPLETE',
+      knownWeightedPlannedProgressSubtotalPercent: '12.3400',
+    }),
+    'Belum lengkap · subtotal 12.3400%',
+  );
+  assert.equal(
+    actualComparisonLabel({
+      state: 'INCOMPLETE',
+      knownWeightedContributionSubtotalPercent: '9.8700',
+    }),
+    'Belum lengkap · subtotal 9.8700%',
+  );
+  assert.equal(
+    actualComparisonLabel({
+      state: 'UNAVAILABLE',
+      reason: 'BASELINE_VALUE_UNAVAILABLE',
+    }),
+    'Tidak tersedia',
+  );
+
+  assert.deepEqual(
+    deviationComparisonPresentation({ state: 'COMPLETE', value: '-2.0000' }),
+    {
+      value: '-2.0000 pp',
+      meaning: 'Tertinggal dari rencana',
+    },
+  );
+  assert.deepEqual(
+    deviationComparisonPresentation({ state: 'COMPLETE', value: '4.1250' }),
+    {
+      value: '4.1250 pp',
+      meaning: 'Lebih maju dari rencana',
+    },
+  );
+  assert.deepEqual(
+    deviationComparisonPresentation({ state: 'COMPLETE', value: '0.0000' }),
+    {
+      value: '0.0000 pp',
+      meaning: 'Sesuai rencana',
+    },
+  );
+  assert.deepEqual(
+    deviationComparisonPresentation({
+      state: 'UNAVAILABLE',
+      reason: {
+        planned: null,
+        actual: 'ACTUAL_INCOMPLETE',
+      },
+    }),
+    {
+      value: 'Tidak tersedia',
+      meaning: 'Fakta realisasi belum lengkap.',
+    },
+  );
+});
+
+test('MON04 chart projects canonical dates without inventing or joining unknown points', () => {
+  const points: MonitoringProgressComparisonPoint[] = [
+    {
+      cutoffDate: '2026-09-01',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '0',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '0',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '0' },
+    },
+    {
+      cutoffDate: '2026-09-02',
+      planned: {
+        state: 'INCOMPLETE',
+        reason: 'PLANNED_CURVE_INCOMPLETE',
+        knownWeightedPlannedProgressSubtotalPercent: '4',
+      },
+      actual: {
+        state: 'UNAVAILABLE',
+        reason: 'BASELINE_VALUE_UNAVAILABLE',
+      },
+      deviationPercentagePoints: {
+        state: 'UNAVAILABLE',
+        reason: {
+          planned: 'PLANNED_INCOMPLETE',
+          actual: 'ACTUAL_UNAVAILABLE',
+        },
+      },
+    },
+    {
+      cutoffDate: '2026-09-11',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '26.1250',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '24.1250',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-2.0000' },
+    },
+  ];
+  const chart = monitoringComparisonChartProjection(points);
+
+  assert.deepEqual(
+    chart.points.map((point) => point.cutoffDate),
+    points.map((point) => point.cutoffDate),
+  );
+  assert.equal(chart.points[0].plannedY, chart.height - chart.padding);
+  assert.equal(chart.points[0].actualY, chart.height - chart.padding);
+  assert.equal(chart.points[1].plannedY, null);
+  assert.equal(chart.points[1].actualY, null);
+  assert.equal(chart.plannedSegments.length, 0);
+  assert.equal(chart.actualSegments.length, 0);
+
+  const completePoints = points.map((point) => ({
+    ...point,
+    planned: {
+      state: 'COMPLETE' as const,
+      plannedRabWeightedPhysicalProgressPercent: '10',
+    },
+    actual: {
+      state: 'COMPLETE' as const,
+      currentOfficialRabWeightedPhysicalProgressPercent: '10',
+    },
+    deviationPercentagePoints: {
+      state: 'COMPLETE' as const,
+      value: '0',
+    },
+  }));
+  const irregular = monitoringComparisonChartProjection(completePoints);
+  const firstX = irregular.points[0].x;
+  const secondX = irregular.points[1].x;
+  const thirdX = irregular.points[2].x;
+  assert.notEqual(firstX, null);
+  assert.notEqual(secondX, null);
+  assert.notEqual(thirdX, null);
+  assert.ok(
+    secondX! - firstX! < thirdX! - secondX!,
+    'one day must occupy less x-distance than nine days',
+  );
+
+  const single = monitoringComparisonChartProjection([points[0]]);
+  assert.equal(single.points[0].x, single.width / 2);
+  assert.equal(single.plannedSegments.length, 0);
+  assert.equal(single.actualSegments.length, 0);
+
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const chartBlock = utility.slice(
+    utility.indexOf('export function monitoringComparisonChartProjection'),
+    utility.indexOf('export function lastRecordedLabel'),
+  );
+  assert.doesNotMatch(chartBlock, /\.sort\(|new Set|interpolat/i);
+});
+
+test('MON04 chart holds the previous value until the next canonical boundary', () => {
+  const points: MonitoringProgressComparisonPoint[] = [
+    {
+      cutoffDate: '2026-09-01',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '10',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '5',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
+    },
+    {
+      cutoffDate: '2026-09-10',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '30',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '25',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
+    },
+  ];
+  const chart = monitoringComparisonChartProjection(points);
+  const [first, second] = chart.points;
+
+  assert.deepEqual(
+    chart.points.map((point) => point.cutoffDate),
+    points.map((point) => point.cutoffDate),
+  );
+  assert.deepEqual(chart.plannedSegments, [
+    {
+      from: { x: first.x, y: first.plannedY },
+      to: { x: second.x, y: first.plannedY },
+    },
+    {
+      from: { x: second.x, y: first.plannedY },
+      to: { x: second.x, y: second.plannedY },
+    },
+  ]);
+  assert.deepEqual(chart.actualSegments, [
+    {
+      from: { x: first.x, y: first.actualY },
+      to: { x: second.x, y: first.actualY },
+    },
+    {
+      from: { x: second.x, y: first.actualY },
+      to: { x: second.x, y: second.actualY },
+    },
+  ]);
+  for (const [segments, previousY, currentY] of [
+    [chart.plannedSegments, first.plannedY, second.plannedY],
+    [chart.actualSegments, first.actualY, second.actualY],
+  ] as const) {
+    assert.equal(
+      segments.some(
+        (segment) =>
+          segment.from.x === first.x &&
+          segment.from.y === previousY &&
+          segment.to.x === second.x &&
+          segment.to.y === currentY,
+      ),
+      false,
+    );
+  }
+
+  const equal = monitoringComparisonChartProjection([
+    points[0],
+    {
+      ...points[1],
+      planned: points[0].planned,
+      actual: points[0].actual,
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
+    },
+  ]);
+  assert.deepEqual(equal.plannedSegments, [
+    {
+      from: { x: equal.points[0].x, y: equal.points[0].plannedY },
+      to: { x: equal.points[1].x, y: equal.points[0].plannedY },
+    },
+  ]);
+  assert.deepEqual(equal.actualSegments, [
+    {
+      from: { x: equal.points[0].x, y: equal.points[0].actualY },
+      to: { x: equal.points[1].x, y: equal.points[0].actualY },
+    },
+  ]);
+});
+
 test('H2-A0-9 the shell states project scope, Terkini, and both freshness meanings', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
   assert.match(page, /SELURUH PROYEK/);
@@ -253,8 +582,9 @@ test('H2-A0-11 the shell neither consumes legacy reality nor paints later truth'
   assert.doesNotMatch(page, /\/reality|ProjectWarRoomPage|DeviationService/);
   assert.doesNotMatch(
     page,
-    /Kurva S|plannedWeight|planned-to-date|Forecast|Recovery|CPM/,
+    /Kurva S Realisasi|planned-to-date|Forecast|Recovery|CPM/,
   );
+  assert.match(page, /ExecutionPlanReadinessPanel/);
   assert.doesNotMatch(page, />\s*Network\s*</);
   assert.match(page, /Realisasi Terakhir yang Berlaku/);
   assert.match(
@@ -378,6 +708,167 @@ test('H2-A1-4 coverage language is bounded and never presented as project progre
   assert.doesNotMatch(page, /planned-to-date|ahead|behind|On Track/);
 });
 
+/* SCHEDULE_REALIZATION_PRESENTATION_V1 */
+
+test('SCHEDULE-REALIZATION-1 lookup uses exact BoqItem identity and never WBS/name fallback', () => {
+  const workA = item({ id: 'boq-a', name: 'Same Name' });
+  const workB = item({ id: 'boq-b', name: 'Same Name' });
+  const folder = item({
+    id: 'folder-a',
+    name: 'Same Name',
+    itemType: 'FOLDER',
+    actual: null,
+  });
+  const lookup = monitoringWorkItemsById([workB, folder, workA]);
+
+  assert.equal(lookup.get('boq-a'), workA);
+  assert.equal(lookup.get('boq-b'), workB);
+  assert.equal(lookup.has('folder-a'), false);
+  assert.equal(lookup.get('missing'), undefined);
+});
+
+test('SCHEDULE-REALIZATION-2 COMPLETE facts preserve exact backend strings and effective work date', () => {
+  const monitored = item({
+    id: 'complete',
+    name: 'Complete',
+    currentOfficialQuantity: {
+      state: 'COMPLETE',
+      currentOfficialQuantity: '12.5',
+    },
+    currentOfficialItemProgress: {
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '125',
+      boundedContributionProgressPercent: '24.000000000000000000',
+    },
+    actual: {
+      state: 'RECORDED',
+      lifecycleState: 'VERIFIED',
+      effectiveRecord: {
+        id: 'effective-complete',
+        installedQuantity: '999',
+        workDate: '2026-09-07T00:00:00.000Z',
+        notes: null,
+        captureMethod: 'FIELD_MEASUREMENT',
+        evidenceReferences: [],
+        recordedByAccountId: null,
+        supersedesEntryId: null,
+        recordedAt: '2026-09-08T01:00:00.000Z',
+      },
+    },
+  });
+
+  assert.deepEqual(scheduleRealizationPresentation(monitored, 'm3'), {
+    currentOfficialQuantity: '12.5 m3',
+    currentOfficialItemProgress: '24.000000000000000000%',
+    effectiveWorkDate: '7 Sep 2026',
+    quantityState: 'Lengkap',
+    progressState: 'Lengkap',
+  });
+});
+
+test('SCHEDULE-REALIZATION-3 lawful COMPLETE zero remains zero', () => {
+  const monitored = item({
+    id: 'zero',
+    name: 'Zero',
+    currentOfficialQuantity: {
+      state: 'COMPLETE',
+      currentOfficialQuantity: '0',
+    },
+    currentOfficialItemProgress: {
+      state: 'COMPLETE',
+      rawPhysicalProgressPercent: '0',
+      boundedContributionProgressPercent: '0',
+    },
+  });
+  const view = scheduleRealizationPresentation(monitored, 'm3');
+
+  assert.equal(view.currentOfficialQuantity, '0 m3');
+  assert.equal(view.currentOfficialItemProgress, '0%');
+  assert.equal(view.quantityState, 'Lengkap');
+  assert.notEqual(view.currentOfficialQuantity, 'BELUM DICATAT');
+});
+
+test('SCHEDULE-REALIZATION-4 NOT_YET_RECORDED never becomes zero', () => {
+  const view = scheduleRealizationPresentation(
+    item({ id: 'missing', name: 'Missing' }),
+    'm3',
+  );
+
+  assert.equal(view.currentOfficialQuantity, 'BELUM DICATAT');
+  assert.equal(view.currentOfficialItemProgress, 'BELUM DICATAT');
+  assert.equal(view.effectiveWorkDate, 'BELUM DICATAT');
+  assert.equal(view.quantityState, 'Belum dicatat');
+  assert.equal(view.progressState, 'Belum dicatat');
+  assert.doesNotMatch(JSON.stringify(view), /(^|[^0-9])0([^0-9]|$)/);
+});
+
+test('SCHEDULE-REALIZATION-5 INCOMPLETE exposes known subtotals without claiming complete', () => {
+  const view = scheduleRealizationPresentation(
+    item({
+      id: 'incomplete',
+      name: 'Incomplete',
+      currentOfficialQuantity: {
+        state: 'INCOMPLETE',
+        knownEligibleQuantitySubtotal: '4.25',
+      },
+      currentOfficialItemProgress: {
+        state: 'INCOMPLETE',
+        knownProgressSubtotalPercent: '17.5',
+      },
+    }),
+    'm3',
+  );
+
+  assert.equal(view.currentOfficialQuantity, 'Belum lengkap — subtotal 4.25 m3');
+  assert.equal(view.currentOfficialItemProgress, 'BELUM LENGKAP — subtotal 17.5%');
+  assert.equal(view.quantityState, 'Belum lengkap');
+  assert.equal(view.progressState, 'Belum lengkap');
+});
+
+test('SCHEDULE-REALIZATION-6 unavailable and invalid facts remain explicit', () => {
+  const unavailable = scheduleRealizationPresentation(
+    item({
+      id: 'unavailable',
+      name: 'Unavailable',
+      currentOfficialQuantity: { state: 'SEMANTICS_UNPROVEN' },
+      currentOfficialItemProgress: {
+        state: 'UNAVAILABLE',
+        reason: 'PLANNED_QUANTITY_ZERO',
+      },
+      actual: { state: 'UNAVAILABLE', effectiveRecord: null },
+    }),
+    'm3',
+  );
+  assert.deepEqual(unavailable, {
+    currentOfficialQuantity: 'SEMANTIK BELUM TERBUKTI',
+    currentOfficialItemProgress: 'TIDAK TERSEDIA — PLANNED_QUANTITY_ZERO',
+    effectiveWorkDate: 'TIDAK TERSEDIA',
+    quantityState: 'Semantik belum terbukti',
+    progressState: 'Tidak tersedia',
+  });
+
+  const invalid = scheduleRealizationPresentation(
+    item({
+      id: 'invalid',
+      name: 'Invalid',
+      currentOfficialQuantity: { state: 'INVALID_NUMERIC_FACT' },
+      currentOfficialItemProgress: { state: 'INVALID_LINEAGE' },
+    }),
+    'm3',
+  );
+  assert.equal(invalid.currentOfficialQuantity, 'FAKTA NUMERIK TIDAK VALID');
+  assert.equal(invalid.currentOfficialItemProgress, 'LINEAGE TIDAK VALID');
+  assert.equal(invalid.quantityState, 'Fakta numerik tidak valid');
+  assert.equal(invalid.progressState, 'Lineage tidak valid');
+
+  assert.deepEqual(scheduleRealizationPresentation(undefined, 'm3'), {
+    currentOfficialQuantity: 'TIDAK TERSEDIA',
+    currentOfficialItemProgress: 'TIDAK TERSEDIA',
+    effectiveWorkDate: 'TIDAK TERSEDIA',
+    quantityState: 'Tidak tersedia',
+    progressState: 'Tidak tersedia',
+  });
+});
 /* OFFICIAL_TRUTH_CONTRACT_GUARDS_V1 */
 
 test('OFFICIAL-1 official quantity COMPLETE preserves exact zero', () => {

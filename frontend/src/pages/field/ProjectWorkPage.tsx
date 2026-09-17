@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
+import type { ExecutionPlanResponse } from '../../utils/executionPlan';
 import {
   actualStateLabel,
   buildMonitoringRows,
@@ -11,16 +12,22 @@ import {
   formatWeightPercentage,
   formatProjectBusinessDate,
   lastRecordedLabel,
+  monitoringComparisonCutoff,
+  monitoringComparisonRequestPath,
+  monitoringWorkItemsById,
+  officialItemProgressLabel,
+  officialQuantityLabel,
   progressDetailPath,
   recordedAtLabel,
   rowWeightPresentation,
   selectedWorkItem,
   weightCompletenessExplanation,
   weightCompletenessLabel,
-  type MonitoringItem,
   type MonitoringProject,
+  type MonitoringProgressComparisonPresentation,
   type MonitoringResponse,
 } from '../../utils/monitoringCurrent';
+import { ExecutionPlanReadinessPanel } from './ExecutionPlanReadinessPanel';
 import './ProjectWorkPage.css';
 
 type ErrorKind =
@@ -60,53 +67,6 @@ function actualQuantity(
   return quantity === undefined ? 'BELUM DICATAT' : `${quantity} ${unit}`.trim();
 }
 
-function officialQuantityLabel(
-  fact: MonitoringItem['currentOfficialQuantity'],
-  unit: string,
-): string {
-  switch (fact.state) {
-    case 'COMPLETE':
-      return `${fact.currentOfficialQuantity} ${unit}`.trim();
-    case 'INCOMPLETE':
-      return `Belum lengkap — subtotal ${fact.knownEligibleQuantitySubtotal} ${unit}`.trim();
-    case 'NOT_YET_RECORDED':
-      return 'BELUM DICATAT';
-    case 'NO_ELIGIBLE_CURRENT_FACT':
-      return 'TIDAK ADA FAKTA BERLAKU';
-    case 'INVALID_LINEAGE':
-      return 'LINEAGE TIDAK VALID';
-    case 'INVALID_NUMERIC_FACT':
-      return 'FAKTA NUMERIK TIDAK VALID';
-    case 'SEMANTICS_UNPROVEN':
-      return 'SEMANTIK BELUM TERBUKTI';
-  }
-}
-
-function officialItemProgressLabel(
-  fact: MonitoringItem['currentOfficialItemProgress'],
-): string {
-  switch (fact.state) {
-    case 'COMPLETE':
-      return `${fact.boundedContributionProgressPercent}%`;
-    case 'INCOMPLETE':
-      return fact.knownProgressSubtotalPercent === undefined
-        ? 'BELUM LENGKAP'
-        : `BELUM LENGKAP — subtotal ${fact.knownProgressSubtotalPercent}%`;
-    case 'UNAVAILABLE':
-      return `TIDAK TERSEDIA — ${fact.reason}`;
-    case 'NOT_YET_RECORDED':
-      return 'BELUM DICATAT';
-    case 'NO_ELIGIBLE_CURRENT_FACT':
-      return 'TIDAK ADA FAKTA BERLAKU';
-    case 'INVALID_LINEAGE':
-      return 'LINEAGE TIDAK VALID';
-    case 'INVALID_NUMERIC_FACT':
-      return 'FAKTA NUMERIK TIDAK VALID';
-    case 'SEMANTICS_UNPROVEN':
-      return 'SEMANTIK BELUM TERBUKTI';
-  }
-}
-
 function officialProjectProgressLabel(
   fact: MonitoringResponse['currentOfficialRabWeightedPhysicalProgress'],
 ): string {
@@ -128,6 +88,18 @@ export function ProjectWorkPage() {
   const returnItemId = searchParams.get('item');
   const [project, setProject] = useState<MonitoringProject | null>(null);
   const [monitoring, setMonitoring] = useState<MonitoringResponse | null>(null);
+  const [executionPlan, setExecutionPlan] = useState<ExecutionPlanResponse | null>(null);
+  const [progressComparisonPresentation, setProgressComparisonPresentation] =
+    useState<MonitoringProgressComparisonPresentation>({
+      state: 'PENDING',
+      cutoffDate: null,
+      comparison: null,
+    });
+  const comparisonRequestRef = useRef<{
+    key: string;
+    promise: Promise<MonitoringResponse>;
+  } | null>(null);
+  const [executionPlanRefresh, setExecutionPlanRefresh] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const [errorProjectId, setErrorProjectId] = useState<string | null>(null);
@@ -138,28 +110,49 @@ export function ProjectWorkPage() {
     if (!token || !projectId) return;
 
     const controller = new AbortController();
+    let active = true;
+    setProgressComparisonPresentation({
+      state: 'PENDING',
+      cutoffDate: null,
+      comparison: null,
+    });
 
-    Promise.all([
-      apiFetch(`/projects/${projectId}`, { signal: controller.signal }),
-      apiFetch(`/projects/${projectId}/progress/monitoring`, {
-        signal: controller.signal,
-      }),
-    ])
-      .then(async ([projectResponse, monitoringResponse]) => {
+    const load = async () => {
+      try {
+        const [projectResponse, monitoringResponse, executionPlanResponse] =
+          await Promise.all([
+            apiFetch(`/projects/${projectId}`, {
+              signal: controller.signal,
+            }),
+            apiFetch(`/projects/${projectId}/progress/monitoring`, {
+              signal: controller.signal,
+            }),
+            apiFetch(`/projects/${projectId}/execution-plan`, {
+              signal: controller.signal,
+            }),
+          ]);
+
         if (!projectResponse.ok) {
           throw new MonitoringRequestError(projectResponse.status);
         }
         if (!monitoringResponse.ok) {
           throw new MonitoringRequestError(monitoringResponse.status);
         }
-        return Promise.all([
-          projectResponse.json() as Promise<MonitoringProject>,
-          monitoringResponse.json() as Promise<MonitoringResponse>,
-        ]);
-      })
-      .then(([projectData, monitoringData]) => {
+        if (!executionPlanResponse.ok) {
+          throw new MonitoringRequestError(executionPlanResponse.status);
+        }
+
+        const [projectData, monitoringData, executionPlanData] =
+          await Promise.all([
+            projectResponse.json() as Promise<MonitoringProject>,
+            monitoringResponse.json() as Promise<MonitoringResponse>,
+            executionPlanResponse.json() as Promise<ExecutionPlanResponse>,
+          ]);
+
+        if (!active) return;
         setProject(projectData);
         setMonitoring(monitoringData);
+        setExecutionPlan(executionPlanData);
         setSelectedId(
           monitoringData.items.some(
             (item) =>
@@ -172,9 +165,85 @@ export function ProjectWorkPage() {
         setErrorProjectId(null);
         setErrorKind(null);
         setErrorStatus(null);
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') return;
+
+        const cutoffDate = monitoringComparisonCutoff(
+          monitoringData.freshness.dataThrough,
+        );
+        if (cutoffDate === null) {
+          setProgressComparisonPresentation({
+            state: 'MISSING_CUTOFF',
+            cutoffDate: null,
+            comparison: null,
+          });
+          return;
+        }
+
+        setProgressComparisonPresentation({
+          state: 'LOADING',
+          cutoffDate,
+          comparison: null,
+        });
+
+        const plan = executionPlanData.plan;
+        const comparisonRequestKey = [
+          projectId,
+          cutoffDate,
+          executionPlanData.baseline?.id ?? 'NO_BASELINE',
+          plan?.id ?? 'NO_PLAN',
+          plan?.status ?? 'NO_PLAN_STATUS',
+          String(plan?.revision ?? 'NO_REVISION'),
+        ].join(':');
+        let comparisonPromise: Promise<MonitoringResponse>;
+        if (comparisonRequestRef.current?.key === comparisonRequestKey) {
+          comparisonPromise = comparisonRequestRef.current.promise;
+        } else {
+          comparisonPromise = apiFetch(
+            monitoringComparisonRequestPath(projectId, cutoffDate),
+          ).then(async (response) => {
+            if (!response.ok) {
+              throw new MonitoringRequestError(response.status);
+            }
+            return response.json() as Promise<MonitoringResponse>;
+          });
+          comparisonRequestRef.current = {
+            key: comparisonRequestKey,
+            promise: comparisonPromise,
+          };
+        }
+
+        try {
+          const comparisonData = await comparisonPromise;
+          if (!active) return;
+          if (comparisonData.progressComparison === undefined) {
+            setProgressComparisonPresentation({
+              state: 'UNAVAILABLE',
+              cutoffDate,
+              comparison: null,
+            });
+            return;
+          }
+          setProgressComparisonPresentation({
+            state: 'AVAILABLE',
+            cutoffDate: comparisonData.progressComparison.cutoffDate,
+            comparison: comparisonData.progressComparison,
+          });
+        } catch (comparisonError) {
+          if (!active) return;
+          console.error(
+            'Failed to fetch optional Monitoring comparison:',
+            comparisonError,
+          );
+          setProgressComparisonPresentation({
+            state: 'UNAVAILABLE',
+            cutoffDate,
+            comparison: null,
+          });
+        }
+      } catch (error: unknown) {
+        if (!active) return;
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
         if (error instanceof MonitoringRequestError) {
           setErrorStatus(error.status);
           setErrorKind(errorKindForStatus(error.status));
@@ -186,13 +255,24 @@ export function ProjectWorkPage() {
         setLoadedProjectId(null);
         setProject(null);
         setMonitoring(null);
-      });
+        setExecutionPlan(null);
+      }
+    };
 
-    return () => controller.abort();
-  }, [token, projectId, returnItemId]);
+    void load();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [token, projectId, returnItemId, executionPlanRefresh]);
 
   const rows = useMemo(
     () => buildMonitoringRows(monitoring?.items ?? []),
+    [monitoring?.items],
+  );
+  const realizationByBoqItemId = useMemo(
+    () => monitoringWorkItemsById(monitoring?.items ?? []),
     [monitoring?.items],
   );
   const selected = useMemo(
@@ -265,7 +345,7 @@ export function ProjectWorkPage() {
     );
   }
 
-  if (!project || !monitoring) return null;
+  if (!project || !monitoring || !executionPlan) return null;
 
   const selectedRecordedAt =
     selected?.actual?.state === 'NOT_YET_RECORDED'
@@ -307,6 +387,14 @@ export function ProjectWorkPage() {
           )}
         </div>
       </header>
+
+      <ExecutionPlanReadinessPanel
+        projectId={project.id}
+        executionPlan={executionPlan}
+        realizationByBoqItemId={realizationByBoqItemId}
+        progressComparisonPresentation={progressComparisonPresentation}
+        onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
+      />
 
       <section className="h2a0-context-strip" aria-label="Konteks Monitoring">
         <div>

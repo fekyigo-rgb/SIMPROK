@@ -1059,16 +1059,13 @@ test("VD-5. the primary status and the Addendum action are untouched", () => {
   assert.match(rabDoor, /\{!archived \? \(/);
 });
 
-test("PRE-MON-04. legacy Reality fails closed and keeps the canonical Monitoring door", () => {
+test("MON-04. legacy Reality remains fail-closed and keeps the canonical Monitoring door", () => {
   assert.match(legacyWarRoom, /projects\/\$\{id\}\/reality/);
   assert.match(
     legacyWarRoom,
-    /Perhitungan progress dan deviasi resmi belum diaktifkan/,
+    /Endpoint Reality lama ini tidak menghitung progress atau deviasi\. Gunakan Monitoring untuk melihat Current Official Progress\. Deviasi berbasis waktu belum tersedia karena sumber rencana waktu resmi dan aturan cut-off\/as-of belum lengkap\./,
   );
-  assert.match(
-    legacyWarRoom,
-    /Actual lapangan yang tercatat tetap dapat ditinjau melalui Monitoring/,
-  );
+  assert.match(legacyWarRoom, /Gunakan Monitoring untuk melihat Current Official Progress\./);
   assert.match(legacyWarRoom, /navigate\(`\/field\/project\/\$\{id\}`\)/);
   assert.match(legacyWarRoom, />\s*Buka Monitoring\s*<\/button>/);
   assert.doesNotMatch(legacyWarRoom, /Overall Project Execution/);

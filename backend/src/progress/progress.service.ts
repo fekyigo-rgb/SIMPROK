@@ -7,9 +7,11 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import {
+  ExecutionPlanStatus,
   Prisma,
   ProgressActualStatus,
   ProgressAuditOutcome,
+  ProjectStatus,
 } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ProjectAccessContext } from '../auth/project-access-policy.service';
@@ -37,6 +39,7 @@ import {
 } from './progress-semantic-authority.policy';
 import {
   calculateCurrentOfficialQuantity,
+  calculateCurrentOfficialQuantityFromGoverned,
   type CurrentOfficialQuantityResult,
 } from './progress-current-official-quantity.policy';
 import {
@@ -47,6 +50,36 @@ import {
   calculateCurrentOfficialRabWeightedPhysicalProgress,
   type CurrentOfficialRabWeightedPhysicalProgressResult,
 } from './progress-current-rab-weighted-physical-progress.policy';
+import {
+  ACTUAL_TEMPORAL_SERIES_BOUNDARY_BASIS,
+  ACTUAL_TEMPORAL_TRUTH_MODE,
+  actualTemporalSeriesBoundaries,
+  prepareActualTemporalOfficialQuantity,
+  projectActualTemporalOfficialQuantity,
+  projectBusinessDateWire,
+} from './progress-actual-temporal-quantity.policy';
+import { projectExecutionPlan } from '../execution-plan/execution-plan-projection.policy';
+import { EXECUTION_PLAN_DRAFT_FLOW } from '../execution-plan/execution-plan-adoption.policy';
+import { EXECUTION_PLAN_BLOCKER } from '../execution-plan/execution-plan.contracts';
+import {
+  calculateProgressDeviationPercentagePoints,
+  PROGRESS_COMPARISON_BOUNDARY_BASIS,
+  PROGRESS_COMPARISON_MODE,
+  progressComparisonBoundaries,
+  projectPlannedProgressAtBoundary,
+  type PlannedTemporalProgressResult,
+  type ProgressComparisonPlannedCurve,
+  type ProgressDeviationResult,
+} from './progress-planned-actual-comparison.policy';
+
+type MonitoringReadClient = Pick<
+  Prisma.TransactionClient,
+  | 'project'
+  | 'projectBaseline'
+  | 'boqItem'
+  | 'progressEntry'
+  | 'executionPlanVersion'
+>;
 
 type CurrentOfficialQuantityResponse =
   | Exclude<
@@ -90,6 +123,43 @@ type CurrentOfficialRabWeightedPhysicalProgressResponse =
       state: 'INCOMPLETE';
       knownWeightedContributionSubtotalPercent: string;
     };
+
+type PlannedTemporalProgressResponse =
+  | Exclude<PlannedTemporalProgressResult, { state: 'COMPLETE' | 'INCOMPLETE' }>
+  | {
+      state: 'COMPLETE';
+      plannedRabWeightedPhysicalProgressPercent: string;
+    }
+  | {
+      state: 'INCOMPLETE';
+      reason: string;
+      knownWeightedPlannedProgressSubtotalPercent: string;
+    };
+
+type ProgressDeviationResponse =
+  | Exclude<ProgressDeviationResult, { state: 'COMPLETE' }>
+  | { state: 'COMPLETE'; value: string };
+
+const serializeCurrentOfficialQuantity = (
+  result: CurrentOfficialQuantityResult,
+): CurrentOfficialQuantityResponse => {
+  if (result.state === 'COMPLETE') {
+    return {
+      state: 'COMPLETE',
+      currentOfficialQuantity: result.currentOfficialQuantity.toString(),
+    };
+  }
+
+  if (result.state === 'INCOMPLETE') {
+    return {
+      state: 'INCOMPLETE',
+      knownEligibleQuantitySubtotal:
+        result.knownEligibleQuantitySubtotal.toString(),
+    };
+  }
+
+  return result;
+};
 
 const serializeWorkItemCurrentPhysicalProgress = (
   result: WorkItemCurrentPhysicalProgressResult,
@@ -137,6 +207,34 @@ const serializeCurrentOfficialRabWeightedPhysicalProgress = (
 
   return result;
 };
+
+const serializePlannedTemporalProgress = (
+  result: PlannedTemporalProgressResult,
+): PlannedTemporalProgressResponse => {
+  if (result.state === 'COMPLETE') {
+    return {
+      state: 'COMPLETE',
+      plannedRabWeightedPhysicalProgressPercent:
+        result.plannedRabWeightedPhysicalProgressPercent.toString(),
+    };
+  }
+  if (result.state === 'INCOMPLETE') {
+    return {
+      state: 'INCOMPLETE',
+      reason: result.reason,
+      knownWeightedPlannedProgressSubtotalPercent:
+        result.knownWeightedPlannedProgressSubtotalPercent.toString(),
+    };
+  }
+  return result;
+};
+
+const serializeProgressDeviation = (
+  result: ProgressDeviationResult,
+): ProgressDeviationResponse =>
+  result.state === 'COMPLETE'
+    ? { state: 'COMPLETE', value: result.value.toString() }
+    : result;
 
 interface TrustedProgressActor {
   accountId: string;
@@ -373,6 +471,42 @@ export class ProgressService {
     return { id: rows[0].id, boqStructureId: rab.boqStructureId };
   }
 
+  /**
+   * MON-04 execution boundary. A new Actual may enter only after the same
+   * atomic act has locked the official plan and activated the Project. The
+   * Project share lock is intentionally acquired before Baseline/plan reads,
+   * matching ExecutionPlanService's Project-first lock order.
+   */
+  private async requireExecutionProjectActive(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+  ): Promise<void> {
+    const rows = await tx.$queryRaw<Array<{ status: string }>>(
+      Prisma.sql`SELECT "status" FROM "projects" WHERE "id" = ${projectId}::uuid FOR SHARE`,
+    );
+    if (rows.length !== 1 || rows[0].status !== 'ACTIVE') {
+      throw new ConflictException('EXECUTION_PLAN_NOT_LOCKED');
+    }
+  }
+
+  private async requireLockedExecutionPlanForWrite(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    baselineId: string,
+  ): Promise<void> {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id"
+                   FROM "execution_plan_versions"
+                  WHERE "projectId" = ${projectId}::uuid
+                    AND "baselineId" = ${baselineId}::uuid
+                    AND "status" = 'LOCKED'
+                  FOR SHARE`,
+    );
+    if (rows.length !== 1) {
+      throw new ConflictException('EXECUTION_PLAN_NOT_LOCKED');
+    }
+  }
+
   private async lockSemanticContextWorkItems(
     tx: Prisma.TransactionClient,
     boqStructureId: string,
@@ -591,18 +725,59 @@ export class ProgressService {
     throw params.error;
   }
 
-  async getMonitoring(projectId: string) {
+  async getMonitoring(
+    projectId: string,
+    cutoffDate?: unknown,
+    includeActualSeries = false,
+    includeProgressComparison = false,
+  ) {
+    if (includeActualSeries && cutoffDate === undefined) {
+      throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
+    }
+    if (includeProgressComparison && cutoffDate === undefined) {
+      throw new BadRequestException('PROGRESS_COMPARISON_REQUIRES_CUTOFF');
+    }
+
+    if (cutoffDate === undefined) {
+      return this.getMonitoringFromClient(this.prisma, projectId);
+    }
+
+    const validCutoffDate = projectBusinessDateWire(cutoffDate);
+    if (validCutoffDate === null) {
+      throw new BadRequestException('INVALID_PROJECT_BUSINESS_CUTOFF');
+    }
+
+    return this.prisma.$transaction(
+      (tx) =>
+        this.getMonitoringFromClient(
+          tx,
+          projectId,
+          validCutoffDate,
+          includeActualSeries,
+          includeProgressComparison,
+        ),
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+  }
+
+  private async getMonitoringFromClient(
+    db: MonitoringReadClient,
+    projectId: string,
+    cutoffDate?: string,
+    includeActualSeries = false,
+    includeProgressComparison = false,
+  ) {
     const unavailable = [
       'plannedStart',
       'plannedFinish',
       'plannedDuration',
       'plannedWeight',
     ] as const;
-    const project = await this.prisma.project.findUnique({
+    const project = await db.project.findUnique({
       where: { id: projectId },
-      select: { timeZone: true },
+      select: { status: true, timeZone: true },
     });
-    const activeBaselines = await this.prisma.projectBaseline.findMany({
+    const activeBaselines = await db.projectBaseline.findMany({
       where: { projectId, status: 'ACTIVE' },
       orderBy: { versionNumber: 'desc' },
       take: 2,
@@ -621,16 +796,59 @@ export class ProgressService {
           projectWeight: weight.project,
           workItems: [],
         });
+      const serializedOfficialRabWeightedPhysicalProgress =
+        serializeCurrentOfficialRabWeightedPhysicalProgress(
+          currentOfficialRabWeightedPhysicalProgress,
+        );
+      const baselineResponse = baseline
+        ? {
+            id: baseline.id,
+            versionNumber: baseline.versionNumber,
+            approvedAt: baseline.approvedAt,
+          }
+        : null;
+      const progressComparison =
+        includeProgressComparison && cutoffDate !== undefined
+          ? (() => {
+              const planned = projectPlannedProgressAtBoundary(
+                {
+                  state: 'UNAVAILABLE',
+                  reason:
+                    baseline === null
+                      ? EXECUTION_PLAN_BLOCKER.NO_ACTIVE_BASELINE
+                      : EXECUTION_PLAN_BLOCKER.H2A1_WEIGHT_UNAVAILABLE,
+                  points: [],
+                },
+                cutoffDate,
+              );
+
+              return {
+                mode: PROGRESS_COMPARISON_MODE,
+                cutoffDate,
+                baseline: baselineResponse,
+                plannedSource: null,
+                boundaryBasis: PROGRESS_COMPARISON_BOUNDARY_BASIS,
+                points: [
+                  {
+                    cutoffDate,
+                    planned: serializePlannedTemporalProgress(planned),
+                    actual: serializedOfficialRabWeightedPhysicalProgress,
+                    deviationPercentagePoints: serializeProgressDeviation(
+                      calculateProgressDeviationPercentagePoints(
+                        planned,
+                        currentOfficialRabWeightedPhysicalProgress,
+                      ),
+                    ),
+                  },
+                ],
+              };
+            })()
+          : undefined;
+
       return {
         projectId,
         projectTimeZone: project?.timeZone ?? null,
-        baseline: baseline
-          ? {
-              id: baseline.id,
-              versionNumber: baseline.versionNumber,
-              approvedAt: baseline.approvedAt,
-            }
-          : null,
+        baseline: baselineResponse,
         items: [],
         freshness: {
           dataThrough: { state: 'UNAVAILABLE' as const, workDate: null },
@@ -641,13 +859,38 @@ export class ProgressService {
         },
         weight: weight.project,
         currentOfficialRabWeightedPhysicalProgress:
-          serializeCurrentOfficialRabWeightedPhysicalProgress(
-            currentOfficialRabWeightedPhysicalProgress,
-          ),
+          serializedOfficialRabWeightedPhysicalProgress,
+        ...(cutoffDate === undefined
+          ? {}
+          : {
+              actualTemporal: {
+                mode: ACTUAL_TEMPORAL_TRUTH_MODE,
+                cutoffDate,
+                baseline: baselineResponse,
+                items: [],
+                officialRabWeightedPhysicalProgress:
+                  serializedOfficialRabWeightedPhysicalProgress,
+                ...(includeActualSeries
+                  ? {
+                      series: {
+                        boundaryBasis: ACTUAL_TEMPORAL_SERIES_BOUNDARY_BASIS,
+                        points: [
+                          {
+                            cutoffDate,
+                            officialRabWeightedPhysicalProgress:
+                              serializedOfficialRabWeightedPhysicalProgress,
+                          },
+                        ],
+                      },
+                    }
+                  : {}),
+              },
+            }),
+        ...(progressComparison === undefined ? {} : { progressComparison }),
         unavailable,
       };
     }
-    const items = await this.prisma.boqItem.findMany({
+    const items = await db.boqItem.findMany({
       where: { boqStructureId: baseline.rabDocument.boqStructureId },
       orderBy: { sortOrder: 'asc' },
     });
@@ -657,8 +900,82 @@ export class ProgressService {
       items,
       baseline.rabDocument.totalBaseCost,
     );
+    const lockedPlanCandidates = includeProgressComparison
+      ? await db.executionPlanVersion.findMany({
+          where: { projectId, status: ExecutionPlanStatus.LOCKED },
+          orderBy: { versionNumber: 'desc' },
+          take: 3,
+          include: {
+            distributions: {
+              orderBy: [
+                { periodStartDate: 'asc' },
+                { periodEndDate: 'asc' },
+                { id: 'asc' },
+              ],
+            },
+          },
+        })
+      : [];
+    let canonicalPlannedCurve: ProgressComparisonPlannedCurve | null = null;
+    let plannedSource: {
+      executionPlanVersionId: string;
+      versionNumber: number;
+      status: typeof ExecutionPlanStatus.LOCKED;
+    } | null = null;
+
+    if (includeProgressComparison) {
+      if (project === null) {
+        canonicalPlannedCurve = {
+          state: 'UNAVAILABLE',
+          reason: EXECUTION_PLAN_BLOCKER.PROJECT_NOT_PLANNED,
+          points: [],
+        };
+      } else if (lockedPlanCandidates.length === 0) {
+        canonicalPlannedCurve = {
+          state: 'UNAVAILABLE',
+          reason: EXECUTION_PLAN_BLOCKER.ACTIVE_PROJECT_WITHOUT_LOCKED_PLAN,
+          points: [],
+        };
+      } else if (lockedPlanCandidates.length > 1) {
+        canonicalPlannedCurve = {
+          state: 'UNAVAILABLE',
+          reason: EXECUTION_PLAN_BLOCKER.AMBIGUOUS_EXECUTION_PLAN_CONTEXT,
+          points: [],
+        };
+      } else {
+        const lockedPlan = lockedPlanCandidates[0];
+        if (lockedPlan.baselineId !== baseline.id) {
+          canonicalPlannedCurve = {
+            state: 'UNAVAILABLE',
+            reason: EXECUTION_PLAN_BLOCKER.BASELINE_BINDING_MISMATCH,
+            points: [],
+          };
+        } else {
+          plannedSource = {
+            executionPlanVersionId: lockedPlan.id,
+            versionNumber: lockedPlan.versionNumber,
+            status: ExecutionPlanStatus.LOCKED,
+          };
+          canonicalPlannedCurve =
+            project.status === ProjectStatus.ACTIVE
+              ? projectExecutionPlan({
+                  projectStatus: project.status,
+                  planStatus: lockedPlan.status,
+                  draftFlow: EXECUTION_PLAN_DRAFT_FLOW.NOT_ELIGIBLE,
+                  totalBaseCost: baseline.rabDocument.totalBaseCost,
+                  items,
+                  distributions: lockedPlan.distributions,
+                }).plannedCurve
+              : {
+                  state: 'UNAVAILABLE',
+                  reason: EXECUTION_PLAN_BLOCKER.LOCKED_PLAN_PROJECT_NOT_ACTIVE,
+                  points: [],
+                };
+        }
+      }
+    }
     const entries = workItemIds.length
-      ? await this.prisma.progressEntry.findMany({
+      ? await db.progressEntry.findMany({
           where: {
             boqItemId: { in: workItemIds },
             progressReport: {
@@ -708,6 +1025,23 @@ export class ProgressService {
       }
     }
 
+    const temporalGovernedByWorkItem =
+      cutoffDate === undefined
+        ? null
+        : new Map(
+            workItems.map((item) => [
+              item.id,
+              prepareActualTemporalOfficialQuantity(
+                {
+                  projectId,
+                  activeBaselineId: baseline.id,
+                  boqItemId: item.id,
+                },
+                entriesByWorkItem.get(item.id) ?? [],
+              ),
+            ]),
+          );
+
     const effectiveByItem = new Map<string, (typeof entries)[number]>();
     for (const workItemId of workItemIds) {
       const effective = this.effectiveEntry(
@@ -724,10 +1058,18 @@ export class ProgressService {
       }
     >();
     const law3WorkItems = workItems.map((item) => {
-      const rawQuantityResult = calculateCurrentOfficialQuantity(
-        { projectId, activeBaselineId: baseline.id, boqItemId: item.id },
-        entriesByWorkItem.get(item.id) ?? [],
-      );
+      const governed = temporalGovernedByWorkItem?.get(item.id);
+      const rawQuantityResult =
+        governed === undefined
+          ? calculateCurrentOfficialQuantity(
+              {
+                projectId,
+                activeBaselineId: baseline.id,
+                boqItemId: item.id,
+              },
+              entriesByWorkItem.get(item.id) ?? [],
+            )
+          : calculateCurrentOfficialQuantityFromGoverned(governed);
       const rawItemProgressResult = calculateWorkItemCurrentPhysicalProgress({
         currentOfficialQuantity: rawQuantityResult,
         plannedQuantity: item.quantity,
@@ -755,6 +1097,190 @@ export class ProgressService {
         projectWeight: weight.project,
         workItems: law3WorkItems,
       });
+
+    const projectTemporalAtCutoff = (boundaryDate: string) => {
+      if (temporalGovernedByWorkItem === null) {
+        throw new Error('TEMPORAL_GOVERNED_CONTEXT_REQUIRED');
+      }
+
+      const temporalTruthByWorkItem = new Map<
+        string,
+        {
+          rawQuantityResult: CurrentOfficialQuantityResult;
+          rawItemProgressResult: WorkItemCurrentPhysicalProgressResult;
+        }
+      >();
+      const temporalLaw3WorkItems = workItems.map((item) => {
+        const governed = temporalGovernedByWorkItem.get(item.id);
+        if (governed === undefined) {
+          throw new Error('TEMPORAL_GOVERNED_WORK_ITEM_CONTEXT_REQUIRED');
+        }
+
+        const temporalQuantityResult = projectActualTemporalOfficialQuantity({
+          governed,
+          cutoffDate: boundaryDate,
+        });
+
+        if (temporalQuantityResult.state === 'UNAVAILABLE') {
+          throw new Error('VALIDATED_TEMPORAL_CUTOFF_REQUIRED');
+        }
+
+        const temporalItemProgressResult =
+          calculateWorkItemCurrentPhysicalProgress({
+            currentOfficialQuantity: temporalQuantityResult,
+            plannedQuantity: item.quantity,
+            plannedUnit: item.unit,
+          });
+        const itemWeight = weight.rows.get(item.id);
+
+        if (!itemWeight) {
+          throw new Error('H2A1_WORK_ITEM_WEIGHT_PROJECTION_REQUIRED');
+        }
+
+        temporalTruthByWorkItem.set(item.id, {
+          rawQuantityResult: temporalQuantityResult,
+          rawItemProgressResult: temporalItemProgressResult,
+        });
+
+        return {
+          boqItemId: item.id,
+          rabWeight: itemWeight.own,
+          currentOfficialItemProgress: temporalItemProgressResult,
+        };
+      });
+
+      return {
+        temporalTruthByWorkItem,
+        officialRabWeightedPhysicalProgress:
+          calculateCurrentOfficialRabWeightedPhysicalProgress({
+            projectWeight: weight.project,
+            workItems: temporalLaw3WorkItems,
+          }),
+      };
+    };
+    const temporalProjectionCache = new Map<
+      string,
+      ReturnType<typeof projectTemporalAtCutoff>
+    >();
+    const cachedProjectTemporalAtCutoff = (boundaryDate: string) => {
+      const cached = temporalProjectionCache.get(boundaryDate);
+      if (cached) return cached;
+
+      const projection = projectTemporalAtCutoff(boundaryDate);
+      temporalProjectionCache.set(boundaryDate, projection);
+      return projection;
+    };
+    const actualTemporal =
+      cutoffDate === undefined
+        ? undefined
+        : (() => {
+            const temporalProjection =
+              cachedProjectTemporalAtCutoff(cutoffDate);
+            const serializedOfficialRabWeightedPhysicalProgress =
+              serializeCurrentOfficialRabWeightedPhysicalProgress(
+                temporalProjection.officialRabWeightedPhysicalProgress,
+              );
+
+            return {
+              mode: ACTUAL_TEMPORAL_TRUTH_MODE,
+              cutoffDate,
+              baseline: {
+                id: baseline.id,
+                versionNumber: baseline.versionNumber,
+                approvedAt: baseline.approvedAt,
+              },
+              items: workItems.map((item) => {
+                const temporalTruth =
+                  temporalProjection.temporalTruthByWorkItem.get(item.id)!;
+
+                return {
+                  boqItemId: item.id,
+                  officialQuantity: serializeCurrentOfficialQuantity(
+                    temporalTruth.rawQuantityResult,
+                  ),
+                  officialPhysicalProgress:
+                    serializeWorkItemCurrentPhysicalProgress(
+                      temporalTruth.rawItemProgressResult,
+                    ),
+                };
+              }),
+              officialRabWeightedPhysicalProgress:
+                serializedOfficialRabWeightedPhysicalProgress,
+              ...(includeActualSeries
+                ? {
+                    series: {
+                      boundaryBasis: ACTUAL_TEMPORAL_SERIES_BOUNDARY_BASIS,
+                      points: actualTemporalSeriesBoundaries(
+                        [...temporalGovernedByWorkItem!.values()],
+                        cutoffDate,
+                      ).map((boundaryDate) => ({
+                        cutoffDate: boundaryDate,
+                        officialRabWeightedPhysicalProgress:
+                          boundaryDate === cutoffDate
+                            ? serializedOfficialRabWeightedPhysicalProgress
+                            : serializeCurrentOfficialRabWeightedPhysicalProgress(
+                                cachedProjectTemporalAtCutoff(boundaryDate)
+                                  .officialRabWeightedPhysicalProgress,
+                              ),
+                      })),
+                    },
+                  }
+                : {}),
+            };
+          })();
+    const progressComparison =
+      includeProgressComparison && cutoffDate !== undefined
+        ? (() => {
+            if (
+              temporalGovernedByWorkItem === null ||
+              canonicalPlannedCurve === null
+            ) {
+              throw new Error('PROGRESS_COMPARISON_CONTEXT_REQUIRED');
+            }
+
+            const actualBoundaries = actualTemporalSeriesBoundaries(
+              [...temporalGovernedByWorkItem.values()],
+              cutoffDate,
+            );
+            const boundaries = progressComparisonBoundaries({
+              plannedCurve: canonicalPlannedCurve,
+              actualBoundaries,
+              cutoffDate,
+            });
+
+            return {
+              mode: PROGRESS_COMPARISON_MODE,
+              cutoffDate,
+              baseline: {
+                id: baseline.id,
+                versionNumber: baseline.versionNumber,
+                approvedAt: baseline.approvedAt,
+              },
+              plannedSource,
+              boundaryBasis: PROGRESS_COMPARISON_BOUNDARY_BASIS,
+              points: boundaries.map((boundaryDate) => {
+                const planned = projectPlannedProgressAtBoundary(
+                  canonicalPlannedCurve!,
+                  boundaryDate,
+                );
+                const actual =
+                  cachedProjectTemporalAtCutoff(
+                    boundaryDate,
+                  ).officialRabWeightedPhysicalProgress;
+
+                return {
+                  cutoffDate: boundaryDate,
+                  planned: serializePlannedTemporalProgress(planned),
+                  actual:
+                    serializeCurrentOfficialRabWeightedPhysicalProgress(actual),
+                  deviationPercentagePoints: serializeProgressDeviation(
+                    calculateProgressDeviationPercentagePoints(planned, actual),
+                  ),
+                };
+              }),
+            };
+          })()
+        : undefined;
     const effectiveRecords = [...effectiveByItem.values()];
     const latestWorkDate = effectiveRecords.reduce<Date | null>(
       (latest, entry) =>
@@ -802,6 +1328,8 @@ export class ProgressService {
         serializeCurrentOfficialRabWeightedPhysicalProgress(
           currentOfficialRabWeightedPhysicalProgress,
         ),
+      ...(actualTemporal === undefined ? {} : { actualTemporal }),
+      ...(progressComparison === undefined ? {} : { progressComparison }),
       items: items.map((item) => {
         const effective = effectiveByItem.get(item.id);
 
@@ -815,19 +1343,7 @@ export class ProgressService {
             currentTruthByWorkItem.get(item.id)!;
 
           currentOfficialQuantityResponse =
-            rawQuantityResult.state === 'COMPLETE'
-              ? {
-                  ...rawQuantityResult,
-                  currentOfficialQuantity:
-                    rawQuantityResult.currentOfficialQuantity.toString(),
-                }
-              : rawQuantityResult.state === 'INCOMPLETE'
-                ? {
-                    ...rawQuantityResult,
-                    knownEligibleQuantitySubtotal:
-                      rawQuantityResult.knownEligibleQuantitySubtotal.toString(),
-                  }
-                : rawQuantityResult;
+            serializeCurrentOfficialQuantity(rawQuantityResult);
 
           currentOfficialItemProgressResponse =
             serializeWorkItemCurrentPhysicalProgress(rawItemProgressResult);
@@ -937,7 +1453,13 @@ export class ProgressService {
           ...actor,
           roleInProject: transactionalActor.roleInProject,
         };
+        await this.requireExecutionProjectActive(tx, projectId);
         const baseline = await this.activeBaselineForWrite(tx, projectId);
+        await this.requireLockedExecutionPlanForWrite(
+          tx,
+          projectId,
+          baseline.id,
+        );
         const itemIds = [
           ...new Set(dto.entries.map((entry) => entry.boqItemId)),
         ];
