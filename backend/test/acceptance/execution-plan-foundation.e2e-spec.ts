@@ -29,6 +29,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
   let foreignProjectId: string;
   let foreignItemId: string;
   let authorizedAccountId: string;
+  let authorizedMembershipId: string;
   let authorizedPositionId: string;
   let authorizedToken: string;
   let permissionOnlyToken: string;
@@ -71,18 +72,23 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
   const createActor = async (suffix: string, withPosition: boolean) => {
     const permissionCodes = [
       'PROJECT_VIEW',
+      'PROJECT_SETTINGS_MANAGE',
       'EXECUTION_PLAN_EDIT',
       'EXECUTION_PLAN_LOCK',
       'FIELD_PROGRESS_SUBMIT',
     ];
-    const permissions = await Promise.all(permissionCodes.map(ensurePermission));
+    const permissions = await Promise.all(
+      permissionCodes.map(ensurePermission),
+    );
     const role = await prisma.role.create({
       data: {
         workspaceId,
         code: `${tag}_${suffix.toUpperCase()}`,
         name: `${tag} ${suffix}`,
         rolePermissions: {
-          create: permissions.map((permission) => ({ permissionId: permission.id })),
+          create: permissions.map((permission) => ({
+            permissionId: permission.id,
+          })),
         },
       },
     });
@@ -143,7 +149,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
         data: { positionId: position.id, userId: user.id, isActive: true },
       });
     }
-    return { account, email };
+    return { account, membership, email };
   };
 
   const createPlanBasis = async (name: string, itemQuantities: string[]) => {
@@ -161,7 +167,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     const structure = await prisma.boqStructure.create({
       data: { projectId: project.id, name: `${name} BOQ`, version: 1 },
     });
-    const items = [];
+    const items: Array<{ id: string }> = [];
     for (let index = 0; index < itemQuantities.length; index += 1) {
       const quantity = itemQuantities[index];
       items.push(
@@ -204,9 +210,30 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     return { project, baseline, items };
   };
 
+  const assignAuthorizedToProject = (targetProjectId: string) =>
+    prisma.projectAssignment.create({
+      data: {
+        workspaceMembershipId: authorizedMembershipId,
+        projectId: targetProjectId,
+        roleInProject: 'MEMBER',
+        isPrimaryAssignment: false,
+        status: 'ASSIGNED',
+      },
+    });
+
+  const activateWorkPeriodAnchor = (
+    targetProjectId: string,
+    anchorDate: string,
+  ) =>
+    request(app.getHttpServer())
+      .patch(`/projects/${targetProjectId}/work-period-anchor`)
+      .set(auth(authorizedToken))
+      .send({ commandId: randomUUID(), anchorDate });
+
   beforeAll(async () => {
-    app = (await Test.createTestingModule({ imports: [AppModule] }).compile())
-      .createNestApplication();
+    app = (
+      await Test.createTestingModule({ imports: [AppModule] }).compile()
+    ).createNestApplication();
     await app.init();
     plans = app.get(ExecutionPlanService);
 
@@ -245,6 +272,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
 
     const authorized = await createActor('authorized', true);
     authorizedAccountId = authorized.account.id;
+    authorizedMembershipId = authorized.membership.id;
     const permissionOnly = await createActor('permission-only', false);
 
     const existingAuthority = await prisma.authority.findUnique({
@@ -365,7 +393,9 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       })
       .expect(409);
     expect(rejected.body.message).toBe('EXECUTION_PLAN_NOT_LOCKED');
-    expect(await prisma.progressReport.count({ where: { projectId } })).toBe(before);
+    expect(await prisma.progressReport.count({ where: { projectId } })).toBe(
+      before,
+    );
   });
 
   it('creates an incomplete draft, protects exact input rules, and revises the same draft', async () => {
@@ -394,7 +424,9 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       .expect(200);
     expect(incomplete.body.readinessState).toBe('REVISION_IN_PROGRESS');
     expect(incomplete.body.plannedCurve.state).toBe('INCOMPLETE');
-    expect(incomplete.body.blockers.map((value: { code: string }) => value.code)).toEqual(
+    expect(
+      incomplete.body.blockers.map((value: { code: string }) => value.code),
+    ).toEqual(
       expect.arrayContaining([
         'PLANNED_QUANTITY_INCOMPLETE',
         'MISSING_WORK_ITEM_DISTRIBUTION',
@@ -570,9 +602,10 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       where: { id: planId },
     });
     expect(after).toEqual(before);
-    expect((await prisma.project.findUniqueOrThrow({ where: { id: projectId } })).status).toBe(
-      'PLANNED',
-    );
+    expect(
+      (await prisma.project.findUniqueOrThrow({ where: { id: projectId } }))
+        .status,
+    ).toBe('PLANNED');
     await prisma.positionAuthority.updateMany({
       where: { positionId: authorizedPositionId },
       data: { isActive: true, revokedAt: null },
@@ -615,19 +648,28 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     expect(failedLock.status).toBe(500);
 
     expect(
-      (await prisma.executionPlanVersion.findUniqueOrThrow({ where: { id: atomicPlanId } }))
-        .status,
+      (
+        await prisma.executionPlanVersion.findUniqueOrThrow({
+          where: { id: atomicPlanId },
+        })
+      ).status,
     ).toBe('DRAFT');
     expect(
-      (await prisma.project.findUniqueOrThrow({ where: { id: atomicProjectId } })).status,
+      (
+        await prisma.project.findUniqueOrThrow({
+          where: { id: atomicProjectId },
+        })
+      ).status,
     ).toBe('PLANNED');
   });
 
   it('locks and activates atomically, is idempotent, and makes every ordinary plan write fail closed', async () => {
-    const distributionsBefore = await prisma.executionPlanDistribution.findMany({
-      where: { executionPlanVersionId: planId },
-      orderBy: { id: 'asc' },
-    });
+    const distributionsBefore = await prisma.executionPlanDistribution.findMany(
+      {
+        where: { executionPlanVersionId: planId },
+        orderBy: { id: 'asc' },
+      },
+    );
     const locked = await request(app.getHttpServer())
       .post(`/projects/${projectId}/execution-plan/lock`)
       .set(auth(authorizedToken))
@@ -656,9 +698,10 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       lockedAuthorityCode: 'EXECUTION_PLAN_LOCK',
     });
     expect(settled.lockedAt).not.toBeNull();
-    expect((await prisma.project.findUniqueOrThrow({ where: { id: projectId } })).status).toBe(
-      'ACTIVE',
-    );
+    expect(
+      (await prisma.project.findUniqueOrThrow({ where: { id: projectId } }))
+        .status,
+    ).toBe('ACTIVE');
 
     const repeated = await request(app.getHttpServer())
       .post(`/projects/${projectId}/execution-plan/lock`)
@@ -671,7 +714,10 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     await request(app.getHttpServer())
       .post(`/projects/${projectId}/execution-plan/lock`)
       .set(auth(authorizedToken))
-      .send({ executionPlanVersionId: randomUUID(), expectedRevision: planRevision })
+      .send({
+        executionPlanVersionId: randomUUID(),
+        expectedRevision: planRevision,
+      })
       .expect(409);
     await request(app.getHttpServer())
       .put(`/projects/${projectId}/execution-plan/draft`)
@@ -747,9 +793,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       projectStatus: 'ACTIVE',
       readinessState: 'PLAN_NOT_READY',
       plan: null,
-      blockers: [
-        { code: 'LEGACY_ACTIVE_PROJECT_REQUIRES_PLAN_ADOPTION' },
-      ],
+      blockers: [{ code: 'LEGACY_ACTIVE_PROJECT_REQUIRES_PLAN_ADOPTION' }],
       capabilities: { canEditDraft: true, canLock: false },
     });
 
@@ -904,15 +948,12 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       changed: false,
       lockedFromProjectStatus: 'ACTIVE',
     });
-    const settledAgain =
-      await prisma.executionPlanVersion.findUniqueOrThrow({
-        where: { id: legacyPlanId },
-      });
+    const settledAgain = await prisma.executionPlanVersion.findUniqueOrThrow({
+      where: { id: legacyPlanId },
+    });
     expect(settledAgain.lockedAt).toEqual(settled.lockedAt);
     expect(settledAgain.lockedByAccountId).toBe(settled.lockedByAccountId);
-    expect(settledAgain.lockedByPositionId).toBe(
-      settled.lockedByPositionId,
-    );
+    expect(settledAgain.lockedByPositionId).toBe(settled.lockedByPositionId);
     expect(settledAgain.lockedFromProjectStatus).toBe('ACTIVE');
 
     await request(app.getHttpServer())
@@ -935,6 +976,214 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     expect(submitted.body.entryIds).toHaveLength(1);
   });
 
+  it('gates only DRAFT-to-LOCKED against a PROVEN Day-1 and reports the earliest Planned credit conflict', async () => {
+    const basis = await createPlanBasis('ANCHOR-GATE', ['10', '4']);
+    await assignAuthorizedToProject(basis.project.id);
+    await activateWorkPeriodAnchor(basis.project.id, '2026-05-18').expect(200);
+
+    const created = await request(app.getHttpServer())
+      .put(`/projects/${basis.project.id}/execution-plan/draft`)
+      .set(auth(authorizedToken))
+      .send({
+        expectedRevision: 0,
+        distributions: [
+          {
+            boqItemId: basis.items[0].id,
+            periodStartDate: '2026-05-10',
+            periodEndDate: '2026-05-17',
+            plannedIncrementalQuantity: '10',
+          },
+          {
+            boqItemId: basis.items[1].id,
+            periodStartDate: '2026-05-10',
+            periodEndDate: '2026-05-16',
+            plannedIncrementalQuantity: '4',
+          },
+        ],
+      })
+      .expect(200);
+    const targetPlanId = (created.body as { executionPlanVersionId: string })
+      .executionPlanVersionId;
+
+    const blocked = await request(app.getHttpServer())
+      .post(`/projects/${basis.project.id}/execution-plan/lock`)
+      .set(auth(authorizedToken))
+      .send({
+        executionPlanVersionId: targetPlanId,
+        expectedRevision: 1,
+      })
+      .expect(409);
+    expect(blocked.body).toMatchObject({
+      state: 'CONFLICT',
+      code: 'WORK_PERIOD_ANCHOR_PLANNED_FACT_BEFORE_ANCHOR',
+      baselineId: basis.baseline.id,
+      executionPlanVersionId: targetPlanId,
+      boqItemId: basis.items[1].id,
+      earliestConflictingDate: '2026-05-16',
+    });
+    expect(
+      await prisma.executionPlanVersion.findUniqueOrThrow({
+        where: { id: targetPlanId },
+        select: { status: true, revision: true },
+      }),
+    ).toEqual({ status: 'DRAFT', revision: 1 });
+    expect(
+      (
+        await prisma.project.findUniqueOrThrow({
+          where: { id: basis.project.id },
+          select: { status: true },
+        })
+      ).status,
+    ).toBe('PLANNED');
+
+    const revised = await request(app.getHttpServer())
+      .put(`/projects/${basis.project.id}/execution-plan/draft`)
+      .set(auth(authorizedToken))
+      .send({
+        expectedRevision: 1,
+        distributions: [
+          {
+            boqItemId: basis.items[0].id,
+            periodStartDate: '2026-05-10',
+            periodEndDate: '2026-05-18',
+            plannedIncrementalQuantity: '10',
+          },
+          {
+            boqItemId: basis.items[1].id,
+            periodStartDate: '2026-05-10',
+            periodEndDate: '2026-05-19',
+            plannedIncrementalQuantity: '4',
+          },
+        ],
+      })
+      .expect(200);
+    expect((revised.body as { revision: number }).revision).toBe(2);
+    await request(app.getHttpServer())
+      .post(`/projects/${basis.project.id}/execution-plan/lock`)
+      .set(auth(authorizedToken))
+      .send({
+        executionPlanVersionId: targetPlanId,
+        expectedRevision: 2,
+      })
+      .expect(201);
+  });
+
+  it('fails Plan LOCK closed when governed anchor provenance no longer matches Project.startDate', async () => {
+    const basis = await createPlanBasis('ANCHOR-INVALID', ['10']);
+    await assignAuthorizedToProject(basis.project.id);
+    await activateWorkPeriodAnchor(basis.project.id, '2026-05-18').expect(200);
+    await prisma.project.update({
+      where: { id: basis.project.id },
+      data: { startDate: new Date('2026-05-19T00:00:00.000Z') },
+    });
+    const created = await request(app.getHttpServer())
+      .put(`/projects/${basis.project.id}/execution-plan/draft`)
+      .set(auth(authorizedToken))
+      .send({
+        expectedRevision: 0,
+        distributions: [
+          {
+            boqItemId: basis.items[0].id,
+            periodStartDate: '2026-05-18',
+            periodEndDate: '2026-05-20',
+            plannedIncrementalQuantity: '10',
+          },
+        ],
+      })
+      .expect(200);
+    const targetPlanId = (created.body as { executionPlanVersionId: string })
+      .executionPlanVersionId;
+
+    const blocked = await request(app.getHttpServer())
+      .post(`/projects/${basis.project.id}/execution-plan/lock`)
+      .set(auth(authorizedToken))
+      .send({
+        executionPlanVersionId: targetPlanId,
+        expectedRevision: 1,
+      })
+      .expect(409);
+    expect(blocked.body).toMatchObject({
+      code: 'WORK_PERIOD_ANCHOR_PROVENANCE_INVALID',
+      reason: 'GOVERNED_ANCHOR_START_DATE_MISMATCH',
+    });
+    expect(
+      (
+        await prisma.executionPlanVersion.findUniqueOrThrow({
+          where: { id: targetPlanId },
+          select: { status: true },
+        })
+      ).status,
+    ).toBe('DRAFT');
+  });
+
+  it('serializes initial anchor activation against a conflicting Plan LOCK so both cannot succeed', async () => {
+    const basis = await createPlanBasis('ANCHOR-LOCK-RACE', ['10']);
+    await assignAuthorizedToProject(basis.project.id);
+    const created = await request(app.getHttpServer())
+      .put(`/projects/${basis.project.id}/execution-plan/draft`)
+      .set(auth(authorizedToken))
+      .send({
+        expectedRevision: 0,
+        distributions: [
+          {
+            boqItemId: basis.items[0].id,
+            periodStartDate: '2026-05-10',
+            periodEndDate: '2026-05-17',
+            plannedIncrementalQuantity: '10',
+          },
+        ],
+      })
+      .expect(200);
+    const targetPlanId = (created.body as { executionPlanVersionId: string })
+      .executionPlanVersionId;
+
+    const [anchorResponse, lockResponse] = await Promise.all([
+      activateWorkPeriodAnchor(basis.project.id, '2026-05-18'),
+      request(app.getHttpServer())
+        .post(`/projects/${basis.project.id}/execution-plan/lock`)
+        .set(auth(authorizedToken))
+        .send({
+          executionPlanVersionId: targetPlanId,
+          expectedRevision: 1,
+        }),
+    ]);
+    expect(
+      [anchorResponse.status, lockResponse.status].filter(
+        (status) => status === 409,
+      ),
+    ).toHaveLength(1);
+    expect(
+      [anchorResponse.status, lockResponse.status].filter((status) =>
+        [200, 201].includes(status),
+      ),
+    ).toHaveLength(1);
+
+    const [anchor, plan] = await Promise.all([
+      request(app.getHttpServer())
+        .get(`/projects/${basis.project.id}/work-period-anchor`)
+        .set(auth(authorizedToken))
+        .expect(200),
+      prisma.executionPlanVersion.findUniqueOrThrow({
+        where: { id: targetPlanId },
+        select: { status: true },
+      }),
+    ]);
+    const anchorBody = anchor.body as {
+      state: 'NOT_PROVEN' | 'PROVEN' | 'INVALID_PROVENANCE';
+      anchorDate?: string;
+    };
+    expect(anchorBody.state === 'PROVEN' && plan.status === 'LOCKED').toBe(
+      false,
+    );
+    if (anchorBody.state === 'PROVEN') {
+      expect(anchorBody.anchorDate).toBe('2026-05-18');
+      expect(plan.status).toBe('DRAFT');
+    } else {
+      expect(anchorBody.state).toBe('NOT_PROVEN');
+      expect(plan.status).toBe('LOCKED');
+    }
+  }, 30_000);
+
   it('database constraints preserve plan identity and refuse orphaning locked history', async () => {
     await expect(
       prisma.executionPlanVersion.create({
@@ -951,7 +1200,9 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     await expect(
       prisma.projectBaseline.delete({ where: { id: baselineId } }),
     ).rejects.toThrow();
-    await expect(prisma.boqItem.delete({ where: { id: firstItemId } })).rejects.toThrow();
+    await expect(
+      prisma.boqItem.delete({ where: { id: firstItemId } }),
+    ).rejects.toThrow();
 
     const persisted = await prisma.executionPlanVersion.findUniqueOrThrow({
       where: { id: planId },
