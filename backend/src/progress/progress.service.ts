@@ -58,7 +58,10 @@ import {
   projectActualTemporalOfficialQuantity,
   projectBusinessDateWire,
 } from './progress-actual-temporal-quantity.policy';
-import { projectExecutionPlan } from '../execution-plan/execution-plan-projection.policy';
+import {
+  projectExecutionPlan,
+  type ExecutionPlanProjectionDistribution,
+} from '../execution-plan/execution-plan-projection.policy';
 import { EXECUTION_PLAN_DRAFT_FLOW } from '../execution-plan/execution-plan-adoption.policy';
 import { EXECUTION_PLAN_BLOCKER } from '../execution-plan/execution-plan.contracts';
 import {
@@ -71,6 +74,16 @@ import {
   type ProgressComparisonPlannedCurve,
   type ProgressDeviationResult,
 } from './progress-planned-actual-comparison.policy';
+import {
+  ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
+  PERIOD_WINDOW_BOUNDARY_BASIS,
+  PERIOD_WINDOW_MODE,
+  projectActualItemPeriodWindow,
+  projectPlannedItemPeriodWindow,
+  validateProjectBusinessDateWindow,
+  type PlannedItemQuantityProjection,
+  type ProjectBusinessDateWindow,
+} from './progress-period-window.policy';
 
 type MonitoringReadClient = Pick<
   Prisma.TransactionClient,
@@ -140,6 +153,18 @@ type ProgressDeviationResponse =
   | Exclude<ProgressDeviationResult, { state: 'COMPLETE' }>
   | { state: 'COMPLETE'; value: string };
 
+type PlannedItemQuantityResponse =
+  | Exclude<PlannedItemQuantityProjection, { state: 'COMPLETE' | 'INCOMPLETE' }>
+  | {
+      state: 'COMPLETE';
+      plannedQuantity: string;
+    }
+  | {
+      state: 'INCOMPLETE';
+      reason: string;
+      knownPlannedQuantitySubtotal: string;
+    };
+
 const serializeCurrentOfficialQuantity = (
   result: CurrentOfficialQuantityResult,
 ): CurrentOfficialQuantityResponse => {
@@ -155,6 +180,28 @@ const serializeCurrentOfficialQuantity = (
       state: 'INCOMPLETE',
       knownEligibleQuantitySubtotal:
         result.knownEligibleQuantitySubtotal.toString(),
+    };
+  }
+
+  return result;
+};
+
+const serializePlannedItemQuantity = (
+  result: PlannedItemQuantityProjection,
+): PlannedItemQuantityResponse => {
+  if (result.state === 'COMPLETE') {
+    return {
+      state: 'COMPLETE',
+      plannedQuantity: result.plannedQuantity.toString(),
+    };
+  }
+
+  if (result.state === 'INCOMPLETE') {
+    return {
+      state: 'INCOMPLETE',
+      reason: result.reason,
+      knownPlannedQuantitySubtotal:
+        result.knownPlannedQuantitySubtotal.toString(),
     };
   }
 
@@ -730,6 +777,7 @@ export class ProgressService {
     cutoffDate?: unknown,
     includeActualSeries = false,
     includeProgressComparison = false,
+    periodWindowInput?: { startDate: unknown; endDate: unknown },
   ) {
     if (includeActualSeries && cutoffDate === undefined) {
       throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
@@ -738,13 +786,32 @@ export class ProgressService {
       throw new BadRequestException('PROGRESS_COMPARISON_REQUIRES_CUTOFF');
     }
 
-    if (cutoffDate === undefined) {
+    const periodWindowValidation =
+      periodWindowInput === undefined
+        ? null
+        : validateProjectBusinessDateWindow(
+            periodWindowInput.startDate,
+            periodWindowInput.endDate,
+          );
+    if (periodWindowValidation?.state === 'INVALID') {
+      throw new BadRequestException(periodWindowValidation.reason);
+    }
+    const periodWindow =
+      periodWindowValidation?.state === 'VALID'
+        ? periodWindowValidation.window
+        : undefined;
+
+    if (cutoffDate === undefined && periodWindow === undefined) {
       return this.getMonitoringFromClient(this.prisma, projectId);
     }
 
-    const validCutoffDate = projectBusinessDateWire(cutoffDate);
-    if (validCutoffDate === null) {
-      throw new BadRequestException('INVALID_PROJECT_BUSINESS_CUTOFF');
+    let validCutoffDate: string | undefined;
+    if (cutoffDate !== undefined) {
+      const parsedCutoffDate = projectBusinessDateWire(cutoffDate);
+      if (parsedCutoffDate === null) {
+        throw new BadRequestException('INVALID_PROJECT_BUSINESS_CUTOFF');
+      }
+      validCutoffDate = parsedCutoffDate;
     }
 
     return this.prisma.$transaction(
@@ -755,6 +822,7 @@ export class ProgressService {
           validCutoffDate,
           includeActualSeries,
           includeProgressComparison,
+          periodWindow,
         ),
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
@@ -766,6 +834,7 @@ export class ProgressService {
     cutoffDate?: string,
     includeActualSeries = false,
     includeProgressComparison = false,
+    periodWindow?: ProjectBusinessDateWindow,
   ) {
     const unavailable = [
       'plannedStart',
@@ -844,6 +913,26 @@ export class ProgressService {
               };
             })()
           : undefined;
+      const periodWindowProjection =
+        periodWindow === undefined
+          ? undefined
+          : {
+              mode: PERIOD_WINDOW_MODE,
+              startDate: periodWindow.startDate,
+              endDate: periodWindow.endDate,
+              boundaryBasis: PERIOD_WINDOW_BOUNDARY_BASIS,
+              baseline: baselineResponse,
+              plannedSource: null,
+              plannedContext: {
+                state: 'UNAVAILABLE' as const,
+                reason:
+                  baseline === null
+                    ? EXECUTION_PLAN_BLOCKER.NO_ACTIVE_BASELINE
+                    : EXECUTION_PLAN_BLOCKER.H2A1_WEIGHT_UNAVAILABLE,
+              },
+              actualTruthMode: ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
+              items: [],
+            };
 
       return {
         projectId,
@@ -887,6 +976,9 @@ export class ProgressService {
               },
             }),
         ...(progressComparison === undefined ? {} : { progressComparison }),
+        ...(periodWindowProjection === undefined
+          ? {}
+          : { periodWindow: periodWindowProjection }),
         unavailable,
       };
     }
@@ -900,7 +992,9 @@ export class ProgressService {
       items,
       baseline.rabDocument.totalBaseCost,
     );
-    const lockedPlanCandidates = includeProgressComparison
+    const needsPlannedContext =
+      includeProgressComparison || periodWindow !== undefined;
+    const lockedPlanCandidates = needsPlannedContext
       ? await db.executionPlanVersion.findMany({
           where: { projectId, status: ExecutionPlanStatus.LOCKED },
           orderBy: { versionNumber: 'desc' },
@@ -917,13 +1011,15 @@ export class ProgressService {
         })
       : [];
     let canonicalPlannedCurve: ProgressComparisonPlannedCurve | null = null;
+    let canonicalPlanDistributions: readonly ExecutionPlanProjectionDistribution[] =
+      [];
     let plannedSource: {
       executionPlanVersionId: string;
       versionNumber: number;
       status: typeof ExecutionPlanStatus.LOCKED;
     } | null = null;
 
-    if (includeProgressComparison) {
+    if (needsPlannedContext) {
       if (project === null) {
         canonicalPlannedCurve = {
           state: 'UNAVAILABLE',
@@ -956,21 +1052,24 @@ export class ProgressService {
             versionNumber: lockedPlan.versionNumber,
             status: ExecutionPlanStatus.LOCKED,
           };
-          canonicalPlannedCurve =
-            project.status === ProjectStatus.ACTIVE
-              ? projectExecutionPlan({
-                  projectStatus: project.status,
-                  planStatus: lockedPlan.status,
-                  draftFlow: EXECUTION_PLAN_DRAFT_FLOW.NOT_ELIGIBLE,
-                  totalBaseCost: baseline.rabDocument.totalBaseCost,
-                  items,
-                  distributions: lockedPlan.distributions,
-                }).plannedCurve
-              : {
-                  state: 'UNAVAILABLE',
-                  reason: EXECUTION_PLAN_BLOCKER.LOCKED_PLAN_PROJECT_NOT_ACTIVE,
-                  points: [],
-                };
+          if (project.status === ProjectStatus.ACTIVE) {
+            const projection = projectExecutionPlan({
+              projectStatus: project.status,
+              planStatus: lockedPlan.status,
+              draftFlow: EXECUTION_PLAN_DRAFT_FLOW.NOT_ELIGIBLE,
+              totalBaseCost: baseline.rabDocument.totalBaseCost,
+              items,
+              distributions: lockedPlan.distributions,
+            });
+            canonicalPlannedCurve = projection.plannedCurve;
+            canonicalPlanDistributions = lockedPlan.distributions;
+          } else {
+            canonicalPlannedCurve = {
+              state: 'UNAVAILABLE',
+              reason: EXECUTION_PLAN_BLOCKER.LOCKED_PLAN_PROJECT_NOT_ACTIVE,
+              points: [],
+            };
+          }
         }
       }
     }
@@ -1025,22 +1124,23 @@ export class ProgressService {
       }
     }
 
-    const temporalGovernedByWorkItem =
-      cutoffDate === undefined
-        ? null
-        : new Map(
-            workItems.map((item) => [
-              item.id,
-              prepareActualTemporalOfficialQuantity(
-                {
-                  projectId,
-                  activeBaselineId: baseline.id,
-                  boqItemId: item.id,
-                },
-                entriesByWorkItem.get(item.id) ?? [],
-              ),
-            ]),
-          );
+    const needsTemporalContext =
+      cutoffDate !== undefined || periodWindow !== undefined;
+    const temporalGovernedByWorkItem = !needsTemporalContext
+      ? null
+      : new Map(
+          workItems.map((item) => [
+            item.id,
+            prepareActualTemporalOfficialQuantity(
+              {
+                projectId,
+                activeBaselineId: baseline.id,
+                boqItemId: item.id,
+              },
+              entriesByWorkItem.get(item.id) ?? [],
+            ),
+          ]),
+        );
 
     const effectiveByItem = new Map<string, (typeof entries)[number]>();
     for (const workItemId of workItemIds) {
@@ -1228,6 +1328,88 @@ export class ProgressService {
                 : {}),
             };
           })();
+    const periodWindowProjection =
+      periodWindow === undefined
+        ? undefined
+        : (() => {
+            if (
+              temporalGovernedByWorkItem === null ||
+              canonicalPlannedCurve === null
+            ) {
+              throw new Error('PERIOD_WINDOW_CONTEXT_REQUIRED');
+            }
+
+            const cumulativeThroughEnd = cachedProjectTemporalAtCutoff(
+              periodWindow.endDate,
+            );
+            const plannedContext =
+              canonicalPlannedCurve.state === 'COMPLETE'
+                ? { state: 'COMPLETE' as const }
+                : canonicalPlannedCurve.state === 'INCOMPLETE'
+                  ? {
+                      state: 'INCOMPLETE' as const,
+                      reason: canonicalPlannedCurve.reason,
+                    }
+                  : {
+                      state: 'UNAVAILABLE' as const,
+                      reason: canonicalPlannedCurve.reason,
+                    };
+
+            return {
+              mode: PERIOD_WINDOW_MODE,
+              startDate: periodWindow.startDate,
+              endDate: periodWindow.endDate,
+              boundaryBasis: PERIOD_WINDOW_BOUNDARY_BASIS,
+              baseline: {
+                id: baseline.id,
+                versionNumber: baseline.versionNumber,
+                approvedAt: baseline.approvedAt,
+              },
+              plannedSource,
+              plannedContext,
+              actualTruthMode: ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
+              items: workItems.map((item) => {
+                const governed = temporalGovernedByWorkItem.get(item.id);
+                const cumulativeTruth =
+                  cumulativeThroughEnd.temporalTruthByWorkItem.get(item.id);
+                if (governed === undefined || cumulativeTruth === undefined) {
+                  throw new Error('PERIOD_WINDOW_WORK_ITEM_CONTEXT_REQUIRED');
+                }
+
+                const planned = projectPlannedItemPeriodWindow({
+                  boqItemId: item.id,
+                  window: periodWindow,
+                  plannedCurve: canonicalPlannedCurve,
+                  distributions: canonicalPlanDistributions,
+                });
+                const actualPeriod = projectActualItemPeriodWindow({
+                  governed,
+                  window: periodWindow,
+                });
+
+                return {
+                  boqItemId: item.id,
+                  planned: {
+                    periodQuantity: serializePlannedItemQuantity(
+                      planned.periodQuantity,
+                    ),
+                    cumulativeQuantityThroughEndDate:
+                      serializePlannedItemQuantity(
+                        planned.cumulativeQuantityThroughEndDate,
+                      ),
+                  },
+                  actual: {
+                    periodOfficialQuantity:
+                      serializeCurrentOfficialQuantity(actualPeriod),
+                    cumulativeOfficialQuantityThroughEndDate:
+                      serializeCurrentOfficialQuantity(
+                        cumulativeTruth.rawQuantityResult,
+                      ),
+                  },
+                };
+              }),
+            };
+          })();
     const progressComparison =
       includeProgressComparison && cutoffDate !== undefined
         ? (() => {
@@ -1330,6 +1512,9 @@ export class ProgressService {
         ),
       ...(actualTemporal === undefined ? {} : { actualTemporal }),
       ...(progressComparison === undefined ? {} : { progressComparison }),
+      ...(periodWindowProjection === undefined
+        ? {}
+        : { periodWindow: periodWindowProjection }),
       items: items.map((item) => {
         const effective = effectiveByItem.get(item.id);
 
