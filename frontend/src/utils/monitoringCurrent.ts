@@ -339,6 +339,91 @@ export interface MonitoringResponse {
   unavailable: string[];
 }
 
+export type MonitoringTemporalSnapshotCoherence =
+  | {
+      state: 'COHERENT';
+      lens: Extract<MonitoringTemporalLens, { state: 'RESOLVED' }>;
+    }
+  | {
+      state: 'INCOHERENT';
+      reason:
+        | 'PROJECT_ID_MISMATCH'
+        | 'TEMPORAL_LENS_NOT_RESOLVED'
+        | 'BASELINE_MISMATCH'
+        | 'DUPLICATE_WORK_ITEM_ID'
+        | 'DUPLICATE_TEMPORAL_ITEM_ID'
+        | 'TEMPORAL_ITEM_NOT_IN_SNAPSHOT';
+    };
+
+export function monitoringTemporalSnapshotCoherence(input: {
+  requestedProjectId: string;
+  response: MonitoringResponse;
+}): MonitoringTemporalSnapshotCoherence {
+  if (input.response.projectId !== input.requestedProjectId) {
+    return { state: 'INCOHERENT', reason: 'PROJECT_ID_MISMATCH' };
+  }
+
+  const lens = input.response.temporalLens;
+  if (lens?.state !== 'RESOLVED') {
+    return { state: 'INCOHERENT', reason: 'TEMPORAL_LENS_NOT_RESOLVED' };
+  }
+
+  const responseBaseline = input.response.baseline;
+  const lensBaseline = lens.baseline;
+  if (
+    (responseBaseline === null) !== (lensBaseline === null) ||
+    (responseBaseline !== null &&
+      lensBaseline !== null &&
+      (responseBaseline.id !== lensBaseline.id ||
+        responseBaseline.versionNumber !== lensBaseline.versionNumber ||
+        responseBaseline.approvedAt !== lensBaseline.approvedAt))
+  ) {
+    return { state: 'INCOHERENT', reason: 'BASELINE_MISMATCH' };
+  }
+
+  const workItemIds = new Set<string>();
+  for (const item of input.response.items) {
+    if (item.itemType !== 'WORK_ITEM') continue;
+    if (workItemIds.has(item.id)) {
+      return { state: 'INCOHERENT', reason: 'DUPLICATE_WORK_ITEM_ID' };
+    }
+    workItemIds.add(item.id);
+  }
+
+  const temporalItemIds = new Set<string>();
+  for (const item of lens.items) {
+    if (temporalItemIds.has(item.boqItemId)) {
+      return { state: 'INCOHERENT', reason: 'DUPLICATE_TEMPORAL_ITEM_ID' };
+    }
+    if (!workItemIds.has(item.boqItemId)) {
+      return { state: 'INCOHERENT', reason: 'TEMPORAL_ITEM_NOT_IN_SNAPSHOT' };
+    }
+    temporalItemIds.add(item.boqItemId);
+  }
+
+  return { state: 'COHERENT', lens };
+}
+
+export function monitoringActiveSnapshot(input: {
+  mode: 'TERKINI' | 'PERIODIK';
+  currentResponse: MonitoringResponse | null;
+  periodicResponse: MonitoringResponse | null;
+}): MonitoringResponse | null {
+  return input.mode === 'TERKINI'
+    ? input.currentResponse
+    : input.periodicResponse;
+}
+
+export function monitoringPeriodicSnapshotForRequest(input: {
+  activeRequestKey: string;
+  responseRequestKey: string;
+  response: MonitoringResponse;
+}): MonitoringResponse | null {
+  return input.activeRequestKey === input.responseRequestKey
+    ? input.response
+    : null;
+}
+
 export interface MonitoringProject {
   id: string;
   name: string;

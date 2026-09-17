@@ -14,11 +14,14 @@ import {
   lastRecordedLabel,
   monitoringComparisonCutoff,
   monitoringComparisonRequestPath,
+  monitoringActiveSnapshot,
   monitoringTemporalBasisLabel,
   monitoringTemporalGranularityLabel,
   monitoringTemporalLensRequestPath,
   monitoringTemporalLensUnavailableMessage,
+  monitoringPeriodicSnapshotForRequest,
   monitoringTemporalPeriodLabel,
+  monitoringTemporalSnapshotCoherence,
   monitoringWorkItemsById,
   officialItemProgressLabel,
   officialQuantityLabel,
@@ -55,9 +58,11 @@ type TemporalContextMode = 'TERKINI' | 'PERIODIK';
 type PeriodicTemporalLensPresentation =
   | { state: 'DISABLED' | 'WAITING_INPUT' | 'LOADING' }
   | { state: 'RESOLVED'; requestKey: string;
+      response: MonitoringResponse;
       lens: Extract<MonitoringTemporalLens, { state: 'RESOLVED' }> }
   | { state: 'UNAVAILABLE'; requestKey: string;
       lens: Extract<MonitoringTemporalLens, { state: 'UNAVAILABLE' }> }
+  | { state: 'INCOHERENT'; requestKey: string }
   | { state: 'ERROR'; requestKey: string; status: number | null };
 
 class MonitoringRequestError extends Error {
@@ -353,8 +358,16 @@ export function ProjectWorkPage() {
           setPeriodicPresentation({ state: 'UNAVAILABLE', requestKey: temporalRequestKey,
             lens: data.temporalLens });
         } else {
-          setPeriodicPresentation({ state: 'RESOLVED', requestKey: temporalRequestKey,
-            lens: data.temporalLens });
+          const coherence = monitoringTemporalSnapshotCoherence({
+            requestedProjectId: projectId,
+            response: data,
+          });
+          if (coherence.state === 'INCOHERENT') {
+            setPeriodicPresentation({ state: 'INCOHERENT', requestKey: temporalRequestKey });
+          } else {
+            setPeriodicPresentation({ state: 'RESOLVED', requestKey: temporalRequestKey,
+              response: data, lens: coherence.lens });
+          }
         }
       } catch (error: unknown) {
         if (
@@ -405,9 +418,22 @@ export function ProjectWorkPage() {
     ],
   );
 
+  const periodicResolvedResponse =
+    activePeriodicPresentation.state === 'RESOLVED'
+      ? monitoringPeriodicSnapshotForRequest({
+          activeRequestKey: temporalRequestKey,
+          responseRequestKey: activePeriodicPresentation.requestKey,
+          response: activePeriodicPresentation.response,
+        })
+      : null;
+  const activeMonitoringSnapshot = monitoringActiveSnapshot({
+    mode: temporalContextMode,
+    currentResponse: monitoring,
+    periodicResponse: periodicResolvedResponse,
+  });
   const rows = useMemo(
-    () => buildMonitoringRows(monitoring?.items ?? []),
-    [monitoring?.items],
+    () => buildMonitoringRows(activeMonitoringSnapshot?.items ?? []),
+    [activeMonitoringSnapshot?.items],
   );
   const realizationByBoqItemId = useMemo(
     () => monitoringWorkItemsById(monitoring?.items ?? []),
@@ -438,13 +464,13 @@ export function ProjectWorkPage() {
     [rows],
   );
 
-  const dataThrough = monitoring
-    ? dataThroughLabel(monitoring.freshness.dataThrough)
+  const dataThrough = activeMonitoringSnapshot
+    ? dataThroughLabel(activeMonitoringSnapshot.freshness.dataThrough)
     : 'TIDAK TERSEDIA';
-  const lastRecorded = monitoring
+  const lastRecorded = activeMonitoringSnapshot
     ? lastRecordedLabel(
-        monitoring.freshness.lastRecordedAt,
-        monitoring.projectTimeZone,
+        activeMonitoringSnapshot.freshness.lastRecordedAt,
+        activeMonitoringSnapshot.projectTimeZone,
       )
     : { value: 'TIDAK TERSEDIA', basis: '' };
   const currentErrorKind = errorProjectId === projectId ? errorKind : null;
@@ -535,15 +561,15 @@ export function ProjectWorkPage() {
         </div>
         <div className="h2a0-baseline-identity">
           <span>Baseline Aktif</span>
-          {monitoring.baseline ? (
+          {activeMonitoringSnapshot?.baseline ? (
             <>
-              <strong>Versi {monitoring.baseline.versionNumber}</strong>
+              <strong>Versi {activeMonitoringSnapshot.baseline.versionNumber}</strong>
               <small>
                 Disetujui{' '}
                 {
                   recordedAtLabel(
-                    monitoring.baseline.approvedAt,
-                    monitoring.projectTimeZone,
+                    activeMonitoringSnapshot.baseline.approvedAt,
+                    activeMonitoringSnapshot.projectTimeZone,
                   ).value
                 }
               </small>
@@ -685,7 +711,8 @@ export function ProjectWorkPage() {
 
       {temporalContextMode === 'PERIODIK' && activePeriodicPresentation.state !== 'RESOLVED' ? (
         <section className={`h2a0-periodic-state is-${activePeriodicPresentation.state.toLowerCase()}`}
-          role={activePeriodicPresentation.state === 'ERROR' ? 'alert' : 'status'}
+          role={activePeriodicPresentation.state === 'ERROR' ||
+            activePeriodicPresentation.state === 'INCOHERENT' ? 'alert' : 'status'}
           aria-live="polite">
           {activePeriodicPresentation.state === 'WAITING_INPUT' && (
             <><h2>Lengkapi konteks periode</h2>
@@ -709,6 +736,11 @@ export function ProjectWorkPage() {
                 onClick={() => setTemporalRequestRefresh((current) => current + 1)}>
                 Coba Lagi
               </button></>
+          )}
+          {activePeriodicPresentation.state === 'INCOHERENT' && (
+            <><h2>Konteks periode tidak konsisten</h2>
+              <p>Fakta periode tidak dapat ditampilkan karena konteks RAB dan periode
+                tidak konsisten. Data Terkini tetap aman.</p></>
           )}
         </section>
       ) : temporalContextMode === 'TERKINI' && !monitoring.baseline ? (
@@ -925,8 +957,8 @@ export function ProjectWorkPage() {
                       {formatProjectBusinessDate(periodicResolvedLens.period.endDate)}
                     </dd></div>
                     <div><dt>Baseline Aktif</dt><dd>
-                      {periodicResolvedLens.baseline
-                        ? `Versi ${periodicResolvedLens.baseline.versionNumber}`
+                      {activeMonitoringSnapshot?.baseline
+                        ? `Versi ${activeMonitoringSnapshot.baseline.versionNumber}`
                         : 'TIDAK TERSEDIA'}
                     </dd></div>
                     <div><dt>Sumber Rencana</dt><dd>
