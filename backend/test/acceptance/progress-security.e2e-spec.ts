@@ -204,6 +204,55 @@ interface Law1MonitoringBody {
       };
     }>;
   };
+  temporalLens?: {
+    mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1';
+    state: 'RESOLVED' | 'UNAVAILABLE';
+    basis: 'CALENDAR' | 'WORK_PERIOD';
+    granularity: 'WEEK' | 'MONTH';
+    referenceDate: string;
+    reason?: string;
+    period?: {
+      periodKey: string;
+      periodIndex: number;
+      startDate: string;
+      endDate: string;
+      metadata: Record<string, unknown>;
+    };
+    weeklyRecap?: {
+      rule: 'CANONICAL_WEEK_SLICE_RECAP';
+      sliceCount: number;
+      slices: Array<{
+        weekPeriodKey: string;
+        weekPeriodIndex: number;
+        weekStartDate: string;
+        weekEndDate: string;
+        sliceStartDate: string;
+        sliceEndDate: string;
+      }>;
+    };
+    baseline?: { id: string; versionNumber: number; approvedAt: string } | null;
+    plannedSource?: {
+      executionPlanVersionId: string;
+      versionNumber: number;
+      status: 'LOCKED';
+    } | null;
+    plannedContext?: { state: string; reason?: string };
+    actualTruthMode?: 'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_EXPLICIT_WORKDATE_WINDOW';
+    items?: Array<{
+      boqItemId: string;
+      planned: {
+        periodQuantity: { state: string; [key: string]: unknown };
+        cumulativeQuantityThroughEndDate: {
+          state: string;
+          [key: string]: unknown;
+        };
+      };
+      actual: {
+        periodOfficialQuantity: Law1MonitoringQuantity;
+        cumulativeOfficialQuantityThroughEndDate: Law1MonitoringQuantity;
+      };
+    }>;
+  };
 }
 
 describe('Progress Security (e2e)', () => {
@@ -1596,6 +1645,234 @@ describe('Progress Security (e2e)', () => {
       .expect(200);
     expect(falseResponse.body).not.toHaveProperty('periodWindow');
     expect(falseResponse.body).not.toHaveProperty('actualTemporal');
+  });
+
+  it('6h-1. Monitoring validates the canonical Temporal Lens opt-in and rejects competing contexts', async () => {
+    const token = await login(userViewEmail);
+    const invalidCases = [
+      {
+        query: 'temporalBasis=CALENDAR',
+        reason: 'TEMPORAL_LENS_FIELDS_REQUIRE_OPT_IN',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31',
+        reason: 'TEMPORAL_LENS_REQUIRES_BASIS_GRANULARITY_REFERENCE',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalBasis=calendar&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31',
+        reason: 'INVALID_TEMPORAL_BASIS',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=weekly&temporalReferenceDate=2026-08-31',
+        reason: 'INVALID_TEMPORAL_GRANULARITY',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-02-30',
+        reason: 'INVALID_TEMPORAL_REFERENCE_PROJECT_BUSINESS_DATE',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31T00%3A00%3A00.000Z',
+        reason: 'INVALID_TEMPORAL_REFERENCE_PROJECT_BUSINESS_DATE',
+      },
+      {
+        query:
+          'includeTemporalLens=true&includeTemporalLens=false&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31',
+        reason: 'AMBIGUOUS_TEMPORAL_LENS',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalBasis[value]=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31',
+        reason: 'AMBIGUOUS_TEMPORAL_LENS',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31&includePeriodWindow=true&periodStartDate=2026-08-31&periodEndDate=2026-09-06',
+        reason: 'TEMPORAL_LENS_EXPLICIT_PERIOD_WINDOW_CONFLICT',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31&cutoffDate=2026-09-06',
+        reason: 'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31&includeActualSeries=true',
+        reason: 'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
+      },
+      {
+        query:
+          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31&includeProgressComparison=true',
+        reason: 'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
+      },
+    ];
+
+    for (const candidate of invalidCases) {
+      const response = await request(app.getHttpServer())
+        .get(`/projects/${projectAId}/progress/monitoring?${candidate.query}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(400);
+      expect((response.body as ErrorResponseBody).message).toBe(
+        candidate.reason,
+      );
+    }
+
+    const falseResponse = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?includeTemporalLens=false`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    expect(falseResponse.body).not.toHaveProperty('temporalLens');
+  });
+
+  it('6h-2. Calendar Week equals its explicit Period Window and Calendar Month is a weekly-slice recap', async () => {
+    const token = await login(userViewEmail);
+    const plan = await prisma.executionPlanVersion.findFirstOrThrow({
+      where: {
+        projectId: projectAId,
+        baselineId: baselineAId,
+        status: 'LOCKED',
+      },
+    });
+    const domainCounts = async () =>
+      Promise.all([
+        prisma.project.count({ where: { id: projectAId } }),
+        prisma.progressReport.count({ where: { projectId: projectAId } }),
+        prisma.progressEntry.count({
+          where: { progressReport: { projectId: projectAId } },
+        }),
+        prisma.progressAuditEvent.count({ where: { projectId: projectAId } }),
+        prisma.executionPlanVersion.count({ where: { projectId: projectAId } }),
+        prisma.executionPlanDistribution.count({
+          where: { executionPlanVersion: { projectId: projectAId } },
+        }),
+      ]);
+    const before = await domainCounts();
+
+    const weekResponse = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const explicitWeekResponse = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?includePeriodWindow=true&periodStartDate=2026-08-31&periodEndDate=2026-09-06`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const weekBody = weekResponse.body as unknown as Law1MonitoringBody;
+    const explicitWeekBody =
+      explicitWeekResponse.body as unknown as Law1MonitoringBody;
+
+    expect(weekBody.temporalLens).toMatchObject({
+      mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1',
+      state: 'RESOLVED',
+      basis: 'CALENDAR',
+      granularity: 'WEEK',
+      referenceDate: '2026-08-31',
+      period: {
+        periodKey: '2026-W36',
+        periodIndex: 36,
+        startDate: '2026-08-31',
+        endDate: '2026-09-06',
+      },
+      baseline: { id: baselineAId, versionNumber: 1 },
+      plannedSource: {
+        executionPlanVersionId: plan.id,
+        versionNumber: 1,
+        status: 'LOCKED',
+      },
+      plannedContext: { state: 'COMPLETE' },
+      actualTruthMode:
+        'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_EXPLICIT_WORKDATE_WINDOW',
+    });
+    expect(weekBody.temporalLens).not.toHaveProperty('weeklyRecap');
+    expect(weekBody.temporalLens?.items).toEqual(
+      explicitWeekBody.periodWindow?.items,
+    );
+
+    const monthResponse = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=MONTH&temporalReferenceDate=2026-08-15`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const explicitMonthResponse = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?includePeriodWindow=true&periodStartDate=2026-08-01&periodEndDate=2026-08-31`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const monthBody = monthResponse.body as unknown as Law1MonitoringBody;
+    const explicitMonthBody =
+      explicitMonthResponse.body as unknown as Law1MonitoringBody;
+
+    expect(monthBody.temporalLens).toMatchObject({
+      mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1',
+      state: 'RESOLVED',
+      basis: 'CALENDAR',
+      granularity: 'MONTH',
+      referenceDate: '2026-08-15',
+      period: {
+        periodKey: '2026-08',
+        periodIndex: 8,
+        startDate: '2026-08-01',
+        endDate: '2026-08-31',
+      },
+      weeklyRecap: {
+        rule: 'CANONICAL_WEEK_SLICE_RECAP',
+        sliceCount: 6,
+      },
+    });
+    expect(monthBody.temporalLens?.weeklyRecap?.slices.at(0)).toMatchObject({
+      weekStartDate: '2026-07-27',
+      weekEndDate: '2026-08-02',
+      sliceStartDate: '2026-08-01',
+      sliceEndDate: '2026-08-02',
+    });
+    expect(monthBody.temporalLens?.weeklyRecap?.slices.at(-1)).toMatchObject({
+      weekStartDate: '2026-08-31',
+      weekEndDate: '2026-09-06',
+      sliceStartDate: '2026-08-31',
+      sliceEndDate: '2026-08-31',
+    });
+    expect(monthBody.temporalLens?.items).toEqual(
+      explicitMonthBody.periodWindow?.items,
+    );
+
+    const septemberResponse = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=MONTH&temporalReferenceDate=2026-09-15`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const septemberBody =
+      septemberResponse.body as unknown as Law1MonitoringBody;
+    const septemberItem = septemberBody.temporalLens?.items?.find(
+      (item) => item.boqItemId === boqItemAId,
+    );
+    expect(septemberItem?.planned).toEqual({
+      periodQuantity: { state: 'COMPLETE', plannedQuantity: '0' },
+      cumulativeQuantityThroughEndDate: {
+        state: 'COMPLETE',
+        plannedQuantity: '10',
+      },
+    });
+
+    expect(await domainCounts()).toEqual(before);
   });
 
   it('6i. guarded Monitoring exposes canonical item period quantities and reuses Actual cumulative at end', async () => {
@@ -3334,6 +3611,23 @@ describe('Progress Security (e2e)', () => {
         candidateDate: '2026-05-01',
         provenance: null,
       });
+      const unavailableLens = await request(app.getHttpServer())
+        .get(
+          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=WEEK&temporalReferenceDate=2026-05-18`,
+        )
+        .set('Authorization', `Bearer ${viewerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+      expect(
+        (unavailableLens.body as unknown as Law1MonitoringBody).temporalLens,
+      ).toEqual({
+        mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1',
+        state: 'UNAVAILABLE',
+        basis: 'WORK_PERIOD',
+        granularity: 'WEEK',
+        referenceDate: '2026-05-18',
+        reason: 'GOVERNED_WORK_PERIOD_ANCHOR_REQUIRED',
+      });
 
       const deniedCommandId = randomUUID();
       await request(app.getHttpServer())
@@ -3391,6 +3685,47 @@ describe('Progress Security (e2e)', () => {
           actorAccountId: submitAccountId,
           reason: 'Owner-ratified official Day 1',
         },
+      });
+      const resolvedLens = await request(app.getHttpServer())
+        .get(
+          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=WEEK&temporalReferenceDate=2026-05-25`,
+        )
+        .set('Authorization', `Bearer ${viewerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+      expect(
+        (resolvedLens.body as unknown as Law1MonitoringBody).temporalLens,
+      ).toMatchObject({
+        mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1',
+        state: 'RESOLVED',
+        basis: 'WORK_PERIOD',
+        granularity: 'WEEK',
+        referenceDate: '2026-05-25',
+        period: {
+          periodKey: 'WORK-WEEK-2',
+          periodIndex: 2,
+          startDate: '2026-05-25',
+          endDate: '2026-05-31',
+        },
+        plannedContext: { state: 'UNAVAILABLE' },
+        items: [],
+      });
+      const beforeAnchorLens = await request(app.getHttpServer())
+        .get(
+          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=WEEK&temporalReferenceDate=2026-05-17`,
+        )
+        .set('Authorization', `Bearer ${viewerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+      expect(
+        (beforeAnchorLens.body as unknown as Law1MonitoringBody).temporalLens,
+      ).toEqual({
+        mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1',
+        state: 'UNAVAILABLE',
+        basis: 'WORK_PERIOD',
+        granularity: 'WEEK',
+        referenceDate: '2026-05-17',
+        reason: 'REFERENCE_DATE_BEFORE_GOVERNED_WORK_PERIOD_ANCHOR',
       });
 
       await request(app.getHttpServer())
