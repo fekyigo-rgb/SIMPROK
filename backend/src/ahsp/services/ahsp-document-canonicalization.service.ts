@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { LocationType, MethodType, Prisma } from '@prisma/client';
+import { ImportStatus, LocationType, MethodType, Prisma } from '@prisma/client';
 import { IntakeError } from '../../universal-intake/intake-errors';
 import { ReaderRegistry } from '../../universal-intake/readers/reader-registry';
 import {
@@ -22,18 +22,39 @@ import {
   ResourceObservationService,
 } from '../../resource-catalog/resource-observation.service';
 import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
-import { understandAhspDocument } from '../document/ahsp-document-understanding';
+import { isResourceCatalogIdShape } from '../../resource-catalog/resource-identity-resolution.kernel';
 import {
+  understandAhspDocument,
+  withTitleOutputUnitStatement,
+} from '../document/ahsp-document-understanding';
+import {
+  AHSP_DOCUMENT_CONTRACT_VERSION,
   AHSP_DOCUMENT_REASON,
   AhspDocumentKnowledge,
   AhspDocumentReasonCode,
   AhspResourceGroup,
   AhspResourceKnowledge,
+  AhspSourceLocator,
+  AhspWorkItemAdmission,
   AhspWorkItemKnowledge,
 } from '../document/ahsp-document-knowledge';
+// Read, never re-implemented: the ONE eligibility law for a usable recipe, and the
+// policy under which the consuming resolver consults governed identity decisions.
+import {
+  buildEligibleAhspVersionWhere,
+  pickCurrentApplicableAhspVersions,
+} from '../../project-ahsp/ahsp-eligibility.policy';
+import { E1A_RESOLUTION_POLICY_VERSION } from '../../project-ahsp/ahsp-resource-resolution.orchestrator';
 import { AhspService } from './ahsp.service';
 import { AhspVersionService } from './ahsp-version.service';
 import { AhspAuditService } from './ahsp-audit.service';
+import {
+  AhspImportJournalLine,
+  AhspImportLineAlreadySettledError,
+  AhspImportLineOutcome,
+  AhspImportLockedLine,
+  AhspImportService,
+} from './ahsp-import.service';
 import { RealityNormalizationEngine } from './reality-normalization.engine';
 import {
   classifyAhspIdentity,
@@ -65,18 +86,95 @@ const GROUP_TO_CONTEXT: Record<
   EQUIPMENT: UNIT_ALIAS_CONTEXT.EQUIPMENT,
 };
 
+/**
+ * The reasons that mean "the recipe is whole; only a component's catalogue
+ * identity is still open". Anything else keeps an item HELD.
+ */
+const IDENTITY_ONLY_REASONS: ReadonlySet<AhspDocumentReasonCode> = new Set([
+  AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED,
+  AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND,
+]);
+
+/**
+ * One work item's canonical write — or one recorded duplicate decision — is
+ * whole-or-nothing. The same budget the observation lifecycle uses for its own
+ * interactive transactions.
+ */
+const ITEM_TRANSACTION = { timeout: 20_000, maxWait: 20_000 } as const;
+
+/** What one evaluation of a document (or of a job's held lines) did, counted once. */
+export interface AhspImportIntakeSummary {
+  /** Work items evaluated — each one already has a durable intake line. */
+  readonly evaluated: number;
+  /** Written with every fact proved: usable now. */
+  readonly ready: number;
+  /** Written; at least one component keeps the source's wording while its catalogue identity is pending. */
+  readonly identityPending: number;
+  /** An AHSP with this identity already represents the item; nothing new was written. */
+  readonly alreadyPresent: number;
+  /**
+   * This intake line was already settled by an earlier evaluation, so THIS
+   * request did nothing to it: no AHSP, no adoption, no second record. Its
+   * recorded outcome stands. A replay is counted here and nowhere else — never
+   * as something newly written or newly adopted.
+   */
+  readonly alreadyProcessed: number;
+  /** Kept, not written: a fact the recipe needs is missing, unproved, or awaits a decision. */
+  readonly held: number;
+  /** The item's write failed and wrote nothing; its line stays open for the next evaluation. */
+  readonly failed: number;
+}
+
+/**
+ * What ONE evaluation did to ONE intake line. Each meaning stays separate: a
+ * replay that changed nothing must never be counted — or worded — as a write,
+ * an adoption, or a fresh hold.
+ */
+type AhspImportItemOutcome =
+  | {
+      readonly kind: 'WRITTEN';
+      readonly ahspId: string;
+      readonly versionId: string;
+    }
+  | {
+      readonly kind: 'ALREADY_PRESENT';
+      readonly reasonCodes: readonly AhspDocumentReasonCode[];
+    }
+  | {
+      readonly kind: 'ALREADY_PROCESSED';
+      readonly reasonCodes: readonly AhspDocumentReasonCode[];
+    }
+  | {
+      readonly kind: 'HELD';
+      readonly reasonCodes: readonly AhspDocumentReasonCode[];
+    }
+  | { readonly kind: 'FAILED' }
+  /** The line is not (or no longer) one this workspace can see. */
+  | { readonly kind: 'UNREACHABLE' };
+
 export interface AhspDocumentCommitResult {
   readonly knowledge: AhspDocumentKnowledge;
+  /** The durable intake journal this evaluation belongs to. */
+  readonly importJobId: string;
+  readonly summary: AhspImportIntakeSummary;
   readonly written: ReadonlyArray<{
     readonly workType: string;
     readonly methodName: string;
     readonly ahspId: string;
     readonly versionId: string;
+    readonly admission: Exclude<AhspWorkItemAdmission, 'HELD'>;
+    /** Components written with the source's wording because their identity is not proved yet. */
+    readonly identityPendingResources: number;
   }>;
   readonly skipped: ReadonlyArray<{
     readonly workType: string | null;
     readonly methodName: string | null;
     readonly reasonCodes: readonly AhspDocumentReasonCode[];
+  }>;
+  readonly failed: ReadonlyArray<{
+    readonly workType: string | null;
+    readonly methodName: string | null;
+    readonly lineNumber: number;
   }>;
 }
 
@@ -97,6 +195,10 @@ export class AhspDocumentCanonicalizationService {
     // The one AHSP provenance mechanism — records a human's duplicate decision.
     // No second audit/provenance store is created.
     private readonly audit: AhspAuditService,
+    // IMPORT-SEAM-02 — the durable intake journal on the existing AHSP import
+    // tables. It holds what a document was read into; it never resolves or writes
+    // a canonical AHSP.
+    private readonly journal: AhspImportService,
   ) {}
 
   private readonly readers = ReaderRegistry.default();
@@ -167,83 +269,940 @@ export class AhspDocumentCanonicalizationService {
     });
   }
 
+  /**
+   * IMPORT IS RECEIVING INFORMATION: read → understand → CAPTURE → resolve → write.
+   *
+   * Capture comes before any decision. Every work item the document was read
+   * into becomes a durable intake line exactly as it was understood, so nothing
+   * the source stated depends on this request surviving, and nothing that cannot
+   * be written yet is lost. Only then is the knowledge resolved against today's
+   * authorities and written through the existing writers.
+   */
   async commit(
     envelope: SourceEnvelope,
     userId: string,
     decisions: readonly AhspImportDecision[] = [],
   ): Promise<AhspDocumentCommitResult> {
-    const knowledge = await this.preview(envelope);
-    const decisionByItem = this.decisionMap(decisions);
+    const understood = understandAhspDocument(
+      await this.readers.read(envelope),
+      envelope,
+    );
+    const journal = await this.journal.recordDocument({
+      workspaceId: envelope.workspaceId,
+      userId,
+      knowledge: understood,
+    });
+    const knowledge = await this.resolveKnowledge(
+      understood,
+      envelope.workspaceId,
+    );
+    return this.commitKnowledge(knowledge, {
+      workspaceId: envelope.workspaceId,
+      userId,
+      decisions,
+      importJobId: journal.importJobId,
+      lines: journal.lines,
+    });
+  }
+
+  /**
+   * Continue an import WITHOUT the file. The held lines are read back exactly as
+   * they were understood, asked again of today's identity, unit and sameness
+   * authorities, and written through the same path a fresh commit uses. Items
+   * still missing a fact stay held, unchanged; nothing is guessed.
+   */
+  async continueImportJob(params: {
+    workspaceId: string;
+    importJobId: string;
+    userId: string;
+    decisions?: readonly AhspImportDecision[];
+  }): Promise<AhspDocumentCommitResult> {
+    const held = await this.journal.loadHeld(
+      params.workspaceId,
+      params.importJobId,
+    );
+    // Stored knowledge is trusted only under the contract it was understood with.
+    if (held.knowledgeContractVersion !== AHSP_DOCUMENT_CONTRACT_VERSION) {
+      throw new ConflictException('AHSP_IMPORT_KNOWLEDGE_CONTRACT_CHANGED');
+    }
+    // A line understood before work titles were read is completed with ONLY the
+    // title statement it lacks, read from the title it kept — never from the file.
+    const understood: AhspDocumentKnowledge = {
+      ...held.envelope,
+      workItems: held.lines.map((line) =>
+        withTitleOutputUnitStatement(line.knowledge),
+      ),
+    };
+    const knowledge = await this.resolveKnowledge(
+      understood,
+      params.workspaceId,
+    );
+    return this.commitKnowledge(knowledge, {
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+      decisions: params.decisions ?? [],
+      importJobId: params.importJobId,
+      lines: held.lines,
+    });
+  }
+
+  /**
+   * The workspace's recent imports and every line still waiting — a read. A line
+   * held for a possible twin carries the comparison the preview showed, asked
+   * again of today's AHSPs through the same classifier, so the reader can still
+   * decide after leaving the page — without the file. Nothing is decided here.
+   *
+   * AHSP COMPLETION — and what each import still needs, asked of TODAY's
+   * authorities from the facts the document stated, never from the evaluation
+   * that settled a line (those reasons go stale the moment a person curates):
+   *  - a unit spelling waited for is asked of the Unit Kernel once per spelling
+   *    and class; a line whose units are all known now is worth checking again,
+   *    and every other line names the spellings it still waits for;
+   *  - a line held on a source contradiction names what each statement says;
+   *  - a line understood before work titles were read, whose kept title states
+   *    its output unit, is worth checking again (the check reads that title);
+   *  - OPEN QUESTIONS are the curation queue's own projection, once per exact
+   *    question — a count of what is asked, never proof of what is identified;
+   *  - a saved line is COMPLETE FOR THE AHSP STAGE only when the recipe it points
+   *    to passes the resolver that consumes it (see recipeStates). Pricing is a
+   *    later question, and is not asked here.
+   */
+  async listImportJobs(
+    workspaceId: string,
+    options: { cursor?: string | null } = {},
+  ) {
+    const page = await this.journal.listDocuments(workspaceId, {
+      cursor: options.cursor ?? null,
+    });
+    const jobs = page.jobs;
+    // The way on travels with the page, so "nothing waiting here" is never read
+    // as "nothing waiting anywhere".
+    const nextPage = { nextCursor: page.nextCursor, hasMore: page.hasMore };
+    if (jobs.length === 0) return { items: [], ...nextPage };
+    const awaitsSameness = (line: { reasonCodes: readonly string[] }) =>
+      line.reasonCodes.includes(AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH);
+    const surface = jobs.some((job) => job.waiting.some(awaitsSameness))
+      ? await this.ahspService.loadIdentitySurface(workspaceId)
+      : null;
+    const stored = await this.journal.loadCompletionLines(
+      workspaceId,
+      jobs.map((job) => job.importJobId),
+    );
+    const openQuestions = await this.observations.openQuestionsBySource(
+      workspaceId,
+      [
+        ...new Set(
+          jobs
+            .map((job) => job.sourceSha256)
+            .filter((sha): sha is string => Boolean(sha)),
+        ),
+      ],
+    );
+    // One Unit Kernel question per spelling (and class), however many lines ask it.
+    const unitAnswers = new Map<string, Promise<boolean>>();
+    const unitProvedToday = (raw: string, group: AhspResourceGroup | null) => {
+      const key = JSON.stringify([group, raw]);
+      const known = unitAnswers.get(key) ?? this.unitProved(raw, group);
+      unitAnswers.set(key, known);
+      return known;
+    };
+    const definitionAnswers = new Map<string, Promise<string | null>>();
+    const definitionToday = (raw: string) => {
+      const known =
+        definitionAnswers.get(raw) ?? this.outputUnitDefinition(raw);
+      definitionAnswers.set(raw, known);
+      return known;
+    };
+    const completed = stored.filter(
+      (line) => line.status === ImportStatus.COMPLETED,
+    );
+    const recipes = await this.recipeStates(
+      workspaceId,
+      completed,
+      unitProvedToday,
+    );
+
+    const items = await Promise.all(
+      jobs.map(async (job) => {
+        const lines = stored.filter(
+          (line) => line.importJobId === job.importJobId,
+        );
+        const open = (job.sourceSha256 &&
+          openQuestions.get(job.sourceSha256)) || {
+          keys: new Set<string>(),
+          uses: 0,
+        };
+        // A saved line counts ONCE: a recipe that cannot be used, a document that
+        // states another output unit than the one saved, an identity the consumer
+        // cannot prove yet — or complete for the AHSP stage.
+        let complete = 0;
+        let awaitingIdentity = 0;
+        let recipeNotUsable = 0;
+        const writtenUnitQuestions: Array<{
+          lineNumber: number;
+          workType: string | null;
+          methodName: string | null;
+          statedOutputUnits: string[];
+          provenDifferent: boolean;
+        }> = [];
+        for (const line of lines) {
+          if (line.status !== ImportStatus.COMPLETED) continue;
+          const recipe = recipes.get(line.id) ?? 'NOT_USABLE';
+          if (recipe === 'NOT_USABLE') {
+            recipeNotUsable += 1;
+            continue;
+          }
+          const adapted = withTitleOutputUnitStatement(line.knowledge);
+          if (
+            adapted !== line.knowledge &&
+            adapted.outputUnitStatements &&
+            adapted.reasonCodes.includes(
+              AHSP_DOCUMENT_REASON.SOURCE_UNIT_CONFLICT,
+            )
+          ) {
+            const verdict = await this.outputUnitStatementsVerdict(
+              adapted.outputUnitStatements,
+              definitionToday,
+            );
+            if (verdict !== 'SAME') {
+              writtenUnitQuestions.push({
+                lineNumber: line.lineNumber,
+                workType: line.knowledge.workType?.raw ?? null,
+                methodName: line.knowledge.methodName?.raw ?? null,
+                statedOutputUnits: adapted.outputUnitStatements.map(
+                  (statement) => statement.raw,
+                ),
+                provenDifferent: verdict === 'DIFFERENT',
+              });
+              continue;
+            }
+          }
+          if (recipe === 'AWAITING_IDENTITY') awaitingIdentity += 1;
+          else complete += 1;
+        }
+        const waiting = await Promise.all(
+          job.waiting.map(async (line) => {
+            const kept = lines.find(
+              (candidate) => candidate.lineNumber === line.lineNumber,
+            )?.knowledge;
+            const knowledge = kept && withTitleOutputUnitStatement(kept);
+            return {
+              ...line,
+              ...(surface &&
+              awaitsSameness(line) &&
+              line.workType !== null &&
+              line.methodName !== null
+                ? this.identityOf(
+                    line.workType,
+                    line.methodName,
+                    surface,
+                    workspaceId,
+                  )
+                : {}),
+              ...(knowledge !== kept ? { readingUpdated: true as const } : {}),
+              ...(knowledge &&
+              line.reasonCodes.includes(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED)
+                ? await this.unitsWaitedFor(knowledge, unitProvedToday)
+                : {}),
+              ...(knowledge?.outputUnitStatements &&
+              line.reasonCodes.includes(
+                AHSP_DOCUMENT_REASON.SOURCE_UNIT_CONFLICT,
+              )
+                ? {
+                    statedOutputUnits: knowledge.outputUnitStatements.map(
+                      (statement) => statement.raw,
+                    ),
+                  }
+                : {}),
+            };
+          }),
+        );
+        return {
+          importJobId: job.importJobId,
+          sourceFileName: job.sourceFileName,
+          status: job.status,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt,
+          counts: job.counts,
+          completion: {
+            complete,
+            awaitingIdentity,
+            recipeNotUsable,
+            writtenUnitQuestions,
+            identityQuestions: { questions: open.keys.size, uses: open.uses },
+          },
+          waiting,
+        };
+      }),
+    );
+    return { items, ...nextPage };
+  }
+
+  /**
+   * COMPLETE FOR THE AHSP STAGE — asked of the recipe a saved line points to, the
+   * way the resolver that CONSUMES that recipe asks (AhspResourceResolutionOrchestrator),
+   * and never read off the curation queue: a question that left the queue is not
+   * an identity anyone can use, and a component that was never observed is not
+   * one either.
+   *  - the recipe is the version the import wrote; for a line represented by an
+   *    AHSP SIMPROK already held, the version that AHSP offers today under the ONE
+   *    eligibility law (buildEligibleAhspVersionWhere, then the current applicable
+   *    snapshot). No such version, or a written version no longer lawful: NOT_USABLE;
+   *  - its output unit and every component unit must be proved by the Unit Kernel,
+   *    and every coefficient must be positive — otherwise NOT_USABLE;
+   *  - every component must be IDENTIFIED by the Resource Identity authority from
+   *    the consumer's own facts, with the governed source-fact decisions (GHX) and
+   *    approved exact-question answers (IQL) it consults — otherwise
+   *    AWAITING_IDENTITY. ONE evidence load serves every recipe listed.
+   * Nothing is written, and whether a Basic Price exists is not asked.
+   */
+  private async recipeStates(
+    workspaceId: string,
+    lines: ReadonlyArray<{
+      id: string;
+      ahspId: string | null;
+      ahspVersionId: string | null;
+    }>,
+    unitProvedToday: (
+      raw: string,
+      group: AhspResourceGroup | null,
+    ) => Promise<boolean>,
+  ): Promise<Map<string, 'COMPLETE' | 'AWAITING_IDENTITY' | 'NOT_USABLE'>> {
+    const states = new Map<
+      string,
+      'COMPLETE' | 'AWAITING_IDENTITY' | 'NOT_USABLE'
+    >();
+    if (lines.length === 0) return states;
+    const eligible = buildEligibleAhspVersionWhere(workspaceId, new Date());
+    const recipeSelect = {
+      id: true,
+      versionNumber: true,
+      outputUnit: true,
+      ahsp: { select: { id: true } },
+      resources: {
+        select: {
+          id: true,
+          resourceId: true,
+          resourceType: true,
+          coefficient: true,
+          baseUnit: true,
+          rawName: true,
+          rawCode: true,
+          rawUnit: true,
+        },
+      },
+    } as const;
+    const writtenIds = [
+      ...new Set(
+        lines.flatMap((line) =>
+          line.ahspVersionId ? [line.ahspVersionId] : [],
+        ),
+      ),
+    ];
+    const heldIds = [
+      ...new Set(
+        lines.flatMap((line) =>
+          !line.ahspVersionId && line.ahspId ? [line.ahspId] : [],
+        ),
+      ),
+    ];
+    const written =
+      writtenIds.length > 0
+        ? await this.prisma.aHSPVersion.findMany({
+            where: { AND: [{ id: { in: writtenIds } }, eligible] },
+            select: recipeSelect,
+          })
+        : [];
+    const offered =
+      heldIds.length > 0
+        ? pickCurrentApplicableAhspVersions(
+            await this.prisma.aHSPVersion.findMany({
+              where: { AND: [{ ahspId: { in: heldIds } }, eligible] },
+              select: recipeSelect,
+            }),
+          )
+        : [];
+    const writtenById = new Map(
+      written.map((version) => [version.id, version]),
+    );
+    const offeredByParent = new Map(
+      offered.map((version) => [version.ahsp.id, version]),
+    );
+    const recipes = [...written, ...offered];
+    const resources = recipes.flatMap((version) => version.resources);
+    const factsOf = (resource: (typeof resources)[number]) => {
+      // The consumer's own derivation (orchestrator sourceFacts), pinned to it by
+      // the consumer-equivalence spec so the two cannot drift apart silently.
+      const resourceCatalogId = isResourceCatalogIdShape(resource.resourceId)
+        ? resource.resourceId
+        : null;
+      return {
+        rawName:
+          resource.rawName ??
+          (resourceCatalogId === null ? resource.resourceId : ''),
+        rawCode: resource.rawCode ?? null,
+        rawUnit: resource.rawUnit ?? resource.baseUnit,
+        resourceType: resource.resourceType,
+        resourceCatalogId,
+      };
+    };
+    const evidence =
+      resources.length > 0
+        ? await this.identity.loadEvidence(
+            this.prisma,
+            workspaceId,
+            resources.map((resource) => resource.id),
+            {
+              identicalQuestionKeys: resources.map((resource) => {
+                const facts = factsOf(resource);
+                return identicalQuestionKey({
+                  workspaceId,
+                  resourceType: facts.resourceType,
+                  rawName: facts.rawName,
+                  rawCode: facts.rawCode,
+                  rawUnit: facts.rawUnit,
+                });
+              }),
+            },
+          )
+        : null;
+    const stateOf = async (
+      version: (typeof recipes)[number] | undefined,
+    ): Promise<'COMPLETE' | 'AWAITING_IDENTITY' | 'NOT_USABLE'> => {
+      if (!version || version.resources.length === 0 || !version.outputUnit) {
+        return 'NOT_USABLE';
+      }
+      if (!(await unitProvedToday(version.outputUnit, null)))
+        return 'NOT_USABLE';
+      let identified = true;
+      for (const resource of version.resources) {
+        const group = (['LABOR', 'MATERIAL', 'EQUIPMENT'] as const).find(
+          (candidate) => candidate === resource.resourceType,
+        );
+        if (
+          !group ||
+          !(Number(resource.coefficient) > 0) ||
+          !(await unitProvedToday(resource.baseUnit, group))
+        ) {
+          return 'NOT_USABLE';
+        }
+        if (!evidence) continue;
+        // Every component is asked, as the consumer asks every one.
+        const verdict = await this.identity.resolve(
+          {
+            ...evidence,
+            ghxSubject: {
+              workspaceId,
+              ahspResourceId: resource.id,
+              resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+            },
+          },
+          factsOf(resource),
+        );
+        identified =
+          identified &&
+          verdict.status === 'RESOLVED' &&
+          evidence.catalogCandidates.some(
+            (candidate) => candidate.id === verdict.resolvedResourceCatalogId,
+          );
+      }
+      return identified ? 'COMPLETE' : 'AWAITING_IDENTITY';
+    };
+    for (const line of lines) {
+      states.set(
+        line.id,
+        await stateOf(
+          line.ahspVersionId
+            ? writtenById.get(line.ahspVersionId)
+            : line.ahspId
+              ? offeredByParent.get(line.ahspId)
+              : undefined,
+        ),
+      );
+    }
+    return states;
+  }
+
+  /**
+   * What the Unit Kernel says differently spelled statements of ONE output unit
+   * are: one unit, different units, or not provable (a spelling it does not know).
+   */
+  private async outputUnitStatementsVerdict(
+    statements: readonly AhspSourceLocator[],
+    definitionOf: (raw: string) => Promise<string | null>,
+  ): Promise<'SAME' | 'DIFFERENT' | 'UNPROVEN'> {
+    const definitions: Array<string | null> = [];
+    for (const statement of statements) {
+      definitions.push(await definitionOf(statement.raw));
+    }
+    if (definitions.includes(null)) return 'UNPROVEN';
+    return new Set(definitions).size === 1 ? 'SAME' : 'DIFFERENT';
+  }
+
+  /** The unit definition an output-unit spelling resolves to today, if exactly one. */
+  private async outputUnitDefinition(raw: string): Promise<string | null> {
+    const unit = await this.units.resolve(raw, raw);
+    return unit.status === UNIT_RESOLUTION_STATUS.RESOLVED
+      ? (unit.sourceUnitDefinition?.id ?? null)
+      : null;
+  }
+
+  /**
+   * The unit spellings a waiting line still waits for today, as the document
+   * spells them and how often; or, when the Unit Kernel now knows every one, that
+   * the line is worth checking again. Only what the import itself asks is asked:
+   * the output unit (or each of its differently spelled statements), and each
+   * named, classed component's unit.
+   */
+  private async unitsWaitedFor(
+    knowledge: AhspWorkItemKnowledge,
+    unitProvedToday: (
+      raw: string,
+      group: AhspResourceGroup | null,
+    ) => Promise<boolean>,
+  ): Promise<
+    | { unitsKnownNow: true }
+    | { unknownUnits: Array<{ spelling: string; uses: number }> }
+  > {
+    const unknown = new Map<string, number>();
+    const ask = async (raw: string, group: AhspResourceGroup | null) => {
+      if (await unitProvedToday(raw, group)) return;
+      const spelling = raw.trim();
+      unknown.set(spelling, (unknown.get(spelling) ?? 0) + 1);
+    };
+    if (knowledge.outputUnitRaw) {
+      await ask(knowledge.outputUnitRaw.raw, null);
+    } else {
+      for (const statement of knowledge.outputUnitStatements ?? []) {
+        await ask(statement.raw, null);
+      }
+    }
+    for (const resource of knowledge.resources) {
+      if (!resource.rawName || !resource.group || resource.rawUnit === null)
+        continue;
+      await ask(resource.rawUnit, resource.group);
+    }
+    return unknown.size === 0
+      ? { unitsKnownNow: true }
+      : {
+          unknownUnits: [...unknown].map(([spelling, uses]) => ({
+            spelling,
+            uses,
+          })),
+        };
+  }
+
+  /**
+   * THE unit question an import asks: an output unit must resolve to a unit
+   * definition; a component's unit must resolve under its class's context.
+   */
+  private async unitProved(
+    raw: string,
+    group: AhspResourceGroup | null,
+  ): Promise<boolean> {
+    if (group === null) {
+      const unit = await this.units.resolve(raw, raw);
+      return (
+        unit.status === UNIT_RESOLUTION_STATUS.RESOLVED &&
+        Boolean(unit.sourceUnitDefinition)
+      );
+    }
+    const unit = await this.units.resolve(
+      raw,
+      raw,
+      undefined,
+      GROUP_TO_CONTEXT[group],
+    );
+    return unit.status === UNIT_RESOLUTION_STATUS.RESOLVED;
+  }
+
+  /**
+   * ONE write path for a fresh commit and a continuation. `lines` are aligned
+   * with `knowledge.workItems`, one durable intake line per item.
+   *
+   * Every item is its own unit: a canonical write is whole-or-nothing
+   * (IMPORT-SEAM-08), and an item that cannot be written — or whose write fails —
+   * never erases or blocks the items around it.
+   */
+  private async commitKnowledge(
+    knowledge: AhspDocumentKnowledge,
+    context: {
+      workspaceId: string;
+      userId: string;
+      decisions: readonly AhspImportDecision[];
+      importJobId: string;
+      lines: readonly AhspImportJournalLine[];
+    },
+  ): Promise<AhspDocumentCommitResult> {
+    const { workspaceId, userId, lines } = context;
+    if (lines.length !== knowledge.workItems.length) {
+      throw new ConflictException('AHSP_IMPORT_JOURNAL_MISALIGNED');
+    }
+    const decisionByItem = this.decisionMap(context.decisions);
+    // IMPORT-SEAM-03 — SOURCE TRUTH FIRST. What the document said about a
+    // resource SIMPROK could not prove is kept before anything canonical is
+    // attempted: awaited and never swallowed, so if it cannot be kept no write
+    // begins. It used to run after the writes, best-effort, and any earlier
+    // failure skipped it for the whole document.
+    await this.observeUnresolved(knowledge, workspaceId);
+
     const skipped: Array<AhspDocumentCommitResult['skipped'][number]> = [];
     const written: Array<AhspDocumentCommitResult['written'][number]> = [];
+    const failed: Array<AhspDocumentCommitResult['failed'][number]> = [];
     const sightings: Prisma.ResourceSourceIdentityCreateManyInput[] = [];
-    // Two provenance writes, two durability contracts, both written inline beside
-    // the item they describe:
-    //  - KEEP_SEPARATE: best-effort (its own catch), exactly like the observation
-    //    and sighting writes below. The row already carries a durable AHSPCreated
-    //    entry, so losing this note corrupts nothing and must never fail a commit.
-    //  - USE_EXISTING: DURABLE (see recordUseExisting). Nothing is created for a
-    //    use-existing decision, so that audit row is the ONLY trace that a human
-    //    weighed a duplicate — its failure surfaces rather than being swallowed.
-    for (const item of knowledge.workItems) {
-      if (item.status !== 'READY' || !item.workType || !item.methodName) {
-        skipped.push({
-          workType: item.workType?.raw ?? null,
-          methodName: item.methodName?.raw ?? null,
-          reasonCodes: item.reasonCodes.length
-            ? item.reasonCodes
-            : [AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY],
-        });
-        continue;
-      }
+    const counts = {
+      ready: 0,
+      identityPending: 0,
+      alreadyPresent: 0,
+      alreadyProcessed: 0,
+      held: 0,
+    };
 
+    for (const [index, item] of knowledge.workItems.entries()) {
+      const line = lines[index];
+      const workType = item.workType?.raw ?? null;
+      const methodName = item.methodName?.raw ?? null;
+      const admission = item.admission ?? 'HELD';
       const verdict = item.identityVerdict ?? 'DISTINCT';
-      const decision = decisionByItem.get(
-        item.workType.raw + '\u0000' + item.methodName.raw,
-      );
-      const primaryMatch = item.identityMatches?.[0];
+      const decision = decisionByItem.get(workType + '\u0000' + methodName);
 
-      // IDENTICAL — an AHSP with this exact identity already holds it (a
-      // soft-deleted twin counts, because it still occupies the @@unique index).
-      // NEVER create: that is both the ONE-TRUTH law and the fix for the raw
-      // P2002/500. Nothing is auto-merged — the human adopts the existing AHSP or
-      // leaves it, and the choice is recorded, never inferred.
-      if (verdict === 'IDENTICAL') {
-        if (decision === 'USE_EXISTING') {
-          await this.recordUseExisting(item, knowledge, userId);
-        }
-        skipped.push({
-          workType: item.workType.raw,
-          methodName: item.methodName.raw,
-          reasonCodes: [AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY],
-        });
-        continue;
-      }
-
-      // POSSIBLY_IDENTICAL — a look-alike exists but identity is NOT proven. It
-      // is never silently created: the human must explicitly keep it separate.
-      // Absent that decision it is HELD (surfaced, not written, not lost) so the
-      // human can still decide. similarity is evidence, never an auto-action.
-      if (verdict === 'POSSIBLY_IDENTICAL' && decision !== 'KEEP_SEPARATE') {
-        if (decision === 'USE_EXISTING') {
-          await this.recordUseExisting(item, knowledge, userId);
-        }
-        skipped.push({
-          workType: item.workType.raw,
-          methodName: item.methodName.raw,
-          reasonCodes: [AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH],
-        });
-        continue;
-      }
-
-      // DISTINCT, or POSSIBLY with an explicit human KEEP_SEPARATE (its identity
-      // differs from every existing one, so a distinct row is lawful) — the
-      // existing canonical write path, unchanged.
+      let outcome: AhspImportItemOutcome;
       try {
-        const parent = await this.ahspService.create({
-          workspaceId: envelope.workspaceId,
-          workType: item.workType.raw,
-          methodName: item.methodName.raw,
+        // IMPORT-SEAM-09 — ONE LINE, ONE AUTHORITATIVE OUTCOME. Nothing is
+        // decided about this item — nothing written, adopted or recorded — until
+        // its intake line is LOCKED and re-read here: the status a request loaded
+        // can be stale by the time it writes, and the same document uploaded
+        // again must not act a second time on a line an earlier evaluation has
+        // already settled.
+        outcome = await this.prisma.$transaction(async (txc) => {
+          const tx = txc as Prisma.TransactionClient;
+          const current = await this.journal.lockLine(tx, {
+            workspaceId,
+            lineId: line.id,
+          });
+          if (!current) return { kind: 'UNREACHABLE' as const };
+          // ALREADY REPRESENTED — the first lawful outcome stands. A replay, a
+          // re-upload, or a different decision arriving afterwards reports what
+          // is recorded; it never rewrites it and never acts again.
+          if (current.status === ImportStatus.COMPLETED) {
+            return this.alreadyProcessed(current);
+          }
+          return this.settleHeldItem(
+            item,
+            knowledge,
+            { workspaceId, userId, lineId: line.id, decision },
+            tx,
+          );
+        }, ITEM_TRANSACTION);
+      } catch (error) {
+        outcome = await this.settleAfterRollback(error, {
+          workspaceId,
+          lineId: line.id,
+          reasonCodes: item.reasonCodes,
+        });
+      }
+
+      switch (outcome.kind) {
+        case 'WRITTEN':
+          written.push({
+            workType: workType as string,
+            methodName: methodName as string,
+            ahspId: outcome.ahspId,
+            versionId: outcome.versionId,
+            admission: admission as Exclude<AhspWorkItemAdmission, 'HELD'>,
+            identityPendingResources: item.resources.filter(
+              (resource) => resource.resolvedResourceCatalogId === null,
+            ).length,
+          });
+          if (admission === 'PROVEN') counts.ready += 1;
+          else counts.identityPending += 1;
+          if (verdict === 'POSSIBLY_IDENTICAL') {
+            // Record that a possible twin was SHOWN and deliberately kept separate.
+            // Best-effort and OUTSIDE the item's transaction: the row already carries
+            // a durable AHSPCreated entry, so losing this note corrupts nothing and
+            // must never fail — or roll back — an otherwise-good write.
+            await this.audit
+              .logAction({
+                ahspId: outcome.ahspId,
+                action: 'AHSPImportKeptSeparate',
+                who: userId,
+                before: this.decisionProvenance(item, knowledge),
+              })
+              .catch(() => undefined);
+          }
+          sightings.push(...this.sightingsFor(item, knowledge, workspaceId));
+          break;
+        case 'ALREADY_PRESENT':
+          skipped.push({
+            workType,
+            methodName,
+            reasonCodes: outcome.reasonCodes,
+          });
+          counts.alreadyPresent += 1;
+          break;
+        case 'ALREADY_PROCESSED':
+          skipped.push({
+            workType,
+            methodName,
+            reasonCodes: outcome.reasonCodes,
+          });
+          counts.alreadyProcessed += 1;
+          break;
+        case 'HELD':
+          skipped.push({
+            workType,
+            methodName,
+            reasonCodes: outcome.reasonCodes,
+          });
+          counts.held += 1;
+          break;
+        // IMPORT-SEAM-08 — the item's transaction rolled back, so it wrote
+        // nothing. The failure is kept on its intake line and returned — never
+        // swallowed — and the items after it are still evaluated. A line this
+        // workspace can no longer reach is the same truth for this request.
+        case 'FAILED':
+        case 'UNREACHABLE':
+          failed.push({ workType, methodName, lineNumber: line.lineNumber });
+          break;
+      }
+    }
+    // Every PROVED reading in an accepted analysis enriches the shared sighting
+    // memory (ResourceSourceIdentity), so a spelling proved once is recognised
+    // the next time. Best-effort: learning must never fail an otherwise-good
+    // commit.
+    await this.rememberProvenReadings(sightings).catch(() => undefined);
+    await this.journal.refreshJobStatus(workspaceId, context.importJobId);
+
+    return {
+      knowledge,
+      importJobId: context.importJobId,
+      summary: {
+        evaluated: knowledge.workItems.length,
+        ...counts,
+        failed: failed.length,
+      },
+      written,
+      skipped,
+      failed,
+    };
+  }
+
+  /**
+   * What ONE still-open line lawfully becomes now — decided and settled on the
+   * transaction that already HOLDS that line's lock, so every effect below
+   * (adoption record, canonical write, settlement) commits or rolls back as one
+   * act on a line that is still eligible for it.
+   */
+  private async settleHeldItem(
+    item: AhspWorkItemKnowledge,
+    knowledge: AhspDocumentKnowledge,
+    context: {
+      workspaceId: string;
+      userId: string;
+      lineId: string;
+      decision: AhspImportDecisionAction | undefined;
+    },
+    tx: Prisma.TransactionClient,
+  ): Promise<AhspImportItemOutcome> {
+    const { workspaceId, userId, lineId, decision } = context;
+    const workType = item.workType?.raw ?? null;
+    const methodName = item.methodName?.raw ?? null;
+    const hold = async (
+      reasonCodes: readonly AhspDocumentReasonCode[],
+    ): Promise<AhspImportItemOutcome> => {
+      await this.journal.settleOrThrow(tx, {
+        workspaceId,
+        lineId,
+        status: ImportStatus.PENDING,
+        reasonCodes,
+      });
+      return { kind: 'HELD', reasonCodes };
+    };
+
+    const admission = item.admission ?? 'HELD';
+    if (admission === 'HELD' || workType === null || methodName === null) {
+      return hold(
+        item.reasonCodes.length
+          ? item.reasonCodes
+          : [AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY],
+      );
+    }
+
+    const verdict = item.identityVerdict ?? 'DISTINCT';
+
+    // IDENTICAL — an AHSP with this exact identity already holds it (a
+    // soft-deleted twin counts, because it still occupies the @@unique index).
+    // NEVER create: that is both the ONE-TRUTH law and the fix for the raw
+    // P2002/500. Nothing is auto-merged — the human adopts the existing AHSP or
+    // leaves it, and the choice is recorded, never inferred.
+    if (verdict === 'IDENTICAL') {
+      const twin = item.identityMatches?.[0] ?? null;
+      const reasonCodes = [AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY];
+      // A live twin already represents this item. A soft-deleted one does not:
+      // reviving it is a separate, governed act, so the item stays held.
+      const representedBy = twin !== null && !twin.deleted ? twin.ahspId : null;
+      if (decision === 'USE_EXISTING') {
+        await this.recordUseExisting(item, knowledge, userId, tx);
+      }
+      await this.journal.settleOrThrow(tx, {
+        workspaceId,
+        lineId,
+        status: representedBy ? ImportStatus.COMPLETED : ImportStatus.PENDING,
+        reasonCodes,
+        ahspId: representedBy,
+      });
+      return representedBy
+        ? { kind: 'ALREADY_PRESENT', reasonCodes }
+        : { kind: 'HELD', reasonCodes };
+    }
+
+    // POSSIBLY_IDENTICAL — a look-alike exists but identity is NOT proven. It
+    // is never silently created: the human must explicitly keep it separate.
+    // Absent that decision it is HELD (surfaced, not written, not lost) so the
+    // human can still decide. Similarity is evidence, never an auto-action.
+    if (verdict === 'POSSIBLY_IDENTICAL' && decision !== 'KEEP_SEPARATE') {
+      const reasonCodes = [AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH];
+      if (decision !== 'USE_EXISTING') return hold(reasonCodes);
+      const adoptedAhspId = await this.recordUseExisting(
+        item,
+        knowledge,
+        userId,
+        tx,
+      );
+      await this.journal.settleOrThrow(tx, {
+        workspaceId,
+        lineId,
+        status: adoptedAhspId ? ImportStatus.COMPLETED : ImportStatus.PENDING,
+        reasonCodes,
+        ahspId: adoptedAhspId,
+      });
+      return adoptedAhspId
+        ? { kind: 'ALREADY_PRESENT', reasonCodes }
+        : { kind: 'HELD', reasonCodes };
+    }
+
+    // DISTINCT, or POSSIBLY with an explicit human KEEP_SEPARATE (its identity
+    // differs from every existing one, so a distinct row is lawful).
+    const saved = await this.writeItem(
+      item,
+      knowledge,
+      { workspaceId, userId, lineId },
+      tx,
+    );
+    return {
+      kind: 'WRITTEN',
+      ahspId: saved.ahspId,
+      versionId: saved.versionId,
+    };
+  }
+
+  /**
+   * A line this evaluation found ALREADY REPRESENTED: its recorded reasons are
+   * reported as they stand. They are the reasons of the evaluation that settled
+   * it — this request states them, and claims nothing of its own.
+   */
+  private alreadyProcessed(line: AhspImportLockedLine): AhspImportItemOutcome {
+    return {
+      kind: 'ALREADY_PROCESSED',
+      reasonCodes: line.reasonCodes as readonly AhspDocumentReasonCode[],
+    };
+  }
+
+  /**
+   * The item's transaction rolled back, so it wrote nothing. What is recorded
+   * now is decided under the line's OWN lock, because another evaluation may
+   * have completed it in the meantime: a completed line keeps its result and
+   * this request reports it, and a still-open line is settled for what happened.
+   */
+  private async settleAfterRollback(
+    error: unknown,
+    context: {
+      workspaceId: string;
+      lineId: string;
+      reasonCodes: readonly AhspDocumentReasonCode[];
+    },
+  ): Promise<AhspImportItemOutcome> {
+    // The settlement itself refused: this line was represented while the write
+    // was in flight. Nothing of this request committed — report the truth.
+    if (error instanceof AhspImportLineAlreadySettledError) {
+      return this.settleOpenLine(context.workspaceId, context.lineId, null, {
+        kind: 'FAILED',
+      });
+    }
+    // An identical AHSP appeared between classification and the write. Held
+    // with that reason; the next evaluation classifies it for what it is.
+    if (error instanceof ConflictException) {
+      const reasonCodes = [AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY];
+      return this.settleOpenLine(
+        context.workspaceId,
+        context.lineId,
+        { status: ImportStatus.PENDING, reasonCodes },
+        { kind: 'HELD', reasonCodes },
+      );
+    }
+    return this.settleOpenLine(
+      context.workspaceId,
+      context.lineId,
+      {
+        status: ImportStatus.FAILED,
+        reasonCodes: context.reasonCodes,
+        errorMessage: (error instanceof Error
+          ? error.message
+          : String(error)
+        ).slice(0, 500),
+      },
+      { kind: 'FAILED' },
+    );
+  }
+
+  /**
+   * Settle a line that is NOT being completed — held, or failed — under its own
+   * lock. A line another evaluation has completed is never downgraded and never
+   * reported as newly held or newly failed: its recorded result is what this
+   * request returns. `outcome` null only re-reads.
+   */
+  private async settleOpenLine(
+    workspaceId: string,
+    lineId: string,
+    outcome: AhspImportLineOutcome | null,
+    settled: AhspImportItemOutcome,
+  ): Promise<AhspImportItemOutcome> {
+    return this.prisma.$transaction(async (txc) => {
+      const tx = txc as Prisma.TransactionClient;
+      const current = await this.journal.lockLine(tx, { workspaceId, lineId });
+      if (!current) return { kind: 'UNREACHABLE' as const };
+      if (current.status === ImportStatus.COMPLETED) {
+        return this.alreadyProcessed(current);
+      }
+      if (outcome === null) return settled;
+      await this.journal.settleOrThrow(tx, { workspaceId, lineId, ...outcome });
+      return settled;
+    }, ITEM_TRANSACTION);
+  }
+
+  /**
+   * IMPORT-SEAM-08 — ONE WORK ITEM, WHOLE OR NOTHING. The parent AHSP, its
+   * version, the version's resources, their durable audit entries and the intake
+   * line that records them commit together, through the SAME writers every other
+   * caller uses, on the transaction that holds this line's lock. A failure
+   * anywhere leaves no parent without a version and no line claiming a write
+   * that did not happen — and a settlement that changes no line rolls the whole
+   * write back rather than leaving an AHSP the journal does not know about.
+   */
+  private async writeItem(
+    item: AhspWorkItemKnowledge,
+    knowledge: AhspDocumentKnowledge,
+    context: { workspaceId: string; userId: string; lineId: string },
+    tx: Prisma.TransactionClient,
+  ): Promise<{ ahspId: string; versionId: string }> {
+    const { workspaceId, userId } = context;
+    {
+      // AhspService.create returns an untyped row; only the new parent's id is read.
+      const parent = (await this.ahspService.create(
+        {
+          workspaceId,
+          workType: item.workType!.raw,
+          methodName: item.methodName!.raw,
           methodType: AHSP_PARENT_IDENTITY_FILLER.methodType,
           locationType: AHSP_PARENT_IDENTITY_FILLER.locationType,
           // ACG-01 CLOSURE 2 — the source's own item code, recorded as the code
@@ -257,22 +1216,28 @@ export class AhspDocumentCanonicalizationService {
           // parser contract carries no such fact, so supplying one would mean
           // inferring it from a document heading — context invented rather than
           // read. See the closure report for the exact narrow blocker.
-          code: item.workType.raw,
+          code: item.workType!.raw,
           userId,
-        });
-        const version = await this.versionService.createVersion(parent.id, {
-          workspaceId: envelope.workspaceId,
+        },
+        tx,
+      )) as { id: string };
+      const version = await this.versionService.createVersion(
+        parent.id,
+        {
+          workspaceId,
           userId,
           outputUnit: item.resolvedOutputUnit ?? item.outputUnitRaw!.raw,
           regulationReference:
             item.regulationReference?.raw ??
             knowledge.document.regulationReference?.raw,
           // CLOSURE 1 — what the document actually said about this line, kept
-          // beside the identity the import proved. `resourceId` still carries
-          // the catalog id exactly as before; these columns are what makes that
-          // id traceable back to the row it was read from.
+          // beside the identity the import proved.
           resources: item.resources.map((resource) => ({
-            resourceId: resource.resolvedResourceCatalogId!,
+            // IMPORT-SEAM-01 — the catalogue id the identity kernel PROVED, or,
+            // while that identity is still pending, the source's own words: the
+            // convention hand-built recipes use and the occurrence path reads by
+            // shape. Never a candidate, a weak possibility or a ruled-out row.
+            resourceId: resource.resolvedResourceCatalogId ?? resource.rawName!,
             resourceType: resource.group!,
             coefficient: resource.coefficient!,
             baseUnit: resource.resolvedBaseUnit ?? resource.rawUnit!,
@@ -288,67 +1253,27 @@ export class AhspDocumentCanonicalizationService {
             sourceCodeCellAddress: resource.codeEvidence?.locator ?? null,
             sourceUnitCellAddress: resource.unitEvidence?.locator ?? null,
           })),
-        });
-        written.push({
-          workType: item.workType.raw,
-          methodName: item.methodName.raw,
-          ahspId: parent.id,
-          versionId: version.id,
-        });
-        if (verdict === 'POSSIBLY_IDENTICAL') {
-          // Record that a possible twin was SHOWN and deliberately kept separate.
-          // Written right beside the row it describes, so it can never be stranded
-          // by an unrelated failure later in the loop. Best-effort: the row already
-          // carries a durable AHSPCreated entry, so losing this note corrupts
-          // nothing and must never fail an otherwise-good commit.
-          await this.audit
-            .logAction({
-              ahspId: parent.id,
-              action: 'AHSPImportKeptSeparate',
-              who: userId,
-              before: this.decisionProvenance(item, knowledge),
-            })
-            .catch(() => undefined);
-        }
-        const recorded = written[written.length - 1];
-        await this.recordIdenticalQuestionReuse(
-          item,
-          knowledge,
-          recorded.ahspId,
-          recorded.versionId,
-          userId,
-        );
-        sightings.push(
-          ...this.sightingsFor(item, knowledge, envelope.workspaceId),
-        );
-      } catch (error) {
-        if (error instanceof ConflictException) {
-          skipped.push({
-            workType: item.workType.raw,
-            methodName: item.methodName.raw,
-            reasonCodes: [AHSP_DOCUMENT_REASON.DUPLICATE_IDENTITY],
-          });
-          continue;
-        }
-        throw error;
-      }
+        },
+        tx,
+      );
+      await this.recordIdenticalQuestionReuse(
+        item,
+        knowledge,
+        parent.id,
+        version.id,
+        userId,
+        tx,
+      );
+      await this.journal.settleOrThrow(tx, {
+        workspaceId,
+        lineId: context.lineId,
+        status: ImportStatus.COMPLETED,
+        reasonCodes: item.reasonCodes,
+        ahspId: parent.id,
+        ahspVersionId: version.id,
+      });
+      return { ahspId: parent.id, versionId: version.id };
     }
-    // A resource this document SAW but could not prove is not lost. It is
-    // persisted as a shared observation for later human curation — the exact
-    // same lifecycle Basic Price feeds, through the one shared service. Proven
-    // resources need no observation (they are already canonical); only the
-    // unresolved ones are recorded, best-effort so a persistence hiccup never
-    // fails an otherwise-good commit.
-    await this.observeUnresolved(knowledge, envelope.workspaceId).catch(
-      () => undefined,
-    );
-    // Every PROVED reading in an accepted analysis enriches the shared sighting
-    // memory (ResourceSourceIdentity), so a spelling proved once is recognised
-    // the next time. Best-effort, exactly like the observation above: learning
-    // must never fail an otherwise-good commit.
-    await this.rememberProvenReadings(sightings).catch(() => undefined);
-
-    return { knowledge, written, skipped };
   }
 
   /** Index human decisions by the work item's source-name identity (stable across the preview and commit uploads of the same file). Malformed entries are ignored, never trusted. */
@@ -385,29 +1310,36 @@ export class AhspDocumentCanonicalizationService {
    * When a rule refuses the choice, the ACT of choosing is still recorded, so a
    * human decision is never silently erased.
    *
-   * DURABLE: awaited and uncaught. For a use-existing decision nothing is created,
-   * so this row is the only trace that a human weighed a duplicate — losing it
-   * silently is the one thing that must not happen. NOTE: commit() is not wrapped in
-   * a transaction, so items written EARLIER in the loop stay written if this throws;
-   * what is guaranteed is that the failure surfaces instead of being swallowed.
+   * DURABLE: awaited and uncaught, on the item's own transaction together with its
+   * intake line. For a use-existing decision nothing is created, so this row is the
+   * only trace that a human weighed a duplicate — if it cannot be written, neither
+   * is the line, and the failure is recorded on that line and returned.
+   *
+   * Returns the AHSP the human's choice now represents the item by, or null when
+   * the choice was refused (or there was nothing to choose).
    */
   private async recordUseExisting(
     item: AhspWorkItemKnowledge,
     knowledge: AhspDocumentKnowledge,
     userId: string,
-  ): Promise<void> {
+    client: Prisma.TransactionClient,
+  ): Promise<string | null> {
     const matches = item.identityMatches ?? [];
     const primaryMatch = matches[0];
-    if (!primaryMatch) return;
+    if (!primaryMatch) return null;
     const honoured = matches.length === 1 && !primaryMatch.deleted;
-    await this.audit.logAction({
-      ahspId: primaryMatch.ahspId,
-      action: honoured
-        ? 'AHSPImportUsedExisting'
-        : 'AHSPImportUsedExistingRefused',
-      who: userId,
-      before: this.decisionProvenance(item, knowledge),
-    });
+    await this.audit.logAction(
+      {
+        ahspId: primaryMatch.ahspId,
+        action: honoured
+          ? 'AHSPImportUsedExisting'
+          : 'AHSPImportUsedExistingRefused',
+        who: userId,
+        before: this.decisionProvenance(item, knowledge),
+      },
+      client,
+    );
+    return honoured ? primaryMatch.ahspId : null;
   }
 
   /**
@@ -415,7 +1347,8 @@ export class AhspDocumentCanonicalizationService {
    * APPROVED exact-question answer says so, through the one AHSP provenance
    * channel. The AHSP row stores only a catalog id, so without this entry a
    * later reader could not tell a human-verified reuse from a machine-proven
-   * match. DURABLE, like recordUseExisting: it is the only trace.
+   * match. DURABLE, like recordUseExisting: it is the only trace — written on the
+   * item's own transaction, so it exists exactly when the analysis does.
    */
   private async recordIdenticalQuestionReuse(
     item: AhspWorkItemKnowledge,
@@ -423,29 +1356,33 @@ export class AhspDocumentCanonicalizationService {
     ahspId: string,
     ahspVersionId: string,
     userId: string,
+    client: Prisma.TransactionClient,
   ): Promise<void> {
     const reused = item.resources.filter(
       (resource) => resource.identicalQuestionDecisionId,
     );
     if (reused.length === 0) return;
-    await this.audit.logAction({
-      ahspId,
-      ahspVersionId,
-      action: 'AHSPImportIdentityFromQuestionDecision',
-      who: userId,
-      after: {
-        sourceFileName: knowledge.source.fileName,
-        sourceSha256: knowledge.source.contentDigestSha256,
-        resources: reused.map((resource) => ({
-          rawName: resource.rawName,
-          rawCode: resource.rawCode,
-          rawUnit: resource.rawUnit,
-          group: resource.group,
-          resourceCatalogId: resource.resolvedResourceCatalogId,
-          approvalDecisionId: resource.identicalQuestionDecisionId,
-        })),
+    await this.audit.logAction(
+      {
+        ahspId,
+        ahspVersionId,
+        action: 'AHSPImportIdentityFromQuestionDecision',
+        who: userId,
+        after: {
+          sourceFileName: knowledge.source.fileName,
+          sourceSha256: knowledge.source.contentDigestSha256,
+          resources: reused.map((resource) => ({
+            rawName: resource.rawName,
+            rawCode: resource.rawCode,
+            rawUnit: resource.rawUnit,
+            group: resource.group,
+            resourceCatalogId: resource.resolvedResourceCatalogId,
+            approvalDecisionId: resource.identicalQuestionDecisionId,
+          })),
+        },
       },
-    });
+      client,
+    );
   }
 
   /**
@@ -697,8 +1634,26 @@ export class AhspDocumentCanonicalizationService {
     workspaceId: string,
   ): AhspWorkItemKnowledge {
     if (!item.workType || !item.methodName) return item;
+    return {
+      ...item,
+      ...this.identityOf(
+        item.workType.raw,
+        item.methodName.raw,
+        surface,
+        workspaceId,
+      ),
+    };
+  }
+
+  /** The one classifier call, for a document being read and a stored line alike. */
+  private identityOf(
+    workType: string,
+    methodName: string,
+    surface: readonly AhspIdentityRow[],
+    workspaceId: string,
+  ): Pick<AhspWorkItemKnowledge, 'identityVerdict' | 'identityMatches'> {
     const classification = classifyAhspIdentity(
-      { workspaceId, workType: item.workType.raw, methodName: item.methodName.raw },
+      { workspaceId, workType, methodName },
       surface,
       {
         name: (raw) => this.norm.normalizeName(raw),
@@ -706,30 +1661,56 @@ export class AhspDocumentCanonicalizationService {
       },
     );
     if (classification.verdict === 'DISTINCT') {
-      return { ...item, identityVerdict: 'DISTINCT', identityMatches: [] };
+      return { identityVerdict: 'DISTINCT', identityMatches: [] };
     }
     const matches =
       classification.verdict === 'IDENTICAL' && classification.exactMatch
         ? [classification.exactMatch]
         : classification.possibleMatches;
-    return { ...item, identityVerdict: classification.verdict, identityMatches: matches };
+    return {
+      identityVerdict: classification.verdict,
+      identityMatches: matches,
+    };
   }
 
   private async resolveWorkItem(
     item: AhspWorkItemKnowledge,
     evidence: ResourceIdentityEvidence,
   ): Promise<AhspWorkItemKnowledge> {
-    const reasons: AhspDocumentReasonCode[] = [...item.reasonCodes];
-    let resolvedOutputUnit: string | null = null;
-    if (item.outputUnitRaw) {
-      const unit = await this.units.resolve(
-        item.outputUnitRaw.raw,
-        item.outputUnitRaw.raw,
+    let reasons: AhspDocumentReasonCode[] = [...item.reasonCodes];
+    let outputUnitRaw = item.outputUnitRaw;
+    // The document spelled its output unit differently in two places. Different
+    // spellings are not yet different units — "m1" and "m'" may name one — and
+    // only the Unit Kernel may say so. ONE unit: the statements agree after all,
+    // and the first is used. DIFFERENT units: a contradiction in the source, held.
+    // A spelling the kernel does not know: sameness is neither proved nor refuted,
+    // so the item waits for that unit — it is never called a contradiction.
+    const statements = item.outputUnitStatements ?? [];
+    if (
+      !outputUnitRaw &&
+      statements.length > 1 &&
+      reasons.includes(AHSP_DOCUMENT_REASON.SOURCE_UNIT_CONFLICT)
+    ) {
+      const verdict = await this.outputUnitStatementsVerdict(
+        statements,
+        (raw) => this.outputUnitDefinition(raw),
       );
-      if (unit.status !== UNIT_RESOLUTION_STATUS.RESOLVED || !unit.sourceUnitDefinition) {
+      if (verdict !== 'DIFFERENT') {
+        reasons = reasons.filter(
+          (code) => code !== AHSP_DOCUMENT_REASON.SOURCE_UNIT_CONFLICT,
+        );
+      }
+      if (verdict === 'SAME') outputUnitRaw = statements[0];
+      if (verdict === 'UNPROVEN') {
         reasons.push(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
+      }
+    }
+    let resolvedOutputUnit: string | null = null;
+    if (outputUnitRaw) {
+      if (await this.unitProved(outputUnitRaw.raw, null)) {
+        resolvedOutputUnit = outputUnitRaw.raw;
       } else {
-        resolvedOutputUnit = item.outputUnitRaw.raw;
+        reasons.push(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
       }
     }
     const resources: AhspResourceKnowledge[] = [];
@@ -766,11 +1747,62 @@ export class AhspDocumentCanonicalizationService {
         .length === 0;
     return {
       ...item,
+      outputUnitRaw,
       resolvedOutputUnit,
       resources,
       reasonCodes: unique,
       status: ready ? 'READY' : 'UNRESOLVED',
+      admission: ready
+        ? 'PROVEN'
+        : this.isIdentityOnlyGap(item, resolvedOutputUnit, resources, unique)
+          ? 'IDENTITY_PENDING'
+          : 'HELD',
     };
+  }
+
+  /**
+   * IMPORT-SEAM-01 — is the recipe WHOLE, with component identity the only open
+   * question? Every fact a recipe needs must be proved: both names, the output
+   * unit, and for every component its name, class, a positive coefficient and a
+   * proved unit. The only reasons tolerated are "this component is not identified
+   * yet" (found nothing, or found candidates it could not prove).
+   *
+   * Decided from reasons SIMPROK already derived, never re-scored. A missing,
+   * invalid, unproved or contradictory fact — or a duplicate in the document, or
+   * an ambiguous structure — keeps the item HELD. And the source's own wording must
+   * not look like a catalogue id, because it is about to be stored in the column
+   * whose meaning is read from exactly that shape.
+   */
+  private isIdentityOnlyGap(
+    item: AhspWorkItemKnowledge,
+    resolvedOutputUnit: string | null,
+    resources: readonly AhspResourceKnowledge[],
+    reasons: readonly AhspDocumentReasonCode[],
+  ): boolean {
+    return (
+      item.workType !== null &&
+      item.methodName !== null &&
+      resolvedOutputUnit !== null &&
+      resources.length > 0 &&
+      reasons.every(
+        (code) =>
+          code === AHSP_DOCUMENT_REASON.CURRENTNESS_UNPROVEN ||
+          IDENTITY_ONLY_REASONS.has(code),
+      ) &&
+      resources.every(
+        (resource) =>
+          resource.rawName !== null &&
+          resource.group !== null &&
+          resource.coefficient !== null &&
+          resource.coefficient > 0 &&
+          resource.rawUnit !== null &&
+          resource.reasonCodes.every((code) =>
+            IDENTITY_ONLY_REASONS.has(code),
+          ) &&
+          (resource.resolvedResourceCatalogId !== null ||
+            !isResourceCatalogIdShape(resource.rawName)),
+      )
+    );
   }
 
   private async resolveResource(
@@ -786,14 +1818,7 @@ export class AhspDocumentCanonicalizationService {
     const reasonCodes = [...resource.reasonCodes];
     const unitResolved =
       resource.rawUnit !== null &&
-      (
-        await this.units.resolve(
-          resource.rawUnit,
-          resource.rawUnit,
-          undefined,
-          GROUP_TO_CONTEXT[resource.group],
-        )
-      ).status === UNIT_RESOLUTION_STATUS.RESOLVED;
+      (await this.unitProved(resource.rawUnit, resource.group));
     if (resource.rawUnit !== null && !unitResolved) {
       reasonCodes.push(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
     }

@@ -16,6 +16,13 @@ export const AHSP_DOCUMENT_REASON = {
   MISSING_RESOURCE: 'MISSING_RESOURCE',
   MISSING_UNIT: 'MISSING_UNIT',
   MISSING_OUTPUT_UNIT: 'MISSING_OUTPUT_UNIT',
+  /**
+   * The document states the output unit more than once, in different spellings (a
+   * title "1 m2 …" over a summary "per - m3"). Every statement is kept; none is
+   * chosen. Never MISSING_OUTPUT_UNIT: the unit is stated, twice. Cleared at
+   * resolution only when the Unit Kernel proves every spelling names one unit.
+   */
+  SOURCE_UNIT_CONFLICT: 'SOURCE_UNIT_CONFLICT',
   INVALID_COEFFICIENT: 'INVALID_COEFFICIENT',
   RESOURCE_UNRESOLVED: 'RESOURCE_UNRESOLVED',
   RESOURCE_CANDIDATES_FOUND: 'RESOURCE_CANDIDATES_FOUND',
@@ -31,6 +38,22 @@ export type AhspDocumentReasonCode =
   (typeof AHSP_DOCUMENT_REASON)[keyof typeof AHSP_DOCUMENT_REASON];
 
 export type AhspKnowledgeStatus = 'READY' | 'UNRESOLVED';
+
+/**
+ * IMPORT-SEAM-01 — what an understood work item may become, decided from the
+ * resolution alone: never from a person, never from similarity.
+ *
+ *  PROVEN            every fact the recipe needs is proved (today's READY).
+ *  IDENTITY_PENDING  the recipe is whole — both names, a proved output unit, and
+ *                    every component's name, class, coefficient and proved unit —
+ *                    and the ONLY open question is which catalogue resource a
+ *                    component is. Written with the source's own wording for that
+ *                    component; pricing stays gated where identity is required.
+ *  HELD              a fact the recipe needs is missing, invalid, unproved,
+ *                    contradictory or awaiting a decision. Kept, never written,
+ *                    never lost.
+ */
+export type AhspWorkItemAdmission = 'PROVEN' | 'IDENTITY_PENDING' | 'HELD';
 
 export type AhspResourceGroup = 'LABOR' | 'MATERIAL' | 'EQUIPMENT';
 
@@ -89,6 +112,13 @@ export interface AhspWorkItemKnowledge {
   readonly workType: AhspSourceLocator | null;
   readonly methodName: AhspSourceLocator | null;
   readonly outputUnitRaw: AhspSourceLocator | null;
+  /**
+   * Every place the block states its output unit, in precedence order — the
+   * "Harga Satuan Pekerjaan per -" summary, a "satuan :" row, the work title —
+   * present only when it states it in more than one place. Agreement keeps the
+   * first as `outputUnitRaw`; a conflict keeps them all and `outputUnitRaw` null.
+   */
+  readonly outputUnitStatements?: readonly AhspSourceLocator[];
   readonly resolvedOutputUnit: string | null;
   readonly regulationReference: AhspSourceLocator | null;
   readonly effectiveDate: string | null;
@@ -102,6 +132,11 @@ export interface AhspWorkItemKnowledge {
    */
   readonly identityVerdict?: AhspIdentityVerdict;
   readonly identityMatches?: readonly AhspIdentityMatch[];
+  /**
+   * IMPORT-SEAM-01 — set by resolution, absent on knowledge that was only
+   * understood. `status` keeps its meaning: READY still means every fact proved.
+   */
+  readonly admission?: AhspWorkItemAdmission;
 }
 
 export interface AhspDocumentKnowledge {

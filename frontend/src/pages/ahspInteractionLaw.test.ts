@@ -87,15 +87,23 @@ test("B4: the stylesheet adds no colour outside the Colour Lock", () => {
   assert.ok(!css.includes("#7E22CE") && !css.toLowerCase().includes("#704da1"));
 });
 
+// LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION pinned the save label
+// 'Simpan yang terbukti'. IMPORT ACCEPTANCE BOUNDARY (B7): saving now receives
+// every recognised work item — not only the proven ones — so that label would
+// promise the wrong thing. NEW_EXPECTATION: the same busy/idle contract with the
+// label 'Simpan hasil import', and the new re-check action held to it too.
+// TEST_WEAKENING=NO.
 test("C1: every curation and learning action shows it is working and refuses a second press", () => {
   assert.ok(importPage.includes("curationLock.current"));
   assert.ok(importPage.includes("questionLock.current"));
+  assert.ok(importPage.includes("jobLock.current"));
   assert.ok(importPage.includes("'Menyimpan…'"));
   assert.ok(importPage.includes("aria-busy={busy || undefined}"));
   assert.ok(importPage.includes("disabled={locked}"));
   // The document buttons each say what they are doing.
   assert.ok(importPage.includes("importAction === 'PREVIEW' ? 'Membaca…' : 'Pahami dokumen'"));
-  assert.ok(importPage.includes("importAction === 'COMMIT' ? 'Menyimpan…' : 'Simpan yang terbukti'"));
+  assert.ok(importPage.includes("importAction === 'COMMIT' ? 'Menyimpan…' : 'Simpan hasil import'"));
+  assert.ok(importPage.includes("busy ? 'Memeriksa…' : 'Periksa ulang'"));
 });
 
 test("C2: results are READ from the server and shown where the action was pressed", () => {

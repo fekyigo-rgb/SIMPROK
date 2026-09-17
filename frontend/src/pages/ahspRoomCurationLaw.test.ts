@@ -36,7 +36,10 @@ const importPage = codeOnly(readFileSync("src/pages/AhspImportPage.tsx", "utf8")
 const room = codeOnly(readFileSync("src/pages/AhspRoomPage.tsx", "utf8"));
 
 test("the import door reuses the EXISTING observation endpoints, not a second door", () => {
-  assert.ok(importPage.includes("apiFetch('/resource-observations')"), "lists observations");
+  // CHANGE NOTE (F03): the same endpoint, read through `readList` so an unread
+    // queue is never rendered as an empty one. NEW_EXPECTATION: readList('/resource-observations', …).
+    // TEST_WEAKENING=NO.
+  assert.ok(importPage.includes("readList('/resource-observations', asRows<CuratableObservationWire>)"), "lists observations");
   assert.ok(importPage.includes("/curate-existing"), "existing decision -> existing endpoint");
   assert.ok(importPage.includes("/curate-new"), "new decision -> existing endpoint");
   // No client-side canonical write, ever.

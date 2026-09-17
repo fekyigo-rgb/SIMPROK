@@ -1,4 +1,7 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import type { PrismaService } from '../prisma/prisma.service';
+import type { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import type { ResourceIdentityResolutionService } from './resource-identity-resolution.service';
 import { GhxDecisionContextTokenService } from './ghx-decision-context-token.service';
 import {
   ResourceObservationService,
@@ -643,5 +646,109 @@ describe('ResourceObservationService', () => {
         actorAccountId: 'acct-1',
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  /**
+   * AHSP COMPLETION — the questions each document still asks, for the import's
+   * completion view: the curation queue's own projection, asked once per exact
+   * question, counted per document.
+   */
+  describe('openQuestionsBySource', () => {
+    const SOURCE_1 = '1'.repeat(64);
+    const SOURCE_2 = '2'.repeat(64);
+    const row = (sourceSha256: string, rawName: string) => ({
+      workspaceId: 'ws-1',
+      sourceSha256,
+      rawName,
+      rawCode: null,
+      rawUnit: 'Bh',
+      resourceType: 'MATERIAL',
+    });
+    // Typed doubles of its own: only the two reads this method may make.
+    const findMany = jest.fn();
+    const update = jest.fn();
+    const loadEvidence = jest.fn();
+    const resolve = jest.fn();
+    const reader = () =>
+      new ResourceObservationService(
+        { observedResource: { findMany, update } } as unknown as PrismaService,
+        {} as ResourceAdmissionService,
+        {} as UnitKernelService,
+        {
+          loadEvidence,
+          resolve,
+        } as unknown as ResourceIdentityResolutionService,
+        new GhxDecisionContextTokenService(),
+      );
+
+    beforeEach(() => {
+      [findMany, update, loadEvidence, resolve].forEach((mock) =>
+        mock.mockReset(),
+      );
+      loadEvidence.mockResolvedValue({
+        catalogCandidates: [],
+        sourceSightings: [],
+        reviewedMappings: [],
+      });
+    });
+
+    it('asks the kernel ONCE per exact question, and a question it proves today is not open', async () => {
+      findMany.mockResolvedValue([
+        row(SOURCE_1, 'Pipa PVC'),
+        row(SOURCE_1, 'Pipa PVC'),
+        row(SOURCE_2, 'Pipa PVC'),
+        row(SOURCE_1, 'Semen Portland'),
+      ]);
+      resolve.mockImplementation(
+        (_evidence: unknown, reference: { rawName: string }) =>
+          Promise.resolve(
+            reference.rawName === 'Semen Portland'
+              ? {
+                  status: 'RESOLVED',
+                  resolvedResourceCatalogId: 'cat-semen',
+                  candidates: [],
+                  reasonCodes: [],
+                }
+              : {
+                  status: 'NEEDS_REVIEW',
+                  resolvedResourceCatalogId: null,
+                  candidates: [],
+                  reasonCodes: [],
+                },
+          ),
+      );
+      const open = await reader().openQuestionsBySource('ws-1', [
+        SOURCE_1,
+        SOURCE_2,
+      ]);
+      // Only what is still OBSERVED, only for these documents, only this workspace.
+      expect(findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            workspaceId: 'ws-1',
+            status: 'OBSERVED',
+            sourceSha256: { in: [SOURCE_1, SOURCE_2] },
+          },
+        }),
+      );
+      expect(loadEvidence).toHaveBeenCalledTimes(1);
+      expect(resolve).toHaveBeenCalledTimes(2);
+      expect(open.get(SOURCE_1)?.keys.size).toBe(1);
+      expect(open.get(SOURCE_1)?.uses).toBe(2);
+      expect(open.get(SOURCE_2)?.uses).toBe(1);
+      // The same exact question in two documents is the same question.
+      expect([...(open.get(SOURCE_1)?.keys ?? [])]).toEqual([
+        ...(open.get(SOURCE_2)?.keys ?? []),
+      ]);
+      // A read: nothing is decided.
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('a document with nothing observed asks nothing', async () => {
+      const open = await reader().openQuestionsBySource('ws-1', []);
+      expect(open.size).toBe(0);
+      expect(findMany).not.toHaveBeenCalled();
+      expect(loadEvidence).not.toHaveBeenCalled();
+    });
   });
 });

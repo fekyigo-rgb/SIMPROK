@@ -51,7 +51,19 @@ export class AhspVersionService {
     private readonly units: UnitKernelService,
   ) {}
 
-  async createVersion(ahspId: string, data: CreateAhspVersionDto) {
+  /**
+   * `client` lets a caller append the version inside a transaction it already
+   * holds — the document import writes parent, version, resources and their
+   * audit whole-or-nothing. Omitted, the version is written in its own
+   * transaction exactly as before. Every validation and the tenant check run the
+   * same either way, and the parent is read on the SAME client, so a parent
+   * created earlier in that transaction is visible here.
+   */
+  async createVersion(
+    ahspId: string,
+    data: CreateAhspVersionDto,
+    client?: Prisma.TransactionClient,
+  ) {
     data.resources.forEach(r => {
       if (r.coefficient <= 0) throw new BadRequestException('Coefficient must be > 0');
       if (r.conversionFactor !== undefined && r.conversionFactor !== null)
@@ -64,7 +76,9 @@ export class AhspVersionService {
       throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
     const outputUnitDefinitionId = outputResolution.sourceUnitDefinition.id;
 
-    const ahsp = await this.prisma.aHSP.findUnique({ where: { id: ahspId } });
+    const ahsp = await (client ?? this.prisma).aHSP.findUnique({
+      where: { id: ahspId },
+    });
     if (!ahsp) throw new NotFoundException('AHSP not found');
 
     // RM-03B tenant scope: this lookup was by id ALONE, so any workspace that
@@ -81,7 +95,7 @@ export class AhspVersionService {
     // versions remain readable and already-bound occurrences keep their
     // ahspVersionId. PUBLISHED catalog rows are not withdrawn here — that is
     // a different authority, the same boundary retireVersion already keeps.
-    return this.prisma.$transaction(async (tx) => {
+    const write = async (tx: Prisma.TransactionClient) => {
       const lastVersion = await tx.aHSPVersion.findFirst({
         where: { ahspId },
         orderBy: { versionNumber: 'desc' },
@@ -176,7 +190,8 @@ export class AhspVersionService {
       }
 
       return version;
-    });
+    };
+    return client ? write(client) : this.prisma.$transaction(write);
   }
 
   async updateStatus(versionId: string, newStatus: AhspVersionStatus, userId: string, reason?: string) {

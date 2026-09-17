@@ -5,7 +5,9 @@
  * Consumes SourceTable only. Does not read XLSX bytes, does not write AHSP,
  * does not call Unit Kernel or Resource Identity, and does not clone the
  * Basic Price price-table detector. Columns are bound by header captions.
- * B1B12 column letters are not law.
+ * B1B12 column letters are not law. When a block states its output unit in more
+ * than one place, only the SPELLINGS are compared here; whether two different
+ * spellings name one unit is the Unit Kernel's question, asked at resolution.
  */
 import {
   SourceCell,
@@ -31,9 +33,42 @@ import {
 
 const OUTPUT_UNIT_PATTERN =
   /harga\s+satuan\s+pekerjaan\s+per\s*[-–]?\s*(.+?)\s*\(/i;
+/**
+ * A block that states its output unit on a row of its own, above the header:
+ *
+ *   B.13 Gorong-gorong pipa beton bertulang ... (2.3.(3c))
+ *   satuan : m
+ *   No | Komponen | | Satuan | Perkiraan Kuantitas | ...
+ *
+ * Read literally from that one cell. The unit is never borrowed from a
+ * neighbouring block or a component's own satuan, and a title states it only in
+ * the one narrow shape TITLE_QUANTITY_PATTERN reads.
+ */
+const UNIT_STATEMENT_PATTERN = /^satuan\s*:\s*(\S(?:.*\S)?)$/i;
+/**
+ * A work title that names the quantity its analysis produces states the output
+ * unit: "Pemasangan 1 m2 Plesteran Dinding", "1 m3 Galian Batu", "PEKERJAAN 1 KG
+ * Besi". Read only in that shape — the number is exactly 1; the unit is one of
+ * these spellings, kept exactly as written for the Unit Kernel to judge; and the
+ * quantity opens the title or directly follows the work noun ("Pe…an") with only
+ * words before it. A dimension, a strength class, a mix or a distance ("Pipa
+ * diameter 6 inch", "Beton K-250", "Campuran 1:2:3", "tebal 5 cm", "Untuk Jarak
+ * 1 Km") never has that shape, and a rate or compound ("1 kg/cm2") is no output.
+ * A unit ending in a letter must end the word; "1 m2Plesteran" still reads m2.
+ */
+const TITLE_QUANTITY_PATTERN =
+  /^(?:(?:[^\s\d]+\s+)*pe\p{L}*an\s+)?1\s*(m³|m²|m3|m2|m1|m'|m’|kg|ton|buah|bh|unit|set|titik|ls|lembar|lbr|batang|btg|pasang|psg|m)(?![\d/'’])(?!(?<=\p{L})\p{L})/iu;
 const AUTHORITY_PATTERN = /permen|peraturan\s+menteri|ahsp\s+pupr|pupr\s+no/i;
 const SUMMARY_PATTERN =
   /jumlah\s+harga|biaya\s+umum|harga\s+satuan\s+pekerjaan|overhead/i;
+/**
+ * The block's closing price total, "F. HARGA SATUAN PEKERJAAN (D + E)". Once a
+ * block's components have been read, it ends them: what a sheet prints below it
+ * ("Nota :" and its numbered notes, the next block's title) is not a component.
+ */
+const CLOSING_TOTAL_PATTERN = /harga\s+satuan\s+pekerjaan/i;
+/** A section letter in the No column ("A", "B.", "c."), never a sequence number. */
+const SECTION_MARKER_PATTERN = /^[A-Za-z]\.?$/;
 const SECTION_PATTERNS: ReadonlyArray<{
   group: AhspResourceGroup;
   pattern: RegExp;
@@ -281,6 +316,26 @@ function readIdentity(
   return { workType, methodName, regulationReference, reasons };
 }
 
+/**
+ * The output unit a row states, when stating it is ALL the row does: exactly one
+ * non-empty cell, and that cell is a "satuan : <unit>" statement.
+ */
+function unitStatementOf(
+  table: SourceTable,
+  row: SourceRow,
+): AhspSourceLocator | null {
+  let statement: AhspSourceLocator | null = null;
+  for (let column = 1; column <= table.columnCount; column += 1) {
+    const text = textAt(row, column);
+    if (!text) continue;
+    if (statement) return null;
+    const match = UNIT_STATEMENT_PATTERN.exec(text.trim());
+    if (!match) return null;
+    statement = locatorOf(table, row, column, match[1]);
+  }
+  return statement;
+}
+
 function findTitleRow(
   table: SourceTable,
   headerRowNumber: number,
@@ -296,6 +351,8 @@ function findTitleRow(
     const joined = row.cells.map((cell) => cell?.text ?? '').join(' ').trim();
     if (SUMMARY_PATTERN.test(joined)) continue;
     if (sectionGroup(textAt(row, 2) ?? textAt(row, 1))) continue;
+    // A unit statement sits between the title and the header; it is never the title.
+    if (unitStatementOf(table, row)) continue;
     return row;
   }
   return null;
@@ -317,6 +374,122 @@ function readOutputUnit(
     }
   }
   return null;
+}
+
+/**
+ * Every output unit a block states on its own rows between ITS title and ITS
+ * header. Only that window is read, so a neighbouring block's statement — which
+ * sits inside this block's body range — can never be borrowed.
+ */
+function readStatedOutputUnits(
+  table: SourceTable,
+  titleRow: SourceRow | null,
+  headerRow: SourceRow,
+): AhspSourceLocator[] {
+  if (!titleRow) return [];
+  return table.rows
+    .filter(
+      (row) => row.number > titleRow.number && row.number < headerRow.number,
+    )
+    .map((row) => unitStatementOf(table, row))
+    .filter((statement): statement is AhspSourceLocator => statement !== null);
+}
+
+/** The output unit a work title states, located at the title's own cell. */
+function readTitleOutputUnit(
+  methodName: AhspSourceLocator | null,
+): AhspSourceLocator | null {
+  const match = methodName
+    ? TITLE_QUANTITY_PATTERN.exec(methodName.raw.trim())
+    : null;
+  return methodName && match ? { ...methodName, raw: match[1] } : null;
+}
+
+/**
+ * What a block's explicit statements of its output unit establish. Statements
+ * with one spelling agree, and the first is used. Statements spelled DIFFERENTLY
+ * are not settled here: all are kept, none is picked, and the unit is not called
+ * missing — it was stated, twice. Whether "m³" and "m3" still name one unit is the
+ * Unit Kernel's question, asked at resolution; this reader never decides what a
+ * spelling means.
+ */
+function establishOutputUnit(statements: readonly AhspSourceLocator[]): {
+  outputUnitRaw: AhspSourceLocator | null;
+  outputUnitStatements?: readonly AhspSourceLocator[];
+  reason: AhspDocumentReasonCode | null;
+} {
+  const spellings = new Set(
+    statements.map((statement) => statement.raw.trim().toLowerCase()),
+  );
+  return {
+    outputUnitRaw: spellings.size === 1 ? statements[0] : null,
+    ...(statements.length > 1 ? { outputUnitStatements: statements } : {}),
+    reason:
+      spellings.size > 1
+        ? AHSP_DOCUMENT_REASON.SOURCE_UNIT_CONFLICT
+        : spellings.size === 0
+          ? AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT
+          : null,
+  };
+}
+
+/**
+ * JOURNAL COMPATIBILITY — a work item kept by an earlier reader of this same
+ * contract, one that did not yet read the output unit a work title states.
+ *
+ * The only fact such knowledge lacks is that title statement, and the title it is
+ * read from was kept: `methodName`, raw and located. So THAT statement is read,
+ * with the same reader, and the output unit is established with the same rule
+ * from what the knowledge still holds — the one statement the earlier reader
+ * agreed on, or none where it recorded MISSING_OUTPUT_UNIT. The item comes back
+ * unchanged when the title states nothing, when the title statement is already
+ * part of the knowledge, when the outcome would not change, and when the earlier
+ * statements were never kept (a contradiction recorded without them): nothing is
+ * invented. No bytes are read, and the stored knowledge is never rewritten.
+ */
+export function withTitleOutputUnitStatement(
+  item: AhspWorkItemKnowledge,
+): AhspWorkItemKnowledge {
+  const title = readTitleOutputUnit(item.methodName);
+  if (!title) return item;
+  const isTitle = (statement: AhspSourceLocator) =>
+    statement.sheetName === title.sheetName &&
+    statement.locator === title.locator &&
+    statement.raw === title.raw;
+  if (item.outputUnitStatements) return item;
+  if (item.outputUnitRaw && isTitle(item.outputUnitRaw)) return item;
+  const kept = item.outputUnitRaw
+    ? [item.outputUnitRaw]
+    : item.reasonCodes.includes(AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT)
+      ? []
+      : null;
+  if (kept === null) return item;
+  const established = establishOutputUnit([...kept, title]);
+  if (
+    established.reason === null &&
+    established.outputUnitRaw === item.outputUnitRaw
+  ) {
+    return item;
+  }
+  const reasonCodes = uniqueReasons([
+    ...item.reasonCodes.filter(
+      (code) => code !== AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT,
+    ),
+    ...(established.reason ? [established.reason] : []),
+  ]);
+  return {
+    ...item,
+    status:
+      reasonCodes.length === 0 &&
+      item.resources.every((resource) => resource.status === 'READY')
+        ? 'READY'
+        : 'UNRESOLVED',
+    reasonCodes,
+    outputUnitRaw: established.outputUnitRaw,
+    ...(established.outputUnitStatements
+      ? { outputUnitStatements: established.outputUnitStatements }
+      : {}),
+  };
 }
 
 function readResourceRow(
@@ -395,6 +568,29 @@ function readResourceRow(
   };
 }
 
+/** The header's "No" column, bound by its caption like every other column. */
+function numberColumnOf(
+  table: SourceTable,
+  headerRow: SourceRow,
+): number | null {
+  const columns: number[] = [];
+  for (let column = 1; column <= table.columnCount; column += 1) {
+    const text = textAt(headerRow, column);
+    if (text && foldHeader(text) === 'no') columns.push(column);
+  }
+  return columns.length === 1 ? columns[0] : null;
+}
+
+/** Whether a row states what a component states: a code, unit or quantity. */
+function carriesComponentFact(
+  row: SourceRow,
+  columns: BoundColumns['roles'],
+): boolean {
+  return [columns.KODE, columns.SATUAN, columns.KOEFISIEN].some(
+    (column) => column !== undefined && Boolean(textAt(row, column)?.trim()),
+  );
+}
+
 function mergeContinuation(
   previous: AhspResourceKnowledge,
   next: AhspResourceKnowledge,
@@ -422,6 +618,7 @@ function mergeContinuation(
 function parseBlock(
   table: SourceTable,
   titleRow: SourceRow | null,
+  headerRow: SourceRow,
   bodyRows: SourceRow[],
   columns: BoundColumns,
   documentRegulation: AhspSourceLocator | null,
@@ -434,15 +631,35 @@ function parseBlock(
         regulationReference: null,
         reasons: [AHSP_DOCUMENT_REASON.MISSING_WORK_ITEM],
       };
-  const outputUnitRaw = readOutputUnit(table, bodyRows);
+  // Every explicit statement of the output unit, in precedence order: the summary
+  // ("Harga Satuan Pekerjaan per - m3 ("), an explicit "satuan : m" row, the work
+  // title ("Pemasangan 1 m2 …"), established by the one rule above.
+  const bodyStatement = readOutputUnit(table, bodyRows);
+  const titleStatement = readTitleOutputUnit(identity.methodName);
+  const established = establishOutputUnit([
+    ...(bodyStatement ? [bodyStatement] : []),
+    ...readStatedOutputUnits(table, titleRow, headerRow),
+    ...(titleStatement ? [titleStatement] : []),
+  ]);
   const reasons: AhspDocumentReasonCode[] = [...identity.reasons];
-  if (!outputUnitRaw) reasons.push(AHSP_DOCUMENT_REASON.MISSING_OUTPUT_UNIT);
+  if (established.reason) reasons.push(established.reason);
   if (columns.ambiguous) reasons.push(AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY);
 
+  const numberColumn = numberColumnOf(table, headerRow);
   let group: AhspResourceGroup | null = null;
+  let closed = false;
   const resources: AhspResourceKnowledge[] = [];
   for (const row of bodyRows) {
     if (isColumnNumberRow(table, row) || isCurrencyBannerRow(table, row)) continue;
+    if (closed) {
+      // Nothing below the closing total is a component. A row there that still
+      // states a code, unit or quantity cannot be read either way, so the item
+      // is held rather than that row dropped without a word.
+      if (carriesComponentFact(row, columns.roles)) {
+        reasons.push(AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY);
+      }
+      continue;
+    }
     const uraianColumn = columns.roles.URAIAN ?? 2;
     const uraian = textAt(row, uraianColumn) ?? textAt(row, 2) ?? textAt(row, 1);
     const nextGroup = sectionGroup(uraian);
@@ -450,7 +667,25 @@ function parseBlock(
       group = nextGroup;
       continue;
     }
+    if (uraian && resources.length > 0 && CLOSING_TOTAL_PATTERN.test(uraian)) {
+      closed = true;
+      continue;
+    }
     if (isSkipUraian(uraian)) continue;
+    const marker =
+      numberColumn !== null ? textAt(row, numberColumn)?.trim() : null;
+    if (
+      marker &&
+      SECTION_MARKER_PATTERN.test(marker) &&
+      !carriesComponentFact(row, columns.roles)
+    ) {
+      // A section heading SIMPROK cannot read ("B. | BANAN"). The rows under it
+      // are not filed under the previous section: they carry no group, and the
+      // item is held.
+      group = null;
+      reasons.push(AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY);
+      continue;
+    }
     const resource = readResourceRow(table, row, columns.roles, group);
     if (!resource) continue;
     if (!resource.rawName) {
@@ -484,7 +719,10 @@ function parseBlock(
     reasonCodes: unique,
     workType: identity.workType,
     methodName: identity.methodName,
-    outputUnitRaw,
+    outputUnitRaw: established.outputUnitRaw,
+    ...(established.outputUnitStatements
+      ? { outputUnitStatements: established.outputUnitStatements }
+      : {}),
     resolvedOutputUnit: null,
     regulationReference: identity.regulationReference ?? documentRegulation,
     effectiveDate: null,
@@ -536,6 +774,7 @@ function parseTable(
       parseBlock(
         table,
         titleRow,
+        current.row,
         bodyRows,
         current.bound,
         documentRegulation,

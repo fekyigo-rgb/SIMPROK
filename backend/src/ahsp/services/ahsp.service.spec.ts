@@ -133,12 +133,44 @@ describe('AhspService', () => {
         reviewStatus: 'PENDING',
       },
     });
-    expect(audit.logAction).toHaveBeenCalledWith({
-      ahspId: ahsp.id,
-      action: 'AHSPCreated',
-      who: ahsp.createdByUserId,
-      after: ahsp,
-    });
+    // IMPORT-SEAM-08 — create() now accepts a caller's transaction; with none
+    // supplied the audit row is written on the root client, exactly as before.
+    expect(audit.logAction).toHaveBeenCalledWith(
+      {
+        ahspId: ahsp.id,
+        action: 'AHSPCreated',
+        who: ahsp.createdByUserId,
+        after: ahsp,
+      },
+      undefined,
+    );
+  });
+
+  it('IMPORT-SEAM-08: create() writes the pre-check, the parent and its audit on a caller-held transaction', async () => {
+    const tx = {
+      aHSP: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue(ahsp),
+      },
+    };
+    await service.create(
+      {
+        workType: ahsp.workType,
+        methodType: ahsp.methodType,
+        locationType: ahsp.locationType,
+        methodName: ahsp.methodName,
+        userId: ahsp.createdByUserId,
+      },
+      tx as any,
+    );
+    expect(tx.aHSP.findFirst).toHaveBeenCalledTimes(1);
+    expect(tx.aHSP.create).toHaveBeenCalledTimes(1);
+    expect(prisma.aHSP.findFirst).not.toHaveBeenCalled();
+    expect(prisma.aHSP.create).not.toHaveBeenCalled();
+    expect(audit.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ ahspId: ahsp.id, action: 'AHSPCreated' }),
+      tx,
+    );
   });
 
   it('create throws ConflictException when official AHSP already exists', async () => {

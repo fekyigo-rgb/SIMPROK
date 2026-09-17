@@ -443,9 +443,19 @@ describe('ACG-01.1 resource admission & identity boundary (e2e)', () => {
     });
   });
 
-  it('a machine-proven identity is not overwritten by a direct request, and can still be confirmed', async () => {
-    const listed = await listedRow('kerikil');
-    expect(listed.identityVerdict.status).toBe('RESOLVED');
+  // LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION was that the machine-proven row
+  // is still LISTED for curation, carrying identityVerdict.status 'RESOLVED'.
+  // AHSP IMPORT ACCEPTANCE BOUNDARY — IMPORT-SEAM-06 (B6): a person is never asked
+  // to reconfirm an identity the machine already proves, so the curation list
+  // omits it. Nothing is written in its place: the row stays OBSERVED, exactly as
+  // stored. NEW_EXPECTATION: not listed, still OBSERVED — and every direct-request
+  // protection below is asserted unchanged. TEST_WEAKENING=NO.
+  it('a machine-proven identity is not asked again, is not overwritten by a direct request, and can still be confirmed', async () => {
+    expect(await listedRow('kerikil')).toBeUndefined();
+    expect(await stored('kerikil')).toMatchObject({
+      status: 'OBSERVED',
+      resolvedResourceCatalogId: null,
+    });
 
     const before = await stored('kerikil');
     const refused = await post(

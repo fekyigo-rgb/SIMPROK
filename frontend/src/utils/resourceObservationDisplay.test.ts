@@ -461,10 +461,15 @@ test("E5: 'genuinely new' opens only when identity is exhausted AND a unit is pr
   );
   assert.equal(weakOnly.canProposeNew, false);
   // No promise of a new resource — and the resource is said to be accepted, not refused.
+  // LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION ended "identitas canonical-nya
+  // belum dapat dipastikan". IMPORT ACCEPTANCE BOUNDARY (B7) forbids architecture
+  // language on the import surface; the same fact is now said as "identitasnya
+  // dalam katalog SIMPROK". The sentence is still pinned exactly. TEST_WEAKENING=NO.
   assert.match(
     weakOnly.guidance,
-    /^Belum ditemukan padanan yang dapat dibuktikan\. Sumber daya dari dokumen sudah diterima; identitas canonical-nya belum dapat dipastikan\.$/u,
+    /^Belum ditemukan padanan yang dapat dibuktikan\. Sumber daya dari dokumen sudah diterima; identitasnya dalam katalog SIMPROK belum dapat dipastikan\.$/u,
   );
+  assert.doesNotMatch(weakOnly.guidance, /canonical/u);
 });
 
 test("E6: a proven identity asks only for confirmation, never claims doubt", () => {
@@ -566,8 +571,21 @@ test("C1: a TEACH is said as submitted for approval — never as learned, used o
   });
   const texts = outcome.lines.map((line) => line.text);
   assert.equal(outcome.kind, "SUCCESS");
-  assert.equal(texts[0], "Keputusan sumber daya berhasil disimpan.");
-  assert.ok(texts.includes("Triplex (Lbr) ditetapkan sama dengan Triplex 9 mm. Berlaku untuk 2 baris dalam dokumen."));
+  // CHANGE NOTE (F04 receipt truth): the receipt says what the decision DID —
+  // the identity was recorded — and never implies the recipe that uses it is now
+  // complete; the occurrences are of one QUESTION, which the page cannot claim
+  // all came from one document. TEST_WEAKENING=NO: it now states MORE.
+  assert.equal(texts[0], "Pilihan Anda tercatat.");
+  assert.ok(texts.includes("Triplex (Lbr) dicatat sama dengan Triplex 9 mm. Berlaku untuk 2 kemunculan pertanyaan yang sama."));
+  assert.ok(
+    texts.includes(
+      "Keputusan ini mencatat identitas sumber daya. Kelengkapan AHSP yang memakainya diperiksa lagi pada daftar import.",
+    ),
+  );
+  // Never "selesai", never "lengkap": this decision does not finish a recipe.
+  for (const text of texts) {
+    assert.doesNotMatch(text, /AHSP .*(selesai|lengkap)\b/u);
+  }
   const learningLine = outcome.lines.find((line) => line.tone === "PENDING");
   assert.match(learningLine?.text ?? "", /diajukan untuk persetujuan/u);
   // The two facts are never blurred into "SIMPROK learned it".
@@ -585,9 +603,41 @@ test("C2: a new resource is named as recorded new; no learning line when none wa
     learning: null,
   });
   assert.deepEqual(outcome.lines.map((line) => line.text), [
-    "Keputusan sumber daya berhasil disimpan.",
+    "Pilihan Anda tercatat.",
     "Plastizier (Kg) dicatat sebagai sumber daya baru.",
+    "Keputusan ini mencatat identitas sumber daya. Kelengkapan AHSP yang memakainya diperiksa lagi pada daftar import.",
   ]);
+});
+
+test("C2b (IMPORT-SEAM-06): one new resource is ONE admission — the other rows are reported from the refreshed list, never claimed", () => {
+  const lines = (otherOccurrences: { total: number; stillWaiting: number | null }) =>
+    describeResourceDecisionSuccess({
+      kind: "NEW",
+      title: "Alat Bantu (Ls)",
+      chosenName: null,
+      rows: 1,
+      learning: null,
+      otherOccurrences,
+    }).lines.map((line) => line.text);
+
+  // Not "berlaku untuk 66 baris": only one admission was made.
+  const allClear = lines({ total: 65, stillWaiting: 0 });
+  assert.deepEqual(allClear, [
+    "Pilihan Anda tercatat.",
+    "Alat Bantu (Ls) dicatat sebagai sumber daya baru.",
+    "Keputusan ini mencatat identitas sumber daya. Kelengkapan AHSP yang memakainya diperiksa lagi pada daftar import.",
+    "65 kemunculan lain dari item yang sama tidak lagi menunggu tinjauan.",
+  ]);
+  assert.equal(
+    lines({ total: 3, stillWaiting: 1 })[3],
+    "2 kemunculan lain dari item yang sama tidak lagi menunggu tinjauan; 1 kemunculan lain masih menunggu tinjauan.",
+  );
+  assert.equal(lines({ total: 2, stillWaiting: 2 })[3], "2 kemunculan lain masih menunggu tinjauan.");
+  // An unreadable refresh is said as unknown — never rounded up to "done".
+  assert.match(lines({ total: 4, stillWaiting: null })[3], /belum dapat ditampilkan/u);
+  for (const text of [...allClear, ...lines({ total: 4, stillWaiting: null })]) {
+    assert.equal(looksLikeInternalIdentifier(text), false);
+  }
 });
 
 test("C3: a refused decision says nothing was saved, the server's reason, and the next step", () => {
@@ -702,7 +752,8 @@ test("R1: no verdict shape ever says the source resource was refused — only ca
 test("R2: where no identity can be proved, the resource is said to be ACCEPTED and its identity UNRESOLVED", () => {
   for (const shape of ["ruledOut", "weakOnly", "noneFound"] as const) {
     const view = describeCuratableObservation(SHAPES[shape]);
-    assert.match(view.guidance, /Sumber daya dari dokumen sudah diterima; identitas canonical-nya belum dapat dipastikan\./u, shape);
+    // LEGACY_TEST_CHANGE_REGISTER: "identitas canonical-nya" → "identitasnya dalam katalog SIMPROK" (B7, no architecture language). TEST_WEAKENING=NO.
+    assert.match(view.guidance, /Sumber daya dari dokumen sudah diterima; identitasnya dalam katalog SIMPROK belum dapat dipastikan\./u, shape);
   }
   // Where a confirmation or a proof exists, the page asks for that instead.
   assert.doesNotMatch(describeCuratableObservation(SHAPES.nominated).guidance, /sudah diterima/u);
