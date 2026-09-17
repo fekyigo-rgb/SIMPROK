@@ -57,6 +57,17 @@ export class ProgressController {
       throw new BadRequestException('AMBIGUOUS_INCLUDE_PROGRESS_COMPARISON');
     }
 
+    if (
+      Object.keys(query).some(
+        (key) =>
+          key.startsWith('includePeriodWindow[') ||
+          key.startsWith('periodStartDate[') ||
+          key.startsWith('periodEndDate['),
+      )
+    ) {
+      throw new BadRequestException('AMBIGUOUS_PERIOD_WINDOW');
+    }
+
     const includeActualSeriesValue = query.includeActualSeries;
     let includeActualSeries = false;
 
@@ -89,6 +100,41 @@ export class ProgressController {
       includeProgressComparison = includeProgressComparisonValue === 'true';
     }
 
+    const includePeriodWindowValue = query.includePeriodWindow;
+    let includePeriodWindow = false;
+
+    if (includePeriodWindowValue !== undefined) {
+      if (typeof includePeriodWindowValue !== 'string') {
+        throw new BadRequestException('AMBIGUOUS_INCLUDE_PERIOD_WINDOW');
+      }
+      if (
+        includePeriodWindowValue !== 'true' &&
+        includePeriodWindowValue !== 'false'
+      ) {
+        throw new BadRequestException('INVALID_INCLUDE_PERIOD_WINDOW');
+      }
+      includePeriodWindow = includePeriodWindowValue === 'true';
+    }
+
+    const hasPeriodWindowDates =
+      query.periodStartDate !== undefined || query.periodEndDate !== undefined;
+    if (!includePeriodWindow && hasPeriodWindowDates) {
+      throw new BadRequestException('PERIOD_WINDOW_DATES_REQUIRE_OPT_IN');
+    }
+    if (
+      includePeriodWindow &&
+      (query.periodStartDate === undefined || query.periodEndDate === undefined)
+    ) {
+      throw new BadRequestException('PERIOD_WINDOW_REQUIRES_START_AND_END');
+    }
+    if (
+      includePeriodWindow &&
+      (typeof query.periodStartDate !== 'string' ||
+        typeof query.periodEndDate !== 'string')
+    ) {
+      throw new BadRequestException('AMBIGUOUS_PERIOD_WINDOW');
+    }
+
     if (includeActualSeries && query.cutoffDate === undefined) {
       throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
     }
@@ -102,6 +148,12 @@ export class ProgressController {
       query.cutoffDate,
       includeActualSeries,
       includeProgressComparison,
+      includePeriodWindow
+        ? {
+            startDate: query.periodStartDate,
+            endDate: query.periodEndDate,
+          }
+        : undefined,
     );
   }
 

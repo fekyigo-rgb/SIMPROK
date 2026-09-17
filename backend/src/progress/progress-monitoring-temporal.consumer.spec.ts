@@ -1231,4 +1231,208 @@ describe('MON-04 Monitoring single-cutoff temporal consumer', () => {
       expect(client.project.findUnique).not.toHaveBeenCalled();
     },
   );
+
+  it('exposes canonical item Planned and Actual quantities for one explicit inclusive date window', async () => {
+    const itemA = workItem('window-item-a', 1);
+    const itemB = workItem('window-item-b', 2);
+    const entries = [
+      ...prove(
+        {
+          projectId,
+          activeBaselineId: baselineId,
+          boqItemId: itemA.id,
+        },
+        [
+          entry('window-a-before', itemA.id, '1', '2026-09-05'),
+          entry('window-a-start', itemA.id, '2', '2026-09-07'),
+          entry('window-a-end', itemA.id, '3', '2026-09-10'),
+          entry('window-a-after', itemA.id, '4', '2026-09-12'),
+        ],
+      ),
+      ...prove(
+        {
+          projectId,
+          activeBaselineId: baselineId,
+          boqItemId: itemB.id,
+        },
+        [entry('window-b-after', itemB.id, '5', '2026-09-12')],
+      ),
+    ];
+    const client = readClient([itemA, itemB], entries);
+    client.executionPlanVersion.findMany.mockResolvedValue([
+      acceptancePlan(itemA.id, itemB.id),
+    ]);
+
+    const result = await serviceFor(client, true).service.getMonitoring(
+      projectId,
+      '2026-09-10',
+      false,
+      false,
+      { startDate: '2026-09-07', endDate: '2026-09-10' },
+    );
+
+    expect(result.periodWindow).toMatchObject({
+      mode: 'CANONICAL_PLANNED_AND_ACTUAL_ITEM_PERIOD_WINDOW',
+      startDate: '2026-09-07',
+      endDate: '2026-09-10',
+      boundaryBasis: 'INCLUSIVE_PROJECT_BUSINESS_DATE_WINDOW',
+      baseline: { id: baselineId, versionNumber: 3 },
+      plannedSource: {
+        executionPlanVersionId: 'execution-plan-locked',
+        versionNumber: 7,
+        status: ExecutionPlanStatus.LOCKED,
+      },
+      plannedContext: { state: 'COMPLETE' },
+      actualTruthMode:
+        'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_EXPLICIT_WORKDATE_WINDOW',
+    });
+    expect(result.periodWindow.items).toEqual([
+      {
+        boqItemId: itemA.id,
+        planned: {
+          periodQuantity: { state: 'COMPLETE', plannedQuantity: '6' },
+          cumulativeQuantityThroughEndDate: {
+            state: 'COMPLETE',
+            plannedQuantity: '8',
+          },
+        },
+        actual: {
+          periodOfficialQuantity: {
+            state: 'COMPLETE',
+            currentOfficialQuantity: '5',
+          },
+          cumulativeOfficialQuantityThroughEndDate: {
+            state: 'COMPLETE',
+            currentOfficialQuantity: '6',
+          },
+        },
+      },
+      {
+        boqItemId: itemB.id,
+        planned: {
+          periodQuantity: { state: 'COMPLETE', plannedQuantity: '3' },
+          cumulativeQuantityThroughEndDate: {
+            state: 'COMPLETE',
+            plannedQuantity: '3',
+          },
+        },
+        actual: {
+          periodOfficialQuantity: {
+            state: 'COMPLETE',
+            currentOfficialQuantity: '0',
+          },
+          cumulativeOfficialQuantityThroughEndDate: {
+            state: 'COMPLETE',
+            currentOfficialQuantity: '0',
+          },
+        },
+      },
+    ]);
+    expect(
+      result.periodWindow.items.map(
+        (item) => item.actual.cumulativeOfficialQuantityThroughEndDate,
+      ),
+    ).toEqual(result.actualTemporal.items.map((item) => item.officialQuantity));
+  });
+
+  it.each([
+    ['missing locked plan', [], 'ACTIVE_PROJECT_WITHOUT_LOCKED_PLAN'],
+    [
+      'baseline mismatch',
+      [
+        lockedPlan(
+          [
+            distribution(
+              'window-wrong-baseline',
+              'window-authority-item',
+              '2026-09-01',
+              '2026-09-07',
+              '10',
+            ),
+          ],
+          'different-baseline',
+        ),
+      ],
+      'BASELINE_BINDING_MISMATCH',
+    ],
+  ])(
+    'fails Planned closed for %s while preserving governed Actual window truth',
+    async (_label, plans, reason) => {
+      const item = workItem('window-authority-item', 1);
+      const entries = prove(
+        {
+          projectId,
+          activeBaselineId: baselineId,
+          boqItemId: item.id,
+        },
+        [entry('window-authority-entry', item.id, '2', '2026-09-05')],
+      );
+      const client = readClient([item], entries);
+      client.executionPlanVersion.findMany.mockResolvedValue(plans);
+
+      const result = await serviceFor(client).service.getMonitoring(
+        projectId,
+        undefined,
+        false,
+        false,
+        { startDate: '2026-09-01', endDate: '2026-09-07' },
+      );
+
+      expect(result).not.toHaveProperty('actualTemporal');
+      expect(result.periodWindow.plannedSource).toBeNull();
+      expect(result.periodWindow.plannedContext).toEqual({
+        state: 'UNAVAILABLE',
+        reason,
+      });
+      expect(result.periodWindow.items[0]).toMatchObject({
+        planned: {
+          periodQuantity: { state: 'UNAVAILABLE', reason },
+          cumulativeQuantityThroughEndDate: {
+            state: 'UNAVAILABLE',
+            reason,
+          },
+        },
+        actual: {
+          periodOfficialQuantity: {
+            state: 'COMPLETE',
+            currentOfficialQuantity: '2',
+          },
+          cumulativeOfficialQuantityThroughEndDate: {
+            state: 'COMPLETE',
+            currentOfficialQuantity: '2',
+          },
+        },
+      });
+    },
+  );
+
+  it.each([
+    [
+      'invalid start',
+      { startDate: '2026-02-30', endDate: '2026-09-07' },
+      'INVALID_PERIOD_WINDOW_START_DATE',
+    ],
+    [
+      'invalid end',
+      { startDate: '2026-09-01', endDate: '2026-02-30' },
+      'INVALID_PERIOD_WINDOW_END_DATE',
+    ],
+    [
+      'start after end',
+      { startDate: '2026-09-08', endDate: '2026-09-07' },
+      'PERIOD_WINDOW_START_AFTER_END',
+    ],
+  ])(
+    'rejects an %s window before opening a transaction',
+    async (_label, input, reason) => {
+      const client = readClient([], []);
+      const { service, prisma } = serviceFor(client);
+
+      await expect(
+        service.getMonitoring(projectId, undefined, false, false, input),
+      ).rejects.toEqual(new BadRequestException(reason));
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(client.project.findUnique).not.toHaveBeenCalled();
+    },
+  );
 });

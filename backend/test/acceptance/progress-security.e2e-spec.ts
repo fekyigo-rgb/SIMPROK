@@ -176,6 +176,34 @@ interface Law1MonitoringBody {
       deviationPercentagePoints: { state: string; [key: string]: unknown };
     }>;
   };
+  periodWindow?: {
+    mode: 'CANONICAL_PLANNED_AND_ACTUAL_ITEM_PERIOD_WINDOW';
+    startDate: string;
+    endDate: string;
+    boundaryBasis: 'INCLUSIVE_PROJECT_BUSINESS_DATE_WINDOW';
+    baseline: { id: string; versionNumber: number; approvedAt: string } | null;
+    plannedSource: {
+      executionPlanVersionId: string;
+      versionNumber: number;
+      status: 'LOCKED';
+    } | null;
+    plannedContext: { state: string; reason?: string };
+    actualTruthMode: 'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_EXPLICIT_WORKDATE_WINDOW';
+    items: Array<{
+      boqItemId: string;
+      planned: {
+        periodQuantity: { state: string; [key: string]: unknown };
+        cumulativeQuantityThroughEndDate: {
+          state: string;
+          [key: string]: unknown;
+        };
+      };
+      actual: {
+        periodOfficialQuantity: Law1MonitoringQuantity;
+        cumulativeOfficialQuantityThroughEndDate: Law1MonitoringQuantity;
+      };
+    }>;
+  };
 }
 
 describe('Progress Security (e2e)', () => {
@@ -1496,7 +1524,145 @@ describe('Progress Security (e2e)', () => {
     expect(falseResponse.body).not.toHaveProperty('actualTemporal');
   });
 
-  it('6h. guarded Monitoring exposes comparator from the same baseline without writes', async () => {
+  it('6h. Monitoring validates explicit period-window opt-in and keeps false backward-compatible', async () => {
+    const token = await login(userViewEmail);
+    const invalidCases = [
+      {
+        query: 'includePeriodWindow=true',
+        reason: 'PERIOD_WINDOW_REQUIRES_START_AND_END',
+      },
+      {
+        query: 'includePeriodWindow=true&periodStartDate=2026-08-31',
+        reason: 'PERIOD_WINDOW_REQUIRES_START_AND_END',
+      },
+      {
+        query: 'periodStartDate=2026-08-31&periodEndDate=2026-08-31',
+        reason: 'PERIOD_WINDOW_DATES_REQUIRE_OPT_IN',
+      },
+      {
+        query:
+          'includePeriodWindow=TRUE&periodStartDate=2026-08-31&periodEndDate=2026-08-31',
+        reason: 'INVALID_INCLUDE_PERIOD_WINDOW',
+      },
+      {
+        query:
+          'includePeriodWindow=true&includePeriodWindow=false&periodStartDate=2026-08-31&periodEndDate=2026-08-31',
+        reason: 'AMBIGUOUS_INCLUDE_PERIOD_WINDOW',
+      },
+      {
+        query:
+          'includePeriodWindow[value]=true&periodStartDate=2026-08-31&periodEndDate=2026-08-31',
+        reason: 'AMBIGUOUS_PERIOD_WINDOW',
+      },
+      {
+        query:
+          'includePeriodWindow=true&periodStartDate[]=2026-08-31&periodEndDate=2026-08-31',
+        reason: 'AMBIGUOUS_PERIOD_WINDOW',
+      },
+      {
+        query:
+          'includePeriodWindow=true&periodStartDate=2026-02-30&periodEndDate=2026-08-31',
+        reason: 'INVALID_PERIOD_WINDOW_START_DATE',
+      },
+      {
+        query:
+          'includePeriodWindow=true&periodStartDate=2026-08-31&periodEndDate=2026-02-30',
+        reason: 'INVALID_PERIOD_WINDOW_END_DATE',
+      },
+      {
+        query:
+          'includePeriodWindow=true&periodStartDate=2026-09-01&periodEndDate=2026-08-31',
+        reason: 'PERIOD_WINDOW_START_AFTER_END',
+      },
+    ];
+
+    for (const candidate of invalidCases) {
+      const response = await request(app.getHttpServer())
+        .get(`/projects/${projectAId}/progress/monitoring?${candidate.query}`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(400);
+      expect((response.body as ErrorResponseBody).message).toBe(
+        candidate.reason,
+      );
+    }
+
+    const falseResponse = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?includePeriodWindow=false`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    expect(falseResponse.body).not.toHaveProperty('periodWindow');
+    expect(falseResponse.body).not.toHaveProperty('actualTemporal');
+  });
+
+  it('6i. guarded Monitoring exposes canonical item period quantities and reuses Actual cumulative at end', async () => {
+    const token = await login(userViewEmail);
+    const plan = await prisma.executionPlanVersion.findFirstOrThrow({
+      where: {
+        projectId: projectAId,
+        baselineId: baselineAId,
+        status: 'LOCKED',
+      },
+    });
+    const response = await request(app.getHttpServer())
+      .get(
+        `/projects/${projectAId}/progress/monitoring?cutoffDate=2026-08-31&includePeriodWindow=true&periodStartDate=2026-08-31&periodEndDate=2026-08-31`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    const body = response.body as unknown as Law1MonitoringBody;
+
+    expect(body.periodWindow).toMatchObject({
+      mode: 'CANONICAL_PLANNED_AND_ACTUAL_ITEM_PERIOD_WINDOW',
+      startDate: '2026-08-31',
+      endDate: '2026-08-31',
+      boundaryBasis: 'INCLUSIVE_PROJECT_BUSINESS_DATE_WINDOW',
+      baseline: { id: baselineAId, versionNumber: 1 },
+      plannedSource: {
+        executionPlanVersionId: plan.id,
+        versionNumber: 1,
+        status: 'LOCKED',
+      },
+      plannedContext: { state: 'COMPLETE' },
+      actualTruthMode:
+        'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_EXPLICIT_WORKDATE_WINDOW',
+    });
+    const periodItems = new Map(
+      body.periodWindow?.items.map((item) => [item.boqItemId, item]),
+    );
+    expect(periodItems.get(boqItemAId)?.planned).toEqual({
+      periodQuantity: { state: 'COMPLETE', plannedQuantity: '10' },
+      cumulativeQuantityThroughEndDate: {
+        state: 'COMPLETE',
+        plannedQuantity: '10',
+      },
+    });
+    expect(periodItems.get(boqItemNoActualId)?.planned).toEqual({
+      periodQuantity: { state: 'COMPLETE', plannedQuantity: '5' },
+      cumulativeQuantityThroughEndDate: {
+        state: 'COMPLETE',
+        plannedQuantity: '5',
+      },
+    });
+    expect(periodItems.get(boqItemRecordedZeroId)?.planned).toEqual({
+      periodQuantity: { state: 'COMPLETE', plannedQuantity: '4' },
+      cumulativeQuantityThroughEndDate: {
+        state: 'COMPLETE',
+        plannedQuantity: '4',
+      },
+    });
+    expect(
+      body.periodWindow?.items.map(
+        (item) => item.actual.cumulativeOfficialQuantityThroughEndDate,
+      ),
+    ).toEqual(body.actualTemporal?.items.map((item) => item.officialQuantity));
+  });
+
+  it('6j. guarded Monitoring exposes comparator from the same baseline without writes', async () => {
     const token = await login(userViewEmail);
     const plan = await prisma.executionPlanVersion.findFirstOrThrow({
       where: {
