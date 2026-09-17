@@ -5,14 +5,21 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { Prisma, ProgressAuditOutcome, ProjectStatus } from '@prisma/client';
+import {
+  ExecutionPlanStatus,
+  Prisma,
+  ProgressAuditOutcome,
+  ProjectStatus,
+} from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
+import { parseDateOnlyUtc } from '../common/date-only.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
 import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { UpdateProjectTimeZoneDto } from './dto/update-project-time-zone.dto';
+import { ActivateWorkPeriodAnchorDto } from './dto/activate-work-period-anchor.dto';
 import { DeviationService } from './deviation.service';
 import { detectIntakeMode } from './intake-mode.kernel';
 import {
@@ -32,6 +39,26 @@ import {
   RAB_STRUCTURE_REASON,
   validateAndOrderRabStructure,
 } from './rab-structure-preflight';
+import { EXECUTION_PLAN_BLOCKER } from '../execution-plan/execution-plan.contracts';
+import {
+  MON04_SEMANTIC_AUDIT_ACTION,
+  type ProgressSemanticContextScope,
+} from '../progress/progress-semantic-authority.policy';
+import {
+  prepareActualTemporalOfficialQuantity,
+  projectBusinessDateWire,
+  workDateWire,
+} from '../progress/progress-actual-temporal-quantity.policy';
+import {
+  WORK_PERIOD_ANCHOR_ACTION,
+  WORK_PERIOD_ANCHOR_POLICY_VERSION,
+  assessActualAnchorCompatibility,
+  assessPlannedAnchorCompatibility,
+  readCanonicalWorkPeriodAnchor,
+  type CanonicalWorkPeriodAnchor,
+  type WorkPeriodAnchorAuditCandidate,
+  type WorkPeriodAnchorCompatibility,
+} from './work-period-anchor.policy';
 
 /**
  * RAB-TRACE-01 — what an AHSP actually is in this domain. There is no AHSP
@@ -651,6 +678,462 @@ export class ProjectService {
 
       return updated;
     });
+  }
+
+  private readonly workPeriodAnchorEventSelect = {
+    id: true,
+    projectId: true,
+    targetEntityType: true,
+    targetEntityId: true,
+    action: true,
+    outcome: true,
+    actorAccountId: true,
+    actorMembershipId: true,
+    reason: true,
+    metadata: true,
+    occurredAt: true,
+  } as const;
+
+  private async workPeriodAnchorCompatibility(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    anchorDate: string,
+  ): Promise<void> {
+    const activeBaselines = await tx.projectBaseline.findMany({
+      where: { projectId, status: 'ACTIVE' },
+      orderBy: { versionNumber: 'desc' },
+      take: 2,
+      select: {
+        id: true,
+        rabDocument: { select: { boqStructureId: true } },
+      },
+    });
+    const lockedPlans = await tx.executionPlanVersion.findMany({
+      where: { projectId, status: ExecutionPlanStatus.LOCKED },
+      orderBy: { versionNumber: 'desc' },
+      take: 3,
+      select: {
+        id: true,
+        baselineId: true,
+        distributions: {
+          orderBy: [
+            { periodEndDate: 'asc' },
+            { boqItemId: 'asc' },
+            { id: 'asc' },
+          ],
+          select: { boqItemId: true, periodEndDate: true },
+        },
+      },
+    });
+
+    const plannedContext =
+      lockedPlans.length === 0
+        ? ({ state: 'NO_LOCKED_PLAN' } as const)
+        : activeBaselines.length !== 1
+          ? ({
+              state: 'UNPROVEN',
+              reason:
+                activeBaselines.length === 0
+                  ? EXECUTION_PLAN_BLOCKER.NO_ACTIVE_BASELINE
+                  : EXECUTION_PLAN_BLOCKER.MULTIPLE_ACTIVE_BASELINES,
+            } as const)
+          : lockedPlans.length !== 1
+            ? ({
+                state: 'UNPROVEN',
+                reason: EXECUTION_PLAN_BLOCKER.AMBIGUOUS_EXECUTION_PLAN_CONTEXT,
+              } as const)
+            : lockedPlans[0].baselineId !== activeBaselines[0].id
+              ? ({
+                  state: 'UNPROVEN',
+                  reason: EXECUTION_PLAN_BLOCKER.BASELINE_BINDING_MISMATCH,
+                } as const)
+              : ({
+                  state: 'AUTHORITATIVE',
+                  baselineId: activeBaselines[0].id,
+                  executionPlanVersionId: lockedPlans[0].id,
+                  distributions: lockedPlans[0].distributions,
+                } as const);
+    const plannedCompatibility = assessPlannedAnchorCompatibility(
+      anchorDate,
+      plannedContext,
+    );
+    if (plannedCompatibility.state !== 'COMPATIBLE') {
+      throw new ConflictException(plannedCompatibility);
+    }
+
+    if (activeBaselines.length > 1) {
+      throw new ConflictException({
+        state: 'UNPROVEN',
+        code: 'WORK_PERIOD_ANCHOR_COMPATIBILITY_UNPROVEN',
+        source: 'ACTUAL',
+        reason: 'MULTIPLE_ACTIVE_BASELINES',
+      } satisfies WorkPeriodAnchorCompatibility);
+    }
+
+    if (activeBaselines.length === 0) {
+      const recordedActualCount = await tx.progressEntry.count({
+        where: {
+          progressReport: { is: { projectId, status: 'SUBMITTED' } },
+        },
+      });
+      if (recordedActualCount > 0) {
+        throw new ConflictException({
+          state: 'UNPROVEN',
+          code: 'WORK_PERIOD_ANCHOR_COMPATIBILITY_UNPROVEN',
+          source: 'ACTUAL',
+          reason: 'NO_ACTIVE_BASELINE',
+        } satisfies WorkPeriodAnchorCompatibility);
+      }
+      return;
+    }
+
+    const baseline = activeBaselines[0];
+    const boqStructureId = baseline.rabDocument?.boqStructureId ?? null;
+    if (boqStructureId === null) {
+      const recordedActualCount = await tx.progressEntry.count({
+        where: {
+          progressReport: {
+            is: { projectId, baselineId: baseline.id, status: 'SUBMITTED' },
+          },
+        },
+      });
+      if (recordedActualCount > 0) {
+        throw new ConflictException({
+          state: 'UNPROVEN',
+          code: 'WORK_PERIOD_ANCHOR_COMPATIBILITY_UNPROVEN',
+          source: 'ACTUAL',
+          reason: 'ACTIVE_BASELINE_BOQ_UNAVAILABLE',
+        } satisfies WorkPeriodAnchorCompatibility);
+      }
+      return;
+    }
+
+    const workItems = await tx.boqItem.findMany({
+      where: { boqStructureId, itemType: 'WORK_ITEM' },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      select: { id: true },
+    });
+    const workItemIds = workItems.map((item) => item.id);
+    const entries =
+      workItemIds.length === 0
+        ? []
+        : await tx.progressEntry.findMany({
+            where: {
+              boqItemId: { in: workItemIds },
+              progressReport: {
+                is: {
+                  projectId,
+                  baselineId: baseline.id,
+                  status: 'SUBMITTED',
+                },
+              },
+            },
+            orderBy: [{ workDate: 'desc' }, { createdAt: 'desc' }],
+            select: {
+              id: true,
+              boqItemId: true,
+              installedQuantity: true,
+              workDate: true,
+              notes: true,
+              photoUrl: true,
+              evidenceReferences: true,
+              captureMethod: true,
+              status: true,
+              recordedByAccountId: true,
+              supersedesEntryId: true,
+              correctionReasonCode: true,
+              correctionReason: true,
+              revision: true,
+              createdAt: true,
+              auditEvents: {
+                where: {
+                  action: MON04_SEMANTIC_AUDIT_ACTION,
+                  outcome: ProgressAuditOutcome.SUCCESS,
+                },
+                orderBy: { occurredAt: 'asc' },
+                select: {
+                  action: true,
+                  outcome: true,
+                  metadata: true,
+                  occurredAt: true,
+                  actorAccountId: true,
+                  authorityCode: true,
+                },
+              },
+            },
+          });
+    const entriesByWorkItem = new Map<
+      string,
+      Array<(typeof entries)[number]>
+    >();
+    for (const entry of entries) {
+      const existing = entriesByWorkItem.get(entry.boqItemId);
+      if (existing) existing.push(entry);
+      else entriesByWorkItem.set(entry.boqItemId, [entry]);
+    }
+    const contexts = workItems.map((item) => ({
+      boqItemId: item.id,
+      governed: prepareActualTemporalOfficialQuantity(
+        {
+          projectId,
+          activeBaselineId: baseline.id,
+          boqItemId: item.id,
+        } satisfies ProgressSemanticContextScope,
+        entriesByWorkItem.get(item.id) ?? [],
+      ),
+    }));
+    const actualCompatibility = assessActualAnchorCompatibility({
+      anchorDate,
+      baselineId: baseline.id,
+      contexts,
+    });
+    if (actualCompatibility.state !== 'COMPATIBLE') {
+      throw new ConflictException(actualCompatibility);
+    }
+  }
+
+  async getWorkPeriodAnchor(
+    projectId: string,
+  ): Promise<CanonicalWorkPeriodAnchor> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, startDate: true },
+    });
+    if (!project) throw new NotFoundException('Project not found');
+    const events = await this.prisma.progressAuditEvent.findMany({
+      where: {
+        projectId,
+        eventType: 'PROJECT_CONFIGURATION',
+        outcome: ProgressAuditOutcome.SUCCESS,
+        action: { in: Object.values(WORK_PERIOD_ANCHOR_ACTION) },
+      },
+      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+      select: this.workPeriodAnchorEventSelect,
+    });
+    return readCanonicalWorkPeriodAnchor({
+      projectId,
+      startDate: project.startDate,
+      events,
+    });
+  }
+
+  async activateWorkPeriodAnchor(
+    projectId: string,
+    dto: ActivateWorkPeriodAnchorDto,
+    actor: {
+      accountId: string;
+      membershipId: string;
+      workspaceId: string;
+      assignmentId: string;
+      roleInProject: string;
+    },
+  ): Promise<CanonicalWorkPeriodAnchor> {
+    const anchorDate = projectBusinessDateWire(dto.anchorDate);
+    if (anchorDate === null) {
+      throw new BadRequestException('INVALID_PROJECT_BUSINESS_DATE');
+    }
+    const anchorStorageDate = parseDateOnlyUtc(
+      anchorDate,
+      'workPeriodAnchorDate',
+    );
+    const reason = this.normalizeOptionalText(dto.reason) ?? null;
+    const commandFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          action: 'PROJECT_WORK_PERIOD_ANCHOR_ACTIVATE',
+          projectId,
+          actorAccountId: actor.accountId,
+          anchorDate,
+          reason,
+        }),
+      )
+      .digest('hex');
+    const persistedCommandId = `PROJECT_WORK_PERIOD_ANCHOR:${dto.commandId}`;
+
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const lockedProjects = await tx.$queryRaw<
+            Array<{
+              id: string;
+              workspaceId: string;
+              startDate: Date | null;
+            }>
+          >(
+            Prisma.sql`SELECT id, "workspaceId", "startDate"
+                         FROM projects
+                        WHERE id = ${projectId}::uuid
+                        FOR UPDATE`,
+          );
+          const project = lockedProjects[0];
+          if (!project || project.workspaceId !== actor.workspaceId) {
+            throw new NotFoundException('Project not found');
+          }
+
+          const trustedActor = await tx.workspaceMembership.findFirst({
+            where: {
+              id: actor.membershipId,
+              accountId: actor.accountId,
+              workspaceId: actor.workspaceId,
+              status: 'ACTIVE',
+              userProfile: { status: 'ACTIVE' },
+            },
+            select: { id: true },
+          });
+          if (!trustedActor) {
+            throw new BadRequestException('Trusted project actor is required');
+          }
+          const trustedAssignment = await tx.projectAssignment.findFirst({
+            where: {
+              id: actor.assignmentId,
+              projectId,
+              workspaceMembershipId: actor.membershipId,
+              status: 'ASSIGNED',
+              revokedAt: null,
+            },
+            select: { id: true },
+          });
+          if (!trustedAssignment) {
+            throw new BadRequestException(
+              'Trusted project assignment is required',
+            );
+          }
+
+          const existingCommand = await tx.progressAuditEvent.findUnique({
+            where: { commandId: persistedCommandId },
+            select: {
+              projectId: true,
+              actorAccountId: true,
+              action: true,
+              outcome: true,
+              commandFingerprint: true,
+            },
+          });
+          const events = await tx.progressAuditEvent.findMany({
+            where: {
+              projectId,
+              eventType: 'PROJECT_CONFIGURATION',
+              outcome: ProgressAuditOutcome.SUCCESS,
+              action: { in: Object.values(WORK_PERIOD_ANCHOR_ACTION) },
+            },
+            orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+            select: this.workPeriodAnchorEventSelect,
+          });
+          const current = readCanonicalWorkPeriodAnchor({
+            projectId,
+            startDate: project.startDate,
+            events,
+          });
+
+          if (existingCommand) {
+            if (
+              existingCommand.projectId !== projectId ||
+              existingCommand.actorAccountId !== actor.accountId ||
+              !Object.values(WORK_PERIOD_ANCHOR_ACTION).includes(
+                existingCommand.action as
+                  | (typeof WORK_PERIOD_ANCHOR_ACTION)['ACTIVATED']
+                  | (typeof WORK_PERIOD_ANCHOR_ACTION)['CONFIRMED'],
+              ) ||
+              existingCommand.outcome !== ProgressAuditOutcome.SUCCESS ||
+              existingCommand.commandFingerprint !== commandFingerprint
+            ) {
+              throw new ConflictException('COMMAND_ID_REUSED');
+            }
+            return current;
+          }
+
+          if (current.state === 'INVALID_PROVENANCE') {
+            throw new ConflictException({
+              code: 'WORK_PERIOD_ANCHOR_PROVENANCE_INVALID',
+              reason: current.reason,
+            });
+          }
+          if (current.state === 'PROVEN' && current.anchorDate !== anchorDate) {
+            throw new ConflictException(
+              'WORK_PERIOD_ANCHOR_AMENDMENT_REQUIRED',
+            );
+          }
+
+          if (current.state === 'NOT_PROVEN') {
+            await this.workPeriodAnchorCompatibility(tx, projectId, anchorDate);
+          }
+
+          const previousStartDate = project.startDate?.toISOString() ?? null;
+          const previousCandidateDate = workDateWire(project.startDate);
+          const changed = previousCandidateDate !== anchorDate;
+          if (changed) {
+            await tx.project.update({
+              where: { id: projectId },
+              data: { startDate: anchorStorageDate },
+            });
+          }
+
+          const action = changed
+            ? WORK_PERIOD_ANCHOR_ACTION.ACTIVATED
+            : WORK_PERIOD_ANCHOR_ACTION.CONFIRMED;
+          const now = new Date();
+          const created = await tx.progressAuditEvent.create({
+            data: {
+              schemaVersion: 1,
+              eventType: 'PROJECT_CONFIGURATION',
+              outcome: ProgressAuditOutcome.SUCCESS,
+              workspaceId: actor.workspaceId,
+              projectId,
+              progressEntryId: null,
+              actorAccountId: actor.accountId,
+              actorMembershipId: actor.membershipId,
+              actorType: 'USER',
+              action,
+              roleInProjectSnapshot: actor.roleInProject,
+              sourceModule: 'PROJECT_GOVERNANCE',
+              targetEntityType: 'PROJECT',
+              targetEntityId: projectId,
+              correlationId: randomUUID(),
+              requestId: randomUUID(),
+              businessCommandId: dto.commandId,
+              commandId: persistedCommandId,
+              commandFingerprint,
+              reason,
+              reasonCode: null,
+              reasonText: reason,
+              errorCode: null,
+              metadata: {
+                policyVersion: WORK_PERIOD_ANCHOR_POLICY_VERSION,
+                anchorDate,
+                previousStartDate,
+                actorAssignmentId: actor.assignmentId,
+                explicitConfirmation: true,
+              },
+              occurredAt: now,
+              recordedAt: now,
+            },
+            select: this.workPeriodAnchorEventSelect,
+          });
+
+          return readCanonicalWorkPeriodAnchor({
+            projectId,
+            startDate: changed ? anchorStorageDate : project.startDate,
+            events: [...events, created] as WorkPeriodAnchorAuditCandidate[],
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('COMMAND_ID_REUSED');
+      }
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === 'P2034' ||
+          (error.code === 'P2010' && error.meta?.code === '40001'))
+      ) {
+        throw new ConflictException('WORK_PERIOD_ANCHOR_CONCURRENT_CHANGE');
+      }
+      throw error;
+    }
   }
 
   async getBoq(projectId: string) {

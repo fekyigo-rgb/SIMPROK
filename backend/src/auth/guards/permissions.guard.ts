@@ -27,8 +27,12 @@ export class PermissionsGuard implements CanActivate {
 
   private progressWriteAction(request: any): string | null {
     const path = `${request.route?.path ?? request.originalUrl ?? request.url}`;
-    if (request.method === 'PATCH' && path.includes('/time-zone')) {
+    const isPatch = request.method === 'PATCH';
+    if (isPatch && path.includes('/time-zone')) {
       return 'PROJECT_TIME_ZONE_UPDATE';
+    }
+    if (isPatch && path.includes('/work-period-anchor')) {
+      return 'PROJECT_WORK_PERIOD_ANCHOR_ACTIVATE';
     }
     if (request.method !== 'POST') return null;
     if (!path.includes('/progress')) return null;
@@ -89,7 +93,9 @@ export class PermissionsGuard implements CanActivate {
       throw new ServiceUnavailableException('DENIAL_AUDIT_UNAVAILABLE');
     }
     const target = await this.progressTarget(params.request);
-    const projectConfiguration = params.action === 'PROJECT_TIME_ZONE_UPDATE';
+    const projectConfiguration =
+      params.action === 'PROJECT_TIME_ZONE_UPDATE' ||
+      params.action === 'PROJECT_WORK_PERIOD_ANCHOR_ACTIVATE';
     try {
       await this.prisma.progressAuditEvent.create({
         data: {

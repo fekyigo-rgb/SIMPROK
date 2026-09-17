@@ -27,6 +27,7 @@ import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { PersistBoqItemCalculationDto } from './dto/persist-boq-item-calculation.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { UpdateProjectTimeZoneDto } from './dto/update-project-time-zone.dto';
+import { ActivateWorkPeriodAnchorDto } from './dto/activate-work-period-anchor.dto';
 import { CreateRabIntelligenceProposalDto } from './dto/create-rab-intelligence-proposal.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
@@ -43,6 +44,16 @@ import { PersistedCalculationService } from './persisted-calculation.service';
 import { RabLockService } from './rab-lock.service';
 import { RabApprovalService } from './rab-approval.service';
 import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
+
+interface WorkPeriodAnchorProjectRequest {
+  user?: { id?: unknown };
+  projectAccess?: {
+    workspaceId?: unknown;
+    membershipId?: unknown;
+    assignmentId?: unknown;
+    roleInProject?: unknown;
+  };
+}
 
 @Controller('projects')
 @UseGuards(JwtAuthGuard)
@@ -421,6 +432,44 @@ export class ProjectController {
       );
     }
     return this.projectService.updateProjectTimeZone(projectId, dto, {
+      accountId: actorAccountId,
+      membershipId: access.membershipId,
+      workspaceId: access.workspaceId,
+      assignmentId: access.assignmentId,
+      roleInProject: access.roleInProject,
+    });
+  }
+
+  @Get(':projectId/work-period-anchor')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.PROJECT_VIEW)
+  async getWorkPeriodAnchor(@Param('projectId') projectId: string) {
+    return this.projectService.getWorkPeriodAnchor(projectId);
+  }
+
+  @Patch(':projectId/work-period-anchor')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.PROJECT_SETTINGS_MANAGE)
+  async activateWorkPeriodAnchor(
+    @Req() request: WorkPeriodAnchorProjectRequest,
+    @Param('projectId') projectId: string,
+    @Body() dto: ActivateWorkPeriodAnchorDto,
+  ) {
+    const actorAccountId = request.user?.id;
+    const access = request.projectAccess;
+    if (
+      !actorAccountId ||
+      typeof actorAccountId !== 'string' ||
+      typeof access?.workspaceId !== 'string' ||
+      typeof access.membershipId !== 'string' ||
+      typeof access.assignmentId !== 'string' ||
+      typeof access.roleInProject !== 'string'
+    ) {
+      throw new InternalServerErrorException(
+        'Trusted project actor context is missing',
+      );
+    }
+    return this.projectService.activateWorkPeriodAnchor(projectId, dto, {
       accountId: actorAccountId,
       membershipId: access.membershipId,
       workspaceId: access.workspaceId,

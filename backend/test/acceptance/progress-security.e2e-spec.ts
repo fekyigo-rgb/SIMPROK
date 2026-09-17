@@ -3269,6 +3269,314 @@ describe('Progress Security (e2e)', () => {
     ).rejects.toThrow('PROJECT_TIME_ZONE_HISTORY_APPEND_ONLY');
   });
 
+  it('MON04 Work Period anchor is explicitly governed, permissioned, replay-safe, and immutable in V1', async () => {
+    const submitToken = await login(userSubmitEmail);
+    const viewerToken = await login(userViewEmail);
+    const crossToken = await login(userCrossEmail);
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: workspaceAId },
+      select: { organizationId: true },
+    });
+    const submitMembership = await prisma.workspaceMembership.findFirstOrThrow({
+      where: {
+        workspaceId: workspaceAId,
+        account: { email: userSubmitEmail },
+      },
+      select: { id: true },
+    });
+    const viewerMembership = await prisma.workspaceMembership.findFirstOrThrow({
+      where: {
+        workspaceId: workspaceAId,
+        account: { email: userViewEmail },
+      },
+      select: { id: true },
+    });
+    const governedProject = await prisma.project.create({
+      data: {
+        name: 'MON04 governed Work Period anchor',
+        code: `MON04-ANCHOR-${randomUUID()}`,
+        workspaceId: workspaceAId,
+        organizationId: workspace.organizationId,
+        status: 'ACTIVE',
+        startDate: new Date('2026-05-01T00:00:00.000Z'),
+        endDate: new Date('2026-12-31T00:00:00.000Z'),
+        timeZone: 'Asia/Makassar',
+      },
+    });
+    await prisma.projectAssignment.createMany({
+      data: [
+        {
+          workspaceMembershipId: submitMembership.id,
+          projectId: governedProject.id,
+          roleInProject: 'MEMBER',
+          isPrimaryAssignment: false,
+          status: 'ASSIGNED',
+        },
+        {
+          workspaceMembershipId: viewerMembership.id,
+          projectId: governedProject.id,
+          roleInProject: 'MEMBER',
+          isPrimaryAssignment: false,
+          status: 'ASSIGNED',
+        },
+      ],
+    });
+
+    try {
+      const legacy = await request(app.getHttpServer())
+        .get(`/projects/${governedProject.id}/work-period-anchor`)
+        .set('Authorization', `Bearer ${viewerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+      expect(legacy.body).toEqual({
+        state: 'NOT_PROVEN',
+        anchorDate: null,
+        candidateDate: '2026-05-01',
+        provenance: null,
+      });
+
+      const deniedCommandId = randomUUID();
+      await request(app.getHttpServer())
+        .patch(`/projects/${governedProject.id}/work-period-anchor`)
+        .set('Authorization', `Bearer ${viewerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ commandId: deniedCommandId, anchorDate: '2026-05-18' })
+        .expect(403);
+      expect(
+        await prisma.progressAuditEvent.findFirstOrThrow({
+          where: {
+            projectId: governedProject.id,
+            eventType: 'PROJECT_CONFIGURATION',
+            action: 'PROJECT_WORK_PERIOD_ANCHOR_ACTIVATE',
+            outcome: 'DENIED',
+            businessCommandId: deniedCommandId,
+          },
+        }),
+      ).toMatchObject({
+        workspaceId: workspaceAId,
+        actorType: 'USER',
+        sourceModule: 'PROJECT_GOVERNANCE',
+        targetEntityType: 'PROJECT',
+        targetEntityId: governedProject.id,
+        errorCode: 'TECHNICAL_PERMISSION_DENIED',
+      });
+
+      await request(app.getHttpServer())
+        .get(`/projects/${governedProject.id}/work-period-anchor`)
+        .set('Authorization', `Bearer ${crossToken}`)
+        .set('x-workspace-id', workspaceBId)
+        .expect(404);
+
+      const activationCommandId = randomUUID();
+      const activationBody = {
+        commandId: activationCommandId,
+        anchorDate: '2026-05-18',
+        reason: 'Owner-ratified official Day 1',
+        workspaceId: workspaceBId,
+        actorAccountId: 'forged-actor',
+        projectId: projectBId,
+      };
+      const activated = await request(app.getHttpServer())
+        .patch(`/projects/${governedProject.id}/work-period-anchor`)
+        .set('Authorization', `Bearer ${submitToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send(activationBody)
+        .expect(200);
+      expect(activated.body).toMatchObject({
+        state: 'PROVEN',
+        anchorDate: '2026-05-18',
+        candidateDate: '2026-05-18',
+        provenance: {
+          action: 'PROJECT_WORK_PERIOD_ANCHOR_ACTIVATED',
+          actorAccountId: submitAccountId,
+          reason: 'Owner-ratified official Day 1',
+        },
+      });
+
+      await request(app.getHttpServer())
+        .patch(`/projects/${governedProject.id}/work-period-anchor`)
+        .set('Authorization', `Bearer ${submitToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send(activationBody)
+        .expect(200);
+      expect(
+        await prisma.progressAuditEvent.count({
+          where: {
+            projectId: governedProject.id,
+            outcome: 'SUCCESS',
+            action: {
+              in: [
+                'PROJECT_WORK_PERIOD_ANCHOR_ACTIVATED',
+                'PROJECT_WORK_PERIOD_ANCHOR_CONFIRMED',
+              ],
+            },
+          },
+        }),
+      ).toBe(1);
+
+      await request(app.getHttpServer())
+        .patch(`/projects/${governedProject.id}/work-period-anchor`)
+        .set('Authorization', `Bearer ${submitToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({
+          commandId: activationCommandId,
+          anchorDate: '2026-05-18',
+          reason: 'Changed material payload',
+        })
+        .expect(409);
+
+      await request(app.getHttpServer())
+        .patch(`/projects/${governedProject.id}/work-period-anchor`)
+        .set('Authorization', `Bearer ${submitToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ commandId: randomUUID(), anchorDate: '2026-05-18' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch(`/projects/${governedProject.id}/work-period-anchor`)
+        .set('Authorization', `Bearer ${submitToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .send({ commandId: randomUUID(), anchorDate: '2026-05-19' })
+        .expect(409);
+
+      const stored = await prisma.project.findUniqueOrThrow({
+        where: { id: governedProject.id },
+      });
+      expect(stored.startDate?.toISOString()).toBe('2026-05-18T00:00:00.000Z');
+      expect(stored.endDate?.toISOString()).toBe('2026-12-31T00:00:00.000Z');
+      expect(stored.timeZone).toBe('Asia/Makassar');
+      const successProofs = await prisma.progressAuditEvent.findMany({
+        where: {
+          projectId: governedProject.id,
+          outcome: 'SUCCESS',
+          action: {
+            in: [
+              'PROJECT_WORK_PERIOD_ANCHOR_ACTIVATED',
+              'PROJECT_WORK_PERIOD_ANCHOR_CONFIRMED',
+            ],
+          },
+        },
+        orderBy: { occurredAt: 'asc' },
+      });
+      expect(successProofs).toHaveLength(2);
+      expect(successProofs[0]).toMatchObject({
+        workspaceId: workspaceAId,
+        actorAccountId: submitAccountId,
+        sourceModule: 'PROJECT_GOVERNANCE',
+        targetEntityType: 'PROJECT',
+        targetEntityId: governedProject.id,
+        businessCommandId: activationCommandId,
+      });
+      expect(successProofs[0].metadata).toMatchObject({
+        policyVersion: 'MON04_WORK_PERIOD_ANCHOR_V1',
+        anchorDate: '2026-05-18',
+        previousStartDate: '2026-05-01T00:00:00.000Z',
+        explicitConfirmation: true,
+      });
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'ALTER TABLE progress_audit_events DISABLE TRIGGER progress_audit_events_immutable_trigger',
+      );
+      try {
+        await prisma.progressAuditEvent.deleteMany({
+          where: { projectId: governedProject.id },
+        });
+      } finally {
+        await prisma.$executeRawUnsafe(
+          'ALTER TABLE progress_audit_events ENABLE TRIGGER progress_audit_events_immutable_trigger',
+        );
+      }
+      await prisma.projectAssignment.deleteMany({
+        where: { projectId: governedProject.id },
+      });
+      await prisma.project.delete({ where: { id: governedProject.id } });
+    }
+  });
+
+  it('MON04 concurrent rival initial anchor commands establish at most one truth', async () => {
+    const submitToken = await login(userSubmitEmail);
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: workspaceAId },
+      select: { organizationId: true },
+    });
+    const membership = await prisma.workspaceMembership.findFirstOrThrow({
+      where: {
+        workspaceId: workspaceAId,
+        account: { email: userSubmitEmail },
+      },
+      select: { id: true },
+    });
+    const project = await prisma.project.create({
+      data: {
+        name: 'MON04 concurrent Work Period anchor',
+        code: `MON04-ANCHOR-RACE-${randomUUID()}`,
+        workspaceId: workspaceAId,
+        organizationId: workspace.organizationId,
+        status: 'ACTIVE',
+      },
+    });
+    await prisma.projectAssignment.create({
+      data: {
+        workspaceMembershipId: membership.id,
+        projectId: project.id,
+        roleInProject: 'MEMBER',
+        isPrimaryAssignment: false,
+        status: 'ASSIGNED',
+      },
+    });
+
+    try {
+      const responses = await Promise.all([
+        request(app.getHttpServer())
+          .patch(`/projects/${project.id}/work-period-anchor`)
+          .set('Authorization', `Bearer ${submitToken}`)
+          .set('x-workspace-id', workspaceAId)
+          .send({ commandId: randomUUID(), anchorDate: '2026-05-18' }),
+        request(app.getHttpServer())
+          .patch(`/projects/${project.id}/work-period-anchor`)
+          .set('Authorization', `Bearer ${submitToken}`)
+          .set('x-workspace-id', workspaceAId)
+          .send({ commandId: randomUUID(), anchorDate: '2026-05-19' }),
+      ]);
+      expect(responses.map((response) => response.status).sort()).toEqual([
+        200, 409,
+      ]);
+      const success = responses.find((response) => response.status === 200)!;
+      const successBody = success.body as { anchorDate: string };
+      const stored = await prisma.project.findUniqueOrThrow({
+        where: { id: project.id },
+      });
+      expect(stored.startDate?.toISOString().slice(0, 10)).toBe(
+        successBody.anchorDate,
+      );
+      expect(
+        await prisma.progressAuditEvent.count({
+          where: {
+            projectId: project.id,
+            outcome: 'SUCCESS',
+            action: 'PROJECT_WORK_PERIOD_ANCHOR_ACTIVATED',
+          },
+        }),
+      ).toBe(1);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'ALTER TABLE progress_audit_events DISABLE TRIGGER progress_audit_events_immutable_trigger',
+      );
+      try {
+        await prisma.progressAuditEvent.deleteMany({
+          where: { projectId: project.id },
+        });
+      } finally {
+        await prisma.$executeRawUnsafe(
+          'ALTER TABLE progress_audit_events ENABLE TRIGGER progress_audit_events_immutable_trigger',
+        );
+      }
+      await prisma.projectAssignment.deleteMany({
+        where: { projectId: project.id },
+      });
+      await prisma.project.delete({ where: { id: project.id } });
+    }
+  });
+
   it('MON04 T1 - a single current root can receive explicit durable semantic authority', async () => {
     const token = await login(userSubmitEmail);
     const item = await createSemanticWorkItem('MON04 T1 single root');
