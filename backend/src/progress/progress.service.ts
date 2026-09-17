@@ -88,6 +88,14 @@ import {
   assessActualPromotionAnchorCompatibility,
   readCanonicalWorkPeriodAnchorFromStore,
 } from '../project/work-period-anchor.policy';
+import {
+  MONITORING_TEMPORAL_LENS_MODE,
+  recapActualWeeklySlicePeriodQuantities,
+  recapPlannedWeeklySlicePeriodQuantities,
+  resolveMonitoringTemporalLensBoundary,
+  type MonitoringTemporalLensInput,
+} from './progress-temporal-lens.policy';
+import { TEMPORAL_BASIS } from './progress-temporal-boundary.policy';
 
 type MonitoringReadClient = Pick<
   Prisma.TransactionClient,
@@ -96,6 +104,7 @@ type MonitoringReadClient = Pick<
   | 'boqItem'
   | 'progressEntry'
   | 'executionPlanVersion'
+  | 'progressAuditEvent'
 >;
 
 type CurrentOfficialQuantityResponse =
@@ -782,6 +791,7 @@ export class ProgressService {
     includeActualSeries = false,
     includeProgressComparison = false,
     periodWindowInput?: { startDate: unknown; endDate: unknown },
+    temporalLensInput?: MonitoringTemporalLensInput,
   ) {
     if (includeActualSeries && cutoffDate === undefined) {
       throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
@@ -805,7 +815,11 @@ export class ProgressService {
         ? periodWindowValidation.window
         : undefined;
 
-    if (cutoffDate === undefined && periodWindow === undefined) {
+    if (
+      cutoffDate === undefined &&
+      periodWindow === undefined &&
+      temporalLensInput === undefined
+    ) {
       return this.getMonitoringFromClient(this.prisma, projectId);
     }
 
@@ -827,6 +841,7 @@ export class ProgressService {
           includeActualSeries,
           includeProgressComparison,
           periodWindow,
+          temporalLensInput,
         ),
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
@@ -839,6 +854,7 @@ export class ProgressService {
     includeActualSeries = false,
     includeProgressComparison = false,
     periodWindow?: ProjectBusinessDateWindow,
+    temporalLensInput?: MonitoringTemporalLensInput,
   ) {
     const unavailable = [
       'plannedStart',
@@ -848,8 +864,21 @@ export class ProgressService {
     ] as const;
     const project = await db.project.findUnique({
       where: { id: projectId },
-      select: { status: true, timeZone: true },
+      select: { status: true, timeZone: true, startDate: true },
     });
+    const temporalLensBoundary =
+      temporalLensInput === undefined
+        ? undefined
+        : resolveMonitoringTemporalLensBoundary({
+            temporalLens: temporalLensInput,
+            governedWorkPeriodAnchor:
+              temporalLensInput.basis === TEMPORAL_BASIS.WORK_PERIOD
+                ? await readCanonicalWorkPeriodAnchorFromStore(db, {
+                    projectId,
+                    startDate: project?.startDate ?? null,
+                  })
+                : undefined,
+          });
     const activeBaselines = await db.projectBaseline.findMany({
       where: { projectId, status: 'ACTIVE' },
       orderBy: { versionNumber: 'desc' },
@@ -937,6 +966,40 @@ export class ProgressService {
               actualTruthMode: ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
               items: [],
             };
+      const temporalLensProjection =
+        temporalLensInput === undefined || temporalLensBoundary === undefined
+          ? undefined
+          : temporalLensBoundary.state === 'UNAVAILABLE'
+            ? {
+                mode: MONITORING_TEMPORAL_LENS_MODE,
+                state: 'UNAVAILABLE' as const,
+                basis: temporalLensInput.basis,
+                granularity: temporalLensInput.granularity,
+                referenceDate: temporalLensInput.referenceDate,
+                reason: temporalLensBoundary.reason,
+              }
+            : {
+                mode: MONITORING_TEMPORAL_LENS_MODE,
+                state: 'RESOLVED' as const,
+                basis: temporalLensInput.basis,
+                granularity: temporalLensInput.granularity,
+                referenceDate: temporalLensInput.referenceDate,
+                period: temporalLensBoundary.period,
+                ...(temporalLensBoundary.weeklyRecap === undefined
+                  ? {}
+                  : { weeklyRecap: temporalLensBoundary.weeklyRecap }),
+                baseline: baselineResponse,
+                plannedSource: null,
+                plannedContext: {
+                  state: 'UNAVAILABLE' as const,
+                  reason:
+                    baseline === null
+                      ? EXECUTION_PLAN_BLOCKER.NO_ACTIVE_BASELINE
+                      : EXECUTION_PLAN_BLOCKER.H2A1_WEIGHT_UNAVAILABLE,
+                },
+                actualTruthMode: ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
+                items: [],
+              };
 
       return {
         projectId,
@@ -983,6 +1046,9 @@ export class ProgressService {
         ...(periodWindowProjection === undefined
           ? {}
           : { periodWindow: periodWindowProjection }),
+        ...(temporalLensProjection === undefined
+          ? {}
+          : { temporalLens: temporalLensProjection }),
         unavailable,
       };
     }
@@ -997,7 +1063,9 @@ export class ProgressService {
       baseline.rabDocument.totalBaseCost,
     );
     const needsPlannedContext =
-      includeProgressComparison || periodWindow !== undefined;
+      includeProgressComparison ||
+      periodWindow !== undefined ||
+      temporalLensBoundary?.state === 'RESOLVED';
     const lockedPlanCandidates = needsPlannedContext
       ? await db.executionPlanVersion.findMany({
           where: { projectId, status: ExecutionPlanStatus.LOCKED },
@@ -1129,7 +1197,9 @@ export class ProgressService {
     }
 
     const needsTemporalContext =
-      cutoffDate !== undefined || periodWindow !== undefined;
+      cutoffDate !== undefined ||
+      periodWindow !== undefined ||
+      temporalLensBoundary?.state === 'RESOLVED';
     const temporalGovernedByWorkItem = !needsTemporalContext
       ? null
       : new Map(
@@ -1332,88 +1402,213 @@ export class ProgressService {
                 : {}),
             };
           })();
+    const resolvedPlannedContext = () => {
+      if (canonicalPlannedCurve === null) {
+        throw new Error('PERIOD_WINDOW_PLANNED_CONTEXT_REQUIRED');
+      }
+      return canonicalPlannedCurve.state === 'COMPLETE'
+        ? { state: 'COMPLETE' as const }
+        : canonicalPlannedCurve.state === 'INCOMPLETE'
+          ? {
+              state: 'INCOMPLETE' as const,
+              reason: canonicalPlannedCurve.reason,
+            }
+          : {
+              state: 'UNAVAILABLE' as const,
+              reason: canonicalPlannedCurve.reason,
+            };
+    };
+    const projectItemWindowTruth = (window: ProjectBusinessDateWindow) => {
+      if (
+        temporalGovernedByWorkItem === null ||
+        canonicalPlannedCurve === null
+      ) {
+        throw new Error('PERIOD_WINDOW_CONTEXT_REQUIRED');
+      }
+      const cumulativeThroughEnd = cachedProjectTemporalAtCutoff(
+        window.endDate,
+      );
+      return workItems.map((item) => {
+        const governed = temporalGovernedByWorkItem.get(item.id);
+        const cumulativeTruth =
+          cumulativeThroughEnd.temporalTruthByWorkItem.get(item.id);
+        if (governed === undefined || cumulativeTruth === undefined) {
+          throw new Error('PERIOD_WINDOW_WORK_ITEM_CONTEXT_REQUIRED');
+        }
+        return {
+          boqItemId: item.id,
+          planned: projectPlannedItemPeriodWindow({
+            boqItemId: item.id,
+            window,
+            plannedCurve: canonicalPlannedCurve,
+            distributions: canonicalPlanDistributions,
+          }),
+          actualPeriod: projectActualItemPeriodWindow({ governed, window }),
+          actualCumulative: cumulativeTruth.rawQuantityResult,
+        };
+      });
+    };
+    const serializeItemWindowTruth = (
+      items: ReturnType<typeof projectItemWindowTruth>,
+    ) =>
+      items.map((item) => ({
+        boqItemId: item.boqItemId,
+        planned: {
+          periodQuantity: serializePlannedItemQuantity(
+            item.planned.periodQuantity,
+          ),
+          cumulativeQuantityThroughEndDate: serializePlannedItemQuantity(
+            item.planned.cumulativeQuantityThroughEndDate,
+          ),
+        },
+        actual: {
+          periodOfficialQuantity: serializeCurrentOfficialQuantity(
+            item.actualPeriod,
+          ),
+          cumulativeOfficialQuantityThroughEndDate:
+            serializeCurrentOfficialQuantity(item.actualCumulative),
+        },
+      }));
     const periodWindowProjection =
       periodWindow === undefined
         ? undefined
-        : (() => {
-            if (
-              temporalGovernedByWorkItem === null ||
-              canonicalPlannedCurve === null
-            ) {
-              throw new Error('PERIOD_WINDOW_CONTEXT_REQUIRED');
+        : {
+            mode: PERIOD_WINDOW_MODE,
+            startDate: periodWindow.startDate,
+            endDate: periodWindow.endDate,
+            boundaryBasis: PERIOD_WINDOW_BOUNDARY_BASIS,
+            baseline: {
+              id: baseline.id,
+              versionNumber: baseline.versionNumber,
+              approvedAt: baseline.approvedAt,
+            },
+            plannedSource,
+            plannedContext: resolvedPlannedContext(),
+            actualTruthMode: ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
+            items: serializeItemWindowTruth(
+              projectItemWindowTruth(periodWindow),
+            ),
+          };
+    const temporalLensProjection =
+      temporalLensInput === undefined || temporalLensBoundary === undefined
+        ? undefined
+        : temporalLensBoundary.state === 'UNAVAILABLE'
+          ? {
+              mode: MONITORING_TEMPORAL_LENS_MODE,
+              state: 'UNAVAILABLE' as const,
+              basis: temporalLensInput.basis,
+              granularity: temporalLensInput.granularity,
+              referenceDate: temporalLensInput.referenceDate,
+              reason: temporalLensBoundary.reason,
             }
-
-            const cumulativeThroughEnd = cachedProjectTemporalAtCutoff(
-              periodWindow.endDate,
-            );
-            const plannedContext =
-              canonicalPlannedCurve.state === 'COMPLETE'
-                ? { state: 'COMPLETE' as const }
-                : canonicalPlannedCurve.state === 'INCOMPLETE'
-                  ? {
-                      state: 'INCOMPLETE' as const,
-                      reason: canonicalPlannedCurve.reason,
-                    }
-                  : {
-                      state: 'UNAVAILABLE' as const,
-                      reason: canonicalPlannedCurve.reason,
-                    };
-
-            return {
-              mode: PERIOD_WINDOW_MODE,
-              startDate: periodWindow.startDate,
-              endDate: periodWindow.endDate,
-              boundaryBasis: PERIOD_WINDOW_BOUNDARY_BASIS,
-              baseline: {
-                id: baseline.id,
-                versionNumber: baseline.versionNumber,
-                approvedAt: baseline.approvedAt,
-              },
-              plannedSource,
-              plannedContext,
-              actualTruthMode: ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
-              items: workItems.map((item) => {
-                const governed = temporalGovernedByWorkItem.get(item.id);
-                const cumulativeTruth =
-                  cumulativeThroughEnd.temporalTruthByWorkItem.get(item.id);
-                if (governed === undefined || cumulativeTruth === undefined) {
-                  throw new Error('PERIOD_WINDOW_WORK_ITEM_CONTEXT_REQUIRED');
+          : (() => {
+              const period = temporalLensBoundary.period;
+              let items: ReturnType<typeof serializeItemWindowTruth>;
+              if (period.granularity === 'WEEK') {
+                items = serializeItemWindowTruth(
+                  projectItemWindowTruth({
+                    startDate: period.startDate,
+                    endDate: period.endDate,
+                  }),
+                );
+              } else {
+                if (
+                  temporalGovernedByWorkItem === null ||
+                  canonicalPlannedCurve === null ||
+                  temporalLensBoundary.weeklyRecap === undefined
+                ) {
+                  throw new Error('TEMPORAL_LENS_MONTH_CONTEXT_REQUIRED');
                 }
-
-                const planned = projectPlannedItemPeriodWindow({
-                  boqItemId: item.id,
-                  window: periodWindow,
-                  plannedCurve: canonicalPlannedCurve,
-                  distributions: canonicalPlanDistributions,
-                });
-                const actualPeriod = projectActualItemPeriodWindow({
-                  governed,
-                  window: periodWindow,
-                });
-
-                return {
-                  boqItemId: item.id,
-                  planned: {
-                    periodQuantity: serializePlannedItemQuantity(
-                      planned.periodQuantity,
-                    ),
-                    cumulativeQuantityThroughEndDate:
-                      serializePlannedItemQuantity(
-                        planned.cumulativeQuantityThroughEndDate,
+                const slices = temporalLensBoundary.weeklyRecap.slices;
+                const finalSlice = slices.at(-1);
+                if (finalSlice === undefined) {
+                  throw new Error('TEMPORAL_LENS_MONTH_SLICE_REQUIRED');
+                }
+                const cumulativeThroughEnd = cachedProjectTemporalAtCutoff(
+                  period.endDate,
+                );
+                items = workItems.map((item) => {
+                  const governed = temporalGovernedByWorkItem.get(item.id);
+                  const cumulativeTruth =
+                    cumulativeThroughEnd.temporalTruthByWorkItem.get(item.id);
+                  if (governed === undefined || cumulativeTruth === undefined) {
+                    throw new Error(
+                      'TEMPORAL_LENS_MONTH_WORK_ITEM_CONTEXT_REQUIRED',
+                    );
+                  }
+                  const plannedSlices = slices.map((slice) =>
+                    projectPlannedItemPeriodWindow({
+                      boqItemId: item.id,
+                      window: {
+                        startDate: slice.sliceStartDate,
+                        endDate: slice.sliceEndDate,
+                      },
+                      plannedCurve: canonicalPlannedCurve,
+                      distributions: canonicalPlanDistributions,
+                    }),
+                  );
+                  const actualSlices = slices.map((slice) =>
+                    projectActualItemPeriodWindow({
+                      governed,
+                      window: {
+                        startDate: slice.sliceStartDate,
+                        endDate: slice.sliceEndDate,
+                      },
+                    }),
+                  );
+                  const finalPlannedSlice = plannedSlices.at(-1);
+                  if (finalPlannedSlice === undefined) {
+                    throw new Error(
+                      'TEMPORAL_LENS_MONTH_PLANNED_SLICE_REQUIRED',
+                    );
+                  }
+                  return {
+                    boqItemId: item.id,
+                    planned: {
+                      periodQuantity: serializePlannedItemQuantity(
+                        recapPlannedWeeklySlicePeriodQuantities(
+                          plannedSlices.map((slice) => slice.periodQuantity),
+                        ),
                       ),
-                  },
-                  actual: {
-                    periodOfficialQuantity:
-                      serializeCurrentOfficialQuantity(actualPeriod),
-                    cumulativeOfficialQuantityThroughEndDate:
-                      serializeCurrentOfficialQuantity(
-                        cumulativeTruth.rawQuantityResult,
+                      cumulativeQuantityThroughEndDate:
+                        serializePlannedItemQuantity(
+                          finalPlannedSlice.cumulativeQuantityThroughEndDate,
+                        ),
+                    },
+                    actual: {
+                      periodOfficialQuantity: serializeCurrentOfficialQuantity(
+                        recapActualWeeklySlicePeriodQuantities(actualSlices),
                       ),
-                  },
-                };
-              }),
-            };
-          })();
+                      cumulativeOfficialQuantityThroughEndDate:
+                        serializeCurrentOfficialQuantity(
+                          cumulativeTruth.rawQuantityResult,
+                        ),
+                    },
+                  };
+                });
+              }
+
+              return {
+                mode: MONITORING_TEMPORAL_LENS_MODE,
+                state: 'RESOLVED' as const,
+                basis: temporalLensInput.basis,
+                granularity: temporalLensInput.granularity,
+                referenceDate: temporalLensInput.referenceDate,
+                period,
+                ...(temporalLensBoundary.weeklyRecap === undefined
+                  ? {}
+                  : { weeklyRecap: temporalLensBoundary.weeklyRecap }),
+                baseline: {
+                  id: baseline.id,
+                  versionNumber: baseline.versionNumber,
+                  approvedAt: baseline.approvedAt,
+                },
+                plannedSource,
+                plannedContext: resolvedPlannedContext(),
+                actualTruthMode: ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
+                items,
+              };
+            })();
     const progressComparison =
       includeProgressComparison && cutoffDate !== undefined
         ? (() => {
@@ -1519,6 +1714,9 @@ export class ProgressService {
       ...(periodWindowProjection === undefined
         ? {}
         : { periodWindow: periodWindowProjection }),
+      ...(temporalLensProjection === undefined
+        ? {}
+        : { temporalLens: temporalLensProjection }),
       items: items.map((item) => {
         const effective = effectiveByItem.get(item.id);
 
