@@ -63,6 +63,7 @@ type ErrorKind =
   | null;
 
 type TemporalContextMode = 'TERKINI' | 'PERIODIK';
+type MonitoringContentLens = 'VISUAL' | 'ANALYSIS' | 'SCHEDULE';
 type PeriodicTemporalLensPresentation =
   | { state: 'DISABLED' | 'WAITING_INPUT' | 'LOADING' }
   | { state: 'RESOLVED'; requestKey: string;
@@ -144,6 +145,8 @@ export function ProjectWorkPage() {
   } | null>(null);
   const [executionPlanRefresh, setExecutionPlanRefresh] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [monitoringContentLens, setMonitoringContentLens] =
+    useState<MonitoringContentLens>('VISUAL');
   const [temporalContextMode, setTemporalContextMode] =
     useState<TemporalContextMode>('TERKINI');
   const [temporalBasis, setTemporalBasis] =
@@ -219,6 +222,7 @@ export function ProjectWorkPage() {
         if (!active) return;
         if (temporalProjectRef.current !== projectId) {
           temporalProjectRef.current = projectId;
+          setMonitoringContentLens('VISUAL');
           setTemporalContextMode('TERKINI');
           setTemporalBasis('WORK_PERIOD');
           setTemporalGranularity('WEEK');
@@ -777,6 +781,91 @@ export function ProjectWorkPage() {
           selectedActual?.recordedAt ?? null,
           monitoring.projectTimeZone,
         );
+  const monitoringPlanView =
+    monitoringContentLens === 'VISUAL' ? null : monitoringContentLens;
+  const monitoringLensSelector = (
+    <div
+      className="h2a0-content-lens"
+      role="group"
+      aria-label="Pilih detail Monitoring"
+    >
+      <button
+        type="button"
+        aria-pressed={monitoringContentLens === 'VISUAL'}
+        onClick={() => setMonitoringContentLens('VISUAL')}
+      >
+        Visual
+      </button>
+      <button
+        type="button"
+        aria-pressed={monitoringContentLens === 'ANALYSIS'}
+        onClick={() => setMonitoringContentLens('ANALYSIS')}
+      >
+        Analisis
+      </button>
+      <button
+        type="button"
+        aria-pressed={monitoringContentLens === 'SCHEDULE'}
+        onClick={() => setMonitoringContentLens('SCHEDULE')}
+      >
+        Jadwal
+      </button>
+    </div>
+  );
+  const monitoringPlanContent =
+    monitoringPlanView === null ? null : temporalContextMode === 'TERKINI' ? (
+      <ExecutionPlanReadinessPanel
+        presentation={monitoringPlanView}
+        projectId={project.id}
+        executionPlan={executionPlan}
+        realizationByBoqItemId={realizationByBoqItemId}
+        progressComparisonPresentation={progressComparisonPresentation}
+        onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
+      />
+    ) : activePeriodicSchedulePresentation.state === 'RESOLVED' &&
+      periodicResolvedResponse &&
+      periodicResolvedLens ? (
+      <ExecutionPlanReadinessPanel
+        periodicSchedule={{
+          view: monitoringPlanView,
+          monitoring: periodicResolvedResponse,
+          lens: periodicResolvedLens,
+          executionPlan: activePeriodicSchedulePresentation.executionPlan,
+          comparisonPresentation: activePeriodicComparisonPresentation,
+        }}
+      />
+    ) : periodicResolvedLens ? (
+      <section className="h2a0-periodic-deferred" role="status">
+        {activePeriodicSchedulePresentation.state === 'NO_PLANNED_SOURCE' && (
+          <strong>
+            {monitoringPlanView === 'SCHEDULE'
+              ? 'Schedule periode belum tersedia karena Rencana Pelaksanaan resmi belum tersedia.'
+              : 'Kurva S periode belum tersedia karena Rencana Pelaksanaan resmi belum tersedia.'}
+          </strong>
+        )}
+        {activePeriodicSchedulePresentation.state === 'CHECKING' && (
+          <strong>
+            {monitoringPlanView === 'SCHEDULE'
+              ? 'Memeriksa Rencana Pelaksanaan resmi untuk periode ini...'
+              : 'Menyiapkan Kurva S sampai akhir periode yang dipilih...'}
+          </strong>
+        )}
+        {activePeriodicSchedulePresentation.state === 'INCOHERENT' && (
+          <strong>
+            {monitoringPlanView === 'SCHEDULE'
+              ? 'Schedule periode tidak dapat ditampilkan karena konteks Rencana, RAB, dan periode tidak konsisten.'
+              : 'Kurva S periode tidak dapat ditampilkan karena konteks RAB, rencana, dan perbandingan tidak konsisten.'}
+          </strong>
+        )}
+        {activePeriodicSchedulePresentation.state === 'ERROR' && (
+          <strong>
+            {monitoringPlanView === 'SCHEDULE'
+              ? 'Schedule periode gagal dimuat. Fakta periode tetap aman.'
+              : 'Kurva S periode gagal dimuat. Fakta periode lainnya tetap aman.'}
+          </strong>
+        )}
+      </section>
+    ) : null;
 
   return (
     <main className="h2a0-page">
@@ -925,51 +1014,16 @@ export function ProjectWorkPage() {
         )}
       </section>
 
-      {temporalContextMode === 'TERKINI' ? (
+      {temporalContextMode === 'TERKINI' && (
         <ExecutionPlanReadinessPanel
+          presentation="GOVERNANCE"
           projectId={project.id}
           executionPlan={executionPlan}
           realizationByBoqItemId={realizationByBoqItemId}
           progressComparisonPresentation={progressComparisonPresentation}
           onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
         />
-      ) : activePeriodicSchedulePresentation.state === 'RESOLVED' &&
-        periodicResolvedResponse && periodicResolvedLens ? (
-        <ExecutionPlanReadinessPanel
-          periodicSchedule={{
-            monitoring: periodicResolvedResponse,
-            lens: periodicResolvedLens,
-            executionPlan: activePeriodicSchedulePresentation.executionPlan,
-            comparisonPresentation: activePeriodicComparisonPresentation,
-          }}
-        />
-      ) : periodicResolvedLens ? (
-        <section className="h2a0-periodic-deferred" role="status">
-          {activePeriodicSchedulePresentation.state === 'NO_PLANNED_SOURCE' && (
-            <strong>
-              Schedule periode belum tersedia karena Rencana Pelaksanaan resmi
-              belum tersedia.
-            </strong>
-          )}
-          {activePeriodicSchedulePresentation.state === 'CHECKING' && (
-            <strong>Memeriksa Rencana Pelaksanaan resmi untuk periode ini...</strong>
-          )}
-          {activePeriodicSchedulePresentation.state === 'INCOHERENT' && (
-            <strong>
-              Schedule periode tidak dapat ditampilkan karena konteks Rencana,
-              RAB, dan periode tidak konsisten.
-            </strong>
-          )}
-          {activePeriodicSchedulePresentation.state === 'ERROR' && (
-            <strong>Schedule periode gagal dimuat. Fakta periode tetap aman.</strong>
-          )}
-          {activePeriodicSchedulePresentation.state === 'NO_PLANNED_SOURCE' && (
-            <span>
-              Kurva S periode juga belum tersedia tanpa Rencana Pelaksanaan resmi.
-            </span>
-          )}
-        </section>
-      ) : null}
+      )}
 
       {temporalContextMode === 'PERIODIK' && activePeriodicPresentation.state !== 'RESOLVED' ? (
         <section className={`h2a0-periodic-state is-${activePeriodicPresentation.state.toLowerCase()}`}
@@ -1242,20 +1296,23 @@ export function ProjectWorkPage() {
                   )}
                   <p className="h2a1-weight-note">Bobot tetap menunjukkan komposisi nilai
                     Baseline RAB, bukan progress atau kinerja periode.</p>
-                  <section
-                    className="h2a0-visual-evidence"
-                    aria-labelledby="h2a0-periodic-visual-guidance-title"
-                  >
-                    <div className="h2a0-visual-evidence-heading">
-                      <h4 id="h2a0-periodic-visual-guidance-title">
-                        Visual Lapangan
-                      </h4>
-                      <p>
-                        Pilih satu pekerjaan untuk melihat bukti yang terlampir pada
-                        Actual resmi di periode ini.
-                      </p>
-                    </div>
-                  </section>
+                  {monitoringLensSelector}
+                  {monitoringContentLens === 'VISUAL' ? (
+                    <section
+                      className="h2a0-visual-evidence"
+                      aria-labelledby="h2a0-periodic-visual-guidance-title"
+                    >
+                      <div className="h2a0-visual-evidence-heading">
+                        <h4 id="h2a0-periodic-visual-guidance-title">
+                          Visual Lapangan
+                        </h4>
+                        <p>
+                          Pilih satu pekerjaan untuk melihat bukti yang terlampir pada
+                          Actual resmi di periode ini.
+                        </p>
+                      </div>
+                    </section>
+                  ) : monitoringPlanContent}
                 </div>
               ) : (
                 <div className="h2a0-item-scope">
@@ -1287,10 +1344,12 @@ export function ProjectWorkPage() {
                   </dl>
                   <p className="h2a1-weight-note">Bobot menunjukkan kontribusi nilai item
                     dan komposisi RAB. Nilai itu bukan persentase progress periode.</p>
-                  <section
-                    className="h2a0-visual-evidence"
-                    aria-labelledby="h2a0-periodic-visual-evidence-title"
-                  >
+                  {monitoringLensSelector}
+                  {monitoringContentLens === 'VISUAL' ? (
+                    <section
+                      className="h2a0-visual-evidence"
+                      aria-labelledby="h2a0-periodic-visual-evidence-title"
+                    >
                     <div className="h2a0-visual-evidence-heading">
                       <h4 id="h2a0-periodic-visual-evidence-title">
                         Visual Lapangan
@@ -1406,7 +1465,8 @@ export function ProjectWorkPage() {
                         )}
                       </>
                     )}
-                  </section>
+                    </section>
+                  ) : monitoringPlanContent}
                 </div>
               )) : null
             ) : !selected ? (
@@ -1458,18 +1518,21 @@ export function ProjectWorkPage() {
                   Pilih satu item pekerjaan pada struktur RAB/WBS untuk melihat
                   catatan realisasi yang berlaku tanpa meninggalkan orientasi proyek.
                 </p>
-                <section
-                  className="h2a0-visual-evidence"
-                  aria-labelledby="h2a0-visual-guidance-title"
-                >
-                  <div className="h2a0-visual-evidence-heading">
-                    <h4 id="h2a0-visual-guidance-title">Visual Lapangan</h4>
-                    <p>
-                      Pilih satu pekerjaan untuk melihat bukti lapangan yang melekat
-                      pada Actual yang berlaku.
-                    </p>
-                  </div>
-                </section>
+                {monitoringLensSelector}
+                {monitoringContentLens === 'VISUAL' ? (
+                  <section
+                    className="h2a0-visual-evidence"
+                    aria-labelledby="h2a0-visual-guidance-title"
+                  >
+                    <div className="h2a0-visual-evidence-heading">
+                      <h4 id="h2a0-visual-guidance-title">Visual Lapangan</h4>
+                      <p>
+                        Pilih satu pekerjaan untuk melihat bukti lapangan yang melekat
+                        pada Actual yang berlaku.
+                      </p>
+                    </div>
+                  </section>
+                ) : monitoringPlanContent}
               </div>
             ) : (
               <div className="h2a0-item-scope">
@@ -1561,10 +1624,22 @@ export function ProjectWorkPage() {
                   urutan pekerjaan, bukan persentase kemajuan atau perkembangan
                   terhadap waktu.
                 </p>
-                <section
-                  className="h2a0-visual-evidence"
-                  aria-labelledby="h2a0-visual-evidence-title"
+                <button
+                  className="h2a0-detail-action"
+                  onClick={() =>
+                    navigate(progressDetailPath(project.id, selected.id))
+                  }
                 >
+                  {hasPermission('FIELD_PROGRESS_SUBMIT')
+                    ? 'Catat / Kelola Actual'
+                    : 'Lihat Riwayat Actual'}
+                </button>
+                {monitoringLensSelector}
+                {monitoringContentLens === 'VISUAL' ? (
+                  <section
+                    className="h2a0-visual-evidence"
+                    aria-labelledby="h2a0-visual-evidence-title"
+                  >
                   <div className="h2a0-visual-evidence-heading">
                     <h4 id="h2a0-visual-evidence-title">Visual Lapangan</h4>
                     <p>
@@ -1638,17 +1713,8 @@ export function ProjectWorkPage() {
                       )}
                     </>
                   )}
-                </section>
-                <button
-                  className="h2a0-detail-action"
-                  onClick={() =>
-                    navigate(progressDetailPath(project.id, selected.id))
-                  }
-                >
-                  {hasPermission('FIELD_PROGRESS_SUBMIT')
-                    ? 'Catat / Kelola Actual'
-                    : 'Lihat Riwayat Actual'}
-                </button>
+                  </section>
+                ) : monitoringPlanContent}
               </div>
             )}
           </aside>

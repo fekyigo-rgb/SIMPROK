@@ -641,8 +641,10 @@ test('MON04-PS-7 Periodic Schedule presents backend facts and keeps Current path
   assert.match(periodicBlock, /row\.plannedFinishDate/);
   assert.match(periodicBlock, /plannedPeriodQuantityLabel/);
   assert.match(periodicBlock, /temporalActualQuantityLabel/);
-  assert.match(periodicBlock, /aria-pressed=\{periodicView === 'schedule'\}/);
-  assert.match(periodicBlock, /aria-pressed=\{periodicView === 'curve'\}/);
+  assert.match(periodicBlock, /view === 'SCHEDULE'/);
+  assert.match(periodicBlock, /view === 'ANALYSIS'/);
+  assert.doesNotMatch(periodicBlock, /aria-pressed|periodicView|setPeriodicView/);
+  assert.match(page, /className="h2a0-content-lens"/);
   assert.match(periodicBlock, /Rencana vs Realisasi s\.d\. Akhir Periode/);
   assert.doesNotMatch(periodicBlock, /scheduleRealizationPresentation/);
   assert.doesNotMatch(periodicBlock, /currentOfficialItemProgress/);
@@ -754,7 +756,7 @@ test('MON04-PK-P2 Periodic Kurva uses cumulative backend wording and supplied de
   assert.doesNotMatch(renderer, /actual\s*-\s*planned|planned\s*-\s*actual/i);
 });
 
-test('MON04-PK-P3 Periodic Kurva states fail closed without hiding healthy Schedule', () => {
+test('MON04-PK-P3 Periodic Kurva states fail closed without replacing the Schedule view', () => {
   const panel = readFileSync(
     'src/pages/field/ExecutionPlanReadinessPanel.tsx',
     'utf8',
@@ -762,8 +764,8 @@ test('MON04-PK-P3 Periodic Kurva states fail closed without hiding healthy Sched
   const start = panel.indexOf('function PeriodicScheduleReadOnly');
   const end = panel.indexOf('export function ExecutionPlanReadinessPanel', start);
   const periodicBlock = panel.slice(start, end);
-  assert.match(periodicBlock, /periodicView === 'schedule'/);
-  assert.match(periodicBlock, /periodicView === 'curve'/);
+  assert.match(periodicBlock, /view === 'SCHEDULE'/);
+  assert.match(periodicBlock, /view === 'ANALYSIS'/);
   assert.match(
     periodicBlock,
     /Kurva S periode tidak dapat ditampilkan karena konteks RAB,[\s\S]*rencana, dan perbandingan tidak konsisten/,
@@ -788,5 +790,120 @@ test('MON04-PK-P4 renderer consumes backend points without synthetic period data
   assert.doesNotMatch(
     renderer,
     /period\.startDate|period\.endDate|push\(|unshift\(|interpol|prorat|resampl/i,
+  );
+});
+
+test('MON04-DCA-L1..7 Visual defaults once, lenses preserve context, and projects reset explicitly', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  assert.match(
+    page,
+    /type MonitoringContentLens = 'VISUAL' \| 'ANALYSIS' \| 'SCHEDULE'/,
+  );
+  assert.match(
+    page,
+    /useState<MonitoringContentLens>\('VISUAL'\)/,
+  );
+  assert.match(
+    page,
+    /temporalProjectRef\.current !== projectId[\s\S]*setMonitoringContentLens\('VISUAL'\)/,
+  );
+  assert.equal(
+    (page.match(/setMonitoringContentLens/g) ?? []).length,
+    5,
+    'only the declaration, project reset, and three human lens choices may set the lens',
+  );
+  assert.match(page, /onClick=\{\(\) => setSelectedId\(row\.id\)\}/);
+  assert.doesNotMatch(page, /localStorage|sessionStorage/);
+});
+
+test('MON04-DCA-C1..7 and P1..8 expose one controlled Visual, Analysis, or Schedule view', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  const selectorStart = page.indexOf('const monitoringLensSelector');
+  const selectorEnd = page.indexOf('const monitoringPlanContent', selectorStart);
+  const selector = page.slice(selectorStart, selectorEnd);
+  assert.ok(selectorStart >= 0 && selectorEnd > selectorStart);
+  for (const lens of ['VISUAL', 'ANALYSIS', 'SCHEDULE']) {
+    assert.match(selector, new RegExp(`aria-pressed=\\{monitoringContentLens === '${lens}'\\}`));
+    assert.match(selector, new RegExp(`setMonitoringContentLens\\('${lens}'\\)`));
+  }
+  for (const label of ['Visual', 'Analisis', 'Jadwal']) {
+    assert.match(selector, new RegExp(`>\\s*${label}\\s*<`));
+  }
+  assert.equal((page.match(/\{monitoringLensSelector\}/g) ?? []).length, 4);
+  assert.equal((page.match(/periodicSchedule=\{\{/g) ?? []).length, 1);
+  assert.match(page, /presentation="GOVERNANCE"/);
+  assert.match(page, /presentation=\{monitoringPlanView\}/);
+  assert.match(page, /view: monitoringPlanView/);
+  assert.match(panel, /presentation === 'SCHEDULE'/);
+  assert.match(panel, /presentation === 'ANALYSIS'/);
+  assert.match(panel, /view === 'SCHEDULE'/);
+  assert.match(panel, /view === 'ANALYSIS'/);
+  assert.match(panel, /Jadwal Proyek/);
+  assert.match(panel, /Analisis Proyek/);
+  assert.doesNotMatch(panel, /Kurva pekerjaan ini|Schedule pekerjaan ini/);
+});
+
+test('MON04-DCA preserves one renderer, one Schedule mapping, and one governance mutation path', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  assert.equal((panel.match(/<svg/g) ?? []).length, 1);
+  assert.equal((panel.match(/function MonitoringComparisonCurve/g) ?? []).length, 1);
+  assert.equal((panel.match(/executionPlan\.schedule\.map/g) ?? []).length, 2);
+  assert.equal(
+    (panel.match(/\/execution-plan\/draft/g) ?? []).length,
+    1,
+  );
+  assert.equal(
+    (panel.match(/\/execution-plan\/lock/g) ?? []).length,
+    1,
+  );
+  assert.match(panel, /<h3>Rencana Kerja<\/h3>/);
+  assert.match(panel, /executionPlan\.workPlan\.map/);
+  assert.match(page, /temporalContextMode === 'TERKINI' && \([\s\S]*presentation="GOVERNANCE"/);
+  const periodicStart = panel.indexOf('function PeriodicScheduleReadOnly');
+  const periodicEnd = panel.indexOf('export function ExecutionPlanReadinessPanel');
+  const periodic = panel.slice(periodicStart, periodicEnd);
+  assert.doesNotMatch(
+    periodic,
+    /execution-plan\/draft|execution-plan\/lock|Simpan Draft|Kunci Rencana Pelaksanaan/,
+  );
+});
+
+test('MON04-DCA lens switching is presentation-only with no request or business calculation', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const selectorStart = page.indexOf('const monitoringLensSelector');
+  const selectorEnd = page.indexOf('const monitoringPlanContent', selectorStart);
+  const selector = page.slice(selectorStart, selectorEnd);
+  assert.doesNotMatch(
+    selector,
+    /apiFetch|\bfetch\b|axios|RequestPath|setTemporal|setExecutionPlanRefresh/,
+  );
+  assert.doesNotMatch(page, /^\s+monitoringContentLens,$/m);
+  const connectionStart = page.indexOf('const monitoringPlanContent');
+  const connectionEnd = page.indexOf('return (', connectionStart);
+  const connection = page.slice(connectionStart, connectionEnd);
+  assert.doesNotMatch(
+    connection,
+    /Number\(|parseFloat\(|Math\.|Date\.parse|new Date\(|getDay|getMonth|reduce\(|actual\s*-\s*planned|planned\s*-\s*actual/i,
+  );
+});
+
+test('MON04-DCA responsive and accessible selector reuses the existing Monitoring layout', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const css = readFileSync('src/pages/field/ProjectWorkPage.css', 'utf8');
+  assert.match(page, /role="group"[\s\S]*aria-label="Pilih detail Monitoring"/);
+  assert.match(css, /\.h2a0-content-lens \{[^}]*repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(css, /\.h2a0-content-lens button \{[^}]*min-height: 44px/);
+  assert.match(css, /\.h2a0-content-lens button:hover,[\s\S]*:focus-visible/);
+  assert.match(
+    css,
+    /@media \(max-width: 820px\)[\s\S]*\.h2a0-workspace \{ grid-template-columns: 1fr; \}/,
   );
 });
