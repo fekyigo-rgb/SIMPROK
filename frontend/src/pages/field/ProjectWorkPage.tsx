@@ -29,6 +29,7 @@ import {
   monitoringTemporalSnapshotCoherence,
   monitoringWorkItemsById,
   periodicComparisonCoherence,
+  officialFactStateLabel,
   officialItemProgressLabel,
   officialQuantityLabel,
   plannedPeriodQuantityLabel,
@@ -490,6 +491,8 @@ export function ProjectWorkPage() {
   const selectedTemporalItem = selected
     ? temporalLensItemsById.get(selected.id)
     : undefined;
+  const selectedPeriodEvidence =
+    selectedTemporalItem?.actual.periodEvidence;
   const effectiveItemCount = useMemo(
     () => rows.filter((row) => effectiveActual(row) !== null).length,
     [rows],
@@ -1239,6 +1242,20 @@ export function ProjectWorkPage() {
                   )}
                   <p className="h2a1-weight-note">Bobot tetap menunjukkan komposisi nilai
                     Baseline RAB, bukan progress atau kinerja periode.</p>
+                  <section
+                    className="h2a0-visual-evidence"
+                    aria-labelledby="h2a0-periodic-visual-guidance-title"
+                  >
+                    <div className="h2a0-visual-evidence-heading">
+                      <h4 id="h2a0-periodic-visual-guidance-title">
+                        Visual Lapangan
+                      </h4>
+                      <p>
+                        Pilih satu pekerjaan untuk melihat bukti yang terlampir pada
+                        Actual resmi di periode ini.
+                      </p>
+                    </div>
+                  </section>
                 </div>
               ) : (
                 <div className="h2a0-item-scope">
@@ -1270,6 +1287,126 @@ export function ProjectWorkPage() {
                   </dl>
                   <p className="h2a1-weight-note">Bobot menunjukkan kontribusi nilai item
                     dan komposisi RAB. Nilai itu bukan persentase progress periode.</p>
+                  <section
+                    className="h2a0-visual-evidence"
+                    aria-labelledby="h2a0-periodic-visual-evidence-title"
+                  >
+                    <div className="h2a0-visual-evidence-heading">
+                      <h4 id="h2a0-periodic-visual-evidence-title">
+                        Visual Lapangan
+                      </h4>
+                      <p>
+                        Bukti yang terlampir pada Actual resmi yang saat ini berlaku
+                        dan berada pada periode terpilih.
+                      </p>
+                    </div>
+                    {!selectedPeriodEvidence ? (
+                      <p className="h2a0-visual-evidence-empty">
+                        Bukti periode tidak tersedia dari snapshot kanonikal.
+                      </p>
+                    ) : selectedPeriodEvidence.state !== 'COMPLETE' &&
+                      selectedPeriodEvidence.state !== 'INCOMPLETE' ? (
+                      <p className="h2a0-visual-evidence-empty">
+                        Bukti periode tidak dapat ditampilkan sebagai fakta resmi:{' '}
+                        {officialFactStateLabel(selectedPeriodEvidence.state)}.
+                      </p>
+                    ) : (
+                      <>
+                        {selectedPeriodEvidence.state === 'COMPLETE' &&
+                        selectedPeriodEvidence.facts.length === 0 ? (
+                          <p className="h2a0-visual-evidence-empty">
+                            Tidak ada Actual resmi yang berlaku pada periode ini.
+                          </p>
+                        ) : (
+                          selectedPeriodEvidence.facts.map((fact) => {
+                            const factEvidence = monitoringEvidencePresentation(
+                              fact.evidenceReferences,
+                            );
+                            const factRecordedAt = recordedAtLabel(
+                              fact.recordedAt,
+                              activeMonitoringSnapshot?.projectTimeZone ?? null,
+                            );
+                            return (
+                              <article
+                                className="h2a0-period-evidence-fact"
+                                key={fact.sourceActualEntryId}
+                              >
+                                <dl className="h2a0-visual-evidence-context">
+                                  <div>
+                                    <dt>Tanggal pekerjaan</dt>
+                                    <dd>
+                                      {formatProjectBusinessDate(fact.workDate) ||
+                                        'TIDAK TERSEDIA'}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt>Dicatat di SIMPROK</dt>
+                                    <dd>{factRecordedAt.value}</dd>
+                                    {factRecordedAt.basis && (
+                                      <small>{factRecordedAt.basis}</small>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <dt>Metode pencatatan</dt>
+                                    <dd>{captureMethodLabel(fact.captureMethod)}</dd>
+                                  </div>
+                                </dl>
+                                {fact.notes?.trim() && (
+                                  <p className="h2a0-visual-evidence-notes">
+                                    <strong>Catatan Actual</strong>
+                                    <span>{fact.notes}</span>
+                                  </p>
+                                )}
+                                {fact.evidenceReferences.length === 0 ? (
+                                  <p className="h2a0-visual-evidence-empty">
+                                    Actual resmi pada periode ini belum memiliki bukti
+                                    lapangan terlampir.
+                                  </p>
+                                ) : factEvidence.length === 0 ? (
+                                  <p className="h2a0-visual-evidence-empty">
+                                    Bukti lapangan pada periode ini tidak dapat
+                                    ditampilkan dengan aman.
+                                  </p>
+                                ) : (
+                                  <ul className="h2a0-visual-evidence-list">
+                                    {factEvidence.map((evidence) => (
+                                      <li
+                                        className="h2a0-visual-evidence-card"
+                                        key={`${fact.sourceActualEntryId}:${evidence.url}:${evidence.label}`}
+                                      >
+                                        <span>
+                                          {evidence.presentation === 'IMAGE'
+                                            ? 'Gambar'
+                                            : evidence.presentation === 'VIDEO'
+                                              ? 'Video'
+                                              : 'Referensi'}
+                                        </span>
+                                        <h5>{evidence.label}</h5>
+                                        <a
+                                          href={evidence.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          aria-label={`Buka ${evidence.label} di tab baru`}
+                                        >
+                                          Buka bukti di tab baru
+                                        </a>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </article>
+                            );
+                          })
+                        )}
+                        {selectedPeriodEvidence.state === 'INCOMPLETE' && (
+                          <p className="h2a0-warning">
+                            Bukti periode belum lengkap karena belum seluruh fakta
+                            Actual dapat disajikan sebagai fakta resmi pada periode ini.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </section>
                 </div>
               )) : null
             ) : !selected ? (

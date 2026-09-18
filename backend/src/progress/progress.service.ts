@@ -57,6 +57,7 @@ import {
   prepareActualTemporalOfficialQuantity,
   projectActualTemporalOfficialQuantity,
   projectBusinessDateWire,
+  workDateWire,
 } from './progress-actual-temporal-quantity.policy';
 import {
   projectExecutionPlan,
@@ -78,9 +79,11 @@ import {
   ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
   PERIOD_WINDOW_BOUNDARY_BASIS,
   PERIOD_WINDOW_MODE,
+  projectActualItemPeriodOfficialFacts,
   projectActualItemPeriodWindow,
   projectPlannedItemPeriodWindow,
   validateProjectBusinessDateWindow,
+  type ActualItemPeriodOfficialFactsResult,
   type PlannedItemQuantityProjection,
   type ProjectBusinessDateWindow,
 } from './progress-period-window.policy';
@@ -1453,13 +1456,54 @@ export class ProgressService {
             plannedCurve: canonicalPlannedCurve,
             distributions: canonicalPlanDistributions,
           }),
+          actualPeriodEvidence: projectActualItemPeriodOfficialFacts({
+            governed,
+            window,
+          }),
           actualPeriod: projectActualItemPeriodWindow({ governed, window }),
           actualCumulative: cumulativeTruth.rawQuantityResult,
         };
       });
     };
+    const serializePeriodEvidence = (
+      periodEvidence: ActualItemPeriodOfficialFactsResult<
+        (typeof entries)[number]
+      >,
+    ) => {
+      if (
+        periodEvidence.state !== 'COMPLETE' &&
+        periodEvidence.state !== 'INCOMPLETE'
+      ) {
+        return {
+          state: periodEvidence.state,
+          ...('reason' in periodEvidence
+            ? { reason: periodEvidence.reason }
+            : {}),
+          facts: [],
+        };
+      }
+
+      return {
+        state: periodEvidence.state,
+        facts: periodEvidence.facts.map((fact) => {
+          const workDate = workDateWire(fact.entry.workDate);
+          if (workDate === null) {
+            throw new Error('PERIOD_EVIDENCE_WORK_DATE_REQUIRED');
+          }
+          return {
+            sourceActualEntryId: fact.entry.id,
+            workDate,
+            recordedAt: fact.entry.createdAt,
+            captureMethod: fact.entry.captureMethod,
+            notes: fact.entry.notes,
+            evidenceReferences: this.evidenceProjection(fact.entry),
+          };
+        }),
+      };
+    };
     const serializeItemWindowTruth = (
       items: ReturnType<typeof projectItemWindowTruth>,
+      includePeriodEvidence = false,
     ) =>
       items.map((item) => ({
         boqItemId: item.boqItemId,
@@ -1477,6 +1521,13 @@ export class ProgressService {
           ),
           cumulativeOfficialQuantityThroughEndDate:
             serializeCurrentOfficialQuantity(item.actualCumulative),
+          ...(includePeriodEvidence
+            ? {
+                periodEvidence: serializePeriodEvidence(
+                  item.actualPeriodEvidence,
+                ),
+              }
+            : {}),
         },
       }));
     const periodWindowProjection =
@@ -1520,6 +1571,7 @@ export class ProgressService {
                     startDate: period.startDate,
                     endDate: period.endDate,
                   }),
+                  true,
                 );
               } else {
                 if (
@@ -1566,6 +1618,20 @@ export class ProgressService {
                       },
                     }),
                   );
+                  const periodEvidence = projectActualItemPeriodOfficialFacts({
+                    governed,
+                    window: {
+                      startDate: period.startDate,
+                      endDate: period.endDate,
+                    },
+                  });
+                  const actualPeriodQuantity =
+                    recapActualWeeklySlicePeriodQuantities(actualSlices);
+                  if (periodEvidence.state !== actualPeriodQuantity.state) {
+                    throw new Error(
+                      'TEMPORAL_LENS_MONTH_PERIOD_EVIDENCE_STATE_MISMATCH',
+                    );
+                  }
                   const finalPlannedSlice = plannedSlices.at(-1);
                   if (finalPlannedSlice === undefined) {
                     throw new Error(
@@ -1586,13 +1652,13 @@ export class ProgressService {
                         ),
                     },
                     actual: {
-                      periodOfficialQuantity: serializeCurrentOfficialQuantity(
-                        recapActualWeeklySlicePeriodQuantities(actualSlices),
-                      ),
+                      periodOfficialQuantity:
+                        serializeCurrentOfficialQuantity(actualPeriodQuantity),
                       cumulativeOfficialQuantityThroughEndDate:
                         serializeCurrentOfficialQuantity(
                           cumulativeTruth.rawQuantityResult,
                         ),
+                      periodEvidence: serializePeriodEvidence(periodEvidence),
                     },
                   };
                 });

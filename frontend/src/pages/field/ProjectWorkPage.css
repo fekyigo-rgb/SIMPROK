@@ -151,6 +151,7 @@
 .h2a0-visual-evidence-heading h4, .h2a0-visual-evidence-card h5 { margin: 0; color: #123b58; }
 .h2a0-visual-evidence-heading h4 { font-size: .9rem; }
 .h2a0-visual-evidence-heading p, .h2a0-visual-evidence-empty { margin: 0; }
+.h2a0-period-evidence-fact { display: grid; gap: .7rem; padding-top: .75rem; border-top: 1px solid #dce7ee; }
 .h2a0-visual-evidence-context { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; margin: 0; }
 .h2a0-visual-evidence-context > div { min-width: 0; padding: .6rem; border-radius: 8px; background: #fff; }
 .h2a0-visual-evidence-context dt { color: #617887; font-size: .66rem; }

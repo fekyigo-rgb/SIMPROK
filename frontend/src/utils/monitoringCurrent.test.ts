@@ -26,6 +26,7 @@ import {
   monitoringTemporalPeriodLabel,
   monitoringTemporalSnapshotCoherence,
   monitoringWorkItemsById,
+  officialFactStateLabel,
   periodicComparisonCoherence,
   plannedComparisonLabel,
   plannedPeriodQuantityLabel,
@@ -1108,6 +1109,7 @@ function snapshotTemporalItem(boqItemId: string): MonitoringTemporalLensItem {
       cumulativeOfficialQuantityThroughEndDate: {
         state: 'COMPLETE', currentOfficialQuantity: '5',
       },
+      periodEvidence: { state: 'COMPLETE', facts: [] },
     },
   };
 }
@@ -1628,6 +1630,7 @@ test('MON04-TC-5 Temporal Lens items join only by canonical boqItemId', () => {
       cumulativeOfficialQuantityThroughEndDate: {
         state: 'COMPLETE', currentOfficialQuantity: '5',
       },
+      periodEvidence: { state: 'COMPLETE', facts: [] },
     },
   }];
   const byId = temporalLensItemsByBoqItemId(items);
@@ -1860,13 +1863,14 @@ test('MON04-CU-1..6 Current Visual Lapangan is progressive, contextual, and acce
   );
 });
 
-test('MON04-PV-1..5 Periodic never presents or fabricates Current evidence', () => {
+test('MON04-PE-F1..10 Periodic Visual uses canonical facts and never Current evidence', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
   const periodicStart = page.indexOf(
     "{temporalContextMode === 'PERIODIK' ? (",
   );
   const currentStart = page.indexOf(') : !selected ? (', periodicStart);
   const periodicPresentation = page.slice(periodicStart, currentStart);
+  const periodicText = periodicPresentation.replace(/\s+/g, ' ');
   const evidenceDataStart = page.indexOf('const selectedEvidenceReferences');
   const evidenceDataEnd = page.indexOf(
     'const selectedTemporalItem',
@@ -1875,9 +1879,47 @@ test('MON04-PV-1..5 Periodic never presents or fabricates Current evidence', () 
   const evidenceData = page.slice(evidenceDataStart, evidenceDataEnd);
 
   assert.ok(periodicStart >= 0 && currentStart > periodicStart);
+  assert.match(periodicPresentation, /Visual Lapangan/);
+  assert.match(
+    periodicText,
+    /Pilih satu pekerjaan untuk melihat bukti yang terlampir pada Actual resmi di periode ini/,
+  );
+  assert.match(
+    page,
+    /const selectedPeriodEvidence =\s*selectedTemporalItem\?\.actual\.periodEvidence/,
+  );
+  assert.match(periodicPresentation, /selectedPeriodEvidence\.facts\.map\(\(fact\)/);
+  assert.match(
+    periodicPresentation,
+    /monitoringEvidencePresentation\(\s*fact\.evidenceReferences/,
+  );
+  for (const copy of [
+    'Bukti yang terlampir pada Actual resmi yang saat ini berlaku dan berada pada periode terpilih.',
+    'Tidak ada Actual resmi yang berlaku pada periode ini.',
+    'Actual resmi pada periode ini belum memiliki bukti lapangan terlampir.',
+    'Bukti lapangan pada periode ini tidak dapat ditampilkan dengan aman.',
+    'Bukti periode belum lengkap karena belum seluruh fakta Actual dapat disajikan sebagai fakta resmi pada periode ini.',
+    'Bukti periode tidak dapat ditampilkan sebagai fakta resmi:',
+  ]) {
+    assert.match(periodicText, new RegExp(
+      copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    ));
+  }
+  assert.doesNotMatch(
+    periodicText,
+    /belum dapat ditempatkan secara sah/,
+  );
+  assert.match(
+    periodicPresentation,
+    /officialFactStateLabel\(selectedPeriodEvidence\.state\)/,
+  );
+  assert.match(periodicPresentation, /href=\{evidence\.url\}/);
+  assert.match(periodicPresentation, /target="_blank"/);
+  assert.match(periodicPresentation, /rel="noopener noreferrer"/);
+  assert.doesNotMatch(periodicPresentation, /selectedActual|selectedEvidenceReferences/);
   assert.doesNotMatch(
     periodicPresentation,
-    /Visual Lapangan|monitoringEvidencePresentation|selectedEvidence/,
+    /<img\b|<video\b|<source\b|src=\{evidence\.url\}|background-image|fetch\(|XMLHttpRequest|new Image\(|preload|prefetch/i,
   );
   assert.match(
     evidenceData,
@@ -1891,6 +1933,44 @@ test('MON04-PV-1..5 Periodic never presents or fabricates Current evidence', () 
   assert.doesNotMatch(
     evidenceData,
     /workDate\s*[<>=]|recordedAt\s*[<>=]|Date\.parse|new Date\(/,
+  );
+  assert.doesNotMatch(
+    periodicPresentation,
+    /\.filter\(|workDate\s*[<>=]|recordedAt\s*[<>=]|Date\.parse|new Date\(|getDay|getMonth/,
+  );
+});
+
+test('MON04-PE-F5 multiple Periodic facts retain their own safe references', () => {
+  const facts = [
+    {
+      sourceActualEntryId: 'actual-1',
+      evidenceReferences: [
+        { url: 'https://evidence.example/one', label: 'Bukti satu' },
+      ],
+    },
+    {
+      sourceActualEntryId: 'actual-2',
+      evidenceReferences: [
+        { url: 'https://evidence.example/two', label: 'Bukti dua' },
+      ],
+    },
+  ];
+
+  assert.deepEqual(
+    facts.map((fact) => ({
+      id: fact.sourceActualEntryId,
+      labels: monitoringEvidencePresentation(fact.evidenceReferences).map(
+        (evidence) => evidence.label,
+      ),
+    })),
+    [
+      { id: 'actual-1', labels: ['Bukti satu'] },
+      { id: 'actual-2', labels: ['Bukti dua'] },
+    ],
+  );
+  assert.equal(
+    officialFactStateLabel('SEMANTICS_UNPROVEN'),
+    'Semantik belum terbukti',
   );
 });
 

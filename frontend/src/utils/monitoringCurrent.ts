@@ -251,6 +251,31 @@ export type MonitoringPlannedItemQuantity =
   | { state: 'INCOMPLETE'; reason: string; knownPlannedQuantitySubtotal: string }
   | { state: 'UNAVAILABLE'; reason: string };
 
+export interface MonitoringPeriodEvidenceFact {
+  sourceActualEntryId: string;
+  workDate: string;
+  recordedAt: string;
+  captureMethod: string;
+  notes: string | null;
+  evidenceReferences: unknown[];
+}
+
+export type MonitoringPeriodEvidence =
+  | { state: 'COMPLETE' | 'INCOMPLETE'; facts: MonitoringPeriodEvidenceFact[] }
+  | {
+      state:
+        | 'NOT_YET_RECORDED'
+        | 'NO_ELIGIBLE_CURRENT_FACT'
+        | 'INVALID_NUMERIC_FACT'
+        | 'SEMANTICS_UNPROVEN';
+      facts: MonitoringPeriodEvidenceFact[];
+    }
+  | {
+      state: 'INVALID_LINEAGE';
+      reason?: string;
+      facts: MonitoringPeriodEvidenceFact[];
+    };
+
 export interface MonitoringTemporalLensItem {
   boqItemId: string;
   planned: {
@@ -260,6 +285,7 @@ export interface MonitoringTemporalLensItem {
   actual: {
     periodOfficialQuantity: MonitoringItem['currentOfficialQuantity'];
     cumulativeOfficialQuantityThroughEndDate: MonitoringItem['currentOfficialQuantity'];
+    periodEvidence: MonitoringPeriodEvidence;
   };
 }
 
@@ -724,7 +750,7 @@ export function officialItemProgressLabel(
   }
 }
 
-function officialFactStateLabel(state: MonitoringOfficialFactState): string {
+export function officialFactStateLabel(state: MonitoringOfficialFactState): string {
   switch (state) {
     case 'COMPLETE':
       return 'Lengkap';

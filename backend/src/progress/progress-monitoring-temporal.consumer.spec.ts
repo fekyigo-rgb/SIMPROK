@@ -46,7 +46,7 @@ describe('MON-04 Monitoring single-cutoff temporal consumer', () => {
   ): Law1CalculationEntry & {
     boqItemId: string;
     createdAt: Date;
-    photoUrl: null;
+    photoUrl: string | null;
   } => ({
     id,
     boqItemId,
@@ -1265,6 +1265,15 @@ describe('MON-04 Monitoring single-cutoff temporal consumer', () => {
         plannedSource: temporalLens.plannedSource,
       });
       expect(progressComparison.cutoffDate).toBe(temporalLens.period.endDate);
+      expect(temporalLens.items[0].actual.periodEvidence).toMatchObject({
+        state: 'COMPLETE',
+        facts: [
+          {
+            sourceActualEntryId: 'atomic-entry',
+            workDate: '2026-09-16',
+          },
+        ],
+      });
       expect(result).not.toHaveProperty('actualTemporal');
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
@@ -1278,6 +1287,83 @@ describe('MON-04 Monitoring single-cutoff temporal consumer', () => {
       expect(client.executionPlanVersion.findMany).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('projects modern and legacy evidence from the same governed fact without another query', async () => {
+    const item = workItem('period-evidence-item', 1);
+    const source = {
+      ...entry('period-evidence-entry', item.id, '3', '2026-09-16'),
+      notes: 'Pengecoran zona timur',
+      photoUrl: 'https://legacy.example/period-photo.jpg',
+      evidenceReferences: [
+        {
+          url: 'https://evidence.example/period-photo.jpg',
+          label: 'Foto periode',
+          mediaType: 'image/jpeg',
+        },
+      ],
+    };
+    const client = readClient(
+      [item],
+      prove(
+        {
+          projectId,
+          activeBaselineId: baselineId,
+          boqItemId: item.id,
+        },
+        [source],
+      ),
+    );
+    const { service, prisma } = serviceFor(client, true);
+
+    const result = await service.getMonitoring(
+      projectId,
+      undefined,
+      false,
+      true,
+      undefined,
+      {
+        basis: 'CALENDAR',
+        granularity: 'WEEK',
+        referenceDate: '2026-09-16',
+      },
+    );
+    const lens = result.temporalLens;
+    expect(lens?.state).toBe('RESOLVED');
+    if (lens?.state !== 'RESOLVED') return;
+
+    expect(lens.items[0].actual.periodEvidence).toEqual({
+      state: 'COMPLETE',
+      facts: [
+        {
+          sourceActualEntryId: source.id,
+          workDate: '2026-09-16',
+          recordedAt: source.createdAt,
+          captureMethod: 'FIELD_MEASUREMENT',
+          notes: 'Pengecoran zona timur',
+          evidenceReferences: [
+            {
+              url: 'https://evidence.example/period-photo.jpg',
+              label: 'Foto periode',
+              mediaType: 'image/jpeg',
+            },
+            {
+              url: 'https://legacy.example/period-photo.jpg',
+              label:
+                'Referensi bukti lama \u2014 status verifikasi tidak tersedia',
+              kind: 'LEGACY_REFERENCE',
+              verificationState: 'UNAVAILABLE',
+            },
+          ],
+        },
+      ],
+    });
+    expect(result).not.toHaveProperty('actualTemporal');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(client.progressEntry.findMany).toHaveBeenCalledTimes(1);
+    expect(client.boqItem.findMany).toHaveBeenCalledTimes(1);
+    expect(client.executionPlanVersion.findMany).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a comparison request without a cutoff before opening a transaction', async () => {
     const client = readClient([], []);
     const { service, prisma } = serviceFor(client);
