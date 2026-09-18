@@ -1882,7 +1882,7 @@ test('MON04-PE-F1..10 Periodic Visual uses canonical facts and never Current evi
   assert.match(periodicPresentation, /Visual Lapangan/);
   assert.match(
     periodicText,
-    /Pilih satu pekerjaan untuk melihat bukti Actual resmi pada periode ini/,
+    /Pilih satu pekerjaan untuk melihat bukti yang terlampir pada Actual resmi di periode ini/,
   );
   assert.match(
     page,
@@ -1894,16 +1894,21 @@ test('MON04-PE-F1..10 Periodic Visual uses canonical facts and never Current evi
     /monitoringEvidencePresentation\(\s*fact\.evidenceReferences/,
   );
   for (const copy of [
+    'Bukti yang terlampir pada Actual resmi yang saat ini berlaku dan berada pada periode terpilih.',
     'Tidak ada Actual resmi yang berlaku pada periode ini.',
     'Actual resmi pada periode ini belum memiliki bukti lapangan terlampir.',
     'Bukti lapangan pada periode ini tidak dapat ditampilkan dengan aman.',
-    'Bukti periode belum lengkap karena sebagian fakta Actual',
+    'Bukti periode belum lengkap karena belum seluruh fakta Actual dapat disajikan sebagai fakta resmi pada periode ini.',
     'Bukti periode tidak dapat ditampilkan sebagai fakta resmi:',
   ]) {
     assert.match(periodicText, new RegExp(
       copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
     ));
   }
+  assert.doesNotMatch(
+    periodicText,
+    /belum dapat ditempatkan secara sah/,
+  );
   assert.match(
     periodicPresentation,
     /officialFactStateLabel\(selectedPeriodEvidence\.state\)/,

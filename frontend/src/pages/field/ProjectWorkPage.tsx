@@ -1251,8 +1251,8 @@ export function ProjectWorkPage() {
                         Visual Lapangan
                       </h4>
                       <p>
-                        Pilih satu pekerjaan untuk melihat bukti Actual resmi pada
-                        periode ini.
+                        Pilih satu pekerjaan untuk melihat bukti yang terlampir pada
+                        Actual resmi di periode ini.
                       </p>
                     </div>
                   </section>
@@ -1296,8 +1296,8 @@ export function ProjectWorkPage() {
                         Visual Lapangan
                       </h4>
                       <p>
-                        Evidence dari Actual resmi yang saat ini berlaku dan berada
-                        pada periode terpilih.
+                        Bukti yang terlampir pada Actual resmi yang saat ini berlaku
+                        dan berada pada periode terpilih.
                       </p>
                     </div>
                     {!selectedPeriodEvidence ? (
@@ -1400,8 +1400,8 @@ export function ProjectWorkPage() {
                         )}
                         {selectedPeriodEvidence.state === 'INCOMPLETE' && (
                           <p className="h2a0-warning">
-                            Bukti periode belum lengkap karena sebagian fakta Actual
-                            belum dapat ditempatkan secara sah.
+                            Bukti periode belum lengkap karena belum seluruh fakta
+                            Actual dapat disajikan sebagai fakta resmi pada periode ini.
                           </p>
                         )}
                       </>
