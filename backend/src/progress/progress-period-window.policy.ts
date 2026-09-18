@@ -6,6 +6,7 @@ import {
   workDateWire,
 } from './progress-actual-temporal-quantity.policy';
 import type {
+  CurrentGovernedOfficialFact,
   CurrentGovernedOfficialFactsResult,
   CurrentOfficialQuantityResult,
   Law1CalculationEntry,
@@ -54,6 +55,18 @@ export type PlannedItemPeriodWindowProjection = {
   periodQuantity: PlannedItemQuantityProjection;
   cumulativeQuantityThroughEndDate: PlannedItemQuantityProjection;
 };
+
+export type ActualItemPeriodOfficialFactsResult<
+  T extends Law1CalculationEntry = Law1CalculationEntry,
+> =
+  | Exclude<
+      CurrentGovernedOfficialFactsResult<T>,
+      { state: 'INCOMPLETE' | 'COMPLETE' }
+    >
+  | {
+      state: 'INCOMPLETE' | 'COMPLETE';
+      facts: readonly CurrentGovernedOfficialFact<T>[];
+    };
 
 export function validateProjectBusinessDateWindow(
   startDate: unknown,
@@ -152,12 +165,12 @@ export function projectPlannedItemPeriodWindow(input: {
   };
 }
 
-export function projectActualItemPeriodWindow<
+export function projectActualItemPeriodOfficialFacts<
   T extends Law1CalculationEntry,
 >(input: {
   governed: CurrentGovernedOfficialFactsResult<T>;
   window: ProjectBusinessDateWindow;
-}): CurrentOfficialQuantityResult {
+}): ActualItemPeriodOfficialFactsResult<T> {
   switch (input.governed.state) {
     case 'NOT_YET_RECORDED':
     case 'NO_ELIGIBLE_CURRENT_FACT':
@@ -170,7 +183,7 @@ export function projectActualItemPeriodWindow<
       break;
   }
 
-  let knownEligibleQuantitySubtotal = new Prisma.Decimal(0);
+  const facts: CurrentGovernedOfficialFact<T>[] = [];
   let hasUnplaceableCurrentFact = false;
 
   for (const fact of input.governed.eligibleCurrentFacts) {
@@ -185,21 +198,49 @@ export function projectActualItemPeriodWindow<
       workDate >= input.window.startDate &&
       workDate <= input.window.endDate
     ) {
-      knownEligibleQuantitySubtotal = knownEligibleQuantitySubtotal.plus(
-        fact.quantity,
-      );
+      facts.push(fact);
     }
   }
 
-  if (input.governed.state === 'INCOMPLETE' || hasUnplaceableCurrentFact) {
-    return {
-      state: 'INCOMPLETE',
-      knownEligibleQuantitySubtotal,
-    };
+  return {
+    state:
+      input.governed.state === 'INCOMPLETE' || hasUnplaceableCurrentFact
+        ? 'INCOMPLETE'
+        : 'COMPLETE',
+    facts,
+  };
+}
+
+export function projectActualItemPeriodWindow<
+  T extends Law1CalculationEntry,
+>(input: {
+  governed: CurrentGovernedOfficialFactsResult<T>;
+  window: ProjectBusinessDateWindow;
+}): CurrentOfficialQuantityResult {
+  const periodFacts = projectActualItemPeriodOfficialFacts(input);
+  switch (periodFacts.state) {
+    case 'NOT_YET_RECORDED':
+    case 'NO_ELIGIBLE_CURRENT_FACT':
+    case 'INVALID_LINEAGE':
+    case 'INVALID_NUMERIC_FACT':
+    case 'SEMANTICS_UNPROVEN':
+      return periodFacts;
+    case 'INCOMPLETE':
+    case 'COMPLETE':
+      break;
   }
 
-  return {
-    state: 'COMPLETE',
-    currentOfficialQuantity: knownEligibleQuantitySubtotal,
-  };
+  let knownEligibleQuantitySubtotal = new Prisma.Decimal(0);
+  for (const fact of periodFacts.facts) {
+    knownEligibleQuantitySubtotal = knownEligibleQuantitySubtotal.plus(
+      fact.quantity,
+    );
+  }
+
+  return periodFacts.state === 'INCOMPLETE'
+    ? { state: 'INCOMPLETE', knownEligibleQuantitySubtotal }
+    : {
+        state: 'COMPLETE',
+        currentOfficialQuantity: knownEligibleQuantitySubtotal,
+      };
 }

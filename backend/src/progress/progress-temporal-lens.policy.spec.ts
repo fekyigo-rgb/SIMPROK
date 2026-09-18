@@ -6,6 +6,7 @@ import type {
   Law1CalculationEntry,
 } from './progress-current-official-quantity.policy';
 import {
+  projectActualItemPeriodOfficialFacts,
   projectActualItemPeriodWindow,
   projectPlannedItemPeriodWindow,
   type PlannedItemQuantityProjection,
@@ -522,6 +523,173 @@ describe('MON-04 canonical Monitoring temporal lens projection', () => {
       });
     });
   });
+
+  it.each([
+    [
+      'Calendar Week',
+      {
+        temporalLens: {
+          basis: 'CALENDAR' as const,
+          granularity: 'WEEK' as const,
+          referenceDate: '2026-09-16',
+        },
+      },
+      ['2026-09-14', '2026-09-20'],
+    ],
+    [
+      'Work Week',
+      {
+        temporalLens: {
+          basis: 'WORK_PERIOD' as const,
+          granularity: 'WEEK' as const,
+          referenceDate: '2026-06-03',
+        },
+        governedWorkPeriodAnchor: provenAnchor('2026-05-18'),
+      },
+      ['2026-06-01', '2026-06-07'],
+    ],
+  ])(
+    '%s reuses the resolved boundary for exact evidence membership',
+    (_label, input, expectedBoundary) => {
+      const boundary = resolveMonitoringTemporalLensBoundary(input);
+      expect(boundary.state).toBe('RESOLVED');
+      if (boundary.state !== 'RESOLVED') return;
+      expect([boundary.period.startDate, boundary.period.endDate]).toEqual(
+        expectedBoundary,
+      );
+
+      const [startDate, endDate] = expectedBoundary;
+      const governed: CurrentGovernedOfficialFactsResult = {
+        state: 'COMPLETE',
+        eligibleCurrentFacts: [startDate, endDate].map((date, index) => ({
+          entry: {
+            id: index === 0 ? 'week-start' : 'week-end',
+            supersedesEntryId: null,
+            installedQuantity: '1',
+            workDate: new Date(`${date}T00:00:00.000Z`),
+            status: ProgressActualStatus.VERIFIED,
+            captureMethod: 'FIELD_MEASUREMENT',
+            evidenceReferences: [],
+            notes: null,
+            correctionReasonCode: null,
+            correctionReason: null,
+            recordedByAccountId: 'actor-period-evidence',
+            revision: 1,
+            auditEvents: [],
+          },
+          quantity: new Prisma.Decimal(1),
+        })),
+      };
+      const selected = projectActualItemPeriodOfficialFacts({
+        governed,
+        window: {
+          startDate: boundary.period.startDate,
+          endDate: boundary.period.endDate,
+        },
+      });
+      expect(selected.state).toBe('COMPLETE');
+      if (selected.state !== 'COMPLETE') return;
+      expect(selected.facts.map((fact) => fact.entry.id)).toEqual([
+        'week-start',
+        'week-end',
+      ]);
+    },
+  );
+
+  it.each([
+    [
+      'Calendar Month',
+      {
+        temporalLens: {
+          basis: 'CALENDAR' as const,
+          granularity: 'MONTH' as const,
+          referenceDate: '2026-08-15',
+        },
+      },
+      [
+        ['before', '2026-07-31'],
+        ['at-start', '2026-08-01'],
+        ['at-end', '2026-08-31'],
+        ['after', '2026-09-01'],
+      ],
+      ['at-start', 'at-end'],
+    ],
+    [
+      'Work Month',
+      {
+        temporalLens: {
+          basis: 'WORK_PERIOD' as const,
+          granularity: 'MONTH' as const,
+          referenceDate: '2026-06-01',
+        },
+        governedWorkPeriodAnchor: provenAnchor('2026-05-18'),
+      },
+      [
+        ['before', '2026-05-17'],
+        ['at-start', '2026-05-18'],
+        ['at-end', '2026-06-17'],
+        ['after', '2026-06-18'],
+      ],
+      ['at-start', 'at-end'],
+    ],
+  ])(
+    '%s period fact membership equals the union of canonical weekly slices without leakage or duplicates',
+    (_label, input, datedFacts, expectedIds) => {
+      const boundary = resolveMonitoringTemporalLensBoundary(input);
+      expect(boundary.state).toBe('RESOLVED');
+      if (boundary.state !== 'RESOLVED' || !boundary.weeklyRecap) return;
+
+      const governed: CurrentGovernedOfficialFactsResult = {
+        state: 'COMPLETE',
+        eligibleCurrentFacts: datedFacts.map(([id, date]) => ({
+          entry: {
+            id,
+            supersedesEntryId: null,
+            installedQuantity: '1',
+            workDate: new Date(`${date}T00:00:00.000Z`),
+            status: ProgressActualStatus.VERIFIED,
+            captureMethod: 'FIELD_MEASUREMENT',
+            evidenceReferences: [],
+            notes: null,
+            correctionReasonCode: null,
+            correctionReason: null,
+            recordedByAccountId: 'actor-period-evidence',
+            revision: 1,
+            auditEvents: [],
+          },
+          quantity: new Prisma.Decimal(1),
+        })),
+      };
+      const direct = projectActualItemPeriodOfficialFacts({
+        governed,
+        window: {
+          startDate: boundary.period.startDate,
+          endDate: boundary.period.endDate,
+        },
+      });
+      expect(direct.state).toBe('COMPLETE');
+      if (direct.state !== 'COMPLETE') return;
+
+      const slicedIds = boundary.weeklyRecap.slices.flatMap((slice) => {
+        const selected = projectActualItemPeriodOfficialFacts({
+          governed,
+          window: {
+            startDate: slice.sliceStartDate,
+            endDate: slice.sliceEndDate,
+          },
+        });
+        if (selected.state !== 'COMPLETE') {
+          throw new Error('COMPLETE_SLICE_FACTS_REQUIRED');
+        }
+        return selected.facts.map((fact) => fact.entry.id);
+      });
+      const directIds = direct.facts.map((fact) => fact.entry.id);
+
+      expect(directIds).toEqual(expectedIds);
+      expect(slicedIds).toEqual(expectedIds);
+      expect(new Set(slicedIds).size).toBe(slicedIds.length);
+    },
+  );
 
   describe('exact weekly-slice recap state law', () => {
     const planned = (

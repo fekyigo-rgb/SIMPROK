@@ -250,6 +250,17 @@ interface Law1MonitoringBody {
       actual: {
         periodOfficialQuantity: Law1MonitoringQuantity;
         cumulativeOfficialQuantityThroughEndDate: Law1MonitoringQuantity;
+        periodEvidence: {
+          state: Law1MonitoringQuantity['state'];
+          facts: Array<{
+            sourceActualEntryId: string;
+            workDate: string;
+            recordedAt: string;
+            captureMethod: string;
+            notes: string | null;
+            evidenceReferences: unknown[];
+          }>;
+        };
       };
     }>;
   };
@@ -1792,9 +1803,27 @@ describe('Progress Security (e2e)', () => {
         'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_EXPLICIT_WORKDATE_WINDOW',
     });
     expect(weekBody.temporalLens).not.toHaveProperty('weeklyRecap');
-    expect(weekBody.temporalLens?.items).toEqual(
+    const quantityProjection = (
+      items: NonNullable<Law1MonitoringBody['temporalLens']>['items'],
+    ) =>
+      items?.map((item) => ({
+        boqItemId: item.boqItemId,
+        planned: item.planned,
+        actual: {
+          periodOfficialQuantity: item.actual.periodOfficialQuantity,
+          cumulativeOfficialQuantityThroughEndDate:
+            item.actual.cumulativeOfficialQuantityThroughEndDate,
+        },
+      }));
+    expect(quantityProjection(weekBody.temporalLens?.items)).toEqual(
       explicitWeekBody.periodWindow?.items,
     );
+    for (const item of weekBody.temporalLens?.items ?? []) {
+      expect(item.actual.periodEvidence.state).toBe(
+        item.actual.periodOfficialQuantity.state,
+      );
+      expect(item.actual.periodEvidence.facts).toEqual(expect.any(Array));
+    }
     expect(weekBody.progressComparison?.cutoffDate).toBe(
       weekBody.temporalLens?.period?.endDate,
     );
@@ -1853,9 +1882,15 @@ describe('Progress Security (e2e)', () => {
       sliceStartDate: '2026-08-31',
       sliceEndDate: '2026-08-31',
     });
-    expect(monthBody.temporalLens?.items).toEqual(
+    expect(quantityProjection(monthBody.temporalLens?.items)).toEqual(
       explicitMonthBody.periodWindow?.items,
     );
+    for (const item of monthBody.temporalLens?.items ?? []) {
+      expect(item.actual.periodEvidence.state).toBe(
+        item.actual.periodOfficialQuantity.state,
+      );
+      expect(item.actual.periodEvidence.facts).toEqual(expect.any(Array));
+    }
     expect(monthBody.progressComparison?.cutoffDate).toBe(
       monthBody.temporalLens?.period?.endDate,
     );

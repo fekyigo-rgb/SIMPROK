@@ -74,6 +74,10 @@ function periodicTemporalItem(id: string): MonitoringTemporalLensItem {
         state: 'COMPLETE',
         currentOfficialQuantity: '3',
       },
+      periodEvidence: {
+        state: 'COMPLETE',
+        facts: [],
+      },
     },
   };
 }
