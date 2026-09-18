@@ -847,6 +847,49 @@ test('MON04-DCA-C1..7 and P1..8 expose one controlled Visual, Analysis, or Sched
   assert.doesNotMatch(panel, /Kurva pekerjaan ini|Schedule pekerjaan ini/);
 });
 
+test('MON04-DCA Current selected work item keeps its action after active lens content', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const periodicStart = page.indexOf("{temporalContextMode === 'PERIODIK' ? (");
+  const currentStart = page.indexOf(') : !selected ? (', periodicStart);
+  const currentSelectedStart = page.indexOf(
+    '<div className="h2a0-item-scope">',
+    currentStart,
+  );
+  const currentSelectedEnd = page.indexOf('</aside>', currentSelectedStart);
+  assert.ok(periodicStart >= 0 && currentStart > periodicStart);
+  assert.ok(
+    currentSelectedStart > currentStart &&
+      currentSelectedEnd > currentSelectedStart,
+  );
+
+  const periodicBranch = page.slice(periodicStart, currentStart);
+  const currentSelected = page.slice(currentSelectedStart, currentSelectedEnd);
+  const semantics = currentSelected.indexOf('className="h2a0-semantics"');
+  const selector = currentSelected.indexOf('{monitoringLensSelector}');
+  const activeContent = currentSelected.indexOf(
+    "{monitoringContentLens === 'VISUAL' ? (",
+  );
+  const activeContentEnd = currentSelected.indexOf(
+    ') : monitoringPlanContent}',
+    activeContent,
+  );
+  const action = currentSelected.indexOf('className="h2a0-detail-action"');
+
+  assert.ok(semantics >= 0 && semantics < selector);
+  assert.ok(selector >= 0 && selector < activeContent);
+  assert.ok(activeContent >= 0 && activeContentEnd > activeContent);
+  assert.ok(activeContentEnd < action);
+  assert.equal((currentSelected.match(/h2a0-detail-action/g) ?? []).length, 1);
+  assert.match(currentSelected, /progressDetailPath\(project\.id, selected\.id\)/);
+  assert.match(currentSelected, /hasPermission\('FIELD_PROGRESS_SUBMIT'\)/);
+  assert.match(currentSelected, /Catat \/ Kelola Actual/);
+  assert.match(currentSelected, /Lihat Riwayat Actual/);
+  assert.doesNotMatch(
+    periodicBranch,
+    /h2a0-detail-action|Catat \/ Kelola Actual|FIELD_PROGRESS_SUBMIT/,
+  );
+});
+
 test('MON04-DCA preserves one renderer, one Schedule mapping, and one governance mutation path', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
   const panel = readFileSync(

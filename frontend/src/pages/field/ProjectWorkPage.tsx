@@ -1624,16 +1624,6 @@ export function ProjectWorkPage() {
                   urutan pekerjaan, bukan persentase kemajuan atau perkembangan
                   terhadap waktu.
                 </p>
-                <button
-                  className="h2a0-detail-action"
-                  onClick={() =>
-                    navigate(progressDetailPath(project.id, selected.id))
-                  }
-                >
-                  {hasPermission('FIELD_PROGRESS_SUBMIT')
-                    ? 'Catat / Kelola Actual'
-                    : 'Lihat Riwayat Actual'}
-                </button>
                 {monitoringLensSelector}
                 {monitoringContentLens === 'VISUAL' ? (
                   <section
@@ -1715,6 +1705,16 @@ export function ProjectWorkPage() {
                   )}
                   </section>
                 ) : monitoringPlanContent}
+                <button
+                  className="h2a0-detail-action"
+                  onClick={() =>
+                    navigate(progressDetailPath(project.id, selected.id))
+                  }
+                >
+                  {hasPermission('FIELD_PROGRESS_SUBMIT')
+                    ? 'Catat / Kelola Actual'
+                    : 'Lihat Riwayat Actual'}
+                </button>
               </div>
             )}
           </aside>
