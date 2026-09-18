@@ -28,7 +28,6 @@ import {
   monitoringTemporalSnapshotCoherence,
   monitoringWorkItemsById,
   periodicComparisonCoherence,
-  periodicComparisonDecision,
   officialItemProgressLabel,
   officialQuantityLabel,
   plannedPeriodQuantityLabel,
@@ -141,8 +140,6 @@ export function ProjectWorkPage() {
     key: string;
     promise: Promise<MonitoringResponse>;
   } | null>(null);
-  const [currentComparisonResponse, setCurrentComparisonResponse] =
-    useState<MonitoringResponse | null>(null);
   const [executionPlanRefresh, setExecutionPlanRefresh] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [temporalContextMode, setTemporalContextMode] =
@@ -160,10 +157,6 @@ export function ProjectWorkPage() {
     useState<PeriodicSchedulePresentation>({ state: 'DISABLED' });
   const [periodicSchedulePlanCache, setPeriodicSchedulePlanCache] =
     useState<ExecutionPlanResponse | null>(null);
-  const [periodicComparisonPresentation, setPeriodicComparisonPresentation] =
-    useState<MonitoringPeriodicComparisonPresentation>({ state: 'DISABLED' });
-  const [periodicComparisonCache, setPeriodicComparisonCache] =
-    useState<MonitoringResponse | null>(null);
   const [temporalRequestRefresh, setTemporalRequestRefresh] = useState(0);
   const temporalRequestGenerationRef = useRef(0);
   const periodicScheduleGenerationRef = useRef(0);
@@ -171,12 +164,6 @@ export function ProjectWorkPage() {
     key: string;
     controller: AbortController;
     promise: Promise<ExecutionPlanResponse>;
-  } | null>(null);
-  const periodicComparisonGenerationRef = useRef(0);
-  const periodicComparisonRequestRef = useRef<{
-    key: string;
-    controller: AbortController;
-    promise: Promise<MonitoringResponse>;
   } | null>(null);
   const temporalProjectRef = useRef<string | null>(null);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
@@ -257,7 +244,6 @@ export function ProjectWorkPage() {
           monitoringData.freshness.dataThrough,
         );
         if (cutoffDate === null) {
-          setCurrentComparisonResponse(null);
           setProgressComparisonPresentation({
             state: 'MISSING_CUTOFF',
             cutoffDate: null,
@@ -303,7 +289,6 @@ export function ProjectWorkPage() {
           const comparisonData = await comparisonPromise;
           if (!active) return;
           if (comparisonData.progressComparison === undefined) {
-            setCurrentComparisonResponse(null);
             setProgressComparisonPresentation({
               state: 'UNAVAILABLE',
               cutoffDate,
@@ -311,7 +296,6 @@ export function ProjectWorkPage() {
             });
             return;
           }
-          setCurrentComparisonResponse(comparisonData);
           setProgressComparisonPresentation({
             state: 'AVAILABLE',
             cutoffDate: comparisonData.progressComparison.cutoffDate,
@@ -323,7 +307,6 @@ export function ProjectWorkPage() {
             'Failed to fetch optional Monitoring comparison:',
             comparisonError,
           );
-          setCurrentComparisonResponse(null);
           setProgressComparisonPresentation({
             state: 'UNAVAILABLE',
             cutoffDate,
@@ -687,190 +670,35 @@ export function ProjectWorkPage() {
     activePeriodicSchedulePresentation.state === 'RESOLVED'
       ? activePeriodicSchedulePresentation.executionPlan.plan
       : null;
-  const periodicComparisonRequestKey =
-    periodicResolvedResponse && periodicResolvedLens
-      ? [
-          temporalRequestKey,
-          periodicResolvedResponse.projectId,
-          periodicResolvedLens.period.endDate,
-          periodicResolvedResponse.baseline?.id ?? 'NO_BASELINE',
-          periodicResolvedResponse.baseline?.versionNumber ??
-            'NO_BASELINE_VERSION',
-          periodicResolvedResponse.baseline?.approvedAt ??
-            'NO_BASELINE_APPROVAL',
-          periodicResolvedLens.plannedSource?.executionPlanVersionId ??
-            'NO_PLANNED_SOURCE',
-          periodicResolvedLens.plannedSource?.versionNumber ??
-            'NO_PLANNED_SOURCE_VERSION',
-        ].join(':')
-      : null;
-
-  useEffect(() => {
-    const generation = periodicComparisonGenerationRef.current + 1;
-    periodicComparisonGenerationRef.current = generation;
-
-    if (
-      temporalContextMode !== 'PERIODIK' ||
-      !token ||
-      !projectId ||
-      periodicResolvedResponse === null ||
-      periodicResolvedLens === null ||
-      periodicComparisonRequestKey === null
-    ) {
-      periodicComparisonRequestRef.current?.controller.abort();
-      periodicComparisonRequestRef.current = null;
-      return;
-    }
-
-    const decision = periodicComparisonDecision({
-      periodicResponse: periodicResolvedResponse,
-      candidates: [
-        currentComparisonResponse,
-        periodicComparisonCache,
-      ],
-      periodicSchedulePlan: periodicSchedulePlanIdentity,
-    });
-    if (decision.state === 'NO_COMPARATOR_CONTEXT') {
-      periodicComparisonRequestRef.current?.controller.abort();
-      periodicComparisonRequestRef.current = null;
-      return;
-    }
-    if (decision.state === 'REUSE') {
-      periodicComparisonRequestRef.current?.controller.abort();
-      periodicComparisonRequestRef.current = null;
-      return;
-    }
-
-    const previousRequest = periodicComparisonRequestRef.current;
-    let activeRequest = previousRequest;
-    if (activeRequest?.key !== periodicComparisonRequestKey) {
-      previousRequest?.controller.abort();
-      const controller = new AbortController();
-      const promise = apiFetch(
-        monitoringComparisonRequestPath(
-          projectId,
-          periodicResolvedLens.period.endDate,
-        ),
-        { signal: controller.signal },
-      ).then(async (response) => {
-        if (!response.ok) throw new MonitoringRequestError(response.status);
-        return response.json() as Promise<MonitoringResponse>;
-      });
-      activeRequest = {
-        key: periodicComparisonRequestKey,
-        controller,
-        promise,
-      };
-      periodicComparisonRequestRef.current = activeRequest;
-    }
-
-    let active = true;
-    void activeRequest.promise
-      .then((freshComparisonResponse) => {
-        if (
-          !active ||
-          periodicComparisonGenerationRef.current !== generation ||
-          periodicComparisonRequestRef.current?.key !==
-            periodicComparisonRequestKey
-        ) {
-          return;
-        }
-        const coherence = periodicComparisonCoherence({
-          periodicResponse: periodicResolvedResponse,
-          comparisonResponse: freshComparisonResponse,
-          periodicSchedulePlan: periodicSchedulePlanIdentity,
-        });
-        if (coherence.state !== 'COHERENT') {
-          setPeriodicComparisonPresentation({
-            state: 'INCOHERENT',
-            requestKey: periodicComparisonRequestKey,
-          });
-          return;
-        }
-        setPeriodicComparisonCache(freshComparisonResponse);
-        setPeriodicComparisonPresentation({
-          state: 'RESOLVED',
-          requestKey: periodicComparisonRequestKey,
-          response: coherence.response,
-          comparison: coherence.comparison,
-        });
-      })
-      .catch((comparisonError: unknown) => {
-        if (
-          !active ||
-          periodicComparisonGenerationRef.current !== generation ||
-          (comparisonError instanceof DOMException &&
-            comparisonError.name === 'AbortError')
-        ) {
-          return;
-        }
-        console.error(
-          'Failed to verify Periodic comparator provenance:',
-          comparisonError,
-        );
-        periodicComparisonRequestRef.current = null;
-        setPeriodicComparisonPresentation({
-          state: 'ERROR',
-          requestKey: periodicComparisonRequestKey,
-        });
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [
-    token,
-    projectId,
-    temporalContextMode,
-    periodicResolvedResponse,
-    periodicResolvedLens,
-    periodicComparisonRequestKey,
-    periodicComparisonCache,
-    currentComparisonResponse,
-    periodicSchedulePlanIdentity,
-  ]);
-
-  useEffect(
-    () => () => periodicComparisonRequestRef.current?.controller.abort(),
-    [],
-  );
-
-  const periodicComparisonImmediateDecision =
-    temporalContextMode === 'PERIODIK' && periodicResolvedResponse
-      ? periodicComparisonDecision({
-          periodicResponse: periodicResolvedResponse,
-          candidates: [
-            currentComparisonResponse,
-            periodicComparisonCache,
-          ],
-          periodicSchedulePlan: periodicSchedulePlanIdentity,
-        })
-      : null;
-  const activePeriodicComparisonPresentation =
-    periodicComparisonRequestKey === null ||
-    periodicComparisonImmediateDecision === null
-      ? ({ state: 'DISABLED' } as const)
-      : periodicComparisonImmediateDecision.state === 'NO_COMPARATOR_CONTEXT'
-        ? ({
+  const periodicAtomicComparisonKey =
+    periodicResolvedResponse && periodicResolvedLens ? temporalRequestKey : null;
+  const activePeriodicComparisonPresentation: MonitoringPeriodicComparisonPresentation =
+    periodicAtomicComparisonKey === null ||
+    periodicResolvedResponse === null ||
+    periodicResolvedLens === null
+      ? { state: 'DISABLED' }
+      : periodicResolvedLens.plannedSource === null
+        ? {
             state: 'NO_COMPARATOR_CONTEXT',
-            requestKey: periodicComparisonRequestKey,
-          } as const)
-        : periodicComparisonImmediateDecision.state === 'REUSE'
-          ? ({
-              state: 'RESOLVED',
-              requestKey: periodicComparisonRequestKey,
-              response: periodicComparisonImmediateDecision.response,
-              comparison: periodicComparisonImmediateDecision.comparison,
-            } as const)
-          : 'requestKey' in periodicComparisonPresentation &&
-              periodicComparisonPresentation.requestKey ===
-                periodicComparisonRequestKey
-            ? periodicComparisonPresentation
-            : ({
-                state: 'CHECKING',
-                requestKey: periodicComparisonRequestKey,
-              } as const);
-
+            requestKey: periodicAtomicComparisonKey,
+          }
+        : (() => {
+            const coherence = periodicComparisonCoherence({
+              periodicResponse: periodicResolvedResponse,
+              periodicSchedulePlan: periodicSchedulePlanIdentity,
+            });
+            return coherence.state === 'COHERENT'
+              ? {
+                  state: 'RESOLVED' as const,
+                  requestKey: periodicAtomicComparisonKey,
+                  response: coherence.response,
+                  comparison: coherence.comparison,
+                }
+              : {
+                  state: 'INCOHERENT' as const,
+                  requestKey: periodicAtomicComparisonKey,
+                };
+          })();
   const activatePeriodicContext = () => {
     if (temporalContextMode === 'PERIODIK') return;
     const canonicalDataThrough = monitoringComparisonCutoff(

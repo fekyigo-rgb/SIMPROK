@@ -25,7 +25,6 @@ import {
   monitoringTemporalSnapshotCoherence,
   monitoringWorkItemsById,
   periodicComparisonCoherence,
-  periodicComparisonDecision,
   plannedComparisonLabel,
   plannedPeriodQuantityLabel,
   progressDetailPath,
@@ -1175,43 +1174,50 @@ function monitoringSnapshot(input: {
   };
 }
 
-function comparisonSnapshot(input: {
-  projectId?: string;
-  topLevelBaseline?: MonitoringResponse['baseline'];
+function atomicPeriodicSnapshot(input: {
+  responseBaseline?: MonitoringResponse['baseline'];
+  lensBaseline?: MonitoringResponse['baseline'];
   comparisonBaseline?: MonitoringResponse['baseline'];
+  lensPlanId?: string | null;
+  lensPlanVersion?: number;
+  comparisonPlanId?: string | null;
+  comparisonPlanVersion?: number;
   cutoffDate?: string;
-  planId?: string | null;
-  planVersion?: number;
   includeComparison?: boolean;
   mode?: string;
 } = {}): MonitoringResponse {
-  const topLevelBaseline = input.topLevelBaseline === undefined
+  const responseBaseline = input.responseBaseline === undefined
     ? snapshotBaselineB
-    : input.topLevelBaseline;
-  const comparisonBaseline = input.comparisonBaseline === undefined
-    ? snapshotBaselineB
-    : input.comparisonBaseline;
-  const planId = input.planId === undefined ? 'plan-b' : input.planId;
+    : input.responseBaseline;
+  const lensPlanId = input.lensPlanId === undefined ? 'plan-b' : input.lensPlanId;
   const response = monitoringSnapshot({
-    projectId: input.projectId,
-    baseline: topLevelBaseline,
+    baseline: responseBaseline,
+    lensBaseline: input.lensBaseline,
     items: [item({ id: 'work-1', name: 'Work 1' })],
-    includeLens: false,
+    planId: lensPlanId,
+    planVersion: input.lensPlanVersion ?? 4,
+    periodEndDate: input.cutoffDate,
   });
   if (input.includeComparison === false) return response;
 
+  const comparisonPlanId = input.comparisonPlanId === undefined
+    ? lensPlanId
+    : input.comparisonPlanId;
+  const cutoffDate = input.cutoffDate ?? '2026-09-20';
   return {
     ...response,
     progressComparison: {
       mode: (input.mode ??
         'PLANNED_VS_CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE') as
         'PLANNED_VS_CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE',
-      cutoffDate: input.cutoffDate ?? '2026-09-20',
-      baseline: comparisonBaseline,
-      plannedSource: planId
+      cutoffDate,
+      baseline: input.comparisonBaseline === undefined
+        ? responseBaseline
+        : input.comparisonBaseline,
+      plannedSource: comparisonPlanId
         ? {
-            executionPlanVersionId: planId,
-            versionNumber: input.planVersion ?? 4,
+            executionPlanVersionId: comparisonPlanId,
+            versionNumber: input.comparisonPlanVersion ?? 4,
             status: 'LOCKED',
           }
         : null,
@@ -1219,7 +1225,7 @@ function comparisonSnapshot(input: {
         'PLANNED_PERIOD_ENDS_AND_GOVERNED_ACTUAL_WORKDATES_AND_REQUESTED_CUTOFF',
       points: [
         {
-          cutoffDate: input.cutoffDate ?? '2026-09-20',
+          cutoffDate,
           planned: {
             state: 'COMPLETE',
             plannedRabWeightedPhysicalProgressPercent: '40',
@@ -1234,7 +1240,6 @@ function comparisonSnapshot(input: {
     },
   };
 }
-
 test('TC-SNAPSHOT-1 Current A to Periodic B uses B Baseline', () => {
   const currentA = monitoringSnapshot({
     baseline: snapshotBaselineA, items: [item({ id: 'item-A', name: 'A' })], includeLens: false,
@@ -1416,159 +1421,99 @@ test('TC-SNAPSHOT-12 repair adds no frontend business math', () => {
     /periodQuantity\s*[/*+-]|plannedQuantity\s*[/*+-]|currentOfficialQuantity\s*[/*+-]/);
 });
 
-test('MON04-PK-C1 exact Periodic comparator provenance is coherent', () => {
-  const periodicResponse = monitoringSnapshot({
-    baseline: snapshotBaselineB,
-    items: [item({ id: 'work-1', name: 'Work 1' })],
-    planId: 'plan-b',
-    planVersion: 4,
-  });
-  const comparisonResponse = comparisonSnapshot();
+test('MON04-PK-ATOMIC-C1 one Periodic response is internally coherent', () => {
+  const periodicResponse = atomicPeriodicSnapshot();
   const result = periodicComparisonCoherence({
     periodicResponse,
-    comparisonResponse,
     periodicSchedulePlan: { id: 'plan-b', versionNumber: 4, status: 'LOCKED' },
   });
   assert.equal(result.state, 'COHERENT');
   if (result.state === 'COHERENT') {
-    assert.equal(result.response, comparisonResponse);
-    assert.equal(result.comparison, comparisonResponse.progressComparison);
+    assert.equal(result.response, periodicResponse);
+    assert.equal(result.comparison, periodicResponse.progressComparison);
   }
 });
 
-test('MON04-PK-C2 project and top-level Baseline mismatches fail closed', () => {
-  const periodicResponse = monitoringSnapshot({
-    baseline: snapshotBaselineB,
-    items: [item({ id: 'work-1', name: 'Work 1' })],
-    planId: 'plan-b',
-  });
+test('MON04-PK-ATOMIC-C2 Baseline mismatches inside one response fail closed', () => {
   assert.deepEqual(periodicComparisonCoherence({
-    periodicResponse,
-    comparisonResponse: comparisonSnapshot({ projectId: 'project-other' }),
-  }), { state: 'INCOHERENT', reason: 'PROJECT_ID_MISMATCH' });
-  assert.deepEqual(periodicComparisonCoherence({
-    periodicResponse,
-    comparisonResponse: comparisonSnapshot({ topLevelBaseline: snapshotBaselineA }),
-  }), { state: 'INCOHERENT', reason: 'TOP_LEVEL_BASELINE_MISMATCH' });
-});
-
-test('MON04-PK-C3 nested and Temporal Lens Baseline mismatches fail closed', () => {
-  const periodicResponse = monitoringSnapshot({
-    baseline: snapshotBaselineB,
-    items: [item({ id: 'work-1', name: 'Work 1' })],
-    planId: 'plan-b',
-  });
-  assert.deepEqual(periodicComparisonCoherence({
-    periodicResponse,
-    comparisonResponse: comparisonSnapshot({ comparisonBaseline: snapshotBaselineA }),
-  }), { state: 'INCOHERENT', reason: 'COMPARISON_BASELINE_MISMATCH' });
-  assert.deepEqual(periodicComparisonCoherence({
-    periodicResponse: monitoringSnapshot({
-      baseline: snapshotBaselineB,
-      lensBaseline: snapshotBaselineA,
-      items: [item({ id: 'work-1', name: 'Work 1' })],
-      planId: 'plan-b',
-    }),
-    comparisonResponse: comparisonSnapshot(),
+    periodicResponse: atomicPeriodicSnapshot({ lensBaseline: snapshotBaselineA }),
   }), { state: 'INCOHERENT', reason: 'TEMPORAL_BASELINE_MISMATCH' });
+  assert.deepEqual(periodicComparisonCoherence({
+    periodicResponse: atomicPeriodicSnapshot({ comparisonBaseline: snapshotBaselineA }),
+  }), { state: 'INCOHERENT', reason: 'COMPARISON_BASELINE_MISMATCH' });
 });
 
-test('MON04-PK-C4 plannedSource id, version, null, and Schedule Plan mismatches fail closed', () => {
-  const periodicResponse = monitoringSnapshot({
-    baseline: snapshotBaselineB,
-    items: [item({ id: 'work-1', name: 'Work 1' })],
-    planId: 'plan-b',
-    planVersion: 4,
-  });
-  for (const comparisonResponse of [
-    comparisonSnapshot({ planId: 'plan-a' }),
-    comparisonSnapshot({ planVersion: 3 }),
-    comparisonSnapshot({ planId: null }),
+test('MON04-PK-ATOMIC-C3 plannedSource and resolved Schedule Plan mismatches fail closed', () => {
+  for (const periodicResponse of [
+    atomicPeriodicSnapshot({ comparisonPlanId: 'plan-a' }),
+    atomicPeriodicSnapshot({ comparisonPlanVersion: 3 }),
+    atomicPeriodicSnapshot({ comparisonPlanId: null }),
   ]) {
-    assert.deepEqual(periodicComparisonCoherence({
-      periodicResponse,
-      comparisonResponse,
-    }), { state: 'INCOHERENT', reason: 'PLANNED_SOURCE_MISMATCH' });
+    assert.deepEqual(periodicComparisonCoherence({ periodicResponse }), {
+      state: 'INCOHERENT', reason: 'PLANNED_SOURCE_MISMATCH',
+    });
   }
   assert.deepEqual(periodicComparisonCoherence({
-    periodicResponse,
-    comparisonResponse: comparisonSnapshot(),
+    periodicResponse: atomicPeriodicSnapshot(),
     periodicSchedulePlan: { id: 'plan-a', versionNumber: 4, status: 'LOCKED' },
   }), { state: 'INCOHERENT', reason: 'SCHEDULE_PLAN_MISMATCH' });
 });
 
-test('MON04-PK-C5 cutoff, missing comparison, and unexpected mode fail closed', () => {
-  const periodicResponse = monitoringSnapshot({
-    baseline: snapshotBaselineB,
-    items: [item({ id: 'work-1', name: 'Work 1' })],
-    planId: 'plan-b',
+test('MON04-PK-ATOMIC-C4 cutoff, missing comparison, and unexpected mode fail closed', () => {
+  const wrongCutoff = atomicPeriodicSnapshot({ cutoffDate: '2026-09-19' });
+  if (wrongCutoff.temporalLens?.state === 'RESOLVED') {
+    wrongCutoff.temporalLens.period.endDate = '2026-09-20';
+  }
+  assert.deepEqual(periodicComparisonCoherence({ periodicResponse: wrongCutoff }), {
+    state: 'INCOHERENT', reason: 'COMPARISON_CUTOFF_MISMATCH',
   });
   assert.deepEqual(periodicComparisonCoherence({
-    periodicResponse,
-    comparisonResponse: comparisonSnapshot({ cutoffDate: '2026-09-19' }),
-  }), { state: 'INCOHERENT', reason: 'COMPARISON_CUTOFF_MISMATCH' });
-  assert.deepEqual(periodicComparisonCoherence({
-    periodicResponse,
-    comparisonResponse: comparisonSnapshot({ includeComparison: false }),
+    periodicResponse: atomicPeriodicSnapshot({ includeComparison: false }),
   }), { state: 'INCOHERENT', reason: 'COMPARISON_NOT_AVAILABLE' });
   assert.deepEqual(periodicComparisonCoherence({
-    periodicResponse,
-    comparisonResponse: comparisonSnapshot({ mode: 'UNEXPECTED_MODE' }),
+    periodicResponse: atomicPeriodicSnapshot({ mode: 'UNEXPECTED_MODE' }),
   }), { state: 'INCOHERENT', reason: 'COMPARISON_MODE_INVALID' });
 });
 
-test('MON04-PK-R1 exact comparator is reused; drift refreshes once; no Plan makes no request', () => {
-  const periodicResponse = monitoringSnapshot({
-    baseline: snapshotBaselineB,
-    items: [item({ id: 'work-1', name: 'Work 1' })],
-    planId: 'plan-b',
-  });
-  const exact = comparisonSnapshot();
-  assert.deepEqual(periodicComparisonDecision({
-    periodicResponse,
-    candidates: [exact],
-  }), {
-    state: 'REUSE',
-    response: exact,
-    comparison: exact.progressComparison,
-  });
-  assert.deepEqual(periodicComparisonDecision({
-    periodicResponse,
-    candidates: [comparisonSnapshot({ cutoffDate: '2026-09-19' })],
-  }), { state: 'REFRESH_REQUIRED' });
-  assert.deepEqual(periodicComparisonDecision({
-    periodicResponse,
-    candidates: [comparisonSnapshot({ topLevelBaseline: snapshotBaselineA })],
-  }), { state: 'REFRESH_REQUIRED' });
-  assert.deepEqual(periodicComparisonDecision({
-    periodicResponse: monitoringSnapshot({
-      baseline: snapshotBaselineB,
-      items: [item({ id: 'work-1', name: 'Work 1' })],
-      planId: null,
-    }),
-    candidates: [exact],
-  }), { state: 'NO_COMPARATOR_CONTEXT' });
+test('MON04-PK-ATOMIC-R1 Periodic request is one atomic Lens plus comparator request', () => {
+  const url = new URL(monitoringTemporalLensRequestPath({
+    projectId: 'project-1', basis: 'CALENDAR', granularity: 'WEEK',
+    referenceDate: '2026-09-16',
+  }), 'https://simprok.test');
+  assert.deepEqual([...url.searchParams.entries()], [
+    ['includeTemporalLens', 'true'],
+    ['temporalBasis', 'CALENDAR'],
+    ['temporalGranularity', 'WEEK'],
+    ['temporalReferenceDate', '2026-09-16'],
+    ['includeProgressComparison', 'true'],
+  ]);
+  assert.equal(url.searchParams.has('cutoffDate'), false);
+  for (const forbidden of [
+    'includeActualSeries', 'includePeriodWindow', 'periodStartDate', 'periodEndDate',
+  ]) assert.equal(url.searchParams.has(forbidden), false);
 });
 
-test('MON04-PK-S1 full Periodic comparator response is keyed, abortable, and stale-safe', () => {
+test('MON04-PK-ATOMIC-R2 frontend has no second Periodic comparator authority', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
-  const start = page.indexOf('const periodicComparisonRequestKey');
-  const end = page.indexOf('const activatePeriodicContext', start);
-  const connection = page.slice(start, end);
-  assert.ok(start >= 0 && end > start);
+  const temporalStart = page.indexOf('const temporalRequestKey');
+  const temporalEnd = page.indexOf('const activatePeriodicContext', temporalStart);
+  const periodicConnection = page.slice(temporalStart, temporalEnd);
+  assert.ok(temporalStart >= 0 && temporalEnd > temporalStart);
   assert.equal(
-    (connection.match(/monitoringComparisonRequestPath\(/g) ?? []).length,
+    (page.match(/monitoringComparisonRequestPath\(/g) ?? []).length,
+    1,
+    'only the locked TERKINI comparator request remains',
+  );
+  assert.equal(
+    (periodicConnection.match(/monitoringTemporalLensRequestPath\(\{/g) ?? []).length,
     1,
   );
-  assert.match(connection, /periodicResolvedLens\.period\.endDate/);
-  assert.match(connection, /periodicComparisonRequestRef\.current\?\.key/);
-  assert.match(connection, /periodicComparisonGenerationRef\.current !== generation/);
-  assert.match(connection, /controller\.abort\(\)/);
-  assert.match(connection, /setPeriodicComparisonCache\(freshComparisonResponse\)/);
-  assert.match(connection, /response: coherence\.response/);
-  assert.doesNotMatch(connection, /setInterval|setTimeout/);
+  assert.doesNotMatch(periodicConnection, /monitoringComparisonRequestPath\(/);
+  assert.doesNotMatch(periodicConnection,
+    /periodicComparisonRequestRef|periodicComparisonGenerationRef|periodicComparisonCache|currentComparisonResponse/);
+  assert.match(periodicConnection, /periodicResponse: periodicResolvedResponse/);
+  assert.match(periodicConnection, /comparison: coherence\.comparison/);
 });
-
 test('MON04-PK-A1 comparator integrity gate adds no business math or second engine', () => {
   const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
   const start = utility.indexOf('export interface MonitoringPeriodicSchedulePlanIdentity');
@@ -1598,8 +1543,9 @@ test('MON04-TC-1 Temporal Lens request carries exactly one canonical context', (
   assert.deepEqual([...url.searchParams.entries()], [
     ['includeTemporalLens', 'true'], ['temporalBasis', 'WORK_PERIOD'],
     ['temporalGranularity', 'MONTH'], ['temporalReferenceDate', '2026-07-20'],
+    ['includeProgressComparison', 'true'],
   ]);
-  for (const forbidden of ['cutoffDate', 'includeProgressComparison',
+  for (const forbidden of ['cutoffDate',
     'includeActualSeries', 'includePeriodWindow', 'periodStartDate', 'periodEndDate']) {
     assert.equal(url.searchParams.has(forbidden), false);
   }
@@ -1738,5 +1684,5 @@ test('MON04-TC-8 candidate contains no frontend temporal or quantity math', () =
   assert.doesNotMatch(helpers,
     /Date\.now|new Date\(|getDay|getUTCDay|setDate|setUTCDate|getMonth|getUTCMonth|parseFloat\(|Number\(|Math\./);
   assert.doesNotMatch(helpers,
-    /cutoffDate|includeProgressComparison|includeActualSeries|includePeriodWindow|periodStartDate|periodEndDate/);
+    /cutoffDate|includeActualSeries|includePeriodWindow|periodStartDate|periodEndDate/);
 });

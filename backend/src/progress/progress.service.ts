@@ -796,7 +796,11 @@ export class ProgressService {
     if (includeActualSeries && cutoffDate === undefined) {
       throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
     }
-    if (includeProgressComparison && cutoffDate === undefined) {
+    if (
+      includeProgressComparison &&
+      cutoffDate === undefined &&
+      temporalLensInput === undefined
+    ) {
       throw new BadRequestException('PROGRESS_COMPARISON_REQUIRES_CUTOFF');
     }
 
@@ -879,6 +883,12 @@ export class ProgressService {
                   })
                 : undefined,
           });
+    const comparisonCutoffDate = !includeProgressComparison
+      ? undefined
+      : (cutoffDate ??
+        (temporalLensBoundary?.state === 'RESOLVED'
+          ? temporalLensBoundary.period.endDate
+          : undefined));
     const activeBaselines = await db.projectBaseline.findMany({
       where: { projectId, status: 'ACTIVE' },
       orderBy: { versionNumber: 'desc' },
@@ -910,7 +920,7 @@ export class ProgressService {
           }
         : null;
       const progressComparison =
-        includeProgressComparison && cutoffDate !== undefined
+        comparisonCutoffDate !== undefined
           ? (() => {
               const planned = projectPlannedProgressAtBoundary(
                 {
@@ -921,18 +931,18 @@ export class ProgressService {
                       : EXECUTION_PLAN_BLOCKER.H2A1_WEIGHT_UNAVAILABLE,
                   points: [],
                 },
-                cutoffDate,
+                comparisonCutoffDate,
               );
 
               return {
                 mode: PROGRESS_COMPARISON_MODE,
-                cutoffDate,
+                cutoffDate: comparisonCutoffDate,
                 baseline: baselineResponse,
                 plannedSource: null,
                 boundaryBasis: PROGRESS_COMPARISON_BOUNDARY_BASIS,
                 points: [
                   {
-                    cutoffDate,
+                    cutoffDate: comparisonCutoffDate,
                     planned: serializePlannedTemporalProgress(planned),
                     actual: serializedOfficialRabWeightedPhysicalProgress,
                     deviationPercentagePoints: serializeProgressDeviation(
@@ -1610,7 +1620,7 @@ export class ProgressService {
               };
             })();
     const progressComparison =
-      includeProgressComparison && cutoffDate !== undefined
+      comparisonCutoffDate !== undefined
         ? (() => {
             if (
               temporalGovernedByWorkItem === null ||
@@ -1621,17 +1631,17 @@ export class ProgressService {
 
             const actualBoundaries = actualTemporalSeriesBoundaries(
               [...temporalGovernedByWorkItem.values()],
-              cutoffDate,
+              comparisonCutoffDate,
             );
             const boundaries = progressComparisonBoundaries({
               plannedCurve: canonicalPlannedCurve,
               actualBoundaries,
-              cutoffDate,
+              cutoffDate: comparisonCutoffDate,
             });
 
             return {
               mode: PROGRESS_COMPARISON_MODE,
-              cutoffDate,
+              cutoffDate: comparisonCutoffDate,
               baseline: {
                 id: baseline.id,
                 versionNumber: baseline.versionNumber,
@@ -1641,7 +1651,7 @@ export class ProgressService {
               boundaryBasis: PROGRESS_COMPARISON_BOUNDARY_BASIS,
               points: boundaries.map((boundaryDate) => {
                 const planned = projectPlannedProgressAtBoundary(
-                  canonicalPlannedCurve!,
+                  canonicalPlannedCurve,
                   boundaryDate,
                 );
                 const actual =

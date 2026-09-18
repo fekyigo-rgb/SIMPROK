@@ -177,6 +177,7 @@ describe('MON-04 canonical Monitoring temporal lens projection', () => {
           temporalGranularity: 'WEEK',
           temporalReferenceDate: '2026-09-17',
           cutoffDate: '2026-09-17',
+          includeProgressComparison: 'true',
         },
         'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
       ],
@@ -188,17 +189,6 @@ describe('MON-04 canonical Monitoring temporal lens projection', () => {
           temporalGranularity: 'WEEK',
           temporalReferenceDate: '2026-09-17',
           includeActualSeries: 'true',
-        },
-        'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
-      ],
-      [
-        'comparison conflict',
-        {
-          includeTemporalLens: 'true',
-          temporalBasis: 'CALENDAR',
-          temporalGranularity: 'WEEK',
-          temporalReferenceDate: '2026-09-17',
-          includeProgressComparison: 'true',
         },
         'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
       ],
@@ -223,6 +213,24 @@ describe('MON-04 canonical Monitoring temporal lens projection', () => {
           basis: 'WORK_PERIOD',
           granularity: 'MONTH',
           referenceDate: '2026-07-20',
+        },
+      });
+    });
+    it('accepts the atomic Temporal Lens plus comparator connection without an explicit cutoff', () => {
+      expect(
+        parseMonitoringTemporalLensQuery({
+          includeTemporalLens: 'true',
+          temporalBasis: 'CALENDAR',
+          temporalGranularity: 'WEEK',
+          temporalReferenceDate: '2026-09-16',
+          includeProgressComparison: 'true',
+        }),
+      ).toEqual({
+        state: 'ENABLED',
+        input: {
+          basis: 'CALENDAR',
+          granularity: 'WEEK',
+          referenceDate: '2026-09-16',
         },
       });
     });
