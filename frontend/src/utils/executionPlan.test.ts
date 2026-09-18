@@ -425,7 +425,7 @@ test('MON04 Kurva S consumes comparison points and preserves Planned-only fallba
   assert.match(panel, /<svg/);
   assert.match(panel, /comparisonChart\.plannedSegments\.map/);
   assert.match(panel, /comparisonChart\.actualSegments\.map/);
-  assert.match(panel, /progressComparison\.points\.map/);
+  assert.match(panel, /comparison\.points\.map/);
   assert.match(panel, /<th>Tanggal<\/th>/);
   assert.match(panel, /<th>Rencana<\/th>/);
   assert.match(panel, /<th>Realisasi<\/th>/);
@@ -637,7 +637,9 @@ test('MON04-PS-7 Periodic Schedule presents backend facts and keeps Current path
   assert.match(periodicBlock, /row\.plannedFinishDate/);
   assert.match(periodicBlock, /plannedPeriodQuantityLabel/);
   assert.match(periodicBlock, /temporalActualQuantityLabel/);
-  assert.match(periodicBlock, /Kurva S untuk konteks periode belum diaktifkan/);
+  assert.match(periodicBlock, /aria-pressed=\{periodicView === 'schedule'\}/);
+  assert.match(periodicBlock, /aria-pressed=\{periodicView === 'curve'\}/);
+  assert.match(periodicBlock, /Rencana vs Realisasi s\.d\. Akhir Periode/);
   assert.doesNotMatch(periodicBlock, /scheduleRealizationPresentation/);
   assert.doesNotMatch(periodicBlock, /currentOfficialItemProgress/);
   assert.doesNotMatch(periodicBlock, /Edit Rencana|Simpan Draft|Kunci Plan/);
@@ -675,7 +677,7 @@ test('MON04-PS-9 Periodic Schedule connection adds no business math or duplicate
     'src/pages/field/ExecutionPlanReadinessPanel.tsx',
     'utf8',
   );
-  const panelStart = panel.indexOf('function PeriodicScheduleReadOnly');
+  const panelStart = panel.indexOf('interface MonitoringComparisonCurveProps');
   const panelEnd = panel.indexOf('export function ExecutionPlanReadinessPanel', panelStart);
   const production = helperBlock + panel.slice(panelStart, panelEnd);
   assert.doesNotMatch(
@@ -689,5 +691,98 @@ test('MON04-PS-9 Periodic Schedule connection adds no business math or duplicate
   assert.doesNotMatch(
     production,
     /resolveCanonicalTemporalPeriod|canonicalWeekSlicesForMonth|periodEndDate\s*[<>=]|workDate\s*[<>=]/,
+  );
+});
+
+test('MON04-PK-P1 Current and Periodic reuse exactly one Kurva renderer', () => {
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  assert.equal((panel.match(/<svg/g) ?? []).length, 1);
+  assert.match(
+    panel,
+    /monitoringComparisonChartProjection\(comparison\.points\)/,
+  );
+  assert.equal(
+    (panel.match(/<MonitoringComparisonCurve/g) ?? []).length,
+    2,
+  );
+  assert.match(panel, /contextLine=\{`TERKINI · Data sampai/);
+  assert.match(
+    panel,
+    /contextLine=\{`\$\{monitoringTemporalPeriodLabel\(lens\.period\)\} · s\.d\./,
+  );
+});
+
+test('MON04-PK-P2 Periodic Kurva uses cumulative backend wording and supplied deviation', () => {
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  const start = panel.indexOf('function PeriodicScheduleReadOnly');
+  const end = panel.indexOf('export function ExecutionPlanReadinessPanel', start);
+  const periodicBlock = panel.slice(start, end);
+  for (const label of [
+    'Rencana vs Realisasi s.d. Akhir Periode',
+    'Rencana s.d. akhir periode',
+    'Realisasi s.d. akhir periode',
+    'Deviasi s.d. akhir periode',
+  ]) {
+    assert.ok(periodicBlock.includes(label));
+  }
+  assert.match(
+    periodicBlock,
+    /comparison=\{comparisonPresentation\.comparison\}/,
+  );
+  assert.doesNotMatch(
+    periodicBlock,
+    /Progress Minggu ini|Progress Periode|Deviasi Periode/,
+  );
+
+  const rendererStart = panel.indexOf('function MonitoringComparisonCurve');
+  const rendererEnd = panel.indexOf('function PeriodicScheduleReadOnly', rendererStart);
+  const renderer = panel.slice(rendererStart, rendererEnd);
+  assert.match(
+    renderer,
+    /deviationComparisonPresentation\(\s*finalComparisonPoint\.deviationPercentagePoints/,
+  );
+  assert.doesNotMatch(renderer, /actual\s*-\s*planned|planned\s*-\s*actual/i);
+});
+
+test('MON04-PK-P3 Periodic Kurva states fail closed without hiding healthy Schedule', () => {
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  const start = panel.indexOf('function PeriodicScheduleReadOnly');
+  const end = panel.indexOf('export function ExecutionPlanReadinessPanel', start);
+  const periodicBlock = panel.slice(start, end);
+  assert.match(periodicBlock, /periodicView === 'schedule'/);
+  assert.match(periodicBlock, /periodicView === 'curve'/);
+  assert.match(
+    periodicBlock,
+    /Kurva S periode tidak dapat ditampilkan karena konteks RAB,[\s\S]*rencana, dan perbandingan tidak konsisten/,
+  );
+  assert.match(
+    periodicBlock,
+    /Kurva S periode gagal dimuat\. Fakta periode lainnya tetap aman/,
+  );
+  assert.doesNotMatch(periodicBlock, /Simpan Draft|Kunci Rencana Pelaksanaan/);
+});
+
+test('MON04-PK-P4 renderer consumes backend points without synthetic period data', () => {
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  const start = panel.indexOf('function MonitoringComparisonCurve');
+  const end = panel.indexOf('function PeriodicScheduleReadOnly', start);
+  const renderer = panel.slice(start, end);
+  assert.match(renderer, /comparison\.points\.map/);
+  assert.match(renderer, /point\.cutoffDate/);
+  assert.doesNotMatch(
+    renderer,
+    /period\.startDate|period\.endDate|push\(|unshift\(|interpol|prorat|resampl/i,
   );
 });
