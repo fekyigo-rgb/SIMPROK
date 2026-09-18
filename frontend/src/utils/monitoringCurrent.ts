@@ -592,6 +592,69 @@ export function effectiveActual(
   return item.actual.effectiveRecord;
 }
 
+export interface MonitoringEvidencePresentation {
+  url: string;
+  label: string;
+  mediaType?: string;
+  integrityHash?: string;
+  presentation: 'IMAGE' | 'VIDEO' | 'LINK';
+}
+
+export function monitoringEvidencePresentation(
+  value: unknown,
+): MonitoringEvidencePresentation[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((candidate) => {
+    if (
+      candidate === null ||
+      typeof candidate !== 'object' ||
+      Array.isArray(candidate)
+    ) {
+      return [];
+    }
+
+    const record = candidate as Record<string, unknown>;
+    if (
+      typeof record.url !== 'string' ||
+      record.url.trim() === '' ||
+      typeof record.label !== 'string' ||
+      record.label.trim() === ''
+    ) {
+      return [];
+    }
+
+    try {
+      const protocol = new URL(record.url).protocol;
+      if (protocol !== 'http:' && protocol !== 'https:') return [];
+    } catch {
+      return [];
+    }
+
+    const mediaType =
+      typeof record.mediaType === 'string' ? record.mediaType : undefined;
+    const integrityHash =
+      typeof record.integrityHash === 'string'
+        ? record.integrityHash
+        : undefined;
+    const normalizedMediaType = mediaType?.toLowerCase() ?? '';
+
+    return [
+      {
+        url: record.url,
+        label: record.label,
+        ...(mediaType === undefined ? {} : { mediaType }),
+        ...(integrityHash === undefined ? {} : { integrityHash }),
+        presentation: normalizedMediaType.startsWith('image/')
+          ? ('IMAGE' as const)
+          : normalizedMediaType.startsWith('video/')
+            ? ('VIDEO' as const)
+            : ('LINK' as const),
+      },
+    ];
+  });
+}
+
 type MonitoringOfficialFactState =
   | MonitoringItem['currentOfficialQuantity']['state']
   | MonitoringItem['currentOfficialItemProgress']['state'];

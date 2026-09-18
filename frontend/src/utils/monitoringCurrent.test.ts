@@ -9,6 +9,8 @@ import {
   dataThroughLabel,
   deviationComparisonPresentation,
   effectiveActual,
+  formatProjectBusinessDate,
+  monitoringEvidencePresentation,
   formatWeightPercentage,
   lastRecordedLabel,
   lifecycleLabel,
@@ -1685,4 +1687,275 @@ test('MON04-TC-8 candidate contains no frontend temporal or quantity math', () =
     /Date\.now|new Date\(|getDay|getUTCDay|setDate|setUTCDate|getMonth|getUTCMonth|parseFloat\(|Number\(|Math\./);
   assert.doesNotMatch(helpers,
     /cutoffDate|includeActualSeries|includePeriodWindow|periodStartDate|periodEndDate/);
+});
+
+test('MON04-VE-1..5 evidence presentation accepts safe modern and legacy references', () => {
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://evidence.example/current',
+        label: 'Dokumentasi lapangan',
+        integrityHash: 'sha256:abc',
+      },
+    ]),
+    [
+      {
+        url: 'https://evidence.example/current',
+        label: 'Dokumentasi lapangan',
+        integrityHash: 'sha256:abc',
+        presentation: 'LINK',
+      },
+    ],
+  );
+  assert.equal(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://evidence.example/photo',
+        label: 'Foto pengecoran',
+        mediaType: 'image/jpeg',
+      },
+    ])[0]?.presentation,
+    'IMAGE',
+  );
+  assert.equal(
+    monitoringEvidencePresentation([
+      {
+        url: 'http://evidence.example/video',
+        label: 'Video inspeksi',
+        mediaType: 'video/mp4',
+      },
+    ])[0]?.presentation,
+    'VIDEO',
+  );
+  assert.equal(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://evidence.example/document',
+        label: 'Dokumen lapangan',
+      },
+    ])[0]?.presentation,
+    'LINK',
+  );
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://legacy.example/photo',
+        label: 'Foto bukti progres (legacy)',
+        kind: 'LEGACY_PHOTO_REFERENCE',
+        status: 'PROJECTED_REFERENCE',
+      },
+    ]),
+    [
+      {
+        url: 'https://legacy.example/photo',
+        label: 'Foto bukti progres (legacy)',
+        presentation: 'LINK',
+      },
+    ],
+  );
+});
+
+test('MON04-VE-6..8 unsafe, malformed, and empty evidence fail closed independently', () => {
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      { url: 'javascript:alert(1)', label: 'Unsafe JavaScript' },
+      { url: 'data:image/png;base64,abc', label: 'Unsafe data' },
+      { url: 'file:///tmp/evidence.jpg', label: 'Unsafe file' },
+      { url: 'ftp://evidence.example/file', label: 'Unknown protocol' },
+      { url: 'not a URL', label: 'Malformed URL' },
+    ]),
+    [],
+  );
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      null,
+      [],
+      'plain text',
+      {},
+      { url: '', label: 'Empty URL' },
+      { url: 'https://evidence.example', label: '' },
+      { url: 42, label: 'Wrong URL shape' },
+      { url: 'https://evidence.example', label: 42 },
+    ]),
+    [],
+  );
+  assert.deepEqual(monitoringEvidencePresentation([]), []);
+  assert.deepEqual(monitoringEvidencePresentation({}), []);
+});
+
+test('MON04-VE-9 effective Actual notes remain verbatim presentation context', () => {
+  const notes = '  Bekisting sisi timur sudah diperiksa.\nMenunggu pengecoran.  ';
+  const effectiveRecord = {
+    id: 'actual-1',
+    installedQuantity: '2.5',
+    workDate: '2026-09-16',
+    notes,
+    captureMethod: 'WEB_FORM',
+    evidenceReferences: [],
+    recordedByAccountId: 'account-1',
+    supersedesEntryId: null,
+    recordedAt: '2026-09-16T04:30:00.000Z',
+  };
+  const selected = effectiveActual(
+    item({
+      id: 'work-evidence',
+      name: 'Pekerjaan Evidence',
+      actual: {
+        state: 'RECORDED',
+        lifecycleState: 'ATTESTED',
+        effectiveRecord,
+      },
+    }),
+  );
+
+  assert.equal(selected?.notes, notes);
+  assert.equal(selected, effectiveRecord);
+});
+
+test('MON04-VE-10 evidence helper contains validation only, never progress inference', () => {
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const start = utility.indexOf('export interface MonitoringEvidencePresentation');
+  const end = utility.indexOf('type MonitoringOfficialFactState', start);
+  const helper = utility.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(
+    helper,
+    /Date\.now|new Date\(|Date\.parse|Number\(|parseFloat\(|Math\.|reduce\(/,
+  );
+  assert.doesNotMatch(
+    helper,
+    /progress|weight|quantity|period|workDate|recordedAt|\/\s*100|\*\s*100/i,
+  );
+});
+
+test('MON04-CU-1..6 Current Visual Lapangan is progressive, contextual, and accessible', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  for (const copy of [
+    'Pilih satu pekerjaan untuk melihat bukti lapangan yang melekat',
+    'Bukti yang terlampir pada Actual yang berlaku untuk pekerjaan ini.',
+    'Belum ada Actual yang berlaku untuk pekerjaan ini.',
+    'Actual yang berlaku belum memiliki bukti lapangan terlampir.',
+    'Bukti lapangan terlampir tidak dapat ditampilkan dengan aman.',
+    'Tanggal pekerjaan',
+    'Dicatat di SIMPROK',
+    'Metode pencatatan',
+    'Catatan Actual',
+  ]) {
+    assert.match(page, new RegExp(copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  const visualStart = page.indexOf('aria-labelledby="h2a0-visual-evidence-title"');
+  const visualEnd = page.indexOf('</section>', visualStart);
+  const visual = page.slice(visualStart, visualEnd);
+  assert.ok(visualStart >= 0 && visualEnd > visualStart);
+  assert.match(visual, /'Gambar'/);
+  assert.match(visual, /'Video'/);
+  assert.match(visual, /'Referensi'/);
+  assert.match(visual, /href=\{evidence\.url\}/);
+  assert.match(visual, /target="_blank"/);
+  assert.match(visual, /rel="noopener noreferrer"/);
+  assert.match(visual, /aria-label=/);
+  assert.doesNotMatch(
+    visual,
+    /recordedByAccountId|supersedesEntryId|integrityHash|selectedActual\.id/,
+  );
+});
+
+test('MON04-PV-1..5 Periodic never presents or fabricates Current evidence', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const periodicStart = page.indexOf(
+    "{temporalContextMode === 'PERIODIK' ? (",
+  );
+  const currentStart = page.indexOf(') : !selected ? (', periodicStart);
+  const periodicPresentation = page.slice(periodicStart, currentStart);
+  const evidenceDataStart = page.indexOf('const selectedEvidenceReferences');
+  const evidenceDataEnd = page.indexOf(
+    'const selectedTemporalItem',
+    evidenceDataStart,
+  );
+  const evidenceData = page.slice(evidenceDataStart, evidenceDataEnd);
+
+  assert.ok(periodicStart >= 0 && currentStart > periodicStart);
+  assert.doesNotMatch(
+    periodicPresentation,
+    /Visual Lapangan|monitoringEvidencePresentation|selectedEvidence/,
+  );
+  assert.match(
+    evidenceData,
+    /temporalContextMode === 'TERKINI'/,
+  );
+  assert.doesNotMatch(
+    evidenceData,
+    /apiFetch|monitoringComparisonRequestPath|monitoringTemporalLensRequestPath|filter\(/,
+  );
+  assert.doesNotMatch(page, /\/history['"`?&]/);
+  assert.doesNotMatch(
+    evidenceData,
+    /workDate\s*[<>=]|recordedAt\s*[<>=]|Date\.parse|new Date\(/,
+  );
+});
+
+test('MON04-SAFE-1..10 evidence stays a user-initiated safe reference', () => {
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://evidence.example/photo',
+        label: 'Foto lapangan',
+        mediaType: 'image/jpeg',
+      },
+      {
+        url: 'http://evidence.example/video',
+        label: 'Video lapangan',
+        mediaType: 'video/mp4',
+      },
+    ]).map((evidence) => [evidence.url, evidence.presentation]),
+    [
+      ['https://evidence.example/photo', 'IMAGE'],
+      ['http://evidence.example/video', 'VIDEO'],
+    ],
+  );
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      { url: 'javascript:alert(1)', label: 'Unsafe JavaScript' },
+      { url: 'data:text/plain,unsafe', label: 'Unsafe data' },
+      { url: 'file:///tmp/evidence.jpg', label: 'Unsafe file' },
+      { url: 'ftp://evidence.example/file', label: 'Unsafe FTP' },
+      { url: 'not a URL', label: 'Malformed URL' },
+      null,
+    ]),
+    [],
+  );
+
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const visualStart = page.indexOf('aria-labelledby="h2a0-visual-evidence-title"');
+  const visualEnd = page.indexOf('</section>', visualStart);
+  const visual = page.slice(visualStart, visualEnd);
+  assert.ok(visualStart >= 0 && visualEnd > visualStart);
+  assert.match(visual, /href=\{evidence\.url\}/);
+  assert.match(visual, /target="_blank"/);
+  assert.match(visual, /rel="noopener noreferrer"/);
+  assert.doesNotMatch(
+    visual,
+    /<img\b|<video\b|<source\b|src=\{evidence\.url\}|background-image|fetch\(|XMLHttpRequest|new Image\(|preload|prefetch/i,
+  );
+});
+
+test('MON04-DATE-1..3 Visual workDate is formatted or fails closed without substitution', () => {
+  assert.equal(formatProjectBusinessDate('2026-09-16'), '16 Sep 2026');
+  assert.equal(formatProjectBusinessDate(null), '');
+
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const visualStart = page.indexOf('aria-labelledby="h2a0-visual-evidence-title"');
+  const visualEnd = page.indexOf('</section>', visualStart);
+  const visual = page.slice(visualStart, visualEnd);
+  const workDateStart = visual.indexOf('<dt>Tanggal pekerjaan</dt>');
+  const recordedAtStart = visual.indexOf('<dt>Dicatat di SIMPROK</dt>');
+  const workDatePresentation = visual.slice(workDateStart, recordedAtStart);
+
+  assert.ok(workDateStart >= 0 && recordedAtStart > workDateStart);
+  assert.match(
+    workDatePresentation,
+    /formatProjectBusinessDate\(selectedActual\.workDate\) \|\|\s*'TIDAK TERSEDIA'/,
+  );
+  assert.doesNotMatch(workDatePresentation, /selectedRecordedAt|recordedAt/);
+  assert.match(visual, /\{selectedRecordedAt\.value\}/);
 });

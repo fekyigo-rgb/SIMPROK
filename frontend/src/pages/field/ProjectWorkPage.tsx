@@ -15,6 +15,7 @@ import {
   effectiveActual,
   formatWeightPercentage,
   formatProjectBusinessDate,
+  monitoringEvidencePresentation,
   lastRecordedLabel,
   monitoringComparisonCutoff,
   monitoringComparisonRequestPath,
@@ -478,6 +479,14 @@ export function ProjectWorkPage() {
     [rows, selectedId],
   );
   const selectedActual = effectiveActual(selected);
+  const selectedEvidenceReferences =
+    temporalContextMode === 'TERKINI'
+      ? selectedActual?.evidenceReferences
+      : undefined;
+  const selectedEvidence = monitoringEvidencePresentation(
+    selectedEvidenceReferences,
+  );
+
   const selectedTemporalItem = selected
     ? temporalLensItemsById.get(selected.id)
     : undefined;
@@ -1312,6 +1321,18 @@ export function ProjectWorkPage() {
                   Pilih satu item pekerjaan pada struktur RAB/WBS untuk melihat
                   catatan realisasi yang berlaku tanpa meninggalkan orientasi proyek.
                 </p>
+                <section
+                  className="h2a0-visual-evidence"
+                  aria-labelledby="h2a0-visual-guidance-title"
+                >
+                  <div className="h2a0-visual-evidence-heading">
+                    <h4 id="h2a0-visual-guidance-title">Visual Lapangan</h4>
+                    <p>
+                      Pilih satu pekerjaan untuk melihat bukti lapangan yang melekat
+                      pada Actual yang berlaku.
+                    </p>
+                  </div>
+                </section>
               </div>
             ) : (
               <div className="h2a0-item-scope">
@@ -1403,6 +1424,84 @@ export function ProjectWorkPage() {
                   urutan pekerjaan, bukan persentase kemajuan atau perkembangan
                   terhadap waktu.
                 </p>
+                <section
+                  className="h2a0-visual-evidence"
+                  aria-labelledby="h2a0-visual-evidence-title"
+                >
+                  <div className="h2a0-visual-evidence-heading">
+                    <h4 id="h2a0-visual-evidence-title">Visual Lapangan</h4>
+                    <p>
+                      Bukti yang terlampir pada Actual yang berlaku untuk pekerjaan ini.
+                    </p>
+                  </div>
+                  {!selectedActual ? (
+                    <p className="h2a0-visual-evidence-empty">
+                      Belum ada Actual yang berlaku untuk pekerjaan ini.
+                    </p>
+                  ) : (
+                    <>
+                      <dl className="h2a0-visual-evidence-context">
+                        <div>
+                          <dt>Tanggal pekerjaan</dt>
+                          <dd>
+                            {formatProjectBusinessDate(selectedActual.workDate) ||
+                              'TIDAK TERSEDIA'}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Dicatat di SIMPROK</dt>
+                          <dd>{selectedRecordedAt.value}</dd>
+                        </div>
+                        <div>
+                          <dt>Metode pencatatan</dt>
+                          <dd>{captureMethodLabel(selectedActual.captureMethod)}</dd>
+                        </div>
+                      </dl>
+                      {selectedActual.notes?.trim() && (
+                        <p className="h2a0-visual-evidence-notes">
+                          <strong>Catatan Actual</strong>
+                          <span>{selectedActual.notes}</span>
+                        </p>
+                      )}
+                      {Array.isArray(selectedEvidenceReferences) &&
+                      selectedEvidenceReferences.length === 0 ? (
+                        <p className="h2a0-visual-evidence-empty">
+                          Actual yang berlaku belum memiliki bukti lapangan terlampir.
+                        </p>
+                      ) : selectedEvidence.length === 0 ? (
+                        <p className="h2a0-visual-evidence-empty">
+                          Bukti lapangan terlampir tidak dapat ditampilkan dengan aman.
+                        </p>
+                      ) : (
+                        <ul className="h2a0-visual-evidence-list">
+                          {selectedEvidence.map((evidence) => (
+                            <li
+                              className="h2a0-visual-evidence-card"
+                              key={`${evidence.url}\u0000${evidence.label}`}
+                            >
+                              <span>
+                                {evidence.presentation === 'IMAGE'
+                                  ? 'Gambar'
+                                  : evidence.presentation === 'VIDEO'
+                                    ? 'Video'
+                                    : 'Referensi'}
+                              </span>
+                              <h5>{evidence.label}</h5>
+                              <a
+                                href={evidence.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label={`Buka ${evidence.label} di tab baru`}
+                              >
+                                Buka bukti di tab baru
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                </section>
                 <button
                   className="h2a0-detail-action"
                   onClick={() =>
