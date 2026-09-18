@@ -1443,7 +1443,10 @@ export function ProjectWorkPage() {
                       <dl className="h2a0-visual-evidence-context">
                         <div>
                           <dt>Tanggal pekerjaan</dt>
-                          <dd>{formatProjectBusinessDate(selectedActual.workDate)}</dd>
+                          <dd>
+                            {formatProjectBusinessDate(selectedActual.workDate) ||
+                              'TIDAK TERSEDIA'}
+                          </dd>
                         </div>
                         <div>
                           <dt>Dicatat di SIMPROK</dt>
@@ -1476,27 +1479,13 @@ export function ProjectWorkPage() {
                               className="h2a0-visual-evidence-card"
                               key={`${evidence.url}\u0000${evidence.label}`}
                             >
-                              {evidence.presentation === 'IMAGE' && (
-                                <img
-                                  src={evidence.url}
-                                  alt={evidence.label}
-                                  loading="lazy"
-                                  onError={(event) => {
-                                    event.currentTarget.hidden = true;
-                                  }}
-                                />
-                              )}
-                              {evidence.presentation === 'VIDEO' && (
-                                <video
-                                  src={evidence.url}
-                                  controls
-                                  preload="metadata"
-                                  aria-label={evidence.label}
-                                  onError={(event) => {
-                                    event.currentTarget.hidden = true;
-                                  }}
-                                />
-                              )}
+                              <span>
+                                {evidence.presentation === 'IMAGE'
+                                  ? 'Gambar'
+                                  : evidence.presentation === 'VIDEO'
+                                    ? 'Video'
+                                    : 'Referensi'}
+                              </span>
                               <h5>{evidence.label}</h5>
                               <a
                                 href={evidence.url}
