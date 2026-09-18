@@ -29,7 +29,7 @@ import {
   type MonitoringTemporalLens,
 } from '../../utils/monitoringCurrent';
 
-type ReviewView = 'schedule' | 'work-plan' | 'planned-curve';
+type MonitoringPlanView = 'ANALYSIS' | 'SCHEDULE';
 
 interface DraftRow {
   key: string;
@@ -40,6 +40,7 @@ interface DraftRow {
 }
 
 interface CurrentExecutionPlanReadinessPanelProps {
+  presentation: 'GOVERNANCE' | MonitoringPlanView;
   projectId: string;
   executionPlan: ExecutionPlanResponse;
   realizationByBoqItemId: ReadonlyMap<string, MonitoringItem>;
@@ -49,6 +50,7 @@ interface CurrentExecutionPlanReadinessPanelProps {
 
 interface PeriodicExecutionPlanReadinessPanelProps {
   periodicSchedule: {
+    view: MonitoringPlanView;
     monitoring: MonitoringResponse;
     lens: Extract<MonitoringTemporalLens, { state: 'RESOLVED' }>;
     executionPlan: ExecutionPlanResponse;
@@ -275,13 +277,12 @@ function MonitoringComparisonCurve({
 }
 
 function PeriodicScheduleReadOnly({
+  view,
   monitoring,
   lens,
   executionPlan,
   comparisonPresentation,
 }: PeriodicExecutionPlanReadinessPanelProps['periodicSchedule']) {
-  const [periodicView, setPeriodicView] =
-    useState<'schedule' | 'curve'>('schedule');
   const periodicItemsById = monitoringWorkItemsById(monitoring.items);
   const temporalItemsById = temporalLensItemsByBoqItemId(lens.items);
 
@@ -294,11 +295,13 @@ function PeriodicScheduleReadOnly({
         <div>
           <p className="h2a0-eyebrow">Schedule Periode</p>
           <h2 id="execution-plan-periodic-title">
-            {periodicView === 'schedule'
-              ? 'Schedule Rencana + Realisasi Periode'
-              : 'Kurva S Rencana + Realisasi s.d. Akhir Periode'}
+            {view === 'SCHEDULE' ? 'Jadwal Proyek' : 'Analisis Proyek'}
           </h2>
           <p className="execution-plan-note">
+            {view === 'SCHEDULE'
+              ? 'Schedule Rencana + Realisasi Periode'
+              : 'Kurva S Rencana + Realisasi s.d. Akhir Periode'}
+            <br />
             {monitoringTemporalPeriodLabel(lens.period)} {' · '}
             {formatProjectBusinessDate(lens.period.startDate)} {' - '}
             {formatProjectBusinessDate(lens.period.endDate)}
@@ -307,27 +310,7 @@ function PeriodicScheduleReadOnly({
         <strong className="execution-plan-state is-locked">Hanya baca</strong>
       </div>
 
-      <div
-        className="execution-plan-actions"
-        aria-label="Tinjau konteks Rencana Pelaksanaan periode"
-      >
-        <button
-          type="button"
-          aria-pressed={periodicView === 'schedule'}
-          onClick={() => setPeriodicView('schedule')}
-        >
-          Schedule <span>Tinjau</span>
-        </button>
-        <button
-          type="button"
-          aria-pressed={periodicView === 'curve'}
-          onClick={() => setPeriodicView('curve')}
-        >
-          Kurva S <span>Tinjau</span>
-        </button>
-      </div>
-
-      {periodicView === 'schedule' && (
+      {view === 'SCHEDULE' && (
         <div className="execution-plan-review">
           <p className="execution-plan-note">
             Tanggal rencana berasal dari Rencana Pelaksanaan resmi. Kuantitas
@@ -404,7 +387,7 @@ function PeriodicScheduleReadOnly({
         </div>
       )}
 
-      {periodicView === 'curve' && (
+      {view === 'ANALYSIS' && (
         <div className="execution-plan-review">
           {comparisonPresentation.state === 'RESOLVED' && (
             <MonitoringComparisonCurve
@@ -451,7 +434,6 @@ export function ExecutionPlanReadinessPanel(
   props: ExecutionPlanReadinessPanelProps,
 ) {
   const { hasPermission } = useAuth();
-  const [view, setView] = useState<ReviewView>('schedule');
   const [editing, setEditing] = useState(false);
   const [draftRows, setDraftRows] = useState<DraftRow[]>([]);
   const [working, setWorking] = useState(false);
@@ -462,6 +444,7 @@ export function ExecutionPlanReadinessPanel(
   }
 
   const {
+    presentation,
     projectId,
     executionPlan,
     realizationByBoqItemId,
@@ -480,6 +463,166 @@ export function ExecutionPlanReadinessPanel(
     progressComparisonPresentation.state === 'AVAILABLE'
       ? progressComparisonPresentation.comparison
       : null;
+
+  if (presentation === 'SCHEDULE') {
+    return (
+      <section
+        className="execution-plan"
+        aria-labelledby="execution-plan-current-schedule-title"
+      >
+        <div className="execution-plan-heading">
+          <div>
+            <p className="h2a0-eyebrow">Schedule Terkini</p>
+            <h2 id="execution-plan-current-schedule-title">Jadwal Proyek</h2>
+            <p className="execution-plan-note">
+              Schedule Rencana + Realisasi Terkini
+            </p>
+          </div>
+        </div>
+        <div className="execution-plan-review">
+          <p className="execution-plan-note">
+            Waktu tetap berasal dari rencana resmi. Realisasi menampilkan fakta
+            Current Official terkini, bukan Actual Start, Actual Finish, atau durasi aktual.
+          </p>
+          {executionPlan.schedule.length === 0 ? (
+            <p>Distribusi waktu belum tersedia.</p>
+          ) : (
+            <div className="execution-plan-table-scroll">
+              <table className="execution-plan-schedule">
+                <thead>
+                  <tr>
+                    <th>Pekerjaan</th>
+                    <th>Rencana Mulai</th>
+                    <th>Rencana Selesai</th>
+                    <th>Rencana</th>
+                    <th>Realisasi Terkini</th>
+                    <th>Progress Terkini</th>
+                    <th>Tanggal Kerja Efektif</th>
+                    <th>Status Fakta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {executionPlan.schedule.map((row) => {
+                    const realization = scheduleRealizationPresentation(
+                      realizationByBoqItemId.get(row.boqItemId),
+                      row.unit,
+                    );
+                    return (
+                      <tr key={row.boqItemId}>
+                        <td>{row.wbsCode} · {row.name}</td>
+                        <td>{formatProjectBusinessDate(row.plannedStartDate)}</td>
+                        <td>{formatProjectBusinessDate(row.plannedFinishDate)}</td>
+                        <td>{row.plannedQuantity} {row.unit}</td>
+                        <td className="execution-plan-realization-value">
+                          {realization.currentOfficialQuantity}
+                        </td>
+                        <td className="execution-plan-realization-value">
+                          {realization.currentOfficialItemProgress}
+                        </td>
+                        <td>{realization.effectiveWorkDate}</td>
+                        <td>
+                          <span className="execution-plan-fact-state">
+                            <small>Kuantitas</small>
+                            {realization.quantityState}
+                          </span>
+                          <span className="execution-plan-fact-state">
+                            <small>Progress</small>
+                            {realization.progressState}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  if (presentation === 'ANALYSIS') {
+    return (
+      <section
+        className="execution-plan"
+        aria-labelledby="execution-plan-current-analysis-title"
+      >
+        <div className="execution-plan-heading">
+          <div>
+            <p className="h2a0-eyebrow">Perbandingan Proyek</p>
+            <h2 id="execution-plan-current-analysis-title">Analisis Proyek</h2>
+          </div>
+        </div>
+        <div className="execution-plan-review">
+          {progressComparison ? (
+            <MonitoringComparisonCurve
+              comparison={progressComparison}
+              subtitle="Rencana vs Realisasi"
+              contextLine={`TERKINI · Data sampai ${formatProjectBusinessDate(progressComparison.cutoffDate)}`}
+              plannedSummaryLabel="Rencana"
+              actualSummaryLabel="Realisasi"
+              deviationSummaryLabel="Deviasi"
+            />
+          ) : (
+            <>
+              <h3>Kurva S Rencana</h3>
+              <p className="execution-plan-note">
+                Dibentuk SIMPROK dari kuantitas incremental dan bobot RAB
+                resmi; bukan titik kurva yang diedit manual.
+              </p>
+              {progressComparisonPresentation.state === 'MISSING_CUTOFF' && (
+                <p className="execution-plan-comparison-state" role="status">
+                  Kurva Realisasi belum tersedia karena belum ada tanggal data
+                  pekerjaan yang berlaku.
+                </p>
+              )}
+              {progressComparisonPresentation.state === 'UNAVAILABLE' && (
+                <p className="execution-plan-comparison-state" role="status">
+                  Perbandingan Rencana dan Realisasi sedang tidak tersedia.
+                  Kurva Rencana tetap ditampilkan.
+                </p>
+              )}
+              {(progressComparisonPresentation.state === 'PENDING' ||
+                progressComparisonPresentation.state === 'LOADING') && (
+                <p className="execution-plan-comparison-state" role="status">
+                  Menyiapkan perbandingan Rencana dan Realisasi terkini…
+                </p>
+              )}
+              {executionPlan.plannedCurve.state === 'UNAVAILABLE' ? (
+                <p>
+                  {executionPlanCurveUnavailableLabel(
+                    executionPlan.plannedCurve.reason,
+                  )}
+                </p>
+              ) : (
+                <div
+                  className="execution-plan-curve"
+                  data-state={executionPlan.plannedCurve.state}
+                >
+                  {executionPlan.plannedCurve.points.map((point) => (
+                    <div key={point.periodEndDate}>
+                      <span>
+                        {formatProjectBusinessDate(point.periodEndDate)}
+                      </span>
+                      <strong>
+                        {point.knownWeightedPlannedProgressPercent}%
+                      </strong>
+                    </div>
+                  ))}
+                  {executionPlan.plannedCurve.state === 'INCOMPLETE' && (
+                    <small>
+                      Subtotal yang diketahui; belum menjadi kurva lengkap.
+                    </small>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </section>
+    );
+  }
 
   const beginRevision = () => {
     const existing = executionPlan.distributions.map((row) => ({
@@ -591,18 +734,6 @@ export function ExecutionPlanReadinessPanel(
         </strong>
       </div>
 
-      <div className="execution-plan-actions" aria-label="Tinjau Rencana Pelaksanaan">
-        <button type="button" onClick={() => setView('schedule')}>
-          Schedule Rencana <span>Tinjau</span>
-        </button>
-        <button type="button" onClick={() => setView('work-plan')}>
-          Rencana Kerja <span>Tinjau</span>
-        </button>
-        <button type="button" onClick={() => setView('planned-curve')}>
-          Kurva S <span>Tinjau</span>
-        </button>
-      </div>
-
       {executionPlan.blockers.length > 0 && !locked && (
         <div className="execution-plan-blockers" role="status">
           <strong>Yang perlu diselesaikan sebelum penguncian:</strong>
@@ -616,159 +747,25 @@ export function ExecutionPlanReadinessPanel(
         </div>
       )}
 
-      {view === 'schedule' && (
-        <div className="execution-plan-review">
-          <h3>Schedule Rencana + Realisasi Terkini</h3>
-          <p className="execution-plan-note">
-            Waktu tetap berasal dari rencana resmi. Realisasi menampilkan fakta
-            Current Official terkini, bukan Actual Start, Actual Finish, atau durasi aktual.
-          </p>
-          {executionPlan.schedule.length === 0 ? (
-            <p>Distribusi waktu belum tersedia.</p>
-          ) : (
-            <div className="execution-plan-table-scroll">
-              <table className="execution-plan-schedule">
-                <thead>
-                  <tr>
-                    <th>Pekerjaan</th>
-                    <th>Rencana Mulai</th>
-                    <th>Rencana Selesai</th>
-                    <th>Rencana</th>
-                    <th>Realisasi Terkini</th>
-                    <th>Progress Terkini</th>
-                    <th>Tanggal Kerja Efektif</th>
-                    <th>Status Fakta</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {executionPlan.schedule.map((row) => {
-                    const realization = scheduleRealizationPresentation(
-                      realizationByBoqItemId.get(row.boqItemId),
-                      row.unit,
-                    );
-                    return (
-                      <tr key={row.boqItemId}>
-                        <td>{row.wbsCode} · {row.name}</td>
-                        <td>{formatProjectBusinessDate(row.plannedStartDate)}</td>
-                        <td>{formatProjectBusinessDate(row.plannedFinishDate)}</td>
-                        <td>{row.plannedQuantity} {row.unit}</td>
-                        <td className="execution-plan-realization-value">
-                          {realization.currentOfficialQuantity}
-                        </td>
-                        <td className="execution-plan-realization-value">
-                          {realization.currentOfficialItemProgress}
-                        </td>
-                        <td>{realization.effectiveWorkDate}</td>
-                        <td>
-                          <span className="execution-plan-fact-state">
-                            <small>Kuantitas</small>
-                            {realization.quantityState}
-                          </span>
-                          <span className="execution-plan-fact-state">
-                            <small>Progress</small>
-                            {realization.progressState}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+      <div className="execution-plan-review">
+        <h3>Rencana Kerja</h3>
+        <div className="execution-plan-table-scroll">
+          <table>
+            <thead>
+              <tr><th>WBS / Pekerjaan</th><th>Volume Baseline</th><th>Periode Rencana</th></tr>
+            </thead>
+            <tbody>
+              {executionPlan.workPlan.map((row) => (
+                <tr key={row.boqItemId}>
+                  <td>{row.wbsCode} · {row.name}</td>
+                  <td>{row.baselineQuantity} {row.unit}</td>
+                  <td>{executionPlanPeriodCountLabel(row.distributionCount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
-
-      {view === 'work-plan' && (
-        <div className="execution-plan-review">
-          <h3>Rencana Kerja</h3>
-          <div className="execution-plan-table-scroll">
-            <table>
-              <thead>
-                <tr><th>WBS / Pekerjaan</th><th>Volume Baseline</th><th>Periode Rencana</th></tr>
-              </thead>
-              <tbody>
-                {executionPlan.workPlan.map((row) => (
-                  <tr key={row.boqItemId}>
-                    <td>{row.wbsCode} · {row.name}</td>
-                    <td>{row.baselineQuantity} {row.unit}</td>
-                    <td>{executionPlanPeriodCountLabel(row.distributionCount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {view === 'planned-curve' && (
-        <div className="execution-plan-review">
-          {progressComparison ? (
-            <MonitoringComparisonCurve
-              comparison={progressComparison}
-              subtitle="Rencana vs Realisasi"
-              contextLine={`TERKINI · Data sampai ${formatProjectBusinessDate(progressComparison.cutoffDate)}`}
-              plannedSummaryLabel="Rencana"
-              actualSummaryLabel="Realisasi"
-              deviationSummaryLabel="Deviasi"
-            />
-          ) : (
-            <>
-              <h3>Kurva S Rencana</h3>
-              <p className="execution-plan-note">
-                Dibentuk SIMPROK dari kuantitas incremental dan bobot RAB
-                resmi; bukan titik kurva yang diedit manual.
-              </p>
-              {progressComparisonPresentation.state === 'MISSING_CUTOFF' && (
-                <p className="execution-plan-comparison-state" role="status">
-                  Kurva Realisasi belum tersedia karena belum ada tanggal data
-                  pekerjaan yang berlaku.
-                </p>
-              )}
-              {progressComparisonPresentation.state === 'UNAVAILABLE' && (
-                <p className="execution-plan-comparison-state" role="status">
-                  Perbandingan Rencana dan Realisasi sedang tidak tersedia.
-                  Kurva Rencana tetap ditampilkan.
-                </p>
-              )}
-              {(progressComparisonPresentation.state === 'PENDING' ||
-                progressComparisonPresentation.state === 'LOADING') && (
-                <p className="execution-plan-comparison-state" role="status">
-                  Menyiapkan perbandingan Rencana dan Realisasi terkini…
-                </p>
-              )}
-              {executionPlan.plannedCurve.state === 'UNAVAILABLE' ? (
-                <p>
-                  {executionPlanCurveUnavailableLabel(
-                    executionPlan.plannedCurve.reason,
-                  )}
-                </p>
-              ) : (
-                <div
-                  className="execution-plan-curve"
-                  data-state={executionPlan.plannedCurve.state}
-                >
-                  {executionPlan.plannedCurve.points.map((point) => (
-                    <div key={point.periodEndDate}>
-                      <span>
-                        {formatProjectBusinessDate(point.periodEndDate)}
-                      </span>
-                      <strong>
-                        {point.knownWeightedPlannedProgressPercent}%
-                      </strong>
-                    </div>
-                  ))}
-                  {executionPlan.plannedCurve.state === 'INCOMPLETE' && (
-                    <small>
-                      Subtotal yang diketahui; belum menjadi kurva lengkap.
-                    </small>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      </div>
 
       {locked && executionPlan.plan && (
         <>

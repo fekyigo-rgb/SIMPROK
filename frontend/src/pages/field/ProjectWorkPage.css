@@ -146,6 +146,11 @@
 .h2a1-weight-note { padding: .75rem; border-left: 3px solid #0284c7; border-radius: 8px; background: #f0f9ff; color: #24566f !important; }
 .h2a0-detail-action { width: 100%; border: 0; border-radius: 9px; background: #0369a1; color: #fff; cursor: pointer; padding: .75rem 1rem; font: inherit; font-size: .84rem; font-weight: 800; }
 .h2a0-detail-action:hover, .h2a0-detail-action:focus-visible { background: #075985; }
+.h2a0-content-lens { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .3rem; margin-top: 1rem; padding: .3rem; border: 1px solid #cbdce8; border-radius: 10px; background: #f6f9fb; }
+.h2a0-content-lens button { min-width: 0; min-height: 44px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #36586c; cursor: pointer; padding: .55rem .45rem; font: inherit; font-size: .76rem; font-weight: 800; }
+.h2a0-content-lens button[aria-pressed='true'] { border-color: #0369a1; background: #fff; color: #075985; box-shadow: 0 1px 4px rgb(15 52 77 / 10%); }
+.h2a0-content-lens button:hover, .h2a0-content-lens button:focus-visible { border-color: #0284c7; outline: 2px solid #bae6fd; outline-offset: 1px; }
+.h2a0-current .execution-plan { margin-top: 1rem; box-shadow: none; }
 .h2a0-visual-evidence { display: grid; gap: .75rem; margin: 1rem 0; padding: .9rem; border: 1px solid #dce7ee; border-radius: 10px; background: #f8fbfd; }
 .h2a0-visual-evidence-heading { display: grid; gap: .2rem; }
 .h2a0-visual-evidence-heading h4, .h2a0-visual-evidence-card h5 { margin: 0; color: #123b58; }
