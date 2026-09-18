@@ -329,7 +329,7 @@ export interface MonitoringResponse {
    */
   currentOfficialRabWeightedPhysicalProgress: MonitoringOfficialProjectProgress;
 
-  /** Present only on the explicit, cutoff-bound comparison request. */
+  /** Present on an explicit cutoff request or an atomic Temporal Lens request. */
   progressComparison?: MonitoringProgressComparison;
 
   /** Present only on an explicit canonical Temporal Lens request. */
@@ -337,6 +337,139 @@ export interface MonitoringResponse {
 
   items: MonitoringItem[];
   unavailable: string[];
+}
+
+export interface MonitoringPeriodicSchedulePlanIdentity {
+  id: string;
+  versionNumber: number;
+  status: 'DRAFT' | 'LOCKED';
+}
+
+export type MonitoringPeriodicComparisonCoherence =
+  | {
+      state: 'COHERENT';
+      response: MonitoringResponse;
+      comparison: MonitoringProgressComparison;
+    }
+  | {
+      state: 'INCOHERENT';
+      reason:
+        | 'TEMPORAL_LENS_NOT_RESOLVED'
+        | 'TEMPORAL_BASELINE_MISMATCH'
+        | 'COMPARISON_NOT_AVAILABLE'
+        | 'COMPARISON_MODE_INVALID'
+        | 'COMPARISON_CUTOFF_MISMATCH'
+        | 'COMPARISON_BASELINE_MISMATCH'
+        | 'PLANNED_SOURCE_MISMATCH'
+        | 'SCHEDULE_PLAN_MISMATCH';
+    };
+
+export type MonitoringPeriodicComparisonPresentation =
+  | { state: 'DISABLED' }
+  | { state: 'NO_COMPARATOR_CONTEXT' | 'CHECKING'; requestKey: string }
+  | {
+      state: 'RESOLVED';
+      requestKey: string;
+      response: MonitoringResponse;
+      comparison: MonitoringProgressComparison;
+    }
+  | { state: 'INCOHERENT' | 'ERROR'; requestKey: string };
+
+function exactMonitoringBaselineIdentity(
+  left: MonitoringResponse['baseline'],
+  right: MonitoringResponse['baseline'],
+): boolean {
+  return (
+    (left === null && right === null) ||
+    (left !== null &&
+      right !== null &&
+      left.id === right.id &&
+      left.versionNumber === right.versionNumber &&
+      left.approvedAt === right.approvedAt)
+  );
+}
+
+function exactMonitoringPlannedSourceIdentity(
+  left: MonitoringProgressComparison['plannedSource'],
+  right: MonitoringProgressComparison['plannedSource'],
+): boolean {
+  return (
+    (left === null && right === null) ||
+    (left !== null &&
+      right !== null &&
+      left.status === 'LOCKED' &&
+      right.status === 'LOCKED' &&
+      left.executionPlanVersionId === right.executionPlanVersionId &&
+      left.versionNumber === right.versionNumber)
+  );
+}
+
+/**
+ * Presentation-integrity gate only. It proves that the comparator embedded in
+ * one resolved Periodic Monitoring response is internally coherent and performs
+ * no progress, deviation, quantity, curve, or temporal calculation.
+ */
+export function periodicComparisonCoherence(input: {
+  periodicResponse: MonitoringResponse;
+  periodicSchedulePlan?: MonitoringPeriodicSchedulePlanIdentity | null;
+}): MonitoringPeriodicComparisonCoherence {
+  const lens = input.periodicResponse.temporalLens;
+  if (lens?.state !== 'RESOLVED') {
+    return { state: 'INCOHERENT', reason: 'TEMPORAL_LENS_NOT_RESOLVED' };
+  }
+
+  if (
+    !exactMonitoringBaselineIdentity(
+      input.periodicResponse.baseline,
+      lens.baseline,
+    )
+  ) {
+    return { state: 'INCOHERENT', reason: 'TEMPORAL_BASELINE_MISMATCH' };
+  }
+
+  const comparison = input.periodicResponse.progressComparison;
+  if (comparison === undefined) {
+    return { state: 'INCOHERENT', reason: 'COMPARISON_NOT_AVAILABLE' };
+  }
+  if (
+    comparison.mode !==
+    'PLANNED_VS_CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE'
+  ) {
+    return { state: 'INCOHERENT', reason: 'COMPARISON_MODE_INVALID' };
+  }
+  if (comparison.cutoffDate !== lens.period.endDate) {
+    return { state: 'INCOHERENT', reason: 'COMPARISON_CUTOFF_MISMATCH' };
+  }
+  if (
+    !exactMonitoringBaselineIdentity(
+      comparison.baseline,
+      input.periodicResponse.baseline,
+    ) ||
+    !exactMonitoringBaselineIdentity(comparison.baseline, lens.baseline)
+  ) {
+    return { state: 'INCOHERENT', reason: 'COMPARISON_BASELINE_MISMATCH' };
+  }
+  if (
+    !exactMonitoringPlannedSourceIdentity(
+      comparison.plannedSource,
+      lens.plannedSource,
+    )
+  ) {
+    return { state: 'INCOHERENT', reason: 'PLANNED_SOURCE_MISMATCH' };
+  }
+
+  const schedulePlan = input.periodicSchedulePlan;
+  if (
+    schedulePlan &&
+    (schedulePlan.status !== 'LOCKED' ||
+      comparison.plannedSource === null ||
+      schedulePlan.id !== comparison.plannedSource.executionPlanVersionId ||
+      schedulePlan.versionNumber !== comparison.plannedSource.versionNumber)
+  ) {
+    return { state: 'INCOHERENT', reason: 'SCHEDULE_PLAN_MISMATCH' };
+  }
+
+  return { state: 'COHERENT', response: input.periodicResponse, comparison };
 }
 
 export type MonitoringTemporalSnapshotCoherence =
@@ -370,14 +503,7 @@ export function monitoringTemporalSnapshotCoherence(input: {
 
   const responseBaseline = input.response.baseline;
   const lensBaseline = lens.baseline;
-  if (
-    (responseBaseline === null) !== (lensBaseline === null) ||
-    (responseBaseline !== null &&
-      lensBaseline !== null &&
-      (responseBaseline.id !== lensBaseline.id ||
-        responseBaseline.versionNumber !== lensBaseline.versionNumber ||
-        responseBaseline.approvedAt !== lensBaseline.approvedAt))
-  ) {
+  if (!exactMonitoringBaselineIdentity(responseBaseline, lensBaseline)) {
     return { state: 'INCOHERENT', reason: 'BASELINE_MISMATCH' };
   }
 
@@ -725,6 +851,7 @@ export function monitoringTemporalLensRequestPath(input: {
     temporalBasis: input.basis,
     temporalGranularity: input.granularity,
     temporalReferenceDate: input.referenceDate,
+    includeProgressComparison: 'true',
   });
   return `/projects/${input.projectId}/progress/monitoring?${params.toString()}`;
 }

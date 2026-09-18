@@ -124,11 +124,7 @@ export function parseMonitoringTemporalLensQuery(
       reason: 'TEMPORAL_LENS_EXPLICIT_PERIOD_WINDOW_CONFLICT',
     };
   }
-  if (
-    query.cutoffDate !== undefined ||
-    query.includeActualSeries === 'true' ||
-    query.includeProgressComparison === 'true'
-  ) {
+  if (query.cutoffDate !== undefined || query.includeActualSeries === 'true') {
     return {
       state: 'INVALID',
       reason: 'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',

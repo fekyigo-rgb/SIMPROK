@@ -27,6 +27,7 @@ import {
   monitoringTemporalPeriodLabel,
   monitoringTemporalSnapshotCoherence,
   monitoringWorkItemsById,
+  periodicComparisonCoherence,
   officialItemProgressLabel,
   officialQuantityLabel,
   plannedPeriodQuantityLabel,
@@ -39,6 +40,7 @@ import {
   weightCompletenessExplanation,
   weightCompletenessLabel,
   type MonitoringProject,
+  type MonitoringPeriodicComparisonPresentation,
   type MonitoringProgressComparisonPresentation,
   type MonitoringResponse,
   type MonitoringTemporalBasis,
@@ -664,6 +666,39 @@ export function ProjectWorkPage() {
                 requestKey: periodicScheduleRequestKey,
               } as const);
 
+  const periodicSchedulePlanIdentity =
+    activePeriodicSchedulePresentation.state === 'RESOLVED'
+      ? activePeriodicSchedulePresentation.executionPlan.plan
+      : null;
+  const periodicAtomicComparisonKey =
+    periodicResolvedResponse && periodicResolvedLens ? temporalRequestKey : null;
+  const activePeriodicComparisonPresentation: MonitoringPeriodicComparisonPresentation =
+    periodicAtomicComparisonKey === null ||
+    periodicResolvedResponse === null ||
+    periodicResolvedLens === null
+      ? { state: 'DISABLED' }
+      : periodicResolvedLens.plannedSource === null
+        ? {
+            state: 'NO_COMPARATOR_CONTEXT',
+            requestKey: periodicAtomicComparisonKey,
+          }
+        : (() => {
+            const coherence = periodicComparisonCoherence({
+              periodicResponse: periodicResolvedResponse,
+              periodicSchedulePlan: periodicSchedulePlanIdentity,
+            });
+            return coherence.state === 'COHERENT'
+              ? {
+                  state: 'RESOLVED' as const,
+                  requestKey: periodicAtomicComparisonKey,
+                  response: coherence.response,
+                  comparison: coherence.comparison,
+                }
+              : {
+                  state: 'INCOHERENT' as const,
+                  requestKey: periodicAtomicComparisonKey,
+                };
+          })();
   const activatePeriodicContext = () => {
     if (temporalContextMode === 'PERIODIK') return;
     const canonicalDataThrough = monitoringComparisonCutoff(
@@ -893,6 +928,7 @@ export function ProjectWorkPage() {
             monitoring: periodicResolvedResponse,
             lens: periodicResolvedLens,
             executionPlan: activePeriodicSchedulePresentation.executionPlan,
+            comparisonPresentation: activePeriodicComparisonPresentation,
           }}
         />
       ) : periodicResolvedLens ? (
@@ -915,7 +951,11 @@ export function ProjectWorkPage() {
           {activePeriodicSchedulePresentation.state === 'ERROR' && (
             <strong>Schedule periode gagal dimuat. Fakta periode tetap aman.</strong>
           )}
-          <span>Kurva S untuk konteks periode belum diaktifkan.</span>
+          {activePeriodicSchedulePresentation.state === 'NO_PLANNED_SOURCE' && (
+            <span>
+              Kurva S periode juga belum tersedia tanpa Rencana Pelaksanaan resmi.
+            </span>
+          )}
         </section>
       ) : null}
 

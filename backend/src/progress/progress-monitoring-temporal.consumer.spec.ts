@@ -1197,6 +1197,87 @@ describe('MON-04 Monitoring single-cutoff temporal consumer', () => {
     expect(client.project.findUnique).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['Calendar WEEK', 'WEEK' as const, '2026-09-16', '2026-09-20'],
+    ['Calendar MONTH', 'MONTH' as const, '2026-09-16', '2026-09-30'],
+  ])(
+    'assembles one atomic %s Temporal Lens and comparator inside one RepeatableRead snapshot',
+    async (_label, granularity, referenceDate, expectedEndDate) => {
+      const item = workItem(`atomic-${granularity.toLowerCase()}`, 1);
+      const scope = {
+        projectId,
+        activeBaselineId: baselineId,
+        boqItemId: item.id,
+      };
+      const client = readClient(
+        [item],
+        prove(scope, [entry('atomic-entry', item.id, '3', '2026-09-16')]),
+      );
+      client.executionPlanVersion.findMany.mockResolvedValue([
+        lockedPlan([
+          distribution(
+            'atomic-plan-20',
+            item.id,
+            '2026-09-01',
+            '2026-09-20',
+            '4',
+          ),
+          distribution(
+            'atomic-plan-30',
+            item.id,
+            '2026-09-21',
+            '2026-09-30',
+            '6',
+          ),
+        ]),
+      ]);
+      const { service, prisma, rootClient } = serviceFor(client, true);
+
+      const result = await service.getMonitoring(
+        projectId,
+        undefined,
+        false,
+        true,
+        undefined,
+        {
+          basis: 'CALENDAR',
+          granularity,
+          referenceDate,
+        },
+      );
+
+      const temporalLens = result.temporalLens;
+      const progressComparison = result.progressComparison;
+      expect(temporalLens).toMatchObject({
+        state: 'RESOLVED',
+        period: { endDate: expectedEndDate },
+      });
+      expect(progressComparison).toBeDefined();
+      if (
+        temporalLens?.state !== 'RESOLVED' ||
+        progressComparison === undefined
+      ) {
+        throw new Error('ATOMIC_TEMPORAL_LENS_COMPARISON_REQUIRED');
+      }
+      expect(progressComparison).toMatchObject({
+        cutoffDate: expectedEndDate,
+        baseline: result.baseline,
+        plannedSource: temporalLens.plannedSource,
+      });
+      expect(progressComparison.cutoffDate).toBe(temporalLens.period.endDate);
+      expect(result).not.toHaveProperty('actualTemporal');
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+        isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+      });
+      expect(rootClient.project.findUnique).not.toHaveBeenCalled();
+      expect(client.project.findUnique).toHaveBeenCalledTimes(1);
+      expect(client.projectBaseline.findMany).toHaveBeenCalledTimes(1);
+      expect(client.boqItem.findMany).toHaveBeenCalledTimes(1);
+      expect(client.progressEntry.findMany).toHaveBeenCalledTimes(1);
+      expect(client.executionPlanVersion.findMany).toHaveBeenCalledTimes(1);
+    },
+  );
   it('rejects a comparison request without a cutoff before opening a transaction', async () => {
     const client = readClient([], []);
     const { service, prisma } = serviceFor(client);

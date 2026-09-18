@@ -145,7 +145,11 @@ export class ProgressController {
       throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
     }
 
-    if (includeProgressComparison && query.cutoffDate === undefined) {
+    if (
+      includeProgressComparison &&
+      query.cutoffDate === undefined &&
+      temporalLensQuery.state !== 'ENABLED'
+    ) {
       throw new BadRequestException('PROGRESS_COMPARISON_REQUIRES_CUTOFF');
     }
 

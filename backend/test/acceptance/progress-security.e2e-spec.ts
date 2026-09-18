@@ -1696,17 +1696,12 @@ describe('Progress Security (e2e)', () => {
       },
       {
         query:
-          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31&cutoffDate=2026-09-06',
+          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31&cutoffDate=2026-09-06&includeProgressComparison=true',
         reason: 'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
       },
       {
         query:
           'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31&includeActualSeries=true',
-        reason: 'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
-      },
-      {
-        query:
-          'includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31&includeProgressComparison=true',
         reason: 'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
       },
     ];
@@ -1758,7 +1753,7 @@ describe('Progress Security (e2e)', () => {
 
     const weekResponse = await request(app.getHttpServer())
       .get(
-        `/projects/${projectAId}/progress/monitoring?includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31`,
+        `/projects/${projectAId}/progress/monitoring?includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=WEEK&temporalReferenceDate=2026-08-31&includeProgressComparison=true`,
       )
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
@@ -1800,10 +1795,20 @@ describe('Progress Security (e2e)', () => {
     expect(weekBody.temporalLens?.items).toEqual(
       explicitWeekBody.periodWindow?.items,
     );
+    expect(weekBody.progressComparison?.cutoffDate).toBe(
+      weekBody.temporalLens?.period?.endDate,
+    );
+    expect(weekBody.progressComparison?.baseline).toEqual(
+      weekBody.temporalLens?.baseline,
+    );
+    expect(weekBody.progressComparison?.plannedSource).toEqual(
+      weekBody.temporalLens?.plannedSource,
+    );
+    expect(weekBody).not.toHaveProperty('actualTemporal');
 
     const monthResponse = await request(app.getHttpServer())
       .get(
-        `/projects/${projectAId}/progress/monitoring?includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=MONTH&temporalReferenceDate=2026-08-15`,
+        `/projects/${projectAId}/progress/monitoring?includeTemporalLens=true&temporalBasis=CALENDAR&temporalGranularity=MONTH&temporalReferenceDate=2026-08-15&includeProgressComparison=true`,
       )
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceAId)
@@ -1851,6 +1856,16 @@ describe('Progress Security (e2e)', () => {
     expect(monthBody.temporalLens?.items).toEqual(
       explicitMonthBody.periodWindow?.items,
     );
+    expect(monthBody.progressComparison?.cutoffDate).toBe(
+      monthBody.temporalLens?.period?.endDate,
+    );
+    expect(monthBody.progressComparison?.baseline).toEqual(
+      monthBody.temporalLens?.baseline,
+    );
+    expect(monthBody.progressComparison?.plannedSource).toEqual(
+      monthBody.temporalLens?.plannedSource,
+    );
+    expect(monthBody).not.toHaveProperty('actualTemporal');
 
     const septemberResponse = await request(app.getHttpServer())
       .get(
@@ -3613,7 +3628,7 @@ describe('Progress Security (e2e)', () => {
       });
       const unavailableLens = await request(app.getHttpServer())
         .get(
-          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=WEEK&temporalReferenceDate=2026-05-18`,
+          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=WEEK&temporalReferenceDate=2026-05-18&includeProgressComparison=true`,
         )
         .set('Authorization', `Bearer ${viewerToken}`)
         .set('x-workspace-id', workspaceAId)
@@ -3628,6 +3643,8 @@ describe('Progress Security (e2e)', () => {
         referenceDate: '2026-05-18',
         reason: 'GOVERNED_WORK_PERIOD_ANCHOR_REQUIRED',
       });
+      expect(unavailableLens.body).not.toHaveProperty('progressComparison');
+      expect(unavailableLens.body).not.toHaveProperty('actualTemporal');
 
       const deniedCommandId = randomUUID();
       await request(app.getHttpServer())
@@ -3688,7 +3705,7 @@ describe('Progress Security (e2e)', () => {
       });
       const resolvedLens = await request(app.getHttpServer())
         .get(
-          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=WEEK&temporalReferenceDate=2026-05-25`,
+          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=WEEK&temporalReferenceDate=2026-05-25&includeProgressComparison=true`,
         )
         .set('Authorization', `Bearer ${viewerToken}`)
         .set('x-workspace-id', workspaceAId)
@@ -3710,9 +3727,43 @@ describe('Progress Security (e2e)', () => {
         plannedContext: { state: 'UNAVAILABLE' },
         items: [],
       });
+      const resolvedLensBody =
+        resolvedLens.body as unknown as Law1MonitoringBody;
+      expect(resolvedLensBody.progressComparison?.cutoffDate).toBe(
+        resolvedLensBody.temporalLens?.period?.endDate,
+      );
+      expect(resolvedLensBody.progressComparison?.plannedSource).toEqual(
+        resolvedLensBody.temporalLens?.plannedSource,
+      );
+      expect(resolvedLensBody).not.toHaveProperty('actualTemporal');
+
+      const resolvedMonthLens = await request(app.getHttpServer())
+        .get(
+          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=MONTH&temporalReferenceDate=2026-06-01&includeProgressComparison=true`,
+        )
+        .set('Authorization', `Bearer ${viewerToken}`)
+        .set('x-workspace-id', workspaceAId)
+        .expect(200);
+      const resolvedMonthBody =
+        resolvedMonthLens.body as unknown as Law1MonitoringBody;
+      expect(resolvedMonthBody.temporalLens).toMatchObject({
+        state: 'RESOLVED',
+        basis: 'WORK_PERIOD',
+        granularity: 'MONTH',
+        period: {
+          periodKey: 'WORK-MONTH-1',
+          startDate: '2026-05-18',
+          endDate: '2026-06-17',
+        },
+      });
+      expect(resolvedMonthBody.progressComparison?.cutoffDate).toBe(
+        resolvedMonthBody.temporalLens?.period?.endDate,
+      );
+      expect(resolvedMonthBody).not.toHaveProperty('actualTemporal');
+
       const beforeAnchorLens = await request(app.getHttpServer())
         .get(
-          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=WEEK&temporalReferenceDate=2026-05-17`,
+          `/projects/${governedProject.id}/progress/monitoring?includeTemporalLens=true&temporalBasis=WORK_PERIOD&temporalGranularity=WEEK&temporalReferenceDate=2026-05-17&includeProgressComparison=true`,
         )
         .set('Authorization', `Bearer ${viewerToken}`)
         .set('x-workspace-id', workspaceAId)
@@ -3727,6 +3778,7 @@ describe('Progress Security (e2e)', () => {
         referenceDate: '2026-05-17',
         reason: 'REFERENCE_DATE_BEFORE_GOVERNED_WORK_PERIOD_ANCHOR',
       });
+      expect(beforeAnchorLens.body).not.toHaveProperty('progressComparison');
 
       await request(app.getHttpServer())
         .patch(`/projects/${governedProject.id}/work-period-anchor`)

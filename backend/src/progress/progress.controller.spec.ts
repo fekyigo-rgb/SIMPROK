@@ -62,6 +62,39 @@ describe('ProgressController Monitoring temporal lens contract', () => {
       },
     );
   });
+  it('passes the atomic Temporal Lens plus comparator mode without an explicit cutoff', async () => {
+    await controller.getMonitoring('project-1', {
+      includeTemporalLens: 'true',
+      temporalBasis: 'CALENDAR',
+      temporalGranularity: 'WEEK',
+      temporalReferenceDate: '2026-09-16',
+      includeProgressComparison: 'true',
+    });
+
+    expect(getMonitoring).toHaveBeenCalledWith(
+      'project-1',
+      undefined,
+      false,
+      true,
+      undefined,
+      {
+        basis: 'CALENDAR',
+        granularity: 'WEEK',
+        referenceDate: '2026-09-16',
+      },
+    );
+  });
+
+  it('still requires a cutoff when comparison has no Temporal Lens context', async () => {
+    await expect(
+      controller.getMonitoring('project-1', {
+        includeProgressComparison: 'true',
+      }),
+    ).rejects.toEqual(
+      new BadRequestException('PROGRESS_COMPARISON_REQUIRES_CUTOFF'),
+    );
+    expect(getMonitoring).not.toHaveBeenCalled();
+  });
 
   it.each([
     [
@@ -120,6 +153,7 @@ describe('ProgressController Monitoring temporal lens contract', () => {
         temporalGranularity: 'WEEK',
         temporalReferenceDate: '2026-09-17',
         cutoffDate: '2026-09-17',
+        includeProgressComparison: 'true',
       },
       'TEMPORAL_LENS_CUTOFF_CONTEXT_CONFLICT',
     ],
