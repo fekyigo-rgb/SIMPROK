@@ -739,7 +739,16 @@ export function AhspImportPage() {
       path: '/curate-new',
       // ONE admission for the question, never one per row.
       ids: group.ids.slice(0, 1),
-      bodyFor: () => ({ unitDefinitionId }),
+      // Branch (c): the nominations the reader is refusing, and the candidate
+      // context they were shown under — re-proved by the server under its lock.
+      bodyFor: () =>
+        group.view.newResourceRefusal
+          ? {
+              unitDefinitionId,
+              refusedCandidateIds: group.view.newResourceRefusal.candidateIds,
+              candidateContextDigest: group.view.newResourceRefusal.candidateContextDigest,
+            }
+          : { unitDefinitionId },
       decision: { kind: 'NEW', title: group.view.title, chosenName: null },
       remember: false,
     });
@@ -966,6 +975,22 @@ export function AhspImportPage() {
     return (
       <li key={group.key} aria-label={'Tinjau ' + view.title} className="ahsp-curation-item">
         <span className="ahsp-curation-item__title">{view.title}</span>
+        {/* C2 — WHERE THIS COMPONENT CAME FROM, beside the buttons that settle it.
+            A bare "Pekerja (Jam)" is not answerable; the work item that quoted it
+            is what makes the question a question. Shown for all three outcomes,
+            because "more than one work item quotes this" and "we cannot trace it"
+            are things the person deciding is entitled to know BEFORE deciding. */}
+        <span
+          className={
+            view.workContext.kind === 'FOUND'
+              ? 'ahsp-line'
+              : 'ahsp-line ahsp-line--abu'
+          }
+          style={view.workContext.kind === 'FOUND' ? { color: MUTED } : undefined}
+        >
+          {view.workContext.line}
+          {view.workContext.detail ? ` (${view.workContext.detail})` : ''}
+        </span>
         {/* Said plainly, because one click will answer for all of them. */}
         {repeated ? <span className="ahsp-line" style={{ color: MUTED }}>{repeated}</span> : null}
         {view.candidateLine ? <span className="ahsp-line" style={{ color: MUTED }}>{view.candidateLine}</span> : null}
@@ -1023,7 +1048,7 @@ export function AhspImportPage() {
               aria-busy={busyOn('new') || undefined}
               onClick={() => void curateNew(group, at, view.newUnitDefinitionId as string)}
             >
-              {busyOn('new') ? 'Menyimpan…' : 'Tetapkan sebagai sumber daya baru'}
+              {busyOn('new') ? 'Menyimpan…' : view.newResourceActionLabel}
             </button>
           ) : view.newResourceBlockedLine ? (
             // A door that cannot open is shown shut and explained — never a refusal waiting to happen.
@@ -1566,10 +1591,14 @@ export function AhspImportPage() {
       ) : null}
 
       {/* Earlier imports still holding work items — checked again once per document, never re-uploaded */}
+      {/* A journal that was READ and holds nothing says so; an unread one says it
+          could not be read. The panel is never simply absent after a read, so its
+          absence is never mistaken for "no import jobs". */}
       {canManage &&
       (waitingImports.length > 0 ||
         jobOutcomes.length > 0 ||
         importHasMore ||
+        importPhase === 'READY' ||
         importPhase === 'FAILED' ||
         importPhase === 'STALE') ? (
         <section aria-label="Import yang masih dilengkapi" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>

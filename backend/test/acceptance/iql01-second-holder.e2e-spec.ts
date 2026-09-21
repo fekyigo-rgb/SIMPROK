@@ -228,7 +228,29 @@ describe('IQL-01 second holder: Basic Price verifier approves (e2e)', () => {
       return created.id;
     };
     kerikilId = await catalog(workspaceId, 'Kerikil / Agregat');
-    await catalog(workspaceBId, 'Kerikil / Agregat');
+    const kerikilB = await catalog(workspaceBId, 'Kerikil / Agregat');
+    // DECISION SAFETY — the golden candidate must rest on a RECORDED FACT: the
+    // source code M03 was seen bound to "Kerikil / Agregat" in an earlier
+    // document. A shared stem ("agregat") alone is never taught or reused.
+    const recordCodeSighting = (ws: string, resourceCatalogId: string) =>
+      prisma.resourceSourceIdentity.create({
+        data: {
+          resourceCatalogId,
+          workspaceId: ws,
+          sourceSha256: 'E2E0B'.padEnd(64, '0'),
+          sourceFileName: 'AHSP earlier.xlsx',
+          parserContractVersion: 'USI01_XLSX_V1',
+          sheetName: 'Sheet1',
+          sourceRowNumber: 11,
+          sourceSection: 'MATERIAL',
+          sourceNameCellAddress: 'C11',
+          rawCode: 'M03',
+          rawName: 'Kerikil / Agregat',
+          rawUnit: 'M3',
+        },
+      });
+    await recordCodeSighting(workspaceId, kerikilId);
+    await recordCodeSighting(workspaceBId, kerikilB);
 
     const observe = async (
       key: string,
@@ -301,6 +323,9 @@ describe('IQL-01 second holder: Basic Price verifier approves (e2e)', () => {
     await prisma.$executeRawUnsafe(
       'ALTER TABLE resource_identity_question_decisions ENABLE TRIGGER resource_identity_question_decisions_immutable_trigger',
     );
+    await prisma.resourceSourceIdentity.deleteMany({
+      where: { workspaceId: { in: workspaces } },
+    });
     await prisma.observedResource.deleteMany({
       where: { workspaceId: { in: workspaces } },
     });

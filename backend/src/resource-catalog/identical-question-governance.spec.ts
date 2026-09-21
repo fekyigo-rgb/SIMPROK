@@ -8,6 +8,7 @@ import {
   planSupersede,
   planTeach,
 } from './identical-question-governance';
+import { IQL01_IDENTICAL_QUESTION_POLICY_VERSION } from './identical-question-key';
 
 /**
  * IQL-01 — the governance state machine. TEACH is never effective; APPROVE needs
@@ -232,6 +233,7 @@ describe('IQL-01 governance law', () => {
     const latest = teach();
     expect(
       planApprove({
+        livePolicyVersion: POLICY,
         state: identicalQuestionState(latest, null),
         latest,
         expectedGeneration: 1,
@@ -244,6 +246,7 @@ describe('IQL-01 governance law', () => {
     const latest = teach();
     expect(
       planApprove({
+        livePolicyVersion: POLICY,
         state: identicalQuestionState(latest, null),
         latest,
         expectedGeneration: 1,
@@ -260,6 +263,7 @@ describe('IQL-01 governance law', () => {
     const rejected = event({ id: 'reject-2', generation: 2, action: 'REJECT' });
     expect(
       planApprove({
+        livePolicyVersion: POLICY,
         state: identicalQuestionState(null, null),
         latest: null,
         expectedGeneration: 0,
@@ -268,6 +272,7 @@ describe('IQL-01 governance law', () => {
     ).toEqual({ outcome: 'CONFLICT', code: 'NO_PENDING_CANDIDATE' });
     expect(
       planApprove({
+        livePolicyVersion: POLICY,
         state: identicalQuestionState(rejected, teach()),
         latest: rejected,
         expectedGeneration: 2,
@@ -281,6 +286,7 @@ describe('IQL-01 governance law', () => {
     const state = identicalQuestionState(latest, teach());
     expect(
       planApprove({
+        livePolicyVersion: POLICY,
         state,
         latest,
         expectedGeneration: 1,
@@ -289,6 +295,7 @@ describe('IQL-01 governance law', () => {
     ).toEqual({ outcome: 'REPLAY', event: latest });
     expect(
       planApprove({
+        livePolicyVersion: POLICY,
         state,
         latest,
         expectedGeneration: 1,
@@ -397,6 +404,7 @@ describe('IQL-01 governance law', () => {
     expect(state.kind).toBe('PENDING');
     expect(
       planApprove({
+        livePolicyVersion: POLICY,
         state,
         latest: superseding,
         expectedGeneration: 3,
@@ -405,6 +413,7 @@ describe('IQL-01 governance law', () => {
     ).toEqual({ outcome: 'CONFLICT', code: 'TEACHER_CANNOT_APPROVE' });
     expect(
       planApprove({
+        livePolicyVersion: POLICY,
         state,
         latest: superseding,
         expectedGeneration: 3,
@@ -427,6 +436,7 @@ describe('IQL-01 governance law', () => {
     });
     const t1 = teach(1);
     const g2 = planApprove({
+        livePolicyVersion: POLICY,
       state: identicalQuestionState(t1, null),
       latest: t1,
       expectedGeneration: 1,
@@ -449,6 +459,7 @@ describe('IQL-01 governance law', () => {
     });
     const t4 = teach(4);
     const g5 = planApprove({
+        livePolicyVersion: POLICY,
       state: identicalQuestionState(t4, r3),
       latest: t4,
       expectedGeneration: 4,
@@ -459,5 +470,255 @@ describe('IQL-01 governance law', () => {
         plan.outcome === 'APPEND' ? plan.generation : plan.outcome,
       ),
     ).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+/**
+ * GAP B — THE V2 TRANSITION, NOT JUST THE CONSTANT.
+ *
+ * Bumping IQL01_IDENTICAL_QUESTION_POLICY_VERSION to V2 makes every stored V1
+ * answer inapplicable. That is only half a transition: the two real historical
+ * cohorts must still have LAWFUL ACTIONS, and no door may be offered that its
+ * own route would refuse.
+ *
+ *   cohort (a) key 067f0db4… "Agregat kasar"/M03/M3 — TEACH V1 then APPROVE.
+ *   cohort (b) key 890183c6… "Stamper"/E25/Jam     — TEACH V1 only, PENDING.
+ *
+ * Nothing here auto-approves, auto-rejects or auto-revokes. The ledger is never
+ * rewritten: every action below APPENDS a generation.
+ */
+describe('Gap B — lawful actions for answers recorded under the superseded policy', () => {
+  const V1 = 'IQL01_IDENTICAL_QUESTION_V1';
+  const V2 = IQL01_IDENTICAL_QUESTION_POLICY_VERSION;
+  const TEACHER = 'acct-owner';
+  const SECOND = 'acct-second';
+  const DIGEST = 'digest-unchanged';
+  /** The context now in force. The candidate SET has not moved; only the law has. */
+  const LIVE = { candidateContextDigest: DIGEST, resolutionPolicyVersion: V2 };
+
+  const event = (
+    over: Partial<{
+      id: string;
+      action: string;
+      generation: number;
+      previousDecisionId: string | null;
+      selectedResourceCatalogId: string | null;
+      candidateContextDigest: string | null;
+      resolutionPolicyVersion: string | null;
+      decidedByAccountId: string;
+    }> = {},
+  ) =>
+    ({
+      id: 'ev-1',
+      action: 'TEACH',
+      generation: 1,
+      previousDecisionId: null,
+      selectedResourceCatalogId: 'cat-kerikil',
+      candidateContextDigest: DIGEST,
+      resolutionPolicyVersion: V1,
+      decidedByAccountId: TEACHER,
+      decidedAt: new Date('2026-09-11T03:21:16.678Z'),
+      reason: null,
+      ...over,
+    }) as never;
+
+  /** cohort (b): a TEACH under V1, never approved. */
+  const pendingV1 = event();
+  /** cohort (a): an APPROVE under V1 whose answer is the V1 TEACH. */
+  const approvalV1 = event({
+    id: 'ev-2',
+    action: 'APPROVE',
+    generation: 2,
+    previousDecisionId: 'ev-1',
+    selectedResourceCatalogId: null,
+    candidateContextDigest: null,
+    resolutionPolicyVersion: null,
+    decidedByAccountId: SECOND,
+  });
+
+  const pendingState = { kind: 'PENDING' as const, candidate: pendingV1 };
+  const approvedState = {
+    kind: 'APPROVED' as const,
+    approval: approvalV1,
+    answer: pendingV1,
+  };
+
+  it('the superseded policy is what makes both cohorts inapplicable — the candidate set never moved', () => {
+    expect(isAnswerApplicable(pendingV1, LIVE)).toBe(false);
+    // Same digest on both sides: the ONLY difference is the law.
+    expect(isAnswerApplicable(event({ resolutionPolicyVersion: V2 }), LIVE)).toBe(true);
+  });
+
+  // ---- cohort (a): APPROVED under V1 ----
+
+  it('(a) an inapplicable APPROVED answer can still be REVOKED — the lawful correction path stays open', () => {
+    const plan = planRevoke({
+      state: approvedState,
+      latest: approvalV1,
+      expectedGeneration: 2,
+      actorAccountId: SECOND,
+    });
+    expect(plan).toMatchObject({ outcome: 'APPEND', generation: 3, previousDecisionId: 'ev-2' });
+  });
+
+  it('(a) SUPERSEDE is refused for it — you cannot amend an answer given under a law that no longer holds', () => {
+    const plan = planSupersede({
+      state: approvedState,
+      latest: approvalV1,
+      expectedGeneration: 2,
+      actorAccountId: SECOND,
+      selectedResourceCatalogId: 'cat-other',
+      live: LIVE,
+    });
+    expect(plan).toEqual({ outcome: 'CONFLICT', code: 'NO_EFFECTIVE_ANSWER' });
+  });
+
+  it('(a) a NEW TEACH is lawful over it, appending a generation — the old approval is not rewritten', () => {
+    const plan = planTeach({
+      state: approvedState,
+      latest: approvalV1,
+      expectedGeneration: 2,
+      selectedResourceCatalogId: 'cat-kerikil',
+      live: LIVE,
+    });
+    expect(plan).toMatchObject({ outcome: 'APPEND', generation: 3, previousDecisionId: 'ev-2' });
+  });
+
+  it('(a) POSITIVE CONTROL — an APPROVED answer under the CURRENT policy is still effective and supersedable', () => {
+    const answerV2 = event({ resolutionPolicyVersion: V2 });
+    const approvalV2 = event({
+      id: 'ev-2',
+      action: 'APPROVE',
+      generation: 2,
+      previousDecisionId: 'ev-1',
+      selectedResourceCatalogId: null,
+      candidateContextDigest: null,
+      resolutionPolicyVersion: null,
+      decidedByAccountId: SECOND,
+    });
+    const state = { kind: 'APPROVED' as const, approval: approvalV2, answer: answerV2 };
+    expect(isAnswerApplicable(answerV2, LIVE)).toBe(true);
+    expect(
+      planSupersede({
+        state,
+        latest: approvalV2,
+        expectedGeneration: 2,
+        actorAccountId: SECOND,
+        selectedResourceCatalogId: 'cat-other',
+        live: LIVE,
+      }),
+    ).toMatchObject({ outcome: 'APPEND' });
+    // …and teaching the SAME answer again is a replay, not a second record.
+    expect(
+      planTeach({
+        state,
+        latest: approvalV2,
+        expectedGeneration: 2,
+        selectedResourceCatalogId: 'cat-kerikil',
+        live: LIVE,
+      }),
+    ).toMatchObject({ outcome: 'REPLAY' });
+  });
+
+  // ---- cohort (b): PENDING under V1 ----
+
+  it('(b) APPROVE is REFUSED with its own reason — a second holder is not asked to judge a no-op', () => {
+    const plan = planApprove({
+      state: pendingState,
+      latest: pendingV1,
+      expectedGeneration: 1,
+      actorAccountId: SECOND,
+      livePolicyVersion: V2,
+    });
+    expect(plan).toEqual({ outcome: 'CONFLICT', code: 'CANDIDATE_POLICY_SUPERSEDED' });
+  });
+
+  it('(b) REJECT is the lawful exit and is NOT blocked by the policy', () => {
+    const plan = planReject({
+      state: pendingState,
+      latest: pendingV1,
+      expectedGeneration: 1,
+      actorAccountId: SECOND,
+    });
+    expect(plan).toMatchObject({ outcome: 'APPEND', generation: 2, previousDecisionId: 'ev-1' });
+  });
+
+  it('(b) after a REJECT the question can be TAUGHT again under the policy now in force', () => {
+    const rejection = event({
+      id: 'ev-2',
+      action: 'REJECT',
+      generation: 2,
+      previousDecisionId: 'ev-1',
+      selectedResourceCatalogId: null,
+      candidateContextDigest: null,
+      resolutionPolicyVersion: null,
+      decidedByAccountId: SECOND,
+    });
+    const plan = planTeach({
+      state: { kind: 'REJECTED', rejection } as never,
+      latest: rejection,
+      expectedGeneration: 2,
+      selectedResourceCatalogId: 'cat-kerikil',
+      live: LIVE,
+    });
+    expect(plan).toMatchObject({ outcome: 'APPEND', generation: 3 });
+  });
+
+  it('(b) a stale PENDING is not left as a dead wait: teaching over it is refused, so REJECT is the door', () => {
+    expect(
+      planTeach({
+        state: pendingState,
+        latest: pendingV1,
+        expectedGeneration: 1,
+        selectedResourceCatalogId: 'cat-kerikil',
+        live: LIVE,
+      }),
+    ).toEqual({ outcome: 'CONFLICT', code: 'CANDIDATE_PENDING' });
+  });
+
+  it('(b) POSITIVE CONTROL — a PENDING under the CURRENT policy is still approvable by a second holder', () => {
+    const state = { kind: 'PENDING' as const, candidate: event({ resolutionPolicyVersion: V2 }) };
+    expect(
+      planApprove({
+        state,
+        latest: state.candidate,
+        expectedGeneration: 1,
+        actorAccountId: SECOND,
+        livePolicyVersion: V2,
+      }),
+    ).toMatchObject({ outcome: 'APPEND', generation: 2 });
+  });
+
+  it('the teacher still may not approve their own teaching, and the policy check does not mask that', () => {
+    const state = { kind: 'PENDING' as const, candidate: event({ resolutionPolicyVersion: V2 }) };
+    expect(
+      planApprove({
+        state,
+        latest: state.candidate,
+        expectedGeneration: 1,
+        actorAccountId: TEACHER,
+        livePolicyVersion: V2,
+      }),
+    ).toEqual({ outcome: 'CONFLICT', code: 'TEACHER_CANNOT_APPROVE' });
+  });
+
+  it('a stale generation is still reported as a stale generation, before any policy verdict', () => {
+    expect(
+      planApprove({
+        state: pendingState,
+        latest: pendingV1,
+        expectedGeneration: 0,
+        actorAccountId: SECOND,
+        livePolicyVersion: V2,
+      }),
+    ).toEqual({ outcome: 'CONFLICT', code: 'DECISION_GENERATION_STALE' });
+  });
+
+  it('nothing auto-expires: a V1 PENDING stays PENDING until a human acts', () => {
+    // The state derivation reads the ledger only; no policy, no clock.
+    expect(identicalQuestionState(pendingV1, null)).toEqual({
+      kind: 'PENDING',
+      candidate: pendingV1,
+    });
   });
 });

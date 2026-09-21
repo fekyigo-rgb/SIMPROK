@@ -138,6 +138,14 @@ export const parseCoefficientInput = (
  * against the catalogue, so this helper never invents a trust state.
  */
 export type AhspDefinitionResourceWire = {
+  /**
+   * The SERVER'S identity for this line of this version (AHSPResource.id).
+   *
+   * Not a resource identity and not shown to anyone: it exists so a revision can
+   * tell the server WHICH line it continues, which is how a line's recorded
+   * origin survives an edit without the client ever asserting one.
+   */
+  id?: string | null;
   resourceId?: string | null;
   /**
    * The catalogue's own name for `resourceId`, supplied by GET /ahsp/:id.

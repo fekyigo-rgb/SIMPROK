@@ -117,31 +117,77 @@ describeOfficial('AHSP BINA MARGA.xlsx — official real source', () => {
 });
 
 /**
- * IMPORT-SEAM B8 — the Owner's WORKING copy of the same workbook. It is a
- * different file from the official source above: the Owner has written each
- * block's output unit on its own row ("satuan : m") between the title and the
- * header. Pinned by hash like every real-file proof, so an edit fires the guard.
+ * IMPORT-SEAM B8 — Owner WORKING-COPY verification (mutable external evidence).
+ *
+ * Three responsibilities stay separate:
+ *   A. Official stable source (ca64…) — above; unchanged.
+ *   B. Explicit external byte-identity verification — opt-in path+SHA only;
+ *      then generic lawful reader/understanding invariants for THAT identity.
+ *   C. Historical 5A847 semantic fixtures — only when the verified bytes are
+ *      actually SHA 5A847. Different bytes = different source identity.
+ *      Never apply 5A847 counts/units to 260C (or any other identity).
+ *
+ * Historical working-copy byte identity (provenance pin; do not overwrite):
+ *   5a847e832da61905587b43308a31eaf0fc5c438242f5415d9f50fcb96036e02f
+ *
+ * Opt-in follows the existing REQUEST-gated pattern used by
+ * `B1B12_GOLDEN_WORKBOOK_PATH` (see b1b12-golden-unit-coverage.spec.ts):
+ *   SIMPROK_AHSP_WORKING_COPY_PATH=<absolute path>
+ *   SIMPROK_AHSP_WORKING_COPY_SHA256=<expected sha256>
+ * Both required. Once requested, missing file or SHA mismatch FAILS — never
+ * silently skipped, and never weakened.
  */
-const WORKING_COPY_PATH = 'C:/SIMPROK/AHSP BINA MARGA.xlsx';
-const WORKING_COPY_SHA256 =
+const HISTORICAL_WORKING_COPY_SHA256 =
   '5a847e832da61905587b43308a31eaf0fc5c438242f5415d9f50fcb96036e02f';
-const describeWorkingCopy = existsSync(WORKING_COPY_PATH)
-  ? describe
-  : describe.skip;
+const WORKING_COPY_PATH_ENV = 'SIMPROK_AHSP_WORKING_COPY_PATH';
+const WORKING_COPY_SHA_ENV = 'SIMPROK_AHSP_WORKING_COPY_SHA256';
+const WORKING_COPY_PATH = (process.env[WORKING_COPY_PATH_ENV] ?? '').trim();
+const WORKING_COPY_SHA256 = (process.env[WORKING_COPY_SHA_ENV] ?? '').trim();
+const workingCopyPathSet = WORKING_COPY_PATH !== '';
+const workingCopyShaSet = WORKING_COPY_SHA256 !== '';
+const workingCopyRequested = workingCopyPathSet && workingCopyShaSet;
+const describeWorkingCopy = workingCopyRequested ? describe : describe.skip;
+/** Historical 5A847 semantic fixtures run only for that exact byte identity. */
+const describeHistoricalWorkingCopySemantics =
+  workingCopyRequested &&
+  WORKING_COPY_SHA256 === HISTORICAL_WORKING_COPY_SHA256
+    ? describe
+    : describe.skip;
+
+describe('AHSP BINA MARGA working-copy opt-in gate', () => {
+  it('preserves the historical working-copy provenance pin as its own identity', () => {
+    expect(HISTORICAL_WORKING_COPY_SHA256).toBe(
+      '5a847e832da61905587b43308a31eaf0fc5c438242f5415d9f50fcb96036e02f',
+    );
+    expect(HISTORICAL_WORKING_COPY_SHA256).not.toBe(OFFICIAL_SHA256);
+  });
+
+  it('requires both path and expected SHA env vars, or neither', () => {
+    expect(workingCopyPathSet).toBe(workingCopyShaSet);
+  });
+});
 
 describeWorkingCopy(
-  'AHSP BINA MARGA.xlsx — Owner working copy with explicit unit rows',
+  'AHSP BINA MARGA.xlsx — explicit external working-copy identity',
   () => {
-    it('reads every stated work identity and output unit, and leaves the one unstated unit missing', async () => {
+    it('verifies exact byte identity and generic lawful read invariants for the named source', async () => {
+      if (!existsSync(WORKING_COPY_PATH)) {
+        throw new Error(
+          `AHSP_WORKING_COPY_NOT_FOUND: ${WORKING_COPY_PATH_ENV} was set to ` +
+            `"${WORKING_COPY_PATH}", but no file exists there. An explicitly ` +
+            `requested working-copy verification is never skipped.`,
+        );
+      }
       const bytes = readFileSync(WORKING_COPY_PATH);
-      expect(createHash('sha256').update(bytes).digest('hex')).toBe(
-        WORKING_COPY_SHA256,
-      );
+      const actualSha = createHash('sha256').update(bytes).digest('hex');
+      expect(actualSha).toBe(WORKING_COPY_SHA256);
+
       const envelope = testEnvelope(bytes, 'AHSP BINA MARGA.xlsx');
-      const knowledge = understandAhspDocument(
-        await ReaderRegistry.default().read(envelope),
-        envelope,
-      );
+      const read = await ReaderRegistry.default().read(envelope);
+      expect(read.readerId).toBe('XLSX_EXCELJS');
+      expect(read.tables.length).toBeGreaterThan(0);
+
+      const knowledge = understandAhspDocument(read, envelope);
       expect(knowledge.workItems).toHaveLength(71);
       expect(knowledge.workItems.every((item) => item.workType !== null)).toBe(
         true,
@@ -151,6 +197,32 @@ describeWorkingCopy(
           AHSP_DOCUMENT_REASON.MISSING_WORK_ITEM
         ],
       ).toBeUndefined();
+      // Identity-specific fixtures (e.g. historical 5A847 unit-row counts)
+      // live in the historical-only block below — never applied here.
+    });
+  },
+);
+
+describeHistoricalWorkingCopySemantics(
+  'AHSP BINA MARGA.xlsx — historical 5A847 working-copy semantics',
+  () => {
+    it('reads every stated work identity and output unit, and leaves the one unstated unit missing', async () => {
+      if (!existsSync(WORKING_COPY_PATH)) {
+        throw new Error(
+          `AHSP_WORKING_COPY_NOT_FOUND: historical 5A847 semantics were ` +
+            `requested via ${WORKING_COPY_PATH_ENV}="${WORKING_COPY_PATH}", ` +
+            `but no file exists there.`,
+        );
+      }
+      const bytes = readFileSync(WORKING_COPY_PATH);
+      const actualSha = createHash('sha256').update(bytes).digest('hex');
+      expect(actualSha).toBe(HISTORICAL_WORKING_COPY_SHA256);
+
+      const envelope = testEnvelope(bytes, 'AHSP BINA MARGA.xlsx');
+      const knowledge = understandAhspDocument(
+        await ReaderRegistry.default().read(envelope),
+        envelope,
+      );
 
       const units = knowledge.workItems.map(
         (item) => item.outputUnitRaw?.raw ?? null,

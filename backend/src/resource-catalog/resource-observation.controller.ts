@@ -13,6 +13,10 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { ResourceObservationService } from './resource-observation.service';
+import {
+  AhspImportService,
+  ahspSourceRowKey,
+} from '../ahsp/services/ahsp-import.service';
 
 /**
  * THE shared curation door for observed resources — the backend behind
@@ -34,6 +38,13 @@ export class ResourceObservationController {
   constructor(
     private readonly observations: ResourceObservationService,
     private readonly permissions: WorkspacePermissionResolverService,
+    /**
+     * The AHSP import journal, asked ONLY about its own documents. Provided as a
+     * stateless class exactly as the domain modules already provide the identity
+     * authority — no module cycle, and no AHSP knowledge inside the shared
+     * observed-resource lifecycle.
+     */
+    private readonly ahspJournal: AhspImportService,
   ) {}
 
   private workspaceId(request: any): string {
@@ -53,15 +64,37 @@ export class ResourceObservationController {
   /**
    * The observations still awaiting a human decision, each enriched with the
    * live candidates and a suggested unit so the curator has what both decisions
-   * need — the same authorities, never a second matcher.
+   * need — the same authorities, never a second matcher — and (GAP C2) with the
+   * work item each row was quoted by.
+   *
+   * COMPOSED HERE, deliberately. The observed-resource lifecycle is shared by
+   * AHSP, Basic Price and BOQ and must not learn about any one of them: `origin`
+   * there is a provenance tag, never a branch. So the shared read stays as it
+   * is, the AHSP journal answers for its own documents, and this controller —
+   * the edge where one screen's payload is assembled — puts the two together.
+   *
+   * Every row keeps its answer, including the honest ones: a row whose document
+   * left no journal (every observation recorded before the journal existed) is
+   * ABSENT, and a source row that two work items quote is AMBIGUOUS. Neither is
+   * dressed up as context, and neither blocks that row's own curation.
    */
   @Get()
   @Permissions('AHSP_RESOURCE_IDENTITY_DECIDE')
   async list(@Req() request: any) {
-    return this.observations.listOpenForCuration(
-      this.workspaceId(request),
+    const workspaceId = this.workspaceId(request);
+    const rows = await this.observations.listOpenForCuration(
+      workspaceId,
       this.actor(request),
     );
+    if (rows.length === 0) return rows;
+    const context = await this.ahspJournal.workContextForSourceRows(
+      workspaceId,
+      rows,
+    );
+    return rows.map((row) => ({
+      ...row,
+      workContext: context.get(ahspSourceRowKey(row)) ?? { kind: 'ABSENT' as const },
+    }));
   }
 
   /**
@@ -210,10 +243,35 @@ export class ResourceObservationController {
   async curateNew(
     @Req() request: any,
     @Param('id') id: string,
-    @Body() body: { unitDefinitionId?: string; reason?: string },
+    @Body()
+    body: {
+      unitDefinitionId?: string;
+      reason?: string;
+      refusedCandidateIds?: unknown;
+      candidateContextDigest?: unknown;
+    },
   ) {
     if (!body?.unitDefinitionId) {
       throw new BadRequestException('UNIT_DEFINITION_ID_REQUIRED');
+    }
+    // Both halves of an examination, or neither: a refused set without the
+    // context it was refused in (or the reverse) is not an examination.
+    const refused = body.refusedCandidateIds;
+    const digest = body.candidateContextDigest;
+    const hasRefused = refused !== undefined && refused !== null;
+    const hasDigest = digest !== undefined && digest !== null;
+    if (hasRefused !== hasDigest) {
+      throw new BadRequestException('EXAMINATION_INCOMPLETE');
+    }
+    if (
+      hasRefused &&
+      (!Array.isArray(refused) ||
+        refused.length === 0 ||
+        !refused.every((value) => typeof value === 'string' && value !== '') ||
+        typeof digest !== 'string' ||
+        digest === '')
+    ) {
+      throw new BadRequestException('EXAMINATION_INVALID');
     }
     return this.observations.curateNew({
       workspaceId: this.workspaceId(request),
@@ -221,6 +279,12 @@ export class ResourceObservationController {
       unitDefinitionId: body.unitDefinitionId,
       actorAccountId: this.actor(request),
       reason: body.reason ?? null,
+      examination: hasRefused
+        ? {
+            refusedCandidateIds: refused as string[],
+            candidateContextDigest: digest as string,
+          }
+        : null,
     });
   }
 }

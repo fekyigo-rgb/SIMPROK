@@ -40,6 +40,9 @@ menafsirkan ulang isi hukum.
   provenance, dan lawful calculation consumption.
 - Owner lock/pointer memory untuk Addendum tersebut:
   `docs/project-memory/MON04_CURRENT_NUMERIC_LAW_OWNER_LOCK.md`.
+- AHSP Classification & Import Product Law v1.4 FINAL:
+  `docs/product-law/SIMPROK-AHSP-Classification-Import-Product-Law-v1.4-FINAL.md`
+  — LOCKED BY OWNER pada 19 September 2026; supersedes v1.3 FINAL dan draft sebelumnya.
 
 ## MUTABLE OPERATIONAL TRUTH
 

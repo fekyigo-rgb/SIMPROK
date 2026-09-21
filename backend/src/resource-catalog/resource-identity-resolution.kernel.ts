@@ -80,6 +80,23 @@ export interface RawResourceReference {
    * verdict below is byte-identical to before.
    */
   readonly resourceCatalogId?: string | null;
+  /**
+   * The digest of the document this line was read from, when the caller is
+   * reading one.
+   *
+   * IN-MEMORY ONLY — no column, no schema, no migration; `ObservedResource` and
+   * `ResourceSourceIdentity` already store it, so this only carries a fact both
+   * sides already record. It exists for ONE comparison: two lines of the SAME
+   * workbook share ONE code system, so a code difference between them is the
+   * document's own statement that they are different things. Across documents a
+   * code difference says nothing — two workbooks simply number independently —
+   * so the comparison is scoped here and nowhere else.
+   *
+   * IT GRANTS NO NEW MATCHING POWER: it can only REFUSE an automatic identity,
+   * never assert one. When it is absent every verdict below is byte-identical
+   * to before.
+   */
+  readonly sourceSha256?: string | null;
 }
 
 export interface IdentityCatalogCandidate {
@@ -373,7 +390,13 @@ export type ResourceIdentityReasonCode =
   /** Every tied row proved to be a different canonical unit from the source. */
   | 'UNIT_CONTEXT_NO_MATCHING_REPRESENTATION'
   /** Several tied rows share the source's canonical unit — still ambiguous. */
-  | 'UNIT_CONTEXT_MULTIPLE_MATCHING_REPRESENTATIONS';
+  | 'UNIT_CONTEXT_MULTIPLE_MATCHING_REPRESENTATIONS'
+  /**
+   * The name matches exactly, but THIS SAME DOCUMENT already recorded that
+   * catalogue row under a DIFFERENT code of its own. The document itself
+   * distinguishes the two lines; SIMPROK does not overrule that on a name.
+   */
+  | 'SOURCE_CODE_DISAGREES_WITHIN_DOCUMENT';
 
 /** Why a particular catalog row was nominated. Shown to humans verbatim. */
 export type CandidateEvidenceKind =
@@ -394,6 +417,57 @@ export interface PriorHumanDecision {
   readonly reason: string | null;
 }
 
+/**
+ * WHAT A CANDIDATE'S NOMINATION ACTUALLY RESTS ON — the kernel's own statement,
+ * made once here so no reader re-derives it from the evidence list.
+ *
+ *   EXACT_NAME            the catalogue row states this very name and class
+ *                         (a Level 1 / 1b row).
+ *   RECORDED_FACT         a fact SIMPROK recorded binds this row to the source:
+ *                         the same source code seen for it, a provenance
+ *                         sighting of the same name, or a reviewed mapping.
+ *   NAME_SIMILARITY_ONLY  nothing but name tokens — containment or a shared
+ *                         stem. "Tripleks" is contained in "Paku tripleks".
+ *                         That is a reason to LOOK, never evidence of identity:
+ *                         it may not be confirmed, taught, or reused.
+ *   RULED_OUT             listed only so a reader can see what was examined; a
+ *                         stated specification or the class refused it.
+ *
+ * A single candidate is not strong because it is alone. Strength is what the
+ * nomination rests on, and nothing else.
+ */
+export type CandidateIdentityBasis =
+  | 'EXACT_NAME'
+  | 'RECORDED_FACT'
+  | 'NAME_SIMILARITY_ONLY'
+  | 'RULED_OUT';
+
+const RECORDED_FACT_EVIDENCE: ReadonlyArray<CandidateEvidenceKind> = [
+  'SOURCE_CODE_MATCH',
+  'SOURCE_SIGHTING_NAME_MATCH',
+  'REVIEWED_MAPPING_CODE_MATCH',
+  'REVIEWED_MAPPING_NAME_MATCH',
+];
+
+/** The basis a discovery nomination rests on, from its evidence kinds alone. */
+export function discoveryBasisOf(
+  evidence: ReadonlyArray<CandidateEvidenceKind>,
+): CandidateIdentityBasis {
+  return evidence.some((kind) => RECORDED_FACT_EVIDENCE.includes(kind))
+    ? 'RECORDED_FACT'
+    : 'NAME_SIMILARITY_ONLY';
+}
+
+/** A candidate a human may confirm as this resource: an exact name or a recorded fact. */
+export function isConfirmableCandidate(
+  candidate: Pick<ResourceIdentityCandidate, 'identityBasis'>,
+): boolean {
+  return (
+    candidate.identityBasis === 'EXACT_NAME' ||
+    candidate.identityBasis === 'RECORDED_FACT'
+  );
+}
+
 export interface ResourceIdentityCandidate {
   readonly resourceCatalogId: string;
   readonly name: string;
@@ -401,6 +475,8 @@ export interface ResourceIdentityCandidate {
   readonly type: string;
   readonly baseUnit: string;
   readonly evidence: ReadonlyArray<CandidateEvidenceKind>;
+  /** What this nomination rests on. See CandidateIdentityBasis. */
+  readonly identityBasis: CandidateIdentityBasis;
   /** True when the catalog row claims anything the source did not state. */
   readonly specificationUnproved: boolean;
   /**
@@ -848,8 +924,112 @@ export function isHumanDecidable(result: ResourceIdentityResolution): boolean {
   if (result.authority === 'HUMAN_REVIEW_REQUIRED') return true;
   return (
     result.authority === 'EVIDENCE_CANDIDATE' &&
-    result.reasonCodes.includes('MULTIPLE_CANDIDATES_NEEDS_REVIEW')
+    result.reasonCodes.includes('MULTIPLE_CANDIDATES_NEEDS_REVIEW') &&
+    // A choice BETWEEN name-similarity guesses is not a choice between
+    // legitimate alternatives: at least one must rest on more than a name.
+    result.candidates.some(isConfirmableCandidate)
   );
+}
+
+/** Why a chosen catalogue row may not be recorded as this resource's identity. */
+export type SelectionRefusal =
+  /** The machine proved ONE identity and it is another row. */
+  | 'IDENTITY_PROVEN_OTHERWISE'
+  /** The machine examined this row and refused it (specification or class). */
+  | 'IDENTITY_CANDIDATE_RULED_OUT'
+  /** The row was nominated only because the names resemble each other. */
+  | 'IDENTITY_CANDIDATE_NAME_SIMILARITY_ONLY'
+  /** The machine never connected this row to this wording at all. */
+  | 'IDENTITY_CANDIDATE_NOT_NOMINATED';
+
+/**
+ * THE WRITE-ELIGIBILITY LAW for recording "this source resource IS that
+ * catalogue row" — owned here, next to the verdict it reads, so every write path
+ * (ordinary curate, curate + TEACH, governed decisions) asks ONE question and no
+ * screen keeps a second opinion.
+ *
+ * Eligible only when the verdict itself backs the row: the machine proved it, or
+ * nominated it on an exact name or a recorded fact. A name-similarity nomination,
+ * a row the machine ruled out, and a row the machine never nominated are all
+ * refused — missing evidence is not assumed to be strong evidence, and a human
+ * confirming a guess does not turn it into a fact.
+ */
+export function selectionRefusal(
+  verdict: Pick<
+    ResourceIdentityResolution,
+    'status' | 'resolvedResourceCatalogId' | 'candidates'
+  >,
+  selectedResourceCatalogId: string,
+): SelectionRefusal | null {
+  if (verdict.status === 'RESOLVED') {
+    return verdict.resolvedResourceCatalogId === selectedResourceCatalogId
+      ? null
+      : 'IDENTITY_PROVEN_OTHERWISE';
+  }
+  const chosen = verdict.candidates.find(
+    (candidate) => candidate.resourceCatalogId === selectedResourceCatalogId,
+  );
+  if (verdict.status === 'UNRESOLVED') {
+    return chosen
+      ? 'IDENTITY_CANDIDATE_RULED_OUT'
+      : 'IDENTITY_CANDIDATE_NOT_NOMINATED';
+  }
+  if (!chosen) return 'IDENTITY_CANDIDATE_NOT_NOMINATED';
+  if (chosen.identityBasis === 'RULED_OUT') return 'IDENTITY_CANDIDATE_RULED_OUT';
+  if (!isConfirmableCandidate(chosen)) {
+    return 'IDENTITY_CANDIDATE_NAME_SIMILARITY_ONLY';
+  }
+  return null;
+}
+
+/**
+ * THE LAWFUL "GENUINELY NEW" AFTER HUMAN EXAMINATION — branch (c), stated
+ * exactly and separately from the machine-only exhaustion predicate that Basic
+ * Price admission keeps using unchanged.
+ *
+ * Three different facts must not blur:
+ *   (a) a possibility is not yet examined          → not admissible;
+ *   (b) particular candidates were refused         → not, by itself, admissible;
+ *   (c) the WHOLE live search was examined and every
+ *       nomination in it refused                    → admissible.
+ *
+ * (c) holds only when ALL of these hold on the verdict read under the admission
+ * lock:
+ *   - the machine did not resolve, and it is not an exact representation tie;
+ *   - there is at least one candidate, and EVERY candidate either was ruled out
+ *     by the machine or rests on name similarity only — an exact name or a
+ *     recorded fact is a real possibility a person must confirm or leave, never
+ *     wave away;
+ *   - the person refused EXACTLY the live candidate set (not a subset, not a
+ *     remembered older set), and
+ *   - the candidate context they were shown is the live one (digest equality).
+ * A candidate that appears after the screen was loaded therefore reopens (a).
+ */
+export function isAdmissibleAfterExamination(
+  verdict: ResourceIdentityResolution,
+  examination: {
+    readonly refusedCandidateIds: ReadonlyArray<string>;
+    readonly candidateContextDigest: string;
+  },
+  liveCandidateContextDigest: string,
+): boolean {
+  if (verdict.status === 'RESOLVED') return false;
+  if (verdict.authority === 'HUMAN_REVIEW_REQUIRED') return false;
+  if (verdict.candidates.length === 0) return false;
+  if (
+    !verdict.candidates.every(
+      (candidate) =>
+        candidate.identityBasis === 'RULED_OUT' ||
+        candidate.identityBasis === 'NAME_SIMILARITY_ONLY',
+    )
+  ) {
+    return false;
+  }
+  const live = new Set(verdict.candidates.map((c) => c.resourceCatalogId));
+  const refused = new Set(examination.refusedCandidateIds);
+  if (live.size !== refused.size) return false;
+  for (const id of live) if (!refused.has(id)) return false;
+  return examination.candidateContextDigest === liveCandidateContextDigest;
 }
 
 /**
@@ -875,7 +1055,10 @@ export function isSingleStrongCandidate(
     result.reasonCodes.length === 1 &&
     result.reasonCodes[0] === 'STRONG_CANDIDATE_NEEDS_REVIEW' &&
     result.candidates.length === 1 &&
-    result.candidates[0].specificationUnproved === false
+    result.candidates[0].specificationUnproved === false &&
+    // One candidate is not strong because it is alone: a nomination that rests
+    // on name similarity only ("Tripleks" → "Paku tripleks") is never taught.
+    isConfirmableCandidate(result.candidates[0])
   );
 }
 
@@ -916,6 +1099,9 @@ function applyVerifiedIdentityDecision(
   // Fail closed to the machine's own verdict rather than widening the candidate set.
   if (!chosen) return machine;
   if (chosen.specificationUnproved) return machine;
+  // A stored answer naming a row that rests on name similarity only is never
+  // reused: remembering a guess does not make it evidence. Its ledger stays.
+  if (!isConfirmableCandidate(chosen)) return machine;
 
   if (identicalQuestion) {
     return {
@@ -1014,6 +1200,7 @@ function resolveByMachineEvidence(
   const describeCandidate = (
     candidate: IdentityCatalogCandidate,
     evidence: ReadonlyArray<CandidateEvidenceKind>,
+    identityBasis: CandidateIdentityBasis,
   ): ResourceIdentityCandidate => ({
     resourceCatalogId: candidate.id,
     name: candidate.name,
@@ -1021,11 +1208,42 @@ function resolveByMachineEvidence(
     type: candidate.type,
     baseUnit: candidate.baseUnit,
     evidence,
+    identityBasis,
     specificationUnproved: specificationUnproved(rawName, candidate),
     unprovedSpecificationFacts: unprovedSpecificationFacts(rawName, candidate),
     specifications: candidate.specifications ?? null,
     priorHumanDecision: priorDecisionFor(candidate.id),
   });
+
+  /**
+   * The codes THIS SAME DOCUMENT has already been recorded quoting for one
+   * catalogue row — nothing else.
+   *
+   * Empty whenever the caller did not say which document it is reading, or the
+   * row has no sighting from that document, or those sightings carry no code.
+   * Empty means "nothing recorded to disagree with", never "agreement": an
+   * absent fact stays absent, exactly as everywhere else in this kernel.
+   *
+   * Sorted, so the same evidence always produces the same verdict text.
+   */
+  const sameDocumentRecordedCodes = (catalogId: string): string[] => {
+    const raw = reference.sourceSha256;
+    if (raw === null || raw === undefined || raw.length === 0) return [];
+    // A hex digest means the same document whatever case it is written in, and
+    // the two sides are stored by different writers. Compared case-insensitively
+    // so a lowercase digest on either side cannot silently switch this law off —
+    // a safety rule that fails by doing nothing is the worst kind.
+    const digest = raw.toLowerCase();
+    const codes = new Set<string>();
+    for (const sighting of sourceSightings) {
+      if (sighting.resourceCatalogId !== catalogId) continue;
+      if ((sighting.sourceSha256 ?? '').toLowerCase() !== digest) continue;
+      if (!typeMatches(sighting.sourceSection, type)) continue;
+      const code = normalizeResourceCode(sighting.rawCode);
+      if (code !== null) codes.add(code);
+    }
+    return [...codes].sort();
+  };
 
   // ---- LEVEL 1: exact canonical match ----
   const exactNameRows = usable.filter(
@@ -1042,7 +1260,7 @@ function resolveByMachineEvidence(
         status: 'UNRESOLVED',
         authority: null,
         resolvedResourceCatalogId: null,
-        candidates: [describeCandidate(only, [])],
+        candidates: [describeCandidate(only, [], 'RULED_OUT')],
         reasonCodes: ['SPECIFICATION_CONFLICT'],
         explanation:
           `Nama "${rawName}" cocok persis dengan katalog "${only.name}", tetapi ` +
@@ -1059,7 +1277,7 @@ function resolveByMachineEvidence(
         status: 'NEEDS_REVIEW',
         authority: 'EVIDENCE_CANDIDATE',
         resolvedResourceCatalogId: null,
-        candidates: [describeCandidate(only, [])],
+        candidates: [describeCandidate(only, [], 'EXACT_NAME')],
         reasonCodes: [
           'STRONG_CANDIDATE_NEEDS_REVIEW',
           'SPECIFICATION_UNPROVED',
@@ -1073,11 +1291,48 @@ function resolveByMachineEvidence(
           `Diperlukan penegasan manusia.`,
       };
     }
+    // The names agree, and so does everything the catalogue row claims. But this
+    // SAME document has already been recorded quoting that row under a code of
+    // its own, and this line states a DIFFERENT one. One workbook uses ONE code
+    // system, so that difference is the document distinguishing two things — and
+    // a document that distinguishes them outranks a name that does not.
+    //
+    // Deliberately one-directional: a code that AGREES proves nothing extra (the
+    // live population has one code covering three different names), so agreement
+    // only leaves this branch as it was. Only disagreement refuses, and it
+    // refuses into a question a human can still settle — the row stays an
+    // EXACT_NAME candidate, which the write-eligibility law already accepts.
+    const documentCodeDisagreement = sameDocumentRecordedCodes(only.id);
+    if (
+      normalizedCode !== null &&
+      documentCodeDisagreement.length > 0 &&
+      !documentCodeDisagreement.includes(normalizedCode)
+    ) {
+      return {
+        status: 'NEEDS_REVIEW',
+        authority: 'EVIDENCE_CANDIDATE',
+        resolvedResourceCatalogId: null,
+        candidates: [describeCandidate(only, [], 'EXACT_NAME')],
+        reasonCodes: [
+          'STRONG_CANDIDATE_NEEDS_REVIEW',
+          'SOURCE_CODE_DISAGREES_WITHIN_DOCUMENT',
+        ],
+        explanation:
+          `Nama "${rawName}" cocok persis dengan katalog "${only.name}" ` +
+          `(${only.id}), tetapi dokumen yang sama ini mencatat entri tersebut ` +
+          `dengan kode ${documentCodeDisagreement
+            .map((code) => `"${code}"`)
+            .join(', ')}, sedangkan baris ini menyatakan kode ` +
+          `"${reference.rawCode}". Dokumen membedakan keduanya, dan SIMPROK ` +
+          `tidak menetapkan identitas hanya karena namanya sama. Diperlukan ` +
+          `keputusan manusia.`,
+      };
+    }
     return {
       status: 'RESOLVED',
       authority: 'EXACT_CANONICAL_MATCH',
       resolvedResourceCatalogId: only.id,
-      candidates: [describeCandidate(only, [])],
+      candidates: [describeCandidate(only, [], 'EXACT_NAME')],
       reasonCodes: ['EXACT_CANONICAL_MATCH'],
       explanation:
         `Nama sumber daya "${rawName}" (${type}) cocok persis dengan satu entri ` +
@@ -1119,7 +1374,9 @@ function resolveByMachineEvidence(
       status: 'NEEDS_REVIEW',
       authority: 'HUMAN_REVIEW_REQUIRED',
       resolvedResourceCatalogId: null,
-      candidates: tiedRows.map((candidate) => describeCandidate(candidate, [])),
+      candidates: tiedRows.map((candidate) =>
+        describeCandidate(candidate, [], 'EXACT_NAME'),
+      ),
       reasonCodes: ['MULTIPLE_CANDIDATES_NEEDS_REVIEW', reasonCode],
       explanation:
         `Ditemukan ${tiedRows.length} entri ResourceCatalog dengan nama persis ` +
@@ -1254,7 +1511,7 @@ function resolveByMachineEvidence(
         status: 'UNRESOLVED',
         authority: null,
         resolvedResourceCatalogId: null,
-        candidates: [describeCandidate(only, [])],
+        candidates: [describeCandidate(only, [], 'RULED_OUT')],
         reasonCodes: ['SPECIFICATION_CONFLICT'],
         explanation:
           tiePreamble +
@@ -1269,7 +1526,7 @@ function resolveByMachineEvidence(
         status: 'NEEDS_REVIEW',
         authority: 'EVIDENCE_CANDIDATE',
         resolvedResourceCatalogId: null,
-        candidates: [describeCandidate(only, [])],
+        candidates: [describeCandidate(only, [], 'EXACT_NAME')],
         reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW', 'SPECIFICATION_UNPROVED'],
         explanation:
           tiePreamble +
@@ -1279,11 +1536,54 @@ function resolveByMachineEvidence(
       };
     }
 
+    // THE SAME DOCUMENT-CODE LAW AS LEVEL 1, AT THE SAME MOMENT IN THE VERDICT.
+    //
+    // The unit has done its work: the tie is narrowed to exactly one surviving
+    // representation, which is structurally the same thing Level 1 holds — ONE
+    // row about to be asserted as this line's identity. The cardinality gate is
+    // not a way around the false-certainty guards, so the last question Level 1
+    // asks is asked here too: has THIS SAME DOCUMENT already been recorded
+    // quoting that row under a code of its own, and does this line state a
+    // different one?
+    //
+    // Placed HERE, after the unit has discriminated, and deliberately not
+    // earlier: every tieRefused path above is untouched, so RM-03D2 keeps
+    // deciding which representation was meant and a tie is never turned into a
+    // refusal by this rule. What is withheld is only the final automatic
+    // certainty — and it is withheld into the same shape Level 1 produces, so
+    // the write-eligibility law, the admission examination predicate and the
+    // reader's wording all behave identically on both roads.
+    const tieCodeDisagreement = sameDocumentRecordedCodes(only.id);
+    if (
+      normalizedCode !== null &&
+      tieCodeDisagreement.length > 0 &&
+      !tieCodeDisagreement.includes(normalizedCode)
+    ) {
+      return {
+        status: 'NEEDS_REVIEW',
+        authority: 'EVIDENCE_CANDIDATE',
+        resolvedResourceCatalogId: null,
+        candidates: [describeCandidate(only, [], 'EXACT_NAME')],
+        reasonCodes: [
+          'STRONG_CANDIDATE_NEEDS_REVIEW',
+          'SOURCE_CODE_DISAGREES_WITHIN_DOCUMENT',
+        ],
+        explanation:
+          tiePreamble +
+          `Namun dokumen yang sama ini mencatat representasi tersebut dengan ` +
+          `kode ${tieCodeDisagreement.map((code) => `"${code}"`).join(', ')}, ` +
+          `sedangkan baris ini menyatakan kode "${reference.rawCode}". Unit ` +
+          `memang menunjuk satu representasi, tetapi dokumen membedakan ` +
+          `keduanya, dan SIMPROK tidak menetapkan identitas selama pembedaan itu ` +
+          `belum dijawab. Diperlukan keputusan manusia.`,
+      };
+    }
+
     return {
       status: 'RESOLVED',
       authority: 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT',
       resolvedResourceCatalogId: only.id,
-      candidates: [describeCandidate(only, [])],
+      candidates: [describeCandidate(only, [], 'EXACT_NAME')],
       reasonCodes: ['EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT'],
       explanation:
         tiePreamble +
@@ -1393,7 +1693,13 @@ function resolveByMachineEvidence(
           .name.localeCompare(byId.get(b.id)!.name);
         return nameDelta !== 0 ? nameDelta : a.id.localeCompare(b.id);
       })
-      .map(({ id, kinds }) => describeCandidate(byId.get(id)!, [...kinds]));
+      .map(({ id, kinds }) =>
+        describeCandidate(
+          byId.get(id)!,
+          [...kinds],
+          discoveryBasisOf([...kinds]),
+        ),
+      );
 
     const multiple = candidates.length > 1;
     const anyUnproved = candidates.some(
@@ -1441,7 +1747,7 @@ function resolveByMachineEvidence(
       authority: null,
       resolvedResourceCatalogId: null,
       candidates: [...specificationConflicted].map((id) =>
-        describeCandidate(byId.get(id)!, []),
+        describeCandidate(byId.get(id)!, [], 'RULED_OUT'),
       ),
       reasonCodes: ['SPECIFICATION_CONFLICT'],
       explanation:
@@ -1458,7 +1764,9 @@ function resolveByMachineEvidence(
       status: 'UNRESOLVED',
       authority: null,
       resolvedResourceCatalogId: null,
-      candidates: exactNameRows.map((candidate) => describeCandidate(candidate, [])),
+      candidates: exactNameRows.map((candidate) =>
+        describeCandidate(candidate, [], 'RULED_OUT'),
+      ),
       reasonCodes: ['RESOURCE_TYPE_MISMATCH'],
       explanation:
         `Nama "${rawName}" ditemukan di katalog, tetapi tipenya ` +

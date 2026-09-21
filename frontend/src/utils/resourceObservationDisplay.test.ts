@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   IQL_COPY,
   describeCuratableObservation,
+  describeWorkContext,
   previewRuledOutLine,
   previewRuledOutNames,
   describeGovernanceFailure,
@@ -16,6 +17,10 @@ import {
   previewCandidateMentions,
   previewCandidateNames,
   looksLikeInternalIdentifier,
+} from "./resourceObservationDisplay.ts";
+import type {
+  CuratableObservationWire,
+  WorkContextWire,
 } from "./resourceObservationDisplay.ts";
 
 /**
@@ -48,18 +53,39 @@ test("A: candidates are shown by name; the catalogue id rides along for the acti
   assert.equal(view.newUnitDefinitionId, "unit-m3");
 });
 
-test("candidates are de-duplicated and dropped if they carry no id", () => {
+// LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION folded "id-1" and "id-2" into ONE
+// choice because they share a name, silently dropping a distinct catalogue
+// identity. GRADE-A §7 requires every distinct canonical id to survive. The
+// id-less row is still dropped. TEST_WEAKENING=NO (stricter).
+test("candidates are de-duplicated by catalogue id — never by name — and dropped if they carry no id", () => {
   const view = describeCuratableObservation({
     id: "obs-2",
     rawName: "Semen",
     candidates: [
+      { resourceCatalogId: "id-1", name: "Semen Portland" },
       { resourceCatalogId: "id-1", name: "Semen Portland" },
       { resourceCatalogId: "id-2", name: "Semen Portland" },
       { resourceCatalogId: "", name: "Bocor" },
     ],
     suggestedUnitDefinitionId: null,
   });
-  assert.deepEqual(view.candidateChoices.map((c) => c.name), ["Semen Portland"]);
+  assert.deepEqual(view.candidateChoices.map((c) => c.resourceCatalogId), ["id-1", "id-2"]);
+});
+
+test("DECISION SAFETY: two rows sharing a name are both offered, told apart by the facts that differ", () => {
+  const view = describeCuratableObservation({
+    id: "obs-twin",
+    rawName: "Semen",
+    candidates: [
+      { resourceCatalogId: "id-kg", name: "Semen Portland", code: "M.23", baseUnit: "Kg", confirmable: true },
+      { resourceCatalogId: "id-zak", name: "Semen Portland", code: "M.23a", baseUnit: "Zak", confirmable: true },
+    ],
+    suggestedUnitDefinitionId: null,
+  });
+  assert.deepEqual(view.candidateChoices.map((c) => c.name), [
+    "Semen Portland (kode M.23, satuan Kg)",
+    "Semen Portland (kode M.23a, satuan Zak)",
+  ]);
 });
 
 test("a long candidate list is trimmed, never dumped", () => {
@@ -282,7 +308,9 @@ test("C4-1: a nomination whose ONLY evidence is a shared word is shown, never of
   // ...but not hidden either.
   assert.deepEqual(view.weakPossibilities, ["Klem biasa", "Paku biasa"]);
   assert.match(view.weakPossibilityLine ?? "", /belum cukup kuat untuk dipilih/u);
-  assert.match(view.guidance, /Belum ditemukan padanan yang dapat dibuktikan/u);
+  // LEGACY_TEST_CHANGE_REGISTER: OLD "Belum ditemukan padanan yang dapat dibuktikan";
+  // the guidance now names WHY — resemblance of names only. TEST_WEAKENING=NO.
+  assert.match(view.guidance, /SIMPROK hanya menemukan kemiripan nama \(Klem biasa, Paku biasa\), yang tidak cukup untuk memastikan identitas\./u);
 });
 
 test("C4-2: evidence SIMPROK can name makes a candidate confirmable", () => {
@@ -317,7 +345,10 @@ test("C4-4: what the catalogue claims but the source never stated is named, not 
         {
           resourceCatalogId: "cat-p",
           name: "Pipa porous 6 inch",
-          evidence: ["NAME_TOKEN_CONTAINMENT"],
+          // LEGACY_TEST_CHANGE_REGISTER: OLD evidence was NAME_TOKEN_CONTAINMENT, which
+          // no longer makes a choice (DECISION SAFETY). The property under test —
+          // unproved facts are named — is kept on a recorded-fact nomination.
+          evidence: ["SOURCE_CODE_MATCH", "NAME_TOKEN_CONTAINMENT"],
           specificationUnproved: true,
           unprovedSpecificationFacts: ["6"],
         },
@@ -325,6 +356,24 @@ test("C4-4: what the catalogue claims but the source never stated is named, not 
     }),
   );
   assert.deepEqual(view.candidateChoices[0].unprovedFacts, ["6"]);
+});
+
+test("DECISION SAFETY: token containment alone is never a choice — Tripleks is not Paku tripleks", () => {
+  const legacyServer = describeCuratableObservation(
+    obs({
+      rawName: "Tripleks",
+      rawUnit: "Lbr",
+      resourceType: "MATERIAL",
+      candidates: [{ resourceCatalogId: "cat-pt", name: "Paku tripleks", evidence: ["NAME_TOKEN_CONTAINMENT", "NAME_TOKEN_STEM_SHARED"] }],
+    }),
+  );
+  assert.deepEqual(legacyServer.candidateChoices, []);
+  assert.deepEqual(legacyServer.weakPossibilities, ["Paku tripleks"]);
+  // The server's own answer wins over any evidence reading.
+  const serverSaysNo = describeCuratableObservation(
+    obs({ candidates: [{ resourceCatalogId: "cat-x", name: "X", evidence: [], confirmable: false }] }),
+  );
+  assert.deepEqual(serverSaysNo.candidateChoices, []);
 });
 
 test("C4-5: SIMPROK states what it understood before it asks anything", () => {
@@ -394,19 +443,26 @@ test("E3: many candidates are CHOICES with their evidence named — none is call
       resourceType: "MATERIAL",
       candidates: [
         { resourceCatalogId: "cat-1", name: "Semen Portland", evidence: ["SOURCE_CODE_MATCH", "NAME_TOKEN_CONTAINMENT"] },
-        { resourceCatalogId: "cat-2", name: "Semen Putih", evidence: ["NAME_TOKEN_CONTAINMENT"] },
-        { resourceCatalogId: "cat-3", name: "Semen Instan", evidence: ["NAME_TOKEN_CONTAINMENT"] },
+        { resourceCatalogId: "cat-2", name: "Semen Putih", evidence: ["REVIEWED_MAPPING_NAME_MATCH"] },
+        { resourceCatalogId: "cat-3", name: "Semen Instan", evidence: ["SOURCE_SIGHTING_NAME_MATCH"] },
+        { resourceCatalogId: "cat-4", name: "Semen Warna", evidence: ["NAME_TOKEN_CONTAINMENT"] },
       ],
       identityVerdict: verdict("NEEDS_REVIEW", ["MULTIPLE_CANDIDATES_NEEDS_REVIEW"], false),
     }),
   );
+  // LEGACY_TEST_CHANGE_REGISTER: OLD fixture offered two NAME_TOKEN_CONTAINMENT-only
+  // rows as choices ("Dasar: kemiripan nama saja."). DECISION SAFETY: such a row is
+  // shown as a weak possibility, never offered. Recorded-fact rows keep the proof
+  // that several choices are named and none recommended. TEST_WEAKENING=NO.
   // The kernel's own order is kept; nothing is re-ranked.
   assert.deepEqual(view.candidateChoices.map((c) => c.name), ["Semen Portland", "Semen Putih", "Semen Instan"]);
+  assert.deepEqual(view.weakPossibilities, ["Semen Warna"]);
   assert.equal(
     view.candidateChoices[0].basis,
     "Dasar: kode sumber yang sama pernah tercatat untuk sumber daya ini; kemiripan nama.",
   );
-  assert.equal(view.candidateChoices[1].basis, "Dasar: kemiripan nama saja.");
+  assert.equal(view.candidateChoices[1].basis, "Dasar: nama ini pernah dipetakan manusia ke sumber daya ini.");
+  assert.ok(!view.candidateChoices.some((c) => c.basis === "Dasar: kemiripan nama saja."));
   assert.match(view.guidance, /ada 3 kemungkinan padanan dan SIMPROK tidak memilih sendiri/u);
   assert.match(view.guidance, /biarkan item ini tetap menunggu/u);
   // No score, no percentage, no internal code in anything shown.
@@ -424,7 +480,9 @@ test("E4: an exact-name nomination says so; an unproved specification cannot car
         {
           resourceCatalogId: "cat-a",
           name: "Besi angker diameter 8",
-          evidence: ["NAME_TOKEN_CONTAINMENT"],
+          // LEGACY_TEST_CHANGE_REGISTER: OLD evidence NAME_TOKEN_CONTAINMENT only; now a
+          // recorded code so it stays a choice whose unproved spec blocks learning.
+          evidence: ["SOURCE_CODE_MATCH", "NAME_TOKEN_CONTAINMENT"],
           specificationUnproved: true,
           unprovedSpecificationFacts: ["8"],
         },
@@ -465,11 +523,63 @@ test("E5: 'genuinely new' opens only when identity is exhausted AND a unit is pr
   // belum dapat dipastikan". IMPORT ACCEPTANCE BOUNDARY (B7) forbids architecture
   // language on the import surface; the same fact is now said as "identitasnya
   // dalam katalog SIMPROK". The sentence is still pinned exactly. TEST_WEAKENING=NO.
+  // LEGACY_TEST_CHANGE_REGISTER: OLD first sentence "Belum ditemukan padanan yang
+  // dapat dibuktikan." — now names the only thing found (name resemblance). The
+  // acceptance sentence is still pinned exactly. TEST_WEAKENING=NO.
   assert.match(
     weakOnly.guidance,
-    /^Belum ditemukan padanan yang dapat dibuktikan\. Sumber daya dari dokumen sudah diterima; identitasnya dalam katalog SIMPROK belum dapat dipastikan\.$/u,
+    /^SIMPROK hanya menemukan kemiripan nama \(Dump Truck\), yang tidak cukup untuk memastikan identitas\. Sumber daya dari dokumen sudah diterima; identitasnya dalam katalog SIMPROK belum dapat dipastikan\.$/u,
   );
   assert.doesNotMatch(weakOnly.guidance, /canonical/u);
+});
+
+test("LAWFUL ADMISSION: when the server says refusing exactly these makes it admissible, 'new' opens and names what is refused", () => {
+  const view = describeCuratableObservation(
+    obs({
+      rawName: "Tripleks",
+      rawUnit: "Lbr",
+      resourceType: "MATERIAL",
+      suggestedUnitDefinitionId: "unit-lbr",
+      candidates: [{ resourceCatalogId: "cat-pt", name: "Paku tripleks", evidence: ["NAME_TOKEN_CONTAINMENT"], confirmable: false }],
+      identityVerdict: {
+        status: "NEEDS_REVIEW",
+        reasonCodes: ["STRONG_CANDIDATE_NEEDS_REVIEW"],
+        exhausted: false,
+        admissibleAfterExamination: true,
+        candidateContextDigest: "digest-1",
+      },
+    }),
+  );
+  assert.equal(view.canProposeNew, true);
+  assert.equal(view.newResourceBlockedLine, null);
+  assert.deepEqual(view.newResourceRefusal, { candidateIds: ["cat-pt"], names: ["Paku tripleks"], candidateContextDigest: "digest-1" });
+  assert.equal(view.newResourceActionLabel, "Bukan Paku tripleks — tetapkan sebagai sumber daya baru");
+  assert.match(view.guidance, /Bila tidak ada yang sama dengan item ini, Anda dapat menetapkannya sebagai sumber daya baru\./u);
+  assert.equal(looksLikeInternalIdentifier(view.newResourceActionLabel), false);
+
+  // Same shape, but the unit is not proven: shut, and the reason is the unit — not identity only.
+  const noUnit = describeCuratableObservation(
+    obs({
+      rawName: "Tripleks",
+      rawUnit: "Lbr",
+      suggestedUnitDefinitionId: null,
+      candidates: [{ resourceCatalogId: "cat-pt", name: "Paku tripleks", confirmable: false }],
+      identityVerdict: { status: "NEEDS_REVIEW", reasonCodes: [], exhausted: false, admissibleAfterExamination: true, candidateContextDigest: "d" },
+    }),
+  );
+  assert.equal(noUnit.canProposeNew, false);
+  assert.equal(noUnit.newResourceRefusal, null);
+  assert.match(noUnit.newResourceBlockedLine ?? "", /satuan "Lbr" belum dapat dibuktikan/u);
+
+  // A confirmable choice on screen keeps 'new' shut even if the flag arrives: a real possibility is not waved away.
+  const withChoice = describeCuratableObservation(
+    obs({
+      candidates: [{ resourceCatalogId: "cat-real", name: "Stemper", confirmable: true }],
+      identityVerdict: { status: "NEEDS_REVIEW", reasonCodes: [], exhausted: false, admissibleAfterExamination: true, candidateContextDigest: "d" },
+    }),
+  );
+  assert.equal(withChoice.canProposeNew, false);
+  assert.equal(withChoice.newResourceRefusal, null);
 });
 
 test("E6: a proven identity asks only for confirmation, never claims doubt", () => {
@@ -729,7 +839,9 @@ const SHAPES = {
   nominated: obs({
     rawName: "Triplex",
     rawUnit: "Lbr",
-    candidates: [{ resourceCatalogId: "cat-t", name: "Triplex Meranti", evidence: ["NAME_TOKEN_CONTAINMENT"] }],
+    // LEGACY_TEST_CHANGE_REGISTER: OLD evidence NAME_TOKEN_CONTAINMENT only, which is
+    // no longer a nomination a person may confirm; the "nominated" shape keeps a recorded code.
+    candidates: [{ resourceCatalogId: "cat-t", name: "Triplex Meranti", evidence: ["SOURCE_CODE_MATCH", "NAME_TOKEN_CONTAINMENT"] }],
     identityVerdict: verdict("NEEDS_REVIEW", ["STRONG_CANDIDATE_NEEDS_REVIEW"], false),
   }),
   proven: obs({
@@ -881,4 +993,228 @@ test("R5: a direct attempt the kernel refuses is reported as a refused CANDIDATE
       assert.equal(looksLikeInternalIdentifier(text), false, code);
     }
   }
+});
+
+
+// ---------------- GRADE-A §7: a group is a DECISION SCOPE, not a look-alike ----------------
+
+const scoped = (over: Record<string, unknown> = {}) =>
+  obs({
+    identityVerdict: { status: "NEEDS_REVIEW", reasonCodes: ["STRONG_CANDIDATE_NEEDS_REVIEW"], exhausted: false, admissibleAfterExamination: false, candidateContextDigest: "d1" },
+    candidates: [{ resourceCatalogId: "cat-a", name: "Alat Bantu", confirmable: true }],
+    identicalQuestion: { questionKey: "k1", state: "NONE" },
+    ...over,
+  });
+
+test("SCOPE-1: the server's exact question key is the question — a trimmed or null/empty look-alike is NOT merged", () => {
+  // Legacy servers (no key): the raw fields are compared exactly.
+  assert.equal(groupIdenticalObservations([obs({ id: "1", rawCode: null }), obs({ id: "2", rawCode: "" })]).length, 2);
+  assert.equal(groupIdenticalObservations([obs({ id: "3", rawName: "Alat Bantu" }), obs({ id: "4", rawName: "Alat Bantu " })]).length, 2);
+  assert.equal(groupIdenticalObservations([obs({ id: "5", rawUnit: "Ls" }), obs({ id: "6", rawUnit: " Ls" })]).length, 2);
+  // With keys: different exact questions never fold, the same one does.
+  assert.equal(groupIdenticalObservations([scoped({ id: "7" }), scoped({ id: "8", identicalQuestion: { questionKey: "k2" } })]).length, 2);
+  assert.equal(groupIdenticalObservations([scoped({ id: "9" }), scoped({ id: "10" })]).length, 1);
+});
+
+test("SCOPE-2: the WHOLE candidate context decides, not only the offered choices — a hidden weak row differs", () => {
+  const withWeak = scoped({
+    id: "w",
+    identityVerdict: { status: "NEEDS_REVIEW", reasonCodes: ["MULTIPLE_CANDIDATES_NEEDS_REVIEW"], exhausted: false, candidateContextDigest: "d2" },
+    candidates: [
+      { resourceCatalogId: "cat-a", name: "Alat Bantu", confirmable: true },
+      { resourceCatalogId: "cat-z", name: "Alat Bantu Las", confirmable: false },
+    ],
+  });
+  assert.equal(groupIdenticalObservations([scoped({ id: "p" }), withWeak]).length, 2);
+  // Legacy server (no digest): a differing weak row still separates them.
+  const legacyA = obs({ id: "la", candidates: [{ resourceCatalogId: "cat-a", name: "Alat Bantu" }] });
+  const legacyB = obs({ id: "lb", candidates: [{ resourceCatalogId: "cat-a", name: "Alat Bantu" }, { resourceCatalogId: "cat-z", name: "Z", evidence: ["NAME_TOKEN_STEM_SHARED"] }] });
+  assert.equal(groupIdenticalObservations([legacyA, legacyB]).length, 2);
+});
+
+test("SCOPE-3: candidate ORDER alone never changes what a group means", () => {
+  const ab = obs({ id: "ab", candidates: [{ resourceCatalogId: "cat-a", name: "A" }, { resourceCatalogId: "cat-b", name: "B" }] });
+  const ba = obs({ id: "ba", candidates: [{ resourceCatalogId: "cat-b", name: "B" }, { resourceCatalogId: "cat-a", name: "A" }] });
+  assert.equal(groupIdenticalObservations([ab, ba]).length, 1);
+});
+
+test("SCOPE-4: differing eligibility (exhausted, lawful admission) is a different decision scope", () => {
+  const base = scoped({ id: "e1" });
+  const exhausted = scoped({ id: "e2", identityVerdict: { status: "NEEDS_REVIEW", reasonCodes: ["STRONG_CANDIDATE_NEEDS_REVIEW"], exhausted: true, candidateContextDigest: "d1" } });
+  const admissible = scoped({ id: "e3", identityVerdict: { status: "NEEDS_REVIEW", reasonCodes: ["STRONG_CANDIDATE_NEEDS_REVIEW"], exhausted: false, admissibleAfterExamination: true, candidateContextDigest: "d1" } });
+  assert.equal(groupIdenticalObservations([base, exhausted, admissible]).length, 3);
+});
+
+// ---------------------------------------------------------------------------
+// B-1 — THE MACHINE SAYS WHAT IT WITHHELD, AND WHY.
+//
+// The kernel refuses to settle an exact-name match when the SAME source document
+// already records that catalogue row under a different code of its own. Without
+// words for that, the row reaches the reader looking exactly like an ordinary
+// strong candidate — and one click confirms past a fact SIMPROK is holding.
+// The shape is the live one: "Timbunan Porus [M3]" stated as M144, against a
+// catalogue row the same workbook recorded as M44.
+// ---------------------------------------------------------------------------
+
+test("B1-UI: a code the same document states differently is NAMED, not hidden behind a generic confirm", () => {
+  const view = describeCuratableObservation(
+    obs({
+      rawName: "Timbunan Porus",
+      rawUnit: "M3",
+      rawCode: "M144",
+      resourceType: "MATERIAL",
+      candidates: [{ resourceCatalogId: "cat-timbunan", name: "Timbunan Porus", evidence: [] }],
+      identityVerdict: verdict(
+        "NEEDS_REVIEW",
+        ["STRONG_CANDIDATE_NEEDS_REVIEW", "SOURCE_CODE_DISAGREES_WITHIN_DOCUMENT"],
+        false,
+      ),
+    }),
+  );
+
+  // The row is still actionable — this is a question, not a dead end.
+  assert.equal(view.candidateChoices.length, 1);
+  // …and the reason is stated in the reader's words.
+  assert.match(view.guidance, /kode yang berbeda/u);
+  assert.match(view.guidance, /dokumen sumber yang sama/u);
+  assert.match(view.guidance, /Timbunan Porus/u);
+  // It must NOT read as the ordinary "matches existing data" reassurance.
+  assert.doesNotMatch(view.guidance, /sudah dapat memastikan/u);
+  // No internal vocabulary leaks to the reader.
+  for (const word of ["SOURCE_CODE_DISAGREES_WITHIN_DOCUMENT", "kernel", "NEEDS_REVIEW"]) {
+    assert.ok(!view.guidance.includes(word), word);
+  }
+});
+
+test("B1-UI: without that reason code the wording is unchanged — no new sentence leaks into ordinary rows", () => {
+  const view = describeCuratableObservation(
+    obs({
+      rawName: "Timbunan Porus",
+      rawUnit: "M3",
+      rawCode: "M44",
+      resourceType: "MATERIAL",
+      candidates: [{ resourceCatalogId: "cat-timbunan", name: "Timbunan Porus", evidence: [] }],
+      identityVerdict: verdict("NEEDS_REVIEW", ["STRONG_CANDIDATE_NEEDS_REVIEW"], false),
+    }),
+  );
+
+  assert.doesNotMatch(view.guidance, /kode yang berbeda/u);
+  assert.match(view.guidance, /membutuhkan konfirmasi Anda/u);
+});
+
+/**
+ * C2 — WHERE THIS COMPONENT CAME FROM, BESIDE THE BUTTONS THAT SETTLE IT.
+ *
+ * The backend attached this to every curation row and the screen dropped it, so
+ * a person was asked what a bare "Pekerja (Jam)" IS with no sight of the work
+ * item that quoted it. These prove it is shown, that the source's own words are
+ * used, and — the part that matters most — that the two kinds of not-knowing are
+ * never dressed up as an answer.
+ */
+const CONTEXT_FOUND = {
+  kind: "FOUND",
+  importJobId: "job-1",
+  lineNumber: 7,
+  workType: "B.13",
+  methodName: "Gorong-gorong pipa beton bertulang",
+  sheetName: "Sheet1",
+};
+
+test("C2: a traced component names the work item in the source's own words", () => {
+  const view = describeWorkContext(CONTEXT_FOUND);
+  assert.equal(view.kind, "FOUND");
+  assert.match(view.line, /B\.13/u);
+  assert.match(view.line, /Gorong-gorong pipa beton bertulang/u);
+  assert.match(view.detail ?? "", /Sheet1/u);
+  assert.match(view.detail ?? "", /baris jurnal 7/u);
+});
+
+test("C2: more than one work item quoting a row is SAID, not resolved on the reader's behalf", () => {
+  const view = describeWorkContext({ kind: "AMBIGUOUS", quotedByLines: 2 });
+  assert.equal(view.kind, "AMBIGUOUS");
+  assert.match(view.line, /2 pekerjaan berbeda/u);
+  assert.match(view.detail ?? "", /tidak memilih/u);
+});
+
+test("C2: an untraceable row says so — it never borrows another row's context", () => {
+  for (const absent of [null, undefined, { kind: "ABSENT" }]) {
+    const view = describeWorkContext(absent);
+    assert.equal(view.kind, "ABSENT");
+    assert.match(view.line, /belum dapat ditelusuri/u);
+    assert.equal(view.detail, null);
+  }
+});
+
+test("C2: every curation row carries a context, so the screen never has to guess", () => {
+  const view = describeCuratableObservation({
+    id: "obs-1",
+    rawName: "Pekerja",
+    rawUnit: "Jam",
+    resourceType: "LABOR",
+    workContext: CONTEXT_FOUND,
+  });
+  assert.equal(view.workContext.kind, "FOUND");
+  assert.match(view.workContext.line, /B\.13/u);
+});
+
+/**
+ * C2 — GROUPING MUST NOT HIDE A DIFFERENCE IN CONTEXT.
+ *
+ * Members fold because every input the DECISION depends on is identical; where
+ * each was quoted from is not one of those inputs. The group's view is built
+ * from the FIRST member, so showing its context unchanged would tell the reader
+ * "this came from B.13" while sixty-five other members came from elsewhere.
+ */
+const contextMember = (
+  id: string,
+  context: WorkContextWire | null,
+): CuratableObservationWire => ({
+  id,
+  rawName: "Alat Bantu",
+  rawUnit: "Ls",
+  resourceType: "EQUIPMENT",
+  workContext: context,
+});
+
+test("C2: one question asked from ONE work item shows that work item", () => {
+  const [group] = groupIdenticalObservations([
+    contextMember("obs-1", CONTEXT_FOUND),
+    contextMember("obs-2", CONTEXT_FOUND),
+  ]);
+  assert.equal(group.occurrences, 2);
+  assert.equal(group.view.workContext.kind, "FOUND");
+  assert.match(group.view.workContext.line, /B\.13/u);
+});
+
+test("C2: one question asked from DIFFERENT work items never shows just one of them", () => {
+  const [group] = groupIdenticalObservations([
+    contextMember("obs-1", CONTEXT_FOUND),
+    contextMember("obs-2", { ...CONTEXT_FOUND, lineNumber: 9, workType: "B.14" }),
+    contextMember("obs-3", { ...CONTEXT_FOUND, lineNumber: 11, workType: "B.15" }),
+  ]);
+  assert.equal(group.occurrences, 3);
+  assert.equal(group.view.workContext.kind, "AMBIGUOUS");
+  assert.match(group.view.workContext.line, /3 pekerjaan berbeda/u);
+  // The first member's work item is NOT presented as the group's answer.
+  assert.doesNotMatch(group.view.workContext.line, /Dari pekerjaan/u);
+});
+
+test("C2: a group that is part traced and part not says both, and counts each honestly", () => {
+  const [group] = groupIdenticalObservations([
+    contextMember("obs-1", CONTEXT_FOUND),
+    contextMember("obs-2", { kind: "ABSENT" }),
+    contextMember("obs-3", { kind: "ABSENT" }),
+  ]);
+  assert.equal(group.view.workContext.kind, "AMBIGUOUS");
+  assert.match(group.view.workContext.line, /1 pekerjaan berbeda/u);
+  assert.match(group.view.workContext.line, /2 kemunculan belum dapat ditelusuri/u);
+});
+
+test("C2: a group nobody can trace says exactly that, with no count of work items", () => {
+  const [group] = groupIdenticalObservations([
+    contextMember("obs-1", { kind: "ABSENT" }),
+    contextMember("obs-2", null),
+  ]);
+  assert.equal(group.view.workContext.kind, "ABSENT");
+  assert.match(group.view.workContext.line, /belum dapat ditelusuri/u);
 });

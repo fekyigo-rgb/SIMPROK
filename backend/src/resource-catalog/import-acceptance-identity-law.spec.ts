@@ -143,6 +143,11 @@ const unitKernel = {
     Promise.resolve({
       status: 'RESOLVED',
       sourceUnitDefinition: { id: 'unit-m', code: 'M' },
+      // A RESOLVED proof from the real kernel always states its price operation:
+      // IDENTITY when the two spellings are the same canonical unit. Admission now
+      // requires that, so the fixture states what the kernel would actually return.
+      priceOperation: 'IDENTITY',
+      quantityFactor: '1',
     }),
   ),
   resolveCanonicalUnitIdentities: jest.fn(() => Promise.resolve([])),

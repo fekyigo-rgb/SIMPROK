@@ -20,6 +20,7 @@ import {
 import {
   ObserveResourceInput,
   ResourceObservationService,
+  observedSourceRowKey,
 } from '../../resource-catalog/resource-observation.service';
 import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
 import { isResourceCatalogIdShape } from '../../resource-catalog/resource-identity-resolution.kernel';
@@ -55,6 +56,10 @@ import {
   AhspImportLockedLine,
   AhspImportService,
 } from './ahsp-import.service';
+import {
+  ARCHIVE_SOURCE_NOT_RETAINED,
+  BasicPriceSourceArchiveService,
+} from '../../basic-price/basic-price-source-archive.service';
 import { RealityNormalizationEngine } from './reality-normalization.engine';
 import {
   classifyAhspIdentity,
@@ -199,6 +204,12 @@ export class AhspDocumentCanonicalizationService {
     // tables. It holds what a document was read into; it never resolves or writes
     // a canonical AHSP.
     private readonly journal: AhspImportService,
+    /**
+     * C1 — the existing content-addressed source archive. Domain-neutral given
+     * (workspaceId, digest, bytes); see ahsp.module.ts for why this class and
+     * not a second one.
+     */
+    private readonly sourceArchive: BasicPriceSourceArchiveService,
   ) {}
 
   private readonly readers = ReaderRegistry.default();
@@ -270,6 +281,62 @@ export class AhspDocumentCanonicalizationService {
   }
 
   /**
+   * C1 — THE SOURCE OF A SAVED IMPORT, READ BACK FROM THE JOB ALONE.
+   *
+   * Retaining bytes nothing can reach is only half a memory. An import job
+   * keeps the document's digest and no storage reference, so until now the
+   * artifact this service retained was unreachable from the import that named
+   * it — the file was kept and lost at the same time.
+   *
+   * Composed from the two existing owners rather than a third: the journal says
+   * WHICH document a job is about, the archive says where a workspace's bytes
+   * for that document live and hands them back verified. This service holds
+   * both already, so no new dependency, column or storage path is introduced.
+   *
+   * It answers only about this workspace's own job, and it distinguishes what
+   * must stay distinguishable: a job that names no document at all, a document
+   * whose bytes were never retained (imports saved before the bytes were kept
+   * are exactly this), and bytes that are there but do not verify — the last
+   * raises from the archive rather than answering with something that is not
+   * the document.
+   */
+  async sourceBytesOfImportJob(params: {
+    workspaceId: string;
+    importJobId: string;
+  }): Promise<
+    | { status: 'FOUND'; bytes: Buffer; sourceFileName: string | null; contentDigestSha256: string }
+    | { status: 'JOB_NOT_FOUND' }
+    | { status: 'DOCUMENT_NOT_NAMED' }
+    | { status: 'NOT_RETAINED' }
+  > {
+    const identity = await this.journal.documentIdentityOfJob(params);
+    if (!identity) return { status: 'JOB_NOT_FOUND' };
+    if (!identity.sourceSha256) return { status: 'DOCUMENT_NOT_NAMED' };
+    try {
+      const bytes = await this.sourceArchive.readForDocument({
+        workspaceId: params.workspaceId,
+        contentDigestSha256: identity.sourceSha256,
+      });
+      return {
+        status: 'FOUND',
+        bytes,
+        sourceFileName: identity.sourceFileName,
+        contentDigestSha256: identity.sourceSha256.toUpperCase(),
+      };
+    } catch (error) {
+      // An absence is an answer; a fault is not, and must not be flattened into
+      // one — the archive already tells them apart, so only ABSENT is caught.
+      if (
+        error instanceof Error &&
+        error.message.startsWith(ARCHIVE_SOURCE_NOT_RETAINED)
+      ) {
+        return { status: 'NOT_RETAINED' };
+      }
+      throw error;
+    }
+  }
+
+  /**
    * IMPORT IS RECEIVING INFORMATION: read → understand → CAPTURE → resolve → write.
    *
    * Capture comes before any decision. Every work item the document was read
@@ -283,6 +350,30 @@ export class AhspDocumentCanonicalizationService {
     userId: string,
     decisions: readonly AhspImportDecision[] = [],
   ): Promise<AhspDocumentCommitResult> {
+    /**
+     * C1 — THE BYTES ARE KEPT BEFORE SIMPROK TRIES TO UNDERSTAND THEM.
+     *
+     * The journal row this commit will write names a digest. Nothing used to
+     * keep the bytes behind it, so an AHSPImportJob could name a source SIMPROK
+     * could not produce, and a document's context became unrecoverable the
+     * moment the request ended.
+     *
+     * This sits BEFORE the reader, not merely before the journal. A document
+     * SIMPROK cannot read is exactly the document worth keeping: reading it
+     * later, better, is possible only if the bytes survived the attempt, and a
+     * reader that throws would otherwise take the Owner's file down with it.
+     * Retaining is not a claim that anything was understood — no job, no line
+     * and no AHSP is created here, and a failed read still fails the commit.
+     *
+     * The archive is content addressed and verifies the declared digest instead
+     * of trusting it, so the same document sent twice resolves to the same
+     * artifact rather than a duplicate: retry and re-upload are idempotent here.
+     */
+    await this.sourceArchive.retain({
+      workspaceId: envelope.workspaceId,
+      contentDigestSha256: envelope.contentDigestSha256,
+      bytes: envelope.bytes,
+    });
     const understood = understandAhspDocument(
       await this.readers.read(envelope),
       envelope,
@@ -1241,6 +1332,15 @@ export class AhspDocumentCanonicalizationService {
             resourceType: resource.group!,
             coefficient: resource.coefficient!,
             baseUnit: resource.resolvedBaseUnit ?? resource.rawUnit!,
+          })),
+        },
+        tx,
+        {
+          // CLOSURE 1 — what the document actually said, handed in on the
+          // TRUSTED road: one whole origin per line, from the reading this very
+          // method performed. It travels beside the recipe rather than inside
+          // it, so the same shape can never arrive from a request body.
+          sourceFacts: item.resources.map((resource) => ({
             rawName: resource.rawName,
             rawCode: resource.rawCode,
             rawUnit: resource.rawUnit,
@@ -1254,7 +1354,6 @@ export class AhspDocumentCanonicalizationService {
             sourceUnitCellAddress: resource.unitEvidence?.locator ?? null,
           })),
         },
-        tx,
       );
       await this.recordIdenticalQuestionReuse(
         item,
@@ -1602,9 +1701,49 @@ export class AhspDocumentCanonicalizationService {
     // resource-identity load-once step above), never per work item — the
     // workspace's AHSPs plus the Official Repository, indexed for the classifier.
     const identitySurface = await this.ahspService.loadIdentitySurface(workspaceId);
+    /**
+     * F1 — THE DECISIONS A PERSON ALREADY MADE ABOUT THIS DOCUMENT'S ROWS.
+     *
+     * Loaded ONCE per document, the same way the identity surface and the
+     * evidence are, and asked only about the rows this document actually
+     * contains. The observation lifecycle re-proves each one under today's law
+     * before it answers, so nothing arrives here that today's law would refuse.
+     */
+    const decided = await this.observations.decidedIdentityForSourceRows(
+      workspaceId,
+      knowledge.workItems.flatMap((item) =>
+        item.resources.flatMap((resource) =>
+          resource.rawName && resource.group
+            ? [
+                {
+                  sourceSha256: knowledge.source.contentDigestSha256 ?? null,
+                  sheetName: resource.nameEvidence?.sheetName ?? null,
+                  sourceRowNumber: resource.nameEvidence?.rowNumber ?? null,
+                  rawName: resource.rawName,
+                  resourceType: resource.group,
+                  // The stated facts travel with the address: an answer about
+                  // M144 at this row is not an answer about M999 at this row.
+                  rawCode: resource.rawCode ?? null,
+                  rawUnit: resource.rawUnit ?? null,
+                  // The same value the observation was stored under
+                  // (`observeUnresolved` writes the reader's contract version
+                  // into `parserContractVersion`), so like is compared with like.
+                  parserContractVersion:
+                    knowledge.source.readerContractVersion ?? null,
+                },
+              ]
+            : [],
+        ),
+      ),
+    );
     const workItems: AhspWorkItemKnowledge[] = [];
     for (const item of knowledge.workItems) {
-      const resolved = await this.resolveWorkItem(item, loaded);
+      const resolved = await this.resolveWorkItem(
+        item,
+        loaded,
+        knowledge.source.contentDigestSha256 ?? null,
+        decided,
+      );
       workItems.push(this.classifyItemIdentity(resolved, identitySurface, workspaceId));
     }
     const anyReady = workItems.some((item) => item.status === 'READY');
@@ -1676,6 +1815,10 @@ export class AhspDocumentCanonicalizationService {
   private async resolveWorkItem(
     item: AhspWorkItemKnowledge,
     evidence: ResourceIdentityEvidence,
+    /** The digest of the document being read; carried down to each component. */
+    sourceSha256: string | null,
+    /** F1 — decisions already made about this document's rows, re-proved today. */
+    decided: ReadonlyMap<string, string>,
   ): Promise<AhspWorkItemKnowledge> {
     let reasons: AhspDocumentReasonCode[] = [...item.reasonCodes];
     let outputUnitRaw = item.outputUnitRaw;
@@ -1715,7 +1858,9 @@ export class AhspDocumentCanonicalizationService {
     }
     const resources: AhspResourceKnowledge[] = [];
     for (const resource of item.resources) {
-      resources.push(await this.resolveResource(resource, evidence));
+      resources.push(
+        await this.resolveResource(resource, evidence, sourceSha256, decided),
+      );
     }
     // EVERY reason a component was held back travels up to the work item.
     //
@@ -1808,6 +1953,14 @@ export class AhspDocumentCanonicalizationService {
   private async resolveResource(
     resource: AhspResourceKnowledge,
     evidence: ResourceIdentityEvidence,
+    /**
+     * The digest of the document being read, so the identity kernel can tell a
+     * code THIS workbook already recorded for a catalogue row from a code some
+     * other workbook happens to use. Null leaves every verdict as it was.
+     */
+    sourceSha256: string | null,
+    /** F1 — decisions already made about this document's rows, re-proved today. */
+    decided: ReadonlyMap<string, string>,
   ): Promise<AhspResourceKnowledge> {
     // A component the source never named cannot be searched for at all. That is
     // the ONLY thing that stops the investigation before it starts.
@@ -1837,6 +1990,7 @@ export class AhspDocumentCanonicalizationService {
       rawCode: resource.rawCode,
       rawUnit: resource.rawUnit,
       resourceType: resource.group,
+      sourceSha256,
     });
     const identityCandidates = [
       ...new Set(
@@ -1845,6 +1999,44 @@ export class AhspDocumentCanonicalizationService {
           .filter((name) => name.length > 0),
       ),
     ];
+    /**
+     * F1 — A PERSON ALREADY ANSWERED THIS EXACT ROW.
+     *
+     * Consulted only where the machine did NOT settle it, so a machine proof is
+     * never overridden, and only for the SAME source row — same document, sheet,
+     * row, wording and class. The observation lifecycle has already re-proved
+     * the decision under today's write-eligibility law, so a name-only answer
+     * from the older law never reaches here.
+     *
+     * It settles IDENTITY alone. The unit is proved separately above and stays
+     * exactly as it was; an unproven unit still holds the component back.
+     */
+    const decidedCatalogId =
+      identity.status !== 'RESOLVED'
+        ? decided.get(
+            observedSourceRowKey({
+              sourceSha256,
+              sheetName: resource.nameEvidence?.sheetName ?? null,
+              sourceRowNumber: resource.nameEvidence?.rowNumber ?? null,
+              rawName: resource.rawName,
+              resourceType: resource.group,
+            }),
+          )
+        : undefined;
+    if (decidedCatalogId) {
+      return {
+        ...resource,
+        status: unitResolved ? 'READY' : 'UNRESOLVED',
+        reasonCodes: unitResolved
+          ? reasonCodes.filter(
+              (code) => code !== AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED,
+            )
+          : reasonCodes,
+        resolvedResourceCatalogId: decidedCatalogId,
+        resolvedBaseUnit: unitResolved ? resource.rawUnit : null,
+        identityCandidates,
+      };
+    }
     if (identity.status === 'RESOLVED' && identity.resolvedResourceCatalogId) {
       // Identity proved. The base unit is only carried when the Unit authority
       // proved it too — knowing WHICH resource this is never licenses asserting

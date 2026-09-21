@@ -26,7 +26,12 @@ describe('AhspDocumentCanonicalizationService — IQL-01', () => {
   const identity = { loadEvidence: jest.fn(), resolve: jest.fn() };
   const sightings = { createMany: jest.fn() };
   const { prisma } = transactionalPrisma({ resourceSourceIdentity: sightings });
-  const observations = { observeMany: jest.fn() };
+  const observations = {
+    observeMany: jest.fn(),
+    // F1 — the import reader asks which rows a person already decided.
+    // No decisions is the truthful default for a fixture that has none.
+    decidedIdentityForSourceRows: jest.fn().mockResolvedValue(new Map()),
+  };
   const audit = { logAction: jest.fn() };
   let service: AhspDocumentCanonicalizationService;
 
@@ -69,6 +74,8 @@ describe('AhspDocumentCanonicalizationService — IQL-01', () => {
       new RealityNormalizationEngine(),
       audit as any,
       inMemoryImportJournal() as any,
+      // C1 — the commit retains source bytes before journalling them.
+      { retain: jest.fn().mockResolvedValue("ws/digest/source") } as any,
     );
   });
 

@@ -7,6 +7,7 @@ import {
   identicalQuestionKey,
   isSameIdenticalQuestion,
 } from './identical-question-key';
+import { isAnswerApplicable } from './identical-question-governance';
 
 /**
  * IQL-01 — the exact question fingerprint. Exact means exact: every near-miss
@@ -126,7 +127,40 @@ describe('IQL-01 identicalQuestionKey', () => {
 
   it('carries its own policy version, never another domain’s', () => {
     expect(IQL01_IDENTICAL_QUESTION_POLICY_VERSION).toBe(
-      'IQL01_IDENTICAL_QUESTION_V1',
+      'IQL01_IDENTICAL_QUESTION_V2',
     );
+  });
+
+  /**
+   * The version records WHICH LAW an answer was approved under. V1 permitted an
+   * answer to be taught for a row nominated on name similarity alone; V2 does
+   * not. So an answer stored under V1 must not settle anything by itself — not
+   * because its candidate set changed (it need not have), but because the
+   * approval was given under a law this workspace no longer applies.
+   *
+   * This asserts the MECHANISM, not the literal: the applicability law refuses
+   * the superseded policy and admits the current one, with the candidate context
+   * held identical so the policy is the only thing under test.
+   */
+  it('an answer recorded under the superseded policy is NOT applicable', () => {
+    const live = {
+      candidateContextDigest: 'digest-unchanged',
+      resolutionPolicyVersion: IQL01_IDENTICAL_QUESTION_POLICY_VERSION,
+    };
+    const answerUnder = (resolutionPolicyVersion: string) =>
+      ({
+        candidateContextDigest: 'digest-unchanged',
+        resolutionPolicyVersion,
+      }) as never;
+
+    expect(
+      isAnswerApplicable(answerUnder('IQL01_IDENTICAL_QUESTION_V1'), live),
+    ).toBe(false);
+    expect(
+      isAnswerApplicable(
+        answerUnder(IQL01_IDENTICAL_QUESTION_POLICY_VERSION),
+        live,
+      ),
+    ).toBe(true);
   });
 });

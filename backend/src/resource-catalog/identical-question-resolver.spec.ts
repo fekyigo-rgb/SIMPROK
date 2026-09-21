@@ -100,7 +100,23 @@ const approved = (
 function fakeClient(ledger: Latest[], catalogs = [KERIKIL]) {
   return {
     resourceCatalog: { findMany: jest.fn(() => Promise.resolve(catalogs)) },
-    resourceSourceIdentity: { findMany: jest.fn(() => Promise.resolve([])) },
+    // The golden candidate rests on a recorded fact: code M03 seen for Kerikil.
+    resourceSourceIdentity: {
+      findMany: jest.fn(() =>
+        Promise.resolve([
+          {
+            resourceCatalogId: KERIKIL.id,
+            rawName: 'Kerikil',
+            rawCode: 'M03',
+            rawUnit: 'M3',
+            sourceSection: 'MATERIAL',
+            sourceSha256: 'S'.repeat(64),
+            sheetName: 'Sheet1',
+            sourceRowNumber: 7,
+          },
+        ]),
+      ),
+    },
     basicPriceImportRowResourceMapping: {
       findMany: jest.fn(() => Promise.resolve([])),
     },

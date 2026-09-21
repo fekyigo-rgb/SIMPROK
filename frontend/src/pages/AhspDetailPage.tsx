@@ -61,6 +61,12 @@ type DetailState =
   | { phase: 'FAILED'; message: string };
 
 type ResourceDraft = {
+  /**
+   * The line this draft came from, as the server identified it. Carried, never
+   * shown, and never invented: a line the reader ADDS has none, which is exactly
+   * how the server tells a continued line from a new one.
+   */
+  lineId: string | null;
   resourceId: string;
   resourceName: string | null;
   stored: boolean;
@@ -123,6 +129,8 @@ const orDash = (value: string | number | null | undefined) =>
   );
 
 const emptyResource = (): ResourceDraft => ({
+  // A line the reader adds continues nothing, and says so.
+  lineId: null,
   resourceId: '',
   resourceName: null,
   stored: false,
@@ -141,6 +149,7 @@ const draftsFromVersion = (version: AhspVersion | null): ResourceDraft[] => {
   const resources = version?.resources ?? [];
   if (resources.length === 0) return [emptyResource()];
   return resources.map((row) => ({
+    lineId: typeof row.id === 'string' && row.id !== '' ? row.id : null,
     resourceId: (row.resourceId ?? '').trim(),
     resourceName: row.resourceName ?? null,
     stored: true,
@@ -322,6 +331,10 @@ export function AhspDetailPage() {
       resourceType: row.resourceType,
       coefficient: parseCoefficientInput(row.coefficient) as number,
       baseUnit: row.baseUnit.trim(),
+      // WHICH LINE THIS CONTINUES — never where it came from. The server reads
+      // the origin from that line itself; this page cannot state one, and a line
+      // the reader added carries nothing.
+      ...(row.lineId ? { carriedFromResourceLineId: row.lineId } : {}),
     }));
     if (resources.length === 0) {
       setActionError('Isi paling sedikit satu komponen dengan sumber daya, satuan, dan koefisien.');
@@ -358,6 +371,10 @@ export function AhspDetailPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // The version this revision was composed from, so the server continues
+          // THAT recipe's lines rather than whichever version is newest by the
+          // time the save arrives.
+          ...(currentVersion?.id ? { basedOnVersionId: currentVersion.id } : {}),
           outputUnit: unit,
           regulationReference: regulationReference.trim() || undefined,
           effectiveDate: effectiveDate.trim() ? new Date(effectiveDate.trim()).toISOString() : undefined,

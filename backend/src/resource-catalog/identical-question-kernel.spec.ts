@@ -27,8 +27,11 @@ const row = (
   ...over,
 });
 
-// The real golden shape: "Agregat kasar / M03 / M3 / MATERIAL" nominates exactly
-// one row, "Kerikil / Agregat" [M3], by a shared stem — never an exact match.
+// The golden shape: "Agregat kasar / M03 / M3 / MATERIAL" nominates exactly one
+// row, "Kerikil / Agregat" [M3] — never an exact match. DECISION SAFETY: the
+// nomination must rest on a RECORDED FACT (here: the source code M03 was seen
+// bound to that row). The Owner's canonical question reaches it by a shared stem
+// alone, and that shape is proven below to be neither taught nor reused.
 const KERIKIL = row({
   id: 'cat-kerikil',
   name: 'Kerikil / Agregat',
@@ -53,15 +56,27 @@ const fact = (
   scope,
 });
 
+const M03_SIGHTING = {
+  resourceCatalogId: 'cat-kerikil',
+  rawName: 'Kerikil',
+  rawCode: 'M03',
+  rawUnit: 'M3',
+  sourceSection: 'MATERIAL',
+  sourceSha256: 'S'.repeat(64),
+  sheetName: 'Sheet1',
+  sourceRowNumber: 7,
+};
+
 const run = (
   candidates: IdentityCatalogCandidate[],
   decision?: VerifiedIdentityDecisionFact,
   reference: typeof AGREGAT_KASAR = AGREGAT_KASAR,
+  sourceSightings = [M03_SIGHTING],
 ) =>
   resolveResourceIdentity({
     reference,
     catalogCandidates: candidates,
-    sourceSightings: [],
+    sourceSightings,
     reviewedMappings: [],
     verifiedIdentityDecision: decision,
   });
@@ -182,5 +197,19 @@ describe('IQL-01 kernel seam', () => {
   ])('isSingleStrongCandidate is exact — refused with %s', (_label, change) => {
     const golden = run([KERIKIL]);
     expect(isSingleStrongCandidate({ ...golden, ...change })).toBe(false);
+  });
+
+  it('DECISION SAFETY: one candidate resting on a shared stem only is not strong, not decidable, and an approved answer for it is not reused', () => {
+    const machine = run([KERIKIL], undefined, AGREGAT_KASAR, []);
+    expect(machine.status).toBe('NEEDS_REVIEW');
+    expect(machine.candidates).toHaveLength(1);
+    expect(machine.candidates[0].identityBasis).toBe('NAME_SIMILARITY_ONLY');
+    expect(isSingleStrongCandidate(machine)).toBe(false);
+    expect(isIdenticalQuestionDecidable(machine)).toBe(false);
+    const withAnswer = run([KERIKIL], fact('cat-kerikil'), AGREGAT_KASAR, []);
+    expect(withAnswer.status).toBe('NEEDS_REVIEW');
+    expect(withAnswer.resolvedResourceCatalogId).toBeNull();
+    // With the recorded fact, the same answer IS reused — the positive control.
+    expect(run([KERIKIL], fact('cat-kerikil')).status).toBe('RESOLVED');
   });
 });

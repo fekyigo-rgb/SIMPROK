@@ -30,6 +30,10 @@ export interface ObservationCandidateWire {
   type?: string | null;
   baseUnit?: string | null;
   evidence?: readonly string[] | null;
+  /** What the nomination rests on, as the identity kernel stated it. */
+  identityBasis?: string | null;
+  /** The server's own answer: may a person confirm this row as the resource? */
+  confirmable?: boolean | null;
   /** The candidate claims something the source never stated. */
   specificationUnproved?: boolean | null;
   /** Exactly which claims are unsupported — a diameter, a grade, a finish. */
@@ -37,35 +41,32 @@ export interface ObservationCandidateWire {
 }
 
 /**
- * EVIDENCE STRENGTH, READ FROM THE KERNEL'S OWN REASONS.
+ * EVIDENCE STRENGTH IS THE SERVER'S ANSWER, NOT THIS PAGE'S.
  *
- * CONFIRMABLE — SIMPROK has seen this exact fact bound to this catalogue row
- *   before, or a person already decided it: a code it has recorded, a reviewed
- *   mapping, a previous sighting of the same name, or the source name fully
- *   containing the candidate's words.
+ * The identity kernel states what each nomination rests on and the server sends
+ * `confirmable`: an exact name or a RECORDED FACT (a source code seen for this
+ * row, a sighting, a reviewed mapping). A nomination resting on name similarity
+ * alone — "Tripleks" contained in "Paku tripleks", "Semen" sharing a stem with
+ * "Serat semen gel" — is a reason to look, never an answer: shown, not offered.
  *
- * WEAK — the ONLY reason is that the two names happen to share one long word.
- *   "Tanah Biasa" and "Klem biasa" share "biasa"; "Dump Truck" and "Water Tank
- *   Truck" share "truck". That is a reason to look, never a reason to choose,
- *   so it is shown and is deliberately NOT actionable.
+ * An older server that does not send `confirmable` is read FAIL-CLOSED by the
+ * same rule: only recorded-fact evidence (or no evidence list, the kernel's own
+ * exact-name finding) is confirmable. Name tokens alone never are.
  */
-const CONFIRMABLE_EVIDENCE = [
+const RECORDED_FACT_EVIDENCE = [
   'SOURCE_CODE_MATCH',
   'REVIEWED_MAPPING_CODE_MATCH',
   'REVIEWED_MAPPING_NAME_MATCH',
   'SOURCE_SIGHTING_NAME_MATCH',
-  'NAME_TOKEN_CONTAINMENT',
 ];
 
 export const isConfirmableCandidate = (
   candidate: ObservationCandidateWire,
 ): boolean => {
+  if (typeof candidate.confirmable === 'boolean') return candidate.confirmable;
   const evidence = candidate.evidence ?? [];
-  // No evidence list at all means the kernel handed this row over as its own
-  // single finding (an exact or representation-tie candidate), not as a token
-  // guess — those are confirmable. An EMPTY list is the same fact.
   if (evidence.length === 0) return true;
-  return evidence.some((kind) => CONFIRMABLE_EVIDENCE.includes(kind));
+  return evidence.some((kind) => RECORDED_FACT_EVIDENCE.includes(kind));
 };
 
 /** An open observation, enriched by GET /resource-observations for curation. */
@@ -83,7 +84,104 @@ export interface CuratableObservationWire {
   suggestedUnitDefinitionId?: string | null;
   /** IQL-01 — the state of this row's EXACT question, attached by the backend. */
   identicalQuestion?: IdenticalQuestionWire | null;
+  /**
+   * C2 — WHICH WORK THIS COMPONENT CAME FROM, as the journal recorded it.
+   *
+   * The backend has attached this to every curation row and the screen dropped
+   * it, so a person was asked to settle what a component IS with no sight of the
+   * work item that quoted it — the one fact that makes a bare "Pekerja" or
+   * "Stamper" answerable at all.
+   */
+  workContext?: WorkContextWire | null;
 }
+
+/**
+ * C2 — the journal's answer about one source row, carried exactly as the server
+ * gave it. THREE outcomes, kept apart on purpose:
+ *
+ *   FOUND      one work item quotes this row; the source's own words are here.
+ *   AMBIGUOUS  more than one work item quotes it. Lawful, and not the screen's
+ *              to resolve — so it says so instead of showing one of them.
+ *   ABSENT     the row cannot be joined to a work item at all.
+ *
+ * Folding AMBIGUOUS or ABSENT into "no context" would let the screen imply a
+ * certainty the server never claimed.
+ */
+export interface WorkContextWire {
+  kind?: string | null;
+  importJobId?: string | null;
+  lineNumber?: number | null;
+  workType?: string | null;
+  methodName?: string | null;
+  sheetName?: string | null;
+  quotedByLines?: number | null;
+}
+
+/**
+ * What the screen may say about where a component came from. `line` is for the
+ * eye at the decision point; `detail` carries the locator for someone checking
+ * the document itself.
+ */
+export interface WorkContextView {
+  kind: 'FOUND' | 'AMBIGUOUS' | 'ABSENT';
+  line: string;
+  detail: string | null;
+}
+
+/**
+ * C2 — the one place the wire's context becomes words.
+ *
+ * The source's own wording is shown and never paraphrased, and where the source
+ * said nothing, nothing is invented. An AMBIGUOUS row is told plainly that more
+ * than one work item quotes it, with the count, because that is a real thing a
+ * person may need to look up — it is never dressed up as an answer.
+ */
+export const describeWorkContext = (
+  context: WorkContextWire | null | undefined,
+): WorkContextView => {
+  const kind = context?.kind ?? 'ABSENT';
+  if (kind === 'FOUND') {
+    const workType = trimmedName(context?.workType ?? '');
+    const methodName = trimmedName(context?.methodName ?? '');
+    const named = [workType, methodName].filter((part) => part !== '').join(' — ');
+    const sheet = trimmedName(context?.sheetName ?? '');
+    const lineNumber =
+      typeof context?.lineNumber === 'number' ? context.lineNumber : null;
+    const detail = [
+      sheet === '' ? null : `lembar ${sheet}`,
+      lineNumber === null ? null : `baris jurnal ${lineNumber}`,
+    ]
+      .filter((part): part is string => part !== null)
+      .join(', ');
+    return {
+      kind: 'FOUND',
+      // The journal joined it, but the document named the work in no words we
+      // can show: say that, rather than printing an empty dash.
+      line:
+        named === ''
+          ? 'Dikutip oleh satu pekerjaan dalam dokumen ini.'
+          : `Dari pekerjaan: ${named}`,
+      detail: detail === '' ? null : detail,
+    };
+  }
+  if (kind === 'AMBIGUOUS') {
+    const count =
+      typeof context?.quotedByLines === 'number' ? context.quotedByLines : null;
+    return {
+      kind: 'AMBIGUOUS',
+      line:
+        count === null
+          ? 'Lebih dari satu pekerjaan mengutip baris sumber ini.'
+          : `Dikutip oleh ${count} pekerjaan berbeda dalam dokumen ini.`,
+      detail: 'SIMPROK tidak memilih salah satunya.',
+    };
+  }
+  return {
+    kind: 'ABSENT',
+    line: 'Pekerjaan asalnya belum dapat ditelusuri dari catatan impor.',
+    detail: null,
+  };
+};
 
 /**
  * ACG-01 OWNER BROWSER GAP — the verdict a candidate list belongs to, carried by
@@ -98,6 +196,14 @@ export interface IdentityVerdictWire {
   status?: string | null;
   reasonCodes?: readonly string[] | null;
   exhausted?: boolean | null;
+  /**
+   * Branch (c): every listed nomination rests on name similarity or was ruled
+   * out, so a person who refuses EXACTLY these may record the item as new. The
+   * server re-proves it under its admission lock.
+   */
+  admissibleAfterExamination?: boolean | null;
+  /** The candidate context this list was shown under; sent back with a refusal. */
+  candidateContextDigest?: string | null;
 }
 
 /**
@@ -161,10 +267,25 @@ export interface ObservationView {
    */
   canProposeNew: boolean;
   newUnitDefinitionId: string | null;
+  /**
+   * When "new" is lawful only because a person refuses the nominations shown
+   * (branch c): exactly which rows are being refused, their names for the
+   * button, and the candidate context the refusal is made under. Null when the
+   * machine exhausted identity by itself, or when "new" is not available.
+   */
+  newResourceRefusal: { candidateIds: string[]; names: string[]; candidateContextDigest: string } | null;
+  /** The label of the "new resource" action, which names what is being refused. */
+  newResourceActionLabel: string;
   /** When it cannot, why — so the door is shown shut and explained, never a refusal waiting to happen. */
   newResourceBlockedLine: string | null;
   /** What the curator should do, in plain language. */
   guidance: string;
+  /**
+   * C2 — the work item this component was quoted by, for the eye at the moment
+   * of deciding. Always present, because "we cannot tell" is also an answer the
+   * person is entitled to see.
+   */
+  workContext: WorkContextView;
 }
 
 /** The source's own class, in the reader's words. Never an internal enum. */
@@ -225,15 +346,35 @@ export const describeCuratableObservation = (
   // Under UNRESOLVED every listed row is one the kernel REFUSED. Offering it as
   // "Benar, ini sama dengan…" would let a person bind what the kernel ruled out.
   const listIsRuledOut = verdict?.status === 'UNRESOLVED';
+  // ONE ENTRY PER CATALOGUE ROW, never per spelling. Two rows can share a name
+  // and still be two resources (a different unit, a different code); folding
+  // them by name would silently drop one identity from the reader's choice.
+  const usable = (observation.candidates ?? []).filter(
+    (candidate) => trimmedName(candidate?.name ?? '') !== '' && Boolean(candidate?.resourceCatalogId),
+  );
+  const nameCount = new Map<string, number>();
+  for (const candidate of usable) {
+    const name = trimmedName(candidate.name);
+    nameCount.set(name, (nameCount.get(name) ?? 0) + 1);
+  }
+  // When a name is shared, the facts that tell the rows apart are said with it.
+  const labelOf = (candidate: ObservationCandidateWire): string => {
+    const name = trimmedName(candidate.name);
+    if ((nameCount.get(name) ?? 0) < 2) return name;
+    const facts = [
+      (candidate.code ?? '').trim() !== '' ? 'kode ' + (candidate.code ?? '').trim() : null,
+      (candidate.baseUnit ?? '').trim() !== '' ? 'satuan ' + (candidate.baseUnit ?? '').trim() : null,
+    ].filter((fact): fact is string => fact !== null);
+    return facts.length > 0 ? name + ' (' + facts.join(', ') + ')' : name;
+  };
   const seen = new Set<string>();
   const candidateChoices: ObservationCandidateChoice[] = [];
   const weakPossibilities: string[] = [];
   const ruledOut: string[] = [];
-  for (const candidate of observation.candidates ?? []) {
-    const name = trimmedName(candidate?.name ?? '');
-    if (name === '' || !candidate?.resourceCatalogId) continue;
-    if (seen.has(name)) continue;
-    seen.add(name);
+  for (const candidate of usable) {
+    if (seen.has(candidate.resourceCatalogId)) continue;
+    seen.add(candidate.resourceCatalogId);
+    const name = labelOf(candidate);
     if (listIsRuledOut) {
       ruledOut.push(name);
     } else if (isConfirmableCandidate(candidate)) {
@@ -298,7 +439,28 @@ export const describeCuratableObservation = (
   // keeps the previous behaviour rather than a guessed one.
   const unitProven = Boolean(observation.suggestedUnitDefinitionId);
   const exhausted = typeof verdict?.exhausted === 'boolean' ? verdict.exhausted : true;
-  const canProposeNew = unitProven && exhausted;
+  // Branch (c), from the server's own predicate — never re-derived here. It needs
+  // the candidate context to send back, and something to refuse.
+  const digest = typeof verdict?.candidateContextDigest === 'string' ? verdict.candidateContextDigest : '';
+  const refusable = usable.filter((candidate, index) => usable.findIndex((c) => c.resourceCatalogId === candidate.resourceCatalogId) === index);
+  const admissibleAfterExamination =
+    !exhausted &&
+    verdict?.admissibleAfterExamination === true &&
+    digest !== '' &&
+    refusable.length > 0 &&
+    candidateChoices.length === 0;
+  const canProposeNew = unitProven && (exhausted || admissibleAfterExamination);
+  const newResourceRefusal =
+    canProposeNew && admissibleAfterExamination
+      ? {
+          candidateIds: refusable.map((candidate) => candidate.resourceCatalogId),
+          names: refusable.map(labelOf),
+          candidateContextDigest: digest,
+        }
+      : null;
+  const newResourceActionLabel = newResourceRefusal
+    ? 'Bukan ' + nameList(newResourceRefusal.names) + ' — tetapkan sebagai sumber daya baru'
+    : 'Tetapkan sebagai sumber daya baru';
   // ACG-01.1 — WHY IT IS SHUT, said from the verdict's own facts. When every row
   // SIMPROK found was ruled out, or only too-weak possibilities remain, the
   // admission law does not yet define a next step: that is said as what it is —
@@ -317,12 +479,16 @@ export const describeCuratableObservation = (
             : 'Belum dapat ditetapkan sebagai sumber daya baru: SIMPROK masih menemukan entri katalog yang berkaitan dengan item ini.';
   const newResourceBlockedLine = canProposeNew
     ? null
-    : !exhausted
+    : !exhausted && !admissibleAfterExamination
       ? notExhaustedLine
       : unit === ''
         ? 'Belum dapat ditetapkan sebagai sumber daya baru: sumber tidak menyatakan satuannya.'
         : 'Belum dapat ditetapkan sebagai sumber daya baru: satuan "' + unit + '" belum dapat dibuktikan.';
-  const newSentence = canProposeNew ? ' Anda dapat menetapkannya sebagai sumber daya baru.' : '';
+  const newSentence = !canProposeNew
+    ? ''
+    : newResourceRefusal
+      ? ' Bila tidak ada yang sama dengan item ini, Anda dapat menetapkannya sebagai sumber daya baru.'
+      : ' Anda dapat menetapkannya sebagai sumber daya baru.';
   // UNKNOWN IDENTITY IS NOT A REFUSED RESOURCE. Said wherever no identity could
   // be proved, because that is exactly where "SIMPROK belum tahu" could be
   // misread as "SIMPROK menolak".
@@ -334,9 +500,24 @@ export const describeCuratableObservation = (
   // sentence below states what SIMPROK could and could not prove, and asks for
   // a decision only where one is genuinely required — and it never promises a
   // door the server would refuse.
+  // THE MACHINE MUST SAY WHAT IT KNOWS. When the identity was withheld because
+  // the SAME source document already records that catalogue row under a
+  // different code of its own, the reader is told so. Without this the row reads
+  // exactly like an ordinary strong candidate and one click confirms past a fact
+  // SIMPROK is holding — the machine refusing for a reason it never states.
+  const codeDisagreesWithinDocument = (verdict?.reasonCodes ?? []).includes(
+    'SOURCE_CODE_DISAGREES_WITHIN_DOCUMENT',
+  );
+
   const guidance =
     verdict?.status === 'RESOLVED' && names.length > 0
       ? 'SIMPROK sudah dapat memastikan padanan item ini. Konfirmasi untuk menutup item ini.'
+      : codeDisagreesWithinDocument && names.length > 0
+        ? 'SIMPROK membutuhkan keputusan Anda: namanya sama persis dengan ' +
+          nameList(names) +
+          ', tetapi dokumen sumber yang sama mencatat data itu dengan kode yang berbeda. ' +
+          'Dokumen itu sendiri membedakan keduanya, sehingga SIMPROK tidak menetapkannya sendiri. ' +
+          'Konfirmasi hanya bila Anda yakin keduanya memang sumber daya yang sama.'
       : names.length > 1
         ? 'SIMPROK membutuhkan konfirmasi Anda: ada ' +
           names.length +
@@ -344,7 +525,15 @@ export const describeCuratableObservation = (
           (canProposeNew ? 'tetapkan sebagai sumber daya baru.' : 'biarkan item ini tetap menunggu.')
         : names.length === 1
           ? 'SIMPROK membutuhkan konfirmasi Anda: item ini cocok dengan data yang sudah ada, tetapi kecocokannya belum dapat dipastikan sendiri oleh SIMPROK.'
-          : weakPossibilities.length > 0 || ruledOut.length > 0
+          : weakPossibilities.length > 0
+            ? // WHY IT IS NOT A CHOICE, said plainly: resemblance of names is all
+              // SIMPROK found, and resemblance is not identity.
+              'SIMPROK hanya menemukan kemiripan nama (' +
+              nameList(weakPossibilities) +
+              '), yang tidak cukup untuk memastikan identitas.' +
+              ACCEPTED +
+              newSentence
+            : ruledOut.length > 0
             ? 'Belum ditemukan padanan yang dapat dibuktikan.' + ACCEPTED + newSentence
             : 'SIMPROK belum menemukan padanan yang dapat dipastikan.' + ACCEPTED + newSentence;
 
@@ -363,8 +552,12 @@ export const describeCuratableObservation = (
     understanding,
     canProposeNew,
     newUnitDefinitionId: observation.suggestedUnitDefinitionId ?? null,
+    newResourceRefusal,
+    newResourceActionLabel,
     newResourceBlockedLine,
     guidance,
+    // C2 — carried to the screen beside the actions, not summarised away.
+    workContext: describeWorkContext(observation.workContext),
   };
 };
 
@@ -375,6 +568,52 @@ export const describeCuratableObservation = (
  * never appears in source text.
  */
 const QUESTION_FIELD_SEPARATOR = '\u0000';
+
+/**
+ * C2 — ONE HONEST SENTENCE FOR A WHOLE GROUP'S CONTEXT.
+ *
+ * A folded question can be asked by members quoted from many different work
+ * items. Exactly one thing may be shown as "the" context: when every member
+ * points at the SAME work item. Otherwise the reader is told how many distinct
+ * work items are involved and how many occurrences could not be traced — never
+ * one member's context standing in for all the rest.
+ *
+ * Counted by distinct work item, not by occurrence: sixty-six members all quoted
+ * by one work item are one context, not sixty-six.
+ */
+const summariseWorkContexts = (
+  members: ReadonlyArray<WorkContextWire | null>,
+): WorkContextView => {
+  const found = new Map<string, WorkContextWire>();
+  let untraceable = 0;
+  let ambiguous = 0;
+  for (const member of members) {
+    const kind = member?.kind ?? 'ABSENT';
+    if (kind === 'FOUND' && member) {
+      found.set(`${member.importJobId ?? ''}#${member.lineNumber ?? ''}`, member);
+    } else if (kind === 'AMBIGUOUS') {
+      ambiguous += 1;
+    } else {
+      untraceable += 1;
+    }
+  }
+  if (found.size === 1 && untraceable === 0 && ambiguous === 0) {
+    return describeWorkContext([...found.values()][0]);
+  }
+  if (found.size === 0 && ambiguous === 0) {
+    return describeWorkContext(null);
+  }
+  const parts = [
+    found.size > 0 ? `${found.size} pekerjaan berbeda dalam dokumen ini` : null,
+    ambiguous > 0 ? `${ambiguous} kemunculan dikutip lebih dari satu pekerjaan` : null,
+    untraceable > 0 ? `${untraceable} kemunculan belum dapat ditelusuri` : null,
+  ].filter((part): part is string => part !== null);
+  return {
+    kind: 'AMBIGUOUS',
+    line: `Pertanyaan ini muncul pada ${parts.join('; ')}.`,
+    detail: 'SIMPROK tidak memilih salah satunya.',
+  };
+};
 
 /** One question, and every observation that asked it. */
 export interface ObservationGroup {
@@ -424,30 +663,83 @@ export const groupIdenticalObservations = (
 ): ObservationGroup[] => {
   const groups: ObservationGroup[] = [];
   const byQuestion = new Map<string, ObservationGroup>();
+  /** question key → every member's context, so the group can describe them all. */
+  const contexts = new Map<string, Array<WorkContextWire | null>>();
 
   for (const observation of observations ?? []) {
     if (!observation?.id) continue;
     const view = describeCuratableObservation(observation);
-    // The null character never appears in source text, so no combination of
-    // fields can collide with a different combination.
+    // THE DECISION SCOPE, NOT A LOOK-ALIKE. One click answers every member, so
+    // members must share every fact the answer depends on, exactly as the server
+    // holds them:
+    //   - the EXACT question: the server's own IQL key when sent (byte-exact —
+    //     no trim, null is not ""), else the raw fields serialized exactly;
+    //   - the WHOLE candidate context (the server's digest, else every candidate
+    //     id with what it rests on) — not only the rows offered as choices, and
+    //     independent of the order they were listed in;
+    //   - the verdict and its eligibility (exhausted, branch c), and the proven unit.
+    const exactQuestion =
+      typeof observation.identicalQuestion?.questionKey === 'string' && observation.identicalQuestion.questionKey !== ''
+        ? 'K' + observation.identicalQuestion.questionKey
+        : 'R' + JSON.stringify([
+            observation.rawName ?? null,
+            observation.rawCode ?? null,
+            observation.rawUnit ?? null,
+            observation.resourceType ?? null,
+          ]);
+    const verdictWire = observation.identityVerdict ?? null;
+    const candidateContext =
+      typeof verdictWire?.candidateContextDigest === 'string' && verdictWire.candidateContextDigest !== ''
+        ? 'D' + verdictWire.candidateContextDigest
+        : 'C' + JSON.stringify(
+            (observation.candidates ?? [])
+              .map((c) => [c?.resourceCatalogId ?? '', c?.identityBasis ?? null, (c?.evidence ?? []).slice().sort()])
+              .sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1)),
+          );
     const question = [
-      (observation.rawName ?? '').trim(),
-      (observation.rawCode ?? '').trim(),
-      (observation.rawUnit ?? '').trim(),
-      (observation.resourceType ?? '').trim(),
+      exactQuestion,
+      candidateContext,
+      JSON.stringify([
+        verdictWire?.status ?? null,
+        (verdictWire?.reasonCodes ?? []).slice().sort(),
+        verdictWire?.exhausted ?? null,
+        verdictWire?.admissibleAfterExamination ?? null,
+      ]),
       observation.suggestedUnitDefinitionId ?? '',
-      view.candidateChoices.map((c) => c.resourceCatalogId).join(QUESTION_FIELD_SEPARATOR),
+      view.candidateChoices.map((c) => c.resourceCatalogId).sort().join(','),
     ].join(QUESTION_FIELD_SEPARATOR);
 
     const existing = byQuestion.get(question);
     if (existing) {
       existing.ids.push(observation.id);
       existing.occurrences += 1;
+      contexts.get(question)?.push(observation.workContext ?? null);
       continue;
     }
     const group: ObservationGroup = { key: question, view, ids: [observation.id], occurrences: 1 };
     byQuestion.set(question, group);
+    contexts.set(question, [observation.workContext ?? null]);
     groups.push(group);
+  }
+
+  /**
+   * C2 — GROUPING MUST NOT HIDE A DIFFERENCE IN CONTEXT.
+   *
+   * Members are folded because every input the DECISION depends on is identical;
+   * where the component was quoted from is not one of those inputs, so it may
+   * well differ between them. The group's view is built from the first member,
+   * so showing its context unchanged would tell the reader "this came from work
+   * item X" when sixty-five other members came from elsewhere.
+   *
+   * The fold is still right — one judgment, not sixty-six — so the answer is to
+   * describe the members TOGETHER, honestly, instead of splitting the question
+   * into sixty-six or quietly showing one member's context for all of them.
+   */
+  for (const group of groups) {
+    group.view = {
+      ...group.view,
+      workContext: summariseWorkContexts(contexts.get(group.key) ?? []),
+    };
   }
 
   return groups;
@@ -847,6 +1139,22 @@ const DECISION_FAILURE: Readonly<Record<string, FailureExplanation>> = (() => {
       reason: 'SIMPROK tidak menggunakan sumber daya itu sebagai padanan karena buktinya tidak cocok dengan sumber. Sumber daya dari dokumen tetap tersimpan.',
       next: reloaded,
     },
+    IDENTITY_CANDIDATE_NAME_SIMILARITY_ONLY: {
+      reason: 'Sumber daya itu hanya mirip namanya dengan item ini; kemiripan nama tidak cukup untuk memastikan identitas. Sumber daya dari dokumen tetap tersimpan.',
+      next: reloaded,
+    },
+    IDENTITY_CANDIDATE_NOT_NOMINATED: {
+      reason: 'SIMPROK tidak menemukan bukti yang menghubungkan sumber daya itu dengan item ini. Sumber daya dari dokumen tetap tersimpan.',
+      next: reloaded,
+    },
+    EXAMINATION_INCOMPLETE: {
+      reason: 'Daftar kandidat yang ditolak tidak terkirim lengkap.',
+      next: 'Muat ulang halaman lalu putuskan lagi.',
+    },
+    EXAMINATION_INVALID: {
+      reason: 'Daftar kandidat yang ditolak tidak dapat dibaca.',
+      next: 'Muat ulang halaman lalu putuskan lagi.',
+    },
     IDENTITY_PROVEN_OTHERWISE: {
       reason: 'SIMPROK sudah memastikan identitas item ini sebagai sumber daya lain. Sumber daya dari dokumen tetap tersimpan.',
       next: reloaded,
@@ -862,6 +1170,21 @@ const DECISION_FAILURE: Readonly<Record<string, FailureExplanation>> = (() => {
     },
     UNIT_UNKNOWN_OR_INACTIVE: { reason: 'Satuan yang diusulkan tidak dikenal atau tidak aktif.', next: 'Item ini tetap tersimpan untuk ditinjau.' },
     UNIT_NOT_REPRESENTABLE_BY_UNIT_AUTHORITY: { reason: 'Satuan item ini belum dapat dibuktikan oleh SIMPROK.', next: 'Item ini tetap tersimpan untuk ditinjau.' },
+    // The chosen canonical unit IS known — it simply cannot be reached from the
+    // unit the source document itself stated, so nothing proves they mean the
+    // same measure. Said plainly, because "unknown unit" would be wrong here.
+    UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE: {
+      reason: 'Satuan yang dipilih belum terbukti sepadan dengan satuan yang tertulis di dokumen sumber.',
+      next: 'Item ini tetap tersimpan untuk ditinjau.',
+    },
+    // The measures ARE relatable — but by a factor, and SIMPROK will not apply
+    // an arithmetic nobody asked for at the moment a resource's canonical
+    // measure is fixed. Said as a conversion, never as "unknown".
+    UNIT_SELECTION_REQUIRES_PRICE_CONVERSION: {
+      reason:
+        'Satuan yang dipilih berbeda dari satuan sumber dan hanya dapat disetarakan melalui konversi, sehingga tidak dapat ditetapkan sebagai satuan bakunya.',
+      next: 'Pilih satuan yang sama dengan dokumen sumber, atau biarkan item ini tetap menunggu.',
+    },
     DECISION_CONTEXT_STALE: stale,
     DECISION_GENERATION_STALE: stale,
     QUESTION_PROVENANCE_MISMATCH: stale,
@@ -884,6 +1207,14 @@ const DECISION_FAILURE: Readonly<Record<string, FailureExplanation>> = (() => {
     },
     NO_PENDING_CANDIDATE: { reason: 'Tidak ada pengajuan yang sedang menunggu persetujuan untuk pertanyaan ini.', next: reloaded },
     NO_EFFECTIVE_ANSWER: { reason: 'Tidak ada pembelajaran yang sedang berlaku untuk pertanyaan ini.', next: reloaded },
+    // The refusal is the RULE having changed, not a missing right and not a
+    // stale screen. Without its own words the generic fallback would accuse the
+    // reader of an authority failure that never happened, and reloading — its
+    // advice — would change nothing.
+    CANDIDATE_POLICY_SUPERSEDED: {
+      reason: 'Pengajuan ini dibuat ketika aturan penetapan identitas masih berbeda, sehingga menyetujuinya tidak akan berlaku.',
+      next: 'Tolak pengajuan ini, lalu ajukan kembali bila memang masih layak diajarkan.',
+    },
     REASON_REQUIRED: { reason: 'Alasan wajib diisi untuk tindakan ini.', next: 'Tuliskan alasannya lalu coba lagi.' },
     QUESTION_NOT_FOUND: { reason: 'Pertanyaan pembelajaran ini tidak ditemukan.', next: reloaded },
   };
@@ -997,6 +1328,11 @@ export interface GovernedQuestionWire {
   answer?: { resourceCatalogId: string; name: string } | null;
   authoredByYou?: boolean | null;
   canApprove?: boolean | null;
+  /**
+   * Why APPROVE is shut, when the reason is one the reader cannot otherwise
+   * see. The SERVER decides this; the view only says it.
+   */
+  approvalBlockedReason?: string | null;
   canReject?: boolean | null;
   canRevoke?: boolean | null;
   decisionContextToken?: string | null;
@@ -1034,10 +1370,17 @@ export const describeGovernedQuestion = (wire: GovernedQuestionWire): GovernedQu
       : null;
   const pending = wire.state === 'PENDING';
   const effective = wire.state === 'EFFECTIVE';
+  // A PENDING taught under a rule no longer in force can never become
+  // effective, so the server does not offer APPROVE for it. Saying so — and
+  // naming the way out — is the difference between a door shown shut and a door
+  // that silently vanished.
+  const policySuperseded = wire.approvalBlockedReason === 'CANDIDATE_POLICY_SUPERSEDED';
   const guidance = pending
-    ? wire.authoredByYou
-      ? 'Anda yang mengajukan pembelajaran ini, jadi persetujuannya harus datang dari orang lain yang berwenang.'
-      : 'Periksa usulan ini: setujui bila benar, atau tolak dengan alasan.'
+    ? policySuperseded
+      ? 'Usulan pembelajaran ini diajukan ketika aturan penetapan identitas masih berbeda, sehingga menyetujuinya tidak akan berlaku. Tolak usulan ini, lalu ajukan ulang bila memang masih layak diajarkan.'
+      : wire.authoredByYou
+        ? 'Anda yang mengajukan pembelajaran ini, jadi persetujuannya harus datang dari orang lain yang berwenang.'
+        : 'Periksa usulan ini: setujui bila benar, atau tolak dengan alasan.'
     : effective
       ? IQL_COPY.effective
       : IQL_COPY.inapplicable;
@@ -1046,7 +1389,9 @@ export const describeGovernedQuestion = (wire: GovernedQuestionWire): GovernedQu
     title,
     answerLine: answerName !== '' ? 'Padanan: ' + answerName : null,
     stateLabel: pending
-      ? 'Menunggu persetujuan'
+      ? policySuperseded
+        ? 'Menunggu — aturannya sudah berubah'
+        : 'Menunggu persetujuan'
       : effective
         ? 'Disetujui — dapat digunakan kembali'
         : 'Tidak berlaku lagi',
