@@ -11,6 +11,7 @@ import {
   ACTUAL_PERIOD_WINDOW_TRUTH_MODE,
   PERIOD_WINDOW_BOUNDARY_BASIS,
   PERIOD_WINDOW_MODE,
+  projectActualItemPeriodOfficialFacts,
   projectActualItemPeriodWindow,
   projectPlannedItemPeriodWindow,
   validateProjectBusinessDateWindow,
@@ -113,6 +114,16 @@ describe('MON-04 canonical explicit period-window projection v1', () => {
     endDate: string,
   ) =>
     projectActualItemPeriodWindow({
+      governed: prepareActualTemporalOfficialQuantity(scope, entries),
+      window: window(startDate, endDate),
+    });
+
+  const facts = (
+    entries: readonly Law1CalculationEntry[],
+    startDate: string,
+    endDate: string,
+  ) =>
+    projectActualItemPeriodOfficialFacts({
       governed: prepareActualTemporalOfficialQuantity(scope, entries),
       window: window(startDate, endDate),
     });
@@ -391,5 +402,84 @@ describe('MON-04 canonical explicit period-window projection v1', () => {
     expect(
       completeActualQuantity(actual(movedEarlier, '2026-09-08', '2026-09-14')),
     ).toBe('0');
+  });
+
+  it('PE-B1 selects governed facts on exact inclusive boundaries and excludes outside facts', () => {
+    const result = facts(
+      prove([
+        entry('before', '1', '2026-08-31'),
+        entry('on-start', '2', '2026-09-01'),
+        entry('inside', '3', '2026-09-04'),
+        entry('on-end', '4', '2026-09-07'),
+        entry('after', '5', '2026-09-08'),
+      ]),
+      '2026-09-01',
+      '2026-09-07',
+    );
+
+    expect(result.state).toBe('COMPLETE');
+    if (result.state !== 'COMPLETE') return;
+    expect(result.facts.map((fact) => fact.entry.id).sort()).toEqual([
+      'inside',
+      'on-end',
+      'on-start',
+    ]);
+  });
+
+  it('PE-B2..3 never resurrects an in-period predecessor after its current leaf moves outside', () => {
+    const current = prove([
+      entry('predecessor-inside', '10', '2026-09-05'),
+      entry('current-outside', '8', '2026-09-12', {
+        supersedesEntryId: 'predecessor-inside',
+        revision: 2,
+      }),
+    ]);
+    const result = facts(current, '2026-09-01', '2026-09-07');
+
+    expect(result).toEqual({ state: 'COMPLETE', facts: [] });
+  });
+
+  it('PE-B4..8 preserves terminal, incomplete, unplaceable, and complete-empty states', () => {
+    expect(
+      facts([entry('unproven', '4', '2026-09-05')], '2026-09-01', '2026-09-07'),
+    ).toEqual({ state: 'SEMANTICS_UNPROVEN' });
+
+    const cycleA = entry('facts-cycle-a', '1', '2026-09-05', {
+      supersedesEntryId: 'facts-cycle-b',
+    });
+    const cycleB = entry('facts-cycle-b', '2', '2026-09-05', {
+      supersedesEntryId: 'facts-cycle-a',
+    });
+    expect(facts([cycleA, cycleB], '2026-09-01', '2026-09-07')).toEqual({
+      state: 'INVALID_LINEAGE',
+      reason: 'CYCLE',
+    });
+
+    const eligible = entry('known-inside', '3', '2026-09-05');
+    const submitted = entry('submitted-inside', '4', '2026-09-06', {
+      status: ProgressActualStatus.SUBMITTED,
+    });
+    const incomplete = facts(
+      prove([eligible, submitted], ['known-inside']),
+      '2026-09-01',
+      '2026-09-07',
+    );
+    expect(incomplete.state).toBe('INCOMPLETE');
+    if (incomplete.state === 'INCOMPLETE') {
+      expect(incomplete.facts.map((fact) => fact.entry.id)).toEqual([
+        'known-inside',
+      ]);
+    }
+
+    expect(
+      facts(prove([entry('undated', '5', null)]), '2026-09-01', '2026-09-07'),
+    ).toEqual({ state: 'INCOMPLETE', facts: [] });
+    expect(
+      facts(
+        prove([entry('complete-outside', '6', '2026-09-10')]),
+        '2026-09-01',
+        '2026-09-07',
+      ),
+    ).toEqual({ state: 'COMPLETE', facts: [] });
   });
 });

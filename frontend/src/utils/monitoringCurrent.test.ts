@@ -9,22 +9,40 @@ import {
   dataThroughLabel,
   deviationComparisonPresentation,
   effectiveActual,
+  formatProjectBusinessDate,
+  monitoringEvidencePresentation,
   formatWeightPercentage,
   lastRecordedLabel,
   lifecycleLabel,
   monitoringComparisonChartProjection,
   monitoringComparisonCutoff,
   monitoringComparisonRequestPath,
+  monitoringActiveSnapshot,
+  monitoringPeriodicSnapshotForRequest,
+  monitoringTemporalBasisLabel,
+  monitoringTemporalGranularityLabel,
+  monitoringTemporalLensRequestPath,
+  monitoringTemporalLensUnavailableMessage,
+  monitoringTemporalPeriodLabel,
+  monitoringTemporalSnapshotCoherence,
   monitoringWorkItemsById,
+  officialFactStateLabel,
+  periodicComparisonCoherence,
   plannedComparisonLabel,
+  plannedPeriodQuantityLabel,
   progressDetailPath,
   scheduleRealizationPresentation,
   recordedAtLabel,
   rowWeightPresentation,
   selectedWorkItem,
+  temporalActualQuantityLabel,
+  temporalLensItemsByBoqItemId,
   weightCompletenessLabel,
   type MonitoringItem,
   type MonitoringProgressComparisonPoint,
+  type MonitoringResponse,
+  type MonitoringTemporalLensItem,
+  type MonitoringTemporalPeriod,
 } from './monitoringCurrent.ts';
 
 const item = (
@@ -551,7 +569,7 @@ test('MON04 chart holds the previous value until the next canonical boundary', (
 test('H2-A0-9 the shell states project scope, Terkini, and both freshness meanings', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
   assert.match(page, /SELURUH PROYEK/);
-  assert.match(page, />TERKINI</);
+  assert.match(page, />\s*TERKINI\s*</);
   assert.match(page, /Data pekerjaan sampai/);
   assert.match(page, /Terakhir diperbarui/);
   assert.match(page, /effectiveActual\(row\)/);
@@ -1070,4 +1088,954 @@ test('OFFICIAL-9 page does not introduce frontend progress arithmetic', () => {
     page,
     /parseFloat|parseInt|Number\([^)]*currentOfficial|Math\./,
   );
+});
+
+const snapshotBaselineA = {
+  id: 'baseline-a', versionNumber: 1, approvedAt: '2026-08-01T00:00:00.000Z',
+};
+const snapshotBaselineB = {
+  id: 'baseline-b', versionNumber: 2, approvedAt: '2026-09-01T00:00:00.000Z',
+};
+
+function snapshotTemporalItem(boqItemId: string): MonitoringTemporalLensItem {
+  return {
+    boqItemId,
+    planned: {
+      periodQuantity: { state: 'COMPLETE', plannedQuantity: '4' },
+      cumulativeQuantityThroughEndDate: { state: 'COMPLETE', plannedQuantity: '7' },
+    },
+    actual: {
+      periodOfficialQuantity: { state: 'COMPLETE', currentOfficialQuantity: '3' },
+      cumulativeOfficialQuantityThroughEndDate: {
+        state: 'COMPLETE', currentOfficialQuantity: '5',
+      },
+      periodEvidence: { state: 'COMPLETE', facts: [] },
+    },
+  };
+}
+
+function monitoringSnapshot(input: {
+  projectId?: string;
+  baseline: MonitoringResponse['baseline'];
+  lensBaseline?: MonitoringResponse['baseline'];
+  items: MonitoringItem[];
+  temporalItems?: MonitoringTemporalLensItem[];
+  includeLens?: boolean;
+  planId?: string | null;
+  planVersion?: number;
+  periodEndDate?: string;
+}): MonitoringResponse {
+  const temporalItems = input.temporalItems ?? input.items
+    .filter((candidate) => candidate.itemType === 'WORK_ITEM')
+    .map((candidate) => snapshotTemporalItem(candidate.id));
+  const lensBaseline = input.lensBaseline === undefined
+    ? input.baseline
+    : input.lensBaseline;
+  return {
+    projectId: input.projectId ?? 'project-1',
+    projectTimeZone: 'Asia/Jakarta',
+    baseline: input.baseline,
+    freshness: {
+      dataThrough: { state: 'RECORDED', workDate: '2026-09-14' },
+      lastRecordedAt: { state: 'RECORDED', recordedAt: '2026-09-14T08:00:00.000Z' },
+    },
+    weight: {
+      basis: 'ACTIVE_BASELINE_RAB_TOTAL_BASE_COST', completeness: 'COMPLETE', reason: null,
+      denominator: { state: 'AVAILABLE', value: '100' },
+      eligibleWorkItemCount: input.items.length, weightedWorkItemCount: input.items.length,
+      unavailableWorkItemCount: 0,
+    },
+    currentOfficialRabWeightedPhysicalProgress: {
+      state: 'COMPLETE', currentOfficialRabWeightedPhysicalProgressPercent: '10',
+    },
+    temporalLens: input.includeLens === false ? undefined : {
+      mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1', state: 'RESOLVED',
+      basis: 'CALENDAR', granularity: 'WEEK', referenceDate: '2026-09-14',
+      period: {
+        basis: 'CALENDAR', granularity: 'WEEK', periodKey: '2026-W38', periodIndex: 38,
+        startDate: '2026-09-14', endDate: input.periodEndDate ?? '2026-09-20',
+        metadata: {
+          boundaryInclusivity: 'START_AND_END_INCLUSIVE',
+          boundaryRule: 'ISO_8601_MONDAY_TO_SUNDAY', isoWeekYear: 2026, isoWeekNumber: 38,
+        },
+      },
+      baseline: lensBaseline,
+      plannedSource: input.planId
+        ? {
+            executionPlanVersionId: input.planId,
+            versionNumber: input.planVersion ?? 4,
+            status: 'LOCKED',
+          }
+        : null,
+      plannedContext: input.planId
+        ? { state: 'COMPLETE' }
+        : { state: 'UNAVAILABLE', reason: 'NO_LOCKED_PLAN' },
+      actualTruthMode: 'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_EXPLICIT_WORKDATE_WINDOW',
+      items: temporalItems,
+    },
+    items: input.items,
+    unavailable: [],
+  };
+}
+
+function atomicPeriodicSnapshot(input: {
+  responseBaseline?: MonitoringResponse['baseline'];
+  lensBaseline?: MonitoringResponse['baseline'];
+  comparisonBaseline?: MonitoringResponse['baseline'];
+  lensPlanId?: string | null;
+  lensPlanVersion?: number;
+  comparisonPlanId?: string | null;
+  comparisonPlanVersion?: number;
+  cutoffDate?: string;
+  includeComparison?: boolean;
+  mode?: string;
+} = {}): MonitoringResponse {
+  const responseBaseline = input.responseBaseline === undefined
+    ? snapshotBaselineB
+    : input.responseBaseline;
+  const lensPlanId = input.lensPlanId === undefined ? 'plan-b' : input.lensPlanId;
+  const response = monitoringSnapshot({
+    baseline: responseBaseline,
+    lensBaseline: input.lensBaseline,
+    items: [item({ id: 'work-1', name: 'Work 1' })],
+    planId: lensPlanId,
+    planVersion: input.lensPlanVersion ?? 4,
+    periodEndDate: input.cutoffDate,
+  });
+  if (input.includeComparison === false) return response;
+
+  const comparisonPlanId = input.comparisonPlanId === undefined
+    ? lensPlanId
+    : input.comparisonPlanId;
+  const cutoffDate = input.cutoffDate ?? '2026-09-20';
+  return {
+    ...response,
+    progressComparison: {
+      mode: (input.mode ??
+        'PLANNED_VS_CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE') as
+        'PLANNED_VS_CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE',
+      cutoffDate,
+      baseline: input.comparisonBaseline === undefined
+        ? responseBaseline
+        : input.comparisonBaseline,
+      plannedSource: comparisonPlanId
+        ? {
+            executionPlanVersionId: comparisonPlanId,
+            versionNumber: input.comparisonPlanVersion ?? 4,
+            status: 'LOCKED',
+          }
+        : null,
+      boundaryBasis:
+        'PLANNED_PERIOD_ENDS_AND_GOVERNED_ACTUAL_WORKDATES_AND_REQUESTED_CUTOFF',
+      points: [
+        {
+          cutoffDate,
+          planned: {
+            state: 'COMPLETE',
+            plannedRabWeightedPhysicalProgressPercent: '40',
+          },
+          actual: {
+            state: 'COMPLETE',
+            currentOfficialRabWeightedPhysicalProgressPercent: '35',
+          },
+          deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
+        },
+      ],
+    },
+  };
+}
+test('TC-SNAPSHOT-1 Current A to Periodic B uses B Baseline', () => {
+  const currentA = monitoringSnapshot({
+    baseline: snapshotBaselineA, items: [item({ id: 'item-A', name: 'A' })], includeLens: false,
+  });
+  const periodicB = monitoringSnapshot({
+    baseline: snapshotBaselineB, items: [item({ id: 'item-B', name: 'B' })],
+  });
+  const coherence = monitoringTemporalSnapshotCoherence({
+    requestedProjectId: 'project-1', response: periodicB,
+  });
+  assert.equal(coherence.state, 'COHERENT');
+  const active = monitoringActiveSnapshot({
+    mode: 'PERIODIK', currentResponse: currentA, periodicResponse: periodicB,
+  });
+  assert.equal(active?.baseline?.id, 'baseline-b');
+  assert.notEqual(active?.baseline?.id, currentA.baseline?.id);
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  assert.match(page, /response: data, lens: coherence\.lens/);
+  assert.match(page, /activeMonitoringSnapshot\.baseline\.versionNumber/);
+});
+
+test('TC-SNAPSHOT-2 Current A to Periodic B uses B RAB rows only', () => {
+  const currentA = monitoringSnapshot({
+    baseline: snapshotBaselineA, items: [item({ id: 'item-A-1', name: 'A1' }),
+      item({ id: 'item-A-2', name: 'A2' })], includeLens: false,
+  });
+  const periodicB = monitoringSnapshot({
+    baseline: snapshotBaselineB, items: [item({ id: 'item-B-1', name: 'B1' }),
+      item({ id: 'item-B-2', name: 'B2' })],
+  });
+  const active = monitoringActiveSnapshot({
+    mode: 'PERIODIK', currentResponse: currentA, periodicResponse: periodicB,
+  });
+  assert.deepEqual(buildMonitoringRows(active?.items ?? []).map((row) => row.id),
+    ['item-B-1', 'item-B-2']);
+  assert.match(readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8'),
+    /buildMonitoringRows\(activeMonitoringSnapshot\?\.items \?\? \[\]\)/);
+});
+
+test('TC-SNAPSHOT-3 same canonical item id uses B row facts', () => {
+  const currentA = monitoringSnapshot({
+    baseline: snapshotBaselineA,
+    items: [item({ id: 'work-1', name: 'Work', planned: { quantity: '10', unit: 'm3' } })],
+    includeLens: false,
+  });
+  const periodicB = monitoringSnapshot({
+    baseline: snapshotBaselineB,
+    items: [item({ id: 'work-1', name: 'Work', planned: { quantity: '12', unit: 'm3' } })],
+  });
+  const active = monitoringActiveSnapshot({
+    mode: 'PERIODIK', currentResponse: currentA, periodicResponse: periodicB,
+  });
+  const selected = selectedWorkItem(buildMonitoringRows(active?.items ?? []), 'work-1');
+  assert.deepEqual(selected?.planned, { quantity: '12', unit: 'm3' });
+});
+
+test('TC-SNAPSHOT-4 Current A to Periodic null does not borrow A rows', () => {
+  const currentA = monitoringSnapshot({
+    baseline: snapshotBaselineA, items: [item({ id: 'item-A', name: 'A' })], includeLens: false,
+  });
+  const periodicNull = monitoringSnapshot({ baseline: null, items: [] });
+  assert.equal(monitoringTemporalSnapshotCoherence({
+    requestedProjectId: 'project-1', response: periodicNull,
+  }).state, 'COHERENT');
+  const active = monitoringActiveSnapshot({
+    mode: 'PERIODIK', currentResponse: currentA, periodicResponse: periodicNull,
+  });
+  assert.equal(active?.baseline, null);
+  assert.deepEqual(buildMonitoringRows(active?.items ?? []), []);
+});
+
+test('TC-SNAPSHOT-5 Current null to Periodic B lawfully shows B', () => {
+  const currentNull = monitoringSnapshot({ baseline: null, items: [], includeLens: false });
+  const periodicB = monitoringSnapshot({
+    baseline: snapshotBaselineB, items: [item({ id: 'item-B', name: 'B' })],
+  });
+  const active = monitoringActiveSnapshot({
+    mode: 'PERIODIK', currentResponse: currentNull, periodicResponse: periodicB,
+  });
+  assert.equal(active?.baseline?.id, 'baseline-b');
+  assert.equal(buildMonitoringRows(active?.items ?? [])[0]?.id, 'item-B');
+});
+
+test('TC-SNAPSHOT-6 selected A item missing in B becomes unselected', () => {
+  const currentA = monitoringSnapshot({
+    baseline: snapshotBaselineA, items: [item({ id: 'item-A', name: 'A' })], includeLens: false,
+  });
+  const periodicB = monitoringSnapshot({
+    baseline: snapshotBaselineB, items: [item({ id: 'item-B', name: 'B' })],
+  });
+  const active = monitoringActiveSnapshot({
+    mode: 'PERIODIK', currentResponse: currentA, periodicResponse: periodicB,
+  });
+  assert.equal(selectedWorkItem(buildMonitoringRows(active?.items ?? []), 'item-A'), null);
+});
+
+test('TC-SNAPSHOT-7 top-level Baseline B and lens Baseline C fail closed', () => {
+  const incoherent = monitoringSnapshot({
+    baseline: snapshotBaselineB,
+    lensBaseline: { id: 'baseline-c', versionNumber: 3,
+      approvedAt: '2026-09-02T00:00:00.000Z' },
+    items: [item({ id: 'item-B', name: 'B' })],
+  });
+  assert.deepEqual(monitoringTemporalSnapshotCoherence({
+    requestedProjectId: 'project-1', response: incoherent,
+  }), { state: 'INCOHERENT', reason: 'BASELINE_MISMATCH' });
+  assert.match(readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8'),
+    /Fakta periode tidak dapat ditampilkan karena konteks RAB dan periode/);
+});
+
+test('TC-SNAPSHOT-8 Temporal Lens item absent from same RAB fails closed', () => {
+  const incoherent = monitoringSnapshot({
+    baseline: snapshotBaselineB,
+    items: [item({ id: 'item-B-1', name: 'B1' })],
+    temporalItems: [snapshotTemporalItem('item-B-1'), snapshotTemporalItem('item-B-999')],
+  });
+  assert.deepEqual(monitoringTemporalSnapshotCoherence({
+    requestedProjectId: 'project-1', response: incoherent,
+  }), { state: 'INCOHERENT', reason: 'TEMPORAL_ITEM_NOT_IN_SNAPSHOT' });
+});
+
+test('TC-SNAPSHOT-9 duplicate canonical identities fail closed', () => {
+  const duplicateWorkItem = monitoringSnapshot({
+    baseline: snapshotBaselineB,
+    items: [item({ id: 'item-B', name: 'B1' }), item({ id: 'item-B', name: 'B2' })],
+    temporalItems: [snapshotTemporalItem('item-B')],
+  });
+  assert.deepEqual(monitoringTemporalSnapshotCoherence({
+    requestedProjectId: 'project-1', response: duplicateWorkItem,
+  }), { state: 'INCOHERENT', reason: 'DUPLICATE_WORK_ITEM_ID' });
+
+  const duplicateTemporalItem = monitoringSnapshot({
+    baseline: snapshotBaselineB, items: [item({ id: 'item-B', name: 'B' })],
+    temporalItems: [snapshotTemporalItem('item-B'), snapshotTemporalItem('item-B')],
+  });
+  assert.deepEqual(monitoringTemporalSnapshotCoherence({
+    requestedProjectId: 'project-1', response: duplicateTemporalItem,
+  }), { state: 'INCOHERENT', reason: 'DUPLICATE_TEMPORAL_ITEM_ID' });
+});
+
+test('TC-SNAPSHOT-10 stale Periodic full response cannot replace active request', () => {
+  const responseB = monitoringSnapshot({
+    baseline: snapshotBaselineB, items: [item({ id: 'item-B', name: 'B' })],
+  });
+  assert.equal(monitoringPeriodicSnapshotForRequest({
+    activeRequestKey: 'request-C', responseRequestKey: 'request-B', response: responseB,
+  }), null);
+  assert.equal(monitoringPeriodicSnapshotForRequest({
+    activeRequestKey: 'request-B', responseRequestKey: 'request-B', response: responseB,
+  }), responseB);
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  assert.ok(page.indexOf('temporalRequestGenerationRef.current !== generation') <
+    page.indexOf('response: data, lens: coherence.lens'));
+});
+
+test('TC-SNAPSHOT-11 returning to TERKINI still uses Current A', () => {
+  const currentA = monitoringSnapshot({
+    baseline: snapshotBaselineA, items: [item({ id: 'item-A', name: 'A' })], includeLens: false,
+  });
+  const periodicB = monitoringSnapshot({
+    baseline: snapshotBaselineB, items: [item({ id: 'item-B', name: 'B' })],
+  });
+  const active = monitoringActiveSnapshot({
+    mode: 'TERKINI', currentResponse: currentA, periodicResponse: periodicB,
+  });
+  assert.equal(active, currentA);
+  assert.equal(selectedWorkItem(buildMonitoringRows(active?.items ?? []), 'item-A')?.id, 'item-A');
+});
+
+test('TC-SNAPSHOT-12 repair adds no frontend business math', () => {
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const start = utility.indexOf('export type MonitoringTemporalSnapshotCoherence');
+  const end = utility.indexOf('export interface MonitoringProject {', start);
+  const repairHelpers = utility.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(repairHelpers,
+    /Date\.now|new Date\(|getDay|getUTCDay|getMonth|getUTCMonth|parseFloat\(|Number\(|Math\./);
+  assert.doesNotMatch(repairHelpers,
+    /periodQuantity\s*[/*+-]|plannedQuantity\s*[/*+-]|currentOfficialQuantity\s*[/*+-]/);
+});
+
+test('MON04-PK-ATOMIC-C1 one Periodic response is internally coherent', () => {
+  const periodicResponse = atomicPeriodicSnapshot();
+  const result = periodicComparisonCoherence({
+    periodicResponse,
+    periodicSchedulePlan: { id: 'plan-b', versionNumber: 4, status: 'LOCKED' },
+  });
+  assert.equal(result.state, 'COHERENT');
+  if (result.state === 'COHERENT') {
+    assert.equal(result.response, periodicResponse);
+    assert.equal(result.comparison, periodicResponse.progressComparison);
+  }
+});
+
+test('MON04-PK-ATOMIC-C2 Baseline mismatches inside one response fail closed', () => {
+  assert.deepEqual(periodicComparisonCoherence({
+    periodicResponse: atomicPeriodicSnapshot({ lensBaseline: snapshotBaselineA }),
+  }), { state: 'INCOHERENT', reason: 'TEMPORAL_BASELINE_MISMATCH' });
+  assert.deepEqual(periodicComparisonCoherence({
+    periodicResponse: atomicPeriodicSnapshot({ comparisonBaseline: snapshotBaselineA }),
+  }), { state: 'INCOHERENT', reason: 'COMPARISON_BASELINE_MISMATCH' });
+});
+
+test('MON04-PK-ATOMIC-C3 plannedSource and resolved Schedule Plan mismatches fail closed', () => {
+  for (const periodicResponse of [
+    atomicPeriodicSnapshot({ comparisonPlanId: 'plan-a' }),
+    atomicPeriodicSnapshot({ comparisonPlanVersion: 3 }),
+    atomicPeriodicSnapshot({ comparisonPlanId: null }),
+  ]) {
+    assert.deepEqual(periodicComparisonCoherence({ periodicResponse }), {
+      state: 'INCOHERENT', reason: 'PLANNED_SOURCE_MISMATCH',
+    });
+  }
+  assert.deepEqual(periodicComparisonCoherence({
+    periodicResponse: atomicPeriodicSnapshot(),
+    periodicSchedulePlan: { id: 'plan-a', versionNumber: 4, status: 'LOCKED' },
+  }), { state: 'INCOHERENT', reason: 'SCHEDULE_PLAN_MISMATCH' });
+});
+
+test('MON04-PK-ATOMIC-C4 cutoff, missing comparison, and unexpected mode fail closed', () => {
+  const wrongCutoff = atomicPeriodicSnapshot({ cutoffDate: '2026-09-19' });
+  if (wrongCutoff.temporalLens?.state === 'RESOLVED') {
+    wrongCutoff.temporalLens.period.endDate = '2026-09-20';
+  }
+  assert.deepEqual(periodicComparisonCoherence({ periodicResponse: wrongCutoff }), {
+    state: 'INCOHERENT', reason: 'COMPARISON_CUTOFF_MISMATCH',
+  });
+  assert.deepEqual(periodicComparisonCoherence({
+    periodicResponse: atomicPeriodicSnapshot({ includeComparison: false }),
+  }), { state: 'INCOHERENT', reason: 'COMPARISON_NOT_AVAILABLE' });
+  assert.deepEqual(periodicComparisonCoherence({
+    periodicResponse: atomicPeriodicSnapshot({ mode: 'UNEXPECTED_MODE' }),
+  }), { state: 'INCOHERENT', reason: 'COMPARISON_MODE_INVALID' });
+});
+
+test('MON04-PK-ATOMIC-R1 Periodic request is one atomic Lens plus comparator request', () => {
+  const url = new URL(monitoringTemporalLensRequestPath({
+    projectId: 'project-1', basis: 'CALENDAR', granularity: 'WEEK',
+    referenceDate: '2026-09-16',
+  }), 'https://simprok.test');
+  assert.deepEqual([...url.searchParams.entries()], [
+    ['includeTemporalLens', 'true'],
+    ['temporalBasis', 'CALENDAR'],
+    ['temporalGranularity', 'WEEK'],
+    ['temporalReferenceDate', '2026-09-16'],
+    ['includeProgressComparison', 'true'],
+  ]);
+  assert.equal(url.searchParams.has('cutoffDate'), false);
+  for (const forbidden of [
+    'includeActualSeries', 'includePeriodWindow', 'periodStartDate', 'periodEndDate',
+  ]) assert.equal(url.searchParams.has(forbidden), false);
+});
+
+test('MON04-PK-ATOMIC-R2 frontend has no second Periodic comparator authority', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const temporalStart = page.indexOf('const temporalRequestKey');
+  const temporalEnd = page.indexOf('const activatePeriodicContext', temporalStart);
+  const periodicConnection = page.slice(temporalStart, temporalEnd);
+  assert.ok(temporalStart >= 0 && temporalEnd > temporalStart);
+  assert.equal(
+    (page.match(/monitoringComparisonRequestPath\(/g) ?? []).length,
+    1,
+    'only the locked TERKINI comparator request remains',
+  );
+  assert.equal(
+    (periodicConnection.match(/monitoringTemporalLensRequestPath\(\{/g) ?? []).length,
+    1,
+  );
+  assert.doesNotMatch(periodicConnection, /monitoringComparisonRequestPath\(/);
+  assert.doesNotMatch(periodicConnection,
+    /periodicComparisonRequestRef|periodicComparisonGenerationRef|periodicComparisonCache|currentComparisonResponse/);
+  assert.match(periodicConnection, /periodicResponse: periodicResolvedResponse/);
+  assert.match(periodicConnection, /comparison: coherence\.comparison/);
+});
+test('MON04-PK-A1 comparator integrity gate adds no business math or second engine', () => {
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const start = utility.indexOf('export interface MonitoringPeriodicSchedulePlanIdentity');
+  const end = utility.indexOf('export type MonitoringTemporalSnapshotCoherence', start);
+  const helperBlock = utility.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(
+    helperBlock,
+    /Date\.now|new Date\(|Date\.parse|Number\(|parseFloat\(|Math\.|reduce\(/,
+  );
+  assert.doesNotMatch(
+    helperBlock,
+    /actual\s*-\s*planned|planned\s*-\s*actual|quantity\s*\/|weight\s*\*/i,
+  );
+  assert.doesNotMatch(
+    helperBlock,
+    /monitoringComparisonChartProjection|resolveCanonicalTemporalPeriod|canonicalWeekSlicesForMonth/,
+  );
+});
+
+test('MON04-TC-1 Temporal Lens request carries exactly one canonical context', () => {
+  const url = new URL(monitoringTemporalLensRequestPath({
+    projectId: 'project-1', basis: 'WORK_PERIOD', granularity: 'MONTH',
+    referenceDate: '2026-07-20',
+  }), 'https://simprok.test');
+  assert.equal(url.pathname, '/projects/project-1/progress/monitoring');
+  assert.deepEqual([...url.searchParams.entries()], [
+    ['includeTemporalLens', 'true'], ['temporalBasis', 'WORK_PERIOD'],
+    ['temporalGranularity', 'MONTH'], ['temporalReferenceDate', '2026-07-20'],
+    ['includeProgressComparison', 'true'],
+  ]);
+  for (const forbidden of ['cutoffDate',
+    'includeActualSeries', 'includePeriodWindow', 'periodStartDate', 'periodEndDate']) {
+    assert.equal(url.searchParams.has(forbidden), false);
+  }
+});
+
+test('MON04-TC-2 period labels consume backend identity and ordinal only', () => {
+  const base = { periodIndex: 3, startDate: '2026-06-01', endDate: '2026-06-07' };
+  const workWeek: MonitoringTemporalPeriod = {
+    ...base, basis: 'WORK_PERIOD', granularity: 'WEEK', periodKey: 'WORK-WEEK-3',
+    metadata: { boundaryInclusivity: 'START_AND_END_INCLUSIVE',
+      boundaryRule: 'SEVEN_DAY_WINDOW_FROM_GOVERNED_WORK_PERIOD_ANCHOR',
+      governedWorkPeriodAnchorDate: '2026-05-18' },
+  };
+  const workMonth: MonitoringTemporalPeriod = {
+    ...base, periodIndex: 2, basis: 'WORK_PERIOD', granularity: 'MONTH',
+    periodKey: 'WORK-MONTH-2',
+    metadata: { boundaryInclusivity: 'START_AND_END_INCLUSIVE',
+      boundaryRule: 'ORIGINAL_ANCHOR_ANNIVERSARY_MONTH_WITH_TARGET_CLAMP',
+      governedWorkPeriodAnchorDate: '2026-05-18' },
+  };
+  const calendarWeek: MonitoringTemporalPeriod = {
+    ...base, periodIndex: 36, basis: 'CALENDAR', granularity: 'WEEK',
+    periodKey: '2026-W36',
+    metadata: { boundaryInclusivity: 'START_AND_END_INCLUSIVE',
+      boundaryRule: 'ISO_8601_MONDAY_TO_SUNDAY', isoWeekYear: 2026, isoWeekNumber: 36 },
+  };
+  const calendarMonth: MonitoringTemporalPeriod = {
+    ...base, periodIndex: 24320, basis: 'CALENDAR', granularity: 'MONTH',
+    periodKey: '2026-08',
+    metadata: { boundaryInclusivity: 'START_AND_END_INCLUSIVE',
+      boundaryRule: 'GREGORIAN_CALENDAR_MONTH', calendarYear: 2026, calendarMonth: 8 },
+  };
+  assert.equal(monitoringTemporalPeriodLabel(workWeek), 'Minggu Kerja ke-3');
+  assert.equal(monitoringTemporalPeriodLabel(workMonth), 'Bulan Kerja ke-2');
+  assert.equal(monitoringTemporalPeriodLabel(calendarWeek), 'Minggu Kalender \u00b7 2026-W36');
+  assert.equal(monitoringTemporalPeriodLabel(calendarMonth), 'Agustus 2026');
+  assert.equal(monitoringTemporalBasisLabel('WORK_PERIOD'), 'Waktu Kerja');
+  assert.equal(monitoringTemporalBasisLabel('CALENDAR'), 'Kalender');
+  assert.equal(monitoringTemporalGranularityLabel('WEEK'), 'Mingguan');
+  assert.equal(monitoringTemporalGranularityLabel('MONTH'), 'Bulanan');
+});
+
+test('MON04-TC-3 unavailable reasons are bounded human messages', () => {
+  assert.match(monitoringTemporalLensUnavailableMessage(
+    'GOVERNED_WORK_PERIOD_ANCHOR_REQUIRED'), /Hari Pertama Resmi proyek belum dibuktikan/);
+  assert.match(monitoringTemporalLensUnavailableMessage(
+    'WORK_PERIOD_ANCHOR_PROVENANCE_INVALID'), /bukti Hari Pertama Resmi tidak valid/);
+  assert.match(monitoringTemporalLensUnavailableMessage(
+    'REFERENCE_DATE_BEFORE_GOVERNED_WORK_PERIOD_ANCHOR'), /sebelum Hari Pertama Resmi proyek/);
+  assert.equal(monitoringTemporalLensUnavailableMessage('FUTURE_REASON'),
+    'Konteks periode belum tersedia dari fakta proyek yang sah.');
+});
+
+test('MON04-TC-4 planned and Actual labels preserve incomplete, unknown, and exact zero', () => {
+  assert.equal(plannedPeriodQuantityLabel(
+    { state: 'COMPLETE', plannedQuantity: '0' }, 'm3'), '0 m3');
+  assert.equal(plannedPeriodQuantityLabel({ state: 'INCOMPLETE', reason: 'PLAN_INCOMPLETE',
+    knownPlannedQuantitySubtotal: '2.5' }, 'm3'), 'Belum lengkap \u2014 subtotal 2.5 m3');
+  assert.equal(plannedPeriodQuantityLabel(
+    { state: 'UNAVAILABLE', reason: 'NO_LOCKED_PLAN' }, 'm3'), 'TIDAK TERSEDIA');
+  assert.equal(temporalActualQuantityLabel(
+    { state: 'COMPLETE', currentOfficialQuantity: '0' }, 'm3'), '0 m3');
+  assert.equal(temporalActualQuantityLabel(
+    { state: 'NOT_YET_RECORDED' }, 'm3'), 'BELUM DICATAT');
+  assert.equal(temporalActualQuantityLabel(
+    { state: 'SEMANTICS_UNPROVEN' }, 'm3'), 'SEMANTIK BELUM TERBUKTI');
+});
+
+test('MON04-TC-5 Temporal Lens items join only by canonical boqItemId', () => {
+  const items: MonitoringTemporalLensItem[] = [{
+    boqItemId: 'boq-1',
+    planned: {
+      periodQuantity: { state: 'COMPLETE', plannedQuantity: '4' },
+      cumulativeQuantityThroughEndDate: { state: 'COMPLETE', plannedQuantity: '7' },
+    },
+    actual: {
+      periodOfficialQuantity: { state: 'COMPLETE', currentOfficialQuantity: '3' },
+      cumulativeOfficialQuantityThroughEndDate: {
+        state: 'COMPLETE', currentOfficialQuantity: '5',
+      },
+      periodEvidence: { state: 'COMPLETE', facts: [] },
+    },
+  }];
+  const byId = temporalLensItemsByBoqItemId(items);
+  assert.equal(byId.get('boq-1')?.planned.periodQuantity.state, 'COMPLETE');
+  assert.equal(byId.get('missing'), undefined);
+});
+
+test('MON04-TC-6 ProjectWorkPage owns one optional request and retires stale responses', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  assert.match(page, /useState<TemporalContextMode>\('TERKINI'\)/);
+  assert.match(page, /monitoringTemporalLensRequestPath\(\{/);
+  assert.match(page, /const controller = new AbortController\(\)/);
+  assert.match(page, /temporalRequestGenerationRef\.current !== generation/);
+  assert.match(page, /controller\.abort\(\)/);
+  for (const state of ['WAITING_INPUT', 'LOADING', 'RESOLVED', 'UNAVAILABLE', 'ERROR']) {
+    assert.match(page, new RegExp(`state: '${state}'`));
+  }
+  assert.equal((page.match(/monitoringTemporalLensRequestPath\(\{/g) ?? []).length, 1);
+});
+
+test('MON04-TC-7 one Monitoring shell evolves without Current contamination', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  for (const control of ['Waktu Kerja', 'Kalender', 'Mingguan', 'Bulanan']) {
+    assert.match(page, new RegExp(`>\\s*${control}\\s*<`));
+  }
+  assert.match(page, /aria-label="Konteks waktu"/);
+  assert.match(page, /type="date"/);
+  assert.match(page, /Rencana Periode/);
+  assert.match(page, /Realisasi Resmi Periode/);
+  assert.match(page, /Rencana s\.d\. Akhir Periode/);
+  assert.match(page, /Realisasi Resmi s\.d\. Akhir Periode/);
+  assert.match(page, /temporalLensItemsById\.get\(row\.id\)/);
+  assert.match(page, /Kondisi Periode/);
+  assert.match(page, /periodicResolvedLens\.weeklyRecap\.sliceCount/);
+  assert.doesNotMatch(page, /weeklyRecap\.slices\.length/);
+  assert.match(panel, /Schedule Rencana \+ Realisasi Periode/);
+  assert.match(panel, /Kurva S Rencana \+ Realisasi s\.d\. Akhir Periode/);
+  assert.match(page, /temporalContextMode === 'TERKINI'[\s\S]*onChanged=/);
+});
+
+test('MON04-TC-8 candidate contains no frontend temporal or quantity math', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const start = utility.indexOf('export function monitoringTemporalLensRequestPath');
+  const end = utility.indexOf('export function plannedComparisonLabel');
+  const helpers = utility.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  const forbiddenMath = /Date\.now|new Date\(|getDay|getUTCDay|setDate|setUTCDate|getMonth|getUTCMonth|parseFloat\(|Number\(/;
+  assert.doesNotMatch(page, forbiddenMath);
+  assert.doesNotMatch(page,
+    /periodQuantity\s*[/*+-]|plannedQuantity\s*[/*+-]|currentOfficialQuantity\s*[/*+-]/);
+  assert.doesNotMatch(helpers,
+    /Date\.now|new Date\(|getDay|getUTCDay|setDate|setUTCDate|getMonth|getUTCMonth|parseFloat\(|Number\(|Math\./);
+  assert.doesNotMatch(helpers,
+    /cutoffDate|includeActualSeries|includePeriodWindow|periodStartDate|periodEndDate/);
+});
+
+test('MON04-VE-1..5 evidence presentation accepts safe modern and legacy references', () => {
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://evidence.example/current',
+        label: 'Dokumentasi lapangan',
+        integrityHash: 'sha256:abc',
+      },
+    ]),
+    [
+      {
+        url: 'https://evidence.example/current',
+        label: 'Dokumentasi lapangan',
+        integrityHash: 'sha256:abc',
+        presentation: 'LINK',
+      },
+    ],
+  );
+  assert.equal(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://evidence.example/photo',
+        label: 'Foto pengecoran',
+        mediaType: 'image/jpeg',
+      },
+    ])[0]?.presentation,
+    'IMAGE',
+  );
+  assert.equal(
+    monitoringEvidencePresentation([
+      {
+        url: 'http://evidence.example/video',
+        label: 'Video inspeksi',
+        mediaType: 'video/mp4',
+      },
+    ])[0]?.presentation,
+    'VIDEO',
+  );
+  assert.equal(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://evidence.example/document',
+        label: 'Dokumen lapangan',
+      },
+    ])[0]?.presentation,
+    'LINK',
+  );
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://legacy.example/photo',
+        label: 'Foto bukti progres (legacy)',
+        kind: 'LEGACY_PHOTO_REFERENCE',
+        status: 'PROJECTED_REFERENCE',
+      },
+    ]),
+    [
+      {
+        url: 'https://legacy.example/photo',
+        label: 'Foto bukti progres (legacy)',
+        presentation: 'LINK',
+      },
+    ],
+  );
+});
+
+test('MON04-VE-6..8 unsafe, malformed, and empty evidence fail closed independently', () => {
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      { url: 'javascript:alert(1)', label: 'Unsafe JavaScript' },
+      { url: 'data:image/png;base64,abc', label: 'Unsafe data' },
+      { url: 'file:///tmp/evidence.jpg', label: 'Unsafe file' },
+      { url: 'ftp://evidence.example/file', label: 'Unknown protocol' },
+      { url: 'not a URL', label: 'Malformed URL' },
+    ]),
+    [],
+  );
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      null,
+      [],
+      'plain text',
+      {},
+      { url: '', label: 'Empty URL' },
+      { url: 'https://evidence.example', label: '' },
+      { url: 42, label: 'Wrong URL shape' },
+      { url: 'https://evidence.example', label: 42 },
+    ]),
+    [],
+  );
+  assert.deepEqual(monitoringEvidencePresentation([]), []);
+  assert.deepEqual(monitoringEvidencePresentation({}), []);
+});
+
+test('MON04-VE-9 effective Actual notes remain verbatim presentation context', () => {
+  const notes = '  Bekisting sisi timur sudah diperiksa.\nMenunggu pengecoran.  ';
+  const effectiveRecord = {
+    id: 'actual-1',
+    installedQuantity: '2.5',
+    workDate: '2026-09-16',
+    notes,
+    captureMethod: 'WEB_FORM',
+    evidenceReferences: [],
+    recordedByAccountId: 'account-1',
+    supersedesEntryId: null,
+    recordedAt: '2026-09-16T04:30:00.000Z',
+  };
+  const selected = effectiveActual(
+    item({
+      id: 'work-evidence',
+      name: 'Pekerjaan Evidence',
+      actual: {
+        state: 'RECORDED',
+        lifecycleState: 'ATTESTED',
+        effectiveRecord,
+      },
+    }),
+  );
+
+  assert.equal(selected?.notes, notes);
+  assert.equal(selected, effectiveRecord);
+});
+
+test('MON04-VE-10 evidence helper contains validation only, never progress inference', () => {
+  const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
+  const start = utility.indexOf('export interface MonitoringEvidencePresentation');
+  const end = utility.indexOf('type MonitoringOfficialFactState', start);
+  const helper = utility.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(
+    helper,
+    /Date\.now|new Date\(|Date\.parse|Number\(|parseFloat\(|Math\.|reduce\(/,
+  );
+  assert.doesNotMatch(
+    helper,
+    /progress|weight|quantity|period|workDate|recordedAt|\/\s*100|\*\s*100/i,
+  );
+});
+
+test('MON04-CU-1..6 Current Visual Lapangan is progressive, contextual, and accessible', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  for (const copy of [
+    'Pilih satu pekerjaan untuk melihat bukti lapangan yang melekat',
+    'Bukti yang terlampir pada Actual yang berlaku untuk pekerjaan ini.',
+    'Belum ada Actual yang berlaku untuk pekerjaan ini.',
+    'Actual yang berlaku belum memiliki bukti lapangan terlampir.',
+    'Bukti lapangan terlampir tidak dapat ditampilkan dengan aman.',
+    'Tanggal pekerjaan',
+    'Dicatat di SIMPROK',
+    'Metode pencatatan',
+    'Catatan Actual',
+  ]) {
+    assert.match(page, new RegExp(copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  const visualStart = page.indexOf('aria-labelledby="h2a0-visual-evidence-title"');
+  const visualEnd = page.indexOf('</section>', visualStart);
+  const visual = page.slice(visualStart, visualEnd);
+  assert.ok(visualStart >= 0 && visualEnd > visualStart);
+  assert.match(visual, /'Gambar'/);
+  assert.match(visual, /'Video'/);
+  assert.match(visual, /'Referensi'/);
+  assert.match(visual, /href=\{evidence\.url\}/);
+  assert.match(visual, /target="_blank"/);
+  assert.match(visual, /rel="noopener noreferrer"/);
+  assert.match(visual, /aria-label=/);
+  assert.doesNotMatch(
+    visual,
+    /recordedByAccountId|supersedesEntryId|integrityHash|selectedActual\.id/,
+  );
+});
+
+test('MON04-PE-F1..10 Periodic Visual uses canonical facts and never Current evidence', () => {
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const periodicStart = page.indexOf(
+    "{temporalContextMode === 'PERIODIK' ? (",
+  );
+  const currentStart = page.indexOf(') : !selected ? (', periodicStart);
+  const periodicPresentation = page.slice(periodicStart, currentStart);
+  const periodicText = periodicPresentation.replace(/\s+/g, ' ');
+  const evidenceDataStart = page.indexOf('const selectedEvidenceReferences');
+  const evidenceDataEnd = page.indexOf(
+    'const selectedTemporalItem',
+    evidenceDataStart,
+  );
+  const evidenceData = page.slice(evidenceDataStart, evidenceDataEnd);
+
+  assert.ok(periodicStart >= 0 && currentStart > periodicStart);
+  assert.match(periodicPresentation, /Visual Lapangan/);
+  assert.match(
+    periodicText,
+    /Pilih satu pekerjaan untuk melihat bukti yang terlampir pada Actual resmi di periode ini/,
+  );
+  assert.match(
+    page,
+    /const selectedPeriodEvidence =\s*selectedTemporalItem\?\.actual\.periodEvidence/,
+  );
+  assert.match(periodicPresentation, /selectedPeriodEvidence\.facts\.map\(\(fact\)/);
+  assert.match(
+    periodicPresentation,
+    /monitoringEvidencePresentation\(\s*fact\.evidenceReferences/,
+  );
+  for (const copy of [
+    'Bukti yang terlampir pada Actual resmi yang saat ini berlaku dan berada pada periode terpilih.',
+    'Tidak ada Actual resmi yang berlaku pada periode ini.',
+    'Actual resmi pada periode ini belum memiliki bukti lapangan terlampir.',
+    'Bukti lapangan pada periode ini tidak dapat ditampilkan dengan aman.',
+    'Bukti periode belum lengkap karena belum seluruh fakta Actual dapat disajikan sebagai fakta resmi pada periode ini.',
+    'Bukti periode tidak dapat ditampilkan sebagai fakta resmi:',
+  ]) {
+    assert.match(periodicText, new RegExp(
+      copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    ));
+  }
+  assert.doesNotMatch(
+    periodicText,
+    /belum dapat ditempatkan secara sah/,
+  );
+  assert.match(
+    periodicPresentation,
+    /officialFactStateLabel\(selectedPeriodEvidence\.state\)/,
+  );
+  assert.match(periodicPresentation, /href=\{evidence\.url\}/);
+  assert.match(periodicPresentation, /target="_blank"/);
+  assert.match(periodicPresentation, /rel="noopener noreferrer"/);
+  assert.doesNotMatch(periodicPresentation, /selectedActual|selectedEvidenceReferences/);
+  assert.doesNotMatch(
+    periodicPresentation,
+    /<img\b|<video\b|<source\b|src=\{evidence\.url\}|background-image|fetch\(|XMLHttpRequest|new Image\(|preload|prefetch/i,
+  );
+  assert.match(
+    evidenceData,
+    /temporalContextMode === 'TERKINI'/,
+  );
+  assert.doesNotMatch(
+    evidenceData,
+    /apiFetch|monitoringComparisonRequestPath|monitoringTemporalLensRequestPath|filter\(/,
+  );
+  assert.doesNotMatch(page, /\/history['"`?&]/);
+  assert.doesNotMatch(
+    evidenceData,
+    /workDate\s*[<>=]|recordedAt\s*[<>=]|Date\.parse|new Date\(/,
+  );
+  assert.doesNotMatch(
+    periodicPresentation,
+    /\.filter\(|workDate\s*[<>=]|recordedAt\s*[<>=]|Date\.parse|new Date\(|getDay|getMonth/,
+  );
+});
+
+test('MON04-PE-F5 multiple Periodic facts retain their own safe references', () => {
+  const facts = [
+    {
+      sourceActualEntryId: 'actual-1',
+      evidenceReferences: [
+        { url: 'https://evidence.example/one', label: 'Bukti satu' },
+      ],
+    },
+    {
+      sourceActualEntryId: 'actual-2',
+      evidenceReferences: [
+        { url: 'https://evidence.example/two', label: 'Bukti dua' },
+      ],
+    },
+  ];
+
+  assert.deepEqual(
+    facts.map((fact) => ({
+      id: fact.sourceActualEntryId,
+      labels: monitoringEvidencePresentation(fact.evidenceReferences).map(
+        (evidence) => evidence.label,
+      ),
+    })),
+    [
+      { id: 'actual-1', labels: ['Bukti satu'] },
+      { id: 'actual-2', labels: ['Bukti dua'] },
+    ],
+  );
+  assert.equal(
+    officialFactStateLabel('SEMANTICS_UNPROVEN'),
+    'Semantik belum terbukti',
+  );
+});
+
+test('MON04-SAFE-1..10 evidence stays a user-initiated safe reference', () => {
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      {
+        url: 'https://evidence.example/photo',
+        label: 'Foto lapangan',
+        mediaType: 'image/jpeg',
+      },
+      {
+        url: 'http://evidence.example/video',
+        label: 'Video lapangan',
+        mediaType: 'video/mp4',
+      },
+    ]).map((evidence) => [evidence.url, evidence.presentation]),
+    [
+      ['https://evidence.example/photo', 'IMAGE'],
+      ['http://evidence.example/video', 'VIDEO'],
+    ],
+  );
+  assert.deepEqual(
+    monitoringEvidencePresentation([
+      { url: 'javascript:alert(1)', label: 'Unsafe JavaScript' },
+      { url: 'data:text/plain,unsafe', label: 'Unsafe data' },
+      { url: 'file:///tmp/evidence.jpg', label: 'Unsafe file' },
+      { url: 'ftp://evidence.example/file', label: 'Unsafe FTP' },
+      { url: 'not a URL', label: 'Malformed URL' },
+      null,
+    ]),
+    [],
+  );
+
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const visualStart = page.indexOf('aria-labelledby="h2a0-visual-evidence-title"');
+  const visualEnd = page.indexOf('</section>', visualStart);
+  const visual = page.slice(visualStart, visualEnd);
+  assert.ok(visualStart >= 0 && visualEnd > visualStart);
+  assert.match(visual, /href=\{evidence\.url\}/);
+  assert.match(visual, /target="_blank"/);
+  assert.match(visual, /rel="noopener noreferrer"/);
+  assert.doesNotMatch(
+    visual,
+    /<img\b|<video\b|<source\b|src=\{evidence\.url\}|background-image|fetch\(|XMLHttpRequest|new Image\(|preload|prefetch/i,
+  );
+});
+
+test('MON04-DATE-1..3 Visual workDate is formatted or fails closed without substitution', () => {
+  assert.equal(formatProjectBusinessDate('2026-09-16'), '16 Sep 2026');
+  assert.equal(formatProjectBusinessDate(null), '');
+
+  const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
+  const visualStart = page.indexOf('aria-labelledby="h2a0-visual-evidence-title"');
+  const visualEnd = page.indexOf('</section>', visualStart);
+  const visual = page.slice(visualStart, visualEnd);
+  const workDateStart = visual.indexOf('<dt>Tanggal pekerjaan</dt>');
+  const recordedAtStart = visual.indexOf('<dt>Dicatat di SIMPROK</dt>');
+  const workDatePresentation = visual.slice(workDateStart, recordedAtStart);
+
+  assert.ok(workDateStart >= 0 && recordedAtStart > workDateStart);
+  assert.match(
+    workDatePresentation,
+    /formatProjectBusinessDate\(selectedActual\.workDate\) \|\|\s*'TIDAK TERSEDIA'/,
+  );
+  assert.doesNotMatch(workDatePresentation, /selectedRecordedAt|recordedAt/);
+  assert.match(visual, /\{selectedRecordedAt\.value\}/);
 });

@@ -202,6 +202,128 @@ export interface MonitoringProgressComparison {
   points: MonitoringProgressComparisonPoint[];
 }
 
+export type MonitoringTemporalBasis = 'CALENDAR' | 'WORK_PERIOD';
+export type MonitoringTemporalGranularity = 'WEEK' | 'MONTH';
+
+type MonitoringTemporalPeriodBase = {
+  periodKey: string;
+  periodIndex: number;
+  startDate: string;
+  endDate: string;
+};
+
+export type MonitoringTemporalPeriod =
+  | (MonitoringTemporalPeriodBase & {
+      basis: 'CALENDAR'; granularity: 'WEEK';
+      metadata: {
+        boundaryInclusivity: 'START_AND_END_INCLUSIVE';
+        boundaryRule: 'ISO_8601_MONDAY_TO_SUNDAY';
+        isoWeekYear: number; isoWeekNumber: number;
+      };
+    })
+  | (MonitoringTemporalPeriodBase & {
+      basis: 'CALENDAR'; granularity: 'MONTH';
+      metadata: {
+        boundaryInclusivity: 'START_AND_END_INCLUSIVE';
+        boundaryRule: 'GREGORIAN_CALENDAR_MONTH';
+        calendarYear: number; calendarMonth: number;
+      };
+    })
+  | (MonitoringTemporalPeriodBase & {
+      basis: 'WORK_PERIOD'; granularity: 'WEEK';
+      metadata: {
+        boundaryInclusivity: 'START_AND_END_INCLUSIVE';
+        boundaryRule: 'SEVEN_DAY_WINDOW_FROM_GOVERNED_WORK_PERIOD_ANCHOR';
+        governedWorkPeriodAnchorDate: string;
+      };
+    })
+  | (MonitoringTemporalPeriodBase & {
+      basis: 'WORK_PERIOD'; granularity: 'MONTH';
+      metadata: {
+        boundaryInclusivity: 'START_AND_END_INCLUSIVE';
+        boundaryRule: 'ORIGINAL_ANCHOR_ANNIVERSARY_MONTH_WITH_TARGET_CLAMP';
+        governedWorkPeriodAnchorDate: string;
+      };
+    });
+
+export type MonitoringPlannedItemQuantity =
+  | { state: 'COMPLETE'; plannedQuantity: string }
+  | { state: 'INCOMPLETE'; reason: string; knownPlannedQuantitySubtotal: string }
+  | { state: 'UNAVAILABLE'; reason: string };
+
+export interface MonitoringPeriodEvidenceFact {
+  sourceActualEntryId: string;
+  workDate: string;
+  recordedAt: string;
+  captureMethod: string;
+  notes: string | null;
+  evidenceReferences: unknown[];
+}
+
+export type MonitoringPeriodEvidence =
+  | { state: 'COMPLETE' | 'INCOMPLETE'; facts: MonitoringPeriodEvidenceFact[] }
+  | {
+      state:
+        | 'NOT_YET_RECORDED'
+        | 'NO_ELIGIBLE_CURRENT_FACT'
+        | 'INVALID_NUMERIC_FACT'
+        | 'SEMANTICS_UNPROVEN';
+      facts: MonitoringPeriodEvidenceFact[];
+    }
+  | {
+      state: 'INVALID_LINEAGE';
+      reason?: string;
+      facts: MonitoringPeriodEvidenceFact[];
+    };
+
+export interface MonitoringTemporalLensItem {
+  boqItemId: string;
+  planned: {
+    periodQuantity: MonitoringPlannedItemQuantity;
+    cumulativeQuantityThroughEndDate: MonitoringPlannedItemQuantity;
+  };
+  actual: {
+    periodOfficialQuantity: MonitoringItem['currentOfficialQuantity'];
+    cumulativeOfficialQuantityThroughEndDate: MonitoringItem['currentOfficialQuantity'];
+    periodEvidence: MonitoringPeriodEvidence;
+  };
+}
+
+export interface MonitoringTemporalLensWeeklyRecap {
+  rule: 'CANONICAL_WEEK_SLICE_RECAP';
+  sliceCount: number;
+  slices: Array<{
+    weekPeriodKey: string;
+    weekPeriodIndex: number;
+    weekStartDate: string;
+    weekEndDate: string;
+    sliceStartDate: string;
+    sliceEndDate: string;
+  }>;
+}
+
+export type MonitoringTemporalLens =
+  | {
+      mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1'; state: 'UNAVAILABLE';
+      basis: MonitoringTemporalBasis; granularity: MonitoringTemporalGranularity;
+      referenceDate: string; reason: string;
+    }
+  | {
+      mode: 'CANONICAL_MONITORING_TEMPORAL_LENS_V1'; state: 'RESOLVED';
+      basis: MonitoringTemporalBasis; granularity: MonitoringTemporalGranularity;
+      referenceDate: string; period: MonitoringTemporalPeriod;
+      weeklyRecap?: MonitoringTemporalLensWeeklyRecap;
+      baseline: { id: string; versionNumber: number; approvedAt: string } | null;
+      plannedSource: {
+        executionPlanVersionId: string; versionNumber: number; status: 'LOCKED';
+      } | null;
+      plannedContext:
+        | { state: 'COMPLETE' }
+        | { state: 'INCOMPLETE' | 'UNAVAILABLE'; reason: string };
+      actualTruthMode: 'CURRENT_OFFICIAL_TRUTH_RESTATED_TO_EXPLICIT_WORKDATE_WINDOW';
+      items: MonitoringTemporalLensItem[];
+    };
+
 export type MonitoringProgressComparisonPresentation =
   | { state: 'PENDING'; cutoffDate: null; comparison: null }
   | { state: 'LOADING'; cutoffDate: string; comparison: null }
@@ -233,11 +355,225 @@ export interface MonitoringResponse {
    */
   currentOfficialRabWeightedPhysicalProgress: MonitoringOfficialProjectProgress;
 
-  /** Present only on the explicit, cutoff-bound comparison request. */
+  /** Present on an explicit cutoff request or an atomic Temporal Lens request. */
   progressComparison?: MonitoringProgressComparison;
+
+  /** Present only on an explicit canonical Temporal Lens request. */
+  temporalLens?: MonitoringTemporalLens;
 
   items: MonitoringItem[];
   unavailable: string[];
+}
+
+export interface MonitoringPeriodicSchedulePlanIdentity {
+  id: string;
+  versionNumber: number;
+  status: 'DRAFT' | 'LOCKED';
+}
+
+export type MonitoringPeriodicComparisonCoherence =
+  | {
+      state: 'COHERENT';
+      response: MonitoringResponse;
+      comparison: MonitoringProgressComparison;
+    }
+  | {
+      state: 'INCOHERENT';
+      reason:
+        | 'TEMPORAL_LENS_NOT_RESOLVED'
+        | 'TEMPORAL_BASELINE_MISMATCH'
+        | 'COMPARISON_NOT_AVAILABLE'
+        | 'COMPARISON_MODE_INVALID'
+        | 'COMPARISON_CUTOFF_MISMATCH'
+        | 'COMPARISON_BASELINE_MISMATCH'
+        | 'PLANNED_SOURCE_MISMATCH'
+        | 'SCHEDULE_PLAN_MISMATCH';
+    };
+
+export type MonitoringPeriodicComparisonPresentation =
+  | { state: 'DISABLED' }
+  | { state: 'NO_COMPARATOR_CONTEXT' | 'CHECKING'; requestKey: string }
+  | {
+      state: 'RESOLVED';
+      requestKey: string;
+      response: MonitoringResponse;
+      comparison: MonitoringProgressComparison;
+    }
+  | { state: 'INCOHERENT' | 'ERROR'; requestKey: string };
+
+function exactMonitoringBaselineIdentity(
+  left: MonitoringResponse['baseline'],
+  right: MonitoringResponse['baseline'],
+): boolean {
+  return (
+    (left === null && right === null) ||
+    (left !== null &&
+      right !== null &&
+      left.id === right.id &&
+      left.versionNumber === right.versionNumber &&
+      left.approvedAt === right.approvedAt)
+  );
+}
+
+function exactMonitoringPlannedSourceIdentity(
+  left: MonitoringProgressComparison['plannedSource'],
+  right: MonitoringProgressComparison['plannedSource'],
+): boolean {
+  return (
+    (left === null && right === null) ||
+    (left !== null &&
+      right !== null &&
+      left.status === 'LOCKED' &&
+      right.status === 'LOCKED' &&
+      left.executionPlanVersionId === right.executionPlanVersionId &&
+      left.versionNumber === right.versionNumber)
+  );
+}
+
+/**
+ * Presentation-integrity gate only. It proves that the comparator embedded in
+ * one resolved Periodic Monitoring response is internally coherent and performs
+ * no progress, deviation, quantity, curve, or temporal calculation.
+ */
+export function periodicComparisonCoherence(input: {
+  periodicResponse: MonitoringResponse;
+  periodicSchedulePlan?: MonitoringPeriodicSchedulePlanIdentity | null;
+}): MonitoringPeriodicComparisonCoherence {
+  const lens = input.periodicResponse.temporalLens;
+  if (lens?.state !== 'RESOLVED') {
+    return { state: 'INCOHERENT', reason: 'TEMPORAL_LENS_NOT_RESOLVED' };
+  }
+
+  if (
+    !exactMonitoringBaselineIdentity(
+      input.periodicResponse.baseline,
+      lens.baseline,
+    )
+  ) {
+    return { state: 'INCOHERENT', reason: 'TEMPORAL_BASELINE_MISMATCH' };
+  }
+
+  const comparison = input.periodicResponse.progressComparison;
+  if (comparison === undefined) {
+    return { state: 'INCOHERENT', reason: 'COMPARISON_NOT_AVAILABLE' };
+  }
+  if (
+    comparison.mode !==
+    'PLANNED_VS_CURRENT_OFFICIAL_TRUTH_RESTATED_TO_WORKDATE'
+  ) {
+    return { state: 'INCOHERENT', reason: 'COMPARISON_MODE_INVALID' };
+  }
+  if (comparison.cutoffDate !== lens.period.endDate) {
+    return { state: 'INCOHERENT', reason: 'COMPARISON_CUTOFF_MISMATCH' };
+  }
+  if (
+    !exactMonitoringBaselineIdentity(
+      comparison.baseline,
+      input.periodicResponse.baseline,
+    ) ||
+    !exactMonitoringBaselineIdentity(comparison.baseline, lens.baseline)
+  ) {
+    return { state: 'INCOHERENT', reason: 'COMPARISON_BASELINE_MISMATCH' };
+  }
+  if (
+    !exactMonitoringPlannedSourceIdentity(
+      comparison.plannedSource,
+      lens.plannedSource,
+    )
+  ) {
+    return { state: 'INCOHERENT', reason: 'PLANNED_SOURCE_MISMATCH' };
+  }
+
+  const schedulePlan = input.periodicSchedulePlan;
+  if (
+    schedulePlan &&
+    (schedulePlan.status !== 'LOCKED' ||
+      comparison.plannedSource === null ||
+      schedulePlan.id !== comparison.plannedSource.executionPlanVersionId ||
+      schedulePlan.versionNumber !== comparison.plannedSource.versionNumber)
+  ) {
+    return { state: 'INCOHERENT', reason: 'SCHEDULE_PLAN_MISMATCH' };
+  }
+
+  return { state: 'COHERENT', response: input.periodicResponse, comparison };
+}
+
+export type MonitoringTemporalSnapshotCoherence =
+  | {
+      state: 'COHERENT';
+      lens: Extract<MonitoringTemporalLens, { state: 'RESOLVED' }>;
+    }
+  | {
+      state: 'INCOHERENT';
+      reason:
+        | 'PROJECT_ID_MISMATCH'
+        | 'TEMPORAL_LENS_NOT_RESOLVED'
+        | 'BASELINE_MISMATCH'
+        | 'DUPLICATE_WORK_ITEM_ID'
+        | 'DUPLICATE_TEMPORAL_ITEM_ID'
+        | 'TEMPORAL_ITEM_NOT_IN_SNAPSHOT';
+    };
+
+export function monitoringTemporalSnapshotCoherence(input: {
+  requestedProjectId: string;
+  response: MonitoringResponse;
+}): MonitoringTemporalSnapshotCoherence {
+  if (input.response.projectId !== input.requestedProjectId) {
+    return { state: 'INCOHERENT', reason: 'PROJECT_ID_MISMATCH' };
+  }
+
+  const lens = input.response.temporalLens;
+  if (lens?.state !== 'RESOLVED') {
+    return { state: 'INCOHERENT', reason: 'TEMPORAL_LENS_NOT_RESOLVED' };
+  }
+
+  const responseBaseline = input.response.baseline;
+  const lensBaseline = lens.baseline;
+  if (!exactMonitoringBaselineIdentity(responseBaseline, lensBaseline)) {
+    return { state: 'INCOHERENT', reason: 'BASELINE_MISMATCH' };
+  }
+
+  const workItemIds = new Set<string>();
+  for (const item of input.response.items) {
+    if (item.itemType !== 'WORK_ITEM') continue;
+    if (workItemIds.has(item.id)) {
+      return { state: 'INCOHERENT', reason: 'DUPLICATE_WORK_ITEM_ID' };
+    }
+    workItemIds.add(item.id);
+  }
+
+  const temporalItemIds = new Set<string>();
+  for (const item of lens.items) {
+    if (temporalItemIds.has(item.boqItemId)) {
+      return { state: 'INCOHERENT', reason: 'DUPLICATE_TEMPORAL_ITEM_ID' };
+    }
+    if (!workItemIds.has(item.boqItemId)) {
+      return { state: 'INCOHERENT', reason: 'TEMPORAL_ITEM_NOT_IN_SNAPSHOT' };
+    }
+    temporalItemIds.add(item.boqItemId);
+  }
+
+  return { state: 'COHERENT', lens };
+}
+
+export function monitoringActiveSnapshot(input: {
+  mode: 'TERKINI' | 'PERIODIK';
+  currentResponse: MonitoringResponse | null;
+  periodicResponse: MonitoringResponse | null;
+}): MonitoringResponse | null {
+  return input.mode === 'TERKINI'
+    ? input.currentResponse
+    : input.periodicResponse;
+}
+
+export function monitoringPeriodicSnapshotForRequest(input: {
+  activeRequestKey: string;
+  responseRequestKey: string;
+  response: MonitoringResponse;
+}): MonitoringResponse | null {
+  return input.activeRequestKey === input.responseRequestKey
+    ? input.response
+    : null;
 }
 
 export interface MonitoringProject {
@@ -280,6 +616,69 @@ export function effectiveActual(
 ): MonitoringEffectiveRecord | null {
   if (item?.actual?.state !== 'RECORDED') return null;
   return item.actual.effectiveRecord;
+}
+
+export interface MonitoringEvidencePresentation {
+  url: string;
+  label: string;
+  mediaType?: string;
+  integrityHash?: string;
+  presentation: 'IMAGE' | 'VIDEO' | 'LINK';
+}
+
+export function monitoringEvidencePresentation(
+  value: unknown,
+): MonitoringEvidencePresentation[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((candidate) => {
+    if (
+      candidate === null ||
+      typeof candidate !== 'object' ||
+      Array.isArray(candidate)
+    ) {
+      return [];
+    }
+
+    const record = candidate as Record<string, unknown>;
+    if (
+      typeof record.url !== 'string' ||
+      record.url.trim() === '' ||
+      typeof record.label !== 'string' ||
+      record.label.trim() === ''
+    ) {
+      return [];
+    }
+
+    try {
+      const protocol = new URL(record.url).protocol;
+      if (protocol !== 'http:' && protocol !== 'https:') return [];
+    } catch {
+      return [];
+    }
+
+    const mediaType =
+      typeof record.mediaType === 'string' ? record.mediaType : undefined;
+    const integrityHash =
+      typeof record.integrityHash === 'string'
+        ? record.integrityHash
+        : undefined;
+    const normalizedMediaType = mediaType?.toLowerCase() ?? '';
+
+    return [
+      {
+        url: record.url,
+        label: record.label,
+        ...(mediaType === undefined ? {} : { mediaType }),
+        ...(integrityHash === undefined ? {} : { integrityHash }),
+        presentation: normalizedMediaType.startsWith('image/')
+          ? ('IMAGE' as const)
+          : normalizedMediaType.startsWith('video/')
+            ? ('VIDEO' as const)
+            : ('LINK' as const),
+      },
+    ];
+  });
 }
 
 type MonitoringOfficialFactState =
@@ -351,7 +750,7 @@ export function officialItemProgressLabel(
   }
 }
 
-function officialFactStateLabel(state: MonitoringOfficialFactState): string {
+export function officialFactStateLabel(state: MonitoringOfficialFactState): string {
   switch (state) {
     case 'COMPLETE':
       return 'Lengkap';
@@ -528,6 +927,87 @@ export function monitoringComparisonRequestPath(
     cutoffDate +
     '&includeProgressComparison=true'
   );
+}
+
+export function monitoringTemporalLensRequestPath(input: {
+  projectId: string;
+  basis: MonitoringTemporalBasis;
+  granularity: MonitoringTemporalGranularity;
+  referenceDate: string;
+}): string {
+  const params = new URLSearchParams({
+    includeTemporalLens: 'true',
+    temporalBasis: input.basis,
+    temporalGranularity: input.granularity,
+    temporalReferenceDate: input.referenceDate,
+    includeProgressComparison: 'true',
+  });
+  return `/projects/${input.projectId}/progress/monitoring?${params.toString()}`;
+}
+
+export function monitoringTemporalBasisLabel(basis: MonitoringTemporalBasis): string {
+  return basis === 'WORK_PERIOD' ? 'Waktu Kerja' : 'Kalender';
+}
+
+export function monitoringTemporalGranularityLabel(
+  granularity: MonitoringTemporalGranularity,
+): string {
+  return granularity === 'WEEK' ? 'Mingguan' : 'Bulanan';
+}
+
+const INDONESIAN_MONTH_LABELS: Readonly<Record<number, string>> = {
+  1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 'Juni',
+  7: 'Juli', 8: 'Agustus', 9: 'September', 10: 'Oktober',
+  11: 'November', 12: 'Desember',
+};
+
+export function monitoringTemporalPeriodLabel(period: MonitoringTemporalPeriod): string {
+  if (period.basis === 'WORK_PERIOD') {
+    return period.granularity === 'WEEK'
+      ? `Minggu Kerja ke-${period.periodIndex}`
+      : `Bulan Kerja ke-${period.periodIndex}`;
+  }
+  if (period.granularity === 'WEEK') return `Minggu Kalender \u00b7 ${period.periodKey}`;
+  const month = INDONESIAN_MONTH_LABELS[period.metadata.calendarMonth];
+  return month === undefined
+    ? `Bulan Kalender \u00b7 ${period.periodKey}`
+    : `${month} ${period.metadata.calendarYear}`;
+}
+
+export function monitoringTemporalLensUnavailableMessage(reason: string): string {
+  const messages: Readonly<Record<string, string>> = {
+    GOVERNED_WORK_PERIOD_ANCHOR_REQUIRED:
+      'Basis Waktu Kerja belum tersedia karena Hari Pertama Resmi proyek belum dibuktikan.',
+    WORK_PERIOD_ANCHOR_PROVENANCE_INVALID:
+      'Basis Waktu Kerja tidak dapat digunakan karena bukti Hari Pertama Resmi tidak valid.',
+    REFERENCE_DATE_BEFORE_GOVERNED_WORK_PERIOD_ANCHOR:
+      'Tanggal acuan berada sebelum Hari Pertama Resmi proyek.',
+  };
+  return messages[reason] ?? 'Konteks periode belum tersedia dari fakta proyek yang sah.';
+}
+
+export function plannedPeriodQuantityLabel(
+  fact: MonitoringPlannedItemQuantity | undefined,
+  unit: string,
+): string {
+  if (fact === undefined || fact.state === 'UNAVAILABLE') return 'TIDAK TERSEDIA';
+  if (fact.state === 'INCOMPLETE') {
+    return `Belum lengkap \u2014 subtotal ${fact.knownPlannedQuantitySubtotal} ${unit}`.trim();
+  }
+  return `${fact.plannedQuantity} ${unit}`.trim();
+}
+
+export function temporalActualQuantityLabel(
+  fact: MonitoringItem['currentOfficialQuantity'] | undefined,
+  unit: string,
+): string {
+  return fact === undefined ? 'TIDAK TERSEDIA' : officialQuantityLabel(fact, unit);
+}
+
+export function temporalLensItemsByBoqItemId(
+  items: readonly MonitoringTemporalLensItem[],
+): ReadonlyMap<string, MonitoringTemporalLensItem> {
+  return new Map(items.map((item) => [item.boqItemId, item] as const));
 }
 
 export function plannedComparisonLabel(

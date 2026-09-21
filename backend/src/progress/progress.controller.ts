@@ -22,6 +22,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { Permissions } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 import type { ProjectAccessContext } from '../auth/project-access-policy.service';
+import { parseMonitoringTemporalLensQuery } from './progress-temporal-lens.policy';
 
 interface ProgressSemanticAttestationRequest {
   user: { id: string };
@@ -66,6 +67,11 @@ export class ProgressController {
       )
     ) {
       throw new BadRequestException('AMBIGUOUS_PERIOD_WINDOW');
+    }
+
+    const temporalLensQuery = parseMonitoringTemporalLensQuery(query);
+    if (temporalLensQuery.state === 'INVALID') {
+      throw new BadRequestException(temporalLensQuery.reason);
     }
 
     const includeActualSeriesValue = query.includeActualSeries;
@@ -139,7 +145,11 @@ export class ProgressController {
       throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
     }
 
-    if (includeProgressComparison && query.cutoffDate === undefined) {
+    if (
+      includeProgressComparison &&
+      query.cutoffDate === undefined &&
+      temporalLensQuery.state !== 'ENABLED'
+    ) {
       throw new BadRequestException('PROGRESS_COMPARISON_REQUIRES_CUTOFF');
     }
 
@@ -153,6 +163,9 @@ export class ProgressController {
             startDate: query.periodStartDate,
             endDate: query.periodEndDate,
           }
+        : undefined,
+      temporalLensQuery.state === 'ENABLED'
+        ? temporalLensQuery.input
         : undefined,
     );
   }
