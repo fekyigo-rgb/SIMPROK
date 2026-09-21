@@ -22,7 +22,7 @@ export function FieldLayout() {
         alignItems: 'center',
         boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
       }}>
-        <h1 style={{ margin: 0, fontSize: 'var(--text-xl)', fontWeight: 'bold' }}>SIMPROK Mandor</h1>
+        <h1 style={{ margin: 0, fontSize: 'var(--text-xl)', fontWeight: 'bold' }}>SIMPROK</h1>
         <button 
           onClick={handleLogout}
           style={{

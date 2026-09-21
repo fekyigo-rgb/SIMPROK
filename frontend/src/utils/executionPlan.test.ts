@@ -658,7 +658,7 @@ test('MON04-PS-7 Periodic Schedule presents backend facts and keeps Current path
 test('MON04-PS-8 refresh is bounded, abortable, and guarded against stale Plan responses', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
   const start = page.indexOf('const periodicScheduleRequestKey');
-  const end = page.indexOf('const activatePeriodicContext', start);
+  const end = page.indexOf('const activeTimeLens', start);
   const connection = page.slice(start, end);
   assert.ok(start >= 0 && end > start);
   assert.equal(
