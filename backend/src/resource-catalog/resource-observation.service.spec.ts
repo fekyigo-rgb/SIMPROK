@@ -6,11 +6,13 @@ import { GhxDecisionContextTokenService } from './ghx-decision-context-token.ser
 import {
   ResourceObservationService,
   kernelRefusalOfSelection,
+  observedSourceRowKey,
 } from './resource-observation.service';
 import {
   ResourceAdmissionNotExhaustedError,
   ResourceAdmissionService,
 } from './resource-admission.service';
+import { selectionRefusal } from './resource-identity-resolution.kernel';
 
 /**
  * THE shared OBSERVED → HUMAN → CANONICAL lifecycle. Proves an unknown resource
@@ -73,6 +75,11 @@ describe('ResourceObservationService', () => {
       resolve: jest.fn().mockResolvedValue({
         status: 'RESOLVED',
         sourceUnitDefinition: { id: 'unit-m3', code: 'M3' },
+      // A RESOLVED proof from the real kernel always states its price operation:
+      // IDENTITY when the two spellings are the same canonical unit. Admission now
+      // requires that, so the fixture states what the kernel would actually return.
+        priceOperation: 'IDENTITY',
+        quantityFactor: '1',
       }),
     };
     identity = {
@@ -177,13 +184,29 @@ describe('ResourceObservationService', () => {
       resolvedResourceCatalogId: null,
       reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
       candidates: [
-        { resourceCatalogId: 'cat-x', name: 'Kerikil / Agregat', extra: 'ignored' },
+        {
+          resourceCatalogId: 'cat-x',
+          name: 'Kerikil / Agregat',
+          type: 'MATERIAL',
+          baseUnit: 'M3',
+          identityBasis: 'RECORDED_FACT',
+          extra: 'ignored',
+        },
       ],
     });
     const list = await service.listOpenForCuration('ws-1');
     expect(list).toHaveLength(1);
+    // The kernel's own statement of what the nomination rests on is carried,
+    // never re-derived: a recorded fact is confirmable.
     expect(list[0].candidates).toEqual([
-      { resourceCatalogId: 'cat-x', name: 'Kerikil / Agregat' },
+      {
+        resourceCatalogId: 'cat-x',
+        name: 'Kerikil / Agregat',
+        type: 'MATERIAL',
+        baseUnit: 'M3',
+        identityBasis: 'RECORDED_FACT',
+        confirmable: true,
+      },
     ]);
     // A suggested unit for curate-new, from the Unit Kernel — not invented here.
     expect(list[0].suggestedUnitDefinitionId).toBe('unit-m3');
@@ -211,7 +234,10 @@ describe('ResourceObservationService', () => {
         {
           resourceCatalogId: 'cat-unp',
           name: 'Besi UNP 100.50.5',
+          type: 'MATERIAL',
+          baseUnit: 'M3',
           evidence: [],
+          identityBasis: 'RULED_OUT',
         },
       ],
       reasonCodes: ['SPECIFICATION_CONFLICT'],
@@ -223,6 +249,10 @@ describe('ResourceObservationService', () => {
       status: 'UNRESOLVED',
       reasonCodes: ['SPECIFICATION_CONFLICT'],
       exhausted: false,
+      // Not machine-exhausted, but every listed row was ruled out: a person
+      // who refuses exactly these may lawfully admit it (branch c).
+      admissibleAfterExamination: true,
+      candidateContextDigest: expect.any(String),
     });
     // The list itself is unchanged — shown, never removed.
     expect(row.candidates.map((candidate) => candidate.name)).toEqual([
@@ -252,6 +282,9 @@ describe('ResourceObservationService', () => {
       status: 'UNRESOLVED',
       reasonCodes: ['RESOURCE_NOT_FOUND'],
       exhausted: true,
+      // No candidate at all: nothing to examine, so this road is not needed.
+      admissibleAfterExamination: false,
+      candidateContextDigest: expect.any(String),
     });
     expect(row.identityVerdict.exhausted).toBe(
       ResourceAdmissionService.isIdentityExhausted({
@@ -287,6 +320,8 @@ describe('ResourceObservationService', () => {
     unitKernel.resolve.mockResolvedValue({
       status: 'RESOLVED',
       sourceUnitDefinition: { id: 'unit-equipment-hour', code: 'EQUIPMENT_HOUR' },
+      priceOperation: 'IDENTITY',
+      quantityFactor: '1',
     });
 
     const list = await service.listOpenForCuration('ws-1');
@@ -352,6 +387,19 @@ describe('ResourceObservationService', () => {
 
   // D — a human maps the observation to an existing canonical resource.
   it('D: curateExisting records the chosen existing catalog id, minting nothing', async () => {
+    identity.resolve.mockResolvedValue({
+      status: 'NEEDS_REVIEW',
+      authority: 'EVIDENCE_CANDIDATE',
+      resolvedResourceCatalogId: null,
+      candidates: [
+        {
+          resourceCatalogId: 'cat-existing',
+          name: 'Agregat XYZ',
+          identityBasis: 'RECORDED_FACT',
+        },
+      ],
+      reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
+    });
     const updated = await service.curateExisting({
       workspaceId: 'ws-1',
       observationId: 'obs-1',
@@ -469,7 +517,13 @@ describe('ResourceObservationService', () => {
         status: 'NEEDS_REVIEW',
         authority: 'EVIDENCE_CANDIDATE',
         resolvedResourceCatalogId: null,
-        candidates: [{ resourceCatalogId: 'cat-x', name: 'Besi UNP' }],
+        candidates: [
+          {
+            resourceCatalogId: 'cat-x',
+            name: 'Besi UNP',
+            identityBasis: 'RECORDED_FACT',
+          },
+        ],
         reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
       })
       .mockResolvedValueOnce({
@@ -505,13 +559,19 @@ describe('ResourceObservationService', () => {
     expect(alone[0].reviewedMappings).toBe(whole[0].reviewedMappings);
   });
 
-  it('ACG-01.1: a nominated candidate is still a human decision the door records', async () => {
+  it('ACG-01.1: a nomination backed by a recorded fact is still a human decision the door records', async () => {
     prisma.resourceCatalog.findFirst.mockResolvedValue({ id: 'cat-x' });
     identity.resolve.mockResolvedValue({
       status: 'NEEDS_REVIEW',
       authority: 'EVIDENCE_CANDIDATE',
       resolvedResourceCatalogId: null,
-      candidates: [{ resourceCatalogId: 'cat-x', name: 'Kerikil / Agregat' }],
+      candidates: [
+        {
+          resourceCatalogId: 'cat-x',
+          name: 'Kerikil / Agregat',
+          identityBasis: 'RECORDED_FACT',
+        },
+      ],
       reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
     });
 
@@ -521,13 +581,48 @@ describe('ResourceObservationService', () => {
     });
   });
 
-  it('ACG-01.1: the kernel NOT FINDING a row is not the kernel refusing it — human judgment stays', async () => {
-    // Default verdict: UNRESOLVED / RESOURCE_NOT_FOUND with nothing listed. A
-    // person may know an alias the kernel cannot connect; that is not a refusal.
-    await expect(plainDecision('cat-existing')).resolves.toMatchObject({
-      status: 'RESOLVED_EXISTING',
-      resolvedResourceCatalogId: 'cat-existing',
+  /**
+   * RESOURCE DECISION SAFETY — a name-similarity nomination is a reason to look,
+   * never an identity. "Tripleks" is contained in "Paku tripleks"; a single
+   * such candidate is not strong because it is alone. A direct request to the
+   * plain door is refused BEFORE anything is written.
+   */
+  it('DECISION SAFETY: a nomination resting on name similarity only is refused at the write', async () => {
+    prisma.resourceCatalog.findFirst.mockResolvedValue({ id: 'cat-x' });
+    identity.resolve.mockResolvedValue({
+      status: 'NEEDS_REVIEW',
+      authority: 'EVIDENCE_CANDIDATE',
+      resolvedResourceCatalogId: null,
+      candidates: [
+        {
+          resourceCatalogId: 'cat-x',
+          name: 'Paku tripleks',
+          evidence: ['NAME_TOKEN_CONTAINMENT', 'NAME_TOKEN_STEM_SHARED'],
+          identityBasis: 'NAME_SIMILARITY_ONLY',
+        },
+      ],
+      reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
     });
+
+    await expect(plainDecision('cat-x')).rejects.toThrow(
+      new ConflictException('IDENTITY_CANDIDATE_NAME_SIMILARITY_ONLY'),
+    );
+    expect(prisma.observedResource.update).not.toHaveBeenCalled();
+  });
+
+  /**
+   * RESOURCE DECISION SAFETY — a row the machine never connected to this wording
+   * carries NO evidence at all, which is weaker than a name guess. It is refused
+   * too, so the name-similarity refusal cannot be walked around by naming an
+   * unrelated row. (Before this law, ACG-01.1 left such a row to human judgment;
+   * the census found no stored decision that used that door.)
+   */
+  it('DECISION SAFETY: a row the kernel never nominated is not recorded as this resource', async () => {
+    // Default verdict: UNRESOLVED / RESOURCE_NOT_FOUND with nothing listed.
+    await expect(plainDecision('cat-existing')).rejects.toThrow(
+      new ConflictException('IDENTITY_CANDIDATE_NOT_NOMINATED'),
+    );
+    expect(prisma.observedResource.update).not.toHaveBeenCalled();
   });
 
   it('ACG-01.1: the refusal rule reads only the verdict — pure and exhaustive', () => {
@@ -692,7 +787,7 @@ describe('ResourceObservationService', () => {
       });
     });
 
-    it('asks the kernel ONCE per exact question, and a question it proves today is not open', async () => {
+    it('asks the kernel once per exact question PER DOCUMENT, and a question it proves today is not open', async () => {
       findMany.mockResolvedValue([
         row(SOURCE_1, 'Pipa PVC'),
         row(SOURCE_1, 'Pipa PVC'),
@@ -732,7 +827,11 @@ describe('ResourceObservationService', () => {
         }),
       );
       expect(loadEvidence).toHaveBeenCalledTimes(1);
-      expect(resolve).toHaveBeenCalledTimes(2);
+      // THREE, not two: "Pipa PVC" is asked once for SOURCE_1 and once for
+      // SOURCE_2, because the document-code law can settle it in one document
+      // and withhold it in the other. The two identical SOURCE_1 rows still
+      // collapse to ONE evaluation — that is the saving this memo exists for.
+      expect(resolve).toHaveBeenCalledTimes(3);
       expect(open.get(SOURCE_1)?.keys.size).toBe(1);
       expect(open.get(SOURCE_1)?.uses).toBe(2);
       expect(open.get(SOURCE_2)?.uses).toBe(1);
@@ -742,6 +841,417 @@ describe('ResourceObservationService', () => {
       ]);
       // A read: nothing is decided.
       expect(update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * F2 — THE AUDITOR'S COUNTEREXAMPLE.
+     *
+     * Documents A and B carry rows with the SAME exact-question tuple, but only
+     * A's row meets the same-document code conflict. Memoizing the kernel's
+     * answer under the question tuple alone let ONE document's row win the map
+     * and answer for both, so the result depended on the order rows arrived in:
+     * [A,B] reported nothing open, [B,A] reported both open.
+     *
+     * The correct answer is the same in both orders: only A.
+     */
+    it('F2: the summary is per DOCUMENT and does not depend on row order', async () => {
+      const A = SOURCE_1;
+      const B = SOURCE_2;
+      // Withheld in A — its document records that row under another code — and
+      // settled in B. Nothing else differs between them.
+      resolve.mockImplementation(
+        (_evidence: unknown, reference: { sourceSha256?: string | null }) =>
+          Promise.resolve(
+            reference.sourceSha256 === A
+              ? {
+                  status: 'NEEDS_REVIEW',
+                  resolvedResourceCatalogId: null,
+                  candidates: [],
+                  reasonCodes: ['SOURCE_CODE_DISAGREES_WITHIN_DOCUMENT'],
+                }
+              : {
+                  status: 'RESOLVED',
+                  resolvedResourceCatalogId: 'cat-pipa',
+                  candidates: [],
+                  reasonCodes: [],
+                },
+          ),
+      );
+
+      const run = async (ordered: unknown[]) => {
+        findMany.mockResolvedValue(ordered);
+        return reader().openQuestionsBySource('ws-1', [A, B]);
+      };
+      const forward = await run([row(A, 'Pipa PVC'), row(B, 'Pipa PVC')]);
+      const reversed = await run([row(B, 'Pipa PVC'), row(A, 'Pipa PVC')]);
+
+      for (const result of [forward, reversed]) {
+        expect(result.get(A)?.uses).toBe(1);
+        expect(result.get(A)?.keys.size).toBe(1);
+        // B was settled, so B asks nothing.
+        expect(result.get(B)).toBeUndefined();
+      }
+      expect([...(forward.get(A)?.keys ?? [])]).toEqual([
+        ...(reversed.get(A)?.keys ?? []),
+      ]);
+    });
+
+    it('F2: a row that names no document is evaluated apart, and attributed to none', async () => {
+      findMany.mockResolvedValue([
+        { ...row(SOURCE_1, 'Pipa PVC'), sourceSha256: null },
+        row(SOURCE_1, 'Pipa PVC'),
+      ]);
+      resolve.mockResolvedValue({
+        status: 'NEEDS_REVIEW',
+        resolvedResourceCatalogId: null,
+        candidates: [],
+        reasonCodes: [],
+      });
+      const open = await reader().openQuestionsBySource('ws-1', [SOURCE_1]);
+      // Two evaluations: the digest-less row is its own group rather than being
+      // folded into the document's answer. Only the row that names a document
+      // is counted against it.
+      expect(resolve).toHaveBeenCalledTimes(2);
+      expect(open.get(SOURCE_1)?.uses).toBe(1);
+    });
+
+    /**
+     * F1 — A LAWFUL CONFIRMATION MUST BE USABLE WHEN THE ROW IS READ AGAIN.
+     *
+     * A person confirmed a component, the write succeeded, the question left the
+     * queue — and re-reading the document asked the same question again and got
+     * the same refusal, because `resolvedResourceCatalogId` was a column nothing
+     * ever read.
+     *
+     * The reader below is narrow on purpose: it answers only about the SAME
+     * source row, and only for decisions today's write-eligibility law would
+     * still accept. A decision made under the older law, which permitted
+     * confirming a name-similarity nomination, is NOT revived by this wiring.
+     */
+    describe('decidedIdentityForSourceRows', () => {
+      const DOC = 'a'.repeat(64);
+      const settledRow = (over = {}) => ({
+        sourceSha256: DOC,
+        sheetName: 'Sheet1',
+        sourceRowNumber: 41,
+        rawName: 'Timbunan Porus',
+        rawCode: 'M144',
+        rawUnit: 'M3',
+        parserContractVersion: 'USI01_XLSX_V1',
+        resourceType: 'MATERIAL',
+        resolvedResourceCatalogId: 'cat-timbunan',
+        ...over,
+      });
+      const asked = (over = {}) => ({
+        sourceSha256: DOC,
+        sheetName: 'Sheet1',
+        sourceRowNumber: 41,
+        rawName: 'Timbunan Porus',
+        resourceType: 'MATERIAL',
+        // E2 — the stated facts travel with the address.
+        rawCode: 'M144',
+        rawUnit: 'M3',
+        parserContractVersion: 'USI01_XLSX_V1',
+        ...over,
+      });
+      /** Today's verdict: withheld, but the chosen row is an EXACT_NAME candidate. */
+      const confirmableToday = {
+        status: 'NEEDS_REVIEW',
+        authority: 'EVIDENCE_CANDIDATE',
+        resolvedResourceCatalogId: null,
+        reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW', 'SOURCE_CODE_DISAGREES_WITHIN_DOCUMENT'],
+        candidates: [
+          {
+            resourceCatalogId: 'cat-timbunan',
+            name: 'Timbunan Porus',
+            code: null,
+            type: 'MATERIAL',
+            baseUnit: 'M3',
+            evidence: [],
+            identityBasis: 'EXACT_NAME',
+            specificationUnproved: false,
+            unprovedSpecificationFacts: [],
+            specifications: null,
+            priorHumanDecision: null,
+          },
+        ],
+        explanation: '',
+      };
+      /** A decision from the older law: the chosen row rests on a name alone. */
+      const nameOnlyToday = {
+        ...confirmableToday,
+        reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
+        candidates: [
+          { ...confirmableToday.candidates[0], identityBasis: 'NAME_SIMILARITY_ONLY' },
+        ],
+      };
+
+      it('F1: a decision today’s law still accepts is handed back for the SAME row', async () => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue(confirmableToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.get(observedSourceRowKey(asked()))).toBe('cat-timbunan');
+        // Only settled rows of the asked documents, in this workspace.
+        //
+        // CORRECTED: this asserted a single hex spelling, which is the narrow
+        // law that made the reader silently blind to rows stored in the other
+        // case. The scope being proven here is the DOCUMENT, not a spelling of
+        // its digest, so both spellings are offered and nothing else is.
+        expect(findMany.mock.calls[0][0].where).toMatchObject({
+          workspaceId: 'ws-1',
+        });
+        expect(new Set(findMany.mock.calls[0][0].where.sourceSha256.in)).toEqual(
+          new Set([DOC.toLowerCase(), DOC.toUpperCase()]),
+        );
+      });
+
+      it('F1: a WEAK historical decision is NOT revived — today’s law would refuse it', async () => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue(nameOnlyToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.size).toBe(0);
+      });
+
+      it('F1: a decision whose chosen row the machine no longer nominates is not handed back', async () => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue({ ...confirmableToday, candidates: [] });
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.size).toBe(0);
+      });
+
+      it.each([
+        ['another document', { sourceSha256: 'b'.repeat(64) }],
+        ['another sheet', { sheetName: 'Sheet2' }],
+        ['another row', { sourceRowNumber: 42 }],
+        ['another wording', { rawName: 'Timbunan porus' }],
+        ['another class', { resourceType: 'EQUIPMENT' }],
+      ])('F1: a decision never travels to %s', async (_label, over) => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue(confirmableToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [
+          asked(over),
+        ]);
+        expect(decided.size).toBe(0);
+      });
+
+      it('F1: when the machine proves it by itself, that is its own answer', async () => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue({
+          ...confirmableToday,
+          status: 'RESOLVED',
+          resolvedResourceCatalogId: 'cat-timbunan',
+        });
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.get(observedSourceRowKey(asked()))).toBe('cat-timbunan');
+      });
+
+      it('F1: a machine proof that names a DIFFERENT row overrides nothing here', async () => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue({
+          ...confirmableToday,
+          status: 'RESOLVED',
+          resolvedResourceCatalogId: 'cat-someone-else',
+        });
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.size).toBe(0);
+      });
+
+      it('F1: rows that name no document ask nothing of the database', async () => {
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [
+          asked({ sourceSha256: null }),
+        ]);
+        expect(decided.size).toBe(0);
+        expect(findMany).not.toHaveBeenCalled();
+      });
+
+      /**
+       * F1 — ONE OCCURRENCE, ONE ANSWER. A DISAGREEMENT IS NOT AN ANSWER.
+       *
+       * Two settled rows can describe the same source occurrence. If they name
+       * DIFFERENT catalogue rows, the reader used to hand back whichever the
+       * database returned last: two people contradicting each other settled by
+       * query order, flipping between runs with nothing recording the doubt.
+       */
+      const secondSettled = (catalogId) =>
+        settledRow({ resolvedResourceCatalogId: catalogId });
+
+      it('F1: two decisions that DISAGREE about one occurrence hand back nothing', async () => {
+        findMany.mockResolvedValue([settledRow(), secondSettled('cat-other')]);
+        resolve.mockResolvedValue(confirmableToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.size).toBe(0);
+      });
+
+      it('F1: the SAME disagreement in the OTHER query order hands back nothing too', async () => {
+        findMany.mockResolvedValue([secondSettled('cat-other'), settledRow()]);
+        resolve.mockResolvedValue(confirmableToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.size).toBe(0);
+      });
+
+      it('F1: two rows that AGREE about one occurrence are one answer, in either order', async () => {
+        for (const order of [
+          [settledRow(), settledRow()],
+          [settledRow(), settledRow()].reverse(),
+        ]) {
+          findMany.mockResolvedValue(order);
+          resolve.mockResolvedValue(confirmableToday);
+          const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+          expect(decided.get(observedSourceRowKey(asked()))).toBe('cat-timbunan');
+          // Agreement is ONE question, asked of the kernel once.
+          expect(resolve).toHaveBeenCalledTimes(1);
+          resolve.mockClear();
+        }
+      });
+
+      /**
+       * F1 — A DECISION NEVER TRAVELS ON A LOCATOR THAT NAMES NOWHERE.
+       *
+       * The key folds a missing sheet and a missing row number to placeholders, so
+       * two rows that cannot say where they are would collapse onto one key and
+       * become "the same occurrence" by accident.
+       */
+      it.each([
+        ['no sheet', { sheetName: null }],
+        ['no row number', { sourceRowNumber: null }],
+      ])('F1: a row with %s is not asked about at all', async (_label, over) => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue(confirmableToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked(over)]);
+        expect(decided.size).toBe(0);
+        expect(findMany).not.toHaveBeenCalled();
+      });
+
+      /**
+       * F1 — HEX CASE IS A SPELLING, NOT AN IDENTITY.
+       *
+       * The key case-folds the digest; SQL equality does not, and an IN list has no
+       * case-insensitive form. A query narrowed to one spelling would return
+       * NOTHING for rows stored in the other — an empty answer that reads
+       * exactly like "nobody ever decided this".
+       */
+      it('F1: the query offers BOTH hex spellings of every digest asked about', async () => {
+        findMany.mockResolvedValue([]);
+        await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        const asked256 = findMany.mock.calls[0][0].where.sourceSha256.in;
+        expect(asked256).toEqual(expect.arrayContaining([DOC.toLowerCase(), DOC.toUpperCase()]));
+      });
+
+      it('F1: a decision stored under the OTHER hex spelling is still the same occurrence', async () => {
+        findMany.mockResolvedValue([settledRow({ sourceSha256: DOC.toUpperCase() })]);
+        resolve.mockResolvedValue(confirmableToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [
+          asked({ sourceSha256: DOC.toLowerCase() }),
+        ]);
+        expect(decided.get(observedSourceRowKey(asked()))).toBe('cat-timbunan');
+      });
+
+      /**
+       * E1 — A NEW SIGHTING MUST NOT VALIDATE AN OLD DECISION.
+       *
+       * The audit's sequence. T0: a decision is made when the evidence is thin.
+       * T1: some LATER import sights the same spelling and binds it, so the row
+       * is now nominated as a RECORDED FACT. T2: the machine still says
+       * NEEDS_REVIEW and nobody has looked again.
+       *
+       * Today's write-eligibility law would ACCEPT that selection — a person may
+       * confirm on a sighting, because a person sees it. Replaying it unattended
+       * is a different act, and the kernel's own contract is that a sighting
+       * "can nominate a candidate, it can never assert one".
+       */
+      const sightingOnlyToday = {
+        ...confirmableToday,
+        reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
+        candidates: [
+          {
+            ...confirmableToday.candidates[0],
+            identityBasis: 'RECORDED_FACT',
+            evidence: ['SOURCE_SIGHTING_NAME_MATCH'],
+          },
+        ],
+      };
+
+      /**
+       * THE TWO LAWS ARE DELIBERATELY DIFFERENT, AND THIS IS THE PROOF.
+       *
+       * The write law ACCEPTS this selection — which is exactly why the reader
+       * handed it back before this repair: it asked only that question. A person
+       * confirming on a sighting is lawful, because they see it; replaying it
+       * with nobody looking is not.
+       */
+      it('E1: the WRITE law still accepts it — the replay law is what narrowed', () => {
+        expect(selectionRefusal(sightingOnlyToday, 'cat-timbunan')).toBeNull();
+      });
+
+      it('E1: a decision nominated ONLY by a later sighting is NOT replayed', async () => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue(sightingOnlyToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.size).toBe(0);
+      });
+
+      it.each([
+        ['a source CODE match', ['SOURCE_CODE_MATCH']],
+        ['a reviewed human mapping', ['REVIEWED_MAPPING_NAME_MATCH']],
+        ['a sighting AND a code match', ['SOURCE_SIGHTING_NAME_MATCH', 'SOURCE_CODE_MATCH']],
+      ])('E1: %s still stands on its own and IS replayed', async (_label, evidence) => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue({
+          ...sightingOnlyToday,
+          candidates: [{ ...sightingOnlyToday.candidates[0], evidence }],
+        });
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.get(observedSourceRowKey(asked()))).toBe('cat-timbunan');
+      });
+
+      it('E1: an EXACT catalogue-name match is never "sighting only"', async () => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue({
+          ...confirmableToday,
+          candidates: [
+            {
+              ...confirmableToday.candidates[0],
+              identityBasis: 'EXACT_NAME',
+              evidence: ['SOURCE_SIGHTING_NAME_MATCH'],
+            },
+          ],
+        });
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.get(observedSourceRowKey(asked()))).toBe('cat-timbunan');
+      });
+
+      /**
+       * E2 — THE SAME PLACE IS NOT THE SAME FACT.
+       *
+       * The locator key carries digest, sheet, row, name and class — not the
+       * stated code, unit or parser contract. So an answer given about M144 at
+       * this row would answer a question about M999 at this row: a different
+       * source fact wearing the same address.
+       */
+      it.each([
+        ['another stated code (M144 answered, M999 asked)', { rawCode: 'M999' }],
+        ['another stated unit', { rawUnit: 'Kg' }],
+        ['another parser contract', { parserContractVersion: 'USI01_XLSX_V2' }],
+      ])('E2: a decision does not answer %s', async (_label, over) => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue(confirmableToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked(over)]);
+        expect(decided.size).toBe(0);
+      });
+
+      it('E2: a stated code the source never gave is not the same as one it did', async () => {
+        findMany.mockResolvedValue([settledRow({ rawCode: null })]);
+        resolve.mockResolvedValue(confirmableToday);
+        const decided = await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(decided.size).toBe(0);
+      });
+
+      it('F1: it is a READ — nothing is written', async () => {
+        findMany.mockResolvedValue([settledRow()]);
+        resolve.mockResolvedValue(confirmableToday);
+        await reader().decidedIdentityForSourceRows('ws-1', [asked()]);
+        expect(update).not.toHaveBeenCalled();
+      });
     });
 
     it('a document with nothing observed asks nothing', async () => {

@@ -195,7 +195,20 @@ const analysis = (workType: string, components: readonly Component[]) =>
 /** Everything SIMPROK "holds" in this spec, read through the delegates the services query. */
 function world() {
   const catalogs: CatalogRow[] = [];
-  const sightings: Sighting[] = [];
+  // The golden candidate rests on a RECORDED FACT in both workspaces: code M03
+  // was seen bound to "Kerikil / Agregat". A shared stem alone would never be
+  // taught or reused (see identical-question-kernel.spec DECISION SAFETY).
+  const sightings: Sighting[] = [WS_A, WS_B].map((workspaceId) => ({
+    workspaceId,
+    resourceCatalogId: KERIKIL.id,
+    rawName: 'Kerikil',
+    rawCode: 'M03',
+    rawUnit: 'M3',
+    sourceSection: 'MATERIAL',
+    sourceSha256: 'S'.repeat(64),
+    sheetName: 'Sheet1',
+    sourceRowNumber: 7,
+  }));
   const ledger: LedgerEvent[] = [];
   const observed: ObservedRow[] = [];
   const versions = new Map<string, StoredVersion>();
@@ -372,6 +385,11 @@ describe('CLOSEOUT P1-A — complete for the AHSP stage is proven by the consume
           outputUnit: string;
           resources: Array<Omit<StoredVersion['resources'][number], 'id'>>;
         },
+        _client: unknown,
+        // F3 — source facts now arrive on the TRUSTED road, beside the recipe,
+        // so a request body cannot carry them. The stub merges them the way the
+        // real service does: positionally, and whole.
+        trusted?: { sourceFacts: ReadonlyArray<Record<string, unknown> | null> },
       ) => {
         const id = `ver-${w.versions.size + 1}`;
         w.versions.set(id, {
@@ -385,9 +403,9 @@ describe('CLOSEOUT P1-A — complete for the AHSP stage is proven by the consume
             resourceType: resource.resourceType,
             coefficient: resource.coefficient,
             baseUnit: resource.baseUnit,
-            rawName: resource.rawName,
-            rawCode: resource.rawCode,
-            rawUnit: resource.rawUnit,
+            rawName: (trusted?.sourceFacts[index]?.rawName ?? null) as never,
+            rawCode: (trusted?.sourceFacts[index]?.rawCode ?? null) as never,
+            rawUnit: (trusted?.sourceFacts[index]?.rawUnit ?? null) as never,
           })),
         });
         return Promise.resolve({ id });
@@ -406,10 +424,18 @@ describe('CLOSEOUT P1-A — complete for the AHSP stage is proven by the consume
             workspaceId: string,
             sourceSha256s: readonly string[],
           ) => queue.openQuestionsBySource(workspaceId, sourceSha256s),
+          // F1 — the REAL decision-reuse law, against this world's own rows, so
+          // this spec keeps proving the lifecycle rather than a stand-in for it.
+          decidedIdentityForSourceRows: (
+            workspaceId: string,
+            rows: readonly unknown[],
+          ) => queue.decidedIdentityForSourceRows(workspaceId, rows as never),
         },
         new RealityNormalizationEngine(),
         { logAction: jest.fn(() => Promise.resolve()) },
         journal,
+        // C1 — the commit retains the source bytes before journalling them.
+        { retain: jest.fn().mockResolvedValue("ws/digest/source") },
       ] as unknown as Dependencies),
     );
     orchestrator = new AhspResourceResolutionOrchestrator(

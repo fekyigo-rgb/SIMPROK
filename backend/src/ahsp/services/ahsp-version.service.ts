@@ -26,12 +26,33 @@ export interface AhspResourceSourceProvenance {
   sourceUnitCellAddress?: string | null;
 }
 
-export interface CreateAhspResourceInput extends AhspResourceSourceProvenance {
+/**
+ * WHAT A REQUEST MAY SAY ABOUT A LINE — AND WHAT IT MAY NOT.
+ *
+ * Deliberately NOT extending `AhspResourceSourceProvenance`. The version route
+ * spreads the request body, so anything declared here is something a client can
+ * assert. Where a line was READ FROM is not a client's to assert: it is either
+ * recorded by the trusted import pipeline, in one piece, or carried forward by
+ * the server from the line being revised — never composed field by field from a
+ * body, and never half from one origin and half from another.
+ *
+ * `carriedFromResourceLineId` is the one provenance-adjacent value a request may
+ * send, and it is not a claim: it is a REFERENCE to an existing AHSPResource
+ * row, resolved by the server against the version being revised. A forged id
+ * resolves to nothing and is refused; it can never invent an origin.
+ */
+export interface CreateAhspResourceInput {
   resourceId: string;
   resourceType: string;
   coefficient: number;
   baseUnit: string;
   conversionFactor?: unknown;
+  /**
+   * The line in the base version this line continues — the server's own row
+   * identity. NOT the catalogue id, which identifies a RESOURCE and says
+   * nothing about which occurrence of it a recipe means.
+   */
+  carriedFromResourceLineId?: string;
 }
 
 export interface CreateAhspVersionDto {
@@ -41,7 +62,47 @@ export interface CreateAhspVersionDto {
   userId: string;
   regulationReference?: string;
   effectiveDate?: Date;
+  /**
+   * The version the author was editing. A revision saved from an OLDER version
+   * must continue THAT version's lines rather than quietly borrow the newest
+   * one's, so the base is stated instead of assumed. Absent means the current
+   * latest — what an editor that opened the current recipe is looking at.
+   */
+  basedOnVersionId?: string;
 }
+
+/**
+ * Source facts recorded by a TRUSTED in-process pipeline, positionally aligned
+ * with `resources`. A separate argument and deliberately not part of the DTO,
+ * precisely so an HTTP body cannot reach it: the controller builds the DTO from
+ * the request and never passes this.
+ */
+export interface TrustedAhspSourceFacts {
+  readonly sourceFacts: ReadonlyArray<AhspResourceSourceProvenance | null>;
+}
+
+/** A line whose origin cannot be established coherently keeps honest nulls. */
+const NO_SOURCE_FACTS: AhspResourceSourceProvenance = {
+  rawName: null,
+  rawCode: null,
+  rawUnit: null,
+  sourceSha256: null,
+  sourceFileName: null,
+  parserContractVersion: null,
+  sheetName: null,
+  sourceRowNumber: null,
+  sourceNameCellAddress: null,
+  sourceCodeCellAddress: null,
+  sourceUnitCellAddress: null,
+};
+
+/** A line referenced a row that is not part of the version being revised. */
+export const AHSP_CARRIED_LINE_NOT_IN_BASE_VERSION =
+  'AHSP_CARRIED_LINE_NOT_IN_BASE_VERSION';
+/** Two lines claimed continuity from the SAME prior line. */
+export const AHSP_CARRIED_LINE_REUSED = 'AHSP_CARRIED_LINE_REUSED';
+/** The stated base version does not belong to this AHSP. */
+export const AHSP_BASE_VERSION_NOT_FOUND = 'AHSP_BASE_VERSION_NOT_FOUND';
 
 @Injectable()
 export class AhspVersionService {
@@ -63,6 +124,15 @@ export class AhspVersionService {
     ahspId: string,
     data: CreateAhspVersionDto,
     client?: Prisma.TransactionClient,
+    /**
+     * THE TRUST BOUNDARY, and it is a PARAMETER rather than a field.
+     *
+     * Only an in-process caller that actually read the document can pass this —
+     * the HTTP route builds the DTO from the request body and never reaches
+     * here. No `isTrusted` flag is consulted, because a flag in a body is just
+     * another thing a body says.
+     */
+    trusted?: TrustedAhspSourceFacts,
   ) {
     data.resources.forEach(r => {
       if (r.coefficient <= 0) throw new BadRequestException('Coefficient must be > 0');
@@ -102,6 +172,125 @@ export class AhspVersionService {
       });
       const versionNumber = lastVersion ? lastVersion.versionNumber + 1 : 1;
 
+      /**
+       * ACG-01 CLOSURE 1 — A REVISION DOES NOT ERASE WHERE A LINE WAS BORN, AND
+       * A REQUEST NEVER INVENTS ONE.
+       *
+       * Source facts arrive by exactly two roads, and they are WHOLE on both:
+       *
+       *   1. the trusted pipeline hands them in, per line, already read from the
+       *      document it parsed; or
+       *   2. the server carries a prior line's facts forward, entire, when this
+       *      line says which prior line it continues.
+       *
+       * There is no third road, and no merging between the two. The earlier
+       * `input ?? inherited` merge could compose an origin that never existed —
+       * one document's digest with another row's sheet and a third line's cell
+       * address — which is a locator naming nowhere. A locator names one place
+       * in one document, or it names none.
+       *
+       * Continuity is the SERVER'S row identity (AHSPResource.id), resolved
+       * against the version being revised. The catalogue id is not usable for
+       * this: it identifies a RESOURCE, so two lines quoting the same resource —
+       * a lawful recipe — are indistinguishable by it, and reorder, duplication
+       * and delete-then-add all become guesses.
+       */
+      const base = data.basedOnVersionId
+        ? await tx.aHSPVersion.findFirst({
+            where: { id: data.basedOnVersionId, ahspId },
+            select: { id: true },
+          })
+        : lastVersion;
+      // A base that is not this AHSP's is refused rather than silently replaced
+      // by the latest: the author was editing SOMETHING, and guessing what
+      // would attach the wrong recipe's origins to this one.
+      if (data.basedOnVersionId && !base) {
+        throw new BadRequestException(AHSP_BASE_VERSION_NOT_FOUND);
+      }
+
+      const carriedIds = data.resources
+        .map((r) => r.carriedFromResourceLineId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      const priorById = new Map<
+        string,
+        AhspResourceSourceProvenance & {
+          resourceId: string;
+          resourceType: string;
+        }
+      >();
+      if (carriedIds.length > 0) {
+        if (!base) throw new BadRequestException(AHSP_CARRIED_LINE_NOT_IN_BASE_VERSION);
+        const priorRows = await tx.aHSPResource.findMany({
+          // Scoped to the base version, so an id from another AHSP — or from a
+          // version of this AHSP the author was not editing — simply is not here.
+          where: { ahspVersionId: base.id, id: { in: [...new Set(carriedIds)] } },
+        });
+        for (const row of priorRows) priorById.set(row.id, row);
+        for (const id of carriedIds) {
+          if (!priorById.has(id)) {
+            throw new BadRequestException(AHSP_CARRIED_LINE_NOT_IN_BASE_VERSION);
+          }
+        }
+        // One prior line continues into at most ONE new line. Letting two claim
+        // it would hand the same locator to two different components.
+        const claims = new Map<string, number>();
+        for (const id of carriedIds) claims.set(id, (claims.get(id) ?? 0) + 1);
+        for (const [, times] of claims) {
+          if (times > 1) throw new BadRequestException(AHSP_CARRIED_LINE_REUSED);
+        }
+      }
+
+      /** The ONE origin this line may carry — whole, or nothing. */
+      const sourceFactsFor = (
+        r: CreateAhspResourceInput,
+        index: number,
+      ): AhspResourceSourceProvenance => {
+        const fromPipeline = trusted?.sourceFacts[index];
+        if (fromPipeline) return fromPipeline;
+        if (trusted) return NO_SOURCE_FACTS;
+        const id = r.carriedFromResourceLineId;
+        if (!id) return NO_SOURCE_FACTS;
+        const prior = priorById.get(id);
+        if (!prior) return NO_SOURCE_FACTS;
+        /**
+         * CONTINUITY ENDS WHERE THE RESOURCE CHANGES.
+         *
+         * Provenance says "the document stated THIS, here". It is evidence about
+         * a particular resource, not about a slot in a recipe. So when an author
+         * REPLACES what a line is about — a MATERIAL priced in M3 becomes a piece
+         * of EQUIPMENT priced by the hour — carrying the old facts forward would
+         * hand the new resource a workbook cell that never named it: an authentic
+         * lineage turned into false evidence for an identity it never proved.
+         *
+         * The lineage itself is real and is not denied; it simply stops being
+         * evidence. The substituted line is hand-built, and it says so with the
+         * same nulls any hand-built line carries. A person may of course re-state
+         * a source for it through the trusted pipeline, which is the only road
+         * that ever asserts a source fact.
+         */
+        if (
+          prior.resourceId !== r.resourceId ||
+          prior.resourceType !== r.resourceType
+        ) {
+          return NO_SOURCE_FACTS;
+        }
+        // Taken as one unit — including its nulls. A prior line that was itself
+        // hand-built carries its emptiness forward, which is the truth about it.
+        return {
+          rawName: prior.rawName ?? null,
+          rawCode: prior.rawCode ?? null,
+          rawUnit: prior.rawUnit ?? null,
+          sourceSha256: prior.sourceSha256 ?? null,
+          sourceFileName: prior.sourceFileName ?? null,
+          parserContractVersion: prior.parserContractVersion ?? null,
+          sheetName: prior.sheetName ?? null,
+          sourceRowNumber: prior.sourceRowNumber ?? null,
+          sourceNameCellAddress: prior.sourceNameCellAddress ?? null,
+          sourceCodeCellAddress: prior.sourceCodeCellAddress ?? null,
+          sourceUnitCellAddress: prior.sourceUnitCellAddress ?? null,
+        };
+      };
+
       const version = await tx.aHSPVersion.create({
         data: {
           ahspId,
@@ -117,22 +306,13 @@ export class AhspVersionService {
             // never a fallback to another column: an absent code is absent, not
             // the name, and not an empty string. The database CHECK refuses a
             // locator that cannot name the document it came from.
-            create: data.resources.map(r => ({
+            create: data.resources.map((r, index) => ({
               resourceId: r.resourceId,
               resourceType: r.resourceType,
               coefficient: r.coefficient,
               baseUnit: r.baseUnit,
-              rawName: r.rawName ?? null,
-              rawCode: r.rawCode ?? null,
-              rawUnit: r.rawUnit ?? null,
-              sourceSha256: r.sourceSha256 ?? null,
-              sourceFileName: r.sourceFileName ?? null,
-              parserContractVersion: r.parserContractVersion ?? null,
-              sheetName: r.sheetName ?? null,
-              sourceRowNumber: r.sourceRowNumber ?? null,
-              sourceNameCellAddress: r.sourceNameCellAddress ?? null,
-              sourceCodeCellAddress: r.sourceCodeCellAddress ?? null,
-              sourceUnitCellAddress: r.sourceUnitCellAddress ?? null,
+              // ONE origin, spread whole. Nothing here reads the request body.
+              ...sourceFactsFor(r, index),
             })),
           },
         },

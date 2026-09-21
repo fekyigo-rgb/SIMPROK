@@ -63,6 +63,15 @@ export const ARCHIVE_POST_WRITE_MISSING =
   'SOURCE_ARCHIVE_POST_WRITE_ARTIFACT_MISSING';
 
 /**
+ * A read asked for a document this workspace never retained.
+ *
+ * Distinct from READ_FAILURE on purpose: nothing is wrong here, there is simply
+ * nothing at this address. Kept separate so a caller — and whoever reads the
+ * error later — can tell "we never kept it" from "we cannot see what we kept".
+ */
+export const ARCHIVE_SOURCE_NOT_RETAINED = 'SOURCE_ARCHIVE_SOURCE_NOT_RETAINED';
+
+/**
  * What an existing content-addressed artifact turned out to be.
  *
  * Four outcomes, because four different things can be true and only one of them
@@ -233,6 +242,47 @@ export class BasicPriceSourceArchiveService {
   /** Reads back retained bytes by logical reference. Survives restart (§8). */
   async read(logicalRef: string): Promise<Buffer> {
     return this.storage.readFinal(this.storage.resolveFinalPath(logicalRef));
+  }
+
+  /**
+   * THE ROUND TRIP, CLOSED AT THE ADDRESS'S OWNER.
+   *
+   * `retain` answers with a logical reference, and a caller that keeps a column
+   * for it — Basic Price does — can read straight back. A caller that does not
+   * had no way back to its own bytes at all: AHSP keeps the document's DIGEST on
+   * the import job and no reference column, so the artifact it retained was
+   * unreachable from the job that named it.
+   *
+   * The closure belongs HERE, not in that caller. `<workspaceId>/<sha256>/source`
+   * is this class's law, and a second place that rebuilt the same string would be
+   * a second archive authority in all but name — the moment the layout changed,
+   * one of them would be wrong. So a caller brings the identity it already holds
+   * and this class does the addressing, exactly as it already does when retaining.
+   * No new column is introduced to carry what the digest already determines.
+   *
+   * It is a READ, and it fails closed. Bytes come back only when they hash to the
+   * address they sit under, so a truncated, replaced or unreadable artifact raises
+   * instead of answering with something that is not the document. An address
+   * nothing was retained at is told apart from one that could not be read: the
+   * first is an absence, the second is a fault.
+   */
+  async readForDocument(input: {
+    workspaceId: string;
+    contentDigestSha256: string;
+  }): Promise<Buffer> {
+    const digest = input.contentDigestSha256.toUpperCase();
+    const logicalRef = this.logicalRef(input.workspaceId, digest);
+    const stored = await this.verifyStoredArtifact(logicalRef, digest);
+    if (stored.status === 'VERIFIED') return stored.bytes;
+    if (stored.status === 'CORRUPT') {
+      throw this.integrityConflict(logicalRef, digest, stored.actualDigest);
+    }
+    if (stored.status === 'READ_FAILED') {
+      throw this.storageReadFailure(logicalRef, stored);
+    }
+    throw new Error(
+      `${ARCHIVE_SOURCE_NOT_RETAINED}: storageRef=${logicalRef} expected=${digest}`,
+    );
   }
 
   /**

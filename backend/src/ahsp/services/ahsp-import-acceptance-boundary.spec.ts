@@ -108,6 +108,11 @@ describe('AHSP import acceptance boundary — seams', () => {
       outputUnit: string;
       resources: Array<Omit<StoredVersion['resources'][number], 'id'>>;
     },
+    _client?: unknown,
+    // F3 — source facts arrive on the TRUSTED road now, beside the recipe, so a
+    // request body cannot carry them. Merged here positionally and whole, the
+    // way the real version service does it.
+    trusted?: { sourceFacts: ReadonlyArray<Record<string, unknown> | null> },
   ) => {
     const id = `ver-${versions.size + 1}`;
     versions.set(id, {
@@ -121,9 +126,9 @@ describe('AHSP import acceptance boundary — seams', () => {
         resourceType: resource.resourceType,
         coefficient: resource.coefficient,
         baseUnit: resource.baseUnit,
-        rawName: resource.rawName,
-        rawCode: resource.rawCode,
-        rawUnit: resource.rawUnit,
+        rawName: (trusted?.sourceFacts[index]?.rawName ?? null) as never,
+        rawCode: (trusted?.sourceFacts[index]?.rawCode ?? null) as never,
+        rawUnit: (trusted?.sourceFacts[index]?.rawUnit ?? null) as never,
       })),
     });
     return Promise.resolve({ id });
@@ -134,6 +139,10 @@ describe('AHSP import acceptance boundary — seams', () => {
   });
   const observations = {
     observeMany: jest.fn(),
+    // F1 — the import reader asks which rows a person already decided.
+    // No decisions is the truthful default for a fixture that has none.
+    decidedIdentityForSourceRows: jest.fn().mockResolvedValue(new Map()),
+
     openQuestionsBySource: jest.fn(),
   };
   const audit = { logAction: jest.fn() };
@@ -163,6 +172,8 @@ describe('AHSP import acceptance boundary — seams', () => {
         new RealityNormalizationEngine(),
         audit,
         withJournal,
+        // C1 — the commit retains source bytes before journalling them.
+        { retain: jest.fn().mockResolvedValue("ws/digest/source") },
       ] as unknown as CanonicalizationDependencies),
     );
 

@@ -3,8 +3,10 @@ import { Prisma, ResourceType } from '@prisma/client';
 import {
   RawResourceReference,
   ResourceIdentityResolution,
+  isAdmissibleAfterExamination,
 } from './resource-identity-resolution.kernel';
 import { ResourceIdentityResolutionService } from './resource-identity-resolution.service';
+import { candidateContextDigest } from './ghx-candidate-context';
 
 /**
  * THE one canonical mint authority for a genuinely-new resource.
@@ -100,6 +102,15 @@ export interface AdmitObservedResourceInput {
   /** A canonical unit code the caller has already PROVEN via the Unit Kernel. */
   baseUnit: string;
   provenance: ResourceAdmissionProvenance;
+  /**
+   * OPTIONAL — a person examined the live nominations and refused every one of
+   * them (see `isAdmissibleAfterExamination`). Absent, admission is exactly the
+   * machine-exhaustion law it always was; Basic Price never sends it.
+   */
+  examination?: {
+    refusedCandidateIds: readonly string[];
+    candidateContextDigest: string;
+  };
 }
 
 const PROVENANCE_REQUIRED: ReadonlyArray<keyof ResourceAdmissionProvenance> = [
@@ -164,10 +175,39 @@ export class ResourceAdmissionService {
       rawCode: input.rawCode ?? null,
       rawUnit: input.rawUnit ?? null,
       resourceType: input.resourceType,
+      // The SAME question the queue asked, digest included. Admission re-proves
+      // the verdict a person was shown, so it must be handed the same facts:
+      // provenance.sourceSha256 is already mandatory input here, and leaving it
+      // out made the two computations agree only while the document-code law
+      // happened to be one-directional. That is an invariant, not a coincidence,
+      // so it is stated rather than relied upon.
+      sourceSha256: input.provenance.sourceSha256,
     };
     const evidence = await this.identity.loadEvidence(tx, input.workspaceId);
     const resolution = await this.identity.resolve(evidence, reference, tx);
-    if (!ResourceAdmissionService.isIdentityExhausted(resolution)) {
+    // Re-proved UNDER THE LOCK: either the machine exhausted identity by itself,
+    // or a person refused exactly the live nominations — all of them name
+    // similarity or machine-ruled-out — against the live candidate context. A
+    // concurrent admission that created this resource makes it an exact match
+    // here, so both roads refuse the duplicate.
+    const exhausted = ResourceAdmissionService.isIdentityExhausted(resolution);
+    const examined =
+      !exhausted &&
+      input.examination !== undefined &&
+      isAdmissibleAfterExamination(
+        resolution,
+        input.examination,
+        candidateContextDigest(
+          resolution.candidates.map((candidate) => ({
+            resourceCatalogId: candidate.resourceCatalogId,
+            name: candidate.name,
+            type: candidate.type,
+            baseUnit: candidate.baseUnit,
+            specifications: candidate.specifications,
+          })),
+        ),
+      );
+    if (!exhausted && !examined) {
       throw new ResourceAdmissionNotExhaustedError(resolution);
     }
 

@@ -242,7 +242,7 @@ describe('IQL-01 governed exact-question learning (e2e)', () => {
         },
       })
     ).id;
-    await prisma.resourceCatalog.create({
+    const kerikilB = await prisma.resourceCatalog.create({
       data: {
         workspaceId: workspaceBId,
         name: 'Kerikil / Agregat',
@@ -250,6 +250,28 @@ describe('IQL-01 governed exact-question learning (e2e)', () => {
         baseUnit: 'M3',
       },
     });
+    // DECISION SAFETY — the golden candidate must rest on a RECORDED FACT: the
+    // source code M03 was seen bound to "Kerikil / Agregat" in an earlier
+    // document. A shared stem ("agregat") alone is never taught or reused.
+    const recordCodeSighting = (ws: string, resourceCatalogId: string) =>
+      prisma.resourceSourceIdentity.create({
+        data: {
+          resourceCatalogId,
+          workspaceId: ws,
+          sourceSha256: 'E2E0A'.padEnd(64, '0'),
+          sourceFileName: 'AHSP earlier.xlsx',
+          parserContractVersion: 'USI01_XLSX_V1',
+          sheetName: 'Sheet1',
+          sourceRowNumber: 11,
+          sourceSection: 'MATERIAL',
+          sourceNameCellAddress: 'C11',
+          rawCode: 'M03',
+          rawName: 'Kerikil / Agregat',
+          rawUnit: 'M3',
+        },
+      });
+    await recordCodeSighting(workspaceId, kerikilId);
+    await recordCodeSighting(workspaceBId, kerikilB.id);
 
     // Real, fully-located observations, as the AHSP import records them.
     const observe = async (
@@ -313,6 +335,9 @@ describe('IQL-01 governed exact-question learning (e2e)', () => {
     await prisma.$executeRawUnsafe(
       'ALTER TABLE resource_identity_question_decisions ENABLE TRIGGER resource_identity_question_decisions_immutable_trigger',
     );
+    await prisma.resourceSourceIdentity.deleteMany({
+      where: { workspaceId: { in: workspaces } },
+    });
     await prisma.observedResource.deleteMany({
       where: { workspaceId: { in: workspaces } },
     });

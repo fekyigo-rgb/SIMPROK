@@ -249,6 +249,11 @@ describe('ACG-01.1 resource admission & identity boundary (e2e)', () => {
       status: 'UNRESOLVED',
       reasonCodes: ['SPECIFICATION_CONFLICT'],
       exhausted: false,
+      // Every listed row was ruled out by the machine: refusing exactly these is
+      // the lawful road to "new" (proven at the end of this file). The binding
+      // itself stays refused below.
+      admissibleAfterExamination: true,
+      candidateContextDigest: expect.any(String),
     });
     expect(listed.candidates.map((c: any) => c.resourceCatalogId)).toEqual([
       catalog.pipa4,
@@ -328,7 +333,37 @@ describe('ACG-01.1 resource admission & identity boundary (e2e)', () => {
         }),
       ).toBe(learnedBefore);
 
-      // POSITIVE CONTROL — the nominated row is still the human's to confirm.
+      // DECISION SAFETY — nominated on the shared words "pipa porous" ONLY, the
+      // sibling is a reason to look, not an identity: a direct request is refused.
+      const nameOnly = await post(
+        `/resource-observations/${obs.pipa}/curate-existing`,
+        { selectedResourceCatalogId: sibling.id },
+      ).expect(409);
+      expect(nameOnly.body.message).toBe(
+        'IDENTITY_CANDIDATE_NAME_SIMILARITY_ONLY',
+      );
+      expect(await stored('pipa')).toEqual(before);
+
+      // LEGACY_TEST_CHANGE_REGISTER: OLD positive control confirmed the sibling on
+      // name tokens alone. NEW: once a recorded fact binds it (source code M25a
+      // seen for that row), it is the human's to confirm. TEST_WEAKENING=NO.
+      await prisma.resourceSourceIdentity.create({
+        data: {
+          resourceCatalogId: sibling.id,
+          workspaceId,
+          sourceSha256: 'ACC5'.padEnd(64, '0'),
+          sourceFileName: 'AHSP earlier.xlsx',
+          parserContractVersion: 'USI01_XLSX_V1',
+          sheetName: 'Sheet1',
+          sourceRowNumber: 5,
+          sourceSection: 'MATERIAL',
+          sourceNameCellAddress: 'B5',
+          rawCode: 'M25a',
+          rawName: 'Pipa porous',
+          rawUnit: 'M1',
+        },
+      });
+      // POSITIVE CONTROL — the recorded-fact nomination is still the human's to confirm.
       const saved = await post(
         `/resource-observations/${obs.pipa}/curate-existing`,
         { selectedResourceCatalogId: sibling.id },
@@ -349,6 +384,9 @@ describe('ACG-01.1 resource admission & identity boundary (e2e)', () => {
           reason: null,
         },
       });
+      await prisma.resourceSourceIdentity.deleteMany({
+        where: { resourceCatalogId: sibling.id },
+      });
       await prisma.resourceCatalog.delete({ where: { id: sibling.id } });
     }
   });
@@ -359,6 +397,8 @@ describe('ACG-01.1 resource admission & identity boundary (e2e)', () => {
       status: 'UNRESOLVED',
       reasonCodes: ['RESOURCE_TYPE_MISMATCH'],
       exhausted: false,
+      admissibleAfterExamination: true,
+      candidateContextDigest: expect.any(String),
     });
     const before = await stored('air');
     const refused = await post(
@@ -410,6 +450,8 @@ describe('ACG-01.1 resource admission & identity boundary (e2e)', () => {
       status: 'UNRESOLVED',
       reasonCodes: ['RESOURCE_NOT_FOUND'],
       exhausted: true,
+      admissibleAfterExamination: false,
+      candidateContextDigest: expect.any(String),
     });
     expect(listed.suggestedUnitDefinitionId).toEqual(expect.any(String));
 
@@ -428,12 +470,46 @@ describe('ACG-01.1 resource admission & identity boundary (e2e)', () => {
     });
   });
 
+  // LEGACY_TEST_CHANGE_REGISTER: OLD fixture confirmed "Semen" → "Semen Portland"
+  // on token containment alone. DECISION SAFETY refuses that; the valid
+  // nomination now rests on a recorded fact (code M12 seen for Semen Portland),
+  // and the name-only attempt is asserted refused first. TEST_WEAKENING=NO.
   it('TEST 1 — a valid nominated candidate still resolves exactly as before', async () => {
+    const guess = await listedRow('semen');
+    expect(
+      guess.candidates.find((c: any) => c.resourceCatalogId === catalog.semenPortland),
+    ).toMatchObject({ identityBasis: 'NAME_SIMILARITY_ONLY', confirmable: false });
+    const refusedGuess = await post(
+      `/resource-observations/${obs.semen}/curate-existing`,
+      { selectedResourceCatalogId: catalog.semenPortland },
+    ).expect(409);
+    expect(refusedGuess.body.message).toBe('IDENTITY_CANDIDATE_NAME_SIMILARITY_ONLY');
+    expect(await stored('semen')).toMatchObject({ status: 'OBSERVED', resolvedResourceCatalogId: null });
+
+    await prisma.resourceSourceIdentity.create({
+      data: {
+        resourceCatalogId: catalog.semenPortland,
+        workspaceId,
+        sourceSha256: 'ACC6'.padEnd(64, '0'),
+        sourceFileName: 'AHSP earlier.xlsx',
+        parserContractVersion: 'USI01_XLSX_V1',
+        sheetName: 'Sheet1',
+        sourceRowNumber: 6,
+        sourceSection: 'MATERIAL',
+        sourceNameCellAddress: 'B6',
+        rawCode: 'M12',
+        rawName: 'Semen Portland',
+        rawUnit: 'KG',
+      },
+    });
     const listed = await listedRow('semen');
     expect(listed.identityVerdict.status).toBe('NEEDS_REVIEW');
     expect(listed.candidates.map((c: any) => c.resourceCatalogId)).toContain(
       catalog.semenPortland,
     );
+    expect(
+      listed.candidates.find((c: any) => c.resourceCatalogId === catalog.semenPortland),
+    ).toMatchObject({ identityBasis: 'RECORDED_FACT', confirmable: true });
     await post(`/resource-observations/${obs.semen}/curate-existing`, {
       selectedResourceCatalogId: catalog.semenPortland,
     }).expect(201);
@@ -474,5 +550,101 @@ describe('ACG-01.1 resource admission & identity boundary (e2e)', () => {
       status: 'RESOLVED_EXISTING',
       resolvedResourceCatalogId: catalog.kerikil,
     });
+  });
+
+  /**
+   * LAWFUL ADMISSION PATH (branch c), through the real API and database.
+   *
+   * "Water Tank Truck" meets only "Dump Truck" by a shared stem. Refusing EXACTLY
+   * that nomination, under the candidate context the list showed, lets the ONE
+   * admission authority mint exactly one resource with full provenance. A stale
+   * or partial refusal is refused; a repeated or concurrent request never mints
+   * a second identity; and the other question of the page is untouched.
+   */
+  it('LAWFUL ADMISSION — refusing exactly the name-guess nominations mints ONE resource, once, with provenance', async () => {
+    const listed = await listedRow('truck');
+    expect(listed.identityVerdict).toMatchObject({
+      status: 'NEEDS_REVIEW',
+      exhausted: false,
+      admissibleAfterExamination: true,
+    });
+    const digest = listed.identityVerdict.candidateContextDigest as string;
+    const refusedIds = listed.candidates.map((c: any) => c.resourceCatalogId);
+    expect(refusedIds).toEqual([catalog.dumpTruck]);
+    const catalogBefore = await workspaceCatalogCount();
+    const before = await stored('truck');
+
+    // (b) is not (c): a partial or stale refusal is not an examination.
+    const partial = await post(`/resource-observations/${obs.truck}/curate-new`, {
+      unitDefinitionId: listed.suggestedUnitDefinitionId,
+      refusedCandidateIds: ['00000000-0000-4000-8000-000000000000'],
+      candidateContextDigest: digest,
+    }).expect(409);
+    expect(partial.body.message).toBe('RESOURCE_IDENTITY_NOT_EXHAUSTED');
+    const stale = await post(`/resource-observations/${obs.truck}/curate-new`, {
+      unitDefinitionId: listed.suggestedUnitDefinitionId,
+      refusedCandidateIds: refusedIds,
+      candidateContextDigest: 'f'.repeat(64),
+    }).expect(409);
+    expect(stale.body.message).toBe('RESOURCE_IDENTITY_NOT_EXHAUSTED');
+    const incomplete = await post(`/resource-observations/${obs.truck}/curate-new`, {
+      unitDefinitionId: listed.suggestedUnitDefinitionId,
+      refusedCandidateIds: refusedIds,
+    }).expect(400);
+    expect(incomplete.body.message).toBe('EXAMINATION_INCOMPLETE');
+    expect(await stored('truck')).toEqual(before);
+    expect(await workspaceCatalogCount()).toBe(catalogBefore);
+
+    // Two identical requests at once: exactly one admission.
+    const body = {
+      unitDefinitionId: listed.suggestedUnitDefinitionId,
+      refusedCandidateIds: refusedIds,
+      candidateContextDigest: digest,
+    };
+    const results = await Promise.all([
+      post(`/resource-observations/${obs.truck}/curate-new`, body),
+      post(`/resource-observations/${obs.truck}/curate-new`, body),
+    ]);
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses).toEqual([201, 409]);
+    expect(await workspaceCatalogCount()).toBe(catalogBefore + 1);
+
+    const after = await stored('truck');
+    expect(after).toMatchObject({
+      status: 'ADMITTED_NEW',
+      rawName: 'Water Tank Truck',
+      rawCode: 'E23',
+      rawUnit: 'Jam',
+      sourceSha256: SOURCE_SHA,
+      sourceRowNumber: 43,
+    });
+    expect(after.reason).toContain(catalog.dumpTruck);
+    const minted = await prisma.resourceCatalog.findUniqueOrThrow({
+      where: { id: after.resolvedResourceCatalogId as string },
+    });
+    expect(minted).toMatchObject({ name: 'Water Tank Truck', type: 'EQUIPMENT', workspaceId });
+    const sightings = await prisma.resourceSourceIdentity.findMany({
+      where: { resourceCatalogId: minted.id },
+    });
+    expect(sightings).toHaveLength(1);
+    expect(sightings[0]).toMatchObject({ sourceSha256: SOURCE_SHA, sourceRowNumber: 43, rawName: 'Water Tank Truck' });
+
+    // A repeat after the fact: already decided, still one identity.
+    const repeat = await post(`/resource-observations/${obs.truck}/curate-new`, body).expect(409);
+    expect(repeat.body.message).toBe('OBSERVATION_ALREADY_DECIDED');
+    expect(await workspaceCatalogCount()).toBe(catalogBefore + 1);
+  });
+
+  it('LAWFUL ADMISSION — a machine-ruled-out-only question (Pipa porous 6" vs 4") is admissible after refusing exactly that row', async () => {
+    const listed = await listedRow('pipa');
+    expect(listed.identityVerdict).toMatchObject({ status: 'UNRESOLVED', admissibleAfterExamination: true });
+    const catalogBefore = await workspaceCatalogCount();
+    await post(`/resource-observations/${obs.pipa}/curate-new`, {
+      unitDefinitionId: listed.suggestedUnitDefinitionId,
+      refusedCandidateIds: listed.candidates.map((c: any) => c.resourceCatalogId),
+      candidateContextDigest: listed.identityVerdict.candidateContextDigest,
+    }).expect(201);
+    expect(await workspaceCatalogCount()).toBe(catalogBefore + 1);
+    expect(await stored('pipa')).toMatchObject({ status: 'ADMITTED_NEW', rawName: 'Pipa porous diameter 6"' });
   });
 });

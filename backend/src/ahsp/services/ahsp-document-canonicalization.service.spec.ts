@@ -37,7 +37,12 @@ describe('AhspDocumentCanonicalizationService', () => {
     createMany: jest.fn<Promise<void>, [SightingWrite]>(),
   };
   const { prisma } = transactionalPrisma({ resourceSourceIdentity: sightings });
-  const observations = { observeMany: jest.fn() };
+  const observations = {
+    observeMany: jest.fn(),
+    // F1 — the import reader asks which rows a person already decided.
+    // No decisions is the truthful default for a fixture that has none.
+    decidedIdentityForSourceRows: jest.fn().mockResolvedValue(new Map()),
+  };
   const norm = new RealityNormalizationEngine();
   const audit = { logAction: jest.fn() };
   let journal: ReturnType<typeof inMemoryImportJournal>;
@@ -71,6 +76,8 @@ describe('AhspDocumentCanonicalizationService', () => {
       norm as any,
       audit as any,
       journal as any,
+      // C1 — the commit retains the source bytes before journalling them.
+      { retain: jest.fn().mockResolvedValue("ws/digest/source") } as any,
     );
   });
 
@@ -121,22 +128,53 @@ describe('AhspDocumentCanonicalizationService', () => {
    * gone the moment the row was written — and the occurrence path had to ask
    * the identity kernel with rawCode null even for a document that stated one.
    */
+  /**
+   * C1 — THE BYTES BEHIND THE DIGEST ARE KEPT, AND KEPT FIRST.
+   *
+   * The journal row names a source digest. Until this wiring nothing retained
+   * the bytes behind it, so an import could name a source SIMPROK could not
+   * produce. Retain runs BEFORE the journal, so no row ever claims a source that
+   * was not kept.
+   */
+  it('C1: source bytes are retained on the existing archive BEFORE the journal row exists', async () => {
+    const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
+    await service.commit(envelope, 'user-1');
+    const retain = (service as any).sourceArchive.retain as jest.Mock;
+    expect(retain).toHaveBeenCalledTimes(1);
+    const call = retain.mock.calls[0][0];
+    expect(call.workspaceId).toBe(envelope.workspaceId);
+    // The digest is DECLARED to the archive, which verifies it rather than
+    // trusting it — and the bytes handed over are the envelope's own.
+    expect(call.contentDigestSha256).toBe(envelope.contentDigestSha256);
+    expect(Buffer.isBuffer(call.bytes)).toBe(true);
+    // Ordering, proven by invocation order rather than asserted in prose.
+    expect(retain.mock.invocationCallOrder[0]).toBeLessThan(
+      (journal.recordDocument as jest.Mock).mock.invocationCallOrder[0],
+    );
+  });
+
   it('CLOSURE 1: an accepted resource keeps the source facts it was born from', async () => {
     const envelope = await envelopeFrom(await buildAhspAnalisaXlsx());
     await service.commit(envelope, 'user-1');
 
-    const written = versionService.createVersion.mock.calls[0][1].resources[0];
+    const call = versionService.createVersion.mock.calls[0];
+    const written = call[1].resources[0];
     // The identity the import proved is unchanged...
     expect(written.resourceId).toBe('catalog-pekerja');
-    // ...and now travels beside what the document actually said.
-    expect(written.rawName).toBe('Pekerja');
-    expect(written.rawUnit).toBe('OH');
-    expect(written.sourceSha256).toEqual(expect.any(String));
-    expect(written.sourceFileName).toEqual(expect.any(String));
-    expect(written.parserContractVersion).toEqual(expect.any(String));
-    expect(written.sheetName).toEqual(expect.any(String));
-    expect(typeof written.sourceRowNumber).toBe('number');
-    expect(written.sourceNameCellAddress).toEqual(expect.any(String));
+    // ...and the recipe itself carries NO source facts: F3 moved them off the
+    // road a request body travels on, so a client can never assert an origin.
+    expect(written.rawName).toBeUndefined();
+    expect(written.sourceSha256).toBeUndefined();
+    // They travel beside it, on the trusted road, as ONE whole origin per line.
+    const facts = call[3].sourceFacts[0];
+    expect(facts.rawName).toBe('Pekerja');
+    expect(facts.rawUnit).toBe('OH');
+    expect(facts.sourceSha256).toEqual(expect.any(String));
+    expect(facts.sourceFileName).toEqual(expect.any(String));
+    expect(facts.parserContractVersion).toEqual(expect.any(String));
+    expect(facts.sheetName).toEqual(expect.any(String));
+    expect(typeof facts.sourceRowNumber).toBe('number');
+    expect(facts.sourceNameCellAddress).toEqual(expect.any(String));
   });
 
   /**
@@ -929,10 +967,15 @@ describeBinaMargaCommit('AhspDocumentCanonicalizationService — official Bina M
       transactionalPrisma({
         resourceSourceIdentity: { createMany: jest.fn() },
       }).prisma as any,
-      { observeMany: jest.fn() } as any,
+      {
+        observeMany: jest.fn(),
+        decidedIdentityForSourceRows: jest.fn().mockResolvedValue(new Map()),
+      } as any,
       new RealityNormalizationEngine() as any,
       { logAction: jest.fn() } as any,
       inMemoryImportJournal() as any,
+      // C1 — the commit retains source bytes before journalling them.
+      { retain: jest.fn().mockResolvedValue("ws/digest/source") } as any,
     );
   });
 
@@ -1025,10 +1068,15 @@ describePositiveCommit('AhspDocumentCanonicalizationService — Copy of AHSP ok(
       transactionalPrisma({
         resourceSourceIdentity: { createMany: jest.fn() },
       }).prisma as any,
-      { observeMany: jest.fn() } as any,
+      {
+        observeMany: jest.fn(),
+        decidedIdentityForSourceRows: jest.fn().mockResolvedValue(new Map()),
+      } as any,
       new RealityNormalizationEngine() as any,
       { logAction: jest.fn() } as any,
       inMemoryImportJournal() as any,
+      // C1 — the commit retains source bytes before journalling them.
+      { retain: jest.fn().mockResolvedValue("ws/digest/source") } as any,
     );
   });
 

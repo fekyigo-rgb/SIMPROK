@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  isConfirmableCandidate,
   isHumanDecidable,
 } from '../resource-catalog/resource-identity-resolution.kernel';
 import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
@@ -488,6 +489,11 @@ export class GhxResourceIdentityDecisionService {
         if (!chosen) throw new ConflictException('CANDIDATE_NOT_LEGITIMATE');
         if (chosen.specificationUnproved) {
           throw new ConflictException('CANDIDATE_SPECIFICATION_UNPROVED');
+        }
+        // A nomination resting on name similarity only is a reason to look, not
+        // an alternative a governed decision may select (the kernel's own law).
+        if (!isConfirmableCandidate(chosen)) {
+          throw new ConflictException('CANDIDATE_NAME_SIMILARITY_ONLY');
         }
 
         // 6. Generation is SERVER-CONTROLLED, derived under the lock.

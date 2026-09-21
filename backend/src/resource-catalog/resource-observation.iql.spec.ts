@@ -58,6 +58,24 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
 
   let observations: ReturnType<typeof observation>[];
   let catalogs: Array<typeof KERIKIL>;
+  /**
+   * DECISION SAFETY — the golden question's candidate rests on a RECORDED FACT:
+   * the source code M03 was seen bound to Kerikil / Agregat. Without it the only
+   * link is a shared word ("agregat"), which the kernel treats as a reason to
+   * look and never as an answer to teach or reuse (proven below).
+   */
+  let sightings: Array<Record<string, unknown>>;
+  const sighting = (resourceCatalogId: string, rawCode: string) => ({
+    resourceCatalogId,
+    workspaceId: WS,
+    rawName: 'sighted in an earlier document',
+    rawCode,
+    rawUnit: 'M3',
+    sourceSection: 'MATERIAL',
+    sourceSha256: 'S'.repeat(64),
+    sheetName: 'Sheet1',
+    sourceRowNumber: 7,
+  });
   let ledger: Array<Record<string, any>>;
   let failNextCreateWithRace: (() => void) | null;
   let observationUpdates: Array<Record<string, unknown>>;
@@ -88,6 +106,7 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
       observation('obs-3'),
     ];
     catalogs = [KERIKIL];
+    sightings = [sighting(KERIKIL.id, 'M03')];
     ledger = [];
     failNextCreateWithRace = null;
     observationUpdates = [];
@@ -127,7 +146,7 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
             : null,
         ),
       },
-      resourceSourceIdentity: { findMany: jest.fn(async () => []) },
+      resourceSourceIdentity: { findMany: jest.fn(async () => sightings) },
       basicPriceImportRowResourceMapping: { findMany: jest.fn(async () => []) },
       resourceIdentityQuestionDecision: {
         // The resolver preload (newest per key, with the answer it follows) and
@@ -608,6 +627,10 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
       status: 'UNRESOLVED',
       reasonCodes: ['SPECIFICATION_CONFLICT'],
       exhausted: false,
+      // Every listed row was ruled out by the machine: refusing exactly these
+      // opens the lawful "genuinely new" road — the binding stays refused.
+      admissibleAfterExamination: true,
+      candidateContextDigest: expect.any(String),
     });
     expect(listed?.candidates.map((c) => c.resourceCatalogId)).toEqual([
       PIPA_4.id,
@@ -731,6 +754,8 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
    */
   it('ACG-01.1: the nominated row is still recorded, ruled-out sibling and all', async () => {
     catalogs = [KERIKIL, PIPA_4, PIPA_GENERIC, ...UNRELATED];
+    // The generic pipe is nominated on a recorded fact (its code was seen).
+    sightings.push(sighting(PIPA_GENERIC.id, 'M25a'));
     observations.push(pipaObservation());
 
     const saved = await service.curateExisting({
@@ -830,6 +855,7 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
       name: 'Agregat Batu Pecah',
     };
     catalogs = [KERIKIL, BATU_PECAH];
+    sightings.push(sighting(BATU_PECAH.id, 'M03'));
     const offered = await openList(OWNER);
     await teach(
       'obs-1',
@@ -923,6 +949,7 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
       KERIKIL,
       { ...KERIKIL, id: 'cat-batu-pecah', name: 'Agregat Batu Pecah' },
     ];
+    sightings.push(sighting('cat-batu-pecah', 'M03'));
     const offered = await openList(OWNER);
     await teach(
       'obs-1',
@@ -1036,5 +1063,82 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
           o.resourceType === 'MATERIAL',
       ),
     ).toBe(true);
+  });
+
+  /**
+   * DECISION SAFETY — THE OWNER'S REAL SHAPE. In canonical, "Agregat kasar"
+   * reaches "Kerikil / Agregat" through a shared word only. A single such
+   * candidate is not strong because it is alone: no learning is offered, and a
+   * context minted for it anyway cannot be spent — nothing is written.
+   */
+  it('DECISION SAFETY: a name-similarity-only candidate is never offered, taught or recorded', async () => {
+    sightings = [];
+    const rows = await openList(OWNER);
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.identicalQuestion).toMatchObject({
+        rememberable: false,
+        notRememberableReason: 'NOT_DECIDABLE',
+        decisionContextToken: null,
+      });
+      expect(row.candidates).toEqual([
+        expect.objectContaining({
+          resourceCatalogId: KERIKIL.id,
+          identityBasis: 'NAME_SIMILARITY_ONLY',
+          confirmable: false,
+        }),
+      ]);
+    }
+    // A context minted directly (bypassing the list) still cannot teach it.
+    const forged = tokens.issueIdenticalQuestionContext({
+      workspaceId: WS,
+      questionKey: rows[0].identicalQuestion.questionKey,
+      actorAccountId: OWNER,
+      expectedGeneration: 0,
+      candidateContextDigest: rows[0].identityVerdict.candidateContextDigest,
+      resolutionPolicyVersion: IQL01_IDENTICAL_QUESTION_POLICY_VERSION,
+    });
+    await expect(teach('obs-1', forged)).rejects.toThrow(
+      new ConflictException('NOT_IDENTICAL_QUESTION_DECIDABLE'),
+    );
+    await expect(
+      service.curateExisting({
+        workspaceId: WS,
+        observationId: 'obs-1',
+        selectedResourceCatalogId: KERIKIL.id,
+        actorAccountId: OWNER,
+      }),
+    ).rejects.toThrow(
+      new ConflictException('IDENTITY_CANDIDATE_NAME_SIMILARITY_ONLY'),
+    );
+    expect(observationUpdates).toHaveLength(0);
+    expect(ledger).toHaveLength(0);
+  });
+
+  /**
+   * DECISION SAFETY — an APPROVED answer whose chosen row loses its recorded
+   * fact is NOT reused, and is said to be INAPPLICABLE rather than EFFECTIVE.
+   * The ledger is untouched: history is kept, reuse simply stops.
+   */
+  it('DECISION SAFETY: an approved answer that now rests on name similarity only is not reused', async () => {
+    await teach('obs-1', await tokenFor('obs-1'));
+    const pending = await question(SECOND);
+    await service.approveQuestion({
+      workspaceId: WS,
+      questionKey: pending.questionKey,
+      actorAccountId: SECOND,
+      decisionContextToken: pending.decisionContextToken,
+    });
+    expect(await openList(OWNER)).toHaveLength(0);
+    const before = ledger.length;
+
+    sightings = [];
+    const reopened = await openList(OWNER);
+    expect(reopened.map((row) => row.id).sort()).toEqual(['obs-2', 'obs-3']);
+    expect(
+      reopened.every((row) => row.identicalQuestion.state === 'INAPPLICABLE'),
+    ).toBe(true);
+    expect((await question(OWNER)).state).toBe('INAPPLICABLE');
+    expect(ledger).toHaveLength(before);
   });
 });

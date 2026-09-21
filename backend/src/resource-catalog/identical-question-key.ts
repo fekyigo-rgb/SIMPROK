@@ -28,9 +28,34 @@ export const IQL01_QUESTION_KEY_TAG = 'IQL01';
 /**
  * The policy an IQL-01 answer is recorded and reused under. A stored answer
  * recorded under a different policy is inapplicable, never silently reused.
+ *
+ * V1 → V2 (resource decision safety). Under V1 an answer could be TAUGHT for a
+ * row the machine nominated on NAME SIMILARITY ALONE; the kernel now refuses
+ * that at teach, at confirm and at reuse. A V1 answer is therefore an approval
+ * granted under a law that no longer exists — the approver weighed a different
+ * proposition than the one this workspace now applies.
+ *
+ * WHY THE VERSION MOVES AND THE DIGEST DOES NOT. The candidate context digest
+ * covers WHICH rows were offered (id, name, class, unit, specifications) —
+ * deliberately not what each nomination RESTS ON. A V1 answer is therefore
+ * dormant rather than dead: it is inapplicable today only because the live
+ * basis is weak, and a sighting arriving later from an ordinary Basic Price
+ * import could strengthen that basis WITHOUT changing the candidate set, waking
+ * the old approval with nobody asked. Putting evidence kinds into the digest
+ * would instead invalidate every stored digest at once — GHX's separate ledger
+ * included — and would discard an answer whenever its evidence merely improved.
+ * This field already means "which law this was approved under", so this is the
+ * field that moves.
+ *
+ * NOTHING IS REWRITTEN. The ledger, its generations and its approvals stay
+ * exactly as they are; a V1 answer simply stops resolving anything by itself.
+ * The lawful way forward is the governance path that already exists: REVOKE
+ * remains available for a V1 answer (planRevoke does not consult applicability),
+ * and the question may be taught and approved again under V2 — which now
+ * requires a confirmable candidate before it will teach at all.
  */
 export const IQL01_IDENTICAL_QUESTION_POLICY_VERSION =
-  'IQL01_IDENTICAL_QUESTION_V1';
+  'IQL01_IDENTICAL_QUESTION_V2';
 
 /** The locked exact-question tuple (lock §2). */
 export interface IdenticalQuestion {

@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import { resolveB1B12RuntimePaths } from './b1b12-runtime-paths';
 
@@ -57,11 +57,20 @@ describe('B1B12 runtime paths', () => {
   });
 
   it('does not inject a literal Computer-1 user into the default path', () => {
+    // The supplied home must NOT be derived from where this checkout happens to
+    // live. `resolve('current-os-user')` is relative to process.cwd(), so in a
+    // checkout under C:\Users\<name> the FIXTURE smuggled the developer's own
+    // user name into the value it then asserted was absent — the test failed for
+    // a reason that has nothing to do with the function under test, which takes
+    // the home as a parameter and hard-codes no user at all.
+    const currentOsUserHome = resolve(sep, 'current-os-user-home');
+
     const paths = resolveB1B12RuntimePaths({
       environment: {},
-      userHome: resolve('current-os-user'),
+      userHome: currentOsUserHome,
     });
 
+    expect(paths.runtimeRoot).toBe(join(currentOsUserHome, 'SIMPROK-RUNTIME'));
     expect(paths.runtimeRoot.toLowerCase()).not.toContain('asus');
   });
 });

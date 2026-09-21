@@ -104,7 +104,16 @@ export type IdenticalQuestionConflict =
   | 'TEACHER_CANNOT_APPROVE'
   | 'NO_PENDING_CANDIDATE'
   | 'NO_EFFECTIVE_ANSWER'
-  | 'SUPERSEDE_SAME_ANSWER';
+  | 'SUPERSEDE_SAME_ANSWER'
+  /**
+   * The pending candidate was taught under a policy — or against a candidate
+   * context — that no longer holds, so approving it could never make it
+   * effective. Refused rather than accepted as a no-op: asking a second holder
+   * to spend a judgement on an answer that cannot apply is asking them to do
+   * nothing and be told it was something. REJECT stays open, and the question
+   * may be taught again under the policy now in force.
+   */
+  | 'CANDIDATE_POLICY_SUPERSEDED';
 
 export type GovernancePlan =
   | {
@@ -173,7 +182,18 @@ export function planTeach(
 
 /** APPROVE — by an account different from the candidate's author. */
 export function planApprove(
-  params: PlanBase & { readonly actorAccountId: string },
+  params: PlanBase & {
+    readonly actorAccountId: string;
+    /**
+     * The policy now in force — THE POLICY ONLY, deliberately not the whole live
+     * context. Whether the candidate SET has moved is a different fact, decided
+     * downstream against a freshly computed verdict and reported as a stale
+     * context; conflating the two would report a changed law as a changed
+     * screen. This guard needs no verdict: the candidate carries the policy it
+     * was taught under.
+     */
+    readonly livePolicyVersion: string;
+  },
 ): GovernancePlan {
   const { state, latest } = params;
   if (
@@ -187,6 +207,17 @@ export function planApprove(
     return conflict('DECISION_GENERATION_STALE');
   }
   if (state.kind !== 'PENDING') return conflict('NO_PENDING_CANDIDATE');
+  // APPROVING WHAT CAN NEVER APPLY IS NOT AN APPROVAL.
+  //
+  // The candidate carries the policy it was taught under. When that policy is no
+  // longer in force, the approval would append a generation and change nothing:
+  // the reuse path refuses the answer on exactly this field. Accepting it would
+  // spend a second holder's judgement on a no-op and record it as a decision.
+  // REJECT is untouched — it is the lawful exit — and the question may be taught
+  // again under the policy now in force.
+  if (state.candidate.resolutionPolicyVersion !== params.livePolicyVersion) {
+    return conflict('CANDIDATE_POLICY_SUPERSEDED');
+  }
   if (state.candidate.decidedByAccountId === params.actorAccountId) {
     return conflict('TEACHER_CANNOT_APPROVE');
   }

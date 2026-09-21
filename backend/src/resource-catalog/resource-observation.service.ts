@@ -8,6 +8,8 @@ import { ObservedResourceStatus, Prisma, ResourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
+  UNIT_KERNEL_POLICY_VERSION,
+  UNIT_PRICE_OPERATION,
   UNIT_RESOLUTION_STATUS,
   trustedUnitContext,
 } from '../unit-kernel/unit-kernel.contracts';
@@ -26,7 +28,11 @@ import {
 import {
   RawResourceReference,
   ResourceIdentityResolution,
+  SelectionRefusal,
+  isAdmissibleAfterExamination,
+  isConfirmableCandidate,
   isIdenticalQuestionDecidable,
+  selectionRefusal,
 } from './resource-identity-resolution.kernel';
 import { candidateContextDigest } from './ghx-candidate-context';
 import {
@@ -117,9 +123,11 @@ export type KernelIdentityRefusal =
  * second question — this wording against the CHOSEN ROW ALONE — and applies
  * this same predicate to that answer too (see refusalOfSelection).
  *
- * Everything else stays the human judgment it already was: a nominated
- * candidate, or a row the kernel cannot connect to this wording at all (the
- * kernel not finding a row is not the kernel refusing it).
+ * SCOPE, SINCE THE WRITE-ELIGIBILITY LAW: this predicate now answers ONLY the
+ * second, chosen-row-alone question. The whole-catalogue answer is judged by the
+ * kernel's `selectionRefusal`, which additionally refuses a row nominated on name
+ * similarity only and a row the machine never nominated — a human confirming a
+ * guess, or a row with no evidence at all, is not an identity.
  */
 export function kernelRefusalOfSelection(
   verdict: Pick<
@@ -244,6 +252,55 @@ export interface ObserveResourceInput {
   resourceType: ResourceType;
   candidates?: readonly string[];
   provenance?: ObserveResourceProvenance;
+}
+
+/**
+ * THE LOCATOR BOTH SIDES ALREADY CARRY — the six facts `observed_resources` is
+ * unique on. Used to ask "has a human already decided THIS source row?" without
+ * inventing any new identity: it is the row's own place in its own document.
+ */
+/**
+ * F1 — IS THIS CANDIDATE STANDING ONLY ON SIGHTINGS?
+ *
+ * An exact catalogue-name match carries no evidence list at all and is never
+ * "sighting only". Among the recorded facts a nomination can rest on, a source
+ * SIGHTING is the one the kernel itself refuses to let assert anything — so a
+ * nomination whose recorded facts are all sightings is strong enough for a
+ * person to look at, and not strong enough to replay a decision unattended.
+ */
+export function sightingOnlyNomination(candidate: {
+  identityBasis?: string | null;
+  evidence?: ReadonlyArray<string> | null;
+}): boolean {
+  if (candidate.identityBasis === 'EXACT_NAME') return false;
+  const recorded = (candidate.evidence ?? []).filter((kind) =>
+    [
+      'SOURCE_CODE_MATCH',
+      'SOURCE_SIGHTING_NAME_MATCH',
+      'REVIEWED_MAPPING_CODE_MATCH',
+      'REVIEWED_MAPPING_NAME_MATCH',
+    ].includes(kind),
+  );
+  return (
+    recorded.length > 0 &&
+    recorded.every((kind) => kind === 'SOURCE_SIGHTING_NAME_MATCH')
+  );
+}
+
+export function observedSourceRowKey(row: {
+  sourceSha256: string | null;
+  sheetName: string | null;
+  sourceRowNumber: number | null;
+  rawName: string;
+  resourceType: string;
+}): string {
+  return JSON.stringify([
+    (row.sourceSha256 ?? '').toLowerCase(),
+    row.sheetName ?? '',
+    row.sourceRowNumber ?? -1,
+    row.rawName,
+    row.resourceType,
+  ]);
 }
 
 @Injectable()
@@ -377,6 +434,10 @@ export class ResourceObservationService {
         // kernel's own description, carried instead of discarded. The decision
         // about what is strong enough to act on is made from these facts in the
         // reader's own view-model, never by inventing a score in this seam.
+        //
+        // `identityBasis` / `confirmable` are the kernel's OWN statement of what
+        // each nomination rests on, so the screen projects eligibility instead of
+        // keeping a second opinion about which evidence is strong enough.
         const candidates = resolution.candidates.map((candidate) => ({
           resourceCatalogId: candidate.resourceCatalogId,
           name: candidate.name,
@@ -384,9 +445,14 @@ export class ResourceObservationService {
           type: candidate.type,
           baseUnit: candidate.baseUnit,
           evidence: candidate.evidence,
+          identityBasis: candidate.identityBasis,
+          confirmable:
+            resolution.status !== 'UNRESOLVED' &&
+            isConfirmableCandidate(candidate),
           specificationUnproved: candidate.specificationUnproved,
           unprovedSpecificationFacts: candidate.unprovedSpecificationFacts,
         }));
+        const candidateContextDigest = candidateDigestOf(resolution);
         let suggestedUnitDefinitionId: string | null = null;
         if (observation.rawUnit) {
           // THE CLASS IS ALREADY ON THE ROW, so ask the kernel the whole
@@ -430,11 +496,34 @@ export class ResourceObservationService {
           resourceType: observation.resourceType,
           origin: observation.origin,
           status: observation.status,
+          // The locator this row already carries, carried on. Provenance is not
+          // one domain's idea — every origin records where a row was read from —
+          // so naming it here keeps this lifecycle domain-neutral while letting
+          // a caller that DOES know its own documents join back to them.
+          sourceSha256: observation.sourceSha256,
+          parserContractVersion: observation.parserContractVersion,
+          sheetName: observation.sheetName,
+          sourceRowNumber: observation.sourceRowNumber,
           candidates,
           identityVerdict: {
             status: resolution.status,
             reasonCodes: [...resolution.reasonCodes],
             exhausted: ResourceAdmissionService.isIdentityExhausted(resolution),
+            // Branch (c) — "genuinely new" becomes lawful once a person refuses
+            // EXACTLY these nominations, all of which rest on name similarity or
+            // were ruled out by the machine. Carried, never recomputed: the same
+            // kernel predicate is re-proved under the admission lock.
+            admissibleAfterExamination: isAdmissibleAfterExamination(
+              resolution,
+              {
+                refusedCandidateIds: resolution.candidates.map(
+                  (candidate) => candidate.resourceCatalogId,
+                ),
+                candidateContextDigest,
+              },
+              candidateContextDigest,
+            ),
+            candidateContextDigest,
           },
           suggestedUnitDefinitionId,
           identicalQuestion,
@@ -483,17 +572,51 @@ export class ResourceObservationService {
       },
     });
     if (rows.length === 0) return bySource;
-    const keyOf = (row: (typeof rows)[number]) =>
+    /**
+     * THE GOVERNANCE KEY — which exact question this is. It is what a stored
+     * answer is filed under, and what the caller counts as "distinct questions".
+     * Unchanged, and deliberately so: nothing here alters what an IQL answer
+     * means or which question it may be reused for.
+     */
+    const questionKeyOf = (row: (typeof rows)[number]) =>
       identicalQuestionKey(this.questionOf(row));
-    const questions = new Map(rows.map((row) => [keyOf(row), row]));
+    /**
+     * THE EVALUATION KEY — which distinct QUESTION-AND-DOCUMENT the kernel is
+     * being asked about. A different thing from the governance key, and it has
+     * to be.
+     *
+     * The kernel's answer is no longer a function of the exact-question tuple
+     * alone: `referenceOf` carries the document digest, and the document-code
+     * law reads it — the same wording and code can be settled in one document
+     * and withheld in another, because only one of them records that catalogue
+     * row under a different code of its own. Memoizing that answer under the
+     * five-field question key alone was unsound: one document's row won the map
+     * and its verdict was then attributed to every document asking the same
+     * wording, so the result depended on the order the rows arrived in.
+     *
+     * The key therefore carries the question AND the digest — the complete input
+     * `referenceOf` builds. An absent digest is its own group, which is right:
+     * a row that cannot name its document has nothing to disagree with, and it
+     * is attributed to no document below either.
+     */
+    const evaluationKeyOf = (row: (typeof rows)[number]) =>
+      JSON.stringify([questionKeyOf(row), row.sourceSha256 ?? '']);
+
+    const evaluations = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const key = evaluationKeyOf(row);
+      if (!evaluations.has(key)) evaluations.set(key, row);
+    }
     const evidence = await this.identity.loadEvidence(
       this.prisma,
       workspaceId,
       undefined,
-      { identicalQuestionKeys: [...questions.keys()] },
+      // The IQL preload still asks by GOVERNANCE key: a stored answer belongs to
+      // a question, not to a document.
+      { identicalQuestionKeys: [...new Set(rows.map(questionKeyOf))] },
     );
     const open = new Set<string>();
-    for (const [key, row] of questions) {
+    for (const [key, row] of evaluations) {
       const resolution = await this.identity.resolve(
         evidence,
         this.referenceOf(row),
@@ -501,17 +624,247 @@ export class ResourceObservationService {
       if (!this.machineProves(resolution)) open.add(key);
     }
     for (const row of rows) {
-      const key = keyOf(row);
-      if (!row.sourceSha256 || !open.has(key)) continue;
+      if (!row.sourceSha256) continue;
+      if (!open.has(evaluationKeyOf(row))) continue;
       const entry = bySource.get(row.sourceSha256) ?? {
         keys: new Set<string>(),
         uses: 0,
       };
-      entry.keys.add(key);
+      // Counted as the QUESTION it is — so "3 questions" still means three
+      // distinct questions, not three question-document pairs.
+      entry.keys.add(questionKeyOf(row));
       entry.uses += 1;
       bySource.set(row.sourceSha256, entry);
     }
     return bySource;
+  }
+
+  /**
+   * F1 — THE DECISIONS A HUMAN ALREADY MADE ABOUT THESE EXACT SOURCE ROWS.
+   *
+   * A confirmation was lawful, was written, and then nothing could ever read it:
+   * `resolvedResourceCatalogId` was a write-only column, so re-reading the same
+   * document asked the same question again and got the same refusal. The person
+   * had answered; SIMPROK had not listened.
+   *
+   * This is the listening, and it is deliberately NARROW. It answers only about
+   * the SAME source row — the six facts `observed_resources` is unique on — so a
+   * decision never travels to another document, another wording, or another
+   * occurrence. It is not a memory and not a generalisation: it is the same
+   * question, asked again, about the same row.
+   *
+   * EVERY DECISION IS RE-PROVED UNDER TODAY'S LAW before it is handed back.
+   * observed_resources records no policy version and no candidate context, so a
+   * row cannot say which law it was decided under — and rows decided under the
+   * older law could be confirmed on a name alone. Rather than trust a timestamp,
+   * the chosen row is put back through the SAME write-eligibility predicate
+   * `curateExisting` applies at the moment of writing: if today's law would
+   * still let a person confirm it, the decision stands; if it would refuse it —
+   * a name-similarity nomination, a row the machine no longer nominates, a row
+   * that is gone — the decision is simply not handed back. Nothing is revived by
+   * this wiring that today's law would not accept on its own.
+   *
+   * TWO THINGS THAT LOOK LIKE RE-PROVING AND ARE NOT, BOTH REFUSED HERE:
+   *
+   *   A NEW SIGHTING MAY NOT VALIDATE AN OLD DECISION. Today's law lets a person
+   *   confirm a candidate nominated by a recorded fact, and a source sighting is
+   *   a recorded fact — so a decision made when the evidence was thin becomes
+   *   replayable the moment some LATER import sights the same spelling, with
+   *   nobody having looked again. The kernel's own contract is that a sighting
+   *   "can nominate a candidate, it can never assert one". Confirming on a
+   *   sighting is lawful for a PERSON, who sees it; it is not lawful as the
+   *   thing that revives a decision nobody re-examined. So a replay whose chosen
+   *   row is held up by sightings alone is withheld, and the question is asked.
+   *
+   *   THE SAME PLACE IS NOT THE SAME FACT. The locator key does not carry the
+   *   stated code, unit or parser contract, so an answer about `M144` at a row
+   *   would otherwise answer a question about `M999` at that same row — a
+   *   different source fact wearing the same address. Every stated fact of the
+   *   row must match the stored one, or it is not the question that was answered.
+   *
+   * It asserts identity and nothing else. No unit becomes proven, no coefficient
+   * and no price: those are other questions, asked elsewhere, as before.
+   */
+  async decidedIdentityForSourceRows(
+    workspaceId: string,
+    rows: readonly {
+      sourceSha256: string | null;
+      sheetName: string | null;
+      sourceRowNumber: number | null;
+      rawName: string;
+      resourceType: string;
+      /**
+       * The stated facts of the row. Required, not optional: a caller that does
+       * not know what the source said cannot be asking about the same fact, and
+       * a silently-skipped comparison is exactly how M999 gets M144's answer.
+       */
+      rawCode: string | null;
+      rawUnit: string | null;
+      parserContractVersion: string | null;
+    }[],
+  ): Promise<Map<string, string>> {
+    const decided = new Map<string, string>();
+    if (rows.length === 0) return decided;
+
+    /**
+     * THE SAME OCCURRENCE MEANS THE WHOLE LOCATOR, OR NOTHING.
+     *
+     * `observedSourceRowKey` folds a missing sheet to '' and a missing row
+     * number to -1, so two rows that cannot say where they are collapse onto one
+     * key and become "the same occurrence" by accident. A decision must never
+     * travel on a locator that names nowhere, so an incomplete one is not asked
+     * about at all — it is not an answer withheld, it is a question that cannot
+     * be posed.
+     */
+    const locatable = rows.filter(
+      (row) =>
+        typeof row.sourceSha256 === 'string' &&
+        row.sourceSha256.length > 0 &&
+        typeof row.sheetName === 'string' &&
+        row.sheetName.length > 0 &&
+        typeof row.sourceRowNumber === 'number',
+    );
+    if (locatable.length === 0) return decided;
+
+    /**
+     * A DIGEST IS A NUMBER WRITTEN IN LETTERS.
+     *
+     * The key case-folds it; SQL equality does not, and `in` has no
+     * case-insensitive form. Narrowing to the caller's spelling alone would
+     * return NOTHING whenever the stored rows use the other case — an empty
+     * result indistinguishable from "nobody ever decided this". Both spellings
+     * are offered to the query, and the folded key below stays the authority.
+     */
+    const digests = [
+      ...new Set(
+        locatable.flatMap((row) => {
+          const sha = row.sourceSha256 as string;
+          return [sha.toLowerCase(), sha.toUpperCase()];
+        }),
+      ),
+    ];
+
+    /**
+     * THE STATED FACTS OF THE ROW, beside its address.
+     *
+     * The locator key answers WHERE; these answer WHAT THE SOURCE SAID there.
+     * Both must match, or the stored answer is about a different fact.
+     */
+    const statedFacts = (row: {
+      rawCode: string | null;
+      rawUnit: string | null;
+      parserContractVersion: string | null;
+    }) =>
+      JSON.stringify([
+        row.rawCode ?? null,
+        row.rawUnit ?? null,
+        row.parserContractVersion ?? null,
+      ]);
+
+    const wanted = new Map(
+      locatable.map((row) => [observedSourceRowKey(row), statedFacts(row)]),
+    );
+    const settled = await this.prisma.observedResource.findMany({
+      where: {
+        workspaceId,
+        sourceSha256: { in: digests },
+        resolvedResourceCatalogId: { not: null },
+        status: {
+          in: [
+            ObservedResourceStatus.RESOLVED_EXISTING,
+            ObservedResourceStatus.ADMITTED_NEW,
+          ],
+        },
+      },
+      select: {
+        sourceSha256: true,
+        sheetName: true,
+        sourceRowNumber: true,
+        rawName: true,
+        rawCode: true,
+        rawUnit: true,
+        parserContractVersion: true,
+        resourceType: true,
+        resolvedResourceCatalogId: true,
+      },
+    });
+    if (settled.length === 0) return decided;
+
+    const relevant = settled.filter((row) => {
+      const key = observedSourceRowKey(row);
+      if (!wanted.has(key)) return false;
+      // Same address AND same stated facts, or it is not the same question.
+      return wanted.get(key) === statedFacts(row);
+    });
+    if (relevant.length === 0) return decided;
+
+    /**
+     * ONE OCCURRENCE, ONE ANSWER — AND DISAGREEMENT IS NOT AN ANSWER.
+     *
+     * This looped straight into `decided.set(...)`, so when two settled rows
+     * described the SAME source occurrence and named DIFFERENT catalogue rows,
+     * whichever the database happened to return last silently won. Two people
+     * contradicting each other would have been resolved by query order, and the
+     * result would flip between runs with no record that anything was in doubt.
+     *
+     * So the rows are gathered per occurrence FIRST. One distinct choice is an
+     * answer; more than one is a conflict this reader has no authority to
+     * settle, and it hands back nothing for that occurrence — leaving the
+     * machine's own verdict to stand and the question open, which is what a
+     * disagreement should cost. Not last-row-wins, and not first-row-wins.
+     */
+    const chosenByOccurrence = new Map<
+      string,
+      { choices: Set<string>; row: (typeof relevant)[number] }
+    >();
+    for (const row of relevant) {
+      const chosen = row.resolvedResourceCatalogId;
+      if (!chosen) continue;
+      const key = observedSourceRowKey(row);
+      const entry = chosenByOccurrence.get(key);
+      if (entry) entry.choices.add(chosen);
+      else chosenByOccurrence.set(key, { choices: new Set([chosen]), row });
+    }
+
+    const evidence = await this.identity.loadEvidence(this.prisma, workspaceId);
+    for (const [key, entry] of chosenByOccurrence) {
+      if (entry.choices.size !== 1) continue;
+      const chosen = [...entry.choices][0];
+      const verdict = await this.identity.resolve(
+        evidence,
+        this.referenceOf(entry.row),
+      );
+      // The machine may have come to prove it by itself since; that is its own
+      // answer and this method has nothing to add to it.
+      if (verdict.status === 'RESOLVED') {
+        if (verdict.resolvedResourceCatalogId === chosen) decided.set(key, chosen);
+        continue;
+      }
+      // Today's write-eligibility law, asked exactly as the write asks it.
+      if (selectionRefusal(verdict, chosen) !== null) continue;
+      /**
+       * …AND THE REPLAY MAY NOT BE PROPPED UP BY A SIGHTING.
+       *
+       * `selectionRefusal` is the law for a PERSON making a decision, and it
+       * lets them confirm a candidate nominated by a recorded fact — a source
+       * sighting among them. That is right for a person: they see the sighting
+       * and weigh it. It is wrong as the thing that revives a decision nobody
+       * re-examined, because then a LATER import sighting the same spelling
+       * quietly turns a thin old choice into an asserted identity.
+       *
+       * The kernel's own contract on a sighting: it "can nominate a candidate,
+       * it can never assert one". So when the chosen row is held up by sightings
+       * ALONE, the replay is withheld and the question is put to a person again.
+       * An exact catalogue-name match, a source CODE match, or a reviewed human
+       * mapping all still stand on their own.
+       */
+      const nominated = verdict.candidates.find(
+        (candidate) => candidate.resourceCatalogId === chosen,
+      );
+      if (nominated && sightingOnlyNomination(nominated)) continue;
+      decided.set(key, chosen);
+    }
+    return decided;
   }
 
   /**
@@ -588,7 +941,9 @@ export class ResourceObservationService {
    * HUMAN DECISION — this observation is genuinely new. The reviewer names a
    * canonical unit (never invented here), and the ONE admission authority mints
    * exactly one ResourceCatalog + one ResourceSourceIdentity. Fails closed if the
-   * identity turns out to still be known, if the unit is not representable, or if
+   * identity turns out to still be known, if the chosen unit is not representable
+   * by the Unit Kernel, if the Unit Kernel cannot reach that unit FROM the one the
+   * source document itself stated (including when the source stated none), or if
    * the observation lacks the provenance a sighting requires.
    */
   async curateNew(params: {
@@ -597,6 +952,15 @@ export class ResourceObservationService {
     unitDefinitionId: string;
     actorAccountId: string;
     reason?: string | null;
+    /**
+     * Branch (c): the nominations this person examined and refused, and the
+     * candidate context they were shown. Re-proved by the admission authority
+     * under its lock; absent means the machine-exhaustion law alone.
+     */
+    examination?: {
+      refusedCandidateIds: readonly string[];
+      candidateContextDigest: string;
+    } | null;
   }) {
     return this.prisma.$transaction(
       async (tx) => {
@@ -630,6 +994,107 @@ export class ResourceObservationService {
           );
         }
 
+        // …AND THE UNIT THE SOURCE ITSELF STATED MUST REACH THE CHOSEN ONE.
+        //
+        // The proof above answers "is this canonical code vocabulary the kernel
+        // can see" — true of every catalogued unit, and therefore silent about
+        // THIS row. It was the only unit question asked here, so a human could
+        // observe "Formworks [bh/M']" and admit it under any known canonical
+        // unit: the selection was checked against itself and passed.
+        //
+        // The proposition admission actually needs is the one the Basic Price
+        // admission already asks through this same authority — can the Unit
+        // Kernel get from the unit the SOURCE stated to the unit a human chose.
+        // The kernel is the ONE unit law (see its own standing instruction:
+        // reuse it, never replicate the domain logic), so nothing is compared,
+        // normalized or aliased here; a lawful equivalence or an existing
+        // conversion rule still passes exactly as before.
+        //
+        // A source that states no unit is not a WEAKER proof — it is NO proof,
+        // and it is the dangerous case rather than the mild one: an
+        // incompatible spelling fails loudly, an absent one would pass in
+        // silence. Refused here without consulting the kernel, so safety never
+        // depends on the catalogue happening to hold no empty alias.
+        const rawSourceUnit = observation.rawUnit?.trim() ?? '';
+        const sourceUnitRefusal = (
+          status: string,
+          reasonCodes: readonly string[],
+          explanation: string,
+        ) =>
+          new ConflictException({
+            statusCode: 409,
+            error: 'Conflict',
+            message: 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE',
+            unitResolution: {
+              status,
+              reasonCodes,
+              explanation,
+              policyVersion: UNIT_KERNEL_POLICY_VERSION,
+              // The source cell, unaltered — null stays null, blank stays blank.
+              rawSourceUnit: observation.rawUnit,
+              selectedUnitCode: unitDefinition.code,
+              resourceContext: observation.resourceType,
+            },
+          });
+
+        if (rawSourceUnit === '') {
+          throw sourceUnitRefusal(
+            UNIT_RESOLUTION_STATUS.NEEDS_REVIEW,
+            ['UNIT_REQUIRED'],
+            'Dokumen sumber tidak mencantumkan satuan pada baris ini, sehingga ' +
+              'tidak ada bukti yang dapat membuktikan satuan pilihan manusia.',
+          );
+        }
+
+        const sourceUnitProof = await this.unitKernel.resolve(
+          rawSourceUnit,
+          unitDefinition.code,
+          undefined,
+          trustedUnitContext(observation.resourceType),
+        );
+        if (sourceUnitProof.status !== UNIT_RESOLUTION_STATUS.RESOLVED) {
+          throw sourceUnitRefusal(
+            sourceUnitProof.status,
+            sourceUnitProof.reasonCodes,
+            sourceUnitProof.explanation,
+          );
+        }
+
+        // RESOLVED IS NOT THE SAME FACT AS "THE SAME UNIT".
+        //
+        // The kernel also answers RESOLVED when it found a real, evidence-bound
+        // CONVERSION — the measures are relatable, with a factor. Admission is
+        // where a resource's canonical measure is fixed for good: baseUnit goes
+        // onto the new ResourceCatalog row while the source's own spelling goes
+        // onto its ResourceSourceIdentity beside it. Accepting a conversion here
+        // would bake in an equivalence whose arithmetic nobody performed — every
+        // later coefficient and price would read as if the two measures were the
+        // same, and nothing downstream would know a factor was owed.
+        //
+        // So the mint requires IDENTITY and says exactly why, rather than
+        // inventing the missing arithmetic. It is the same refusal the Basic
+        // Price admission already makes (UNIT_SELECTION_REQUIRES_PRICE_CONVERSION),
+        // and the same half of the law: SIMPROK menghitung, manusia memutuskan —
+        // it will not quietly decide that one measure is another.
+        if (sourceUnitProof.priceOperation !== UNIT_PRICE_OPERATION.IDENTITY) {
+          throw new ConflictException({
+            statusCode: 409,
+            error: 'Conflict',
+            message: 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION',
+            unitResolution: {
+              status: sourceUnitProof.status,
+              reasonCodes: sourceUnitProof.reasonCodes,
+              explanation: sourceUnitProof.explanation,
+              policyVersion: UNIT_KERNEL_POLICY_VERSION,
+              rawSourceUnit: observation.rawUnit,
+              selectedUnitCode: unitDefinition.code,
+              resourceContext: observation.resourceType,
+              quantityFactor: sourceUnitProof.quantityFactor,
+              priceOperation: sourceUnitProof.priceOperation,
+            },
+          });
+        }
+
         const admissionInput: AdmitObservedResourceInput = {
           workspaceId: params.workspaceId,
           rawName: observation.rawName,
@@ -647,6 +1112,7 @@ export class ResourceObservationService {
             sourceCodeCellAddress: observation.sourceCodeCellAddress,
             sourceUnitCellAddress: observation.sourceUnitCellAddress,
           },
+          ...(params.examination ? { examination: params.examination } : {}),
         };
 
         const catalog = await this.admission
@@ -676,7 +1142,10 @@ export class ResourceObservationService {
             resolvedResourceCatalogId: catalog.id,
             decidedByAccountId: params.actorAccountId,
             decidedAt: new Date(),
-            reason: params.reason ?? null,
+            // The decision record keeps WHAT was refused on the way to "new",
+            // in the existing reason column and in plain words — the refused
+            // candidate ids are the audit trail of branch (c).
+            reason: this.admissionReason(params.reason, params.examination),
           },
         });
         return { admittedResource: catalog, observation: updated };
@@ -768,6 +1237,7 @@ export class ResourceObservationService {
             rawName: true,
             rawCode: true,
             rawUnit: true,
+            sourceSha256: true,
           },
         },
       },
@@ -811,11 +1281,22 @@ export class ResourceObservationService {
           this.referenceOf(origin),
         );
         const liveDigest = candidateDigestOf(verdict);
-        const label = this.stateLabel(state, () => liveDigest);
+        const label = this.stateLabel(state, () => liveDigest, verdict);
         const authoredBy = answerRow?.decidedByAccountId ?? null;
 
+        // A PENDING candidate taught under a policy no longer in force can never
+        // become effective, so APPROVE is not offered for it — the same
+        // principle this projection already applies to REVOKE and SUPERSEDE:
+        // never a door its own route would refuse. REJECT stays open, because
+        // that is the lawful way out, and the reason is carried so the door is
+        // seen to be shut and explained rather than silently missing.
+        const candidatePolicySuperseded =
+          state.kind === 'PENDING' &&
+          state.candidate.resolutionPolicyVersion !== LIVE_POLICY;
         const mayApprove =
-          state.kind === 'PENDING' && authoredBy !== actorAccountId;
+          state.kind === 'PENDING' &&
+          !candidatePolicySuperseded &&
+          authoredBy !== actorAccountId;
         const mayReject = state.kind === 'PENDING';
         const mayRevoke = authority.mayDecide && state.kind === 'APPROVED';
         const maySupersede =
@@ -852,6 +1333,15 @@ export class ResourceObservationService {
           generation: latest.generation,
           decidedAt: latestRow.decidedAt,
           canApprove: open && mayApprove,
+          /**
+           * Why APPROVE is shut, when it is shut for a reason the reader cannot
+           * otherwise see. `authoredByYou` already explains the other case, so
+           * only this one needs saying. Null whenever approval is offered or the
+           * question is not pending at all.
+           */
+          approvalBlockedReason: candidatePolicySuperseded
+            ? ('CANDIDATE_POLICY_SUPERSEDED' as const)
+            : null,
           canReject: open && mayReject,
           canRevoke: open && mayRevoke,
           canSupersede: open && maySupersede,
@@ -862,7 +1352,8 @@ export class ResourceObservationService {
                     (candidate) =>
                       candidate.resourceCatalogId !==
                         answerRow?.selectedResourceCatalogId &&
-                      !candidate.specificationUnproved,
+                      !candidate.specificationUnproved &&
+                      isConfirmableCandidate(candidate),
                   )
                   .map((candidate) => ({
                     resourceCatalogId: candidate.resourceCatalogId,
@@ -1093,7 +1584,7 @@ export class ResourceObservationService {
           } | null = null;
           let plan: GovernancePlan;
           if (action === 'APPROVE') {
-            plan = planApprove(base);
+            plan = planApprove({ ...base, livePolicyVersion: LIVE_POLICY });
             if (plan.outcome === 'APPEND' && state.kind === 'PENDING') {
               // The candidate must STILL answer the live question: machine
               // first, same candidate context, same policy, still a legitimate
@@ -1221,7 +1712,11 @@ export class ResourceObservationService {
     const pending = state.kind === 'PENDING' ? state.candidate : null;
     const view = {
       questionKey,
-      state: this.stateLabel(state, () => candidateDigestOf(resolution)),
+      state: this.stateLabel(
+        state,
+        () => candidateDigestOf(resolution),
+        resolution,
+      ),
       rememberable: false,
       // WHY learning is not offered — each early return below, said out loud
       // instead of left for the reader to guess. Describes; decides nothing.
@@ -1263,6 +1758,7 @@ export class ResourceObservationService {
   private stateLabel(
     state: IdenticalQuestionState,
     liveDigest: () => string,
+    verdict: ResourceIdentityResolution,
   ): IdenticalQuestionStateLabel {
     switch (state.kind) {
       case 'NONE':
@@ -1274,10 +1770,16 @@ export class ResourceObservationService {
       case 'REVOKED':
         return 'REVOKED';
       case 'APPROVED':
+        // EFFECTIVE only while it is actually reused: same candidate context
+        // and policy, AND still a legitimate answer to the live verdict.
         return isAnswerApplicable(state.answer, {
           candidateContextDigest: liveDigest(),
           resolutionPolicyVersion: LIVE_POLICY,
-        })
+        }) &&
+          this.answerStillLegitimate(
+            verdict,
+            state.answer.selectedResourceCatalogId,
+          )
           ? 'EFFECTIVE'
           : 'INAPPLICABLE';
     }
@@ -1331,10 +1833,34 @@ export class ResourceObservationService {
     const chosen = verdict.candidates.find(
       (candidate) => candidate.resourceCatalogId === selectedResourceCatalogId,
     );
-    if (!chosen || chosen.specificationUnproved) {
+    if (
+      !chosen ||
+      chosen.specificationUnproved ||
+      !isConfirmableCandidate(chosen)
+    ) {
       throw new ConflictException('CANDIDATE_NOT_LEGITIMATE_FOR_LEARNING');
     }
     return liveDigest;
+  }
+
+  /**
+   * Is a stored exact-question answer still a LEGITIMATE answer to the live
+   * question — not only the same candidate context and policy, but still a
+   * verdict an answer may settle, naming a row that rests on more than a name?
+   * An answer failing this is shown INAPPLICABLE, because it is not reused.
+   */
+  private answerStillLegitimate(
+    verdict: ResourceIdentityResolution,
+    selectedResourceCatalogId: string | null,
+  ): boolean {
+    if (verdict.status === 'RESOLVED') return true;
+    if (!isIdenticalQuestionDecidable(verdict)) return false;
+    const chosen = verdict.candidates.find(
+      (candidate) => candidate.resourceCatalogId === selectedResourceCatalogId,
+    );
+    return Boolean(
+      chosen && !chosen.specificationUnproved && isConfirmableCandidate(chosen),
+    );
   }
 
   /**
@@ -1360,14 +1886,37 @@ export class ResourceObservationService {
     workspaceId: string,
     reference: RawResourceReference,
     selectedResourceCatalogId: string,
-  ): Promise<KernelIdentityRefusal | null> {
+  ): Promise<SelectionRefusal | null> {
     const evidence = await this.identity.loadEvidence(tx, workspaceId);
     const whole = await this.identity.resolve(evidence, reference, tx);
-    const refusedByWhole = kernelRefusalOfSelection(
-      whole,
-      selectedResourceCatalogId,
-    );
-    if (refusedByWhole) return refusedByWhole;
+    // THE KERNEL'S WRITE-ELIGIBILITY LAW on the whole-catalogue answer: a row the
+    // machine proved otherwise, ruled out, nominated on name similarity only, or
+    // never nominated is not recorded as this resource. Nothing is re-scored here.
+    const refusedByWhole = selectionRefusal(whole, selectedResourceCatalogId);
+    if (
+      refusedByWhole &&
+      refusedByWhole !== 'IDENTITY_CANDIDATE_NOT_NOMINATED'
+    ) {
+      return refusedByWhole;
+    }
+    if (refusedByWhole) {
+      // Absent from the whole answer. Say the PRECISE reason when the row alone
+      // was examined and ruled out; otherwise it was simply never nominated.
+      const alone = await this.identity.resolve(
+        {
+          ...evidence,
+          catalogCandidates: evidence.catalogCandidates.filter(
+            (candidate) => candidate.id === selectedResourceCatalogId,
+          ),
+        },
+        reference,
+        tx,
+      );
+      return (
+        kernelRefusalOfSelection(alone, selectedResourceCatalogId) ??
+        refusedByWhole
+      );
+    }
     // MACHINE FIRST — a proven identity is never reconsidered. If the machine
     // PROVED this very row for this wording, no narrower question may unprove
     // it; the whole-catalogue answer above already refused every other row.
@@ -1383,6 +1932,28 @@ export class ResourceObservationService {
       tx,
     );
     return kernelRefusalOfSelection(alone, selectedResourceCatalogId);
+  }
+
+  private admissionReason(
+    reason: string | null | undefined,
+    examination:
+      | {
+          refusedCandidateIds: readonly string[];
+          candidateContextDigest: string;
+        }
+      | null
+      | undefined,
+  ): string | null {
+    const given =
+      typeof reason === 'string' && reason.trim() !== '' ? reason : null;
+    if (!examination) return given;
+    const note =
+      'Kandidat yang diperiksa dan dinyatakan bukan sumber daya ini: ' +
+      [...examination.refusedCandidateIds].sort().join(', ') +
+      ' (konteks kandidat ' +
+      examination.candidateContextDigest +
+      ').';
+    return given ? `${given}\n${note}` : note;
   }
 
   /** The machine's own verdict for a question — no governed memory applied. */
@@ -1419,6 +1990,7 @@ export class ResourceObservationService {
         rawName: true,
         rawCode: true,
         rawUnit: true,
+        sourceSha256: true,
       },
     } as const;
     return tx.resourceIdentityQuestionDecision.findFirst({
@@ -1481,12 +2053,20 @@ export class ResourceObservationService {
     rawCode: string | null;
     rawUnit: string | null;
     resourceType: string;
+    /**
+     * The document this row was read from, when the caller selected it. The
+     * kernel uses it for ONE comparison — a code the same workbook already
+     * recorded for the matched row — and an absent digest leaves every verdict
+     * exactly as it was.
+     */
+    sourceSha256?: string | null;
   }): RawResourceReference {
     return {
       rawName: observation.rawName,
       rawCode: observation.rawCode,
       rawUnit: observation.rawUnit,
       resourceType: observation.resourceType,
+      sourceSha256: observation.sourceSha256 ?? null,
     };
   }
 

@@ -175,6 +175,10 @@ describe('CLOSEOUT P1-B — the list and "Periksa ulang" over pre-title lines, w
   const identity = { loadEvidence: jest.fn(), resolve: jest.fn() };
   const observations = {
     observeMany: jest.fn(),
+    // F1 — the import reader asks which rows a person already decided.
+    // No decisions is the truthful default for a fixture that has none.
+    decidedIdentityForSourceRows: jest.fn().mockResolvedValue(new Map()),
+
     openQuestionsBySource: jest.fn(() => Promise.resolve(new Map())),
   };
   let versions: Map<string, StoredVersion>;
@@ -248,6 +252,8 @@ describe('CLOSEOUT P1-B — the list and "Periksa ulang" over pre-title lines, w
         new RealityNormalizationEngine(),
         { logAction: jest.fn(() => Promise.resolve()) },
         journal,
+        // C1 — the commit retains the source bytes before journalling them.
+        { retain: jest.fn().mockResolvedValue("ws/digest/source") },
       ] as unknown as Dependencies),
     );
   });

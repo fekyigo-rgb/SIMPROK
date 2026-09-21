@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   IQL_COPY,
+  describeGovernanceFailure,
   describeGovernedQuestion,
   groupCanRemember,
   identicalQuestionLine,
@@ -117,4 +118,73 @@ test("reader-facing copy never leaks an id or a reason code", () => {
     }
   }
   for (const text of Object.values(IQL_COPY)) assert.equal(looksLikeInternalIdentifier(text), false, text);
+});
+
+// ---------------------------------------------------------------------------
+// GAP B — A PENDING TAUGHT UNDER A SUPERSEDED RULE.
+//
+// The server does not offer APPROVE for it, because approving could never make
+// it effective. The reader must see the door shut AND the way out — otherwise
+// the button simply vanishes and the page looks broken rather than honest.
+// Shape taken from the real cohort: "Stamper" / E25 / Jam, taught under V1.
+// ---------------------------------------------------------------------------
+
+test("GAP-B: a pending taught under a superseded rule says so, and names REJECT as the way out", () => {
+  const view = describeGovernedQuestion(
+    governed({
+      rawName: "Stamper",
+      rawCode: "E25",
+      rawUnit: "Jam",
+      state: "PENDING",
+      canApprove: false,
+      canReject: true,
+      approvalBlockedReason: "CANDIDATE_POLICY_SUPERSEDED",
+    }),
+  );
+  assert.equal(view.canApprove, false);
+  // REJECT is the lawful exit and must stay open.
+  assert.equal(view.canReject, true);
+  assert.equal(view.stateLabel, "Menunggu — aturannya sudah berubah");
+  assert.match(view.guidance, /aturan penetapan identitas masih berbeda/u);
+  assert.match(view.guidance, /Tolak usulan ini/u);
+  assert.match(view.guidance, /ajukan ulang/u);
+  // Never the ordinary "approve if correct" instruction for a door that is shut.
+  assert.doesNotMatch(view.guidance, /setujui bila benar/u);
+  // No internal vocabulary reaches the reader.
+  for (const word of ["CANDIDATE_POLICY_SUPERSEDED", "policy", "V1", "V2"]) {
+    assert.ok(!view.guidance.includes(word), word);
+  }
+});
+
+test("GAP-B: an ordinary pending is unchanged — the new sentence does not leak", () => {
+  const view = describeGovernedQuestion(governed());
+  assert.equal(view.stateLabel, "Menunggu persetujuan");
+  assert.match(view.guidance, /setujui bila benar/u);
+  assert.doesNotMatch(view.guidance, /aturan penetapan identitas/u);
+  assert.equal(view.canApprove, true);
+});
+
+test("GAP-B: even a server that wrongly offered canApprove gets no door once the rule is superseded", () => {
+  // Belt and braces: the view refuses the door the server said it could not have.
+  const view = describeGovernedQuestion(
+    governed({ canApprove: true, approvalBlockedReason: "CANDIDATE_POLICY_SUPERSEDED" }),
+  );
+  assert.match(view.guidance, /Tolak usulan ini/u);
+  assert.equal(view.canReject, true);
+});
+
+test("GAP-B: the superseded-policy refusal has its OWN words — never the generic authority fallback", () => {
+  const outcome = describeGovernanceFailure({ status: 409, code: "CANDIDATE_POLICY_SUPERSEDED" });
+  const text = outcome.lines.map((line) => line.text).join(" ");
+  assert.match(text, /aturan penetapan identitas masih berbeda/u);
+  assert.match(text, /Tolak pengajuan ini/u);
+  // It must NOT accuse the reader of something that did not happen…
+  assert.doesNotMatch(text, /wewenang/u);
+  // …nor advise a reload, which would change nothing here.
+  assert.doesNotMatch(text, /[Mm]uat ulang/u);
+  // Nothing was written, and that is said.
+  assert.match(text, /belum berhasil disimpan|tidak ada yang tersimpan|Tidak ada perubahan/u);
+  for (const word of ["CANDIDATE_POLICY_SUPERSEDED", "policy", "V1", "V2"]) {
+    assert.ok(!text.includes(word), word);
+  }
 });
