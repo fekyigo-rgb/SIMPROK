@@ -20,6 +20,8 @@ import {
   monitoringComparisonCutoff,
   monitoringComparisonRequestPath,
   monitoringActiveSnapshot,
+  monitoringPeriodNavigatorRequestPath,
+  monitoringPeriodNavigatorUnavailableMessage,
   monitoringTemporalBasisLabel,
   monitoringTemporalGranularityLabel,
   monitoringTemporalLensRequestPath,
@@ -43,12 +45,24 @@ import {
   weightCompletenessLabel,
   type MonitoringProject,
   type MonitoringPeriodicComparisonPresentation,
+  type MonitoringPeriodNavigator,
   type MonitoringProgressComparisonPresentation,
   type MonitoringResponse,
   type MonitoringTemporalBasis,
   type MonitoringTemporalGranularity,
   type MonitoringTemporalLens,
+  type MonitoringTemporalPeriod,
 } from '../../utils/monitoringCurrent';
+import {
+  DEFAULT_MONITORING_TIME_LENS,
+  MONITORING_TIME_LENSES,
+  monitoringTimeLensAllowsActualAction,
+  monitoringTimeLensDescription,
+  monitoringTimeLensLabel,
+  monitoringTimeLensOf,
+  monitoringTimeLensState,
+  type MonitoringTimeLens,
+} from '../../utils/monitoringTimeLens';
 import { ExecutionPlanReadinessPanel } from './ExecutionPlanReadinessPanel';
 import './ProjectWorkPage.css';
 
@@ -74,6 +88,24 @@ type PeriodicTemporalLensPresentation =
   | { state: 'INCOHERENT'; requestKey: string }
   | { state: 'ERROR'; requestKey: string; status: number | null };
 
+type PeriodNavigatorPresentation =
+  | { state: 'DISABLED' }
+  | { state: 'LOADING'; requestKey: string }
+  | {
+      state: 'RESOLVED';
+      requestKey: string;
+      periods: MonitoringTemporalPeriod[];
+      hasMoreOlder: boolean;
+      olderCursor: string | null;
+      olderState: 'IDLE' | 'LOADING' | 'ERROR';
+    }
+  | {
+      state: 'UNAVAILABLE';
+      requestKey: string;
+      navigator: Extract<MonitoringPeriodNavigator, { state: 'UNAVAILABLE' }>;
+    }
+  | { state: 'ERROR'; requestKey: string; status: number | null };
+
 type PeriodicSchedulePresentation =
   | { state: 'DISABLED' }
   | { state: 'NO_PLANNED_SOURCE' | 'CHECKING'; requestKey: string }
@@ -83,6 +115,17 @@ type PeriodicSchedulePresentation =
       executionPlan: ExecutionPlanResponse;
     }
   | { state: 'INCOHERENT' | 'ERROR'; requestKey: string };
+
+/**
+ * The Smart Monitoring Table opens on the Owner's default window: TERKINI.
+ * MINGGUAN and BULANAN are the same table under a different time window, so the
+ * granularity carried alongside the default is only the window a later periodic
+ * switch would open on.
+ */
+const DEFAULT_TIME_LENS_STATE = monitoringTimeLensState(
+  DEFAULT_MONITORING_TIME_LENS,
+  'WEEK',
+);
 
 class MonitoringRequestError extends Error {
   readonly status: number;
@@ -148,14 +191,17 @@ export function ProjectWorkPage() {
   const [monitoringContentLens, setMonitoringContentLens] =
     useState<MonitoringContentLens>('VISUAL');
   const [temporalContextMode, setTemporalContextMode] =
-    useState<TemporalContextMode>('TERKINI');
+    useState<TemporalContextMode>(DEFAULT_TIME_LENS_STATE.mode);
   const [temporalBasis, setTemporalBasis] =
     useState<MonitoringTemporalBasis>('WORK_PERIOD');
   const [temporalGranularity, setTemporalGranularity] =
-    useState<MonitoringTemporalGranularity>('WEEK');
+    useState<MonitoringTemporalGranularity>(DEFAULT_TIME_LENS_STATE.granularity);
   const [temporalReferenceDate, setTemporalReferenceDate] = useState('');
-  const [referencePrefilledFromDataThrough, setReferencePrefilledFromDataThrough] =
-    useState(false);
+  const [selectedPeriodKey, setSelectedPeriodKey] = useState<string | null>(null);
+  const [periodMenuOpen, setPeriodMenuOpen] = useState(false);
+  const [periodNavigatorPresentation, setPeriodNavigatorPresentation] =
+    useState<PeriodNavigatorPresentation>({ state: 'DISABLED' });
+  const [periodNavigatorRefresh, setPeriodNavigatorRefresh] = useState(0);
   const [periodicPresentation, setPeriodicPresentation] =
     useState<PeriodicTemporalLensPresentation>({ state: 'DISABLED' });
   const [periodicSchedulePresentation, setPeriodicSchedulePresentation] =
@@ -164,6 +210,12 @@ export function ProjectWorkPage() {
     useState<ExecutionPlanResponse | null>(null);
   const [temporalRequestRefresh, setTemporalRequestRefresh] = useState(0);
   const temporalRequestGenerationRef = useRef(0);
+  const periodNavigatorGenerationRef = useRef(0);
+  const periodNavigatorRequestRef = useRef<{
+    key: string;
+    promise: Promise<MonitoringResponse>;
+  } | null>(null);
+  const selectedPeriodKeyRef = useRef<string | null>(null);
   const periodicScheduleGenerationRef = useRef(0);
   const periodicScheduleRequestRef = useRef<{
     key: string;
@@ -223,11 +275,14 @@ export function ProjectWorkPage() {
         if (temporalProjectRef.current !== projectId) {
           temporalProjectRef.current = projectId;
           setMonitoringContentLens('VISUAL');
-          setTemporalContextMode('TERKINI');
+          setTemporalContextMode(DEFAULT_TIME_LENS_STATE.mode);
           setTemporalBasis('WORK_PERIOD');
-          setTemporalGranularity('WEEK');
+          setTemporalGranularity(DEFAULT_TIME_LENS_STATE.granularity);
           setTemporalReferenceDate('');
-          setReferencePrefilledFromDataThrough(false);
+          selectedPeriodKeyRef.current = null;
+          setSelectedPeriodKey(null);
+          setPeriodMenuOpen(false);
+          setPeriodNavigatorPresentation({ state: 'DISABLED' });
           setPeriodicPresentation({ state: 'DISABLED' });
         }
         setProject(projectData);
@@ -347,6 +402,138 @@ export function ProjectWorkPage() {
     };
   }, [token, projectId, returnItemId, executionPlanRefresh]);
 
+  const periodNavigatorRequestKey = [
+    projectId ?? '',
+    temporalBasis,
+    temporalGranularity,
+  ].join(':');
+
+  useEffect(() => {
+    const generation = periodNavigatorGenerationRef.current + 1;
+    periodNavigatorGenerationRef.current = generation;
+    if (
+      temporalContextMode !== 'PERIODIK' ||
+      !token ||
+      !projectId ||
+      loadedProjectId !== projectId
+    ) {
+      return;
+    }
+
+    let active = true;
+    setPeriodNavigatorPresentation({
+      state: 'LOADING',
+      requestKey: periodNavigatorRequestKey,
+    });
+
+    const transportKey =
+      `${periodNavigatorRequestKey}:${periodNavigatorRefresh}`;
+    let request = periodNavigatorRequestRef.current;
+    if (request?.key !== transportKey) {
+      const promise = apiFetch(
+          monitoringPeriodNavigatorRequestPath({
+            projectId,
+            basis: temporalBasis,
+            granularity: temporalGranularity,
+          }),
+        ).then(async (response) => {
+        if (!response.ok) throw new MonitoringRequestError(response.status);
+        return response.json() as Promise<MonitoringResponse>;
+      });
+      request = { key: transportKey, promise };
+      periodNavigatorRequestRef.current = request;
+    }
+
+    void request.promise
+      .then((data) => {
+        if (!active || periodNavigatorGenerationRef.current !== generation) return;
+
+        const navigator = data.periodNavigator;
+        if (
+          navigator === undefined ||
+          navigator.basis !== temporalBasis ||
+          navigator.granularity !== temporalGranularity
+        ) {
+          setPeriodNavigatorPresentation({
+            state: 'ERROR',
+            requestKey: periodNavigatorRequestKey,
+            status: null,
+          });
+          return;
+        }
+        if (navigator.state === 'UNAVAILABLE') {
+          selectedPeriodKeyRef.current = null;
+          setSelectedPeriodKey(null);
+          setTemporalReferenceDate('');
+          setPeriodNavigatorPresentation({
+            state: 'UNAVAILABLE',
+            requestKey: periodNavigatorRequestKey,
+            navigator,
+          });
+          return;
+        }
+
+        const selectedPeriod =
+          navigator.periods.find(
+            (period) => period.periodKey === selectedPeriodKeyRef.current,
+          ) ??
+          navigator.periods[0] ??
+          null;
+        selectedPeriodKeyRef.current = selectedPeriod?.periodKey ?? null;
+        setSelectedPeriodKey(selectedPeriod?.periodKey ?? null);
+        setTemporalReferenceDate(selectedPeriod?.endDate ?? '');
+        setPeriodNavigatorPresentation({
+          state: 'RESOLVED',
+          requestKey: periodNavigatorRequestKey,
+          periods: navigator.periods,
+          hasMoreOlder: navigator.hasMoreOlder,
+          olderCursor: navigator.olderCursor,
+          olderState: 'IDLE',
+        });
+      })
+      .catch((error: unknown) => {
+        if (
+          !active ||
+          periodNavigatorGenerationRef.current !== generation
+        ) {
+          return;
+        }
+        setPeriodNavigatorPresentation({
+          state: 'ERROR',
+          requestKey: periodNavigatorRequestKey,
+          status: error instanceof MonitoringRequestError ? error.status : null,
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    token,
+    projectId,
+    loadedProjectId,
+    temporalContextMode,
+    temporalBasis,
+    temporalGranularity,
+    periodNavigatorRequestKey,
+    periodNavigatorRefresh,
+  ]);
+
+  const activePeriodNavigatorPresentation = useMemo<PeriodNavigatorPresentation>(
+    () =>
+      temporalContextMode !== 'PERIODIK'
+        ? { state: 'DISABLED' }
+        : 'requestKey' in periodNavigatorPresentation &&
+            periodNavigatorPresentation.requestKey === periodNavigatorRequestKey
+          ? periodNavigatorPresentation
+          : { state: 'LOADING', requestKey: periodNavigatorRequestKey },
+    [
+      periodNavigatorPresentation,
+      periodNavigatorRequestKey,
+      temporalContextMode,
+    ],
+  );
+
   const temporalRequestKey = [
     projectId ?? '', temporalBasis, temporalGranularity,
     temporalReferenceDate, String(temporalRequestRefresh),
@@ -395,6 +582,12 @@ export function ProjectWorkPage() {
             response: data,
           });
           if (coherence.state === 'INCOHERENT') {
+            setPeriodicPresentation({ state: 'INCOHERENT', requestKey: temporalRequestKey });
+          } else if (
+            coherence.lens.basis !== temporalBasis ||
+            coherence.lens.granularity !== temporalGranularity ||
+            coherence.lens.period.periodKey !== selectedPeriodKeyRef.current
+          ) {
             setPeriodicPresentation({ state: 'INCOHERENT', requestKey: temporalRequestKey });
           } else {
             setPeriodicPresentation({ state: 'RESOLVED', requestKey: temporalRequestKey,
@@ -715,17 +908,128 @@ export function ProjectWorkPage() {
                   requestKey: periodicAtomicComparisonKey,
                 };
           })();
-  const activatePeriodicContext = () => {
-    if (temporalContextMode === 'PERIODIK') return;
-    const canonicalDataThrough = monitoringComparisonCutoff(
-      monitoring?.freshness.dataThrough ?? { state: 'UNAVAILABLE', workDate: null },
-    );
-    setTemporalContextMode('PERIODIK');
-    setTemporalRequestRefresh((current) => current + 1);
-    if (temporalReferenceDate === '' && canonicalDataThrough !== null) {
-      setTemporalReferenceDate(canonicalDataThrough);
-      setReferencePrefilledFromDataThrough(true);
+  /**
+   * The user-facing primary lens of the Smart Monitoring Table. The internal
+   * temporal context mode and granularity are unchanged; this is the same
+   * canonical state read through the Owner's three-window model.
+   */
+  const activeTimeLens = monitoringTimeLensOf({
+    mode: temporalContextMode,
+    granularity: temporalGranularity,
+  });
+  const selectNavigatorPeriod = (period: MonitoringTemporalPeriod) => {
+    selectedPeriodKeyRef.current = period.periodKey;
+    setSelectedPeriodKey(period.periodKey);
+    setTemporalReferenceDate(period.endDate);
+    setPeriodMenuOpen(false);
+  };
+
+  const loadOlderPeriods = async () => {
+    if (
+      !token ||
+      !projectId ||
+      activePeriodNavigatorPresentation.state !== 'RESOLVED' ||
+      !activePeriodNavigatorPresentation.hasMoreOlder ||
+      activePeriodNavigatorPresentation.olderCursor === null ||
+      activePeriodNavigatorPresentation.olderState === 'LOADING'
+    ) {
+      return;
     }
+
+    const requestKey = activePeriodNavigatorPresentation.requestKey;
+    const cursor = activePeriodNavigatorPresentation.olderCursor;
+    setPeriodNavigatorPresentation((current) =>
+      current.state === 'RESOLVED' && current.requestKey === requestKey
+        ? { ...current, olderState: 'LOADING' }
+        : current,
+    );
+
+    try {
+      const response = await apiFetch(
+        monitoringPeriodNavigatorRequestPath({
+          projectId,
+          basis: temporalBasis,
+          granularity: temporalGranularity,
+          cursor,
+        }),
+      );
+      if (!response.ok) throw new MonitoringRequestError(response.status);
+      const data = (await response.json()) as MonitoringResponse;
+      const navigator = data.periodNavigator;
+      if (
+        navigator === undefined ||
+        navigator.state !== 'RESOLVED' ||
+        navigator.basis !== temporalBasis ||
+        navigator.granularity !== temporalGranularity
+      ) {
+        throw new Error('Period Navigator continuation is not coherent');
+      }
+
+      setPeriodNavigatorPresentation((current) => {
+        if (current.state !== 'RESOLVED' || current.requestKey !== requestKey) {
+          return current;
+        }
+        const identities = new Set(
+          current.periods.map(
+            (period) =>
+              `${period.basis}:${period.granularity}:${period.periodKey}`,
+          ),
+        );
+        const additionalPeriods = navigator.periods.filter((period) => {
+          const identity =
+            `${period.basis}:${period.granularity}:${period.periodKey}`;
+          if (identities.has(identity)) return false;
+          identities.add(identity);
+          return true;
+        });
+        return {
+          ...current,
+          periods: [...current.periods, ...additionalPeriods],
+          hasMoreOlder: navigator.hasMoreOlder,
+          olderCursor: navigator.olderCursor,
+          olderState: 'IDLE',
+        };
+      });
+    } catch {
+      setPeriodNavigatorPresentation((current) =>
+        current.state === 'RESOLVED' && current.requestKey === requestKey
+          ? { ...current, olderState: 'ERROR' }
+          : current,
+      );
+    }
+  };
+
+  /**
+   * One table, three windows. Switching windows never rebuilds the table, never
+   * navigates, and never clears the selected WORK_ITEM — the selection survives
+   * wherever the item exists in the newly active canonical snapshot. A changed
+   * window asks the backend for that window's own canonical period identities.
+   */
+  const selectTimeLens = (nextLens: MonitoringTimeLens) => {
+    if (nextLens === activeTimeLens) {
+      if (nextLens !== 'TERKINI') {
+        setPeriodMenuOpen((current) => !current);
+      }
+      return;
+    }
+    const next = monitoringTimeLensState(nextLens, temporalGranularity);
+
+    if (next.mode === 'TERKINI') {
+      setTemporalContextMode('TERKINI');
+      setPeriodMenuOpen(false);
+      setPeriodicPresentation({ state: 'DISABLED' });
+      return;
+    }
+
+    if (next.granularity !== temporalGranularity) {
+      selectedPeriodKeyRef.current = null;
+      setSelectedPeriodKey(null);
+      setTemporalReferenceDate('');
+      setPeriodicPresentation({ state: 'DISABLED' });
+    }
+    setTemporalGranularity(next.granularity);
+    setTemporalContextMode('PERIODIK');
+    setPeriodMenuOpen(true);
   };
 
   let errorMessage = '';
@@ -783,6 +1087,178 @@ export function ProjectWorkPage() {
         );
   const monitoringPlanView =
     monitoringContentLens === 'VISUAL' ? null : monitoringContentLens;
+
+  /**
+   * The primary time lens belongs to the Smart Monitoring Table itself: the
+   * same table, the same RAB structure, read through one of three windows.
+   */
+  const timeLensSelector = (
+    <div
+      className="h2a0-time-lens"
+      role="group"
+      aria-label="Jendela waktu Monitoring"
+    >
+      {MONITORING_TIME_LENSES.map((lens) => (
+        <button
+          key={lens}
+          type="button"
+          aria-pressed={activeTimeLens === lens}
+          aria-haspopup={lens === 'TERKINI' ? undefined : 'listbox'}
+          aria-expanded={
+            lens === 'TERKINI'
+              ? undefined
+              : activeTimeLens === lens && periodMenuOpen
+          }
+          aria-controls={lens === 'TERKINI' ? undefined : 'monitoring-period-options'}
+          onClick={() => selectTimeLens(lens)}
+        >
+          <span>{monitoringTimeLensLabel(lens)}</span>
+          {lens !== 'TERKINI' && (
+            <span className="h2a0-time-lens-caret" aria-hidden="true">
+              &#9662;
+            </span>
+          )}
+        </button>
+      ))}
+      {periodMenuOpen && temporalContextMode === 'PERIODIK' && (
+        <div
+          id="monitoring-period-options"
+          className="h2a0-period-menu"
+          aria-live="polite"
+        >
+          <div
+            className="h2a0-period-basis"
+            role="group"
+            aria-label="Dasar periode"
+          >
+            <button
+              type="button"
+              aria-pressed={temporalBasis === 'WORK_PERIOD'}
+              onClick={() => {
+                if (temporalBasis === 'WORK_PERIOD') return;
+                selectedPeriodKeyRef.current = null;
+                setSelectedPeriodKey(null);
+                setTemporalReferenceDate('');
+                setPeriodicPresentation({ state: 'DISABLED' });
+                setTemporalBasis('WORK_PERIOD');
+                setPeriodMenuOpen(true);
+              }}
+            >
+              Waktu Kerja
+            </button>
+            <button
+              type="button"
+              aria-pressed={temporalBasis === 'CALENDAR'}
+              onClick={() => {
+                if (temporalBasis === 'CALENDAR') return;
+                selectedPeriodKeyRef.current = null;
+                setSelectedPeriodKey(null);
+                setTemporalReferenceDate('');
+                setPeriodicPresentation({ state: 'DISABLED' });
+                setTemporalBasis('CALENDAR');
+                setPeriodMenuOpen(true);
+              }}
+            >
+              Kalender
+            </button>
+          </div>
+          {activePeriodNavigatorPresentation.state === 'LOADING' && (
+            <p className="h2a0-period-menu-state" role="status">
+              Memuat periode resmi...
+            </p>
+          )}
+          {activePeriodNavigatorPresentation.state === 'UNAVAILABLE' && (
+            <p className="h2a0-period-menu-state">
+              {monitoringPeriodNavigatorUnavailableMessage(
+                activePeriodNavigatorPresentation.navigator.reason,
+              )}
+            </p>
+          )}
+          {activePeriodNavigatorPresentation.state === 'ERROR' && (
+            <div className="h2a0-period-menu-state" role="alert">
+              <p>Periode belum berhasil dimuat.</p>
+              <button
+                type="button"
+                onClick={() =>
+                  setPeriodNavigatorRefresh((current) => current + 1)
+                }
+              >
+                Coba lagi
+              </button>
+            </div>
+          )}
+          {activePeriodNavigatorPresentation.state === 'RESOLVED' && (
+            <>
+              {activePeriodNavigatorPresentation.periods.length === 0 ? (
+                <p className="h2a0-period-menu-state">
+                  Belum ada periode yang tersedia.
+                </p>
+              ) : (
+                <ul
+                  className="h2a0-period-options"
+                  role="listbox"
+                  aria-label={`Pilihan periode ${monitoringTemporalGranularityLabel(
+                    temporalGranularity,
+                  ).toLowerCase()}`}
+                >
+                  {activePeriodNavigatorPresentation.periods.map((period) => {
+                    const selected = period.periodKey === selectedPeriodKey;
+                    return (
+                      <li
+                        key={`${period.basis}:${period.granularity}:${period.periodKey}`}
+                        role="option"
+                        aria-selected={selected}
+                      >
+                        <button
+                          type="button"
+                          className={selected ? 'is-selected' : undefined}
+                          onClick={() => selectNavigatorPeriod(period)}
+                        >
+                          <strong>{monitoringTemporalPeriodLabel(period)}</strong>
+                          <span>
+                            {formatProjectBusinessDate(period.startDate)}
+                            {' \u2013 '}
+                            {formatProjectBusinessDate(period.endDate)}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {activePeriodNavigatorPresentation.hasMoreOlder && (
+                <button
+                  type="button"
+                  className="h2a0-period-older"
+                  disabled={
+                    activePeriodNavigatorPresentation.olderState === 'LOADING'
+                  }
+                  onClick={() => void loadOlderPeriods()}
+                >
+                  {activePeriodNavigatorPresentation.olderState === 'LOADING'
+                    ? 'Memuat...'
+                    : activePeriodNavigatorPresentation.olderState === 'ERROR'
+                      ? 'Coba muat lagi'
+                      : 'Periode sebelumnya'}
+                </button>
+              )}
+              {activePeriodNavigatorPresentation.olderState === 'ERROR' && (
+                <small className="h2a0-period-older-note" role="alert">
+                  Riwayat sebelumnya belum berhasil dimuat.
+                </small>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  /**
+   * Basis and the server-issued period are secondary context for a periodic
+   * window, never a second reporting engine. The selected canonical period's
+   * end date is only passed back as the existing Temporal Lens reference.
+   */
   const monitoringLensSelector = (
     <div
       className="h2a0-content-lens"
@@ -874,145 +1350,54 @@ export function ProjectWorkPage() {
       </button>
 
       <header className="h2a0-project-header">
-        <div>
+        <div className="h2a0-project-identity">
           <p className="h2a0-eyebrow">Monitoring Proyek</p>
           <h1>{project.name}</h1>
-          {project.code && <p className="h2a0-project-code">{project.code}</p>}
         </div>
-        <div className="h2a0-baseline-identity">
-          <span>Baseline Aktif</span>
-          {activeMonitoringSnapshot?.baseline ? (
-            <>
-              <strong>Versi {activeMonitoringSnapshot.baseline.versionNumber}</strong>
-              <small>
-                Disetujui{' '}
-                {
-                  recordedAtLabel(
-                    activeMonitoringSnapshot.baseline.approvedAt,
-                    activeMonitoringSnapshot.projectTimeZone,
-                  ).value
-                }
-              </small>
-            </>
-          ) : (
-            <strong>TIDAK TERSEDIA</strong>
+        <dl className="h2a0-project-meta">
+          {project.code && (
+            <div>
+              <dt>Kode Paket</dt>
+              <dd className="is-code">{project.code}</dd>
+            </div>
           )}
-        </div>
+          {project.status && (
+            <div>
+              <dt>Status Proyek</dt>
+              <dd>{project.status}</dd>
+            </div>
+          )}
+          <div>
+            <dt>Baseline Aktif</dt>
+            {activeMonitoringSnapshot?.baseline ? (
+              <>
+                <dd>Versi {activeMonitoringSnapshot.baseline.versionNumber}</dd>
+                <small>
+                  Disetujui{' '}
+                  {
+                    recordedAtLabel(
+                      activeMonitoringSnapshot.baseline.approvedAt,
+                      activeMonitoringSnapshot.projectTimeZone,
+                    ).value
+                  }
+                </small>
+              </>
+            ) : (
+              <dd>TIDAK TERSEDIA</dd>
+            )}
+          </div>
+          <div>
+            <dt>Data pekerjaan sampai</dt>
+            <dd>{dataThrough}</dd>
+            <small>Tanggal kerja efektif terbaru</small>
+          </div>
+          <div>
+            <dt>Terakhir diperbarui</dt>
+            <dd>{lastRecorded.value}</dd>
+            {lastRecorded.basis && <small>{lastRecorded.basis}</small>}
+          </div>
+        </dl>
       </header>
-
-      <section
-        className={temporalContextMode === 'PERIODIK'
-          ? 'h2a0-context-strip is-periodic'
-          : 'h2a0-context-strip'}
-        aria-label="Konteks Monitoring"
-      >
-        <div>
-          <span>Lingkup</span>
-          <strong>{selected ? `${selected.number} · ${selected.name}` : 'SELURUH PROYEK'}</strong>
-        </div>
-        <div className="h2a0-context-choice">
-          <span>Konteks</span>
-          <div className="h2a0-segmented" role="group" aria-label="Konteks waktu">
-            <button type="button" aria-pressed={temporalContextMode === 'TERKINI'}
-              onClick={() => {
-                setTemporalContextMode('TERKINI');
-                setPeriodicPresentation({ state: 'DISABLED' });
-              }}>
-              TERKINI
-            </button>
-            <button type="button" aria-pressed={temporalContextMode === 'PERIODIK'}
-              onClick={activatePeriodicContext}>
-              PERIODIK
-            </button>
-          </div>
-        </div>
-        <div>
-          <span>Data pekerjaan sampai</span>
-          <strong>{dataThrough}</strong>
-          <small>Tanggal kerja efektif terbaru</small>
-        </div>
-        <div>
-          <span>Terakhir diperbarui</span>
-          <strong>{lastRecorded.value}</strong>
-          {lastRecorded.basis && <small>{lastRecorded.basis}</small>}
-        </div>
-        {temporalContextMode === 'PERIODIK' && (
-          <div className="h2a0-temporal-controls">
-            <fieldset>
-              <legend>Basis</legend>
-              <div className="h2a0-segmented">
-                <button type="button" aria-pressed={temporalBasis === 'WORK_PERIOD'}
-                  onClick={() => {
-                    if (temporalBasis === 'WORK_PERIOD') return;
-                    setTemporalBasis('WORK_PERIOD');
-                  }}>
-                  Waktu Kerja
-                </button>
-                <button type="button" aria-pressed={temporalBasis === 'CALENDAR'}
-                  onClick={() => {
-                    if (temporalBasis === 'CALENDAR') return;
-                    setTemporalBasis('CALENDAR');
-                  }}>
-                  Kalender
-                </button>
-              </div>
-            </fieldset>
-            <fieldset>
-              <legend>Tampilan</legend>
-              <div className="h2a0-segmented">
-                <button type="button" aria-pressed={temporalGranularity === 'WEEK'}
-                  onClick={() => {
-                    if (temporalGranularity === 'WEEK') return;
-                    setTemporalGranularity('WEEK');
-                  }}>
-                  Mingguan
-                </button>
-                <button type="button" aria-pressed={temporalGranularity === 'MONTH'}
-                  onClick={() => {
-                    if (temporalGranularity === 'MONTH') return;
-                    setTemporalGranularity('MONTH');
-                  }}>
-                  Bulanan
-                </button>
-              </div>
-            </fieldset>
-            <label className="h2a0-temporal-date" htmlFor="monitoring-temporal-reference-date">
-              <span>Tanggal Acuan</span>
-              <input id="monitoring-temporal-reference-date" type="date"
-                value={temporalReferenceDate}
-                onChange={(event) => {
-                  setTemporalReferenceDate(event.target.value);
-                  setReferencePrefilledFromDataThrough(false);
-                }} />
-              {referencePrefilledFromDataThrough && (
-                <small>Menggunakan tanggal data terakhir. Anda dapat mengubahnya.</small>
-              )}
-            </label>
-          </div>
-        )}
-        {periodicResolvedLens && (
-          <div className="h2a0-period-summary" aria-live="polite">
-            <div>
-              <span>Basis</span>
-              <strong>{monitoringTemporalBasisLabel(periodicResolvedLens.basis)}</strong>
-            </div>
-            <div>
-              <span>Periode</span>
-              <strong>{monitoringTemporalPeriodLabel(periodicResolvedLens.period)}</strong>
-              <small>{monitoringTemporalGranularityLabel(periodicResolvedLens.granularity)}</small>
-            </div>
-            <div>
-              <span>Rentang</span>
-              <strong>
-                {formatProjectBusinessDate(periodicResolvedLens.period.startDate)}
-                {' - '}
-                {formatProjectBusinessDate(periodicResolvedLens.period.endDate)}
-              </strong>
-              <small>Batas inklusif dari backend</small>
-            </div>
-          </div>
-        )}
-      </section>
 
       {temporalContextMode === 'TERKINI' && (
         <ExecutionPlanReadinessPanel
@@ -1025,58 +1410,79 @@ export function ProjectWorkPage() {
         />
       )}
 
-      {temporalContextMode === 'PERIODIK' && activePeriodicPresentation.state !== 'RESOLVED' ? (
-        <section className={`h2a0-periodic-state is-${activePeriodicPresentation.state.toLowerCase()}`}
-          role={activePeriodicPresentation.state === 'ERROR' ||
-            activePeriodicPresentation.state === 'INCOHERENT' ? 'alert' : 'status'}
-          aria-live="polite">
-          {activePeriodicPresentation.state === 'WAITING_INPUT' && (
-            <><h2>Lengkapi konteks periode</h2>
-              <p>Pilih Tanggal Acuan untuk meminta periode kanonikal dari SIMPROK.</p></>
-          )}
-          {activePeriodicPresentation.state === 'LOADING' && (
-            <><h2>Memuat konteks periode...</h2>
-              <p>SIMPROK sedang menyelesaikan batas dan fakta periode yang dipilih.</p></>
-          )}
-          {activePeriodicPresentation.state === 'UNAVAILABLE' && (
-            <><h2>Konteks periode belum tersedia</h2>
-              <p>{monitoringTemporalLensUnavailableMessage(
-                activePeriodicPresentation.lens.reason,
-              )}</p>
-              <small>Alasan teknis: {activePeriodicPresentation.lens.reason}</small></>
-          )}
-          {activePeriodicPresentation.state === 'ERROR' && (
-            <><h2>Konteks periode gagal dimuat</h2>
-              <p>Data Monitoring Terkini tetap aman. Coba lagi atau kembali ke TERKINI.</p>
-              <button type="button"
-                onClick={() => setTemporalRequestRefresh((current) => current + 1)}>
-                Coba Lagi
-              </button></>
-          )}
-          {activePeriodicPresentation.state === 'INCOHERENT' && (
-            <><h2>Konteks periode tidak konsisten</h2>
-              <p>Fakta periode tidak dapat ditampilkan karena konteks RAB dan periode
-                tidak konsisten. Data Terkini tetap aman.</p></>
-          )}
-        </section>
-      ) : temporalContextMode === 'TERKINI' && !monitoring.baseline ? (
-        <section className="h2a0-warning" role="status">
-          <h2>Baseline aktif tidak tersedia</h2>
-          <p>
-            Identitas proyek tetap dapat dilihat, tetapi RAB/WBS dan data realisasi
-            tidak ditampilkan tanpa Baseline aktif yang sah.
-          </p>
-        </section>
-      ) : (
         <div className="h2a0-workspace">
           <section className="h2a0-anchor" aria-labelledby="h2a0-anchor-title">
             <div className="h2a0-section-heading">
               <div>
                 <p className="h2a0-eyebrow">Orientasi stabil</p>
-                <h2 id="h2a0-anchor-title">RAB/WBS Monitoring</h2>
+                <h2 id="h2a0-anchor-title">Daftar Uraian Pekerjaan Monitoring</h2>
+                <p className="h2a0-lens-note">
+                  {monitoringTimeLensDescription(activeTimeLens)}
+                  {' '}
+                  <span>{workItemCount} item pekerjaan</span>
+                </p>
               </div>
-              <span>{workItemCount} item pekerjaan</span>
+              {timeLensSelector}
             </div>
+
+            {temporalContextMode === 'PERIODIK' &&
+            activePeriodicPresentation.state !== 'RESOLVED' ? (
+              <section className={`h2a0-periodic-state is-${activePeriodicPresentation.state.toLowerCase()}`}
+                role={activePeriodicPresentation.state === 'ERROR' ||
+                  activePeriodicPresentation.state === 'INCOHERENT' ? 'alert' : 'status'}
+                aria-live="polite">
+                {activePeriodicPresentation.state === 'WAITING_INPUT' && (
+                  activePeriodNavigatorPresentation.state === 'UNAVAILABLE' ? (
+                    <><h2>Periode belum tersedia</h2>
+                      <p>{monitoringPeriodNavigatorUnavailableMessage(
+                        activePeriodNavigatorPresentation.navigator.reason,
+                      )}</p></>
+                  ) : activePeriodNavigatorPresentation.state === 'ERROR' ? (
+                    <><h2>Periode gagal dimuat</h2>
+                      <p>Coba lagi dari pemilih periode atau kembali ke TERKINI.</p></>
+                  ) : activePeriodNavigatorPresentation.state === 'LOADING' ? (
+                    <><h2>Menyiapkan periode...</h2>
+                      <p>SIMPROK sedang memuat periode resmi proyek.</p></>
+                  ) : (
+                    <><h2>Lengkapi konteks periode</h2>
+                      <p>Pilih periode resmi untuk melihat konteks Monitoring.</p></>
+                  )
+                )}
+                {activePeriodicPresentation.state === 'LOADING' && (
+                  <><h2>Memuat konteks periode...</h2>
+                    <p>SIMPROK sedang menyelesaikan batas dan fakta periode yang dipilih.</p></>
+                )}
+                {activePeriodicPresentation.state === 'UNAVAILABLE' && (
+                  <><h2>Konteks periode belum tersedia</h2>
+                    <p>{monitoringTemporalLensUnavailableMessage(
+                      activePeriodicPresentation.lens.reason,
+                    )}</p>
+                    <small>Alasan teknis: {activePeriodicPresentation.lens.reason}</small></>
+                )}
+                {activePeriodicPresentation.state === 'ERROR' && (
+                  <><h2>Konteks periode gagal dimuat</h2>
+                    <p>Data Monitoring Terkini tetap aman. Coba lagi atau kembali ke TERKINI.</p>
+                    <button type="button"
+                      onClick={() => setTemporalRequestRefresh((current) => current + 1)}>
+                      Coba Lagi
+                    </button></>
+                )}
+                {activePeriodicPresentation.state === 'INCOHERENT' && (
+                  <><h2>Konteks periode tidak konsisten</h2>
+                    <p>Fakta periode tidak dapat ditampilkan karena konteks RAB dan periode
+                      tidak konsisten. Data Terkini tetap aman.</p></>
+                )}
+              </section>
+            ) : temporalContextMode === 'TERKINI' && !monitoring.baseline ? (
+              <section className="h2a0-warning" role="status">
+                <h2>Baseline aktif tidak tersedia</h2>
+                <p>
+                  Identitas proyek tetap dapat dilihat, tetapi RAB/WBS dan data
+                  realisasi tidak ditampilkan tanpa Baseline aktif yang sah.
+                </p>
+              </section>
+            ) : (
+              <>
 
             {rows.length === 0 ? (
               <p className="h2a0-empty">Struktur RAB/WBS belum tersedia.</p>
@@ -1243,6 +1649,8 @@ export function ProjectWorkPage() {
                 </table>
               </div>
             )}
+              </>
+            )}
           </section>
 
           <aside className="h2a0-current" aria-labelledby="h2a0-current-title">
@@ -1250,7 +1658,11 @@ export function ProjectWorkPage() {
               <div>
                 <p className="h2a0-eyebrow">Lingkup aktif</p>
                 <h2 id="h2a0-current-title">
-                  {temporalContextMode === 'PERIODIK' ? 'Kondisi Periode' : 'Kondisi Terkini'}
+                  {selected
+                    ? 'Detail Sub-Pekerjaan Terpilih'
+                    : temporalContextMode === 'PERIODIK'
+                      ? 'Kondisi Periode'
+                      : 'Kondisi Proyek'}
                 </h2>
               </div>
             </div>
@@ -1260,7 +1672,7 @@ export function ProjectWorkPage() {
                 <div className="h2a0-project-scope">
                   <span className="h2a0-scope-badge">SELURUH PROYEK</span>
                   <h3>{monitoringTemporalPeriodLabel(periodicResolvedLens.period)}</h3>
-                  <p>Konteks dibentuk backend dari basis, tampilan, dan Tanggal Acuan.
+                  <p>Konteks dibentuk backend dari basis dan periode resmi yang dipilih.
                     Kuantitas lintas satuan tidak dijumlahkan pada lingkup proyek.</p>
                   <dl className="h2a0-facts">
                     <div><dt>Basis</dt>
@@ -1468,7 +1880,14 @@ export function ProjectWorkPage() {
                     </section>
                   ) : monitoringPlanContent}
                 </div>
-              )) : null
+              )) : (
+                <div className="h2a0-project-scope">
+                  <p className="h2a0-guidance">
+                    Detail periode akan tampil setelah SIMPROK menyelesaikan
+                    konteks periode yang dipilih.
+                  </p>
+                </div>
+              )
             ) : !selected ? (
               <div className="h2a0-project-scope">
                 <span className="h2a0-scope-badge">SELURUH PROYEK</span>
@@ -1705,21 +2124,28 @@ export function ProjectWorkPage() {
                   )}
                   </section>
                 ) : monitoringPlanContent}
-                <button
-                  className="h2a0-detail-action"
-                  onClick={() =>
-                    navigate(progressDetailPath(project.id, selected.id))
-                  }
-                >
-                  {hasPermission('FIELD_PROGRESS_SUBMIT')
-                    ? 'Catat / Kelola Actual'
-                    : 'Lihat Riwayat Actual'}
-                </button>
+                {/*
+                  ACTION HIERARCHY — this door stands last on purpose.
+                  Lihat Kondisi -> Lihat Bukti -> Pahami Angka -> Pahami Penyebab
+                  -> Ambil Tindakan. It is offered only under TERKINI; a periodic
+                  window is read-only and exposes no Actual mutation door.
+                */}
+                {monitoringTimeLensAllowsActualAction(activeTimeLens) && (
+                  <button
+                    className="h2a0-detail-action"
+                    onClick={() =>
+                      navigate(progressDetailPath(project.id, selected.id))
+                    }
+                  >
+                    {hasPermission('FIELD_PROGRESS_SUBMIT')
+                      ? 'Catat / Kelola Actual'
+                      : 'Lihat Riwayat Actual'}
+                  </button>
+                )}
               </div>
             )}
           </aside>
         </div>
-      )}
     </main>
   );
 }

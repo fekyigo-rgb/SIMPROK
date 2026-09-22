@@ -246,6 +246,20 @@ export type MonitoringTemporalPeriod =
       };
     });
 
+export type MonitoringPeriodNavigator = {
+  mode: 'CANONICAL_MONITORING_PERIOD_NAVIGATOR_V1';
+  basis: MonitoringTemporalBasis;
+  granularity: MonitoringTemporalGranularity;
+} & (
+  | {
+      state: 'RESOLVED';
+      periods: MonitoringTemporalPeriod[];
+      hasMoreOlder: boolean;
+      olderCursor: string | null;
+    }
+  | { state: 'UNAVAILABLE'; reason: string }
+);
+
 export type MonitoringPlannedItemQuantity =
   | { state: 'COMPLETE'; plannedQuantity: string }
   | { state: 'INCOMPLETE'; reason: string; knownPlannedQuantitySubtotal: string }
@@ -360,6 +374,9 @@ export interface MonitoringResponse {
 
   /** Present only on an explicit canonical Temporal Lens request. */
   temporalLens?: MonitoringTemporalLens;
+
+  /** Present only on an explicit canonical Period Navigator request. */
+  periodNavigator?: MonitoringPeriodNavigator;
 
   items: MonitoringItem[];
   unavailable: string[];
@@ -945,6 +962,23 @@ export function monitoringTemporalLensRequestPath(input: {
   return `/projects/${input.projectId}/progress/monitoring?${params.toString()}`;
 }
 
+export function monitoringPeriodNavigatorRequestPath(input: {
+  projectId: string;
+  basis: MonitoringTemporalBasis;
+  granularity: MonitoringTemporalGranularity;
+  cursor?: string;
+}): string {
+  const params = new URLSearchParams({
+    includePeriodNavigator: 'true',
+    periodNavigatorBasis: input.basis,
+    periodNavigatorGranularity: input.granularity,
+  });
+  if (input.cursor !== undefined) {
+    params.set('periodNavigatorCursor', input.cursor);
+  }
+  return `/projects/${input.projectId}/progress/monitoring?${params.toString()}`;
+}
+
 export function monitoringTemporalBasisLabel(basis: MonitoringTemporalBasis): string {
   return basis === 'WORK_PERIOD' ? 'Waktu Kerja' : 'Kalender';
 }
@@ -984,6 +1018,29 @@ export function monitoringTemporalLensUnavailableMessage(reason: string): string
       'Tanggal acuan berada sebelum Hari Pertama Resmi proyek.',
   };
   return messages[reason] ?? 'Konteks periode belum tersedia dari fakta proyek yang sah.';
+}
+
+export function monitoringPeriodNavigatorUnavailableMessage(reason: string): string {
+  const messages: Readonly<Record<string, string>> = {
+    REPORTING_NOT_STARTED_FOR_PLANNED_PROJECT:
+      'Periode Monitoring belum tersedia karena pelaporan proyek belum dimulai.',
+    NO_ACTIVE_BASELINE_CONTEXT:
+      'Periode Monitoring belum tersedia karena Baseline aktif belum ada.',
+    TERMINAL_PROJECT_BUSINESS_DATE_NOT_AVAILABLE:
+      'Periode Monitoring belum tersedia karena tanggal akhir resmi proyek belum tersedia.',
+    ARCHIVED_PROJECT_TERMINAL_SEMANTICS_NOT_RATIFIED:
+      'Periode Monitoring untuk proyek arsip belum tersedia.',
+    PROJECT_NOT_FOUND: 'Proyek tidak ditemukan.',
+    PROJECT_TIME_ZONE_NOT_SET:
+      'Periode Monitoring belum tersedia karena zona waktu proyek belum ditetapkan.',
+    INVALID_PROJECT_TIME_ZONE:
+      'Periode Monitoring belum tersedia karena zona waktu proyek tidak valid.',
+    GOVERNED_WORK_PERIOD_ANCHOR_REQUIRED:
+      'Periode Waktu Kerja belum tersedia karena Hari Pertama Resmi proyek belum dibuktikan.',
+    WORK_PERIOD_ANCHOR_PROVENANCE_INVALID:
+      'Periode Waktu Kerja belum tersedia karena bukti Hari Pertama Resmi tidak valid.',
+  };
+  return messages[reason] ?? 'Periode belum tersedia dari fakta proyek yang sah.';
 }
 
 export function plannedPeriodQuantityLabel(

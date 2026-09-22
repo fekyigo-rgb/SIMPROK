@@ -719,8 +719,23 @@ export function ExecutionPlanReadinessPanel(
     }
   };
 
+  /*
+   * MONITORING IS NOT A PLANNING ENGINE.
+   *
+   * Once the Rencana Pelaksanaan is locked, Monitoring is the project's
+   * Pengawasan and Pengendalian workspace. Governance and provenance stay
+   * visible — nothing is deleted — but the plan stops dominating the page: the
+   * full Rencana Kerja review table is a pre-lock completion surface, and after
+   * the lock the same schedule truth is read through the contextual JADWAL
+   * view instead.
+   */
   return (
-    <section className="execution-plan" aria-labelledby="execution-plan-title">
+    <section
+      className={
+        locked ? 'execution-plan is-governance-compact' : 'execution-plan'
+      }
+      aria-labelledby="execution-plan-title"
+    >
       <div className="execution-plan-heading">
         <div>
           <p className="h2a0-eyebrow">Execution Readiness</p>
@@ -747,31 +762,34 @@ export function ExecutionPlanReadinessPanel(
         </div>
       )}
 
-      <div className="execution-plan-review">
-        <h3>Rencana Kerja</h3>
-        <div className="execution-plan-table-scroll">
-          <table>
-            <thead>
-              <tr><th>WBS / Pekerjaan</th><th>Volume Baseline</th><th>Periode Rencana</th></tr>
-            </thead>
-            <tbody>
-              {executionPlan.workPlan.map((row) => (
-                <tr key={row.boqItemId}>
-                  <td>{row.wbsCode} · {row.name}</td>
-                  <td>{row.baselineQuantity} {row.unit}</td>
-                  <td>{executionPlanPeriodCountLabel(row.distributionCount)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {!locked && (
+        <div className="execution-plan-review">
+          <h3>Rencana Kerja</h3>
+          <div className="execution-plan-table-scroll">
+            <table>
+              <thead>
+                <tr><th>WBS / Pekerjaan</th><th>Volume Baseline</th><th>Periode Rencana</th></tr>
+              </thead>
+              <tbody>
+                {executionPlan.workPlan.map((row) => (
+                  <tr key={row.boqItemId}>
+                    <td>{row.wbsCode} · {row.name}</td>
+                    <td>{row.baselineQuantity} {row.unit}</td>
+                    <td>{executionPlanPeriodCountLabel(row.distributionCount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {locked && executionPlan.plan && (
         <>
-          <p className="execution-plan-note">
+          <p className="execution-plan-note execution-plan-governance-note">
             Rencana Pelaksanaan telah dikunci. Monitoring menggunakan rencana
-            ini sebagai dasar Pengawasan dan Pengendalian.
+            ini sebagai dasar Pengawasan dan Pengendalian. Distribusi waktu
+            rencana tetap dapat dibaca melalui Jadwal pada detail pekerjaan.
           </p>
           <dl className="execution-plan-lock-facts">
             <div><dt>Plan Version</dt><dd>{executionPlan.plan.versionNumber}</dd></div>

@@ -569,7 +569,13 @@ test('MON04 chart holds the previous value until the next canonical boundary', (
 test('H2-A0-9 the shell states project scope, Terkini, and both freshness meanings', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
   assert.match(page, /SELURUH PROYEK/);
-  assert.match(page, />\s*TERKINI\s*</);
+  // TERKINI is now one of the three windows of the Smart Monitoring Table, so
+  // its label comes from the canonical lens list rather than a literal. That
+  // the list is exactly TERKINI / MINGGUAN / BULANAN is pinned in
+  // utils/monitoringTimeLens.test.ts.
+  assert.match(page, /MONITORING_TIME_LENSES\.map/);
+  assert.match(page, /monitoringTimeLensLabel\(lens\)/);
+  assert.match(page, /DEFAULT_MONITORING_TIME_LENS/);
   assert.match(page, /Data pekerjaan sampai/);
   assert.match(page, /Terakhir diperbarui/);
   assert.match(page, /effectiveActual\(row\)/);
@@ -1500,7 +1506,7 @@ test('MON04-PK-ATOMIC-R1 Periodic request is one atomic Lens plus comparator req
 test('MON04-PK-ATOMIC-R2 frontend has no second Periodic comparator authority', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
   const temporalStart = page.indexOf('const temporalRequestKey');
-  const temporalEnd = page.indexOf('const activatePeriodicContext', temporalStart);
+  const temporalEnd = page.indexOf('const activeTimeLens', temporalStart);
   const periodicConnection = page.slice(temporalStart, temporalEnd);
   assert.ok(temporalStart >= 0 && temporalEnd > temporalStart);
   assert.equal(
@@ -1640,7 +1646,15 @@ test('MON04-TC-5 Temporal Lens items join only by canonical boqItemId', () => {
 
 test('MON04-TC-6 ProjectWorkPage owns one optional request and retires stale responses', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
-  assert.match(page, /useState<TemporalContextMode>\('TERKINI'\)/);
+  // The opening window is TERKINI, taken from the canonical default lens.
+  assert.match(
+    page,
+    /useState<TemporalContextMode>\(DEFAULT_TIME_LENS_STATE\.mode\)/,
+  );
+  assert.match(
+    page,
+    /const DEFAULT_TIME_LENS_STATE = monitoringTimeLensState\(\s*DEFAULT_MONITORING_TIME_LENS,/,
+  );
   assert.match(page, /monitoringTemporalLensRequestPath\(\{/);
   assert.match(page, /const controller = new AbortController\(\)/);
   assert.match(page, /temporalRequestGenerationRef\.current !== generation/);
@@ -1657,11 +1671,24 @@ test('MON04-TC-7 one Monitoring shell evolves without Current contamination', ()
     'src/pages/field/ExecutionPlanReadinessPanel.tsx',
     'utf8',
   );
-  for (const control of ['Waktu Kerja', 'Kalender', 'Mingguan', 'Bulanan']) {
+  // Basis stays a secondary control with literal labels; the weekly and monthly
+  // windows are now the primary time lens, labelled from the canonical list.
+  for (const control of ['Waktu Kerja', 'Kalender']) {
     assert.match(page, new RegExp(`>\\s*${control}\\s*<`));
   }
-  assert.match(page, /aria-label="Konteks waktu"/);
-  assert.match(page, /type="date"/);
+  assert.match(page, /MONITORING_TIME_LENSES\.map/);
+  assert.match(page, /monitoringTimeLensLabel\(lens\)/);
+  assert.match(page, /onClick=\{\(\) => selectTimeLens\(lens\)\}/);
+  assert.match(page, /aria-label="Jendela waktu Monitoring"/);
+  assert.doesNotMatch(
+    page,
+    /type=["']date["']/,
+    'Monitoring must not expose an arbitrary local date selector',
+  );
+  assert.match(page, /monitoringPeriodNavigatorRequestPath\(\{/);
+  assert.match(page, /activePeriodNavigatorPresentation\.periods\.map/);
+  assert.match(page, /onClick=\{\(\) => selectNavigatorPeriod\(period\)\}/);
+  assert.match(page, /setTemporalReferenceDate\(period\.endDate\)/);
   assert.match(page, /Rencana Periode/);
   assert.match(page, /Realisasi Resmi Periode/);
   assert.match(page, /Rencana s\.d\. Akhir Periode/);
