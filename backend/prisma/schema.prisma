@@ -120,6 +120,7 @@ model Workspace {
   resourceIdentityQuestionDecisions ResourceIdentityQuestionDecision[]
   ingestionConnectors               IngestionConnector[]
   ahspImportJobs                    AHSPImportJob[]
+  constructionClassificationNodes   ConstructionClassificationNode[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -2291,6 +2292,49 @@ model BasicPrice {
   @@index([sourceSubmissionId])
   @@index([regionId])
   @@map("basic_prices")
+}
+
+// =====================================================
+// SECTION G.1b: AHSP SHARED CLASSIFICATION FOUNDATION (Slice 1)
+// Product Law v1.4 — ONE shared classification truth.
+// Levels: JENIS_PENGADAAN → KATEGORI → SUBKATEGORI → JENIS_PEKERJAAN
+// Uraian AHSP is NOT a node here. AHSP assignment is Slice 2.
+// workspaceId NULL = GLOBAL/SHARED; non-null = WORKSPACE/LOCAL custom.
+// No auto-promotion. Additive only — existing AHSP scalar fields untouched.
+// =====================================================
+
+enum ConstructionClassificationLevel {
+  JENIS_PENGADAAN
+  KATEGORI
+  SUBKATEGORI
+  JENIS_PEKERJAAN
+}
+
+model ConstructionClassificationNode {
+  id             String                           @id @default(uuid()) @db.Uuid
+  level          ConstructionClassificationLevel
+  name           String
+  /// NFKC + lower + collapsed whitespace — identity key companion to name.
+  normalizedName String
+  code           String?
+  /// NULL only for JENIS_PENGADAAN roots. RESTRICT: parent with children cannot
+  /// be deleted out from under them. Self-parent refused by CHECK.
+  parentId       String?                          @db.Uuid
+  /// NULL = GLOBAL/SHARED canonical node. Non-null = WORKSPACE/LOCAL custom.
+  workspaceId    String?                          @db.Uuid
+  isActive       Boolean                          @default(true)
+  createdAt      DateTime                         @default(now())
+  updatedAt      DateTime                         @updatedAt
+
+  parent    ConstructionClassificationNode?  @relation("ConstructionClassificationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children  ConstructionClassificationNode[] @relation("ConstructionClassificationHierarchy")
+  workspace Workspace?                       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+
+  @@index([parentId])
+  @@index([workspaceId])
+  @@index([level, normalizedName])
+  @@index([workspaceId, level, normalizedName])
+  @@map("construction_classification_nodes")
 }
 
 // =====================================================

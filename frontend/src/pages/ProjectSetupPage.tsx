@@ -4,6 +4,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiFetch } from '../utils/apiClient';
 import { NumericFact } from '../components/atoms/NumericFact';
 import { ArrowRight, MapPin, Send, Sparkles, X } from 'lucide-react';
+import {
+  JENIS_PENGADAAN_OPTIONS,
+  JENIS_PENGADAAN_WITH_BIDANG,
+} from '../jenisPengadaanVocabulary';
 
 const requiredPreparationFields = [
   'Nama Proyek',
@@ -17,22 +21,11 @@ const requiredPreparationFields = [
   'Pemilik / Instansi',
 ];
 
-const kategoriOptions = [
-  'Pengadaan Barang',
-  'Pekerjaan Konstruksi',
-  'Jasa Konsultansi Badan Usaha Non Konstruksi',
-  'Jasa Konsultansi Badan Usaha Konstruksi',
-  'Jasa Konsultansi Perorangan Non Konstruksi',
-  'Jasa Konsultansi Perorangan Konstruksi',
-  'Jasa Lainnya',
-  'Pekerjaan Konstruksi Terintegrasi',
-];
+/** Buat RAB / Ruang Interaksi — SAME Jenis Pengadaan authority (Product Law). */
+const kategoriOptions: readonly string[] = JENIS_PENGADAAN_OPTIONS;
 
 // Bidang Pekerjaan hanya untuk kategori konstruksi pelaksana fisik.
-const kategoriDenganBidang = [
-  'Pekerjaan Konstruksi',
-  'Pekerjaan Konstruksi Terintegrasi',
-];
+const kategoriDenganBidang: readonly string[] = JENIS_PENGADAAN_WITH_BIDANG;
 
 const bidangPekerjaanOptions = [
   'Bidang Bina Marga',
