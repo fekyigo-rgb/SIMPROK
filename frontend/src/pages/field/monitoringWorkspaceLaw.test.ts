@@ -54,6 +54,13 @@ test('4. the primary lens control offers no generic PERIODIK button', () => {
     page.indexOf('className="h2a0-time-lens"'),
     page.indexOf('const monitoringLensSelector'),
   );
+  const primaryButtons = control.slice(
+    control.indexOf('{MONITORING_TIME_LENSES.map'),
+    control.indexOf("{periodMenuOpen && temporalContextMode === 'PERIODIK'"),
+  );
+  const primaryLensList = lens.match(
+    /export const MONITORING_TIME_LENSES:[\s\S]*?= \[([\s\S]*?)\];/,
+  );
   assert.notEqual(control.length, 0, 'the time lens control is missing');
   assert.ok(
     control.includes('MONITORING_TIME_LENSES.map'),
@@ -63,8 +70,15 @@ test('4. the primary lens control offers no generic PERIODIK button', () => {
     control.includes('monitoringTimeLensLabel(lens)'),
     'the lens buttons do not use the canonical labels',
   );
+  assert.notEqual(primaryButtons.length, 0, 'the primary lens buttons are missing');
+  assert.ok(primaryLensList, 'the canonical primary lens list is missing');
+  assert.deepEqual(
+    Array.from(primaryLensList[1].matchAll(/'([^']+)'/g), (match) => match[1]),
+    ['TERKINI', 'MINGGUAN', 'BULANAN'],
+    'the canonical primary lens list exposes another user-facing mode',
+  );
   assert.equal(
-    countOf(control, 'PERIODIK'),
+    countOf(primaryButtons, 'PERIODIK'),
     0,
     'a generic PERIODIK lens is offered to the user',
   );
