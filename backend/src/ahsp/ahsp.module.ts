@@ -7,10 +7,12 @@ import { AhspAuditService } from './services/ahsp-audit.service';
 import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
 import { RealityNormalizationEngine } from './services/reality-normalization.engine';
 import { AhspDocumentCanonicalizationService } from './services/ahsp-document-canonicalization.service';
+import { AhspClassificationAssignmentService } from './services/ahsp-classification-assignment.service';
 import { AhspController } from './ahsp.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 import { RealityIntakeModule } from '../reality-intake/reality-intake.module';
+import { ConstructionClassificationModule } from '../construction-classification/construction-classification.module';
 import { BasicPriceSourceArchiveService } from '../basic-price/basic-price-source-archive.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { ResourceAdmissionService } from '../resource-catalog/resource-admission.service';
@@ -26,6 +28,9 @@ import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision
     // without importing an RM-12 platform concept. Its own export comment says
     // so. Acyclic: RealityIntakeModule imports only PrismaModule.
     RealityIntakeModule,
+    // Path-assignment foundation: reuses ConstructionClassificationService;
+    // does not create a second taxonomy engine.
+    ConstructionClassificationModule,
   ],
   controllers: [AhspController],
   providers: [
@@ -39,6 +44,7 @@ import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision
     // signal of the duplicate classifier). No second normalizer is created.
     RealityNormalizationEngine,
     AhspDocumentCanonicalizationService,
+    AhspClassificationAssignmentService,
     /**
      * C1 — THE ONE SOURCE ARCHIVE, reached by a second injector.
      *
@@ -65,6 +71,11 @@ import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision
     // now also uses for IQL-01 exact-question decisions.
     GhxDecisionContextTokenService,
   ],
-  exports: [AhspService, AhspVersionService, AhspSnapshotService],
+  exports: [
+    AhspService,
+    AhspVersionService,
+    AhspSnapshotService,
+    AhspClassificationAssignmentService,
+  ],
 })
 export class AhspModule {}

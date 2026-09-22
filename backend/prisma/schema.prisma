@@ -782,6 +782,9 @@ model AHSP {
   snapshots  AHSPSnapshot[]
   importJobs AHSPImportJob[]
   auditLogs  AHSPAuditLog[]
+  /// Product Law v1.4 — durable multi-path classification. Scalars above remain
+  /// legacy display/backward-compat only; they are NOT the path assignment truth.
+  classificationAssignments AhspClassificationAssignment[]
 
   @@unique([workspaceId, workType, methodType, locationType, methodName])
   @@index([workspaceId])
@@ -2329,12 +2332,48 @@ model ConstructionClassificationNode {
   parent    ConstructionClassificationNode?  @relation("ConstructionClassificationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
   children  ConstructionClassificationNode[] @relation("ConstructionClassificationHierarchy")
   workspace Workspace?                       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  ahspClassificationAssignments AhspClassificationAssignment[]
 
   @@index([parentId])
   @@index([workspaceId])
   @@index([level, normalizedName])
   @@index([workspaceId, level, normalizedName])
   @@map("construction_classification_nodes")
+}
+
+// =====================================================
+// SECTION G.1c: AHSP CLASSIFICATION PATH ASSIGNMENT
+// Product Law v1.4 — one AHSP → many lawful paths.
+// Owner = AHSP identity (not AhspVersion): classification may change while
+// source evidence and formula versions remain. Leaf = JENIS_PEKERJAAN;
+// lineage derived via ConstructionClassificationService — no name copies.
+// Provenance distinguishes SOURCE_DERIVED vs HUMAN_ADDED (coexist; no overwrite).
+// Legacy AHSP scalars (fieldCategory/subCategory/classification) untouched.
+// =====================================================
+
+enum AhspClassificationAssignmentProvenance {
+  SOURCE_DERIVED
+  HUMAN_ADDED
+}
+
+model AhspClassificationAssignment {
+  id         String                                 @id @default(uuid()) @db.Uuid
+  ahspId     String                                 @db.Uuid
+  /// Path tip. Must be JENIS_PEKERJAAN. Ancestors derived, never duplicated.
+  leafNodeId String                                 @db.Uuid
+  provenance AhspClassificationAssignmentProvenance
+  isActive   Boolean                                @default(true)
+  createdAt  DateTime                               @default(now())
+  updatedAt  DateTime                               @updatedAt
+
+  ahsp     AHSP                           @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  leafNode ConstructionClassificationNode @relation(fields: [leafNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([ahspId, leafNodeId, provenance])
+  @@index([ahspId])
+  @@index([leafNodeId])
+  @@index([ahspId, isActive])
+  @@map("ahsp_classification_assignments")
 }
 
 // =====================================================
