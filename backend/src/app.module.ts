@@ -28,6 +28,7 @@ import { ProjectAhspModule } from './project-ahsp/project-ahsp.module';
 import { UnitKernelModule } from './unit-kernel/unit-kernel.module';
 import { ResourceCatalogModule } from './resource-catalog/resource-catalog.module';
 import { ExecutionPlanModule } from './execution-plan/execution-plan.module';
+import { ConstructionClassificationModule } from './construction-classification/construction-classification.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { ExecutionPlanModule } from './execution-plan/execution-plan.module';
     UnitKernelModule,
     ResourceCatalogModule,
     ExecutionPlanModule,
+    ConstructionClassificationModule,
   ],
   controllers: [AppController],
   providers: [

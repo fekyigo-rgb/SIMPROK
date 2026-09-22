@@ -1,0 +1,16 @@
+{
+  "jenisPengadaanOptions": [
+    "Pengadaan Barang",
+    "Pekerjaan Konstruksi",
+    "Jasa Konsultansi Badan Usaha Non Konstruksi",
+    "Jasa Konsultansi Badan Usaha Konstruksi",
+    "Jasa Konsultansi Perorangan Non Konstruksi",
+    "Jasa Konsultansi Perorangan Konstruksi",
+    "Jasa Lainnya",
+    "Pekerjaan Konstruksi Terintegrasi"
+  ],
+  "jenisPengadaanWithBidang": [
+    "Pekerjaan Konstruksi",
+    "Pekerjaan Konstruksi Terintegrasi"
+  ]
+}
