@@ -13,6 +13,7 @@ import {
 } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseDateOnlyUtc } from '../common/date-only.util';
+import { isSupportedProjectTimeZone } from '../common/project-time-zone.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
@@ -130,11 +131,9 @@ export class ProjectService {
   ): string | null | undefined {
     const normalized = this.normalizeOptionalText(value);
     if (normalized === undefined || normalized === null) return normalized;
-    try {
-      new Intl.DateTimeFormat('en-US', { timeZone: normalized }).format(
-        new Date('2026-01-01T00:00:00.000Z'),
-      );
-    } catch {
+    // The same acceptance rule now serves Monitoring's Project Business Date,
+    // so the one check lives in common/. Behaviour here is unchanged.
+    if (!isSupportedProjectTimeZone(normalized)) {
       throw new BadRequestException('INVALID_PROJECT_TIME_ZONE');
     }
     return normalized;

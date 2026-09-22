@@ -40,6 +40,8 @@ import {
 import {
   calculateCurrentOfficialQuantity,
   calculateCurrentOfficialQuantityFromGoverned,
+  resolveCurrentGovernedOfficialFacts,
+  type CurrentGovernedOfficialFactsResult,
   type CurrentOfficialQuantityResult,
 } from './progress-current-official-quantity.policy';
 import {
@@ -98,7 +100,20 @@ import {
   resolveMonitoringTemporalLensBoundary,
   type MonitoringTemporalLensInput,
 } from './progress-temporal-lens.policy';
-import { TEMPORAL_BASIS } from './progress-temporal-boundary.policy';
+import {
+  TEMPORAL_BASIS,
+  type TemporalGranularity,
+} from './progress-temporal-boundary.policy';
+import { projectBusinessDateAtInstant } from '../common/project-time-zone.util';
+import {
+  monitoringPeriodNavigatorStatusSupport,
+  periodNavigatorUnavailable,
+  resolveEarliestGovernedActualWorkDate,
+  resolveMonitoringPeriodNavigator,
+  type LockedPlanNavigatorStart,
+  type MonitoringPeriodNavigatorInput,
+  type WorkPeriodAnchorNavigatorStart,
+} from './progress-period-navigator.policy';
 
 type MonitoringReadClient = Pick<
   Prisma.TransactionClient,
@@ -795,6 +810,7 @@ export class ProgressService {
     includeProgressComparison = false,
     periodWindowInput?: { startDate: unknown; endDate: unknown },
     temporalLensInput?: MonitoringTemporalLensInput,
+    periodNavigatorInput?: MonitoringPeriodNavigatorInput,
   ) {
     if (includeActualSeries && cutoffDate === undefined) {
       throw new BadRequestException('ACTUAL_SERIES_REQUIRES_CUTOFF');
@@ -825,10 +841,21 @@ export class ProgressService {
     if (
       cutoffDate === undefined &&
       periodWindow === undefined &&
-      temporalLensInput === undefined
+      temporalLensInput === undefined &&
+      periodNavigatorInput === undefined
     ) {
       return this.getMonitoringFromClient(this.prisma, projectId);
     }
+
+    /*
+     * One wall-clock reading per request. The navigator's Work Period and
+     * Calendar lists must agree about which day "today" is, so the instant is
+     * request context captured here and passed down — never re-read while the
+     * two lists are being built. It is not a database fact and takes no part in
+     * the RepeatableRead snapshot below.
+     */
+    const requestInstant =
+      periodNavigatorInput === undefined ? undefined : new Date();
 
     let validCutoffDate: string | undefined;
     if (cutoffDate !== undefined) {
@@ -849,6 +876,9 @@ export class ProgressService {
           includeProgressComparison,
           periodWindow,
           temporalLensInput,
+          periodNavigatorInput === undefined || requestInstant === undefined
+            ? undefined
+            : { ...periodNavigatorInput, requestInstant },
         ),
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
@@ -862,6 +892,9 @@ export class ProgressService {
     includeProgressComparison = false,
     periodWindow?: ProjectBusinessDateWindow,
     temporalLensInput?: MonitoringTemporalLensInput,
+    periodNavigatorInput?: MonitoringPeriodNavigatorInput & {
+      requestInstant: Date;
+    },
   ) {
     const unavailable = [
       'plannedStart',
@@ -1062,6 +1095,30 @@ export class ProgressService {
         ...(temporalLensProjection === undefined
           ? {}
           : { temporalLens: temporalLensProjection }),
+        // Project lifecycle truth precedes Baseline availability.
+        // Only ACTIVE / ON_HOLD may fall through to the no-Baseline reason.
+        ...(periodNavigatorInput === undefined
+          ? {}
+          : {
+              periodNavigator:
+                project === null
+                  ? periodNavigatorUnavailable(
+                      periodNavigatorInput.basis,
+                      periodNavigatorInput.granularity,
+                      'PROJECT_NOT_FOUND',
+                    )
+                  : (() => {
+                      const statusSupport =
+                        monitoringPeriodNavigatorStatusSupport(project.status);
+                      return periodNavigatorUnavailable(
+                        periodNavigatorInput.basis,
+                        periodNavigatorInput.granularity,
+                        statusSupport.state === 'UNAVAILABLE'
+                          ? statusSupport.reason
+                          : 'NO_ACTIVE_BASELINE_CONTEXT',
+                      );
+                    })(),
+            }),
         unavailable,
       };
     }
@@ -1075,10 +1132,17 @@ export class ProgressService {
       items,
       baseline.rabDocument.totalBaseCost,
     );
+    /*
+     * The navigator joins the existing planned-context readers rather than
+     * running its own Execution Plan query: the Calendar start precedence needs
+     * the SAME authoritative LOCKED plan decision Monitoring already makes
+     * below, including its ambiguity and baseline-binding refusals.
+     */
     const needsPlannedContext =
       includeProgressComparison ||
       periodWindow !== undefined ||
-      temporalLensBoundary?.state === 'RESOLVED';
+      temporalLensBoundary?.state === 'RESOLVED' ||
+      periodNavigatorInput !== undefined;
     const lockedPlanCandidates = needsPlannedContext
       ? await db.executionPlanVersion.findMany({
           where: { projectId, status: ExecutionPlanStatus.LOCKED },
@@ -1530,6 +1594,100 @@ export class ProgressService {
             : {}),
         },
       }));
+
+    /*
+     * PERIOD NAVIGATOR — which periods a reader may select, for ACTIVE/ON_HOLD.
+     *
+     * Every input here is an existing canonical fact, gathered and handed to a
+     * pure policy: the governed Work Period Anchor, the SAME authoritative
+     * LOCKED plan decision Monitoring made above (its `plannedSource` when the
+     * plan is authoritative, its refusal reason when it is not), and the
+     * earliest work date among governed eligible Current Official facts — read
+     * through `resolveCurrentGovernedOfficialFacts`, never by scanning raw
+     * entries for a minimum date.
+     */
+    const periodNavigatorProjection = await (async () => {
+      if (periodNavigatorInput === undefined) return undefined;
+
+      const anchor =
+        project === null
+          ? null
+          : await readCanonicalWorkPeriodAnchorFromStore(db, {
+              projectId,
+              startDate: project.startDate ?? null,
+            });
+      const workPeriodAnchor: WorkPeriodAnchorNavigatorStart =
+        anchor === null || anchor.state === 'NOT_PROVEN'
+          ? { state: 'NOT_PROVEN' }
+          : anchor.state === 'INVALID_PROVENANCE'
+            ? { state: 'INVALID_PROVENANCE' }
+            : { state: 'PROVEN', anchorDate: anchor.anchorDate };
+
+      // The plan decision is Monitoring's, not the navigator's: an authoritative
+      // plan yields `plannedSource`, and a refusal keeps its exact reason.
+      const lockedPlanStart: LockedPlanNavigatorStart = (() => {
+        if (plannedSource !== null) {
+          const authoritativePlan = lockedPlanCandidates[0];
+          const earliest = authoritativePlan?.distributions[0]?.periodStartDate;
+          return earliest === undefined
+            ? { state: 'ABSENT' }
+            : {
+                state: 'RESOLVED',
+                startDate: earliest.toISOString().slice(0, 10),
+              };
+        }
+        if (
+          canonicalPlannedCurve?.state === 'UNAVAILABLE' &&
+          canonicalPlannedCurve.reason ===
+            EXECUTION_PLAN_BLOCKER.AMBIGUOUS_EXECUTION_PLAN_CONTEXT
+        ) {
+          return {
+            state: 'UNAVAILABLE',
+            reason: 'AMBIGUOUS_EXECUTION_PLAN_CONTEXT',
+          };
+        }
+        if (
+          canonicalPlannedCurve?.state === 'UNAVAILABLE' &&
+          canonicalPlannedCurve.reason ===
+            EXECUTION_PLAN_BLOCKER.BASELINE_BINDING_MISMATCH
+        ) {
+          return { state: 'UNAVAILABLE', reason: 'BASELINE_BINDING_MISMATCH' };
+        }
+        return { state: 'ABSENT' };
+      })();
+
+      const governedResults: CurrentGovernedOfficialFactsResult[] =
+        workItems.map((item) =>
+          resolveCurrentGovernedOfficialFacts(
+            {
+              projectId,
+              activeBaselineId: baseline.id,
+              boqItemId: item.id,
+            },
+            entriesByWorkItem.get(item.id) ?? [],
+          ),
+        );
+
+      return resolveMonitoringPeriodNavigator({
+        basis: periodNavigatorInput.basis,
+        granularity: periodNavigatorInput.granularity,
+        ...(periodNavigatorInput.cursor === undefined
+          ? {}
+          : { cursor: periodNavigatorInput.cursor }),
+        requestInstant: periodNavigatorInput.requestInstant,
+        project:
+          project === null
+            ? null
+            : { status: project.status, timeZone: project.timeZone },
+        hasActiveBaselineContext: true,
+        workPeriodAnchor,
+        lockedPlanStart,
+        earliestGovernedActual:
+          resolveEarliestGovernedActualWorkDate(governedResults),
+        projectBusinessDateAtInstant,
+      });
+    })();
+
     const periodWindowProjection =
       periodWindow === undefined
         ? undefined
@@ -1793,6 +1951,9 @@ export class ProgressService {
       ...(temporalLensProjection === undefined
         ? {}
         : { temporalLens: temporalLensProjection }),
+      ...(periodNavigatorProjection === undefined
+        ? {}
+        : { periodNavigator: periodNavigatorProjection }),
       items: items.map((item) => {
         const effective = effectiveByItem.get(item.id);
 

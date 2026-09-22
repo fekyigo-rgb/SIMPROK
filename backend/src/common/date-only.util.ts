@@ -53,3 +53,15 @@ export function parseDateOnlyUtc(value: string, fieldName: string): Date {
 export function nextUtcDayStart(utcDayStart: Date): Date {
   return new Date(utcDayStart.getTime() + 24 * 60 * 60 * 1000);
 }
+
+/**
+ * The UTC instant at the start of the day immediately before the given UTC
+ * start-of-day instant — the exact mirror of `nextUtcDayStart`, for walking a
+ * date-only sequence backward.
+ *
+ * Calendar-day stepping only. It knows nothing of weeks, months, or any period
+ * boundary; those remain the temporal boundary policy's alone.
+ */
+export function previousUtcDayStart(utcDayStart: Date): Date {
+  return new Date(utcDayStart.getTime() - 24 * 60 * 60 * 1000);
+}

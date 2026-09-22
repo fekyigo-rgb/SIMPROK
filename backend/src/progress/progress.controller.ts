@@ -23,6 +23,7 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 import type { ProjectAccessContext } from '../auth/project-access-policy.service';
 import { parseMonitoringTemporalLensQuery } from './progress-temporal-lens.policy';
+import { parseMonitoringPeriodNavigatorQuery } from './progress-period-navigator.policy';
 
 interface ProgressSemanticAttestationRequest {
   user: { id: string };
@@ -72,6 +73,11 @@ export class ProgressController {
     const temporalLensQuery = parseMonitoringTemporalLensQuery(query);
     if (temporalLensQuery.state === 'INVALID') {
       throw new BadRequestException(temporalLensQuery.reason);
+    }
+
+    const periodNavigatorQuery = parseMonitoringPeriodNavigatorQuery(query);
+    if (periodNavigatorQuery.state === 'INVALID') {
+      throw new BadRequestException(periodNavigatorQuery.reason);
     }
 
     const includeActualSeriesValue = query.includeActualSeries;
@@ -153,6 +159,15 @@ export class ProgressController {
       throw new BadRequestException('PROGRESS_COMPARISON_REQUIRES_CUTOFF');
     }
 
+    /*
+     * Appended only when the navigator is actually opted into, so a request
+     * without it reaches Monitoring as exactly the call it always made.
+     */
+    const periodNavigatorArgument =
+      periodNavigatorQuery.state === 'ENABLED'
+        ? ([periodNavigatorQuery.input] as const)
+        : ([] as const);
+
     return this.progressService.getMonitoring(
       projectId,
       query.cutoffDate,
@@ -167,6 +182,7 @@ export class ProgressController {
       temporalLensQuery.state === 'ENABLED'
         ? temporalLensQuery.input
         : undefined,
+      ...periodNavigatorArgument,
     );
   }
 

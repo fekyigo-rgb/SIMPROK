@@ -17,29 +17,41 @@ export function FieldLayout() {
         backgroundColor: 'var(--simprok-engineering-blue-900)', 
         color: 'white', 
         padding: 'var(--space-4) var(--space-6)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
+        overflowY: 'auto',
+        scrollbarGutter: 'stable',
         boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
       }}>
-        <h1 style={{ margin: 0, fontSize: 'var(--text-xl)', fontWeight: 'bold' }}>SIMPROK Mandor</h1>
-        <button 
-          onClick={handleLogout}
-          style={{
-            background: 'transparent',
-            border: '1px solid rgba(255,255,255,0.3)',
-            color: 'white',
-            padding: 'var(--space-2) var(--space-4)',
-            borderRadius: 'var(--radius-md)',
-            cursor: 'pointer'
-          }}
-        >
-          Keluar
-        </button>
+        <div style={{
+          width: 'min(100%, 1680px)',
+          margin: '0 auto',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <h1 style={{ margin: 0, fontSize: 'var(--text-xl)', fontWeight: 'bold' }}>SIMPROK</h1>
+          <button
+            onClick={handleLogout}
+            style={{
+              background: 'transparent',
+              border: '1px solid rgba(255,255,255,0.3)',
+              color: 'white',
+              padding: 'var(--space-2) var(--space-4)',
+              borderRadius: 'var(--radius-md)',
+              cursor: 'pointer'
+            }}
+          >
+            Keluar
+          </button>
+        </div>
       </header>
       
       {/* Scrollable Page Content */}
-      <main style={{ flex: 1, padding: 'var(--space-6)', overflowY: 'auto' }}>
+      <main style={{
+        flex: 1,
+        padding: 'var(--space-6)',
+        overflowY: 'auto',
+        scrollbarGutter: 'stable'
+      }}>
         <Outlet />
       </main>
     </div>
