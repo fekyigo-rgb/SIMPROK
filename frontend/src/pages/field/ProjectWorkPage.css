@@ -124,7 +124,7 @@
 .execution-plan-comparison-current dt { color: #617887; font-size: .64rem; font-weight: 750; text-transform: uppercase; }
 .execution-plan-comparison-current dd { margin: .22rem 0 0; color: #123b58; font-size: 1rem; font-weight: 850; overflow-wrap: anywhere; }
 .execution-plan-comparison-current small { display: block; margin-top: .2rem; color: #587080; font-size: .65rem; }
-.execution-plan-comparison-table { min-width: 680px; }
+.execution-plan-comparison-table { min-width: 36rem; }
 .execution-plan-comparison-table caption { padding: .55rem 0; color: #36586c; font-size: .72rem; font-weight: 800; text-align: left; }
 .execution-plan-comparison-table td small { display: block; margin-top: .15rem; color: #617887; font-size: .62rem; font-weight: 500; }
 .execution-plan-comparison-table td[data-state='INCOMPLETE'] { color: #92400e; }
