@@ -1350,65 +1350,70 @@ export function ProjectWorkPage() {
       </button>
 
       <header className="h2a0-project-header">
-        <div className="h2a0-project-identity">
-          <p className="h2a0-eyebrow">Monitoring Proyek</p>
-          <h1>{project.name}</h1>
-        </div>
-        <dl className="h2a0-project-meta">
-          {project.code && (
-            <div>
-              <dt>Kode Paket</dt>
-              <dd className="is-code">{project.code}</dd>
-            </div>
-          )}
-          {project.status && (
-            <div>
-              <dt>Status Proyek</dt>
-              <dd>{project.status}</dd>
-            </div>
-          )}
-          <div>
-            <dt>Baseline Aktif</dt>
-            {activeMonitoringSnapshot?.baseline ? (
-              <>
-                <dd>Versi {activeMonitoringSnapshot.baseline.versionNumber}</dd>
-                <small>
-                  Disetujui{' '}
-                  {
-                    recordedAtLabel(
-                      activeMonitoringSnapshot.baseline.approvedAt,
-                      activeMonitoringSnapshot.projectTimeZone,
-                    ).value
-                  }
-                </small>
-              </>
-            ) : (
-              <dd>TIDAK TERSEDIA</dd>
+        <div className="h2a0-project-overview">
+          <div className="h2a0-project-identity">
+            <p className="h2a0-eyebrow">Monitoring Proyek</p>
+            <h1>{project.name}</h1>
+          </div>
+          <dl className="h2a0-project-meta">
+            {project.code && (
+              <div>
+                <dt>Kode Paket</dt>
+                <dd className="is-code">{project.code}</dd>
+              </div>
             )}
-          </div>
-          <div>
-            <dt>Data pekerjaan sampai</dt>
-            <dd>{dataThrough}</dd>
-            <small>Tanggal kerja efektif terbaru</small>
-          </div>
-          <div>
-            <dt>Terakhir diperbarui</dt>
-            <dd>{lastRecorded.value}</dd>
-            {lastRecorded.basis && <small>{lastRecorded.basis}</small>}
-          </div>
-        </dl>
+            {project.status && (
+              <div>
+                <dt>Status Proyek</dt>
+                <dd>{project.status}</dd>
+              </div>
+            )}
+            <div>
+              <dt>Baseline Aktif</dt>
+              {activeMonitoringSnapshot?.baseline ? (
+                <>
+                  <dd>Versi {activeMonitoringSnapshot.baseline.versionNumber}</dd>
+                  <small>
+                    Disetujui{' '}
+                    {
+                      recordedAtLabel(
+                        activeMonitoringSnapshot.baseline.approvedAt,
+                        activeMonitoringSnapshot.projectTimeZone,
+                      ).value
+                    }
+                  </small>
+                </>
+              ) : (
+                <dd>TIDAK TERSEDIA</dd>
+              )}
+            </div>
+            <div>
+              <dt>Data pekerjaan sampai</dt>
+              <dd>{dataThrough}</dd>
+              <small>Tanggal kerja efektif terbaru</small>
+            </div>
+          </dl>
+        </div>
+        <div className="h2a0-project-header-controls">
+          {temporalContextMode === 'TERKINI' && (
+            <ExecutionPlanReadinessPanel
+              presentation="GOVERNANCE"
+              projectId={project.id}
+              executionPlan={executionPlan}
+              realizationByBoqItemId={realizationByBoqItemId}
+              progressComparisonPresentation={progressComparisonPresentation}
+              onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
+            />
+          )}
+          <dl className="h2a0-project-updated">
+            <div>
+              <dt>Terakhir diperbarui</dt>
+              <dd>{lastRecorded.value}</dd>
+              {lastRecorded.basis && <small>{lastRecorded.basis}</small>}
+            </div>
+          </dl>
+        </div>
       </header>
-
-      {temporalContextMode === 'TERKINI' && (
-        <ExecutionPlanReadinessPanel
-          presentation="GOVERNANCE"
-          projectId={project.id}
-          executionPlan={executionPlan}
-          realizationByBoqItemId={realizationByBoqItemId}
-          progressComparisonPresentation={progressComparisonPresentation}
-          onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
-        />
-      )}
 
         <div className="h2a0-workspace">
           <section className="h2a0-anchor" aria-labelledby="h2a0-anchor-title">

@@ -430,8 +430,8 @@ test('MON04 chart projects canonical dates without inventing or joining unknown 
   assert.equal(chart.points[0].actualY, chart.height - chart.padding);
   assert.equal(chart.points[1].plannedY, null);
   assert.equal(chart.points[1].actualY, null);
-  assert.equal(chart.plannedSegments.length, 0);
-  assert.equal(chart.actualSegments.length, 0);
+  assert.equal(chart.plannedCurve.segments.length, 0);
+  assert.equal(chart.actualCurve.segments.length, 0);
 
   const completePoints = points.map((point) => ({
     ...point,
@@ -455,25 +455,45 @@ test('MON04 chart projects canonical dates without inventing or joining unknown 
   assert.notEqual(firstX, null);
   assert.notEqual(secondX, null);
   assert.notEqual(thirdX, null);
+  assert.equal(firstX, irregular.xPadding);
+  assert.equal(thirdX, irregular.width - irregular.xPadding);
+  assert.ok(firstX! < secondX! && secondX! < thirdX!);
   assert.ok(
     secondX! - firstX! < thirdX! - secondX!,
     'one day must occupy less x-distance than nine days',
   );
+  assert.deepEqual(
+    irregular.dateTicks.map((tick) => ({
+      cutoffDate: tick.cutoffDate,
+      label: tick.label,
+    })),
+    completePoints.map((point) => ({
+      cutoffDate: point.cutoffDate,
+      label: true,
+    })),
+  );
 
   const single = monitoringComparisonChartProjection([points[0]]);
   assert.equal(single.points[0].x, single.width / 2);
-  assert.equal(single.plannedSegments.length, 0);
-  assert.equal(single.actualSegments.length, 0);
+  assert.deepEqual(single.dateTicks, [
+    {
+      cutoffDate: points[0].cutoffDate,
+      x: single.width / 2,
+      label: true,
+    },
+  ]);
+  assert.equal(single.plannedCurve.segments.length, 0);
+  assert.equal(single.actualCurve.segments.length, 0);
 
   const utility = readFileSync('src/utils/monitoringCurrent.ts', 'utf8');
   const chartBlock = utility.slice(
     utility.indexOf('export function monitoringComparisonChartProjection'),
     utility.indexOf('export function lastRecordedLabel'),
   );
-  assert.doesNotMatch(chartBlock, /\.sort\(|new Set|interpolat/i);
+  assert.doesNotMatch(chartBlock, /\.sort\(|new Set/);
 });
 
-test('MON04 chart holds the previous value until the next canonical boundary', () => {
+test('MON04 chart uses bounded monotone Hermite curves through unchanged canonical facts', () => {
   const points: MonitoringProgressComparisonPoint[] = [
     {
       cutoffDate: '2026-09-01',
@@ -484,6 +504,18 @@ test('MON04 chart holds the previous value until the next canonical boundary', (
       actual: {
         state: 'COMPLETE',
         currentOfficialRabWeightedPhysicalProgressPercent: '5',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
+    },
+    {
+      cutoffDate: '2026-09-04',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '30',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '25',
       },
       deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
     },
@@ -499,71 +531,138 @@ test('MON04 chart holds the previous value until the next canonical boundary', (
       },
       deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
     },
+    {
+      cutoffDate: '2026-09-20',
+      planned: {
+        state: 'COMPLETE',
+        plannedRabWeightedPhysicalProgressPercent: '70',
+      },
+      actual: {
+        state: 'COMPLETE',
+        currentOfficialRabWeightedPhysicalProgressPercent: '40',
+      },
+      deviationPercentagePoints: { state: 'COMPLETE', value: '-30' },
+    },
   ];
+  const inputBefore = JSON.stringify(points);
   const chart = monitoringComparisonChartProjection(points);
-  const [first, second] = chart.points;
 
+  assert.equal(JSON.stringify(points), inputBefore);
+  assert.equal(chart.points.length, points.length);
   assert.deepEqual(
     chart.points.map((point) => point.cutoffDate),
     points.map((point) => point.cutoffDate),
   );
-  assert.deepEqual(chart.plannedSegments, [
-    {
-      from: { x: first.x, y: first.plannedY },
-      to: { x: second.x, y: first.plannedY },
-    },
-    {
-      from: { x: second.x, y: first.plannedY },
-      to: { x: second.x, y: second.plannedY },
-    },
-  ]);
-  assert.deepEqual(chart.actualSegments, [
-    {
-      from: { x: first.x, y: first.actualY },
-      to: { x: second.x, y: first.actualY },
-    },
-    {
-      from: { x: second.x, y: first.actualY },
-      to: { x: second.x, y: second.actualY },
-    },
-  ]);
-  for (const [segments, previousY, currentY] of [
-    [chart.plannedSegments, first.plannedY, second.plannedY],
-    [chart.actualSegments, first.actualY, second.actualY],
-  ] as const) {
-    assert.equal(
-      segments.some(
-        (segment) =>
-          segment.from.x === first.x &&
-          segment.from.y === previousY &&
-          segment.to.x === second.x &&
-          segment.to.y === currentY,
-      ),
-      false,
+  assert.deepEqual(
+    chart.percentageTicks.map((tick) => tick.value),
+    [0, 25, 50, 75, 100],
+  );
+  assert.equal(chart.points[0].x, chart.xPadding);
+  assert.equal(
+    chart.points.at(-1)!.x,
+    chart.width - chart.xPadding,
+  );
+  for (let index = 1; index < chart.points.length; index += 1) {
+    assert.ok(chart.points[index].x! > chart.points[index - 1].x!);
+  }
+  assert.deepEqual(
+    chart.dateTicks.map((tick) => ({
+      cutoffDate: tick.cutoffDate,
+      label: tick.label,
+    })),
+    [
+      { cutoffDate: '2026-09-01', label: true },
+      { cutoffDate: '2026-09-04', label: false },
+      { cutoffDate: '2026-09-10', label: true },
+      { cutoffDate: '2026-09-20', label: true },
+    ],
+  );
+
+  const pathValue = (value: number): string =>
+    String(Number(value.toFixed(6)));
+  const cubic = (
+    start: number,
+    control1: number,
+    control2: number,
+    end: number,
+    t: number,
+  ): number => {
+    const remaining = 1 - t;
+    return (
+      remaining ** 3 * start +
+      3 * remaining ** 2 * t * control1 +
+      3 * remaining * t ** 2 * control2 +
+      t ** 3 * end
     );
+  };
+
+  for (const [curve, key] of [
+    [chart.plannedCurve, 'plannedY'],
+    [chart.actualCurve, 'actualY'],
+  ] as const) {
+    const canonical = chart.points.map((point) => ({
+      x: point.x!,
+      y: point[key]!,
+    }));
+    assert.equal(curve.segments.length, canonical.length - 1);
+    assert.deepEqual(
+      [curve.segments[0].from, ...curve.segments.map((segment) => segment.to)],
+      canonical,
+    );
+    assert.ok(
+      curve.path.startsWith(
+        'M ' + pathValue(canonical[0].x) + ' ' + pathValue(canonical[0].y),
+      ),
+    );
+    assert.ok(
+      curve.path.endsWith(
+        pathValue(canonical.at(-1)!.x) + ' ' + pathValue(canonical.at(-1)!.y),
+      ),
+    );
+
+    const sampledY: number[] = [];
+    for (const segment of curve.segments) {
+      const lower = Math.min(segment.from.y, segment.to.y);
+      const upper = Math.max(segment.from.y, segment.to.y);
+      assert.ok(segment.control1.x > segment.from.x);
+      assert.ok(segment.control2.x < segment.to.x);
+      assert.equal(segment.control1.y, segment.from.y);
+      assert.equal(segment.control2.y, segment.to.y);
+      for (let step = 0; step <= 20; step += 1) {
+        const t = step / 20;
+        const sampled = cubic(
+          segment.from.y,
+          segment.control1.y,
+          segment.control2.y,
+          segment.to.y,
+          t,
+        );
+        assert.ok(sampled >= lower - 1e-9);
+        assert.ok(sampled <= upper + 1e-9);
+        sampledY.push(sampled);
+      }
+    }
+
+    for (let index = 1; index < sampledY.length; index += 1) {
+      assert.ok(
+        sampledY[index] <= sampledY[index - 1] + 1e-9,
+        'monotonic cumulative input must not gain a visual reversal',
+      );
+    }
+    const flat = curve.segments.find(
+      (segment) => segment.from.y === segment.to.y,
+    );
+    assert.ok(flat);
+    assert.equal(flat.control1.y, flat.from.y);
+    assert.equal(flat.control2.y, flat.to.y);
   }
 
-  const equal = monitoringComparisonChartProjection([
-    points[0],
-    {
-      ...points[1],
-      planned: points[0].planned,
-      actual: points[0].actual,
-      deviationPercentagePoints: { state: 'COMPLETE', value: '-5' },
-    },
-  ]);
-  assert.deepEqual(equal.plannedSegments, [
-    {
-      from: { x: equal.points[0].x, y: equal.points[0].plannedY },
-      to: { x: equal.points[1].x, y: equal.points[0].plannedY },
-    },
-  ]);
-  assert.deepEqual(equal.actualSegments, [
-    {
-      from: { x: equal.points[0].x, y: equal.points[0].actualY },
-      to: { x: equal.points[1].x, y: equal.points[0].actualY },
-    },
-  ]);
+  for (const point of chart.points) {
+    assert.ok(point.plannedY! >= chart.padding);
+    assert.ok(point.plannedY! <= chart.height - chart.padding);
+    assert.ok(point.actualY! >= chart.padding);
+    assert.ok(point.actualY! <= chart.height - chart.padding);
+  }
 });
 
 test('H2-A0-9 the shell states project scope, Terkini, and both freshness meanings', () => {

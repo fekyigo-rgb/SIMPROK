@@ -427,9 +427,16 @@ test('MON04 Kurva S consumes comparison points and preserves Planned-only fallba
 
   assert.match(panel, /Rencana vs Realisasi/);
   assert.match(panel, /<svg/);
-  assert.match(panel, /comparisonChart\.plannedSegments\.map/);
-  assert.match(panel, /comparisonChart\.actualSegments\.map/);
+  assert.match(panel, /d=\{comparisonChart\.plannedCurve\.path\}/);
+  assert.match(panel, /d=\{comparisonChart\.actualCurve\.path\}/);
   assert.match(panel, /comparison\.points\.map/);
+  assert.match(panel, /className="comparison-point is-planned"/);
+  assert.match(panel, /className="comparison-point is-actual"/);
+  assert.match(panel, /comparisonChart\.dateTicks\.map/);
+  assert.match(panel, /className="comparison-x-tick"/);
+  assert.match(panel, /className="comparison-x-label"/);
+  assert.match(panel, /formatProjectBusinessDate\(tick\.cutoffDate\)/);
+  assert.doesNotMatch(panel, /execution-plan-comparison-range/);
   assert.match(panel, /<th>Tanggal<\/th>/);
   assert.match(panel, /<th>Rencana<\/th>/);
   assert.match(panel, /<th>Realisasi<\/th>/);

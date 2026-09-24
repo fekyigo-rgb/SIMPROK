@@ -28,6 +28,17 @@ const lens = readFileSync('src/utils/monitoringTimeLens.ts', 'utf8');
 const countOf = (source: string, needle: string) =>
   source.split(needle).length - 1;
 
+const readinessNativeMarkerRule =
+  '.execution-plan-header-control > summary::-webkit-details-marker { display: none; }';
+
+/**
+ * The native WebKit disclosure marker is decorative here because the summary
+ * owns one visible caret. Remove only that exact, readiness-scoped rule before
+ * enforcing the stronger law that no Monitoring fact or control disappears.
+ */
+const withoutReadinessNativeMarkerRule = (source: string) =>
+  source.replace(readinessNativeMarkerRule, '');
+
 // ─────────────────────────────────────────────────────────────────────────────
 // A. ONE SMART MONITORING TABLE, THREE WINDOWS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,13 +327,26 @@ test('16. the Actual door stands after the contextual facts and the inspection l
 // E. EXECUTION PLAN — GOVERNANCE, NOT PAGE DOMINATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('17. a locked Rencana Pelaksanaan stays visible but stops dominating the page', () => {
-  // The heavy pre-lock review table is unreachable once the plan is locked.
+test('17. Rencana Pelaksanaan is a compact header disclosure without losing governance truth', () => {
+  const headerStart = page.indexOf('<header className="h2a0-project-header">');
+  const headerEnd = page.indexOf('</header>', headerStart);
+  const header = page.slice(headerStart, headerEnd);
+
+  assert.ok(headerStart !== -1 && headerEnd !== -1, 'project header is missing');
   assert.ok(
-    plan.includes('{!locked && (\n        <div className="execution-plan-review">'),
-    'the full Rencana Kerja review table still renders after the lock',
+    header.includes('<ExecutionPlanReadinessPanel') &&
+      header.includes('presentation="GOVERNANCE"'),
+    'the readiness control is not mounted in the project header',
   );
-  // Governance and provenance are not deleted.
+  assert.ok(
+    plan.includes('<details className="execution-plan-header-control">') &&
+      plan.includes('<summary aria-describedby="execution-plan-header-help">'),
+    'the readiness facts are not disclosed from one accessible header control',
+  );
+  assert.ok(
+    plan.includes('className="execution-plan execution-plan-header-detail"'),
+    'the readiness detail surface is missing',
+  );
   assert.ok(
     plan.includes('{locked && executionPlan.plan && ('),
     'locked governance facts were removed',
@@ -337,12 +361,22 @@ test('17. a locked Rencana Pelaksanaan stays visible but stops dominating the pa
     assert.ok(plan.includes(`<dt>${fact}</dt>`), `${fact} governance fact was removed`);
   }
   assert.ok(
-    plan.includes("locked ? 'execution-plan is-governance-compact'"),
-    'the locked plan carries no compact governance presentation',
+    !plan.includes('Execution Readiness'),
+    'the internal Execution Readiness label remains visible to users',
   );
   assert.ok(
-    /\.execution-plan\.is-governance-compact \{/.test(css),
-    'the compact governance presentation has no styling',
+    /\.execution-plan-header-control > summary \{/.test(css) &&
+      /\.execution-plan-header-detail \{[^}]*position: absolute/.test(css),
+    'the compact control or non-flowing detail presentation has no styling',
+  );
+  assert.ok(
+    /summary:hover \.execution-plan-header-help,[\s\S]*summary:focus-visible \.execution-plan-header-help/.test(css),
+    'the helper explanation is not available on both hover and keyboard focus',
+  );
+  assert.doesNotMatch(
+    page.slice(headerEnd, page.indexOf('className="h2a0-workspace"', headerEnd)),
+    /presentation="GOVERNANCE"/,
+    'a standalone readiness row remains below the project header',
   );
 });
 
@@ -359,6 +393,23 @@ test('18. bounded pre-lock completion, save, and lock capability is preserved', 
   ]) {
     assert.ok(plan.includes(capability), `pre-lock capability ${capability} was removed`);
   }
+});
+
+test('19. UI-01 preserves last-updated provenance, actions, and independent chart rendering', () => {
+  const headerStart = page.indexOf('<header className="h2a0-project-header">');
+  const headerEnd = page.indexOf('</header>', headerStart);
+  const header = page.slice(headerStart, headerEnd);
+  assert.match(
+    header,
+    /<dt>Terakhir diperbarui<\/dt>[\s\S]*<dd>\{lastRecorded\.value\}<\/dd>[\s\S]*lastRecorded\.basis/,
+  );
+  assert.match(plan, /role="region"[\s\S]*aria-label="Detail Rencana Pelaksanaan"/);
+  assert.match(plan, /<h3>Rencana Kerja<\/h3>/);
+  assert.match(plan, /Lengkapi Rencana Pelaksanaan/);
+  assert.match(plan, /Kunci Rencana Pelaksanaan/);
+  assert.match(page, /presentation=\{monitoringPlanView\}/);
+  assert.match(plan, /monitoringComparisonChartProjection\(comparison\.points\)/);
+  assert.match(css, /\.execution-plan-comparison-table \{ min-width: 36rem; \}/);
 });
 
 test('21 + 22. Analysis and Schedule reuse the existing plan/comparator truth', () => {
@@ -493,8 +544,49 @@ test('26. no truth disappears at a small viewport', () => {
     'the contextual workspace does not stack below the table',
   );
   assert.equal(
-    countOf(css, 'display: none'),
+    countOf(css, readinessNativeMarkerRule),
+    1,
+    'the exact native marker exception is missing or duplicated',
+  );
+  assert.equal(
+    countOf(withoutReadinessNativeMarkerRule(css), 'display: none'),
     0,
     'a Monitoring fact is hidden rather than stacked at a small viewport',
   );
+  assert.match(
+    css,
+    /\.execution-plan-header-control > summary \{[^}]*display: flex/,
+    'the real readiness summary control is not visible',
+  );
+  assert.match(
+    css,
+    /\.execution-plan-header-control > summary:focus-visible \{/,
+    'the readiness summary has no keyboard focus treatment',
+  );
+  assert.match(
+    css,
+    /\.execution-plan-header-control\[open\] \.execution-plan-header-caret \{/,
+    'the open disclosure has no visible marker state',
+  );
+  assert.match(
+    plan,
+    /<details className="execution-plan-header-control">[\s\S]*<summary aria-describedby="execution-plan-header-help">/,
+    'the readiness marker is not attached to a native focusable disclosure',
+  );
+
+  for (const forbiddenRule of [
+    '.execution-plan-header-control > summary { display: none; }',
+    '.h2a0-time-lens { display: none; }',
+    '.h2a0-table td { display: none; }',
+    '.execution-plan-header-control > summary::-webkit-details-marker, .h2a0-time-lens { display: none; }',
+  ]) {
+    assert.equal(
+      countOf(
+        withoutReadinessNativeMarkerRule(`${css}\n${forbiddenRule}`),
+        'display: none',
+      ),
+      1,
+      `a real control/data rule was incorrectly exempted: ${forbiddenRule}`,
+    );
+  }
 });
