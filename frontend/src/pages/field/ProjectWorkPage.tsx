@@ -1,4 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Activity,
+  BarChart3,
+  CalendarDays,
+  FileText,
+  Image as ImageIcon,
+  MessageSquare,
+  PackageSearch,
+  Send,
+  ShieldCheck,
+} from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
@@ -57,7 +68,6 @@ import {
   DEFAULT_MONITORING_TIME_LENS,
   MONITORING_TIME_LENSES,
   monitoringTimeLensAllowsActualAction,
-  monitoringTimeLensDescription,
   monitoringTimeLensLabel,
   monitoringTimeLensOf,
   monitoringTimeLensState,
@@ -77,7 +87,7 @@ type ErrorKind =
   | null;
 
 type TemporalContextMode = 'TERKINI' | 'PERIODIK';
-type MonitoringContentLens = 'VISUAL' | 'ANALYSIS' | 'SCHEDULE';
+type MonitoringContentLens = 'CONDITION' | 'VISUAL' | 'ANALYSIS' | 'SCHEDULE';
 type PeriodicTemporalLensPresentation =
   | { state: 'DISABLED' | 'WAITING_INPUT' | 'LOADING' }
   | { state: 'RESOLVED'; requestKey: string;
@@ -189,7 +199,7 @@ export function ProjectWorkPage() {
   const [executionPlanRefresh, setExecutionPlanRefresh] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [monitoringContentLens, setMonitoringContentLens] =
-    useState<MonitoringContentLens>('VISUAL');
+    useState<MonitoringContentLens>('CONDITION');
   const [temporalContextMode, setTemporalContextMode] =
     useState<TemporalContextMode>(DEFAULT_TIME_LENS_STATE.mode);
   const [temporalBasis, setTemporalBasis] =
@@ -1086,7 +1096,9 @@ export function ProjectWorkPage() {
           monitoring.projectTimeZone,
         );
   const monitoringPlanView =
-    monitoringContentLens === 'VISUAL' ? null : monitoringContentLens;
+    monitoringContentLens === 'ANALYSIS' || monitoringContentLens === 'SCHEDULE'
+      ? monitoringContentLens
+      : null;
 
   /**
    * The primary time lens belongs to the Smart Monitoring Table itself: the
@@ -1260,16 +1272,21 @@ export function ProjectWorkPage() {
    * end date is only passed back as the existing Temporal Lens reference.
    */
   const monitoringLensSelector = (
-    <div
-      className="h2a0-content-lens"
-      role="group"
-      aria-label="Pilih detail Monitoring"
-    >
+    <nav className="h2a0-primary-view-nav" aria-label="Tampilan utama Monitoring">
+      <button
+        type="button"
+        aria-pressed={monitoringContentLens === 'CONDITION'}
+        onClick={() => setMonitoringContentLens('CONDITION')}
+      >
+        <Activity size={16} aria-hidden="true" />
+        Kondisi Proyek
+      </button>
       <button
         type="button"
         aria-pressed={monitoringContentLens === 'VISUAL'}
         onClick={() => setMonitoringContentLens('VISUAL')}
       >
+        <ImageIcon size={16} aria-hidden="true" />
         Visual
       </button>
       <button
@@ -1277,6 +1294,7 @@ export function ProjectWorkPage() {
         aria-pressed={monitoringContentLens === 'ANALYSIS'}
         onClick={() => setMonitoringContentLens('ANALYSIS')}
       >
+        <BarChart3 size={16} aria-hidden="true" />
         Analisis
       </button>
       <button
@@ -1284,9 +1302,10 @@ export function ProjectWorkPage() {
         aria-pressed={monitoringContentLens === 'SCHEDULE'}
         onClick={() => setMonitoringContentLens('SCHEDULE')}
       >
+        <CalendarDays size={16} aria-hidden="true" />
         Jadwal
       </button>
-    </div>
+    </nav>
   );
   const monitoringPlanContent =
     monitoringPlanView === null ? null : temporalContextMode === 'TERKINI' ? (
@@ -1342,6 +1361,30 @@ export function ProjectWorkPage() {
         )}
       </section>
     ) : null;
+  const monitoringPlanWorkspace =
+    monitoringPlanView === null ? null : (
+      <section
+        className="h2a0-plan-workspace"
+        aria-label={monitoringPlanView === 'ANALYSIS' ? 'Pilihan Analisis' : 'Pilihan Jadwal'}
+      >
+        <label className="h2a0-view-selector">
+          <span>{monitoringPlanView === 'ANALYSIS' ? 'Tampilan Analisis' : 'Tampilan Jadwal'}</span>
+          {monitoringPlanView === 'ANALYSIS' ? (
+            <select value="CURVE" onChange={() => undefined}>
+              <option value="CURVE">Kurva S</option>
+              <option value="PIE" disabled>Diagram Lingkaran</option>
+              <option value="BAR" disabled>Diagram Batang</option>
+            </select>
+          ) : (
+            <select value="WORK_PROGRAM" onChange={() => undefined}>
+              <option value="WORK_PROGRAM">Program Kerja</option>
+              <option value="NETWORK" disabled>Network Planning</option>
+            </select>
+          )}
+        </label>
+        {monitoringPlanContent}
+      </section>
+    );
 
   return (
     <main className="h2a0-page">
@@ -1395,16 +1438,14 @@ export function ProjectWorkPage() {
           </dl>
         </div>
         <div className="h2a0-project-header-controls">
-          {temporalContextMode === 'TERKINI' && (
-            <ExecutionPlanReadinessPanel
-              presentation="GOVERNANCE"
-              projectId={project.id}
-              executionPlan={executionPlan}
-              realizationByBoqItemId={realizationByBoqItemId}
-              progressComparisonPresentation={progressComparisonPresentation}
-              onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
-            />
-          )}
+          <ExecutionPlanReadinessPanel
+            presentation="GOVERNANCE"
+            projectId={project.id}
+            executionPlan={executionPlan}
+            realizationByBoqItemId={realizationByBoqItemId}
+            progressComparisonPresentation={progressComparisonPresentation}
+            onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
+          />
           <dl className="h2a0-project-updated">
             <div>
               <dt>Terakhir diperbarui</dt>
@@ -1419,13 +1460,7 @@ export function ProjectWorkPage() {
           <section className="h2a0-anchor" aria-labelledby="h2a0-anchor-title">
             <div className="h2a0-section-heading">
               <div>
-                <p className="h2a0-eyebrow">Orientasi stabil</p>
                 <h2 id="h2a0-anchor-title">Daftar Uraian Pekerjaan Monitoring</h2>
-                <p className="h2a0-lens-note">
-                  {monitoringTimeLensDescription(activeTimeLens)}
-                  {' '}
-                  <span>{workItemCount} item pekerjaan</span>
-                </p>
               </div>
               {timeLensSelector}
             </div>
@@ -1651,32 +1686,100 @@ export function ProjectWorkPage() {
                       );
                     })}
                   </tbody>
+                  {activeMonitoringSnapshot && (
+                    <tfoot>
+                      <tr>
+                        <th scope="row" colSpan={4}>TOTAL PROYEK</th>
+                        <td data-label="Cakupan Bobot">
+                          <strong>{weightCompletenessLabel(activeMonitoringSnapshot.weight)}</strong>
+                        </td>
+                        <td data-label="Bobot terhitung">
+                          <strong>
+                            {activeMonitoringSnapshot.weight.weightedWorkItemCount} /{' '}
+                            {activeMonitoringSnapshot.weight.eligibleWorkItemCount} item
+                          </strong>
+                        </td>
+                        <td
+                          data-label="Progress fisik resmi"
+                          colSpan={temporalContextMode === 'PERIODIK' ? 4 : 3}
+                        >
+                          <strong>
+                            {officialProjectProgressLabel(
+                              activeMonitoringSnapshot.currentOfficialRabWeightedPhysicalProgress,
+                            )}
+                          </strong>
+                          <small>Progress fisik resmi · bukan bobot</small>
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             )}
               </>
             )}
+            <nav className="h2a0-support-actions" aria-label="Aksi penunjang Monitoring">
+              <button type="button" disabled data-capability-status="ABSENT" title="Cashflow belum tersedia">
+                <BarChart3 size={20} aria-hidden="true" />
+                <span>Cashflow</span>
+                <small>Belum tersedia</small>
+              </button>
+              <button type="button" disabled data-capability-status="ABSENT" title="Laporan SMKK belum tersedia">
+                <ShieldCheck size={20} aria-hidden="true" />
+                <span>Lap. SMKK</span>
+                <small>Belum tersedia</small>
+              </button>
+              <button type="button" disabled data-capability-status="ABSENT" title="Laporan Harian belum tersedia">
+                <FileText size={20} aria-hidden="true" />
+                <span>Laporan Harian</span>
+                <small>Belum tersedia</small>
+              </button>
+              <button type="button" disabled data-capability-status="EXISTS_BUT_NOT_READY" title="Logistik belum diaktifkan">
+                <PackageSearch size={20} aria-hidden="true" />
+                <span>Logistik</span>
+                <small>Belum diaktifkan</small>
+              </button>
+            </nav>
           </section>
 
-          <aside className="h2a0-current" aria-labelledby="h2a0-current-title">
-            <div className="h2a0-section-heading">
-              <div>
-                <p className="h2a0-eyebrow">Lingkup aktif</p>
-                <h2 id="h2a0-current-title">
-                  {selected
-                    ? 'Detail Sub-Pekerjaan Terpilih'
-                    : temporalContextMode === 'PERIODIK'
-                      ? 'Kondisi Periode'
-                      : 'Kondisi Proyek'}
-                </h2>
-              </div>
-            </div>
-
+          <aside className="h2a0-current" aria-label="Ruang kontekstual Monitoring">
+            {monitoringLensSelector}
+            <div className="h2a0-right-viewport">
             {temporalContextMode === 'PERIODIK' ? (
               periodicResolvedLens ? (!selected ? (
                 <div className="h2a0-project-scope">
                   <span className="h2a0-scope-badge">SELURUH PROYEK</span>
-                  <h3>{monitoringTemporalPeriodLabel(periodicResolvedLens.period)}</h3>
+                  {monitoringPlanView === null ? (
+                    <h3>{monitoringTemporalPeriodLabel(periodicResolvedLens.period)}</h3>
+                  ) : (
+                    <details className="h2a0-period-context-help">
+                      <summary
+                        aria-label={`Buka informasi periode ${monitoringTemporalPeriodLabel(periodicResolvedLens.period)}`}
+                        aria-describedby="h2a0-period-context-tooltip"
+                      >
+                        <span className="h2a0-period-context-label">
+                          {monitoringTemporalPeriodLabel(periodicResolvedLens.period)}
+                        </span>
+                        <span
+                          id="h2a0-period-context-tooltip"
+                          className="h2a0-period-context-tooltip"
+                          role="tooltip"
+                        >
+                          <strong>
+                            {monitoringPlanView === 'SCHEDULE'
+                              ? 'Schedule Rencana + Realisasi Periode'
+                              : 'Kurva S Rencana + Realisasi s.d. Akhir Periode'}
+                          </strong>
+                          <small>
+                            {monitoringTemporalPeriodLabel(periodicResolvedLens.period)} {' · '}
+                            {formatProjectBusinessDate(periodicResolvedLens.period.startDate)} {' - '}
+                            {formatProjectBusinessDate(periodicResolvedLens.period.endDate)}
+                          </small>
+                        </span>
+                      </summary>
+                    </details>
+                  )}
+                  {monitoringContentLens === 'CONDITION' && (<>
                   <p>Konteks dibentuk backend dari basis dan periode resmi yang dipilih.
                     Kuantitas lintas satuan tidak dijumlahkan pada lingkup proyek.</p>
                   <dl className="h2a0-facts">
@@ -1713,7 +1816,7 @@ export function ProjectWorkPage() {
                   )}
                   <p className="h2a1-weight-note">Bobot tetap menunjukkan komposisi nilai
                     Baseline RAB, bukan progress atau kinerja periode.</p>
-                  {monitoringLensSelector}
+                  </>)}
                   {monitoringContentLens === 'VISUAL' ? (
                     <section
                       className="h2a0-visual-evidence"
@@ -1729,12 +1832,13 @@ export function ProjectWorkPage() {
                         </p>
                       </div>
                     </section>
-                  ) : monitoringPlanContent}
+                  ) : monitoringPlanWorkspace}
                 </div>
               ) : (
                 <div className="h2a0-item-scope">
                   <span className="h2a0-scope-badge">Pekerjaan {'\u00b7'} {selected.number}</span>
                   <h3>{selected.name}</h3><p className="h2a0-wbs-code">{selected.wbsCode}</p>
+                  {monitoringContentLens === 'CONDITION' && (<>
                   <dl className="h2a0-facts">
                     <div><dt>Volume BOQ</dt>
                       <dd>{selected.planned.quantity} {selected.planned.unit}</dd></div>
@@ -1761,7 +1865,7 @@ export function ProjectWorkPage() {
                   </dl>
                   <p className="h2a1-weight-note">Bobot menunjukkan kontribusi nilai item
                     dan komposisi RAB. Nilai itu bukan persentase progress periode.</p>
-                  {monitoringLensSelector}
+                  </>)}
                   {monitoringContentLens === 'VISUAL' ? (
                     <section
                       className="h2a0-visual-evidence"
@@ -1883,7 +1987,7 @@ export function ProjectWorkPage() {
                       </>
                     )}
                     </section>
-                  ) : monitoringPlanContent}
+                  ) : monitoringPlanWorkspace}
                 </div>
               )) : (
                 <div className="h2a0-project-scope">
@@ -1897,18 +2001,13 @@ export function ProjectWorkPage() {
               <div className="h2a0-project-scope">
                 <span className="h2a0-scope-badge">SELURUH PROYEK</span>
                 <h3>{project.name}</h3>
+                {monitoringContentLens === 'CONDITION' && (<>
                 <p>
                   {effectiveItemCount} dari {workItemCount} item pekerjaan mempunyai
                   catatan realisasi yang berlaku. Ini adalah hitungan ketersediaan
                   data, bukan persentase kemajuan proyek.
                 </p>
                 <dl className="h2a0-facts">
-                  <div>
-                    <dt>Baseline Aktif</dt>
-                    <dd>{monitoring.baseline
-                      ? `Versi ${monitoring.baseline.versionNumber}`
-                      : 'TIDAK TERSEDIA'}</dd>
-                  </div>
                   <div>
                     <dt>Cakupan Bobot</dt>
                     <dd>{weightCompletenessLabel(monitoring.weight)}</dd>
@@ -1929,20 +2028,12 @@ export function ProjectWorkPage() {
                       )}
                     </dd>
                   </div>
-                  <div>
-                    <dt>Data pekerjaan sampai</dt>
-                    <dd>{dataThrough}</dd>
-                  </div>
-                  <div>
-                    <dt>Terakhir diperbarui</dt>
-                    <dd>{lastRecorded.value}</dd>
-                  </div>
                 </dl>
                 <p className="h2a0-guidance">
                   Pilih satu item pekerjaan pada struktur RAB/WBS untuk melihat
                   catatan realisasi yang berlaku tanpa meninggalkan orientasi proyek.
                 </p>
-                {monitoringLensSelector}
+                </>)}
                 {monitoringContentLens === 'VISUAL' ? (
                   <section
                     className="h2a0-visual-evidence"
@@ -1956,13 +2047,14 @@ export function ProjectWorkPage() {
                       </p>
                     </div>
                   </section>
-                ) : monitoringPlanContent}
+                ) : monitoringPlanWorkspace}
               </div>
             ) : (
               <div className="h2a0-item-scope">
                 <span className="h2a0-scope-badge">Pekerjaan · {selected.number}</span>
                 <h3>{selected.name}</h3>
                 <p className="h2a0-wbs-code">{selected.wbsCode}</p>
+                {monitoringContentLens === 'CONDITION' && (<>
                 <dl className="h2a0-facts">
                   <div>
                     <dt>Volume BOQ</dt>
@@ -2048,7 +2140,7 @@ export function ProjectWorkPage() {
                   urutan pekerjaan, bukan persentase kemajuan atau perkembangan
                   terhadap waktu.
                 </p>
-                {monitoringLensSelector}
+                </>)}
                 {monitoringContentLens === 'VISUAL' ? (
                   <section
                     className="h2a0-visual-evidence"
@@ -2128,14 +2220,15 @@ export function ProjectWorkPage() {
                     </>
                   )}
                   </section>
-                ) : monitoringPlanContent}
+                ) : monitoringPlanWorkspace}
                 {/*
                   ACTION HIERARCHY — this door stands last on purpose.
                   Lihat Kondisi -> Lihat Bukti -> Pahami Angka -> Pahami Penyebab
                   -> Ambil Tindakan. It is offered only under TERKINI; a periodic
                   window is read-only and exposes no Actual mutation door.
                 */}
-                {monitoringTimeLensAllowsActualAction(activeTimeLens) && (
+                {monitoringContentLens === 'CONDITION' &&
+                monitoringTimeLensAllowsActualAction(activeTimeLens) && (
                   <button
                     className="h2a0-detail-action"
                     onClick={() =>
@@ -2149,6 +2242,25 @@ export function ProjectWorkPage() {
                 )}
               </div>
             )}
+            </div>
+            <footer className="h2a0-interaction-dock" aria-label="Ruang Interaksi SIMPROK">
+              <label htmlFor="h2a0-interaction-input">
+                <MessageSquare size={16} aria-hidden="true" />
+                Tanyakan ke SIMPROK...
+              </label>
+              <div className="h2a0-interaction-input-row">
+                <input
+                  id="h2a0-interaction-input"
+                  type="text"
+                  placeholder="Tanyakan ke SIMPROK..."
+                  disabled
+                  title="Ruang interaksi belum aktif"
+                />
+                <button type="button" disabled aria-label="Kirim pertanyaan" title="Ruang interaksi belum aktif">
+                  <Send size={17} aria-hidden="true" />
+                </button>
+              </div>
+            </footer>
           </aside>
         </div>
     </main>

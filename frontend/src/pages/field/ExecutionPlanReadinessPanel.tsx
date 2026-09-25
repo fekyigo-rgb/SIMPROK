@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
 import {
@@ -71,6 +71,73 @@ interface MonitoringComparisonCurveProps {
   deviationSummaryLabel: string;
 }
 
+function useOnDemandHelp() {
+  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const dismiss = () => {
+    setPinned(false);
+    setOpen(false);
+  };
+
+  return {
+    open,
+    triggerProps: {
+      onMouseEnter: () => setOpen(true),
+      onMouseLeave: () => {
+        if (!pinned) setOpen(false);
+      },
+      onFocus: () => setOpen(true),
+      onBlur: dismiss,
+      onClick: () => {
+        const nextPinned = !pinned;
+        setPinned(nextPinned);
+        setOpen(nextPinned);
+      },
+      onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+        if (event.key === 'Escape') {
+          dismiss();
+          event.currentTarget.blur();
+        }
+      },
+    },
+  };
+}
+
+function OnDemandHeadingHelp({
+  headingId,
+  helpId,
+  title,
+  explanation,
+}: {
+  headingId: string;
+  helpId: string;
+  title: string;
+  explanation: string;
+}) {
+  const help = useOnDemandHelp();
+
+  return (
+    <>
+      <h2 id={headingId}>
+        <button
+          type="button"
+          className="execution-plan-help-trigger"
+          aria-expanded={help.open}
+          aria-controls={helpId}
+          {...help.triggerProps}
+        >
+          {title}
+        </button>
+      </h2>
+      {help.open && (
+        <div id={helpId} className="execution-plan-help-popover" role="tooltip">
+          <p>{explanation}</p>
+        </div>
+      )}
+    </>
+  );
+}
+
 function MonitoringComparisonCurve({
   comparison,
   subtitle,
@@ -79,6 +146,7 @@ function MonitoringComparisonCurve({
   actualSummaryLabel,
   deviationSummaryLabel,
 }: MonitoringComparisonCurveProps) {
+  const curveHelp = useOnDemandHelp();
   const comparisonChart = monitoringComparisonChartProjection(comparison.points);
   const finalComparisonPoint =
     comparison.points.length > 0
@@ -93,26 +161,44 @@ function MonitoringComparisonCurve({
   return (
     <>
       <div className="execution-plan-curve-heading">
-        <div>
-          <h3>Kurva S</h3>
-          <p>{subtitle}</p>
+        <div className="execution-plan-help-anchor">
+          <h3>
+            <button
+              type="button"
+              className="execution-plan-help-trigger"
+              aria-expanded={curveHelp.open}
+              aria-controls="execution-plan-curve-help"
+              {...curveHelp.triggerProps}
+            >
+              Kurva S
+            </button>
+          </h3>
+          {curveHelp.open && (
+            <div
+              id="execution-plan-curve-help"
+              className="execution-plan-help-popover"
+              role="tooltip"
+            >
+              <strong>{subtitle}</strong>
+              <p>
+                Rencana, Realisasi, dan Deviasi berasal dari perbandingan temporal
+                kanonikal backend. Garis terputus saat fakta belum lengkap atau tidak
+                tersedia.
+              </p>
+              <small className="execution-plan-curve-provenance">
+                {comparison.baseline
+                  ? 'Baseline v' + comparison.baseline.versionNumber
+                  : 'Baseline tidak tersedia'}
+                {' · '}
+                {comparison.plannedSource
+                  ? 'Rencana Pelaksanaan v' + comparison.plannedSource.versionNumber
+                  : 'Sumber rencana tidak tersedia'}
+              </small>
+            </div>
+          )}
         </div>
         <span>{contextLine}</span>
       </div>
-      <p className="execution-plan-note">
-        Rencana, Realisasi, dan Deviasi berasal dari perbandingan temporal
-        kanonikal backend. Garis terputus saat fakta belum lengkap atau tidak
-        tersedia.
-      </p>
-      <p className="execution-plan-curve-provenance">
-        {comparison.baseline
-          ? 'Baseline v' + comparison.baseline.versionNumber
-          : 'Baseline tidak tersedia'}
-        {' · '}
-        {comparison.plannedSource
-          ? 'Rencana Pelaksanaan v' + comparison.plannedSource.versionNumber
-          : 'Sumber rencana tidak tersedia'}
-      </p>
 
       {comparison.points.length === 0 ? (
         <p>Fakta perbandingan temporal belum tersedia.</p>
@@ -122,13 +208,17 @@ function MonitoringComparisonCurve({
             className="execution-plan-comparison-chart"
             data-boundary-basis={comparison.boundaryBasis}
           >
-            <div
+            <button
+              type="button"
               className="execution-plan-comparison-legend"
               aria-label="Legenda Kurva S"
+              aria-expanded={curveHelp.open}
+              aria-controls="execution-plan-curve-help"
+              {...curveHelp.triggerProps}
             >
               <span className="is-planned">Rencana</span>
               <span className="is-actual">Realisasi</span>
-            </div>
+            </button>
             <div className="execution-plan-comparison-plot">
               <div className="execution-plan-comparison-plot-frame">
                 <svg
@@ -306,35 +396,31 @@ function PeriodicScheduleReadOnly({
   return (
     <section
       className="execution-plan"
-      aria-labelledby="execution-plan-periodic-title"
+      aria-labelledby={view === 'SCHEDULE' ? 'execution-plan-periodic-title' : undefined}
+      aria-label={view === 'ANALYSIS' ? 'Analisis Kurva S' : undefined}
     >
-      <div className="execution-plan-heading">
-        <div>
-          <p className="h2a0-eyebrow">Schedule Periode</p>
-          <h2 id="execution-plan-periodic-title">
-            {view === 'SCHEDULE' ? 'Jadwal Proyek' : 'Analisis Proyek'}
-          </h2>
-          <p className="execution-plan-note">
-            {view === 'SCHEDULE'
-              ? 'Schedule Rencana + Realisasi Periode'
-              : 'Kurva S Rencana + Realisasi s.d. Akhir Periode'}
-            <br />
-            {monitoringTemporalPeriodLabel(lens.period)} {' · '}
-            {formatProjectBusinessDate(lens.period.startDate)} {' - '}
-            {formatProjectBusinessDate(lens.period.endDate)}
-          </p>
-        </div>
+      <div
+        className={
+          view === 'ANALYSIS'
+            ? 'execution-plan-heading execution-plan-heading-state-only'
+            : 'execution-plan-heading'
+        }
+      >
+        {view === 'SCHEDULE' && (
+          <div className="execution-plan-help-anchor">
+            <OnDemandHeadingHelp
+              headingId="execution-plan-periodic-title"
+              helpId="execution-plan-periodic-schedule-help"
+              title="Jadwal Proyek"
+              explanation="Tanggal rencana berasal dari Rencana Pelaksanaan resmi. Kuantitas periode dan kumulatif berasal dari konteks periode kanonikal yang dipilih, bukan progress, Actual Start, Actual Finish, atau durasi aktual."
+            />
+          </div>
+        )}
         <strong className="execution-plan-state is-locked">Hanya baca</strong>
       </div>
 
       {view === 'SCHEDULE' && (
         <div className="execution-plan-review">
-          <p className="execution-plan-note">
-            Tanggal rencana berasal dari Rencana Pelaksanaan resmi. Kuantitas
-            periode dan kumulatif berasal dari konteks periode kanonikal yang
-            dipilih, bukan progress, Actual Start, Actual Finish, atau durasi
-            aktual.
-          </p>
           {executionPlan.schedule.length === 0 ? (
             <p>Schedule resmi belum mempunyai baris pekerjaan.</p>
           ) : (
@@ -488,19 +574,20 @@ export function ExecutionPlanReadinessPanel(
         aria-labelledby="execution-plan-current-schedule-title"
       >
         <div className="execution-plan-heading">
-          <div>
+          <div className="execution-plan-help-anchor">
             <p className="h2a0-eyebrow">Schedule Terkini</p>
-            <h2 id="execution-plan-current-schedule-title">Jadwal Proyek</h2>
+            <OnDemandHeadingHelp
+              headingId="execution-plan-current-schedule-title"
+              helpId="execution-plan-current-schedule-help"
+              title="Jadwal Proyek"
+              explanation="Waktu tetap berasal dari rencana resmi. Realisasi menampilkan fakta Current Official terkini, bukan Actual Start, Actual Finish, atau durasi aktual."
+            />
             <p className="execution-plan-note">
               Schedule Rencana + Realisasi Terkini
             </p>
           </div>
         </div>
         <div className="execution-plan-review">
-          <p className="execution-plan-note">
-            Waktu tetap berasal dari rencana resmi. Realisasi menampilkan fakta
-            Current Official terkini, bukan Actual Start, Actual Finish, atau durasi aktual.
-          </p>
           {executionPlan.schedule.length === 0 ? (
             <p>Distribusi waktu belum tersedia.</p>
           ) : (
@@ -561,16 +648,7 @@ export function ExecutionPlanReadinessPanel(
 
   if (presentation === 'ANALYSIS') {
     return (
-      <section
-        className="execution-plan"
-        aria-labelledby="execution-plan-current-analysis-title"
-      >
-        <div className="execution-plan-heading">
-          <div>
-            <p className="h2a0-eyebrow">Perbandingan Proyek</p>
-            <h2 id="execution-plan-current-analysis-title">Analisis Proyek</h2>
-          </div>
-        </div>
+      <section className="execution-plan" aria-label="Analisis Kurva S">
         <div className="execution-plan-review">
           {progressComparison ? (
             <MonitoringComparisonCurve
