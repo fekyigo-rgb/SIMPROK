@@ -19,10 +19,12 @@ import {
   type ExecutionPlanResponse,
 } from '../../utils/executionPlan';
 import {
+  actualComparisonLabel,
   actualStateLabel,
   buildMonitoringRows,
   captureMethodLabel,
   dataThroughLabel,
+  deviationComparisonPresentation,
   effectiveActual,
   formatWeightPercentage,
   formatProjectBusinessDate,
@@ -46,6 +48,7 @@ import {
   officialItemProgressLabel,
   officialQuantityLabel,
   plannedPeriodQuantityLabel,
+  plannedComparisonLabel,
   progressDetailPath,
   recordedAtLabel,
   rowWeightPresentation,
@@ -58,6 +61,7 @@ import {
   type MonitoringPeriodicComparisonPresentation,
   type MonitoringPeriodNavigator,
   type MonitoringProgressComparisonPresentation,
+  type MonitoringProgressComparison,
   type MonitoringResponse,
   type MonitoringTemporalBasis,
   type MonitoringTemporalGranularity,
@@ -177,6 +181,95 @@ function officialProjectProgressLabel(
   }
 }
 
+function ProjectConditionMetric({
+  helpId,
+  label,
+  value,
+  help,
+  tone,
+}: {
+  helpId: string;
+  label: string;
+  value: string;
+  help: string;
+  tone: 'planned' | 'actual' | 'critical' | 'neutral' | 'healthy';
+}) {
+  return (
+    <details className={'h2a0-condition-metric is-' + tone}>
+      <summary aria-label={'Buka detail ' + label} aria-describedby={helpId}>
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </summary>
+      <div id={helpId} className="h2a0-condition-metric-help" role="tooltip">
+        <p>{help}</p>
+      </div>
+    </details>
+  );
+}
+
+function ProjectConditionSummary({
+  helpIdPrefix,
+  comparison,
+  actualFallback,
+  plannedHelp,
+  actualHelp,
+}: {
+  helpIdPrefix: string;
+  comparison: MonitoringProgressComparison | null;
+  actualFallback: MonitoringResponse['currentOfficialRabWeightedPhysicalProgress'] | null;
+  plannedHelp: string;
+  actualHelp: string;
+}) {
+  const finalPoint =
+    comparison && comparison.points.length > 0
+      ? comparison.points[comparison.points.length - 1]
+      : null;
+  const deviation = finalPoint
+    ? deviationComparisonPresentation(finalPoint.deviationPercentagePoints)
+    : {
+        value: 'BELUM TERSEDIA',
+        meaning: 'Deviasi menunggu fakta Rencana dan Progress Resmi pada konteks yang sama.',
+      };
+  const deviationTone =
+    deviation.meaning === 'Tertinggal dari rencana'
+      ? 'critical'
+      : deviation.meaning === 'Lebih maju dari rencana'
+        ? 'healthy'
+        : 'neutral';
+
+  return (
+    <section className="h2a0-condition-summary" aria-label="Ringkasan Kondisi Proyek">
+      <ProjectConditionMetric
+        helpId={helpIdPrefix + '-planned'}
+        label="Rencana"
+        value={finalPoint ? plannedComparisonLabel(finalPoint.planned) : 'BELUM TERSEDIA'}
+        help={plannedHelp}
+        tone="planned"
+      />
+      <ProjectConditionMetric
+        helpId={helpIdPrefix + '-actual'}
+        label="Progress Resmi"
+        value={
+          finalPoint
+            ? actualComparisonLabel(finalPoint.actual)
+            : actualFallback
+              ? officialProjectProgressLabel(actualFallback)
+              : 'TIDAK TERSEDIA'
+        }
+        help={actualHelp}
+        tone="actual"
+      />
+      <ProjectConditionMetric
+        helpId={helpIdPrefix + '-deviation'}
+        label="Deviasi"
+        value={deviation.value}
+        help={deviation.meaning}
+        tone={deviationTone}
+      />
+    </section>
+  );
+}
+
 export function ProjectWorkPage() {
   const { projectId } = useParams();
   const { token, hasPermission } = useAuth();
@@ -200,6 +293,9 @@ export function ProjectWorkPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [monitoringContentLens, setMonitoringContentLens] =
     useState<MonitoringContentLens>('CONDITION');
+  const [interactionOpen, setInteractionOpen] = useState(false);
+  const rightViewportRef = useRef<HTMLDivElement | null>(null);
+  const interactionReturnScrollTopRef = useRef(0);
   const [temporalContextMode, setTemporalContextMode] =
     useState<TemporalContextMode>(DEFAULT_TIME_LENS_STATE.mode);
   const [temporalBasis, setTemporalBasis] =
@@ -237,6 +333,22 @@ export function ProjectWorkPage() {
   const [errorProjectId, setErrorProjectId] = useState<string | null>(null);
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [errorKind, setErrorKind] = useState<ErrorKind>(null);
+
+  const openInteraction = () => {
+    interactionReturnScrollTopRef.current = rightViewportRef.current?.scrollTop ?? 0;
+    setInteractionOpen(true);
+  };
+
+  const closeInteraction = () => {
+    setInteractionOpen(false);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (rightViewportRef.current) {
+          rightViewportRef.current.scrollTop = interactionReturnScrollTopRef.current;
+        }
+      });
+    });
+  };
 
   useEffect(() => {
     if (!token || !projectId) return;
@@ -1744,7 +1856,25 @@ export function ProjectWorkPage() {
 
           <aside className="h2a0-current" aria-label="Ruang kontekstual Monitoring">
             {monitoringLensSelector}
-            <div className="h2a0-right-viewport">
+            <div
+              ref={rightViewportRef}
+              className="h2a0-right-viewport"
+              id="h2a0-right-viewport"
+            >
+            {interactionOpen ? (
+              <section
+                className="h2a0-interaction-surface"
+                aria-labelledby="h2a0-interaction-surface-title"
+              >
+                <MessageSquare size={24} aria-hidden="true" />
+                <h3 id="h2a0-interaction-surface-title">Interaksi SIMPROK</h3>
+                <p role="status">Ruang interaksi belum aktif.</p>
+                <small>
+                  Input, pengiriman, dan insight tidak diaktifkan oleh penataan presentasi ini.
+                </small>
+              </section>
+            ) : (
+              <>
             {temporalContextMode === 'PERIODIK' ? (
               periodicResolvedLens ? (!selected ? (
                 <div className="h2a0-project-scope">
@@ -1779,44 +1909,55 @@ export function ProjectWorkPage() {
                       </summary>
                     </details>
                   )}
-                  {monitoringContentLens === 'CONDITION' && (<>
-                  <p>Konteks dibentuk backend dari basis dan periode resmi yang dipilih.
-                    Kuantitas lintas satuan tidak dijumlahkan pada lingkup proyek.</p>
-                  <dl className="h2a0-facts">
-                    <div><dt>Basis</dt>
-                      <dd>{monitoringTemporalBasisLabel(periodicResolvedLens.basis)}</dd></div>
-                    <div><dt>Tampilan</dt>
-                      <dd>{monitoringTemporalGranularityLabel(periodicResolvedLens.granularity)}</dd></div>
-                    <div><dt>Rentang kanonikal</dt><dd>
-                      {formatProjectBusinessDate(periodicResolvedLens.period.startDate)}
-                      {' - '}
-                      {formatProjectBusinessDate(periodicResolvedLens.period.endDate)}
-                    </dd></div>
-                    <div><dt>Baseline Aktif</dt><dd>
-                      {activeMonitoringSnapshot?.baseline
-                        ? `Versi ${activeMonitoringSnapshot.baseline.versionNumber}`
-                        : 'TIDAK TERSEDIA'}
-                    </dd></div>
-                    <div><dt>Sumber Rencana</dt><dd>
-                      {periodicResolvedLens.plannedSource
-                        ? `Rencana Pelaksanaan versi ${periodicResolvedLens.plannedSource.versionNumber}`
-                        : 'TIDAK TERSEDIA'}
-                    </dd>
-                      {periodicResolvedLens.plannedContext.state !== 'COMPLETE' && (
-                        <small>Fakta rencana {periodicResolvedLens.plannedContext.state === 'INCOMPLETE'
-                          ? 'belum lengkap.' : 'belum tersedia.'}</small>
-                      )}
-                    </div>
-                    <div><dt>Makna Actual</dt>
-                      <dd>Kebenaran resmi saat ini, disajikan kembali menurut tanggal kerja</dd></div>
-                  </dl>
-                  {periodicResolvedLens.weeklyRecap && (
-                    <p className="h2a0-guidance">Diringkas dari{' '}
-                      {periodicResolvedLens.weeklyRecap.sliceCount} irisan minggu kanonikal.</p>
+                  {monitoringContentLens === 'CONDITION' && (
+                    <ProjectConditionSummary
+                      helpIdPrefix="periodic-project-condition"
+                      comparison={
+                        activePeriodicComparisonPresentation.state === 'RESOLVED'
+                          ? activePeriodicComparisonPresentation.comparison
+                          : null
+                      }
+                      actualFallback={
+                        periodicResolvedResponse?.currentOfficialRabWeightedPhysicalProgress ?? null
+                      }
+                      plannedHelp={
+                        'Basis ' +
+                        monitoringTemporalBasisLabel(periodicResolvedLens.basis) +
+                        ', tampilan ' +
+                        monitoringTemporalGranularityLabel(periodicResolvedLens.granularity) +
+                        ', rentang ' +
+                        formatProjectBusinessDate(periodicResolvedLens.period.startDate) +
+                        ' - ' +
+                        formatProjectBusinessDate(periodicResolvedLens.period.endDate) +
+                        '. ' +
+                        (periodicResolvedLens.plannedSource
+                          ? 'Rencana Pelaksanaan versi ' +
+                            periodicResolvedLens.plannedSource.versionNumber +
+                            '.'
+                          : 'Sumber Rencana belum tersedia.') +
+                        (periodicResolvedLens.plannedContext.state === 'COMPLETE'
+                          ? ''
+                          : periodicResolvedLens.plannedContext.state === 'INCOMPLETE'
+                            ? ' Fakta rencana belum lengkap.'
+                            : ' Fakta rencana belum tersedia.')
+                      }
+                      actualHelp={
+                        'Current Official disajikan kembali menurut tanggal kerja. ' +
+                        (activeMonitoringSnapshot
+                          ? 'Cakupan bobot ' +
+                            weightCompletenessLabel(activeMonitoringSnapshot.weight) +
+                            '. ' +
+                            weightCompletenessExplanation(activeMonitoringSnapshot.weight)
+                          : 'Cakupan bobot belum tersedia.') +
+                        (periodicResolvedLens.weeklyRecap
+                          ? ' Diringkas dari ' +
+                            periodicResolvedLens.weeklyRecap.sliceCount +
+                            ' irisan minggu kanonikal.'
+                          : '') +
+                        ' Bobot adalah komposisi nilai Baseline RAB, bukan progress periode.'
+                      }
+                    />
                   )}
-                  <p className="h2a1-weight-note">Bobot tetap menunjukkan komposisi nilai
-                    Baseline RAB, bukan progress atau kinerja periode.</p>
-                  </>)}
                   {monitoringContentLens === 'VISUAL' ? (
                     <section
                       className="h2a0-visual-evidence"
@@ -2000,40 +2141,42 @@ export function ProjectWorkPage() {
             ) : !selected ? (
               <div className="h2a0-project-scope">
                 <span className="h2a0-scope-badge">SELURUH PROYEK</span>
-                <h3>{project.name}</h3>
-                {monitoringContentLens === 'CONDITION' && (<>
-                <p>
-                  {effectiveItemCount} dari {workItemCount} item pekerjaan mempunyai
-                  catatan realisasi yang berlaku. Ini adalah hitungan ketersediaan
-                  data, bukan persentase kemajuan proyek.
-                </p>
-                <dl className="h2a0-facts">
-                  <div>
-                    <dt>Cakupan Bobot</dt>
-                    <dd>{weightCompletenessLabel(monitoring.weight)}</dd>
-                    <small>{weightCompletenessExplanation(monitoring.weight)}</small>
-                  </div>
-                  <div>
-                    <dt>Bobot terhitung</dt>
-                    <dd>
-                      {monitoring.weight.weightedWorkItemCount} /{' '}
-                      {monitoring.weight.eligibleWorkItemCount} item pekerjaan
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Progress fisik resmi RAB</dt>
-                    <dd>
-                      {officialProjectProgressLabel(
-                        monitoring.currentOfficialRabWeightedPhysicalProgress,
-                      )}
-                    </dd>
-                  </div>
-                </dl>
-                <p className="h2a0-guidance">
-                  Pilih satu item pekerjaan pada struktur RAB/WBS untuk melihat
-                  catatan realisasi yang berlaku tanpa meninggalkan orientasi proyek.
-                </p>
-                </>)}
+                {monitoringContentLens !== 'CONDITION' && <h3>{project.name}</h3>}
+                {monitoringContentLens === 'CONDITION' && (
+                  <ProjectConditionSummary
+                    helpIdPrefix="current-project-condition"
+                    comparison={
+                      progressComparisonPresentation.state === 'AVAILABLE'
+                        ? progressComparisonPresentation.comparison
+                        : null
+                    }
+                    actualFallback={
+                      monitoring.currentOfficialRabWeightedPhysicalProgress
+                    }
+                    plannedHelp={
+                      'Data pekerjaan sampai ' +
+                      dataThrough +
+                      '. ' +
+                      (progressComparisonPresentation.state === 'AVAILABLE' &&
+                      progressComparisonPresentation.comparison.plannedSource
+                        ? 'Rencana Pelaksanaan versi ' +
+                          progressComparisonPresentation.comparison.plannedSource
+                            .versionNumber +
+                          '.'
+                        : 'Perbandingan Rencana belum tersedia.')
+                    }
+                    actualHelp={
+                      effectiveItemCount +
+                      ' dari ' +
+                      workItemCount +
+                      ' item pekerjaan mempunyai catatan realisasi yang berlaku. ' +
+                      'Cakupan bobot ' +
+                      weightCompletenessLabel(monitoring.weight) +
+                      '. ' +
+                      weightCompletenessExplanation(monitoring.weight)
+                    }
+                  />
+                )}
                 {monitoringContentLens === 'VISUAL' ? (
                   <section
                     className="h2a0-visual-evidence"
@@ -2242,16 +2385,26 @@ export function ProjectWorkPage() {
                 )}
               </div>
             )}
+              </>
+            )}
             </div>
             <footer className="h2a0-interaction-dock" aria-label="Ruang Interaksi SIMPROK">
-              <label htmlFor="h2a0-interaction-input">
+              <button
+                type="button"
+                className="h2a0-interaction-toggle"
+                aria-expanded={interactionOpen}
+                aria-controls="h2a0-right-viewport"
+                onClick={interactionOpen ? closeInteraction : openInteraction}
+              >
                 <MessageSquare size={16} aria-hidden="true" />
-                Tanyakan ke SIMPROK...
-              </label>
+                <span>Tanyakan ke SIMPROK...</span>
+                <small>{interactionOpen ? 'Tutup' : 'Buka'}</small>
+              </button>
               <div className="h2a0-interaction-input-row">
                 <input
                   id="h2a0-interaction-input"
                   type="text"
+                  aria-label="Pertanyaan untuk SIMPROK"
                   placeholder="Tanyakan ke SIMPROK..."
                   disabled
                   title="Ruang interaksi belum aktif"

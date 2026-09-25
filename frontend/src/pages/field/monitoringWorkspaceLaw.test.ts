@@ -550,7 +550,7 @@ test('periodic Analysis and Schedule context is disclosed from the compact perio
     periodicStart,
   );
   const periodicProjectScopeEnd = page.indexOf(
-    "{monitoringContentLens === 'CONDITION' && (<>",
+    "{monitoringContentLens === 'CONDITION' && (",
     periodicProjectScopeStart,
   );
   assert.ok(periodicProjectScopeStart >= 0, 'periodic project scope start is missing');
@@ -581,6 +581,144 @@ test('periodic Analysis and Schedule context is disclosed from the compact perio
   assert.match(css, /\.h2a0-period-context-help > summary:hover \.h2a0-period-context-tooltip/);
   assert.match(css, /\.h2a0-period-context-help > summary:focus-visible \.h2a0-period-context-tooltip/);
   assert.match(css, /\.h2a0-period-context-help\[open\] \.h2a0-period-context-tooltip/);
+});
+
+test('UI-03B keeps Kondisi Proyek compact while canonical context stays on demand', () => {
+  const componentStart = page.indexOf('function ProjectConditionMetric');
+  const componentEnd = page.indexOf('export function ProjectWorkPage');
+  assert.ok(componentStart >= 0, 'the project-condition metric owner is missing');
+  assert.ok(componentEnd > componentStart, 'the project-condition component boundary is invalid');
+  const conditionComponents = page.slice(componentStart, componentEnd);
+  assert.ok(conditionComponents.length > 0, 'the project-condition component slice is empty');
+
+  assert.equal(
+    countOf(conditionComponents, '<ProjectConditionMetric'),
+    3,
+    'the compact layer must contain exactly three decision facts',
+  );
+  for (const label of ['Rencana', 'Progress Resmi', 'Deviasi']) {
+    assert.match(
+      conditionComponents,
+      new RegExp('label="' + label + '"'),
+      label + ' is missing from the compact condition summary',
+    );
+  }
+  assert.match(conditionComponents, /plannedComparisonLabel\(finalPoint\.planned\)/);
+  assert.match(conditionComponents, /actualComparisonLabel\(finalPoint\.actual\)/);
+  assert.match(
+    conditionComponents,
+    /deviationComparisonPresentation\(finalPoint\.deviationPercentagePoints\)/,
+  );
+  assert.match(conditionComponents, /officialProjectProgressLabel\(actualFallback\)/);
+  assert.match(
+    conditionComponents,
+    /deviation\.meaning === 'Tertinggal dari rencana'[\s\S]*\? 'critical'/,
+    'negative canonical deviation does not receive the critical presentation tone',
+  );
+  assert.match(
+    conditionComponents,
+    /deviation\.meaning === 'Lebih maju dari rencana'[\s\S]*\? 'healthy'/,
+    'positive canonical deviation does not reuse the healthy presentation tone',
+  );
+  assert.match(
+    conditionComponents,
+    /<details className=\{'h2a0-condition-metric is-' \+ tone\}>/,
+  );
+  assert.match(conditionComponents, /<summary[\s\S]*aria-describedby=\{helpId\}/);
+  assert.match(
+    conditionComponents,
+    /className="h2a0-condition-metric-help" role="tooltip"/,
+  );
+
+  assert.equal(countOf(page, '<ProjectConditionSummary'), 2);
+  assert.match(
+    page,
+    /monitoringContentLens !== 'CONDITION' && <h3>\{project\.name\}<\/h3>/,
+    'the duplicate project name must stay out of the condition view only',
+  );
+  assert.doesNotMatch(
+    page,
+    /<dt>Cakupan Bobot<\/dt>|<dt>Bobot terhitung<\/dt>|<dt>Makna Actual<\/dt>/,
+    'secondary or technical facts remain permanently rendered as condition cards',
+  );
+  assert.doesNotMatch(
+    page,
+    /Konteks dibentuk backend dari basis dan periode resmi yang dipilih/,
+    'technical provenance remains permanently rendered in Kondisi Proyek',
+  );
+  assert.match(page, /helpIdPrefix="current-project-condition"/);
+  assert.match(page, /helpIdPrefix="periodic-project-condition"/);
+  assert.match(page, /Cakupan bobot/);
+  assert.match(page, /Current Official disajikan kembali menurut tanggal kerja/);
+
+  assert.match(
+    css,
+    /\.h2a0-condition-summary \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.h2a0-condition-summary \{[^}]*auto-fit/,
+    'the condition metrics can still collapse into a desktop 2+1 orphan layout',
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 420px\) \{[\s\S]*\.h2a0-condition-summary \{ grid-template-columns: 1fr; \}/,
+    'genuinely narrow screens do not fall back to one balanced column',
+  );
+  assert.match(css, /\.h2a0-condition-metric\.is-critical > summary \{[^}]*#c0392b/);
+  assert.match(css, /\.h2a0-condition-metric\.is-critical > summary strong \{[^}]*#c0392b/);
+  assert.match(css, /\.h2a0-condition-metric-help \{[^}]*position: absolute/);
+  assert.match(
+    css,
+    /\.h2a0-condition-metric > summary:hover \+ \.h2a0-condition-metric-help/,
+  );
+  assert.match(
+    css,
+    /\.h2a0-condition-metric > summary:focus-visible \+ \.h2a0-condition-metric-help/,
+  );
+  assert.match(css, /\.h2a0-condition-metric\[open\] \.h2a0-condition-metric-help/);
+});
+
+test('UI-03B closeout opens only a truthful interaction shell and restores its primary view', () => {
+  assert.equal(countOf(page, 'Perhatian SIMPROK'), 0);
+  assert.equal(countOf(page, 'h2a0-simprok-insight'), 0);
+  assert.doesNotMatch(page, /RiskCard|RecommendationCard|ProjectWarRoomPage/);
+
+  assert.match(page, /const \[interactionOpen, setInteractionOpen\] = useState\(false\)/);
+  assert.match(page, /const rightViewportRef = useRef<HTMLDivElement \| null>\(null\)/);
+  assert.match(page, /const interactionReturnScrollTopRef = useRef\(0\)/);
+  const interactionHandlers = page.slice(
+    page.indexOf('const openInteraction'),
+    page.indexOf('useEffect(', page.indexOf('const openInteraction')),
+  );
+  assert.match(
+    interactionHandlers,
+    /interactionReturnScrollTopRef\.current = rightViewportRef\.current\?\.scrollTop \?\? 0/,
+  );
+  assert.match(interactionHandlers, /setInteractionOpen\(true\)/);
+  assert.match(interactionHandlers, /setInteractionOpen\(false\)/);
+  assert.match(
+    interactionHandlers,
+    /rightViewportRef\.current\.scrollTop = interactionReturnScrollTopRef\.current/,
+  );
+  assert.doesNotMatch(
+    interactionHandlers,
+    /setMonitoringContentLens/,
+    'opening or closing interaction changes the active primary view',
+  );
+
+  assert.match(page, /ref=\{rightViewportRef\}[\s\S]*id="h2a0-right-viewport"/);
+  assert.match(
+    page,
+    /\{interactionOpen \? \([\s\S]*className="h2a0-interaction-surface"[\s\S]*Ruang interaksi belum aktif\.[\s\S]*\) : \(/,
+  );
+  assert.match(
+    page,
+    /className="h2a0-interaction-toggle"[\s\S]*aria-expanded=\{interactionOpen\}[\s\S]*onClick=\{interactionOpen \? closeInteraction : openInteraction\}/,
+  );
+  assert.match(page, /<input[\s\S]*disabled[\s\S]*title="Ruang interaksi belum aktif"/);
+  assert.match(page, /<button type="button" disabled aria-label="Kirim pertanyaan"/);
+  assert.match(css, /\.h2a0-interaction-surface \{[^}]*min-height: 100%/);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

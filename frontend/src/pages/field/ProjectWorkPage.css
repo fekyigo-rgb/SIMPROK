@@ -255,6 +255,28 @@
 .h2a0-period-context-help > summary:focus-visible .h2a0-period-context-tooltip,
 .h2a0-period-context-help[open] .h2a0-period-context-tooltip { opacity: 1; visibility: visible; transform: translateY(0); }
 
+.h2a0-condition-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; margin-top: .75rem; }
+.h2a0-condition-metric { position: relative; min-width: 0; margin: 0; }
+.h2a0-condition-metric > summary { min-height: 86px; box-sizing: border-box; display: grid; align-content: space-between; gap: .5rem; padding: .72rem .75rem; border: 1px solid #d6e4ec; border-radius: 10px; background: #fff; color: #16294b; cursor: help; box-shadow: inset 0 3px #1da1f2; }
+.h2a0-condition-metric.is-actual > summary { box-shadow: inset 0 3px #2e9e6b; }
+.h2a0-condition-metric.is-neutral > summary { box-shadow: inset 0 3px #78909f; }
+.h2a0-condition-metric.is-critical > summary { border-color: #efc4bf; box-shadow: inset 0 3px #c0392b; }
+.h2a0-condition-metric.is-critical > summary strong { color: #c0392b; }
+.h2a0-condition-metric.is-healthy > summary { border-color: #b9ddcc; box-shadow: inset 0 3px #2e9e6b; }
+.h2a0-condition-metric.is-healthy > summary strong { color: #237a55; }
+.h2a0-condition-metric > summary::marker { color: #78909f; font-size: .72em; }
+.h2a0-condition-metric > summary:hover { border-color: #a9cede; background: #fbfdff; }
+.h2a0-condition-metric > summary:focus-visible { outline: 2px solid rgb(29 161 242 / 42%); outline-offset: 3px; }
+.h2a0-condition-metric > summary span { color: #607789; font-size: .65rem; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
+.h2a0-condition-metric > summary strong { color: #16294b; font-size: 1rem; line-height: 1.25; overflow-wrap: anywhere; }
+.h2a0-condition-metric.is-actual > summary strong { color: #237a55; }
+.h2a0-condition-metric-help { position: absolute; top: calc(100% + .45rem); left: 0; z-index: 24; box-sizing: border-box; width: min(19rem, calc(100vw - 3rem)); padding: .65rem .72rem; border: 1px solid #b9d7e7; border-radius: 9px; background: #fff; color: #334f61; box-shadow: 0 10px 24px rgb(15 52 77 / 16%); opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(3px); transition: opacity .14s ease, transform .14s ease, visibility .14s ease; }
+.h2a0-condition-metric-help p { margin: 0; color: inherit; font-size: .7rem; font-weight: 650; line-height: 1.45; }
+.h2a0-condition-metric:last-child .h2a0-condition-metric-help { right: 0; left: auto; }
+.h2a0-condition-metric > summary:hover + .h2a0-condition-metric-help,
+.h2a0-condition-metric > summary:focus-visible + .h2a0-condition-metric-help,
+.h2a0-condition-metric[open] .h2a0-condition-metric-help { opacity: 1; visibility: visible; transform: translateY(0); }
+
 /*
  * CONTEXTUAL FACT CARDS — a compact two-column grid so the facts that matter
  * read at a glance instead of scrolling as a long definition list.
@@ -306,8 +328,17 @@
 .h2a0-visual-evidence-card a:hover, .h2a0-visual-evidence-card a:focus-visible { color: #075985; }
 
 .h2a0-interaction-dock { display: grid; gap: .42rem; padding: .62rem .72rem .7rem; border-top: 1px solid #cbdce8; background: #fff; box-shadow: 0 -5px 14px rgb(22 41 75 / 5%); }
-.h2a0-interaction-dock label { display: flex; align-items: center; gap: .42rem; color: #16294b; font-size: .72rem; font-weight: 850; }
-.h2a0-interaction-dock label svg { color: #1da1f2; }
+.h2a0-interaction-toggle { min-height: 28px; display: flex; align-items: center; gap: .42rem; border: 0; border-radius: 6px; background: transparent; color: #16294b; cursor: pointer; padding: .18rem .2rem; font: inherit; font-size: .72rem; font-weight: 850; text-align: left; }
+.h2a0-interaction-toggle svg { color: #1da1f2; }
+.h2a0-interaction-toggle span { flex: 1 1 auto; }
+.h2a0-interaction-toggle small { color: #167fc0; font-size: .66rem; font-weight: 850; }
+.h2a0-interaction-toggle:hover { background: #f0f9ff; }
+.h2a0-interaction-toggle:focus-visible { outline: 2px solid rgb(29 161 242 / 35%); outline-offset: 1px; }
+.h2a0-interaction-surface { min-height: 100%; box-sizing: border-box; display: grid; place-content: center; justify-items: center; gap: .45rem; padding: 1.25rem; color: #16294b; text-align: center; }
+.h2a0-interaction-surface > svg { color: #1da1f2; }
+.h2a0-interaction-surface h3, .h2a0-interaction-surface p { margin: 0; }
+.h2a0-interaction-surface p { color: #36586c; font-weight: 800; }
+.h2a0-interaction-surface small { max-width: 26rem; color: #6b8090; font-size: .7rem; line-height: 1.45; }
 .h2a0-interaction-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem; }
 .h2a0-interaction-input-row input { min-width: 0; min-height: 36px; border: 1px solid #c7d8e3; border-radius: 8px; background: #f8fafc; color: #607788; padding: .48rem .62rem; font: inherit; font-size: .72rem; }
 .h2a0-interaction-input-row button { width: 38px; min-height: 36px; display: grid; place-items: center; border: 0; border-radius: 8px; background: #1da1f2; color: #fff; }
@@ -384,4 +415,8 @@
   .execution-plan-curve-heading { align-items: stretch; flex-direction: column; }
   .execution-plan-editor-row { grid-template-columns: 1fr; }
   .h2a0-visual-evidence-context { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 420px) {
+  .h2a0-condition-summary { grid-template-columns: 1fr; }
 }
