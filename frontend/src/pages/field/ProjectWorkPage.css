@@ -125,7 +125,7 @@
 .execution-plan-comparison-state { border-left: 3px solid #8aa7b8; background: #f6f9fb; padding: .65rem .75rem; }
 .execution-plan-comparison-chart { margin-top: .7rem; border: 1px solid #dce7ee; border-radius: 10px; background: #fbfdfe; padding: .7rem; overflow: hidden; }
 .execution-plan-comparison-plot { max-width: 100%; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-.execution-plan-comparison-plot-frame { min-width: 34rem; }
+.execution-plan-comparison-plot-frame { width: 100%; min-width: 0; }
 .execution-plan-comparison-chart svg { display: block; width: 100%; height: auto; min-height: 280px; }
 .execution-plan-comparison-chart text { fill: #36586c; font-size: 13.5px; font-weight: 750; }
 .execution-plan-comparison-legend { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: .35rem; color: #36586c; font-size: .72rem; font-weight: 750; }

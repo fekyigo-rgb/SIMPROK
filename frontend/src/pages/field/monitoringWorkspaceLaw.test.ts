@@ -641,6 +641,38 @@ test('Kurva S detail facts remain available only through one collapsed disclosur
   assert.doesNotMatch(css, /\.execution-plan-comparison-detail[^}]*display:\s*none/);
 });
 
+test('MON04 chart fits the available right-panel width without a second point truth', () => {
+  const curveStart = plan.indexOf('function MonitoringComparisonCurve');
+  const curveEnd = plan.indexOf('function PeriodicScheduleReadOnly', curveStart);
+  assert.ok(curveStart >= 0, 'the Kurva S render owner is missing');
+  assert.ok(curveEnd > curveStart, 'the Kurva S render boundary is invalid');
+  const curve = plan.slice(curveStart, curveEnd);
+
+  assert.equal(
+    countOf(curve, 'monitoringComparisonChartProjection(comparison.points)'),
+    1,
+    'the responsive presentation must keep the canonical comparison projection',
+  );
+  assert.equal(
+    countOf(curve, 'comparisonChart.points.map'),
+    1,
+    'chart markers must keep the single projected canonical point source',
+  );
+  assert.match(
+    css,
+    /\.execution-plan-comparison-plot-frame \{[^}]*width: 100%[^}]*min-width: 0/,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.execution-plan-comparison-plot-frame \{[^}]*min-width: 34rem/,
+    'the chart frame must not be wider than the available right-panel viewport',
+  );
+  assert.match(
+    css,
+    /\.execution-plan-comparison-chart svg \{[^}]*width: 100%[^}]*height: auto/,
+  );
+});
+
 test('UI-03B keeps Kondisi Proyek compact while canonical context stays on demand', () => {
   const componentStart = page.indexOf('function ProjectConditionMetric');
   const componentEnd = page.indexOf('export function ProjectWorkPage');
