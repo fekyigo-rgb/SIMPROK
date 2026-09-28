@@ -150,7 +150,13 @@
 .execution-plan-comparison-current dt { color: #617887; font-size: .64rem; font-weight: 750; text-transform: uppercase; }
 .execution-plan-comparison-current dd { margin: .22rem 0 0; color: #123b58; font-size: 1rem; font-weight: 850; overflow-wrap: anywhere; }
 .execution-plan-comparison-current small { display: block; margin-top: .2rem; color: #587080; font-size: .65rem; }
-.execution-plan-comparison-table { min-width: 36rem; }
+.execution-plan-comparison-detail { margin-top: .6rem; }
+.execution-plan-comparison-detail > summary { width: fit-content; color: #167fc0; cursor: pointer; font-size: .72rem; font-weight: 800; }
+.execution-plan-comparison-detail > summary::marker { color: #1da1f2; }
+.execution-plan-comparison-detail > summary:focus-visible { outline: 2px solid rgb(29 161 242 / 35%); outline-offset: 3px; border-radius: 4px; }
+.execution-plan-comparison-detail[open] > summary { margin-bottom: .4rem; }
+.execution-plan-comparison-table { width: 100%; min-width: 0; table-layout: fixed; }
+.execution-plan-comparison-table th, .execution-plan-comparison-table td { white-space: normal; overflow-wrap: anywhere; }
 .execution-plan-comparison-table caption { padding: .55rem 0; color: #36586c; font-size: .72rem; font-weight: 800; text-align: left; }
 .execution-plan-comparison-table td small { display: block; margin-top: .15rem; color: #617887; font-size: .62rem; font-weight: 500; }
 .execution-plan-comparison-table td[data-state='INCOMPLETE'] { color: #92400e; }

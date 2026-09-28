@@ -338,8 +338,10 @@ function MonitoringComparisonCurve({
             </dl>
           )}
 
-          <div className="execution-plan-table-scroll">
-            <table className="execution-plan-comparison-table">
+          <details className="execution-plan-comparison-detail">
+            <summary>Lihat detail</summary>
+            <div className="execution-plan-table-scroll">
+              <table className="execution-plan-comparison-table">
               <caption>Detail fakta perbandingan Kurva S</caption>
               <thead>
                 <tr>
@@ -375,8 +377,9 @@ function MonitoringComparisonCurve({
                   );
                 })}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+          </details>
         </>
       )}
     </>

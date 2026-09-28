@@ -428,7 +428,10 @@ test('19. UI-01 preserves last-updated provenance, actions, and independent char
   assert.match(plan, /Kunci Rencana Pelaksanaan/);
   assert.match(page, /presentation=\{monitoringPlanView\}/);
   assert.match(plan, /monitoringComparisonChartProjection\(comparison\.points\)/);
-  assert.match(css, /\.execution-plan-comparison-table \{ min-width: 36rem; \}/);
+  assert.match(
+    css,
+    /\.execution-plan-comparison-table \{[^}]*width: 100%[^}]*min-width: 0[^}]*table-layout: fixed/,
+  );
 });
 
 test('21 + 22. Analysis and Schedule reuse the existing plan/comparator truth', () => {
@@ -581,6 +584,61 @@ test('periodic Analysis and Schedule context is disclosed from the compact perio
   assert.match(css, /\.h2a0-period-context-help > summary:hover \.h2a0-period-context-tooltip/);
   assert.match(css, /\.h2a0-period-context-help > summary:focus-visible \.h2a0-period-context-tooltip/);
   assert.match(css, /\.h2a0-period-context-help\[open\] \.h2a0-period-context-tooltip/);
+});
+
+test('Kurva S detail facts remain available only through one collapsed disclosure', () => {
+  const curveStart = plan.indexOf('function MonitoringComparisonCurve');
+  const curveEnd = plan.indexOf('function PeriodicScheduleReadOnly', curveStart);
+  assert.ok(curveStart >= 0, 'the Kurva S render owner is missing');
+  assert.ok(curveEnd > curveStart, 'the Kurva S render boundary is invalid');
+  const curve = plan.slice(curveStart, curveEnd);
+  const detailStart = curve.indexOf(
+    '<details className="execution-plan-comparison-detail">',
+  );
+  const detailEnd = curve.indexOf('</details>', detailStart);
+  assert.ok(detailStart >= 0, 'the compact detail disclosure is missing');
+  assert.ok(detailEnd > detailStart, 'the detail disclosure boundary is invalid');
+  const detail = curve.slice(detailStart, detailEnd);
+
+  assert.equal(countOf(curve, 'className="execution-plan-comparison-detail"'), 1);
+  assert.match(detail, /<summary>Lihat detail<\/summary>/);
+  assert.match(detail, /className="execution-plan-comparison-table"/);
+  assert.match(detail, /Detail fakta perbandingan Kurva S/);
+  assert.match(detail, /<th>Tanggal<\/th>[\s\S]*<th>Rencana<\/th>[\s\S]*<th>Realisasi<\/th>[\s\S]*<th>Deviasi<\/th>/);
+  assert.equal(
+    countOf(detail, 'comparison.points.map'),
+    1,
+    'the detail disclosure must consume the canonical comparison points exactly once',
+  );
+  assert.equal(
+    countOf(curve.slice(0, detailStart), 'comparison.points.map'),
+    0,
+    'canonical detail facts must not be mapped outside the collapsed disclosure',
+  );
+  assert.equal(
+    countOf(curve, 'comparisonChart.points.map'),
+    1,
+    'chart markers must consume the chart-specific projected points exactly once',
+  );
+  assert.doesNotMatch(
+    curve.slice(0, detailStart),
+    /Detail fakta perbandingan Kurva S|execution-plan-comparison-table/,
+    'the detail-fact table still appears in permanent Kurva S flow',
+  );
+  assert.match(curve, /monitoringComparisonChartProjection\(comparison\.points\)/);
+  assert.match(curve, /className="execution-plan-comparison-chart"/);
+  assert.match(css, /\.execution-plan-comparison-detail \{[^}]*margin-top: \.6rem/);
+  assert.match(css, /\.execution-plan-comparison-detail > summary \{[^}]*width: fit-content/);
+  assert.match(
+    css,
+    /\.execution-plan-comparison-table \{[^}]*width: 100%[^}]*min-width: 0[^}]*table-layout: fixed/,
+  );
+  assert.match(
+    css,
+    /\.execution-plan-comparison-table th, \.execution-plan-comparison-table td \{[^}]*white-space: normal[^}]*overflow-wrap: anywhere/,
+  );
+  assert.doesNotMatch(css, /\.execution-plan-comparison-table \{[^}]*min-width: 36rem/);
+  assert.doesNotMatch(css, /\.execution-plan-comparison-detail[^}]*display:\s*none/);
 });
 
 test('UI-03B keeps Kondisi Proyek compact while canonical context stays on demand', () => {
