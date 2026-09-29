@@ -361,6 +361,659 @@
   color: var(--simprok-authority-navy-800);
 }
 
+/* Assisted classification — multi-select + Dasar/Penerbit separation */
+.ahsp-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  min-width: 0;
+  margin: 0;
+}
+.ahsp-field__label {
+  display: block;
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  color: var(--simprok-authority-navy-800);
+  line-height: 1.3;
+}
+.ahsp-field__control,
+.ahsp-field > select,
+.ahsp-field > input:not([type='checkbox']):not([type='radio']) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.5rem;
+  height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  background: var(--simprok-white);
+  color: var(--simprok-authority-navy-800);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+}
+.ahsp-field > select:disabled,
+.ahsp-field__control:disabled {
+  opacity: 0.55;
+  background: var(--simprok-surface-light);
+  cursor: not-allowed;
+}
+.ahsp-assisted-classification {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 12px;
+  background: var(--simprok-white);
+}
+.ahsp-assisted-classification .ahsp-section-title {
+  color: var(--simprok-authority-navy-800);
+}
+.ahsp-multi-select {
+  position: relative;
+  margin-bottom: 0;
+}
+.ahsp-multi-select__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.5rem;
+  height: 2.5rem;
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  background: var(--simprok-white);
+  color: var(--simprok-authority-navy-800);
+  font: inherit;
+  font-size: var(--text-sm, 0.875rem);
+  cursor: pointer;
+}
+.ahsp-multi-select__trigger--open {
+  border-color: #1da1f2;
+  box-shadow: 0 0 0 2px rgba(29, 161, 242, 0.15);
+}
+.ahsp-multi-select__summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ahsp-multi-select__chevron {
+  flex: 0 0 auto;
+  font-size: 0.65rem;
+  color: var(--simprok-engineering-blue-500);
+}
+.ahsp-multi-select__trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--simprok-surface-light);
+}
+.ahsp-multi-select__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+}
+.ahsp-multi-select__chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(29, 161, 242, 0.35);
+  background: rgba(29, 161, 242, 0.08);
+  color: var(--simprok-authority-navy-800);
+  font-size: 0.75rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ahsp-multi-select__menu {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  background: var(--simprok-white);
+  max-height: 14rem;
+  overflow: auto;
+  box-shadow: 0 8px 24px rgba(22, 41, 75, 0.08);
+}
+.ahsp-multi-select__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--simprok-authority-navy-800);
+}
+.ahsp-multi-select__option input {
+  margin-top: 0.15rem;
+  accent-color: #1da1f2;
+}
+.ahsp-multi-select__add {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.ahsp-assisted-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--simprok-engineering-blue-100);
+}
+
+.ahsp-assisted-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .ahsp-assisted-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .ahsp-assisted-grid,
+  .ahsp-assisted-meta {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Room — Owner visual parity */
+.ahsp-room {
+  padding: var(--space-5, 1.25rem);
+}
+.ahsp-room__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+.ahsp-room__title {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--simprok-authority-navy-800);
+  margin: 0;
+}
+.ahsp-room__subtitle {
+  font-size: var(--text-sm);
+  color: var(--simprok-engineering-blue-500);
+  margin: var(--space-1) 0 0;
+  max-width: 40rem;
+}
+.ahsp-room__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.ahsp-room__filters {
+  background: var(--simprok-white);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 12px;
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.ahsp-room__filter-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+@media (max-width: 1100px) {
+  .ahsp-room__filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.ahsp-room__table-card {
+  background: var(--simprok-white);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 12px;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  overflow: hidden;
+}
+.ahsp-room__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.ahsp-room__table th {
+  text-align: left;
+  padding: 0.7rem 0.65rem;
+  background: var(--simprok-surface-light);
+  border-bottom: 1px solid var(--simprok-engineering-blue-100);
+  color: var(--simprok-authority-navy-800);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ahsp-room__table td {
+  padding: 0.7rem 0.65rem;
+  border-bottom: 1px solid var(--simprok-engineering-blue-100);
+  color: var(--simprok-authority-navy-800);
+  vertical-align: middle;
+}
+.ahsp-room__table tbody tr:hover td {
+  background: rgba(29, 161, 242, 0.04);
+}
+.ahsp-room__pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+}
+.ahsp-room__pagination-meta {
+  color: var(--simprok-engineering-blue-500);
+  font-size: var(--text-sm);
+}
+.ahsp-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.ahsp-search-row__field {
+  position: relative;
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.ahsp-search-row__icon {
+  position: absolute;
+  left: 0.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--simprok-engineering-blue-500);
+}
+.ahsp-search-row__input {
+  color: var(--simprok-authority-navy-800);
+  padding: 0.55rem 0.75rem 0.55rem 2rem;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  background: var(--simprok-white);
+  width: 100%;
+  min-height: 2.5rem;
+  font: inherit;
+}
+
+/* Import file card — hide native Choose File as primary */
+.ahsp-import-upload__native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.ahsp-import-upload {
+  position: relative;
+}
+.ahsp-import-file-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  background: var(--simprok-white);
+  cursor: pointer;
+}
+.ahsp-import-file-card--ready {
+  border-color: var(--simprok-success-green-600);
+  background: rgba(46, 158, 107, 0.06);
+  cursor: default;
+}
+.ahsp-import-file-card__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 8px;
+  background: var(--simprok-engineering-blue-100);
+  color: var(--simprok-authority-navy-800);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.ahsp-import-file-card__body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-sm);
+}
+.ahsp-import-file-card__body strong {
+  font-size: var(--text-base);
+}
+.ahsp-import-file-card__status {
+  color: var(--simprok-success-green-600);
+  font-weight: 600;
+}
+
+/* Ringkasan — intelligence accent only in purple */
+.ahsp-ringkasan {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 12px;
+  background: var(--simprok-white);
+}
+.ahsp-ringkasan__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.ahsp-ringkasan__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+}
+.ahsp-ringkasan__spark {
+  color: var(--simprok-glory-purple-500);
+}
+.ahsp-ringkasan__count {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(109, 74, 158, 0.1);
+  color: var(--simprok-glory-purple-500);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+/* Confirmation — four compact cards; held as secondary strip */
+.ahsp-confirm-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+.ahsp-confirm-summary__card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 12px;
+  background: var(--simprok-white);
+  min-width: 0;
+  min-height: 5.5rem;
+}
+.ahsp-confirm-summary__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+}
+.ahsp-confirm-summary__value {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--simprok-authority-navy-800);
+  line-height: 1.3;
+}
+.ahsp-confirm-summary__hint {
+  margin: 0.25rem 0 0;
+  font-size: var(--text-sm);
+  color: var(--simprok-engineering-blue-500);
+  line-height: 1.4;
+}
+.ahsp-confirm-summary__card--understood {
+  border-left: 3px solid var(--simprok-success-green-600);
+}
+.ahsp-confirm-summary__card--understood .ahsp-confirm-summary__icon {
+  background: rgba(46, 158, 107, 0.12);
+  color: var(--simprok-success-green-600);
+}
+.ahsp-confirm-summary__card--existing {
+  border-left: 3px solid #1da1f2;
+}
+.ahsp-confirm-summary__card--existing .ahsp-confirm-summary__icon {
+  background: rgba(29, 161, 242, 0.12);
+  color: #1da1f2;
+}
+.ahsp-confirm-summary__card--will-save {
+  border-left: 3px solid #1da1f2;
+}
+.ahsp-confirm-summary__card--will-save .ahsp-confirm-summary__icon {
+  background: rgba(29, 161, 242, 0.12);
+  color: #1da1f2;
+}
+.ahsp-confirm-summary__card--review {
+  border-left: 3px solid var(--simprok-glory-purple-500);
+}
+.ahsp-confirm-summary__card--review .ahsp-confirm-summary__icon {
+  background: rgba(109, 74, 158, 0.12);
+  color: var(--simprok-glory-purple-500);
+}
+.ahsp-confirm-held {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  border: 1px dashed #c77a17;
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-sm);
+  background: rgba(199, 122, 23, 0.06);
+}
+.ahsp-confirm-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.ahsp-confirm-panel {
+  padding: var(--space-4);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 12px;
+  background: var(--simprok-white);
+  min-width: 0;
+}
+.ahsp-confirm-panel__review-title {
+  color: var(--simprok-glory-purple-500);
+}
+.ahsp-confirm-checklist {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+.ahsp-confirm-checklist li {
+  position: relative;
+  padding-left: 1.7rem;
+  font-size: var(--text-sm);
+  color: var(--simprok-authority-navy-800);
+  line-height: 1.45;
+}
+.ahsp-confirm-checklist li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.15rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  background: #1da1f2;
+  box-shadow: inset 0 0 0 2px #1da1f2;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23fff' d='M6.5 11.2 3.3 8l1.1-1.1 2.1 2.1 4.1-4.1L11.7 6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 0.85rem;
+}
+.ahsp-confirm-info-strip {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  background: rgba(29, 161, 242, 0.08);
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.ahsp-confirm-info-strip svg {
+  flex: 0 0 auto;
+  color: #1da1f2;
+  margin-top: 0.1rem;
+}
+.ahsp-confirm-detail-bar {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: var(--space-2);
+}
+.ahsp-confirm-table-wrap {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 12px;
+  background: var(--simprok-white);
+  overflow-x: auto;
+}
+.ahsp-confirm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.ahsp-confirm-table th,
+.ahsp-confirm-table td {
+  text-align: left;
+  padding: 0.65rem 0.55rem;
+  border-bottom: 1px solid var(--simprok-engineering-blue-100);
+  vertical-align: top;
+}
+.ahsp-confirm-table th {
+  color: var(--simprok-authority-navy-800);
+  font-weight: 600;
+  background: var(--simprok-surface-light);
+}
+.ahsp-condition-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.ahsp-condition-badge::before {
+  content: '';
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+.ahsp-condition-badge--new {
+  color: var(--simprok-success-green-600);
+  background: rgba(46, 158, 107, 0.1);
+}
+.ahsp-condition-badge--existing {
+  color: #1da1f2;
+  background: rgba(29, 161, 242, 0.1);
+}
+.ahsp-condition-badge--review {
+  color: #c77a17;
+  background: rgba(199, 122, 23, 0.1);
+}
+
+/* Manual page */
+.ahsp-manual-page {
+  padding: var(--space-5, 1.25rem);
+}
+.ahsp-manual-page__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--space-4);
+}
+.ahsp-manual-page__title {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--simprok-authority-navy-800);
+}
+.ahsp-manual-page__subtitle {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--simprok-engineering-blue-500);
+  max-width: 36rem;
+}
+.ahsp-manual-grid--4 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.ahsp-manual-info-row {
+  display: grid;
+  grid-template-columns: minmax(12rem, 2fr) minmax(8rem, 1fr);
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.ahsp-manual-page__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+.ahsp-manual-deferred {
+  border-style: dashed;
+}
+
+@media (max-width: 960px) {
+  .ahsp-confirm-summary,
+  .ahsp-confirm-panels {
+    grid-template-columns: 1fr;
+  }
+}
+.ahsp-assisted-meta__dasar,
+.ahsp-assisted-meta__penerbit {
+  margin-bottom: 0;
+}
+.ahsp-pending-empty {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  font-size: var(--text-sm);
+  color: var(--simprok-authority-navy-800);
+  background: var(--simprok-surface-light);
+}
+
 /* ---------------------------------------------------------------------------
  * Completion — what an import still needs, one quiet row per question
  * ------------------------------------------------------------------------- */
@@ -398,42 +1051,76 @@ li.ahsp-completion:last-child {
 
 .ahsp-attention {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
   gap: var(--space-2);
-  max-width: 64rem;
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
   list-style: none;
-  border-radius: 10px;
-  background: var(--simprok-engineering-blue-50);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  max-width: none;
 }
 
 .ahsp-attention__row {
   position: relative;
   display: grid;
-  gap: 2px;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 0.65rem;
+  row-gap: 0.35rem;
   min-width: 0;
-  padding-left: var(--space-4);
+  min-height: 5.5rem;
+  padding: var(--space-3);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 10px;
+  background: var(--simprok-white);
 }
 
-/* A small dot says what kind of need it is; the words say the rest. */
+.ahsp-attention__icon {
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: rgba(152, 162, 179, 0.15);
+  color: #98a2b3;
+}
+
+.ahsp-attention__row[data-tone='unit'] .ahsp-attention__icon,
+.ahsp-attention__row[data-tone='source'] .ahsp-attention__icon,
+.ahsp-attention__row[data-tone='other'] .ahsp-attention__icon {
+  background: rgba(199, 122, 23, 0.12);
+  color: #c77a17;
+}
+
+.ahsp-attention__row[data-tone='identity'] .ahsp-attention__icon,
+.ahsp-attention__row[data-tone='decision'] .ahsp-attention__icon,
+.ahsp-attention__row[data-tone='recheck'] .ahsp-attention__icon {
+  background: rgba(109, 74, 158, 0.12);
+  color: var(--simprok-glory-purple-500);
+}
+
+.ahsp-attention__row[data-tone='failed'] .ahsp-attention__icon {
+  background: rgba(192, 57, 43, 0.12);
+  color: #c0392b;
+}
+
+.ahsp-attention__body,
+.ahsp-attention__door {
+  grid-column: 2;
+  min-width: 0;
+}
+
+/* Soft left accent retained via icon; remove old dot marker */
 .ahsp-attention__row::before {
-  content: '';
-  position: absolute;
-  top: 0.5em;
-  left: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #98a2b3;
+  display: none;
 }
 
 .ahsp-attention__row[data-tone='recheck']::before,
-.ahsp-attention__row[data-tone='decision']::before {
-  background: var(--simprok-trust-blue-500);
-}
-
-.ahsp-attention__row[data-tone='failed']::before {
-  background: #c0392b;
+.ahsp-attention__row[data-tone='decision']::before,
+.ahsp-attention__row[data-tone='failed']::before,
+.ahsp-attention__row[data-tone='identity']::before {
+  display: none;
 }
 
 .ahsp-attention__title {
@@ -448,6 +1135,62 @@ li.ahsp-completion:last-child {
   line-height: 1.5;
   color: var(--simprok-engineering-blue-700);
   overflow-wrap: anywhere;
+}
+
+.ahsp-attention__badge {
+  grid-column: 2;
+  justify-self: end;
+  align-self: end;
+  display: inline-flex;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #c77a17;
+  background: rgba(199, 122, 23, 0.1);
+}
+
+.ahsp-attention__row[data-tone='identity'] .ahsp-attention__badge,
+.ahsp-attention__row[data-tone='decision'] .ahsp-attention__badge {
+  color: var(--simprok-glory-purple-500);
+  background: rgba(109, 74, 158, 0.1);
+}
+
+.ahsp-attention__row[data-tone='failed'] .ahsp-attention__badge {
+  color: #c0392b;
+  background: rgba(192, 57, 43, 0.1);
+}
+
+.ahsp-attention__door {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.ahsp-attention__door:hover .ahsp-attention__title,
+.ahsp-attention__door:focus-visible .ahsp-attention__title {
+  color: var(--simprok-trust-blue-500);
+}
+
+.ahsp-attention__door:focus-visible {
+  outline: 2px solid var(--simprok-trust-blue-500);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.ahsp-attention__action {
+  margin-top: 2px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--simprok-trust-blue-500);
 }
 
 .ahsp-decisions {
@@ -585,6 +1328,279 @@ li.ahsp-completion:last-child {
   }
 
   .ahsp-choice-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Buat AHSP Manual — Owner mockup convergence (presentation)
+ * ------------------------------------------------------------------------- */
+
+.ahsp-assisted-classification--embedded {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.ahsp-manual-card {
+  background: var(--simprok-white);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 12px;
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.ahsp-manual-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-start;
+  margin-bottom: var(--space-3);
+}
+
+.ahsp-manual-card__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 8px;
+}
+
+.ahsp-manual-card__icon--blue {
+  background: rgba(29, 161, 242, 0.12);
+  color: #1da1f2;
+}
+
+.ahsp-manual-card__icon--purple {
+  background: rgba(109, 74, 158, 0.12);
+  color: var(--simprok-glory-purple-500);
+}
+
+.ahsp-manual-card__icon--navy {
+  background: rgba(22, 41, 75, 0.08);
+  color: #16294b;
+}
+
+.ahsp-manual-card__heading {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.ahsp-manual-intel {
+  flex: 1 1 14rem;
+  display: flex;
+  gap: 0.45rem;
+  align-items: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  background: rgba(109, 74, 158, 0.08);
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.ahsp-manual-intel svg {
+  flex: 0 0 auto;
+  color: var(--simprok-glory-purple-500);
+  margin-top: 0.1rem;
+}
+
+.ahsp-manual-info-strip {
+  flex: 1 1 14rem;
+  display: flex;
+  gap: 0.45rem;
+  align-items: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  background: rgba(29, 161, 242, 0.08);
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.ahsp-manual-info-strip svg {
+  flex: 0 0 auto;
+  color: #1da1f2;
+  margin-top: 0.1rem;
+}
+
+.ahsp-manual-info-grid {
+  display: grid;
+  grid-template-columns: minmax(12rem, 2.2fr) minmax(6rem, 0.8fr) minmax(7rem, 1fr) minmax(8rem, 1.2fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.ahsp-required {
+  color: #c0392b;
+}
+
+.ahsp-manual-missing {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  background: var(--simprok-surface-light);
+  color: var(--simprok-engineering-blue-500);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  min-height: 2.5rem;
+}
+
+.ahsp-manual-comp-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.ahsp-manual-comp {
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 10px;
+  padding: var(--space-3);
+  background: var(--simprok-white);
+  min-width: 0;
+}
+
+.ahsp-manual-comp__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: var(--space-2);
+}
+
+.ahsp-manual-comp__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+}
+
+.ahsp-manual-comp--labor .ahsp-manual-comp__icon {
+  background: rgba(46, 158, 107, 0.12);
+  color: var(--simprok-success-green-600);
+}
+
+.ahsp-manual-comp--material .ahsp-manual-comp__icon {
+  background: rgba(29, 161, 242, 0.12);
+  color: #1da1f2;
+}
+
+.ahsp-manual-comp--equipment .ahsp-manual-comp__icon {
+  background: rgba(109, 74, 158, 0.12);
+  color: var(--simprok-glory-purple-500);
+}
+
+.ahsp-manual-comp__title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--simprok-authority-navy-800);
+}
+
+.ahsp-manual-comp__search {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: var(--space-2);
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  background: var(--simprok-surface-light);
+}
+
+.ahsp-manual-comp__search svg {
+  color: var(--simprok-engineering-blue-500);
+  flex: 0 0 auto;
+}
+
+.ahsp-manual-comp__search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--simprok-authority-navy-800);
+}
+
+.ahsp-manual-comp__hits {
+  list-style: none;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  max-height: 9rem;
+  overflow: auto;
+}
+
+.ahsp-manual-comp__hit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.45rem 0.65rem;
+  border: 0;
+  border-bottom: 1px solid var(--simprok-engineering-blue-100);
+  background: var(--simprok-white);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--simprok-authority-navy-800);
+}
+
+.ahsp-manual-comp__hit:hover {
+  background: rgba(29, 161, 242, 0.06);
+}
+
+.ahsp-manual-comp__hit span {
+  font-size: 0.75rem;
+  color: var(--simprok-engineering-blue-500);
+}
+
+.ahsp-manual-comp__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.ahsp-manual-comp__table th,
+.ahsp-manual-comp__table td {
+  text-align: left;
+  padding: 0.4rem 0.35rem;
+  border-bottom: 1px solid var(--simprok-engineering-blue-100);
+  vertical-align: middle;
+}
+
+.ahsp-manual-comp__table th {
+  color: var(--simprok-engineering-blue-500);
+  font-weight: 600;
+}
+
+.ahsp-manual-comp__coef {
+  width: 4.5rem;
+  min-height: 1.9rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 6px;
+  font: inherit;
+  text-align: right;
+}
+
+.ahsp-manual-draft-deferred {
+  font-size: 0.7rem;
+  color: #98a2b3;
+  align-self: center;
+}
+
+@media (max-width: 1100px) {
+  .ahsp-manual-info-grid,
+  .ahsp-manual-comp-grid {
     grid-template-columns: 1fr;
   }
 }

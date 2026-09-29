@@ -126,6 +126,7 @@ describe('AhspService', () => {
         fieldCategory: null,
         subCategory: null,
         classification: null,
+        keterangan: null,
         methodType: MethodType.OTHER,
         locationType: LocationType.OTHER,
         createdByUserId: ahsp.createdByUserId,
@@ -420,6 +421,42 @@ describe('AhspService', () => {
     expect(Object.keys(prisma.aHSP.update.mock.calls[0][0].data).sort()).toEqual([
       'methodName',
     ]);
+  });
+
+  it('update persists parent keterangan and still drops methodType and classification', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue(ahsp);
+    prisma.aHSP.update.mockResolvedValue({ ...ahsp, keterangan: 'catatan lapangan' });
+    audit.logAction.mockResolvedValue({ id: 'audit-1' });
+
+    await service.update(
+      ahsp.id,
+      {
+        keterangan: '  catatan lapangan  ',
+        methodType: MethodType.CHEMICAL,
+        fieldCategory: 'must-not-persist',
+      } as any,
+      ahsp.createdByUserId,
+      'catatan',
+      ahsp.workspaceId,
+    );
+
+    expect(prisma.aHSP.update).toHaveBeenCalledWith({
+      where: { id: ahsp.id },
+      data: { keterangan: 'catatan lapangan' },
+    });
+
+    prisma.aHSP.update.mockClear();
+    await service.update(
+      ahsp.id,
+      { keterangan: '   ' },
+      ahsp.createdByUserId,
+      'kosongkan catatan',
+      ahsp.workspaceId,
+    );
+    expect(prisma.aHSP.update).toHaveBeenCalledWith({
+      where: { id: ahsp.id },
+      data: { keterangan: null },
+    });
   });
   /**
    * WORKSPACE AHSP DISCOVERY — visibility, not bindability.

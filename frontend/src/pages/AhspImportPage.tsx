@@ -1,18 +1,25 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+﻿import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowLeft, AlertTriangle, CheckCircle2, Database, FileText, Info, Sparkles } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  AhspImportAssistedClassificationPanel,
+  emptyAssistedContext,
+  type AssistedClassificationContext,
+} from '../components/AhspImportAssistedClassificationPanel';
 import { explainWaitingItemReasons } from '../utils/ahspDocumentUserCopy';
 import {
   IDENTITY_PENDING_ITEM_LINE,
   admissionOf,
+  confirmImportFigures,
   describeImportIntake,
   describeImportRecheck,
   describeImportRecheckFailure,
   describePreviewAttention,
   describeWaitingImports,
   previewIntakeLine,
+  IMPORT_JOURNEY_SUBTITLE,
   type AttentionRowView,
   type ImportJobView,
   type ImportWaitingItemView,
@@ -65,7 +72,6 @@ import {
   type ListRead,
   type ReadMode,
   type ReadResult,
-  type SessionTicket,
 } from '../utils/ahspImportReadState';
 import {
   NETWORK_FAILURE,
@@ -96,8 +102,8 @@ type SamenessDecision = 'USE_EXISTING' | 'KEEP_SEPARATE' | 'SKIP';
  * NOTHING about the canonical pipeline changes. Upload still uses the EXISTING
  * POST /ahsp/document/preview and /commit; unresolved resources still surface as
  * the EXISTING shared observation lifecycle (GET /resource-observations +
- * /curate-existing | /curate-new); manual create still uses the EXISTING
- * POST /ahsp. This file only rehomes that surface out of the room — bytes ->
+ * /curate-existing | /curate-new). Manual create ("Buat AHSP Manual") lives on
+ * AhspRoomPage via the EXISTING POST /ahsp — not duplicated here. Bytes ->
  * SourceEnvelope -> ReaderRegistry -> SourceTable -> understanding -> Unit Kernel
  * -> Resource Identity -> Observation/Curation -> canonical writer, unchanged.
  *
@@ -201,10 +207,8 @@ const ABU = '#98A2B3';
 const HAIRLINE = '1px solid var(--simprok-engineering-blue-100)';
 const CARD: CSSProperties = { background: '#FFFFFF', border: HAIRLINE, borderRadius: '12px', padding: 'var(--space-4)' };
 const controlBox: CSSProperties = { color: NAVY, padding: 'var(--space-2)', border: HAIRLINE, borderRadius: '8px', background: '#FFFFFF', width: '100%' };
-const labelStyle: CSSProperties = { display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-1)' };
 
 export function AhspImportPage() {
-  const navigate = useNavigate();
   const { hasPermission, activeWorkspaceId } = useAuth();
   const canManage = hasPermission('AHSP_MANAGE');
   const canCurate = hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE');
@@ -213,9 +217,28 @@ export function AhspImportPage() {
   const canViewAhsp = hasPermission('AHSP_VIEW');
 
   const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<null | { workItems: PreviewItem[] }>(null);
+  const [preview, setPreview] = useState<null | {
+    workItems: PreviewItem[];
+    document?: { regulationReference?: { raw?: string } | null };
+    source?: { contentDigestSha256?: string | null; fileName?: string | null };
+  }>(null);
+  /**
+   * STAGE 2A Door A — server-side scope for GET /resource-observations.
+   * importJobId or sourceSha256 only; never whole-workspace client filter.
+   */
+  type ObservationScope =
+    | { kind: 'importJobId'; importJobId: string }
+    | { kind: 'sourceSha256'; sourceSha256: string }
+    | null;
+  const [observationScope, setObservationScope] = useState<ObservationScope>(null);
+  const curationSectionRef = useRef<HTMLElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [assistedClassification, setAssistedClassification] =
+    useState<AssistedClassificationContext>(() => emptyAssistedContext());
   const [commitResult, setCommitResult] = useState<null | { summary?: IntakeSummaryWire | null }>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  /** Owner PASS Import journey: classify after preview, then confirm before save. */
+  const [journeyStep, setJourneyStep] = useState<'idle' | 'classify' | 'confirm'>('idle');
   // Which document request is running, so each button tells the truth about itself.
   const [importAction, setImportAction] = useState<'PREVIEW' | 'COMMIT' | null>(null);
   const importing = importAction !== null;
@@ -270,15 +293,7 @@ export function AhspImportPage() {
   const [openJobAllWaiting, setOpenJobAllWaiting] = useState<Record<string, boolean>>({});
   const [openCurationReason, setOpenCurationReason] = useState<Record<string, boolean>>({});
   const [curationShowAll, setCurationShowAll] = useState(false);
-  // The manual door stays on this page, one press away, without dominating it.
-  const [manualOpen, setManualOpen] = useState(false);
-
-  const [workType, setWorkType] = useState('');
-  const [methodName, setMethodName] = useState('');
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  // The create that owns the manual form's button; a workspace change takes it from it.
-  const createLock = useRef<SessionTicket | null>(null);
+  // Manual create lives on the AHSP room door ("Buat AHSP Manual"), not on Import.
 
   // Human decisions for AHSPs the identity classifier flagged. Keyed by the same
   // source-name identity the backend uses, so a decision travels from this
@@ -332,6 +347,7 @@ export function AhspImportPage() {
     setCurationOutcomes([]);
     setOpenCurationReason({});
     setCurationShowAll(false);
+    setObservationScope(null);
     curationLock.current = null;
     setCurationBusy(null);
   };
@@ -362,22 +378,29 @@ export function AhspImportPage() {
     setCommitResult(null);
     setSettled(false);
     setPreviewDetailOpen(false);
+    setJourneyStep('idle');
     // A new file's items are new decisions — drop any prior ones so a stale decision
     // can never ride a different document to commit.
     setDecisions({});
+    setAssistedClassification(emptyAssistedContext());
     setImportError(null);
     documentLock.current = null;
     setImportAction(null);
   };
-  /** A workspace change: a create begun in the workspace before says nothing here. */
-  const forgetCreate = () => {
-    setCreateError(null);
-    createLock.current = null;
-    setCreating(false);
+  const observationsListPath = (scope: ObservationScope): string => {
+    if (scope?.kind === 'importJobId') {
+      return '/resource-observations?importJobId=' + encodeURIComponent(scope.importJobId);
+    }
+    if (scope?.kind === 'sourceSha256') {
+      return '/resource-observations?sourceSha256=' + encodeURIComponent(scope.sourceSha256);
+    }
+    return '/resource-observations';
   };
+
   /** The curation list as the server holds it now; null when it could not be read. */
   const loadObservations = async (
     mode: ReadMode = 'REFRESH',
+    scope: ObservationScope = observationScope,
   ): Promise<readonly CuratableObservationWire[] | null> => {
     if (!canCurate) return null;
     if (mode === 'INITIAL') setObservationsRead((previous) => ({ ...previous, phase: 'LOADING' }));
@@ -385,13 +408,23 @@ export function AhspImportPage() {
     // refusal never leaves the refused rows behind.
     const outcome = await runListRead(reads, {
       list: 'observations',
-      read: () => readList('/resource-observations', asRows<CuratableObservationWire>),
+      read: () => readList(observationsListPath(scope), asRows<CuratableObservationWire>),
       refusedBy: isRefusal,
       answeredBy: isAnswer,
       apply: (answer) => setObservationsRead((previous) => applyListRead(previous, answer, mode)),
       forget: forgetCuration,
     });
     return outcome.applied && outcome.answer.ok ? outcome.answer.data : null;
+  };
+
+  /** Door A — open existing curation scoped to THIS document. Read only. */
+  const openIdentityReview = async (scope: Exclude<ObservationScope, null>) => {
+    if (!canCurate) return;
+    setObservationScope(scope);
+    setCurationShowAll(true);
+    await loadObservations('INITIAL', scope);
+    curationSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    curationSectionRef.current?.focus();
   };
 
   /**
@@ -486,9 +519,8 @@ export function AhspImportPage() {
     forgetCuration();
     forgetImports();
     forgetQuestions();
-    // Nor does a preview, a commit or a create begun there write anything here.
+    // Nor does a preview or commit begun there write anything here.
     forgetDocument();
-    forgetCreate();
     void loadObservations('INITIAL');
     void loadQuestions('INITIAL');
     void loadImportJobs('INITIAL');
@@ -509,6 +541,8 @@ export function AhspImportPage() {
     setDecisions({});
     setSettled(false);
     setPreviewDetailOpen(false);
+    setAssistedClassification(emptyAssistedContext());
+    setJourneyStep('idle');
     try {
       const body = new FormData();
       body.append('file', file);
@@ -520,7 +554,17 @@ export function AhspImportPage() {
         return;
       }
       const understood = await response.json();
-      if (reads.mayApplyDocument(ticket)) setPreview(understood);
+      if (reads.mayApplyDocument(ticket)) {
+        setPreview(understood);
+        setJourneyStep('classify');
+        const dasar = understood?.document?.regulationReference?.raw ?? null;
+        if (typeof dasar === 'string' && dasar.trim()) {
+          setAssistedClassification((prev) => ({
+            ...prev,
+            dasarAcuan: prev.dasarAcuan ?? dasar.trim(),
+          }));
+        }
+      }
     } catch {
       if (reads.mayApplyDocument(ticket)) setImportError('Dokumen AHSP tidak dapat dihubungi.');
     } finally {
@@ -568,6 +612,7 @@ export function AhspImportPage() {
           action: decisions[decisionKey(item)],
         }));
       if (chosen.length > 0) body.append('decisions', JSON.stringify(chosen));
+      body.append('assistedClassification', JSON.stringify(assistedClassification));
       const response = await apiFetch('/ahsp/document/commit', { method: 'POST', body });
       if (!response.ok) {
         // Saving the same document again never records what was already kept twice.
@@ -829,7 +874,7 @@ export function AhspImportPage() {
         const response = await apiFetch('/ahsp/document/jobs/' + job.key + '/continue', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ decisions }),
+          body: JSON.stringify({ decisions, assistedClassification }),
         });
         outcome = response.ok
           ? describeImportRecheck((await response.json().catch(() => null))?.summary ?? null)
@@ -865,46 +910,13 @@ export function AhspImportPage() {
 
   const shownQuestions = questions.filter(isGovernedQuestionShown).map(describeGovernedQuestion);
 
-  const createWorkspaceAhsp = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!canManage || createLock.current !== null) return;
-    // The workspace this AHSP is created in: its answer may move the reader, or say what
-    // went wrong, only while that workspace is still the one on screen. What the server
-    // created stays created there.
-    const ticket = reads.captureSession();
-    createLock.current = ticket;
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const response = await apiFetch('/ahsp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workType: workType.trim(), methodName: methodName.trim(), methodType: 'OTHER', locationType: 'OTHER' }),
-      });
-      if (!response.ok) {
-        if (reads.sameSession(ticket)) setCreateError('AHSP milik Anda belum dapat dibuat. Periksa isian lalu coba lagi.');
-        return;
-      }
-      const created = (await response.json()) as { id?: string };
-      if (!reads.sameSession(ticket)) return;
-      if (typeof created.id !== 'string' || created.id === '') {
-        setCreateError('Server tidak mengembalikan identitas AHSP yang baru dibuat.');
-        return;
-      }
-      navigate('/ahsp/' + created.id);
-    } catch {
-      if (reads.sameSession(ticket)) setCreateError('AHSP milik Anda tidak dapat dihubungi.');
-    } finally {
-      if (createLock.current === ticket) {
-        createLock.current = null;
-        setCreating(false);
-      }
-    }
-  };
-
   // Received and ready are different truths: the summary of a SAVED document
   // comes from the server's own count, never from the preview list.
   const intake = commitResult?.summary ? describeImportIntake(commitResult.summary) : null;
+  const previewAttention = preview
+    ? describePreviewAttention(preview.workItems, { canCurate })
+    : [];
+  const confirmFigures = preview ? confirmImportFigures(preview.workItems ?? []) : null;
 
   // AUTOMATION BEFORE HUMAN INTERVENTION.
   //
@@ -1230,15 +1242,63 @@ export function AhspImportPage() {
 
   // ONE rendering of what an import still needs — for a document being read and a
   // saved import alike: one row per question, never one per work item.
-  const renderAttention = (rows: readonly AttentionRowView[], label: string): ReactNode =>
+  // STAGE 2A: identity cards are ENTRY POINTS only — they open scoped curation,
+  // they never curate, mint, or materialize.
+  const attentionBadge = (detail: string): string | null => {
+    const match = detail.match(/(\d[\d.]*)\s+pekerjaan/u) ?? detail.match(/(\d[\d.]*)\s+pertanyaan/u);
+    return match ? match[0] : null;
+  };
+  const attentionIcon = (tone: AttentionRowView['tone']): ReactNode => {
+    if (tone === 'IDENTITY' || tone === 'DECISION') {
+      return <Database size={16} aria-hidden className="ahsp-attention__icon-svg" />;
+    }
+    if (tone === 'FAILED') {
+      return <AlertTriangle size={16} aria-hidden className="ahsp-attention__icon-svg" />;
+    }
+    if (tone === 'UNIT' || tone === 'SOURCE' || tone === 'OTHER') {
+      return <AlertTriangle size={16} aria-hidden className="ahsp-attention__icon-svg" />;
+    }
+    return <Info size={16} aria-hidden className="ahsp-attention__icon-svg" />;
+  };
+  const renderAttention = (
+    rows: readonly AttentionRowView[],
+    label: string,
+    identityScope: Exclude<ObservationScope, null> | null,
+  ): ReactNode =>
     rows.length > 0 ? (
       <ul className="ahsp-attention" aria-label={label}>
-        {rows.map((row) => (
-          <li key={row.key} className="ahsp-attention__row" data-tone={row.tone.toLowerCase()}>
-            <span className="ahsp-attention__title">{row.title}</span>
-            <span className="ahsp-attention__detail">{row.detail}</span>
-          </li>
-        ))}
+        {rows.map((row) => {
+          const identityDoor =
+            canCurate &&
+            identityScope !== null &&
+            (row.tone === 'IDENTITY' || row.key === 'identity' || row.key.startsWith('identity:'));
+          const badge = attentionBadge(row.detail);
+          return (
+            <li key={row.key} className="ahsp-attention__row" data-tone={row.tone.toLowerCase()}>
+              <span className="ahsp-attention__icon" aria-hidden>
+                {attentionIcon(row.tone)}
+              </span>
+              {identityDoor ? (
+                <button
+                  type="button"
+                  className="ahsp-action ahsp-action--quiet ahsp-attention__door"
+                  onClick={() => void openIdentityReview(identityScope)}
+                  aria-label={'Tinjau: ' + row.title}
+                >
+                  <span className="ahsp-attention__title">{row.title}</span>
+                  <span className="ahsp-attention__detail">{row.detail}</span>
+                  <span className="ahsp-attention__action">Buka tinjauan sumber daya</span>
+                </button>
+              ) : (
+                <div className="ahsp-attention__body">
+                  <span className="ahsp-attention__title">{row.title}</span>
+                  <span className="ahsp-attention__detail">{row.detail}</span>
+                </div>
+              )}
+              {badge ? <span className="ahsp-attention__badge">{badge}</span> : null}
+            </li>
+          );
+        })}
       </ul>
     ) : null;
 
@@ -1246,7 +1306,7 @@ export function AhspImportPage() {
   const jobEntries = placeOutcomes(waitingImports, (job) => job.key, jobOutcomes);
   const dismissJob = (key: string) => setJobOutcomes((prev) => prev.filter((outcome) => outcome.key !== key));
 
-  // PURPOSE → STATUS → WHAT IT NEEDS → THE ONE ACTION → DECISIONS → DETAIL ON DEMAND.
+  // PURPOSE â†’ STATUS â†’ WHAT IT NEEDS â†’ THE ONE ACTION â†’ DECISIONS â†’ DETAIL ON DEMAND.
   const renderImportJob = (job: ImportJobView, at: number, anchored: AnchoredOutcome | null): ReactNode => {
     const busy = jobBusy === job.key;
     const open = openJobDetails[job.key] === true;
@@ -1271,7 +1331,11 @@ export function AhspImportPage() {
       <li key={job.key} aria-label={'Import ' + job.title} className="ahsp-completion">
         <span className="ahsp-curation-item__title">{job.title}</span>
         <p className="ahsp-completion__summary">{job.summaryLine}</p>
-        {renderAttention(job.attention, 'Yang masih dibutuhkan')}
+        {renderAttention(
+          job.attention,
+          'Yang masih dibutuhkan',
+          job.key ? { kind: 'importJobId', importJobId: job.key } : null,
+        )}
         {decisionItems.length > 0 ? (
           <div className="ahsp-decisions" aria-label="Keputusan Anda">
             {decisionItems.map((item) => (
@@ -1387,7 +1451,7 @@ export function AhspImportPage() {
       <nav aria-label="Jejak navigasi" style={{ fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
         {/* A door only for whoever may open it — the second holder may judge here, not browse AHSP. */}
         {canViewAhsp ? <Link to="/ahsp" style={{ color: MUTED, textDecoration: 'none' }}>AHSP</Link> : <span>AHSP</span>}
-        <span style={{ margin: '0 var(--space-2)' }}>›</span>
+        <span style={{ margin: '0 var(--space-2)' }}>{'\u203A'}</span>
         <span style={{ color: NAVY }}>Import AHSP</span>
       </nav>
 
@@ -1395,7 +1459,7 @@ export function AhspImportPage() {
         <div>
           <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: NAVY, margin: 0 }}>Import AHSP</h1>
           <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 'var(--space-1) 0 0' }}>
-            Unggah dokumen resmi, pahami isinya, lalu simpan hasil import. Semua pekerjaan yang dikenali diterima SIMPROK; yang belum lengkap tetap tersimpan untuk dilengkapi.
+            {IMPORT_JOURNEY_SUBTITLE}
           </p>
         </div>
         {canViewAhsp ? (
@@ -1414,12 +1478,14 @@ export function AhspImportPage() {
 
       {/* Upload -> Pahami dokumen -> Simpan hasil import -> Import selesai */}
       {canManage ? (
-        <section aria-label="Unggah dan pahami dokumen" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
+        <section aria-label="Unggah dan pahami dokumen" className="ahsp-import-upload" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
           <input
+            ref={fileInputRef}
+            id="ahsp-import-file"
             type="file"
             accept=".xlsx"
             aria-label="Berkas AHSP resmi"
-            style={{ maxWidth: '100%' }}
+            className="ahsp-import-upload__native"
             onChange={(event) => {
               // Another document: nothing understood, saved or decided for the one before is
               // about this one, and a request still waiting for it never writes here.
@@ -1428,14 +1494,61 @@ export function AhspImportPage() {
               forgetDocument();
             }}
           />
+          {!file ? (
+            <label htmlFor="ahsp-import-file" className="ahsp-import-file-card ahsp-import-file-card--empty">
+              <span className="ahsp-import-file-card__icon" aria-hidden>xlsx</span>
+              <span className="ahsp-import-file-card__body">
+                <strong>Pilih berkas AHSP</strong>
+                <span>Unggah dokumen resmi (.xlsx). Mesin pembacaan tidak berubah.</span>
+              </span>
+              <span className="ahsp-action ahsp-action--outline ahsp-action--compact">Pilih berkas</span>
+            </label>
+          ) : (
+            <div className="ahsp-import-file-card ahsp-import-file-card--ready">
+              <span className="ahsp-import-file-card__icon" aria-hidden>xlsx</span>
+              <span className="ahsp-import-file-card__body">
+                <strong>{file.name}</strong>
+                <span>
+                  {(file.size / (1024 * 1024)).toFixed(2)} MB
+                  {preview?.workItems?.length
+                    ? ` · ${preview.workItems.length} pekerjaan terdeteksi`
+                    : ' · siap dibaca'}
+                </span>
+                {preview ? <span className="ahsp-import-file-card__status">File siap diproses</span> : null}
+              </span>
+              <label htmlFor="ahsp-import-file" className="ahsp-action ahsp-action--outline ahsp-action--compact">
+                Ganti File
+              </label>
+            </div>
+          )}
           <div className="ahsp-action-row ahsp-action-row--stack" style={{ marginTop: 'var(--space-3)' }}>
             <button type="button" className="ahsp-action ahsp-action--primary" disabled={!file || importing} aria-busy={importAction === 'PREVIEW' || undefined} onClick={() => void previewDocument()}>
               {importAction === 'PREVIEW' ? 'Membaca…' : 'Pahami dokumen'}
             </button>
-            <button type="button" className="ahsp-action ahsp-action--outline" disabled={!file || importing || !preview} aria-busy={importAction === 'COMMIT' || undefined} onClick={() => void commitDocument()}>
-              {importAction === 'COMMIT' ? 'Menyimpan…' : 'Simpan hasil import'}
-            </button>
           </div>
+          {preview && !settled ? (
+            <ol
+              aria-label="Langkah import AHSP"
+              style={{
+                display: 'flex',
+                gap: 'var(--space-3)',
+                listStyle: 'none',
+                padding: 0,
+                margin: 'var(--space-3) 0 0',
+                flexWrap: 'wrap',
+                fontSize: 'var(--text-sm)',
+                color: MUTED,
+              }}
+            >
+              <li style={{ color: BLUE, fontWeight: 600 }}>1. Unggah (selesai)</li>
+              <li style={{ color: journeyStep === 'classify' ? BLUE : NAVY, fontWeight: journeyStep === 'classify' ? 600 : 400 }}>
+                2. Klasifikasi{journeyStep === 'confirm' || settled ? ' (selesai)' : ''}
+              </li>
+              <li style={{ color: journeyStep === 'confirm' ? BLUE : MUTED, fontWeight: journeyStep === 'confirm' ? 600 : 400 }}>
+                3. Tinjau &amp; Simpan
+              </li>
+            </ol>
+          ) : null}
           {importError ? <p role="alert" style={{ color: RED, fontSize: 'var(--text-sm)' }}>{importError}</p> : null}
           {/* What a SAVED document now is, beside the button that saved it. */}
           {intake ? (
@@ -1454,10 +1567,36 @@ export function AhspImportPage() {
               ))}
             </div>
           ) : null}
-          {preview ? (
+          {preview && journeyStep === 'classify' ? (
             <div className="ahsp-completion ahsp-completion--preview">
-              {intake ? null : <p className="ahsp-completion__summary">{previewIntakeLine(preview.workItems)}</p>}
-              {intake ? null : renderAttention(describePreviewAttention(preview.workItems, { canCurate }), 'Yang perlu diperhatikan')}
+              <AhspImportAssistedClassificationPanel
+                enabled={canManage && !settled}
+                prefillDasarAcuan={preview.document?.regulationReference?.raw ?? null}
+                value={assistedClassification}
+                onChange={setAssistedClassification}
+              />
+              {intake ? null : (
+                <section className="ahsp-ringkasan" aria-label="Ringkasan hasil analisis">
+                  <header className="ahsp-ringkasan__header">
+                    <h3 className="ahsp-section-title ahsp-ringkasan__title">
+                      <Sparkles size={16} aria-hidden className="ahsp-ringkasan__spark" />
+                      Ringkasan hasil analisis
+                    </h3>
+                    <span className="ahsp-ringkasan__count">
+                      {preview.workItems.length} pekerjaan terdeteksi
+                    </span>
+                  </header>
+                  <p className="ahsp-completion__summary">{previewIntakeLine(preview.workItems)}</p>
+                  {renderAttention(
+                    previewAttention,
+                    'Yang perlu diperhatikan',
+                    typeof preview.source?.contentDigestSha256 === 'string' &&
+                      /^[0-9a-fA-F]{64}$/.test(preview.source.contentDigestSha256)
+                      ? { kind: 'sourceSha256', sourceSha256: preview.source.contentDigestSha256 }
+                      : null,
+                  )}
+                </section>
+              )}
               {adoptableIdentical.length > 0 ? (
                 <p style={{ margin: '0 0 var(--space-2)', paddingLeft: 'var(--space-2)', borderLeft: `2px solid ${NAVY}`, color: NAVY }}>
                   <span style={{ fontWeight: 600 }}>{identicalAggregateLine(distinctIdentities(adoptableIdentical))}</span>
@@ -1479,15 +1618,9 @@ export function AhspImportPage() {
                   {identicalDeletedAggregateLine(distinctIdentities(deletedIdentical))}
                 </p>
               ) : null}
-              {/* A possible twin is a question only the reader can answer, so it is never
-                  folded behind the detail: each keeps its own evidence and its own choice. */}
               {possibleTwins.length > 0 ? (
                 <div className="ahsp-decisions" aria-label="Kemungkinan sama dengan AHSP yang sudah ada">
                   {possibleTwins.map(({ item, index }) => {
-                    // Sameness and readiness are DIFFERENT questions, so the comparison is
-                    // ALWAYS shown; only the decision is withheld when the item could not be
-                    // admitted anyway (commit holds a HELD item before it reads any decision,
-                    // so a button there would land nowhere).
                     const sameness = describeSameness(item);
                     if (!sameness) return null;
                     const admission = admissionOf(item);
@@ -1506,7 +1639,128 @@ export function AhspImportPage() {
                   })}
                 </div>
               ) : null}
-              <div className="ahsp-action-row">
+              <div className="ahsp-action-row" style={{ marginTop: 'var(--space-4)', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="ahsp-action ahsp-action--primary"
+                  disabled={settled}
+                  onClick={() => setJourneyStep('confirm')}
+                >
+                  Lanjutkan ke Tinjauan {'\u2192'}
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {preview && journeyStep === 'confirm' ? (
+            <div className="ahsp-completion ahsp-completion--confirm" aria-label="Konfirmasi Hasil Import">
+              <header style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-3)' }}>
+                <div>
+                  <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: MUTED }}>
+                    AHSP {'\u203A'} Import AHSP {'\u203A'} Konfirmasi Hasil Import
+                  </p>
+                  <h2 style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--text-xl)', color: NAVY }}>Konfirmasi Hasil Import</h2>
+                </div>
+                <div className="ahsp-action-row">
+                  <button
+                    type="button"
+                    className="ahsp-action ahsp-action--outline"
+                    disabled={importing}
+                    onClick={() => setJourneyStep('classify')}
+                  >
+                    <ArrowLeft size={16} /> Kembali ke Klasifikasi &amp; Konteks
+                  </button>
+                  <button
+                    type="button"
+                    className="ahsp-action ahsp-action--primary"
+                    disabled={!file || importing || settled}
+                    aria-busy={importAction === 'COMMIT' || undefined}
+                    onClick={() => void commitDocument()}
+                  >
+                    {importAction === 'COMMIT' ? 'Menyimpan…' : 'Simpan Hasil Import'}
+                  </button>
+                </div>
+              </header>
+              {confirmFigures ? (
+                <>
+                  <div className="ahsp-confirm-summary" aria-label="Ringkasan konfirmasi import">
+                    <div className="ahsp-confirm-summary__card ahsp-confirm-summary__card--understood">
+                      <span className="ahsp-confirm-summary__icon" aria-hidden>
+                        <CheckCircle2 size={22} />
+                      </span>
+                      <div>
+                        <p className="ahsp-confirm-summary__value">{confirmFigures.understood} AHSP dipahami</p>
+                        <p className="ahsp-confirm-summary__hint">Dari pekerjaan yang dikenali dalam dokumen.</p>
+                      </div>
+                    </div>
+                    <div className="ahsp-confirm-summary__card ahsp-confirm-summary__card--existing">
+                      <span className="ahsp-confirm-summary__icon" aria-hidden>
+                        <Database size={22} />
+                      </span>
+                      <div>
+                        <p className="ahsp-confirm-summary__value">{confirmFigures.already} sudah ada di SIMPROK</p>
+                        <p className="ahsp-confirm-summary__hint">Tidak disimpan dua kali.</p>
+                      </div>
+                    </div>
+                    <div className="ahsp-confirm-summary__card ahsp-confirm-summary__card--will-save">
+                      <span className="ahsp-confirm-summary__icon" aria-hidden>
+                        <FileText size={22} />
+                      </span>
+                      <div>
+                        <p className="ahsp-confirm-summary__value">{confirmFigures.willSave} akan disimpan</p>
+                        <p className="ahsp-confirm-summary__hint">Disimpan dari dokumen; siap digunakan hanya bila seluruh faktanya terbukti.</p>
+                      </div>
+                    </div>
+                    <div className="ahsp-confirm-summary__card ahsp-confirm-summary__card--review">
+                      <span className="ahsp-confirm-summary__icon" aria-hidden>
+                        <AlertTriangle size={22} />
+                      </span>
+                      <div>
+                        <p className="ahsp-confirm-summary__value">{confirmFigures.needsReview} masih perlu ditinjau</p>
+                        <p className="ahsp-confirm-summary__hint">Independen dari penyimpanan — tinjauan dapat dilanjutkan setelah simpan.</p>
+                      </div>
+                    </div>
+                  </div>
+                  {confirmFigures.cannotSave > 0 ? (
+                    <p className="ahsp-confirm-held" role="status">
+                      {confirmFigures.cannotSave} belum dapat disimpan — menunggu fakta atau keputusan yang menahan penerimaan.
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+              <div className="ahsp-confirm-panels">
+                <section className="ahsp-confirm-panel ahsp-confirm-panel--save">
+                  <h3 className="ahsp-section-title">Apa yang akan disimpan</h3>
+                  <ul className="ahsp-confirm-checklist">
+                    <li>Identitas AHSP dari dokumen</li>
+                    <li>Klasifikasi &amp; konteks yang Anda pilih</li>
+                    <li>Formula tenaga, bahan, dan peralatan</li>
+                    <li>Dasar / acuan dan penerbit (bila diisi)</li>
+                    <li>Status AHSP yang sudah ada (tanpa duplikasi)</li>
+                  </ul>
+                </section>
+                <section className="ahsp-confirm-panel ahsp-confirm-panel--review">
+                  <h3 className="ahsp-section-title ahsp-confirm-panel__review-title">Yang masih perlu ditinjau</h3>
+                  {previewAttention.length === 0 ? (
+                    <p className="ahsp-line ahsp-line--abu">Tidak ada perhatian khusus pada preview ini.</p>
+                  ) : (
+                    renderAttention(
+                      previewAttention,
+                      'Perhatian dari pembacaan dokumen',
+                      typeof preview.source?.contentDigestSha256 === 'string' &&
+                        /^[0-9a-fA-F]{64}$/.test(preview.source.contentDigestSha256)
+                        ? { kind: 'sourceSha256', sourceSha256: preview.source.contentDigestSha256 }
+                        : null,
+                    )
+                  )}
+                  <p className="ahsp-confirm-info-strip" role="note">
+                    <Info size={16} aria-hidden />
+                    <span>
+                      AHSP tetap dapat disimpan. Peninjauan dapat dilanjutkan setelah penyimpanan tanpa mengunggah ulang berkas.
+                    </span>
+                  </p>
+                </section>
+              </div>
+              <div className="ahsp-confirm-detail-bar">
                 <button
                   type="button"
                   className="ahsp-action ahsp-action--quiet ahsp-action--compact"
@@ -1517,7 +1771,49 @@ export function AhspImportPage() {
                   {previewDetailOpen ? 'Sembunyikan rincian' : 'Lihat rincian ' + preview.workItems.length + ' pekerjaan'}
                 </button>
               </div>
-              {previewDetailOpen ? (
+            </div>
+          ) : null}
+          {preview && (journeyStep === 'classify' || journeyStep === 'confirm') && previewDetailOpen ? (
+              journeyStep === 'confirm' ? (
+                <div id="ahsp-preview-detail" className="ahsp-confirm-table-wrap">
+                  <h3 className="ahsp-section-title">Daftar Hasil Import</h3>
+                  <table className="ahsp-confirm-table" aria-label="Daftar hasil import">
+                    <thead>
+                      <tr>
+                        <th>Jenis Pekerjaan</th>
+                        <th>Uraian</th>
+                        <th>Satuan Output</th>
+                        <th>Kondisi Import</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.workItems.map((item, index) => {
+                        const admission = admissionOf(item);
+                        const condition =
+                          admission === 'HELD'
+                            ? { label: 'Perlu tinjauan', tone: 'review' as const }
+                            : item.identityVerdict === 'IDENTICAL'
+                              ? { label: 'Sudah ada', tone: 'existing' as const }
+                              : admission === 'PROVEN'
+                                ? { label: 'Baru', tone: 'new' as const }
+                                : { label: 'Perlu tinjauan', tone: 'review' as const };
+                        return (
+                          <tr key={index}>
+                            <td>{item.workType?.raw ?? '—'}</td>
+                            <td>{item.methodName?.raw ?? '—'}</td>
+                            <td>{item.resolvedOutputUnit ?? item.outputUnitRaw?.raw ?? '—'}</td>
+                            <td>
+                              <span className={'ahsp-condition-badge ahsp-condition-badge--' + condition.tone}>
+                                {condition.label}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
               <ul id="ahsp-preview-detail" className="ahsp-detail-list">
                 {preview.workItems.map((item, index) => {
                   const admission = admissionOf(item);
@@ -1584,21 +1880,17 @@ export function AhspImportPage() {
                   );
                 })}
               </ul>
-              ) : null}
-            </div>
+              )
           ) : null}
         </section>
       ) : null}
 
-      {/* Earlier imports still holding work items — checked again once per document, never re-uploaded */}
-      {/* A journal that was READ and holds nothing says so; an unread one says it
-          could not be read. The panel is never simply absent after a read, so its
-          absence is never mistaken for "no import jobs". */}
+      {/* Earlier imports still holding work — large card only when there is content
+          or a failed/stale read. Empty READY becomes a compact disclosure. */}
       {canManage &&
       (waitingImports.length > 0 ||
         jobOutcomes.length > 0 ||
         importHasMore ||
-        importPhase === 'READY' ||
         importPhase === 'FAILED' ||
         importPhase === 'STALE') ? (
         <section aria-label="Import yang masih dilengkapi" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
@@ -1608,15 +1900,6 @@ export function AhspImportPage() {
             onRetry={() => void loadImportJobs(importJobs.length === 0 ? 'INITIAL' : 'REFRESH')}
             label="Muat ulang daftar import"
           />
-          {/* "Nothing waiting" is said only of what was actually READ — and only as
-              far as this page reaches, while older imports remain one press away. */}
-          {waitingImports.length === 0 && importPhase === 'READY' ? (
-            <p role="status" style={{ fontSize: 'var(--text-sm)', color: NAVY, margin: '0 0 var(--space-2)' }}>
-              {importHasMore
-                ? 'Tidak ada import yang menunggu dilengkapi pada bagian ini.'
-                : 'Tidak ada lagi import yang menunggu dilengkapi.'}
-            </p>
-          ) : null}
           {importJobList}
           {importMayLoadOlder ? (
             <div className="ahsp-action-row" style={{ marginTop: 'var(--space-2)' }}>
@@ -1637,6 +1920,10 @@ export function AhspImportPage() {
             </p>
           ) : null}
         </section>
+      ) : canManage && importPhase === 'READY' && waitingImports.length === 0 ? (
+        <p className="ahsp-pending-empty" role="status">
+          Tidak ada import yang menunggu dilengkapi.
+        </p>
       ) : null}
 
       {/* Curation queue — the shared observed-resource lifecycle. Shown when there
@@ -1645,10 +1932,32 @@ export function AhspImportPage() {
       {canCurate &&
       (observations.length > 0 ||
         curationOutcomes.length > 0 ||
+        observationScope !== null ||
         observationsPhase === 'FAILED' ||
         observationsPhase === 'STALE') ? (
-        <section aria-label="Sumber daya untuk ditinjau" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
+        <section
+          ref={curationSectionRef}
+          tabIndex={-1}
+          aria-label="Sumber daya untuk ditinjau"
+          style={{ ...CARD, marginBottom: 'var(--space-4)', outline: 'none' }}
+        >
           {curationIntro}
+          {observationScope ? (
+            <p role="status" style={{ fontSize: 'var(--text-sm)', color: NAVY, margin: '0 0 var(--space-2)' }}>
+              Menampilkan pertanyaan untuk dokumen yang Anda buka dari Ringkasan.
+              <button
+                type="button"
+                className="ahsp-action ahsp-action--quiet ahsp-action--compact"
+                style={{ marginLeft: 'var(--space-2)' }}
+                onClick={() => {
+                  setObservationScope(null);
+                  void loadObservations('REFRESH', null);
+                }}
+              >
+                Tampilkan semua
+              </button>
+            </p>
+          ) : null}
           <ReadNotice
             phase={observationsPhase}
             onRetry={() => void loadObservations(observations.length === 0 ? 'INITIAL' : 'REFRESH')}
@@ -1656,7 +1965,8 @@ export function AhspImportPage() {
           />
           {observations.length === 0 && observationsPhase === 'READY' ? (
             <p role="status" style={{ fontSize: 'var(--text-sm)', color: NAVY, margin: '0 0 var(--space-2)' }}>
-              Tidak ada lagi sumber daya yang menunggu tinjauan.
+              Tidak ada lagi sumber daya yang menunggu tinjauan
+              {observationScope ? ' untuk dokumen ini' : ''}.
             </p>
           ) : null}
           {curationList}
@@ -1682,43 +1992,7 @@ export function AhspImportPage() {
         </section>
       ) : null}
 
-      {/* Manual create — relocated here from the list (the "AHSP Milik Saya" door), same POST /ahsp capability */}
-      {canManage ? (
-        <section aria-label="Buat AHSP milik saya" style={CARD}>
-          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-1)' }}>Buat AHSP milik saya</h2>
-          <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
-            Tidak punya berkas? Buat AHSP milik Anda secara manual, lalu lengkapi komponennya di halaman detail.
-          </p>
-          {/* The same capability, still here and still one press away — but this is
-              an import page, and a manual form standing open owns a page it is not
-              about. What is typed is kept while it is closed. */}
-          <div className="ahsp-action-row">
-            <button
-              type="button"
-              className="ahsp-action ahsp-action--quiet ahsp-action--compact"
-              aria-expanded={manualOpen}
-              aria-controls="ahsp-manual-form"
-              onClick={() => setManualOpen((open) => !open)}
-            >
-              {manualOpen ? 'Tutup formulir manual' : 'Buat AHSP secara manual'}
-            </button>
-          </div>
-          {manualOpen ? (
-          <form id="ahsp-manual-form" onSubmit={createWorkspaceAhsp} style={{ maxWidth: '36rem' }}>
-            <label style={labelStyle}>Jenis pekerjaan
-              <input required value={workType} onChange={(event) => setWorkType(event.target.value)} aria-label="Jenis pekerjaan" style={controlBox} />
-            </label>
-            <label style={{ ...labelStyle, marginTop: 'var(--space-3)' }}>Uraian
-              <input required value={methodName} onChange={(event) => setMethodName(event.target.value)} aria-label="Uraian AHSP" style={controlBox} />
-            </label>
-            {createError ? <p role="alert" style={{ color: RED, fontSize: 'var(--text-sm)' }}>{createError}</p> : null}
-            <button type="submit" className="ahsp-action ahsp-action--outline" disabled={creating} aria-busy={creating || undefined} style={{ marginTop: 'var(--space-3)' }}>
-              {creating ? 'Menyimpan…' : 'Simpan AHSP milik saya'}
-            </button>
-          </form>
-          ) : null}
-        </section>
-      ) : null}
+      {/* Manual AHSP create is NOT on Import — see AhspRoomPage "Buat AHSP Manual". */}
     </main>
   );
 }

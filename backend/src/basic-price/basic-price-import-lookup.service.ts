@@ -29,11 +29,17 @@ export interface UnitLookupRow {
   kind: UnitKind;
 }
 
+export type ResourceSearchVisibility = 'WORKSPACE_ONLY' | 'WORKSPACE_PLUS_GLOBAL';
+
 @Injectable()
 export class BasicPriceImportLookupService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async searchResources(workspaceId: string, dto: SearchResourceCatalogDto) {
+  async searchResources(
+    workspaceId: string,
+    dto: SearchResourceCatalogDto,
+    visibility: ResourceSearchVisibility = 'WORKSPACE_ONLY',
+  ) {
     const q = dto.q?.trim() ?? '';
     const page = dto.page ?? 1;
     const limit = dto.limit ?? 20;
@@ -52,11 +58,16 @@ export class BasicPriceImportLookupService {
           )`
         : Prisma.empty;
 
+    const visibilitySql =
+      visibility === 'WORKSPACE_PLUS_GLOBAL'
+        ? Prisma.sql`("workspaceId" = ${workspaceId}::uuid OR "workspaceId" IS NULL)`
+        : Prisma.sql`"workspaceId" = ${workspaceId}::uuid`;
+
     const [items, countRows] = await Promise.all([
       this.prisma.$queryRaw<ResourceLookupRow[]>(Prisma.sql`
         SELECT "id", "code", "name", "type", "baseUnit", "status"
         FROM "resource_catalogs"
-        WHERE "workspaceId" = ${workspaceId}::uuid
+        WHERE ${visibilitySql}
           AND "status" = 'ACTIVE'
           ${typeFilter}
           ${searchFilter}
@@ -77,7 +88,7 @@ export class BasicPriceImportLookupService {
       this.prisma.$queryRaw<CountRow[]>(Prisma.sql`
         SELECT count(*)::bigint AS "count"
         FROM "resource_catalogs"
-        WHERE "workspaceId" = ${workspaceId}::uuid
+        WHERE ${visibilitySql}
           AND "status" = 'ACTIVE'
           ${typeFilter}
           ${searchFilter}

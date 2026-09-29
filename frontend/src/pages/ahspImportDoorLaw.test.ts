@@ -6,8 +6,8 @@ import { readFileSync } from "node:fs";
  * IMPORT AHSP IS ITS OWN DOOR (gap F). Upload -> Pahami dokumen -> Simpan hasil
  * import -> Import selesai lives at /ahsp/import, on the EXISTING canonical
  * pipeline (no second importer). The list page no longer carries the import
- * surface. Manual create — the relocated "AHSP Milik Saya" capability — lives
- * here too, on the same POST /ahsp, never a second create engine.
+ * surface. Manual create ("Buat AHSP Manual") lives at /ahsp/manual via the
+ * same POST /ahsp — never a second create engine, and not duplicated on Import.
  */
 
 const NEWLINE = String.fromCharCode(10);
@@ -100,7 +100,7 @@ test("B7: saving COMPLETES the import — received, ready and still-being-comple
   assert.ok(importPage.includes("intake.details.map"));
   // The save is not "save what is proven": everything recognised is received.
   assert.ok(!importPage.includes("Simpan yang terbukti"));
-  assert.ok(importPage.includes("'Simpan hasil import'"));
+  assert.ok(importPage.includes("'Simpan Hasil Import'"));
   // The old READY-only receipt is gone.
   assert.ok(!importPage.includes("commitResult.written.length"));
   assert.ok(!importPage.includes("pekerjaan belum disimpan"));
@@ -132,8 +132,12 @@ test("B5: an earlier import is checked again ONCE per document from what SIMPROK
   assert.ok(importPage.includes("readList(jobsPath(cursor), asImportPage)"));
   assert.ok(importPage.includes("'/ahsp/document/jobs/' + job.key + '/continue'"));
   // The continuation carries no file: only a JSON body.
+  // CHANGE NOTE (Human-Assisted Import Classification Connection): same continue
+  // door, same one JSON body — now may also carry assistedClassification so the
+  // existing ClassificationService connection rides the SAME recheck, never a
+  // second upload. Still never FormData / file. TEST_WEAKENING=NO.
   const recheck = importPage.slice(importPage.indexOf("const recheckImport"), importPage.indexOf("const shownQuestions"));
-  assert.ok(recheck.includes("JSON.stringify({ decisions })"));
+  assert.ok(recheck.includes("JSON.stringify({ decisions, assistedClassification })"));
   assert.ok(!recheck.includes("FormData"));
   assert.ok(!recheck.includes("body.append('file'"));
   // One button per import, not one per AHSP; a second press is refused while one runs.
@@ -362,21 +366,18 @@ const writesAfterAwaitGuarded = (source: string, setter: string, guard: string):
 };
 
 // IMPORT TRUST SEAMS — a preview and a commit answer to the workspace and the document they
-// began for; the rows of one group decision stop once it may no longer write; the manual
-// create answers to the workspace it began in. Each takes its ticket before it sends anything,
-// and only the request that still holds the buttons lets them go.
-test("TRUST SEAMS: document requests carry a document ticket, a group decision stops sending rows, the manual create carries a session ticket", () => {
+// began for; the rows of one group decision stop once it may no longer write.
+test("TRUST SEAMS: document requests carry a document ticket, a group decision stops sending rows", () => {
   assert.ok(readState.includes("export interface DocumentTicket {"));
-  assert.ok(readState.includes("export interface SessionTicket {"));
   assert.ok(readState.includes("mayApplyDocument: (ticket) => ticket.session === session && ticket.document === documentEpoch,"));
 
   // Another document ends what was begun for the one before, and clears what it said.
   const fileInput = importPage.slice(importPage.indexOf('type="file"'), importPage.indexOf("Pahami dokumen"));
   assert.ok(fileInput.includes("reads.changeDocument();") && fileInput.includes("forgetDocument();"));
-  // So does a workspace change — for the document and for the create.
+  // So does a workspace change — for the document (manual create is on the AHSP room door).
   const effect = importPage.slice(importPage.indexOf("reads.resetSession();"), importPage.indexOf("}, [activeWorkspaceId"));
-  assert.ok(effect.includes("forgetDocument();") && effect.includes("forgetCreate();"));
-  const forgetDocument = importPage.slice(importPage.indexOf("const forgetDocument = () => {"), importPage.indexOf("const forgetCreate = () => {"));
+  assert.ok(effect.includes("forgetDocument();"));
+  const forgetDocument = importPage.slice(importPage.indexOf("const forgetDocument = () => {"), importPage.indexOf("const observationsListPath = "));
   for (const cleared of ["setPreview(null);", "setCommitResult(null);", "setSettled(false);", "setDecisions({});", "setImportError(null);", "documentLock.current = null;", "setImportAction(null);"]) {
     assert.ok(forgetDocument.includes(cleared), "forgetDocument: " + cleared);
   }
@@ -404,18 +405,6 @@ test("TRUST SEAMS: document requests carry a document ticket, a group decision s
   const group = importPage.slice(importPage.indexOf("const curateGroup = async"), importPage.indexOf("const wireById"));
   const loop = group.slice(group.indexOf("for (const id of request.ids) {"));
   assert.ok(loop.indexOf("if (!reads.mayApply(ticket)) break;") !== -1 && loop.indexOf("if (!reads.mayApply(ticket)) break;") < loop.indexOf("apiFetch("));
-
-  // The manual create answers to the workspace it began in.
-  const create = importPage.slice(importPage.indexOf("const createWorkspaceAhsp = async"), importPage.indexOf("const intake = commitResult?.summary"));
-  assert.ok(create.length > 0 && create.includes("navigate('/ahsp/' + created.id);"), "the create is sliced on its own");
-  const sessionCaptured = create.indexOf("const ticket = reads.captureSession();");
-  assert.ok(sessionCaptured !== -1 && sessionCaptured < create.indexOf("apiFetch("));
-  assert.ok(create.includes("createLock.current = ticket;"));
-  assert.ok(writesAfterAwaitGuarded(create, "setCreateError", "reads.sameSession(ticket)"));
-  assert.ok(writesAfterAwaitGuarded(create, "navigate", "reads.sameSession(ticket)"));
-  assert.ok(create.includes("if (createLock.current === ticket) {"));
-  const forgetCreate = importPage.slice(importPage.indexOf("const forgetCreate = () => {"), importPage.indexOf("};", importPage.indexOf("const forgetCreate = () => {")));
-  assert.ok(forgetCreate.includes("createLock.current = null;") && forgetCreate.includes("setCreating(false);") && forgetCreate.includes("setCreateError(null);"));
 });
 
 // F03/R4 — the page contract is proved before it is believed.
@@ -479,14 +468,12 @@ test("B6: a new resource is admitted ONCE for its question — never once per ro
   assert.ok(importPage.includes("for (const id of request.ids)"));
 });
 
-test("the relocated manual-create lives here on the same POST /ahsp, and left the list", () => {
-  assert.ok(importPage.includes("apiFetch('/ahsp', {"));
-  assert.ok(importPage.includes("method: 'POST'"));
-  assert.ok(importPage.includes("Buat AHSP milik saya"));
-  assert.ok(importPage.includes("Simpan AHSP milik saya"));
-  // The list no longer creates.
-  assert.ok(!room.includes("createWorkspaceAhsp"));
-  assert.ok(!room.includes("Simpan AHSP milik saya"));
+test("manual create uses POST /ahsp on the Manual door — not on Import", () => {
+  assert.ok(!importPage.includes("Buat AHSP milik saya"));
+  assert.ok(!importPage.includes("Simpan AHSP milik saya"));
+  assert.ok(!importPage.includes("Buat AHSP secara manual"));
+  assert.ok(room.includes("Buat AHSP Manual"));
+  assert.ok(room.includes('to="/ahsp/manual"'));
 });
 
 test("the reader can return to the canonical list", () => {
@@ -560,8 +547,20 @@ test("an item that cannot be admitted is still TOLD it already exists, but is of
 test("AHSP COMPLETION: a need is said once per question, from the display module — the item list waits behind 'Lihat rincian'", () => {
   // One renderer for what a document being read and a saved import still need.
   assert.ok(importPage.includes("const renderAttention = ("));
-  assert.equal(importPage.split("renderAttention(").length - 1, 2);
+  assert.ok(importPage.includes("'Yang masih dibutuhkan'"));
+  assert.ok(importPage.includes("'Yang perlu diperhatikan'"));
+  assert.ok(importPage.includes("'Perhatian dari pembacaan dokumen'"));
   assert.ok(importPage.includes("describePreviewAttention(preview.workItems, { canCurate })"));
+  assert.ok(importPage.includes("openIdentityReview"));
+  assert.ok(importPage.includes("importJobId="));
+  assert.ok(importPage.includes("Buka tinjauan sumber daya"));
+  const doorOpen = importPage.slice(
+    importPage.indexOf("const openIdentityReview = async"),
+    importPage.indexOf("const loadImportJobs = "),
+  );
+  assert.ok(doorOpen.includes("loadObservations"));
+  assert.ok(!doorOpen.includes("/curate-existing"));
+  assert.ok(!doorOpen.includes("/curate-new"));
   // The page formats no need of its own: no unit spelling, no count sentence.
   assert.ok(!importPage.includes("belum dikenali SIMPROK"));
   assert.ok(!importPage.includes("pertanyaan unik"));
@@ -611,11 +610,9 @@ test("F04: a curation question shows its name, evidence and actions — the reas
   assert.ok(group.indexOf("view.candidateLine") < group.indexOf("reasonOpen ? ("));
   assert.ok(group.includes("view.candidateChoices.map"));
   assert.ok(group.includes("Tetapkan sebagai sumber daya baru"));
-  // The manual door is kept, collapsed, and is no longer the page's loudest action.
-  assert.ok(importPage.includes("Buat AHSP secara manual"));
-  assert.ok(importPage.includes("aria-expanded={manualOpen}"));
-  assert.ok(importPage.includes("{manualOpen ? ("));
-  assert.ok(!importPage.includes('className="ahsp-action ahsp-action--primary" disabled={creating}'));
+  // Manual create is NOT on Import (Owner lock: Buat AHSP Manual lives on the AHSP room).
+  assert.ok(!importPage.includes("Buat AHSP milik saya"));
+  assert.ok(!importPage.includes("manualOpen"));
 });
 
 test("a duplicate decision never rides a stale document to commit (reset + flagged-only)", () => {

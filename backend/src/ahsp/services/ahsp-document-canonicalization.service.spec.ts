@@ -78,6 +78,12 @@ describe('AhspDocumentCanonicalizationService', () => {
       journal as any,
       // C1 — the commit retains the source bytes before journalling them.
       { retain: jest.fn().mockResolvedValue("ws/digest/source") } as any,
+      // Product Law v1.4 — Import→Classification connector (noop in existing write proofs).
+      {
+        saveJobContext: jest.fn().mockImplementation(async ({ context }) => context),
+        loadJobContext: jest.fn().mockResolvedValue(null),
+        applyToAhsp: jest.fn().mockResolvedValue({ applied: 0 }),
+      } as any,
     );
   });
 
@@ -976,6 +982,11 @@ describeBinaMargaCommit('AhspDocumentCanonicalizationService — official Bina M
       inMemoryImportJournal() as any,
       // C1 — the commit retains source bytes before journalling them.
       { retain: jest.fn().mockResolvedValue("ws/digest/source") } as any,
+      {
+        saveJobContext: jest.fn().mockImplementation(async ({ context }) => context),
+        loadJobContext: jest.fn().mockResolvedValue(null),
+        applyToAhsp: jest.fn().mockResolvedValue({ applied: 0 }),
+      } as any,
     );
   });
 
@@ -1077,6 +1088,11 @@ describePositiveCommit('AhspDocumentCanonicalizationService — Copy of AHSP ok(
       inMemoryImportJournal() as any,
       // C1 — the commit retains source bytes before journalling them.
       { retain: jest.fn().mockResolvedValue("ws/digest/source") } as any,
+      {
+        saveJobContext: jest.fn().mockImplementation(async ({ context }) => context),
+        loadJobContext: jest.fn().mockResolvedValue(null),
+        applyToAhsp: jest.fn().mockResolvedValue({ applied: 0 }),
+      } as any,
     );
   });
 

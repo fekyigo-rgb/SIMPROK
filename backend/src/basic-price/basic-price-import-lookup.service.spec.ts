@@ -75,6 +75,33 @@ describe('BasicPriceImportLookupService', () => {
     expect(text).toContain('position(');
   });
 
+  it('default resource search stays workspace-only', async () => {
+    queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ count: 0n }]);
+    await service.searchResources('10000000-0000-4000-8000-000000000004', {
+      q: 'pasir',
+      page: 1,
+      limit: 5,
+    });
+    const text = sqlText(queryRaw.mock.calls[0][0]);
+    expect(text).toContain('"workspaceId" =');
+    expect(text).toContain('"status" = \'ACTIVE\'');
+    expect(text).not.toContain('IS NULL');
+  });
+
+  it('AHSP visibility includes lawful global rows in the same query', async () => {
+    queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ count: 0n }]);
+    await service.searchResources(
+      '10000000-0000-4000-8000-000000000004',
+      { q: 'pasir', page: 1, limit: 5 },
+      'WORKSPACE_PLUS_GLOBAL',
+    );
+    const text = sqlText(queryRaw.mock.calls[0][0]);
+    expect(text).toContain('"workspaceId" =');
+    expect(text).toContain('IS NULL');
+    expect(text).toContain('"status" = \'ACTIVE\'');
+    expect(text).not.toContain('specifications');
+  });
+
   it('unit SQL is active-only, alias-active-only, deduplicated, filtered, and exposes no conversion rule', async () => {
     queryRaw
       .mockResolvedValueOnce([

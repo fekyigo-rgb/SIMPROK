@@ -8,6 +8,7 @@ import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
 import { RealityNormalizationEngine } from './services/reality-normalization.engine';
 import { AhspDocumentCanonicalizationService } from './services/ahsp-document-canonicalization.service';
 import { AhspClassificationAssignmentService } from './services/ahsp-classification-assignment.service';
+import { AhspImportAssistedClassificationService } from './services/ahsp-import-assisted-classification.service';
 import { AhspController } from './ahsp.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
@@ -18,6 +19,7 @@ import { ResourceIdentityResolutionService } from '../resource-catalog/resource-
 import { ResourceAdmissionService } from '../resource-catalog/resource-admission.service';
 import { ResourceObservationService } from '../resource-catalog/resource-observation.service';
 import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision-context-token.service';
+import { BasicPriceImportLookupService } from '../basic-price/basic-price-import-lookup.service';
 
 @Module({
   imports: [
@@ -45,6 +47,7 @@ import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision
     RealityNormalizationEngine,
     AhspDocumentCanonicalizationService,
     AhspClassificationAssignmentService,
+    AhspImportAssistedClassificationService,
     /**
      * C1 — THE ONE SOURCE ARCHIVE, reached by a second injector.
      *
@@ -70,12 +73,16 @@ import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision
     // The existing stateless signed-context service the observation lifecycle
     // now also uses for IQL-01 exact-question decisions.
     GhxDecisionContextTokenService,
+    // The existing catalog lookup. Listed here so the AHSP door can read it
+    // without a second search implementation and without changing Basic Price.
+    BasicPriceImportLookupService,
   ],
   exports: [
     AhspService,
     AhspVersionService,
     AhspSnapshotService,
     AhspClassificationAssignmentService,
+    AhspImportAssistedClassificationService,
   ],
 })
 export class AhspModule {}

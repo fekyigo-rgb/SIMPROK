@@ -4,6 +4,8 @@ import { AhspAuditService } from './ahsp-audit.service';
 import { MethodType, LocationType, OwnershipType, ReviewStatus, Prisma } from '@prisma/client';
 import { AhspOwnershipPolicy, OwnershipViolationError, AhspEntity } from '../domain/ahsp-ownership.policy';
 import type { AhspIdentityRow } from '../document/ahsp-identity-classifier';
+import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
+import { neutralQuestionOfHandBuiltLine } from '../../resource-catalog/resource-observation.service';
 
 export interface CreateAhspDto {
   workspaceId?: string;
@@ -18,6 +20,8 @@ export interface CreateAhspDto {
   fieldCategory?: string | null;
   subCategory?: string | null;
   classification?: string | null;
+  /** Free note on the AHSP identity. Null when the author leaves it blank. */
+  keterangan?: string | null;
 }
 
 export interface UpdateAhspDto {
@@ -25,6 +29,8 @@ export interface UpdateAhspDto {
   methodType?: MethodType;
   locationType?: LocationType;
   methodName?: string;
+  /** Parent note only. Blank clears it. Classification scalars stay stripped. */
+  keterangan?: string | null;
 }
 
 /**
@@ -107,6 +113,7 @@ export class AhspService {
           fieldCategory: data.fieldCategory ?? null,
           subCategory: data.subCategory ?? null,
           classification: data.classification ?? null,
+          keterangan: data.keterangan?.trim() ? data.keterangan.trim() : null,
           ...AHSP_PARENT_IDENTITY_FILLER,
           createdByUserId: data.userId,
           ownershipType: 'USER_ASSET',
@@ -227,26 +234,72 @@ export class AhspService {
         ),
       ),
     ];
-    if (ids.length === 0) return ahsp;
-    const catalog = await this.prisma.resourceCatalog.findMany({
-      where: {
-        id: { in: ids },
-        status: 'ACTIVE',
-        OR: workspaceId
-          ? [{ workspaceId }, { workspaceId: null }]
-          : [{ workspaceId: null }],
-      },
-      select: { id: true, name: true },
-    });
-    const names = new Map(catalog.map((row) => [row.id, row.name]));
+    const names = new Map<string, string>();
+    if (ids.length > 0) {
+      const catalog = await this.prisma.resourceCatalog.findMany({
+        where: {
+          id: { in: ids },
+          status: 'ACTIVE',
+          OR: workspaceId
+            ? [{ workspaceId }, { workspaceId: null }]
+            : [{ workspaceId: null }],
+        },
+        select: { id: true, name: true },
+      });
+      for (const row of catalog) names.set(row.id, row.name);
+    }
+    const resolvedNames = new Map<string, string>();
+    if (workspaceId) {
+      const questions = ahsp.versions.flatMap((version) =>
+        version.resources
+          .map((row) => neutralQuestionOfHandBuiltLine(workspaceId, row))
+          .filter((question) => question !== null),
+      );
+      if (questions.length > 0) {
+        const observations = await this.prisma.observedResource.findMany({
+          where: {
+            workspaceId,
+            sourceSha256: null,
+            observationSubjectKey: {
+              in: questions.map((question) => identicalQuestionKey(question)),
+            },
+            status: { in: ['RESOLVED_EXISTING', 'ADMITTED_NEW'] },
+          },
+          select: {
+            observationSubjectKey: true,
+            resolvedResourceCatalog: {
+              select: { name: true, status: true, workspaceId: true },
+            },
+          },
+        });
+        for (const observation of observations) {
+          const catalog = observation.resolvedResourceCatalog;
+          if (!catalog || catalog.status !== 'ACTIVE') continue;
+          if (catalog.workspaceId !== null && catalog.workspaceId !== workspaceId) continue;
+          if (observation.observationSubjectKey) {
+            resolvedNames.set(observation.observationSubjectKey, catalog.name);
+          }
+        }
+      }
+    }
+    if (names.size === 0 && resolvedNames.size === 0) return ahsp;
     return {
       ...ahsp,
       versions: ahsp.versions.map((version) => ({
         ...version,
-        resources: version.resources.map((row) => ({
-          ...row,
-          resourceName: names.get(row.resourceId) ?? null,
-        })),
+        resources: version.resources.map((row) => {
+          const question = workspaceId
+            ? neutralQuestionOfHandBuiltLine(workspaceId, row)
+            : null;
+          const resolvedCatalogName = question
+            ? resolvedNames.get(identicalQuestionKey(question)) ?? null
+            : null;
+          return {
+            ...row,
+            resourceName: names.get(row.resourceId) ?? null,
+            resolvedCatalogName,
+          };
+        }),
       })),
     };
   }
@@ -318,11 +371,16 @@ export class AhspService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       // HTTP PATCH forwards the raw body, which still carries reason/userId and
-      // may carry methodType/locationType. Parent identity is source names only;
-      // classification and request metadata must never be persisted here.
-      const identitySafe: { workType?: string; methodName?: string } = {};
+      // may carry methodType/locationType. Parent identity is source names only.
+      // Classification scalars stay stripped. Keterangan is the one parent note
+      // this writer already owns the row for — not a second metadata engine.
+      const identitySafe: { workType?: string; methodName?: string; keterangan?: string | null } = {};
       if (updateData.workType !== undefined) identitySafe.workType = updateData.workType;
       if (updateData.methodName !== undefined) identitySafe.methodName = updateData.methodName;
+      if (updateData.keterangan !== undefined) {
+        const note = typeof updateData.keterangan === 'string' ? updateData.keterangan.trim() : '';
+        identitySafe.keterangan = note.length > 0 ? note : null;
+      }
       const updatedAhsp = await tx.aHSP.update({
         where: { id },
         data: identitySafe,

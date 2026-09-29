@@ -254,6 +254,11 @@ describe('CLOSEOUT P1-B — the list and "Periksa ulang" over pre-title lines, w
         journal,
         // C1 — the commit retains the source bytes before journalling them.
         { retain: jest.fn().mockResolvedValue("ws/digest/source") },
+        {
+          saveJobContext: jest.fn().mockImplementation(async ({ context }) => context),
+          loadJobContext: jest.fn().mockResolvedValue(null),
+          applyToAhsp: jest.fn().mockResolvedValue({ applied: 0 }),
+        },
       ] as unknown as Dependencies),
     );
   });

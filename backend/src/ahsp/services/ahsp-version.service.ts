@@ -61,6 +61,8 @@ export interface CreateAhspVersionDto {
   outputUnit: string;
   userId: string;
   regulationReference?: string;
+  /** Product Law v1.4 — Penerbit / Instansi Sumber (distinct from Dasar/Acuan). */
+  issuerInstitution?: string;
   effectiveDate?: Date;
   /**
    * The version the author was editing. A revision saved from an OLDER version
@@ -298,6 +300,7 @@ export class AhspVersionService {
           versionNumber,
           status: AhspVersionStatus.DRAFT,
           regulationReference: data.regulationReference,
+          issuerInstitution: data.issuerInstitution,
           effectiveDate: data.effectiveDate,
           outputUnit: data.outputUnit,
           outputUnitDefinitionId,

@@ -3,11 +3,11 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 
 /**
- * THE AHSP filters draw Bidang/Subkategori/Jenis Pekerjaan from the ONE shared
+ * THE AHSP filters draw Kategori/Subkategori/Jenis Pekerjaan from the ONE shared
  * construction taxonomy (constructionTaxonomy.ts), merged with the values
  * actually present in the data so a stored value is never hidden. The room
- * hardcodes no domain vocabulary of its own, and Subkategori is context-aware to
- * the chosen Bidang.
+ * hardcodes no domain vocabulary of its own, and Subkategori is recalculated
+ * from the chosen Kategori.
  */
 
 const NEWLINE = String.fromCharCode(10);
@@ -36,9 +36,9 @@ test("the room draws its vocabulary from the single shared taxonomy module", () 
   assert.ok(!room.includes("Cipta Karya"));
 });
 
-test("Subkategori is context-aware, and stale picks reset when Bidang changes", () => {
-  assert.ok(room.includes("subkategoriForBidang(bidang)"));
-  assert.ok(room.includes("setSubkategori('')"));
+test("Subkategori follows the chosen Kategori, and a stale Subkategori resets", () => {
+  assert.ok(room.includes("subkategoriForBidang(kategori)"));
+  assert.ok(room.includes("setKategori(e.target.value); setSubkategori('')"));
 });
 
 test("every taxonomy filter merges curated vocabulary with the values in the data", () => {

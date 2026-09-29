@@ -8,12 +8,14 @@ import {
   ConstructionClassificationLevel,
   type AhspClassificationAssignment,
 } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   ConstructionClassificationService,
   type ClassificationLineage,
   type ClassificationNodeView,
 } from '../../construction-classification/construction-classification.service';
+import { AhspAuditService } from './ahsp-audit.service';
 
 export type AhspClassificationAssignmentView = {
   id: string;
@@ -38,6 +40,7 @@ export class AhspClassificationAssignmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly classification: ConstructionClassificationService,
+    private readonly audit: AhspAuditService,
   ) {}
 
   /**
@@ -47,13 +50,23 @@ export class AhspClassificationAssignmentService {
    *   reads. Must equal AHSP.workspaceId when AHSP is workspace-owned.
    *   Official AHSP (workspaceId null) may only receive GLOBAL leaf nodes.
    */
-  async addAssignment(input: {
-    ahspId: string;
-    leafNodeId: string;
-    provenance: AhspClassificationAssignmentProvenance;
-    actingWorkspaceId: string;
-  }): Promise<AhspClassificationAssignmentView> {
-    const ahsp = await this.prisma.aHSP.findFirst({
+  async addAssignment(
+    input: {
+      ahspId: string;
+      leafNodeId: string;
+      provenance: AhspClassificationAssignmentProvenance;
+      actingWorkspaceId: string;
+      actorAccountId: string;
+    },
+    /**
+     * Optional transaction client. Omitted, behaviour is unchanged.
+     * Manual save passes the same client that just created the parent so the
+     * assignment sees that row and rolls back with it.
+     */
+    client?: Prisma.TransactionClient,
+  ): Promise<AhspClassificationAssignmentView> {
+    const db = client ?? this.prisma;
+    const ahsp = await db.aHSP.findFirst({
       where: { id: input.ahspId, deletedAt: null },
       select: {
         id: true,
@@ -115,13 +128,16 @@ export class AhspClassificationAssignmentService {
       );
     }
 
-    await this.assertSingleJenisPengadaanRoot({
-      ahspId: ahsp.id,
-      actingWorkspaceId: input.actingWorkspaceId,
-      nextRootId: root.id,
-    });
+    await this.assertSingleJenisPengadaanRoot(
+      {
+        ahspId: ahsp.id,
+        actingWorkspaceId: input.actingWorkspaceId,
+        nextRootId: root.id,
+      },
+      db,
+    );
 
-    const existing = await this.prisma.ahspClassificationAssignment.findUnique({
+    const existing = await db.ahspClassificationAssignment.findUnique({
       where: {
         ahspId_leafNodeId_provenance: {
           ahspId: ahsp.id,
@@ -130,20 +146,53 @@ export class AhspClassificationAssignmentService {
         },
       },
     });
-    if (existing) {
-      // Idempotent reuse — never overwrite provenance or erase the other door.
-      return this.toView(existing, lineage, root.id);
-    }
+    const persist = async (tx: Prisma.TransactionClient) => {
+      if (existing) {
+        if (
+          !existing.isActive &&
+          existing.provenance ===
+            AhspClassificationAssignmentProvenance.HUMAN_ADDED
+        ) {
+          const revived = await tx.ahspClassificationAssignment.update({
+            where: { id: existing.id },
+            data: { isActive: true },
+          });
+          await this.audit.logAction(
+            {
+              ahspId: ahsp.id,
+              action: 'AhspClassificationAssignmentReactivated',
+              who: input.actorAccountId,
+              before: this.auditFact(existing),
+              after: this.auditFact(revived),
+            },
+            tx,
+          );
+          return revived;
+        }
+        return existing;
+      }
 
-    const created = await this.prisma.ahspClassificationAssignment.create({
-      data: {
-        ahspId: ahsp.id,
-        leafNodeId: input.leafNodeId,
-        provenance: input.provenance,
-      },
-    });
+      const created = await tx.ahspClassificationAssignment.create({
+        data: {
+          ahspId: ahsp.id,
+          leafNodeId: input.leafNodeId,
+          provenance: input.provenance,
+        },
+      });
+      await this.audit.logAction(
+        {
+          ahspId: ahsp.id,
+          action: 'AhspClassificationAssignmentCreated',
+          who: input.actorAccountId,
+          after: this.auditFact(created),
+        },
+        tx,
+      );
+      return created;
+    };
 
-    return this.toView(created, lineage, root.id);
+    const row = client ? await persist(client) : await this.prisma.$transaction(persist);
+    return this.toView(row, lineage, root.id);
   }
 
   async listAssignments(input: {
@@ -190,12 +239,85 @@ export class AhspClassificationAssignmentService {
     return out;
   }
 
-  private async assertSingleJenisPengadaanRoot(input: {
+  /**
+   * Manual correction of a human-added path. History stays. SOURCE_DERIVED
+   * evidence is not erased from this door.
+   */
+  async deactivateAssignment(input: {
     ahspId: string;
+    assignmentId: string;
     actingWorkspaceId: string;
-    nextRootId: string;
-  }): Promise<void> {
-    const existing = await this.prisma.ahspClassificationAssignment.findMany({
+    actorAccountId: string;
+  }): Promise<AhspClassificationAssignmentView> {
+    const ahsp = await this.prisma.aHSP.findFirst({
+      where: { id: input.ahspId, deletedAt: null },
+      select: { id: true, workspaceId: true },
+    });
+    if (!ahsp) {
+      throw new NotFoundException('AHSP_NOT_FOUND');
+    }
+    if (
+      ahsp.workspaceId !== null &&
+      ahsp.workspaceId !== input.actingWorkspaceId
+    ) {
+      throw new BadRequestException(
+        'AHSP_CLASSIFICATION_ASSIGNMENT_WORKSPACE_MISMATCH',
+      );
+    }
+    const row = await this.prisma.ahspClassificationAssignment.findFirst({
+      where: { id: input.assignmentId, ahspId: ahsp.id },
+    });
+    if (!row) {
+      throw new NotFoundException('AHSP_CLASSIFICATION_ASSIGNMENT_NOT_FOUND');
+    }
+    if (row.provenance !== AhspClassificationAssignmentProvenance.HUMAN_ADDED) {
+      throw new BadRequestException(
+        'AHSP_CLASSIFICATION_SOURCE_DERIVED_PRESERVED',
+      );
+    }
+    const current = row.isActive
+      ? await this.prisma.$transaction(async (tx) => {
+          const updated = await tx.ahspClassificationAssignment.update({
+            where: { id: row.id },
+            data: { isActive: false },
+          });
+          await this.audit.logAction(
+            {
+              ahspId: ahsp.id,
+              action: 'AhspClassificationAssignmentDeactivated',
+              who: input.actorAccountId,
+              before: this.auditFact(row),
+              after: this.auditFact(updated),
+            },
+            tx,
+          );
+          return updated;
+        })
+      : row;
+    const lineage = await this.classification.getLineage({
+      id: current.leafNodeId,
+      workspaceId: input.actingWorkspaceId,
+    });
+    const root = lineage.path.find(
+      (n) => n.level === ConstructionClassificationLevel.JENIS_PENGADAAN,
+    );
+    if (!root) {
+      throw new BadRequestException(
+        'AHSP_CLASSIFICATION_ASSIGNMENT_LINEAGE_MISSING_ROOT',
+      );
+    }
+    return this.toView(current, lineage, root.id);
+  }
+
+  private async assertSingleJenisPengadaanRoot(
+    input: {
+      ahspId: string;
+      actingWorkspaceId: string;
+      nextRootId: string;
+    },
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<void> {
+    const existing = await db.ahspClassificationAssignment.findMany({
       where: { ahspId: input.ahspId, isActive: true },
       select: { leafNodeId: true },
     });
@@ -213,6 +335,16 @@ export class AhspClassificationAssignmentService {
         );
       }
     }
+  }
+
+  private auditFact(row: AhspClassificationAssignment) {
+    return {
+      id: row.id,
+      ahspId: row.ahspId,
+      leafNodeId: row.leafNodeId,
+      provenance: row.provenance,
+      isActive: row.isActive,
+    };
   }
 
   private toView(

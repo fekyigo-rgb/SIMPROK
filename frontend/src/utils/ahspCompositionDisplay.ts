@@ -155,6 +155,7 @@ export type AhspDefinitionResourceWire = {
    * catalogue-bound, or when the catalogue row is no longer readable here.
    */
   resourceName?: string | null;
+  resolvedCatalogName?: string | null;
   resourceType?: string | null;
   baseUnit?: string | null;
   coefficient?: string | number | null;
@@ -164,6 +165,7 @@ export type AhspDefinitionComponentRow = {
   name: string;
   unit: string;
   coefficient: string;
+  identityNote?: string;
 };
 
 export type AhspDefinitionComponentGroup = {
@@ -206,11 +208,15 @@ export const resolveDefinitionResourceName = (
 
 const toDefinitionRow = (
   row: AhspDefinitionResourceWire,
-): AhspDefinitionComponentRow => ({
-  name: resolveDefinitionResourceName(row),
-  unit: (row.baseUnit ?? '').trim() || '—',
-  coefficient: formatCoefficient(row.coefficient),
-});
+): AhspDefinitionComponentRow => {
+  const mapped = (row.resolvedCatalogName ?? '').trim();
+  return {
+    name: resolveDefinitionResourceName(row),
+    unit: (row.baseUnit ?? '').trim() || '—',
+    coefficient: formatCoefficient(row.coefficient),
+    ...(mapped !== '' ? { identityNote: 'Dipetakan ke ' + mapped + '.' } : {}),
+  };
+};
 
 export const groupAhspDefinitionResources = (
   resources: readonly AhspDefinitionResourceWire[] | null | undefined,

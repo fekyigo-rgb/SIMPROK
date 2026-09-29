@@ -76,6 +76,11 @@ describe('AhspDocumentCanonicalizationService — IQL-01', () => {
       inMemoryImportJournal() as any,
       // C1 — the commit retains source bytes before journalling them.
       { retain: jest.fn().mockResolvedValue("ws/digest/source") } as any,
+      {
+        saveJobContext: jest.fn().mockImplementation(async ({ context }) => context),
+        loadJobContext: jest.fn().mockResolvedValue(null),
+        applyToAhsp: jest.fn().mockResolvedValue({ applied: 0 }),
+      } as any,
     );
   });
 

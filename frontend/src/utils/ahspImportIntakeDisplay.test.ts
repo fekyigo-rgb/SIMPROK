@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   IDENTITY_PENDING_ITEM_LINE,
   admissionOf,
+  confirmImportFigures,
   describeImportIntake,
   describeImportRecheck,
   describeImportRecheckFailure,
@@ -32,7 +33,24 @@ test("an unrecognised admission is held — never promoted to saved or ready", (
   assert.equal(admissionOf({}), "HELD");
 });
 
-test("the preview counts what SIMPROK understood, and says every recognised item will be received", () => {
+test("UI-12/13 confirm figures: IDENTITY_PENDING will-save AND needs-review independently", () => {
+  const figures = confirmImportFigures([
+    { admission: "IDENTITY_PENDING", identityVerdict: "NEW" },
+    { admission: "IDENTITY_PENDING", identityVerdict: "NEW" },
+    { admission: "PROVEN", identityVerdict: "NEW" },
+    { admission: "HELD", identityVerdict: "NEW" },
+    { admission: "PROVEN", identityVerdict: "IDENTICAL" },
+  ]);
+  assert.equal(figures.understood, 5);
+  assert.equal(figures.already, 1);
+  assert.equal(figures.willSave, 3);
+  assert.equal(figures.needsReview, 3); // 2 pending + 1 held
+  assert.equal(figures.cannotSave, 1);
+  // Overlapping review must not zero out will-save.
+  assert.ok(figures.willSave > 0 && figures.needsReview > 0);
+});
+
+test("the preview distinguishes recognised, storeable now, held, review, and ready — never claims all are accepted", () => {
   const line = previewIntakeLine([
     { admission: "PROVEN" },
     { admission: "IDENTITY_PENDING" },
@@ -41,10 +59,14 @@ test("the preview counts what SIMPROK understood, and says every recognised item
   ]);
   assert.equal(
     line,
-    "4 pekerjaan dikenali. 1 lengkap dan terbukti. 2 lengkap, tetapi identitas sebagian komponennya masih dilengkapi. 1 masih menunggu fakta atau keputusan. Saat disimpan, semua pekerjaan yang dikenali diterima SIMPROK.",
+    "4 pekerjaan dikenali. 3 dapat disimpan sekarang. 1 ditahan (belum dapat disimpan). 3 masih perlu ditinjau. 1 siap digunakan setelah disimpan (lengkap dan terbukti).",
   );
-  // Before saving, nothing is called ready to use or received yet.
-  assert.doesNotMatch(line, /siap digunakan|sudah diterima/u);
+  assert.doesNotMatch(line, /semua pekerjaan yang dikenali diterima/u);
+  assert.doesNotMatch(line, /sudah diterima/u);
+  assert.match(line, /dapat disimpan sekarang/u);
+  assert.match(line, /ditahan/u);
+  assert.match(line, /masih perlu ditinjau/u);
+  assert.match(line, /siap digunakan setelah disimpan/u);
   // A document with nothing recognisable promises nothing.
   assert.equal(previewIntakeLine([]), "Tidak ada pekerjaan yang dapat dikenali dari dokumen ini.");
   everyText([line, IDENTITY_PENDING_ITEM_LINE]);

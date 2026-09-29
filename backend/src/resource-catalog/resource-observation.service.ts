@@ -45,6 +45,10 @@ import {
   identicalQuestionKey,
 } from './identical-question-key';
 import {
+  buildEligibleAhspVersionWhere,
+  pickCurrentApplicableAhspVersions,
+} from '../project-ahsp/ahsp-eligibility.policy';
+import {
   GovernancePlan,
   IdenticalQuestionAction,
   IdenticalQuestionEvent,
@@ -254,6 +258,81 @@ export interface ObserveResourceInput {
   provenance?: ObserveResourceProvenance;
 }
 
+const CATALOG_RESOURCE_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * The exact question for a hand-built line. A document locator stays on the
+ * locator path and returns null here. A catalog id stored in resourceId is
+ * already an identity, not a raw name. The key itself is identicalQuestionKey.
+ */
+export function neutralQuestionOfHandBuiltLine(
+  workspaceId: string,
+  line: {
+    resourceId?: string | null;
+    resourceType?: string | null;
+    rawName?: string | null;
+    rawCode?: string | null;
+    rawUnit?: string | null;
+    baseUnit?: string | null;
+    sourceSha256?: string | null;
+    sheetName?: string | null;
+    sourceRowNumber?: number | null;
+  },
+): IdenticalQuestion | null {
+  // Any real document digest keeps this row on the document-provenance path,
+  // even if the rest of its locator is incomplete. A partial document row is
+  // not a hand-built declaration and must never be re-labelled AHSP_MANUAL.
+  if (
+    typeof line.sourceSha256 === 'string' &&
+    line.sourceSha256.length > 0
+  ) {
+    return null;
+  }
+  const resourceType = (line.resourceType ?? '').trim();
+  if (
+    resourceType !== 'LABOR' &&
+    resourceType !== 'MATERIAL' &&
+    resourceType !== 'EQUIPMENT'
+  ) {
+    return null;
+  }
+  const storedName = (line.rawName ?? '').trim();
+  const resourceId = (line.resourceId ?? '').trim();
+  const rawName =
+    storedName !== ''
+      ? storedName
+      : resourceId !== '' && !CATALOG_RESOURCE_ID.test(resourceId)
+        ? resourceId
+        : '';
+  if (rawName === '') return null;
+  const rawCode = (line.rawCode ?? '').trim();
+  const declaredUnit = (line.rawUnit ?? '').trim();
+  return {
+    workspaceId,
+    resourceType,
+    rawName,
+    rawCode: rawCode !== '' ? rawCode : null,
+    // IQL truth: only the raw/source-declared unit participates in the question.
+    // baseUnit is formula/canonical context and must never be promoted into rawUnit.
+    rawUnit: declaredUnit !== '' ? declaredUnit : null,
+  };
+}
+
+export type ObservationListScope =
+  | { readonly kind: 'SOURCE_SHA256'; readonly sourceSha256: string }
+  | {
+      readonly kind: 'LOCATORS';
+      readonly locators: ReadonlyArray<{
+        sourceSha256: string;
+        sheetName: string;
+        sourceRowNumber: number;
+        rawName: string;
+        resourceType: string;
+      }>;
+    }
+  | { readonly kind: 'SUBJECT_KEYS'; readonly subjectKeys: readonly string[] };
+
 /**
  * THE LOCATOR BOTH SIDES ALREADY CARRY — the six facts `observed_resources` is
  * unique on. Used to ask "has a human already decided THIS source row?" without
@@ -318,22 +397,34 @@ export class ResourceObservationService {
    * Persist observations, additively and idempotently. A resource with no name
    * cannot be searched for, so it is never observed. Re-importing the same
    * located source row does not duplicate (unique on workspace + provenance +
-   * name + type); a hand-built row with null provenance always inserts, which is
-   * the honest behaviour. Never touches a resource that already resolved.
+   * name + type). A hand-built row has no document locator; its subject is the
+   * existing identical-question key, and the same question in the same workspace
+   * reuses one row. Never touches a resource that already resolved.
    */
   async observeMany(
     inputs: readonly ObserveResourceInput[],
   ): Promise<{ persisted: number }> {
     const rows = inputs
       .filter((input) => input.rawName.trim().length > 0)
-      .map((input) => ({
+      .map((input) => {
+        const sourceSha256 = input.provenance?.sourceSha256 ?? null;
+        return {
         workspaceId: input.workspaceId,
         origin: input.origin,
         rawName: input.rawName,
         rawCode: input.rawCode ?? null,
         rawUnit: input.rawUnit ?? null,
         resourceType: input.resourceType,
-        sourceSha256: input.provenance?.sourceSha256 ?? null,
+        observationSubjectKey: sourceSha256
+          ? null
+          : identicalQuestionKey({
+              workspaceId: input.workspaceId,
+              resourceType: input.resourceType,
+              rawName: input.rawName,
+              rawCode: input.rawCode ?? null,
+              rawUnit: input.rawUnit ?? null,
+            }),
+        sourceSha256,
         sourceFileName: input.provenance?.sourceFileName ?? null,
         parserContractVersion: input.provenance?.parserContractVersion ?? null,
         sheetName: input.provenance?.sheetName ?? null,
@@ -345,7 +436,8 @@ export class ResourceObservationService {
           input.candidates && input.candidates.length > 0
             ? [...new Set(input.candidates)]
             : Prisma.JsonNull,
-      }));
+        };
+      });
     if (rows.length === 0) return { persisted: 0 };
     const result = await this.prisma.observedResource.createMany({
       data: rows,
@@ -354,12 +446,255 @@ export class ResourceObservationService {
     return { persisted: result.count };
   }
 
-  /** The observations still awaiting a human decision, newest first. */
-  async listOpen(workspaceId: string) {
+  /**
+   * STAGE 2A — optional server-side scope for the EXISTING open list.
+   *
+   * SOURCE_SHA256: one document digest (Door A / import job / preview digest).
+   * LOCATORS: exact ObservedResource unique-key facts carried on AHSPResource
+   * (Door B). Empty locators mean "no joinable unresolved subject" — return [].
+   * Never rawName-only. Never client-side workspace dump.
+   */
+  async listOpen(workspaceId: string, scope?: ObservationListScope) {
+    if (scope?.kind === 'LOCATORS' && scope.locators.length === 0) {
+      return [];
+    }
+    if (scope?.kind === 'SUBJECT_KEYS' && scope.subjectKeys.length === 0) {
+      return [];
+    }
+    const digests =
+      scope?.kind === 'SOURCE_SHA256'
+        ? [
+            scope.sourceSha256,
+            scope.sourceSha256.toLowerCase(),
+            scope.sourceSha256.toUpperCase(),
+          ]
+        : null;
     return this.prisma.observedResource.findMany({
-      where: { workspaceId, status: ObservedResourceStatus.OBSERVED },
+      where: {
+        workspaceId,
+        status: ObservedResourceStatus.OBSERVED,
+        ...(digests
+          ? { sourceSha256: { in: [...new Set(digests)] } }
+          : {}),
+        ...(scope?.kind === 'LOCATORS'
+          ? {
+              OR: scope.locators.map((locator) => ({
+                sourceSha256: locator.sourceSha256,
+                sheetName: locator.sheetName,
+                sourceRowNumber: locator.sourceRowNumber,
+                rawName: locator.rawName,
+                resourceType: locator.resourceType as never,
+              })),
+            }
+          : {}),
+        ...(scope?.kind === 'SUBJECT_KEYS'
+          ? {
+              sourceSha256: null,
+              observationSubjectKey: { in: [...scope.subjectKeys] },
+            }
+          : {}),
+      },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /**
+   * Door B — locators from the SAME lawful applicable AHSP version SIMPROK
+   * already uses for new-use selection:
+   *   buildEligibleAhspVersionWhere(asOf=now)
+   *   → pickCurrentApplicableAhspVersions
+   *
+   * Never max(versionNumber) alone: an expired/superseded/not-yet-effective
+   * higher ordinal must not create review work. Tenant-checked on the parent.
+   * Returns null when the AHSP is not visible; [] when visible but no eligible
+   * applicable version or no joinable provenance (honest empty Door B).
+   */
+  async locatorsForAhsp(
+    workspaceId: string,
+    ahspId: string,
+    asOf: Date = new Date(),
+  ): Promise<
+    | null
+    | ReadonlyArray<{
+        sourceSha256: string;
+        sheetName: string;
+        sourceRowNumber: number;
+        rawName: string;
+        resourceType: string;
+      }>
+  > {
+    const ahsp = await this.prisma.aHSP.findFirst({
+      where: {
+        id: ahspId,
+        deletedAt: null,
+        OR: [{ workspaceId }, { workspaceId: null }],
+      },
+      select: { id: true },
+    });
+    if (!ahsp) return null;
+
+    const eligible = buildEligibleAhspVersionWhere(workspaceId, asOf);
+    const versions = await this.prisma.aHSPVersion.findMany({
+      where: { AND: [{ ahspId }, eligible] },
+      select: {
+        id: true,
+        versionNumber: true,
+        ahsp: { select: { id: true } },
+        resources: {
+          select: {
+            rawName: true,
+            sourceSha256: true,
+            sheetName: true,
+            sourceRowNumber: true,
+            resourceType: true,
+          },
+        },
+      },
+    });
+    const applicable = pickCurrentApplicableAhspVersions(versions);
+    const resources = applicable[0]?.resources ?? [];
+    return resources.flatMap((row) => {
+      if (
+        typeof row.sourceSha256 !== 'string' ||
+        row.sourceSha256.length === 0 ||
+        typeof row.sheetName !== 'string' ||
+        row.sheetName.length === 0 ||
+        typeof row.sourceRowNumber !== 'number' ||
+        typeof row.rawName !== 'string' ||
+        row.rawName.length === 0 ||
+        typeof row.resourceType !== 'string' ||
+        row.resourceType.length === 0
+      ) {
+        return [];
+      }
+      return [
+        {
+          sourceSha256: row.sourceSha256,
+          sheetName: row.sheetName,
+          sourceRowNumber: row.sourceRowNumber,
+          rawName: row.rawName,
+          resourceType: row.resourceType,
+        },
+      ];
+    });
+  }
+
+  /**
+   * Hand-built lines on the current applicable version. Document locators stay
+   * on locatorsForAhsp. Returns null when the AHSP is not visible.
+   */
+  async handBuiltLinesForAhsp(
+    workspaceId: string,
+    ahspId: string,
+    asOf: Date = new Date(),
+  ): Promise<
+    | null
+    | {
+        lines: ReadonlyArray<{
+          resourceId: string;
+          resourceType: string;
+          rawName: string | null;
+          rawCode: string | null;
+          rawUnit: string | null;
+          baseUnit: string;
+          sourceSha256: string | null;
+          sheetName: string | null;
+          sourceRowNumber: number | null;
+        }>;
+        presentation: { workType: string | null; methodName: string | null };
+      }
+  > {
+    const ahsp = await this.prisma.aHSP.findFirst({
+      where: {
+        id: ahspId,
+        deletedAt: null,
+        OR: [{ workspaceId }, { workspaceId: null }],
+      },
+      select: { id: true, workType: true, methodName: true },
+    });
+    if (!ahsp) return null;
+    const eligible = buildEligibleAhspVersionWhere(workspaceId, asOf);
+    const versions = await this.prisma.aHSPVersion.findMany({
+      where: { AND: [{ ahspId }, eligible] },
+      select: {
+        id: true,
+        versionNumber: true,
+        ahsp: { select: { id: true } },
+        resources: {
+          select: {
+            resourceId: true,
+            resourceType: true,
+            rawName: true,
+            rawCode: true,
+            rawUnit: true,
+            baseUnit: true,
+            sourceSha256: true,
+            sheetName: true,
+            sourceRowNumber: true,
+          },
+        },
+      },
+    });
+    const applicable = pickCurrentApplicableAhspVersions(versions);
+    const lines = (applicable[0]?.resources ?? []).filter(
+      (line) => neutralQuestionOfHandBuiltLine(workspaceId, line) !== null,
+    );
+    return {
+      lines,
+      presentation: { workType: ahsp.workType, methodName: ahsp.methodName },
+    };
+  }
+
+  /**
+   * Persist a neutral observation only when the existing identity kernel does
+   * not already prove the question. Same question, same workspace, one row.
+   */
+  async ensureHandBuiltObservations(
+    workspaceId: string,
+    lines: ReadonlyArray<{
+      resourceId?: string | null;
+      resourceType?: string | null;
+      rawName?: string | null;
+      rawCode?: string | null;
+      rawUnit?: string | null;
+      baseUnit?: string | null;
+      sourceSha256?: string | null;
+      sheetName?: string | null;
+      sourceRowNumber?: number | null;
+    }>,
+  ): Promise<{ ensured: number }> {
+    const questions = lines
+      .map((line) => neutralQuestionOfHandBuiltLine(workspaceId, line))
+      .filter((question): question is IdenticalQuestion => question !== null);
+    if (questions.length === 0) return { ensured: 0 };
+    const evidence = await this.identity.loadEvidence(
+      this.prisma,
+      workspaceId,
+      undefined,
+      { identicalQuestionKeys: questions.map((question) => identicalQuestionKey(question)) },
+    );
+    const pending: ObserveResourceInput[] = [];
+    for (const question of questions) {
+      const resolution = await this.identity.resolve(evidence, {
+        rawName: question.rawName,
+        rawCode: question.rawCode,
+        rawUnit: question.rawUnit,
+        resourceType: question.resourceType,
+        sourceSha256: null,
+      });
+      if (this.machineProves(resolution)) continue;
+      pending.push({
+        workspaceId,
+        origin: 'AHSP_MANUAL',
+        rawName: question.rawName,
+        rawCode: question.rawCode,
+        rawUnit: question.rawUnit,
+        resourceType: question.resourceType as ResourceType,
+      });
+    }
+    if (pending.length === 0) return { ensured: 0 };
+    const result = await this.observeMany(pending);
+    return { ensured: result.persisted };
   }
 
   /**
@@ -384,8 +719,12 @@ export class ResourceObservationService {
    * actor — the signed context that lets the human offer this decision as a
    * learning candidate.
    */
-  async listOpenForCuration(workspaceId: string, actorAccountId?: string) {
-    const observations = await this.listOpen(workspaceId);
+  async listOpenForCuration(
+    workspaceId: string,
+    actorAccountId?: string,
+    scope?: ObservationListScope,
+  ) {
+    const observations = await this.listOpen(workspaceId, scope);
     if (observations.length === 0) return [];
     const questionKeys = new Map(
       observations.map((observation) => [

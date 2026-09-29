@@ -106,12 +106,16 @@ test("C the Owner mockup columns are present", () => {
   }
 });
 
-test("C search and the five filters form the control area", () => {
+test("C search and the canonical filters form the control area", () => {
   assert.ok(room.includes("Cari kode atau uraian pekerjaan"));
   assert.ok(room.includes("Reset Filter"));
-  for (const f of ['Dasar AHSP', 'Bidang / Kategori', 'Subkategori', 'Jenis Pekerjaan']) {
+  for (const f of ['Jenis Pengadaan', 'Kategori', 'Subkategori', 'Jenis Pekerjaan']) {
     assert.ok(room.includes(f), `missing filter "${f}"`);
   }
+  assert.ok(room.includes("Saring sumber AHSP"));
+  // Dasar/Acuan stays Detail and search knowledge. It is not a primary filter.
+  assert.ok(!room.includes("Dasar AHSP"));
+  assert.ok(!room.includes("Bidang / Kategori"));
 });
 
 test("C the selection bar wires Usulkan ke SIMPROK to the real propose lifecycle", () => {

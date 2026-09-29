@@ -5,6 +5,7 @@ import type { ResourceIdentityResolutionService } from './resource-identity-reso
 import { GhxDecisionContextTokenService } from './ghx-decision-context-token.service';
 import {
   ResourceObservationService,
+  neutralQuestionOfHandBuiltLine,
   kernelRefusalOfSelection,
   observedSourceRowKey,
 } from './resource-observation.service';
@@ -13,6 +14,7 @@ import {
   ResourceAdmissionService,
 } from './resource-admission.service';
 import { selectionRefusal } from './resource-identity-resolution.kernel';
+import { identicalQuestionKey } from './identical-question-key';
 
 /**
  * THE shared OBSERVED → HUMAN → CANONICAL lifecycle. Proves an unknown resource
@@ -160,6 +162,68 @@ describe('ResourceObservationService', () => {
       'Agregat Halus',
     ]);
     expect(call.data[0].resolvedResourceCatalogId).toBeUndefined();
+    expect(call.data[0].observationSubjectKey).toBeNull();
+  });
+
+  it('C: a hand-built observation carries the existing identical-question key and no document locator', async () => {
+    await service.observeMany([
+      {
+        workspaceId: 'ws-1',
+        origin: 'AHSP_MANUAL',
+        rawName: 'Pasir lokal',
+        rawCode: null,
+        rawUnit: 'm3',
+        resourceType: 'MATERIAL',
+      },
+    ]);
+    const row = prisma.observedResource.createMany.mock.calls[0][0].data[0];
+    expect(row.sourceSha256).toBeNull();
+    expect(row.sheetName).toBeNull();
+    expect(row.sourceRowNumber).toBeNull();
+    expect(row.observationSubjectKey).toBe(
+      identicalQuestionKey({
+        workspaceId: 'ws-1',
+        resourceType: 'MATERIAL',
+        rawName: 'Pasir lokal',
+        rawCode: null,
+        rawUnit: 'm3',
+      }),
+    );
+  });
+
+  it('C: hand-built identical-question truth never promotes formula baseUnit into rawUnit', () => {
+    const question = neutralQuestionOfHandBuiltLine('ws-1', {
+      resourceId: 'Pasir manual tanpa satuan mentah',
+      resourceType: 'MATERIAL',
+      rawName: null,
+      rawCode: null,
+      rawUnit: null,
+      baseUnit: 'M3',
+      sourceSha256: null,
+      sheetName: null,
+      sourceRowNumber: null,
+    });
+    expect(question).toEqual({
+      workspaceId: 'ws-1',
+      resourceType: 'MATERIAL',
+      rawName: 'Pasir manual tanpa satuan mentah',
+      rawCode: null,
+      rawUnit: null,
+    });
+  });
+  it('C: a row with any real document digest never becomes a neutral Manual subject', () => {
+    const question = neutralQuestionOfHandBuiltLine('ws-1', {
+      resourceId: 'Pasir dari dokumen parsial',
+      resourceType: 'MATERIAL',
+      rawName: 'Pasir dari dokumen parsial',
+      rawCode: null,
+      rawUnit: 'm3',
+      baseUnit: 'M3',
+      sourceSha256: 'a'.repeat(64),
+      sheetName: null,
+      sourceRowNumber: null,
+    });
+    expect(question).toBeNull();
   });
 
   it('C: a nameless observation is never recorded', async () => {

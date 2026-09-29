@@ -77,6 +77,7 @@ export interface CuratableObservationWire {
   rawUnit?: string | null;
   resourceType?: string | null;
   origin?: string | null;
+  sourceSha256?: string | null;
   status?: string | null;
   candidates?: readonly ObservationCandidateWire[] | null;
   /** ACG-01 — the kernel's verdict the candidate list belongs to. */
@@ -449,7 +450,10 @@ export const describeCuratableObservation = (
     digest !== '' &&
     refusable.length > 0 &&
     candidateChoices.length === 0;
-  const canProposeNew = unitProven && (exhausted || admissibleAfterExamination);
+  const noDocumentEvidence =
+    observation.sourceSha256 === null || observation.sourceSha256 === '';
+  const canProposeNew =
+    !noDocumentEvidence && unitProven && (exhausted || admissibleAfterExamination);
   const newResourceRefusal =
     canProposeNew && admissibleAfterExamination
       ? {
@@ -477,7 +481,11 @@ export const describeCuratableObservation = (
           : ruledOut.length > 0
             ? 'Belum dapat ditetapkan sebagai sumber daya baru: langkah untuk sumber daya yang padanannya tidak cocok belum tersedia.' + STILL_STORED
             : 'Belum dapat ditetapkan sebagai sumber daya baru: SIMPROK masih menemukan entri katalog yang berkaitan dengan item ini.';
-  const newResourceBlockedLine = canProposeNew
+  const HELD =
+    ' Nama ini tetap tersimpan pada AHSP ini. Identitas katalognya belum terbukti, jadi belum dapat diperlakukan sebagai sumber daya katalog. Diperlukan bukti sebelum dapat menjadi sumber daya baru.';
+  const newResourceBlockedLine = noDocumentEvidence
+    ? HELD.trim()
+    : canProposeNew
     ? null
     : !exhausted && !admissibleAfterExamination
       ? notExhaustedLine
@@ -494,6 +502,7 @@ export const describeCuratableObservation = (
   // misread as "SIMPROK menolak".
   // IMPORT ACCEPTANCE BOUNDARY (B7): said in the reader's words — never "canonical".
   const ACCEPTED = ' Sumber daya dari dokumen sudah diterima; identitasnya dalam katalog SIMPROK belum dapat dipastikan.';
+  const unresolvedTail = noDocumentEvidence ? HELD : ACCEPTED + newSentence;
 
   // THE HUMAN IS NOT THE MATCHER. The old wording ("pilih padanan yang paling
   // sesuai") asked the reader to judge a list SIMPROK had not judged. Each
@@ -531,11 +540,10 @@ export const describeCuratableObservation = (
               'SIMPROK hanya menemukan kemiripan nama (' +
               nameList(weakPossibilities) +
               '), yang tidak cukup untuk memastikan identitas.' +
-              ACCEPTED +
-              newSentence
+              unresolvedTail
             : ruledOut.length > 0
-            ? 'Belum ditemukan padanan yang dapat dibuktikan.' + ACCEPTED + newSentence
-            : 'SIMPROK belum menemukan padanan yang dapat dipastikan.' + ACCEPTED + newSentence;
+            ? 'Belum ditemukan padanan yang dapat dibuktikan.' + unresolvedTail
+            : 'SIMPROK belum menemukan padanan yang dapat dipastikan.' + unresolvedTail;
 
   const title =
     unit !== '' ? observation.rawName + ' (' + unit + ')' : observation.rawName;
