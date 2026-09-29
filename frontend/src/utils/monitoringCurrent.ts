@@ -1160,13 +1160,38 @@ export interface MonitoringComparisonChartSegment {
   to: { x: number; y: number };
 }
 
+export interface MonitoringComparisonChartCurveSegment
+  extends MonitoringComparisonChartSegment {
+  control1: { x: number; y: number };
+  control2: { x: number; y: number };
+}
+
+export interface MonitoringComparisonChartCurve {
+  path: string;
+  segments: MonitoringComparisonChartCurveSegment[];
+}
+
+export interface MonitoringComparisonChartTick {
+  value: number;
+  y: number;
+}
+
+export interface MonitoringComparisonChartDateTick {
+  cutoffDate: string;
+  x: number;
+  label: boolean;
+}
+
 export interface MonitoringComparisonChartProjection {
   width: number;
   height: number;
   padding: number;
+  xPadding: number;
   points: MonitoringComparisonChartPoint[];
-  plannedSegments: MonitoringComparisonChartSegment[];
-  actualSegments: MonitoringComparisonChartSegment[];
+  percentageTicks: MonitoringComparisonChartTick[];
+  dateTicks: MonitoringComparisonChartDateTick[];
+  plannedCurve: MonitoringComparisonChartCurve;
+  actualCurve: MonitoringComparisonChartCurve;
 }
 
 /**
@@ -1179,7 +1204,8 @@ export function monitoringComparisonChartProjection(
 ): MonitoringComparisonChartProjection {
   const width = 720;
   const height = 280;
-  const padding = 34;
+  const padding = 48;
+  const xPadding = padding + 16;
   const boundaryTime = (value: string): number | null => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
     const parsed = Date.parse(value + 'T00:00:00.000Z');
@@ -1196,6 +1222,10 @@ export function monitoringComparisonChartProjection(
       (visualPercent / 100) * (height - padding * 2)
     );
   };
+  const percentageTicks = [0, 25, 50, 75, 100].map((value) => ({
+    value,
+    y: percentageY(String(value))!,
+  }));
 
   const firstTime =
     points.length > 0 ? boundaryTime(points[0].cutoffDate) : null;
@@ -1216,9 +1246,9 @@ export function monitoringComparisonChartProjection(
         ? null
         : lastTime === firstTime
           ? width / 2
-          : padding +
+          : xPadding +
             ((pointTime - firstTime) / (lastTime - firstTime)) *
-              (width - padding * 2);
+              (width - xPadding * 2);
 
     return {
       cutoffDate: point.cutoffDate,
@@ -1238,44 +1268,93 @@ export function monitoringComparisonChartProjection(
     };
   });
 
-  const segmentsFor = (
-    key: 'plannedY' | 'actualY',
-  ): MonitoringComparisonChartSegment[] => {
-    const segments: MonitoringComparisonChartSegment[] = [];
-    for (let index = 1; index < projected.length; index += 1) {
-      const previous = projected[index - 1];
-      const current = projected[index];
-      const previousY = previous[key];
-      const currentY = current[key];
+  const validDateTicks = projected.flatMap((point) =>
+    point.x === null
+      ? []
+      : [{ cutoffDate: point.cutoffDate, x: point.x }],
+  );
+  let middleDateTickIndex = -1;
+  if (validDateTicks.length > 3) {
+    const horizontalCenter = width / 2;
+    middleDateTickIndex = 1;
+    for (let index = 2; index < validDateTicks.length - 1; index += 1) {
       if (
-        previous.x !== null &&
-        current.x !== null &&
-        previousY !== null &&
-        currentY !== null
+        Math.abs(validDateTicks[index].x - horizontalCenter) <
+        Math.abs(validDateTicks[middleDateTickIndex].x - horizontalCenter)
       ) {
-        const boundaryAtPreviousValue = { x: current.x, y: previousY };
-        segments.push({
-          from: { x: previous.x, y: previousY },
-          to: boundaryAtPreviousValue,
-        });
-        if (currentY !== previousY) {
-          segments.push({
-            from: boundaryAtPreviousValue,
-            to: { x: current.x, y: currentY },
-          });
-        }
+        middleDateTickIndex = index;
       }
     }
-    return segments;
+  }
+  const dateTicks = validDateTicks.map((tick, index) => ({
+    ...tick,
+    label:
+      validDateTicks.length <= 3 ||
+      index === 0 ||
+      index === middleDateTickIndex ||
+      index === validDateTicks.length - 1,
+  }));
+
+  const curveFor = (
+    key: 'plannedY' | 'actualY',
+  ): MonitoringComparisonChartCurve => {
+    const segments: MonitoringComparisonChartCurveSegment[] = [];
+    const pathValue = (value: number): string =>
+      String(Number(value.toFixed(6)));
+    let path = '';
+    let previous: { x: number; y: number } | null = null;
+
+    for (const point of projected) {
+      const currentY = point[key];
+      if (point.x === null || currentY === null) {
+        previous = null;
+        continue;
+      }
+      const current = { x: point.x, y: currentY };
+      if (previous === null || current.x <= previous.x) {
+        const move = 'M ' + pathValue(current.x) + ' ' + pathValue(current.y);
+        path = path ? path + ' ' + move : move;
+        previous = current;
+        continue;
+      }
+
+      const third = (current.x - previous.x) / 3;
+      const segment: MonitoringComparisonChartCurveSegment = {
+        from: previous,
+        control1: { x: previous.x + third, y: previous.y },
+        control2: { x: current.x - third, y: current.y },
+        to: current,
+      };
+      segments.push(segment);
+      path +=
+        ' C ' +
+        pathValue(segment.control1.x) +
+        ' ' +
+        pathValue(segment.control1.y) +
+        ', ' +
+        pathValue(segment.control2.x) +
+        ' ' +
+        pathValue(segment.control2.y) +
+        ', ' +
+        pathValue(segment.to.x) +
+        ' ' +
+        pathValue(segment.to.y);
+      previous = current;
+    }
+
+    return { path, segments };
   };
 
   return {
     width,
     height,
     padding,
+    xPadding,
     points: projected,
-    plannedSegments: segmentsFor('plannedY'),
-    actualSegments: segmentsFor('actualY'),
+    percentageTicks,
+    dateTicks,
+    plannedCurve: curveFor('plannedY'),
+    actualCurve: curveFor('actualY'),
   };
 }
 

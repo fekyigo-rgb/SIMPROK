@@ -28,6 +28,17 @@ const lens = readFileSync('src/utils/monitoringTimeLens.ts', 'utf8');
 const countOf = (source: string, needle: string) =>
   source.split(needle).length - 1;
 
+const readinessNativeMarkerRule =
+  '.execution-plan-header-control > summary::-webkit-details-marker { display: none; }';
+
+/**
+ * The native WebKit disclosure marker is decorative here because the summary
+ * owns one visible caret. Remove only that exact, readiness-scoped rule before
+ * enforcing the stronger law that no Monitoring fact or control disappears.
+ */
+const withoutReadinessNativeMarkerRule = (source: string) =>
+  source.replace(readinessNativeMarkerRule, '');
+
 // ─────────────────────────────────────────────────────────────────────────────
 // A. ONE SMART MONITORING TABLE, THREE WINDOWS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,8 +55,8 @@ test('1. the primary time lens defaults to TERKINI through the canonical default
     'the default state is not derived from DEFAULT_MONITORING_TIME_LENS',
   );
   assert.ok(
-    page.includes("useState<MonitoringContentLens>('VISUAL')"),
-    'the initial contextual lens is not VISUAL',
+    page.includes("useState<MonitoringContentLens>('CONDITION')"),
+    'the initial contextual lens is not Kondisi Proyek',
   );
 });
 
@@ -142,7 +153,7 @@ test('5 + 6. basis and server periods stay inside the on-demand lens menu', () =
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('7 + 8. no separate Laporan Mingguan or Laporan Bulanan module, card, or door', () => {
-  for (const forbidden of ['Laporan Mingguan', 'Laporan Bulanan', 'Laporan Harian']) {
+  for (const forbidden of ['Laporan Mingguan', 'Laporan Bulanan']) {
     assert.equal(
       countOf(page, forbidden),
       0,
@@ -150,6 +161,11 @@ test('7 + 8. no separate Laporan Mingguan or Laporan Bulanan module, card, or do
     );
     assert.equal(countOf(plan, forbidden), 0, `${forbidden} leaked into the plan panel`);
   }
+  assert.equal(
+    countOf(page, 'Lihat Kalender'),
+    0,
+    'a standalone Lihat Kalender control bypasses the nested period menu',
+  );
 });
 
 test('10. no second Monitoring request engine was introduced', () => {
@@ -232,7 +248,7 @@ test('12 + 13. neither the contextual lens nor the time lens clears the selectio
   assert.equal(
     countOf(contentLens, 'setSelectedId'),
     0,
-    'switching Visual/Analisis/Jadwal clears the selected WORK_ITEM',
+    'switching Kondisi/Visual/Analisis/Jadwal clears the selected WORK_ITEM',
   );
 
   const timeLens = page.slice(
@@ -248,7 +264,7 @@ test('12 + 13. neither the contextual lens nor the time lens clears the selectio
   assert.equal(
     countOf(timeLens, 'setMonitoringContentLens'),
     0,
-    'switching the time window resets Visual/Analisis/Jadwal',
+    'switching the time window resets Kondisi/Visual/Analisis/Jadwal',
   );
   assert.ok(
     timeLens.includes('setPeriodMenuOpen(true)'),
@@ -256,13 +272,14 @@ test('12 + 13. neither the contextual lens nor the time lens clears the selectio
   );
 });
 
-test('14. the contextual workspace offers exactly Visual, Analisis, and Jadwal', () => {
+test('14. the contextual workspace offers exactly four primary views and no Interaksi tab', () => {
   const contentLens = page.slice(
     page.indexOf('const monitoringLensSelector'),
     page.indexOf('const monitoringPlanContent'),
   );
-  assert.equal(countOf(contentLens, '<button'), 3, 'the contextual lens count changed');
+  assert.equal(countOf(contentLens, '<button'), 4, 'the primary view count is not four');
   for (const [label, state] of [
+    ['Kondisi Proyek', 'CONDITION'],
     ['Visual', 'VISUAL'],
     ['Analisis', 'ANALYSIS'],
     ['Jadwal', 'SCHEDULE'],
@@ -276,10 +293,8 @@ test('14. the contextual workspace offers exactly Visual, Analisis, and Jadwal',
       `${label} lens is not wired to the ${state} view`,
     );
   }
-  // No unsupported mockup tab is rendered here, live or disabled.
-  for (const fake of ['Diagram', 'Network', 'Batang', 'Lingkaran']) {
-    assert.equal(countOf(contentLens, fake), 0, `a fake ${fake} tab was added`);
-  }
+  assert.equal(countOf(contentLens, 'Interaksi'), 0, 'Interaksi was added as a primary tab');
+  assert.match(contentLens, /className="h2a0-primary-view-nav"/);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -298,17 +313,22 @@ test('15. a periodic window exposes no Actual mutation door', () => {
   );
 });
 
-test('16. the Actual door stands after the contextual facts and the inspection lenses', () => {
+test('16. the Actual door stays after contextual facts and only inside Kondisi', () => {
   const itemScope = page.slice(page.lastIndexOf('className="h2a0-item-scope"'));
+  const conditionGate = itemScope.indexOf("monitoringContentLens === 'CONDITION'");
   const facts = itemScope.indexOf('className="h2a0-facts"');
-  const lensSelector = itemScope.indexOf('{monitoringLensSelector}');
   const action = itemScope.indexOf('h2a0-detail-action');
 
-  assert.ok(facts !== -1 && lensSelector !== -1 && action !== -1);
-  assert.ok(facts < lensSelector, 'the inspection lenses precede the contextual facts');
+  assert.ok(conditionGate !== -1 && facts !== -1 && action !== -1);
   assert.ok(
-    lensSelector < action,
-    'the Actual door is offered before Visual/Analisis/Jadwal inspection',
+    conditionGate < facts && facts < action,
+    'the Actual door is not downstream of the Kondisi facts',
+  );
+  assert.ok(
+    itemScope.includes(
+      "monitoringContentLens === 'CONDITION' &&\n                monitoringTimeLensAllowsActualAction(activeTimeLens)",
+    ),
+    'the Actual door leaks into another primary view',
   );
 });
 
@@ -316,13 +336,36 @@ test('16. the Actual door stands after the contextual facts and the inspection l
 // E. EXECUTION PLAN — GOVERNANCE, NOT PAGE DOMINATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('17. a locked Rencana Pelaksanaan stays visible but stops dominating the page', () => {
-  // The heavy pre-lock review table is unreachable once the plan is locked.
+test('17. Rencana Pelaksanaan is a compact header disclosure without losing governance truth', () => {
+  const headerStart = page.indexOf('<header className="h2a0-project-header">');
+  const headerEnd = page.indexOf('</header>', headerStart);
+  const header = page.slice(headerStart, headerEnd);
+
+  assert.ok(headerStart !== -1 && headerEnd !== -1, 'project header is missing');
   assert.ok(
-    plan.includes('{!locked && (\n        <div className="execution-plan-review">'),
-    'the full Rencana Kerja review table still renders after the lock',
+    header.includes('<ExecutionPlanReadinessPanel') &&
+      header.includes('presentation="GOVERNANCE"'),
+    'the readiness control is not mounted in the project header',
   );
-  // Governance and provenance are not deleted.
+  assert.equal(
+    countOf(page, 'presentation="GOVERNANCE"'),
+    1,
+    'the compact readiness control is missing or duplicated',
+  );
+  assert.doesNotMatch(
+    header,
+    /temporalContextMode|monitoringContentLens/,
+    'the project-level readiness control is conditional on a time lens or right view',
+  );
+  assert.ok(
+    plan.includes('<details className="execution-plan-header-control">') &&
+      plan.includes('<summary aria-describedby="execution-plan-header-help">'),
+    'the readiness facts are not disclosed from one accessible header control',
+  );
+  assert.ok(
+    plan.includes('className="execution-plan execution-plan-header-detail"'),
+    'the readiness detail surface is missing',
+  );
   assert.ok(
     plan.includes('{locked && executionPlan.plan && ('),
     'locked governance facts were removed',
@@ -337,12 +380,22 @@ test('17. a locked Rencana Pelaksanaan stays visible but stops dominating the pa
     assert.ok(plan.includes(`<dt>${fact}</dt>`), `${fact} governance fact was removed`);
   }
   assert.ok(
-    plan.includes("locked ? 'execution-plan is-governance-compact'"),
-    'the locked plan carries no compact governance presentation',
+    !plan.includes('Execution Readiness'),
+    'the internal Execution Readiness label remains visible to users',
   );
   assert.ok(
-    /\.execution-plan\.is-governance-compact \{/.test(css),
-    'the compact governance presentation has no styling',
+    /\.execution-plan-header-control > summary \{/.test(css) &&
+      /\.execution-plan-header-detail \{[^}]*position: absolute/.test(css),
+    'the compact control or non-flowing detail presentation has no styling',
+  );
+  assert.ok(
+    /summary:hover \.execution-plan-header-help,[\s\S]*summary:focus-visible \.execution-plan-header-help/.test(css),
+    'the helper explanation is not available on both hover and keyboard focus',
+  );
+  assert.doesNotMatch(
+    page.slice(headerEnd, page.indexOf('className="h2a0-workspace"', headerEnd)),
+    /presentation="GOVERNANCE"/,
+    'a standalone readiness row remains below the project header',
   );
 });
 
@@ -359,6 +412,26 @@ test('18. bounded pre-lock completion, save, and lock capability is preserved', 
   ]) {
     assert.ok(plan.includes(capability), `pre-lock capability ${capability} was removed`);
   }
+});
+
+test('19. UI-01 preserves last-updated provenance, actions, and independent chart rendering', () => {
+  const headerStart = page.indexOf('<header className="h2a0-project-header">');
+  const headerEnd = page.indexOf('</header>', headerStart);
+  const header = page.slice(headerStart, headerEnd);
+  assert.match(
+    header,
+    /<dt>Terakhir diperbarui<\/dt>[\s\S]*<dd>\{lastRecorded\.value\}<\/dd>[\s\S]*lastRecorded\.basis/,
+  );
+  assert.match(plan, /role="region"[\s\S]*aria-label="Detail Rencana Pelaksanaan"/);
+  assert.match(plan, /<h3>Rencana Kerja<\/h3>/);
+  assert.match(plan, /Lengkapi Rencana Pelaksanaan/);
+  assert.match(plan, /Kunci Rencana Pelaksanaan/);
+  assert.match(page, /presentation=\{monitoringPlanView\}/);
+  assert.match(plan, /monitoringComparisonChartProjection\(comparison\.points\)/);
+  assert.match(
+    css,
+    /\.execution-plan-comparison-table \{[^}]*width: 100%[^}]*min-width: 0[^}]*table-layout: fixed/,
+  );
 });
 
 test('21 + 22. Analysis and Schedule reuse the existing plan/comparator truth', () => {
@@ -381,9 +454,398 @@ test('21 + 22. Analysis and Schedule reuse the existing plan/comparator truth', 
   );
 });
 
+test('UI-02 closeout keeps Kurva and Jadwal guidance on demand without changing their truth', () => {
+  const curve = plan.slice(
+    plan.indexOf('function MonitoringComparisonCurve'),
+    plan.indexOf('function PeriodicScheduleReadOnly'),
+  );
+  assert.equal(
+    countOf(curve, 'Rencana, Realisasi, dan Deviasi berasal dari perbandingan temporal'),
+    1,
+    'the canonical Kurva guidance is missing or duplicated',
+  );
+  assert.doesNotMatch(
+    curve,
+    /<p className="execution-plan-note">\s*Rencana, Realisasi, dan Deviasi/,
+    'Kurva guidance remains a permanent paragraph',
+  );
+  assert.equal(
+    countOf(curve, '{...curveHelp.triggerProps}'),
+    2,
+    'Kurva help is not reachable from both its title and legend',
+  );
+  assert.match(curve, /<h3>[\s\S]*Kurva S[\s\S]*<\/h3>/);
+  assert.match(curve, /aria-label="Legenda Kurva S"/);
+  assert.match(curve, /role="tooltip"/);
+  assert.match(curve, /monitoringComparisonChartProjection\(comparison\.points\)/);
+
+  assert.equal(
+    countOf(
+      plan,
+      'Waktu tetap berasal dari rencana resmi. Realisasi menampilkan fakta Current Official terkini, bukan Actual Start, Actual Finish, atau durasi aktual.',
+    ),
+    1,
+    'current schedule guidance is missing or duplicated',
+  );
+  assert.equal(
+    countOf(
+      plan,
+      'Tanggal rencana berasal dari Rencana Pelaksanaan resmi. Kuantitas periode dan kumulatif berasal dari konteks periode kanonikal yang dipilih, bukan progress, Actual Start, Actual Finish, atau durasi aktual.',
+    ),
+    1,
+    'periodic schedule guidance is missing or duplicated',
+  );
+  assert.equal(countOf(plan, '<OnDemandHeadingHelp'), 2);
+  assert.match(plan, /onMouseEnter: \(\) => setOpen\(true\)/);
+  assert.match(plan, /onFocus: \(\) => setOpen\(true\)/);
+  assert.match(plan, /onClick: \(\) =>/);
+  assert.match(plan, /event\.key === 'Escape'/);
+  assert.match(css, /\.execution-plan-help-popover \{[^}]*position: absolute/);
+});
+
+test('UI-03A removes only redundant Analisis and Jadwal labels while preserving selectors and content', () => {
+  for (const redundantLabel of [
+    'Perbandingan Proyek',
+    'Analisis Proyek',
+    'Schedule Periode',
+  ]) {
+    assert.equal(
+      countOf(plan, redundantLabel),
+      0,
+      `${redundantLabel} remains permanently rendered`,
+    );
+  }
+
+  const currentAnalysis = plan.slice(
+    plan.indexOf("if (presentation === 'ANALYSIS')"),
+    plan.indexOf('const beginRevision'),
+  );
+  assert.match(currentAnalysis, /aria-label="Analisis Kurva S"/);
+  assert.doesNotMatch(
+    currentAnalysis,
+    /className="execution-plan-heading"/,
+    'an empty current-analysis heading still consumes permanent space',
+  );
+  assert.match(currentAnalysis, /<MonitoringComparisonCurve/);
+  assert.match(plan, /title="Jadwal Proyek"/);
+  assert.equal(countOf(plan, 'title="Jadwal Proyek"'), 2);
+
+  const selectors = page.slice(
+    page.indexOf('const monitoringPlanWorkspace'),
+    page.indexOf('return (', page.indexOf('const monitoringPlanWorkspace')),
+  );
+  assert.match(selectors, /<option value="CURVE">Kurva S<\/option>/);
+  assert.match(selectors, /<option value="WORK_PROGRAM">Program Kerja<\/option>/);
+});
+
+test('periodic Analysis and Schedule context is disclosed from the compact period label', () => {
+  for (const contextCopy of [
+    'Schedule Rencana + Realisasi Periode',
+    'Kurva S Rencana + Realisasi s.d. Akhir Periode',
+  ]) {
+    assert.equal(countOf(plan, contextCopy), 0);
+    assert.equal(countOf(page, contextCopy), 1);
+  }
+
+  const periodicStart = page.indexOf("temporalContextMode === 'PERIODIK'");
+  const periodicProjectScopeStart = page.indexOf(
+    '<div className="h2a0-project-scope">',
+    periodicStart,
+  );
+  const periodicProjectScopeEnd = page.indexOf(
+    "{monitoringContentLens === 'CONDITION' && (",
+    periodicProjectScopeStart,
+  );
+  assert.ok(periodicProjectScopeStart >= 0, 'periodic project scope start is missing');
+  assert.ok(
+    periodicProjectScopeEnd > periodicProjectScopeStart,
+    'periodic project scope end does not follow its start',
+  );
+  const periodicProjectScope = page.slice(
+    periodicProjectScopeStart,
+    periodicProjectScopeEnd,
+  );
+  assert.ok(periodicProjectScope.length > 0, 'periodic project scope slice is empty');
+  assert.match(periodicProjectScope, /monitoringPlanView === null \? \(/);
+  assert.match(periodicProjectScope, /<details className="h2a0-period-context-help">/);
+  assert.match(periodicProjectScope, /<summary[\s\S]*aria-describedby="h2a0-period-context-tooltip"/);
+  assert.match(periodicProjectScope, /role="tooltip"/);
+  assert.match(periodicProjectScope, /monitoringTemporalPeriodLabel\(periodicResolvedLens\.period\)/);
+  assert.match(periodicProjectScope, /formatProjectBusinessDate\(periodicResolvedLens\.period\.startDate\)/);
+  assert.match(periodicProjectScope, /formatProjectBusinessDate\(periodicResolvedLens\.period\.endDate\)/);
+
+  assert.match(plan, /title="Jadwal Proyek"/);
+  assert.match(plan, /execution-plan-heading-state-only/);
+  assert.match(plan, /<strong className="execution-plan-state is-locked">Hanya baca<\/strong>/);
+  assert.match(css, /\.h2a0-period-context-tooltip \{[^}]*position: absolute/);
+  assert.match(css, /\.h2a0-period-context-tooltip \{[^}]*border: 1px solid #86efac/);
+  assert.match(css, /\.h2a0-period-context-tooltip \{[^}]*background: #f0fdf4/);
+  assert.match(css, /\.h2a0-period-context-tooltip \{[^}]*color: #166534/);
+  assert.match(css, /\.h2a0-period-context-help > summary:hover \.h2a0-period-context-tooltip/);
+  assert.match(css, /\.h2a0-period-context-help > summary:focus-visible \.h2a0-period-context-tooltip/);
+  assert.match(css, /\.h2a0-period-context-help\[open\] \.h2a0-period-context-tooltip/);
+});
+
+test('Kurva S detail facts remain available only through one collapsed disclosure', () => {
+  const curveStart = plan.indexOf('function MonitoringComparisonCurve');
+  const curveEnd = plan.indexOf('function PeriodicScheduleReadOnly', curveStart);
+  assert.ok(curveStart >= 0, 'the Kurva S render owner is missing');
+  assert.ok(curveEnd > curveStart, 'the Kurva S render boundary is invalid');
+  const curve = plan.slice(curveStart, curveEnd);
+  const detailStart = curve.indexOf(
+    '<details className="execution-plan-comparison-detail">',
+  );
+  const detailEnd = curve.indexOf('</details>', detailStart);
+  assert.ok(detailStart >= 0, 'the compact detail disclosure is missing');
+  assert.ok(detailEnd > detailStart, 'the detail disclosure boundary is invalid');
+  const detail = curve.slice(detailStart, detailEnd);
+
+  assert.equal(countOf(curve, 'className="execution-plan-comparison-detail"'), 1);
+  assert.match(detail, /<summary>Lihat detail<\/summary>/);
+  assert.match(detail, /className="execution-plan-comparison-table"/);
+  assert.match(detail, /Detail fakta perbandingan Kurva S/);
+  assert.match(detail, /<th>Tanggal<\/th>[\s\S]*<th>Rencana<\/th>[\s\S]*<th>Realisasi<\/th>[\s\S]*<th>Deviasi<\/th>/);
+  assert.equal(
+    countOf(detail, 'comparison.points.map'),
+    1,
+    'the detail disclosure must consume the canonical comparison points exactly once',
+  );
+  assert.equal(
+    countOf(curve.slice(0, detailStart), 'comparison.points.map'),
+    0,
+    'canonical detail facts must not be mapped outside the collapsed disclosure',
+  );
+  assert.equal(
+    countOf(curve, 'comparisonChart.points.map'),
+    1,
+    'chart markers must consume the chart-specific projected points exactly once',
+  );
+  assert.doesNotMatch(
+    curve.slice(0, detailStart),
+    /Detail fakta perbandingan Kurva S|execution-plan-comparison-table/,
+    'the detail-fact table still appears in permanent Kurva S flow',
+  );
+  assert.match(curve, /monitoringComparisonChartProjection\(comparison\.points\)/);
+  assert.match(curve, /className="execution-plan-comparison-chart"/);
+  assert.match(css, /\.execution-plan-comparison-detail \{[^}]*margin-top: \.6rem/);
+  assert.match(css, /\.execution-plan-comparison-detail > summary \{[^}]*width: fit-content/);
+  assert.match(
+    css,
+    /\.execution-plan-comparison-table \{[^}]*width: 100%[^}]*min-width: 0[^}]*table-layout: fixed/,
+  );
+  assert.match(
+    css,
+    /\.execution-plan-comparison-table th, \.execution-plan-comparison-table td \{[^}]*white-space: normal[^}]*overflow-wrap: anywhere/,
+  );
+  assert.doesNotMatch(css, /\.execution-plan-comparison-table \{[^}]*min-width: 36rem/);
+  assert.doesNotMatch(css, /\.execution-plan-comparison-detail[^}]*display:\s*none/);
+});
+
+test('MON04 chart fits the available right-panel width without a second point truth', () => {
+  const curveStart = plan.indexOf('function MonitoringComparisonCurve');
+  const curveEnd = plan.indexOf('function PeriodicScheduleReadOnly', curveStart);
+  assert.ok(curveStart >= 0, 'the Kurva S render owner is missing');
+  assert.ok(curveEnd > curveStart, 'the Kurva S render boundary is invalid');
+  const curve = plan.slice(curveStart, curveEnd);
+
+  assert.equal(
+    countOf(curve, 'monitoringComparisonChartProjection(comparison.points)'),
+    1,
+    'the responsive presentation must keep the canonical comparison projection',
+  );
+  assert.equal(
+    countOf(curve, 'comparisonChart.points.map'),
+    1,
+    'chart markers must keep the single projected canonical point source',
+  );
+  assert.match(
+    css,
+    /\.execution-plan-comparison-plot-frame \{[^}]*width: 100%[^}]*min-width: 0/,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.execution-plan-comparison-plot-frame \{[^}]*min-width: 34rem/,
+    'the chart frame must not be wider than the available right-panel viewport',
+  );
+  assert.match(
+    css,
+    /\.execution-plan-comparison-chart svg \{[^}]*width: 100%[^}]*height: auto/,
+  );
+});
+
+test('UI-03B keeps Kondisi Proyek compact while canonical context stays on demand', () => {
+  const componentStart = page.indexOf('function ProjectConditionMetric');
+  const componentEnd = page.indexOf('export function ProjectWorkPage');
+  assert.ok(componentStart >= 0, 'the project-condition metric owner is missing');
+  assert.ok(componentEnd > componentStart, 'the project-condition component boundary is invalid');
+  const conditionComponents = page.slice(componentStart, componentEnd);
+  assert.ok(conditionComponents.length > 0, 'the project-condition component slice is empty');
+
+  assert.equal(
+    countOf(conditionComponents, '<ProjectConditionMetric'),
+    3,
+    'the compact layer must contain exactly three decision facts',
+  );
+  for (const label of ['Rencana', 'Progress Resmi', 'Deviasi']) {
+    assert.match(
+      conditionComponents,
+      new RegExp('label="' + label + '"'),
+      label + ' is missing from the compact condition summary',
+    );
+  }
+  assert.match(conditionComponents, /plannedComparisonLabel\(finalPoint\.planned\)/);
+  assert.match(conditionComponents, /actualComparisonLabel\(finalPoint\.actual\)/);
+  assert.match(
+    conditionComponents,
+    /deviationComparisonPresentation\(finalPoint\.deviationPercentagePoints\)/,
+  );
+  assert.match(conditionComponents, /officialProjectProgressLabel\(actualFallback\)/);
+  assert.match(
+    conditionComponents,
+    /deviation\.meaning === 'Tertinggal dari rencana'[\s\S]*\? 'critical'/,
+    'negative canonical deviation does not receive the critical presentation tone',
+  );
+  assert.match(
+    conditionComponents,
+    /deviation\.meaning === 'Lebih maju dari rencana'[\s\S]*\? 'healthy'/,
+    'positive canonical deviation does not reuse the healthy presentation tone',
+  );
+  assert.match(
+    conditionComponents,
+    /<details className=\{'h2a0-condition-metric is-' \+ tone\}>/,
+  );
+  assert.match(conditionComponents, /<summary[\s\S]*aria-describedby=\{helpId\}/);
+  assert.match(
+    conditionComponents,
+    /className="h2a0-condition-metric-help" role="tooltip"/,
+  );
+
+  assert.equal(countOf(page, '<ProjectConditionSummary'), 2);
+  assert.match(
+    page,
+    /monitoringContentLens !== 'CONDITION' && <h3>\{project\.name\}<\/h3>/,
+    'the duplicate project name must stay out of the condition view only',
+  );
+  assert.doesNotMatch(
+    page,
+    /<dt>Cakupan Bobot<\/dt>|<dt>Bobot terhitung<\/dt>|<dt>Makna Actual<\/dt>/,
+    'secondary or technical facts remain permanently rendered as condition cards',
+  );
+  assert.doesNotMatch(
+    page,
+    /Konteks dibentuk backend dari basis dan periode resmi yang dipilih/,
+    'technical provenance remains permanently rendered in Kondisi Proyek',
+  );
+  assert.match(page, /helpIdPrefix="current-project-condition"/);
+  assert.match(page, /helpIdPrefix="periodic-project-condition"/);
+  assert.match(page, /Cakupan bobot/);
+  assert.match(page, /Current Official disajikan kembali menurut tanggal kerja/);
+
+  assert.match(
+    css,
+    /\.h2a0-condition-summary \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.h2a0-condition-summary \{[^}]*auto-fit/,
+    'the condition metrics can still collapse into a desktop 2+1 orphan layout',
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 420px\) \{[\s\S]*\.h2a0-condition-summary \{ grid-template-columns: 1fr; \}/,
+    'genuinely narrow screens do not fall back to one balanced column',
+  );
+  assert.match(css, /\.h2a0-condition-metric\.is-critical > summary \{[^}]*#c0392b/);
+  assert.match(css, /\.h2a0-condition-metric\.is-critical > summary strong \{[^}]*#c0392b/);
+  assert.match(css, /\.h2a0-condition-metric-help \{[^}]*position: absolute/);
+  assert.match(
+    css,
+    /\.h2a0-condition-metric > summary:hover \+ \.h2a0-condition-metric-help/,
+  );
+  assert.match(
+    css,
+    /\.h2a0-condition-metric > summary:focus-visible \+ \.h2a0-condition-metric-help/,
+  );
+  assert.match(css, /\.h2a0-condition-metric\[open\] \.h2a0-condition-metric-help/);
+});
+
+test('UI-03B closeout opens only a truthful interaction shell and restores its primary view', () => {
+  assert.equal(countOf(page, 'Perhatian SIMPROK'), 0);
+  assert.equal(countOf(page, 'h2a0-simprok-insight'), 0);
+  assert.doesNotMatch(page, /RiskCard|RecommendationCard|ProjectWarRoomPage/);
+
+  assert.match(page, /const \[interactionOpen, setInteractionOpen\] = useState\(false\)/);
+  assert.match(page, /const rightViewportRef = useRef<HTMLDivElement \| null>\(null\)/);
+  assert.match(page, /const interactionReturnScrollTopRef = useRef\(0\)/);
+  const interactionHandlers = page.slice(
+    page.indexOf('const openInteraction'),
+    page.indexOf('useEffect(', page.indexOf('const openInteraction')),
+  );
+  assert.match(
+    interactionHandlers,
+    /interactionReturnScrollTopRef\.current = rightViewportRef\.current\?\.scrollTop \?\? 0/,
+  );
+  assert.match(interactionHandlers, /setInteractionOpen\(true\)/);
+  assert.match(interactionHandlers, /setInteractionOpen\(false\)/);
+  assert.match(
+    interactionHandlers,
+    /rightViewportRef\.current\.scrollTop = interactionReturnScrollTopRef\.current/,
+  );
+  assert.doesNotMatch(
+    interactionHandlers,
+    /setMonitoringContentLens/,
+    'opening or closing interaction changes the active primary view',
+  );
+
+  assert.match(page, /ref=\{rightViewportRef\}[\s\S]*id="h2a0-right-viewport"/);
+  assert.match(
+    page,
+    /\{interactionOpen \? \([\s\S]*className="h2a0-interaction-surface"[\s\S]*Ruang interaksi belum aktif\.[\s\S]*\) : \(/,
+  );
+  assert.match(
+    page,
+    /className="h2a0-interaction-toggle"[\s\S]*aria-expanded=\{interactionOpen\}[\s\S]*onClick=\{interactionOpen \? closeInteraction : openInteraction\}/,
+  );
+  assert.match(page, /<input[\s\S]*disabled[\s\S]*title="Ruang interaksi belum aktif"/);
+  assert.match(page, /<button type="button" disabled aria-label="Kirim pertanyaan"/);
+  assert.match(css, /\.h2a0-interaction-surface \{[^}]*min-height: 100%/);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // F. EVIDENCE SAFETY
 // ─────────────────────────────────────────────────────────────────────────────
+
+test('UI-02 table footer and support doors remain inside the one left workspace', () => {
+  const anchor = page.slice(
+    page.indexOf('<section className="h2a0-anchor"'),
+    page.indexOf('<aside className="h2a0-current"'),
+  );
+  const footer = anchor.slice(anchor.indexOf('<tfoot>'), anchor.indexOf('</tfoot>'));
+  assert.ok(anchor.includes('Daftar Uraian Pekerjaan Monitoring'));
+  assert.ok(footer.includes('TOTAL PROYEK'), 'the project footer is missing');
+  assert.ok(
+    footer.includes('weightCompletenessLabel(activeMonitoringSnapshot.weight)') &&
+      footer.includes('officialProjectProgressLabel('),
+    'the footer is not rendering canonical weight/progress facts',
+  );
+  assert.ok(
+    anchor.indexOf('className="h2a0-support-actions"') > anchor.indexOf('</table>'),
+    'support actions are not below the table',
+  );
+});
+
+test('UI-02 right shell keeps one scrollable viewport and a view-independent dock', () => {
+  const asideStart = page.indexOf('<aside className="h2a0-current"');
+  const aside = page.slice(asideStart, page.indexOf('</aside>', asideStart));
+  const nav = aside.indexOf('{monitoringLensSelector}');
+  const viewport = aside.indexOf('className="h2a0-right-viewport"');
+  const dock = aside.indexOf('className="h2a0-interaction-dock"');
+  assert.ok(nav !== -1 && viewport !== -1 && dock !== -1 && nav < viewport && viewport < dock);
+  assert.equal(countOf(page, 'className="h2a0-interaction-dock"'), 1);
+  assert.equal(countOf(aside, 'Tanyakan ke SIMPROK...'), 2);
+  assert.match(css, /\.h2a0-current \{[^}]*grid-template-rows: auto minmax\(0, 1fr\) auto[^}]*overflow: hidden/);
+  assert.match(css, /\.h2a0-right-viewport \{[^}]*overflow-x: hidden[^}]*overflow-y: auto/);
+});
 
 test('19 + 20. evidence stays a user-initiated safe reference', () => {
   for (const unsafe of ['<img', '<video', '<iframe', 'background-image', 'preload']) {
@@ -407,23 +869,48 @@ test('19 + 20. evidence stays a user-initiated safe reference', () => {
 // G. NO DOOR WITHOUT A CAPABILITY, NO MOCKUP CONTENT HARD-CODED
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('23. unsupported mockup features are not exposed as fake doors', () => {
+test('23. unsupported features are either absent or explicitly disabled without fake routes', () => {
   for (const fake of [
     'Recovery',
     'Simulasi',
-    'Diagram Batang',
-    'Diagram Lingkaran',
     'Diagram Alir',
-    'Network Planning',
     'Export / Print',
     'Forecast Selesai',
     'Sisa Waktu',
-    'Cashflow',
-    'SMKK',
-    'Logistik',
   ]) {
     assert.equal(countOf(page, fake), 0, `${fake} is exposed without a canonical capability`);
     assert.equal(countOf(plan, fake), 0, `${fake} is exposed in the plan panel`);
+  }
+
+  const support = page.slice(
+    page.indexOf('<nav className="h2a0-support-actions"'),
+    page.indexOf('</nav>', page.indexOf('<nav className="h2a0-support-actions"')),
+  );
+  assert.equal(countOf(support, '<button'), 4, 'the support door count is not four');
+  assert.equal(countOf(support, ' disabled'), 4, 'a support door is falsely actionable');
+  for (const label of ['Cashflow', 'Lap. SMKK', 'Laporan Harian', 'Logistik']) {
+    assert.ok(support.includes(label), `${label} support door is missing`);
+  }
+  for (const forbiddenWire of ['navigate(', 'href=', 'onClick=']) {
+    assert.equal(
+      countOf(support, forbiddenWire),
+      0,
+      `a disabled support door is wired through ${forbiddenWire}`,
+    );
+  }
+
+  const subselectors = page.slice(
+    page.indexOf('const monitoringPlanWorkspace'),
+    page.indexOf('return (', page.indexOf('const monitoringPlanWorkspace')),
+  );
+  assert.match(subselectors, /<option value="CURVE">Kurva S<\/option>/);
+  assert.match(subselectors, /<option value="WORK_PROGRAM">Program Kerja<\/option>/);
+  for (const unavailable of ['Diagram Lingkaran', 'Diagram Batang', 'Network Planning']) {
+    assert.match(
+      subselectors,
+      new RegExp(`<option[^>]*disabled[^>]*>${unavailable}<\\/option>`),
+      `${unavailable} is not truthfully disabled`,
+    );
   }
 });
 
@@ -493,8 +980,49 @@ test('26. no truth disappears at a small viewport', () => {
     'the contextual workspace does not stack below the table',
   );
   assert.equal(
-    countOf(css, 'display: none'),
+    countOf(css, readinessNativeMarkerRule),
+    1,
+    'the exact native marker exception is missing or duplicated',
+  );
+  assert.equal(
+    countOf(withoutReadinessNativeMarkerRule(css), 'display: none'),
     0,
     'a Monitoring fact is hidden rather than stacked at a small viewport',
   );
+  assert.match(
+    css,
+    /\.execution-plan-header-control > summary \{[^}]*display: flex/,
+    'the real readiness summary control is not visible',
+  );
+  assert.match(
+    css,
+    /\.execution-plan-header-control > summary:focus-visible \{/,
+    'the readiness summary has no keyboard focus treatment',
+  );
+  assert.match(
+    css,
+    /\.execution-plan-header-control\[open\] \.execution-plan-header-caret \{/,
+    'the open disclosure has no visible marker state',
+  );
+  assert.match(
+    plan,
+    /<details className="execution-plan-header-control">[\s\S]*<summary aria-describedby="execution-plan-header-help">/,
+    'the readiness marker is not attached to a native focusable disclosure',
+  );
+
+  for (const forbiddenRule of [
+    '.execution-plan-header-control > summary { display: none; }',
+    '.h2a0-time-lens { display: none; }',
+    '.h2a0-table td { display: none; }',
+    '.execution-plan-header-control > summary::-webkit-details-marker, .h2a0-time-lens { display: none; }',
+  ]) {
+    assert.equal(
+      countOf(
+        withoutReadinessNativeMarkerRule(`${css}\n${forbiddenRule}`),
+        'display: none',
+      ),
+      1,
+      `a real control/data rule was incorrectly exempted: ${forbiddenRule}`,
+    );
+  }
 });
