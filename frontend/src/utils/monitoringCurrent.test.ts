@@ -714,8 +714,11 @@ test('H2-A0-11 the shell neither consumes legacy reality nor paints later truth'
     page,
     /Realisasi Terakhir yang Berlaku adalah catatan aktual[\s\S]*?perhitungan dan Progress fisik resmi/,
   );
-  assert.match(page, /Progress fisik resmi RAB/);
-  assert.match(page, /Progress fisik resmi/);
+  assert.match(page, /Progress fisik resmi[^<\n]*bukan bobot/);
+  assert.match(
+    page,
+    /officialProjectProgressLabel\(\s*activeMonitoringSnapshot\.currentOfficialRabWeightedPhysicalProgress/,
+  );
   assert.match(page, /Catat \/ Kelola Actual/);
   assert.match(page, /Lihat Riwayat Actual/);
   assert.match(page, /hasPermission\('FIELD_PROGRESS_SUBMIT'\)/);
@@ -1766,10 +1769,6 @@ test('MON04-TC-6 ProjectWorkPage owns one optional request and retires stale res
 
 test('MON04-TC-7 one Monitoring shell evolves without Current contamination', () => {
   const page = readFileSync('src/pages/field/ProjectWorkPage.tsx', 'utf8');
-  const panel = readFileSync(
-    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
-    'utf8',
-  );
   // Basis stays a secondary control with literal labels; the weekly and monthly
   // windows are now the primary time lens, labelled from the canonical list.
   for (const control of ['Waktu Kerja', 'Kalender']) {
@@ -1793,11 +1792,18 @@ test('MON04-TC-7 one Monitoring shell evolves without Current contamination', ()
   assert.match(page, /Rencana s\.d\. Akhir Periode/);
   assert.match(page, /Realisasi Resmi s\.d\. Akhir Periode/);
   assert.match(page, /temporalLensItemsById\.get\(row\.id\)/);
-  assert.match(page, /Kondisi Periode/);
+  assert.match(
+    page,
+    /monitoringContentLens === 'CONDITION' && \([\s\S]*<ProjectConditionSummary/,
+  );
+  assert.match(page, />\s*Kondisi Proyek\s*</);
+  assert.doesNotMatch(page, /Kondisi Periode/);
   assert.match(page, /periodicResolvedLens\.weeklyRecap\.sliceCount/);
   assert.doesNotMatch(page, /weeklyRecap\.slices\.length/);
-  assert.match(panel, /Schedule Rencana \+ Realisasi Periode/);
-  assert.match(panel, /Kurva S Rencana \+ Realisasi s\.d\. Akhir Periode/);
+  assert.match(
+    page,
+    /<details className="h2a0-period-context-help">[\s\S]*Schedule Rencana \+ Realisasi Periode[\s\S]*Kurva S Rencana \+ Realisasi s\.d\. Akhir Periode/,
+  );
   assert.match(page, /temporalContextMode === 'TERKINI'[\s\S]*onChanged=/);
 });
 
