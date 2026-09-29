@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { apiFetch } from '../../utils/apiClient';
 import {
@@ -71,6 +71,73 @@ interface MonitoringComparisonCurveProps {
   deviationSummaryLabel: string;
 }
 
+function useOnDemandHelp() {
+  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const dismiss = () => {
+    setPinned(false);
+    setOpen(false);
+  };
+
+  return {
+    open,
+    triggerProps: {
+      onMouseEnter: () => setOpen(true),
+      onMouseLeave: () => {
+        if (!pinned) setOpen(false);
+      },
+      onFocus: () => setOpen(true),
+      onBlur: dismiss,
+      onClick: () => {
+        const nextPinned = !pinned;
+        setPinned(nextPinned);
+        setOpen(nextPinned);
+      },
+      onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+        if (event.key === 'Escape') {
+          dismiss();
+          event.currentTarget.blur();
+        }
+      },
+    },
+  };
+}
+
+function OnDemandHeadingHelp({
+  headingId,
+  helpId,
+  title,
+  explanation,
+}: {
+  headingId: string;
+  helpId: string;
+  title: string;
+  explanation: string;
+}) {
+  const help = useOnDemandHelp();
+
+  return (
+    <>
+      <h2 id={headingId}>
+        <button
+          type="button"
+          className="execution-plan-help-trigger"
+          aria-expanded={help.open}
+          aria-controls={helpId}
+          {...help.triggerProps}
+        >
+          {title}
+        </button>
+      </h2>
+      {help.open && (
+        <div id={helpId} className="execution-plan-help-popover" role="tooltip">
+          <p>{explanation}</p>
+        </div>
+      )}
+    </>
+  );
+}
+
 function MonitoringComparisonCurve({
   comparison,
   subtitle,
@@ -79,6 +146,7 @@ function MonitoringComparisonCurve({
   actualSummaryLabel,
   deviationSummaryLabel,
 }: MonitoringComparisonCurveProps) {
+  const curveHelp = useOnDemandHelp();
   const comparisonChart = monitoringComparisonChartProjection(comparison.points);
   const finalComparisonPoint =
     comparison.points.length > 0
@@ -93,26 +161,44 @@ function MonitoringComparisonCurve({
   return (
     <>
       <div className="execution-plan-curve-heading">
-        <div>
-          <h3>Kurva S</h3>
-          <p>{subtitle}</p>
+        <div className="execution-plan-help-anchor">
+          <h3>
+            <button
+              type="button"
+              className="execution-plan-help-trigger"
+              aria-expanded={curveHelp.open}
+              aria-controls="execution-plan-curve-help"
+              {...curveHelp.triggerProps}
+            >
+              Kurva S
+            </button>
+          </h3>
+          {curveHelp.open && (
+            <div
+              id="execution-plan-curve-help"
+              className="execution-plan-help-popover"
+              role="tooltip"
+            >
+              <strong>{subtitle}</strong>
+              <p>
+                Rencana, Realisasi, dan Deviasi berasal dari perbandingan temporal
+                kanonikal backend. Garis terputus saat fakta belum lengkap atau tidak
+                tersedia.
+              </p>
+              <small className="execution-plan-curve-provenance">
+                {comparison.baseline
+                  ? 'Baseline v' + comparison.baseline.versionNumber
+                  : 'Baseline tidak tersedia'}
+                {' · '}
+                {comparison.plannedSource
+                  ? 'Rencana Pelaksanaan v' + comparison.plannedSource.versionNumber
+                  : 'Sumber rencana tidak tersedia'}
+              </small>
+            </div>
+          )}
         </div>
         <span>{contextLine}</span>
       </div>
-      <p className="execution-plan-note">
-        Rencana, Realisasi, dan Deviasi berasal dari perbandingan temporal
-        kanonikal backend. Garis terputus saat fakta belum lengkap atau tidak
-        tersedia.
-      </p>
-      <p className="execution-plan-curve-provenance">
-        {comparison.baseline
-          ? 'Baseline v' + comparison.baseline.versionNumber
-          : 'Baseline tidak tersedia'}
-        {' · '}
-        {comparison.plannedSource
-          ? 'Rencana Pelaksanaan v' + comparison.plannedSource.versionNumber
-          : 'Sumber rencana tidak tersedia'}
-      </p>
 
       {comparison.points.length === 0 ? (
         <p>Fakta perbandingan temporal belum tersedia.</p>
@@ -122,94 +208,115 @@ function MonitoringComparisonCurve({
             className="execution-plan-comparison-chart"
             data-boundary-basis={comparison.boundaryBasis}
           >
-            <div
+            <button
+              type="button"
               className="execution-plan-comparison-legend"
               aria-label="Legenda Kurva S"
+              aria-expanded={curveHelp.open}
+              aria-controls="execution-plan-curve-help"
+              {...curveHelp.triggerProps}
             >
               <span className="is-planned">Rencana</span>
               <span className="is-actual">Realisasi</span>
-            </div>
-            <svg
-              role="img"
-              aria-label="Kurva S Rencana dan Realisasi terhadap tanggal kerja"
-              viewBox={
-                '0 0 ' + comparisonChart.width + ' ' + comparisonChart.height
-              }
-            >
-              <line
-                className="comparison-axis"
-                x1={comparisonChart.padding}
-                y1={comparisonChart.padding}
-                x2={comparisonChart.padding}
-                y2={comparisonChart.height - comparisonChart.padding}
-              />
-              <line
-                className="comparison-axis"
-                x1={comparisonChart.padding}
-                y1={comparisonChart.height - comparisonChart.padding}
-                x2={comparisonChart.width - comparisonChart.padding}
-                y2={comparisonChart.height - comparisonChart.padding}
-              />
-              <text x={4} y={comparisonChart.padding + 4}>100%</text>
-              <text
-                x={16}
-                y={comparisonChart.height - comparisonChart.padding + 4}
-              >
-                0%
-              </text>
-              {comparisonChart.plannedSegments.map((segment, index) => (
-                <line
-                  key={'planned-' + index}
-                  className="comparison-line is-planned"
-                  x1={segment.from.x}
-                  y1={segment.from.y}
-                  x2={segment.to.x}
-                  y2={segment.to.y}
-                />
-              ))}
-              {comparisonChart.actualSegments.map((segment, index) => (
-                <line
-                  key={'actual-' + index}
-                  className="comparison-line is-actual"
-                  x1={segment.from.x}
-                  y1={segment.from.y}
-                  x2={segment.to.x}
-                  y2={segment.to.y}
-                />
-              ))}
-              {comparisonChart.points.map((point) => (
-                <g key={point.cutoffDate}>
-                  {point.x !== null && point.plannedY !== null && (
-                    <circle
-                      className="comparison-point is-planned"
-                      cx={point.x}
-                      cy={point.plannedY}
-                      r={4}
+            </button>
+            <div className="execution-plan-comparison-plot">
+              <div className="execution-plan-comparison-plot-frame">
+                <svg
+                  role="img"
+                  aria-label="Kurva S Rencana dan Realisasi terhadap tanggal kerja"
+                  viewBox={
+                    '0 0 ' + comparisonChart.width + ' ' + comparisonChart.height
+                  }
+                >
+                  {comparisonChart.percentageTicks.map((tick) => (
+                    <g key={tick.value}>
+                      <line
+                        className={
+                          tick.value === 0 || tick.value === 100
+                            ? 'comparison-grid is-boundary'
+                            : 'comparison-grid'
+                        }
+                        x1={comparisonChart.padding}
+                        y1={tick.y}
+                        x2={comparisonChart.width - comparisonChart.padding}
+                        y2={tick.y}
+                        aria-hidden="true"
+                      />
+                      <text
+                        className="comparison-axis-label"
+                        x={comparisonChart.padding - 10}
+                        y={tick.y}
+                        textAnchor="end"
+                        dominantBaseline="middle"
+                      >
+                        {tick.value}%
+                      </text>
+                    </g>
+                  ))}
+                  <line
+                    className="comparison-axis"
+                    x1={comparisonChart.padding}
+                    y1={comparisonChart.padding}
+                    x2={comparisonChart.padding}
+                    y2={comparisonChart.height - comparisonChart.padding}
+                  />
+                  {comparisonChart.dateTicks.map((tick) => (
+                    <g key={tick.cutoffDate}>
+                      <line
+                        className="comparison-x-tick"
+                        x1={tick.x}
+                        y1={comparisonChart.height - comparisonChart.padding}
+                        x2={tick.x}
+                        y2={comparisonChart.height - comparisonChart.padding + 6}
+                        aria-hidden="true"
+                      />
+                      {tick.label && (
+                        <text
+                          className="comparison-x-label"
+                          x={tick.x}
+                          y={comparisonChart.height - comparisonChart.padding + 22}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                        >
+                          {formatProjectBusinessDate(tick.cutoffDate)}
+                        </text>
+                      )}
+                    </g>
+                  ))}
+                  {comparisonChart.plannedCurve.path && (
+                    <path
+                      className="comparison-line is-planned"
+                      d={comparisonChart.plannedCurve.path}
                     />
                   )}
-                  {point.x !== null && point.actualY !== null && (
-                    <circle
-                      className="comparison-point is-actual"
-                      cx={point.x}
-                      cy={point.actualY}
-                      r={4}
+                  {comparisonChart.actualCurve.path && (
+                    <path
+                      className="comparison-line is-actual"
+                      d={comparisonChart.actualCurve.path}
                     />
                   )}
-                </g>
-              ))}
-            </svg>
-            <div className="execution-plan-comparison-range">
-              <span>
-                {formatProjectBusinessDate(comparison.points[0].cutoffDate)}
-              </span>
-              {comparison.points[0].cutoffDate !==
-                comparison.points[comparison.points.length - 1].cutoffDate && (
-                <span>
-                  {formatProjectBusinessDate(
-                    comparison.points[comparison.points.length - 1].cutoffDate,
-                  )}
-                </span>
-              )}
+                  {comparisonChart.points.map((point) => (
+                    <g key={point.cutoffDate}>
+                      {point.x !== null && point.plannedY !== null && (
+                        <circle
+                          className="comparison-point is-planned"
+                          cx={point.x}
+                          cy={point.plannedY}
+                          r={4.5}
+                        />
+                      )}
+                      {point.x !== null && point.actualY !== null && (
+                        <circle
+                          className="comparison-point is-actual"
+                          cx={point.x}
+                          cy={point.actualY}
+                          r={4.5}
+                        />
+                      )}
+                    </g>
+                  ))}
+                </svg>
+              </div>
             </div>
           </div>
 
@@ -231,8 +338,10 @@ function MonitoringComparisonCurve({
             </dl>
           )}
 
-          <div className="execution-plan-table-scroll">
-            <table className="execution-plan-comparison-table">
+          <details className="execution-plan-comparison-detail">
+            <summary>Lihat detail</summary>
+            <div className="execution-plan-table-scroll">
+              <table className="execution-plan-comparison-table">
               <caption>Detail fakta perbandingan Kurva S</caption>
               <thead>
                 <tr>
@@ -268,8 +377,9 @@ function MonitoringComparisonCurve({
                   );
                 })}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+          </details>
         </>
       )}
     </>
@@ -289,35 +399,31 @@ function PeriodicScheduleReadOnly({
   return (
     <section
       className="execution-plan"
-      aria-labelledby="execution-plan-periodic-title"
+      aria-labelledby={view === 'SCHEDULE' ? 'execution-plan-periodic-title' : undefined}
+      aria-label={view === 'ANALYSIS' ? 'Analisis Kurva S' : undefined}
     >
-      <div className="execution-plan-heading">
-        <div>
-          <p className="h2a0-eyebrow">Schedule Periode</p>
-          <h2 id="execution-plan-periodic-title">
-            {view === 'SCHEDULE' ? 'Jadwal Proyek' : 'Analisis Proyek'}
-          </h2>
-          <p className="execution-plan-note">
-            {view === 'SCHEDULE'
-              ? 'Schedule Rencana + Realisasi Periode'
-              : 'Kurva S Rencana + Realisasi s.d. Akhir Periode'}
-            <br />
-            {monitoringTemporalPeriodLabel(lens.period)} {' · '}
-            {formatProjectBusinessDate(lens.period.startDate)} {' - '}
-            {formatProjectBusinessDate(lens.period.endDate)}
-          </p>
-        </div>
+      <div
+        className={
+          view === 'ANALYSIS'
+            ? 'execution-plan-heading execution-plan-heading-state-only'
+            : 'execution-plan-heading'
+        }
+      >
+        {view === 'SCHEDULE' && (
+          <div className="execution-plan-help-anchor">
+            <OnDemandHeadingHelp
+              headingId="execution-plan-periodic-title"
+              helpId="execution-plan-periodic-schedule-help"
+              title="Jadwal Proyek"
+              explanation="Tanggal rencana berasal dari Rencana Pelaksanaan resmi. Kuantitas periode dan kumulatif berasal dari konteks periode kanonikal yang dipilih, bukan progress, Actual Start, Actual Finish, atau durasi aktual."
+            />
+          </div>
+        )}
         <strong className="execution-plan-state is-locked">Hanya baca</strong>
       </div>
 
       {view === 'SCHEDULE' && (
         <div className="execution-plan-review">
-          <p className="execution-plan-note">
-            Tanggal rencana berasal dari Rencana Pelaksanaan resmi. Kuantitas
-            periode dan kumulatif berasal dari konteks periode kanonikal yang
-            dipilih, bukan progress, Actual Start, Actual Finish, atau durasi
-            aktual.
-          </p>
           {executionPlan.schedule.length === 0 ? (
             <p>Schedule resmi belum mempunyai baris pekerjaan.</p>
           ) : (
@@ -471,19 +577,20 @@ export function ExecutionPlanReadinessPanel(
         aria-labelledby="execution-plan-current-schedule-title"
       >
         <div className="execution-plan-heading">
-          <div>
+          <div className="execution-plan-help-anchor">
             <p className="h2a0-eyebrow">Schedule Terkini</p>
-            <h2 id="execution-plan-current-schedule-title">Jadwal Proyek</h2>
+            <OnDemandHeadingHelp
+              headingId="execution-plan-current-schedule-title"
+              helpId="execution-plan-current-schedule-help"
+              title="Jadwal Proyek"
+              explanation="Waktu tetap berasal dari rencana resmi. Realisasi menampilkan fakta Current Official terkini, bukan Actual Start, Actual Finish, atau durasi aktual."
+            />
             <p className="execution-plan-note">
               Schedule Rencana + Realisasi Terkini
             </p>
           </div>
         </div>
         <div className="execution-plan-review">
-          <p className="execution-plan-note">
-            Waktu tetap berasal dari rencana resmi. Realisasi menampilkan fakta
-            Current Official terkini, bukan Actual Start, Actual Finish, atau durasi aktual.
-          </p>
           {executionPlan.schedule.length === 0 ? (
             <p>Distribusi waktu belum tersedia.</p>
           ) : (
@@ -544,16 +651,7 @@ export function ExecutionPlanReadinessPanel(
 
   if (presentation === 'ANALYSIS') {
     return (
-      <section
-        className="execution-plan"
-        aria-labelledby="execution-plan-current-analysis-title"
-      >
-        <div className="execution-plan-heading">
-          <div>
-            <p className="h2a0-eyebrow">Perbandingan Proyek</p>
-            <h2 id="execution-plan-current-analysis-title">Analisis Proyek</h2>
-          </div>
-        </div>
+      <section className="execution-plan" aria-label="Analisis Kurva S">
         <div className="execution-plan-review">
           {progressComparison ? (
             <MonitoringComparisonCurve
@@ -722,32 +820,43 @@ export function ExecutionPlanReadinessPanel(
   /*
    * MONITORING IS NOT A PLANNING ENGINE.
    *
-   * Once the Rencana Pelaksanaan is locked, Monitoring is the project's
-   * Pengawasan and Pengendalian workspace. Governance and provenance stay
-   * visible — nothing is deleted — but the plan stops dominating the page: the
-   * full Rencana Kerja review table is a pre-lock completion surface, and after
-   * the lock the same schedule truth is read through the contextual JADWAL
-   * view instead.
+   * Governance stays in one instance beside the project identity. Opening this
+   * disclosure reveals the same readiness facts and the same bounded mutation
+   * handlers; opening it does not itself save, lock, or change any plan fact.
+   * Schedule and comparison rendering returned above remain independent.
    */
   return (
-    <section
-      className={
-        locked ? 'execution-plan is-governance-compact' : 'execution-plan'
-      }
-      aria-labelledby="execution-plan-title"
-    >
-      <div className="execution-plan-heading">
-        <div>
-          <p className="h2a0-eyebrow">Execution Readiness</p>
-          <h2 id="execution-plan-title">Rencana Pelaksanaan</h2>
+    <details className="execution-plan-header-control">
+      <summary aria-describedby="execution-plan-header-help">
+        <span className="execution-plan-header-title">
+          Rencana Pelaksanaan
+          <span
+            className="execution-plan-header-help"
+            id="execution-plan-header-help"
+            role="tooltip"
+          >
+            Digunakan sebagai dasar pengawasan dan pengendalian.
+          </span>
+        </span>
+        <strong className={`execution-plan-state ${locked ? 'is-locked' : ''}`}>
+          {executionPlanStatusLabel(executionPlan.readinessState)}
+        </strong>
+        <span className="execution-plan-header-caret" aria-hidden="true">
+          &#8964;
+        </span>
+      </summary>
+
+      <div
+        className="execution-plan execution-plan-header-detail"
+        role="region"
+        aria-label="Detail Rencana Pelaksanaan"
+      >
+        <div className="execution-plan-disclosure-heading">
+          <strong>Detail Rencana Pelaksanaan</strong>
           <p className="execution-plan-note">
             Status Proyek: <strong>{executionPlan.projectStatus}</strong>
           </p>
         </div>
-        <strong className={`execution-plan-state ${locked ? 'is-locked' : ''}`}>
-          {executionPlanStatusLabel(executionPlan.readinessState)}
-        </strong>
-      </div>
 
       {executionPlan.blockers.length > 0 && !locked && (
         <div className="execution-plan-blockers" role="status">
@@ -857,7 +966,8 @@ export function ExecutionPlanReadinessPanel(
         </div>
       )}
 
-      {error && <p className="execution-plan-error" role="alert">{error}</p>}
-    </section>
+        {error && <p className="execution-plan-error" role="alert">{error}</p>}
+      </div>
+    </details>
   );
 }
