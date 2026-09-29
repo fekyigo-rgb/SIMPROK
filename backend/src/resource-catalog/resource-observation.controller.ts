@@ -3,8 +3,10 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -12,7 +14,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import { Permissions } from '../common/decorators/permissions.decorator';
-import { ResourceObservationService } from './resource-observation.service';
+import { ResourceObservationService, neutralQuestionOfHandBuiltLine } from './resource-observation.service';
+import { identicalQuestionKey } from './identical-question-key';
 import {
   AhspImportService,
   ahspSourceRowKey,
@@ -80,21 +83,86 @@ export class ResourceObservationController {
    */
   @Get()
   @Permissions('AHSP_RESOURCE_IDENTITY_DECIDE')
-  async list(@Req() request: any) {
+  async list(
+    @Req() request: any,
+    @Query('importJobId') importJobId?: string,
+    @Query('ahspId') ahspId?: string,
+    @Query('sourceSha256') sourceSha256?: string,
+  ) {
     const workspaceId = this.workspaceId(request);
-    const rows = await this.observations.listOpenForCuration(
-      workspaceId,
-      this.actor(request),
+    const scopeFlags = [importJobId, ahspId, sourceSha256].filter(
+      (value) => typeof value === 'string' && value.length > 0,
     );
+    if (scopeFlags.length > 1) {
+      throw new BadRequestException('OBSERVATION_SCOPE_CONFLICT');
+    }
+
+    let presentation: { workType: string | null; methodName: string | null } | null = null;
+    let rows;
+    if (typeof ahspId === 'string' && ahspId.length > 0) {
+      const locators = await this.observations.locatorsForAhsp(workspaceId, ahspId);
+      if (locators === null) throw new NotFoundException('AHSP_NOT_FOUND');
+      const handBuilt = await this.observations.handBuiltLinesForAhsp(workspaceId, ahspId);
+      if (handBuilt === null) throw new NotFoundException('AHSP_NOT_FOUND');
+      await this.observations.ensureHandBuiltObservations(workspaceId, handBuilt.lines);
+      const subjectKeys = handBuilt.lines
+        .map((line) => neutralQuestionOfHandBuiltLine(workspaceId, line))
+        .filter((question) => question !== null)
+        .map((question) => identicalQuestionKey(question));
+      const locatorRows =
+        locators.length > 0
+          ? await this.observations.listOpenForCuration(workspaceId, this.actor(request), {
+              kind: 'LOCATORS',
+              locators,
+            })
+          : [];
+      const subjectRows =
+        subjectKeys.length > 0
+          ? await this.observations.listOpenForCuration(workspaceId, this.actor(request), {
+              kind: 'SUBJECT_KEYS',
+              subjectKeys,
+            })
+          : [];
+      rows = [...locatorRows, ...subjectRows];
+      presentation = handBuilt.presentation;
+    } else {
+      let scope:
+        | { readonly kind: 'SOURCE_SHA256'; readonly sourceSha256: string }
+        | undefined;
+      if (typeof importJobId === 'string' && importJobId.length > 0) {
+        const identity = await this.ahspJournal.documentIdentityOfJob({
+          workspaceId,
+          importJobId,
+        });
+        if (!identity) throw new NotFoundException('IMPORT_JOB_NOT_FOUND');
+        if (!identity.sourceSha256) return [];
+        scope = { kind: 'SOURCE_SHA256', sourceSha256: identity.sourceSha256 };
+      } else if (typeof sourceSha256 === 'string' && sourceSha256.length > 0) {
+        if (!/^[0-9a-fA-F]{64}$/.test(sourceSha256)) {
+          throw new BadRequestException('SOURCE_SHA256_INVALID');
+        }
+        scope = { kind: 'SOURCE_SHA256', sourceSha256 };
+      }
+      rows = await this.observations.listOpenForCuration(
+        workspaceId,
+        this.actor(request),
+        scope,
+      );
+    }
     if (rows.length === 0) return rows;
-    const context = await this.ahspJournal.workContextForSourceRows(
-      workspaceId,
-      rows,
-    );
-    return rows.map((row) => ({
-      ...row,
-      workContext: context.get(ahspSourceRowKey(row)) ?? { kind: 'ABSENT' as const },
-    }));
+    const context = await this.ahspJournal.workContextForSourceRows(workspaceId, rows);
+    return rows.map((row) => {
+      const journal = context.get(ahspSourceRowKey(row)) ?? { kind: 'ABSENT' as const };
+      const workContext =
+        (row.sourceSha256 == null || row.sourceSha256 === '') && presentation
+          ? {
+              kind: 'FOUND' as const,
+              workType: presentation.workType,
+              methodName: presentation.methodName,
+            }
+          : journal;
+      return { ...row, workContext };
+    });
   }
 
   /**

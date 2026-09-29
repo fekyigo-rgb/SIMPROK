@@ -436,6 +436,11 @@ describe('CLOSEOUT P1-A — complete for the AHSP stage is proven by the consume
         journal,
         // C1 — the commit retains the source bytes before journalling them.
         { retain: jest.fn().mockResolvedValue("ws/digest/source") },
+        {
+          saveJobContext: jest.fn().mockImplementation(async ({ context }) => context),
+          loadJobContext: jest.fn().mockResolvedValue(null),
+          applyToAhsp: jest.fn().mockResolvedValue({ applied: 0 }),
+        },
       ] as unknown as Dependencies),
     );
     orchestrator = new AhspResourceResolutionOrchestrator(

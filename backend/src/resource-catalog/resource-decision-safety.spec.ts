@@ -1020,3 +1020,118 @@ describe('ResourceObservationController — the curation list carries its work c
     expect(workContextForSourceRows).not.toHaveBeenCalled();
   });
 });
+
+describe('ResourceObservationController — Stage 2A server-side scope (existing GET)', () => {
+  const WORKSPACE = 'ws-1';
+  const request = {
+    workspaceContext: { workspaceId: WORKSPACE },
+    user: { id: 'acct-1' },
+  };
+  const DIGEST = 'a'.repeat(64);
+
+  it('S2A: importJobId resolves document digest via journal and scopes the list', async () => {
+    const listOpenForCuration = jest.fn().mockResolvedValue([]);
+    const documentIdentityOfJob = jest.fn().mockResolvedValue({
+      importJobId: 'job-1',
+      sourceSha256: DIGEST,
+      sourceFileName: 'analisa.xlsx',
+    });
+    const controller = new ResourceObservationController(
+      { listOpenForCuration } as never,
+      {} as never,
+      { documentIdentityOfJob, workContextForSourceRows: jest.fn() } as never,
+    );
+    await expect(controller.list(request, 'job-1')).resolves.toEqual([]);
+    expect(documentIdentityOfJob).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE,
+      importJobId: 'job-1',
+    });
+    expect(listOpenForCuration).toHaveBeenCalledWith(WORKSPACE, 'acct-1', {
+      kind: 'SOURCE_SHA256',
+      sourceSha256: DIGEST,
+    });
+  });
+
+  it('S2A: another importJobId cannot be forged without workspace ownership', async () => {
+    const listOpenForCuration = jest.fn();
+    const controller = new ResourceObservationController(
+      { listOpenForCuration } as never,
+      {} as never,
+      {
+        documentIdentityOfJob: jest.fn().mockResolvedValue(null),
+        workContextForSourceRows: jest.fn(),
+      } as never,
+    );
+    await expect(controller.list(request, 'foreign-job')).rejects.toThrow(
+      'IMPORT_JOB_NOT_FOUND',
+    );
+    expect(listOpenForCuration).not.toHaveBeenCalled();
+  });
+
+  it('S2A: ahspId scopes by AHSPResource locators, never rawName alone', async () => {
+    const locators = [
+      {
+        sourceSha256: DIGEST,
+        sheetName: 'Sheet1',
+        sourceRowNumber: 12,
+        rawName: 'Kerikil',
+        resourceType: 'MATERIAL',
+      },
+    ];
+    const listOpenForCuration = jest.fn().mockResolvedValue([]);
+    const locatorsForAhsp = jest.fn().mockResolvedValue(locators);
+    const handBuiltLinesForAhsp = jest.fn().mockResolvedValue({
+      lines: [],
+      presentation: { workType: null, methodName: null },
+    });
+    const ensureHandBuiltObservations = jest.fn().mockResolvedValue({ ensured: 0 });
+    const controller = new ResourceObservationController(
+      {
+        listOpenForCuration,
+        locatorsForAhsp,
+        handBuiltLinesForAhsp,
+        ensureHandBuiltObservations,
+      } as never,
+      {} as never,
+      { workContextForSourceRows: jest.fn() } as never,
+    );
+    await expect(
+      controller.list(request, undefined, 'ahsp-1'),
+    ).resolves.toEqual([]);
+    expect(locatorsForAhsp).toHaveBeenCalledWith(WORKSPACE, 'ahsp-1');
+    expect(listOpenForCuration).toHaveBeenCalledWith(WORKSPACE, 'acct-1', {
+      kind: 'LOCATORS',
+      locators,
+    });
+  });
+
+  it('S2A: conflicting scope params fail closed', async () => {
+    const controller = new ResourceObservationController(
+      { listOpenForCuration: jest.fn() } as never,
+      {} as never,
+      {} as never,
+    );
+    await expect(
+      controller.list(request, 'job-1', 'ahsp-1'),
+    ).rejects.toThrow('OBSERVATION_SCOPE_CONFLICT');
+  });
+
+  it('S2A: opening the list performs no write', async () => {
+    const listOpenForCuration = jest.fn().mockResolvedValue([]);
+    const controller = new ResourceObservationController(
+      { listOpenForCuration, curateExisting: jest.fn(), curateNew: jest.fn() } as never,
+      {} as never,
+      {
+        documentIdentityOfJob: jest.fn().mockResolvedValue({
+          importJobId: 'job-1',
+          sourceSha256: DIGEST,
+          sourceFileName: null,
+        }),
+        workContextForSourceRows: jest.fn(),
+      } as never,
+    );
+    await controller.list(request, 'job-1');
+    expect((controller as any).observations.curateExisting).not.toHaveBeenCalled();
+    expect((controller as any).observations.curateNew).not.toHaveBeenCalled();
+  });
+});

@@ -207,12 +207,38 @@ function createHarness() {
         assignments.push(row);
         return row;
       },
+      findFirst: async (args: { where: { id?: string; ahspId?: string } }) => {
+        return (
+          assignments.find(
+            (row) =>
+              (args.where.id === undefined || row.id === args.where.id) &&
+              (args.where.ahspId === undefined || row.ahspId === args.where.ahspId),
+          ) ?? null
+        );
+      },
+      update: async (args: { where: { id: string }; data: { isActive?: boolean } }) => {
+        const row = assignments.find((item) => item.id === args.where.id);
+        if (!row) throw new Error('missing assignment');
+        if (args.data.isActive !== undefined) row.isActive = args.data.isActive;
+        row.updatedAt = now();
+        return row;
+      },
+    },
+    $transaction: async <T>(fn: (tx: typeof prisma) => Promise<T>) => fn(prisma),
+  };
+
+  const audits: Array<{ action: string; who: string }> = [];
+  const audit = {
+    logAction: async (params: { action: string; who: string }) => {
+      audits.push({ action: params.action, who: params.who });
+      return { id: 'audit-1' };
     },
   };
 
   const service = new AhspClassificationAssignmentService(
     prisma as never,
     classification,
+    audit as never,
   );
 
   async function seedPath(input: {
@@ -277,6 +303,7 @@ function createHarness() {
     nodes,
     ahsps,
     assignments,
+    audits,
     seedPath,
     seedAhsp,
     visibilityOk,
@@ -302,6 +329,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     expect(view.ahspId).toBe(ahsp.id);
     expect(view.leafNodeId).toBe(path.jp.id);
@@ -335,12 +363,14 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: p1.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     await h.service.addAssignment({
       ahspId: ahsp.id,
       leafNodeId: p2.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     const listed = await h.service.listAssignments({
       ahspId: ahsp.id,
@@ -374,6 +404,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: p1.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     await expect(
       h.service.addAssignment({
@@ -381,6 +412,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
         leafNodeId: p2.jp.id,
         provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
         actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     await expect(
@@ -389,6 +421,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
         leafNodeId: p2.jp.id,
         provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
         actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
       }),
     ).rejects.toThrow('AHSP_CLASSIFICATION_ASSIGNMENT_JENIS_PENGADAAN_CONFLICT');
   });
@@ -409,6 +442,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.SOURCE_DERIVED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     expect(view.leafNodeId).toBe(path.jp.id);
   });
@@ -429,6 +463,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     expect(view.leafNodeId).toBe(path.jp.id);
   });
@@ -449,6 +484,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
         leafNodeId: foreign.jp.id,
         provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
         actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
       }),
     ).rejects.toThrow();
   });
@@ -468,12 +504,14 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     const b = await h.service.addAssignment({
       ahspId: ahsp.id,
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     expect(b.id).toBe(a.id);
     expect(h.assignments).toHaveLength(1);
@@ -494,12 +532,14 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.SOURCE_DERIVED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     const human = await h.service.addAssignment({
       ahspId: ahsp.id,
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     expect(source.id).not.toBe(human.id);
     expect(source.provenance).toBe(
@@ -541,6 +581,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     const row = h.ahsps.find((a) => a.id === ahsp.id)!;
     expect(row.fieldCategory).toBe('KEEP_A');
@@ -564,6 +605,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     expect(h.nodes.length).toBe(before);
   });
@@ -628,6 +670,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
         leafNodeId: path.jp.id,
         provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
         actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
       }),
     ).rejects.toThrow('AHSP_CLASSIFICATION_ASSIGNMENT_WORKSPACE_MISMATCH');
     await expect(
@@ -654,6 +697,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
         leafNodeId: foreign.jp.id,
         provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
         actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
       }),
     ).rejects.toThrow();
   });
@@ -673,6 +717,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.SOURCE_DERIVED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     expect(view.leafNodeId).toBe(path.jp.id);
     expect(path.jp.workspaceId).toBeNull();
@@ -693,6 +738,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     expect(view.leafNodeId).toBe(path.jp.id);
     expect(path.jp.workspaceId).toBe(WS);
@@ -719,12 +765,14 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.SOURCE_DERIVED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     await h.service.addAssignment({
       ahspId: ahsp.id,
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     const after = h.ahsps.find((a) => a.id === ahsp.id)!;
     expect(after.id).toBe(before.id);
@@ -758,12 +806,14 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.SOURCE_DERIVED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     const b = await h.service.addAssignment({
       ahspId: ahsp.id,
       leafNodeId: path.jp.id,
       provenance: AhspClassificationAssignmentProvenance.SOURCE_DERIVED,
       actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
     });
     expect(b.id).toBe(a.id);
     expect(
@@ -790,6 +840,7 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
         leafNodeId: path.sub.id,
         provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
         actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
       }),
     ).rejects.toThrow(
       'AHSP_CLASSIFICATION_ASSIGNMENT_LEAF_MUST_BE_JENIS_PEKERJAAN',
@@ -804,7 +855,116 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
         leafNodeId: uuid(),
         provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
         actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('deactivates HUMAN_ADDED, hides it from the active list, and reactivates the same row', async () => {
+    const h = createHarness();
+    const ahsp = h.seedAhsp({ workspaceId: WS });
+    const path = await h.seedPath({
+      workspaceId: null,
+      rootName: 'Pekerjaan Konstruksi',
+      kategori: 'K',
+      sub: 'S',
+      jp: 'J',
+    });
+    const added = await h.service.addAssignment({
+      ahspId: ahsp.id,
+      leafNodeId: path.jp.id,
+      provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
+      actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
+    });
+    const deactivated = await h.service.deactivateAssignment({
+      ahspId: ahsp.id,
+      assignmentId: added.id,
+      actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
+    });
+    expect(deactivated.isActive).toBe(false);
+    expect(deactivated.id).toBe(added.id);
+    const again = await h.service.deactivateAssignment({
+      ahspId: ahsp.id,
+      assignmentId: added.id,
+      actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
+    });
+    expect(again.isActive).toBe(false);
+    expect(await h.service.listAssignments({ ahspId: ahsp.id, actingWorkspaceId: WS })).toEqual([]);
+    expect(h.assignments).toHaveLength(1);
+    expect(h.assignments[0].provenance).toBe('HUMAN_ADDED');
+    const revived = await h.service.addAssignment({
+      ahspId: ahsp.id,
+      leafNodeId: path.jp.id,
+      provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
+      actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
+    });
+    expect(revived.id).toBe(added.id);
+    expect(revived.isActive).toBe(true);
+    expect(h.assignments).toHaveLength(1);
+    expect(h.audits.map((entry) => entry.action)).toEqual([
+      'AhspClassificationAssignmentCreated',
+      'AhspClassificationAssignmentDeactivated',
+      'AhspClassificationAssignmentReactivated',
+    ]);
+    expect(h.audits.every((entry) => entry.who === 'actor-account')).toBe(true);
+  });
+
+  it('refuses to deactivate SOURCE_DERIVED from the Manual correction door', async () => {
+    const h = createHarness();
+    const ahsp = h.seedAhsp({ workspaceId: WS });
+    const path = await h.seedPath({
+      workspaceId: null,
+      rootName: 'Pekerjaan Konstruksi',
+      kategori: 'K2',
+      sub: 'S2',
+      jp: 'J2',
+    });
+    const added = await h.service.addAssignment({
+      ahspId: ahsp.id,
+      leafNodeId: path.jp.id,
+      provenance: AhspClassificationAssignmentProvenance.SOURCE_DERIVED,
+      actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
+    });
+    await expect(
+      h.service.deactivateAssignment({
+        ahspId: ahsp.id,
+        assignmentId: added.id,
+        actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
+      }),
+    ).rejects.toThrow('AHSP_CLASSIFICATION_SOURCE_DERIVED_PRESERVED');
+    expect(h.assignments[0].isActive).toBe(true);
+  });
+
+  it('refuses a foreign workspace correction', async () => {
+    const h = createHarness();
+    const ahsp = h.seedAhsp({ workspaceId: WS });
+    const path = await h.seedPath({
+      workspaceId: null,
+      rootName: 'Pekerjaan Konstruksi',
+      kategori: 'K3',
+      sub: 'S3',
+      jp: 'J3',
+    });
+    const added = await h.service.addAssignment({
+      ahspId: ahsp.id,
+      leafNodeId: path.jp.id,
+      provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
+      actingWorkspaceId: WS,
+      actorAccountId: 'actor-account',
+    });
+    await expect(
+      h.service.deactivateAssignment({
+        ahspId: ahsp.id,
+        assignmentId: added.id,
+        actingWorkspaceId: 'other-workspace',
+        actorAccountId: 'actor-account',
+      }),
+    ).rejects.toThrow('AHSP_CLASSIFICATION_ASSIGNMENT_WORKSPACE_MISMATCH');
   });
 });

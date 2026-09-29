@@ -17,6 +17,7 @@ import {
 import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
 import { ActionOutcomeNotice } from '../components/ahsp/ActionOutcomeNotice';
 import { BIDANG, JENIS_PEKERJAAN, mergeVocabulary, subkategoriForBidang } from '../constructionTaxonomy';
+import { JENIS_PENGADAAN_OPTIONS } from '../jenisPengadaanVocabulary';
 import '../styles/ahsp.css';
 
 /**
@@ -26,10 +27,12 @@ import '../styles/ahsp.css';
  * confirmation). Import and unresolved-resource curation live behind their OWN
  * door (/ahsp/import) so this list stays a clean library, never a process dump.
  *
- * The Bidang/Subkategori/Jenis filters draw their vocabulary from the ONE shared
+ * The Kategori/Subkategori/Jenis filters draw vocabulary from the ONE shared
  * construction taxonomy (constructionTaxonomy.ts), merged with values actually
- * present in the data so no stored value is ever hidden. The taxonomy guides
- * discovery; the persisted GET /ahsp rows remain the AHSP source of truth.
+ * present in the data so no stored value is ever hidden. Jenis Pengadaan uses
+ * the shared vocabulary for presentation; list rows do not yet carry a
+ * dedicated assignment consumer — selection is honest visual parity, not a
+ * second backend filter engine.
  */
 
 type AhspRow = {
@@ -57,16 +60,10 @@ const NAVY = 'var(--simprok-authority-navy-800)';
 const MUTED = 'var(--simprok-engineering-blue-500)';
 const HAIRLINE = '1px solid var(--simprok-engineering-blue-100)';
 const CARD: CSSProperties = { background: '#FFFFFF', border: HAIRLINE, borderRadius: '12px', padding: 'var(--space-4)' };
-const th: CSSProperties = { padding: 'var(--space-2)', textAlign: 'left', color: MUTED, fontWeight: 600, whiteSpace: 'nowrap' };
-const td: CSSProperties = { padding: 'var(--space-2)', borderTop: HAIRLINE, verticalAlign: 'top', color: NAVY };
-const controlBox: CSSProperties = { color: NAVY, padding: 'var(--space-2)', border: HAIRLINE, borderRadius: '8px', background: '#FFFFFF', width: '100%' };
-const labelStyle: CSSProperties = { display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-1)' };
 
 const PAGE_SIZE = 10;
 const ownershipLabel = (workspaceId: string | null) => (workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya');
 const orDash = (v: string | null | undefined) => (v == null || v === '' ? <span style={{ color: MUTED }}>—</span> : String(v));
-const distinct = (values: Array<string | null | undefined>): string[] =>
-  [...new Set(values.map((v) => (v ?? '').trim()).filter((v) => v !== ''))].sort();
 
 export function AhspRoomPage() {
   const navigate = useNavigate();
@@ -76,8 +73,8 @@ export function AhspRoomPage() {
   const [state, setState] = useState<RoomState>({ phase: 'LOADING' });
   const [query, setQuery] = useState('');
   const [source, setSource] = useState<'ALL' | 'SIMPROK' | 'MINE'>('ALL');
-  const [dasar, setDasar] = useState('');
-  const [bidang, setBidang] = useState('');
+  const [jenisPengadaan, setJenisPengadaan] = useState('');
+  const [kategori, setKategori] = useState('');
   const [subkategori, setSubkategori] = useState('');
   const [jenis, setJenis] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -128,37 +125,42 @@ export function AhspRoomPage() {
 
   const allRows = useMemo(() => (state.phase === 'READY' ? state.rows : []), [state]);
 
-  // The union of every curated Subkategori — the option set when no Bidang is chosen.
+  // The union of every curated Subkategori — the option set when no Kategori is chosen.
   const allCuratedSub = useMemo(() => BIDANG.flatMap((b) => subkategoriForBidang(b)), []);
 
   const options = useMemo(() => {
-    // Subkategori is context-aware: curated to the chosen Bidang, then merged with
-    // the Subkategori values that Bidang's rows actually carry (never hidden).
-    const rowsForSub = bidang ? allRows.filter((r) => (r.fieldCategory ?? '') === bidang) : allRows;
-    const curatedSub = bidang ? subkategoriForBidang(bidang) : allCuratedSub;
+    // Subkategori is context-aware: curated to the chosen Kategori, then merged with
+    // the Subkategori values that Kategori's rows actually carry (never hidden).
+    const rowsForSub = kategori ? allRows.filter((r) => (r.fieldCategory ?? '') === kategori) : allRows;
+    const curatedSub = kategori ? subkategoriForBidang(kategori) : allCuratedSub;
     return {
-      dasar: distinct(allRows.map((r) => r.versions?.[0]?.regulationReference)),
-      bidang: mergeVocabulary(BIDANG, allRows.map((r) => r.fieldCategory)),
+      kategori: mergeVocabulary(BIDANG, allRows.map((r) => r.fieldCategory)),
       subkategori: mergeVocabulary(curatedSub, rowsForSub.map((r) => r.subCategory)),
       // A recorded source code is never offered as a Jenis Pekerjaan.
       jenis: mergeVocabulary(JENIS_PEKERJAAN, allRows.map((r) => presentAhspIdentity(r).workType)),
     };
-  }, [allRows, bidang, allCuratedSub]);
+  }, [allRows, kategori, allCuratedSub]);
 
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return allRows.filter((row) => {
       if (source === 'SIMPROK' && row.workspaceId !== null) return false;
       if (source === 'MINE' && row.workspaceId === null) return false;
-      if (dasar && (row.versions?.[0]?.regulationReference ?? '') !== dasar) return false;
-      if (bidang && (row.fieldCategory ?? '') !== bidang) return false;
+      // Jenis Pengadaan: when list rows carry classification text, filter it.
+      // Rows without classification remain visible — assignment list consumer not connected.
+      if (jenisPengadaan) {
+        const cls = (row.classification ?? '').trim();
+        if (cls !== '' && cls !== jenisPengadaan) return false;
+      }
+      if (kategori && (row.fieldCategory ?? '') !== kategori) return false;
       if (subkategori && (row.subCategory ?? '') !== subkategori) return false;
       if (jenis && (presentAhspIdentity(row).workType ?? '') !== jenis) return false;
       if (!needle) return true;
-      const hay = `${row.code ?? ''} ${row.workType ?? ''} ${row.methodName ?? ''}`.toLowerCase();
+      // Search may still reach Dasar/Bidang provenance text without a dedicated Dasar filter.
+      const hay = `${row.code ?? ''} ${row.workType ?? ''} ${row.methodName ?? ''} ${row.fieldCategory ?? ''} ${row.versions?.[0]?.regulationReference ?? ''}`.toLowerCase();
       return hay.includes(needle);
     });
-  }, [allRows, query, source, dasar, bidang, subkategori, jenis]);
+  }, [allRows, query, source, jenisPengadaan, kategori, subkategori, jenis]);
 
   const pageCount = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
@@ -169,8 +171,8 @@ export function AhspRoomPage() {
   const resetFilters = () => {
     setQuery('');
     setSource('ALL');
-    setDasar('');
-    setBidang('');
+    setJenisPengadaan('');
+    setKategori('');
     setSubkategori('');
     setJenis('');
     setPage(0);
@@ -306,7 +308,7 @@ export function AhspRoomPage() {
 
   const exportSelection = () => {
     if (selectedRows.length === 0) return;
-    const header = ['Kode', 'Jenis Pekerjaan', 'Uraian', 'Satuan', 'Bidang', 'Sumber'];
+    const header = ['Kode', 'Jenis Pekerjaan', 'Uraian', 'Satuan', 'Kategori', 'Sumber'];
     const escape = (v: string) => '"' + v.replace(/"/g, '""') + '"';
     const lines = [header.map(escape).join(',')];
     for (const r of selectedRows) {
@@ -332,21 +334,26 @@ export function AhspRoomPage() {
   const sortHint = <ChevronsUpDown size={12} style={{ verticalAlign: 'middle', opacity: 0.5 }} />;
 
   return (
-    <main aria-label="Ruang AHSP" style={{ padding: 'var(--space-5, 1.25rem)' }}>
-      {/* Header + primary actions */}
-      <header style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 'var(--space-4)' }}>
+    <main className="ahsp-room" aria-label="Ruang AHSP">
+      {/* Header + primary actions — Owner order: Panduan | Buat AHSP Manual | + Import AHSP */}
+      <header className="ahsp-room__header">
         <div>
-          <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: NAVY, margin: 0 }}>AHSP</h1>
-          <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 'var(--space-1) 0 0' }}>
+          <h1 className="ahsp-room__title">AHSP</h1>
+          <p className="ahsp-room__subtitle">
             Standar harga satuan pekerjaan untuk mendukung penyusunan dan analisis proyek.
           </p>
         </div>
         {canManage || canCurate ? (
-          <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+          <div className="ahsp-room__actions">
             {canManage ? (
               <a href="https://docs.simprok.id/ahsp" target="_blank" rel="noreferrer" className="ahsp-action ahsp-action--outline">
                 <BookOpen size={16} /> Panduan AHSP
               </a>
+            ) : null}
+            {canManage ? (
+              <Link to="/ahsp/manual" className="ahsp-action ahsp-action--outline">
+                Buat AHSP Manual
+              </Link>
             ) : null}
             <button type="button" onClick={() => navigate('/ahsp/import')} className="ahsp-action ahsp-action--primary">
               <Plus size={16} /> Import AHSP
@@ -366,17 +373,17 @@ export function AhspRoomPage() {
 
       {state.phase === 'READY' ? (
         <>
-          {/* Search + filter control area */}
-          <section aria-label="Pencarian dan saringan AHSP" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
+          {/* Search + filter control area — Owner: no dedicated Dasar AHSP primary filter */}
+          <section aria-label="Pencarian dan saringan AHSP" className="ahsp-room__filters">
             <div className="ahsp-search-row">
               <div className="ahsp-search-row__field">
-                <Search size={16} style={{ position: 'absolute', left: '0.6rem', top: '50%', transform: 'translateY(-50%)', color: MUTED }} />
+                <Search size={16} className="ahsp-search-row__icon" aria-hidden />
                 <input
                   value={query}
                   onChange={(event) => { setQuery(event.target.value); setPage(0); }}
                   aria-label="Cari AHSP"
                   placeholder="Cari kode atau uraian pekerjaan..."
-                  style={{ ...controlBox, paddingLeft: '2rem' }}
+                  className="ahsp-search-row__input"
                 />
               </div>
               <button type="button" className="ahsp-action ahsp-action--primary" onClick={() => setPage(0)}>Cari</button>
@@ -384,34 +391,39 @@ export function AhspRoomPage() {
                 <RefreshCw size={14} /> Reset Filter
               </button>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(11rem, 1fr))', gap: 'var(--space-3)' }}>
-              <label style={labelStyle}>Sumber
-                <select value={source} onChange={(e) => { setSource(e.target.value as 'ALL' | 'SIMPROK' | 'MINE'); setPage(0); }} aria-label="Saring sumber AHSP" style={controlBox}>
+            <div className="ahsp-room__filter-grid">
+              <label className="ahsp-field">
+                <span className="ahsp-field__label">Sumber</span>
+                <select className="ahsp-field__control" value={source} onChange={(e) => { setSource(e.target.value as 'ALL' | 'SIMPROK' | 'MINE'); setPage(0); }} aria-label="Saring sumber AHSP">
                   <option value="ALL">Semua</option>
                   <option value="SIMPROK">Pustaka SIMPROK</option>
                   <option value="MINE">AHSP Saya</option>
                 </select>
               </label>
-              <label style={labelStyle}>Dasar AHSP
-                <select value={dasar} onChange={(e) => { setDasar(e.target.value); setPage(0); }} aria-label="Saring dasar AHSP" style={controlBox}>
-                  <option value="">Semua Dasar AHSP</option>
-                  {options.dasar.map((o) => <option key={o} value={o}>{o}</option>)}
+              <label className="ahsp-field">
+                <span className="ahsp-field__label">Jenis Pengadaan</span>
+                <select className="ahsp-field__control" value={jenisPengadaan} onChange={(e) => { setJenisPengadaan(e.target.value); setPage(0); }} aria-label="Saring jenis pengadaan AHSP">
+                  <option value="">Semua Jenis Pengadaan</option>
+                  {JENIS_PENGADAAN_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
               </label>
-              <label style={labelStyle}>Bidang / Kategori
-                <select value={bidang} onChange={(e) => { setBidang(e.target.value); setSubkategori(''); setPage(0); }} aria-label="Saring bidang AHSP" style={controlBox}>
-                  <option value="">Semua Bidang</option>
-                  {options.bidang.map((o) => <option key={o} value={o}>{o}</option>)}
+              <label className="ahsp-field">
+                <span className="ahsp-field__label">Kategori</span>
+                <select className="ahsp-field__control" value={kategori} onChange={(e) => { setKategori(e.target.value); setSubkategori(''); setPage(0); }} aria-label="Saring kategori AHSP">
+                  <option value="">Semua Kategori</option>
+                  {options.kategori.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
               </label>
-              <label style={labelStyle}>Subkategori
-                <select value={subkategori} onChange={(e) => { setSubkategori(e.target.value); setPage(0); }} aria-label="Saring subkategori AHSP" style={controlBox}>
+              <label className="ahsp-field">
+                <span className="ahsp-field__label">Subkategori</span>
+                <select className="ahsp-field__control" value={subkategori} onChange={(e) => { setSubkategori(e.target.value); setPage(0); }} aria-label="Saring subkategori AHSP">
                   <option value="">Semua Subkategori</option>
                   {options.subkategori.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
               </label>
-              <label style={labelStyle}>Jenis Pekerjaan
-                <select value={jenis} onChange={(e) => { setJenis(e.target.value); setPage(0); }} aria-label="Saring jenis pekerjaan AHSP" style={controlBox}>
+              <label className="ahsp-field">
+                <span className="ahsp-field__label">Jenis Pekerjaan</span>
+                <select className="ahsp-field__control" value={jenis} onChange={(e) => { setJenis(e.target.value); setPage(0); }} aria-label="Saring jenis pekerjaan AHSP">
                   <option value="">Semua Jenis Pekerjaan</option>
                   {options.jenis.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
@@ -446,7 +458,7 @@ export function AhspRoomPage() {
           ) : null}
 
           {/* Table */}
-          <section aria-label="AHSP yang tersedia" style={CARD}>
+          <section aria-label="AHSP yang tersedia" className="ahsp-room__table-card">
             {allRows.length === 0 ? (
               <section className="simprok-honest-frame" aria-label="AHSP kosong">
                 <span className="simprok-honest-frame__badge">Belum ada data</span>
@@ -457,18 +469,18 @@ export function AhspRoomPage() {
             ) : (
               <>
                 <div style={{ overflowX: 'auto' }}>
-                  <table aria-label="Daftar AHSP yang tersedia" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
+                  <table aria-label="Daftar AHSP yang tersedia" className="ahsp-room__table">
                     <thead>
-                      <tr style={{ background: 'var(--simprok-engineering-blue-100)' }}>
-                        <th style={{ ...th, width: '2.5rem' }}>
+                      <tr>
+                        <th style={{ width: '2.5rem' }}>
                           <input type="checkbox" aria-label="Pilih semua di halaman ini" checked={pageAllSelected} onChange={toggleSelectPage} />
                         </th>
-                        <th style={th}>Kode {sortHint}</th>
-                        <th style={th}>Jenis Pekerjaan {sortHint}</th>
-                        <th style={th}>Uraian {sortHint}</th>
-                        <th style={th}>Satuan {sortHint}</th>
-                        <th style={th}>Bidang {sortHint}</th>
-                        <th style={th}>Aksi</th>
+                        <th>Kode {sortHint}</th>
+                        <th>Jenis Pekerjaan {sortHint}</th>
+                        <th>Uraian {sortHint}</th>
+                        <th>Satuan {sortHint}</th>
+                        <th>Kategori {sortHint}</th>
+                        <th>Aksi</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -478,15 +490,15 @@ export function AhspRoomPage() {
                         const identity = presentAhspIdentity(row);
                         return (
                           <tr key={row.id}>
-                            <td style={td}>
+                            <td>
                               <input type="checkbox" aria-label={'Pilih ' + (row.methodName ?? row.workType ?? row.id)} checked={selected.has(row.id)} onChange={() => toggleSelect(row.id)} />
                             </td>
-                            <td style={td}>{orDash(identity.code)}</td>
-                            <td style={td}>{orDash(identity.workType)}</td>
-                            <td style={td}>{orDash(row.methodName)}</td>
-                            <td style={td}>{orDash(row.versions?.[0]?.outputUnit)}</td>
-                            <td style={td}>{orDash(row.fieldCategory)}</td>
-                            <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                            <td>{orDash(identity.code)}</td>
+                            <td>{orDash(identity.workType)}</td>
+                            <td>{orDash(row.methodName)}</td>
+                            <td>{orDash(row.versions?.[0]?.outputUnit)}</td>
+                            <td>{orDash(row.fieldCategory)}</td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
                               <Link to={'/ahsp/' + row.id} className="ahsp-action ahsp-action--outline ahsp-action--compact">
                                 <Eye size={14} /> Lihat
                               </Link>
@@ -500,9 +512,8 @@ export function AhspRoomPage() {
                     </tbody>
                   </table>
                 </div>
-                {/* Pagination */}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', alignItems: 'center', justifyContent: 'space-between', marginTop: 'var(--space-3)' }}>
-                  <span style={{ color: MUTED, fontSize: 'var(--text-sm)' }}>
+                <div className="ahsp-room__pagination">
+                  <span className="ahsp-room__pagination-meta">
                     Menampilkan {rangeStart} - {rangeEnd} dari {visibleRows.length} data
                   </span>
                   <div style={{ display: 'flex', gap: 'var(--space-1)', alignItems: 'center' }}>

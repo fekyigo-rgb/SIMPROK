@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Layers, Users, Package, Wrench, FileText, Info, Pencil, History, ArrowLeft, Send, MoreHorizontal, BadgeCheck } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
@@ -15,6 +15,12 @@ import { describeAhspProposalStatus, canProposeAhsp, formatIndoDate } from '../u
 import { USULKAN_TOOLTIP } from '../utils/ahspProposalCopy';
 import { presentAhspIdentity } from '../utils/ahspIdentityDisplay';
 import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
+import { AhspClassificationRevisionPanel } from '../components/AhspClassificationRevisionPanel';
+import {
+  groupIdenticalObservations,
+  type CuratableObservationWire,
+  type ObservationGroup,
+} from '../utils/resourceObservationDisplay';
 
 /**
  * THE room's own detail — the Owner-approved detail view.
@@ -24,6 +30,10 @@ import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
  * "Usulkan ke SIMPROK" submits the AHSP for human review through the existing
  * POST /ahsp/:id/propose route — it never publishes. All data is backend truth;
  * this file only arranges it into the Owner mockup and speaks plain Indonesian.
+ *
+ * STAGE 2A Door B — "Tinjau Resource" is an ENTRY to the EXISTING
+ * GET/POST /resource-observations lifecycle, scoped server-side by ahspId.
+ * It is not a second review system, readiness engine, or decision writer.
  */
 
 type AhspVersion = {
@@ -32,6 +42,7 @@ type AhspVersion = {
   status: string | null;
   outputUnit: string | null;
   regulationReference: string | null;
+  issuerInstitution: string | null;
   effectiveDate: string | null;
   resources?: AhspDefinitionResourceWire[] | null;
 };
@@ -45,6 +56,7 @@ type AhspDetail = {
   fieldCategory: string | null;
   subCategory: string | null;
   classification: string | null;
+  keterangan: string | null;
   ownershipType: string | null;
   reviewStatus: string | null;
   proposedAt: string | null;
@@ -183,6 +195,7 @@ export function AhspDetailPage() {
   const { ahspId } = useParams<{ ahspId: string }>();
   const { hasPermission } = useAuth();
   const canManage = hasPermission('AHSP_MANAGE');
+  const canCurate = hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE');
   const [state, setState] = useState<DetailState>({ phase: 'LOADING' });
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -190,14 +203,23 @@ export function AhspDetailPage() {
   const [showProposeConfirm, setShowProposeConfirm] = useState(false);
   const [outputUnit, setOutputUnit] = useState('');
   const [regulationReference, setRegulationReference] = useState('');
+  const [issuerInstitution, setIssuerInstitution] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
   const [resourceDrafts, setResourceDrafts] = useState<ResourceDraft[]>([emptyResource()]);
+  // STAGE 2A Door B — scoped open observations for THIS AHSP only.
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewRows, setReviewRows] = useState<readonly CuratableObservationWire[]>([]);
+  const [reviewPhase, setReviewPhase] = useState<'IDLE' | 'LOADING' | 'READY' | 'FAILED'>('IDLE');
+  const [reviewBusy, setReviewBusy] = useState<string | null>(null);
+  const reviewLock = useRef(false);
+  const reviewSectionRef = useRef<HTMLElement | null>(null);
 
   const applyPayload = useCallback((data: AhspDetail) => {
     setState({ phase: 'READY', ahsp: data });
     const current = (data.versions ?? [])[0] ?? null;
     setOutputUnit(current?.outputUnit ?? '');
     setRegulationReference(current?.regulationReference ?? '');
+    setIssuerInstitution(current?.issuerInstitution ?? '');
     setEffectiveDate(toDateInput(current?.effectiveDate));
     setResourceDrafts(draftsFromVersion(current));
   }, []);
@@ -264,6 +286,77 @@ export function AhspDetailPage() {
       return;
     }
     applyPayload((await response.json()) as AhspDetail);
+  };
+
+  /** Door B — EXISTING list, scoped by ahspId. Read only. */
+  const loadResourceReview = useCallback(async (): Promise<readonly CuratableObservationWire[] | null> => {
+    if (!ahspId || !canCurate) return null;
+    setReviewPhase('LOADING');
+    try {
+      const response = await apiFetch(
+        '/resource-observations?ahspId=' + encodeURIComponent(ahspId),
+      );
+      if (!response.ok) {
+        setReviewPhase(response.status === 401 || response.status === 403 ? 'FAILED' : 'FAILED');
+        setReviewRows([]);
+        return null;
+      }
+      const payload = (await response.json()) as unknown;
+      const rows = Array.isArray(payload) ? (payload as CuratableObservationWire[]) : [];
+      setReviewRows(rows);
+      setReviewPhase('READY');
+      return rows;
+    } catch {
+      setReviewPhase('FAILED');
+      setReviewRows([]);
+      return null;
+    }
+  }, [ahspId, canCurate]);
+
+  useEffect(() => {
+    if (state.phase !== 'READY' || !canCurate || !ahspId) {
+      setReviewRows([]);
+      setReviewPhase('IDLE');
+      setReviewOpen(false);
+      return;
+    }
+    void loadResourceReview();
+  }, [state.phase, canCurate, ahspId, loadResourceReview]);
+
+  const openResourceReview = async () => {
+    setReviewOpen(true);
+    await loadResourceReview();
+    reviewSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    reviewSectionRef.current?.focus();
+  };
+
+  const curateOnDetail = async (
+    _group: ObservationGroup,
+    path: '/curate-existing' | '/curate-new',
+    bodyFor: (id: string) => Record<string, unknown>,
+    ids: readonly string[],
+    busyKey: string,
+  ) => {
+    if (reviewLock.current || ids.length === 0) return;
+    reviewLock.current = true;
+    setReviewBusy(busyKey);
+    try {
+      for (const id of ids) {
+        const response = await apiFetch('/resource-observations/' + id + path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bodyFor(id)),
+        });
+        if (!response.ok) {
+          setActionError('Keputusan sumber daya belum tersimpan. Coba lagi.');
+          break;
+        }
+      }
+      await loadResourceReview();
+    } finally {
+      reviewLock.current = false;
+      setReviewBusy(null);
+    }
   };
 
   const proposeToSimprok = async () => {
@@ -350,6 +443,7 @@ export function AhspDetailPage() {
       currentVersion != null &&
       (currentVersion.outputUnit ?? '') === unit &&
       (currentVersion.regulationReference ?? '') === regulationReference.trim() &&
+      (currentVersion.issuerInstitution ?? '') === issuerInstitution.trim() &&
       toDateInput(currentVersion.effectiveDate) === effectiveDate.trim() &&
       stored.length === resources.length &&
       stored.every((row, index) => {
@@ -377,6 +471,7 @@ export function AhspDetailPage() {
           ...(currentVersion?.id ? { basedOnVersionId: currentVersion.id } : {}),
           outputUnit: unit,
           regulationReference: regulationReference.trim() || undefined,
+          issuerInstitution: issuerInstitution.trim() || undefined,
           effectiveDate: effectiveDate.trim() ? new Date(effectiveDate.trim()).toISOString() : undefined,
           resources,
         }),
@@ -404,6 +499,9 @@ export function AhspDetailPage() {
   const title = ahsp?.methodName || ahsp?.workType || 'AHSP';
   const proposalStatus = ahsp ? describeAhspProposalStatus(ahsp) : '';
   const showPropose = Boolean(ahsp && canManage && canProposeAhsp(ahsp));
+  const reviewGroups = groupIdenticalObservations(reviewRows);
+  const showTinjauResource =
+    canCurate && reviewPhase === 'READY' && reviewRows.length > 0;
 
   const infoRow = (label: string, value: ReactNode) => (
     <div
@@ -485,6 +583,16 @@ export function AhspDetailPage() {
               <Link to="/ahsp" style={outlineButton}>
                 <ArrowLeft size={16} /> Kembali
               </Link>
+              {showTinjauResource ? (
+                <button
+                  type="button"
+                  onClick={() => void openResourceReview()}
+                  style={primaryButton}
+                  aria-expanded={reviewOpen}
+                >
+                  Tinjau Resource
+                </button>
+              ) : null}
               {showPropose ? (
                 <button type="button" title={USULKAN_TOOLTIP} onClick={() => setShowProposeConfirm(true)} disabled={proposing} style={primaryButton}>
                   <Send size={16} /> {proposing ? 'Mengirim…' : 'Usulkan ke SIMPROK'}
@@ -502,6 +610,113 @@ export function AhspDetailPage() {
             <p role="alert" style={{ color: '#C0392B', fontSize: 'var(--text-sm)', margin: '0 0 var(--space-3)' }}>
               {actionError}
             </p>
+          ) : null}
+
+          {reviewOpen && canCurate ? (
+            <section
+              ref={reviewSectionRef}
+              tabIndex={-1}
+              aria-label="Tinjau Resource"
+              style={{ ...CARD, marginBottom: 'var(--space-4)', outline: 'none' }}
+            >
+              <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>
+                Tinjau Resource
+              </h2>
+              <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
+                Pertanyaan identitas untuk AHSP ini saja. Keputusan memakai jalur tinjauan yang sama dengan Import.
+              </p>
+              {reviewPhase === 'LOADING' ? (
+                <p role="status" style={{ color: MUTED }}>Memuat pertanyaan…</p>
+              ) : null}
+              {reviewPhase === 'FAILED' ? (
+                <p role="alert" style={{ color: '#C0392B', fontSize: 'var(--text-sm)' }}>
+                  Daftar tinjauan belum dapat dimuat.{' '}
+                  <button type="button" style={outlineButton} onClick={() => void loadResourceReview()}>
+                    Coba lagi
+                  </button>
+                </p>
+              ) : null}
+              {reviewPhase === 'READY' && reviewGroups.length === 0 ? (
+                <p role="status" style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>
+                  Tidak ada sumber daya yang menunggu tinjauan pada AHSP ini.
+                </p>
+              ) : null}
+              {reviewGroups.length > 0 ? (
+                <ul className="ahsp-curation-list">
+                  {reviewGroups.map((group) => {
+                    const view = group.view;
+                    const locked = reviewBusy !== null;
+                    return (
+                      <li key={group.key} aria-label={'Tinjau ' + view.title} className="ahsp-curation-item">
+                        <span className="ahsp-curation-item__title">{view.title}</span>
+                        <span className="ahsp-line" style={{ color: MUTED }}>
+                          {view.workContext.line}
+                          {view.workContext.detail ? ` (${view.workContext.detail})` : ''}
+                        </span>
+                        {view.candidateLine ? (
+                          <span className="ahsp-line" style={{ color: MUTED }}>{view.candidateLine}</span>
+                        ) : null}
+                        {view.candidateChoices.length > 0 ? (
+                          <div className="ahsp-choice-list">
+                            {view.candidateChoices.map((choice) => (
+                              <button
+                                key={choice.resourceCatalogId}
+                                type="button"
+                                className="ahsp-action ahsp-action--choice"
+                                disabled={locked}
+                                onClick={() =>
+                                  void curateOnDetail(
+                                    group,
+                                    '/curate-existing',
+                                    () => ({ selectedResourceCatalogId: choice.resourceCatalogId }),
+                                    group.ids,
+                                    'existing:' + choice.resourceCatalogId,
+                                  )
+                                }
+                              >
+                                Benar, ini sama dengan: {choice.name}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        {view.canProposeNew && view.newUnitDefinitionId ? (
+                          <button
+                            type="button"
+                            className="ahsp-action ahsp-action--outline"
+                            disabled={locked}
+                            onClick={() =>
+                              void curateOnDetail(
+                                group,
+                                '/curate-new',
+                                () =>
+                                  view.newResourceRefusal
+                                    ? {
+                                        unitDefinitionId: view.newUnitDefinitionId as string,
+                                        refusedCandidateIds: view.newResourceRefusal.candidateIds,
+                                        candidateContextDigest: view.newResourceRefusal.candidateContextDigest,
+                                      }
+                                    : { unitDefinitionId: view.newUnitDefinitionId as string },
+                                group.ids.slice(0, 1),
+                                'new',
+                              )
+                            }
+                          >
+                            {view.newResourceActionLabel}
+                          </button>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+              <button
+                type="button"
+                style={{ ...outlineButton, marginTop: 'var(--space-3)' }}
+                onClick={() => setReviewOpen(false)}
+              >
+                Tutup tinjauan
+              </button>
+            </section>
           ) : null}
 
           {/* Two columns: components (left) + information (right) */}
@@ -547,7 +762,12 @@ export function AhspDetailPage() {
                           {group.rows.map((row, index) => (
                             <tr key={group.key + '-' + index}>
                               <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE, color: MUTED }}>{index + 1}</td>
-                              <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE, color: NAVY }}>{row.name}</td>
+                              <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE, color: NAVY }}>
+                                {row.name}
+                                {row.identityNote ? (
+                                  <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{row.identityNote}</span>
+                                ) : null}
+                              </td>
                               <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{row.unit}</td>
                               <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{row.coefficient}</td>
                             </tr>
@@ -568,6 +788,7 @@ export function AhspDetailPage() {
                 </div>
                 {/* ONE mapping with the room: a recorded source code is the code, never a work type. */}
                 {infoRow('Kode', orDash(presentAhspIdentity(ahsp).code))}
+                {infoRow('Keterangan', orDash(ahsp.keterangan))}
                 {infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
                 {infoRow('Uraian', orDash(ahsp.methodName))}
                 {infoRow('Satuan', orDash(currentVersion?.outputUnit))}
@@ -575,6 +796,7 @@ export function AhspDetailPage() {
                 {infoRow('Subkategori', orDash(ahsp.subCategory))}
                 {infoRow('Jenis Pekerjaan (klasifikasi)', orDash(ahsp.classification))}
                 {infoRow('Dasar AHSP', orDash(currentVersion?.regulationReference))}
+                {infoRow('Penerbit', orDash(currentVersion?.issuerInstitution))}
                 {infoRow('Sumber', ahsp.workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya')}
                 {infoRow(
                   'Status Usulan',
@@ -593,7 +815,6 @@ export function AhspDetailPage() {
                 {infoRow('Dibuat oleh', orDash(ahsp.createdByEmail))}
                 {infoRow('Tanggal dibuat', formatIndoDate(ahsp.createdAt))}
                 {infoRow('Terakhir diperbarui', formatIndoDate(ahsp.updatedAt))}
-                {infoRow('Keterangan', <span style={{ color: MUTED }}>—</span>)}
               </section>
 
               <section
@@ -665,6 +886,7 @@ export function AhspDetailPage() {
                 </span>
               </summary>
               <form aria-label="Update AHSP" onSubmit={addVersion} style={{ marginTop: 'var(--space-4)' }}>
+                <AhspClassificationRevisionPanel ahspId={ahsp.id} enabled={canManage} />
                 <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
                   Satuan
                   <input required value={outputUnit} onChange={(e) => setOutputUnit(e.target.value)} aria-label="Satuan AHSP" style={{ display: 'block', color: NAVY }} />
@@ -672,6 +894,10 @@ export function AhspDetailPage() {
                 <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
                   Sumber / peraturan
                   <input value={regulationReference} onChange={(e) => setRegulationReference(e.target.value)} aria-label="Sumber peraturan AHSP" style={{ display: 'block', width: '100%', maxWidth: '36rem', color: NAVY }} />
+                </label>
+                <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
+                  Penerbit
+                  <input value={issuerInstitution} onChange={(e) => setIssuerInstitution(e.target.value)} aria-label="Penerbit AHSP" style={{ display: 'block', width: '100%', maxWidth: '36rem', color: NAVY }} />
                 </label>
                 <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
                   Tanggal sumber
@@ -733,6 +959,14 @@ export function AhspDetailPage() {
                       }}
                       style={{ color: NAVY }}
                     />
+                    <button
+                      type="button"
+                      aria-label={'Hapus komponen ' + (index + 1)}
+                      onClick={() => setResourceDrafts(resourceDrafts.filter((_, i) => i !== index))}
+                      style={{ ...outlineButton, marginLeft: 'var(--space-2)' }}
+                    >
+                      Hapus
+                    </button>
                   </fieldset>
                 ))}
                 <button type="button" onClick={() => setResourceDrafts([...resourceDrafts, emptyResource()])} style={{ ...outlineButton, marginRight: 'var(--space-2)' }}>

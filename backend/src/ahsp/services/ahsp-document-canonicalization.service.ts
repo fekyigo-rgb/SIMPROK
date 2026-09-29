@@ -65,6 +65,11 @@ import {
   classifyAhspIdentity,
   type AhspIdentityRow,
 } from '../document/ahsp-identity-classifier';
+import { AhspImportAssistedClassificationService } from './ahsp-import-assisted-classification.service';
+import {
+  type AssistedClassificationContext,
+  parseAssistedClassificationContext,
+} from '../document/ahsp-assisted-classification';
 
 export const AHSP_DOCUMENT_MAX_BYTES = MAX_ENVELOPE_BYTES;
 
@@ -144,6 +149,7 @@ type AhspImportItemOutcome =
   | {
       readonly kind: 'ALREADY_PRESENT';
       readonly reasonCodes: readonly AhspDocumentReasonCode[];
+      readonly ahspId?: string;
     }
   | {
       readonly kind: 'ALREADY_PROCESSED';
@@ -210,6 +216,8 @@ export class AhspDocumentCanonicalizationService {
      * not a second one.
      */
     private readonly sourceArchive: BasicPriceSourceArchiveService,
+    /** Import→Classification→Assignment connector (Product Law v1.4). */
+    private readonly assistedClassification: AhspImportAssistedClassificationService,
   ) {}
 
   private readonly readers = ReaderRegistry.default();
@@ -248,8 +256,15 @@ export class AhspDocumentCanonicalizationService {
     userId: string;
     /** Human decisions from Import Review for AHSPs the classifier flagged. */
     decisions?: readonly AhspImportDecision[];
+    /** Assisted classification / Dasar / Penerbit — applied after materialization. */
+    assistedClassification?: AssistedClassificationContext | null;
   }): Promise<AhspDocumentCommitResult> {
-    return this.commit(await this.envelopeFromUpload(params), params.userId, params.decisions ?? []);
+    return this.commit(
+      await this.envelopeFromUpload(params),
+      params.userId,
+      params.decisions ?? [],
+      params.assistedClassification ?? null,
+    );
   }
 
   async preview(envelope: SourceEnvelope): Promise<AhspDocumentKnowledge> {
@@ -349,6 +364,7 @@ export class AhspDocumentCanonicalizationService {
     envelope: SourceEnvelope,
     userId: string,
     decisions: readonly AhspImportDecision[] = [],
+    assistedClassification: AssistedClassificationContext | null = null,
   ): Promise<AhspDocumentCommitResult> {
     /**
      * C1 — THE BYTES ARE KEPT BEFORE SIMPROK TRIES TO UNDERSTAND THEM.
@@ -383,6 +399,20 @@ export class AhspDocumentCanonicalizationService {
       userId,
       knowledge: understood,
     });
+    // Assisted context is caller-supplied only. Do NOT invent write-time Dasar
+    // from document text alone — that would override item-level source evidence.
+    // UI may prefill Dasar for display; commit sends it when the human confirms.
+    let assisted = assistedClassification;
+    if (assisted) {
+      assisted = this.mergeAssistedPrefill(assisted, understood);
+      if (assisted) {
+        await this.assistedClassification.saveJobContext({
+          workspaceId: envelope.workspaceId,
+          importJobId: journal.importJobId,
+          context: assisted,
+        });
+      }
+    }
     const knowledge = await this.resolveKnowledge(
       understood,
       envelope.workspaceId,
@@ -393,6 +423,7 @@ export class AhspDocumentCanonicalizationService {
       decisions,
       importJobId: journal.importJobId,
       lines: journal.lines,
+      assistedClassification: assisted,
     });
   }
 
@@ -407,6 +438,7 @@ export class AhspDocumentCanonicalizationService {
     importJobId: string;
     userId: string;
     decisions?: readonly AhspImportDecision[];
+    assistedClassification?: AssistedClassificationContext | null;
   }): Promise<AhspDocumentCommitResult> {
     const held = await this.journal.loadHeld(
       params.workspaceId,
@@ -424,6 +456,23 @@ export class AhspDocumentCanonicalizationService {
         withTitleOutputUnitStatement(line.knowledge),
       ),
     };
+    let assisted = params.assistedClassification ?? null;
+    if (assisted) {
+      const merged = this.mergeAssistedPrefill(assisted, understood);
+      if (merged) {
+        await this.assistedClassification.saveJobContext({
+          workspaceId: params.workspaceId,
+          importJobId: params.importJobId,
+          context: merged,
+        });
+        assisted = merged;
+      }
+    } else {
+      assisted = await this.assistedClassification.loadJobContext({
+        workspaceId: params.workspaceId,
+        importJobId: params.importJobId,
+      });
+    }
     const knowledge = await this.resolveKnowledge(
       understood,
       params.workspaceId,
@@ -434,6 +483,7 @@ export class AhspDocumentCanonicalizationService {
       decisions: params.decisions ?? [],
       importJobId: params.importJobId,
       lines: held.lines,
+      assistedClassification: assisted,
     });
   }
 
@@ -923,6 +973,7 @@ export class AhspDocumentCanonicalizationService {
       decisions: readonly AhspImportDecision[];
       importJobId: string;
       lines: readonly AhspImportJournalLine[];
+      assistedClassification?: AssistedClassificationContext | null;
     },
   ): Promise<AhspDocumentCommitResult> {
     const { workspaceId, userId, lines } = context;
@@ -981,7 +1032,13 @@ export class AhspDocumentCanonicalizationService {
           return this.settleHeldItem(
             item,
             knowledge,
-            { workspaceId, userId, lineId: line.id, decision },
+            {
+              workspaceId,
+              userId,
+              lineId: line.id,
+              decision,
+              assistedClassification: context.assistedClassification ?? null,
+            },
             tx,
           );
         }, ITEM_TRANSACTION);
@@ -1022,6 +1079,14 @@ export class AhspDocumentCanonicalizationService {
               .catch(() => undefined);
           }
           sightings.push(...this.sightingsFor(item, knowledge, workspaceId));
+          await this.assistedClassification
+            .applyToAhsp({
+              ahspId: outcome.ahspId,
+              actingWorkspaceId: workspaceId,
+              actorAccountId: userId,
+              context: context.assistedClassification,
+            })
+            .catch(() => undefined);
           break;
         case 'ALREADY_PRESENT':
           skipped.push({
@@ -1030,6 +1095,16 @@ export class AhspDocumentCanonicalizationService {
             reasonCodes: outcome.reasonCodes,
           });
           counts.alreadyPresent += 1;
+          if (outcome.ahspId) {
+            await this.assistedClassification
+              .applyToAhsp({
+                ahspId: outcome.ahspId,
+                actingWorkspaceId: workspaceId,
+                actorAccountId: userId,
+                context: context.assistedClassification,
+              })
+              .catch(() => undefined);
+          }
           break;
         case 'ALREADY_PROCESSED':
           skipped.push({
@@ -1092,6 +1167,7 @@ export class AhspDocumentCanonicalizationService {
       userId: string;
       lineId: string;
       decision: AhspImportDecisionAction | undefined;
+      assistedClassification?: AssistedClassificationContext | null;
     },
     tx: Prisma.TransactionClient,
   ): Promise<AhspImportItemOutcome> {
@@ -1143,7 +1219,7 @@ export class AhspDocumentCanonicalizationService {
         ahspId: representedBy,
       });
       return representedBy
-        ? { kind: 'ALREADY_PRESENT', reasonCodes }
+        ? { kind: 'ALREADY_PRESENT', reasonCodes, ahspId: representedBy }
         : { kind: 'HELD', reasonCodes };
     }
 
@@ -1168,7 +1244,7 @@ export class AhspDocumentCanonicalizationService {
         ahspId: adoptedAhspId,
       });
       return adoptedAhspId
-        ? { kind: 'ALREADY_PRESENT', reasonCodes }
+        ? { kind: 'ALREADY_PRESENT', reasonCodes, ahspId: adoptedAhspId }
         : { kind: 'HELD', reasonCodes };
     }
 
@@ -1177,7 +1253,12 @@ export class AhspDocumentCanonicalizationService {
     const saved = await this.writeItem(
       item,
       knowledge,
-      { workspaceId, userId, lineId },
+      {
+        workspaceId,
+        userId,
+        lineId,
+        assistedClassification: context.assistedClassification ?? null,
+      },
       tx,
     );
     return {
@@ -1283,7 +1364,12 @@ export class AhspDocumentCanonicalizationService {
   private async writeItem(
     item: AhspWorkItemKnowledge,
     knowledge: AhspDocumentKnowledge,
-    context: { workspaceId: string; userId: string; lineId: string },
+    context: {
+      workspaceId: string;
+      userId: string;
+      lineId: string;
+      assistedClassification?: AssistedClassificationContext | null;
+    },
     tx: Prisma.TransactionClient,
   ): Promise<{ ahspId: string; versionId: string }> {
     const { workspaceId, userId } = context;
@@ -1306,12 +1392,15 @@ export class AhspDocumentCanonicalizationService {
           // Bidang / Divisi / Jenis Pekerjaan stay NULL here on purpose. The
           // parser contract carries no such fact, so supplying one would mean
           // inferring it from a document heading — context invented rather than
-          // read. See the closure report for the exact narrow blocker.
+          // read. Classification paths are persisted via AssignmentService.
           code: item.workType!.raw,
           userId,
         },
         tx,
       )) as { id: string };
+      const dasarFromAssisted = context.assistedClassification?.dasarAcuan?.trim();
+      const penerbitFromAssisted =
+        context.assistedClassification?.penerbit?.trim();
       const version = await this.versionService.createVersion(
         parent.id,
         {
@@ -1319,8 +1408,12 @@ export class AhspDocumentCanonicalizationService {
           userId,
           outputUnit: item.resolvedOutputUnit ?? item.outputUnitRaw!.raw,
           regulationReference:
-            item.regulationReference?.raw ??
+            item.regulationReference?.raw ||
+            dasarFromAssisted ||
             knowledge.document.regulationReference?.raw,
+          ...(penerbitFromAssisted
+            ? { issuerInstitution: penerbitFromAssisted }
+            : {}),
           // CLOSURE 1 — what the document actually said about this line, kept
           // beside the identity the import proved.
           resources: item.resources.map((resource) => ({
@@ -1373,6 +1466,32 @@ export class AhspDocumentCanonicalizationService {
       });
       return { ahspId: parent.id, versionId: version.id };
     }
+  }
+
+  /**
+   * Prefill Dasar from existing document understanding only — never fabricate
+   * classification paths. Caller values win when already stated.
+   */
+  private mergeAssistedPrefill(
+    assisted: AssistedClassificationContext | null,
+    knowledge: AhspDocumentKnowledge,
+  ): AssistedClassificationContext | null {
+    const dasarFromSource =
+      knowledge.document.regulationReference?.raw?.trim() ||
+      knowledge.workItems.find((w) => w.regulationReference?.raw)?.regulationReference
+        ?.raw?.trim() ||
+      null;
+    if (!assisted && !dasarFromSource) return null;
+    const base = assisted ?? {
+      jenisPengadaanRootId: null,
+      paths: [],
+      dasarAcuan: null,
+      penerbit: null,
+    };
+    return {
+      ...base,
+      dasarAcuan: base.dasarAcuan?.trim() || dasarFromSource,
+    };
   }
 
   /** Index human decisions by the work item's source-name identity (stable across the preview and commit uploads of the same file). Malformed entries are ignored, never trusted. */

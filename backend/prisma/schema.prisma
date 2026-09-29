@@ -735,6 +735,9 @@ model AHSP {
   fieldCategory  String?
   subCategory    String?
   classification String?
+  /// Free note beside Kode on Manual identity. Not Dasar, Penerbit, or formula.
+  /// Nullable: absent means the author stated none. Not a versioned recipe fact.
+  keterangan     String?  @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -807,6 +810,9 @@ model AHSPVersion {
   effectiveDate          DateTime?
   expiredDate            DateTime?
   regulationReference    String?
+  /// Product Law v1.4 — Penerbit / Instansi Sumber. Distinct from
+  /// regulationReference (Dasar/Acuan) and from Sumber Data (Import / AHSP Saya).
+  issuerInstitution      String?
   regulationPage         String?
   regulationSection      String?
   outputUnit             String?
@@ -1102,6 +1108,10 @@ model AHSPImportJob {
   /// document, status and reasonCodes; the work items live one per line. Stored
   /// once, never re-derived.
   documentKnowledge        Json?
+  /// Product Law v1.4 assisted Import — human/source classification + Dasar/
+  /// Penerbit declarations BEFORE AHSP materialization. Does not alter source
+  /// identity. Applied via AhspClassificationAssignmentService after write.
+  assistedClassificationContext Json?
   createdByUserId          String? @db.Uuid
 
   ahsp      AHSP?                @relation(fields: [ahspId], references: [id], onDelete: Cascade)
@@ -1572,6 +1582,12 @@ model ObservedResource {
   sourceCodeCellAddress String?
   sourceNameCellAddress String?
   sourceUnitCellAddress String?
+
+  /// Source-independent subject for an observation that has no document locator.
+  /// The value is identicalQuestionKey. Null when the document locator is the
+  /// identity. Never a fabricated file, sheet, or row.
+  /// Partial uniqueness for non-document rows lives in SQL, not this DSL.
+  observationSubjectKey String? @db.VarChar(64)
 
   /// The candidate names the identity kernel nominated at observation time.
   /// EVIDENCE ONLY — never an asserted identity, never auto-selected.

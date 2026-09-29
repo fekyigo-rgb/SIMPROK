@@ -11,7 +11,12 @@ import { AhspVersionService } from './services/ahsp-version.service';
 import { AhspSnapshotService } from './services/ahsp-snapshot.service';
 import { TrustedAhspActorService } from './services/trusted-ahsp-actor.service';
 import { AhspDocumentCanonicalizationService } from './services/ahsp-document-canonicalization.service';
+import { AhspImportAssistedClassificationService } from './services/ahsp-import-assisted-classification.service';
+import { AhspClassificationAssignmentService } from './services/ahsp-classification-assignment.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { PERMISSIONS_KEY } from '../common/decorators/permissions.decorator';
+import { BasicPriceImportLookupService } from '../basic-price/basic-price-import-lookup.service';
+import { ResourceObservationService } from '../resource-catalog/resource-observation.service';
 
 describe('AhspController', () => {
   let controller: AhspController;
@@ -44,8 +49,29 @@ describe('AhspController', () => {
     listImportJobs: jest.fn(),
     continueImportJob: jest.fn(),
   };
+  const assignments = {
+    addAssignment: jest.fn(),
+    listAssignments: jest.fn(),
+  };
+  const prisma = {
+    $transaction: jest.fn(async (fn: (tx: object) => Promise<unknown>) => fn({})),
+  };
+  const assistedClassification = {
+    listRoots: jest.fn(),
+    listChildren: jest.fn(),
+    search: jest.fn(),
+    createLocalNode: jest.fn(),
+    loadJobContext: jest.fn(),
+    saveJobContext: jest.fn(),
+    applyToAhsp: jest.fn(),
+  };
 
-  /** RM-03B: the actor is server-derived; the controller never reads body.userId. */
+  const resourceLookup = {
+    searchResources: jest.fn().mockResolvedValue({ items: [], page: 1, limit: 12, total: 0 }),
+  };
+  const observations = {
+    ensureHandBuiltObservations: jest.fn().mockResolvedValue({ ensured: 0 }),
+  };
   const TRUSTED_ACTOR_ID = 'trusted-user-a';
   const trustedActorService = {
     resolveActorUserId: jest.fn().mockResolvedValue(TRUSTED_ACTOR_ID),
@@ -65,6 +91,14 @@ describe('AhspController', () => {
         { provide: AhspSnapshotService, useValue: ahspSnapshotService },
         { provide: TrustedAhspActorService, useValue: trustedActorService },
         { provide: AhspDocumentCanonicalizationService, useValue: documents },
+        {
+          provide: AhspImportAssistedClassificationService,
+          useValue: assistedClassification,
+        },
+        { provide: AhspClassificationAssignmentService, useValue: assignments },
+        { provide: PrismaService, useValue: prisma },
+        { provide: BasicPriceImportLookupService, useValue: resourceLookup },
+        { provide: ResourceObservationService, useValue: observations },
         // PermissionsGuard requires Reflector + WorkspacePermissionResolverService at instantiation time.
         // We provide minimal stubs so NestJS DI can resolve the guard in unit test context.
         // Guard logic itself is not under test here — we only verify class-level metadata.
@@ -144,6 +178,70 @@ describe('AhspController', () => {
   describe('actor provenance is server-derived, never client-supplied', () => {
     const SPOOFED = 'attacker-chosen-user-b';
 
+    it('createManual is one transaction: version failure does not return success, and assignments are HUMAN_ADDED', async () => {
+      ahspService.create.mockResolvedValue({ id: 'ahsp-new', keterangan: 'catatan' });
+      ahspVersionService.createVersion.mockResolvedValue({ id: 'ver-1' });
+      assignments.addAssignment.mockResolvedValue({
+        id: 'asg-1',
+        provenance: 'HUMAN_ADDED',
+      });
+
+      const saved = await controller.createManual(requestWithContext as any, {
+        methodName: 'Galian',
+        outputUnit: 'm3',
+        keterangan: 'catatan',
+        leafNodeIds: ['leaf-1', 'leaf-1', 'leaf-2'],
+        resources: [],
+      });
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(ahspService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ keterangan: 'catatan', methodName: 'Galian' }),
+        expect.anything(),
+      );
+      expect(assignments.addAssignment).toHaveBeenCalledTimes(2);
+      expect(assignments.addAssignment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          leafNodeId: 'leaf-1',
+          provenance: 'HUMAN_ADDED',
+          actingWorkspaceId: 'ws-a',
+        }),
+        expect.anything(),
+      );
+      expect(saved).toEqual(
+        expect.objectContaining({ id: 'ahsp-new', keterangan: 'catatan' }),
+      );
+
+      ahspVersionService.createVersion.mockRejectedValueOnce(new Error('UNIT'));
+      await expect(
+        controller.createManual(requestWithContext as any, {
+          methodName: 'Galian',
+          outputUnit: 'zzz',
+          leafNodeIds: ['leaf-1'],
+        }),
+      ).rejects.toThrow('UNIT');
+    });
+
+    it('keeps the committed Manual save successful when post-commit review preparation is temporarily unavailable', async () => {
+      ahspService.create.mockResolvedValue({ id: 'ahsp-post-commit', keterangan: null });
+      ahspVersionService.createVersion.mockResolvedValue({ id: 'ver-post-commit' });
+      observations.ensureHandBuiltObservations.mockRejectedValueOnce(new Error('OBSERVATION_TEMPORARILY_UNAVAILABLE'));
+
+      const saved = await controller.createManual(requestWithContext as any, {
+        methodName: 'Manual tetap tersimpan',
+        outputUnit: 'm3',
+        resources: [],
+      });
+
+      expect(saved).toEqual(
+        expect.objectContaining({
+          id: 'ahsp-post-commit',
+          resourceReviewPrepared: false,
+        }),
+      );
+      expect(ahspService.create).toHaveBeenCalledTimes(1);
+      expect(ahspVersionService.createVersion).toHaveBeenCalledTimes(1);
+    });
     it('create attributes to the trusted actor and drops the client actor and workspace', async () => {
       await controller.create(requestWithContext, {
         userId: SPOOFED,
@@ -278,6 +376,7 @@ describe('AhspController', () => {
         userId: TRUSTED_ACTOR_ID,
         // No multipart `decisions` field on this request -> an empty, safe default.
         decisions: [],
+        assistedClassification: null,
       });
     });
 
@@ -314,6 +413,7 @@ describe('AhspController', () => {
         importJobId: 'job-1',
         userId: TRUSTED_ACTOR_ID,
         decisions,
+        assistedClassification: null,
       });
     });
 
@@ -381,6 +481,35 @@ describe('AhspController', () => {
       ahspService.getDetail.mockResolvedValue({ id: 'ahsp-01' });
       await controller.getById(requestWithContext, 'ahsp-01');
       expect(ahspService.getDetail).toHaveBeenCalledWith('ahsp-01', 'ws-a');
+    });
+  });
+
+  describe('Manual resource search door', () => {
+    it('is GET resource-search under AHSP_MANAGE, not BASIC_PRICE_RESOLVE', () => {
+      expect(Reflect.getMetadata('path', AhspController.prototype.searchManualResources)).toBe(
+        'resource-search',
+      );
+      expect(Reflect.getMetadata('method', AhspController.prototype.searchManualResources)).toBe(0);
+      expect(
+        Reflect.getMetadata(PERMISSIONS_KEY, AhspController.prototype.searchManualResources),
+      ).toEqual(['AHSP_MANAGE']);
+    });
+
+    it('delegates to the existing catalog lookup and writes nothing', async () => {
+      await controller.searchManualResources(requestWithContext, { q: 'semen', page: 1, limit: 12 });
+      expect(resourceLookup.searchResources).toHaveBeenCalledWith(
+        'ws-a',
+        { q: 'semen', page: 1, limit: 12 },
+        'WORKSPACE_PLUS_GLOBAL',
+      );
+      expect(ahspService.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses without a workspace context', async () => {
+      await expect(
+        controller.searchManualResources({} as never, { q: 'semen' }),
+      ).rejects.toThrow('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+      expect(resourceLookup.searchResources).not.toHaveBeenCalled();
     });
   });
 });

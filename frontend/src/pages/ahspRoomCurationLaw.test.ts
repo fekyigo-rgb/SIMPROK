@@ -36,16 +36,22 @@ const importPage = codeOnly(readFileSync("src/pages/AhspImportPage.tsx", "utf8")
 const room = codeOnly(readFileSync("src/pages/AhspRoomPage.tsx", "utf8"));
 
 test("the import door reuses the EXISTING observation endpoints, not a second door", () => {
-  // CHANGE NOTE (F03): the same endpoint, read through `readList` so an unread
-    // queue is never rendered as an empty one. NEW_EXPECTATION: readList('/resource-observations', …).
-    // TEST_WEAKENING=NO.
-  assert.ok(importPage.includes("readList('/resource-observations', asRows<CuratableObservationWire>)"), "lists observations");
+  // CHANGE NOTE (Stage 2A): same endpoint family, optionally scoped via query on
+  // the EXISTING GET. Path is composed by observationsListPath so import/document
+  // scope never becomes a client-side workspace filter. TEST_WEAKENING=NO.
+  assert.ok(
+    importPage.includes("readList(observationsListPath(scope), asRows<CuratableObservationWire>)") ||
+      importPage.includes("readList('/resource-observations', asRows<CuratableObservationWire>)"),
+    "lists observations",
+  );
+  assert.ok(importPage.includes("observationsListPath"));
   assert.ok(importPage.includes("/curate-existing"), "existing decision -> existing endpoint");
   assert.ok(importPage.includes("/curate-new"), "new decision -> existing endpoint");
   // No client-side canonical write, ever.
   assert.ok(!importPage.includes("resourceCatalog.create"), "the UI never writes a catalog directly");
   assert.ok(!importPage.includes("ResourceAdmissionService"), "minting is backend-only");
 });
+
 
 test("curation is gated on the governed identity-decision permission", () => {
   assert.ok(importPage.includes("hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE')"));

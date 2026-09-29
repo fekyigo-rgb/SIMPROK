@@ -29,8 +29,15 @@ import {
   isAhspIntakeError,
 } from './services/ahsp-document-canonicalization.service';
 import type { AhspImportDecision } from './services/ahsp-document-canonicalization.service';
+import { AhspImportAssistedClassificationService } from './services/ahsp-import-assisted-classification.service';
+import { parseAssistedClassificationContext } from './document/ahsp-assisted-classification';
 import { RetireAhspVersionDto } from './dto/retire-ahsp-version.dto';
-import { OwnershipType } from '@prisma/client';
+import { AhspClassificationAssignmentProvenance, ConstructionClassificationLevel, LocationType, MethodType, OwnershipType } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { AhspClassificationAssignmentService, type AhspClassificationAssignmentView } from './services/ahsp-classification-assignment.service';
+import { BasicPriceImportLookupService } from '../basic-price/basic-price-import-lookup.service';
+import { SearchResourceCatalogDto } from '../basic-price/dto/search-basic-price-import-lookups.dto';
+import { ResourceObservationService } from '../resource-catalog/resource-observation.service';
 
 /**
  * Parse the optional multipart `decisions` field into import decisions, failing
@@ -89,6 +96,12 @@ export class AhspController {
     private readonly ahspSnapshotService: AhspSnapshotService,
     private readonly trustedActor: TrustedAhspActorService,
     private readonly documents: AhspDocumentCanonicalizationService,
+    private readonly assistedClassification: AhspImportAssistedClassificationService,
+    private readonly assignments: AhspClassificationAssignmentService,
+    private readonly prisma: PrismaService,
+    /** Read-only catalog search. Same service as Basic Price. Not a second engine. */
+    private readonly resourceLookup: BasicPriceImportLookupService,
+    private readonly observations: ResourceObservationService,
   ) {}
 
   /**
@@ -115,6 +128,23 @@ export class AhspController {
   @Permissions('AHSP_VIEW')
   healthCheck() {
     return { module: 'ahsp', status: 'ok' };
+  }
+
+  /**
+   * Manual/AHSP door onto the existing catalog search.
+   * Reads only. Workspace comes from the guard. BASIC_PRICE_RESOLVE is not required.
+   */
+  @Get('resource-search')
+  @Permissions('AHSP_MANAGE')
+  async searchManualResources(
+    @Req() request: WorkspaceScopedRequest,
+    @Query() dto: SearchResourceCatalogDto,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
+    return this.resourceLookup.searchResources(workspaceId, dto, 'WORKSPACE_PLUS_GLOBAL');
   }
 
   /**
@@ -172,6 +202,9 @@ export class AhspController {
     // degrades to "no decision" — never a throw, never a silent write; the
     // service already re-derives the verdict and holds anything undecided.
     const decisions = parseAhspImportDecisions(request.body?.decisions);
+    const assistedClassification = parseAssistedClassificationContext(
+      request.body?.assistedClassification,
+    );
     try {
       return await this.documents.commitUpload({
         file,
@@ -179,6 +212,7 @@ export class AhspController {
         actorAccountId: request.user?.id,
         userId,
         decisions,
+        assistedClassification,
       });
     } catch (error) {
       if (isAhspIntakeError(error)) throw new BadRequestException(error.code);
@@ -230,11 +264,326 @@ export class AhspController {
     const decisions = Array.isArray(body?.decisions)
       ? (body.decisions as AhspImportDecision[])
       : parseAhspImportDecisions(body?.decisions);
+    const assistedClassification = parseAssistedClassificationContext(
+      (body as { assistedClassification?: unknown })?.assistedClassification,
+    );
     return this.documents.continueImportJob({
       workspaceId,
       importJobId,
       userId,
       decisions,
+      assistedClassification,
+    });
+  }
+
+  /**
+   * Product Law v1.4 — Import consumer of ConstructionClassificationService.
+   * No standalone Classification controller; routes exist only for Import AHSP.
+   */
+  @Get('document/classification/roots')
+  @Permissions('AHSP_MANAGE')
+  async classificationRoots(@Req() request: WorkspaceScopedRequest) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    return this.assistedClassification.listRoots(workspaceId);
+  }
+
+  @Get('document/classification/children')
+  @Permissions('AHSP_MANAGE')
+  async classificationChildren(
+    @Req() request: WorkspaceScopedRequest,
+    @Query('parentId') parentId?: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    if (!parentId || typeof parentId !== 'string') {
+      throw new BadRequestException('CLASSIFICATION_PARENT_ID_REQUIRED');
+    }
+    return this.assistedClassification.listChildren({
+      workspaceId,
+      parentId,
+    });
+  }
+
+  @Get('document/classification/search')
+  @Permissions('AHSP_MANAGE')
+  async classificationSearch(
+    @Req() request: WorkspaceScopedRequest,
+    @Query('q') q?: string,
+    @Query('level') level?: string,
+    @Query('preferredParentId') preferredParentId?: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    const lawfulLevels = new Set(Object.values(ConstructionClassificationLevel));
+    const resolvedLevel =
+      level && lawfulLevels.has(level as ConstructionClassificationLevel)
+        ? (level as ConstructionClassificationLevel)
+        : undefined;
+    return this.assistedClassification.search({
+      workspaceId,
+      q: typeof q === 'string' ? q : '',
+      level: resolvedLevel,
+      preferredParentId:
+        typeof preferredParentId === 'string' && preferredParentId !== ''
+          ? preferredParentId
+          : undefined,
+    });
+  }
+
+  @Post('document/classification/nodes')
+  @Permissions('AHSP_MANAGE')
+  async classificationCreateNode(
+    @Req() request: WorkspaceScopedRequest,
+    @Body()
+    body: {
+      level?: string;
+      name?: string;
+      parentId?: string;
+      code?: string | null;
+    },
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    const lawfulLevels = new Set(Object.values(ConstructionClassificationLevel));
+    if (!body?.level || !lawfulLevels.has(body.level as ConstructionClassificationLevel)) {
+      throw new BadRequestException('CLASSIFICATION_LEVEL_REQUIRED');
+    }
+    if (!body.parentId || typeof body.parentId !== 'string') {
+      throw new BadRequestException('CLASSIFICATION_PARENT_ID_REQUIRED');
+    }
+    return this.assistedClassification.createLocalNode({
+      workspaceId,
+      level: body.level as ConstructionClassificationLevel,
+      name: typeof body.name === 'string' ? body.name : '',
+      parentId: body.parentId,
+      code: body.code ?? null,
+    });
+  }
+
+  @Get('document/jobs/:importJobId/assisted-classification')
+  @Permissions('AHSP_MANAGE')
+  async getAssistedClassification(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('importJobId') importJobId: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    return this.assistedClassification.loadJobContext({
+      workspaceId,
+      importJobId,
+    });
+  }
+
+  @Post('document/jobs/:importJobId/assisted-classification')
+  @Permissions('AHSP_MANAGE')
+  async saveAssistedClassification(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('importJobId') importJobId: string,
+    @Body() body: unknown,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    const context = parseAssistedClassificationContext(body);
+    if (!context) {
+      throw new BadRequestException('ASSISTED_CLASSIFICATION_INVALID');
+    }
+    return this.assistedClassification.saveJobContext({
+      workspaceId,
+      importJobId,
+      context,
+    });
+  }
+
+  /**
+   * Manual AHSP — one transaction: parent, version (formula/unit/dasar/penerbit),
+   * then HUMAN_ADDED leaf assignments. Any failure rolls the whole save back.
+   * Not a second writer: calls AhspService.create, AhspVersionService.createVersion,
+   * and AhspClassificationAssignmentService.addAssignment.
+   */
+  @Post('manual')
+  @Permissions('AHSP_MANAGE')
+  async createManual(
+    @Req() request: WorkspaceScopedRequest,
+    @Body()
+    body: {
+      workType?: string;
+      methodName?: string;
+      code?: string | null;
+      fieldCategory?: string | null;
+      subCategory?: string | null;
+      classification?: string | null;
+      keterangan?: string | null;
+      outputUnit?: string;
+      regulationReference?: string;
+      issuerInstitution?: string;
+      resources?: CreateAhspVersionDto['resources'];
+      leafNodeIds?: string[];
+    },
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
+    const methodName = typeof body?.methodName === 'string' ? body.methodName.trim() : '';
+    const outputUnit = typeof body?.outputUnit === 'string' ? body.outputUnit.trim() : '';
+    if (!methodName) throw new BadRequestException('AHSP_METHOD_NAME_REQUIRED');
+    if (!outputUnit) throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
+    const userId = await this.resolveActor(request);
+    const leafNodeIds = [
+      ...new Set(
+        (Array.isArray(body.leafNodeIds) ? body.leafNodeIds : []).filter(
+          (id): id is string => typeof id === 'string' && id.trim() !== '',
+        ),
+      ),
+    ];
+    const workType =
+      (typeof body.workType === 'string' && body.workType.trim()) || methodName;
+
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const ahsp = await this.ahspService.create(
+        {
+          workspaceId,
+          userId,
+          workType,
+          methodName,
+          methodType: MethodType.OTHER,
+          locationType: LocationType.OTHER,
+          code: body.code ?? null,
+          fieldCategory: body.fieldCategory ?? null,
+          subCategory: body.subCategory ?? null,
+          classification: body.classification ?? null,
+          keterangan: body.keterangan ?? null,
+        },
+        tx,
+      );
+      const version = await this.ahspVersionService.createVersion(
+        ahsp.id,
+        {
+          workspaceId,
+          userId,
+          outputUnit,
+          regulationReference: body.regulationReference,
+          issuerInstitution: body.issuerInstitution,
+          resources: Array.isArray(body.resources) ? body.resources : [],
+        },
+        tx,
+      );
+      const assignments: AhspClassificationAssignmentView[] = [];
+      for (const leafNodeId of leafNodeIds) {
+        assignments.push(
+          await this.assignments.addAssignment(
+            {
+              ahspId: ahsp.id,
+              leafNodeId,
+              provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
+              actingWorkspaceId: workspaceId,
+              actorAccountId: userId,
+            },
+            tx,
+          ),
+        );
+      }
+      return { id: ahsp.id, keterangan: ahsp.keterangan, versionId: version.id, assignments };
+    });
+    // Formula/Manual acceptance is already committed above. Resource identity
+    // enrichment is deliberately not a gate: if observation preparation is
+    // temporarily unavailable, Detail/Tinjau Resource will retry on demand.
+    let resourceReviewPrepared = true;
+    try {
+      await this.observations.ensureHandBuiltObservations(
+        workspaceId,
+        Array.isArray(body.resources) ? body.resources : [],
+      );
+    } catch {
+      resourceReviewPrepared = false;
+    }
+    return { ...saved, resourceReviewPrepared };
+  }
+
+  @Get(':id/classification-assignments')
+  @Permissions('AHSP_VIEW')
+  async listClassificationAssignments(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('id') id: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
+    return this.assignments.listAssignments({
+      ahspId: id,
+      actingWorkspaceId: workspaceId,
+    });
+  }
+
+  @Post(':id/classification-assignments')
+  @Permissions('AHSP_MANAGE')
+  async addClassificationAssignments(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('id') id: string,
+    @Body() body: { leafNodeIds?: string[] },
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
+    const actorAccountId = await this.resolveActor(request);
+    const leafNodeIds = [
+      ...new Set(
+        (Array.isArray(body?.leafNodeIds) ? body.leafNodeIds : []).filter(
+          (leafNodeId): leafNodeId is string =>
+            typeof leafNodeId === 'string' && leafNodeId.trim() !== '',
+        ),
+      ),
+    ];
+    if (leafNodeIds.length === 0) {
+      throw new BadRequestException(
+        'AHSP_CLASSIFICATION_ASSIGNMENT_LEAF_REQUIRED',
+      );
+    }
+    return this.prisma.$transaction(async (tx) =>
+      Promise.all(
+        leafNodeIds.map((leafNodeId) =>
+          this.assignments.addAssignment(
+            {
+              ahspId: id,
+              leafNodeId,
+              provenance:
+                AhspClassificationAssignmentProvenance.HUMAN_ADDED,
+              actingWorkspaceId: workspaceId,
+              actorAccountId,
+            },
+            tx,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @Post(':id/classification-assignments/:assignmentId/deactivate')
+  @Permissions('AHSP_MANAGE')
+  async deactivateClassificationAssignment(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('id') id: string,
+    @Param('assignmentId') assignmentId: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
+    const actorAccountId = await this.resolveActor(request);
+    return this.assignments.deactivateAssignment({
+      ahspId: id,
+      assignmentId,
+      actingWorkspaceId: workspaceId,
+      actorAccountId,
     });
   }
 
@@ -382,11 +731,16 @@ export class AhspController {
     }
     const userId = await this.resolveActor(request);
     const { userId: _clientActor, workspaceId: _clientWorkspace, ...safeBody } = body;
-    return this.ahspVersionService.createVersion(ahspId, {
+    const version = await this.ahspVersionService.createVersion(ahspId, {
       ...safeBody,
       workspaceId,
       userId,
     });
+    await this.observations.ensureHandBuiltObservations(
+      workspaceId,
+      Array.isArray(safeBody.resources) ? safeBody.resources : [],
+    );
+    return version;
   }
 
   // ─────────────────────────────────────────────

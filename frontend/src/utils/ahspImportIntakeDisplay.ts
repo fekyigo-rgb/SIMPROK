@@ -32,25 +32,85 @@ export const admissionOf = (item: { admission?: string | null }): AhspItemAdmiss
 /** What one previewed item says after its name, for an item whose only open question is a component's identity. */
 export const IDENTITY_PENDING_ITEM_LINE = 'masih dilengkapi identitas komponennya';
 
+/**
+ * Konfirmasi figures — four independent truths from canonical preview facts.
+ * READY_TO_STORE (willSave) is never confused with READY_TO_USE (PROVEN-only).
+ * needsReview (IDENTITY_PENDING / HELD) does not reduce willSave for pending identity.
+ */
+export type ConfirmImportFigures = {
+  understood: number;
+  already: number;
+  willSave: number;
+  needsReview: number;
+  cannotSave: number;
+};
+
+export const confirmImportFigures = (
+  items: ReadonlyArray<{
+    admission?: string | null;
+    identityVerdict?: string | null;
+  }>,
+): ConfirmImportFigures => {
+  let already = 0;
+  let willSave = 0;
+  let needsReview = 0;
+  let cannotSave = 0;
+  for (const item of items) {
+    const admission = admissionOf(item);
+    if (item.identityVerdict === 'IDENTICAL' && admission !== 'HELD') {
+      already += 1;
+      continue;
+    }
+    if (admission === 'HELD') {
+      cannotSave += 1;
+      needsReview += 1;
+      continue;
+    }
+    // PROVEN and IDENTITY_PENDING are both accepted for store on Save.
+    willSave += 1;
+    if (admission === 'IDENTITY_PENDING') needsReview += 1;
+  }
+  return {
+    understood: items.length,
+    already,
+    willSave,
+    needsReview,
+    cannotSave,
+  };
+};
+
 const whole = (value: number | null | undefined): number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 
 /**
- * What SIMPROK understood, BEFORE anything is kept. Counted from the server's own
- * admission of each item — never a forecast of what saving will do.
+ * What SIMPROK understood, BEFORE anything is kept. Counted from the same
+ * canonical projection as confirmImportFigures — never invents a true "all
+ * recognised items will be stored" claim when some are held.
+ * Distinguishes: dikenali · dapat disimpan sekarang · ditahan · perlu ditinjau · siap digunakan (proven).
+ * Does not change disposition/count math — only the spoken projection.
  */
-export const previewIntakeLine = (items: ReadonlyArray<{ admission?: string | null }>): string => {
+export const previewIntakeLine = (
+  items: ReadonlyArray<{ admission?: string | null; identityVerdict?: string | null }>,
+): string => {
   if (items.length === 0) return 'Tidak ada pekerjaan yang dapat dikenali dari dokumen ini.';
-  const counts = { PROVEN: 0, IDENTITY_PENDING: 0, HELD: 0 };
-  for (const item of items) counts[admissionOf(item)] += 1;
-  return (
-    items.length + ' pekerjaan dikenali. ' +
-    counts.PROVEN + ' lengkap dan terbukti. ' +
-    counts.IDENTITY_PENDING + ' lengkap, tetapi identitas sebagian komponennya masih dilengkapi. ' +
-    counts.HELD + ' masih menunggu fakta atau keputusan. ' +
-    'Saat disimpan, semua pekerjaan yang dikenali diterima SIMPROK.'
-  );
+  const figures = confirmImportFigures(items);
+  const readyForUse = items.filter((item) => admissionOf(item) === 'PROVEN').length;
+  const parts = [
+    figures.understood + ' pekerjaan dikenali',
+    figures.willSave + ' dapat disimpan sekarang',
+    figures.cannotSave + ' ditahan (belum dapat disimpan)',
+    figures.needsReview + ' masih perlu ditinjau',
+    readyForUse + ' siap digunakan setelah disimpan (lengkap dan terbukti)',
+  ];
+  if (figures.already > 0) {
+    parts.splice(2, 0, figures.already + ' sudah ada di SIMPROK (tidak disimpan dua kali)');
+  }
+  return parts.join('. ') + '.';
 };
+
+/** Page subtitle — never claims every recognised work item is accepted on save. */
+export const IMPORT_JOURNEY_SUBTITLE =
+  'Unggah dokumen resmi, pahami isinya, lalu tinjau apa yang dapat disimpan sekarang, apa yang ditahan, dan apa yang masih perlu ditinjau.';
 
 /** One evaluation of a document, or of an import's waiting items, as the server counted it. */
 export interface IntakeSummaryWire {
