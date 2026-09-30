@@ -83,6 +83,13 @@ test("G4. every stepper state is SPOKEN as well as coloured", () => {
   assert.match(body, /title=\{stage\.hint\}/u);
 });
 
+test("G1c. stepper clicks reuse existing rooms and never invent a workflow engine", () => {
+  assert.match(stepper, /journeyStageHref/u);
+  assert.match(stepper, /navigate\(href\)/u);
+  assert.doesNotMatch(stepper, /basic-price\/reviews/u);
+  assert.doesNotMatch(stepper, /basic-price\/publications/u);
+});
+
 test("G4b. the freshness chip's colour is decoration; the word carries the meaning", () => {
   const body = renderable(chip);
   assert.match(body, /aria-hidden="true"/u, "the dot must be hidden from AT");
@@ -486,4 +493,24 @@ test("CHANGE-DOOR. one compact Detail door routes into existing writers, never a
   assert.match(body, /onCurrentChanged/u);
   assert.doesNotMatch(body, /updateBasicPrice/u);
   assert.doesNotMatch(executable(panel), /@Put|PATCH \/basic-prices/u);
+});
+
+test("TAB-01. Ringkasan, Sumber, and Riwayat are mutually exclusive panels", () => {
+  const body = executable(panel);
+  assert.match(body, /tab === 'RINGKASAN' \?/u);
+  assert.match(body, /tab === 'SUMBER' \?/u);
+  assert.match(body, /tab === 'RIWAYAT' \?/u);
+  assert.match(body, /role="tablist"/u);
+  assert.match(body, /aria-selected=\{tab === entry\.key\}/u);
+});
+
+test("SAVE-01. correction asks once, then stays in context with a spoken notice", () => {
+  const body = executable(panel);
+  assert.match(body, /Simpan koreksi ini\?/u);
+  assert.match(body, /Simpan koreksi/u);
+  assert.match(body, /aria-live="polite"/u);
+  assert.match(body, /notice \? \(/u);
+  assert.match(css, /\.bp-row--open/u);
+  assert.match(css, /\.bp-detail-anchor/u);
+  assert.match(css, /box-shadow: inset 3px 0 0 var\(--simprok-authority-navy-900\)/u);
 });
