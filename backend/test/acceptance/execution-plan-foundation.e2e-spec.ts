@@ -5,7 +5,6 @@ import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
-import { ExecutionPlanService } from '../../src/execution-plan/execution-plan.service';
 
 describe('MON-04 official Execution Plan foundation (e2e)', () => {
   const prisma = new PrismaClient();
@@ -13,7 +12,6 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
   const password = 'ExecutionPlanV1!';
 
   let app: INestApplication;
-  let plans: ExecutionPlanService;
   let organizationId: string;
   let workspaceId: string;
   let projectId: string;
@@ -75,6 +73,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       'PROJECT_SETTINGS_MANAGE',
       'EXECUTION_PLAN_EDIT',
       'EXECUTION_PLAN_LOCK',
+      'PROJECT_EXECUTION_START',
       'FIELD_PROGRESS_SUBMIT',
     ];
     const permissions = await Promise.all(
@@ -139,8 +138,8 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       const position = await prisma.position.create({
         data: {
           workspaceId,
-          code: `${tag}_LOCK_HOLDER`,
-          name: `${tag} Execution Plan Lock Holder`,
+          code: `${tag}_EXECUTION_GOVERNOR`,
+          name: `${tag} Execution Governor`,
         },
       });
       positionIds.push(position.id);
@@ -230,12 +229,17 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       .set(auth(authorizedToken))
       .send({ commandId: randomUUID(), anchorDate });
 
+  const startExecution = (targetProjectId: string, commandId = randomUUID()) =>
+    request(app.getHttpServer())
+      .post(`/projects/${targetProjectId}/start-execution`)
+      .set(auth(authorizedToken))
+      .send({ commandId });
+
   beforeAll(async () => {
     app = (
       await Test.createTestingModule({ imports: [AppModule] }).compile()
     ).createNestApplication();
     await app.init();
-    plans = app.get(ExecutionPlanService);
 
     const organization = await prisma.organization.create({
       data: { name: `${tag} Organization`, type: 'COMPANY' },
@@ -290,6 +294,26 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     if (!existingAuthority) createdAuthorityIds.push(authority.id);
     await prisma.positionAuthority.create({
       data: { positionId: authorizedPositionId, authorityId: authority.id },
+    });
+
+    const existingStartAuthority = await prisma.authority.findUnique({
+      where: { code: 'PROJECT_EXECUTION_START' },
+    });
+    const startAuthority =
+      existingStartAuthority ??
+      (await prisma.authority.create({
+        data: {
+          code: 'PROJECT_EXECUTION_START',
+          name: 'Start Project Execution',
+          description: 'Governed transition into official execution.',
+        },
+      }));
+    if (!existingStartAuthority) createdAuthorityIds.push(startAuthority.id);
+    await prisma.positionAuthority.create({
+      data: {
+        positionId: authorizedPositionId,
+        authorityId: startAuthority.id,
+      },
     });
 
     authorizedToken = await login(authorized.email);
@@ -612,7 +636,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     });
   });
 
-  it('rolls back the plan transition when project activation fails inside the transaction', async () => {
+  it('locks the plan without invoking or changing the Project execution lifecycle', async () => {
     const created = await request(app.getHttpServer())
       .put(`/projects/${atomicProjectId}/execution-plan/draft`)
       .set(auth(authorizedToken))
@@ -631,21 +655,21 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     atomicPlanId = created.body.executionPlanVersionId;
     atomicPlanRevision = created.body.revision;
 
-    const serviceWithSeam = plans as unknown as {
-      activateProjectWithinLock: () => Promise<never>;
-    };
-    const failure = jest
-      .spyOn(serviceWithSeam, 'activateProjectWithinLock')
-      .mockRejectedValueOnce(new Error('SIMULATED_PROJECT_ACTIVATION_FAILURE'));
-    const failedLock = await request(app.getHttpServer())
+    const locked = await request(app.getHttpServer())
       .post(`/projects/${atomicProjectId}/execution-plan/lock`)
       .set(auth(authorizedToken))
       .send({
         executionPlanVersionId: atomicPlanId,
         expectedRevision: atomicPlanRevision,
-      });
-    failure.mockRestore();
-    expect(failedLock.status).toBe(500);
+      })
+      .expect(201);
+    expect(locked.body).toMatchObject({
+      changed: true,
+      status: 'LOCKED',
+      projectStatus: 'PLANNED',
+      baselineId: atomicBaselineId,
+      lockedFromProjectStatus: 'PLANNED',
+    });
 
     expect(
       (
@@ -653,7 +677,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
           where: { id: atomicPlanId },
         })
       ).status,
-    ).toBe('DRAFT');
+    ).toBe('LOCKED');
     expect(
       (
         await prisma.project.findUniqueOrThrow({
@@ -663,7 +687,8 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     ).toBe('PLANNED');
   });
 
-  it('locks and activates atomically, is idempotent, and makes every ordinary plan write fail closed', async () => {
+  it('locks planning only, is idempotent while PLANNED, and makes every ordinary plan write fail closed', async () => {
+    await activateWorkPeriodAnchor(projectId, '2026-09-01').expect(200);
     const distributionsBefore = await prisma.executionPlanDistribution.findMany(
       {
         where: { executionPlanVersionId: planId },
@@ -680,7 +705,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       executionPlanVersionId: planId,
       status: 'LOCKED',
       revision: planRevision,
-      projectStatus: 'ACTIVE',
+      projectStatus: 'PLANNED',
       baselineId,
       authorityCode: 'EXECUTION_PLAN_LOCK',
       lockedByPositionId: authorizedPositionId,
@@ -701,7 +726,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     expect(
       (await prisma.project.findUniqueOrThrow({ where: { id: projectId } }))
         .status,
-    ).toBe('ACTIVE');
+    ).toBe('PLANNED');
 
     const repeated = await request(app.getHttpServer())
       .post(`/projects/${projectId}/execution-plan/lock`)
@@ -709,6 +734,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       .send({ executionPlanVersionId: planId, expectedRevision: planRevision })
       .expect(201);
     expect(repeated.body.changed).toBe(false);
+    expect(repeated.body.projectStatus).toBe('PLANNED');
     expect(new Date(repeated.body.lockedAt)).toEqual(settled.lockedAt);
 
     await request(app.getHttpServer())
@@ -741,13 +767,13 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     );
   });
 
-  it('keeps the historical locked plan readable and permits the existing Actual path only after lock', async () => {
+  it('keeps PLANNED plus LOCKED readable, blocks Actual, then enables it only through Mulai Pelaksanaan', async () => {
     const readiness = await request(app.getHttpServer())
       .get(`/projects/${projectId}/execution-plan`)
       .set(auth(authorizedToken))
       .expect(200);
     expect(readiness.body).toMatchObject({
-      projectStatus: 'ACTIVE',
+      projectStatus: 'PLANNED',
       readinessState: 'LOCKED_FOR_EXECUTION',
       plan: {
         id: planId,
@@ -766,11 +792,44 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
       knownWeightedPlannedProgressPercent: '100',
     });
 
+    const actualCommand = randomUUID();
+    await request(app.getHttpServer())
+      .post(`/projects/${projectId}/progress/field`)
+      .set(auth(authorizedToken))
+      .send({
+        commandId: actualCommand,
+        entries: [
+          {
+            boqItemId: firstItemId,
+            installedQuantity: '1',
+            workDate: '2026-09-15',
+            captureMethod: 'FIELD_OBSERVATION',
+          },
+        ],
+      })
+      .expect(409);
+
+    const startCommandId = randomUUID();
+    const started = await startExecution(projectId, startCommandId).expect(201);
+    expect(started.body).toMatchObject({
+      changed: true,
+      projectId,
+      projectStatus: 'ACTIVE',
+      baselineId,
+      executionPlanVersionId: planId,
+      effectiveStartDate: '2026-09-01',
+      authorityCode: 'PROJECT_EXECUTION_START',
+      positionId: authorizedPositionId,
+    });
+    const replay = await startExecution(projectId, startCommandId).expect(201);
+    expect(replay.body).toMatchObject({ changed: false });
+    await startExecution(projectId, randomUUID()).expect(409);
+
     const submitted = await request(app.getHttpServer())
       .post(`/projects/${projectId}/progress/field`)
       .set(auth(authorizedToken))
       .send({
-        commandId: randomUUID(),
+        commandId: actualCommand,
         entries: [
           {
             boqItemId: firstItemId,

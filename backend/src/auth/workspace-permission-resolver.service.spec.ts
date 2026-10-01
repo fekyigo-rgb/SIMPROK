@@ -186,4 +186,39 @@ describe('WorkspacePermissionResolverService', () => {
       ).sort(),
     );
   });
+
+  it('10. resolves lifecycle-command permission through the supplied transaction without a second RBAC engine', async () => {
+    const transactionalFindFirst = jest
+      .fn()
+      .mockResolvedValue(
+        membership([{ codes: [PERMISSIONS.PROJECT_EXECUTION_START] }]),
+      );
+    const asOf = new Date('2026-09-30T00:00:00.000Z');
+
+    const result = await resolver.resolveWithinTransaction(
+      { workspaceMembership: { findFirst: transactionalFindFirst } } as any,
+      'account-1',
+      'workspace-a',
+      asOf,
+    );
+
+    expect(result?.permissions).toContain(PERMISSIONS.PROJECT_EXECUTION_START);
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(transactionalFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          accountId: 'account-1',
+          workspaceId: 'workspace-a',
+          status: 'ACTIVE',
+        }),
+        select: expect.objectContaining({
+          membershipRoles: expect.objectContaining({
+            where: expect.objectContaining({
+              OR: [{ endDate: null }, { endDate: { gte: asOf } }],
+            }),
+          }),
+        }),
+      }),
+    );
+  });
 });
