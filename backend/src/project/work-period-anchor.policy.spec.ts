@@ -13,6 +13,7 @@ import {
   WORK_PERIOD_ANCHOR_POLICY_VERSION,
   assessActualAnchorCompatibility,
   assessActualPromotionAnchorCompatibility,
+  assessExecutionStartAnchorCompatibility,
   assessPlannedAnchorCompatibility,
   readCanonicalWorkPeriodAnchor,
   type WorkPeriodAnchorAuditCandidate,
@@ -225,6 +226,41 @@ describe('MON-04 governed Work Period anchor policy', () => {
     expect(
       assessPlannedAnchorCompatibility('2026-05-18', {
         state: 'NO_LOCKED_PLAN',
+      }),
+    ).toEqual({ state: 'COMPATIBLE' });
+  });
+
+  it('keeps activation interval-start compatibility separate from Planned credit', () => {
+    expect(
+      assessExecutionStartAnchorCompatibility({
+        anchorDate: '2026-05-18',
+        baselineId,
+        executionPlanVersionId: 'plan-anchor',
+        distributions: [
+          { boqItemId, periodStartDate: businessDate('2026-05-17') },
+        ],
+      }),
+    ).toEqual({
+      state: 'CONFLICT',
+      code: 'PROJECT_EXECUTION_INTERVAL_BEFORE_EFFECTIVE_DAY_ONE',
+      baselineId,
+      executionPlanVersionId: 'plan-anchor',
+      boqItemId,
+      earliestConflictingPeriodStartDate: '2026-05-17',
+      anchorDate: '2026-05-18',
+    });
+  });
+
+  it('accepts execution intervals beginning exactly on or after governed Day-1', () => {
+    expect(
+      assessExecutionStartAnchorCompatibility({
+        anchorDate: '2026-05-18',
+        baselineId,
+        executionPlanVersionId: 'plan-anchor',
+        distributions: [
+          { boqItemId, periodStartDate: businessDate('2026-05-18') },
+          { boqItemId, periodStartDate: businessDate('2026-05-19') },
+        ],
       }),
     ).toEqual({ state: 'COMPATIBLE' });
   });
