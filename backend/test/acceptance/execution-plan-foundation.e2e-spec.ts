@@ -387,7 +387,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     await prisma.$disconnect();
   });
 
-  it('reads PLAN_NOT_READY and refuses Actual before a locked plan', async () => {
+  it('reads PLAN_NOT_READY and refuses Actual before execution starts', async () => {
     const readiness = await request(app.getHttpServer())
       .get(`/projects/${projectId}/execution-plan`)
       .set(auth(authorizedToken))
@@ -416,7 +416,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
         ],
       })
       .expect(409);
-    expect(rejected.body.message).toBe('EXECUTION_PLAN_NOT_LOCKED');
+    expect(rejected.body.message).toBe('PROJECT_EXECUTION_NOT_STARTED');
     expect(await prisma.progressReport.count({ where: { projectId } })).toBe(
       before,
     );
@@ -793,7 +793,7 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
     });
 
     const actualCommand = randomUUID();
-    await request(app.getHttpServer())
+    const blockedBeforeStart = await request(app.getHttpServer())
       .post(`/projects/${projectId}/progress/field`)
       .set(auth(authorizedToken))
       .send({
@@ -808,6 +808,9 @@ describe('MON-04 official Execution Plan foundation (e2e)', () => {
         ],
       })
       .expect(409);
+    expect(blockedBeforeStart.body.message).toBe(
+      'PROJECT_EXECUTION_NOT_STARTED',
+    );
 
     const startCommandId = randomUUID();
     const started = await startExecution(projectId, startCommandId).expect(201);
