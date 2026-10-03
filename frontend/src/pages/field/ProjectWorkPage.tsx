@@ -1554,8 +1554,6 @@ export function ProjectWorkPage() {
             presentation="GOVERNANCE"
             projectId={project.id}
             executionPlan={executionPlan}
-            realizationByBoqItemId={realizationByBoqItemId}
-            progressComparisonPresentation={progressComparisonPresentation}
             onChanged={() => setExecutionPlanRefresh((current) => current + 1)}
           />
           <dl className="h2a0-project-updated">

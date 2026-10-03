@@ -945,12 +945,23 @@ export function ProjectRabDoorPage() {
               <p className="simprok-rab-section-label">Dokumen Pendukung</p>
               <div className="simprok-rab-doc-list">
                 {supportDocuments.map((doc) => (
-                  <button key={doc} type="button" className={activeSupport === doc ? 'simprok-rab-doc simprok-rab-doc--active' : 'simprok-rab-doc'} onClick={() => setActiveSupport(doc)}>
+                  <button
+                    key={doc}
+                    type="button"
+                    className={activeSupport === doc ? 'simprok-rab-doc simprok-rab-doc--active' : 'simprok-rab-doc'}
+                    onClick={() => {
+                      if (doc === 'Schedule / Jadwal' && projectId) {
+                        navigate(`/project/${projectId}/schedule`);
+                        return;
+                      }
+                      setActiveSupport(doc);
+                    }}
+                  >
                     <span>
                       <FileText size={15} aria-hidden="true" />
                       {doc}
                     </span>
-                    <em>Belum tersedia</em>
+                    <em>{doc === 'Schedule / Jadwal' ? 'Buka Schedule' : 'Belum tersedia'}</em>
                   </button>
                 ))}
               </div>
