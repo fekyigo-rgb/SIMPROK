@@ -7,6 +7,7 @@ import { ProjectRabDoorPage } from './pages/ProjectRabDoorPage';
 import { RabWorkspacePage } from './pages/RabWorkspacePage';
 import { ProjectAhspSnapshotPage } from './pages/ProjectAhspSnapshotPage';
 import { ProjectDetailDoorPage } from './pages/ProjectDetailDoorPage';
+import { ScheduleHomePage } from './pages/ScheduleHomePage';
 import { ProjectNotesPage } from './pages/ProjectNotesPage';
 import { ProjectListPage } from './pages/ProjectListPage';
 import { AhspRoomPage } from './pages/AhspRoomPage';
@@ -62,6 +63,7 @@ function App() {
               <Route path="basic-price/reviews/:reviewId" element={<PermissionRoute permission="BASIC_PRICE_REVIEW_VIEW"><BasicPriceReviewDetailPage /></PermissionRoute>} />
               <Route path="basic-price/publications" element={<PermissionRoute permission="BASIC_PRICE_PUBLISH"><BasicPricePublicationQueuePage /></PermissionRoute>} />
               <Route path="project/:projectId/detail" element={<ProjectDetailDoorPage />} />
+              <Route path="project/:projectId/schedule" element={<PermissionRoute permission="PROJECT_VIEW"><ScheduleHomePage /></PermissionRoute>} />
               <Route path="project/:projectId/catatan" element={<ProjectNotesPage />} />
               <Route path="project/:id" element={<ProjectWarRoomPage />} />
               <Route path="showcase" element={<RoleRoute allowedRoles={['OWNER']}><ShowcasePage /></RoleRoute>} />

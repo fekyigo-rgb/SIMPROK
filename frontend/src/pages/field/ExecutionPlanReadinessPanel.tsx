@@ -39,8 +39,16 @@ interface DraftRow {
   plannedIncrementalQuantity: string;
 }
 
-interface CurrentExecutionPlanReadinessPanelProps {
-  presentation: 'GOVERNANCE' | MonitoringPlanView;
+interface GovernanceExecutionPlanReadinessPanelProps {
+  presentation: 'GOVERNANCE';
+  showWorkPlanWhenLocked?: boolean;
+  projectId: string;
+  executionPlan: ExecutionPlanResponse;
+  onChanged: () => void;
+}
+
+interface CurrentMonitoringExecutionPlanReadinessPanelProps {
+  presentation: MonitoringPlanView;
   projectId: string;
   executionPlan: ExecutionPlanResponse;
   realizationByBoqItemId: ReadonlyMap<string, MonitoringItem>;
@@ -59,7 +67,8 @@ interface PeriodicExecutionPlanReadinessPanelProps {
 }
 
 type ExecutionPlanReadinessPanelProps =
-  | CurrentExecutionPlanReadinessPanelProps
+  | GovernanceExecutionPlanReadinessPanelProps
+  | CurrentMonitoringExecutionPlanReadinessPanelProps
   | PeriodicExecutionPlanReadinessPanelProps;
 
 interface MonitoringComparisonCurveProps {
@@ -549,12 +558,13 @@ export function ExecutionPlanReadinessPanel(
     return <PeriodicScheduleReadOnly {...props.periodicSchedule} />;
   }
 
+  const showWorkPlanWhenLocked =
+    props.presentation === 'GOVERNANCE' &&
+    props.showWorkPlanWhenLocked === true;
   const {
     presentation,
     projectId,
     executionPlan,
-    realizationByBoqItemId,
-    progressComparisonPresentation,
     onChanged,
   } = props;
 
@@ -565,12 +575,8 @@ export function ExecutionPlanReadinessPanel(
   const canLock =
     executionPlan.capabilities.canLock &&
     hasPermission('EXECUTION_PLAN_LOCK');
-  const progressComparison =
-    progressComparisonPresentation.state === 'AVAILABLE'
-      ? progressComparisonPresentation.comparison
-      : null;
-
   if (presentation === 'SCHEDULE') {
+    const { realizationByBoqItemId } = props;
     return (
       <section
         className="execution-plan"
@@ -650,6 +656,11 @@ export function ExecutionPlanReadinessPanel(
   }
 
   if (presentation === 'ANALYSIS') {
+    const { progressComparisonPresentation } = props;
+    const progressComparison =
+      progressComparisonPresentation.state === 'AVAILABLE'
+        ? progressComparisonPresentation.comparison
+        : null;
     return (
       <section className="execution-plan" aria-label="Analisis Kurva S">
         <div className="execution-plan-review">
@@ -871,7 +882,7 @@ export function ExecutionPlanReadinessPanel(
         </div>
       )}
 
-      {!locked && (
+      {(!locked || showWorkPlanWhenLocked) && (
         <div className="execution-plan-review">
           <h3>Rencana Kerja</h3>
           <div className="execution-plan-table-scroll">
@@ -898,7 +909,7 @@ export function ExecutionPlanReadinessPanel(
           <p className="execution-plan-note execution-plan-governance-note">
             Rencana Pelaksanaan telah dikunci. Monitoring menggunakan rencana
             ini sebagai dasar Pengawasan dan Pengendalian. Distribusi waktu
-            rencana tetap dapat dibaca melalui Jadwal pada detail pekerjaan.
+            tetap dapat dibaca melalui Jadwal Rencana.
           </p>
           <dl className="execution-plan-lock-facts">
             <div><dt>Plan Version</dt><dd>{executionPlan.plan.versionNumber}</dd></div>

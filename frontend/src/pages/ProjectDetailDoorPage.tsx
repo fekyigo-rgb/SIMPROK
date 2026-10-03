@@ -400,6 +400,11 @@ export function ProjectDetailDoorPage() {
     navigate(`/project/${projectId}/rab`);
   };
 
+  const openSchedule = () => {
+    if (!projectId || projectDetail?.dataSource !== 'api') return;
+    navigate(`/project/${projectId}/schedule`);
+  };
+
   const openChangeDrawer = (type: ChangeType | null = null) => {
     setPreselectedChangeType(type);
     setChangeDrawerOpen(true);
@@ -422,8 +427,8 @@ export function ProjectDetailDoorPage() {
     { key: 'description', label: 'Uraian Pekerjaan', value: formalData.description },
     { key: 'specification', label: 'Spesifikasi Umum', value: formalData.specification },
     { key: 'notes', label: 'Catatan Pekerjaan', value: formalData.notes },
-    { key: 'startDate', label: 'Rencana Mulai', value: formalData.startDate },
-    { key: 'endDate', label: 'Rencana Selesai', value: formalData.endDate },
+    { key: 'startDate', label: 'Usulan Hari 1 Pelaksanaan', value: formalData.startDate },
+    { key: 'endDate', label: 'Target Selesai', value: formalData.endDate },
   ];
   const completedFormalData = formalDataManagementFields.filter((field) => field.value.trim()).length;
   const missingFormalData = formalDataManagementFields.filter((field) => !field.value.trim()).map((field) => field.label);
@@ -552,16 +557,29 @@ export function ProjectDetailDoorPage() {
         <DetailCard title="D. Jadwal">
           <DataList
             rows={[
-              { label: 'Rencana Mulai *', value: manualValue(formalData.startDate) },
-              { label: 'Rencana Selesai *', value: manualValue(formalData.endDate) },
+              { label: 'Usulan Hari 1 Pelaksanaan *', value: manualValue(formalData.startDate) },
+              { label: 'Target Selesai *', value: manualValue(formalData.endDate) },
               { label: 'Progress Saat Ini', value: projectDetail.progress },
             ]}
           />
-          <button type="button" className="simprok-detail-mini-button" disabled>
-            Lihat Schedule
-            <Lock size={13} aria-hidden="true" />
+          <button
+            type="button"
+            className="simprok-detail-mini-button"
+            onClick={openSchedule}
+            disabled={!isApiProject || !projectId}
+          >
+            Buka Schedule
+            {isApiProject ? (
+              <ChevronRight size={13} aria-hidden="true" />
+            ) : (
+              <Lock size={13} aria-hidden="true" />
+            )}
           </button>
-          <p className="simprok-detail-note">Menunggu mesin Schedule.</p>
+          <p className="simprok-detail-note">
+            {isApiProject
+              ? 'Rencana Pelaksanaan dibuka di ruang Schedule proyek.'
+              : 'Schedule tidak tersedia untuk data contoh.'}
+          </p>
         </DetailCard>
 
         <DetailCard title="E. Kelengkapan Data Formal" className="simprok-detail-card--formal-completeness">
@@ -751,20 +769,41 @@ export function ProjectDetailDoorPage() {
           <div>
             <h2>Pintu Dokumen & Ruang Kerja</h2>
             <p>
-              Pintu dokumen dari Detail Proyek adalah preview baca cepat. Edit dokumen tetap melalui
-              Ruang RAB dan mengikuti kewenangan.
+              Dokumen pendukung lain dapat dibuka sebagai preview baca cepat. Schedule membuka Ruang
+              Schedule proyek. Perubahan dilakukan pada ruang kerja masing-masing sesuai kewenangan.
             </p>
           </div>
         </header>
         <div className="simprok-detail-docs__grid">
-          {documentDoors.map((docName) => (
-            <button key={docName} type="button" onClick={() => setPreviewDoc(docName)}>
-              <FileText size={16} aria-hidden="true" />
-              <span>{docName}</span>
-              <small>Preview read-only</small>
-              <ChevronRight size={15} aria-hidden="true" />
-            </button>
-          ))}
+          {documentDoors.map((docName) => {
+            const isScheduleDoor = docName === 'Schedule / Jadwal';
+            const scheduleDoorLive = isScheduleDoor && isApiProject && Boolean(projectId);
+            return (
+              <button
+                key={docName}
+                type="button"
+                disabled={isScheduleDoor && !scheduleDoorLive}
+                onClick={() => {
+                  if (scheduleDoorLive) {
+                    openSchedule();
+                    return;
+                  }
+                  setPreviewDoc(docName);
+                }}
+              >
+                <FileText size={16} aria-hidden="true" />
+                <span>{docName}</span>
+                <small>
+                  {isScheduleDoor
+                    ? scheduleDoorLive
+                      ? 'Buka ruang Schedule'
+                      : 'Tidak tersedia untuk data contoh'
+                    : 'Preview read-only'}
+                </small>
+                <ChevronRight size={15} aria-hidden="true" />
+              </button>
+            );
+          })}
         </div>
       </section>
 
