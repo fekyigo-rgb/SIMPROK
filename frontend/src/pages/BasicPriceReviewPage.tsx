@@ -589,18 +589,18 @@ export function BasicPriceReviewPage() {
           type="button"
           className="bp-btn bp-btn--sm"
           onClick={() => navigate(`/basic-price/import/${batch.batchId}`)}
-          title="Kembali ke data batch"
-          aria-label="Kembali ke data batch"
+          title="Kembali ke Lengkapi Sumber pada batch ini"
+          aria-label="Kembali ke Lengkapi Sumber"
         >
-          <ArrowLeft size={14} /> Data Batch
+          <ArrowLeft size={14} /> Lengkapi Sumber
         </button>
         <button
           type="button"
           className="bp-btn bp-btn--link"
           onClick={() => navigate('/basic-price')}
-          title="Kembali ke daftar Basic Price"
+          title="Keluar dari impor ke daftar Basic Price"
         >
-          Basic Price →
+          Keluar ke Basic Price
         </button>
       </div>
 

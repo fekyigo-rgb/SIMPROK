@@ -308,6 +308,31 @@ function stage(
   return { key, label: STAGE_LABELS[key], state, hint, optional };
 }
 
+/**
+ * BP-WF-NAV-01 — WHERE A STAGE MAY TAKE A PERSON.
+ *
+ * The stepper remains a projection: this names the EXISTING rooms, never a
+ * second workflow engine. VERIFY and PUBLISH stay unlinked because they are
+ * governed back-office doors, not general-product rooms.
+ *
+ * UPCOMING / NOT_OFFERED are not doors. A stage without a batch is not a door.
+ */
+export function journeyStageHref(
+  stage: JourneyStage,
+  batch: BasicPriceImportBatchSummary | null,
+): string | null {
+  if (!batch) return null;
+  if (stage.state === 'UPCOMING' || stage.state === 'NOT_OFFERED') return null;
+  if (stage.key === 'VERIFY' || stage.key === 'PUBLISH') return null;
+  if (stage.key === 'FILE' || stage.key === 'SOURCE') {
+    return `/basic-price/import/${batch.batchId}`;
+  }
+  if (stage.key === 'ROWS' || stage.key === 'PROPOSE') {
+    return `/basic-price/import/${batch.batchId}/review`;
+  }
+  return null;
+}
+
 // ── Row-review counters (§15) ───────────────────────────────────────────────
 
 export interface ReviewCounter {

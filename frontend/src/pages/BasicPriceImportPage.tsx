@@ -50,6 +50,10 @@ import { RegionSearchSelect } from '../components/basic-price/RegionSearchSelect
 import type { RegionLookupItem } from '../api/basicPriceWorkflow';
 import '../styles/basicPrice.css';
 
+/** BP-WF-NAV-01 — replacing the file is a new reading, never a silent overwrite. */
+export const FILE_REPLACE_CONFIRMATION =
+  'Memilih berkas lain membuat bacaan baru. Batch yang sedang dibuka tidak ikut pindah. Lanjutkan?';
+
 /**
  * RM-02 Basic Price import — upload -> preview -> confirm metadata -> hand
  * off to the review room (BasicPriceReviewPage). SIMPROK never auto-submits
@@ -212,6 +216,10 @@ export function BasicPriceImportPage() {
       const result = await previewBasicPriceImport(file, answers, context);
       setBatch(result);
       setQuestion(kdnMappingQuestionOf(result.kdnMapping));
+      const nextPath = `/basic-price/import/${result.batchId}`;
+      if (location.pathname !== nextPath) {
+        navigate(nextPath);
+      }
       const decision = reimportDecisionView(result.reimport);
       setStatusMessage(
         decision
@@ -247,6 +255,13 @@ export function BasicPriceImportPage() {
   };
 
   const handleFileChosen = async (file: File) => {
+    if (batch) {
+      const proceed = window.confirm(FILE_REPLACE_CONFIRMATION);
+      if (!proceed) {
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        return;
+      }
+    }
     setSelectedFile(file);
     // A new file is a new subject: answers given about the previous one must
     // never be carried onto it.
@@ -397,10 +412,10 @@ export function BasicPriceImportPage() {
           type="button"
           className="bp-btn bp-btn--sm"
           onClick={() => navigate('/basic-price')}
-          title="Kembali ke daftar Basic Price"
-          aria-label="Kembali ke daftar Basic Price"
+          title="Keluar dari impor ke daftar Basic Price"
+          aria-label="Keluar ke daftar Basic Price"
         >
-          <ArrowLeft size={14} /> Basic Price
+          <ArrowLeft size={14} /> Keluar ke Basic Price
         </button>
       </div>
 
