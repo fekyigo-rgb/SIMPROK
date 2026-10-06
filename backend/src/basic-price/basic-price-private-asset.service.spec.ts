@@ -19,6 +19,7 @@ describe('BasicPricePrivateAssetService', () => {
   const rowId = '70000000-0000-4000-8000-000000000001';
   const resourceCatalogId = '80000000-0000-4000-8000-000000000001';
   const regionId = '90000000-0000-4000-8000-000000000001';
+  const regionCoverageSetId = '91000000-0000-4000-8000-000000000001';
 
   const actor: TrustedBasicPriceActor = {
     accountId,
@@ -33,6 +34,7 @@ describe('BasicPricePrivateAssetService', () => {
     status: 'READY_FOR_REVIEW',
     effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
     regionId,
+    regionCoverageSetId: null,
     sourceType: 'VENDOR_QUOTE',
     sourceOrigin: 'STORE',
     uploadedByAccountId: accountId,
@@ -106,6 +108,21 @@ describe('BasicPricePrivateAssetService', () => {
       expect(result.createdCount).toBe(1);
       expect(result.alreadyPrivateCount).toBe(0);
       expect(result.prices[0].assetScope).toBe('WORKSPACE_PRIVATE');
+    });
+
+    it('carries explicit Region coverage beside the unchanged scalar District anchor', async () => {
+      makeTx({
+        batch: { ...baseBatch(), regionCoverageSetId },
+      });
+
+      await service.keepBatchPrivate({ batchId, actor });
+
+      expect(tx.basicPrice.create.mock.calls[0][0].data).toEqual(
+        expect.objectContaining({
+          regionId,
+          regionCoverageSetId,
+        }),
+      );
     });
 
     it('NEVER fakes publication: status and verificationStatus are not written at all', async () => {

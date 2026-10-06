@@ -25,7 +25,7 @@ import {
   explorerErrorStateFromStatus,
   explorerSourceNameLabel,
   formatExplorerPrice,
-  regionLabel,
+  basicPriceRegionLabel,
   resourceLabel,
   resourceTypeLabel,
   sourceFamilyLabel,
@@ -619,7 +619,7 @@ export function BasicPriceExplorerPage() {
                       {item.resource.baseUnit}
                     </td>
                     <td data-label="Wilayah" className="bp-cell-region">
-                      {regionLabel(item.region)}
+                      {basicPriceRegionLabel(item)}
                     </td>
                     {/*
                       THE REAL SOURCE NAME (§7, §24) — "Dinas PUPR Provinsi

@@ -118,18 +118,28 @@ export const regionOptionLabels = (
   regions: readonly RegionLookupItem[],
 ): Map<string, string> => {
   const nameCounts = new Map<string, number>();
+  const parentContextCounts = new Map<string, number>();
   for (const region of regions) {
     nameCounts.set(region.name, (nameCounts.get(region.name) ?? 0) + 1);
+    const parent = region.parentName?.trim() ?? '';
+    const parentContext = `${region.name}\u0000${parent}`;
+    parentContextCounts.set(
+      parentContext,
+      (parentContextCounts.get(parentContext) ?? 0) + 1,
+    );
   }
   const labels = new Map<string, string>();
   for (const region of regions) {
     const parent = region.parentName?.trim() ?? '';
     const distinct = (nameCounts.get(region.name) ?? 0) <= 1;
+    const parentDistinct =
+      parent.length > 0 &&
+      (parentContextCounts.get(`${region.name}\u0000${parent}`) ?? 0) <= 1;
     labels.set(
       region.id,
       distinct
         ? region.name
-        : `${region.name} (${parent || region.code})`,
+        : `${region.name} (${parentDistinct ? parent : region.code})`,
     );
   }
   return labels;

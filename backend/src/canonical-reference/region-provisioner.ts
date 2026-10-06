@@ -72,6 +72,17 @@ export type RegionAdministrativeLevel =
   | 'DISTRICT'
   | 'VILLAGE';
 
+const REGION_PARENT_LEVEL: Record<
+  RegionAdministrativeLevel,
+  RegionAdministrativeLevel | null
+> = {
+  COUNTRY: null,
+  PROVINCE: 'COUNTRY',
+  REGENCY_CITY: 'PROVINCE',
+  DISTRICT: 'REGENCY_CITY',
+  VILLAGE: 'DISTRICT',
+};
+
 export interface RegionDesignation {
   regionCode: string;
   regionName: string;
@@ -85,6 +96,8 @@ export interface RegionRow {
   code: string;
   name: string;
   isActive: boolean;
+  parentId?: string | null;
+  administrativeLevel?: RegionAdministrativeLevel | null;
 }
 
 export interface RegionPlan {
@@ -105,7 +118,14 @@ export interface RegionQueryClient {
   region: {
     findMany(args: {
       where: { OR: Array<{ code: string } | { name: string }> };
-      select: { id: true; code: true; name: true; isActive: true };
+      select: {
+        id: true;
+        code: true;
+        name: true;
+        isActive: true;
+        parentId: true;
+        administrativeLevel: true;
+      };
     }): Promise<RegionRow[]>;
   };
 }
@@ -136,7 +156,16 @@ export function assertRegionDesignation(
       'REGION_CODE and REGION_NAME must not carry leading or trailing whitespace; this module will not silently rewrite a designated value.',
     );
   }
-  return { regionCode, regionName };
+  return {
+    regionCode,
+    regionName,
+    ...(designation.parentRegionCode !== undefined
+      ? { parentRegionCode: designation.parentRegionCode }
+      : {}),
+    ...(designation.administrativeLevel !== undefined
+      ? { administrativeLevel: designation.administrativeLevel }
+      : {}),
+  };
 }
 
 async function resolveRegionHierarchy(
@@ -145,6 +174,18 @@ async function resolveRegionHierarchy(
 ): Promise<Pick<RegionPlan, 'parentRegionId' | 'administrativeLevel'>> {
   const parentRegionCode = designation.parentRegionCode;
   const administrativeLevel = designation.administrativeLevel;
+  if (
+    administrativeLevel !== undefined &&
+    !Object.prototype.hasOwnProperty.call(
+      REGION_PARENT_LEVEL,
+      administrativeLevel,
+    )
+  ) {
+    throw new RegionProvisionError(
+      'STOP_REGION_ADMINISTRATIVE_LEVEL_UNKNOWN',
+      `Administrative level "${String(administrativeLevel)}" is not recognised.`,
+    );
+  }
   if (parentRegionCode !== undefined) {
     if (typeof parentRegionCode !== 'string' || parentRegionCode.length === 0) {
       throw new RegionProvisionError(
@@ -165,6 +206,17 @@ async function resolveRegionHierarchy(
       'COUNTRY has no Kemendagri parent.',
     );
   }
+  if (
+    (parentRegionCode !== undefined && administrativeLevel === undefined) ||
+    (administrativeLevel !== undefined &&
+      administrativeLevel !== 'COUNTRY' &&
+      parentRegionCode === undefined)
+  ) {
+    throw new RegionProvisionError(
+      'STOP_REGION_HIERARCHY_INCOMPLETE',
+      'A scoped Region designation must provide both its administrative level and lawful parent code; neither fact is guessed.',
+    );
+  }
 
   const hierarchy: Pick<RegionPlan, 'parentRegionId' | 'administrativeLevel'> =
     {};
@@ -177,7 +229,14 @@ async function resolveRegionHierarchy(
 
   const parents = await client.region.findMany({
     where: { OR: [{ code: parentRegionCode }] },
-    select: { id: true, code: true, name: true, isActive: true },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      isActive: true,
+      parentId: true,
+      administrativeLevel: true,
+    },
   });
   const parent = parents.find((row) => row.code === parentRegionCode);
   if (!parent) {
@@ -192,6 +251,18 @@ async function resolveRegionHierarchy(
       `Parent Region code "${parentRegionCode}" exists but is inactive.`,
     );
   }
+  const expectedParentLevel = administrativeLevel
+    ? REGION_PARENT_LEVEL[administrativeLevel]
+    : null;
+  if (
+    expectedParentLevel === null ||
+    parent.administrativeLevel !== expectedParentLevel
+  ) {
+    throw new RegionProvisionError(
+      'STOP_REGION_PARENT_LEVEL_MISMATCH',
+      `Parent Region code "${parentRegionCode}" is not at the required ${String(expectedParentLevel)} level.`,
+    );
+  }
   hierarchy.parentRegionId = parent.id;
   return hierarchy;
 }
@@ -200,23 +271,52 @@ async function resolveRegionHierarchy(
  * Pure planning. Reads nothing but the two candidate rows, writes nothing.
  *
  * Conflict law — every one of these is a STOP, never a repair:
- *   - same code, different name   → the designation contradicts stored truth
- *   - same name, different code   → the same place would exist twice
- *   - exact match but inactive    → reusing a retired region is not reuse
+ *   - same code, different name     → the designation contradicts stored truth
+ *   - same code, different parent   → hierarchy is placement, not a rename
+ *   - same code, different level    → hierarchy is placement, not a rename
+ *   - exact match but inactive      → reusing a retired region is not reuse
+ *   - unscoped same name, different code → insufficient facts, fail closed
+ *
+ * Official code is the identity. A different official code with the same name
+ * in the same parent and level is a different Region. Name is not unique.
  */
 export async function buildRegionPlan(
   client: RegionQueryClient,
   designation: RegionDesignation,
 ): Promise<RegionPlan> {
   const { regionCode, regionName } = assertRegionDesignation(designation);
+  const hierarchy = await resolveRegionHierarchy(client, designation);
 
   const candidates = await client.region.findMany({
-    where: { OR: [{ code: regionCode }, { name: regionName }] },
-    select: { id: true, code: true, name: true, isActive: true },
+    // A governed hierarchy designation already carries the authoritative
+    // globally unique identity: its official code. Name lookup remains only
+    // for the legacy hierarchy-free path, where a second same-name code must
+    // still fail closed rather than acquire guessed placement semantics.
+    where: {
+      OR: designation.administrativeLevel
+        ? [{ code: regionCode }]
+        : [{ code: regionCode }, { name: regionName }],
+    },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      isActive: true,
+      parentId: true,
+      administrativeLevel: true,
+    },
   });
 
   const byCode = candidates.find((row) => row.code === regionCode);
-  const byName = candidates.find((row) => row.name === regionName);
+  // Official code is identity. The same name under a stated parent and level
+  // does not collide with a different code. The hierarchy-free path still
+  // refuses a same-name row, because that path has no placement facts with
+  // which two codes could be told apart.
+  const conflictingByName = designation.administrativeLevel
+    ? undefined
+    : candidates.find(
+        (row) => row.name === regionName && row.code !== regionCode,
+      );
 
   if (byCode && byCode.name !== regionName) {
     throw new RegionProvisionError(
@@ -224,10 +324,10 @@ export async function buildRegionPlan(
       `Region code "${regionCode}" already exists with a different name. Refusing to rename an existing canonical reference.`,
     );
   }
-  if (byName && byName.code !== regionCode) {
+  if (conflictingByName) {
     throw new RegionProvisionError(
       'STOP_REGION_NAME_CONFLICT',
-      `Region name "${regionName}" already exists under a different code. Refusing to create a second region for the same place.`,
+      `Region name "${regionName}" already exists under a conflicting code in legacy unscoped data.`,
     );
   }
   if (byCode && !byCode.isActive) {
@@ -236,8 +336,17 @@ export async function buildRegionPlan(
       `Region code "${regionCode}" exists but is inactive. Reactivation is a separate governed decision, not a provisioning side effect.`,
     );
   }
-
-  const hierarchy = await resolveRegionHierarchy(client, designation);
+  if (
+    byCode &&
+    designation.administrativeLevel &&
+    (byCode.administrativeLevel !== designation.administrativeLevel ||
+      (byCode.parentId ?? null) !== (hierarchy.parentRegionId ?? null))
+  ) {
+    throw new RegionProvisionError(
+      'STOP_REGION_HIERARCHY_CONFLICT',
+      `Region code "${regionCode}" exists with a different administrative level or parent. Refusing to rewrite existing hierarchy.`,
+    );
+  }
 
   if (byCode) {
     return {
@@ -279,9 +388,7 @@ export function canonicalRegionPlanJson(plan: RegionPlan): string {
       existingRegionId: plan.existingRegionId,
       expectedCreateCount: plan.expectedCreateCount,
       expectedReuseCount: plan.expectedReuseCount,
-      ...(plan.parentRegionId
-        ? { parentRegionId: plan.parentRegionId }
-        : {}),
+      ...(plan.parentRegionId ? { parentRegionId: plan.parentRegionId } : {}),
       ...(plan.administrativeLevel
         ? { administrativeLevel: plan.administrativeLevel }
         : {}),
@@ -321,7 +428,14 @@ export interface RegionTransactionClient extends RegionQueryClient {
         parentId?: string;
         administrativeLevel?: RegionAdministrativeLevel;
       };
-      select: { id: true; code: true; name: true; isActive: true };
+      select: {
+        id: true;
+        code: true;
+        name: true;
+        isActive: true;
+        parentId: true;
+        administrativeLevel: true;
+      };
     }): Promise<RegionRow>;
   };
   $executeRawUnsafe(sql: string): Promise<number>;
@@ -335,13 +449,10 @@ export interface RegionPrismaLike {
  * ONE global lock for the whole Region provisioning domain — deliberately NOT
  * keyed on the region code.
  *
- * A per-code key looked tidier and was wrong. The conflict domain is not a
- * single code: the same-name/different-code rule compares a designation
- * against rows it does NOT share a code with. Two concurrent applies of
- * `{A, "Kota X"}` and `{B, "Kota X"}` would take two different per-code locks,
- * both read a table with no match, both plan CREATE, and both commit — leaving
- * one real place recorded twice under two codes, which is exactly the
- * invariant this module exists to hold.
+ * A per-code key looked tidier and was wrong. The legacy hierarchy-free
+ * conflict domain is not a single code: its same-name/different-code rule
+ * compares rows that do not share a code. The one domain lock therefore
+ * remains in force for every operation, including scoped code-identity plans.
  *
  * Serializing the whole domain is cheap and bounded: Region is governed
  * reference data provisioned rarely, by an operator, a handful of rows at a
@@ -370,7 +481,9 @@ export async function applyRegionPlan(
 ): Promise<RegionApplyResult> {
   // The allow-list is this module's own. A caller cannot widen it, so it
   // cannot authorize a token it invented.
-  if (!KNOWN_REGION_CONFIRMATION_TOKENS.includes(params.expectedConfirmationToken)) {
+  if (
+    !KNOWN_REGION_CONFIRMATION_TOKENS.includes(params.expectedConfirmationToken)
+  ) {
     throw new RegionProvisionError(
       'STOP_UNKNOWN_CONFIRMATION_AUTHORITY',
       'expectedConfirmationToken is not a recognised confirmation authority.',
@@ -431,15 +544,29 @@ export async function applyRegionPlan(
           ? { administrativeLevel: plan.administrativeLevel }
           : {}),
       },
-      select: { id: true, code: true, name: true, isActive: true },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        isActive: true,
+        parentId: true,
+        administrativeLevel: true,
+      },
     });
 
     // Read back what the database actually stored, rather than trusting the
     // values we sent.
-    if (created.code !== plan.regionCode || created.name !== plan.regionName) {
+    if (
+      created.code !== plan.regionCode ||
+      created.name !== plan.regionName ||
+      !created.isActive ||
+      (created.parentId ?? null) !== (plan.parentRegionId ?? null) ||
+      (created.administrativeLevel ?? null) !==
+        (plan.administrativeLevel ?? null)
+    ) {
       throw new RegionProvisionError(
         'STOP_REGION_WRITE_READBACK_MISMATCH',
-        'The created Region does not match the designated code/name.',
+        'The created Region does not match the designated active code/name/hierarchy.',
       );
     }
 

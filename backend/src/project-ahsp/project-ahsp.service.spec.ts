@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import * as kernel from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
+import { basicPriceRegionApplicabilityWhere } from '../basic-price/basic-price-region-applicability';
 import { ProjectAhspService } from './project-ahsp.service';
 import {
   AhspResourceResolutionOrchestrator,
@@ -538,13 +539,14 @@ describe('ProjectAhspService E1A', () => {
       explanation: 'none',
     });
     await service.selectForBoqItem(selectionInput);
-    expect(tx.basicPrice.findMany.mock.calls[0][0].where).toMatchObject({
-      regionId: selectionInput.referenceRegionId,
+    const where = tx.basicPrice.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({
       effectiveDate: { lte: new Date('2026-08-04T00:00:00.000Z') },
     });
-    expect(tx.basicPrice.findMany.mock.calls[0][0].where).not.toHaveProperty(
-      'freshnessStatus',
+    expect(where.AND).toContainEqual(
+      basicPriceRegionApplicabilityWhere(selectionInput.referenceRegionId),
     );
+    expect(where).not.toHaveProperty('freshnessStatus');
   });
 
   /**
@@ -582,7 +584,6 @@ describe('ProjectAhspService E1A', () => {
     // Technical applicability is asserted OUTSIDE the branch OR, so it binds
     // both asset families identically. There is no private shortcut past
     // region, effective date or the validity window.
-    expect(where.regionId).toBe(selectionInput.referenceRegionId);
     expect(where.effectiveDate).toEqual({
       lte: new Date('2026-08-04T00:00:00.000Z'),
     });
@@ -595,6 +596,7 @@ describe('ProjectAhspService E1A', () => {
         ],
       },
       { OR: [{ validUntil: null }, { validUntil: { gte: new Date('2026-08-04T00:00:00.000Z') } }] },
+      basicPriceRegionApplicabilityWhere(selectionInput.referenceRegionId),
     ]);
   });
 

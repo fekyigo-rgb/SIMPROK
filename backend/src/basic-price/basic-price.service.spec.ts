@@ -331,7 +331,6 @@ describe('BasicPriceService', () => {
           where: expect.objectContaining({
             sourceOrigin: 'GOVERNMENT',
             freshnessStatus: 'EXPIRED',
-            regionId: 'reg-01',
             resourceId: 'rc-01',
             effectiveDate: {
               gte: new Date('2026-01-01T00:00:00.000Z'),
@@ -339,6 +338,23 @@ describe('BasicPriceService', () => {
             },
           }),
         }),
+      );
+      expect(
+        prisma.basicPrice.findMany.mock.calls[0][0].where.AND,
+      ).toEqual(
+        expect.arrayContaining([
+          {
+            OR: [
+              { regionCoverageSetId: null, regionId: 'reg-01' },
+              {
+                regionCoverageSetId: { not: null },
+                regionCoverageSet: {
+                  is: { members: { some: { regionId: 'reg-01' } } },
+                },
+              },
+            ],
+          },
+        ]),
       );
     });
 
