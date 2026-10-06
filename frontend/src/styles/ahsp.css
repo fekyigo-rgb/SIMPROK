@@ -463,8 +463,9 @@
 .ahsp-multi-select__chip {
   display: inline-flex;
   align-items: center;
+  gap: 0.25rem;
   max-width: 100%;
-  padding: 0.15rem 0.55rem;
+  padding: 0.15rem 0.35rem 0.15rem 0.55rem;
   border-radius: 999px;
   border: 1px solid rgba(29, 161, 242, 0.35);
   background: rgba(29, 161, 242, 0.08);
@@ -474,6 +475,39 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.ahsp-multi-select__chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.ahsp-classification-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.ahsp-classification-paths li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  color: var(--simprok-authority-navy-800);
+  font-size: 0.8125rem;
+}
+.ahsp-classification-paths__index {
+  font-weight: 700;
 }
 .ahsp-multi-select__menu {
   position: absolute;
@@ -1569,6 +1603,38 @@ li.ahsp-completion:last-child {
   font-size: var(--text-sm);
 }
 
+/* One column contract for Tenaga, Bahan, and Peralatan.
+   table-layout:fixed plus these widths, not content in each table. */
+.ahsp-resource-columns {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.ahsp-resource-columns .ahsp-col-no {
+  width: 3rem;
+}
+
+.ahsp-resource-columns .ahsp-col-unit,
+.ahsp-resource-columns .ahsp-col-coef {
+  width: 7.5rem;
+}
+
+.ahsp-resource-columns .ahsp-col-action {
+  width: 4.5rem;
+}
+
+.ahsp-resource-columns th,
+.ahsp-resource-columns td {
+  overflow-wrap: anywhere;
+}
+
+/* The empty sentence spans the row. anywhere on the cell itself wraps
+   inside the first fixed column even when colspan is set. */
+.ahsp-resource-columns td.ahsp-manual-comp__empty {
+  overflow-wrap: normal;
+}
+
 .ahsp-manual-comp__table th,
 .ahsp-manual-comp__table td {
   text-align: left;
@@ -1603,4 +1669,9 @@ li.ahsp-completion:last-child {
   .ahsp-manual-comp-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.ahsp-unit-workspace {
+  margin-top: var(--space-4);
+  scroll-margin-top: var(--space-4);
 }

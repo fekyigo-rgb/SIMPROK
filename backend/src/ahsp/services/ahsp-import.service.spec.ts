@@ -3,7 +3,7 @@ import { ImportStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AhspDocumentKnowledge } from '../document/ahsp-document-knowledge';
 import { AhspAuditService } from './ahsp-audit.service';
-import { AhspImportService, ahspImportJobKey } from './ahsp-import.service';
+import { AhspImportService, ahspImportJobKey, statedImportWriteFailure } from './ahsp-import.service';
 
 describe('AhspImportService', () => {
   let service: AhspImportService;
@@ -579,5 +579,17 @@ describe('AhspImportService — intake journal', () => {
     prisma.aHSPImportLine.findMany.mockClear();
     expect(await service.loadCompletionLines(WS, [])).toEqual([]);
     expect(prisma.aHSPImportLine.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('stated import write failure', () => {
+  it('names the recorded unique catalog code and keeps every other write generic', () => {
+    expect(
+      statedImportWriteFailure(
+        "Unique constraint failed on the fields: (`workspaceId`,`code`)",
+      ),
+    ).toBe('RESOURCE_CODE_ALREADY_EXISTS');
+    expect(statedImportWriteFailure('database unavailable')).toBe('WRITE_FAILED');
+    expect(statedImportWriteFailure(null)).toBe('WRITE_FAILED');
   });
 });

@@ -144,7 +144,14 @@ describe('AHSP import acceptance boundary — seams', () => {
     decidedIdentityForSourceRows: jest.fn().mockResolvedValue(new Map()),
 
     openQuestionsBySource: jest.fn(),
+    /**
+     * The Manual AHSP admission entrypoint. Default: one catalogue id per
+     * distinct (workspace, type, name, code), reused on a second call.
+     */
+    acceptHumanDeclaredResourceIn: jest.fn(),
   };
+  const minted = new Map<string, string>();
+  let mintSeq = 0;
   const audit = { logAction: jest.fn() };
   let journal: ReturnType<typeof inMemoryImportJournal>;
   let service: AhspDocumentCanonicalizationService;
@@ -197,6 +204,53 @@ describe('AHSP import acceptance boundary — seams', () => {
     versionService.createVersion.mockImplementation(storeVersion);
     observations.observeMany.mockResolvedValue({ persisted: 1 });
     observations.openQuestionsBySource.mockResolvedValue(new Map());
+    minted.clear();
+    mintSeq = 0;
+    observations.acceptHumanDeclaredResourceIn.mockImplementation(
+      async (
+        _tx: unknown,
+        params: {
+          workspaceId: string;
+          rawName: string;
+          rawCode?: string | null;
+          resourceType: string;
+        },
+      ) => {
+        const key = [
+          params.workspaceId,
+          params.resourceType,
+          params.rawName,
+          params.rawCode ?? '',
+        ].join('\u0000');
+        const prior = minted.get(key);
+        if (prior) {
+          return {
+            outcome: 'REUSED' as const,
+            resource: {
+              id: prior,
+              name: params.rawName,
+              code: params.rawCode ?? null,
+              type: params.resourceType,
+              baseUnit: 'OH',
+              workspaceId: params.workspaceId,
+            },
+          };
+        }
+        const id = `catalog-new-${++mintSeq}`;
+        minted.set(key, id);
+        return {
+          outcome: 'CREATED' as const,
+          resource: {
+            id,
+            name: params.rawName,
+            code: params.rawCode ?? null,
+            type: params.resourceType,
+            baseUnit: 'OH',
+            workspaceId: params.workspaceId,
+          },
+        };
+      },
+    );
     audit.logAction.mockResolvedValue(undefined);
     sightings.createMany.mockResolvedValue(undefined);
     journal = inMemoryImportJournal();
@@ -307,11 +361,13 @@ describe('AHSP import acceptance boundary — seams', () => {
     expect(result.failed).toEqual([
       expect.objectContaining({ workType: '1.7.7.1.1.b (a)', lineNumber: 1 }),
     ]);
-    // The second item is still evaluated and, its only gap being identity, written.
+    // The second item is still evaluated. Its only gap was a genuinely new
+    // resource, so Confirm/Save mints that resource and the item is PROVEN.
     expect(result.written).toEqual([
       expect.objectContaining({
         workType: 'B.98',
-        admission: 'IDENTITY_PENDING',
+        admission: 'PROVEN',
+        identityPendingResources: 0,
       }),
     ]);
     const [first, second] = journal.linesOf(result.importJobId);
@@ -403,8 +459,11 @@ describe('AHSP import acceptance boundary — seams', () => {
 
   // ── IMPORT-SEAM-01 — unresolved identity no longer erases a whole recipe ──
 
-  it('B0-4 (flipped): a recipe whose ONLY gap is identity is written as IDENTITY_PENDING', async () => {
-    // Anchor asserted: skipped whole with RESOURCE_UNRESOLVED, create not called.
+  it('B0-4: a recipe whose ONLY gap is a genuinely new identity is accepted on Confirm/Save', async () => {
+    // Was: written as IDENTITY_PENDING with the raw name in resourceId.
+    // Owner law: novelty alone is not an identity question. Confirm/Save mints
+    // the workspace resource through the shared admission entrypoint and links
+    // that id. The source's own name, code, unit and coefficient stay beside it.
     identity.resolve.mockResolvedValue(unknown);
     const result = await service.commit(
       envelopeFrom(await buildAhspAnalisaXlsx()),
@@ -412,11 +471,55 @@ describe('AHSP import acceptance boundary — seams', () => {
     );
     expect(result.written).toEqual([
       expect.objectContaining({
-        admission: 'IDENTITY_PENDING',
-        identityPendingResources: 2,
+        admission: 'PROVEN',
+        identityPendingResources: 0,
       }),
     ]);
     expect(result.skipped).toEqual([]);
+    const stored = callArgument<{
+      resources: Array<{
+        resourceId: string;
+        resourceType: string;
+        coefficient: number;
+        baseUnit: string;
+      }>;
+    }>(versionService.createVersion, 0, 1);
+    expect(stored.resources.map((resource) => resource.resourceId)).toEqual([
+      'catalog-new-1',
+      'catalog-new-2',
+    ]);
+    expect(stored.resources.map((resource) => resource.coefficient)).toEqual([
+      0.4, 0.04,
+    ]);
+    expect(stored.resources.map((resource) => resource.baseUnit)).toEqual([
+      'OH',
+      'OH',
+    ]);
+    const kept = versions.get('ver-1');
+    expect(kept?.resources.map((resource) => resource.rawName)).toEqual([
+      'Pekerja',
+      'Mandor',
+    ]);
+    expect(kept?.resources.map((resource) => resource.rawCode)).toEqual([
+      'L.01',
+      'L.04',
+    ]);
+    expect(kept?.resources.map((resource) => resource.rawUnit)).toEqual([
+      'OH',
+      'OH',
+    ]);
+    const calls = observations.acceptHumanDeclaredResourceIn.mock.calls;
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      const params = call[1] as Record<string, unknown>;
+      expect(params.workspaceId).toBe('11111111-1111-4111-8111-111111111111');
+      expect(params.unitDefinitionId).toBe('unit-1');
+      expect(params).not.toHaveProperty('price');
+      expect(params).not.toHaveProperty('value');
+      expect(params).not.toHaveProperty('effectiveDate');
+      expect(params).not.toHaveProperty('regionId');
+      expect(params).not.toHaveProperty('sourceSha256');
+    }
     expect(journal.linesOf(result.importJobId)[0]).toMatchObject({
       status: 'COMPLETED',
       ahspId: 'ahsp-1',
@@ -425,21 +528,169 @@ describe('AHSP import acceptance boundary — seams', () => {
     });
   });
 
-  it.each([
-    [
-      'a ruled-out 4" row for a 6" source',
-      {
-        status: 'UNRESOLVED',
-        resolvedResourceCatalogId: null,
-        reasonCodes: ['SPECIFICATION_CONFLICT'],
-        candidates: [
-          {
-            name: 'Pipa porous diameter 4"',
-            resourceCatalogId: 'catalog-pipe-4',
-          },
-        ],
+  it('IMPORT-1: a proved resource is reused and the shared admission entrypoint is not asked to mint', async () => {
+    const result = await service.commit(
+      envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+    );
+    expect(result.written[0]).toMatchObject({
+      admission: 'PROVEN',
+      identityPendingResources: 0,
+    });
+    expect(observations.acceptHumanDeclaredResourceIn).not.toHaveBeenCalled();
+    const stored = callArgument<{ resources: WrittenResource[] }>(
+      versionService.createVersion,
+      0,
+      1,
+    ).resources;
+    expect(stored.map((resource) => resource.resourceId)).toEqual([
+      'catalog-known',
+      'catalog-known',
+    ]);
+  });
+
+  it('IMPORT-2/3/4: genuine new labor, material and equipment are each minted on Confirm/Save', async () => {
+    identity.resolve.mockResolvedValue(unknown);
+    const bytes = await buildAhspAnalisaXlsx((sheet) => {
+      sheet.getCell('A14').value = 1;
+      sheet.getCell('B14').value = 'Semen Portland';
+      sheet.getCell('E14').value = 'M.01';
+      sheet.getCell('F14').value = 'kg';
+      sheet.getCell('G14').value = 10;
+      sheet.getCell('A16').value = 1;
+      sheet.getCell('B16').value = 'Excavator';
+      sheet.getCell('E16').value = 'E.01';
+      sheet.getCell('F16').value = 'jam';
+      sheet.getCell('G16').value = 0.2;
+    });
+    await service.commit(envelopeFrom(bytes), 'user-1');
+    const types = observations.acceptHumanDeclaredResourceIn.mock.calls.map(
+      (call) => (call[1] as { resourceType: string; rawName: string }).resourceType,
+    );
+    expect(types).toEqual(
+      expect.arrayContaining(['LABOR', 'MATERIAL', 'EQUIPMENT']),
+    );
+    const names = observations.acceptHumanDeclaredResourceIn.mock.calls.map(
+      (call) => (call[1] as { rawName: string }).rawName,
+    );
+    expect(names).toEqual(
+      expect.arrayContaining(['Pekerja', 'Semen Portland', 'Excavator']),
+    );
+  });
+
+  it('IMPORT-12: confirming the same import again does not mint a second resource', async () => {
+    identity.resolve.mockResolvedValue(unknown);
+    const bytes = await buildAhspAnalisaXlsx();
+    const envelope = envelopeFrom(bytes);
+    const first = await service.commit(envelope, 'user-1');
+    const created = observations.acceptHumanDeclaredResourceIn.mock.calls.length;
+    expect(created).toBe(2);
+    expect(minted.size).toBe(2);
+    const replay = await service.commit(envelope, 'user-1');
+    expect(replay.summary.alreadyProcessed).toBe(1);
+    expect(observations.acceptHumanDeclaredResourceIn).toHaveBeenCalledTimes(
+      created,
+    );
+    expect(minted.size).toBe(2);
+    expect(first.written[0].admission).toBe('PROVEN');
+  });
+
+  it('IMPORT-13: a private resource from another workspace is not linked', async () => {
+    identity.resolve.mockResolvedValue(unknown);
+    observations.acceptHumanDeclaredResourceIn.mockResolvedValue({
+      outcome: 'REUSED',
+      resource: {
+        id: 'catalog-foreign',
+        name: 'Pekerja',
+        code: 'L.01',
+        type: 'LABOR',
+        baseUnit: 'OH',
+        workspaceId: '99999999-9999-4999-8999-999999999999',
       },
-    ],
+    });
+    const result = await service.commit(
+      envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+    );
+    expect(result.written[0]).toMatchObject({
+      admission: 'IDENTITY_PENDING',
+    });
+    const stored = callArgument<{ resources: WrittenResource[] }>(
+      versionService.createVersion,
+      0,
+      1,
+    ).resources;
+    expect(stored.map((resource) => resource.resourceId)).toEqual([
+      'Pekerja',
+      'Mandor',
+    ]);
+    expect(JSON.stringify(stored)).not.toContain('catalog-foreign');
+  });
+
+  it('a database failure while minting rolls the item back and is not an identity question', async () => {
+    identity.resolve.mockResolvedValue(unknown);
+    observations.acceptHumanDeclaredResourceIn.mockRejectedValue(
+      new Error('database unavailable'),
+    );
+    const result = await service.commit(
+      envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+    );
+    expect(result.written).toEqual([]);
+    expect(result.failed).toEqual([
+      expect.objectContaining({ workType: '1.7.7.1.1.b (a)' }),
+    ]);
+    expect(result.summary).toMatchObject({
+      identityPending: 0,
+      ready: 0,
+    });
+    expect(versionService.createVersion).not.toHaveBeenCalled();
+    expect(journal.linesOf(result.importJobId)[0]).toMatchObject({
+      status: 'FAILED',
+      errorMessage: 'database unavailable',
+      ahspId: null,
+    });
+  });
+
+  it('a ruled-out candidate with no credible rival is minted on Confirm/Save, not held as identity pending', async () => {
+    identity.resolve.mockResolvedValue({
+      status: 'UNRESOLVED',
+      resolvedResourceCatalogId: null,
+      reasonCodes: ['SPECIFICATION_CONFLICT'],
+      candidates: [
+        {
+          name: 'Pipa porous diameter 4"',
+          resourceCatalogId: 'catalog-pipe-4',
+        },
+      ],
+    });
+    const result = await service.commit(
+      envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+    );
+    expect(result.written).toEqual([
+      expect.objectContaining({
+        admission: 'PROVEN',
+        identityPendingResources: 0,
+      }),
+    ]);
+    expect(result.summary).toMatchObject({ identityPending: 0, ready: 1 });
+    const stored = callArgument<{
+      resources: Array<WrittenResource & { coefficient: number }>;
+    }>(versionService.createVersion, 0, 1).resources;
+    expect(stored.map((resource) => resource.resourceId)).toEqual([
+      'catalog-new-1',
+      'catalog-new-2',
+    ]);
+    expect(JSON.stringify(stored)).not.toContain('catalog-pipe-4');
+    expect(observations.acceptHumanDeclaredResourceIn).toHaveBeenCalled();
+    const facts = callArgument<{
+      sourceFacts: Array<{ rawName: string; rawUnit: string }>;
+    }>(versionService.createVersion, 0, 3).sourceFacts;
+    expect(facts.map((fact) => fact.rawName)).toEqual(['Pekerja', 'Mandor']);
+  });
+
+  it.each([
     [
       'a weak shared-word possibility',
       {
@@ -1123,7 +1374,22 @@ describe('AHSP import acceptance boundary — seams', () => {
     // consumes the recipe cannot use it. That assertion was the defect; it now
     // asserts the opposite, and completeness is asked of the consumer's own identity
     // question over the recipe the line points to. TEST_WEAKENING=NO.
-    identity.resolve.mockImplementation(onlyByName(['Tukang Gali']));
+    // Genuine novelty is minted on save now. This proof is about a component
+    // that is STILL an open identity question — a competing candidate — so the
+    // recipe keeps the source wording and the consumer cannot treat it as known.
+    identity.resolve.mockImplementation((_evidence: unknown, reference: { rawName: string }) =>
+      Promise.resolve(
+        reference.rawName === 'Tukang Gali'
+          ? {
+              status: 'NEEDS_REVIEW',
+              resolvedResourceCatalogId: null,
+              candidates: [
+                { name: 'Tukang', resourceCatalogId: 'catalog-tukang' },
+              ],
+            }
+          : proven,
+      ),
+    );
     const result = await service.commit(
       envelopeFrom(await twoItemWorkbook()),
       'user-1',

@@ -85,11 +85,12 @@ test("official-domain names and interpretation are never hardcoded as fact", () 
 });
 
 test("the Owner-approved fields and status are present, in human words", () => {
-  for (const field of ['Kode', 'Bidang / Kategori', 'Subkategori', 'Dasar AHSP', 'Status Usulan', 'Dibuat oleh', 'Tanggal dibuat', 'Informasi AHSP', 'Komponen Pembentuk AHSP', 'Tentang AHSP Ini']) {
+  for (const field of ['Kode', 'Jenis Pengadaan', 'Kategori', 'Subkategori', 'Jenis Pekerjaan', 'Dasar AHSP', 'Status Usulan', 'Dibuat oleh', 'Tanggal dibuat', 'Informasi AHSP', 'Komponen Pembentuk AHSP', 'Tentang AHSP Ini']) {
     assert.ok(detail.includes(field), `missing "${field}"`);
   }
   // Status Usulan is translated, not an enum.
   assert.ok(detail.includes("describeAhspProposalStatus"));
+  assert.ok(!detail.includes('Jenis Pekerjaan (klasifikasi)'));
 });
 
 test("update AHSP is an editor of the current recipe, not a blank composer", () => {

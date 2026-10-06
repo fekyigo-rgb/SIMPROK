@@ -1277,6 +1277,268 @@ export class ResourceObservationService {
   }
 
   /**
+   * KNOWLEDGE INTAKE — a person states a resource while composing an AHSP.
+   *
+   * ONE round trip answers the whole decision law, because all three answers come
+   * from the SAME identity kernel reading and splitting them across two endpoints
+   * would let the screen act on a verdict the server no longer holds:
+   *
+   *   REUSED          — the kernel PROVED an existing resource. Nothing is minted.
+   *                     Matching is reuse, so a proven identity always wins.
+   *   REVIEW_REQUIRED — credible existing candidates. Nothing is minted; the
+   *                     nominations and the exact context digest go back so the
+   *                     existing review path can adjudicate. This is the Two-Door
+   *                     door, still shut.
+   *   CREATED         — identity is exhausted (or the person examined the live
+   *                     nominations and refused every one). The ONE admission
+   *                     authority mints exactly one workspace ResourceCatalog.
+   *
+   * Novelty alone is therefore not a review trigger, and review is not an
+   * admission gate — ambiguity is. No price, no location, no date and no document
+   * are asked for, because none of them is a fact about whether this resource
+   * exists.
+   */
+  async acceptHumanDeclaredResource(params: {
+    workspaceId: string;
+    /** Exactly the words the person typed. */
+    rawName: string;
+    rawCode?: string | null;
+    resourceType: ResourceType;
+    /** Chosen from the existing unit vocabulary; admission never mints units. */
+    unitDefinitionId: string;
+    examination?: {
+      refusedCandidateIds: readonly string[];
+      candidateContextDigest: string;
+    } | null;
+  }) {
+    return this.prisma.$transaction(
+      (txc) =>
+        this.acceptHumanDeclaredResourceIn(
+          txc as Prisma.TransactionClient,
+          params,
+        ),
+      // Loading the workspace's evidence is the same read the curation paths do
+      // under this same budget; the default 5s would time it out on a large catalogue.
+      { timeout: 20_000, maxWait: 20_000 },
+    );
+  }
+
+  /**
+   * The same decision as `acceptHumanDeclaredResource`, on a transaction the
+   * caller already holds.
+   *
+   * Import AHSP saves a formula and its new resources as one item. Opening a
+   * second transaction here would mint a catalogue row the formula could not
+   * roll back with. Manual AHSP keeps the wrapper above; both call this.
+   */
+  async acceptHumanDeclaredResourceIn(
+    tx: Prisma.TransactionClient,
+    params: {
+      workspaceId: string;
+      rawName: string;
+      rawCode?: string | null;
+      resourceType: ResourceType;
+      unitDefinitionId: string;
+      examination?: {
+        refusedCandidateIds: readonly string[];
+        candidateContextDigest: string;
+      } | null;
+    },
+  ) {
+    const rawName = params.rawName.trim();
+    if (rawName === '') throw new BadRequestException('RESOURCE_NAME_REQUIRED');
+    const rawCode =
+      typeof params.rawCode === 'string' && params.rawCode.trim() !== ''
+        ? params.rawCode.trim()
+        : null;
+
+    {
+        const unitDefinition = await tx.unitDefinition.findFirst({
+          where: { id: params.unitDefinitionId, isActive: true },
+        });
+        if (!unitDefinition)
+          throw new ConflictException('UNIT_UNKNOWN_OR_INACTIVE');
+
+        // The Unit Kernel is the authority, exactly as on the curation path: a
+        // definition existing is not the same fact as its code being resolvable.
+        // The selected row is already a canonical definition. Its code is not
+        // always a raw alias — PERSON_MONTH is "orang-bulan", not "person_month" —
+        // so the kernel is asked with an alias that belongs to this definition.
+        const ownAlias = await tx.unitAlias.findFirst({
+          where: {
+            unitDefinitionId: unitDefinition.id,
+            isActive: true,
+            context: null,
+          },
+          select: { rawAlias: true },
+        });
+        const spelling = ownAlias?.rawAlias ?? unitDefinition.code;
+        const unitProof = await this.unitKernel.resolve(
+          spelling,
+          spelling,
+          undefined,
+          trustedUnitContext(params.resourceType),
+        );
+        if (
+          unitProof.status !== UNIT_RESOLUTION_STATUS.RESOLVED ||
+          unitProof.sourceUnitDefinition?.id !== unitDefinition.id
+        ) {
+          throw new ConflictException(
+            'UNIT_NOT_REPRESENTABLE_BY_UNIT_AUTHORITY',
+          );
+        }
+
+        // No document was read, so the identity question carries no digest —
+        // the same absent value every hand-built neutral observation asks with.
+        const reference: RawResourceReference = {
+          rawName,
+          rawCode,
+          rawUnit: unitDefinition.code,
+          resourceType: params.resourceType,
+          sourceSha256: null,
+        };
+        const evidence = await this.identity.loadEvidence(
+          tx,
+          params.workspaceId,
+        );
+        const resolution = await this.identity.resolve(evidence, reference, tx);
+
+        const reviewRequired = (verdict: ResourceIdentityResolution) => ({
+          outcome: 'REVIEW_REQUIRED' as const,
+          // Surfaced, never ranked here. The screen shows what the kernel
+          // nominated; the digest is what an examination must be refused
+          // against, so the two sides cannot drift.
+          candidates: verdict.candidates.map((candidate) => ({
+            resourceCatalogId: candidate.resourceCatalogId,
+            name: candidate.name,
+            code: candidate.code,
+            type: candidate.type,
+            baseUnit: candidate.baseUnit,
+          })),
+          candidateContextDigest: candidateContextDigest(
+            verdict.candidates.map((candidate) => ({
+              resourceCatalogId: candidate.resourceCatalogId,
+              name: candidate.name,
+              type: candidate.type,
+              baseUnit: candidate.baseUnit,
+              specifications: candidate.specifications,
+            })),
+          ),
+          reasonCodes: verdict.reasonCodes,
+          explanation: verdict.explanation,
+        });
+
+        const reuseResolved = async (catalogId: string) => {
+          const existing = await tx.resourceCatalog.findFirst({
+            where: { id: catalogId },
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              type: true,
+              baseUnit: true,
+              workspaceId: true,
+            },
+          });
+          if (!existing)
+            throw new ConflictException('RESOLVED_RESOURCE_NOT_VISIBLE');
+          return { outcome: 'REUSED' as const, resource: existing };
+        };
+
+        if (
+          resolution.status === 'RESOLVED' &&
+          resolution.resolvedResourceCatalogId !== null
+        ) {
+          return reuseResolved(resolution.resolvedResourceCatalogId);
+        }
+
+        // A machine-ruled-out row is not a credible nomination. Confirm/Save
+        // already is the human decision to keep this resource as new, so the
+        // existing examination door refuses exactly that live set. A name-only
+        // or exact candidate is still a real question and stays in review.
+        const machineRuledOut =
+          !params.examination &&
+          resolution.status === 'UNRESOLVED' &&
+          resolution.authority !== 'HUMAN_REVIEW_REQUIRED' &&
+          resolution.candidates.length > 0 &&
+          resolution.candidates.every(
+            (candidate) => candidate.identityBasis === 'RULED_OUT',
+          );
+        if (
+          resolution.candidates.length > 0 &&
+          !params.examination &&
+          !machineRuledOut
+        ) {
+          return reviewRequired(resolution);
+        }
+
+        const examination =
+          params.examination ??
+          (machineRuledOut
+            ? {
+                refusedCandidateIds: resolution.candidates.map(
+                  (candidate) => candidate.resourceCatalogId,
+                ),
+                candidateContextDigest: candidateContextDigest(
+                  resolution.candidates.map((candidate) => ({
+                    resourceCatalogId: candidate.resourceCatalogId,
+                    name: candidate.name,
+                    type: candidate.type,
+                    baseUnit: candidate.baseUnit,
+                    specifications: candidate.specifications,
+                  })),
+                ),
+              }
+            : undefined);
+
+        let created: Awaited<
+          ReturnType<ResourceAdmissionService['admitHumanDeclaredResource']>
+        >;
+        try {
+          created = await this.admission.admitHumanDeclaredResource(tx, {
+            workspaceId: params.workspaceId,
+            rawName,
+            rawCode,
+            rawUnit: unitDefinition.code,
+            resourceType: params.resourceType,
+            baseUnit: unitDefinition.code,
+            ...(examination ? { examination } : {}),
+          });
+        } catch (error) {
+          // A concurrent save minted this resource while we waited on the
+          // lock. That is the idempotency answer, not a failure: the identity
+          // that now exists is handed back instead of a duplicate. A candidate
+          // that is still credible stays a review. Anything else is a real
+          // failure and leaves this transaction.
+          if (error instanceof ResourceAdmissionNotExhaustedError) {
+            if (
+              error.resolution.status === 'RESOLVED' &&
+              error.resolution.resolvedResourceCatalogId
+            ) {
+              return reuseResolved(error.resolution.resolvedResourceCatalogId);
+            }
+            if (error.resolution.candidates.length > 0) {
+              return reviewRequired(error.resolution);
+            }
+          }
+          throw error;
+        }
+
+        return {
+          outcome: 'CREATED' as const,
+          resource: {
+            id: created.id,
+            name: created.name,
+            code: created.code,
+            type: created.type,
+            baseUnit: created.baseUnit,
+            workspaceId: created.workspaceId,
+          },
+        };
+    }
+  }
+
+  /**
    * HUMAN DECISION — this observation is genuinely new. The reviewer names a
    * canonical unit (never invented here), and the ONE admission authority mints
    * exactly one ResourceCatalog + one ResourceSourceIdentity. Fails closed if the

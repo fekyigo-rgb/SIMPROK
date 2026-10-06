@@ -37,6 +37,22 @@ export interface AhspImportHeldLine extends AhspImportJournalLine {
   readonly knowledge: AhspWorkItemKnowledge;
 }
 
+/** What a failed write already recorded, said without the driver stack. */
+export type AhspImportWriteFailure = 'RESOURCE_CODE_ALREADY_EXISTS' | 'WRITE_FAILED';
+
+export function statedImportWriteFailure(
+  errorMessage: string | null | undefined,
+): AhspImportWriteFailure {
+  if (
+    typeof errorMessage === 'string' &&
+    errorMessage.includes('Unique constraint failed') &&
+    errorMessage.includes('code')
+  ) {
+    return 'RESOURCE_CODE_ALREADY_EXISTS';
+  }
+  return 'WRITE_FAILED';
+}
+
 /**
  * IMPORT-SEAM-09 — one line as the settlement path must see it: read UNDER the
  * row lock, so it is what the journal holds now and not what a request loaded
@@ -408,6 +424,30 @@ export class AhspImportService {
     }
   }
 
+  /**
+   * The latest evaluation's reasons, and nothing else.
+   *
+   * A recheck may learn that a held line's unit question is answered. That
+   * answer lives in `reasonCodes`. The source (`rawData`), the line's PENDING
+   * hold, and any AHSP pointer stay as they are: PENDING is not COMPLETED,
+   * and COMPLETED is never rewritten here.
+   */
+  async recordRecheckReasons(params: {
+    workspaceId: string;
+    lineId: string;
+    reasonCodes: readonly string[];
+  }): Promise<number> {
+    const { count } = await this.prisma.aHSPImportLine.updateMany({
+      where: {
+        id: params.lineId,
+        workspaceId: params.workspaceId,
+        status: ImportStatus.PENDING,
+      },
+      data: { reasonCodes: [...params.reasonCodes] },
+    });
+    return count;
+  }
+
   /** The job's status from its lines: all represented, some, or none yet. */
   async refreshJobStatus(
     workspaceId: string,
@@ -552,6 +592,7 @@ export class AhspImportService {
         lineNumber: true,
         status: true,
         reasonCodes: true,
+        errorMessage: true,
         rawData: true,
       },
     });
@@ -566,6 +607,9 @@ export class AhspImportService {
             reasonCodes: line.reasonCodes,
             workType: item.workType?.raw ?? null,
             methodName: item.methodName?.raw ?? null,
+            ...(line.status === ImportStatus.FAILED
+              ? { writeFailure: statedImportWriteFailure(line.errorMessage) }
+              : {}),
           };
         });
       return {

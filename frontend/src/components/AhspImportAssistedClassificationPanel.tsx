@@ -4,13 +4,29 @@
  * Jenis Pekerjaan = vertical checkbox multi-select (soft cascade). No "Tambah
  * jalur klasifikasi" control — multi-path is produced by multiple leaf checks.
  *
- * Global vocabulary provisions only Jenis Pengadaan roots. Kategori+ options
- * come from canonical children when present, or workspace-local createNode
- * via "+ Tambahkan pilihan baru" — never hard-coded taxonomy arrays.
+ * Jenis Pengadaan roots come from the classification service.
+ * Kategori, Subkategori, and Jenis Pekerjaan options come from the shared
+ * lower-level vocabulary plus lawful local nodes already stored for this parent.
+ * Checking a baseline name does not write a node. "+ Tambahkan pilihan baru"
+ * remains the explicit local-create action.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { BIDANG, JENIS_PEKERJAAN, subkategoriForBidang } from '../constructionTaxonomy';
 import { apiFetch } from '../utils/apiClient';
+import {
+  baselineJenisPekerjaanOptions,
+  baselineKategoriOptions,
+  baselineSubkategoriOptions,
+  isVocabularyOptionId,
+  optionLabel,
+  pendingPathFromSelection,
+  readableClassificationPaths,
+  vocabularyOptionName,
+  vocabularyOptionParent,
+  type VocabularyOption,
+} from '../utils/ahspBaselineVocabulary';
+import { nextJenisSelection } from '../utils/ahspJenisMenu';
 
 export type AssistedPathProvenanceHint = 'FROM_SOURCE' | 'FROM_USER';
 
@@ -20,6 +36,11 @@ export type AssistedClassificationContext = {
     leafNodeId: string;
     provenanceHint: AssistedPathProvenanceHint;
     sourceEvidence?: { label?: string | null; code?: string | null; raw?: string | null } | null;
+  }>;
+  pendingPaths?: Array<{
+    kategori: string;
+    subkategori: string;
+    jenisPekerjaan: string;
   }>;
   dasarAcuan: string | null;
   penerbit: string | null;
@@ -62,16 +83,35 @@ function summaryLabel(nodes: ClassNode[], selectedIds: ReadonlySet<string>, empt
 function CheckboxMenu(props: {
   label: string;
   summary: string;
-  chips?: readonly string[];
+  chips?: readonly { id: string; name: string }[];
   disabled?: boolean;
   open: boolean;
   onToggle: () => void;
+  onDismiss: () => void;
+  onRemove: (id: string) => void;
   children: ReactNode;
   footer?: ReactNode;
 }): ReactNode {
   const chips = props.chips ?? [];
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!props.open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') props.onDismiss();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (rootRef.current?.contains(event.target as Node)) return;
+      props.onDismiss();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [props.open, props.onDismiss]);
   return (
-    <div className="ahsp-field ahsp-multi-select">
+    <div className="ahsp-field ahsp-multi-select" ref={rootRef}>
       <span className="ahsp-field__label">{props.label}</span>
       <button
         type="button"
@@ -91,9 +131,17 @@ function CheckboxMenu(props: {
       </button>
       {chips.length > 0 ? (
         <ul className="ahsp-multi-select__chips" aria-label={'Terpilih: ' + props.label}>
-          {chips.map((name) => (
-            <li key={name} className="ahsp-multi-select__chip">
-              {name}
+          {chips.map((chip) => (
+            <li key={chip.id} className="ahsp-multi-select__chip">
+              <span>{chip.name}</span>
+              <button
+                type="button"
+                className="ahsp-multi-select__chip-remove"
+                aria-label={`Hapus ${chip.name}`}
+                onClick={() => props.onRemove(chip.id)}
+              >
+                {'\u00D7'}
+              </button>
             </li>
           ))}
         </ul>
@@ -119,6 +167,7 @@ function LocalAddFooter(props: {
   return (
     <div className="ahsp-action-row ahsp-multi-select__add" style={{ marginTop: '0.5rem' }}>
       <input
+        className="ahsp-field__control"
         value={props.draft}
         onChange={(e) => props.onDraft(e.target.value)}
         placeholder={`Nama ${props.levelLabel} baru\u2026`}
@@ -182,6 +231,22 @@ export function AhspImportAssistedClassificationPanel({
     return map;
   }, [allKnown]);
 
+  /**
+   * The node index, seeded with a node this same event has just created.
+   *
+   * `byId` is memoized over state, so inside the event that created a local node
+   * it still predates that node. A leaf missing from the index is dropped by
+   * `syncPaths` (it cannot confirm the level), which is how a just-added Jenis
+   * Pekerjaan could appear checked and still never reach the saved AHSP — and how
+   * a new Kategori/Subkategori name went missing from `displayLabels`. Seeding it
+   * closes that window without waiting for a re-render.
+   */
+  const indexWith = useCallback(
+    (extra?: ClassNode): Map<string, ClassNode> =>
+      extra ? new Map(byId).set(extra.id, extra) : byId,
+    [byId],
+  );
+
   const syncPaths = useCallback(
     (next: {
       rootId: string | null;
@@ -193,8 +258,18 @@ export function AhspImportAssistedClassificationPanel({
       nodeIndex: Map<string, ClassNode>;
       rootsList: ClassNode[];
     }) => {
+      const nameOf = (id: string): string | null =>
+        isVocabularyOptionId(id) ? vocabularyOptionName(id) : next.nodeIndex.get(id)?.name ?? null;
+      const parentOf = (id: string): string | null =>
+        isVocabularyOptionId(id) ? vocabularyOptionParent(id) : next.nodeIndex.get(id)?.parentId ?? null;
       const paths: AssistedClassificationContext['paths'] = [];
+      const pendingPaths: NonNullable<AssistedClassificationContext['pendingPaths']> = [];
       for (const leafId of next.jenisIds) {
+        const pending = pendingPathFromSelection({ jenisId: leafId, nameOf, parentOf });
+        if (pending) {
+          pendingPaths.push(pending);
+          continue;
+        }
         const leaf = next.nodeIndex.get(leafId);
         if (!leaf || leaf.level !== 'JENIS_PEKERJAAN') continue;
         paths.push({ leafNodeId: leafId, provenanceHint: 'FROM_USER' });
@@ -204,12 +279,11 @@ export function AhspImportAssistedClassificationPanel({
         next.nodeIndex.get(next.rootId ?? '')?.name ??
         null;
       const namesOf = (ids: ReadonlySet<string>) =>
-        [...ids]
-          .map((id) => next.nodeIndex.get(id)?.name)
-          .filter((n): n is string => typeof n === 'string' && n !== '');
+        [...ids].map((id) => nameOf(id)).filter((n): n is string => typeof n === 'string' && n !== '');
       onChange({
         jenisPengadaanRootId: next.rootId,
         paths,
+        pendingPaths,
         dasarAcuan: next.dasar,
         penerbit: next.penerbit,
         displayLabels: {
@@ -253,6 +327,7 @@ export function AhspImportAssistedClassificationPanel({
   }, [prefillDasarAcuan]);
 
   const loadChildren = async (parentId: string): Promise<ClassNode[]> => {
+    if (isVocabularyOptionId(parentId)) return [];
     if (childrenByParent[parentId]) return childrenByParent[parentId];
     const res = await apiFetch(
       `/ahsp/document/classification/children?parentId=${encodeURIComponent(parentId)}`,
@@ -320,80 +395,103 @@ export function AhspImportAssistedClassificationPanel({
     });
   };
 
+  const optionName = useCallback(
+    (id: string): string | null =>
+      isVocabularyOptionId(id) ? vocabularyOptionName(id) : byId.get(id)?.name ?? null,
+    [byId],
+  );
+
   const subkategoriOptions = useMemo(() => {
-    const out: ClassNode[] = [];
+    const out: VocabularyOption[] = [];
     const seen = new Set<string>();
     for (const kid of selectedKategoriIds) {
-      for (const n of childrenByParent[kid] ?? []) {
-        if (n.level === 'SUBKATEGORI' && !seen.has(n.id)) {
-          seen.add(n.id);
-          out.push(n);
-        }
-      }
-    }
-    for (const hit of searchHitsSub) {
-      if (hit.level === 'SUBKATEGORI' && !seen.has(hit.id)) {
-        seen.add(hit.id);
-        out.push(hit);
+      const kategoriName = optionName(kid);
+      if (!kategoriName) continue;
+      const existing = [...(childrenByParent[kid] ?? []), ...searchHitsSub.filter((n) => n.parentId === kid)];
+      for (const option of baselineSubkategoriOptions({
+        kategoriName,
+        kategoriOptionId: kid,
+        existing,
+      })) {
+        if (seen.has(option.id)) continue;
+        seen.add(option.id);
+        out.push(option);
       }
     }
     return out;
-  }, [selectedKategoriIds, childrenByParent, searchHitsSub]);
+  }, [selectedKategoriIds, childrenByParent, searchHitsSub, optionName]);
 
   const jenisOptions = useMemo(() => {
-    const out: ClassNode[] = [];
+    const out: VocabularyOption[] = [];
     const seen = new Set<string>();
     for (const sub of selectedSubkategoriIds) {
-      for (const n of childrenByParent[sub] ?? []) {
-        if (n.level === 'JENIS_PEKERJAAN' && !seen.has(n.id)) {
-          seen.add(n.id);
-          out.push(n);
-        }
-      }
-    }
-    for (const hit of searchHitsJenis) {
-      if (hit.level === 'JENIS_PEKERJAAN' && !seen.has(hit.id)) {
-        seen.add(hit.id);
-        out.push(hit);
+      const existing = [
+        ...(childrenByParent[sub] ?? []),
+        ...searchHitsJenis.filter((n) => n.parentId === sub),
+      ];
+      for (const option of baselineJenisPekerjaanOptions({ subOptionId: sub, existing })) {
+        if (seen.has(option.id)) continue;
+        seen.add(option.id);
+        out.push(option);
       }
     }
     return out;
   }, [selectedSubkategoriIds, childrenByParent, searchHitsJenis]);
 
   const kategoriOptions = useMemo(() => {
-    const out: ClassNode[] = [];
-    const seen = new Set<string>();
-    for (const n of kategoriByRoot) {
-      if (!seen.has(n.id)) {
-        seen.add(n.id);
-        out.push(n);
-      }
-    }
-    for (const hit of searchHitsKat) {
-      if (hit.level === 'KATEGORI' && !seen.has(hit.id)) {
-        seen.add(hit.id);
-        out.push(hit);
-      }
-    }
-    return out;
-  }, [kategoriByRoot, searchHitsKat]);
+    if (!value.jenisPengadaanRootId) return [];
+    const existing = [...kategoriByRoot, ...searchHitsKat].filter((n) => n.level === 'KATEGORI');
+    return baselineKategoriOptions(existing, value.jenisPengadaanRootId);
+  }, [value.jenisPengadaanRootId, kategoriByRoot, searchHitsKat]);
 
-  const toggleKategori = async (id: string) => {
+  const chipsFor = (ids: ReadonlySet<string>, options: VocabularyOption[]) => {
+    const listed = options.filter((node) => ids.has(node.id)).map((node) => ({ id: node.id, name: node.name }));
+    const seen = new Set(listed.map((chip) => chip.id));
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      const name = optionName(id);
+      if (!name) continue;
+      listed.push({ id, name });
+    }
+    return listed;
+  };
+
+  const pathLines = useMemo(
+    () =>
+      readableClassificationPaths({
+        rootName:
+          roots.find((root) => root.id === value.jenisPengadaanRootId)?.name ??
+          value.displayLabels?.jenisPengadaan ??
+          null,
+        pendingPaths: value.pendingPaths ?? [],
+        leafIds: value.paths.map((path) => path.leafNodeId),
+        nameOf: (id) =>
+          isVocabularyOptionId(id) ? vocabularyOptionName(id) : byId.get(id)?.name ?? null,
+        parentOf: (id) =>
+          isVocabularyOptionId(id) ? vocabularyOptionParent(id) : byId.get(id)?.parentId ?? null,
+      }),
+    [roots, value.jenisPengadaanRootId, value.displayLabels?.jenisPengadaan, value.pendingPaths, value.paths, byId],
+  );
+
+  const toggleKategori = async (id: string, justCreated?: ClassNode) => {
+    const index = indexWith(justCreated);
     const next = new Set(selectedKategoriIds);
     if (next.has(id)) next.delete(id);
     else {
       next.add(id);
-      await loadChildren(id);
+      if (!isVocabularyOptionId(id)) await loadChildren(id);
     }
+    const parentKey = (id: string) =>
+      isVocabularyOptionId(id) ? vocabularyOptionParent(id) : index.get(id)?.parentId ?? null;
     const stillValidSub = new Set<string>();
     for (const subId of selectedSubkategoriIds) {
-      const sub = byId.get(subId);
-      if (sub?.parentId && next.has(sub.parentId)) stillValidSub.add(subId);
+      const parentId = parentKey(subId);
+      if (parentId && next.has(parentId)) stillValidSub.add(subId);
     }
     const stillValidJenis = new Set<string>();
     for (const jId of selectedJenisIds) {
-      const j = byId.get(jId);
-      if (j?.parentId && stillValidSub.has(j.parentId)) stillValidJenis.add(jId);
+      const parentId = parentKey(jId);
+      if (parentId && stillValidSub.has(parentId)) stillValidJenis.add(jId);
     }
     setSelectedKategoriIds(next);
     setSelectedSubkategoriIds(stillValidSub);
@@ -405,22 +503,23 @@ export function AhspImportAssistedClassificationPanel({
       subIds: stillValidSub,
       dasar: value.dasarAcuan,
       penerbit: value.penerbit,
-      nodeIndex: byId,
+      nodeIndex: index,
       rootsList: roots,
     });
   };
 
-  const toggleSubkategori = async (id: string) => {
+  const toggleSubkategori = async (id: string, justCreated?: ClassNode) => {
+    const index = indexWith(justCreated);
     const next = new Set(selectedSubkategoriIds);
     if (next.has(id)) next.delete(id);
     else {
       next.add(id);
-      await loadChildren(id);
+      if (!isVocabularyOptionId(id)) await loadChildren(id);
     }
     const stillValidJenis = new Set<string>();
     for (const jId of selectedJenisIds) {
-      const j = byId.get(jId);
-      if (j?.parentId && next.has(j.parentId)) stillValidJenis.add(jId);
+      const parentId = isVocabularyOptionId(jId) ? vocabularyOptionParent(jId) : index.get(jId)?.parentId ?? null;
+      if (parentId && next.has(parentId)) stillValidJenis.add(jId);
     }
     setSelectedSubkategoriIds(next);
     setSelectedJenisIds(stillValidJenis);
@@ -431,16 +530,16 @@ export function AhspImportAssistedClassificationPanel({
       subIds: next,
       dasar: value.dasarAcuan,
       penerbit: value.penerbit,
-      nodeIndex: byId,
+      nodeIndex: index,
       rootsList: roots,
     });
   };
 
-  const toggleJenis = (id: string) => {
-    const next = new Set(selectedJenisIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+  const toggleJenis = (id: string, justCreated?: ClassNode) => {
+    const index = indexWith(justCreated);
+    const { ids: next, closeMenu } = nextJenisSelection(selectedJenisIds, id);
     setSelectedJenisIds(next);
+    if (closeMenu) setOpenMenu(null);
     syncPaths({
       rootId: value.jenisPengadaanRootId,
       jenisIds: next,
@@ -448,9 +547,50 @@ export function AhspImportAssistedClassificationPanel({
       subIds: selectedSubkategoriIds,
       dasar: value.dasarAcuan,
       penerbit: value.penerbit,
-      nodeIndex: byId,
+      nodeIndex: index,
       rootsList: roots,
     });
+  };
+
+  const storeNode = async (
+    level: 'KATEGORI' | 'SUBKATEGORI' | 'JENIS_PEKERJAAN',
+    parentId: string,
+    name: string,
+  ): Promise<ClassNode | null> => {
+    const res = await apiFetch('/ahsp/document/classification/nodes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level, name, parentId }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ClassNode;
+  };
+
+  const ensureStoredParent = async (parentId: string): Promise<string | null> => {
+    if (!isVocabularyOptionId(parentId)) return parentId;
+    const level = parentId.split('||')[1];
+    const ancestor = vocabularyOptionParent(parentId);
+    const name = vocabularyOptionName(parentId);
+    if (
+      !ancestor ||
+      !name ||
+      (level !== 'KATEGORI' && level !== 'SUBKATEGORI' && level !== 'JENIS_PEKERJAAN')
+    ) {
+      return null;
+    }
+    const realAncestor = await ensureStoredParent(ancestor);
+    if (!realAncestor) return null;
+    const node = await storeNode(level, realAncestor, name);
+    if (!node) return null;
+    setChildrenByParent((prev) => {
+      const list = prev[realAncestor] ?? [];
+      if (list.some((item) => item.id === node.id)) return prev;
+      return { ...prev, [realAncestor]: [...list, node] };
+    });
+    if (node.level === 'KATEGORI') {
+      setKategoriByRoot((prev) => (prev.some((item) => item.id === node.id) ? prev : [...prev, node]));
+    }
+    return node.id;
   };
 
   const createLocal = async (
@@ -463,27 +603,43 @@ export function AhspImportAssistedClassificationPanel({
     setCustomBusy(true);
     setError(null);
     try {
-      const res = await apiFetch('/ahsp/document/classification/nodes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ level, name: name.trim(), parentId }),
-      });
-      if (!res.ok) {
+      const storedParent = await ensureStoredParent(parentId);
+      if (!storedParent) {
         setError('Penambahan klasifikasi lokal ditolak.');
         return;
       }
-      const node = (await res.json()) as ClassNode;
+      const node = await storeNode(level, storedParent, name.trim());
+      if (!node) {
+        setError('Penambahan klasifikasi lokal ditolak.');
+        return;
+      }
       setChildrenByParent((prev) => {
-        const list = prev[parentId] ?? [];
-        return { ...prev, [parentId]: [...list, node] };
+        const list = prev[storedParent] ?? [];
+        return { ...prev, [storedParent]: [...list, node] };
       });
+      if (storedParent !== parentId && level === 'SUBKATEGORI') {
+        setSelectedKategoriIds((ids) => {
+          const next = new Set(ids);
+          next.delete(parentId);
+          next.add(storedParent);
+          return next;
+        });
+      }
+      if (storedParent !== parentId && level === 'JENIS_PEKERJAAN') {
+        setSelectedSubkategoriIds((ids) => {
+          const next = new Set(ids);
+          next.delete(parentId);
+          next.add(storedParent);
+          return next;
+        });
+      }
       if (level === 'KATEGORI') {
         setKategoriByRoot((prev) => [...prev, node]);
-        await toggleKategori(node.id);
+        await toggleKategori(node.id, node);
       } else if (level === 'SUBKATEGORI') {
-        await toggleSubkategori(node.id);
+        await toggleSubkategori(node.id, node);
       } else {
-        toggleJenis(node.id);
+        toggleJenis(node.id, node);
       }
       clearDraft();
     } catch {
@@ -537,10 +693,12 @@ export function AhspImportAssistedClassificationPanel({
       <CheckboxMenu
         label="Kategori"
         summary={summaryLabel(kategoriOptions, selectedKategoriIds, 'Pilih kategori')}
-        chips={kategoriOptions.filter((n) => selectedKategoriIds.has(n.id)).map((n) => n.name)}
+        chips={chipsFor(selectedKategoriIds, kategoriOptions)}
         disabled={!value.jenisPengadaanRootId}
         open={openMenu === 'kategori'}
         onToggle={() => setOpenMenu((m) => (m === 'kategori' ? null : 'kategori'))}
+        onDismiss={() => setOpenMenu(null)}
+        onRemove={(id) => void toggleKategori(id)}
         footer={
           value.jenisPengadaanRootId ? (
             <>
@@ -593,7 +751,7 @@ export function AhspImportAssistedClassificationPanel({
                 checked={selectedKategoriIds.has(n.id)}
                 onChange={() => void toggleKategori(n.id)}
               />
-              <span>{n.name}</span>
+              <span>{optionLabel(n, BIDANG)}</span>
             </label>
           ))
         )}
@@ -606,10 +764,12 @@ export function AhspImportAssistedClassificationPanel({
             ? 'Tergantung kategori'
             : summaryLabel(subkategoriOptions, selectedSubkategoriIds, 'Pilih subkategori')
         }
-        chips={subkategoriOptions.filter((n) => selectedSubkategoriIds.has(n.id)).map((n) => n.name)}
+        chips={chipsFor(selectedSubkategoriIds, subkategoriOptions)}
         disabled={selectedKategoriIds.size === 0 && searchHitsSub.length === 0}
         open={openMenu === 'sub'}
         onToggle={() => setOpenMenu((m) => (m === 'sub' ? null : 'sub'))}
+        onDismiss={() => setOpenMenu(null)}
+        onRemove={(id) => void toggleSubkategori(id)}
         footer={
           <>
             <label className="ahsp-field" style={{ marginTop: '0.35rem' }}>
@@ -641,7 +801,9 @@ export function AhspImportAssistedClassificationPanel({
       >
         {subkategoriOptions.length === 0 ? (
           <p className="ahsp-line ahsp-line--abu">
-            Pilih kategori terlebih dahulu, cari lintas saran, atau tambah subkategori lokal.
+            {selectedKategoriIds.size === 0
+              ? 'Pilih kategori terlebih dahulu, cari lintas saran, atau tambah subkategori lokal.'
+              : 'Kategori ini belum memiliki subkategori dasar. Tambahan lokal yang sudah ada tetap tampil di sini.'}
           </p>
         ) : (
           subkategoriOptions.map((n) => (
@@ -651,7 +813,12 @@ export function AhspImportAssistedClassificationPanel({
                 checked={selectedSubkategoriIds.has(n.id)}
                 onChange={() => void toggleSubkategori(n.id)}
               />
-              <span>{n.name}</span>
+              <span>
+                {optionLabel(
+                  n,
+                  n.parentId ? subkategoriForBidang(optionName(n.parentId) ?? '') : [],
+                )}
+              </span>
             </label>
           ))
         )}
@@ -664,10 +831,12 @@ export function AhspImportAssistedClassificationPanel({
             ? 'Tergantung subkategori'
             : summaryLabel(jenisOptions, selectedJenisIds, 'Pilih jenis pekerjaan')
         }
-        chips={jenisOptions.filter((n) => selectedJenisIds.has(n.id)).map((n) => n.name)}
+        chips={chipsFor(selectedJenisIds, jenisOptions)}
         disabled={selectedSubkategoriIds.size === 0 && searchHitsJenis.length === 0}
         open={openMenu === 'jenis'}
         onToggle={() => setOpenMenu((m) => (m === 'jenis' ? null : 'jenis'))}
+        onDismiss={() => setOpenMenu(null)}
+        onRemove={(id) => toggleJenis(id)}
         footer={
           <>
             <label className="ahsp-field" style={{ marginTop: '0.35rem' }}>
@@ -714,12 +883,23 @@ export function AhspImportAssistedClassificationPanel({
                 checked={selectedJenisIds.has(n.id)}
                 onChange={() => toggleJenis(n.id)}
               />
-              <span>{n.name}</span>
+              <span>{optionLabel(n, JENIS_PEKERJAAN)}</span>
             </label>
           ))
         )}
       </CheckboxMenu>
       </div>
+
+      {pathLines.length > 0 ? (
+        <ol className="ahsp-classification-paths" aria-label="Jalur klasifikasi">
+          {pathLines.map((line, index) => (
+            <li key={line}>
+              <span className="ahsp-classification-paths__index">Jalur {index + 1}</span>
+              <span>{line}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
 
       {showMetadata ? (
         <>
@@ -729,7 +909,10 @@ export function AhspImportAssistedClassificationPanel({
               <input
                 className="ahsp-field__control"
                 value={value.dasarAcuan ?? ''}
-                onChange={(e) => onChange({ ...value, dasarAcuan: e.target.value.trim() || null })}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  onChange({ ...value, dasarAcuan: next.trim() === '' ? null : next });
+                }}
                 placeholder={'Contoh: Berdasarkan Peraturan Menteri\u2026'}
               />
             </label>
@@ -738,7 +921,10 @@ export function AhspImportAssistedClassificationPanel({
               <input
                 className="ahsp-field__control"
                 value={value.penerbit ?? ''}
-                onChange={(e) => onChange({ ...value, penerbit: e.target.value.trim() || null })}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  onChange({ ...value, penerbit: next.trim() === '' ? null : next });
+                }}
                 placeholder="Instansi penerbit (bukan Sumber Data)"
               />
             </label>
@@ -756,6 +942,7 @@ export function emptyAssistedContext(): AssistedClassificationContext {
   return {
     jenisPengadaanRootId: null,
     paths: [],
+    pendingPaths: [],
     dasarAcuan: null,
     penerbit: null,
     displayLabels: {

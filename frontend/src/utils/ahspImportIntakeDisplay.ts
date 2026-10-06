@@ -29,8 +29,83 @@ export type AhspItemAdmission = 'PROVEN' | 'IDENTITY_PENDING' | 'HELD';
 export const admissionOf = (item: { admission?: string | null }): AhspItemAdmission =>
   item.admission === 'PROVEN' || item.admission === 'IDENTITY_PENDING' ? item.admission : 'HELD';
 
+/** One saved work item, as the commit result states its admission. */
+export interface SavedWorkItemAdmission {
+  readonly workType: string;
+  readonly methodName: string;
+  readonly admission: string;
+}
+
+/**
+ * The admission a current screen should show.
+ *
+ * A written row is the save result. The item's own admission is the reading
+ * from before that save, and it is left as it was when nothing was written
+ * for this item.
+ */
+export const admissionShownAfterSave = <
+  T extends {
+    admission?: string | null;
+    workType?: { raw?: string | null } | null;
+    methodName?: { raw?: string | null } | null;
+  },
+>(
+  item: T,
+  written: ReadonlyArray<SavedWorkItemAdmission> | null | undefined,
+): T => {
+  const match = (written ?? []).find(
+    (row) =>
+      row.workType === item.workType?.raw &&
+      row.methodName === item.methodName?.raw,
+  );
+  if (!match) return item;
+  return { ...item, admission: match.admission };
+};
+
 /** What one previewed item says after its name, for an item whose only open question is a component's identity. */
 export const IDENTITY_PENDING_ITEM_LINE = 'masih dilengkapi identitas komponennya';
+
+/** A component the catalogue already holds. Said beside the source's own name. */
+export const EXISTING_RESOURCE_LINE = 'Ditemukan di katalog';
+
+/**
+ * A component SIMPROK has not seen and has no competing candidate for.
+ * Confirm/Save adds it. This is not an error and not a review.
+ */
+export const NEW_RESOURCE_CONFIRM_LINE =
+  'Resource baru — akan ditambahkan ke katalog saat import disimpan.';
+
+export type ImportResourceConfirmation = 'EXISTING' | 'NEW' | 'REVIEW';
+
+/**
+ * Existing, genuinely new, or still a real identity question.
+ * A named candidate — including one the kernel ruled out — stays REVIEW.
+ * Novelty with no candidate is NEW. Nothing here decides or creates.
+ */
+export const importResourceConfirmation = (resource: {
+  resolvedResourceCatalogId?: string | null;
+  identityCandidates?: readonly string[] | null;
+}): ImportResourceConfirmation => {
+  if (resource.resolvedResourceCatalogId) return 'EXISTING';
+  if ((resource.identityCandidates ?? []).length > 0) return 'REVIEW';
+  return 'NEW';
+};
+
+/** True when every still-unlinked component is genuinely new, and there is one. */
+export const workItemHasGenuineNewOnly = (item: {
+  resources?: ReadonlyArray<{
+    resolvedResourceCatalogId?: string | null;
+    identityCandidates?: readonly string[] | null;
+  }> | null;
+}): boolean => {
+  const open = (item.resources ?? []).filter(
+    (resource) => !resource.resolvedResourceCatalogId,
+  );
+  return (
+    open.length > 0 &&
+    open.every((resource) => importResourceConfirmation(resource) === 'NEW')
+  );
+};
 
 /**
  * Konfirmasi figures — four independent truths from canonical preview facts.
@@ -229,12 +304,20 @@ export interface ImportJobWire {
     identityMatches?: readonly AhspIdentityMatchWire[] | null;
     /** The unit spellings this line still waits for today, as the document spells them. */
     unknownUnits?: ReadonlyArray<{ spelling?: string | null; uses?: number | null } | null> | null;
+    /** One unresolved unit slot. Absent when the line has none. */
+    unitOccurrences?: ReadonlyArray<{
+      occurrenceKey?: string | null;
+      spelling?: string | null;
+      resourceGroup?: string | null;
+    } | null> | null;
     /** Every unit this line waited for is known today: the next check evaluates it with them. */
     unitsKnownNow?: boolean | null;
     /** What each of the document's conflicting output-unit statements says. */
     statedOutputUnits?: readonly string[] | null;
     /** The line was kept before work titles were read, and its kept title states more. */
     readingUpdated?: boolean | null;
+    /** Present only for a line whose write failed. The journal's own class, never a stack. */
+    writeFailure?: 'RESOURCE_CODE_ALREADY_EXISTS' | 'WRITE_FAILED' | null;
   } | null> | null;
 }
 
@@ -256,6 +339,16 @@ export interface AttentionRowView {
   readonly tone: AttentionTone;
   readonly title: string;
   readonly detail: string;
+  /** The existing door for this row, when one already exists. */
+  readonly actionLabel?: string;
+  /** Failed writes already recorded on the journal. Absent for every other tone. */
+  readonly failures?: readonly ImportWriteFailureView[];
+}
+
+export interface ImportWriteFailureView {
+  readonly code: string;
+  readonly description: string;
+  readonly statement: string;
 }
 
 /** What changed since a waiting line was settled — each a reason to check it again, none a promise. */
@@ -276,6 +369,7 @@ interface AttentionItem {
   readonly reasonCodes: readonly string[];
   readonly unknownUnits: ReadonlyArray<{ readonly spelling: string; readonly uses: number }>;
   readonly statedOutputUnits: readonly string[];
+  readonly failure?: ImportWriteFailureView;
 }
 
 /** What the server says about the lines already saved as AHSP — a saved import's own truth, never a preview's. */
@@ -388,11 +482,10 @@ const describeAttention = (
       tone: 'IDENTITY',
       title: 'Identitas sumber daya belum pasti',
       detail:
-        'Ada ' + count(identity.questions) + ' pertanyaan berbeda dari ' + count(identity.uses) + ' kemunculan. ' +
-        'Pertanyaan yang sama dikelompokkan agar tidak perlu dijawab per kemunculan. ' +
-        (context.canCurate
-          ? 'Tinjau di bagian Sumber daya untuk ditinjau.'
-          : 'Diputuskan oleh pemegang kewenangan identitas sumber daya.'),
+        count(identity.questions) + ' pertanyaan identitas mewakili ' + count(identity.uses) + ' kemunculan. ' +
+        'Jawaban yang sama tidak perlu diulang untuk setiap kemunculan.' +
+        (context.canCurate ? '' : ' Diputuskan oleh pemegang kewenangan identitas sumber daya.'),
+      ...(context.canCurate ? { actionLabel: 'Tinjau ' + count(identity.questions) + ' identitas' } : {}),
     });
   } else if (saved.awaitingIdentity > 0) {
     // No question left open is not an identity: a question closed by a decision that
@@ -483,11 +576,14 @@ const describeAttention = (
   }
 
   if (counts.FAILED > 0) {
+    const failures = items.flatMap((item) => (categoryOf(item) === 'FAILED' && item.failure ? [item.failure] : []));
     rows.push({
       key: 'failed',
       tone: 'FAILED',
       title: 'Penyimpanan sebelumnya belum berhasil',
       detail: count(counts.FAILED) + ' pekerjaan akan dicoba lagi saat diperiksa ulang.',
+      actionLabel: 'Lihat ' + count(counts.FAILED) + ' pekerjaan',
+      ...(failures.length > 0 ? { failures } : {}),
     });
   }
   return { rows, counts };
@@ -496,6 +592,8 @@ const describeAttention = (
 /** A resource or work item of a previewed document, in the fields its needs are read from. */
 export interface PreviewAttentionItemWire {
   admission?: string | null;
+  workType?: { raw?: string | null } | null;
+  methodName?: { raw?: string | null } | null;
   reasonCodes?: readonly string[] | null;
   identityVerdict?: string | null;
   outputUnitRaw?: { raw?: string | null } | null;
@@ -566,10 +664,131 @@ export const describePreviewAttention = (
   return describeAttention(items, { questions: questions.size, uses }, { canCurate: options.canCurate }).rows;
 };
 
+/** One unit question on one work item. The id is the issue; doors only filter it. */
+export interface UnitResolutionIssue {
+  readonly id: string;
+  readonly lineKey: string;
+  readonly title: string;
+  readonly spelling: string;
+  readonly uses: number;
+  /** Immutable journal slot. Preview carries the same shape and does not persist it. */
+  readonly occurrenceKey?: string | null;
+  readonly resourceGroup?: 'LABOR' | 'MATERIAL' | 'EQUIPMENT' | null;
+}
+
+const resourceGroupOf = (
+  value: string | null | undefined,
+): 'LABOR' | 'MATERIAL' | 'EQUIPMENT' | null =>
+  value === 'LABOR' || value === 'MATERIAL' || value === 'EQUIPMENT' ? value : null;
+
+export function filterUnitIssues(
+  issues: readonly UnitResolutionIssue[],
+  filter: { readonly spelling?: string | null; readonly lineKey?: string | null },
+): UnitResolutionIssue[] {
+  return issues.filter(
+    (issue) =>
+      (filter.spelling == null || filter.spelling === '' || issue.spelling === filter.spelling) &&
+      (filter.lineKey == null || filter.lineKey === '' || issue.lineKey === filter.lineKey),
+  );
+}
+
+/** The same unit questions Ringkasan groups, one row per work item and spelling. */
+export function previewUnitIssues(
+  workItems: ReadonlyArray<PreviewAttentionItemWire | null> | null | undefined,
+): UnitResolutionIssue[] {
+  const issues: UnitResolutionIssue[] = [];
+  (workItems ?? []).forEach((item, index) => {
+    if (!item) return;
+    const codes = item.reasonCodes ?? [];
+    const resources = (item.resources ?? []).filter(
+      (resource): resource is NonNullable<typeof resource> => resource !== null,
+    );
+    const admission = admissionOf(item);
+    const decision = admission !== 'HELD' && item.identityVerdict === 'POSSIBLY_IDENTICAL';
+    if (admission !== 'HELD' && !decision) return;
+    const lineKey = String(index);
+    const title = (item.workType?.raw ?? '—') + ' — ' + (item.methodName?.raw ?? '—');
+    const push = (
+      occurrenceKey: string,
+      raw: string | null | undefined,
+      resourceGroup: 'LABOR' | 'MATERIAL' | 'EQUIPMENT' | null,
+    ) => {
+      const spelling = (raw ?? '').trim();
+      if (spelling === '') return;
+      issues.push({
+        id: 'preview:' + lineKey + ':' + occurrenceKey,
+        lineKey,
+        title,
+        spelling,
+        uses: 1,
+        occurrenceKey,
+        resourceGroup,
+      });
+    };
+    if (codes.includes('UNIT_UNRESOLVED') && item.outputUnitRaw?.raw && !item.resolvedOutputUnit) {
+      push('output', item.outputUnitRaw.raw, null);
+    }
+    resources.forEach((resource, resourceIndex) => {
+      if ((resource.reasonCodes ?? []).includes('UNIT_UNRESOLVED')) {
+        push('resource:' + resourceIndex, resource.rawUnit, resourceGroupOf(resource.group));
+      }
+    });
+  });
+  return issues;
+}
+
+export function waitingUnitIssues(
+  jobKey: string,
+  items: readonly {
+    readonly key: string;
+    readonly title: string;
+    readonly unknownUnits: ReadonlyArray<{ readonly spelling: string; readonly uses: number }>;
+    readonly unitOccurrences?: ReadonlyArray<{
+      readonly occurrenceKey: string;
+      readonly spelling: string;
+      readonly resourceGroup: 'LABOR' | 'MATERIAL' | 'EQUIPMENT' | null;
+    }>;
+  }[],
+): UnitResolutionIssue[] {
+  const issues: UnitResolutionIssue[] = [];
+  for (const item of items) {
+    if (item.unitOccurrences && item.unitOccurrences.length > 0) {
+      for (const unit of item.unitOccurrences) {
+        issues.push({
+          id: 'job:' + jobKey + ':' + item.key + ':' + unit.occurrenceKey,
+          lineKey: item.key,
+          title: item.title,
+          spelling: unit.spelling,
+          uses: 1,
+          occurrenceKey: unit.occurrenceKey,
+          resourceGroup: unit.resourceGroup,
+        });
+      }
+      continue;
+    }
+    for (const unit of item.unknownUnits) {
+      issues.push({
+        id: 'job:' + jobKey + ':' + item.key + ':' + unit.spelling,
+        lineKey: item.key,
+        title: item.title,
+        spelling: unit.spelling,
+        uses: unit.uses,
+      });
+    }
+  }
+  return issues;
+}
+
 export interface ImportWaitingItemView {
   readonly key: string;
   readonly title: string;
   readonly reason: string;
+  readonly unknownUnits: ReadonlyArray<{ readonly spelling: string; readonly uses: number }>;
+  readonly unitOccurrences?: ReadonlyArray<{
+    readonly occurrenceKey: string;
+    readonly spelling: string;
+    readonly resourceGroup: 'LABOR' | 'MATERIAL' | 'EQUIPMENT' | null;
+  }>;
   /** The comparison the preview shows for a possible twin — present only when a decision is open. */
   readonly sameness: SamenessView | null;
   /** The source names a decision is sent for; present exactly when `sameness` is. */
@@ -636,6 +855,13 @@ const waitingDecisionOf = (line: ImportWaitingLineWire): Pick<ImportWaitingItemV
   return sameness ? { sameness, decisionFor: { workType: line.workType, methodName: line.methodName } } : none;
 };
 
+const WRITE_FAILURE_STATEMENT: Readonly<Record<'RESOURCE_CODE_ALREADY_EXISTS' | 'WRITE_FAILED', string>> = {
+  RESOURCE_CODE_ALREADY_EXISTS:
+    'Penyimpanan berhenti karena kode sumber daya sudah ada di workspace. Pemeriksaan ulang memakai jalur simpan yang sama.',
+  WRITE_FAILED:
+    'Penyimpanan berhenti sebelum AHSP tertulis. Pemeriksaan ulang memakai jalur simpan yang sama.',
+};
+
 /** What a waiting line needs, from the facts the server asked of today's authorities. */
 const storedAttentionItem = (line: ImportWaitingLineWire, decision: boolean): AttentionItem => {
   const codes = line.reasonCodes ?? [];
@@ -661,6 +887,15 @@ const storedAttentionItem = (line: ImportWaitingLineWire, decision: boolean): At
       unit?.spelling && whole(unit.uses) > 0 ? [{ spelling: unit.spelling, uses: whole(unit.uses) }] : [],
     ),
     statedOutputUnits: (line.statedOutputUnits ?? []).filter((unit) => typeof unit === 'string' && unit !== ''),
+    ...(failed
+      ? {
+          failure: {
+            code: line.workType ?? '—',
+            description: line.methodName ?? '—',
+            statement: WRITE_FAILURE_STATEMENT[line.writeFailure ?? 'WRITE_FAILED'],
+          },
+        }
+      : {}),
   };
 };
 
@@ -701,18 +936,32 @@ export const describeWaitingImports = (
         ? Math.min(whole(job.completion.complete), represented)
         : Math.max(represented - savedNotComplete, 0);
     const date = importDate(job?.createdAt);
-    const items = waiting.map((line, index) => ({
-      key: String(line.lineNumber ?? 'w' + index),
-      title: (line.workType ?? '—') + ' — ' + (line.methodName ?? '—'),
-      reason:
-        line.status === 'FAILED'
-          ? 'Penyimpanan sebelumnya belum berhasil; akan dicoba lagi saat diperiksa ulang.'
-          : explainWaitingItemReasons(line.reasonCodes ?? []),
-      ...waitingDecisionOf(line),
-    }));
+    const decisions = waiting.map((line) => waitingDecisionOf(line));
+    const attentionItems = waiting.map((line, index) => storedAttentionItem(line, decisions[index].sameness !== null));
+    const items = waiting.map((line, index) => {
+      const unitOccurrences = (line.unitOccurrences ?? []).flatMap((unit) => {
+        const occurrenceKey = unit?.occurrenceKey ?? '';
+        const spelling = (unit?.spelling ?? '').trim();
+        const resourceGroup = resourceGroupOf(unit?.resourceGroup);
+        return occurrenceKey !== '' && spelling !== ''
+          ? [{ occurrenceKey, spelling, resourceGroup }]
+          : [];
+      });
+      return {
+        key: String(line.lineNumber ?? 'w' + index),
+        title: (line.workType ?? '—') + ' — ' + (line.methodName ?? '—'),
+        reason:
+          line.status === 'FAILED'
+            ? 'Penyimpanan sebelumnya belum berhasil; akan dicoba lagi saat diperiksa ulang.'
+            : explainWaitingItemReasons(line.reasonCodes ?? []),
+        unknownUnits: attentionItems[index].unknownUnits,
+        ...(unitOccurrences.length > 0 ? { unitOccurrences } : {}),
+        ...decisions[index],
+      };
+    });
     const others = items.filter((item) => item.sameness === null);
     const attention = describeAttention(
-      waiting.map((line, index) => storedAttentionItem(line, items[index].sameness !== null)),
+      attentionItems,
       {
         questions: whole(job?.completion?.identityQuestions?.questions),
         uses: whole(job?.completion?.identityQuestions?.uses),

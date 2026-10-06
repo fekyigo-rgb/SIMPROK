@@ -27,19 +27,21 @@ const importPage = codeOnly(readFileSync('src/pages/AhspImportPage.tsx', 'utf8')
 const room = codeOnly(readFileSync('src/pages/AhspRoomPage.tsx', 'utf8'));
 const intake = codeOnly(readFileSync('src/utils/ahspImportIntakeDisplay.ts', 'utf8'));
 
-test('UI-01/06 Kategori dropdown uses children API + local create path', () => {
+test('UI-01/06 Kategori dropdown uses shared vocabulary, children API, and local create', () => {
   assert.ok(panel.includes('/ahsp/document/classification/children'));
   assert.ok(panel.includes('createLocal'));
   assert.ok(panel.includes("'KATEGORI'"));
   assert.ok(panel.includes('+ Tambahkan pilihan baru'));
-  assert.ok(!panel.includes('constructionTaxonomy'));
-  assert.ok(!panel.includes('BIDANG'));
+  assert.ok(panel.includes('ahspBaselineVocabulary'));
+  assert.ok(panel.includes('baselineKategoriOptions'));
+  assert.ok(!panel.includes('const BIDANG'));
 });
 
-test('UI-02/03 Subkategori and Jenis load children of selected parents', () => {
+test('UI-02/03 Subkategori and Jenis use the shared vocabulary and still load stored children', () => {
   assert.ok(panel.includes('loadChildren(id)'));
-  assert.ok(panel.includes("n.level === 'SUBKATEGORI'"));
-  assert.ok(panel.includes("n.level === 'JENIS_PEKERJAAN'"));
+  assert.ok(panel.includes('baselineSubkategoriOptions'));
+  assert.ok(panel.includes('baselineJenisPekerjaanOptions'));
+  assert.ok(panel.includes('isVocabularyOptionId(id)'));
 });
 
 test('UI-04 soft cascade search reaches outside prioritized branch', () => {
@@ -95,7 +97,7 @@ test('UI-12/13 confirm figures derive willSave independent of needsReview', () =
 
 test('UI-14 Ringkasan resource identity remains actionable door', () => {
   assert.ok(importPage.includes('openIdentityReview'));
-  assert.ok(importPage.includes('Buka tinjauan sumber daya'));
+  assert.ok(importPage.includes('row.actionLabel'));
 });
 
 test('UI-15 Door A Stage2A connection unchanged', () => {

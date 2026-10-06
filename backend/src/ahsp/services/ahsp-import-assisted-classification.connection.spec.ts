@@ -16,6 +16,7 @@ describe('T-IAC assisted classification context parsing', () => {
     expect(parseAssistedClassificationContext({ not: 'valid' } as unknown)).toEqual({
       jenisPengadaanRootId: null,
       paths: [],
+      pendingPaths: [],
       dasarAcuan: null,
       penerbit: null,
     });
@@ -48,6 +49,7 @@ describe('T-IAC assisted classification context parsing', () => {
     expect(empty).toEqual({
       jenisPengadaanRootId: null,
       paths: [],
+      pendingPaths: [],
       dasarAcuan: null,
       penerbit: null,
     });

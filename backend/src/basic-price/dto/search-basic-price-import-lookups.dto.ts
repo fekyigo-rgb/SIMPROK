@@ -36,6 +36,15 @@ export class SearchUnitDefinitionDto extends SearchBasicPriceImportLookupPageDto
   @IsOptional()
   @IsEnum(UnitKind)
   kind?: UnitKind;
+
+  /**
+   * The resource family the editor is filling. LABOR sees person-time,
+   * EQUIPMENT sees equipment-time, MATERIAL sees the physical and count
+   * families. The catalog itself is unchanged.
+   */
+  @IsOptional()
+  @IsEnum(ResourceType)
+  resourceType?: ResourceType;
 }
 
 /**

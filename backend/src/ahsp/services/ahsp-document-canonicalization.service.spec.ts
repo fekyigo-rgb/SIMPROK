@@ -42,6 +42,7 @@ describe('AhspDocumentCanonicalizationService', () => {
     // F1 — the import reader asks which rows a person already decided.
     // No decisions is the truthful default for a fixture that has none.
     decidedIdentityForSourceRows: jest.fn().mockResolvedValue(new Map()),
+    acceptHumanDeclaredResourceIn: jest.fn(),
   };
   const norm = new RealityNormalizationEngine();
   const audit = { logAction: jest.fn() };
@@ -64,6 +65,22 @@ describe('AhspDocumentCanonicalizationService', () => {
     ahspService.loadIdentitySurface.mockResolvedValue([]);
     versionService.createVersion.mockResolvedValue({ id: 'ver-1' });
     observations.observeMany.mockResolvedValue(undefined);
+    observations.acceptHumanDeclaredResourceIn.mockImplementation(
+      async (
+        _tx: unknown,
+        params: { workspaceId: string; rawName: string; resourceType: string },
+      ) => ({
+        outcome: 'CREATED' as const,
+        resource: {
+          id: `catalog-${params.rawName}`,
+          name: params.rawName,
+          code: null,
+          type: params.resourceType,
+          baseUnit: 'OH',
+          workspaceId: params.workspaceId,
+        },
+      }),
+    );
     audit.logAction.mockResolvedValue(undefined);
     journal = inMemoryImportJournal();
     service = new AhspDocumentCanonicalizationService(
@@ -208,15 +225,14 @@ describe('AhspDocumentCanonicalizationService', () => {
     expect(created.classification ?? null).toBeNull();
   });
 
-  // LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION was "does not write when
-  // resource identity is unresolved" (written = [], create not called).
-  // D-1 APPROVED (PM, 2026-09-15): a recipe that is whole except for a
-  // component's catalogue identity is accepted as a private DRAFT carrying the
-  // source's own wording. NEW_EXPECTATION: written as IDENTITY_PENDING with
-  // resourceId = the raw name, never a candidate id; pricing stays gated
-  // downstream. TEST_WEAKENING=NO — the unit, output-unit, coefficient and
-  // duplicate refusals below are unchanged.
-  it('IMPORT-SEAM-01: writes a recipe whose ONLY gap is resource identity, with the source wording as its resourceId', async () => {
+  // LEGACY_TEST_CHANGE_REGISTER: OLD_EXPECTATION was IDENTITY_PENDING with
+  // resourceId = the raw name whenever identity was unresolved.
+  // Owner law 2026-09-30: a recipe whose only gap is a genuinely new resource
+  // (no competing candidate) is minted on Confirm/Save and linked by catalogue
+  // id. Ambiguity still stays IDENTITY_PENDING — that case is the acceptance
+  // boundary's candidate tests. The source wording is kept in source facts,
+  // not written over the catalogue id. TEST_WEAKENING=NO.
+  it('IMPORT-SEAM-01: a genuinely new resource is minted on save and linked by catalogue id', async () => {
     identity.resolve.mockResolvedValue({
       status: 'NEEDS_REVIEW',
       resolvedResourceCatalogId: null,
@@ -226,14 +242,14 @@ describe('AhspDocumentCanonicalizationService', () => {
     expect(result.written).toEqual([
       expect.objectContaining({
         workType: '1.7.7.1.1.b (a)',
-        admission: 'IDENTITY_PENDING',
-        identityPendingResources: 2,
+        admission: 'PROVEN',
+        identityPendingResources: 0,
       }),
     ]);
     const resources = versionService.createVersion.mock.calls[0][1].resources;
     expect(resources.map((resource: any) => resource.resourceId)).toEqual([
-      'Pekerja',
-      'Mandor',
+      'catalog-Pekerja',
+      'catalog-Mandor',
     ]);
     const item = result.knowledge.workItems[0];
     expect(item.status).toBe('UNRESOLVED');
@@ -243,8 +259,8 @@ describe('AhspDocumentCanonicalizationService', () => {
     );
     expect(result.summary).toMatchObject({
       evaluated: 1,
-      identityPending: 1,
-      ready: 0,
+      identityPending: 0,
+      ready: 1,
       held: 0,
     });
   });
@@ -655,8 +671,41 @@ describe('AhspDocumentCanonicalizationService', () => {
     await commitWithCandidateVerdict('NEEDS_REVIEW');
   });
 
-  it('reports candidates found on an UNRESOLVED verdict', async () => {
-    await commitWithCandidateVerdict('UNRESOLVED');
+  it('mints a resource whose only candidates the kernel ruled out', async () => {
+    identity.resolve.mockResolvedValue({
+      status: 'UNRESOLVED',
+      resolvedResourceCatalogId: null,
+      candidates: [
+        { name: 'Pekerja Terampil', resourceCatalogId: 'catalog-b' },
+      ],
+    });
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+    );
+    const item = result.knowledge.workItems.find(
+      (candidate) => candidate.workType?.raw === '1.7.7.1.1.b (a)',
+    );
+    expect(item?.resources[0]?.identityCandidates).toEqual([
+      'Pekerja Terampil',
+    ]);
+    expect(item?.resources[0]?.identityCandidatesRuledOut).toBe(true);
+    expect(item?.resources[0]?.resolvedResourceCatalogId).toBe(
+      'catalog-Pekerja',
+    );
+    expect(item?.admission).toBe('IDENTITY_PENDING');
+    expect(result.written).toEqual([
+      expect.objectContaining({
+        admission: 'PROVEN',
+        identityPendingResources: 0,
+      }),
+    ]);
+    const stored = versionService.createVersion.mock.calls[0][1].resources;
+    expect(stored.map((resource: { resourceId: string }) => resource.resourceId)).toEqual([
+      'catalog-Pekerja',
+      'catalog-Mandor',
+    ]);
+    expect(JSON.stringify(stored)).not.toContain('catalog-b');
   });
 
   /**

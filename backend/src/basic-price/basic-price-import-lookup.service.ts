@@ -29,6 +29,29 @@ export interface UnitLookupRow {
   kind: UnitKind;
 }
 
+/**
+ * A query matches inside a longer spelling only as its own word.
+ * "ton" matches "ton metrik" and "short ton". It does not match "kantong" or "karton".
+ * A code prefix such as TONNE for "ton" stays the caller's separate prefix rule.
+ */
+export function unitLookupContainsMatch(text: string, query: string): boolean {
+  const haystack = text.toLowerCase();
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0 || haystack.length < needle.length) return false;
+  const boundary = (char: string) => char === '' || !/[a-z0-9]/i.test(char);
+  let from = 0;
+  while (from <= haystack.length - needle.length) {
+    const at = haystack.indexOf(needle, from);
+    if (at < 0) return false;
+    const before = at === 0 ? '' : haystack[at - 1];
+    const afterIndex = at + needle.length;
+    const after = afterIndex >= haystack.length ? '' : haystack[afterIndex];
+    if (boundary(before) && boundary(after)) return true;
+    from = at + 1;
+  }
+  return false;
+}
+
 export type ResourceSearchVisibility = 'WORKSPACE_ONLY' | 'WORKSPACE_PLUS_GLOBAL';
 
 @Injectable()
@@ -176,6 +199,13 @@ export class BasicPriceImportLookupService {
     const dimensionFilter = dto.dimension
       ? Prisma.sql`AND unit."dimension" = ${dto.dimension}::"UnitDimension"`
       : Prisma.empty;
+    const resourceFilter = dto.resourceType === 'LABOR'
+      ? Prisma.sql`AND unit."dimension" = 'PERSON_TIME'::"UnitDimension"`
+      : dto.resourceType === 'EQUIPMENT'
+        ? Prisma.sql`AND (unit."dimension" = 'EQUIPMENT_TIME'::"UnitDimension" OR unit."code" = 'LS')`
+        : dto.resourceType === 'MATERIAL'
+          ? Prisma.sql`AND unit."dimension" IN ('COUNT'::"UnitDimension", 'MASS'::"UnitDimension", 'LENGTH'::"UnitDimension", 'AREA'::"UnitDimension", 'VOLUME'::"UnitDimension")`
+          : Prisma.empty;
     const kindFilter = dto.kind ? Prisma.sql`AND unit."kind" = ${dto.kind}::"UnitKind"` : Prisma.empty;
     const aliasExact = Prisma.sql`EXISTS (
       SELECT 1 FROM "unit_aliases" alias
@@ -192,13 +222,24 @@ export class BasicPriceImportLookupService {
           OR left(lower(alias."normalizedAlias"), length(${q})) = lower(${q})
         )
     )`;
+    const boundedContains = (expression: Prisma.Sql) => Prisma.sql`(
+      position(lower(${q}) in lower(${expression})) > 0
+      AND (
+        position(lower(${q}) in lower(${expression})) = 1
+        OR substring(lower(${expression}) from position(lower(${q}) in lower(${expression})) - 1 for 1) !~ '[a-z0-9]'
+      )
+      AND (
+        position(lower(${q}) in lower(${expression})) + char_length(${q}) - 1 = char_length(${expression})
+        OR substring(lower(${expression}) from position(lower(${q}) in lower(${expression})) + char_length(${q}) for 1) !~ '[a-z0-9]'
+      )
+    )`;
     const aliasContains = Prisma.sql`EXISTS (
       SELECT 1 FROM "unit_aliases" alias
       WHERE alias."unitDefinitionId" = unit."id"
         AND alias."isActive" = true
         AND (
-          position(lower(${q}) in lower(alias."rawAlias")) > 0
-          OR position(lower(${q}) in lower(alias."normalizedAlias")) > 0
+          ${boundedContains(Prisma.sql`alias."rawAlias"`)}
+          OR ${boundedContains(Prisma.sql`alias."normalizedAlias"`)}
         )
     )`;
     const searchFilter =
@@ -212,9 +253,9 @@ export class BasicPriceImportLookupService {
             OR left(lower(unit."symbol"), length(${q})) = lower(${q})
             OR left(lower(unit."displayName"), length(${q})) = lower(${q})
             OR ${aliasPrefix}
-            OR position(lower(${q}) in lower(unit."code")) > 0
-            OR position(lower(${q}) in lower(unit."symbol")) > 0
-            OR position(lower(${q}) in lower(unit."displayName")) > 0
+            OR ${boundedContains(Prisma.sql`unit."code"`)}
+            OR ${boundedContains(Prisma.sql`unit."symbol"`)}
+            OR ${boundedContains(Prisma.sql`unit."displayName"`)}
             OR ${aliasContains}
           )`
         : Prisma.empty;
@@ -225,6 +266,7 @@ export class BasicPriceImportLookupService {
         FROM "unit_definitions" unit
         WHERE unit."isActive" = true
           ${dimensionFilter}
+          ${resourceFilter}
           ${kindFilter}
           ${searchFilter}
         ORDER BY
@@ -251,6 +293,7 @@ export class BasicPriceImportLookupService {
         FROM "unit_definitions" unit
         WHERE unit."isActive" = true
           ${dimensionFilter}
+          ${resourceFilter}
           ${kindFilter}
           ${searchFilter}
       `),

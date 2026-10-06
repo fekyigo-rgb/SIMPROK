@@ -125,6 +125,21 @@ export function inMemoryImportJournal() {
         ? Promise.resolve()
         : Promise.reject(new AhspImportLineAlreadySettledError(params.lineId)),
     ),
+    recordRecheckReasons: jest.fn(
+      (params: {
+        workspaceId: string;
+        lineId: string;
+        reasonCodes: readonly string[];
+      }) => {
+        const line = lines.get(params.lineId);
+        if (!line || !inWorkspace(params.workspaceId, line.importJobId)) {
+          return Promise.resolve(0);
+        }
+        if (line.status !== ImportStatus.PENDING) return Promise.resolve(0);
+        line.reasonCodes = [...params.reasonCodes];
+        return Promise.resolve(1);
+      },
+    ),
     // IMPORT-SEAM-09 — the line as the settlement path sees it: only in its own
     // workspace, and read the moment it is asked for.
     lockLine: jest.fn(
@@ -241,6 +256,11 @@ export function transactionalPrisma<T extends Record<string, unknown>>(
   return {
     tx,
     prisma: {
+      ahspImportUnitDecision: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        upsert: jest.fn(),
+      },
       ...delegates,
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) =>
         Promise.resolve(callback(tx)),

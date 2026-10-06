@@ -17,6 +17,11 @@ import {
 import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
 import { ActionOutcomeNotice } from '../components/ahsp/ActionOutcomeNotice';
 import { BIDANG, JENIS_PEKERJAAN, mergeVocabulary, subkategoriForBidang } from '../constructionTaxonomy';
+import {
+  canonicalPaths,
+  rowMatchesClassificationFilter,
+  type ListClassificationPath,
+} from '../utils/ahspListClassification';
 import { JENIS_PENGADAAN_OPTIONS } from '../jenisPengadaanVocabulary';
 import '../styles/ahsp.css';
 
@@ -28,11 +33,8 @@ import '../styles/ahsp.css';
  * door (/ahsp/import) so this list stays a clean library, never a process dump.
  *
  * The Kategori/Subkategori/Jenis filters draw vocabulary from the ONE shared
- * construction taxonomy (constructionTaxonomy.ts), merged with values actually
- * present in the data so no stored value is ever hidden. Jenis Pengadaan uses
- * the shared vocabulary for presentation; list rows do not yet carry a
- * dedicated assignment consumer — selection is honest visual parity, not a
- * second backend filter engine.
+ * construction taxonomy. A stored assignment path is the classification meaning.
+ * Legacy text remains readable only when that path is absent.
  */
 
 type AhspRow = {
@@ -44,6 +46,7 @@ type AhspRow = {
   fieldCategory: string | null;
   subCategory: string | null;
   classification: string | null;
+  classificationPaths?: ListClassificationPath[] | null;
   ownershipType: string | null;
   reviewStatus: string | null;
   proposedAt: string | null;
@@ -131,13 +134,26 @@ export function AhspRoomPage() {
   const options = useMemo(() => {
     // Subkategori is context-aware: curated to the chosen Kategori, then merged with
     // the Subkategori values that Kategori's rows actually carry (never hidden).
-    const rowsForSub = kategori ? allRows.filter((r) => (r.fieldCategory ?? '') === kategori) : allRows;
+    const kategoriOf = (row: AhspRow) => {
+      const paths = canonicalPaths(row);
+      return paths.length > 0 ? paths.map((path) => path.kategori) : [row.fieldCategory];
+    };
+    const subOf = (row: AhspRow) => {
+      const paths = canonicalPaths(row);
+      return paths.length > 0 ? paths.map((path) => path.subkategori) : [row.subCategory];
+    };
+    const jenisOf = (row: AhspRow) => {
+      const paths = canonicalPaths(row);
+      return paths.length > 0 ? paths.map((path) => path.jenisPekerjaan) : [presentAhspIdentity(row).workType];
+    };
+    const rowsForSub = kategori
+      ? allRows.filter((row) => kategoriOf(row).includes(kategori))
+      : allRows;
     const curatedSub = kategori ? subkategoriForBidang(kategori) : allCuratedSub;
     return {
-      kategori: mergeVocabulary(BIDANG, allRows.map((r) => r.fieldCategory)),
-      subkategori: mergeVocabulary(curatedSub, rowsForSub.map((r) => r.subCategory)),
-      // A recorded source code is never offered as a Jenis Pekerjaan.
-      jenis: mergeVocabulary(JENIS_PEKERJAAN, allRows.map((r) => presentAhspIdentity(r).workType)),
+      kategori: mergeVocabulary(BIDANG, allRows.flatMap((row) => kategoriOf(row))),
+      subkategori: mergeVocabulary(curatedSub, rowsForSub.flatMap((row) => subOf(row))),
+      jenis: mergeVocabulary(JENIS_PEKERJAAN, allRows.flatMap((row) => jenisOf(row))),
     };
   }, [allRows, kategori, allCuratedSub]);
 
@@ -148,13 +164,17 @@ export function AhspRoomPage() {
       if (source === 'MINE' && row.workspaceId === null) return false;
       // Jenis Pengadaan: when list rows carry classification text, filter it.
       // Rows without classification remain visible — assignment list consumer not connected.
-      if (jenisPengadaan) {
-        const cls = (row.classification ?? '').trim();
-        if (cls !== '' && cls !== jenisPengadaan) return false;
+      if (
+        !rowMatchesClassificationFilter(row, {
+          jenisPengadaan,
+          kategori,
+          subkategori,
+          jenisPekerjaan: jenis,
+          legacyWorkType: presentAhspIdentity(row).workType,
+        })
+      ) {
+        return false;
       }
-      if (kategori && (row.fieldCategory ?? '') !== kategori) return false;
-      if (subkategori && (row.subCategory ?? '') !== subkategori) return false;
-      if (jenis && (presentAhspIdentity(row).workType ?? '') !== jenis) return false;
       if (!needle) return true;
       // Search may still reach Dasar/Bidang provenance text without a dedicated Dasar filter.
       const hay = `${row.code ?? ''} ${row.workType ?? ''} ${row.methodName ?? ''} ${row.fieldCategory ?? ''} ${row.versions?.[0]?.regulationReference ?? ''}`.toLowerCase();
@@ -488,16 +508,25 @@ export function AhspRoomPage() {
                         // Kode and Jenis Pekerjaan are named from ONE mapping: a recorded
                         // source code is shown as the code, never again as a work type.
                         const identity = presentAhspIdentity(row);
+                        const paths = canonicalPaths(row);
+                        const kategoriLabel =
+                          paths.length > 0
+                            ? paths.map((path) => path.kategori).filter(Boolean).join(' · ')
+                            : row.fieldCategory;
+                        const jenisLabel =
+                          paths.length > 0
+                            ? paths.map((path) => path.jenisPekerjaan).filter(Boolean).join(' · ')
+                            : identity.workType;
                         return (
                           <tr key={row.id}>
                             <td>
                               <input type="checkbox" aria-label={'Pilih ' + (row.methodName ?? row.workType ?? row.id)} checked={selected.has(row.id)} onChange={() => toggleSelect(row.id)} />
                             </td>
                             <td>{orDash(identity.code)}</td>
-                            <td>{orDash(identity.workType)}</td>
+                            <td>{orDash(jenisLabel)}</td>
                             <td>{orDash(row.methodName)}</td>
                             <td>{orDash(row.versions?.[0]?.outputUnit)}</td>
-                            <td>{orDash(row.fieldCategory)}</td>
+                            <td>{orDash(kategoriLabel)}</td>
                             <td style={{ whiteSpace: 'nowrap' }}>
                               <Link to={'/ahsp/' + row.id} className="ahsp-action ahsp-action--outline ahsp-action--compact">
                                 <Eye size={14} /> Lihat

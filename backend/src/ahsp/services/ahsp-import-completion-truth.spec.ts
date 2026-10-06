@@ -305,6 +305,9 @@ function world() {
       findMany: () => Promise.resolve([]),
       findFirst: () => Promise.resolve(null),
     },
+    ahspImportUnitDecision: {
+      findMany: () => Promise.resolve([]),
+    },
     $transaction: <T>(callback: (tx: unknown) => Promise<T>): Promise<T> =>
       callback(client),
   };
@@ -704,7 +707,6 @@ describe('CLOSEOUT P1-A — complete for the AHSP stage is proven by the consume
     ['another code', { code: 'M04' }],
     ['another name', { name: 'Agregat halus' }],
     ['another unit', { unit: 'Kg' }],
-    ['another class', { group: 'EQUIPMENT' }],
   ])(
     '(5) an answer to one exact question never closes a near-miss with %s — in the queue or in the recipe',
     async (_label, change) => {
@@ -730,6 +732,22 @@ describe('CLOSEOUT P1-A — complete for the AHSP stage is proven by the consume
       ).toEqual([true, true, false]);
     },
   );
+
+  it('(5) a different class is not stored as an open identity when minting cannot finish', async () => {
+    w.catalogs.push(PEKERJA, MANDOR, KERIKIL);
+    const nearMiss = await commit(WS_A, 'P1A.5e', [
+      { ...AGREGAT, group: 'EQUIPMENT' },
+    ]);
+    expect(nearMiss.written).toEqual([]);
+    expect(nearMiss.summary).toMatchObject({
+      identityPending: 0,
+      ready: 0,
+      failed: 1,
+    });
+    expect(nearMiss.failed).toEqual([
+      expect.objectContaining({ workType: 'P1A.5e' }),
+    ]);
+  });
 
   it('(6) an AHSP line pointing to no lawful recipe is not complete, whatever the queue says', async () => {
     w.catalogs.push(PEKERJA, MANDOR, SEMEN);
