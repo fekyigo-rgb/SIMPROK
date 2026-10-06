@@ -427,7 +427,9 @@ describe('promotion lineage precedence', () => {
       );
       // The AHSP candidate offer filters on region, as-of date and validity —
       // all three inherited.
-      expect(orchestrator).toContain('regionId: input.referenceRegionId');
+      expect(orchestrator).toContain(
+        'basicPriceRegionApplicabilityWhere(input.referenceRegionId)',
+      );
       expect(orchestrator).toContain('effectiveDate: { lte: asOf }');
       expect(orchestrator).toContain('validUntil');
     });
