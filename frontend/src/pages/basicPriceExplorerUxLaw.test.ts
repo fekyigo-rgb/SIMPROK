@@ -19,6 +19,10 @@ import { readFileSync } from "node:fs";
  */
 
 const page = readFileSync("src/pages/BasicPriceExplorerPage.tsx", "utf8");
+const explorerRegion = readFileSync(
+  "src/components/basic-price/ExplorerRegionFilterSelect.tsx",
+  "utf8",
+);
 
 /**
  * WHAT ACTUALLY REACHES A SCREEN.
@@ -86,6 +90,26 @@ test("X-4. exactly the six locked controls are visible", () => {
   }
   // Wilayah is its own component, mounted in the same band.
   assert.match(filterBand, /<ExplorerRegionFilterSelect/u);
+  assert.equal(
+    (filterBand.match(/<div className="bp-field(?:\s|")/g) ?? []).length +
+      (filterBand.match(/<ExplorerRegionFilterSelect/g) ?? []).length,
+    6,
+  );
+});
+
+test("X-4b. Explorer has one compact Wilayah control, never the five-level hierarchy", () => {
+  assert.equal((filterBand.match(/<ExplorerRegionFilterSelect/g) ?? []).length, 1);
+  assert.equal((explorerRegion.match(/>\s*Wilayah\s*</g) ?? []).length, 1);
+  assert.doesNotMatch(explorerRegion, /RegionHierarchySelect|data-region-level/u);
+  for (const rejected of [
+    /Negara/u,
+    /Provinsi/u,
+    /Kabupaten\/Kota/u,
+    /Kecamatan/u,
+    /Desa\/Kelurahan/u,
+  ]) {
+    assert.doesNotMatch(explorerRegion, rejected);
+  }
 });
 
 test("X-5. the removed filters stay removed", () => {

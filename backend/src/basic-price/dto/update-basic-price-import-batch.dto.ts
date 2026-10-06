@@ -6,6 +6,8 @@ import {
   IsBoolean,
   IsDateString,
   IsInt,
+  IsArray,
+  ArrayUnique,
   Matches,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
@@ -44,6 +46,17 @@ export class UpdateBasicPriceImportBatchDto {
   @IsInt() version!: number;
 
   @IsOptional() @IsUUID() regionId?: string;
+
+  /**
+   * Explicit Village intent for the existing metadata command. Omitted keeps
+   * the stored coverage fact; [] clears it; one member remains the existing
+   * scalar Village truth; 2+ resolves one immutable coverage value server-side.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  coveredVillageRegionIds?: string[];
   @IsOptional() @IsDateString() effectiveDate?: string;
 
   /**

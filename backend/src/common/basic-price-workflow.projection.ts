@@ -377,6 +377,8 @@ export interface BasicPriceExplorerItem {
   basicPriceId: string;
   resource: ExplorerResourceIdentity;
   region: RegionIdentity | null;
+  /** Compact truthful text for explicit multi-Village coverage only. */
+  regionCoverageSummary?: string | null;
   /** Exact decimal string, two digits. */
   price: string;
   effectiveDate: string;
@@ -446,6 +448,9 @@ export interface ExplorerRowSource {
     baseUnit: string;
   };
   region: { id: string; code: string; name: string } | null;
+  regionCoverageSet?: {
+    members: Array<{ regionId: string }>;
+  } | null;
   sourceSubmission?: {
     importRow?: {
       batch?: ImportBatchSourceNames | null;
@@ -544,6 +549,11 @@ export function mapExplorerItem(
     basicPriceId: row.id,
     resource: mapExplorerResourceIdentity(row.resource),
     region: mapRegionIdentity(row.region),
+    ...(row.region && (row.regionCoverageSet?.members.length ?? 0) >= 2
+      ? {
+          regionCoverageSummary: `${row.regionCoverageSet?.members.length} Desa/Kelurahan di ${row.region.name}`,
+        }
+      : {}),
     price: toDecimalString2(row.value),
     effectiveDate: toIso(row.effectiveDate),
     validUntil: toIsoOrNull(row.validUntil),

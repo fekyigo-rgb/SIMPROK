@@ -1820,6 +1820,7 @@ model PriceSubmission {
   organizationId      String?               @db.Uuid
   resourceId          String                @db.Uuid
   regionId            String?               @db.Uuid
+  regionCoverageSetId String?               @db.Uuid
   reportedByAccountId String?               @db.Uuid // TODO FK to Account later
   sourceOrigin        PriceSourceOrigin
   sourceType          PriceSourceType       @default(MARKET_SURVEY)
@@ -1831,6 +1832,7 @@ model PriceSubmission {
   resource        ResourceCatalog           @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   workspace       Workspace?                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   region          Region?                   @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  regionCoverageSet BasicPriceRegionCoverageSet? @relation(fields: [regionCoverageSetId], references: [id], onDelete: Restrict)
   revisions       PriceSubmissionRevision[]
   audits          PriceSubmissionAudit[]
   publishedPrices BasicPrice[]
@@ -1844,6 +1846,7 @@ model PriceSubmission {
   @@index([reportedByAccountId])
   @@index([status])
   @@index([regionId])
+  @@index([regionCoverageSetId])
   @@map("price_submissions")
 }
 
@@ -2166,6 +2169,7 @@ model BasicPrice {
   workspaceId                 String?                       @db.Uuid
   organizationId              String?                       @db.Uuid
   regionId                    String?                       @db.Uuid
+  regionCoverageSetId         String?                       @db.Uuid
   sourceSubmissionId          String?                       @unique @db.Uuid
   effectiveDate               DateTime
   /// RM-03D1 — the source's own period wording, verbatim (e.g. "TA 2024").
@@ -2276,6 +2280,7 @@ model BasicPrice {
   resource                       ResourceCatalog                  @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   workspace                      Workspace?                       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   region                         Region?                          @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  regionCoverageSet              BasicPriceRegionCoverageSet?     @relation(fields: [regionCoverageSetId], references: [id], onDelete: Restrict)
   sourceSubmission               PriceSubmission?                 @relation(fields: [sourceSubmissionId], references: [id])
   sourceImportRow                BasicPriceImportRow?             @relation("PrivateBasicPriceProvenance", fields: [sourceImportRowId], references: [id], onDelete: Restrict)
   /// BP-CAT-01B — the origin side of the promotion lineage. RESTRICT, never
@@ -2310,6 +2315,7 @@ model BasicPrice {
   @@index([organizationId])
   @@index([sourceSubmissionId])
   @@index([regionId])
+  @@index([regionCoverageSetId])
   @@map("basic_prices")
 }
 
@@ -2432,9 +2438,44 @@ model Region {
   priceSubmissions        PriceSubmission[]
   basicPriceImportBatches BasicPriceImportBatch[]
   projectAhspOccurrences  ProjectAhspOccurrence[]
+  basicPriceCoverageAnchors BasicPriceRegionCoverageSet[]    @relation("BasicPriceRegionCoverageAnchor")
+  basicPriceCoverageMembers BasicPriceRegionCoverageMember[] @relation("BasicPriceRegionCoverageMemberRegion")
 
   @@index([parentId])
   @@map("regions")
+}
+
+/// BP-MULTIVILLAGE-02 — one immutable, canonical geographic applicability
+/// value. The anchor is structural context only; membership is the complete
+/// explicit snapshot and is never inferred from Region descendants.
+model BasicPriceRegionCoverageSet {
+  id                  String   @id @default(uuid()) @db.Uuid
+  anchorRegionId      String   @db.Uuid
+  deterministicDigest String   @unique
+  createdAt           DateTime @default(now())
+
+  anchorRegion     Region                           @relation("BasicPriceRegionCoverageAnchor", fields: [anchorRegionId], references: [id], onDelete: Restrict)
+  members          BasicPriceRegionCoverageMember[]
+  importBatches    BasicPriceImportBatch[]
+  priceSubmissions PriceSubmission[]
+  basicPrices      BasicPrice[]
+
+  @@index([anchorRegionId])
+  @@map("basic_price_region_coverage_sets")
+}
+
+/// The members of an immutable coverage value. Product commands can only
+/// resolve/reuse a whole set; no endpoint edits these rows in place.
+model BasicPriceRegionCoverageMember {
+  coverageSetId String @db.Uuid
+  regionId      String @db.Uuid
+
+  coverageSet BasicPriceRegionCoverageSet @relation(fields: [coverageSetId], references: [id], onDelete: Restrict)
+  region      Region                      @relation("BasicPriceRegionCoverageMemberRegion", fields: [regionId], references: [id], onDelete: Restrict)
+
+  @@id([coverageSetId, regionId])
+  @@index([regionId])
+  @@map("basic_price_region_coverage_members")
 }
 
 // =====================================================
@@ -2683,6 +2724,7 @@ model BasicPriceImportBatch {
   sourceObservedAt DateTime?
 
   regionId                    String?   @db.Uuid
+  regionCoverageSetId         String?   @db.Uuid
   effectiveDate               DateTime?
   effectiveDateSetByAccountId String?   @db.Uuid
   effectiveDateSetAt          DateTime?
@@ -2767,6 +2809,7 @@ model BasicPriceImportBatch {
   updatedAt DateTime @updatedAt
 
   region             Region?               @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  regionCoverageSet  BasicPriceRegionCoverageSet? @relation(fields: [regionCoverageSetId], references: [id], onDelete: Restrict)
   ingestionConnector IngestionConnector?   @relation(fields: [ingestionConnectorId], references: [id], onDelete: Restrict)
   rows               BasicPriceImportRow[]
 
@@ -2785,6 +2828,7 @@ model BasicPriceImportBatch {
   @@index([organizationId])
   @@index([status])
   @@index([ingestionConnectorId])
+  @@index([regionCoverageSetId])
   @@map("basic_price_import_batches")
 }
 

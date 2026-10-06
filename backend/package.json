@@ -44,7 +44,10 @@
     "b1b12:acceptance:workspace": "tsx scripts/b1b12/provision-basic-price-acceptance.ts",
     "db:provision:platform-authorities": "tsx prisma/seed-platform-authorities.ts",
     "db:provision:execution-plan-authority": "tsx prisma/seed-execution-plan-authority.ts",
-    "platform-governance:ceremony": "tsx scripts/platform-governance/ceremony.ts"
+    "platform-governance:ceremony": "tsx scripts/platform-governance/ceremony.ts",
+    "bp-reg01:national-master:e2e": "tsx scripts/bp-reg01/national-region-master-e2e.ts",
+    "bp-reg01:verify-reuse": "tsx scripts/bp-reg01/verify-national-region-reuse.ts",
+    "bp-reg01:audit-candidate": "tsx scripts/bp-reg01/audit-candidate-readonly.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

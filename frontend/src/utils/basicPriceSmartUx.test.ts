@@ -19,7 +19,6 @@ import {
 import {
   REVERIFICATION_DUE_BADGE,
   REVERIFICATION_HELP_TEXT,
-  REVERIFICATION_HELP_TRIGGER,
   REVERIFICATION_LABEL,
   reverificationLine,
 } from "./basicPriceExplorerDisplay.ts";
@@ -365,7 +364,6 @@ test("the help text explains meaning, when it applies, and when it does not", ()
   assert.match(whenUsed, /survei|laporan lapangan|quotation/u);
   // When it does not: sources kept fresh by real synchronisation evidence.
   assert.match(whenNot, /terhubung langsung|sinkronisasi|observasi/u);
-  assert.equal(REVERIFICATION_HELP_TRIGGER, "Apa maksud tanggal ini?");
 });
 
 test("the help text never exposes field names or backend vocabulary", () => {
@@ -708,14 +706,14 @@ test("the review summary tells ONE story after a save", () => {
  */
 test("a survey is asked when the price was observed, not when it 'becomes' effective", () => {
   const copy = effectiveDateCopy("OBSERVED_PRICE_DATE");
-  assert.match(copy.label, /Tanggal \/ periode harga/u);
+  assert.equal(copy.label, "Tanggal harga");
   assert.doesNotMatch(copy.label, /Mulai berlaku|Berlaku sampai/u);
   assert.match(copy.help, /survei|pengamatan|penawaran/iu);
 });
 
 test("a regulation keeps the one meaning that label was ever true for", () => {
   const copy = effectiveDateCopy("SOURCE_STATED_START");
-  assert.match(copy.label, /Mulai berlaku menurut sumber/u);
+  assert.equal(copy.label, "Tanggal harga");
   // A future start is lawful and is said to be lawful, so nobody "corrects" it.
   assert.match(copy.help, /masa depan/u);
 });
@@ -896,8 +894,8 @@ test("the completion instruction names the field the form actually shows", () =>
     true,
     false,
   );
-  assert.deepEqual(view.missingInDraft, ["Tanggal / periode harga"]);
-  assert.match(view.message, /Tanggal \/ periode harga/u);
+  assert.deepEqual(view.missingInDraft, ["Tanggal harga"]);
+  assert.match(view.message, /Tanggal harga/u);
   assert.doesNotMatch(view.message, /Tanggal berlaku harga/u);
 });
 
@@ -923,7 +921,7 @@ test("a regulation is told to fill in the field a regulation actually shows", ()
     true,
     false,
   );
-  assert.deepEqual(view.missingInDraft, ["Mulai berlaku menurut sumber"]);
+  assert.deepEqual(view.missingInDraft, ["Tanggal harga"]);
 });
 
 test("a batch that stated no temporal question still gets a usable instruction", () => {

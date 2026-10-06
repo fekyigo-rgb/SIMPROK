@@ -41,6 +41,7 @@ describe('PriceSubmissionReviewService', () => {
     organizationId: ORGANIZATION_ID,
     resourceId: 'resource-01',
     regionId: 'region-01',
+    regionCoverageSetId: 'coverage-01',
     sourceType: 'MARKET_SURVEY',
     sourceOrigin: 'SUPPLIER',
     reportedByAccountId: ACCOUNT_ID,
@@ -257,6 +258,7 @@ describe('PriceSubmissionReviewService', () => {
       expect(tx.basicPrice.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           regionId: 'region-01',
+          regionCoverageSetId: 'coverage-01',
           effectiveDate: new Date('2026-07-25'),
         }),
       });

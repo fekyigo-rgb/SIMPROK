@@ -25,10 +25,9 @@ import {
   batchStatusLabel,
   formatBatchProgress,
   metadataGateView,
+  metadataSaveExistingBatchId,
   metadataSaveFailureMessage,
-  regionScopeNoticeView,
   savedMetadataLines,
-  TEMPORAL_HELP_TRIGGER,
   effectiveDateCopy,
   reverificationIsOffered,
   REVERIFICATION_NOT_NEEDED_NOTE,
@@ -42,7 +41,6 @@ import {
 } from '../utils/basicPriceImportDisplay';
 import {
   REVERIFICATION_HELP_TEXT,
-  REVERIFICATION_HELP_TRIGGER,
   REVERIFICATION_LABEL,
 } from '../utils/basicPriceExplorerDisplay';
 import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
@@ -104,6 +102,7 @@ export function BasicPriceImportPage() {
   const temporalCopy = effectiveDateCopy(batch?.temporal?.effectiveDateQuestion);
   const reverificationOffered = reverificationIsOffered(batch?.temporal?.reverification);
   const [region, setRegion] = useState<RegionLookupItem | null>(null);
+  const [coveredVillages, setCoveredVillages] = useState<RegionLookupItem[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('Pilih berkas daftar harga (XLSX atau CSV) untuk memulai.');
   // USI-01 — the answers a human has given about THIS file. Empty on the first
@@ -155,6 +154,8 @@ export function BasicPriceImportPage() {
         setQuestion(kdnMappingQuestionOf(existing.kdnMapping));
         setMetadata({
           regionId: existing.regionId ?? undefined,
+          coveredVillageRegionIds:
+            existing.coveredVillageRegions?.map((item) => item.id) ?? undefined,
           effectiveDate: existing.effectiveDate ? existing.effectiveDate.slice(0, 10) : undefined,
           // Read back what was SAVED, so a reopened batch shows the re-verification
           // date a person actually stated rather than an empty box.
@@ -164,6 +165,7 @@ export function BasicPriceImportPage() {
           sourceOrganizationName: existing.sourceOrganizationName ?? undefined,
         });
         setRegion(existing.region ?? null);
+        setCoveredVillages(existing.coveredVillageRegions ?? []);
         if (usedExistingFromNav) {
           setUsedExistingNotice(true);
           setStatusMessage(USED_EXISTING_CONFIRMATION);
@@ -263,6 +265,7 @@ export function BasicPriceImportPage() {
     setQuestion(null);
     setMetadata({});
     setRegion(null);
+    setCoveredVillages([]);
     setBatch(null);
     setUsedExistingNotice(false);
     await readSource(file, {}, {});
@@ -283,41 +286,6 @@ export function BasicPriceImportPage() {
     await readSource(selectedFile, answers);
   };
 
-  /**
-   * BP-REGION-TRUTH-07S §8 — the human's one decision about the source's own
-   * geography.
-   *
-   * It sends an INTENT, never a region: the server pairs the confirmation with
-   * the Wilayah this batch actually holds, so what is recorded is what was
-   * true when the person decided. Refused while the form is dirty for the same
-   * reason `Simpan` is — confirming a scope against an unsaved region would
-   * confirm it against something the database has never seen.
-   */
-  const handleConfirmRegionScope = async () => {
-    if (!batch) return;
-    setIsBusy(true);
-    setStatusMessage('Mencatat peninjauan wilayah...');
-    try {
-      const updated = await updateBasicPriceImportBatch(batch.batchId, batch.version, {
-        confirmRegionScopeCompatibility: true,
-      });
-      setBatch(updated);
-      setRegion(updated.region ?? null);
-      setStatusMessage('Peninjauan wilayah tercatat.');
-    } catch (error) {
-      // The SAME vocabulary the metadata save uses. This travels through the
-      // same endpoint and can fail for the same named reasons, so it must not
-      // grow a second, vaguer explanation of its own.
-      setStatusMessage(
-        error instanceof ImportRequestError
-          ? metadataSaveFailureMessage(error.httpStatus, error.detail)
-          : 'Peninjauan tidak sampai ke SIMPROK. Periksa koneksi lalu coba lagi. Tidak ada yang tersimpan.',
-      );
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
   const handleSaveMetadata = async () => {
     if (!batch) return;
     setIsBusy(true);
@@ -329,11 +297,29 @@ export function BasicPriceImportPage() {
       // carrying. They agree today; seeding from the answer is what keeps the
       // selector showing a SAVED region rather than a chosen one.
       setRegion(updated.region ?? null);
+      setCoveredVillages(updated.coveredVillageRegions ?? []);
       // ONLY A SUCCESSFUL SAVE CLEARS IT. The catch below deliberately leaves
       // the form dirty, so a failed save cannot open the review door.
       setIsMetadataDirty(false);
       setStatusMessage('Konteks sumber tersimpan.');
     } catch (error) {
+      const existingBatchId =
+        error instanceof ImportRequestError
+          ? metadataSaveExistingBatchId(error.httpStatus, error.detail)
+          : null;
+      if (existingBatchId) {
+        // This exact context is already persisted. Follow the server-named
+        // owner through the existing re-import route; its GET must succeed
+        // before the page confirms anything. No retry, merge, or local success.
+        const path = reimportActionPath('USE_EXISTING', {
+          existingBatchId,
+          updateBatchId: null,
+        });
+        if (path) {
+          navigate(path, { replace: true, state: { usedExisting: true } });
+          return;
+        }
+      }
       // NAMED, NOT GUESSED. The old line told every failure that the batch
       // "mungkin sudah berubah" — including an expired session and a missing
       // authority, which it is not. This is the save that carries the region, so
@@ -351,9 +337,6 @@ export function BasicPriceImportPage() {
   // WHAT THE TWO DOORS MAY OFFER. The requiredness law is the server's; this
   // combines its verdict with the one fact only the browser holds.
   const metadataGate = metadataGateView(batch, metadata, isMetadataDirty, isBusy);
-  // BP-REGION-TRUTH-07S — null for every source that claimed no geography, and
-  // for every pair already reconciled. The server owns that verdict.
-  const regionScopeNotice = batch ? regionScopeNoticeView(batch) : null;
   const reimportView = reimportDecisionView(batch?.reimport);
   /**
    * A const, so the null check below still holds inside the click handler it
@@ -611,8 +594,10 @@ export function BasicPriceImportPage() {
                 THE SERVER CHOOSES WHICH QUESTION, this file owns the words, and
                 nothing about the stored column or its requiredness moved.
               */}
-              <div className="bp-field bp-field--date">
-                <label className="bp-field__label" htmlFor="bp-src-date">{temporalCopy.label}</label>
+              <div className="bp-field bp-field--date bp-date-help">
+                <label className="bp-field__label bp-date-help__trigger" htmlFor="bp-src-date">
+                  {temporalCopy.label}
+                </label>
                 <input
                   id="bp-src-date"
                   className="bp-input"
@@ -630,21 +615,21 @@ export function BasicPriceImportPage() {
                   the height of its neighbours and pushing the rest of Konteks
                   Sumber down the page. §20 forbids deleting truthful
                   explanation to make a screen sparse — so it is not deleted, it
-                  moves behind the SAME disclosure pattern the reverification
-                  field two blocks down already uses. No new component, no new
-                  vocabulary.
+                  moves into SIMPROK's existing absolute tooltip pattern. The
+                  canonical wording is unchanged and the tooltip stays outside
+                  form flow, so it adds no row or field height.
 
-                  ACCESSIBILITY IS UNCHANGED. `<details>` keeps its content in
-                  the DOM whether or not it is open, so the `aria-describedby`
-                  above still resolves to this text and a screen-reader user
-                  still hears the description with the field.
+                  ACCESSIBILITY STAYS EXPLICIT. The tooltip remains mounted and
+                  the input's `aria-describedby` resolves to it; keyboard focus
+                  exposes the same text as hover on the label or input.
                 */}
-                <details className="bp-details">
-                  <summary>{TEMPORAL_HELP_TRIGGER}</summary>
-                  <span id="simprok-effective-date-help" className="bp-field__help">
-                    {temporalCopy.help}
-                  </span>
-                </details>
+                <span
+                  id="simprok-effective-date-help"
+                  className="bp-date-help__tooltip"
+                  role="tooltip"
+                >
+                  {temporalCopy.help}
+                </span>
               </div>
 
               {/*
@@ -663,8 +648,8 @@ export function BasicPriceImportPage() {
                 that quietly vanished.
               */}
               {reverificationOffered ? (
-                <div className="bp-field">
-                  <label className="bp-field__label" htmlFor="bp-src-review">
+                <div className="bp-field bp-date-help">
+                  <label className="bp-field__label bp-date-help__trigger" htmlFor="bp-src-review">
                     {REVERIFICATION_LABEL} (opsional)
                   </label>
                   <input
@@ -672,16 +657,20 @@ export function BasicPriceImportPage() {
                     className="bp-input"
                     type="date"
                     value={metadata.reviewDate ?? ''}
+                    aria-describedby="simprok-review-date-help"
                     onChange={(event) =>
                       updateMetadataField('reviewDate', event.target.value || undefined)
                     }
                   />
-                  <details className="bp-details">
-                    <summary>{REVERIFICATION_HELP_TRIGGER}</summary>
+                  <span
+                    id="simprok-review-date-help"
+                    className="bp-date-help__tooltip"
+                    role="tooltip"
+                  >
                     {REVERIFICATION_HELP_TEXT.map((paragraph) => (
                       <p key={paragraph}>{paragraph}</p>
                     ))}
-                  </details>
+                  </span>
                 </div>
               ) : (
                 <p className="bp-field__help">{REVERIFICATION_NOT_NEEDED_NOTE}</p>
@@ -689,49 +678,21 @@ export function BasicPriceImportPage() {
 
               <RegionSearchSelect
                 selected={region}
+                coveredVillages={coveredVillages}
                 disabled={isBusy}
                 onSelect={(next) => {
                   setRegion(next);
                   updateMetadataField('regionId', next?.id ?? undefined);
                 }}
+                onCoveredVillagesChange={(next) => {
+                  setCoveredVillages(next);
+                  updateMetadataField(
+                    'coveredVillageRegionIds',
+                    next.map((item) => item.id),
+                  );
+                }}
               />
             </div>
-
-            {/*
-              BP-REGION-TRUTH-07S §8 — TWO ANSWERS, AND THE ONE SENTENCE BETWEEN
-              THEM.
-
-              Placed directly under the Wilayah selector because that is the
-              answer being questioned, and shown ONLY when the server says the
-              pair is unproven — which it says only for a source that wrote a
-              region word of its own. A trade-term matrix ("GROSIR", "ECERAN")
-              reaches this line and renders nothing.
-
-              The button states the human's decision; it never sends a region of
-              its own. The server records WHICH Wilayah was confirmed, from the
-              same save, so this form cannot confirm a scope against a place it
-              is not actually saving.
-            */}
-            {regionScopeNotice ? (
-              <div className="bp-field" role="group" aria-label="Peninjauan wilayah sumber">
-                <p className="bp-field__help">{regionScopeNotice.message}</p>
-                <details className="bp-details">
-                  <summary>Mengapa?</summary>
-                  <p>{regionScopeNotice.why}</p>
-                </details>
-                <div className="bp-rowcard__actions">
-                  <button
-                    type="button"
-                    className="bp-btn"
-                    onClick={() => void handleConfirmRegionScope()}
-                    disabled={isBusy || isMetadataDirty}
-                    aria-disabled={isBusy || isMetadataDirty}
-                  >
-                    {regionScopeNotice.actionLabel}
-                  </button>
-                </div>
-              </div>
-            ) : null}
 
             <div className="bp-pop__section">
               <span className="bp-pop__label">Tercatat di SIMPROK</span>
