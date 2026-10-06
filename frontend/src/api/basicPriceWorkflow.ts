@@ -62,6 +62,12 @@ interface LookupPage<T> {
   hasNext: boolean;
 }
 
+export interface RegionLookupQuery {
+  q?: string;
+  parentId?: string;
+  administrativeLevel?: string;
+}
+
 // ── Review queue / detail ─────────────────────────────────────────────────────
 
 export const fetchReviewQueue = (slaState?: string, signal?: AbortSignal): Promise<ReviewQueueItem[]> =>
@@ -102,10 +108,28 @@ export const publishBasicPrice = (basicPriceId: string): Promise<unknown> =>
 
 // ── Region lookup (import Region selector) ────────────────────────────────────
 
-export const searchRegions = async (q?: string, signal?: AbortSignal): Promise<RegionLookupItem[]> => {
-  const page = await requestJson<LookupPage<RegionLookupItem>>(
-    withQuery('/basic-price-import-lookups/regions', { q, limit: '20' }),
-    { signal },
-  );
-  return page.items;
+export const searchRegions = async (
+  query: string | RegionLookupQuery = {},
+  signal?: AbortSignal,
+): Promise<RegionLookupItem[]> => {
+  const normalized = typeof query === 'string' ? { q: query } : query;
+  const items: RegionLookupItem[] = [];
+  let pageNumber = 1;
+  let hasNext = true;
+  while (hasNext) {
+    const page = await requestJson<LookupPage<RegionLookupItem>>(
+      withQuery('/basic-price-import-lookups/regions', {
+        q: normalized.q,
+        parentId: normalized.parentId,
+        administrativeLevel: normalized.administrativeLevel,
+        page: String(pageNumber),
+        limit: '50',
+      }),
+      { signal },
+    );
+    items.push(...page.items);
+    hasNext = page.hasNext;
+    pageNumber += 1;
+  }
+  return items;
 };

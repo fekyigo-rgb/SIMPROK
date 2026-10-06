@@ -60,6 +60,25 @@ test("regionOptionLabels uses parent name, not an invented place, when names col
   assert.equal(labels.get("b"), "Jakarta Selatan (3171)");
 });
 
+test("regionOptionLabels uses official codes when colliding names also share a parent", () => {
+  const labels = regionOptionLabels([
+    {
+      id: "kogekotu-a",
+      code: "94.03.01.2011",
+      name: "Kogekotu",
+      parentName: "Paniai Timur",
+    },
+    {
+      id: "kogekotu-b",
+      code: "94.03.01.2018",
+      name: "Kogekotu",
+      parentName: "Paniai Timur",
+    },
+  ]);
+  assert.equal(labels.get("kogekotu-a"), "Kogekotu (94.03.01.2011)");
+  assert.equal(labels.get("kogekotu-b"), "Kogekotu (94.03.01.2018)");
+});
+
 test("regionOptionLabels keeps a unique live Region as a plain name", () => {
   const labels = regionOptionLabels([
     {

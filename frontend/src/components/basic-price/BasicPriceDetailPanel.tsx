@@ -11,7 +11,7 @@ import {
   formatExplorerPrice,
   kdnLabel,
   observationBasisLabel,
-  regionLabel,
+  basicPriceRegionLabel,
   resourceLabel,
   resourceTypeLabel,
   sourceOriginLabel,
@@ -182,7 +182,7 @@ export function BasicPriceDetailPanel({
         <div>
           <div className="bp-detail__name">{resourceLabel(item.resource)}</div>
           <div className="bp-detail__meta">
-            {resourceTypeLabel(item.resource.type)} · {regionLabel(item.region)}
+            {resourceTypeLabel(item.resource.type)} · {basicPriceRegionLabel(item)}
           </div>
         </div>
         <div className="bp-detail__head-actions">
@@ -280,7 +280,7 @@ export function BasicPriceDetailPanel({
             <Fact label="Harga" value={formatExplorerPrice(item.price)} variant="price" />
             <Fact label="Satuan" value={item.resource.baseUnit} />
             <Fact label="Kategori" value={resourceTypeLabel(item.resource.type)} />
-            <Fact label="Wilayah" value={regionLabel(item.region)} />
+            <Fact label="Wilayah" value={basicPriceRegionLabel(item)} />
             <Fact label="Sumber" value={explorerSourceNameLabel(item.sourceName)} />
             {/*
               KDN — THIS PRICE OBSERVATION's domestic-content fact (Owner Lock).

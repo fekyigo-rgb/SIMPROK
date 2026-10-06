@@ -8,6 +8,7 @@ import {
 import { resolveAhspResourcePrice } from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { promotionLineagePrecedenceWhere } from '../basic-price/basic-price-promotion-precedence';
+import { basicPriceRegionApplicabilityWhere } from '../basic-price/basic-price-region-applicability';
 import {
   basicPriceCurrentnessWhere,
   mergeCurrentnessAnd,
@@ -167,8 +168,8 @@ export class AhspResourceResolutionOrchestrator {
         // proves its provenance. Selection changed; history did not.
         ...mergeCurrentnessAnd(basicPriceCurrentnessWhere({ asOf }), [
           { OR: [{ validUntil: null }, { validUntil: { gte: asOf } }] },
+          basicPriceRegionApplicabilityWhere(input.referenceRegionId),
         ]),
-        regionId: input.referenceRegionId,
         effectiveDate: { lte: asOf },
       },
       include: { resource: true },
@@ -393,7 +394,6 @@ for (const resource of version.resources) {
           // builder — the re-read must never accept a row the offer
           // could not have contained, nor reject one it did.
           ...this.eligibility.usableWhere(input.workspaceId),
-          regionId: input.referenceRegionId,
           effectiveDate: { lte: asOf },
           AND: [
             {
@@ -402,6 +402,7 @@ for (const resource of version.resources) {
                 { validUntil: { gte: asOf } },
               ],
             },
+            basicPriceRegionApplicabilityWhere(input.referenceRegionId),
           ],
         },
         include: { resource: true },

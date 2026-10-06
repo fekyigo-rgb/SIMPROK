@@ -297,6 +297,7 @@ export class PriceSubmissionReviewService {
           workspaceId: liveSubmission.workspaceId,
           organizationId: liveSubmission.organizationId,
           regionId: liveSubmission.regionId,
+          regionCoverageSetId: liveSubmission.regionCoverageSetId,
           effectiveDate: revision.effectiveDate,
           value: revision.value,
           sourceType: liveSubmission.sourceType,

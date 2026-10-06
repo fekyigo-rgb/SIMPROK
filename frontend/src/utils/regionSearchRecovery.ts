@@ -6,8 +6,7 @@
  * skipped search because `results.length > 0`, and the open panel rendered
  * nothing (only loading/empty/error/ready paint a body). Typing still
  * worked; recovery after × did not. This module is the one statement of
- * when search must run again. Both existing selectors consume it. It is
- * not a second selector.
+ * when search must run again. It is not a second selector.
  */
 
 export type RegionSearchPanelState =
@@ -16,8 +15,6 @@ export type RegionSearchPanelState =
   | 'empty'
   | 'ready'
   | 'error';
-
-export const REGION_SEARCH_PLACEHOLDER = 'Ketik nama wilayah...';
 
 /**
  * After the human clears a chosen Region, the field must be immediately

@@ -6,6 +6,7 @@ import {
   formatBatchProgress,
   formatPrivateUseOutcome,
   lifecycleActionFailureMessage,
+  metadataSaveExistingBatchId,
   metadataSaveFailureMessage,
   privateUseBlockSentence,
   proposalBlockSentence,
@@ -1257,8 +1258,7 @@ test("savedMetadataLines reports the server's values, and says so when a fact is
   );
   // READ BACK UNDER THE NAME IT WAS ASKED FOR. This batch is a REGULATION, and
   // a regulation is the one source that genuinely states when it begins — so
-  // both the form and this block call it that. A survey batch would read
-  // "Tanggal / periode harga" in both places, because that is what was asked.
+  // both the form and this block use the Owner-locked "Tanggal harga" label.
   // BP-VISUAL-TRUTH-07 §18/§19 — the approved vocabulary ("Asal data",
   // "Metode perolehan") and the Indonesian calendar order. The FACTS are
   // unchanged; only the words a person reads them under.
@@ -1266,7 +1266,7 @@ test("savedMetadataLines reports the server's values, and says so when a fact is
     "Asal data: Pemerintah",
     "Nama sumber: belum diisi",
     "Metode perolehan: Regulasi",
-    "Mulai berlaku menurut sumber: 01/01/2024",
+    "Tanggal harga: 01/01/2024",
     "Wilayah: Kota Ambon",
   ]);
 });
@@ -1285,6 +1285,21 @@ test("BP-VISUAL-TRUTH-07 §7: the workbook's price column is a line of its own, 
   );
   assert.ok(lines.includes("Wilayah: Kecamatan Teluk Ambon Baguala, Kota Ambon"));
   assert.ok(lines.includes("Kolom harga pada berkas: TELUK AMBON"));
+});
+
+test("explicit multi-Village coverage reads back as coverage, not the whole anchor District", () => {
+  const lines = savedMetadataLines(
+    baseBatch({
+      regionId: "district-01",
+      region: { id: "district-01", code: "81.71.02", name: "Sirimau" },
+      coveredVillageRegions: [
+        { id: "village-a", code: "81.71.02.1001", name: "Village A" },
+        { id: "village-b", code: "81.71.02.1002", name: "Village B" },
+      ],
+    }),
+  );
+  assert.ok(lines.includes("Wilayah: 2 Desa/Kelurahan di Sirimau"));
+  assert.ok(!lines.includes("Wilayah: Sirimau"));
 });
 
 test("savedMetadataLines never leaves an unset fact looking like a value", () => {
@@ -1336,6 +1351,20 @@ test("the server's own named refusal is what the person reads", () => {
     metadataSaveFailureMessage(409, JSON.stringify({ message: "BATCH_NOT_MUTABLE" })),
     /sudah ditutup/,
   );
+});
+
+test("metadata identity collision exposes only the server-named existing batch", () => {
+  const raw = JSON.stringify({
+    message: "BATCH_IDENTITY_ALREADY_EXISTS",
+    existingBatchId: "server-owned-batch",
+  });
+  assert.equal(metadataSaveExistingBatchId(409, raw), "server-owned-batch");
+  assert.equal(metadataSaveExistingBatchId(500, raw), null);
+  assert.equal(
+    metadataSaveExistingBatchId(409, JSON.stringify({ message: "BATCH_VERSION_STALE" })),
+    null,
+  );
+  assert.equal(metadataSaveExistingBatchId(409, "not-json"), null);
 });
 
 test("no metadata-save failure ever claims a partial save, and none prints a raw code", () => {

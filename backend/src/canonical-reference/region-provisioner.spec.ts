@@ -45,7 +45,10 @@ interface Harness {
   lockSql: string[];
 }
 
-const harness = (rows: RegionRow[], createOverride?: Partial<RegionRow>): Harness => {
+const harness = (
+  rows: RegionRow[],
+  createOverride?: Partial<RegionRow>,
+): Harness => {
   const created: Array<{ code: string; name: string }> = [];
   const lockSql: string[] = [];
   const tx: RegionTransactionClient = {
@@ -58,6 +61,8 @@ const harness = (rows: RegionRow[], createOverride?: Partial<RegionRow>): Harnes
           code: data.code,
           name: data.name,
           isActive: true,
+          parentId: data.parentId ?? null,
+          administrativeLevel: data.administrativeLevel ?? null,
           ...createOverride,
         };
       },
@@ -77,7 +82,9 @@ const harness = (rows: RegionRow[], createOverride?: Partial<RegionRow>): Harnes
 describe('RM-03D0 Region provisioner', () => {
   describe('designation is explicit, never derived', () => {
     it('accepts an exact designation', () => {
-      expect(assertRegionDesignation({ regionCode: CODE, regionName: NAME })).toEqual({
+      expect(
+        assertRegionDesignation({ regionCode: CODE, regionName: NAME }),
+      ).toEqual({
         regionCode: CODE,
         regionName: NAME,
       });
@@ -86,16 +93,28 @@ describe('RM-03D0 Region provisioner', () => {
     it.each([
       [{ regionCode: '', regionName: NAME }, /STOP_REGION_CODE_REQUIRED/],
       [{ regionCode: CODE, regionName: '' }, /STOP_REGION_NAME_REQUIRED/],
-      [{ regionCode: undefined as never, regionName: NAME }, /STOP_REGION_CODE_REQUIRED/],
-      [{ regionCode: CODE, regionName: undefined as never }, /STOP_REGION_NAME_REQUIRED/],
-    ])('refuses a missing half of the designation (%p)', (designation, expected) => {
-      expect(() => assertRegionDesignation(designation)).toThrow(expected);
-    });
+      [
+        { regionCode: undefined as never, regionName: NAME },
+        /STOP_REGION_CODE_REQUIRED/,
+      ],
+      [
+        { regionCode: CODE, regionName: undefined as never },
+        /STOP_REGION_NAME_REQUIRED/,
+      ],
+    ])(
+      'refuses a missing half of the designation (%p)',
+      (designation, expected) => {
+        expect(() => assertRegionDesignation(designation)).toThrow(expected);
+      },
+    );
 
     it('refuses to silently normalise a designated value', () => {
       // Trimming on the Owner's behalf would alter a designated fact.
       expect(() =>
-        assertRegionDesignation({ regionCode: ' TEST-REGION ', regionName: NAME }),
+        assertRegionDesignation({
+          regionCode: ' TEST-REGION ',
+          regionName: NAME,
+        }),
       ).toThrow(/STOP_REGION_DESIGNATION_NOT_NORMALISED/);
     });
   });
@@ -140,11 +159,18 @@ describe('RM-03D0 Region provisioner', () => {
         regionName: NAME,
       });
       expect(canonicalRegionPlanJson(plan)).not.toContain('parentRegionId');
-      expect(canonicalRegionPlanJson(plan)).not.toContain('administrativeLevel');
+      expect(canonicalRegionPlanJson(plan)).not.toContain(
+        'administrativeLevel',
+      );
     });
 
     it('plans CREATE under an existing Kemendagri parent', async () => {
-      const parent = existing({ id: 'parent-1', code: '31', name: 'DKI Jakarta' });
+      const parent = existing({
+        id: 'parent-1',
+        code: '31',
+        name: 'DKI Jakarta',
+        administrativeLevel: 'PROVINCE',
+      });
       const plan = await buildRegionPlan(readClient([parent]), {
         regionCode: CODE,
         regionName: NAME,
@@ -162,8 +188,70 @@ describe('RM-03D0 Region provisioner', () => {
           regionCode: CODE,
           regionName: NAME,
           parentRegionCode: '31',
+          administrativeLevel: 'REGENCY_CITY',
         }),
       ).rejects.toThrow(/STOP_REGION_PARENT_NOT_FOUND/);
+    });
+
+    it('refuses partial hierarchy instead of guessing the missing fact', async () => {
+      await expect(
+        buildRegionPlan(readClient([]), {
+          regionCode: CODE,
+          regionName: NAME,
+          parentRegionCode: '31',
+        }),
+      ).rejects.toThrow(/STOP_REGION_HIERARCHY_INCOMPLETE/);
+      await expect(
+        buildRegionPlan(readClient([]), {
+          regionCode: CODE,
+          regionName: NAME,
+          administrativeLevel: 'REGENCY_CITY',
+        }),
+      ).rejects.toThrow(/STOP_REGION_HIERARCHY_INCOMPLETE/);
+    });
+
+    it('refuses inactive, self, and wrong-level parents', async () => {
+      const inactiveParent = existing({
+        id: 'parent-1',
+        code: '31',
+        name: 'DKI Jakarta',
+        isActive: false,
+        administrativeLevel: 'PROVINCE',
+      });
+      await expect(
+        buildRegionPlan(readClient([inactiveParent]), {
+          regionCode: CODE,
+          regionName: NAME,
+          parentRegionCode: '31',
+          administrativeLevel: 'REGENCY_CITY',
+        }),
+      ).rejects.toThrow(/STOP_REGION_PARENT_INACTIVE/);
+      await expect(
+        buildRegionPlan(readClient([]), {
+          regionCode: CODE,
+          regionName: NAME,
+          parentRegionCode: CODE,
+          administrativeLevel: 'REGENCY_CITY',
+        }),
+      ).rejects.toThrow(/STOP_REGION_PARENT_SELF/);
+      await expect(
+        buildRegionPlan(
+          readClient([
+            existing({
+              id: 'parent-1',
+              code: '31',
+              name: 'DKI Jakarta',
+              administrativeLevel: 'COUNTRY',
+            }),
+          ]),
+          {
+            regionCode: CODE,
+            regionName: NAME,
+            parentRegionCode: '31',
+            administrativeLevel: 'REGENCY_CITY',
+          },
+        ),
+      ).rejects.toThrow(/STOP_REGION_PARENT_LEVEL_MISMATCH/);
     });
 
     it('refuses COUNTRY with a parent', async () => {
@@ -206,6 +294,177 @@ describe('RM-03D0 Region provisioner', () => {
       ).rejects.toThrow(/STOP_REGION_INACTIVE_CONFLICT/);
     });
 
+    it('allows the same official name under a different lawful parent', async () => {
+      const requestedParent = existing({
+        id: 'parent-a',
+        code: '31',
+        name: 'Province A',
+        administrativeLevel: 'PROVINCE',
+      });
+      const sameNameElsewhere = existing({
+        id: 'elsewhere',
+        code: 'OTHER-CODE',
+        name: NAME,
+        parentId: 'parent-b',
+        administrativeLevel: 'REGENCY_CITY',
+      });
+      const plan = await buildRegionPlan(
+        readClient([requestedParent, sameNameElsewhere]),
+        {
+          regionCode: CODE,
+          regionName: NAME,
+          parentRegionCode: '31',
+          administrativeLevel: 'REGENCY_CITY',
+        },
+      );
+      expect(plan.disposition).toBe('CREATE_REGION');
+      expect(plan.parentRegionId).toBe('parent-a');
+    });
+
+    it('allows a different official code with the same name, parent, and level', async () => {
+      const parent = existing({
+        id: 'parent-a',
+        code: '31',
+        name: 'Province A',
+        administrativeLevel: 'PROVINCE',
+      });
+      const otherCode = existing({
+        id: 'collision',
+        code: 'OTHER-CODE',
+        name: NAME,
+        parentId: 'parent-a',
+        administrativeLevel: 'REGENCY_CITY',
+      });
+      const plan = await buildRegionPlan(readClient([parent, otherCode]), {
+        regionCode: CODE,
+        regionName: NAME,
+        parentRegionCode: '31',
+        administrativeLevel: 'REGENCY_CITY',
+      });
+      expect(plan.disposition).toBe('CREATE_REGION');
+      expect(plan.regionCode).toBe(CODE);
+      expect(plan.existingRegionId).toBeNull();
+    });
+
+    it('uses official code identity for a scoped designation even beside a legacy same-name row', async () => {
+      const parent = existing({
+        id: 'parent-a',
+        code: '31',
+        name: 'Province A',
+        administrativeLevel: 'PROVINCE',
+      });
+      const legacyCollision = existing({
+        id: 'legacy',
+        code: 'OTHER-CODE',
+        name: NAME,
+        parentId: null,
+        administrativeLevel: null,
+      });
+      const plan = await buildRegionPlan(
+        readClient([parent, legacyCollision]),
+        {
+          regionCode: CODE,
+          regionName: NAME,
+          parentRegionCode: '31',
+          administrativeLevel: 'REGENCY_CITY',
+        },
+      );
+      expect(plan.disposition).toBe('CREATE_REGION');
+      expect(plan.parentRegionId).toBe('parent-a');
+    });
+
+    it('queries scoped identity by official code without imposing name uniqueness', async () => {
+      const parent = existing({
+        id: 'parent-a',
+        code: '31',
+        name: 'Province A',
+        administrativeLevel: 'PROVINCE',
+      });
+      const reads: Array<Array<{ code?: string; name?: string }>> = [];
+      const client: RegionQueryClient = {
+        region: {
+          findMany: async ({ where }) => {
+            reads.push(where.OR);
+            return where.OR.some((entry) => entry.code === '31')
+              ? [parent]
+              : [];
+          },
+        },
+      };
+
+      await buildRegionPlan(client, {
+        regionCode: CODE,
+        regionName: NAME,
+        parentRegionCode: '31',
+        administrativeLevel: 'REGENCY_CITY',
+      });
+
+      expect(reads).toEqual([[{ code: '31' }], [{ code: CODE }]]);
+    });
+
+    it('retains the same-name fail-closed lookup for hierarchy-free callers', async () => {
+      const reads: Array<Array<{ code?: string; name?: string }>> = [];
+      const client: RegionQueryClient = {
+        region: {
+          findMany: async ({ where }) => {
+            reads.push(where.OR);
+            return [];
+          },
+        },
+      };
+
+      await buildRegionPlan(client, {
+        regionCode: CODE,
+        regionName: NAME,
+      });
+
+      expect(reads).toEqual([[{ code: CODE }, { name: NAME }]]);
+    });
+
+    it('reuses only an active same-code row with matching supplied hierarchy', async () => {
+      const parent = existing({
+        id: 'parent-a',
+        code: '31',
+        name: 'Province A',
+        administrativeLevel: 'PROVINCE',
+      });
+      const exact = existing({
+        parentId: 'parent-a',
+        administrativeLevel: 'REGENCY_CITY',
+      });
+      const plan = await buildRegionPlan(readClient([parent, exact]), {
+        regionCode: CODE,
+        regionName: NAME,
+        parentRegionCode: '31',
+        administrativeLevel: 'REGENCY_CITY',
+      });
+      expect(plan.disposition).toBe('REUSE_EXACT_REGION');
+
+      await expect(
+        buildRegionPlan(
+          readClient([parent, { ...exact, parentId: 'different-parent' }]),
+          {
+            regionCode: CODE,
+            regionName: NAME,
+            parentRegionCode: '31',
+            administrativeLevel: 'REGENCY_CITY',
+          },
+        ),
+      ).rejects.toThrow(/STOP_REGION_HIERARCHY_CONFLICT/);
+
+      await expect(
+        buildRegionPlan(
+          readClient([parent, { ...exact, administrativeLevel: 'DISTRICT' }]),
+          {
+            regionCode: CODE,
+            regionName: NAME,
+            parentRegionCode: '31',
+            administrativeLevel: 'REGENCY_CITY',
+          },
+        ),
+      ).rejects.toThrow(/STOP_REGION_HIERARCHY_CONFLICT/);
+    });
+
     it('never plans an update or a rename in any branch', async () => {
       const plan = await buildRegionPlan(readClient([existing()]), {
         regionCode: CODE,
@@ -217,31 +476,86 @@ describe('RM-03D0 Region provisioner', () => {
 
   describe('plan hashing is deterministic and meaningful', () => {
     it('is stable across runs', async () => {
-      const p1 = await buildRegionPlan(readClient([]), { regionCode: CODE, regionName: NAME });
-      const p2 = await buildRegionPlan(readClient([]), { regionCode: CODE, regionName: NAME });
+      const p1 = await buildRegionPlan(readClient([]), {
+        regionCode: CODE,
+        regionName: NAME,
+      });
+      const p2 = await buildRegionPlan(readClient([]), {
+        regionCode: CODE,
+        regionName: NAME,
+      });
       expect(computeRegionPlanHash(p1)).toBe(computeRegionPlanHash(p2));
       expect(canonicalRegionPlanJson(p1)).toBe(canonicalRegionPlanJson(p2));
     });
 
     it('differs between CREATE and REUSE of the same designation', async () => {
-      const create = await buildRegionPlan(readClient([]), { regionCode: CODE, regionName: NAME });
+      const create = await buildRegionPlan(readClient([]), {
+        regionCode: CODE,
+        regionName: NAME,
+      });
       const reuse = await buildRegionPlan(readClient([existing()]), {
         regionCode: CODE,
         regionName: NAME,
       });
-      expect(computeRegionPlanHash(create)).not.toBe(computeRegionPlanHash(reuse));
+      expect(computeRegionPlanHash(create)).not.toBe(
+        computeRegionPlanHash(reuse),
+      );
     });
 
     it('differs when a DIFFERENT existing row would be reused', async () => {
-      const a = await buildRegionPlan(readClient([existing({ id: 'region-a' })]), {
-        regionCode: CODE,
-        regionName: NAME,
-      });
-      const b = await buildRegionPlan(readClient([existing({ id: 'region-b' })]), {
-        regionCode: CODE,
-        regionName: NAME,
-      });
+      const a = await buildRegionPlan(
+        readClient([existing({ id: 'region-a' })]),
+        {
+          regionCode: CODE,
+          regionName: NAME,
+        },
+      );
+      const b = await buildRegionPlan(
+        readClient([existing({ id: 'region-b' })]),
+        {
+          regionCode: CODE,
+          regionName: NAME,
+        },
+      );
       expect(computeRegionPlanHash(a)).not.toBe(computeRegionPlanHash(b));
+    });
+
+    it('binds the resolved parent and administrative level into the reviewed hash', async () => {
+      const first = await buildRegionPlan(
+        readClient([
+          existing({
+            id: 'parent-a',
+            code: '31',
+            name: 'Province A',
+            administrativeLevel: 'PROVINCE',
+          }),
+        ]),
+        {
+          regionCode: CODE,
+          regionName: NAME,
+          parentRegionCode: '31',
+          administrativeLevel: 'REGENCY_CITY',
+        },
+      );
+      const second = await buildRegionPlan(
+        readClient([
+          existing({
+            id: 'parent-b',
+            code: '32',
+            name: 'Province B',
+            administrativeLevel: 'PROVINCE',
+          }),
+        ]),
+        {
+          regionCode: CODE,
+          regionName: NAME,
+          parentRegionCode: '32',
+          administrativeLevel: 'REGENCY_CITY',
+        },
+      );
+      expect(computeRegionPlanHash(first)).not.toBe(
+        computeRegionPlanHash(second),
+      );
     });
 
     it('produces a non-negative lock key that fits Postgres bigint', () => {
@@ -253,11 +567,10 @@ describe('RM-03D0 Region provisioner', () => {
   });
 
   /**
-   * CONCURRENCY. The same-name/different-code rule compares a designation
-   * against rows it does NOT share a code with, so the conflict domain is the
-   * whole Region table, not one code. A per-code lock would let
-   * {A,"Kota X"} and {B,"Kota X"} run concurrently, each see no match, each
-   * plan CREATE, and both commit — one real place, recorded twice.
+   * CONCURRENCY. The legacy hierarchy-free same-name/different-code rule
+   * compares a designation against rows it does NOT share a code with, so its
+   * conflict domain remains the whole Region table, not one code. The single
+   * domain lock is retained for both legacy and scoped operations.
    */
   describe('the conflict domain is serialized globally, not per code', () => {
     it('uses ONE lock key for every designation', () => {
@@ -277,7 +590,12 @@ describe('RM-03D0 Region provisioner', () => {
           },
           create: async ({ data }) => {
             order.push('create');
-            return { id: 'r', code: data.code, name: data.name, isActive: true };
+            return {
+              id: 'r',
+              code: data.code,
+              name: data.name,
+              isActive: true,
+            };
           },
         },
         $executeRawUnsafe: async (sql: string) => {
@@ -289,20 +607,23 @@ describe('RM-03D0 Region provisioner', () => {
         regionCode: CODE,
         regionName: NAME,
       });
-      await applyRegionPlan({ $transaction: async (fn) => fn(tx) }, {
-        regionCode: CODE,
-        regionName: NAME,
-        expectedPlanSha256: computeRegionPlanHash(plan),
-        confirmationToken: CANONICAL_TOKEN,
-        expectedConfirmationToken: CANONICAL_TOKEN,
-      });
+      await applyRegionPlan(
+        { $transaction: async (fn) => fn(tx) },
+        {
+          regionCode: CODE,
+          regionName: NAME,
+          expectedPlanSha256: computeRegionPlanHash(plan),
+          confirmationToken: CANONICAL_TOKEN,
+          expectedConfirmationToken: CANONICAL_TOKEN,
+        },
+      );
       expect(order).toEqual(['lock', 'read', 'create']);
     });
 
     it('serializes two designations that share a name under different codes', async () => {
-      // Simulates the interleaving a per-code lock would have permitted: the
-      // second apply runs AFTER the first committed, so it now sees the row
-      // and refuses instead of creating a duplicate place.
+      // Simulates two legacy hierarchy-free designations. The second apply
+      // runs AFTER the first committed, so it now sees the same-name row and
+      // refuses instead of guessing that the unscoped codes are distinct.
       const committed: RegionRow[] = [];
       const makeTx = (): RegionTransactionClient => ({
         region: {
@@ -325,25 +646,31 @@ describe('RM-03D0 Region provisioner', () => {
         regionCode: 'CODE-A',
         regionName: NAME,
       });
-      await applyRegionPlan({ $transaction: async (fn) => fn(makeTx()) }, {
-        regionCode: 'CODE-A',
-        regionName: NAME,
-        expectedPlanSha256: computeRegionPlanHash(firstPlan),
-        confirmationToken: CANONICAL_TOKEN,
-        expectedConfirmationToken: CANONICAL_TOKEN,
-      });
+      await applyRegionPlan(
+        { $transaction: async (fn) => fn(makeTx()) },
+        {
+          regionCode: 'CODE-A',
+          regionName: NAME,
+          expectedPlanSha256: computeRegionPlanHash(firstPlan),
+          confirmationToken: CANONICAL_TOKEN,
+          expectedConfirmationToken: CANONICAL_TOKEN,
+        },
+      );
       expect(committed).toHaveLength(1);
 
       // Second designation: same name, different code. Planned before the
       // first committed, applied after — the in-transaction rebuild catches it.
       await expect(
-        applyRegionPlan({ $transaction: async (fn) => fn(makeTx()) }, {
-          regionCode: 'CODE-B',
-          regionName: NAME,
-          expectedPlanSha256: 'ANY',
-          confirmationToken: CANONICAL_TOKEN,
-          expectedConfirmationToken: CANONICAL_TOKEN,
-        }),
+        applyRegionPlan(
+          { $transaction: async (fn) => fn(makeTx()) },
+          {
+            regionCode: 'CODE-B',
+            regionName: NAME,
+            expectedPlanSha256: 'ANY',
+            confirmationToken: CANONICAL_TOKEN,
+            expectedConfirmationToken: CANONICAL_TOKEN,
+          },
+        ),
       ).rejects.toThrow(/STOP_REGION_NAME_CONFLICT/);
       expect(committed).toHaveLength(1);
     });
@@ -359,17 +686,14 @@ describe('RM-03D0 Region provisioner', () => {
         regionName: NAME,
       });
       const h = harness(rows);
-      const result = await applyRegionPlan(
-        h.prisma,
-        {
-          regionCode: CODE,
-          regionName: NAME,
-          expectedPlanSha256: computeRegionPlanHash(plan),
-          confirmationToken: CANONICAL_TOKEN,
-          expectedConfirmationToken: CANONICAL_TOKEN,
-          ...over,
-        },
-      );
+      const result = await applyRegionPlan(h.prisma, {
+        regionCode: CODE,
+        regionName: NAME,
+        expectedPlanSha256: computeRegionPlanHash(plan),
+        confirmationToken: CANONICAL_TOKEN,
+        expectedConfirmationToken: CANONICAL_TOKEN,
+        ...over,
+      });
       return { result, h };
     };
 
@@ -398,16 +722,13 @@ describe('RM-03D0 Region provisioner', () => {
     it('refuses a stale plan hash and writes nothing', async () => {
       const h = harness([]);
       await expect(
-        applyRegionPlan(
-          h.prisma,
-          {
-            regionCode: CODE,
-            regionName: NAME,
-            expectedPlanSha256: 'STALE'.repeat(8),
-            confirmationToken: CANONICAL_TOKEN,
-            expectedConfirmationToken: CANONICAL_TOKEN,
-          },
-        ),
+        applyRegionPlan(h.prisma, {
+          regionCode: CODE,
+          regionName: NAME,
+          expectedPlanSha256: 'STALE'.repeat(8),
+          confirmationToken: CANONICAL_TOKEN,
+          expectedConfirmationToken: CANONICAL_TOKEN,
+        }),
       ).rejects.toThrow(/STOP_PLAN_HASH_MISMATCH/);
       expect(h.created).toEqual([]);
     });
@@ -415,16 +736,13 @@ describe('RM-03D0 Region provisioner', () => {
     it('refuses a missing expected plan hash', async () => {
       const h = harness([]);
       await expect(
-        applyRegionPlan(
-          h.prisma,
-          {
-            regionCode: CODE,
-            regionName: NAME,
-            expectedPlanSha256: '',
-            confirmationToken: CANONICAL_TOKEN,
-            expectedConfirmationToken: CANONICAL_TOKEN,
-          },
-        ),
+        applyRegionPlan(h.prisma, {
+          regionCode: CODE,
+          regionName: NAME,
+          expectedPlanSha256: '',
+          confirmationToken: CANONICAL_TOKEN,
+          expectedConfirmationToken: CANONICAL_TOKEN,
+        }),
       ).rejects.toThrow(/STOP_MISSING_EXPECTED_PLAN_HASH/);
       expect(h.created).toEqual([]);
     });
@@ -432,16 +750,13 @@ describe('RM-03D0 Region provisioner', () => {
     it('refuses a wrong confirmation token', async () => {
       const h = harness([]);
       await expect(
-        applyRegionPlan(
-          h.prisma,
-          {
-            regionCode: CODE,
-            regionName: NAME,
-            expectedPlanSha256: 'x',
-            confirmationToken: 'APPLY_RM02C1B_TO_SIMPROK_TEST',
-            expectedConfirmationToken: CANONICAL_TOKEN,
-          },
-        ),
+        applyRegionPlan(h.prisma, {
+          regionCode: CODE,
+          regionName: NAME,
+          expectedPlanSha256: 'x',
+          confirmationToken: 'APPLY_RM02C1B_TO_SIMPROK_TEST',
+          expectedConfirmationToken: CANONICAL_TOKEN,
+        }),
       ).rejects.toThrow(/STOP_MISSING_CONFIRMATION_TOKEN/);
       expect(h.created).toEqual([]);
     });
@@ -449,16 +764,13 @@ describe('RM-03D0 Region provisioner', () => {
     it('refuses an unrecognised confirmation authority even when both strings match', async () => {
       const h = harness([]);
       await expect(
-        applyRegionPlan(
-          h.prisma,
-          {
-            regionCode: CODE,
-            regionName: NAME,
-            expectedPlanSha256: 'x',
-            confirmationToken: 'INVENTED',
-            expectedConfirmationToken: 'INVENTED',
-          },
-        ),
+        applyRegionPlan(h.prisma, {
+          regionCode: CODE,
+          regionName: NAME,
+          expectedPlanSha256: 'x',
+          confirmationToken: 'INVENTED',
+          expectedConfirmationToken: 'INVENTED',
+        }),
       ).rejects.toThrow(/STOP_UNKNOWN_CONFIRMATION_AUTHORITY/);
       expect(h.created).toEqual([]);
     });
@@ -474,7 +786,9 @@ describe('RM-03D0 Region provisioner', () => {
           'APPLY_RM03D0_CANONICAL_REFERENCES',
           'APPLY_GOVERNED_REHEARSAL_REFERENCES',
         ]);
-        expect(REGION_CONFIRMATION_TOKEN).toBe('APPLY_RM03D0_CANONICAL_REFERENCES');
+        expect(REGION_CONFIRMATION_TOKEN).toBe(
+          'APPLY_RM03D0_CANONICAL_REFERENCES',
+        );
         // The acceptance token is still not a Region authority and never was.
         expect(KNOWN_REGION_CONFIRMATION_TOKENS).not.toContain(
           'APPLY_RM02C1B_TO_SIMPROK_TEST',
@@ -533,16 +847,40 @@ describe('RM-03D0 Region provisioner', () => {
       });
       const h = harness([], { name: 'Mutated By Trigger' });
       await expect(
-        applyRegionPlan(
-          h.prisma,
-          {
-            regionCode: CODE,
-            regionName: NAME,
-            expectedPlanSha256: computeRegionPlanHash(plan),
-            confirmationToken: CANONICAL_TOKEN,
-            expectedConfirmationToken: CANONICAL_TOKEN,
-          },
-        ),
+        applyRegionPlan(h.prisma, {
+          regionCode: CODE,
+          regionName: NAME,
+          expectedPlanSha256: computeRegionPlanHash(plan),
+          confirmationToken: CANONICAL_TOKEN,
+          expectedConfirmationToken: CANONICAL_TOKEN,
+        }),
+      ).rejects.toThrow(/STOP_REGION_WRITE_READBACK_MISMATCH/);
+    });
+
+    it('fails closed when hierarchy readback differs from the reviewed plan', async () => {
+      const parent = existing({
+        id: 'parent-1',
+        code: '31',
+        name: 'DKI Jakarta',
+        administrativeLevel: 'PROVINCE',
+      });
+      const plan = await buildRegionPlan(readClient([parent]), {
+        regionCode: CODE,
+        regionName: NAME,
+        parentRegionCode: '31',
+        administrativeLevel: 'REGENCY_CITY',
+      });
+      const h = harness([parent], { parentId: 'wrong-parent' });
+      await expect(
+        applyRegionPlan(h.prisma, {
+          regionCode: CODE,
+          regionName: NAME,
+          parentRegionCode: '31',
+          administrativeLevel: 'REGENCY_CITY',
+          expectedPlanSha256: computeRegionPlanHash(plan),
+          confirmationToken: CANONICAL_TOKEN,
+          expectedConfirmationToken: CANONICAL_TOKEN,
+        }),
       ).rejects.toThrow(/STOP_REGION_WRITE_READBACK_MISMATCH/);
     });
   });

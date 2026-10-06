@@ -41,6 +41,7 @@ export interface BasicPriceExplorerItem {
   basicPriceId: string;
   resource: ExplorerResourceIdentity;
   region: RegionIdentity | null;
+  regionCoverageSummary?: string | null;
   price: string;
   effectiveDate: string;
   validUntil: string | null;
@@ -72,6 +73,9 @@ export interface BasicPriceExplorerItem {
    */
   assetScope?: BasicPriceAssetScope;
 }
+
+export const basicPriceRegionLabel = (item: BasicPriceExplorerItem): string =>
+  item.regionCoverageSummary?.trim() || regionLabel(item.region);
 
 export type BasicPriceAssetScope = 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG';
 
@@ -474,8 +478,6 @@ export const REVERIFICATION_DUE_BADGE = 'Perlu verifikasi ulang';
  * called. Kept here beside the label so the explanation and the wording can
  * never drift apart.
  */
-export const REVERIFICATION_HELP_TRIGGER = 'Apa maksud tanggal ini?';
-
 export const REVERIFICATION_HELP_TEXT = [
   'Ini adalah perkiraan waktu harga perlu diperiksa kembali karena harga pasar dapat berubah. Melewati tanggal ini tidak otomatis membuat harga salah atau tidak boleh digunakan. SIMPROK hanya mengingatkan agar harga diverifikasi dan diperbarui bila memang sudah berubah.',
   'Gunakan untuk harga hasil survei, laporan lapangan, quotation/manual snapshot, atau sumber lain yang tidak diperbarui otomatis.',

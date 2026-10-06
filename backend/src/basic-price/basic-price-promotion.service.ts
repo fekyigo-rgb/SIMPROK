@@ -75,6 +75,7 @@ export class BasicPricePromotionService {
   private static readonly INHERITED_SOURCE_FACTS = {
     resourceId: true,
     regionId: true,
+    regionCoverageSetId: true,
     effectiveDate: true,
     sourcePeriodLabel: true,
     sourcePeriodGranularity: true,
