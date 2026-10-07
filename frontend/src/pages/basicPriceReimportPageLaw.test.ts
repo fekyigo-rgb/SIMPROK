@@ -80,3 +80,25 @@ test("BP-KDN-01 the KDN mapping question is non-blocking and never fail-stops pr
   assert.match(handler, /key === 'selectedKdnColumn' && value === 'none'/);
   assert.match(handler, /setQuestion\(null\)/);
 });
+
+test("BP-WF-NAV-01 preview adopts the real batch URL and reopens from server truth", () => {
+  const readStart = body.indexOf("const readSource");
+  const readSource = body.slice(readStart, body.indexOf("const handleFileChosen", readStart));
+  assert.match(readSource, /const nextPath = `\/basic-price\/import\/\$\{result\.batchId\}`/u);
+  assert.match(readSource, /location\.pathname !== nextPath[\s\S]{0,80}navigate\(nextPath\)/u);
+  assert.ok(readSource.indexOf("setBatch(result)") < readSource.indexOf("navigate(nextPath)"));
+  assert.match(body, /getBasicPriceImportBatch\(reopenBatchId\)/u);
+  assert.match(body, /setCoveredVillages\(existing\.coveredVillageRegions \?\? \[\]\)/u);
+});
+
+test("BP-WF-NAV-02 cancelling file replacement preserves the open batch", () => {
+  const handlerStart = body.indexOf("const handleFileChosen");
+  const handler = body.slice(handlerStart, body.indexOf("const handleAnswer", handlerStart));
+  const confirmation = handler.indexOf("window.confirm(FILE_REPLACE_CONFIRMATION)");
+  const firstMutation = handler.indexOf("setSelectedFile(file)");
+  assert.ok(confirmation > -1);
+  assert.ok(confirmation < firstMutation, "confirmation must precede every batch-state mutation");
+  assert.match(handler, /if \(!proceed\) \{[\s\S]{0,120}fileInputRef\.current\.value = ''[\s\S]{0,40}return/u);
+  assert.match(handler, /await readSource\(file, \{\}, \{\}\)/u);
+  assert.doesNotMatch(handler, /updateBasicPriceImportBatch|delete|overwrite/iu);
+});

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   JOURNEY_STAGE_KEYS,
   ROW_TONE_CLASS,
+  journeyStageHref,
   journeyView,
   reviewCounters,
   rowTone,
@@ -79,6 +80,62 @@ test('J-1. the journey is six stages, in one fixed order', () => {
   assert.deepEqual(
     view.stages.map((stage) => stage.key),
     [...JOURNEY_STAGE_KEYS],
+  );
+});
+
+test('N-1. stepper hrefs reuse existing import/review rooms, never verification/publication queues', () => {
+  const batch = batchOf();
+  const view = journeyView(batch);
+  assert.equal(journeyStageHref(stageBy(batch, 'FILE'), batch), '/basic-price/import/b-1');
+  assert.equal(journeyStageHref(stageBy(batch, 'SOURCE'), batch), '/basic-price/import/b-1');
+  assert.equal(journeyStageHref(stageBy(batch, 'ROWS'), batch), '/basic-price/import/b-1/review');
+  assert.equal(journeyStageHref(stageBy(batch, 'PROPOSE'), batch), '/basic-price/import/b-1/review');
+  assert.equal(journeyStageHref(stageBy(batch, 'VERIFY'), batch), null);
+  assert.equal(journeyStageHref(stageBy(batch, 'PUBLISH'), batch), null);
+  assert.equal(view.stages.length, 6);
+});
+
+test('N-2. missing batches, upcoming stages, and not-offered stages are not doors', () => {
+  for (const stage of journeyView(null).stages) {
+    assert.equal(journeyStageHref(stage, null), null);
+  }
+  const notRouted = batchOf({
+    actions: {
+      privateUse: { offered: true, reasonCode: null, actionableRows: 13 },
+      simprokProposal: {
+        offered: false,
+        reasonCode: 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION',
+        sourceFamily: 'GOVERNMENT',
+      },
+      reviewGate: gate(),
+    },
+  });
+  assert.equal(journeyStageHref(stageBy(notRouted, 'PROPOSE'), notRouted), null);
+  assert.equal(journeyStageHref(stageBy(notRouted, 'VERIFY'), notRouted), null);
+});
+
+test('N-3. incomplete source metadata keeps row review closed while source remains reachable', () => {
+  const incomplete = batchOf({
+    actions: {
+      privateUse: { offered: false, reasonCode: null, actionableRows: 0 },
+      simprokProposal: {
+        offered: false,
+        reasonCode: 'EFFECTIVE_DATE_REQUIRED_BEFORE_SUBMISSION',
+        sourceFamily: 'FIELD_PRICE',
+      },
+      reviewGate: gate({
+        metadataComplete: false,
+        reviewAllowed: false,
+        missingRequiredFacts: ['EFFECTIVE_DATE'],
+        reasonCode: 'REQUIRED_METADATA_INCOMPLETE',
+      }),
+    },
+  });
+  assert.equal(stageBy(incomplete, 'ROWS').state, 'UPCOMING');
+  assert.equal(journeyStageHref(stageBy(incomplete, 'ROWS'), incomplete), null);
+  assert.equal(
+    journeyStageHref(stageBy(incomplete, 'SOURCE'), incomplete),
+    '/basic-price/import/b-1',
   );
 });
 
