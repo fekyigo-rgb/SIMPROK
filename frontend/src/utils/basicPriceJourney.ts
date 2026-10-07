@@ -308,6 +308,26 @@ function stage(
   return { key, label: STAGE_LABELS[key], state, hint, optional };
 }
 
+/**
+ * Existing import/review rooms reachable from the journey projection.
+ * Upcoming, unavailable, verification, and publication stages are never doors.
+ */
+export function journeyStageHref(
+  stage: JourneyStage,
+  batch: BasicPriceImportBatchSummary | null,
+): string | null {
+  if (!batch) return null;
+  if (stage.state === 'UPCOMING' || stage.state === 'NOT_OFFERED') return null;
+  if (stage.key === 'VERIFY' || stage.key === 'PUBLISH') return null;
+  if (stage.key === 'FILE' || stage.key === 'SOURCE') {
+    return `/basic-price/import/${batch.batchId}`;
+  }
+  if (stage.key === 'ROWS' || stage.key === 'PROPOSE') {
+    return `/basic-price/import/${batch.batchId}/review`;
+  }
+  return null;
+}
+
 // ── Row-review counters (§15) ───────────────────────────────────────────────
 
 export interface ReviewCounter {

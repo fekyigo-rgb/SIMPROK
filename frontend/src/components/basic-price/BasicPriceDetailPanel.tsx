@@ -759,6 +759,7 @@ function PrivatePriceChangeForm({
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [confirmCorrection, setConfirmCorrection] = useState(false);
   const askSameSource = Boolean(sourceName);
   const fieldPath =
     intent === 'NEW_OBSERVATION' && evidenceBasis === 'FIELD';
@@ -771,6 +772,10 @@ function PrivatePriceChangeForm({
     if (intent === 'NEW_OBSERVATION' && evidenceBasis !== 'FIELD') return;
     if (fieldPath && askSameSource && sameSource === null) return;
     if (fieldPath && sameSource === false && !sourceIdentityName.trim()) return;
+    if (intent === 'CORRECTION' && !confirmCorrection) {
+      setConfirmCorrection(true);
+      return;
+    }
     setBusy(true);
     setRefusal(null);
     try {
@@ -824,6 +829,7 @@ function PrivatePriceChangeForm({
             onChange={() => {
               setIntent('NEW_OBSERVATION');
               setEvidenceBasis(null);
+              setConfirmCorrection(false);
             }}
             disabled={busy}
           />
@@ -840,6 +846,7 @@ function PrivatePriceChangeForm({
             onChange={() => {
               setIntent('CORRECTION');
               setEvidenceBasis(null);
+              setConfirmCorrection(false);
             }}
             disabled={busy}
           />
@@ -981,10 +988,28 @@ function PrivatePriceChangeForm({
           {refusal}
         </p>
       ) : null}
-      {showMoneyFields ? (
+      {showMoneyFields && intent === 'CORRECTION' && confirmCorrection ? (
+        <div className="bp-detail-complete__actions" role="group" aria-label="Konfirmasi koreksi harga">
+          <p className="bp-field__help">
+            Simpan koreksi ini? Nilai sebelumnya tetap tercatat dalam riwayat.
+            Nilai baru akan menjadi nilai saat ini.
+          </p>
+          <button
+            type="button"
+            className="bp-btn bp-btn--sm"
+            disabled={busy}
+            onClick={() => setConfirmCorrection(false)}
+          >
+            Batal
+          </button>
+          <button type="submit" className="bp-btn bp-btn--primary bp-btn--sm" disabled={busy}>
+            {busy ? 'Menyimpan...' : 'Simpan koreksi'}
+          </button>
+        </div>
+      ) : showMoneyFields ? (
         <div className="bp-detail-complete__actions">
           <button type="submit" className="bp-btn bp-btn--primary bp-btn--sm" disabled={busy}>
-            Simpan harga
+            {busy ? 'Menyimpan...' : 'Simpan harga'}
           </button>
         </div>
       ) : null}

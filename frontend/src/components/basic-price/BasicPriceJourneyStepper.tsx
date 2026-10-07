@@ -1,4 +1,9 @@
-import { journeyView, type JourneyStage } from '../../utils/basicPriceJourney';
+import { useLocation, useNavigate } from 'react-router-dom';
+import {
+  journeyStageHref,
+  journeyView,
+  type JourneyStage,
+} from '../../utils/basicPriceJourney';
 import type { BasicPriceImportBatchSummary } from '../../utils/basicPriceImportDisplay';
 
 interface BasicPriceJourneyStepperProps {
@@ -21,6 +26,8 @@ interface BasicPriceJourneyStepperProps {
  */
 export function BasicPriceJourneyStepper({ batch }: BasicPriceJourneyStepperProps) {
   const view = journeyView(batch);
+  const navigate = useNavigate();
+  const location = useLocation();
 
   return (
     <div className="bp-stack bp-stack--tight">
@@ -49,16 +56,44 @@ export function BasicPriceJourneyStepper({ batch }: BasicPriceJourneyStepperProp
               reader hears "Lengkapi Sumber — sedang berjalan"; a sighted reader
               sees the same words on hover.
             */}
-            <span>
-              {stage.label}
-              {stage.optional ? <span className="bp-muted"> (opsional)</span> : null}
-            </span>
+            {stageLink(stage, batch, location.pathname, navigate)}
             <span className="bp-visually-hidden">{` — ${stateWord(stage.state)}. ${stage.hint}`}</span>
           </li>
         ))}
       </ol>
       {view.note ? <p className="bp-note bp-note--info">{view.note}</p> : null}
     </div>
+  );
+}
+
+function stageLink(
+  stage: JourneyStage,
+  batch: BasicPriceImportBatchSummary | null,
+  pathname: string,
+  navigate: (to: string) => void,
+) {
+  const href = journeyStageHref(stage, batch);
+  const label = (
+    <span>
+      {stage.label}
+      {stage.optional ? <span className="bp-muted"> (opsional)</span> : null}
+    </span>
+  );
+  if (!href) return label;
+  const here = pathname === href;
+  return (
+    <button
+      type="button"
+      className="bp-step__go"
+      disabled={here}
+      aria-current={here ? 'step' : undefined}
+      title={here ? stage.hint : `Buka ${stage.label}`}
+      onClick={() => {
+        if (!here) navigate(href);
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

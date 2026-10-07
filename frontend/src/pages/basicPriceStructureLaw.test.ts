@@ -83,6 +83,13 @@ test("G4. every stepper state is SPOKEN as well as coloured", () => {
   assert.match(body, /title=\{stage\.hint\}/u);
 });
 
+test("G1c. stepper links reuse existing rooms and never invent workflow routes", () => {
+  assert.match(stepper, /journeyStageHref/u);
+  assert.match(stepper, /navigate\(href\)/u);
+  assert.doesNotMatch(stepper, /basic-price\/reviews/u);
+  assert.doesNotMatch(stepper, /basic-price\/publications/u);
+});
+
 test("G4b. the freshness chip's colour is decoration; the word carries the meaning", () => {
   const body = renderable(chip);
   assert.match(body, /aria-hidden="true"/u, "the dot must be hidden from AT");
@@ -486,4 +493,25 @@ test("CHANGE-DOOR. one compact Detail door routes into existing writers, never a
   assert.match(body, /onCurrentChanged/u);
   assert.doesNotMatch(body, /updateBasicPrice/u);
   assert.doesNotMatch(executable(panel), /@Put|PATCH \/basic-prices/u);
+});
+
+test("SAVE-01. a private price correction is confirmed before the existing writer runs", () => {
+  const body = executable(panel);
+  const start = body.indexOf("function PrivatePriceChangeForm");
+  const form = body.slice(start, body.indexOf("function PrivateKdnChangeForm", start));
+  assert.ok(start > -1);
+  assert.match(form, /const \[confirmCorrection, setConfirmCorrection\] = useState\(false\)/u);
+  assert.match(
+    form,
+    /intent === 'CORRECTION' && !confirmCorrection[\s\S]{0,100}setConfirmCorrection\(true\)[\s\S]{0,40}return/u,
+  );
+  assert.ok(
+    form.indexOf("setConfirmCorrection(true)") < form.indexOf("setBusy(true)"),
+    "the first submit must stop before the writer path",
+  );
+  assert.match(form, /type="button"[\s\S]{0,180}onClick=\{\(\) => setConfirmCorrection\(false\)\}[\s\S]{0,100}Batal/u);
+  assert.match(form, /type="submit"[\s\S]{0,160}Simpan koreksi/u);
+  assert.equal((form.match(/await correctPrivateBasicPrice\(/gu) ?? []).length, 1);
+  assert.match(form, /onCurrentChanged\(result\.basicPriceId\)/u);
+  assert.doesNotMatch(form, /updateBasicPrice|PATCH \/basic-prices/u);
 });
