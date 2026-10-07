@@ -29,6 +29,7 @@ import {
 } from './basic-price-currentness';
 import { basicPriceApplicabilityAnd } from './basic-price-applicability';
 import { basicPriceSourceNameWhere } from './basic-price-source-name.filter';
+import { basicPriceRegionApplicabilityWhere } from './basic-price-region-applicability';
 import {
   BASIC_PRICE_HISTORY_MAX_GENERATIONS,
   buildSupersessionTimeline,
@@ -66,6 +67,9 @@ const EXPLORER_ROW_SELECT = {
       code: true,
       name: true,
     },
+  },
+  regionCoverageSet: {
+    select: { members: { select: { regionId: true } } },
   },
   sourceSubmission: {
     select: {
@@ -350,7 +354,10 @@ export class BasicPriceService {
       // the successor clause and resurrect the March-lens leak. Merge once.
       ...mergeCurrentnessAnd(
         basicPriceCurrentnessWhere({ asOf }),
-        basicPriceApplicabilityAnd({ asOf }),
+        [
+          ...basicPriceApplicabilityAnd({ asOf }),
+          ...(regionId ? [basicPriceRegionApplicabilityWhere(regionId)] : []),
+        ],
       ),
     };
 
@@ -383,10 +390,6 @@ export class BasicPriceService {
 
     if (resourceId) {
       where.resourceId = resourceId;
-    }
-
-    if (regionId) {
-      where.regionId = regionId;
     }
 
     if (year) {

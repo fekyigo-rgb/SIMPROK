@@ -112,4 +112,13 @@ describe('Permissions Catalog', () => {
       );
     });
   });
+  it('SR-01 execution-start permission is governed activation only and receives no automatic entitlement', () => {
+    const code = PERMISSIONS.PROJECT_EXECUTION_START;
+    expect(GOVERNED_ACTIVATION_PERMISSION_CODES).toContain(code);
+    expect(ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES).not.toContain(code);
+    expect(SEEDED_PERMISSION_CODES).not.toContain(code);
+    expect(PERMISSION_CATALOG.find((entry) => entry.code === code)?.state).toBe(
+      PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    );
+  });
 });

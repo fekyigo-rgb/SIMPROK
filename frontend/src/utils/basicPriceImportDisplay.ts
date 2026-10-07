@@ -325,6 +325,14 @@ export interface BasicPriceImportBatchSummary {
    * about a file SIMPROK has just read, not about a region anyone has chosen.
    */
   region?: { id: string; code: string; name: string } | null;
+  /** Present only for an explicit immutable 2+ Village coverage snapshot. */
+  coveredVillageRegions?: Array<{
+    id: string;
+    code: string;
+    name: string;
+    administrativeLevel?: string | null;
+    parentId?: string | null;
+  }>;
   /**
    * BP-VISUAL-TRUTH-07 §7 — the PRICE COLUMN this batch was read from, in the
    * source document's own wording ("TELUK AMBON"). It is NOT `region`, and the
@@ -1121,12 +1129,14 @@ export const savedMetadataLines = (batch: BasicPriceImportBatchSummary): string[
   // owns that question — a chosen region has nothing left to be told apart
   // from, so the code is noise — and this now asks it rather than disagreeing.
   const region = batch.regionId
-    ? (batch.region ? regionChosenLabel(batch.region) : 'sudah dipilih')
+    ? batch.coveredVillageRegions && batch.coveredVillageRegions.length >= 2
+      ? `${batch.coveredVillageRegions.length} Desa/Kelurahan di ${batch.region?.name ?? 'Kecamatan terpilih'}`
+      : (batch.region ? regionChosenLabel(batch.region) : 'sudah dipilih')
     : NOT_YET_STATED;
   const publisher = batch.sourceOrganizationName?.trim();
   /**
    * READ BACK UNDER THE SAME NAME IT WAS ASKED FOR. A person who answered
-   * "Tanggal / periode harga" and is then shown "Tanggal berlaku" has no way to
+   * "Tanggal harga" and is then shown "Tanggal berlaku" has no way to
    * tell whether SIMPROK stored their answer or something else.
    */
   const dateLabel = effectiveDateCopy(batch.temporal?.effectiveDateQuestion).label;
@@ -1369,6 +1379,31 @@ export const metadataSaveFailureMessage = (
   if (httpStatus >= 500)
     return 'SIMPROK mengalami kendala saat menyimpan keterangan batch. Tidak ada yang tersimpan.';
   return 'Keterangan batch belum tersimpan. Tidak ada yang tersimpan sebagian.';
+};
+
+/**
+ * The canonical batch named by the existing collision response. This exposes
+ * only the server's answer so the UI can reuse "Gunakan yang sudah ada"; it
+ * neither computes identity nor searches for another batch.
+ */
+export const metadataSaveExistingBatchId = (
+  httpStatus: number,
+  rawBody: string,
+): string | null => {
+  if (httpStatus !== 409) return null;
+  try {
+    const parsed = JSON.parse(rawBody) as {
+      message?: unknown;
+      existingBatchId?: unknown;
+    };
+    return parsed.message === 'BATCH_IDENTITY_ALREADY_EXISTS' &&
+      typeof parsed.existingBatchId === 'string' &&
+      parsed.existingBatchId.trim() !== ''
+      ? parsed.existingBatchId
+      : null;
+  } catch {
+    return null;
+  }
 };
 
 /**
@@ -2366,9 +2401,8 @@ export const metadataGateView = (
    *
    * The effective-date input is labelled by the SOURCE-AWARE question the
    * server chose, so a fixed 'Tanggal berlaku harga' here would tell a person
-   * to fill in a field that appears nowhere on their screen — a survey batch
-   * shows 'Tanggal / periode harga' and a regulation shows 'Mulai berlaku
-   * menurut sumber'. The completion instruction and the field must be the same
+   * to fill in a field that appears nowhere on their screen. The completion
+   * instruction and the Owner-locked 'Tanggal harga' field must be the same
    * words, or the instruction is a false statement about the form.
    */
   const requiredFactLabels: Record<string, string | undefined> = {
@@ -2820,11 +2854,11 @@ interface TemporalCopy {
 
 const EFFECTIVE_DATE_COPY: Record<EffectiveDateQuestion, TemporalCopy> = {
   OBSERVED_PRICE_DATE: {
-    label: 'Tanggal / periode harga',
+    label: 'Tanggal harga',
     help: 'Kapan harga ini berlaku menurut sumbernya — misalnya tanggal survei, tanggal pengamatan harga, atau tanggal penawaran. Isi tanggal yang paling mewakili kapan harga ini benar di lapangan.',
   },
   SOURCE_STATED_START: {
-    label: 'Mulai berlaku menurut sumber',
+    label: 'Tanggal harga',
     help: 'Tanggal yang disebut sendiri oleh dokumen sumber sebagai awal berlakunya harga. Boleh tanggal yang sudah lewat maupun tanggal di masa depan — SIMPROK menyimpan apa yang tertulis, bukan menebak.',
   },
   PRICE_DATE_UNSPECIFIED: {
@@ -2843,19 +2877,6 @@ export const effectiveDateCopy = (
 ): TemporalCopy =>
   (question && EFFECTIVE_DATE_COPY[question]) ??
   EFFECTIVE_DATE_COPY.PRICE_DATE_UNSPECIFIED;
-
-/**
- * BP-VISUAL-TRUTH-07 §20/§21 — the way to ASK for the date explanation, rather
- * than being handed it permanently.
- *
- * Deliberately the same words the reverification field already uses for its own
- * disclosure (`REVERIFICATION_HELP_TRIGGER`) — two date fields sitting in one
- * form should offer their explanations under one phrasing, not two. It is a
- * separate constant rather than an import of that one because that name is
- * about reverification, and a shared literal under a misleading name is how the
- * next person changes one and silently changes the other.
- */
-export const TEMPORAL_HELP_TRIGGER = 'Apa maksud tanggal ini?';
 
 /**
  * WHEN THE SOFT DATE IS WORTH ASKING FOR, AND WHAT TO SAY WHEN IT IS NOT.

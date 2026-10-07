@@ -338,6 +338,7 @@ const PROGRESS_AUDIT_SCHEMA_VERSION = 1;
 const PROGRESS_AUDIT_EVENT_TYPE = 'ACTUAL_PROGRESS';
 const PROGRESS_AUDIT_SOURCE_MODULE = 'FIELD_PROGRESS';
 const PROGRESS_AUDIT_ACTOR_TYPE = 'USER';
+const PROJECT_EXECUTION_NOT_STARTED = 'PROJECT_EXECUTION_NOT_STARTED';
 const PROJECT_BUSINESS_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 interface EffectiveCandidate {
@@ -550,10 +551,10 @@ export class ProgressService {
   }
 
   /**
-   * MON-04 execution boundary. A new Actual may enter only after the same
-   * atomic act has locked the official plan and activated the Project. The
-   * Project share lock is intentionally acquired before Baseline/plan reads,
-   * matching ExecutionPlanService's Project-first lock order.
+   * MON-04 execution boundary. A new Actual may enter only after the official
+   * plan is LOCKED and the Project has separately entered ACTIVE execution.
+   * The Project share lock is intentionally acquired before Baseline/plan
+   * reads, matching the Project-first lifecycle lock order.
    */
   private async requireExecutionProjectActive(
     tx: Prisma.TransactionClient,
@@ -563,7 +564,7 @@ export class ProgressService {
       Prisma.sql`SELECT "status" FROM "projects" WHERE "id" = ${projectId}::uuid FOR SHARE`,
     );
     if (rows.length !== 1 || rows[0].status !== 'ACTIVE') {
-      throw new ConflictException('EXECUTION_PLAN_NOT_LOCKED');
+      throw new ConflictException(PROJECT_EXECUTION_NOT_STARTED);
     }
   }
 

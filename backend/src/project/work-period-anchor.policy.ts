@@ -302,6 +302,80 @@ export function assessPlannedAnchorCompatibility(
     : { state: 'COMPATIBLE' };
 }
 
+export type ExecutionStartAnchorCompatibility =
+  | { state: 'COMPATIBLE' }
+  | {
+      state: 'CONFLICT';
+      code: 'PROJECT_EXECUTION_INTERVAL_BEFORE_EFFECTIVE_DAY_ONE';
+      baselineId: string;
+      executionPlanVersionId: string;
+      boqItemId: string;
+      earliestConflictingPeriodStartDate: string;
+      anchorDate: string;
+    }
+  | {
+      state: 'UNPROVEN';
+      code: 'PROJECT_EXECUTION_START_INTERVAL_COMPATIBILITY_UNPROVEN';
+      baselineId: string;
+      executionPlanVersionId: string;
+      boqItemId: string;
+      reason: 'INVALID_DISTRIBUTION_START_DATE';
+    };
+
+/**
+ * SR-01 activation gate. This is deliberately separate from
+ * `assessPlannedAnchorCompatibility`: Plan LOCK keeps its existing
+ * periodEndDate credit law, while starting execution additionally requires
+ * every ordinary execution interval to begin on or after governed Day-1.
+ */
+export function assessExecutionStartAnchorCompatibility(input: {
+  anchorDate: string;
+  baselineId: string;
+  executionPlanVersionId: string;
+  distributions: readonly {
+    boqItemId: string;
+    periodStartDate: Date;
+  }[];
+}): ExecutionStartAnchorCompatibility {
+  let conflict:
+    | { boqItemId: string; earliestConflictingPeriodStartDate: string }
+    | undefined;
+
+  for (const distribution of input.distributions) {
+    const intervalStart = workDateWire(distribution.periodStartDate);
+    if (intervalStart === null) {
+      return {
+        state: 'UNPROVEN',
+        code: 'PROJECT_EXECUTION_START_INTERVAL_COMPATIBILITY_UNPROVEN',
+        baselineId: input.baselineId,
+        executionPlanVersionId: input.executionPlanVersionId,
+        boqItemId: distribution.boqItemId,
+        reason: 'INVALID_DISTRIBUTION_START_DATE',
+      };
+    }
+    if (
+      intervalStart < input.anchorDate &&
+      (!conflict || intervalStart < conflict.earliestConflictingPeriodStartDate)
+    ) {
+      conflict = {
+        boqItemId: distribution.boqItemId,
+        earliestConflictingPeriodStartDate: intervalStart,
+      };
+    }
+  }
+
+  return conflict
+    ? {
+        state: 'CONFLICT',
+        code: 'PROJECT_EXECUTION_INTERVAL_BEFORE_EFFECTIVE_DAY_ONE',
+        baselineId: input.baselineId,
+        executionPlanVersionId: input.executionPlanVersionId,
+        anchorDate: input.anchorDate,
+        ...conflict,
+      }
+    : { state: 'COMPATIBLE' };
+}
+
 export function assessActualAnchorCompatibility(input: {
   anchorDate: string;
   baselineId: string;

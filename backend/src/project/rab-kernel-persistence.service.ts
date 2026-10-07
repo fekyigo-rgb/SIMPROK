@@ -11,6 +11,7 @@ import {
   WORKING_DRAFT_STRUCTURE_NAME,
 } from './rab-lifecycle-policy.service';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
+import { basicPriceRegionMatches } from '../basic-price/basic-price-region-applicability';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { toMoneyDecimal2 } from '../common/money';
 import { buildDraftRecap } from './rab-draft-recap';
@@ -272,6 +273,10 @@ export class RabKernelPersistenceService {
             workspaceId: true,
             organizationId: true,
             regionId: true,
+            regionCoverageSetId: true,
+            regionCoverageSet: {
+              select: { members: { select: { regionId: true } } },
+            },
           },
         });
         if (!basicPrice) {
@@ -279,7 +284,7 @@ export class RabKernelPersistenceService {
             RAB_KERNEL_PERSISTENCE_REASON.SELECTED_BASIC_PRICE_NOT_ELIGIBLE,
           );
         }
-        if (basicPrice.regionId !== occurrence.referenceRegionId) {
+        if (!basicPriceRegionMatches(basicPrice, occurrence.referenceRegionId)) {
           throw new ConflictException('BASIC_PRICE_REGION_MISMATCH');
         }
         // §PR57 Gap A: exact id equality only — never a name/fuzzy match,
@@ -506,6 +511,7 @@ export class RabKernelPersistenceService {
       workspaceId: string | null;
       organizationId: string | null;
       regionId: string | null;
+      regionCoverageSetId: string | null;
     },
     trustedWorkspaceId: string,
   ): Promise<void> {
@@ -551,6 +557,7 @@ export class RabKernelPersistenceService {
           workspaceId: true,
           organizationId: true,
           regionId: true,
+          regionCoverageSetId: true,
         },
       });
       // The promoted row must genuinely restate its origin's facts. An origin
@@ -561,7 +568,8 @@ export class RabKernelPersistenceService {
         origin.assetScope !== BasicPriceAssetScope.SIMPROK_CATALOG ||
         origin.workspaceId === null ||
         origin.resourceId !== basicPrice.resourceId ||
-        origin.regionId !== basicPrice.regionId
+        origin.regionId !== basicPrice.regionId ||
+        origin.regionCoverageSetId !== basicPrice.regionCoverageSetId
       ) {
         throw new ConflictException(INCOMPLETE);
       }
@@ -675,6 +683,7 @@ export class RabKernelPersistenceService {
       workspaceId: string | null;
       organizationId: string | null;
       regionId: string | null;
+      regionCoverageSetId: string | null;
     },
     trustedWorkspaceId: string,
   ): Promise<void> {
@@ -708,6 +717,7 @@ export class RabKernelPersistenceService {
             workspaceId: true,
             organizationId: true,
             regionId: true,
+            regionCoverageSetId: true,
             effectiveDate: true,
             sourceOrigin: true,
             sourceSha256: true,
@@ -733,7 +743,8 @@ export class RabKernelPersistenceService {
     if (
       importRow.batch.workspaceId !== basicPrice.workspaceId ||
       importRow.batch.organizationId !== basicPrice.organizationId ||
-      importRow.batch.regionId !== basicPrice.regionId
+      importRow.batch.regionId !== basicPrice.regionId ||
+      importRow.batch.regionCoverageSetId !== basicPrice.regionCoverageSetId
     ) {
       throw new ConflictException(INCOMPLETE);
     }

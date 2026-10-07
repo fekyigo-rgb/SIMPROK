@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ACTIVE_MEMBERSHIP_BASELINE_PERMISSION_CODES } from '../common/constants/permissions';
 
@@ -34,11 +35,13 @@ export interface EffectivePermissions {
 export class WorkspacePermissionResolverService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async resolve(
+  private async resolveFromStore(
+    store: Pick<Prisma.TransactionClient, 'workspaceMembership'>,
     accountId: string,
     workspaceId: string,
+    asOf: Date,
   ): Promise<EffectivePermissions | null> {
-    const membership = await this.prisma.workspaceMembership.findFirst({
+    const membership = await store.workspaceMembership.findFirst({
       where: {
         accountId,
         workspaceId,
@@ -49,7 +52,7 @@ export class WorkspacePermissionResolverService {
         membershipRoles: {
           where: {
             isActive: true,
-            OR: [{ endDate: null }, { endDate: { gte: new Date() } }],
+            OR: [{ endDate: null }, { endDate: { gte: asOf } }],
           },
           select: {
             role: {
@@ -88,5 +91,30 @@ export class WorkspacePermissionResolverService {
       membershipId: membership.id,
       permissions: Array.from(new Set(codes)).sort(),
     };
+  }
+
+  async resolve(
+    accountId: string,
+    workspaceId: string,
+  ): Promise<EffectivePermissions | null> {
+    return this.resolveFromStore(
+      this.prisma,
+      accountId,
+      workspaceId,
+      new Date(),
+    );
+  }
+
+  /**
+   * The same canonical resolver, evaluated through the caller's transaction.
+   * Lifecycle commands use this instead of growing a second RBAC query.
+   */
+  async resolveWithinTransaction(
+    tx: Prisma.TransactionClient,
+    accountId: string,
+    workspaceId: string,
+    asOf = new Date(),
+  ): Promise<EffectivePermissions | null> {
+    return this.resolveFromStore(tx, accountId, workspaceId, asOf);
   }
 }

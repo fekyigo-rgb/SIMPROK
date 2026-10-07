@@ -74,6 +74,7 @@ export const PERMISSIONS = {
    */
   EXECUTION_PLAN_EDIT: 'EXECUTION_PLAN_EDIT',
   EXECUTION_PLAN_LOCK: 'EXECUTION_PLAN_LOCK',
+  PROJECT_EXECUTION_START: 'PROJECT_EXECUTION_START',
 
   OBSERVATORY_VIEW: 'OBSERVATORY_VIEW',
 
@@ -354,6 +355,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     note: "MON-04. Application gate only; the same command separately requires Position -> PositionAuthority -> Authority('EXECUTION_PLAN_LOCK').",
   },
   {
+    code: PERMISSIONS.PROJECT_EXECUTION_START,
+    domain: PERMISSION_DOMAINS.PROJECT,
+    state: PERMISSION_CATALOG_STATES.GOVERNED_ACTIVATION,
+    description:
+      'Invoke the governed transition that starts official project execution.',
+    note: 'SR-01 application gate; PositionAuthority must separately hold PROJECT_EXECUTION_START, and canonical provisioning grants it to no role.',
+  },
+  {
     code: PERMISSIONS.OBSERVATORY_VIEW,
     domain: PERMISSION_DOMAINS.OBSERVATORY,
     state: PERMISSION_CATALOG_STATES.SEEDED_CURRENT,
@@ -521,6 +530,7 @@ export const GOVERNED_ACTIVATION_PERMISSION_CODES: readonly PermissionCode[] = [
   PERMISSIONS.RAB_APPROVE,
   PERMISSIONS.EXECUTION_PLAN_EDIT,
   PERMISSIONS.EXECUTION_PLAN_LOCK,
+  PERMISSIONS.PROJECT_EXECUTION_START,
   PERMISSIONS.BASIC_PRICE_VERIFY,
   PERMISSIONS.BASIC_PRICE_PUBLISH,
   PERMISSIONS.BASIC_PRICE_REVIEW_VIEW,

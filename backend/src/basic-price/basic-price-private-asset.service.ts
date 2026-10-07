@@ -288,6 +288,7 @@ export class BasicPricePrivateAssetService {
             status: string;
             effectiveDate: Date | null;
             regionId: string | null;
+            regionCoverageSetId: string | null;
             sourceType: string | null;
             sourceOrigin: string | null;
             uploadedByAccountId: string;
@@ -303,7 +304,7 @@ export class BasicPricePrivateAssetService {
           }>
         >(
           Prisma.sql`SELECT "id", "workspaceId", "organizationId", "status", "effectiveDate",
-                          "regionId", "sourceType", "sourceOrigin", "uploadedByAccountId",
+                          "regionId", "regionCoverageSetId", "sourceType", "sourceOrigin", "uploadedByAccountId",
                           "sourcePeriodLabel", "sourcePeriodGranularity", "effectiveDateProvenance", "effectiveDateDerivationRule",
                           "reviewDate",
                           "sourceRegionScopeLabel", "sourceRegionScopeGeographicEvidence",
@@ -425,6 +426,7 @@ export class BasicPricePrivateAssetService {
               // resolved or set on the batch. Never inferred here.
               resourceId: row.resourceCatalogId,
               regionId: batch.regionId,
+              regionCoverageSetId: batch.regionCoverageSetId,
               effectiveDate: temporal.effectiveDate,
               // EXACT money. Prisma.Decimal, never Number()/parseFloat().
               value: new Prisma.Decimal(row.proposedCanonicalPrice),
@@ -1252,6 +1254,7 @@ export class BasicPricePrivateAssetService {
             organizationId: predecessor.organizationId,
             resourceId: predecessor.resourceId,
             regionId: predecessor.regionId,
+            regionCoverageSetId: predecessor.regionCoverageSetId,
             effectiveDate: predecessor.effectiveDate,
             value: new Prisma.Decimal(proposed),
             kdnPercent: predecessor.kdnPercent,
@@ -1545,6 +1548,7 @@ export class BasicPricePrivateAssetService {
             organizationId: predecessor.organizationId,
             resourceId: predecessor.resourceId,
             regionId: predecessor.regionId,
+            regionCoverageSetId: predecessor.regionCoverageSetId,
             effectiveDate: predecessor.effectiveDate,
             value: predecessor.value,
             kdnPercent: new Prisma.Decimal(proposedKdn),
@@ -1673,6 +1677,7 @@ export class BasicPricePrivateAssetService {
         organizationId: string | null;
         resourceId: string;
         regionId: string | null;
+        regionCoverageSetId: string | null;
         value: Prisma.Decimal;
         kdnPercent: Prisma.Decimal | null;
         kdnEstablishment: string | null;
@@ -1719,6 +1724,7 @@ export class BasicPricePrivateAssetService {
         assetScope: BasicPriceAssetScope.WORKSPACE_PRIVATE,
         resourceId: predecessor.resourceId,
         regionId: predecessor.regionId,
+        regionCoverageSetId: predecessor.regionCoverageSetId,
         effectiveDate: observationDate,
         value: new Prisma.Decimal(proposedValue),
         recordsNewObservation: true,
@@ -1744,6 +1750,7 @@ export class BasicPricePrivateAssetService {
           organizationId: predecessor.organizationId,
           resourceId: predecessor.resourceId,
           regionId: predecessor.regionId,
+          regionCoverageSetId: predecessor.regionCoverageSetId,
           effectiveDate: observationDate,
           value: new Prisma.Decimal(proposedValue),
           kdnPercent: kdnValue,
@@ -1802,6 +1809,7 @@ export class BasicPricePrivateAssetService {
             assetScope: BasicPriceAssetScope.WORKSPACE_PRIVATE,
             resourceId: predecessor.resourceId,
             regionId: predecessor.regionId,
+            regionCoverageSetId: predecessor.regionCoverageSetId,
             effectiveDate: observationDate,
             value: new Prisma.Decimal(proposedValue),
             recordsNewObservation: true,

@@ -10,6 +10,7 @@ describe('BP-DETAIL-MAINT-02 private post-create price correction', () => {
     organizationId: 'org-1',
     resourceId: 'res-1',
     regionId: 'reg-1',
+    regionCoverageSetId: 'coverage-1',
     effectiveDate: new Date('2026-01-15T00:00:00.000Z'),
     value: '62500.00',
     kdnPercent: '72.50',
@@ -99,6 +100,7 @@ describe('BP-DETAIL-MAINT-02 private post-create price correction', () => {
     expect(data.kdnPercent).toBe('72.50');
     expect(data.resourceId).toBe(PREDECESSOR.resourceId);
     expect(data.regionId).toBe(PREDECESSOR.regionId);
+    expect(data.regionCoverageSetId).toBe(PREDECESSOR.regionCoverageSetId);
     expect(data.effectiveDate).toBe(PREDECESSOR.effectiveDate);
     expect(data.assetScope).toBe(BasicPriceAssetScope.WORKSPACE_PRIVATE);
   });

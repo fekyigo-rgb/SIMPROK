@@ -152,16 +152,6 @@ export class ExecutionPlanService {
     }
   }
 
-  private activateProjectWithinLock(
-    tx: Prisma.TransactionClient,
-    projectId: string,
-  ) {
-    return tx.project.updateMany({
-      where: { id: projectId, status: ProjectStatus.PLANNED },
-      data: { status: ProjectStatus.ACTIVE },
-    });
-  }
-
   async getForMonitoring(params: {
     projectId: string;
     accountId: string;
@@ -340,20 +330,7 @@ export class ExecutionPlanService {
       distributions: plan.distributions,
     });
     const blockers = [...projection.blockers];
-    if (
-      plan.status === ExecutionPlanStatus.LOCKED &&
-      project.status !== ProjectStatus.ACTIVE
-    ) {
-      blockers.push({
-        code: EXECUTION_PLAN_BLOCKER.LOCKED_PLAN_PROJECT_NOT_ACTIVE,
-      });
-    }
-    const readinessState =
-      blockers.length === 0
-        ? projection.readinessState
-        : plan.status === ExecutionPlanStatus.LOCKED
-          ? EXECUTION_PLAN_READINESS.PLAN_NOT_READY
-          : projection.readinessState;
+    const readinessState = projection.readinessState;
     const itemById = new Map(items.map((item) => [item.id, item]));
 
     return {
@@ -639,7 +616,8 @@ export class ExecutionPlanService {
             settled.lockedFromProjectStatus === ProjectStatus.ACTIVE) &&
           settled.lockedAuthorityCode === EXECUTION_PLAN_AUTHORITY;
         if (
-          project.status === ProjectStatus.ACTIVE &&
+          (project.status === ProjectStatus.PLANNED ||
+            project.status === ProjectStatus.ACTIVE) &&
           settled.id === dto.executionPlanVersionId &&
           settled.revision === dto.expectedRevision &&
           wholeLock
@@ -749,21 +727,12 @@ export class ExecutionPlanService {
       if (planTransition.count !== 1) {
         throw new ConflictException('EXECUTION_PLAN_REVISION_CONFLICT');
       }
-      if (draftFlow === EXECUTION_PLAN_DRAFT_FLOW.NORMAL_PLANNED_FLOW) {
-        const projectTransition = await this.activateProjectWithinLock(
-          tx,
-          projectId,
-        );
-        if (projectTransition.count !== 1) {
-          throw new ConflictException('PROJECT_ACTIVATION_CONFLICT');
-        }
-      }
       return {
         changed: true,
         executionPlanVersionId: plan.id,
         status: ExecutionPlanStatus.LOCKED,
         revision: plan.revision,
-        projectStatus: ProjectStatus.ACTIVE,
+        projectStatus: project.status,
         baselineId: baseline.id,
         lockedAt: lockedAt.toISOString(),
         authorityCode: EXECUTION_PLAN_AUTHORITY,

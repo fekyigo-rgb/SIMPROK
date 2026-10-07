@@ -28,6 +28,7 @@ import { PersistBoqItemCalculationDto } from './dto/persist-boq-item-calculation
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { UpdateProjectTimeZoneDto } from './dto/update-project-time-zone.dto';
 import { ActivateWorkPeriodAnchorDto } from './dto/activate-work-period-anchor.dto';
+import { StartProjectExecutionDto } from './dto/start-project-execution.dto';
 import { CreateRabIntelligenceProposalDto } from './dto/create-rab-intelligence-proposal.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
@@ -52,6 +53,8 @@ interface WorkPeriodAnchorProjectRequest {
     membershipId?: unknown;
     assignmentId?: unknown;
     roleInProject?: unknown;
+    isPrimaryAssignment?: unknown;
+    roles?: unknown;
   };
 }
 
@@ -475,6 +478,49 @@ export class ProjectController {
       workspaceId: access.workspaceId,
       assignmentId: access.assignmentId,
       roleInProject: access.roleInProject,
+    });
+  }
+
+  @Post(':projectId/start-execution')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.PROJECT_EXECUTION_START)
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: false },
+    }),
+  )
+  async startExecution(
+    @Req() request: WorkPeriodAnchorProjectRequest,
+    @Param('projectId') projectId: string,
+    @Body() dto: StartProjectExecutionDto,
+  ) {
+    const actorAccountId = request.user?.id;
+    const access = request.projectAccess;
+    if (
+      typeof actorAccountId !== 'string' ||
+      typeof access?.workspaceId !== 'string' ||
+      typeof access.membershipId !== 'string' ||
+      typeof access.assignmentId !== 'string' ||
+      typeof access.roleInProject !== 'string' ||
+      typeof access.isPrimaryAssignment !== 'boolean' ||
+      !Array.isArray(access.roles) ||
+      !access.roles.every((role) => typeof role === 'string')
+    ) {
+      throw new InternalServerErrorException(
+        'Trusted project actor context is missing',
+      );
+    }
+    return this.projectService.startExecution(projectId, dto, {
+      accountId: actorAccountId,
+      membershipId: access.membershipId,
+      workspaceId: access.workspaceId,
+      assignmentId: access.assignmentId,
+      roleInProject: access.roleInProject,
+      isPrimaryAssignment: access.isPrimaryAssignment,
+      roles: access.roles,
     });
   }
 

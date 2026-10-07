@@ -266,6 +266,105 @@
   color: var(--bp-uncertain);
 }
 
+.bp-region-hierarchy {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.bp-region-hierarchy__legend {
+  grid-column: 1 / -1;
+  padding: 0;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--simprok-authority-navy-900);
+}
+
+.bp-region-multiselect {
+  position: relative;
+  min-width: 0;
+}
+
+.bp-region-multiselect__summary {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 30px 8px 10px;
+  overflow: hidden;
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-radius: var(--radius-sm);
+  background: var(--simprok-white);
+  color: var(--simprok-engineering-blue-900);
+  font-size: var(--text-sm);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.bp-region-multiselect__summary:focus-visible {
+  outline: 2px solid var(--simprok-bright-sky-blue-400);
+  outline-offset: -1px;
+  border-color: var(--simprok-bright-sky-blue-400);
+}
+
+.bp-region-multiselect__summary[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.bp-region-multiselect__panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  box-sizing: border-box;
+  width: min(360px, calc(100vw - 48px));
+  max-width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-radius: var(--radius-sm);
+  background: var(--simprok-white);
+  box-shadow: 0 8px 24px rgb(15 35 64 / 16%);
+}
+
+.bp-region-multiselect__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--simprok-engineering-blue-200);
+}
+
+.bp-region-multiselect__options {
+  display: grid;
+  max-height: 240px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-top: var(--space-1);
+}
+
+.bp-region-multiselect__option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  padding: 6px 4px;
+  color: var(--simprok-engineering-blue-900);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.bp-region-multiselect__option span {
+  overflow-wrap: anywhere;
+}
+
 /* A select that sits inline in a bar rather than filling a filter cell. */
 .bp-select--inline {
   width: auto;
@@ -1181,6 +1280,55 @@ tr.bp-detail-anchor > td {
 
 .bp-field--date .bp-input {
   width: 100%;
+}
+
+/* Existing absolute-tooltip presentation, scoped to the two import dates. */
+.bp-date-help {
+  position: relative;
+}
+
+.bp-date-help__trigger {
+  cursor: help;
+}
+
+.bp-date-help__tooltip {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  left: auto;
+  z-index: 22;
+  box-sizing: border-box;
+  width: min(26rem, calc(100vw - 3rem));
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-radius: var(--radius-md);
+  background: var(--simprok-white);
+  color: var(--simprok-engineering-blue-700);
+  box-shadow: 0 10px 24px rgb(15 61 89 / 14%);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
+}
+
+.bp-date-help__tooltip p {
+  margin: 0;
+}
+
+.bp-date-help__tooltip p + p {
+  margin-top: 0.35rem;
+}
+
+.bp-date-help__trigger:hover ~ .bp-date-help__tooltip,
+.bp-date-help .bp-input:hover ~ .bp-date-help__tooltip,
+.bp-date-help .bp-input:focus ~ .bp-date-help__tooltip,
+.bp-date-help .bp-input:focus-visible ~ .bp-date-help__tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 
 /* Novice decision cards — one fork, not an error banner. */

@@ -26,6 +26,8 @@ import { reviewCounters } from "../utils/basicPriceJourney.ts";
  */
 
 const review = readFileSync("src/pages/BasicPriceReviewPage.tsx", "utf8");
+const importPage = readFileSync("src/pages/BasicPriceImportPage.tsx", "utf8");
+const basicPriceCss = readFileSync("src/styles/basicPrice.css", "utf8");
 const intakeQuestion = readFileSync(
   "src/components/basic-price/IntakeQuestion.tsx",
   "utf8",
@@ -34,13 +36,18 @@ const regionSelect = readFileSync(
   "src/components/basic-price/RegionSearchSelect.tsx",
   "utf8",
 );
+const regionHierarchy = readFileSync(
+  "src/components/basic-price/RegionHierarchySelect.tsx",
+  "utf8",
+);
 const journey = readFileSync("src/utils/basicPriceJourney.ts", "utf8");
 /** Comments are design intent, not screen text — they must not satisfy a copy pin. */
 const strip = (source: string) =>
   source.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
 const reviewText = strip(review);
 const intakeText = strip(intakeQuestion);
-const regionSelectText = strip(regionSelect);
+const regionSelectText = strip(`${regionSelect}\n${regionHierarchy}`);
+const importPageText = strip(importPage);
 
 const TELUK_AMBON = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -157,7 +164,59 @@ test("REGION-05: the two questions no longer share one word on screen", () => {
   assert.match(intakeText, /Pilih kolom harga\./);
   assert.match(intakeText, /Wilayah resmi SIMPROK dipilih terpisah/);
   assert.doesNotMatch(intakeText, /Wilayah mana yang ingin Anda proses/);
-  assert.match(regionSelectText, />\s*Wilayah\s*</);
+  assert.match(regionSelectText, /contextLabel="Wilayah"/);
+  assert.match(regionSelectText, /<legend[^>]*>\{contextLabel\}<\/legend>/);
+});
+
+test("UI-RESTORE-01: five-level Region hierarchy exists only in Lengkapi Sumber", () => {
+  assert.match(importPageText, /<RegionSearchSelect/);
+  assert.match(regionSelectText, /<RegionHierarchySelect/);
+  for (const label of [
+    '"Negara"',
+    '"Provinsi"',
+    '"Kabupaten/Kota"',
+    '"Kecamatan"',
+    '"Desa/Kelurahan (opsional)"',
+  ]) {
+    assert.match(regionSelectText, new RegExp(label.replace(/[()/]/g, "\\$&"), "u"));
+  }
+  assert.match(regionSelectText, /<details[\s\S]*aria-label="Pilihan Desa\/Kelurahan"/u);
+  assert.match(regionSelectText, /<select[\s\S]*required/u);
+  assert.doesNotMatch(regionSelectText, /<details[^>]*required/u);
+  assert.doesNotMatch(importPageText, /Peninjauan wilayah sumber|handleConfirmRegionScope/);
+  assert.doesNotMatch(
+    regionSelectText,
+    /Hapus pilihan wilayah|Lengkapi wilayah sampai Kecamatan|Wilayah harga:/,
+  );
+  assert.match(importPageText, /Tercatat di SIMPROK/);
+  assert.match(importPageText, /Simpan Konteks Sumber/);
+  assert.match(importPageText, /Lanjut ke Peninjauan Baris/);
+});
+
+test("the two date explanations are hover/focus tooltips without a disclosure row", () => {
+  assert.doesNotMatch(importPageText, /Apa maksud tanggal ini\?/u);
+  assert.equal((importPageText.match(/role="tooltip"/gu) ?? []).length, 2);
+  assert.match(importPageText, /id="simprok-effective-date-help"/u);
+  assert.match(importPageText, /id="simprok-review-date-help"/u);
+  assert.match(importPageText, /aria-describedby="simprok-effective-date-help"/u);
+  assert.match(importPageText, /aria-describedby="simprok-review-date-help"/u);
+  assert.match(basicPriceCss, /\.bp-date-help__tooltip \{[\s\S]*?position: absolute;/u);
+  assert.match(basicPriceCss, /\.bp-date-help__tooltip \{[^}]*right: 0;[^}]*left: auto;/u);
+  assert.match(basicPriceCss, /\.bp-date-help__trigger:hover ~ \.bp-date-help__tooltip/u);
+  assert.match(basicPriceCss, /\.bp-date-help \.bp-input:hover ~ \.bp-date-help__tooltip/u);
+  assert.match(basicPriceCss, /\.bp-date-help \.bp-input:focus ~ \.bp-date-help__tooltip/u);
+  assert.match(
+    basicPriceCss,
+    /\.bp-date-help__tooltip \{[^}]*background: var\(--simprok-white\);/u,
+  );
+  assert.doesNotMatch(basicPriceCss, /var\(--simprok-trust-blue-50\)/u);
+  assert.match(basicPriceCss, /pointer-events: none;/u);
+});
+
+test("a metadata identity collision reuses the server-owned existing-batch route", () => {
+  assert.match(importPage, /metadataSaveExistingBatchId\(error\.httpStatus, error\.detail\)/u);
+  assert.match(importPage, /reimportActionPath\('USE_EXISTING'/u);
+  assert.match(importPage, /state: \{ usedExisting: true \}/u);
 });
 
 // ── COPY / LOCALIZATION (§18 / §19) ─────────────────────────────────────────

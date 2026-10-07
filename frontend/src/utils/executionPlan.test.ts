@@ -160,16 +160,18 @@ function periodicMonitoring(input: {
 
 function executionPlanRead(input: {
   projectId?: string;
+  projectStatus?: 'PLANNED' | 'ACTIVE';
   baseline?: ExecutionPlanResponse['baseline'];
   planId?: string;
   planVersion?: number;
   status?: 'DRAFT' | 'LOCKED';
+  lockedFromProjectStatus?: 'PLANNED' | 'ACTIVE';
   scheduleItemIds?: string[];
 } = {}): ExecutionPlanResponse {
   const status = input.status ?? 'LOCKED';
   return {
     projectId: input.projectId ?? 'project-1',
-    projectStatus: 'ACTIVE',
+    projectStatus: input.projectStatus ?? 'ACTIVE',
     projectTimeZone: null,
     readinessState:
       status === 'LOCKED' ? 'LOCKED_FOR_EXECUTION' : 'REVISION_IN_PROGRESS',
@@ -184,7 +186,10 @@ function executionPlanRead(input: {
       lastEditedAt: '2026-08-01T00:00:00.000Z',
       lockedAt: status === 'LOCKED' ? '2026-08-01T01:00:00.000Z' : null,
       lockedFromRevision: status === 'LOCKED' ? 1 : null,
-      lockedFromProjectStatus: status === 'LOCKED' ? 'ACTIVE' : null,
+      lockedFromProjectStatus:
+        status === 'LOCKED'
+          ? (input.lockedFromProjectStatus ?? input.projectStatus ?? 'ACTIVE')
+          : null,
       authority: null,
     },
     distributions: [],
@@ -494,6 +499,32 @@ test('MON04-PS-1 exact locked Plan provenance is coherent with one Periodic snap
     assert.equal(result.executionPlan, executionPlan);
     assert.equal(result.lens, periodicResponse.temporalLens);
   }
+});
+
+test('SR-01 PLANNED plus LOCKED remains a readable locked-plan contract', () => {
+  const executionPlan = executionPlanRead({
+    projectStatus: 'PLANNED',
+    lockedFromProjectStatus: 'PLANNED',
+  });
+
+  assert.equal(executionPlan.projectStatus, 'PLANNED');
+  assert.equal(executionPlan.plan?.status, 'LOCKED');
+  assert.equal(executionPlan.plan?.lockedFromProjectStatus, 'PLANNED');
+  assert.equal(executionPlan.readinessState, 'LOCKED_FOR_EXECUTION');
+  assert.equal(
+    periodicScheduleCoherence({
+      periodicResponse: periodicMonitoring(),
+      executionPlan,
+    }).state,
+    'COHERENT',
+  );
+
+  const panel = readFileSync(
+    'src/pages/field/ExecutionPlanReadinessPanel.tsx',
+    'utf8',
+  );
+  assert.match(panel, /const locked = executionPlan\.plan\?\.status === 'LOCKED'/);
+  assert.doesNotMatch(panel, /projectStatus === 'ACTIVE'.*locked/s);
 });
 
 test('MON04-PS-2 project and exact Baseline identity mismatches fail closed', () => {

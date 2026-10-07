@@ -70,6 +70,8 @@ export interface UnitLookupQuery {
 
 export interface BasicPriceImportMetadata {
   regionId?: string;
+  /** Explicit Village intent for metadata PATCH only; preview never sends it. */
+  coveredVillageRegionIds?: string[];
   effectiveDate?: string;
   /** Soft re-verification, stated by a person. Never derived. */
   reviewDate?: string;
@@ -203,6 +205,7 @@ export async function searchUnitDefinitions(
 
 const appendMetadata = (body: FormData, metadata: BasicPriceImportMetadata) => {
   for (const [key, value] of Object.entries(metadata)) {
+    if (key === 'coveredVillageRegionIds') continue;
     if (value !== undefined && value !== null && value !== '') body.append(key, String(value));
   }
 };

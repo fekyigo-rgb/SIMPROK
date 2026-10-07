@@ -30,6 +30,12 @@ describe('BasicPriceImportService', () => {
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
     };
+    region: { findUnique: jest.Mock; findMany: jest.Mock };
+    basicPriceRegionCoverageSet: {
+      findUniqueOrThrow: jest.Mock;
+      findUnique: jest.Mock;
+    };
+    basicPriceRegionCoverageMember: { createMany: jest.Mock };
     priceSubmission: { create: jest.Mock; update: jest.Mock };
     priceSubmissionRevision: { create: jest.Mock };
     priceSubmissionAudit: { create: jest.Mock; findFirst: jest.Mock };
@@ -80,6 +86,12 @@ describe('BasicPriceImportService', () => {
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
       },
+      region: { findUnique: jest.fn(), findMany: jest.fn() },
+      basicPriceRegionCoverageSet: {
+        findUniqueOrThrow: jest.fn(),
+        findUnique: jest.fn(),
+      },
+      basicPriceRegionCoverageMember: { createMany: jest.fn() },
       priceSubmission: { create: jest.fn(), update: jest.fn() },
       priceSubmissionRevision: { create: jest.fn() },
       priceSubmissionAudit: { create: jest.fn(), findFirst: jest.fn() },
@@ -1081,6 +1093,227 @@ describe('BasicPriceImportService', () => {
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
     });
+
+    it('resolves 2+ Villages into one immutable set inside the existing metadata writer', async () => {
+      const completeBatch = {
+        ...storedBatch,
+        organizationId: ORGANIZATION_ID,
+        importFingerprint: 'OLD-FINGERPRINT',
+        sourceSha256: 'A'.repeat(64),
+        selectedSheetName: 'Sheet1',
+        parserContractVersion: 'BP_TEST_V1',
+        regionId: 'district-01',
+        regionCoverageSetId: null,
+        effectiveDate: null,
+        sourcePeriodLabel: null,
+        sourcePeriodGranularity: null,
+        effectiveDateProvenance: null,
+        effectiveDateDerivationRule: null,
+        sourceType: null,
+        sourceOrigin: null,
+        sourceOrganizationName: null,
+        sourceVendorName: null,
+        priceCoverageDeclared: false,
+        transportIncluded: null,
+        loadingIncluded: null,
+        unloadingIncluded: null,
+        deliveredToProject: null,
+        sourceRegionScopeLabel: null,
+        sourceRegionScopeGeographicEvidence: null,
+        regionScopeConfirmedRegionId: null,
+        ingestionChannel: 'USER_UPLOAD',
+        ingestionConnectorId: null,
+        ingestionExternalSourceId: null,
+        ingestionExternalRecordId: null,
+        ingestionExternalVersion: null,
+        interpretationResourceNameColumn: null,
+        interpretationSourceUnitColumn: null,
+        interpretationDeclaredSection: null,
+        interpretationKdnColumn: null,
+      };
+      tx.$queryRaw
+        .mockResolvedValueOnce([completeBatch])
+        .mockResolvedValueOnce([{ id: 'coverage-set-01' }]);
+      tx.region.findUnique.mockResolvedValue({
+        id: 'district-01',
+        code: '81.71.02',
+        isActive: true,
+        administrativeLevel: 'DISTRICT',
+        parentId: 'city-01',
+      });
+      tx.region.findMany.mockResolvedValue([
+        {
+          id: 'village-b',
+          code: '81.71.02.1002',
+          isActive: true,
+          administrativeLevel: 'VILLAGE',
+          parentId: 'district-01',
+        },
+        {
+          id: 'village-a',
+          code: '81.71.02.1001',
+          isActive: true,
+          administrativeLevel: 'VILLAGE',
+          parentId: 'district-01',
+        },
+      ]);
+      tx.basicPriceImportBatch.update.mockResolvedValue({
+        ...completeBatch,
+        version: 1,
+        region: { id: 'district-01', code: '81.71.02', name: 'Sirimau' },
+        regionCoverageSet: {
+          members: [
+            {
+              region: {
+                id: 'village-a',
+                code: '81.71.02.1001',
+                name: 'Village A',
+                administrativeLevel: 'VILLAGE',
+                parentId: 'district-01',
+              },
+            },
+            {
+              region: {
+                id: 'village-b',
+                code: '81.71.02.1002',
+                name: 'Village B',
+                administrativeLevel: 'VILLAGE',
+                parentId: 'district-01',
+              },
+            },
+          ],
+        },
+      });
+
+      const result = await service.updateBatchMetadata(
+        WORKSPACE_ID,
+        'batch-01',
+        {
+          version: 0,
+          regionId: 'district-01',
+          coveredVillageRegionIds: ['village-b', 'village-a'],
+        },
+        ACCOUNT_ID,
+        ['version', 'regionId', 'coveredVillageRegionIds'],
+      );
+
+      expect(tx.basicPriceRegionCoverageMember.createMany).toHaveBeenCalledWith({
+        data: [
+          { coverageSetId: 'coverage-set-01', regionId: 'village-a' },
+          { coverageSetId: 'coverage-set-01', regionId: 'village-b' },
+        ],
+      });
+      expect(tx.basicPriceImportBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            regionId: 'district-01',
+            regionCoverageSetId: 'coverage-set-01',
+            importFingerprint: expect.any(String),
+          }),
+        }),
+      );
+      expect(result.coveredVillageRegions.map((item) => item.id)).toEqual([
+        'village-a',
+        'village-b',
+      ]);
+    });
+
+    it('reuses the canonical winner when an equivalent unordered set already exists', async () => {
+      const completeBatch = {
+        ...storedBatch,
+        organizationId: ORGANIZATION_ID,
+        importFingerprint: 'OLD-FINGERPRINT',
+        sourceSha256: 'B'.repeat(64),
+        selectedSheetName: 'Sheet1',
+        parserContractVersion: 'BP_TEST_V1',
+        regionId: 'district-01',
+        regionCoverageSetId: null,
+        effectiveDate: null,
+        sourcePeriodLabel: null,
+        sourcePeriodGranularity: null,
+        effectiveDateProvenance: null,
+        effectiveDateDerivationRule: null,
+        sourceType: null,
+        sourceOrigin: null,
+        sourceOrganizationName: null,
+        sourceVendorName: null,
+        priceCoverageDeclared: false,
+        transportIncluded: null,
+        loadingIncluded: null,
+        unloadingIncluded: null,
+        deliveredToProject: null,
+        sourceRegionScopeLabel: null,
+        sourceRegionScopeGeographicEvidence: null,
+        regionScopeConfirmedRegionId: null,
+        ingestionChannel: 'USER_UPLOAD',
+        ingestionConnectorId: null,
+        ingestionExternalSourceId: null,
+        ingestionExternalRecordId: null,
+        ingestionExternalVersion: null,
+        interpretationResourceNameColumn: null,
+        interpretationSourceUnitColumn: null,
+        interpretationDeclaredSection: null,
+        interpretationKdnColumn: null,
+      };
+      tx.$queryRaw
+        .mockResolvedValueOnce([completeBatch])
+        .mockResolvedValueOnce([]);
+      tx.region.findUnique.mockResolvedValue({
+        id: 'district-01',
+        code: '81.71.02',
+        isActive: true,
+        administrativeLevel: 'DISTRICT',
+        parentId: 'city-01',
+      });
+      tx.region.findMany.mockResolvedValue([
+        {
+          id: 'village-a',
+          code: '81.71.02.1001',
+          isActive: true,
+          administrativeLevel: 'VILLAGE',
+          parentId: 'district-01',
+        },
+        {
+          id: 'village-b',
+          code: '81.71.02.1002',
+          isActive: true,
+          administrativeLevel: 'VILLAGE',
+          parentId: 'district-01',
+        },
+      ]);
+      tx.basicPriceRegionCoverageSet.findUniqueOrThrow.mockResolvedValue({
+        id: 'coverage-winner',
+        anchorRegionId: 'district-01',
+        members: [{ regionId: 'village-b' }, { regionId: 'village-a' }],
+      });
+      tx.basicPriceImportBatch.update.mockResolvedValue({
+        ...completeBatch,
+        version: 1,
+        region: { id: 'district-01', code: '81.71.02', name: 'Sirimau' },
+        regionCoverageSet: { members: [] },
+      });
+
+      await service.updateBatchMetadata(
+        WORKSPACE_ID,
+        'batch-01',
+        {
+          version: 0,
+          regionId: 'district-01',
+          coveredVillageRegionIds: ['village-a', 'village-b'],
+        },
+        ACCOUNT_ID,
+        ['version', 'regionId', 'coveredVillageRegionIds'],
+      );
+
+      expect(tx.basicPriceRegionCoverageMember.createMany).not.toHaveBeenCalled();
+      expect(tx.basicPriceImportBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            regionCoverageSetId: 'coverage-winner',
+          }),
+        }),
+      );
+    });
   });
 
   describe('submitPrivatePrice', () => {
@@ -1092,6 +1325,7 @@ describe('BasicPriceImportService', () => {
       assetScope: 'WORKSPACE_PRIVATE',
       resourceId: 'resource-01',
       regionId: 'region-01',
+      regionCoverageSetId: 'coverage-01',
       sourceOrigin: 'FIELD_REPORT',
       sourceType: 'MARKET_SURVEY',
       value: '137500.00',
@@ -1134,6 +1368,12 @@ describe('BasicPriceImportService', () => {
       );
 
       expect(tx.priceSubmission.create).toHaveBeenCalledTimes(1);
+      expect(tx.priceSubmission.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          regionId: 'region-01',
+          regionCoverageSetId: 'coverage-01',
+        }),
+      });
       expect(reviewService.createReviewWithinTransaction).toHaveBeenCalledWith(
         tx,
         {

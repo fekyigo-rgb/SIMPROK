@@ -71,6 +71,12 @@ export const CANONICAL_PERMISSIONS: readonly CanonicalPermissionDefinition[] = [
     description: 'Invoke the final Execution Plan lock for an assigned project.',
   },
   {
+    code: PERMISSIONS.PROJECT_EXECUTION_START,
+    name: 'Start Project Execution',
+    description:
+      'Invoke the governed transition that starts official project execution.',
+  },
+  {
     code: PERMISSIONS.OBSERVATORY_VIEW,
     name: 'View Observatory',
     description: 'View workspace-scoped Observatory or portfolio intelligence data.',

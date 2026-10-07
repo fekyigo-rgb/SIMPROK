@@ -49,6 +49,10 @@ import {
   selectInterpretationSibling,
   type InterpretationIdentity,
 } from './basic-price-reimport.law';
+import {
+  BasicPriceRegionCoverageError,
+  canonicalBasicPriceRegionCoverage,
+} from './basic-price-region-coverage';
 
 export const MAX_UPLOAD_BYTES = MAX_ENVELOPE_BYTES;
 
@@ -328,6 +332,8 @@ function fingerprintOf(input: {
   parserContractVersion: string;
   metadata: FingerprintMetadata;
   intakeSegments: string[];
+  /** Appended only for explicit multi-Region truth; absent legacy bytes stay exact. */
+  regionCoverageDigest?: string | null;
 }): string {
   return createHash('sha256')
     .update(
@@ -339,6 +345,9 @@ function fingerprintOf(input: {
         input.parserContractVersion,
         fingerprintMetadataPart(input.metadata),
         ...input.intakeSegments,
+        ...(input.regionCoverageDigest
+          ? [`regionCoverageDigest:${input.regionCoverageDigest}`]
+          : []),
       ].join('|'),
     )
     .digest('hex')
@@ -986,6 +995,217 @@ export class BasicPriceImportService {
     });
     if (!workspace) throw new NotFoundException('Workspace not found');
     return workspace.organizationId;
+  }
+
+  private coveredVillageRegionsOf(
+    coverageSet:
+      | {
+          members: Array<{
+            region: {
+              id: string;
+              code: string;
+              name: string;
+              administrativeLevel: string | null;
+              parentId: string | null;
+            };
+          }>;
+        }
+      | null
+      | undefined,
+  ) {
+    return (coverageSet?.members ?? [])
+      .map(({ region }) => region)
+      .sort(
+        (left, right) =>
+          left.code.localeCompare(right.code, 'en') ||
+          left.id.localeCompare(right.id, 'en'),
+      );
+  }
+
+  /**
+   * Resolve one explicit coverage intent inside the existing metadata
+   * transaction. This is deliberately not a public CRUD service: zero/one
+   * member stays scalar, 2+ resolves one immutable value, and an omitted field
+   * preserves the already-stored fact.
+   */
+  private async resolveRegionCoverage(
+    tx: Prisma.TransactionClient,
+    input: {
+      currentRegionId: string | null;
+      currentCoverageSetId: string | null;
+      requestedRegionId?: string;
+      coveredVillageRegionIds?: string[];
+      coverageFieldProvided: boolean;
+    },
+  ): Promise<{
+    regionId: string | null;
+    regionCoverageSetId: string | null;
+    regionCoverageDigest: string | null;
+  }> {
+    if (!input.coverageFieldProvided) {
+      if (!input.currentCoverageSetId) {
+        return {
+          regionId: input.requestedRegionId ?? input.currentRegionId,
+          regionCoverageSetId: null,
+          regionCoverageDigest: null,
+        };
+      }
+      const current =
+        await tx.basicPriceRegionCoverageSet.findUniqueOrThrow({
+          where: { id: input.currentCoverageSetId },
+          select: {
+            id: true,
+            anchorRegionId: true,
+            deterministicDigest: true,
+          },
+        });
+      if (
+        input.requestedRegionId !== undefined &&
+        input.requestedRegionId !== current.anchorRegionId
+      ) {
+        throw new BadRequestException(
+          'REGION_COVERAGE_EXPLICIT_SELECTION_REQUIRED',
+        );
+      }
+      return {
+        regionId: current.anchorRegionId,
+        regionCoverageSetId: current.id,
+        regionCoverageDigest: current.deterministicDigest,
+      };
+    }
+
+    const memberIds = input.coveredVillageRegionIds ?? [];
+    if (new Set(memberIds).size !== memberIds.length) {
+      throw new BadRequestException('REGION_COVERAGE_DUPLICATE_MEMBER');
+    }
+
+    if (memberIds.length === 0) {
+      return {
+        regionId: input.requestedRegionId ?? input.currentRegionId,
+        regionCoverageSetId: null,
+        regionCoverageDigest: null,
+      };
+    }
+
+    if (memberIds.length === 1) {
+      const village = await tx.region.findUnique({
+        where: { id: memberIds[0] },
+        select: {
+          id: true,
+          isActive: true,
+          administrativeLevel: true,
+        },
+      });
+      if (
+        !village ||
+        !village.isActive ||
+        village.administrativeLevel !== 'VILLAGE'
+      ) {
+        throw new BadRequestException(
+          'REGION_COVERAGE_MEMBER_MUST_BE_ACTIVE_VILLAGE',
+        );
+      }
+      if (
+        input.requestedRegionId !== undefined &&
+        input.requestedRegionId !== village.id
+      ) {
+        throw new BadRequestException('REGION_COVERAGE_SCALAR_MISMATCH');
+      }
+      return {
+        regionId: village.id,
+        regionCoverageSetId: null,
+        regionCoverageDigest: null,
+      };
+    }
+
+    const anchorRegionId = input.requestedRegionId ?? input.currentRegionId;
+    if (!anchorRegionId) {
+      throw new BadRequestException(
+        'REGION_COVERAGE_ANCHOR_MUST_BE_ACTIVE_DISTRICT',
+      );
+    }
+    const [anchor, members] = await Promise.all([
+      tx.region.findUnique({
+        where: { id: anchorRegionId },
+        select: {
+          id: true,
+          code: true,
+          isActive: true,
+          administrativeLevel: true,
+          parentId: true,
+        },
+      }),
+      tx.region.findMany({
+        where: { id: { in: memberIds } },
+        select: {
+          id: true,
+          code: true,
+          isActive: true,
+          administrativeLevel: true,
+          parentId: true,
+        },
+      }),
+    ]);
+    if (!anchor) {
+      throw new BadRequestException(
+        'REGION_COVERAGE_ANCHOR_MUST_BE_ACTIVE_DISTRICT',
+      );
+    }
+    if (members.length !== memberIds.length) {
+      throw new BadRequestException('REGION_COVERAGE_REGION_NOT_FOUND');
+    }
+
+    let canonical: ReturnType<typeof canonicalBasicPriceRegionCoverage>;
+    try {
+      canonical = canonicalBasicPriceRegionCoverage(anchor, members);
+    } catch (error) {
+      if (error instanceof BasicPriceRegionCoverageError) {
+        throw new BadRequestException(error.code);
+      }
+      throw error;
+    }
+
+    const candidateId = randomUUID();
+    const inserted = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`INSERT INTO "basic_price_region_coverage_sets"
+        ("id", "anchorRegionId", "deterministicDigest")
+        VALUES (${candidateId}::uuid, ${canonical.anchorRegionId}::uuid, ${canonical.deterministicDigest})
+        ON CONFLICT ("deterministicDigest") DO NOTHING
+        RETURNING "id"`,
+    );
+    let regionCoverageSetId = inserted[0]?.id;
+    if (regionCoverageSetId) {
+      await tx.basicPriceRegionCoverageMember.createMany({
+        data: canonical.memberRegionIds.map((regionId) => ({
+          coverageSetId: regionCoverageSetId as string,
+          regionId,
+        })),
+      });
+    } else {
+      const winner = await tx.basicPriceRegionCoverageSet.findUniqueOrThrow({
+        where: { deterministicDigest: canonical.deterministicDigest },
+        include: { members: { select: { regionId: true } } },
+      });
+      const winnerMembers = winner.members
+        .map(({ regionId }) => regionId)
+        .sort((left, right) => left.localeCompare(right, 'en'));
+      const expectedMembers = [...canonical.memberRegionIds].sort((left, right) =>
+        left.localeCompare(right, 'en'),
+      );
+      if (
+        winner.anchorRegionId !== canonical.anchorRegionId ||
+        winnerMembers.join('|') !== expectedMembers.join('|')
+      ) {
+        throw new ConflictException('REGION_COVERAGE_DIGEST_COLLISION');
+      }
+      regionCoverageSetId = winner.id;
+    }
+
+    return {
+      regionId: canonical.anchorRegionId,
+      regionCoverageSetId,
+      regionCoverageDigest: canonical.deterministicDigest,
+    };
   }
 
   private summarize(
@@ -1825,6 +2045,7 @@ export class BasicPriceImportService {
             selectedSheetName: string;
             parserContractVersion: string;
             regionId: string | null;
+            regionCoverageSetId: string | null;
             sourceOrganizationName: string | null;
             sourceVendorName: string | null;
             priceCoverageDeclared: boolean;
@@ -1852,6 +2073,7 @@ export class BasicPriceImportService {
                           "sourceType", "sourceOrigin",
                           "organizationId", "importFingerprint", "sourceSha256",
                           "selectedSheetName", "parserContractVersion", "regionId",
+                          "regionCoverageSetId",
                           "sourceOrganizationName", "sourceVendorName",
                           "priceCoverageDeclared", "transportIncluded", "loadingIncluded",
                           "unloadingIncluded", "deliveredToProject",
@@ -2002,7 +2224,17 @@ export class BasicPriceImportService {
          * above: the identity must describe what is actually stored, so each value
          * is computed with the same omitted-means-unchanged rule its column uses.
          */
-        const finalRegionId = dto.regionId ?? batch.regionId;
+        const coverageFieldProvided = provided
+          ? provided.has('coveredVillageRegionIds')
+          : dto.coveredVillageRegionIds !== undefined;
+        const resolvedCoverage = await this.resolveRegionCoverage(tx, {
+          currentRegionId: batch.regionId,
+          currentCoverageSetId: batch.regionCoverageSetId,
+          requestedRegionId: dto.regionId,
+          coveredVillageRegionIds: dto.coveredVillageRegionIds,
+          coverageFieldProvided,
+        });
+        const finalRegionId = resolvedCoverage.regionId;
         const finalMetadata: FingerprintMetadata = {
           regionId: finalRegionId,
           effectiveDate: dto.effectiveDate
@@ -2065,6 +2297,7 @@ export class BasicPriceImportService {
             interpretationDeclaredSection: batch.interpretationDeclaredSection,
             interpretationKdnColumn: batch.interpretationKdnColumn,
           }),
+          regionCoverageDigest: resolvedCoverage.regionCoverageDigest,
         });
 
         /**
@@ -2110,9 +2343,29 @@ export class BasicPriceImportService {
             // fact, so what a person is told they saved is a PLACE.
             include: {
               region: { select: { id: true, code: true, name: true } },
+              regionCoverageSet: {
+                include: {
+                  members: {
+                    include: {
+                      region: {
+                        select: {
+                          id: true,
+                          code: true,
+                          name: true,
+                          administrativeLevel: true,
+                          parentId: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
             },
             data: {
-              regionId: dto.regionId ?? undefined,
+              regionId: finalRegionId ?? undefined,
+              regionCoverageSetId: coverageFieldProvided
+                ? resolvedCoverage.regionCoverageSetId
+                : undefined,
               effectiveDate: dto.effectiveDate
                 ? new Date(dto.effectiveDate)
                 : undefined,
@@ -2215,6 +2468,9 @@ export class BasicPriceImportService {
         return {
           ...this.summarize(updated, rows),
           region: updated.region ?? null,
+          coveredVillageRegions: this.coveredVillageRegionsOf(
+            updated.regionCoverageSet,
+          ),
         };
       });
     } catch (error) {
@@ -2261,7 +2517,26 @@ export class BasicPriceImportService {
       // there. The two paths a person actually watches a region through — save
       // it, then reload and check — therefore say the same thing in the same
       // shape, instead of one of them going quiet.
-      include: { region: { select: { id: true, code: true, name: true } } },
+      include: {
+        region: { select: { id: true, code: true, name: true } },
+        regionCoverageSet: {
+          include: {
+            members: {
+              include: {
+                region: {
+                  select: {
+                    id: true,
+                    code: true,
+                    name: true,
+                    administrativeLevel: true,
+                    parentId: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     });
     if (!batch || batch.workspaceId !== workspaceId)
       throw new NotFoundException('Batch not found');
@@ -2333,6 +2608,9 @@ export class BasicPriceImportService {
     return {
       ...this.summarize(batch, rows, proposals, privatePriceByRowId),
       region: batch.region ?? null,
+      coveredVillageRegions: this.coveredVillageRegionsOf(
+        batch.regionCoverageSet,
+      ),
     };
   }
 
@@ -2375,6 +2653,7 @@ export class BasicPriceImportService {
           status: string;
           effectiveDate: Date | null;
           regionId: string | null;
+          regionCoverageSetId: string | null;
           sourceType: string | null;
           sourceOrigin: string | null;
           uploadedByAccountId: string;
@@ -2474,6 +2753,7 @@ export class BasicPriceImportService {
           organizationId: batch.organizationId,
           resourceId: row.resourceCatalogId,
           regionId: batch.regionId as string,
+          regionCoverageSetId: batch.regionCoverageSetId,
           reportedByAccountId: batch.uploadedByAccountId,
           sourceOrigin: batch.sourceOrigin as PriceSourceOrigin,
           sourceType: batch.sourceType as PriceSourceType,
@@ -2544,6 +2824,7 @@ export class BasicPriceImportService {
           assetScope: string;
           resourceId: string;
           regionId: string | null;
+          regionCoverageSetId: string | null;
           sourceOrigin: string | null;
           sourceType: string | null;
           value: Prisma.Decimal;
@@ -2553,7 +2834,8 @@ export class BasicPriceImportService {
         }>
       >(
         Prisma.sql`SELECT "id", "workspaceId", "organizationId", "assetScope",
-                          "resourceId", "regionId", "sourceOrigin", "sourceType",
+                          "resourceId", "regionId", "regionCoverageSetId",
+                          "sourceOrigin", "sourceType",
                           "value", "effectiveDate", "sourceImportRowId",
                           "status", "verificationStatus"
                      FROM "basic_prices"
@@ -2625,6 +2907,7 @@ export class BasicPriceImportService {
           organizationId: batch.organizationId,
           resourceId: price.resourceId,
           regionId: price.regionId as string,
+          regionCoverageSetId: price.regionCoverageSetId,
           reportedByAccountId: currentAccountId,
           sourceOrigin: price.sourceOrigin as PriceSourceOrigin,
           sourceType: price.sourceType as PriceSourceType,
@@ -2673,6 +2956,7 @@ export class BasicPriceImportService {
         organizationId: price.organizationId,
         resourceId: price.resourceId,
         regionId: price.regionId as string,
+        regionCoverageSetId: price.regionCoverageSetId,
         reportedByAccountId: currentAccountId,
         sourceOrigin: price.sourceOrigin as PriceSourceOrigin,
         sourceType: price.sourceType as PriceSourceType,
@@ -2703,6 +2987,7 @@ export class BasicPriceImportService {
       organizationId: string;
       resourceId: string;
       regionId: string;
+      regionCoverageSetId: string | null;
       reportedByAccountId: string;
       sourceOrigin: PriceSourceOrigin;
       sourceType: PriceSourceType;
@@ -2717,6 +3002,7 @@ export class BasicPriceImportService {
         organizationId: input.organizationId,
         resourceId: input.resourceId,
         regionId: input.regionId,
+        regionCoverageSetId: input.regionCoverageSetId,
         reportedByAccountId: input.reportedByAccountId,
         sourceOrigin: input.sourceOrigin,
         sourceType: input.sourceType,

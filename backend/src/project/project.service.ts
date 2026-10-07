@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
@@ -13,14 +14,21 @@ import {
 } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseDateOnlyUtc } from '../common/date-only.util';
-import { isSupportedProjectTimeZone } from '../common/project-time-zone.util';
+import {
+  isSupportedProjectTimeZone,
+  projectBusinessDateAtInstant,
+} from '../common/project-time-zone.util';
+import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
+import { PERMISSIONS } from '../common/constants/permissions';
 import { PrismaService } from '../prisma/prisma.service';
+import { ProgressAuthorityService } from '../progress/progress-authority.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { InitiateProjectDto } from './dto/initiate-project.dto';
 import { SaveDraftBoqDto } from './dto/save-draft-boq.dto';
 import { UpdateProjectIntakeContextDto } from './dto/update-project-intake-context.dto';
 import { UpdateProjectTimeZoneDto } from './dto/update-project-time-zone.dto';
 import { ActivateWorkPeriodAnchorDto } from './dto/activate-work-period-anchor.dto';
+import { StartProjectExecutionDto } from './dto/start-project-execution.dto';
 import { DeviationService } from './deviation.service';
 import { detectIntakeMode } from './intake-mode.kernel';
 import {
@@ -40,7 +48,16 @@ import {
   RAB_STRUCTURE_REASON,
   validateAndOrderRabStructure,
 } from './rab-structure-preflight';
-import { EXECUTION_PLAN_BLOCKER } from '../execution-plan/execution-plan.contracts';
+import {
+  EXECUTION_PLAN_AUTHORITY,
+  EXECUTION_PLAN_BLOCKER,
+} from '../execution-plan/execution-plan.contracts';
+import {
+  PROJECT_EXECUTION_START_ACTION,
+  PROJECT_EXECUTION_START_AUTHORITY,
+  PROJECT_EXECUTION_START_POLICY_VERSION,
+  type ProjectExecutionStartResult,
+} from './project-execution.contracts';
 import {
   MON04_SEMANTIC_AUDIT_ACTION,
   type ProgressSemanticContextScope,
@@ -55,6 +72,7 @@ import {
   WORK_PERIOD_ANCHOR_EVENT_SELECT,
   WORK_PERIOD_ANCHOR_POLICY_VERSION,
   assessActualAnchorCompatibility,
+  assessExecutionStartAnchorCompatibility,
   assessPlannedAnchorCompatibility,
   loadWorkPeriodAnchorAuditEvents,
   readCanonicalWorkPeriodAnchor,
@@ -94,12 +112,40 @@ export interface PriceSourceAuthority {
   catalogBasicPriceCount: number;
 }
 
+interface ProjectExecutionStartActor {
+  accountId: string;
+  membershipId: string;
+  workspaceId: string;
+  assignmentId: string;
+  roleInProject: string;
+  isPrimaryAssignment: boolean;
+  roles: string[];
+}
+
+interface ProjectExecutionStartAuditMetadata {
+  policyVersion: typeof PROJECT_EXECUTION_START_POLICY_VERSION;
+  previousStatus: 'PLANNED';
+  nextStatus: 'ACTIVE';
+  activeBaselineId: string;
+  executionPlanVersionId: string;
+  effectiveStartDate: string;
+  workPeriodAnchorEventId: string;
+  actorAssignmentId: string;
+  explicitConfirmation: true;
+}
+
 @Injectable()
 export class ProjectService {
   constructor(
     private prisma: PrismaService,
     private deviationService: DeviationService,
     private rabLifecyclePolicy: RabLifecyclePolicyService,
+    private permissionResolver: WorkspacePermissionResolverService = new WorkspacePermissionResolverService(
+      prisma,
+    ),
+    private authority: ProgressAuthorityService = new ProgressAuthorityService(
+      prisma,
+    ),
   ) {}
 
   private buildDraftRecap = buildDraftRecap;
@@ -124,6 +170,29 @@ export class ProjectService {
     if (value === null) return null;
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private projectExecutionStartAuditMetadata(
+    value: unknown,
+  ): ProjectExecutionStartAuditMetadata | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    const metadata = value as Record<string, unknown>;
+    if (
+      metadata.policyVersion !== PROJECT_EXECUTION_START_POLICY_VERSION ||
+      metadata.previousStatus !== ProjectStatus.PLANNED ||
+      metadata.nextStatus !== ProjectStatus.ACTIVE ||
+      typeof metadata.activeBaselineId !== 'string' ||
+      typeof metadata.executionPlanVersionId !== 'string' ||
+      projectBusinessDateWire(metadata.effectiveStartDate) === null ||
+      typeof metadata.workPeriodAnchorEventId !== 'string' ||
+      typeof metadata.actorAssignmentId !== 'string' ||
+      metadata.explicitConfirmation !== true
+    ) {
+      return null;
+    }
+    return metadata as unknown as ProjectExecutionStartAuditMetadata;
   }
 
   private normalizeProjectTimeZone(
@@ -892,6 +961,339 @@ export class ProjectService {
       projectId,
       startDate: project.startDate,
     });
+  }
+
+  async startExecution(
+    projectId: string,
+    dto: StartProjectExecutionDto,
+    actor: ProjectExecutionStartActor,
+  ): Promise<ProjectExecutionStartResult> {
+    const reason = this.normalizeOptionalText(dto.reason) ?? null;
+    const commandFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          action: PROJECT_EXECUTION_START_ACTION,
+          projectId,
+          actorAccountId: actor.accountId,
+          actorMembershipId: actor.membershipId,
+          actorAssignmentId: actor.assignmentId,
+          authorityCode: PROJECT_EXECUTION_START_AUTHORITY,
+          reason,
+        }),
+      )
+      .digest('hex');
+    const persistedCommandId = `PROJECT_EXECUTION_START:${dto.commandId}`;
+
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const lockedProjects = await tx.$queryRaw<
+            Array<{
+              id: string;
+              workspaceId: string;
+              status: ProjectStatus;
+              startDate: Date | null;
+              timeZone: string | null;
+            }>
+          >(
+            Prisma.sql`SELECT id, "workspaceId", status, "startDate", "timeZone"
+                         FROM projects
+                        WHERE id = ${projectId}::uuid
+                        FOR UPDATE`,
+          );
+          const project = lockedProjects[0];
+          if (!project || project.workspaceId !== actor.workspaceId) {
+            throw new NotFoundException('Project not found');
+          }
+
+          const now = new Date();
+          const effective =
+            await this.permissionResolver.resolveWithinTransaction(
+              tx,
+              actor.accountId,
+              actor.workspaceId,
+              now,
+            );
+          if (
+            !effective ||
+            effective.membershipId !== actor.membershipId ||
+            !effective.permissions.includes(PERMISSIONS.PROJECT_EXECUTION_START)
+          ) {
+            throw new ForbiddenException(
+              'PROJECT_EXECUTION_START_PERMISSION_REQUIRED',
+            );
+          }
+          const holder = await this.authority.requireWithinTransaction(
+            tx,
+            actor.accountId,
+            {
+              projectId,
+              workspaceId: actor.workspaceId,
+              membershipId: actor.membershipId,
+              assignmentId: actor.assignmentId,
+              roleInProject: actor.roleInProject,
+              projectStatus: project.status,
+              isPrimaryAssignment: actor.isPrimaryAssignment,
+              roles: actor.roles,
+            },
+            PROJECT_EXECUTION_START_AUTHORITY,
+          );
+
+          const existingCommand = await tx.progressAuditEvent.findUnique({
+            where: { commandId: persistedCommandId },
+            select: {
+              workspaceId: true,
+              projectId: true,
+              actorAccountId: true,
+              actorMembershipId: true,
+              actorPositionId: true,
+              action: true,
+              authorityCode: true,
+              outcome: true,
+              businessCommandId: true,
+              commandFingerprint: true,
+              metadata: true,
+              occurredAt: true,
+              recordedAt: true,
+            },
+          });
+          if (existingCommand) {
+            const metadata = this.projectExecutionStartAuditMetadata(
+              existingCommand.metadata,
+            );
+            if (
+              existingCommand.workspaceId !== actor.workspaceId ||
+              existingCommand.projectId !== projectId ||
+              existingCommand.actorAccountId !== actor.accountId ||
+              existingCommand.actorMembershipId !== actor.membershipId ||
+              existingCommand.actorPositionId === null ||
+              existingCommand.action !== PROJECT_EXECUTION_START_ACTION ||
+              existingCommand.authorityCode !==
+                PROJECT_EXECUTION_START_AUTHORITY ||
+              existingCommand.outcome !== ProgressAuditOutcome.SUCCESS ||
+              existingCommand.businessCommandId !== dto.commandId ||
+              existingCommand.commandFingerprint !== commandFingerprint ||
+              metadata === null ||
+              metadata.actorAssignmentId !== actor.assignmentId ||
+              existingCommand.actorPositionId !== holder.positionId
+            ) {
+              throw new ConflictException('COMMAND_ID_REUSED');
+            }
+            if (project.status !== ProjectStatus.ACTIVE) {
+              throw new ConflictException(
+                'PROJECT_EXECUTION_START_REPLAY_STATE_CONFLICT',
+              );
+            }
+            return {
+              changed: false,
+              projectId,
+              projectStatus: ProjectStatus.ACTIVE,
+              baselineId: metadata.activeBaselineId,
+              executionPlanVersionId: metadata.executionPlanVersionId,
+              effectiveStartDate: metadata.effectiveStartDate,
+              recordedAt: (
+                existingCommand.recordedAt ?? existingCommand.occurredAt
+              ).toISOString(),
+              authorityCode: PROJECT_EXECUTION_START_AUTHORITY,
+              positionId: existingCommand.actorPositionId,
+            };
+          }
+
+          if (project.status === ProjectStatus.ACTIVE) {
+            throw new ConflictException('PROJECT_EXECUTION_ALREADY_STARTED');
+          }
+          if (project.status !== ProjectStatus.PLANNED) {
+            throw new ConflictException(
+              'PROJECT_EXECUTION_START_INVALID_PROJECT_STATUS',
+            );
+          }
+
+          const activeBaselines = await tx.projectBaseline.findMany({
+            where: { projectId, status: 'ACTIVE' },
+            orderBy: { versionNumber: 'desc' },
+            take: 2,
+            select: { id: true },
+          });
+          if (activeBaselines.length !== 1) {
+            throw new ConflictException(
+              activeBaselines.length === 0
+                ? EXECUTION_PLAN_BLOCKER.NO_ACTIVE_BASELINE
+                : EXECUTION_PLAN_BLOCKER.MULTIPLE_ACTIVE_BASELINES,
+            );
+          }
+          const baseline = activeBaselines[0];
+
+          const plans = await tx.executionPlanVersion.findMany({
+            where: { projectId },
+            orderBy: { versionNumber: 'desc' },
+            take: 3,
+            include: { distributions: true },
+          });
+          const lockedPlans = plans.filter(
+            (plan) => plan.status === ExecutionPlanStatus.LOCKED,
+          );
+          if (lockedPlans.length === 0) {
+            throw new ConflictException(
+              'PROJECT_EXECUTION_START_LOCKED_PLAN_REQUIRED',
+            );
+          }
+          if (lockedPlans.length !== 1 || plans.length !== 1) {
+            throw new ConflictException(
+              EXECUTION_PLAN_BLOCKER.AMBIGUOUS_EXECUTION_PLAN_CONTEXT,
+            );
+          }
+          const plan = lockedPlans[0];
+          if (plan.baselineId !== baseline.id) {
+            throw new ConflictException(
+              EXECUTION_PLAN_BLOCKER.BASELINE_BINDING_MISMATCH,
+            );
+          }
+          const wholeLock =
+            plan.lockedAt !== null &&
+            plan.lockedByAccountId !== null &&
+            plan.lockedByPositionId !== null &&
+            plan.lockedFromRevision === plan.revision &&
+            (plan.lockedFromProjectStatus === ProjectStatus.PLANNED ||
+              plan.lockedFromProjectStatus === ProjectStatus.ACTIVE) &&
+            plan.lockedAuthorityCode === EXECUTION_PLAN_AUTHORITY;
+          if (!wholeLock) {
+            throw new ConflictException(
+              'EXECUTION_PLAN_LOCK_PROVENANCE_INVALID',
+            );
+          }
+
+          const anchor = await readCanonicalWorkPeriodAnchorFromStore(tx, {
+            projectId,
+            startDate: project.startDate,
+          });
+          if (anchor.state === 'INVALID_PROVENANCE') {
+            throw new ConflictException({
+              code: 'WORK_PERIOD_ANCHOR_PROVENANCE_INVALID',
+              reason: anchor.reason,
+            });
+          }
+          if (anchor.state !== 'PROVEN') {
+            throw new ConflictException('WORK_PERIOD_ANCHOR_NOT_PROVEN');
+          }
+
+          const businessDate = projectBusinessDateAtInstant(
+            now,
+            project.timeZone,
+          );
+          if (businessDate.state !== 'RESOLVED') {
+            throw new ConflictException({
+              code: 'PROJECT_BUSINESS_DATE_UNAVAILABLE',
+              reason: businessDate.reason,
+            });
+          }
+          if (businessDate.businessDate < anchor.anchorDate) {
+            throw new ConflictException({
+              code: 'PROJECT_EXECUTION_START_BEFORE_EFFECTIVE_DAY_ONE',
+              projectId,
+              projectBusinessDate: businessDate.businessDate,
+              anchorDate: anchor.anchorDate,
+            });
+          }
+
+          const intervalCompatibility = assessExecutionStartAnchorCompatibility(
+            {
+              anchorDate: anchor.anchorDate,
+              baselineId: baseline.id,
+              executionPlanVersionId: plan.id,
+              distributions: plan.distributions,
+            },
+          );
+          if (intervalCompatibility.state !== 'COMPATIBLE') {
+            throw new ConflictException(intervalCompatibility);
+          }
+
+          const transitioned = await tx.project.updateMany({
+            where: { id: projectId, status: ProjectStatus.PLANNED },
+            data: { status: ProjectStatus.ACTIVE },
+          });
+          if (transitioned.count !== 1) {
+            throw new ConflictException(
+              'PROJECT_EXECUTION_START_CONCURRENT_CHANGE',
+            );
+          }
+
+          await tx.progressAuditEvent.create({
+            data: {
+              schemaVersion: 1,
+              eventType: 'PROJECT_LIFECYCLE',
+              outcome: ProgressAuditOutcome.SUCCESS,
+              workspaceId: actor.workspaceId,
+              projectId,
+              progressEntryId: null,
+              actorAccountId: actor.accountId,
+              actorMembershipId: actor.membershipId,
+              actorPositionId: holder.positionId,
+              actorType: 'USER',
+              action: PROJECT_EXECUTION_START_ACTION,
+              authorityCode: PROJECT_EXECUTION_START_AUTHORITY,
+              positionCodeSnapshot: holder.positionCode,
+              roleInProjectSnapshot: actor.roleInProject,
+              sourceModule: 'PROJECT_GOVERNANCE',
+              targetEntityType: 'PROJECT',
+              targetEntityId: projectId,
+              correlationId: randomUUID(),
+              requestId: randomUUID(),
+              businessCommandId: dto.commandId,
+              commandId: persistedCommandId,
+              commandFingerprint,
+              reason,
+              reasonCode: null,
+              reasonText: reason,
+              errorCode: null,
+              metadata: {
+                policyVersion: PROJECT_EXECUTION_START_POLICY_VERSION,
+                previousStatus: ProjectStatus.PLANNED,
+                nextStatus: ProjectStatus.ACTIVE,
+                activeBaselineId: baseline.id,
+                executionPlanVersionId: plan.id,
+                effectiveStartDate: anchor.anchorDate,
+                workPeriodAnchorEventId: anchor.provenance.eventId,
+                actorAssignmentId: actor.assignmentId,
+                projectBusinessDateAtAction: businessDate.businessDate,
+                explicitConfirmation: true,
+              },
+              occurredAt: now,
+              recordedAt: now,
+            },
+          });
+
+          return {
+            changed: true,
+            projectId,
+            projectStatus: ProjectStatus.ACTIVE,
+            baselineId: baseline.id,
+            executionPlanVersionId: plan.id,
+            effectiveStartDate: anchor.anchorDate,
+            recordedAt: now.toISOString(),
+            authorityCode: PROJECT_EXECUTION_START_AUTHORITY,
+            positionId: holder.positionId,
+          };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('COMMAND_ID_REUSED');
+      }
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === 'P2034' ||
+          (error.code === 'P2010' && error.meta?.code === '40001'))
+      ) {
+        throw new ConflictException(
+          'PROJECT_EXECUTION_START_CONCURRENT_CHANGE',
+        );
+      }
+      throw error;
+    }
   }
 
   async activateWorkPeriodAnchor(

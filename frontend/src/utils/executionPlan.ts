@@ -297,7 +297,7 @@ const EXECUTION_PLAN_BLOCKER_LABELS: Readonly<Record<string, string>> = {
   H2A1_WEIGHT_UNAVAILABLE:
     'Kurva S Rencana belum tersedia karena bobot RAB resmi belum lengkap.',
   LOCKED_PLAN_PROJECT_NOT_ACTIVE:
-    'Integritas eksekusi tidak konsisten: plan terkunci tetapi proyek belum aktif.',
+    'Pelaksanaan proyek belum dimulai. Rencana Pelaksanaan tetap terkunci dan dapat dibaca.',
 };
 
 export function executionPlanCurveUnavailableLabel(
