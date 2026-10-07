@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../utils/apiClient';
-import { RabWorkspacePage } from './RabWorkspacePage';
 import {
   Activity,
   AlertTriangle,
@@ -147,10 +146,6 @@ export function ObservatoryPage() {
 
     return () => window.clearInterval(timer);
   }, [projectGroups.length]);
-
-  if (placeholderRoom === 'ruang-kerja-rab') {
-    return <RabWorkspacePage />;
-  }
 
   // SINGLE AHSP DOOR — ?ruang=ahsp was the placeholder while no AHSP room
   // existed. One exists now, so this URL leads there instead of rendering a
