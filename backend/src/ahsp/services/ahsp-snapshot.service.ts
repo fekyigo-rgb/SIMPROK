@@ -4,6 +4,7 @@ import {
   OwnershipType,
   Prisma,
 } from '@prisma/client';
+import { buildEligibleAhspVersionWhere } from '../../project-ahsp/ahsp-eligibility.policy';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AhspAuditService } from './ahsp-audit.service';
 
@@ -51,8 +52,15 @@ export class AhspSnapshotService {
     options?: CreateSnapshotOptions,
   ) {
     const db = options?.client ?? this.prisma;
-    const version = await db.aHSPVersion.findUnique({
-      where: { id: ahspVersionId },
+    if (!workspaceId) {
+      throw new NotFoundException('AHSP Version not found');
+    }
+
+    const version = await db.aHSPVersion.findFirst({
+      where: {
+        id: ahspVersionId,
+        ...buildEligibleAhspVersionWhere(workspaceId, new Date()),
+      },
       include: { ahsp: true, resources: true },
     });
 
