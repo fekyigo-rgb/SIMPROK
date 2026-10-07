@@ -26,6 +26,7 @@ import {
 import {
   REGION_CONFIRMATION_TOKEN,
   type RegionAdministrativeLevel,
+  type RegionDesignation,
   type RegionRow,
 } from './region-provisioner';
 
@@ -48,6 +49,10 @@ const LEVELS = [
 
 export interface NationalRegionSnapshotSummary {
   regionTotal: number;
+  canonicalRegionTotal: number;
+  nonMasterRegionTotal: number;
+  nonMasterUnscopedRegionTotal: number;
+  nonMasterStructuredRegionTotal: number;
   levelCounts: NationalRegionCoverage;
   duplicateCodeCount: number;
   missingParentCount: number;
@@ -59,6 +64,7 @@ export interface NationalRegionProductionPlan
   transactionReadOnly: string;
   designationCount: number;
   prospectiveRegionTotal: number;
+  prospectiveCanonicalRegionTotal: number;
 }
 
 interface NationalRegionReadTransaction {
@@ -150,6 +156,7 @@ export function readProductionConfirmation(
 
 export function summarizeNationalRegionSnapshot(
   rows: readonly RegionRow[],
+  designations: readonly RegionDesignation[],
 ): NationalRegionSnapshotSummary {
   const levelCounts: NationalRegionCoverage = {
     COUNTRY: 0,
@@ -159,12 +166,29 @@ export function summarizeNationalRegionSnapshot(
     VILLAGE: 0,
   };
   const byId = new Map(rows.map((row) => [row.id, row]));
+  const canonicalMasterCodes = new Set(
+    designations.map((designation) => designation.regionCode),
+  );
   const codeCounts = new Map<string, number>();
+  let canonicalRegionTotal = 0;
+  let nonMasterRegionTotal = 0;
+  let nonMasterUnscopedRegionTotal = 0;
+  let nonMasterStructuredRegionTotal = 0;
   let missingParentCount = 0;
   let illegalParentLevelCount = 0;
 
   for (const row of rows) {
     codeCounts.set(row.code, (codeCounts.get(row.code) ?? 0) + 1);
+    if (canonicalMasterCodes.has(row.code)) {
+      canonicalRegionTotal += 1;
+    } else {
+      nonMasterRegionTotal += 1;
+      if (row.administrativeLevel == null && row.parentId == null) {
+        nonMasterUnscopedRegionTotal += 1;
+      } else {
+        nonMasterStructuredRegionTotal += 1;
+      }
+    }
     if (row.isActive && row.administrativeLevel) {
       levelCounts[row.administrativeLevel] += 1;
     }
@@ -186,6 +210,10 @@ export function summarizeNationalRegionSnapshot(
 
   return {
     regionTotal: rows.length,
+    canonicalRegionTotal,
+    nonMasterRegionTotal,
+    nonMasterUnscopedRegionTotal,
+    nonMasterStructuredRegionTotal,
     levelCounts,
     duplicateCodeCount: [...codeCounts.values()].filter((count) => count > 1)
       .length,
@@ -227,13 +255,18 @@ export async function planCurrentNationalRegionStateReadOnly(params: {
           'STOP_READ_ONLY_TRANSACTION_NOT_CONFIRMED: national Region planning must run in a read-only transaction.',
         );
       }
-      const summary = summarizeNationalRegionSnapshot(rows);
+      const summary = summarizeNationalRegionSnapshot(
+        rows,
+        params.designations,
+      );
       return {
         transactionReadOnly,
         designationCount: params.designations.length,
         ...summary,
         ...plan,
         prospectiveRegionTotal: summary.regionTotal + plan.plannedCreate,
+        prospectiveCanonicalRegionTotal:
+          summary.canonicalRegionTotal + plan.plannedCreate,
       };
     },
     {
@@ -280,9 +313,14 @@ export function assertNationalRegionApplyPreconditions(
   ) {
     throw new Error('STOP_NATIONAL_REGION_PLAN_INCOMPLETE');
   }
-  if (plan.prospectiveRegionTotal !== NATIONAL_REGION_EXPECTED_TOTAL) {
+  if (plan.nonMasterStructuredRegionTotal !== 0) {
     throw new Error(
-      `STOP_NATIONAL_REGION_PROSPECTIVE_TOTAL:${plan.prospectiveRegionTotal}`,
+      `STOP_NON_MASTER_STRUCTURED_REGION:${plan.nonMasterStructuredRegionTotal}`,
+    );
+  }
+  if (plan.prospectiveCanonicalRegionTotal !== NATIONAL_REGION_EXPECTED_TOTAL) {
+    throw new Error(
+      `STOP_NATIONAL_REGION_PROSPECTIVE_CANONICAL_TOTAL:${plan.prospectiveCanonicalRegionTotal}`,
     );
   }
 }
@@ -303,8 +341,15 @@ export function assertProductionConfirmation(
 export function assertNationalRegionPostApply(
   plan: NationalRegionProductionPlan,
 ): void {
-  if (plan.regionTotal !== NATIONAL_REGION_EXPECTED_TOTAL) {
-    throw new Error(`STOP_REGION_TOTAL_MISMATCH:${plan.regionTotal}`);
+  if (plan.nonMasterStructuredRegionTotal !== 0) {
+    throw new Error(
+      `STOP_NON_MASTER_STRUCTURED_REGION:${plan.nonMasterStructuredRegionTotal}`,
+    );
+  }
+  if (plan.canonicalRegionTotal !== NATIONAL_REGION_EXPECTED_TOTAL) {
+    throw new Error(
+      `STOP_CANONICAL_REGION_TOTAL_MISMATCH:${plan.canonicalRegionTotal}`,
+    );
   }
   for (const level of LEVELS) {
     if (plan.levelCounts[level] !== NATIONAL_REGION_EXPECTED_COVERAGE[level]) {
