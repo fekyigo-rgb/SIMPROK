@@ -18,6 +18,17 @@ const REPO_ROOT = resolve(__dirname, '..', '..', '..');
 function printPlan(plan: NationalRegionProductionPlan): void {
   process.stdout.write(`TRANSACTION_READ_ONLY=${plan.transactionReadOnly}\n`);
   process.stdout.write(`REGION_SNAPSHOT_COUNT=${plan.regionTotal}\n`);
+  process.stdout.write(`REGION_TOTAL=${plan.regionTotal}\n`);
+  process.stdout.write(`CANONICAL_REGION_TOTAL=${plan.canonicalRegionTotal}\n`);
+  process.stdout.write(
+    `NON_MASTER_REGION_TOTAL=${plan.nonMasterRegionTotal}\n`,
+  );
+  process.stdout.write(
+    `NON_MASTER_UNSCOPED_REGION_TOTAL=${plan.nonMasterUnscopedRegionTotal}\n`,
+  );
+  process.stdout.write(
+    `NON_MASTER_STRUCTURED_REGION_TOTAL=${plan.nonMasterStructuredRegionTotal}\n`,
+  );
   process.stdout.write(`DESIGNATION_COUNT=${plan.designationCount}\n`);
   process.stdout.write(`PLANNED_CREATE=${plan.plannedCreate}\n`);
   process.stdout.write(`PLANNED_REUSE=${plan.plannedReuse}\n`);
@@ -27,6 +38,9 @@ function printPlan(plan: NationalRegionProductionPlan): void {
   );
   process.stdout.write(
     `PROSPECTIVE_REGION_TOTAL=${plan.prospectiveRegionTotal}\n`,
+  );
+  process.stdout.write(
+    `PROSPECTIVE_CANONICAL_REGION_TOTAL=${plan.prospectiveCanonicalRegionTotal}\n`,
   );
 }
 
@@ -78,7 +92,6 @@ async function main(): Promise<void> {
     if (result.planAfter) {
       process.stdout.write('POST_APPLY_VERIFICATION=PASS\n');
       printPlan(result.planAfter);
-      process.stdout.write(`REGION_TOTAL=${result.planAfter.regionTotal}\n`);
       process.stdout.write(
         `COUNTRY=${result.planAfter.levelCounts.COUNTRY}\nPROVINCE=${result.planAfter.levelCounts.PROVINCE}\nREGENCY_CITY=${result.planAfter.levelCounts.REGENCY_CITY}\nDISTRICT=${result.planAfter.levelCounts.DISTRICT}\nVILLAGE=${result.planAfter.levelCounts.VILLAGE}\n`,
       );

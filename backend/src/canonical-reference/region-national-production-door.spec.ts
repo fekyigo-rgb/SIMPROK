@@ -43,6 +43,12 @@ const DESIGNATION: RegionDesignation = {
   regionName: 'Indonesia',
   administrativeLevel: 'COUNTRY',
 };
+const PROVINCE_DESIGNATION: RegionDesignation = {
+  regionCode: '94',
+  regionName: 'Papua',
+  administrativeLevel: 'PROVINCE',
+  parentRegionCode: 'ID',
+};
 const COMPLETE_DESIGNATIONS = Array<RegionDesignation>(
   NATIONAL_REGION_EXPECTED_TOTAL,
 ).fill(DESIGNATION);
@@ -72,8 +78,13 @@ function plan(
   return {
     transactionReadOnly: 'on',
     regionTotal: 0,
+    canonicalRegionTotal: 0,
+    nonMasterRegionTotal: 0,
+    nonMasterUnscopedRegionTotal: 0,
+    nonMasterStructuredRegionTotal: 0,
     designationCount: NATIONAL_REGION_EXPECTED_TOTAL,
     prospectiveRegionTotal: NATIONAL_REGION_EXPECTED_TOTAL,
+    prospectiveCanonicalRegionTotal: NATIONAL_REGION_EXPECTED_TOTAL,
     levelCounts: {
       COUNTRY: 0,
       PROVINCE: 0,
@@ -92,12 +103,16 @@ function plan(
   };
 }
 
-function completePlan(): NationalRegionProductionPlan {
+function completePlan(
+  overrides: Partial<NationalRegionProductionPlan> = {},
+): NationalRegionProductionPlan {
   return plan({
     regionTotal: NATIONAL_REGION_EXPECTED_TOTAL,
+    canonicalRegionTotal: NATIONAL_REGION_EXPECTED_TOTAL,
     levelCounts: { ...NATIONAL_REGION_EXPECTED_COVERAGE },
     plannedCreate: 0,
     plannedReuse: NATIONAL_REGION_EXPECTED_TOTAL,
+    ...overrides,
   });
 }
 
@@ -261,21 +276,24 @@ describe('national Region production door read-only planning', () => {
     await expect(
       planCurrentNationalRegionStateReadOnly({
         client: fake,
-        designations: [DESIGNATION, DESIGNATION],
+        designations: [DESIGNATION, PROVINCE_DESIGNATION],
         planReuse,
       }),
     ).resolves.toMatchObject({
       transactionReadOnly: 'on',
       regionTotal: 2,
+      canonicalRegionTotal: 2,
+      nonMasterRegionTotal: 0,
       plannedReuse: 2,
       prospectiveRegionTotal: 2,
+      prospectiveCanonicalRegionTotal: 2,
     });
     expect(executed).toEqual([
       'SET TRANSACTION READ ONLY',
       'SHOW transaction_read_only',
     ]);
     expect(planReuse).toHaveBeenCalledWith({
-      designations: [DESIGNATION, DESIGNATION],
+      designations: [DESIGNATION, PROVINCE_DESIGNATION],
       rows,
     });
   });
@@ -369,26 +387,29 @@ describe('national Region production door master/apply law', () => {
     expect(deps.applyMaster).not.toHaveBeenCalled();
   });
 
-  it('blocks canonical planner conflicts before confirmation or apply', async () => {
-    const deps = dependencies([
-      plan({
-        plannedCreate: NATIONAL_REGION_EXPECTED_TOTAL - 1,
-        plannedConflict: 1,
-        conflictReasonCounts: { STOP_REGION_CODE_CONFLICT: 1 },
-      }),
-    ]);
-    await expect(
-      runNationalRegionProductionDoor({
-        mode: 'apply',
-        repoRoot: 'unused',
-        databaseUrl: CANONICAL_DATABASE_URL,
-        confirmationToken: REGION_CONFIRMATION_TOKEN,
-        client: client(),
-        dependencies: deps,
-      }),
-    ).rejects.toThrow('STOP_NATIONAL_REGION_CONFLICT');
-    expect(deps.applyMaster).not.toHaveBeenCalled();
-  });
+  it.each(['STOP_REGION_CODE_CONFLICT', 'STOP_REGION_HIERARCHY_CONFLICT'])(
+    'blocks canonical planner conflict %s before confirmation or apply',
+    async (reasonCode) => {
+      const deps = dependencies([
+        plan({
+          plannedCreate: NATIONAL_REGION_EXPECTED_TOTAL - 1,
+          plannedConflict: 1,
+          conflictReasonCounts: { [reasonCode]: 1 },
+        }),
+      ]);
+      await expect(
+        runNationalRegionProductionDoor({
+          mode: 'apply',
+          repoRoot: 'unused',
+          databaseUrl: CANONICAL_DATABASE_URL,
+          confirmationToken: REGION_CONFIRMATION_TOKEN,
+          client: client(),
+          dependencies: deps,
+        }),
+      ).rejects.toThrow('STOP_NATIONAL_REGION_CONFLICT');
+      expect(deps.applyMaster).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ['missing', undefined, 'STOP_MISSING_PRODUCTION_CONFIRMATION'],
@@ -448,11 +469,21 @@ describe('national Region production door master/apply law', () => {
 
   it('permits a conflict-free partial canonical state to resume and demands complete reuse afterward', async () => {
     const partial = plan({
-      regionTotal: 2,
+      regionTotal: 4,
+      canonicalRegionTotal: 2,
+      nonMasterRegionTotal: 2,
+      nonMasterUnscopedRegionTotal: 2,
       plannedCreate: 91_598,
       plannedReuse: 2,
+      prospectiveRegionTotal: 91_602,
     });
-    const deps = dependencies([partial, completePlan()]);
+    const completeWithLegacy = completePlan({
+      regionTotal: 91_602,
+      nonMasterRegionTotal: 2,
+      nonMasterUnscopedRegionTotal: 2,
+      prospectiveRegionTotal: 91_602,
+    });
+    const deps = dependencies([partial, completeWithLegacy]);
     await expect(
       runNationalRegionProductionDoor({
         mode: 'apply',
@@ -468,27 +499,79 @@ describe('national Region production door master/apply law', () => {
     });
   });
 
-  it('blocks unrelated legacy rows before apply rather than deleting or rewriting them', () => {
+  it('accepts an empty canonical snapshot with no legacy rows', () => {
+    const empty = plan();
+    expect(() => assertNationalRegionApplyPreconditions(empty)).not.toThrow();
+    expect(empty).toMatchObject({
+      regionTotal: 0,
+      canonicalRegionTotal: 0,
+      nonMasterRegionTotal: 0,
+      plannedCreate: 91_600,
+      plannedConflict: 0,
+      prospectiveCanonicalRegionTotal: 91_600,
+    });
+  });
+
+  it('allows two lawful unscoped legacy rows beside an empty canonical master', () => {
+    const twoLegacy = plan({
+      regionTotal: 2,
+      nonMasterRegionTotal: 2,
+      nonMasterUnscopedRegionTotal: 2,
+      prospectiveRegionTotal: 91_602,
+    });
+    expect(() =>
+      assertNationalRegionApplyPreconditions(twoLegacy),
+    ).not.toThrow();
+    expect(twoLegacy).toMatchObject({
+      regionTotal: 2,
+      canonicalRegionTotal: 0,
+      nonMasterRegionTotal: 2,
+      nonMasterUnscopedRegionTotal: 2,
+      nonMasterStructuredRegionTotal: 0,
+      plannedCreate: 91_600,
+      plannedReuse: 0,
+      plannedConflict: 0,
+      prospectiveRegionTotal: 91_602,
+      prospectiveCanonicalRegionTotal: 91_600,
+    });
+  });
+
+  it('fails closed on a structured non-master row before apply', () => {
     expect(() =>
       assertNationalRegionApplyPreconditions(
         plan({
-          regionTotal: 2,
-          plannedCreate: 91_600,
-          prospectiveRegionTotal: 91_602,
+          regionTotal: 1,
+          nonMasterRegionTotal: 1,
+          nonMasterStructuredRegionTotal: 1,
+          prospectiveRegionTotal: 91_601,
         }),
       ),
-    ).toThrow('STOP_NATIONAL_REGION_PROSPECTIVE_TOTAL');
+    ).toThrow('STOP_NON_MASTER_STRUCTURED_REGION:1');
   });
 });
 
 describe('national Region production door exact post-apply verification', () => {
-  it('accepts only the exact complete state and second canonical all-reuse plan', () => {
-    expect(() => assertNationalRegionPostApply(completePlan())).not.toThrow();
-    expect(() => assertNationalRegionPostApply(completePlan())).not.toThrow();
+  it('accepts 91,600 canonical rows plus two lawful unscoped legacy rows', () => {
+    const completeWithLegacy = completePlan({
+      regionTotal: 91_602,
+      nonMasterRegionTotal: 2,
+      nonMasterUnscopedRegionTotal: 2,
+      prospectiveRegionTotal: 91_602,
+    });
+    expect(() =>
+      assertNationalRegionPostApply(completeWithLegacy),
+    ).not.toThrow();
+    expect(completeWithLegacy).toMatchObject({
+      canonicalRegionTotal: 91_600,
+      plannedCreate: 0,
+      plannedReuse: 91_600,
+      plannedConflict: 0,
+      nonMasterStructuredRegionTotal: 0,
+    });
   });
 
   it.each([
-    ['total', { regionTotal: 91_599 }],
+    ['canonical total', { canonicalRegionTotal: 91_599 }],
     ['duplicate code', { duplicateCodeCount: 1 }],
     ['missing parent', { missingParentCount: 1 }],
     ['illegal parent', { illegalParentLevelCount: 1 }],
@@ -498,6 +581,98 @@ describe('national Region production door exact post-apply verification', () => 
       assertNationalRegionPostApply(plan({ ...completePlan(), ...overrides })),
     ).toThrow();
   });
+
+  it('rejects a missing canonical row after simulated apply even when legacy rows remain', () => {
+    expect(() =>
+      assertNationalRegionPostApply(
+        completePlan({
+          regionTotal: 91_601,
+          canonicalRegionTotal: 91_599,
+          nonMasterRegionTotal: 2,
+          nonMasterUnscopedRegionTotal: 2,
+          prospectiveRegionTotal: 91_601,
+          prospectiveCanonicalRegionTotal: 91_599,
+        }),
+      ),
+    ).toThrow('STOP_CANONICAL_REGION_TOTAL_MISMATCH:91599');
+  });
+
+  it('rejects a structured non-master row beside a complete canonical hierarchy', () => {
+    expect(() =>
+      assertNationalRegionPostApply(
+        completePlan({
+          regionTotal: 91_603,
+          nonMasterRegionTotal: 3,
+          nonMasterUnscopedRegionTotal: 2,
+          nonMasterStructuredRegionTotal: 1,
+          prospectiveRegionTotal: 91_603,
+        }),
+      ),
+    ).toThrow('STOP_NON_MASTER_STRUCTURED_REGION:1');
+  });
+
+  it('classifies canonical membership only by assessed master code', () => {
+    const rows: RegionRow[] = [
+      {
+        id: 'country',
+        code: 'ID',
+        name: 'Indonesia',
+        isActive: true,
+        parentId: null,
+        administrativeLevel: 'COUNTRY',
+      },
+      {
+        id: 'legacy-a',
+        code: 'local-history-a',
+        name: 'Historical place A',
+        isActive: true,
+        parentId: null,
+        administrativeLevel: null,
+      },
+      {
+        id: 'legacy-b',
+        code: 'local-history-b',
+        name: 'Historical place B',
+        isActive: true,
+        parentId: null,
+        administrativeLevel: null,
+      },
+    ];
+    expect(summarizeNationalRegionSnapshot(rows, [DESIGNATION])).toMatchObject({
+      regionTotal: 3,
+      canonicalRegionTotal: 1,
+      nonMasterRegionTotal: 2,
+      nonMasterUnscopedRegionTotal: 2,
+      nonMasterStructuredRegionTotal: 0,
+    });
+  });
+
+  it.each([
+    ['an administrative level', 'DISTRICT', null],
+    ['a parent', null, 'some-parent-id'],
+  ] as const)(
+    'classifies a non-master row with %s as structured',
+    (_, administrativeLevel, parentId) => {
+      const rows: RegionRow[] = [
+        {
+          id: 'structured-extra',
+          code: 'local-structured-extra',
+          name: 'Structured extra',
+          isActive: true,
+          parentId,
+          administrativeLevel,
+        },
+      ];
+      expect(
+        summarizeNationalRegionSnapshot(rows, [DESIGNATION]),
+      ).toMatchObject({
+        canonicalRegionTotal: 0,
+        nonMasterRegionTotal: 1,
+        nonMasterUnscopedRegionTotal: 0,
+        nonMasterStructuredRegionTotal: 1,
+      });
+    },
+  );
 
   it('derives structural counts from the read-only Region snapshot', () => {
     const rows: RegionRow[] = [
@@ -542,8 +717,26 @@ describe('national Region production door exact post-apply verification', () => 
         administrativeLevel: 'PROVINCE',
       },
     ];
-    expect(summarizeNationalRegionSnapshot(rows)).toMatchObject({
+    const designations: RegionDesignation[] = [
+      DESIGNATION,
+      PROVINCE_DESIGNATION,
+      {
+        regionCode: '95',
+        regionName: 'Orphan',
+        administrativeLevel: 'PROVINCE',
+        parentRegionCode: 'ID',
+      },
+      {
+        regionCode: '94.01',
+        regionName: 'Wrong parent',
+        administrativeLevel: 'REGENCY_CITY',
+        parentRegionCode: '94',
+      },
+    ];
+    expect(summarizeNationalRegionSnapshot(rows, designations)).toMatchObject({
       regionTotal: 5,
+      canonicalRegionTotal: 5,
+      nonMasterRegionTotal: 0,
       duplicateCodeCount: 1,
       missingParentCount: 1,
       illegalParentLevelCount: 1,
@@ -564,6 +757,15 @@ describe('national Region production door static anti-duplication law', () => {
       'scripts',
       'bp-reg01',
       'national-region-master-production.ts',
+    ),
+    'utf8',
+  );
+  const basicPriceRegionLookupSource = readFileSync(
+    join(
+      __dirname,
+      '..',
+      'basic-price',
+      'basic-price-import-lookup.service.ts',
     ),
     'utf8',
   );
@@ -597,5 +799,12 @@ describe('national Region production door static anti-duplication law', () => {
     expect(CANONICAL_REFERENCE_WORKSPACE_ID).toBe(
       'a9978fab-d1fc-4bb3-9beb-5d8b89d973e3',
     );
+  });
+
+  it('leaves Basic Price hierarchy selection level-scoped and existing Region references untouched', () => {
+    expect(basicPriceRegionLookupSource).toContain(
+      '? { administrativeLevel: dto.administrativeLevel }',
+    );
+    expect(combined).not.toMatch(/\b(regionId|referenceRegionId)\s*:/);
   });
 });
