@@ -181,4 +181,73 @@ describe('BP-REG-01 national Region provisioner', () => {
     expect(state.rows).toHaveLength(5);
     expect(progress).toEqual([1, 2, 3, 4, 5, 1, 2, 3, 4, 5]);
   });
+
+  it('resumes a partial canonical population by reusing truthful rows and creating only missing descendants', async () => {
+    jest
+      .spyOn(nationalMasterGate, 'assessNationalRegionMaster')
+      .mockReturnValue({
+        status: 'READY_FOR_APPLY',
+        reasonCode: nationalMasterGate.NATIONAL_MASTER_READY_FOR_APPLY,
+        nationalMasterComplete: true,
+        coverage: {
+          COUNTRY: 1,
+          PROVINCE: 1,
+          REGENCY_CITY: 1,
+          DISTRICT: 1,
+          VILLAGE: 1,
+        },
+        integrityErrors: [],
+        designations: lawfulTree,
+        sameNameSameScopeDistinctValidCodeCount: 0,
+        sourceTransformationLossCount: 0,
+        supportingProvenance: [],
+        historicalSuccession: null,
+      });
+
+    const state = harness();
+    state.rows.push(
+      {
+        id: 'region-1',
+        code: 'ID',
+        name: 'Indonesia',
+        isActive: true,
+        parentId: null,
+        administrativeLevel: 'COUNTRY',
+      },
+      {
+        id: 'region-2',
+        code: '31',
+        name: 'DKI Jakarta',
+        isActive: true,
+        parentId: 'region-1',
+        administrativeLevel: 'PROVINCE',
+      },
+    );
+
+    await expect(
+      applyNationalRegionMaster({
+        prisma: state.prisma,
+        dump: {
+          source: 'KEMENDAGRI',
+          sourceDocument: 'TEST-ONLY partial resume fixture',
+          rows: [],
+        },
+        confirmationToken: GOVERNED_REHEARSAL_REGION_CONFIRMATION_TOKEN,
+        expectedConfirmationToken: GOVERNED_REHEARSAL_REGION_CONFIRMATION_TOKEN,
+      }),
+    ).resolves.toEqual({
+      processed: 5,
+      total: 5,
+      created: 3,
+      reused: 2,
+      nationalMasterComplete: true,
+    });
+    expect(state.rows.map((row) => row.code)).toEqual([
+      'ID',
+      '31',
+      '31.74',
+      '31.74.10',
+      '31.74.10.1001',
+    ]);
+  });
 });

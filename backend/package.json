@@ -47,7 +47,9 @@
     "platform-governance:ceremony": "tsx scripts/platform-governance/ceremony.ts",
     "bp-reg01:national-master:e2e": "tsx scripts/bp-reg01/national-region-master-e2e.ts",
     "bp-reg01:verify-reuse": "tsx scripts/bp-reg01/verify-national-region-reuse.ts",
-    "bp-reg01:audit-candidate": "tsx scripts/bp-reg01/audit-candidate-readonly.ts"
+    "bp-reg01:audit-candidate": "tsx scripts/bp-reg01/audit-candidate-readonly.ts",
+    "bp-reg01:national-master:prod:dry-run": "tsx scripts/bp-reg01/national-region-master-production.ts --dry-run",
+    "bp-reg01:national-master:prod:apply": "tsx scripts/bp-reg01/national-region-master-production.ts --apply"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
