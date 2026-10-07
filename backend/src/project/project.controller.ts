@@ -213,9 +213,16 @@ export class ProjectController {
     @UploadedFile() file: any,
     @Body('selectedSheet') selectedSheet?: string,
   ) {
+    const actorAccountId = request.user?.id;
+    if (!actorAccountId) {
+      throw new InternalServerErrorException(
+        'Trusted account context is missing',
+      );
+    }
     return this.boqImportService.preview(
       projectId,
       request.projectAccess.workspaceId,
+      actorAccountId,
       file,
       selectedSheet,
     );

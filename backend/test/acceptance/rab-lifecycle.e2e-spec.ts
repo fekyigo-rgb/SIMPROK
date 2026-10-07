@@ -5,6 +5,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import * as bcrypt from 'bcrypt';
 import { AppModule } from '../../src/app.module';
+import { StorageService } from '../../src/reality-intake/storage.service';
 import { buildPortableBoqXlsx } from '../fixtures/boq-xlsx.fixture';
 
 const PASSWORD = 'Test1234!';
@@ -41,6 +42,7 @@ const CREATE_ONLY_ROLE_CODE = 'ROLE_LIFECYCLE_CREATE_ONLY';
 describe('PR-35 canonical RAB lifecycle (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaClient;
+  let storage: StorageService;
   let assignedToken: string;
   let foremanToken: string;
   let createOnlyToken: string;
@@ -66,6 +68,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
     app = moduleFixture.createNestApplication();
     await app.init();
     prisma = new PrismaClient();
+    storage = app.get(StorageService);
     source = await buildPortableBoqXlsx();
 
     const accX = await prisma.project.findFirstOrThrow({
@@ -366,6 +369,27 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
       PROJECT_TOCTOU_APPROVED,
       PROJECT_TOCTOU_DUPLICATE,
     ];
+    const [intakeRequests, intakeJobs] = await Promise.all([
+      prisma.intakeRequest.findMany({
+        where: { projectId: { in: createdProjectIds } },
+        select: { sourceDocumentId: true },
+      }),
+      prisma.intakeJob.findMany({
+        where: { projectId: { in: createdProjectIds }, knowledgeType: 'BOQ' },
+        select: { sourceDocumentId: true },
+      }),
+    ]);
+    const intakeSourceIds = [...new Set([...intakeRequests, ...intakeJobs].map((row) => row.sourceDocumentId))];
+    await prisma.intakeRequest.deleteMany({ where: { projectId: { in: createdProjectIds } } });
+    await prisma.intakeJob.deleteMany({ where: { projectId: { in: createdProjectIds }, knowledgeType: 'BOQ' } });
+    if (intakeSourceIds.length > 0) {
+      const removableSources = await prisma.sourceDocument.findMany({
+        where: { id: { in: intakeSourceIds }, intakeJobs: { none: {} }, intakeRequests: { none: {} } },
+        select: { id: true, storageRef: true },
+      });
+      await prisma.sourceDocument.deleteMany({ where: { id: { in: removableSources.map((row) => row.id) } } });
+      await Promise.all(removableSources.map((row) => storage.deleteFinal(row.storageRef)));
+    }
     await prisma.boqItem.deleteMany({
       where: { boqStructure: { projectId: { in: createdProjectIds } } },
     });

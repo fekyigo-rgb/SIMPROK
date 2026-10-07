@@ -2,7 +2,8 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException, 
 import { createHash } from 'crypto';
 import { Prisma, ProjectStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { BOQ_PARSER_CONTRACT_VERSION, BoqImportKnowledgeObject, BoqXlsxIntakeAdapter } from './boq-xlsx-intake.adapter';
+import { IntakeEnqueueService } from '../reality-intake/intake-enqueue.service';
+import { BOQ_PARSER_CONTRACT_VERSION, BOQ_READER_CONTRACT_VERSION, BoqImportKnowledgeObject, BoqXlsxIntakeAdapter } from './boq-xlsx-intake.adapter';
 import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from './rab-lifecycle-policy.service';
 
 export const MAX_UPLOAD_BYTES = 10_485_760;
@@ -17,6 +18,7 @@ export class BoqImportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly rabLifecyclePolicy: RabLifecyclePolicyService,
+    private readonly intakeEnqueue: IntakeEnqueueService,
   ) {}
 
   private validateFile(file: UploadedXlsx | undefined): asserts file is UploadedXlsx {
@@ -41,9 +43,25 @@ export class BoqImportService {
   // Lifecycle is enforced by RabEditableLifecycleGuard before this method is
   // ever invoked (pre-Multer — see project.controller.ts). No second check
   // here: one derivation source, read once, before file parsing.
-  async preview(projectId: string, workspaceId: string, file?: UploadedXlsx, selectedSheet?: string) {
+  async preview(projectId: string, workspaceId: string, actorAccountId: string, file?: UploadedXlsx, selectedSheet?: string) {
     this.validateFile(file);
+    const request = await this.intakeEnqueue.beginBoqIntakeRequest({
+      fileName: file.originalname,
+      mimeType: file.mimetype ?? 'application/octet-stream',
+      byteSize: file.size,
+      bytes: file.buffer,
+      workspaceId,
+      projectId,
+      requestingAccountId: actorAccountId,
+    });
     const knowledge = await this.parse(file, selectedSheet);
+    await this.intakeEnqueue.bindBoqInterpretation({
+      intakeRequestId: request.intakeRequestId,
+      sourceSha256: knowledge.sourceSha256,
+      selectedSheet: knowledge.sheetName,
+      readerContractVersion: BOQ_READER_CONTRACT_VERSION,
+      semanticContractVersion: BOQ_PARSER_CONTRACT_VERSION,
+    });
     const prioritized = [...knowledge.rows].sort((a, b) => Number(b.errors.length > 0) - Number(a.errors.length > 0) || Number(b.warnings.length > 0) - Number(a.warnings.length > 0) || a.sortOrder - b.sortOrder);
     const rejectedRows = knowledge.rows.filter((row) => row.errors.length > 0).length;
     const warningRows = knowledge.rows.filter((row) => row.warnings.length > 0).length;

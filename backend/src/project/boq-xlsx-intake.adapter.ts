@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
 
 export const BOQ_PARSER_CONTRACT_VERSION = 'IMPORT_FIRST_01_V2';
+export const BOQ_READER_CONTRACT_VERSION = 'BOQ_XLSX_INTAKE_ADAPTER_V1';
 export const MAX_SOURCE_ROWS = 20_000;
 
 export interface BoqImportKnowledgeRow {
