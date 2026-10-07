@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowLeft,
@@ -482,9 +482,8 @@ const PERSIST_REACHABILITY_TITLE: Record<PersistActionReachability, string> = {
 export function RabWorkspacePage() {
   const navigate = useNavigate();
   const { projectId: routeProjectId } = useParams();
-  const [searchParams] = useSearchParams();
   const layoutContext = useOutletContext<DashboardOutletContext | null>();
-  const projectId = routeProjectId || searchParams.get('projectId');
+  const projectId = routeProjectId ?? null;
   const [rows, setRows] = useState<RabRow[]>([]);
   const [volumes, setVolumes] = useState<Record<string, number>>({});
   const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
