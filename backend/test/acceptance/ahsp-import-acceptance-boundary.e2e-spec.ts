@@ -22,10 +22,12 @@ import { PRE_TITLE_READER_KNOWLEDGE as PRE_TITLE } from '../fixtures/ahsp-pre-ti
  * including the additive intake-journal migration this slice adds.
  *
  * The law under test: import RECEIVES information. Every work item SIMPROK
- * recognises is kept durably; an item whose only gap is a component's identity
- * is written with the source's own words; an item missing a real fact is held,
- * never lost and never invented; one item's failure never costs another; and a
- * held item progresses later WITHOUT the file.
+ * recognises is kept durably. A known catalog identity is reused. A genuinely
+ * new identity, or one whose only candidates the kernel ruled out, is admitted
+ * as a ResourceCatalog id; the document's own spelling stays beside that id.
+ * A credible ambiguity stays unresolved and is not priced as ready. An item
+ * missing a real fact is held, never lost and never invented; one item's
+ * failure never costs another; and a held item progresses later WITHOUT the file.
  */
 
 const PASSWORD = 'IabAcceptance123!';
@@ -674,13 +676,39 @@ describe('AHSP import acceptance boundary (e2e)', () => {
     mixedJobId = mixedResult.importJobId;
     expect(mixedResult.summary).toEqual({
       evaluated: 9,
-      ready: 2,
-      identityPending: 5,
+      ready: 6,
+      identityPending: 1,
       alreadyPresent: 0,
       alreadyProcessed: 0,
       held: 2,
       failed: 0,
     });
+    // The one identity still open is the credible nearby-name case.
+    // Exhausted novelty and a ruled-out specification are admitted above.
+    const pendingLiteralIds: string[] = [];
+    for (const workType of [
+      '9.9.1.a',
+      '9.9.2.a',
+      '9.9.3.a',
+      '9.9.4.a',
+      '9.9.8.a',
+      '9.9.9.a',
+      'B.91',
+    ]) {
+      for (const resource of await resourcesOf(workType)) {
+        if (!/^[0-9a-f-]{36}$/i.test(resource.resourceId)) {
+          pendingLiteralIds.push(
+            `${workType}:${resource.rawName}:${resource.resourceId}`,
+          );
+        }
+      }
+    }
+    expect(pendingLiteralIds).toEqual([`9.9.4.a:${KERIKIL}:${KERIKIL}`]);
+    expect(
+      (await resourcesOf('9.9.4.a')).find(
+        (resource) => resource.rawName === KERIKIL,
+      )?.resourceId,
+    ).not.toBe(kerikil23Id);
 
     // CAPTURED: one durable line per readable item, before and regardless of any write.
     const lines = await linesOf(mixedJobId);
@@ -697,24 +725,26 @@ describe('AHSP import acceptance boundary (e2e)', () => {
       source: { fileName: 'iab-mixed.xlsx' },
     });
 
-    // SCENARIO 2 — the work item is not lost; the unknown component keeps the source's wording.
-    const pending = await resourcesOf('9.9.2.a');
-    const pendingIds = pending.map((resource) => resource.resourceId);
-    expect(pendingIds).toHaveLength(2);
-    expect(pendingIds).toEqual(
-      expect.arrayContaining([
-        bahanBaru,
-        expect.stringMatching(/^[0-9a-f-]{36}$/),
-      ]),
+    // SCENARIO 2 — the work item is not lost. A genuinely new component is
+    // admitted; the document spelling stays beside the new catalog id.
+    const writtenNew = await resourcesOf('9.9.2.a');
+    expect(writtenNew).toHaveLength(2);
+    const admittedNew = writtenNew.find(
+      (resource) => resource.rawName === bahanBaru,
     );
-    expect(
-      pending.find((resource) => resource.rawName === bahanBaru),
-    ).toMatchObject({
-      resourceId: bahanBaru,
+    expect(admittedNew?.resourceId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(admittedNew?.resourceId).not.toBe(bahanBaru);
+    expect(admittedNew).toMatchObject({
+      rawName: bahanBaru,
       rawUnit: 'kg',
       sourceSha256: job.sourceSha256,
       sheetName: 'ANALISA HARGA',
     });
+    expect(
+      await prisma.resourceCatalog.findUniqueOrThrow({
+        where: { id: admittedNew!.resourceId },
+      }),
+    ).toMatchObject({ name: bahanBaru, workspaceId });
     expect((await lineFor(mixedJobId, '9.9.2.a')).status).toBe('COMPLETED');
 
     // SCENARIO 5 — a unit gap only: held durably, never falsely ready, never written.
@@ -756,12 +786,17 @@ describe('AHSP import acceptance boundary (e2e)', () => {
     }
   });
 
-  it('SCENARIO 2 (downstream) — a component whose identity is pending can never be priced', async () => {
+  it('SCENARIO 2 (downstream) — an admitted new identity is the catalog row, and no price is invented for it', async () => {
     const orchestrator = app.get(AhspResourceResolutionOrchestrator);
     const version = await prisma.aHSPVersion.findFirstOrThrow({
       where: { ahsp: { workspaceId, workType: '9.9.2.a' } },
       include: { resources: true },
     });
+    const admitted = version.resources.find(
+      (resource) => resource.rawName === bahanBaru,
+    )!;
+    expect(admitted.resourceId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(admitted.resourceId).not.toBe(bahanBaru);
     const resolutions = await orchestrator.resolveVersionResources(
       app.get(PrismaService),
       {
@@ -772,15 +807,18 @@ describe('AHSP import acceptance boundary (e2e)', () => {
         version,
       },
     );
-    const unknown = resolutions.find(
-      (resolution) => resolution.rawAhspResourceRef === bahanBaru,
+    const known = resolutions.find(
+      (resolution) => resolution.rawAhspResourceRef === admitted.resourceId,
     )!;
-    expect(unknown.status).not.toBe('RESOLVED');
-    expect(unknown.resourceCatalogId).toBeNull();
-    expect(unknown.selectedBasicPriceId).toBeNull();
+    expect(known.selectedBasicPriceId).toBeNull();
+    expect(
+      resolutions.some(
+        (resolution) => resolution.rawAhspResourceRef === bahanBaru,
+      ),
+    ).toBe(false);
   });
 
-  it('SCENARIO 3 — a 6" source is never stored or bound as the 4" row, and admission law is unchanged', async () => {
+  it('SCENARIO 3 — a 6" source is admitted as its own catalog identity and is never bound as the 4" row', async () => {
     const [labourRow, pipeRow] = [
       ...(await resourcesOf('9.9.3.a')).filter(
         (resource) => resource.rawName === pekerja,
@@ -790,44 +828,41 @@ describe('AHSP import acceptance boundary (e2e)', () => {
       ),
     ];
     expect(labourRow).toBeDefined();
-    expect(pipeRow).toMatchObject({ resourceId: PIPE_6, rawUnit: "M'" });
+    expect(pipeRow?.rawName).toBe(PIPE_6);
+    expect(pipeRow?.resourceId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(pipeRow?.resourceId).not.toBe(PIPE_6);
+    expect(pipeRow?.resourceId).not.toBe(pipe4Id);
+    const sourceJob = await prisma.aHSPImportJob.findUniqueOrThrow({
+      where: { id: mixedJobId },
+    });
+    expect(pipeRow).toMatchObject({
+      rawName: PIPE_6,
+      rawUnit: "M'",
+      sourceSha256: sourceJob.sourceSha256,
+      sheetName: 'ANALISA HARGA',
+    });
+    const admittedPipe = await prisma.resourceCatalog.findUniqueOrThrow({
+      where: { id: pipeRow!.resourceId },
+    });
+    expect(admittedPipe).toMatchObject({
+      id: pipeRow!.resourceId,
+      name: PIPE_6,
+      workspaceId,
+    });
+    expect(admittedPipe.id).not.toBe(pipe4Id);
     expect(
       await prisma.aHSPResource.count({
         where: { ahspVersion: { workspaceId }, resourceId: pipe4Id },
       }),
     ).toBe(0);
-
-    const observation = (await openRows()).find(
-      (row) => row.rawName === PIPE_6,
-    )!;
-    expect(observation.identityVerdict).toMatchObject({
-      status: 'UNRESOLVED',
-      exhausted: false,
-    });
-    const refusedExisting = await as('owner')
-      .post(`/resource-observations/${observation.id}/curate-existing`, {
-        selectedResourceCatalogId: pipe4Id,
-      })
-      .expect(409);
-    expect(bodyOf<{ message: string }>(refusedExisting).message).toBe(
-      'IDENTITY_CANDIDATE_RULED_OUT',
-    );
-    const refusedNew = await as('owner')
-      .post(`/resource-observations/${observation.id}/curate-new`, {
-        unitDefinitionId: observation.suggestedUnitDefinitionId,
-      })
-      .expect(409);
-    expect(bodyOf<{ message: string }>(refusedNew).message).toBe(
-      'RESOURCE_IDENTITY_NOT_EXHAUSTED',
-    );
     expect(
-      await prisma.observedResource.findUniqueOrThrow({
-        where: { id: observation.id },
+      await prisma.resourceCatalog.count({
+        where: { workspaceId, name: PIPE_6 },
       }),
-    ).toMatchObject({
-      status: 'OBSERVED',
-      resolvedResourceCatalogId: null,
-    });
+    ).toBe(1);
+    expect(
+      (await openRows()).filter((row) => row.rawName === PIPE_6),
+    ).toEqual([]);
   });
 
   it('SCENARIO 4 — generic "Kerikil / Agregat" keeps its literal wording; a sized row is never adopted for it', async () => {
@@ -846,72 +881,81 @@ describe('AHSP import acceptance boundary (e2e)', () => {
     )!;
     expect(resource.resolvedResourceCatalogId).toBeNull();
     expect(resource.rawName).toBe(KERIKIL);
+
+    // Credible ambiguity stays unresolved, so the price path must not treat it as ready.
+    const orchestrator = app.get(AhspResourceResolutionOrchestrator);
+    const version = await prisma.aHSPVersion.findFirstOrThrow({
+      where: { ahsp: { workspaceId, workType: '9.9.4.a' } },
+      include: { resources: true },
+    });
+    const resolutions = await orchestrator.resolveVersionResources(
+      app.get(PrismaService),
+      {
+        workspaceId,
+        projectId: randomUUID(),
+        referenceRegionId: randomUUID(),
+        asOf: new Date('2026-09-15T00:00:00.000Z'),
+        version,
+      },
+    );
+    const unresolved = resolutions.find(
+      (resolution) => resolution.rawAhspResourceRef === KERIKIL,
+    )!;
+    expect(unresolved.status).not.toBe('RESOLVED');
+    expect(unresolved.resourceCatalogId).toBeNull();
+    expect(unresolved.selectedBasicPriceId).toBeNull();
   });
 
-  it('SCENARIO 7 — a question asked twice costs ONE decision; the machine then proves the twin and asks nothing more', async () => {
-    const asked = (await openRows()).filter((row) => row.rawName === alatBantu);
-    expect(asked).toHaveLength(2);
-    expect(asked.every((row) => row.identityVerdict.exhausted === true)).toBe(
-      true,
-    );
-
-    const orchestrator = app.get(AhspResourceResolutionOrchestrator);
-    const priceIdentity = async () => {
-      const version = await prisma.aHSPVersion.findFirstOrThrow({
-        where: { ahsp: { workspaceId, workType: '9.9.9.a' } },
-        include: { resources: true },
-      });
-      const resolutions = await orchestrator.resolveVersionResources(
-        app.get(PrismaService),
-        {
-          workspaceId,
-          projectId: randomUUID(),
-          referenceRegionId: randomUUID(),
-          asOf: new Date('2026-09-15T00:00:00.000Z'),
-          version,
-        },
-      );
-      return resolutions.find(
-        (resolution) => resolution.rawAhspResourceRef === alatBantu,
-      )!;
-    };
-    // Before: identity is not proven, so the price path is never entered.
-    const unproven = await priceIdentity();
-    expect(unproven.reasonCodes).toContain('RESOURCE_NOT_FOUND');
-    expect(unproven.selectedBasicPriceId).toBeNull();
-
-    // ONE human authority decision.
-    await as('owner')
-      .post(`/resource-observations/${asked[0].id}/curate-new`, {
-        unitDefinitionId: asked[0].suggestedUnitDefinitionId,
-      })
-      .expect(201);
-
-    // The twin is machine-proven now: it is not asked again, and nothing was written on anyone's behalf.
+  it('SCENARIO 7 — identical exhausted alat bantu is one catalog identity and is not asked again', async () => {
     expect(
       (await openRows()).filter((row) => row.rawName === alatBantu),
     ).toEqual([]);
-    const twin = await prisma.observedResource.findUniqueOrThrow({
-      where: { id: asked[1].id },
-    });
-    expect(twin).toMatchObject({
-      status: 'OBSERVED',
-      decidedByAccountId: null,
-      resolvedResourceCatalogId: null,
-    });
+
+    const first = (await resourcesOf('9.9.8.a')).find(
+      (resource) => resource.rawName === alatBantu,
+    );
+    const second = (await resourcesOf('9.9.9.a')).find(
+      (resource) => resource.rawName === alatBantu,
+    );
+    expect(first?.resourceId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(second?.resourceId).toBe(first?.resourceId);
+    expect(first).toMatchObject({ rawName: alatBantu, rawUnit: 'Ls' });
+    expect(second).toMatchObject({ rawName: alatBantu, rawUnit: 'Ls' });
     expect(
       await prisma.resourceCatalog.count({
         where: { workspaceId, name: alatBantu },
       }),
     ).toBe(1);
+    expect(
+      await prisma.resourceCatalog.findUniqueOrThrow({
+        where: { id: first!.resourceId },
+      }),
+    ).toMatchObject({ name: alatBantu, workspaceId });
 
-    // The AHSP written with the source's wording needed no rewrite: its identity is
-    // now proven downstream, and pricing asks the next lawful question — is there a
-    // Basic Price? (There is none in this workspace, so nothing is selected.)
-    const proven = await priceIdentity();
-    expect(proven.reasonCodes).toContain('EXACT_RESOURCE_NAME_MATCH');
-    expect(proven.reasonCodes).not.toContain('RESOURCE_NOT_FOUND');
-    expect(proven.selectedBasicPriceId).toBeNull();
+    const orchestrator = app.get(AhspResourceResolutionOrchestrator);
+    const version = await prisma.aHSPVersion.findFirstOrThrow({
+      where: { ahsp: { workspaceId, workType: '9.9.9.a' } },
+      include: { resources: true },
+    });
+    const resolutions = await orchestrator.resolveVersionResources(
+      app.get(PrismaService),
+      {
+        workspaceId,
+        projectId: randomUUID(),
+        referenceRegionId: randomUUID(),
+        asOf: new Date('2026-09-15T00:00:00.000Z'),
+        version,
+      },
+    );
+    const priced = resolutions.find(
+      (resolution) => resolution.rawAhspResourceRef === first!.resourceId,
+    )!;
+    expect(priced.selectedBasicPriceId).toBeNull();
+    expect(
+      resolutions.some(
+        (resolution) => resolution.rawAhspResourceRef === alatBantu,
+      ),
+    ).toBe(false);
   });
 
   it('SCENARIO 8 — the same document again opens no second job, no new lines, no duplicate AHSP or observation', async () => {

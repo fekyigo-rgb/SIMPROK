@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Patch,
   Delete,
   Body,
@@ -148,6 +149,89 @@ export class AhspController {
   }
 
   /**
+   * Manual/AHSP door onto KNOWLEDGE INTAKE for a resource the catalog lacks.
+   *
+   * The SAME door the search above is, one verb later: an AHSP editor who cannot
+   * find a resource states it here instead of being sent to Basic Price, which is
+   * why this carries AHSP_MANAGE and not a pricing permission. It writes no price
+   * and asks for none — existence and price are separate facts.
+   *
+   * It decides nothing itself. The shared resource-catalog domain answers with
+   * REUSED / REVIEW_REQUIRED / CREATED off ONE identity kernel reading, so this
+   * route is a door and not a second matcher.
+   */
+  @Post('resources')
+  @Permissions('AHSP_MANAGE')
+  async acceptManualResource(
+    @Req() request: WorkspaceScopedRequest,
+    @Body()
+    body: {
+      name?: unknown;
+      code?: unknown;
+      resourceType?: unknown;
+      unitDefinitionId?: unknown;
+      refusedCandidateIds?: unknown;
+      candidateContextDigest?: unknown;
+    },
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId) {
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    }
+    if (typeof body?.name !== 'string' || body.name.trim() === '') {
+      throw new BadRequestException('RESOURCE_NAME_REQUIRED');
+    }
+    if (
+      typeof body?.unitDefinitionId !== 'string' ||
+      body.unitDefinitionId === ''
+    ) {
+      throw new BadRequestException('UNIT_DEFINITION_ID_REQUIRED');
+    }
+    // The section the editor was working in IS the type. It is validated rather
+    // than trusted, so a body can never mint a LABOR row into MATERIAL.
+    const resourceType = body?.resourceType;
+    if (
+      resourceType !== 'LABOR' &&
+      resourceType !== 'MATERIAL' &&
+      resourceType !== 'EQUIPMENT'
+    ) {
+      throw new BadRequestException('RESOURCE_TYPE_INVALID');
+    }
+    // Both halves of an examination, or neither — the same law the curation
+    // route states, because it is the same examination channel.
+    const refused = body?.refusedCandidateIds;
+    const digest = body?.candidateContextDigest;
+    const hasRefused = refused !== undefined && refused !== null;
+    const hasDigest = digest !== undefined && digest !== null;
+    if (hasRefused !== hasDigest) {
+      throw new BadRequestException('EXAMINATION_INCOMPLETE');
+    }
+    if (
+      hasRefused &&
+      (!Array.isArray(refused) ||
+        refused.length === 0 ||
+        !refused.every((value) => typeof value === 'string' && value !== '') ||
+        typeof digest !== 'string' ||
+        digest === '')
+    ) {
+      throw new BadRequestException('EXAMINATION_INVALID');
+    }
+    return this.observations.acceptHumanDeclaredResource({
+      workspaceId,
+      rawName: body.name,
+      rawCode: typeof body.code === 'string' ? body.code : null,
+      resourceType,
+      unitDefinitionId: body.unitDefinitionId,
+      examination: hasRefused
+        ? {
+            refusedCandidateIds: refused as string[],
+            candidateContextDigest: digest as string,
+          }
+        : null,
+    });
+  }
+
+  /**
    * THE standalone AHSP discovery door — the one the sidebar opens.
    *
    * It answers the question a user asks OUTSIDE a project: 'what AHSP is
@@ -221,6 +305,33 @@ export class AhspController {
   }
 
   /**
+   * Durable intake without a business save. The same upload the preview used
+   * becomes the existing import journal. AHSP and its version wait for commit.
+   */
+  @Post('document/intake')
+  @Permissions('AHSP_MANAGE')
+  @UseInterceptors(FileInterceptor('file', AHSP_DOCUMENT_UPLOAD_OPTIONS))
+  async openImportReview(
+    @Req() request: any,
+    @UploadedFile() file: { buffer?: Buffer; originalname?: string; mimetype?: string },
+  ) {
+    const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
+    if (!workspaceId) throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    const userId = await this.resolveActor(request);
+    try {
+      return await this.documents.openImportReviewUpload({
+        file,
+        workspaceId,
+        actorAccountId: request.user?.id,
+        userId,
+      });
+    } catch (error) {
+      if (isAhspIntakeError(error)) throw new BadRequestException(error.code);
+      throw error;
+    }
+  }
+
+  /**
    * IMPORT-SEAM-05 — where a reader finds an import again after leaving the page:
    * the workspace's recent documents and every line still waiting. Without it the
    * only way back to a held item would be to upload the file again.
@@ -273,6 +384,81 @@ export class AhspController {
       userId,
       decisions,
       assistedClassification,
+    });
+  }
+
+  /**
+   * Recalculate a durable import from today's units and the scoped human
+   * choices. The journal reasons move. The AHSP does not.
+   */
+  @Post('document/jobs/:importJobId/recheck')
+  @Permissions('AHSP_MANAGE')
+  async recheckImportJob(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('importJobId') importJobId: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    return this.documents.recheckImportJob({ workspaceId, importJobId });
+  }
+
+  /**
+   * One human choice of an existing canonical unit for one durable import slot.
+   * The slot is the journal line plus its immutable occurrence key. Nothing here
+   * writes an alias or another unit definition.
+   */
+  @Put('document/jobs/:importJobId/lines/:lineNumber/unit-decisions/:occurrenceKey')
+  @Permissions('AHSP_MANAGE')
+  async setImportUnitDecision(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('importJobId') importJobId: string,
+    @Param('lineNumber') lineNumber: string,
+    @Param('occurrenceKey') occurrenceKey: string,
+    @Body() body: { unitDefinitionId?: unknown },
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    const parsedLine = Number(lineNumber);
+    if (!Number.isInteger(parsedLine) || parsedLine < 1) {
+      throw new BadRequestException('AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN');
+    }
+    if (typeof body?.unitDefinitionId !== 'string' || body.unitDefinitionId === '') {
+      throw new BadRequestException('AHSP_IMPORT_UNIT_DECISION_UNIT_UNKNOWN');
+    }
+    const userId = await this.resolveActor(request);
+    return this.documents.setUnitDecision({
+      workspaceId,
+      importJobId,
+      lineNumber: parsedLine,
+      occurrenceKey,
+      unitDefinitionId: body.unitDefinitionId,
+      userId,
+    });
+  }
+
+  /** Remove only the scoped choice. The source spelling stays unresolved. */
+  @Delete('document/jobs/:importJobId/lines/:lineNumber/unit-decisions/:occurrenceKey')
+  @Permissions('AHSP_MANAGE')
+  async clearImportUnitDecision(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('importJobId') importJobId: string,
+    @Param('lineNumber') lineNumber: string,
+    @Param('occurrenceKey') occurrenceKey: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    const parsedLine = Number(lineNumber);
+    if (!Number.isInteger(parsedLine) || parsedLine < 1) {
+      throw new BadRequestException('AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN');
+    }
+    return this.documents.clearUnitDecision({
+      workspaceId,
+      importJobId,
+      lineNumber: parsedLine,
+      occurrenceKey,
     });
   }
 
@@ -425,6 +611,12 @@ export class AhspController {
       issuerInstitution?: string;
       resources?: CreateAhspVersionDto['resources'];
       leafNodeIds?: string[];
+      jenisPengadaanRootId?: string | null;
+      pendingPaths?: Array<{
+        kategori?: string;
+        subkategori?: string;
+        jenisPekerjaan?: string;
+      }>;
     },
   ) {
     const workspaceId = request.workspaceContext?.workspaceId;
@@ -436,13 +628,27 @@ export class AhspController {
     if (!methodName) throw new BadRequestException('AHSP_METHOD_NAME_REQUIRED');
     if (!outputUnit) throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
     const userId = await this.resolveActor(request);
-    const leafNodeIds = [
-      ...new Set(
-        (Array.isArray(body.leafNodeIds) ? body.leafNodeIds : []).filter(
-          (id): id is string => typeof id === 'string' && id.trim() !== '',
-        ),
-      ),
-    ];
+    const declaredLeafIds = (Array.isArray(body.leafNodeIds) ? body.leafNodeIds : []).filter(
+      (id): id is string => typeof id === 'string' && id.trim() !== '',
+    );
+    const pending = Array.isArray(body.pendingPaths) ? body.pendingPaths : [];
+    const materializedLeafIds: string[] = [];
+    if (pending.length > 0) {
+      const rootId =
+        typeof body.jenisPengadaanRootId === 'string' ? body.jenisPengadaanRootId.trim() : '';
+      if (!rootId) throw new BadRequestException('CLASSIFICATION_PATH_ROOT_REQUIRED');
+      for (const row of pending) {
+        const leaf = await this.assistedClassification.materializeWorkspacePath({
+          workspaceId,
+          rootId,
+          kategori: typeof row?.kategori === 'string' ? row.kategori : '',
+          subkategori: typeof row?.subkategori === 'string' ? row.subkategori : '',
+          jenisPekerjaan: typeof row?.jenisPekerjaan === 'string' ? row.jenisPekerjaan : '',
+        });
+        materializedLeafIds.push(leaf.id);
+      }
+    }
+    const leafNodeIds = [...new Set([...declaredLeafIds, ...materializedLeafIds])];
     const workType =
       (typeof body.workType === 'string' && body.workType.trim()) || methodName;
 
@@ -696,6 +902,14 @@ export class AhspController {
     const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
     const actorUserId = await this.resolveActor(request);
     return this.ahspService.propose(id, actorUserId, workspaceId);
+  }
+
+  /** The immutable subject bound at propose. Not the live working AHSP. */
+  @Get(':id/proposal-subject')
+  @Permissions('AHSP_VIEW')
+  async proposalSubject(@Req() request: any, @Param('id') id: string) {
+    const workspaceId: string | undefined = request.workspaceContext?.workspaceId;
+    return this.ahspService.readProposalSubject(id, workspaceId);
   }
 
   /** A reviewer declines a proposed AHSP (-> Ditolak). Separate authority. */

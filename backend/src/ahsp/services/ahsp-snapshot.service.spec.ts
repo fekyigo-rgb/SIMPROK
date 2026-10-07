@@ -13,6 +13,9 @@ describe('AhspSnapshotService', () => {
     aHSPSnapshot: {
       create: jest.Mock;
     };
+    ahspSnapshotClassificationAssignment: {
+      createMany: jest.Mock;
+    };
   };
   let audit: {
     logAction: jest.Mock;
@@ -58,6 +61,9 @@ describe('AhspSnapshotService', () => {
       },
       aHSPSnapshot: {
         create: jest.fn(),
+      },
+      ahspSnapshotClassificationAssignment: {
+        createMany: jest.fn(),
       },
     };
     audit = {
@@ -126,9 +132,56 @@ describe('AhspSnapshotService', () => {
     });
     expect(audit.logAction).toHaveBeenCalledWith({
       ahspId: version.ahspId,
+      ahspVersionId: version.id,
       action: 'AHSPSnapshotCreated',
       who: 'user-1',
       after: snapshot,
+    });
+  });
+
+  it('a proposal freeze copies metadata and only the assignments it is given', async () => {
+    prisma.aHSPVersion.findUnique.mockResolvedValue({
+      ...version,
+      resources: [{ ...resource, coefficient: 1 }],
+    });
+    prisma.aHSPSnapshot.create.mockResolvedValue(snapshot);
+    prisma.ahspSnapshotClassificationAssignment.createMany.mockResolvedValue({ count: 1 });
+    audit.logAction.mockResolvedValue({ id: 'audit-1' });
+    const client = {
+      aHSPVersion: prisma.aHSPVersion,
+      aHSPSnapshot: prisma.aHSPSnapshot,
+      ahspSnapshotClassificationAssignment: prisma.ahspSnapshotClassificationAssignment,
+    };
+
+    await service.createSnapshot(version.id, snapshot.workspaceId, 'user-1', {
+      client: client as never,
+      frozen: {
+        code: 'A.1',
+        keterangan: 'Catatan',
+        regulationReference: 'Dasar',
+        issuerInstitution: 'Penerbit',
+        ownershipType: 'USER_ASSET' as never,
+      },
+      activeAssignments: [{ id: 'as-1', leafNodeId: 'leaf-1', provenance: 'HUMAN_ADDED' as never }],
+    });
+
+    expect(prisma.aHSPSnapshot.create.mock.calls[0][0].data).toEqual(
+      expect.objectContaining({
+        code: 'A.1',
+        keterangan: 'Catatan',
+        regulationReference: 'Dasar',
+        issuerInstitution: 'Penerbit',
+        ownershipType: 'USER_ASSET',
+        resources: { create: [expect.objectContaining({ coefficient: 1, baseUnit: 'm3' })] },
+      }),
+    );
+    expect(prisma.ahspSnapshotClassificationAssignment.createMany).toHaveBeenCalledWith({
+      data: [{
+        snapshotId: snapshot.id,
+        assignmentId: 'as-1',
+        leafNodeId: 'leaf-1',
+        provenance: 'HUMAN_ADDED',
+      }],
     });
   });
 

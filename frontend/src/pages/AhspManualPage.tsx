@@ -39,15 +39,40 @@ import {
   type UnitLookupItem,
 } from '../api/basicPriceImport';
 import { parseCoefficientInput } from '../utils/ahspCompositionDisplay';
+import { manualAdmissionFailure } from '../utils/ahspManualAdmission';
+import { unitSuggestionLabels } from '../utils/unitSuggestionLabel';
 import '../styles/ahsp.css';
 
 type ResourceGroup = 'LABOR' | 'MATERIAL' | 'EQUIPMENT';
+
+function legacyUnitNote(resourceType: ResourceGroup, baseUnit: string): boolean {
+  const token = baseUnit.trim().toLocaleLowerCase('en-US');
+  if (token === '') return false;
+  const person =
+    token === 'person_day' ||
+    token === 'person_hour' ||
+    token === 'person_week' ||
+    token === 'person_month' ||
+    token === 'oh' ||
+    token === 'oj' ||
+    token === 'orang-hari' ||
+    token === 'orang-jam' ||
+    token === 'orang hari' ||
+    token === 'orang jam';
+  const equipment = token.startsWith('equipment_') || token === 'jam alat' || token === 'hari alat' || token === 'minggu alat' || token === 'bulan alat';
+  if (resourceType === 'EQUIPMENT' && person) return true;
+  if (resourceType === 'LABOR' && equipment) return true;
+  return false;
+}
 
 type ManualResourceRow = {
   key: string;
   resourceId: string;
   resourceName: string;
   baseUnit: string;
+  /** Human label of the selected unit. The canonical code stays in baseUnit. */
+  unitDisplayName?: string | null;
+  unitSymbol?: string | null;
   coefficient: string;
   /** True only when resourceId is the catalog row the user selected. */
   catalogBound: boolean;
@@ -55,9 +80,34 @@ type ManualResourceRow = {
 
 const newRowKey = () => `r-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+/** A nomination the identity kernel made. Evidence for the human, never a binding. */
+type IntakeCandidate = {
+  resourceCatalogId: string;
+  name: string;
+  code: string | null;
+  baseUnit: string;
+};
+
+/**
+ * The server's answer to "does this resource already exist?" — one verdict off one
+ * identity reading. REVIEW_REQUIRED is the Two-Door door: nothing was minted, and
+ * the digest must travel back untouched so an examination is refused against
+ * exactly the nominations the person saw.
+ */
+type IntakeAnswer =
+  | { outcome: 'REUSED'; resource: { id: string; name: string; baseUnit: string } }
+  | { outcome: 'CREATED'; resource: { id: string; name: string; baseUnit: string } }
+  | {
+      outcome: 'REVIEW_REQUIRED';
+      candidates: IntakeCandidate[];
+      candidateContextDigest: string;
+    };
+
 function ManualResourceGroupPanel(props: {
   title: string;
   tone: 'labor' | 'material' | 'equipment';
+  /** The section IS the type. The editor is never asked to restate it. */
+  resourceType: ResourceGroup;
   icon: ReactNode;
   rows: ManualResourceRow[];
   onChange: (rows: ManualResourceRow[]) => void;
@@ -66,7 +116,166 @@ function ManualResourceGroupPanel(props: {
   hits: ResourceLookupItem[];
   searching: boolean;
   searchFailed: boolean;
+  disabled: boolean;
 }): ReactNode {
+  const [addOpen, setAddOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [unitQ, setUnitQ] = useState('');
+  const [unitHits, setUnitHits] = useState<UnitLookupItem[]>([]);
+  const [unit, setUnit] = useState<UnitLookupItem | null>(null);
+  const [newCoefficient, setNewCoefficient] = useState('');
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [nameHits, setNameHits] = useState<ResourceLookupItem[]>([]);
+  const [review, setReview] = useState<{
+    candidates: IntakeCandidate[];
+    candidateContextDigest: string;
+  } | null>(null);
+  const addLock = useRef(false);
+
+  useEffect(() => {
+    if (!addOpen) return;
+    const q = newName.trim();
+    if (q.length < 2) {
+      setNameHits([]);
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ q, type: props.resourceType, page: '1', limit: '8' });
+        const response = await apiFetch(`/ahsp/resource-search?${params.toString()}`);
+        if (!response.ok) {
+          setNameHits([]);
+          return;
+        }
+        const page = (await response.json()) as { items?: ResourceLookupItem[] };
+        setNameHits(page.items ?? []);
+      } catch {
+        setNameHits([]);
+      }
+    }, 280);
+    return () => window.clearTimeout(timer);
+  }, [addOpen, newName, props.resourceType]);
+
+  useEffect(() => {
+    if (!addOpen) return;
+    const t = window.setTimeout(async () => {
+      const q = unitQ.trim();
+      if (props.resourceType === 'MATERIAL' && q.length < 1) {
+        setUnitHits([]);
+        return;
+      }
+      try {
+        const page = await searchUnitDefinitions({
+          q: q.length > 0 ? q : undefined,
+          resourceType: props.resourceType,
+          page: 1,
+          limit: props.resourceType === 'MATERIAL' ? 12 : 8,
+        });
+        setUnitHits(page.items ?? []);
+      } catch {
+        setUnitHits([]);
+      }
+    }, 280);
+    return () => window.clearTimeout(t);
+  }, [unitQ, addOpen, props.resourceType]);
+
+  const resetAdd = () => {
+    setAddOpen(false);
+    setNewName('');
+    setUnitQ('');
+    setUnitHits([]);
+    setUnit(null);
+    setNewCoefficient('');
+    setAddError(null);
+    setNameHits([]);
+    setReview(null);
+  };
+
+  const addBound = (
+    resource: { id: string; name: string; baseUnit: string },
+    display?: { unitDisplayName?: string | null; unitSymbol?: string | null },
+  ) => {
+    props.onChange([
+      ...props.rows,
+      {
+        key: newRowKey(),
+        resourceId: resource.id,
+        resourceName: resource.name,
+        baseUnit: resource.baseUnit,
+        unitDisplayName: display?.unitDisplayName ?? null,
+        unitSymbol: display?.unitSymbol ?? null,
+        coefficient: newCoefficient,
+        catalogBound: true,
+      },
+    ]);
+    resetAdd();
+  };
+
+  const selectedUnitDisplay = (baseUnit: string) =>
+    unit && unit.code === baseUnit
+      ? { unitDisplayName: unit.displayName, unitSymbol: unit.symbol }
+      : undefined;
+
+  /**
+   * One request carries the whole decision. An `examination` is sent only after a
+   * person has actually seen the nominations and refused all of them — which is
+   * why the refused ids and the digest are taken from `review` and never rebuilt.
+   */
+  const submitNew = async (examined: boolean) => {
+    const name = newName.trim();
+    if (name === '' || !unit) return;
+    if (addBusy || addLock.current) return;
+    addLock.current = true;
+    setAddBusy(true);
+    setAddError(null);
+    try {
+      const response = await apiFetch('/ahsp/resources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          resourceType: props.resourceType,
+          unitDefinitionId: unit.id,
+          ...(examined && review
+            ? {
+                refusedCandidateIds: review.candidates.map(
+                  (c) => c.resourceCatalogId,
+                ),
+                candidateContextDigest: review.candidateContextDigest,
+              }
+            : {}),
+        }),
+      });
+      if (!response.ok) {
+        const failure = (await response.json().catch(() => null)) as {
+          message?: unknown;
+          resource?: { id?: unknown; name?: unknown; baseUnit?: unknown };
+        } | null;
+        const verdict = manualAdmissionFailure(response.status, failure);
+        if (verdict.kind === 'bind') {
+          addBound(verdict.resource, selectedUnitDisplay(verdict.resource.baseUnit));
+          return;
+        }
+        setAddError(verdict.text);
+        return;
+      }
+      const answer = (await response.json()) as IntakeAnswer;
+      if (answer.outcome === 'REVIEW_REQUIRED') {
+        setReview({
+          candidates: answer.candidates,
+          candidateContextDigest: answer.candidateContextDigest,
+        });
+        return;
+      }
+      addBound(answer.resource, selectedUnitDisplay(answer.resource.baseUnit));
+    } catch {
+      setAddError('SIMPROK tidak dapat dihubungi. Sumber daya belum ditambahkan.');
+    } finally {
+      addLock.current = false;
+      setAddBusy(false);
+    }
+  };
   const addHit = (item: ResourceLookupItem) => {
     props.onChange([
       ...props.rows.filter((r) => r.resourceId.trim() !== '' || r.resourceName.trim() !== ''),
@@ -126,7 +335,8 @@ function ManualResourceGroupPanel(props: {
           ) : null}
           {!props.searching && !props.searchFailed && props.hits.length === 0 ? (
             <li className="ahsp-line ahsp-line--abu">
-              Tidak ada di katalog untuk pencarian ini. Nama ini belum dikenal dan tidak menjadi sumber daya resmi.
+              Belum ada di katalog untuk pencarian ini. Tambahkan sebagai sumber daya SIMPROK dengan + Tambah
+              Resource, atau pakai namanya hanya pada AHSP ini.
               <button type="button" className="ahsp-action ahsp-action--outline ahsp-action--compact" onClick={keepPrivateName}>
                 Pakai nama ini hanya pada AHSP ini
               </button>
@@ -145,7 +355,184 @@ function ManualResourceGroupPanel(props: {
           ))}
         </ul>
       ) : null}
-      <table className="ahsp-manual-comp__table">
+
+      <div className="ahsp-action-row ahsp-manual-comp__add">
+        <button
+          type="button"
+          className="ahsp-action ahsp-action--outline ahsp-action--compact"
+          disabled={props.disabled}
+          aria-expanded={addOpen}
+          onClick={() => (addOpen ? resetAdd() : setAddOpen(true))}
+        >
+          <Plus size={14} aria-hidden /> Tambah Resource
+        </button>
+      </div>
+
+      {addOpen ? (
+        <div
+          className="ahsp-manual-comp__add-form"
+          role="group"
+          aria-label={`Tambah ${props.title} baru`}
+        >
+          <label className="ahsp-field">
+            <span className="ahsp-field__label">
+              Nama Resource <span className="ahsp-required">*</span>
+            </span>
+            <input
+              className="ahsp-field__control"
+              value={newName}
+              onChange={(e) => {
+                setNewName(e.target.value);
+                setReview(null);
+              }}
+              placeholder={`Nama ${props.title.toLowerCase()} baru\u2026`}
+              aria-label={`Nama ${props.title} baru`}
+            />
+          </label>
+          <label className="ahsp-field">
+            <span className="ahsp-field__label">
+              Satuan <span className="ahsp-required">*</span>
+            </span>
+            <input
+              className="ahsp-field__control"
+              value={unit ? unit.displayName : unitQ}
+              onChange={(e) => {
+                setUnit(null);
+                setUnitQ(e.target.value);
+                setReview(null);
+              }}
+              placeholder={'Cari satuan\u2026'}
+              aria-label={`Satuan ${props.title} baru`}
+            />
+            {!unit && unitHits.length > 0 ? (
+              <ul
+                className="ahsp-manual-comp__hits"
+                aria-label={`Hasil satuan ${props.title}`}
+              >
+                {unitHits.map((u) => {
+                  const labels = unitSuggestionLabels(u);
+                  return (
+                  <li key={u.id}>
+                    <button
+                      type="button"
+                      className="ahsp-manual-comp__hit"
+                      onClick={() => {
+                        setUnit(u);
+                        setUnitHits([]);
+                      }}
+                    >
+                      <strong>{labels.primary}</strong>
+                      {labels.secondary ? <span>{labels.secondary}</span> : null}
+                    </button>
+                  </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </label>
+          <label className="ahsp-field">
+            <span className="ahsp-field__label">Koefisien</span>
+            <input
+              className="ahsp-field__control"
+              value={newCoefficient}
+              onChange={(e) => setNewCoefficient(e.target.value)}
+              aria-label={`Koefisien ${props.title} baru`}
+              inputMode="decimal"
+            />
+          </label>
+
+          {nameHits.length > 0 ? (
+            <div role="group" aria-label="Sumber daya katalog untuk nama ini">
+              <p className="ahsp-line">
+                Katalog sudah memiliki sumber daya untuk nama ini. Pilih yang ada untuk memakainya langsung.
+              </p>
+              <ul className="ahsp-manual-comp__hits">
+                {nameHits.map((hit) => (
+                  <li key={hit.id}>
+                    <button type="button" className="ahsp-manual-comp__hit" onClick={() => addHit(hit)}>
+                      <strong>{hit.name}</strong>
+                      <span>
+                        {hit.baseUnit}
+                        {hit.code ? ` \u00B7 ${hit.code}` : ''}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {review ? (
+            <div className="simprok-honest-frame" role="group" aria-label="Tinjau sumber daya serupa">
+              <span className="simprok-honest-frame__badge">Perlu ditinjau</span>
+              <p className="ahsp-line">
+                SIMPROK menemukan sumber daya yang mungkin sama. Pilih yang sudah ada bila benar sama
+                {'\u2014'} menambah yang baru akan menggandakan katalog.
+              </p>
+              <ul className="ahsp-manual-comp__hits" aria-label="Kandidat sumber daya">
+                {review.candidates.map((c) => (
+                  <li key={c.resourceCatalogId}>
+                    <button
+                      type="button"
+                      className="ahsp-manual-comp__hit"
+                      onClick={() =>
+                        addBound({
+                          id: c.resourceCatalogId,
+                          name: c.name,
+                          baseUnit: c.baseUnit,
+                        })
+                      }
+                    >
+                      <strong>{c.name}</strong>
+                      <span>
+                        {c.baseUnit}
+                        {c.code ? ` \u00B7 ${c.code}` : ''}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {addError ? (
+            <p role="alert" className="ahsp-line" style={{ color: '#c0392b' }}>
+              {addError}
+            </p>
+          ) : null}
+
+          <div className="ahsp-action-row">
+            <button
+              type="button"
+              className="ahsp-action ahsp-action--primary ahsp-action--compact"
+              disabled={addBusy || newName.trim() === '' || !unit}
+              aria-busy={addBusy || undefined}
+              onClick={() => void submitNew(review !== null)}
+            >
+              {addBusy
+                ? 'Menambahkan\u2026'
+                : review !== null
+                  ? 'Tambah sebagai resource baru'
+                  : 'Tambah'}
+            </button>
+            <button
+              type="button"
+              className="ahsp-action ahsp-action--quiet ahsp-action--compact"
+              onClick={resetAdd}
+            >
+              Batal
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <table className="ahsp-manual-comp__table ahsp-resource-columns">
+        <colgroup>
+          <col className="ahsp-col-name" />
+          <col className="ahsp-col-unit" />
+          <col className="ahsp-col-coef" />
+          <col className="ahsp-col-action" />
+        </colgroup>
         <thead>
           <tr>
             <th>Sumber Daya</th>
@@ -157,8 +544,8 @@ function ManualResourceGroupPanel(props: {
         <tbody>
           {props.rows.length === 0 ? (
             <tr>
-              <td colSpan={4} className="ahsp-line ahsp-line--abu">
-                Belum ada baris. Cari di katalog di atas.
+              <td colSpan={4} className="ahsp-manual-comp__empty">
+                <span className="ahsp-line ahsp-line--abu">Belum ada baris. Cari di katalog di atas.</span>
               </td>
             </tr>
           ) : (
@@ -174,8 +561,19 @@ function ManualResourceGroupPanel(props: {
                   )}
                 </td>
                 <td>
+                  {legacyUnitNote(props.resourceType, row.baseUnit) ? (
+                    <span className="ahsp-line ahsp-line--abu">LEGACY_INVALID_FOR_RESOURCE_TYPE</span>
+                  ) : null}
                   {row.catalogBound ? (
-                    row.baseUnit || '—'
+                    <span>
+                      <strong>
+                        {unitSuggestionLabels({
+                          displayName: row.unitDisplayName,
+                          symbol: row.unitSymbol,
+                          code: row.baseUnit,
+                        }).primary}
+                      </strong>
+                    </span>
                   ) : (
                     <input
                       className="ahsp-manual-comp__coef"
@@ -374,8 +772,9 @@ export function AhspManualPage(): ReactNode {
         <div>
           <h1 className="ahsp-manual-page__title">Buat AHSP Manual</h1>
           <p className="ahsp-manual-page__subtitle">
-            Susun AHSP baru. Sumber daya yang sudah dikenal memakai katalog yang sama dengan Basic Price. Nama yang
-            belum ada di katalog tetap hanya pada AHSP ini dan tidak menjadi sumber daya resmi.
+            Gunakan sumber daya dari katalog bila sudah tersedia. Jika belum ada, Anda dapat menambahkannya
+            langsung. Resource baru akan disimpan di SIMPROK dan dapat digunakan pada AHSP. Informasi harga
+            dikelola melalui Basic Price.
           </p>
         </div>
         <div className="ahsp-action-row">
@@ -429,6 +828,8 @@ export function AhspManualPage(): ReactNode {
                 issuerInstitution: assisted.penerbit?.trim() || undefined,
                 resources: collected.resources ?? [],
                 leafNodeIds: assisted.paths.map((p) => p.leafNodeId),
+                jenisPengadaanRootId: assisted.jenisPengadaanRootId,
+                pendingPaths: assisted.pendingPaths ?? [],
               }),
             });
             if (!response.ok) {
@@ -473,9 +874,7 @@ export function AhspManualPage(): ReactNode {
             </div>
             <aside className="ahsp-manual-intel" aria-label="Intelijen SIMPROK">
               <Sparkles size={14} aria-hidden />
-              <span>
-                Multi-jalur klasifikasi memakai fondasi yang sama dengan Import.
-              </span>
+              <span>AHSP dapat memiliki lebih dari satu jalur klasifikasi.</span>
             </aside>
           </header>
           <AhspImportAssistedClassificationPanel
@@ -497,7 +896,9 @@ export function AhspManualPage(): ReactNode {
           </header>
           <div className="ahsp-manual-info-grid">
             <label className="ahsp-field ahsp-manual-info-grid__uraian">
-              <span className="ahsp-field__label">Uraian AHSP</span>
+              <span className="ahsp-field__label">
+                Uraian AHSP <span className="ahsp-required">*</span>
+              </span>
               <input
                 className="ahsp-field__control"
                 required
@@ -560,7 +961,8 @@ export function AhspManualPage(): ReactNode {
             <div className="ahsp-manual-card__heading">
               <h2 className="ahsp-section-title">Komposisi / Formula AHSP</h2>
               <p className="ahsp-line ahsp-line--abu">
-                Cari sumber daya dari katalog yang sama dengan Basic Price. Nama yang belum ada tetap hanya pada AHSP ini.
+                Cari sumber daya dari katalog yang sama dengan Basic Price. Jika belum ada, tambahkan langsung
+                dengan + Tambah Resource.
               </p>
             </div>
             <aside className="ahsp-manual-info-strip" role="note">
@@ -575,6 +977,7 @@ export function AhspManualPage(): ReactNode {
             <ManualResourceGroupPanel
               title="Tenaga Kerja"
               tone="labor"
+              resourceType="LABOR"
               icon={<Users size={16} />}
               rows={labor}
               onChange={setLabor}
@@ -583,10 +986,12 @@ export function AhspManualPage(): ReactNode {
               hits={laborHits}
               searching={laborSearching}
               searchFailed={laborFailed}
+              disabled={busy}
             />
             <ManualResourceGroupPanel
               title="Bahan"
               tone="material"
+              resourceType="MATERIAL"
               icon={<Package size={16} />}
               rows={material}
               onChange={setMaterial}
@@ -595,10 +1000,12 @@ export function AhspManualPage(): ReactNode {
               hits={materialHits}
               searching={materialSearching}
               searchFailed={materialFailed}
+              disabled={busy}
             />
             <ManualResourceGroupPanel
               title="Peralatan"
               tone="equipment"
+              resourceType="EQUIPMENT"
               icon={<Wrench size={16} />}
               rows={equipment}
               onChange={setEquipment}
@@ -607,6 +1014,7 @@ export function AhspManualPage(): ReactNode {
               hits={equipmentHits}
               searching={equipmentSearching}
               searchFailed={equipmentFailed}
+              disabled={busy}
             />
           </div>
         </section>

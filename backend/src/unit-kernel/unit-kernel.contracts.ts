@@ -82,6 +82,16 @@ export const UNIT_REASON = {
    * what is ALLOWED.
    */
   FOREIGN_CONTEXT_UNIT_ALIAS: 'FOREIGN_CONTEXT_UNIT_ALIAS',
+  /**
+   * The spelling resolved to exactly one canonical unit, and that unit's
+   * dimension belongs to the other resource family.
+   *
+   * PERSON_TIME stays in the catalog. It is refused only when the trusted
+   * context is EQUIPMENT. EQUIPMENT_TIME is refused only when the trusted
+   * context is LABOR. Nothing is deleted, and a context-free material unit
+   * is untouched.
+   */
+  RESOURCE_TYPE_UNIT_INCOMPATIBLE: 'RESOURCE_TYPE_UNIT_INCOMPATIBLE',
   UNKNOWN_UNIT_ALIAS: 'UNKNOWN_UNIT_ALIAS',
   AMBIGUOUS_UNIT_ALIAS: 'AMBIGUOUS_UNIT_ALIAS',
   UNIQUE_EVIDENCE_BOUND_RULE: 'UNIQUE_EVIDENCE_BOUND_RULE',

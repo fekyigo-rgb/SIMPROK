@@ -42,21 +42,17 @@ const PUBLISHED_AHSP_ID = '44000000-0000-4000-8000-00000000000b';
 // the database made it depend on another suite's fixtures still existing, and
 // when none did, beforeAll threw before its cleanup ids were assigned.
 
-// AHSP_VIEW/AHSP_MANAGE are deliberately NOT active-membership baseline codes,
-// so this suite grants them through a real role — the same pattern
-// rm02d1-resource-identity-mapping uses. Testing against a real grant rather
-// than a widened baseline is the point: retirement must require the same
-// authority as creating a version.
-// Codes this suite OWNS: not part of the seeded catalog, so it creates and
-// removes them itself.
-const OWNED_PERMISSION_CODES = ['AHSP_VIEW', 'AHSP_MANAGE'];
-
-// Codes the suite merely NEEDS in order to drive select-ahsp. These belong to
-// the shared catalog other suites depend on, so they are granted to this
-// suite's own role if present and NEVER created or deleted here. Creating and
-// then deleting them took PROJECT_VIEW/RAB_DRAFT_EDIT out from under twelve
-// unrelated suites and left the database short of its baseline.
-const BORROWED_PERMISSION_CODES = ['RAB_DRAFT_EDIT', 'PROJECT_VIEW'];
+// Codes the suite merely NEEDS. They belong to the shared acceptance catalog,
+// including AHSP_VIEW and AHSP_MANAGE, which the acceptance seed grants to
+// DIRECTOR. This suite grants them to its own role when the rows are already
+// present, and NEVER creates or deletes them. Deleting AHSP_VIEW/AHSP_MANAGE
+// cascaded the DIRECTOR grants away and left the database short of baseline.
+const BORROWED_PERMISSION_CODES = [
+  'RAB_DRAFT_EDIT',
+  'PROJECT_VIEW',
+  'AHSP_VIEW',
+  'AHSP_MANAGE',
+];
 
 const AS_OF = '2026-08-08';
 
@@ -87,15 +83,16 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
       await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A } })
     ).organizationId;
 
-    const owned = await Promise.all(
-      OWNED_PERMISSION_CODES.map((code) =>
-        prisma.permission.upsert({ where: { code }, create: { code, name: code }, update: {} }),
-      ),
-    );
     const borrowed = await prisma.permission.findMany({
       where: { code: { in: BORROWED_PERMISSION_CODES } },
     });
-    const permissions = [...owned, ...borrowed];
+    const missing = BORROWED_PERMISSION_CODES.filter(
+      (code) => !borrowed.some((permission) => permission.code === code),
+    );
+    if (missing.length > 0) {
+      throw new Error(`STOP: shared permissions missing: ${missing.join(',')}`);
+    }
+    const permissions = borrowed;
     await prisma.role.upsert({
       where: { id: ROLE_ID },
       create: {
@@ -329,9 +326,8 @@ describe('RM03D1 Canonical Data Integrity — AHSP version retirement (e2e)', ()
     }
     await prisma.rolePermission.deleteMany({ where: { roleId: ROLE_ID } });
     await prisma.role.deleteMany({ where: { id: ROLE_ID } });
-    // Only the codes this suite owns. A seeded permission is shared state and is
-    // never removed from here.
-    await prisma.permission.deleteMany({ where: { code: { in: OWNED_PERMISSION_CODES } } });
+    // Borrowed permission rows, including seeded AHSP_VIEW and AHSP_MANAGE,
+    // stay. Deleting the suite role above removes only this suite's grants.
     await prisma.region.deleteMany({ where: { id: REGION_ID } });
     await prisma.$disconnect();
     await app.close();

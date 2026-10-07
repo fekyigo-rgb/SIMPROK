@@ -553,7 +553,7 @@ test("AHSP COMPLETION: a need is said once per question, from the display module
   assert.ok(importPage.includes("describePreviewAttention(preview.workItems, { canCurate })"));
   assert.ok(importPage.includes("openIdentityReview"));
   assert.ok(importPage.includes("importJobId="));
-  assert.ok(importPage.includes("Buka tinjauan sumber daya"));
+  assert.ok(importPage.includes("row.actionLabel"));
   const doorOpen = importPage.slice(
     importPage.indexOf("const openIdentityReview = async"),
     importPage.indexOf("const loadImportJobs = "),

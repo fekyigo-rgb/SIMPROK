@@ -22,9 +22,24 @@ export type AssistedClassificationPathDeclaration = {
  * Job-level assisted context. Jenis Pengadaan is single-valued for now.
  * Paths may be many. Dasar ≠ Penerbit ≠ Sumber Data.
  */
+/**
+ * Names the human selected from the shared vocabulary before a Source-B node
+ * exists. Present only after an explicit save/confirm. Browsing does not write.
+ */
+export type AssistedPendingClassificationPath = {
+  kategori: string;
+  subkategori: string;
+  jenisPekerjaan: string;
+};
+
 export type AssistedClassificationContext = {
   jenisPengadaanRootId: string | null;
   paths: AssistedClassificationPathDeclaration[];
+  /**
+   * Optional so older callers stay valid. Absent means none.
+   * Apply/manual save materializes these; opening a menu does not.
+   */
+  pendingPaths?: AssistedPendingClassificationPath[];
   /** Maps to AHSPVersion.regulationReference (Dasar / Acuan). */
   dasarAcuan: string | null;
   /** Maps to AHSPVersion.issuerInstitution (Penerbit / Instansi Sumber). */
@@ -35,6 +50,7 @@ export function emptyAssistedClassificationContext(): AssistedClassificationCont
   return {
     jenisPengadaanRootId: null,
     paths: [],
+    pendingPaths: [],
     dasarAcuan: null,
     penerbit: null,
   };
@@ -77,6 +93,20 @@ export function parseAssistedClassificationContext(
       paths.push({ leafNodeId, provenanceHint, sourceEvidence: evidence });
     }
   }
+  const pendingRaw = obj.pendingPaths;
+  const pendingPaths: AssistedPendingClassificationPath[] = [];
+  if (Array.isArray(pendingRaw)) {
+    for (const row of pendingRaw) {
+      if (typeof row !== 'object' || row === null) continue;
+      const item = row as Record<string, unknown>;
+      const kategori = typeof item.kategori === 'string' ? item.kategori.trim() : '';
+      const subkategori = typeof item.subkategori === 'string' ? item.subkategori.trim() : '';
+      const jenisPekerjaan =
+        typeof item.jenisPekerjaan === 'string' ? item.jenisPekerjaan.trim() : '';
+      if (!kategori || !subkategori || !jenisPekerjaan) continue;
+      pendingPaths.push({ kategori, subkategori, jenisPekerjaan });
+    }
+  }
   return {
     jenisPengadaanRootId:
       typeof obj.jenisPengadaanRootId === 'string' &&
@@ -84,6 +114,7 @@ export function parseAssistedClassificationContext(
         ? obj.jenisPengadaanRootId.trim()
         : null,
     paths,
+    pendingPaths,
     dasarAcuan:
       typeof obj.dasarAcuan === 'string' && obj.dasarAcuan.trim() !== ''
         ? obj.dasarAcuan.trim()

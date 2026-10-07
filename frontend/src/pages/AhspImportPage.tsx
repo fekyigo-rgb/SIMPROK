@@ -8,10 +8,15 @@ import {
   emptyAssistedContext,
   type AssistedClassificationContext,
 } from '../components/AhspImportAssistedClassificationPanel';
+import { AhspUnitResolutionPanel } from '../components/AhspUnitResolutionPanel';
 import { explainWaitingItemReasons } from '../utils/ahspDocumentUserCopy';
 import {
+  EXISTING_RESOURCE_LINE,
   IDENTITY_PENDING_ITEM_LINE,
+  NEW_RESOURCE_CONFIRM_LINE,
   admissionOf,
+  admissionShownAfterSave,
+  workItemHasGenuineNewOnly,
   confirmImportFigures,
   describeImportIntake,
   describeImportRecheck,
@@ -19,6 +24,8 @@ import {
   describePreviewAttention,
   describeWaitingImports,
   previewIntakeLine,
+  previewUnitIssues,
+  waitingUnitIssues,
   IMPORT_JOURNEY_SUBTITLE,
   type AttentionRowView,
   type ImportJobView,
@@ -235,10 +242,32 @@ export function AhspImportPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [assistedClassification, setAssistedClassification] =
     useState<AssistedClassificationContext>(() => emptyAssistedContext());
-  const [commitResult, setCommitResult] = useState<null | { summary?: IntakeSummaryWire | null }>(null);
+  const [commitResult, setCommitResult] = useState<null | {
+    summary?: IntakeSummaryWire | null;
+    written?: ReadonlyArray<{
+      workType: string;
+      methodName: string;
+      admission: string;
+    }> | null;
+  }>(null);
   const [importError, setImportError] = useState<string | null>(null);
   /** Owner PASS Import journey: classify after preview, then confirm before save. */
   const [journeyStep, setJourneyStep] = useState<'idle' | 'classify' | 'confirm'>('idle');
+  const [unitDoor, setUnitDoor] = useState<null | {
+    spelling: string | null;
+    lineKey: string | null;
+    source: 'preview' | 'job';
+    jobKey: string | null;
+  }>(null);
+  const [openFailureJob, setOpenFailureJob] = useState<string | null>(null);
+  const failureSectionRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!openFailureJob) return;
+    failureSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    failureSectionRef.current?.focus();
+  }, [openFailureJob]);
+  /** The preview's journal, created only when a unit choice needs a durable line. */
+  const [previewIntakeJobId, setPreviewIntakeJobId] = useState<string | null>(null);
   // Which document request is running, so each button tells the truth about itself.
   const [importAction, setImportAction] = useState<'PREVIEW' | 'COMMIT' | null>(null);
   const importing = importAction !== null;
@@ -556,6 +585,7 @@ export function AhspImportPage() {
       const understood = await response.json();
       if (reads.mayApplyDocument(ticket)) {
         setPreview(understood);
+        setPreviewIntakeJobId(null);
         setJourneyStep('classify');
         const dasar = understood?.document?.regulationReference?.raw ?? null;
         if (typeof dasar === 'string' && dasar.trim()) {
@@ -799,6 +829,82 @@ export function AhspImportPage() {
     });
 
   /** IQL-01 — one governance act on one exact question, spending the context the server issued. */
+  const recheckJournal = async (importJobId: string) => {
+    const response = await apiFetch('/ahsp/document/jobs/' + importJobId + '/recheck', {
+      method: 'POST',
+    });
+    if (!response.ok) return null;
+    return response.json().catch(() => null);
+  };
+
+  const confirmPreviewUnit = async (
+    issue: { lineKey: string; occurrenceKey?: string | null },
+    unitDefinitionId: string,
+  ) => {
+    if (!canManage || !file || !issue.occurrenceKey || !issue.lineKey) return;
+    const lineNumber = Number(issue.lineKey) + 1;
+    if (!Number.isInteger(lineNumber) || lineNumber < 1) return;
+    let importJobId = previewIntakeJobId;
+    if (!importJobId) {
+      const body = new FormData();
+      body.append('file', file);
+      const opened = await apiFetch('/ahsp/document/intake', { method: 'POST', body });
+      if (!opened.ok) {
+        setImportError('Impor belum dapat ditahan untuk satuan ini. Coba lagi.');
+        return;
+      }
+      const intake = await opened.json().catch(() => null);
+      if (typeof intake?.importJobId !== 'string' || intake.importJobId === '') return;
+      importJobId = intake.importJobId;
+      setPreviewIntakeJobId(importJobId);
+    }
+    if (!importJobId) return;
+    const saved = await apiFetch(
+      '/ahsp/document/jobs/' + importJobId + '/lines/' + lineNumber + '/unit-decisions/' + encodeURIComponent(issue.occurrenceKey),
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unitDefinitionId }),
+      },
+    );
+    if (!saved.ok) return;
+    const reviewed = await recheckJournal(importJobId);
+    if (reviewed?.knowledge?.workItems && Array.isArray(reviewed.lines)) {
+      setPreview((current) => {
+        if (!current) return current;
+        const workItems = current.workItems.slice();
+        reviewed.lines.forEach((line: { lineNumber?: number }, index: number) => {
+          const next = reviewed.knowledge.workItems[index];
+          const at = typeof line?.lineNumber === 'number' ? line.lineNumber - 1 : -1;
+          if (next && at >= 0 && at < workItems.length) workItems[at] = next as PreviewItem;
+        });
+        return { ...current, workItems };
+      });
+    }
+    setUnitDoor(null);
+    await loadImportJobs();
+  };
+
+  const confirmUnitDecision = async (
+    job: ImportJobView,
+    issue: { lineKey: string; occurrenceKey?: string | null },
+    unitDefinitionId: string,
+  ) => {
+    if (!issue.occurrenceKey) return;
+    const response = await apiFetch(
+      '/ahsp/document/jobs/' + job.key + '/lines/' + issue.lineKey + '/unit-decisions/' + encodeURIComponent(issue.occurrenceKey),
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unitDefinitionId }),
+      },
+    );
+    if (!response.ok) return;
+    await recheckJournal(job.key);
+    setUnitDoor(null);
+    await loadImportJobs();
+  };
+
   const governQuestion = async (question: GovernedQuestionView, at: number, action: GovernanceAction) => {
     if (questionLock.current !== null || !question.token || questionsPhase === 'UNAUTHORIZED') return;
     const ticket = reads.captureAction('questions');
@@ -913,10 +1019,17 @@ export function AhspImportPage() {
   // Received and ready are different truths: the summary of a SAVED document
   // comes from the server's own count, never from the preview list.
   const intake = commitResult?.summary ? describeImportIntake(commitResult.summary) : null;
+  // After save, the written admission is the current status. The knowledge
+  // item keeps the reading from before the save.
+  const currentWorkItems = (preview?.workItems ?? []).map((item) =>
+    admissionShownAfterSave(item, commitResult?.written),
+  );
   const previewAttention = preview
     ? describePreviewAttention(preview.workItems, { canCurate })
     : [];
-  const confirmFigures = preview ? confirmImportFigures(preview.workItems ?? []) : null;
+  const confirmFigures = preview
+    ? confirmImportFigures(settled ? currentWorkItems : (preview.workItems ?? []))
+    : null;
 
   // AUTOMATION BEFORE HUMAN INTERVENTION.
   //
@@ -1264,6 +1377,8 @@ export function AhspImportPage() {
     rows: readonly AttentionRowView[],
     label: string,
     identityScope: Exclude<ObservationScope, null> | null,
+    unitScope: { source: 'preview' | 'job'; jobKey: string | null } | null = null,
+    failureJobKey: string | null = null,
   ): ReactNode =>
     rows.length > 0 ? (
       <ul className="ahsp-attention" aria-label={label}>
@@ -1272,13 +1387,32 @@ export function AhspImportPage() {
             canCurate &&
             identityScope !== null &&
             (row.tone === 'IDENTITY' || row.key === 'identity' || row.key.startsWith('identity:'));
+          const unitDoorRow = unitScope !== null && row.tone === 'UNIT' && row.key.startsWith('unit:');
           const badge = attentionBadge(row.detail);
           return (
             <li key={row.key} className="ahsp-attention__row" data-tone={row.tone.toLowerCase()}>
               <span className="ahsp-attention__icon" aria-hidden>
                 {attentionIcon(row.tone)}
               </span>
-              {identityDoor ? (
+              {unitDoorRow ? (
+                <button
+                  type="button"
+                  className="ahsp-action ahsp-action--quiet ahsp-attention__door"
+                  onClick={() =>
+                    setUnitDoor({
+                      spelling: row.key.slice('unit:'.length),
+                      lineKey: null,
+                      source: unitScope.source,
+                      jobKey: unitScope.jobKey,
+                    })
+                  }
+                  aria-label={'Selesaikan satuan: ' + row.title}
+                >
+                  <span className="ahsp-attention__title">{row.title}</span>
+                  <span className="ahsp-attention__detail">{row.detail}</span>
+                  <span className="ahsp-attention__action">Selesaikan satuan</span>
+                </button>
+              ) : identityDoor ? (
                 <button
                   type="button"
                   className="ahsp-action ahsp-action--quiet ahsp-attention__door"
@@ -1287,7 +1421,19 @@ export function AhspImportPage() {
                 >
                   <span className="ahsp-attention__title">{row.title}</span>
                   <span className="ahsp-attention__detail">{row.detail}</span>
-                  <span className="ahsp-attention__action">Buka tinjauan sumber daya</span>
+                  <span className="ahsp-attention__action">{row.actionLabel}</span>
+                </button>
+              ) : row.tone === 'FAILED' && row.actionLabel && failureJobKey ? (
+                <button
+                  type="button"
+                  className="ahsp-action ahsp-action--quiet ahsp-attention__door"
+                  aria-expanded={openFailureJob === failureJobKey}
+                  onClick={() => setOpenFailureJob((current) => (current === failureJobKey ? null : failureJobKey))}
+                  aria-label={row.actionLabel + ': ' + row.title}
+                >
+                  <span className="ahsp-attention__title">{row.title}</span>
+                  <span className="ahsp-attention__detail">{row.detail}</span>
+                  <span className="ahsp-attention__action">{row.actionLabel}</span>
                 </button>
               ) : (
                 <div className="ahsp-attention__body">
@@ -1305,6 +1451,47 @@ export function AhspImportPage() {
   const waitingImports = describeWaitingImports(importJobs, { canCurate });
   const jobEntries = placeOutcomes(waitingImports, (job) => job.key, jobOutcomes);
   const dismissJob = (key: string) => setJobOutcomes((prev) => prev.filter((outcome) => outcome.key !== key));
+
+  const renderUnitWorkspace = (source: 'preview' | 'job', jobKey: string | null): ReactNode => {
+    if (!unitDoor || unitDoor.source !== source) return null;
+    if (source === 'job' && unitDoor.jobKey !== jobKey) return null;
+    return (
+      <AhspUnitResolutionPanel
+        issues={
+          unitDoor.source === 'preview'
+            ? previewUnitIssues(preview?.workItems)
+            : waitingUnitIssues(
+                unitDoor.jobKey ?? '',
+                waitingImports.find((job) => job.key === unitDoor.jobKey)?.waitingItems ?? [],
+              )
+        }
+        spelling={unitDoor.spelling}
+        lineKey={unitDoor.lineKey}
+        onClose={() => setUnitDoor(null)}
+        onRecheck={
+          unitDoor.source === 'job' && unitDoor.jobKey
+            ? () => {
+                const at = waitingImports.findIndex((job) => job.key === unitDoor.jobKey);
+                const job = waitingImports[at];
+                if (job) recheckImport(job, at);
+              }
+            : null
+        }
+        onConfirm={
+          unitDoor.source === 'job' && unitDoor.jobKey
+            ? (issue, unitDefinitionId) => {
+                const job = waitingImports.find((item) => item.key === unitDoor.jobKey);
+                if (job) void confirmUnitDecision(job, issue, unitDefinitionId);
+              }
+            : unitDoor.source === 'preview'
+              ? (issue, unitDefinitionId) => {
+                  void confirmPreviewUnit(issue, unitDefinitionId);
+                }
+              : null
+        }
+      />
+    );
+  };
 
   // PURPOSE â†’ STATUS â†’ WHAT IT NEEDS â†’ THE ONE ACTION â†’ DECISIONS â†’ DETAIL ON DEMAND.
   const renderImportJob = (job: ImportJobView, at: number, anchored: AnchoredOutcome | null): ReactNode => {
@@ -1335,7 +1522,31 @@ export function AhspImportPage() {
           job.attention,
           'Yang masih dibutuhkan',
           job.key ? { kind: 'importJobId', importJobId: job.key } : null,
+          { source: 'job', jobKey: job.key },
+          job.key,
         )}
+        {renderUnitWorkspace('job', job.key)}
+        {openFailureJob === job.key ? (
+          <section ref={failureSectionRef} tabIndex={-1} className="ahsp-unit-workspace" aria-label="Kegagalan penyimpanan">
+            <h3 className="ahsp-section-title">Penyimpanan yang belum berhasil</h3>
+            <ul className="ahsp-detail-list">
+              {(job.attention.find((row) => row.key === 'failed')?.failures ?? []).map((failure) => (
+                <li key={failure.code + failure.description} className="ahsp-line">
+                  <span style={{ display: 'block', fontWeight: 600, color: NAVY }}>{failure.code}</span>
+                  <span style={{ display: 'block' }}>{failure.description}</span>
+                  <span style={{ display: 'block', color: MUTED }}>{failure.statement}</span>
+                </li>
+              ))}
+            </ul>
+            {job.canRecheck ? (
+              <div className="ahsp-action-row">
+                <button type="button" className="ahsp-action ahsp-action--primary" disabled={jobBusy !== null} onClick={recheck}>
+                  {recheckLabel}
+                </button>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
         {decisionItems.length > 0 ? (
           <div className="ahsp-decisions" aria-label="Keputusan Anda">
             {decisionItems.map((item) => (
@@ -1386,6 +1597,15 @@ export function AhspImportPage() {
               {(allWaitingOpen ? waitingDetail : waitingDetail.slice(0, job.waitingShown)).map((item) => (
                 <li key={item.key} className="ahsp-line">
                   {item.title} · {item.reason}
+                  {item.unknownUnits.length > 0 ? (
+                    <button
+                      type="button"
+                      className="ahsp-action ahsp-action--quiet ahsp-action--compact"
+                      onClick={() => setUnitDoor({ spelling: null, lineKey: item.key, source: 'job', jobKey: job.key })}
+                    >
+                      Selesaikan satuan AHSP ini
+                    </button>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -1594,9 +1814,11 @@ export function AhspImportPage() {
                       /^[0-9a-fA-F]{64}$/.test(preview.source.contentDigestSha256)
                       ? { kind: 'sourceSha256', sourceSha256: preview.source.contentDigestSha256 }
                       : null,
+                    { source: 'preview', jobKey: null },
                   )}
                 </section>
               )}
+              {intake ? null : renderUnitWorkspace('preview', null)}
               {adoptableIdentical.length > 0 ? (
                 <p style={{ margin: '0 0 var(--space-2)', paddingLeft: 'var(--space-2)', borderLeft: `2px solid ${NAVY}`, color: NAVY }}>
                   <span style={{ fontWeight: 600 }}>{identicalAggregateLine(distinctIdentities(adoptableIdentical))}</span>
@@ -1644,7 +1866,10 @@ export function AhspImportPage() {
                   type="button"
                   className="ahsp-action ahsp-action--primary"
                   disabled={settled}
-                  onClick={() => setJourneyStep('confirm')}
+                  onClick={() => {
+                    setUnitDoor({ spelling: null, lineKey: null, source: 'preview', jobKey: null });
+                    setJourneyStep('confirm');
+                  }}
                 >
                   Lanjutkan ke Tinjauan {'\u2192'}
                 </button>
@@ -1750,8 +1975,10 @@ export function AhspImportPage() {
                         /^[0-9a-fA-F]{64}$/.test(preview.source.contentDigestSha256)
                         ? { kind: 'sourceSha256', sourceSha256: preview.source.contentDigestSha256 }
                         : null,
+                      { source: 'preview', jobKey: null },
                     )
                   )}
+                  {renderUnitWorkspace('preview', null)}
                   <p className="ahsp-confirm-info-strip" role="note">
                     <Info size={16} aria-hidden />
                     <span>
@@ -1787,16 +2014,19 @@ export function AhspImportPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {preview.workItems.map((item, index) => {
+                      {(settled ? currentWorkItems : preview.workItems).map((item, index) => {
                         const admission = admissionOf(item);
+                        const genuineNew = workItemHasGenuineNewOnly(item);
                         const condition =
                           admission === 'HELD'
                             ? { label: 'Perlu tinjauan', tone: 'review' as const }
                             : item.identityVerdict === 'IDENTICAL'
                               ? { label: 'Sudah ada', tone: 'existing' as const }
-                              : admission === 'PROVEN'
-                                ? { label: 'Baru', tone: 'new' as const }
-                                : { label: 'Perlu tinjauan', tone: 'review' as const };
+                              : genuineNew
+                                ? { label: 'Resource baru — akan ditambahkan', tone: 'new' as const }
+                                : admission === 'PROVEN'
+                                  ? { label: 'Baru', tone: 'new' as const }
+                                  : { label: 'Perlu tinjauan', tone: 'review' as const };
                         return (
                           <tr key={index}>
                             <td>{item.workType?.raw ?? '—'}</td>
@@ -1817,21 +2047,41 @@ export function AhspImportPage() {
               <ul id="ahsp-preview-detail" className="ahsp-detail-list">
                 {preview.workItems.map((item, index) => {
                   const admission = admissionOf(item);
+                  const genuineNew = workItemHasGenuineNewOnly(item);
+                  const knownNames = (item.resources ?? [])
+                    .filter((resource) => resource.resolvedResourceCatalogId && resource.rawName)
+                    .map((resource) => resource.rawName as string);
                   const candidateNames = admission === 'PROVEN' ? [] : previewCandidateNames(item.resources);
                   // Rows the kernel ruled out are said as NOT used — never as possible matches.
                   const ruledOutLine = admission === 'PROVEN' ? null : previewRuledOutLine(previewRuledOutNames(item.resources));
                   return (
                     <li key={index} style={{ marginBottom: 'var(--space-2)', overflowWrap: 'anywhere' }}>
                       {item.workType?.raw ?? '—'} — {item.methodName?.raw ?? '—'}
+                      {previewUnitIssues(preview.workItems).some((issue) => issue.lineKey === String(index)) ? (
+                        <button
+                          type="button"
+                          className="ahsp-action ahsp-action--quiet ahsp-action--compact"
+                          onClick={() => setUnitDoor({ spelling: null, lineKey: String(index), source: 'preview', jobKey: null })}
+                        >
+                          Selesaikan satuan AHSP ini
+                        </button>
+                      ) : null}
                       {admission === 'HELD'
                         ? ` · ${explainWaitingItemReasons(item.reasonCodes)}`
                         : item.identityVerdict === 'IDENTICAL'
                           // Admitted, but it will NOT be written — it already exists. Saying
                           // "siap digunakan" here would promise a save that never happens.
                           ? ' · sudah ada di SIMPROK'
-                          : admission === 'PROVEN'
-                            ? ' · siap digunakan'
-                            : ` · ${IDENTITY_PENDING_ITEM_LINE}`}
+                          : genuineNew
+                            ? ` · ${NEW_RESOURCE_CONFIRM_LINE}`
+                            : admission === 'PROVEN'
+                              ? ' · siap digunakan'
+                              : ` · ${IDENTITY_PENDING_ITEM_LINE}`}
+                      {knownNames.length > 0 ? (
+                        <span style={{ display: 'block', color: MUTED }}>
+                          {EXISTING_RESOURCE_LINE}: {knownNames.join(', ')}
+                        </span>
+                      ) : null}
                       {candidateNames.length > 0 ? (
                         // ACG-01.1 U1 — the preview knows the NAMES SIMPROK found, never how
                         // strong the evidence was. The queue below can tell a confirmable row

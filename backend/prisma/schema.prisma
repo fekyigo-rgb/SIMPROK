@@ -120,6 +120,7 @@ model Workspace {
   resourceIdentityQuestionDecisions ResourceIdentityQuestionDecision[]
   ingestionConnectors               IngestionConnector[]
   ahspImportJobs                    AHSPImportJob[]
+  ahspImportUnitDecisions           AhspImportUnitDecision[]
   constructionClassificationNodes   ConstructionClassificationNode[]
 
   @@index([organizationId])
@@ -664,6 +665,7 @@ model UnitDefinition {
   resolutionTargetUnits     ProjectAhspResourceResolution[]      @relation("ResolutionTargetUnit")
   basicPriceImportRows      BasicPriceImportRow[]
   importRowResourceMappings BasicPriceImportRowResourceMapping[]
+  importUnitDecisions       AhspImportUnitDecision[]
 
   @@map("unit_definitions")
 }
@@ -774,7 +776,12 @@ model AHSP {
   deletedByName   String?
   deletedByEmail  String?
 
+  /// The immutable subject of "Usulkan ke SIMPROK". Null until a proposal
+  /// commits. Restrict: the bound snapshot is not deleted out from under a review.
+  proposalSnapshotId String? @unique @db.Uuid
+
   workspace                  Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  proposalSnapshot           AHSPSnapshot? @relation("AhspProposalSubject", fields: [proposalSnapshotId], references: [id], onDelete: Restrict)
   createdByUser              User?      @relation("AHSPCreatedBy", fields: [createdByUserId], references: [id])
   approvedByUser             User?      @relation("AHSPApprovedBy", fields: [approvedByUserId], references: [id])
   ownershipTransferredByUser User?      @relation("AHSPOwnershipTransferredBy", fields: [ownershipTransferredByUserId], references: [id])
@@ -1114,10 +1121,11 @@ model AHSPImportJob {
   assistedClassificationContext Json?
   createdByUserId          String? @db.Uuid
 
-  ahsp      AHSP?                @relation(fields: [ahspId], references: [id], onDelete: Cascade)
-  workspace Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  lines     AHSPImportLine[]
-  evidences AHSPImportEvidence[]
+  ahsp          AHSP?                    @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  workspace     Workspace?               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lines         AHSPImportLine[]
+  evidences     AHSPImportEvidence[]
+  unitDecisions AhspImportUnitDecision[]
 
   @@index([ahspId])
   @@index([workspaceId, createdAt])
@@ -1152,12 +1160,46 @@ model AHSPImportLine {
   ahspId        String?  @db.Uuid
   ahspVersionId String?  @db.Uuid
 
-  importJob AHSPImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  importJob     AHSPImportJob            @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  unitDecisions AhspImportUnitDecision[]
 
   @@unique([importJobId, lineNumber])
   @@index([importJobId])
   @@index([workspaceId, status])
   @@map("ahsp_import_lines")
+}
+
+/// ONE human canonical-unit choice for ONE durable import occurrence.
+///
+/// The subject is an AHSPImportLine plus a slot inside that line's immutable
+/// rawData (`output`, `output-statement:N`, or `resource:N`). The line is the
+/// persisted work item. The slot is unique because rawData is written once and
+/// never rewritten, and the same spelling may occur on more than one slot.
+///
+/// This row points at an existing UnitDefinition. It is not an alias, not a
+/// conversion, and not a Resource Identity decision. Another job or another
+/// slot that spells the same raw unit inherits nothing.
+model AhspImportUnitDecision {
+  id               String   @id @default(uuid()) @db.Uuid
+  workspaceId      String   @db.Uuid
+  importJobId      String   @db.Uuid
+  importLineId     String   @db.Uuid
+  occurrenceKey    String   @db.VarChar(64)
+  unitDefinitionId String   @db.Uuid
+  /// The journal slot's own spelling, copied at decision time. Never a rewrite of rawData.
+  rawUnit          String
+  decidedByUserId  String   @db.Uuid
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importJob      AHSPImportJob   @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  importLine     AHSPImportLine  @relation(fields: [importLineId], references: [id], onDelete: Cascade)
+  unitDefinition UnitDefinition  @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+
+  @@unique([importLineId, occurrenceKey])
+  @@index([workspaceId, importJobId])
+  @@map("ahsp_import_unit_decisions")
 }
 
 model AHSPImportEvidence {
@@ -1192,14 +1234,24 @@ model AHSPSnapshot {
   outputUnit             String?
   outputUnitDefinitionId String?      @db.Uuid
 
+  /// Frozen at proposal time only. Null on snapshots that predate the proposal
+  /// subject, and on BOQ snapshots that do not freeze a review.
+  code                String?
+  keterangan          String?        @db.Text
+  regulationReference String?
+  issuerInstitution   String?
+  ownershipType       OwnershipType?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace            Workspace?             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ahsp                 AHSP                   @relation(fields: [sourceAhspId], references: [id])
-  ahspVersion          AHSPVersion            @relation(fields: [sourceVersionId], references: [id])
-  resources            AHSPSnapshotResource[]
-  boqItems             BoqItem[]
+  workspace                  Workspace?             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ahsp                       AHSP                   @relation(fields: [sourceAhspId], references: [id])
+  ahspVersion                AHSPVersion            @relation(fields: [sourceVersionId], references: [id])
+  resources                  AHSPSnapshotResource[]
+  classificationAssignments  AhspSnapshotClassificationAssignment[]
+  proposalFor                AHSP?                  @relation("AhspProposalSubject")
+  boqItems                   BoqItem[]
   outputUnitDefinition UnitDefinition?        @relation("AHSPSnapshotOutputUnit", fields: [outputUnitDefinitionId], references: [id], onDelete: Restrict)
 
   @@unique([sourceAhspId, sourceVersionId, snapshotDate])
@@ -1224,6 +1276,27 @@ model AHSPSnapshotResource {
 
   @@index([snapshotId])
   @@map("ahsp_snapshot_resources")
+}
+
+/// The active classification assignments captured when an AHSP was proposed.
+/// Identity only: the node path stays on ConstructionClassificationNode.
+/// Restrict so a reviewed leaf or assignment is not removed out from under the subject.
+model AhspSnapshotClassificationAssignment {
+  id           String                                 @id @default(uuid()) @db.Uuid
+  snapshotId   String                                 @db.Uuid
+  assignmentId String                                 @db.Uuid
+  leafNodeId   String                                 @db.Uuid
+  provenance   AhspClassificationAssignmentProvenance
+  createdAt    DateTime                               @default(now())
+
+  snapshot   AHSPSnapshot                 @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  assignment AhspClassificationAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  leafNode   ConstructionClassificationNode @relation(fields: [leafNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([snapshotId, assignmentId])
+  @@index([snapshotId])
+  @@index([leafNodeId])
+  @@map("ahsp_snapshot_classification_assignments")
 }
 
 model AHSPAuditLog {
@@ -2354,7 +2427,8 @@ model ConstructionClassificationNode {
   parent    ConstructionClassificationNode?  @relation("ConstructionClassificationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
   children  ConstructionClassificationNode[] @relation("ConstructionClassificationHierarchy")
   workspace Workspace?                       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  ahspClassificationAssignments AhspClassificationAssignment[]
+  ahspClassificationAssignments         AhspClassificationAssignment[]
+  snapshotClassificationAssignments AhspSnapshotClassificationAssignment[]
 
   @@index([parentId])
   @@index([workspaceId])
@@ -2388,8 +2462,9 @@ model AhspClassificationAssignment {
   createdAt  DateTime                               @default(now())
   updatedAt  DateTime                               @updatedAt
 
-  ahsp     AHSP                           @relation(fields: [ahspId], references: [id], onDelete: Cascade)
-  leafNode ConstructionClassificationNode @relation(fields: [leafNodeId], references: [id], onDelete: Restrict)
+  ahsp              AHSP                                    @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  leafNode          ConstructionClassificationNode          @relation(fields: [leafNodeId], references: [id], onDelete: Restrict)
+  snapshotCaptures  AhspSnapshotClassificationAssignment[]
 
   @@unique([ahspId, leafNodeId, provenance])
   @@index([ahspId])

@@ -1,5 +1,16 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { PERMISSIONS } from '../src/common/constants/permissions';
+import {
+  CANONICAL_PERMISSIONS,
+  grantPermissionsToRole,
+} from './seed-rbac-permissions';
+
+/** The acceptance DIRECTOR door keeps its role code and receives only these two. */
+const ACCEPTANCE_DIRECTOR_AHSP_CODES = [
+  PERMISSIONS.AHSP_VIEW,
+  PERMISSIONS.AHSP_MANAGE,
+] as const;
 
 const prisma = new PrismaClient();
 
@@ -78,7 +89,64 @@ const ids = {
   approvalProgressAcceptCombined: '10000000-0000-4000-8000-000000000066',
 };
 
+/**
+ * Canonical AHSP_VIEW and AHSP_MANAGE, and nothing else, on the acceptance
+ * DIRECTOR that already exists. The production DIRECTOR bootstrap stays
+ * locked to simprok_db; this seam does not call it and does not create a role.
+ */
+async function grantAcceptanceDirectorAhsp(workspaceId: string): Promise<void> {
+  const wanted = new Set<string>(ACCEPTANCE_DIRECTOR_AHSP_CODES);
+  const definitions = CANONICAL_PERMISSIONS.filter((permission) =>
+    wanted.has(permission.code),
+  );
+  if (definitions.length !== wanted.size) {
+    throw new Error('STOP: canonical AHSP permission definitions are incomplete.');
+  }
+  await prisma.$transaction(async (tx) => {
+    const permissionIds = new Map<string, string>();
+    for (const permission of definitions) {
+      const row = await tx.permission.upsert({
+        where: { code: permission.code },
+        update: {
+          name: permission.name,
+          description: permission.description,
+        },
+        create: {
+          code: permission.code,
+          name: permission.name,
+          description: permission.description,
+        },
+      });
+      permissionIds.set(row.code, row.id);
+    }
+    const role = await tx.role.findUnique({
+      where: { workspaceId_code: { workspaceId, code: 'DIRECTOR' } },
+      select: { id: true },
+    });
+    if (!role) {
+      throw new Error('STOP: acceptance DIRECTOR role is missing.');
+    }
+    await grantPermissionsToRole(
+      tx,
+      role.id,
+      permissionIds,
+      ACCEPTANCE_DIRECTOR_AHSP_CODES,
+    );
+  });
+}
+
 async function main() {
+  const identity = await prisma.$queryRaw<Array<{ name: string; port: number }>>`
+    SELECT current_database() AS name, inet_server_port() AS port
+  `;
+  const database = identity[0];
+  if (
+    !database ||
+    database.name === 'simprok_db' ||
+    Number(database.port) === 55432
+  ) {
+    throw new Error('STOP: acceptance seed refuses the permanent database.');
+  }
   const passwordHash = await bcrypt.hash(PASSWORD, SALT_ROUNDS);
 
   const permission = await prisma.permission.upsert({
@@ -396,10 +464,11 @@ async function main() {
   // is gated by RoleRoute checking literal role codes DIRECTOR/OWNER in
   // activeRoles (frontend/src/components/layout/ProtectedRoute.tsx), which
   // is entirely separate from the backend RBAC PROJECT_CREATE permission
-  // above. This role carries zero permissions of its own — it exists only
-  // to satisfy that frontend role-code check, so it grants no additional
-  // backend authority. Without it, RAB_LIFECYCLE-06's PROJECT_CREATE grant
-  // is necessary but not sufficient to reach the create-project UI.
+  // above. This existing DIRECTOR role still satisfies that door. Its only
+  // backend grants are the two canonical AHSP codes, bound below. It does
+  // not receive the production DIRECTOR allow-list.
+  const acceptanceDirectorDescription =
+    'Acceptance DIRECTOR door plus canonical AHSP_VIEW and AHSP_MANAGE only, for assigned@test.local';
   const roleAcceptanceFrontendDoorDirector = await prisma.role.upsert({
     where: {
       workspaceId_code: {
@@ -409,8 +478,7 @@ async function main() {
     },
     update: {
       name: 'Acceptance Frontend Door (DIRECTOR)',
-      description:
-        'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
+      description: acceptanceDirectorDescription,
       isSystem: false,
     },
     create: {
@@ -418,8 +486,7 @@ async function main() {
       workspaceId: workspaceA.id,
       code: 'DIRECTOR',
       name: 'Acceptance Frontend Door (DIRECTOR)',
-      description:
-        'Zero backend permissions — satisfies the frontend RoleRoute(DIRECTOR/OWNER) check only, for assigned@test.local',
+      description: acceptanceDirectorDescription,
       isSystem: false,
     },
   });
@@ -439,6 +506,8 @@ async function main() {
       isActive: true,
     },
   });
+
+  await grantAcceptanceDirectorAhsp(workspaceA.id);
 
   const nonassignedMembership = await prisma.workspaceMembership.upsert({
     where: {

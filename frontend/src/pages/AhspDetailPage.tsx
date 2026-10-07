@@ -14,6 +14,7 @@ import {
 import { describeAhspProposalStatus, canProposeAhsp, formatIndoDate } from '../utils/ahspProposalStatus';
 import { USULKAN_TOOLTIP } from '../utils/ahspProposalCopy';
 import { presentAhspIdentity } from '../utils/ahspIdentityDisplay';
+import { presentedUnitLabel } from '../utils/unitSuggestionLabel';
 import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
 import { AhspClassificationRevisionPanel } from '../components/AhspClassificationRevisionPanel';
 import {
@@ -36,15 +37,24 @@ import {
  * It is not a second review system, readiness engine, or decision writer.
  */
 
+type DetailResourceWire = AhspDefinitionResourceWire & {
+  unitDisplayName?: string | null;
+  unitSymbol?: string | null;
+  unitCode?: string | null;
+};
+
 type AhspVersion = {
   id: string;
   versionNumber: number | null;
   status: string | null;
   outputUnit: string | null;
+  outputUnitDisplayName?: string | null;
+  outputUnitSymbol?: string | null;
+  outputUnitCode?: string | null;
   regulationReference: string | null;
   issuerInstitution: string | null;
   effectiveDate: string | null;
-  resources?: AhspDefinitionResourceWire[] | null;
+  resources?: DetailResourceWire[] | null;
 };
 
 type AhspDetail = {
@@ -60,12 +70,79 @@ type AhspDetail = {
   ownershipType: string | null;
   reviewStatus: string | null;
   proposedAt: string | null;
+  proposedByName: string | null;
   createdByEmail: string | null;
   createdAt: string | null;
   updatedAt: string | null;
   archivedAt: string | null;
   versions?: AhspVersion[] | null;
 };
+
+type ProposalSubjectWire = {
+  methodName: string | null;
+  code: string | null;
+  keterangan: string | null;
+  regulationReference: string | null;
+  issuerInstitution: string | null;
+  outputUnit: string | null;
+  outputUnitDisplayName?: string | null;
+  outputUnitSymbol?: string | null;
+  outputUnitCode?: string | null;
+  resources: Array<{
+    resourceId: string;
+    resourceName?: string | null;
+    baseUnit: string;
+    coefficient: string | number;
+    unitDisplayName?: string | null;
+    unitSymbol?: string | null;
+    unitCode?: string | null;
+  }>;
+  classificationAssignments: Array<{
+    provenance: string;
+    path: { jenisPengadaan: string; kategori: string; subkategori: string; jenisPekerjaan: string };
+  }>;
+};
+
+function ProposalSubjectView(props: {
+  subject: ProposalSubjectWire;
+  submittedAt: string;
+  submittedBy: string | null;
+}) {
+  const subject = props.subject;
+  const paths = subject.classificationAssignments.map((row) =>
+    [row.path.jenisPengadaan, row.path.kategori, row.path.subkategori, row.path.jenisPekerjaan]
+      .filter((part) => part !== '')
+      .join(' → '),
+  );
+  return (
+    <div style={{ display: 'grid', gap: 'var(--space-2)', fontSize: 'var(--text-sm)', color: NAVY }}>
+      <p style={{ margin: 0 }}>{subject.methodName || '—'}</p>
+      <p style={{ margin: 0, color: MUTED }}>Kode {subject.code || '—'} · {subject.keterangan || '—'}</p>
+      <p style={{ margin: 0 }}>Dasar {subject.regulationReference || '—'} · Penerbit {subject.issuerInstitution || '—'} · Satuan {presentedUnitLabel({
+        stored: subject.outputUnit,
+        displayName: subject.outputUnitDisplayName,
+        symbol: subject.outputUnitSymbol,
+        code: subject.outputUnitCode,
+      }) || '—'}</p>
+      {subject.resources.map((row, index) => (
+        <p key={row.resourceId + '-' + index} style={{ margin: 0 }}>
+          {((row.resourceName ?? '').trim() || row.resourceId)} · {presentedUnitLabel({
+            stored: row.baseUnit,
+            displayName: row.unitDisplayName,
+            symbol: row.unitSymbol,
+            code: row.unitCode,
+          })} · {String(row.coefficient)}
+        </p>
+      ))}
+      {paths.map((path, index) => (
+        <p key={path + '-' + index} style={{ margin: 0 }}>{path}</p>
+      ))}
+      <p style={{ margin: 0, color: MUTED }}>
+        Diajukan {formatIndoDate(props.submittedAt)}{props.submittedBy ? ` · ${props.submittedBy}` : ''}
+      </p>
+    </div>
+  );
+}
 
 type DetailState =
   | { phase: 'LOADING' }
@@ -185,6 +262,38 @@ const historyStatusLabel = (status: string | null | undefined) => {
 const isHistoricalStatus = (status: string | null | undefined) =>
   status === 'SUPERSEDED' || status === 'ARCHIVED';
 
+type DetailClassificationPath = {
+  jenisPengadaan: string;
+  kategori: string;
+  subkategori: string;
+  jenisPekerjaan: string;
+};
+
+function detailPathsFromAssignments(rows: unknown): DetailClassificationPath[] {
+  if (!Array.isArray(rows)) return [];
+  const paths: DetailClassificationPath[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const path = (row as { path?: unknown }).path;
+    if (!Array.isArray(path)) continue;
+    const nameOf = (level: string) => {
+      const node = path.find(
+        (item) => item && typeof item === 'object' && (item as { level?: string }).level === level,
+      ) as { name?: string } | undefined;
+      return typeof node?.name === 'string' ? node.name : '';
+    };
+    const jenisPekerjaan = nameOf('JENIS_PEKERJAAN');
+    if (!jenisPekerjaan) continue;
+    paths.push({
+      jenisPengadaan: nameOf('JENIS_PENGADAAN'),
+      kategori: nameOf('KATEGORI'),
+      subkategori: nameOf('SUBKATEGORI'),
+      jenisPekerjaan,
+    });
+  }
+  return paths;
+}
+
 const GROUP_ICON: Record<string, ReactNode> = {
   TENAGA: <Users size={16} />,
   BAHAN: <Package size={16} />,
@@ -197,10 +306,16 @@ export function AhspDetailPage() {
   const canManage = hasPermission('AHSP_MANAGE');
   const canCurate = hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE');
   const [state, setState] = useState<DetailState>({ phase: 'LOADING' });
+  const [classificationPaths, setClassificationPaths] = useState<DetailClassificationPath[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [proposing, setProposing] = useState(false);
   const [showProposeConfirm, setShowProposeConfirm] = useState(false);
+  const [proposalSubject, setProposalSubject] = useState<
+    | { phase: 'READY'; subject: ProposalSubjectWire }
+    | { phase: 'FAILED' }
+    | null
+  >(null);
   const [outputUnit, setOutputUnit] = useState('');
   const [regulationReference, setRegulationReference] = useState('');
   const [issuerInstitution, setIssuerInstitution] = useState('');
@@ -252,6 +367,13 @@ export function AhspDetailPage() {
         const data = (await response.json()) as AhspDetail;
         if (!active) return;
         applyPayload(data);
+        try {
+          const assignmentResponse = await apiFetch('/ahsp/' + ahspId + '/classification-assignments');
+          const assignmentRows = assignmentResponse.ok ? await assignmentResponse.json() : [];
+          if (active) setClassificationPaths(detailPathsFromAssignments(assignmentRows));
+        } catch {
+          if (active) setClassificationPaths([]);
+        }
       } catch {
         if (!active) return;
         setState({ phase: 'FAILED', message: 'AHSP tidak dapat dihubungi.' });
@@ -262,6 +384,31 @@ export function AhspDetailPage() {
       active = false;
     };
   }, [ahspId, applyPayload]);
+
+  useEffect(() => {
+    if (state.phase !== 'READY' || !ahspId || !state.ahsp.proposedAt) {
+      setProposalSubject(null);
+      return;
+    }
+    let active = true;
+    const loadSubject = async () => {
+      try {
+        const response = await apiFetch('/ahsp/' + ahspId + '/proposal-subject');
+        if (!active) return;
+        if (!response.ok) {
+          setProposalSubject({ phase: 'FAILED' });
+          return;
+        }
+        setProposalSubject({ phase: 'READY', subject: (await response.json()) as ProposalSubjectWire });
+      } catch {
+        if (active) setProposalSubject({ phase: 'FAILED' });
+      }
+    };
+    void loadSubject();
+    return () => {
+      active = false;
+    };
+  }, [ahspId, state]);
 
   const currentVersion = useMemo(() => {
     if (state.phase !== 'READY') return null;
@@ -277,6 +424,25 @@ export function AhspDetailPage() {
     () => groupAhspDefinitionResources(currentVersion?.resources),
     [currentVersion],
   );
+
+  const presentedComponentUnit = (storedUnit: string) => {
+    const source = (currentVersion?.resources ?? []).find(
+      (row) => (row.baseUnit ?? '').trim() === storedUnit,
+    );
+    return presentedUnitLabel({
+      stored: storedUnit,
+      displayName: source?.unitDisplayName,
+      symbol: source?.unitSymbol,
+      code: source?.unitCode,
+    });
+  };
+
+  const presentedOutputUnit = presentedUnitLabel({
+    stored: currentVersion?.outputUnit,
+    displayName: currentVersion?.outputUnitDisplayName,
+    symbol: currentVersion?.outputUnitSymbol,
+    code: currentVersion?.outputUnitCode,
+  });
 
   const reload = async () => {
     if (!ahspId) return;
@@ -575,7 +741,7 @@ export function AhspDetailPage() {
                   </span>
                 ) : null}
               </div>
-              {ahsp.classification ? (
+              {classificationPaths.length === 0 && ahsp.classification ? (
                 <p style={{ margin: 'var(--space-1) 0 0', color: MUTED, fontSize: 'var(--text-sm)' }}>{ahsp.classification}</p>
               ) : null}
             </div>
@@ -610,6 +776,19 @@ export function AhspDetailPage() {
             <p role="alert" style={{ color: '#C0392B', fontSize: 'var(--text-sm)', margin: '0 0 var(--space-3)' }}>
               {actionError}
             </p>
+          ) : null}
+
+          {ahsp.proposedAt ? (
+            <section aria-label="Data yang diajukan" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
+              <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>Data yang diajukan</h2>
+              {proposalSubject?.phase === 'FAILED' ? (
+                <p style={{ margin: 0, color: MUTED, fontSize: 'var(--text-sm)' }}>Data yang diajukan belum dapat dimuat.</p>
+              ) : proposalSubject?.phase === 'READY' ? (
+                <ProposalSubjectView subject={proposalSubject.subject} submittedAt={ahsp.proposedAt} submittedBy={ahsp.proposedByName} />
+              ) : (
+                <p style={{ margin: 0, color: MUTED, fontSize: 'var(--text-sm)' }}>Memuat data yang diajukan…</p>
+              )}
+            </section>
           ) : null}
 
           {reviewOpen && canCurate ? (
@@ -749,10 +928,16 @@ export function AhspDetailPage() {
                     {group.rows.length === 0 ? (
                       <p style={{ color: MUTED, fontSize: 'var(--text-sm)', margin: 0 }}>—</p>
                     ) : (
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
+                      <table className="ahsp-resource-columns" style={{ fontSize: 'var(--text-sm)' }}>
+                        <colgroup>
+                          <col className="ahsp-col-no" />
+                          <col className="ahsp-col-name" />
+                          <col className="ahsp-col-unit" />
+                          <col className="ahsp-col-coef" />
+                        </colgroup>
                         <thead>
                           <tr style={{ textAlign: 'left', color: MUTED, background: 'var(--simprok-engineering-blue-100)' }}>
-                            <th style={{ padding: 'var(--space-1) var(--space-2)', width: '2.5rem' }}>No.</th>
+                            <th style={{ padding: 'var(--space-1) var(--space-2)' }}>No.</th>
                             <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Uraian</th>
                             <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Satuan</th>
                             <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Koefisien</th>
@@ -768,7 +953,7 @@ export function AhspDetailPage() {
                                   <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>{row.identityNote}</span>
                                 ) : null}
                               </td>
-                              <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{row.unit}</td>
+                              <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{presentedComponentUnit(row.unit)}</td>
                               <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{row.coefficient}</td>
                             </tr>
                           ))}
@@ -789,12 +974,25 @@ export function AhspDetailPage() {
                 {/* ONE mapping with the room: a recorded source code is the code, never a work type. */}
                 {infoRow('Kode', orDash(presentAhspIdentity(ahsp).code))}
                 {infoRow('Keterangan', orDash(ahsp.keterangan))}
-                {infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
+                {classificationPaths.length > 0
+                  ? classificationPaths.map((path, index) => (
+                      <div key={'path-' + index}>
+                        {infoRow('Jenis Pengadaan', orDash(path.jenisPengadaan))}
+                        {infoRow('Kategori', orDash(path.kategori))}
+                        {infoRow('Subkategori', orDash(path.subkategori))}
+                        {infoRow('Jenis Pekerjaan', orDash(path.jenisPekerjaan))}
+                      </div>
+                    ))
+                  : (
+                      <>
+                        {infoRow('Jenis Pengadaan', orDash(ahsp.classification))}
+                        {infoRow('Kategori', orDash(ahsp.fieldCategory))}
+                        {infoRow('Subkategori', orDash(ahsp.subCategory))}
+                        {infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
+                      </>
+                    )}
                 {infoRow('Uraian', orDash(ahsp.methodName))}
-                {infoRow('Satuan', orDash(currentVersion?.outputUnit))}
-                {infoRow('Bidang / Kategori', orDash(ahsp.fieldCategory))}
-                {infoRow('Subkategori', orDash(ahsp.subCategory))}
-                {infoRow('Jenis Pekerjaan (klasifikasi)', orDash(ahsp.classification))}
+                {infoRow('Satuan', orDash(presentedOutputUnit))}
                 {infoRow('Dasar AHSP', orDash(currentVersion?.regulationReference))}
                 {infoRow('Penerbit', orDash(currentVersion?.issuerInstitution))}
                 {infoRow('Sumber', ahsp.workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya')}

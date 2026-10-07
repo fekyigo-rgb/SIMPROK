@@ -11,6 +11,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { UnitKernelService } from '../../unit-kernel/unit-kernel.service';
 import {
   UNIT_ALIAS_CONTEXT,
+  UNIT_REASON,
   UNIT_RESOLUTION_STATUS,
 } from '../../unit-kernel/unit-kernel.contracts';
 import {
@@ -96,6 +97,65 @@ const GROUP_TO_CONTEXT: Record<
   EQUIPMENT: UNIT_ALIAS_CONTEXT.EQUIPMENT,
 };
 
+const UNIT_OCCURRENCE_KEY =
+  /^(?:output|output-statement:[0-9]+|resource:[0-9]+)$/u;
+
+/** One human choice already stored for one immutable journal slot. */
+interface StoredUnitDecision {
+  readonly importLineId: string;
+  readonly occurrenceKey: string;
+  readonly unitDefinitionId: string;
+  readonly rawUnit: string;
+}
+
+/**
+ * The unit facts inside one understood work item.
+ *
+ * AHSPImportLine is the persisted work item. A line can state the same spelling
+ * more than once, so the spelling is not the occurrence. rawData is written once
+ * and never rewritten, so each output statement and each named component is a
+ * stable slot: `output`, `output-statement:N`, or `resource:N`.
+ */
+function unitOccurrenceSlots(
+  knowledge: AhspWorkItemKnowledge,
+): Array<{
+  occurrenceKey: string;
+  raw: string;
+  group: AhspResourceGroup | null;
+}> {
+  const slots: Array<{
+    occurrenceKey: string;
+    raw: string;
+    group: AhspResourceGroup | null;
+  }> = [];
+  if (knowledge.outputUnitRaw?.raw) {
+    slots.push({
+      occurrenceKey: 'output',
+      raw: knowledge.outputUnitRaw.raw,
+      group: null,
+    });
+  } else {
+    (knowledge.outputUnitStatements ?? []).forEach((statement, index) => {
+      if (statement?.raw) {
+        slots.push({
+          occurrenceKey: `output-statement:${index}`,
+          raw: statement.raw,
+          group: null,
+        });
+      }
+    });
+  }
+  knowledge.resources.forEach((resource, index) => {
+    if (!resource.rawName || !resource.group || resource.rawUnit === null) return;
+    slots.push({
+      occurrenceKey: `resource:${index}`,
+      raw: resource.rawUnit,
+      group: resource.group,
+    });
+  });
+  return slots;
+}
+
 /**
  * The reasons that mean "the recipe is whole; only a component's catalogue
  * identity is still open". Anything else keeps an item HELD.
@@ -145,6 +205,15 @@ type AhspImportItemOutcome =
       readonly kind: 'WRITTEN';
       readonly ahspId: string;
       readonly versionId: string;
+      /**
+       * PROVEN once every component has a catalogue identity, including one
+       * minted on this save because the resource was genuinely new. IDENTITY_PENDING
+       * remains only where a real identity question is still open.
+       */
+      readonly admission: Exclude<AhspWorkItemAdmission, 'HELD'>;
+      readonly identityPendingResources: number;
+      /** Catalogue ids this save actually linked. Applied to the item only after commit. */
+      readonly linkedResources: readonly AhspResourceKnowledge[];
     }
   | {
       readonly kind: 'ALREADY_PRESENT';
@@ -265,6 +334,46 @@ export class AhspDocumentCanonicalizationService {
       params.decisions ?? [],
       params.assistedClassification ?? null,
     );
+  }
+
+  /**
+   * Durable intake only. The bytes are kept and the document is understood into
+   * the existing journal. No AHSP and no version are written here.
+   */
+  async openImportReviewUpload(params: {
+    file: { buffer?: Buffer; originalname?: string; mimetype?: string } | undefined;
+    workspaceId: string;
+    actorAccountId: string;
+    userId: string;
+  }): Promise<{ importJobId: string; lines: AhspImportJournalLine[] }> {
+    const envelope = await this.envelopeFromUpload(params);
+    await this.sourceArchive.retain({
+      workspaceId: envelope.workspaceId,
+      contentDigestSha256: envelope.contentDigestSha256,
+      bytes: envelope.bytes,
+    });
+    const understood = understandAhspDocument(
+      await this.readers.read(envelope),
+      envelope,
+    );
+    return this.openImportReview({
+      workspaceId: envelope.workspaceId,
+      userId: params.userId,
+      knowledge: understood,
+    });
+  }
+
+  /** The journal half of intake: one idempotent recordDocument, then stop. */
+  async openImportReview(params: {
+    workspaceId: string;
+    userId: string;
+    knowledge: AhspDocumentKnowledge;
+  }): Promise<{ importJobId: string; lines: AhspImportJournalLine[] }> {
+    return this.journal.recordDocument({
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+      knowledge: params.knowledge,
+    });
   }
 
   async preview(envelope: SourceEnvelope): Promise<AhspDocumentKnowledge> {
@@ -416,6 +525,13 @@ export class AhspDocumentCanonicalizationService {
     const knowledge = await this.resolveKnowledge(
       understood,
       envelope.workspaceId,
+      {
+        lineIds: journal.lines.map((line) => line.id),
+        decisions: await this.unitDecisionsForJob(
+          envelope.workspaceId,
+          journal.importJobId,
+        ),
+      },
     );
     return this.commitKnowledge(knowledge, {
       workspaceId: envelope.workspaceId,
@@ -476,6 +592,13 @@ export class AhspDocumentCanonicalizationService {
     const knowledge = await this.resolveKnowledge(
       understood,
       params.workspaceId,
+      {
+        lineIds: held.lines.map((line) => line.id),
+        decisions: await this.unitDecisionsForJob(
+          params.workspaceId,
+          params.importJobId,
+        ),
+      },
     );
     return this.commitKnowledge(knowledge, {
       workspaceId: params.workspaceId,
@@ -485,6 +608,84 @@ export class AhspDocumentCanonicalizationService {
       lines: held.lines,
       assistedClassification: assisted,
     });
+  }
+
+  /**
+   * Recalculate one durable import and record that reading on the journal.
+   *
+   * Same resolveKnowledge the commit uses, including its Unit Kernel and the
+   * scoped unit decisions. The line stays PENDING: ready to be saved is not
+   * saved. COMPLETED still means an AHSP already represents the line, and this
+   * path never calls commitKnowledge or writeItem.
+   */
+  async recheckImportJob(params: {
+    workspaceId: string;
+    importJobId: string;
+  }): Promise<{
+    importJobId: string;
+    status: ImportStatus;
+    lines: Array<{
+      id: string;
+      lineNumber: number;
+      status: ImportStatus;
+      reasonCodes: readonly string[];
+    }>;
+    knowledge: AhspDocumentKnowledge;
+  }> {
+    const held = await this.journal.loadHeld(
+      params.workspaceId,
+      params.importJobId,
+    );
+    if (held.knowledgeContractVersion !== AHSP_DOCUMENT_CONTRACT_VERSION) {
+      throw new ConflictException('AHSP_IMPORT_KNOWLEDGE_CONTRACT_CHANGED');
+    }
+    const understood: AhspDocumentKnowledge = {
+      ...held.envelope,
+      workItems: held.lines.map((line) =>
+        withTitleOutputUnitStatement(line.knowledge),
+      ),
+    };
+    const knowledge = await this.resolveKnowledge(
+      understood,
+      params.workspaceId,
+      {
+        lineIds: held.lines.map((line) => line.id),
+        decisions: await this.unitDecisionsForJob(
+          params.workspaceId,
+          params.importJobId,
+        ),
+      },
+    );
+    const lines: Array<{
+      id: string;
+      lineNumber: number;
+      status: ImportStatus;
+      reasonCodes: readonly string[];
+    }> = [];
+    for (const [index, item] of knowledge.workItems.entries()) {
+      const line = held.lines[index];
+      if (line.status === ImportStatus.PENDING) {
+        await this.journal.recordRecheckReasons({
+          workspaceId: params.workspaceId,
+          lineId: line.id,
+          reasonCodes: item.reasonCodes,
+        });
+      }
+      lines.push({
+        id: line.id,
+        lineNumber: line.lineNumber,
+        status: line.status,
+        reasonCodes:
+          line.status === ImportStatus.PENDING
+            ? item.reasonCodes
+            : line.knowledge.reasonCodes,
+      });
+    }
+    const status = await this.journal.refreshJobStatus(
+      params.workspaceId,
+      params.importJobId,
+    );
+    return { importJobId: params.importJobId, status, lines, knowledge };
   }
 
   /**
@@ -562,6 +763,25 @@ export class AhspDocumentCanonicalizationService {
       completed,
       unitProvedToday,
     );
+    const unitDecisionRows = await this.prisma.ahspImportUnitDecision.findMany({
+      where: {
+        workspaceId,
+        importJobId: { in: jobs.map((job) => job.importJobId) },
+      },
+      select: {
+        importLineId: true,
+        occurrenceKey: true,
+        unitDefinitionId: true,
+        rawUnit: true,
+      },
+    });
+    const unitDecisions = new Map<string, StoredUnitDecision>(
+      unitDecisionRows.map((row) => [
+        `${row.importLineId}:${row.occurrenceKey}`,
+        row,
+      ]),
+    );
+    const adjudication = new Map<string, Promise<string | null>>();
 
     const items = await Promise.all(
       jobs.map(async (job) => {
@@ -623,9 +843,10 @@ export class AhspDocumentCanonicalizationService {
         }
         const waiting = await Promise.all(
           job.waiting.map(async (line) => {
-            const kept = lines.find(
+            const keptLine = lines.find(
               (candidate) => candidate.lineNumber === line.lineNumber,
-            )?.knowledge;
+            );
+            const kept = keptLine?.knowledge;
             const knowledge = kept && withTitleOutputUnitStatement(kept);
             return {
               ...line,
@@ -643,7 +864,13 @@ export class AhspDocumentCanonicalizationService {
               ...(knowledge !== kept ? { readingUpdated: true as const } : {}),
               ...(knowledge &&
               line.reasonCodes.includes(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED)
-                ? await this.unitsWaitedFor(knowledge, unitProvedToday)
+                ? await this.unitsWaitedFor(
+                    knowledge,
+                    unitProvedToday,
+                    keptLine?.id ?? null,
+                    unitDecisions,
+                    adjudication,
+                  )
                 : {}),
               ...(knowledge?.outputUnitStatements &&
               line.reasonCodes.includes(
@@ -889,11 +1116,201 @@ export class AhspDocumentCanonicalizationService {
   }
 
   /**
+   * Record one human choice of an existing canonical unit for one durable slot.
+   * The journal's raw spelling is copied, never rewritten. No alias is written.
+   */
+  async setUnitDecision(params: {
+    workspaceId: string;
+    importJobId: string;
+    lineNumber: number;
+    occurrenceKey: string;
+    unitDefinitionId: string;
+    userId: string;
+  }): Promise<{ occurrenceKey: string; unitDefinitionId: string; rawUnit: string }> {
+    const slot = await this.unitSlotOf(params);
+    const judged = await this.judgeUnit(params.unitDefinitionId, slot.group);
+    if (!judged.ok) {
+      throw new BadRequestException(
+        judged.reason === 'INCOMPATIBLE'
+          ? 'AHSP_IMPORT_UNIT_DECISION_INCOMPATIBLE'
+          : 'AHSP_IMPORT_UNIT_DECISION_UNIT_UNKNOWN',
+      );
+    }
+    await this.prisma.ahspImportUnitDecision.upsert({
+      where: {
+        importLineId_occurrenceKey: {
+          importLineId: slot.importLineId,
+          occurrenceKey: params.occurrenceKey,
+        },
+      },
+      create: {
+        workspaceId: params.workspaceId,
+        importJobId: params.importJobId,
+        importLineId: slot.importLineId,
+        occurrenceKey: params.occurrenceKey,
+        unitDefinitionId: params.unitDefinitionId,
+        rawUnit: slot.raw,
+        decidedByUserId: params.userId,
+      },
+      update: {
+        unitDefinitionId: params.unitDefinitionId,
+        rawUnit: slot.raw,
+        decidedByUserId: params.userId,
+      },
+    });
+    return {
+      occurrenceKey: params.occurrenceKey,
+      unitDefinitionId: params.unitDefinitionId,
+      rawUnit: slot.raw,
+    };
+  }
+
+  /** Leaving a slot unresolved removes only this decision. The raw journal stays. */
+  async clearUnitDecision(params: {
+    workspaceId: string;
+    importJobId: string;
+    lineNumber: number;
+    occurrenceKey: string;
+  }): Promise<{ cleared: true }> {
+    const slot = await this.unitSlotOf(params);
+    await this.prisma.ahspImportUnitDecision.deleteMany({
+      where: {
+        workspaceId: params.workspaceId,
+        importJobId: params.importJobId,
+        importLineId: slot.importLineId,
+        occurrenceKey: params.occurrenceKey,
+      },
+    });
+    return { cleared: true };
+  }
+
+  private async unitDecisionsForJob(
+    workspaceId: string,
+    importJobId: string,
+  ): Promise<Map<string, StoredUnitDecision>> {
+    const rows = await this.prisma.ahspImportUnitDecision.findMany({
+      where: { workspaceId, importJobId },
+      select: {
+        importLineId: true,
+        occurrenceKey: true,
+        unitDefinitionId: true,
+        rawUnit: true,
+      },
+    });
+    return new Map(
+      rows.map((row) => [`${row.importLineId}:${row.occurrenceKey}`, row]),
+    );
+  }
+
+  private async unitSlotOf(params: {
+    workspaceId: string;
+    importJobId: string;
+    lineNumber: number;
+    occurrenceKey: string;
+  }): Promise<{
+    importLineId: string;
+    raw: string;
+    group: AhspResourceGroup | null;
+  }> {
+    if (!UNIT_OCCURRENCE_KEY.test(params.occurrenceKey)) {
+      throw new BadRequestException('AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN');
+    }
+    const line = await this.prisma.aHSPImportLine.findFirst({
+      where: {
+        workspaceId: params.workspaceId,
+        importJobId: params.importJobId,
+        lineNumber: params.lineNumber,
+        importJob: { workspaceId: params.workspaceId },
+      },
+      select: { id: true, status: true, rawData: true },
+    });
+    if (!line) {
+      throw new NotFoundException('AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN');
+    }
+    if (line.status === ImportStatus.COMPLETED) {
+      throw new ConflictException('AHSP_IMPORT_LINE_ALREADY_SETTLED');
+    }
+    const slot = unitOccurrenceSlots(
+      line.rawData as unknown as AhspWorkItemKnowledge,
+    ).find((candidate) => candidate.occurrenceKey === params.occurrenceKey);
+    if (!slot) {
+      throw new BadRequestException('AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN');
+    }
+    return { importLineId: line.id, raw: slot.raw, group: slot.group };
+  }
+
+  /**
+   * Ask the existing Unit Kernel whether this canonical definition is lawful
+   * for the slot's resource family. A foreign family is the kernel's own
+   * RESOURCE_TYPE_UNIT_INCOMPATIBLE. Nothing here writes an alias.
+   */
+  private async judgeUnit(
+    unitDefinitionId: string,
+    group: AhspResourceGroup | null,
+  ): Promise<
+    | { ok: true; spelling: string }
+    | { ok: false; reason: 'UNKNOWN_UNIT' | 'INCOMPATIBLE' }
+  > {
+    const definition = await this.prisma.unitDefinition.findFirst({
+      where: { id: unitDefinitionId, isActive: true },
+      select: {
+        id: true,
+        code: true,
+        aliases: {
+          where: { isActive: true, context: null },
+          select: { rawAlias: true },
+          orderBy: { rawAlias: 'asc' },
+          take: 8,
+        },
+      },
+    });
+    if (!definition) return { ok: false, reason: 'UNKNOWN_UNIT' };
+    const context = group ? GROUP_TO_CONTEXT[group] : undefined;
+    const probes = [
+      ...definition.aliases.map((alias) => alias.rawAlias),
+      definition.code,
+    ];
+    let sawIncompatible = false;
+    for (const probe of probes) {
+      const verdict = await this.units.resolve(probe, probe, undefined, context);
+      if (
+        verdict.reasonCodes?.includes(UNIT_REASON.RESOURCE_TYPE_UNIT_INCOMPATIBLE)
+      ) {
+        sawIncompatible = true;
+        continue;
+      }
+      if (
+        verdict.status === UNIT_RESOLUTION_STATUS.RESOLVED &&
+        verdict.sourceUnitDefinition?.id === definition.id
+      ) {
+        return { ok: true, spelling: probe };
+      }
+    }
+    return { ok: false, reason: sawIncompatible ? 'INCOMPATIBLE' : 'UNKNOWN_UNIT' };
+  }
+
+  private adjudicatedSpelling(
+    unitDefinitionId: string,
+    group: AhspResourceGroup | null,
+    cache: Map<string, Promise<string | null>>,
+  ): Promise<string | null> {
+    const key = `${unitDefinitionId}\0${group ?? ''}`;
+    const known = cache.get(key);
+    if (known) return known;
+    const pending = this.judgeUnit(unitDefinitionId, group).then((judged) =>
+      judged.ok ? judged.spelling : null,
+    );
+    cache.set(key, pending);
+    return pending;
+  }
+
+  /**
    * The unit spellings a waiting line still waits for today, as the document
    * spells them and how often; or, when the Unit Kernel now knows every one, that
-   * the line is worth checking again. Only what the import itself asks is asked:
-   * the output unit (or each of its differently spelled statements), and each
-   * named, classed component's unit.
+   * the line is worth checking again. A scoped human decision for that exact
+   * slot counts as known. Only what the import itself asks is asked: the output
+   * unit (or each of its differently spelled statements), and each named,
+   * classed component's unit.
    */
   private async unitsWaitedFor(
     knowledge: AhspWorkItemKnowledge,
@@ -901,27 +1318,49 @@ export class AhspDocumentCanonicalizationService {
       raw: string,
       group: AhspResourceGroup | null,
     ) => Promise<boolean>,
+    lineId: string | null = null,
+    decisions: ReadonlyMap<string, StoredUnitDecision> = new Map(),
+    adjudication: Map<string, Promise<string | null>> = new Map(),
   ): Promise<
     | { unitsKnownNow: true }
-    | { unknownUnits: Array<{ spelling: string; uses: number }> }
+    | {
+        unknownUnits: Array<{ spelling: string; uses: number }>;
+        unitOccurrences: Array<{
+          occurrenceKey: string;
+          spelling: string;
+          resourceGroup: AhspResourceGroup | null;
+        }>;
+      }
   > {
     const unknown = new Map<string, number>();
-    const ask = async (raw: string, group: AhspResourceGroup | null) => {
+    const unitOccurrences: Array<{
+      occurrenceKey: string;
+      spelling: string;
+      resourceGroup: AhspResourceGroup | null;
+    }> = [];
+    const ask = async (
+      raw: string,
+      group: AhspResourceGroup | null,
+      occurrenceKey: string,
+    ) => {
+      const decision = lineId
+        ? decisions.get(`${lineId}:${occurrenceKey}`)
+        : undefined;
+      if (decision && decision.rawUnit === raw) {
+        const spelling = await this.adjudicatedSpelling(
+          decision.unitDefinitionId,
+          group,
+          adjudication,
+        );
+        if (spelling) return;
+      }
       if (await unitProvedToday(raw, group)) return;
       const spelling = raw.trim();
       unknown.set(spelling, (unknown.get(spelling) ?? 0) + 1);
+      unitOccurrences.push({ occurrenceKey, spelling, resourceGroup: group });
     };
-    if (knowledge.outputUnitRaw) {
-      await ask(knowledge.outputUnitRaw.raw, null);
-    } else {
-      for (const statement of knowledge.outputUnitStatements ?? []) {
-        await ask(statement.raw, null);
-      }
-    }
-    for (const resource of knowledge.resources) {
-      if (!resource.rawName || !resource.group || resource.rawUnit === null)
-        continue;
-      await ask(resource.rawUnit, resource.group);
+    for (const slot of unitOccurrenceSlots(knowledge)) {
+      await ask(slot.raw, slot.group, slot.occurrenceKey);
     }
     return unknown.size === 0
       ? { unitsKnownNow: true }
@@ -930,6 +1369,7 @@ export class AhspDocumentCanonicalizationService {
             spelling,
             uses,
           })),
+          unitOccurrences,
         };
   }
 
@@ -1004,7 +1444,6 @@ export class AhspDocumentCanonicalizationService {
       const line = lines[index];
       const workType = item.workType?.raw ?? null;
       const methodName = item.methodName?.raw ?? null;
-      const admission = item.admission ?? 'HELD';
       const verdict = item.identityVerdict ?? 'DISTINCT';
       const decision = decisionByItem.get(workType + '\u0000' + methodName);
 
@@ -1057,12 +1496,24 @@ export class AhspDocumentCanonicalizationService {
             methodName: methodName as string,
             ahspId: outcome.ahspId,
             versionId: outcome.versionId,
-            admission: admission as Exclude<AhspWorkItemAdmission, 'HELD'>,
-            identityPendingResources: item.resources.filter(
-              (resource) => resource.resolvedResourceCatalogId === null,
-            ).length,
+            admission: outcome.admission,
+            identityPendingResources: outcome.identityPendingResources,
           });
-          if (admission === 'PROVEN') counts.ready += 1;
+          // The transaction has committed. Only now may the in-memory item say
+          // which catalogue identity the save used — a failed write leaves the
+          // preview's reading untouched.
+          outcome.linkedResources.forEach((linked, resourceIndex) => {
+            const current = item.resources[resourceIndex];
+            if (
+              current &&
+              linked.resolvedResourceCatalogId &&
+              current.resolvedResourceCatalogId === null
+            ) {
+              (current as { resolvedResourceCatalogId: string | null }).resolvedResourceCatalogId =
+                linked.resolvedResourceCatalogId;
+            }
+          });
+          if (outcome.admission === 'PROVEN') counts.ready += 1;
           else counts.identityPending += 1;
           if (verdict === 'POSSIBLY_IDENTICAL') {
             // Record that a possible twin was SHOWN and deliberately kept separate.
@@ -1265,6 +1716,9 @@ export class AhspDocumentCanonicalizationService {
       kind: 'WRITTEN',
       ahspId: saved.ahspId,
       versionId: saved.versionId,
+      admission: saved.admission,
+      identityPendingResources: saved.identityPendingResources,
+      linkedResources: saved.linkedResources,
     };
   }
 
@@ -1371,8 +1825,29 @@ export class AhspDocumentCanonicalizationService {
       assistedClassification?: AssistedClassificationContext | null;
     },
     tx: Prisma.TransactionClient,
-  ): Promise<{ ahspId: string; versionId: string }> {
+  ): Promise<{
+    ahspId: string;
+    versionId: string;
+    admission: Exclude<AhspWorkItemAdmission, 'HELD'>;
+    identityPendingResources: number;
+    linkedResources: readonly AhspResourceKnowledge[];
+  }> {
     const { workspaceId, userId } = context;
+    // Confirm/Save is this write. A component the identity kernel could not
+    // match, and for which no credible candidate remains, is genuinely new:
+    // the SAME human-declared admission Manual AHSP uses mints it here, inside
+    // this item's transaction. A candidate still in dispute is left untouched.
+    // A row the kernel already ruled out is not a candidate still in dispute.
+    const linkedResources = await this.linkGenuinelyNewResources(
+      item,
+      workspaceId,
+      tx,
+    );
+    const identityPendingResources = linkedResources.filter(
+      (resource) => resource.resolvedResourceCatalogId === null,
+    ).length;
+    const admission: Exclude<AhspWorkItemAdmission, 'HELD'> =
+      identityPendingResources === 0 ? 'PROVEN' : 'IDENTITY_PENDING';
     {
       // AhspService.create returns an untyped row; only the new parent's id is read.
       const parent = (await this.ahspService.create(
@@ -1416,11 +1891,13 @@ export class AhspDocumentCanonicalizationService {
             : {}),
           // CLOSURE 1 — what the document actually said about this line, kept
           // beside the identity the import proved.
-          resources: item.resources.map((resource) => ({
-            // IMPORT-SEAM-01 — the catalogue id the identity kernel PROVED, or,
-            // while that identity is still pending, the source's own words: the
-            // convention hand-built recipes use and the occurrence path reads by
-            // shape. Never a candidate, a weak possibility or a ruled-out row.
+          resources: linkedResources.map((resource) => ({
+            // IMPORT-SEAM-01 — the catalogue id the identity kernel PROVED, or
+            // the one this save minted for a genuinely new resource, or, while
+            // a real identity question is still open, the source's own words.
+            // Never a candidate, a weak possibility or a ruled-out row.
+            // The raw name stays in sourceFacts below; it is never overwritten
+            // by the catalogue name.
             resourceId: resource.resolvedResourceCatalogId ?? resource.rawName!,
             resourceType: resource.group!,
             coefficient: resource.coefficient!,
@@ -1433,7 +1910,7 @@ export class AhspDocumentCanonicalizationService {
           // TRUSTED road: one whole origin per line, from the reading this very
           // method performed. It travels beside the recipe rather than inside
           // it, so the same shape can never arrive from a request body.
-          sourceFacts: item.resources.map((resource) => ({
+          sourceFacts: linkedResources.map((resource) => ({
             rawName: resource.rawName,
             rawCode: resource.rawCode,
             rawUnit: resource.rawUnit,
@@ -1464,8 +1941,127 @@ export class AhspDocumentCanonicalizationService {
         ahspId: parent.id,
         ahspVersionId: version.id,
       });
-      return { ahspId: parent.id, versionId: version.id };
+      return {
+        ahspId: parent.id,
+        versionId: version.id,
+        admission,
+        identityPendingResources,
+        linkedResources,
+      };
     }
+  }
+
+  /**
+   * A component is genuinely new when no catalogue id is proved and no credible
+   * candidate remains. A row the kernel ruled out is not a competing identity.
+   * A still-nominated candidate, or an unproved unit, is not this case.
+   */
+  private isGenuinelyNewImportResource(
+    resource: AhspResourceKnowledge,
+  ): boolean {
+    const candidates = resource.identityCandidates ?? [];
+    const ruledOutOnly =
+      resource.identityCandidatesRuledOut === true && candidates.length > 0;
+    const credibleCandidate = candidates.length > 0 && !ruledOutOnly;
+    return (
+      resource.resolvedResourceCatalogId === null &&
+      resource.rawName !== null &&
+      resource.group !== null &&
+      resource.rawUnit !== null &&
+      resource.coefficient !== null &&
+      resource.coefficient > 0 &&
+      !credibleCandidate &&
+      resource.reasonCodes.some(
+        (code) =>
+          code === AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED ||
+          (ruledOutOnly &&
+            code === AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND),
+      ) &&
+      resource.reasonCodes.every(
+        (code) =>
+          code === AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED ||
+          code === AHSP_DOCUMENT_REASON.CURRENTNESS_UNPROVEN ||
+          (ruledOutOnly &&
+            code === AHSP_DOCUMENT_REASON.RESOURCE_CANDIDATES_FOUND),
+      )
+    );
+  }
+
+  /** The unit definition the Unit Kernel already proved, or null. Never invented. */
+  private async componentUnitDefinitionId(
+    raw: string,
+    group: AhspResourceGroup,
+  ): Promise<string | null> {
+    const unit = await this.units.resolve(
+      raw,
+      raw,
+      undefined,
+      GROUP_TO_CONTEXT[group],
+    );
+    return unit.status === UNIT_RESOLUTION_STATUS.RESOLVED
+      ? (unit.sourceUnitDefinition?.id ?? null)
+      : null;
+  }
+
+  /**
+   * Mint or reuse a workspace ResourceCatalog for each genuinely new component,
+   * through the Manual AHSP admission entrypoint, on this item's transaction.
+   * Returns a new list. The caller's item is not changed here.
+   */
+  private async linkGenuinelyNewResources(
+    item: AhspWorkItemKnowledge,
+    workspaceId: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<readonly AhspResourceKnowledge[]> {
+    const linked: AhspResourceKnowledge[] = [];
+    for (const resource of item.resources) {
+      if (!this.isGenuinelyNewImportResource(resource)) {
+        linked.push(resource);
+        continue;
+      }
+      const unitDefinitionId = await this.componentUnitDefinitionId(
+        resource.rawUnit as string,
+        resource.group as AhspResourceGroup,
+      );
+      // A proved component unit that the kernel cannot name as a definition is
+      // the existing unit blocker. Do not invent a unit to force acceptance.
+      if (!unitDefinitionId) {
+        linked.push(resource);
+        continue;
+      }
+      // A throw here is a technical failure of this item's transaction. It
+      // must roll the item back. It must not be stored as an open identity.
+      const answer = await this.observations.acceptHumanDeclaredResourceIn(
+        tx,
+        {
+          workspaceId,
+          rawName: resource.rawName as string,
+          rawCode: resource.rawCode,
+          resourceType: resource.group as AhspResourceGroup,
+          unitDefinitionId,
+        },
+      );
+      if (answer.outcome === 'REVIEW_REQUIRED') {
+        linked.push(resource);
+        continue;
+      }
+      // A private resource from another workspace is never this workspace's
+      // identity, even if a caller handed one back.
+      if (
+        answer.resource.workspaceId !== null &&
+        answer.resource.workspaceId !== workspaceId
+      ) {
+        linked.push(resource);
+        continue;
+      }
+      linked.push({
+        ...resource,
+        resolvedResourceCatalogId: answer.resource.id,
+        // The source unit, not a unit invented to match a catalogue row.
+        resolvedBaseUnit: resource.rawUnit,
+      });
+    }
+    return linked;
   }
 
   /**
@@ -1790,6 +2386,10 @@ export class AhspDocumentCanonicalizationService {
   private async resolveKnowledge(
     knowledge: AhspDocumentKnowledge,
     workspaceId: string,
+    unitContext?: {
+      readonly lineIds: readonly string[];
+      readonly decisions: ReadonlyMap<string, StoredUnitDecision>;
+    },
   ): Promise<AhspDocumentKnowledge> {
     if (knowledge.workItems.length === 0) return knowledge;
     // IQL-01 — the exact questions this document asks, so an APPROVED
@@ -1856,12 +2456,17 @@ export class AhspDocumentCanonicalizationService {
       ),
     );
     const workItems: AhspWorkItemKnowledge[] = [];
+    const adjudication = new Map<string, Promise<string | null>>();
     for (const item of knowledge.workItems) {
+      const lineId = unitContext?.lineIds[workItems.length] ?? null;
       const resolved = await this.resolveWorkItem(
         item,
         loaded,
         knowledge.source.contentDigestSha256 ?? null,
         decided,
+        lineId,
+        unitContext?.decisions,
+        adjudication,
       );
       workItems.push(this.classifyItemIdentity(resolved, identitySurface, workspaceId));
     }
@@ -1938,6 +2543,9 @@ export class AhspDocumentCanonicalizationService {
     sourceSha256: string | null,
     /** F1 — decisions already made about this document's rows, re-proved today. */
     decided: ReadonlyMap<string, string>,
+    lineId: string | null = null,
+    unitDecisions?: ReadonlyMap<string, StoredUnitDecision>,
+    adjudication: Map<string, Promise<string | null>> = new Map(),
   ): Promise<AhspWorkItemKnowledge> {
     let reasons: AhspDocumentReasonCode[] = [...item.reasonCodes];
     let outputUnitRaw = item.outputUnitRaw;
@@ -1969,16 +2577,39 @@ export class AhspDocumentCanonicalizationService {
     }
     let resolvedOutputUnit: string | null = null;
     if (outputUnitRaw) {
-      if (await this.unitProved(outputUnitRaw.raw, null)) {
+      const outputDecision =
+        lineId && unitDecisions
+          ? unitDecisions.get(`${lineId}:output`)
+          : undefined;
+      const adjudicated =
+        outputDecision && outputDecision.rawUnit === outputUnitRaw.raw
+          ? await this.adjudicatedSpelling(
+              outputDecision.unitDefinitionId,
+              null,
+              adjudication,
+            )
+          : null;
+      if (adjudicated) {
+        resolvedOutputUnit = adjudicated;
+      } else if (await this.unitProved(outputUnitRaw.raw, null)) {
         resolvedOutputUnit = outputUnitRaw.raw;
       } else {
         reasons.push(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
       }
     }
     const resources: AhspResourceKnowledge[] = [];
-    for (const resource of item.resources) {
+    for (let index = 0; index < item.resources.length; index += 1) {
       resources.push(
-        await this.resolveResource(resource, evidence, sourceSha256, decided),
+        await this.resolveResource(
+          item.resources[index],
+          evidence,
+          sourceSha256,
+          decided,
+          lineId,
+          index,
+          unitDecisions,
+          adjudication,
+        ),
       );
     }
     // EVERY reason a component was held back travels up to the work item.
@@ -2080,6 +2711,10 @@ export class AhspDocumentCanonicalizationService {
     sourceSha256: string | null,
     /** F1 — decisions already made about this document's rows, re-proved today. */
     decided: ReadonlyMap<string, string>,
+    lineId: string | null = null,
+    resourceIndex = 0,
+    unitDecisions?: ReadonlyMap<string, StoredUnitDecision>,
+    adjudication: Map<string, Promise<string | null>> = new Map(),
   ): Promise<AhspResourceKnowledge> {
     // A component the source never named cannot be searched for at all. That is
     // the ONLY thing that stops the investigation before it starts.
@@ -2088,12 +2723,26 @@ export class AhspDocumentCanonicalizationService {
     }
 
     const reasonCodes = [...resource.reasonCodes];
+    const unitDecision =
+      lineId && unitDecisions && resource.rawUnit !== null
+        ? unitDecisions.get(`${lineId}:resource:${resourceIndex}`)
+        : undefined;
+    const adjudicated =
+      unitDecision && unitDecision.rawUnit === resource.rawUnit
+        ? await this.adjudicatedSpelling(
+            unitDecision.unitDefinitionId,
+            resource.group,
+            adjudication,
+          )
+        : null;
     const unitResolved =
-      resource.rawUnit !== null &&
-      (await this.unitProved(resource.rawUnit, resource.group));
+      adjudicated !== null ||
+      (resource.rawUnit !== null &&
+        (await this.unitProved(resource.rawUnit, resource.group)));
     if (resource.rawUnit !== null && !unitResolved) {
       reasonCodes.push(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
     }
+    const resolvedUnitSpelling = adjudicated ?? (unitResolved ? resource.rawUnit : null);
 
     // WHY THE SEARCH CONTINUES PAST AN UNKNOWN UNIT.
     //
@@ -2148,11 +2797,13 @@ export class AhspDocumentCanonicalizationService {
         status: unitResolved ? 'READY' : 'UNRESOLVED',
         reasonCodes: unitResolved
           ? reasonCodes.filter(
-              (code) => code !== AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED,
+              (code) =>
+                code !== AHSP_DOCUMENT_REASON.RESOURCE_UNRESOLVED &&
+                code !== AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED,
             )
           : reasonCodes,
         resolvedResourceCatalogId: decidedCatalogId,
-        resolvedBaseUnit: unitResolved ? resource.rawUnit : null,
+        resolvedBaseUnit: resolvedUnitSpelling,
         identityCandidates,
       };
     }
@@ -2168,9 +2819,13 @@ export class AhspDocumentCanonicalizationService {
       return {
         ...resource,
         status: unitResolved ? resource.status : 'UNRESOLVED',
-        reasonCodes,
+        reasonCodes: unitResolved
+          ? reasonCodes.filter(
+              (code) => code !== AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED,
+            )
+          : reasonCodes,
         resolvedResourceCatalogId: identity.resolvedResourceCatalogId,
-        resolvedBaseUnit: unitResolved ? resource.rawUnit : null,
+        resolvedBaseUnit: resolvedUnitSpelling,
         identityCandidates: [],
         // Present ONLY when an IQL-01 answer settled it, so every other
         // reading is byte-for-byte what it was.

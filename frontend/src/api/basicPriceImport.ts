@@ -63,6 +63,7 @@ export interface UnitLookupQuery {
   q?: string;
   dimension?: UnitDimension;
   kind?: UnitKind;
+  resourceType?: ResourceType;
   page?: number;
   limit?: number;
 }

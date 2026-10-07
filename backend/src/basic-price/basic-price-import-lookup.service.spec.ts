@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { BasicPriceImportLookupService } from './basic-price-import-lookup.service';
+import { BasicPriceImportLookupService, unitLookupContainsMatch } from './basic-price-import-lookup.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 describe('BasicPriceImportLookupService', () => {
@@ -127,6 +127,24 @@ describe('BasicPriceImportLookupService', () => {
     expect(result.hasNext).toBe(false);
   });
 
+  it('equipment unit search keeps person-time out of the normal equipment list', async () => {
+    queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ count: 0n }]);
+    await service.searchUnits({ q: '', resourceType: 'EQUIPMENT', page: 1, limit: 8 });
+    const text = sqlText(queryRaw.mock.calls[0][0]);
+    expect(text).toContain(`'EQUIPMENT_TIME'`);
+    expect(text).toContain(`unit."code" = 'LS'`);
+    expect(text).not.toContain(`'PERSON_TIME'`);
+  });
+
+  it('labor unit search asks only for person-time', async () => {
+    queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ count: 0n }]);
+    await service.searchUnits({ q: '', resourceType: 'LABOR', page: 1, limit: 8 });
+    const text = sqlText(queryRaw.mock.calls[0][0]);
+    expect(text).toContain(`'PERSON_TIME'`);
+    expect(text).not.toContain(`unit."code" = 'LS'`);
+    expect(text).not.toContain(`'EQUIPMENT_TIME'`);
+  });
+
   it('unit ranking orders exact code, symbol, display name, alias, prefix, then contains', async () => {
     queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ count: 0n }]);
     await service.searchUnits({ q: 'OH', page: 1, limit: 20 });
@@ -147,6 +165,22 @@ describe('BasicPriceImportLookupService', () => {
       hasNext: false,
     });
     expect(sqlText(queryRaw.mock.calls[0][0])).toContain('lower(unit."displayName") ASC');
+  });
+
+  it('contains matches a whole word and leaves an interior spelling out', async () => {
+    queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([{ count: 0n }]);
+    await service.searchUnits({ q: 'ton', resourceType: 'MATERIAL', page: 1, limit: 8 });
+    const text = sqlText(queryRaw.mock.calls[0][0]);
+    expect(text).toContain(`!~ '[a-z0-9]'`);
+    expect(text).toContain('left(lower(unit."code")');
+    expect(unitLookupContainsMatch('kantong', 'ton')).toBe(false);
+    expect(unitLookupContainsMatch('karton', 'ton')).toBe(false);
+    expect(unitLookupContainsMatch('ton metrik', 'ton')).toBe(true);
+    expect(unitLookupContainsMatch('short ton', 'ton')).toBe(true);
+    expect(unitLookupContainsMatch('long ton', 'ton')).toBe(true);
+    expect(unitLookupContainsMatch('tonne', 'ton')).toBe(false);
+    expect(unitLookupContainsMatch('kontrol', 'rol')).toBe(false);
+    expect(unitLookupContainsMatch('rol meter', 'rol')).toBe(true);
   });
 
   describe('searchRegions (RM-02D2A2)', () => {

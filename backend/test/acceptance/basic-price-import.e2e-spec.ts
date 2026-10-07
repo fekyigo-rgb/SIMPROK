@@ -31,13 +31,11 @@ const PASSWORD = 'Test1234!';
 const REGION_ID = '41000000-0000-4000-8000-000000000001';
 const RESOURCE_MATERIAL_ID = '41000000-0000-4000-8000-000000000002';
 const RESOURCE_LABOR_ID = '41000000-0000-4000-8000-000000000003';
-const UNIT_ID = '41000000-0000-4000-8000-000000000004';
 const ROLE_ID = '41000000-0000-4000-8000-000000000005';
 const RESOURCE_WORKSPACE_B_ID = '41000000-0000-4000-8000-000000000006';
 const RESOURCE_GLOBAL_ID = '41000000-0000-4000-8000-000000000007';
 const RESOURCE_INACTIVE_ID = '41000000-0000-4000-8000-000000000008';
 const UNIT_INACTIVE_ID = '41000000-0000-4000-8000-000000000009';
-const UNIT_ALIAS_ID = '41000000-0000-4000-8000-00000000000a';
 const ROLE_B_ID = '41000000-0000-4000-8000-00000000000b';
 // RM-02D2A-1: a second human, distinct from `assigned@test.local` (the
 // verifier in the publication tests below), holding ONLY BASIC_PRICE_PUBLISH
@@ -86,10 +84,8 @@ describe('RM02B Basic Price import (e2e)', () => {
   let membershipRoleBId: string;
   let publisherMembershipRoleId: string;
   /**
-   * The REAL canonical unit for row 9's own spelling "Org/Hari" (PERSON_DAY).
-   * ACC-UNIT-ORGHARI below stays: it is this suite's lookup-shape fixture, and
-   * a unit no alias can reach is exactly what a reviewer must not be able to
-   * bind a price to.
+   * The canonical labor-day unit. "orang hari" resolves to PERSON_DAY.
+   * This suite does not insert a second unit for that meaning.
    */
   let personDayUnitId: string;
 
@@ -194,25 +190,15 @@ describe('RM02B Basic Price import (e2e)', () => {
       update: {},
     });
     await prisma.unitDefinition.upsert({
-      where: { id: UNIT_ID },
-      create: { id: UNIT_ID, code: 'ACC-UNIT-ORGHARI', displayName: 'Orang per Hari', symbol: 'Org/Hari', dimension: 'PERSON_TIME', kind: 'CANONICAL' },
-      update: {},
-    });
-    await prisma.unitDefinition.upsert({
       where: { id: UNIT_INACTIVE_ID },
       create: { id: UNIT_INACTIVE_ID, code: 'ACC-INACTIVE-UNIT', displayName: 'Inactive Unit', symbol: 'IU', dimension: 'COUNT', kind: 'CANONICAL', isActive: false },
       update: { isActive: false },
     });
     personDayUnitId = (
       await prisma.unitDefinition.findFirstOrThrow({
-        where: { code: 'PERSON_DAY' },
+        where: { code: 'PERSON_DAY', displayName: 'Orang-hari', isActive: true },
       })
     ).id;
-    await prisma.unitAlias.upsert({
-      where: { id: UNIT_ALIAS_ID },
-      create: { id: UNIT_ALIAS_ID, unitDefinitionId: UNIT_ID, rawAlias: 'orang hari', normalizedAlias: 'ORANG_HARI', isActive: true },
-      update: { isActive: true },
-    });
 
     const login = async (email: string) =>
       (await request(app.getHttpServer()).post('/auth/login').send({ email, password: PASSWORD })).body.access_token;
@@ -243,8 +229,7 @@ describe('RM02B Basic Price import (e2e)', () => {
     await prisma.resourceCatalog.deleteMany({
       where: { id: { in: [RESOURCE_MATERIAL_ID, RESOURCE_LABOR_ID, RESOURCE_WORKSPACE_B_ID, RESOURCE_GLOBAL_ID, RESOURCE_INACTIVE_ID] } },
     });
-    await prisma.unitAlias.deleteMany({ where: { id: UNIT_ALIAS_ID } });
-    await prisma.unitDefinition.deleteMany({ where: { id: { in: [UNIT_ID, UNIT_INACTIVE_ID] } } });
+    await prisma.unitDefinition.deleteMany({ where: { id: UNIT_INACTIVE_ID } });
     await prisma.region.deleteMany({ where: { id: REGION_ID } });
     await prisma.membershipRole.deleteMany({ where: { id: membershipRoleId } });
     await prisma.membershipRole.deleteMany({ where: { id: membershipRoleBId } });
@@ -340,15 +325,22 @@ describe('RM02B Basic Price import (e2e)', () => {
       const response = await lookup('units', assignedToken).query({ q: 'orang hari' }).expect(200);
       expect(response.body.items).toEqual([
         {
-          id: UNIT_ID,
-          code: 'ACC-UNIT-ORGHARI',
-          displayName: 'Orang per Hari',
-          symbol: 'Org/Hari',
+          id: personDayUnitId,
+          code: 'PERSON_DAY',
+          displayName: 'Orang-hari',
+          symbol: 'PERSON_DAY',
           dimension: 'PERSON_TIME',
           kind: 'CANONICAL',
         },
       ]);
+      expect(JSON.stringify(response.body)).not.toContain('ACC-UNIT-ORGHARI');
       expect(JSON.stringify(response.body)).not.toContain('conversion');
+      expect(
+        await prisma.unitDefinition.findFirst({ where: { code: 'ACC-UNIT-ORGHARI' } }),
+      ).toBeNull();
+      expect(
+        await prisma.unitDefinition.findUniqueOrThrow({ where: { id: personDayUnitId } }),
+      ).toMatchObject({ code: 'PERSON_DAY', displayName: 'Orang-hari', isActive: true });
     });
 
     it('both GET lookup routes leave their complete source data fingerprint unchanged', async () => {

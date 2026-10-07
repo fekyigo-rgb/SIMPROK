@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
+  EXISTING_RESOURCE_LINE,
   IDENTITY_PENDING_ITEM_LINE,
+  NEW_RESOURCE_CONFIRM_LINE,
   admissionOf,
+  admissionShownAfterSave,
+  importResourceConfirmation,
+  workItemHasGenuineNewOnly,
   confirmImportFigures,
   describeImportIntake,
   describeImportRecheck,
@@ -24,6 +29,35 @@ const INTERNAL = /[A-Z]{2,}_[A-Z_]{2,}|\bkernel\b|\bcanonical\b|\bdigest\b|\benu
 const everyText = (lines: readonly string[]) => {
   for (const line of lines) assert.doesNotMatch(line, INTERNAL, line);
 };
+
+test("a successful mint keeps the pre-save reading and shows the written admission as current", () => {
+  const historical = {
+    admission: "IDENTITY_PENDING",
+    workType: { raw: "1.7.7.1.1.b (a)" },
+    methodName: { raw: "Galian tanah biasa" },
+    resources: [{ resolvedResourceCatalogId: "catalog-new-1" }],
+  };
+  const shown = admissionShownAfterSave(historical, [
+    {
+      workType: "1.7.7.1.1.b (a)",
+      methodName: "Galian tanah biasa",
+      admission: "PROVEN",
+    },
+  ]);
+  assert.equal(historical.admission, "IDENTITY_PENDING");
+  assert.equal(shown.admission, "PROVEN");
+  assert.equal(admissionOf(shown), "PROVEN");
+  assert.equal(confirmImportFigures([shown]).needsReview, 0);
+  const stillAnalysis = admissionShownAfterSave(historical, []);
+  assert.equal(stillAnalysis.admission, "IDENTITY_PENDING");
+  const page = readFileSync(
+    new URL("../pages/AhspImportPage.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.ok(page.includes("admissionShownAfterSave"));
+  assert.ok(page.includes("confirmImportFigures(settled ? currentWorkItems"));
+  assert.ok(page.includes("settled ? currentWorkItems : preview.workItems"));
+});
 
 test("an unrecognised admission is held — never promoted to saved or ready", () => {
   assert.equal(admissionOf({ admission: "PROVEN" }), "PROVEN");
@@ -145,11 +179,12 @@ test("only imports that still hold work items are listed, each waiting item with
   assert.deepEqual(job.waitingItems, [
     // The missing output unit holds it — not the pending identity it also carries.
     // (closeout §5: "not found", never "not stated" — see ahspDocumentUserCopy.test.ts.)
-    { key: "70", title: "B.83 — Pemasangan", reason: "Satuan hasil pekerjaan belum ditemukan pada dokumen.", sameness: null, decisionFor: null },
+    { key: "70", title: "B.83 — Pemasangan", reason: "Satuan hasil pekerjaan belum ditemukan pada dokumen.", unknownUnits: [], sameness: null, decisionFor: null },
     {
       key: "71",
       title: "— — Galian",
       reason: "Penyimpanan sebelumnya belum berhasil; akan dicoba lagi saat diperiksa ulang.",
+      unknownUnits: [],
       sameness: null,
       decisionFor: null,
     },
@@ -373,14 +408,15 @@ test("§13/§21 F: identity is one row for every exact question — and a saved 
       [
         "IDENTITY",
         "Identitas sumber daya belum pasti",
-        "Ada 3 pertanyaan berbeda dari 100 kemunculan. Pertanyaan yang sama dikelompokkan agar tidak perlu dijawab per kemunculan. Diputuskan oleh pemegang kewenangan identitas sumber daya.",
+        "3 pertanyaan identitas mewakili 100 kemunculan. Jawaban yang sama tidak perlu diulang untuk setiap kemunculan. Diputuskan oleh pemegang kewenangan identitas sumber daya.",
       ],
       ["SOURCE", "Satuan hasil pekerjaan belum ditemukan pada dokumen", "1 pekerjaan. SIMPROK tidak menebaknya."],
     ],
   );
   // A reader who may decide is pointed to where the decision is made.
   const [curator] = describeWaitingImports([wire], { canCurate: true });
-  assert.match(curator.attention[0].detail, /Tinjau di bagian Sumber daya untuk ditinjau\.$/u);
+  assert.equal(curator.attention[0].actionLabel, "Tinjau 3 identitas");
+  assert.equal(curator.attention[0].detail.includes("Tinjau di bagian"), false);
   everyText([job.summaryLine, ...job.attention.flatMap((row) => [row.title, row.detail])]);
 });
 
@@ -426,7 +462,7 @@ test("§15 scale: the Bina Marga card reads as five calm sentences and four rows
       ["Satuan 'Ton' belum dikenali SIMPROK", "Dipakai 1 kali dalam 1 pekerjaan."],
       [
         "Identitas sumber daya belum pasti",
-        "Ada 95 pertanyaan berbeda dari 1.100 kemunculan. Pertanyaan yang sama dikelompokkan agar tidak perlu dijawab per kemunculan. Diputuskan oleh pemegang kewenangan identitas sumber daya.",
+        "95 pertanyaan identitas mewakili 1.100 kemunculan. Jawaban yang sama tidak perlu diulang untuk setiap kemunculan. Diputuskan oleh pemegang kewenangan identitas sumber daya.",
       ],
       ["Satuan hasil pekerjaan belum ditemukan pada dokumen", "1 pekerjaan. SIMPROK tidak menebaknya."],
     ],
@@ -540,7 +576,7 @@ test("the preview says what a document will still need — grouped the same way,
       [
         "IDENTITY",
         "Identitas sumber daya belum pasti",
-        "Ada 1 pertanyaan berbeda dari 3 kemunculan. Pertanyaan yang sama dikelompokkan agar tidak perlu dijawab per kemunculan. Diputuskan oleh pemegang kewenangan identitas sumber daya.",
+        "1 pertanyaan identitas mewakili 3 kemunculan. Jawaban yang sama tidak perlu diulang untuk setiap kemunculan. Diputuskan oleh pemegang kewenangan identitas sumber daya.",
       ],
       ["SOURCE", "Dokumen menyatakan satuan hasil yang berbeda", "1 pekerjaan (m3 dan M2). SIMPROK tidak memilih salah satunya."],
     ],
@@ -645,7 +681,7 @@ test("closeout P3-A correction 1: grouped questions are counted as different que
     },
   ]);
   const [identity] = job.attention;
-  assert.match(identity.detail, /^Ada 95 pertanyaan berbeda dari 1\.100 kemunculan\. Pertanyaan yang sama dikelompokkan agar tidak perlu dijawab per kemunculan\./u);
+  assert.match(identity.detail, /^95 pertanyaan identitas mewakili 1\.100 kemunculan\. Jawaban yang sama tidak perlu diulang untuk setiap kemunculan\./u);
   assert.doesNotMatch(identity.detail, /satu keputusan berlaku untuk semua|pertanyaan unik/u);
   // Grouped is not resolved: the saved AHSPs still wait, and none is called complete.
   assert.match(job.summaryLine, /Belum ada yang lengkap untuk tahap AHSP\. 61 masih menunggu identitas sumber daya\./u);
@@ -688,4 +724,64 @@ test("the module formats only — no endpoint, no request, no decision", () => {
   const source = readFileSync("src/utils/ahspImportIntakeDisplay.ts", "utf8");
   assert.ok(!source.includes("apiFetch"));
   assert.ok(!source.includes("fetch("));
+});
+
+test("IMPORT-UI: confirmation distinguishes existing, genuine new, and ambiguous", () => {
+  assert.equal(
+    importResourceConfirmation({ resolvedResourceCatalogId: "catalog-1" }),
+    "EXISTING",
+  );
+  assert.equal(
+    importResourceConfirmation({ resolvedResourceCatalogId: null, identityCandidates: [] }),
+    "NEW",
+  );
+  assert.equal(
+    importResourceConfirmation({
+      resolvedResourceCatalogId: null,
+      identityCandidates: ["Pipa 4\""],
+    }),
+    "REVIEW",
+  );
+  assert.equal(workItemHasGenuineNewOnly({
+    resources: [{ resolvedResourceCatalogId: null, identityCandidates: [] }],
+  }), true);
+  assert.equal(workItemHasGenuineNewOnly({
+    resources: [{ resolvedResourceCatalogId: null, identityCandidates: ["Klem"] }],
+  }), false);
+  assert.equal(EXISTING_RESOURCE_LINE, "Ditemukan di katalog");
+  assert.match(NEW_RESOURCE_CONFIRM_LINE, /Resource baru — akan ditambahkan/);
+  assert.doesNotMatch(NEW_RESOURCE_CONFIRM_LINE, /gagal|error|ditolak/iu);
+});
+
+test("IMPORT-UI: the confirm screen uses that distinction and does not treat genuine new as an error", () => {
+  const page = readFileSync("src/pages/AhspImportPage.tsx", "utf8");
+  assert.match(page, /workItemHasGenuineNewOnly/);
+  assert.match(page, /NEW_RESOURCE_CONFIRM_LINE/);
+  assert.match(page, /EXISTING_RESOURCE_LINE/);
+  assert.doesNotMatch(page, /genuineNew[\s\S]{0,180}AlertTriangle/);
+  assert.doesNotMatch(page, /Perlu dilengkapi/);
+  assert.doesNotMatch(page, /needsPrice/);
+});
+
+test("a previous save failure names the recorded jobs and the existing recheck path", () => {
+  const [job] = describeWaitingImports([
+    {
+      importJobId: "job-failed",
+      counts: { received: 3, represented: 0, waiting: 3 },
+      waiting: [
+        { lineNumber: 69, status: "FAILED", reasonCodes: ["RESOURCE_CANDIDATES_FOUND"], workType: "B.81", methodName: "Pipa 5 inci", writeFailure: "RESOURCE_CODE_ALREADY_EXISTS" },
+        { lineNumber: 70, status: "FAILED", reasonCodes: ["RESOURCE_CANDIDATES_FOUND"], workType: "B.82", methodName: "Pipa 6 inci", writeFailure: "RESOURCE_CODE_ALREADY_EXISTS" },
+        { lineNumber: 71, status: "FAILED", reasonCodes: ["RESOURCE_CANDIDATES_FOUND"], workType: "B.83", methodName: "Pipa 8 inci", writeFailure: "RESOURCE_CODE_ALREADY_EXISTS" },
+      ],
+    },
+  ]);
+  const failed = job.attention.find((row) => row.tone === "FAILED");
+  assert.equal(failed?.actionLabel, "Lihat 3 pekerjaan");
+  assert.deepEqual(
+    failed?.failures?.map((item) => item.code),
+    ["B.81", "B.82", "B.83"],
+  );
+  assert.match(failed?.failures?.[0].statement ?? "", /kode sumber daya sudah ada/);
+  assert.match(failed?.failures?.[0].statement ?? "", /jalur simpan yang sama/);
+  assert.equal((failed?.failures?.[0].statement ?? "").includes("Invalid `tx"), false);
 });

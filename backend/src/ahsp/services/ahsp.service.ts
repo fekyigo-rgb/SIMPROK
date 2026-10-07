@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AhspAuditService } from './ahsp-audit.service';
+import { AhspSnapshotService } from './ahsp-snapshot.service';
 import { MethodType, LocationType, OwnershipType, ReviewStatus, Prisma } from '@prisma/client';
 import { AhspOwnershipPolicy, OwnershipViolationError, AhspEntity } from '../domain/ahsp-ownership.policy';
 import type { AhspIdentityRow } from '../document/ahsp-identity-classifier';
@@ -52,6 +53,7 @@ export class AhspService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AhspAuditService,
+    private readonly snapshots: AhspSnapshotService,
   ) {}
 
   private runPolicy(action: (policy: AhspOwnershipPolicy) => void) {
@@ -212,7 +214,87 @@ export class AhspService {
       });
       createdByEmail = creator?.membership?.account?.email ?? null;
     }
-    return { ...ahsp, createdByEmail };
+    return this.withUnitPresentation({ ...ahsp, createdByEmail });
+  }
+
+  /**
+   * Presentation only. The stored output unit and each component baseUnit stay
+   * the write contract. One catalog read covers the whole definition: the
+   * output unit by its stored definition id, a component by exact code.
+   * A spelling that is not that id or that code stays unlabeled rather than
+   * guessed.
+   */
+  private async withUnitPresentation<
+    T extends {
+      versions: Array<{
+        outputUnit?: string | null;
+        outputUnitDefinitionId?: string | null;
+        resources: Array<{ baseUnit?: string | null } & Record<string, unknown>>;
+      }>;
+    },
+  >(ahsp: T): Promise<T> {
+    const definitionIds = [
+      ...new Set(
+        ahsp.versions
+          .map((version) => version.outputUnitDefinitionId)
+          .filter((id): id is string => typeof id === 'string' && id !== ''),
+      ),
+    ];
+    const codes = [
+      ...new Set(
+        ahsp.versions.flatMap((version) => [
+          ...(typeof version.outputUnit === 'string' && version.outputUnit.trim() !== ''
+            ? [version.outputUnit.trim()]
+            : []),
+          ...version.resources
+            .map((row) => (typeof row.baseUnit === 'string' ? row.baseUnit.trim() : ''))
+            .filter((code) => code !== ''),
+        ]),
+      ),
+    ];
+    if (definitionIds.length === 0 && codes.length === 0) return ahsp;
+    const units = await this.prisma.unitDefinition.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          ...(definitionIds.length > 0 ? [{ id: { in: definitionIds } }] : []),
+          ...(codes.length > 0 ? [{ code: { in: codes } }] : []),
+        ],
+      },
+      select: { id: true, code: true, displayName: true, symbol: true },
+    });
+    const byId = new Map(units.map((unit) => [unit.id, unit]));
+    const byCode = new Map(units.map((unit) => [unit.code, unit]));
+    return {
+      ...ahsp,
+      versions: ahsp.versions.map((version) => {
+        const byStoredId =
+          typeof version.outputUnitDefinitionId === 'string'
+            ? byId.get(version.outputUnitDefinitionId) ?? null
+            : null;
+        const byStoredCode =
+          !byStoredId && typeof version.outputUnit === 'string'
+            ? byCode.get(version.outputUnit.trim()) ?? null
+            : null;
+        const output = byStoredId ?? byStoredCode;
+        return {
+          ...version,
+          outputUnitDisplayName: output?.displayName ?? null,
+          outputUnitSymbol: output?.symbol ?? null,
+          outputUnitCode: output?.code ?? null,
+          resources: version.resources.map((row) => {
+            const stored = typeof row.baseUnit === 'string' ? row.baseUnit.trim() : '';
+            const match = stored !== '' ? byCode.get(stored) ?? null : null;
+            return {
+              ...row,
+              unitDisplayName: match?.displayName ?? null,
+              unitSymbol: match?.symbol ?? null,
+              unitCode: match?.code ?? null,
+            };
+          }),
+        };
+      }),
+    };
   }
 
   /**
@@ -328,7 +410,7 @@ export class AhspService {
    * hand, or inferred — the version count comes from the database.
    */
   async list(workspaceId: string) {
-    return this.prisma.aHSP.findMany({
+    const rows = await this.prisma.aHSP.findMany({
       where: {
         deletedAt: null,
         OR: [{ workspaceId }, { workspaceId: null }],
@@ -358,8 +440,40 @@ export class AhspService {
           select: { outputUnit: true, regulationReference: true },
         },
         _count: { select: { versions: true } },
+        classificationAssignments: {
+          where: { isActive: true },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: {
+            leafNode: {
+              select: {
+                name: true,
+                level: true,
+                parent: {
+                  select: {
+                    name: true,
+                    level: true,
+                    parent: {
+                      select: {
+                        name: true,
+                        level: true,
+                        parent: { select: { name: true, level: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
       orderBy: [{ workType: 'asc' }, { methodName: 'asc' }],
+    });
+    return rows.map((row) => {
+      const { classificationAssignments, ...rest } = row;
+      return {
+        ...rest,
+        classificationPaths: projectListClassificationPaths(classificationAssignments),
+      };
     });
   }
 
@@ -482,6 +596,11 @@ export class AhspService {
     const user = await this.getUserDetails(userId);
 
     const approved = await this.prisma.$transaction(async (tx) => {
+      const subject = await this.snapshots.readProposalSubject(
+        ahsp.proposalSnapshotId,
+        ahsp.id,
+        tx,
+      );
       const updatedAhsp = await tx.aHSP.update({
         where: { id },
         data: {
@@ -495,11 +614,12 @@ export class AhspService {
 
       await this.audit.logAction({
         ahspId: id,
+        ahspVersionId: subject.sourceVersionId,
         action: 'AHSPApproved',
         who: userId,
         before: ahsp,
         after: updatedAhsp,
-      });
+      }, tx);
 
       return updatedAhsp;
     });
@@ -523,9 +643,53 @@ export class AhspService {
     const user = await this.getUserDetails(userId);
 
     const proposed = await this.prisma.$transaction(async (tx) => {
-      const updatedAhsp = await tx.aHSP.update({
-        where: { id },
+      const current = await tx.aHSP.findFirst({
+        where: { id, deletedAt: null },
+      });
+      if (!current || (current.workspaceId !== null && current.workspaceId !== workspaceId)) {
+        throw new NotFoundException('AHSP not found');
+      }
+      this.runPolicy(p => p.canPropose(current as AhspEntity));
+
+      // The same current version Detail and the list already use: highest versionNumber.
+      const version = await tx.aHSPVersion.findFirst({
+        where: { ahspId: id },
+        orderBy: { versionNumber: 'desc' },
+      });
+      if (!version) {
+        throw new BadRequestException('AHSP_PROPOSAL_VERSION_REQUIRED');
+      }
+
+      const activeAssignments = await tx.ahspClassificationAssignment.findMany({
+        where: { ahspId: id, isActive: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, leafNodeId: true, provenance: true },
+      });
+
+      const snapshot = await this.snapshots.createSnapshot(
+        version.id,
+        current.workspaceId,
+        userId,
+        {
+          client: tx,
+          frozen: {
+            code: current.code ?? null,
+            keterangan: current.keterangan ?? null,
+            regulationReference: version.regulationReference ?? null,
+            issuerInstitution: version.issuerInstitution ?? null,
+            ownershipType: current.ownershipType,
+          },
+          activeAssignments,
+        },
+      );
+      if (snapshot.sourceAhspId !== id || snapshot.sourceVersionId !== version.id) {
+        throw new ConflictException('AHSP_PROPOSAL_SUBJECT_MISMATCH');
+      }
+
+      const bound = await tx.aHSP.updateMany({
+        where: { id, proposedAt: null, deletedAt: null },
         data: {
+          proposalSnapshotId: snapshot.id,
           proposedAt: new Date(),
           proposedByUserId: userId,
           proposedByName: user.fullName,
@@ -533,19 +697,79 @@ export class AhspService {
           reviewStatus: 'PENDING',
         },
       });
+      if (bound.count !== 1) {
+        throw new ForbiddenException('This AHSP has already been proposed and is under review.');
+      }
 
+      const updatedAhsp = await tx.aHSP.findFirst({ where: { id } });
       await this.audit.logAction({
         ahspId: id,
+        ahspVersionId: version.id,
         action: 'AHSPProposed',
         who: userId,
         before: ahsp,
         after: updatedAhsp,
-      });
+      }, tx);
 
       return updatedAhsp;
     });
 
     return proposed;
+  }
+
+  /** Reviewer read of the bound subject. Absent or foreign subjects fail closed. */
+  async readProposalSubject(id: string, workspaceId?: string) {
+    const ahsp = await this.getById(id, workspaceId);
+    const subject = await this.snapshots.readProposalSubject(ahsp.proposalSnapshotId, ahsp.id);
+    const presented = await this.withUnitPresentation({
+      versions: [
+        {
+          outputUnit: subject.outputUnit,
+          outputUnitDefinitionId: subject.outputUnitDefinitionId,
+          resources: subject.resources,
+        },
+      ],
+    });
+    const version = presented.versions[0] as {
+      outputUnitDisplayName?: string | null;
+      outputUnitSymbol?: string | null;
+      outputUnitCode?: string | null;
+      resources: Array<{
+        unitDisplayName?: string | null;
+        unitSymbol?: string | null;
+        unitCode?: string | null;
+      }>;
+    } | undefined;
+    const named = await this.withCatalogResourceNames(
+      { versions: [{ resources: subject.resources }] },
+      workspaceId,
+    );
+    const namedRows = named.versions[0]?.resources as
+      | Array<{ resourceName?: string | null }>
+      | undefined;
+    return {
+      ...subject,
+      outputUnit: subject.outputUnit,
+      outputUnitDisplayName: version?.outputUnitDisplayName ?? null,
+      outputUnitSymbol: version?.outputUnitSymbol ?? null,
+      outputUnitCode: version?.outputUnitCode ?? null,
+      resources: subject.resources.map((row, index) => {
+        const label = version?.resources[index];
+        const catalogName = (namedRows?.[index]?.resourceName ?? '').trim();
+        return {
+          ...row,
+          resourceId: row.resourceId,
+          baseUnit: row.baseUnit,
+          coefficient: row.coefficient,
+          resourceName: catalogName !== '' ? catalogName : null,
+          unitDisplayName: label?.unitDisplayName ?? null,
+          unitSymbol: label?.unitSymbol ?? null,
+          unitCode: label?.unitCode ?? null,
+        };
+      }),
+      proposedAt: ahsp.proposedAt ?? null,
+      proposedByName: ahsp.proposedByName ?? null,
+    };
   }
 
   /**
@@ -560,6 +784,11 @@ export class AhspService {
     this.ensureNotSelfDecision(ahsp, userId);
 
     const rejected = await this.prisma.$transaction(async (tx) => {
+      const subject = await this.snapshots.readProposalSubject(
+        ahsp.proposalSnapshotId,
+        ahsp.id,
+        tx,
+      );
       const updatedAhsp = await tx.aHSP.update({
         where: { id },
         data: { reviewStatus: 'REJECTED' },
@@ -567,12 +796,13 @@ export class AhspService {
 
       await this.audit.logAction({
         ahspId: id,
+        ahspVersionId: subject.sourceVersionId,
         action: 'AHSPRejected',
         who: userId,
         before: ahsp,
         after: updatedAhsp,
         reason,
-      });
+      }, tx);
 
       return updatedAhsp;
     });
@@ -633,4 +863,40 @@ const CATALOG_UUID =
 
 function isCatalogUuid(value: string): boolean {
   return CATALOG_UUID.test(value);
+}
+
+type ListClassificationNode = {
+  name: string;
+  level: string;
+  parent?: ListClassificationNode | null;
+};
+
+export type ListClassificationPath = {
+  jenisPengadaan: string;
+  kategori: string;
+  subkategori: string;
+  jenisPekerjaan: string;
+};
+
+function projectListClassificationPaths(
+  assignments: ReadonlyArray<{ leafNode: ListClassificationNode | null }> | null | undefined,
+): ListClassificationPath[] {
+  if (!assignments) return [];
+  const paths: ListClassificationPath[] = [];
+  for (const assignment of assignments) {
+    const byLevel: Record<string, string> = {};
+    let cursor: ListClassificationNode | null | undefined = assignment.leafNode;
+    while (cursor) {
+      byLevel[cursor.level] = cursor.name;
+      cursor = cursor.parent ?? null;
+    }
+    if (!byLevel.JENIS_PEKERJAAN) continue;
+    paths.push({
+      jenisPengadaan: byLevel.JENIS_PENGADAAN ?? '',
+      kategori: byLevel.KATEGORI ?? '',
+      subkategori: byLevel.SUBKATEGORI ?? '',
+      jenisPekerjaan: byLevel.JENIS_PEKERJAAN,
+    });
+  }
+  return paths;
 }

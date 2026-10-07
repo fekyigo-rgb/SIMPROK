@@ -77,6 +77,19 @@ function selectEligibleAliases<T extends { context: string | null }>(rows: T[], 
  * Every branch below reports the SAME refusal. Only the wording differs, so this
  * function can make the trail more truthful and can never make a unit eligible.
  */
+/**
+ * A person-time unit is a labour unit. An equipment-time unit is an equipment
+ * unit. The catalog keeps both. Trusted context refuses the foreign family
+ * after identity is known, so a historical PERSON_DAY row is not rewritten
+ * and a context-free material unit is not disturbed.
+ */
+function resourceTypeRejectsDimension(dimension: string | null | undefined, context?: UnitAliasContext): boolean {
+  if (!context || !dimension) return false;
+  if (dimension === 'PERSON_TIME') return context !== 'LABOR';
+  if (dimension === 'EQUIPMENT_TIME') return context !== 'EQUIPMENT';
+  return false;
+}
+
 function aliasProblem(match: { rows: unknown[]; contextRequired: boolean; ambiguousWithoutContext: boolean; foreignContext: boolean }): UnitReasonCode | null {
   return match.rows.length === 0
     ? match.contextRequired
@@ -195,9 +208,12 @@ export class UnitKernelService {
         resolvedContext: match.contextScoped ? context ?? null : null,
         policyVersion: UNIT_KERNEL_POLICY_VERSION,
       } as const;
-      return problem
-        ? { ...base, status: UNIT_RESOLUTION_STATUS.NEEDS_REVIEW, unitDefinition: null, reasonCode: problem }
-        : { ...base, status: UNIT_RESOLUTION_STATUS.RESOLVED, unitDefinition: match.rows[0].unitDefinition, reasonCode: match.contextScoped ? UNIT_REASON.CONTEXT_SCOPED_UNIT_ALIAS : UNIT_REASON.EXACT_UNIT_IDENTITY };
+      if (problem) return { ...base, status: UNIT_RESOLUTION_STATUS.NEEDS_REVIEW, unitDefinition: null, reasonCode: problem };
+      const definition = match.rows[0].unitDefinition;
+      if (resourceTypeRejectsDimension(definition.dimension, context)) {
+        return { ...base, status: UNIT_RESOLUTION_STATUS.NEEDS_REVIEW, unitDefinition: null, contextScoped: false, resolvedContext: null, reasonCode: UNIT_REASON.RESOURCE_TYPE_UNIT_INCOMPATIBLE };
+      }
+      return { ...base, status: UNIT_RESOLUTION_STATUS.RESOLVED, unitDefinition: definition, reasonCode: match.contextScoped ? UNIT_REASON.CONTEXT_SCOPED_UNIT_ALIAS : UNIT_REASON.EXACT_UNIT_IDENTITY };
     });
   }
 
@@ -215,6 +231,9 @@ export class UnitKernelService {
     if (bad) return { ...base, status: UNIT_RESOLUTION_STATUS.NEEDS_REVIEW, sourceUnitDefinition: sourceAliases.length === 1 ? sourceAliases[0].unitDefinition : null, targetUnitDefinition: targetAliases.length === 1 ? targetAliases[0].unitDefinition : null, reasonCodes: [bad], explanation: badExplanation };
     const source = sourceAliases[0].unitDefinition;
     const target = targetAliases[0].unitDefinition;
+    if (resourceTypeRejectsDimension(source.dimension, resourceContext) || resourceTypeRejectsDimension(target.dimension, resourceContext)) {
+      return { ...base, status: UNIT_RESOLUTION_STATUS.NEEDS_REVIEW, sourceUnitDefinition: null, targetUnitDefinition: null, reasonCodes: [UNIT_REASON.RESOURCE_TYPE_UNIT_INCOMPATIBLE], explanation: 'Satuan ini milik keluarga sumber daya lain dan tidak berlaku untuk jenis sumber daya yang diminta. Riwayat tidak diubah.' };
+    }
     if (source.id === target.id) return { ...base, status: UNIT_RESOLUTION_STATUS.RESOLVED, sourceUnitDefinition: source, targetUnitDefinition: target, quantityFactor: '1', priceOperation: UNIT_PRICE_OPERATION.IDENTITY, reasonCodes: contextScoped ? [UNIT_REASON.CONTEXT_SCOPED_UNIT_ALIAS, UNIT_REASON.EXACT_UNIT_ALIAS_EQUIVALENCE, UNIT_REASON.EXACT_UNIT_IDENTITY] : [UNIT_REASON.EXACT_UNIT_ALIAS_EQUIVALENCE, UNIT_REASON.EXACT_UNIT_IDENTITY], explanation: 'Kedua alias menunjuk identitas unit canonical yang sama.' };
     const rules = await this.prisma.unitConversionRule.findMany({
       where: { sourceUnitId: source.id, targetUnitId: target.id, status: UnitConversionRuleStatus.ACTIVE, OR: [{ resourceCatalogId: null }, ...(resourceCatalogId ? [{ resourceCatalogId }] : [])] },
