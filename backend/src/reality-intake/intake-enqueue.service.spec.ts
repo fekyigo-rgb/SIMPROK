@@ -117,6 +117,57 @@ describe('IntakeEnqueueService BOQ request truth', () => {
     expect(storage.writeTemp).not.toHaveBeenCalled();
   });
 
+  it('rechecks canonical source under the transaction lock and deletes the losing file', async () => {
+    const finalRef = 'loser/source';
+    const tx = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      sourceDocument: {
+        findFirst: jest.fn().mockResolvedValue(source),
+        create: jest.fn(),
+      },
+      intakeRequest: {
+        create: jest.fn().mockResolvedValue({ id: 'request-id' }),
+      },
+    };
+    const prisma = {
+      project: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'project-id',
+          workspaceId: 'workspace-id',
+          organizationId: 'organization-id',
+        }),
+      },
+      sourceDocument: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn().mockImplementation((callback) => callback(tx)),
+    };
+    const storage = {
+      computeChecksum: jest.fn().mockReturnValue(source.checksum),
+      writeTemp: jest.fn().mockResolvedValue('temp-file'),
+      moveToFinal: jest.fn().mockResolvedValue(finalRef),
+      deleteTemp: jest.fn().mockResolvedValue(undefined),
+      deleteFinal: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new IntakeEnqueueService(prisma as any, storage as any);
+
+    const result = await service.beginBoqIntakeRequest({
+      fileName: 'concurrent.xlsx',
+      mimeType: source.mimeType,
+      byteSize: bytes.length,
+      bytes,
+      workspaceId: 'workspace-id',
+      projectId: 'project-id',
+      requestingAccountId: 'account-b',
+    });
+
+    expect(result.sourceDocumentId).toBe(source.id);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.sourceDocument.create).not.toHaveBeenCalled();
+    expect(tx.intakeRequest.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ sourceDocumentId: source.id }),
+    });
+    expect(storage.deleteFinal).toHaveBeenCalledWith(finalRef);
+  });
+
   it('excludes actor, request, and timestamp from canonical interpretation identity', () => {
     const identity = {
       workspaceId: 'workspace-id',
@@ -234,5 +285,70 @@ describe('IntakeEnqueueService BOQ request truth', () => {
       where: { id: request.id, intakeJobId: null },
       data: { intakeJobId: winner.id },
     });
+  });
+
+  it('rejects a canonical job backed by a different source id even when the checksum matches', async () => {
+    const otherSource = { ...source, id: 'other-source-id' };
+    const request = {
+      id: 'request-id',
+      sourceDocumentId: source.id,
+      intakeJobId: null,
+      requestingAccountId: 'account-b',
+      workspaceId: 'workspace-id',
+      organizationId: 'organization-id',
+      projectId: 'project-id',
+      requestedKnowledgeType: BOQ_KNOWLEDGE_TYPE,
+      presentedFileName: 'same.xlsx',
+      presentedMimeType: source.mimeType,
+      correlationId: 'request-correlation',
+      createdAt: new Date(),
+      sourceDocument: source,
+      intakeJob: null,
+    };
+    const interpretationKey = boqInterpretationKeyOf({
+      workspaceId: request.workspaceId,
+      organizationId: request.organizationId,
+      projectId: request.projectId,
+      sourceSha256: source.checksum,
+      knowledgeType: BOQ_KNOWLEDGE_TYPE,
+      interpretationMode: BOQ_INTERPRETATION_MODE,
+      selectedSheet: 'RAB',
+      readerContractVersion: 'READER_V1',
+      semanticContractVersion: 'BOQ_V1',
+    });
+    const tx = {
+      intakeRequest: { findUnique: jest.fn().mockResolvedValue(request) },
+      intakeJob: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'job-id',
+          sourceDocumentId: otherSource.id,
+          workspaceId: request.workspaceId,
+          organizationId: request.organizationId,
+          interpretationKey,
+          projectId: request.projectId,
+          knowledgeType: BOQ_KNOWLEDGE_TYPE,
+          interpretationMode: BOQ_INTERPRETATION_MODE,
+          selectedSheet: 'RAB',
+          readerContractVersion: 'READER_V1',
+          semanticContractVersion: 'BOQ_V1',
+          sourceDocument: otherSource,
+        }),
+        create: jest.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn().mockImplementation((callback) => callback(tx)),
+    };
+    const service = new IntakeEnqueueService(prisma as any, {} as any);
+
+    await expect(
+      service.bindBoqInterpretation({
+        intakeRequestId: request.id,
+        sourceSha256: source.checksum,
+        selectedSheet: 'RAB',
+        readerContractVersion: 'READER_V1',
+        semanticContractVersion: 'BOQ_V1',
+      }),
+    ).rejects.toThrow('CANONICAL_INTERPRETATION_KEY_COLLISION');
   });
 });

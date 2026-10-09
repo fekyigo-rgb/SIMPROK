@@ -122,8 +122,16 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   };
 
   it('converges concurrent authorized requests onto one canonical interpretation with zero BOQ write', async () => {
+    await cleanupBoqIntake([PROJECT_A]);
     const concurrentSource = await buildPortableBoqXlsx({ scaleViolations: 1 });
     const digest = createHash('sha256').update(concurrentSource).digest('hex');
+    expect(await prisma.sourceDocument.count({
+      where: {
+        workspaceId: WORKSPACE_A,
+        byteSize: concurrentSource.length,
+        checksum: { equals: digest, mode: 'insensitive' },
+      },
+    })).toBe(0);
     const [first, second] = await Promise.all([
       postFile(`/projects/${PROJECT_A}/boq/import/preview`, assignedToken, WORKSPACE_A, concurrentSource, 'concurrent.xlsx').field('selectedSheet', 'RAB'),
       postFile(`/projects/${PROJECT_A}/boq/import/preview`, foremanToken, WORKSPACE_A, concurrentSource, 'concurrent.xlsx').field('selectedSheet', 'RAB'),
@@ -143,7 +151,16 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     });
     expect(requests).toHaveLength(2);
     expect(new Set(requests.map((row) => row.requestingAccountId))).toEqual(new Set([assignedAccountId, foremanAccountId]));
+    expect(new Set(requests.map((row) => row.sourceDocumentId)).size).toBe(1);
+    expect(await prisma.sourceDocument.count({
+      where: {
+        workspaceId: WORKSPACE_A,
+        byteSize: concurrentSource.length,
+        checksum: { equals: digest, mode: 'insensitive' },
+      },
+    })).toBe(1);
     expect(jobs).toHaveLength(1);
+    expect(jobs[0].sourceDocumentId).toBe(requests[0].sourceDocumentId);
     expect(requests.every((row) => row.intakeJobId === jobs[0].id)).toBe(true);
     expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(0);
   });

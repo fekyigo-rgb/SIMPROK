@@ -26,6 +26,10 @@ export const BOQ_KNOWLEDGE_TYPE = 'BOQ';
 export const BOQ_INTERPRETATION_MODE = 'SELECTED_SHEET';
 export const BOQ_INTERPRETATION_KEY_DOMAIN =
   'SIMPROK_BOQ_INTERPRETATION_V1';
+const BOQ_SOURCE_LOCK_NAMESPACE = createHash('sha256')
+  .update('SIMPROK_BOQ_SOURCE_LOCK_V1', 'utf8')
+  .digest()
+  .readInt32BE(0);
 
 export interface BeginBoqIntakeRequestInput {
   fileName: string;
@@ -161,19 +165,49 @@ export class IntakeEnqueueService {
       tempPath = null;
 
       const created = await this.prisma.$transaction(async (tx) => {
-        const sourceDocument = await tx.sourceDocument.create({
-          data: {
-            id: sourceDocumentId,
+        const sourceLockKey = createHash('sha256')
+          .update(
+            [
+              'SIMPROK_BOQ_SOURCE_V1',
+              project.workspaceId,
+              project.organizationId,
+              input.byteSize,
+              checksum.toUpperCase(),
+            ].join('|'),
+            'utf8',
+          )
+          .digest()
+          .readInt32BE(0);
+        await tx.$executeRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(${BOQ_SOURCE_LOCK_NAMESPACE}::int4, ${sourceLockKey}::int4)`,
+        );
+
+        let sourceDocument = await tx.sourceDocument.findFirst({
+          where: {
             workspaceId: project.workspaceId,
             organizationId: project.organizationId,
-            uploadedByAccountId: input.requestingAccountId,
-            fileName: input.fileName,
-            mimeType: input.mimeType,
             byteSize: input.byteSize,
-            checksum,
-            storageRef: finalStorageRef!,
+            checksum: { equals: checksum, mode: 'insensitive' },
           },
+          orderBy: { createdAt: 'asc' },
         });
+        let sourceCreated = false;
+        if (!sourceDocument) {
+          sourceDocument = await tx.sourceDocument.create({
+            data: {
+              id: sourceDocumentId,
+              workspaceId: project.workspaceId,
+              organizationId: project.organizationId,
+              uploadedByAccountId: input.requestingAccountId,
+              fileName: input.fileName,
+              mimeType: input.mimeType,
+              byteSize: input.byteSize,
+              checksum,
+              storageRef: finalStorageRef!,
+            },
+          });
+          sourceCreated = true;
+        }
         const request = await tx.intakeRequest.create({
           data: this.requestData(
             input,
@@ -182,10 +216,10 @@ export class IntakeEnqueueService {
             correlationId,
           ),
         });
-        return { sourceDocument, request };
+        return { sourceDocument, request, sourceCreated };
       });
 
-      finalStorageRef = null;
+      if (created.sourceCreated) finalStorageRef = null;
       return {
         intakeRequestId: created.request.id,
         sourceDocumentId: created.sourceDocument.id,
@@ -368,7 +402,12 @@ export class IntakeEnqueueService {
     const interpretationKey = boqInterpretationKeyOf(identity);
 
     if (request.intakeJob) {
-      this.assertMatchingBoqJob(request.intakeJob, identity, interpretationKey);
+      this.assertMatchingBoqJob(
+        request.intakeJob,
+        identity,
+        interpretationKey,
+        request.sourceDocumentId,
+      );
       return {
         intakeRequestId: request.id,
         intakeJobId: request.intakeJob.id,
@@ -403,7 +442,12 @@ export class IntakeEnqueueService {
     if (!intakeJob) {
       throw new ConflictException('CANONICAL_INTERPRETATION_RACE_UNRESOLVED');
     }
-    this.assertMatchingBoqJob(intakeJob, identity, interpretationKey);
+    this.assertMatchingBoqJob(
+      intakeJob,
+      identity,
+      interpretationKey,
+      request.sourceDocumentId,
+    );
 
     const bound = await tx.intakeRequest.updateMany({
       where: { id: request.id, intakeJobId: null },
@@ -423,6 +467,7 @@ export class IntakeEnqueueService {
         winner.intakeJob,
         identity,
         interpretationKey,
+        request.sourceDocumentId,
       );
       intakeJob = winner.intakeJob;
     }
@@ -446,13 +491,16 @@ export class IntakeEnqueueService {
       selectedSheet: string | null;
       readerContractVersion: string | null;
       semanticContractVersion: string | null;
+      sourceDocumentId: string;
       sourceDocument: { checksum: string };
     },
     identity: BoqInterpretationIdentity,
     interpretationKey: string,
+    sourceDocumentId: string,
   ): void {
     const matches =
       job.interpretationKey === interpretationKey &&
+      job.sourceDocumentId === sourceDocumentId &&
       job.workspaceId === identity.workspaceId &&
       job.organizationId === identity.organizationId &&
       job.projectId === identity.projectId &&
