@@ -1,8 +1,10 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
+import { createHash } from 'crypto';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
+import { StorageService } from '../../src/reality-intake/storage.service';
 import { buildPortableBoqXlsx } from '../fixtures/boq-xlsx.fixture';
 
 // PROJECT_A is a dedicated ad-hoc PLANNED project, not ACC-X. Under the
@@ -24,18 +26,41 @@ const PASSWORD = 'Test1234!';
 describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   let app: INestApplication; let prisma: PrismaClient; let assignedToken: string;
   let foremanToken: string; let nonassignedToken: string; let crosstenantToken: string; let source: Buffer;
+  let storage: StorageService; let assignedAccountId: string; let foremanAccountId: string;
+  let requestProofRoleId: string; let requestProofMembershipRoleId: string;
 
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
-    await app.init(); prisma = new PrismaClient(); source = await buildPortableBoqXlsx();
+    await app.init(); prisma = new PrismaClient(); storage = app.get(StorageService); source = await buildPortableBoqXlsx();
     const orgA = await prisma.workspace.findUniqueOrThrow({ where: { id: WORKSPACE_A }, select: { organizationId: true } });
     await prisma.project.upsert({ where: { id: PROJECT_A }, update: { workspaceId: WORKSPACE_A, organizationId: orgA.organizationId, status: 'PLANNED' }, create: { id: PROJECT_A, workspaceId: WORKSPACE_A, organizationId: orgA.organizationId, code: 'ACC-IMPORT-A', name: 'Import isolation A' } });
     await prisma.project.upsert({ where: { id: PROJECT_B }, update: { workspaceId: WORKSPACE_A, organizationId: orgA.organizationId }, create: { id: PROJECT_B, workspaceId: WORKSPACE_A, organizationId: orgA.organizationId, code: 'ACC-IMPORT-B', name: 'Import isolation B' } });
 
     const assignedAccount = await prisma.account.findUniqueOrThrow({ where: { email: 'assigned@test.local' } });
+    assignedAccountId = assignedAccount.id;
     const assignedMembership = await prisma.workspaceMembership.findUniqueOrThrow({ where: { accountId_workspaceId: { accountId: assignedAccount.id, workspaceId: WORKSPACE_A } } });
     const foremanAccount = await prisma.account.findUniqueOrThrow({ where: { email: 'foreman@test.local' } });
+    foremanAccountId = foremanAccount.id;
     const foremanMembership = await prisma.workspaceMembership.findUniqueOrThrow({ where: { accountId_workspaceId: { accountId: foremanAccount.id, workspaceId: WORKSPACE_A } } });
+    const rabView = await prisma.permission.findUniqueOrThrow({ where: { code: 'RAB_VIEW' } });
+    const requestProofRole = await prisma.role.upsert({
+      where: { workspaceId_code: { workspaceId: WORKSPACE_A, code: 'BOQ_REQUEST_PROOF' } },
+      update: {},
+      create: { workspaceId: WORKSPACE_A, code: 'BOQ_REQUEST_PROOF', name: 'BOQ request proof' },
+    });
+    requestProofRoleId = requestProofRole.id;
+    await prisma.rolePermission.upsert({
+      where: { roleId_permissionId: { roleId: requestProofRole.id, permissionId: rabView.id } },
+      update: {},
+      create: { roleId: requestProofRole.id, permissionId: rabView.id },
+    });
+    const existingRequestProofMembership = await prisma.membershipRole.findFirst({
+      where: { workspaceMembershipId: foremanMembership.id, roleId: requestProofRole.id, isActive: true },
+    });
+    const requestProofMembership = existingRequestProofMembership ?? await prisma.membershipRole.create({
+      data: { workspaceMembershipId: foremanMembership.id, roleId: requestProofRole.id, isActive: true },
+    });
+    requestProofMembershipRoleId = requestProofMembership.id;
     await prisma.projectAssignment.upsert({
       where: { workspaceMembershipId_projectId: { workspaceMembershipId: assignedMembership.id, projectId: PROJECT_A } },
       update: { status: 'ASSIGNED' }, create: { workspaceMembershipId: assignedMembership.id, projectId: PROJECT_A, roleInProject: 'PROJECT_MANAGER', isPrimaryAssignment: false, status: 'ASSIGNED' },
@@ -62,17 +87,107 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   });
 
   afterAll(async () => {
+    await cleanupBoqIntake([PROJECT_A, PROJECT_B, PROJECT_C]);
     await prisma.boqItem.deleteMany({ where: { boqStructureId: { in: [DRAFT_A, DRAFT_B, DUPLICATE_DRAFT] } } });
     await prisma.boqStructure.deleteMany({ where: { id: { in: [DRAFT_A, DRAFT_B, DUPLICATE_DRAFT] } } });
     await prisma.projectAssignment.deleteMany({ where: { projectId: PROJECT_A } });
     await prisma.project.deleteMany({ where: { id: { in: [PROJECT_A, PROJECT_B] } } });
+    await prisma.membershipRole.deleteMany({ where: { id: requestProofMembershipRoleId } });
+    await prisma.rolePermission.deleteMany({ where: { roleId: requestProofRoleId } });
+    await prisma.role.deleteMany({ where: { id: requestProofRoleId } });
     await prisma.$disconnect(); await app.close();
   });
 
-  const postFile = (path: string, token: string, workspace = WORKSPACE_A) => request(app.getHttpServer()).post(path)
+  const postFile = (path: string, token: string, workspace = WORKSPACE_A, upload = source, fileName = 'portable.xlsx') => request(app.getHttpServer()).post(path)
     .set('Authorization', `Bearer ${token}`).set('x-workspace-id', workspace)
-    .attach('file', source, { filename: 'portable.xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    .attach('file', upload, { filename: fileName, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const preview = (token = assignedToken) => postFile(`/projects/${PROJECT_A}/boq/import/preview`, token).field('selectedSheet', 'RAB');
+
+  const cleanupBoqIntake = async (projectIds: string[]) => {
+    const [requests, jobs] = await Promise.all([
+      prisma.intakeRequest.findMany({ where: { projectId: { in: projectIds } }, select: { sourceDocumentId: true } }),
+      prisma.intakeJob.findMany({ where: { projectId: { in: projectIds }, knowledgeType: 'BOQ' }, select: { sourceDocumentId: true } }),
+    ]);
+    const sourceIds = [...new Set([...requests, ...jobs].map((row) => row.sourceDocumentId))];
+    await prisma.intakeRequest.deleteMany({ where: { projectId: { in: projectIds } } });
+    await prisma.intakeJob.deleteMany({ where: { projectId: { in: projectIds }, knowledgeType: 'BOQ' } });
+    if (sourceIds.length > 0) {
+      const removable = await prisma.sourceDocument.findMany({
+        where: { id: { in: sourceIds }, intakeJobs: { none: {} }, intakeRequests: { none: {} } },
+        select: { id: true, storageRef: true },
+      });
+      await prisma.sourceDocument.deleteMany({ where: { id: { in: removable.map((row) => row.id) } } });
+      await Promise.all(removable.map((row) => storage.deleteFinal(row.storageRef)));
+    }
+  };
+
+  it('converges concurrent authorized requests onto one canonical interpretation with zero BOQ write', async () => {
+    await cleanupBoqIntake([PROJECT_A]);
+    const concurrentSource = await buildPortableBoqXlsx({ scaleViolations: 1 });
+    const digest = createHash('sha256').update(concurrentSource).digest('hex');
+    expect(await prisma.sourceDocument.count({
+      where: {
+        workspaceId: WORKSPACE_A,
+        byteSize: concurrentSource.length,
+        checksum: { equals: digest, mode: 'insensitive' },
+      },
+    })).toBe(0);
+    const [first, second] = await Promise.all([
+      postFile(`/projects/${PROJECT_A}/boq/import/preview`, assignedToken, WORKSPACE_A, concurrentSource, 'concurrent.xlsx').field('selectedSheet', 'RAB'),
+      postFile(`/projects/${PROJECT_A}/boq/import/preview`, foremanToken, WORKSPACE_A, concurrentSource, 'concurrent.xlsx').field('selectedSheet', 'RAB'),
+    ]);
+    expect([first.status, second.status]).toEqual([201, 201]);
+
+    const requests = await prisma.intakeRequest.findMany({
+      where: { projectId: PROJECT_A, presentedFileName: 'concurrent.xlsx' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const jobs = await prisma.intakeJob.findMany({
+      where: {
+        projectId: PROJECT_A,
+        knowledgeType: 'BOQ',
+        sourceDocument: { is: { checksum: { equals: digest, mode: 'insensitive' } } },
+      },
+    });
+    expect(requests).toHaveLength(2);
+    expect(new Set(requests.map((row) => row.requestingAccountId))).toEqual(new Set([assignedAccountId, foremanAccountId]));
+    expect(new Set(requests.map((row) => row.sourceDocumentId)).size).toBe(1);
+    expect(await prisma.sourceDocument.count({
+      where: {
+        workspaceId: WORKSPACE_A,
+        byteSize: concurrentSource.length,
+        checksum: { equals: digest, mode: 'insensitive' },
+      },
+    })).toBe(1);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].sourceDocumentId).toBe(requests[0].sourceDocumentId);
+    expect(requests.every((row) => row.intakeJobId === jobs[0].id)).toBe(true);
+    expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(0);
+  });
+
+  it('accepts same-account replay and a different authorized account without duplicating interpretation truth', async () => {
+    await preview(assignedToken).expect(201);
+    await preview(assignedToken).expect(201);
+    await preview(foremanToken).expect(201);
+
+    const requests = await prisma.intakeRequest.findMany({
+      where: { projectId: PROJECT_A, presentedFileName: 'portable.xlsx' },
+      include: { sourceDocument: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(requests).toHaveLength(3);
+    expect(requests.filter((row) => row.requestingAccountId === assignedAccountId)).toHaveLength(2);
+    expect(requests.filter((row) => row.requestingAccountId === foremanAccountId)).toHaveLength(1);
+    expect(new Set(requests.map((row) => row.sourceDocumentId)).size).toBe(1);
+    expect(new Set(requests.map((row) => row.intakeJobId)).size).toBe(1);
+    expect(requests[0].sourceDocument.uploadedByAccountId).toBe(assignedAccountId);
+    const foremanRequest = requests.find((row) => row.requestingAccountId === foremanAccountId);
+    expect(foremanRequest?.sourceDocument.uploadedByAccountId).toBe(assignedAccountId);
+    expect(await prisma.intakeJob.count({
+      where: { projectId: PROJECT_A, knowledgeType: 'BOQ', selectedSheet: 'RAB', sourceDocumentId: requests[0].sourceDocumentId },
+    })).toBe(1);
+    expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(0);
+  });
 
   it('previews without writes and reports the honest row-type breakdown', async () => {
     const response = await preview().expect(201);
@@ -244,6 +359,21 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     const membershipRole = await prisma.membershipRole.create({ data: { workspaceMembershipId: crosstenantMembership.id, roleId: role.id, isActive: true } });
     const assignment = await prisma.projectAssignment.create({ data: { workspaceMembershipId: crosstenantMembership.id, projectId: PROJECT_C, roleInProject: 'PROJECT_MANAGER', isPrimaryAssignment: false, status: 'ASSIGNED' } });
     try {
+      const workspaceAJobIds = (await prisma.intakeJob.findMany({
+        where: { projectId: PROJECT_A, knowledgeType: 'BOQ' },
+        select: { id: true },
+      })).map((row) => row.id);
+      await postFile(`/projects/${PROJECT_C}/boq/import/preview`, crosstenantToken, WORKSPACE_B)
+        .field('selectedSheet', 'RAB')
+        .expect(201);
+      const tenantRequest = await prisma.intakeRequest.findFirstOrThrow({
+        where: { projectId: PROJECT_C, workspaceId: WORKSPACE_B },
+        include: { intakeJob: true, sourceDocument: true },
+      });
+      expect(tenantRequest.intakeJob).not.toBeNull();
+      expect(tenantRequest.sourceDocument.workspaceId).toBe(WORKSPACE_B);
+      expect(workspaceAJobIds).not.toContain(tenantRequest.intakeJobId);
+
       const p = await preview().expect(201);
       const beforeA = await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } });
       const beforeC = await prisma.boqItem.count({ where: { boqStructureId: DRAFT_C } });
@@ -254,6 +384,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
       expect((await prisma.boqStructure.findUniqueOrThrow({ where: { id: DRAFT_A } })).status).toBe('DRAFT');
       expect((await prisma.boqStructure.findUniqueOrThrow({ where: { id: DRAFT_C } })).status).toBe('DRAFT');
     } finally {
+      await cleanupBoqIntake([PROJECT_C]);
       await prisma.projectAssignment.delete({ where: { id: assignment.id } });
       await prisma.membershipRole.delete({ where: { id: membershipRole.id } });
       await prisma.rolePermission.deleteMany({ where: { roleId: role.id } });

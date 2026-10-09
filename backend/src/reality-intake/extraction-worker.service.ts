@@ -128,6 +128,7 @@ export class ExtractionWorkerService implements OnModuleInit, OnModuleDestroy {
         SELECT id, version
         FROM intake_jobs
         WHERE status = 'QUEUED'
+          AND ("knowledgeType" IS NULL OR "knowledgeType" = 'PRICE_POINT')
         ORDER BY "createdAt" ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED

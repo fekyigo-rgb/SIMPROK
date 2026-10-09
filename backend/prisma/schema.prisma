@@ -50,6 +50,7 @@ model Account {
   /// EXECUTOR ONLY — never the subject. An Account performs an authority
   /// ceremony; the Position receives the power. The two never collapse.
   authorityGovernanceCeremoniesExecuted       AuthorityGovernanceDecision[]        @relation("AuthorityGovernanceExecutor")
+  intakeRequests                              IntakeRequest[]                      @relation("IntakeRequestRequester")
 
   @@map("accounts")
 }
@@ -73,6 +74,7 @@ model Organization {
   priceSubmissionReviews PriceSubmissionReview[]
   intelligenceEvidence   IntelligenceEvidence[]
   ingestionConnectors    IngestionConnector[]
+  intakeRequests        IntakeRequest[]
 
   @@map("organizations")
 }
@@ -122,6 +124,7 @@ model Workspace {
   ahspImportJobs                    AHSPImportJob[]
   ahspImportUnitDecisions           AhspImportUnitDecision[]
   constructionClassificationNodes   ConstructionClassificationNode[]
+  intakeRequests                    IntakeRequest[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -384,6 +387,8 @@ model Project {
   progressAuditEvents  ProgressAuditEvent[]
   timeZoneEvents       ProjectTimeZoneEvent[]
   executionPlans       ExecutionPlanVersion[]
+  intakeJobs           IntakeJob[]
+  intakeRequests       IntakeRequest[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -2029,7 +2034,8 @@ model SourceDocument {
   storageRef          String
   createdAt           DateTime @default(now())
 
-  intakeJobs IntakeJob[]
+  intakeJobs     IntakeJob[]
+  intakeRequests IntakeRequest[]
 
   @@index([workspaceId])
   @@index([organizationId])
@@ -2038,29 +2044,68 @@ model SourceDocument {
 }
 
 model IntakeJob {
-  id                 String          @id @default(uuid()) @db.Uuid
-  sourceDocumentId   String          @db.Uuid
-  workspaceId        String          @db.Uuid
-  organizationId     String          @db.Uuid
-  idempotencyKey     String
-  status             IntakeJobStatus @default(QUEUED)
-  lastCompletedStage String?
-  correlationId      String
-  claimedAt          DateTime?
-  attempts           Int             @default(0)
-  version            Int             @default(0)
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+  id                      String          @id @default(uuid()) @db.Uuid
+  sourceDocumentId        String          @db.Uuid
+  workspaceId             String          @db.Uuid
+  organizationId          String          @db.Uuid
+  idempotencyKey          String
+  interpretationKey       String?         @unique
+  projectId               String?         @db.Uuid
+  knowledgeType           String?
+  interpretationMode      String?
+  selectedSheet           String?
+  readerContractVersion   String?
+  semanticContractVersion String?
+  status                  IntakeJobStatus @default(QUEUED)
+  lastCompletedStage      String?
+  correlationId           String
+  claimedAt               DateTime?
+  attempts                Int             @default(0)
+  version                 Int             @default(0)
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
 
   sourceDocument      SourceDocument       @relation(fields: [sourceDocumentId], references: [id], onDelete: Restrict)
+  project             Project?             @relation(fields: [projectId], references: [id], onDelete: Restrict)
   extractionArtifacts ExtractionArtifact[]
   candidates          KnowledgeCandidate[]
+  intakeRequests      IntakeRequest[]
 
   @@unique([idempotencyKey])
   @@index([sourceDocumentId])
+  @@index([projectId])
+  @@index([knowledgeType])
   @@index([workspaceId])
   @@index([status])
   @@map("intake_jobs")
+}
+
+model IntakeRequest {
+  id                     String   @id @default(uuid()) @db.Uuid
+  sourceDocumentId       String   @db.Uuid
+  intakeJobId            String?  @db.Uuid
+  requestingAccountId    String   @db.Uuid
+  workspaceId            String   @db.Uuid
+  organizationId         String   @db.Uuid
+  projectId              String   @db.Uuid
+  requestedKnowledgeType String
+  presentedFileName      String
+  presentedMimeType      String
+  correlationId          String   @unique
+  createdAt              DateTime @default(now())
+
+  sourceDocument    SourceDocument @relation(fields: [sourceDocumentId], references: [id], onDelete: Restrict)
+  intakeJob         IntakeJob?     @relation(fields: [intakeJobId], references: [id], onDelete: Restrict)
+  requestingAccount Account        @relation("IntakeRequestRequester", fields: [requestingAccountId], references: [id], onDelete: Restrict)
+  workspace         Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  project           Project        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  @@index([sourceDocumentId])
+  @@index([intakeJobId])
+  @@index([requestingAccountId, createdAt])
+  @@index([workspaceId, projectId, createdAt])
+  @@map("intake_requests")
 }
 
 model ExtractionArtifact {

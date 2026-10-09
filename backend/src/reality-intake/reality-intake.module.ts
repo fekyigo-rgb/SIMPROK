@@ -26,6 +26,10 @@ import { UploadController } from './upload.controller';
   // knowledge of IntakeJob, ExtractionArtifact or the workers, so sharing it
   // with the Basic Price vertical intake reuses infrastructure without importing
   // any RM-12 platform concept (ROADMAP.md section 15).
-  exports: [PriceSubmissionReviewService, StorageService],
+  exports: [
+    IntakeEnqueueService,
+    PriceSubmissionReviewService,
+    StorageService,
+  ],
 })
 export class RealityIntakeModule {}

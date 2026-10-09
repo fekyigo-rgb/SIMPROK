@@ -19,9 +19,10 @@ import { BasicPriceModule } from '../basic-price/basic-price.module';
 import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 import { AhspResourceResolutionOrchestrator } from '../project-ahsp/ahsp-resource-resolution.orchestrator';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { RealityIntakeModule } from '../reality-intake/reality-intake.module';
 
 @Module({
-  imports: [PrismaModule, IntelligenceModule, AuthModule, BasicPriceModule, UnitKernelModule, ProgressModule],
+  imports: [PrismaModule, IntelligenceModule, AuthModule, BasicPriceModule, UnitKernelModule, ProgressModule, RealityIntakeModule],
   controllers: [ProjectController],
   providers: [ProjectService, DeviationService, RabIntelligenceProposalService, CostKernelService, BoqImportService, RabLifecyclePolicyService, RabEditableLifecycleGuard, RabKernelPersistenceService, PersistedCalculationService, RabLockService, RabApprovalService, AhspResourceResolutionOrchestrator, ResourceIdentityResolutionService],
 })
