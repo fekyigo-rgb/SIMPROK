@@ -2,7 +2,12 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException, 
 import { createHash } from 'crypto';
 import { Prisma, ProjectStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { IntakeEnqueueService } from '../reality-intake/intake-enqueue.service';
+import {
+  BOQ_INTERPRETATION_MODE,
+  BOQ_KNOWLEDGE_TYPE,
+  boqInterpretationKeyOf,
+  IntakeEnqueueService,
+} from '../reality-intake/intake-enqueue.service';
 import { BOQ_PARSER_CONTRACT_VERSION, BOQ_READER_CONTRACT_VERSION, BoqImportKnowledgeObject, BoqXlsxIntakeAdapter } from './boq-xlsx-intake.adapter';
 import { RabLifecyclePolicyService, WORKING_DRAFT_STRUCTURE_NAME } from './rab-lifecycle-policy.service';
 
@@ -71,6 +76,7 @@ export class BoqImportService {
     const workItemRows = accepted.filter((row) => row.itemType === 'WORK_ITEM').length;
     const noteRows = accepted.filter((row) => row.itemType === 'NOTE').length;
     return {
+      intakeRequestId: request.intakeRequestId,
       importFingerprint: this.fingerprint(projectId, workspaceId, knowledge), sourceSha256: knowledge.sourceSha256,
       fileName: knowledge.fileName, sheetName: knowledge.sheetName, totalSourceRows: knowledge.totalSourceRows,
       acceptedRows: folderRows + workItemRows + noteRows, folderRows, workItemRows, noteRows,
@@ -92,7 +98,27 @@ export class BoqImportService {
   // deterministic with no duplicate rows. One-time preview consumption is
   // not implemented and is out of scope for this fix; it would require a
   // stateful session/schema addition this task explicitly does not make.
-  async approve(projectId: string, workspaceId: string, fingerprint: string, file?: UploadedXlsx, selectedSheet?: string) {
+  async approve(input: {
+    projectId: string;
+    workspaceId: string;
+    actorAccountId: string;
+    intakeRequestId: string;
+    fingerprint: string;
+    file?: UploadedXlsx;
+    selectedSheet?: string;
+  }) {
+    const {
+      projectId,
+      workspaceId,
+      actorAccountId,
+      intakeRequestId,
+      fingerprint,
+      file,
+      selectedSheet,
+    } = input;
+    if (!intakeRequestId) {
+      throw new BadRequestException('INTAKE_REQUEST_ID_REQUIRED');
+    }
     this.validateFile(file);
     const knowledge = await this.parse(file, selectedSheet);
     if (this.fingerprint(projectId, workspaceId, knowledge) !== fingerprint) throw new ConflictException('IMPORT_FINGERPRINT_MISMATCH');
@@ -100,10 +126,69 @@ export class BoqImportService {
     if (knowledge.sourceQuantityEvidence.rowsExceedingScale2 > 0) throw new BadRequestException('QUANTITY_SCALE_EXCEEDS_CURRENT_SCHEMA');
 
     return this.prisma.$transaction(async (tx) => {
-      const lockedProject = await tx.$queryRaw<Array<{ id: string; status: string }>>(
-        Prisma.sql`SELECT "id", "status" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
+      const lockedProject = await tx.$queryRaw<Array<{ id: string; status: string; workspaceId: string; organizationId: string }>>(
+        Prisma.sql`SELECT "id", "status", "workspaceId", "organizationId" FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`,
       );
-      if (lockedProject.length === 0) throw new NotFoundException('Project not found');
+      if (lockedProject.length === 0 || lockedProject[0].workspaceId !== workspaceId) {
+        throw new NotFoundException('Project not found');
+      }
+
+      const intakeRequest = await tx.intakeRequest.findFirst({
+        where: {
+          id: intakeRequestId,
+          requestingAccountId: actorAccountId,
+          workspaceId,
+          organizationId: lockedProject[0].organizationId,
+          projectId,
+        },
+        include: {
+          sourceDocument: true,
+          intakeJob: { include: { sourceDocument: true } },
+        },
+      });
+      if (!intakeRequest) {
+        throw new NotFoundException('BOQ_INTAKE_REQUEST_NOT_FOUND');
+      }
+      if (intakeRequest.requestedKnowledgeType !== BOQ_KNOWLEDGE_TYPE) {
+        throw new ConflictException('INTAKE_REQUEST_KNOWLEDGE_TYPE_MISMATCH');
+      }
+      const intakeJob = intakeRequest.intakeJob;
+      if (!intakeJob) {
+        throw new ConflictException('BOQ_INTAKE_REQUEST_NOT_BOUND');
+      }
+      const expectedInterpretationKey = boqInterpretationKeyOf({
+        workspaceId,
+        organizationId: lockedProject[0].organizationId,
+        projectId,
+        sourceSha256: knowledge.sourceSha256,
+        knowledgeType: BOQ_KNOWLEDGE_TYPE,
+        interpretationMode: BOQ_INTERPRETATION_MODE,
+        selectedSheet: knowledge.sheetName,
+        readerContractVersion: BOQ_READER_CONTRACT_VERSION,
+        semanticContractVersion: BOQ_PARSER_CONTRACT_VERSION,
+      });
+      const sourceDigest = knowledge.sourceSha256.toUpperCase();
+      const provenanceMatches =
+        intakeRequest.sourceDocumentId === intakeJob.sourceDocumentId &&
+        intakeRequest.sourceDocument.workspaceId === workspaceId &&
+        intakeRequest.sourceDocument.organizationId === lockedProject[0].organizationId &&
+        intakeRequest.sourceDocument.byteSize === file.size &&
+        intakeRequest.sourceDocument.checksum.toUpperCase() === sourceDigest &&
+        intakeJob.sourceDocument.workspaceId === workspaceId &&
+        intakeJob.sourceDocument.organizationId === lockedProject[0].organizationId &&
+        intakeJob.sourceDocument.checksum.toUpperCase() === sourceDigest &&
+        intakeJob.workspaceId === workspaceId &&
+        intakeJob.organizationId === lockedProject[0].organizationId &&
+        intakeJob.projectId === projectId &&
+        intakeJob.knowledgeType === BOQ_KNOWLEDGE_TYPE &&
+        intakeJob.interpretationMode === BOQ_INTERPRETATION_MODE &&
+        intakeJob.selectedSheet === knowledge.sheetName &&
+        intakeJob.readerContractVersion === BOQ_READER_CONTRACT_VERSION &&
+        intakeJob.semanticContractVersion === BOQ_PARSER_CONTRACT_VERSION &&
+        intakeJob.interpretationKey === expectedInterpretationKey;
+      if (!provenanceMatches) {
+        throw new ConflictException('BOQ_INTAKE_PROVENANCE_MISMATCH');
+      }
 
       const capability = await this.rabLifecyclePolicy.evaluateInTransaction(tx, projectId, lockedProject[0].status as ProjectStatus);
       // MULTIPLE_WORKING_DRAFTS is left to the candidate lookup below, which already
@@ -162,11 +247,41 @@ export class BoqImportService {
       const finalItemCount = await tx.boqItem.count({ where: { boqStructureId: draft.id } });
       if (finalItemCount !== created.length) throw new ConflictException('IMPORT_REPLACE_COUNT_MISMATCH');
 
+      const previousUses = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT current_use."id"
+        FROM "boq_business_use_events" current_use
+        WHERE current_use."boqStructureId" = ${draft.id}::uuid
+          AND NOT EXISTS (
+            SELECT 1 FROM "boq_business_use_events" next_use
+            WHERE next_use."previousUseEventId" = current_use."id"
+          )
+        FOR UPDATE
+      `);
+      if (previousUses.length > 1) {
+        throw new ConflictException('BOQ_BUSINESS_USE_HISTORY_FORK');
+      }
+      const businessUseEvent = await tx.boqBusinessUseEvent.create({
+        data: {
+          workspaceId,
+          organizationId: lockedProject[0].organizationId,
+          projectId,
+          boqStructureId: draft.id,
+          sourceDocumentId: intakeRequest.sourceDocumentId,
+          intakeRequestId: intakeRequest.id,
+          intakeJobId: intakeJob.id,
+          approvedByAccountId: actorAccountId,
+          importFingerprint: fingerprint,
+          previousUseEventId: previousUses[0]?.id ?? null,
+          appliedItemCount: created.length,
+          replacedItemCount: replacedExistingItemCount,
+        },
+      });
+
       return {
         structureId: draft.id, workingDraftId: draft.id,
         importedRows: created.length, importedItemCount: created.length,
         replacedExistingItemCount, state: draft.status,
-        importFingerprint: fingerprint, items: created,
+        importFingerprint: fingerprint, businessUseEvent, items: created,
       };
     });
   }

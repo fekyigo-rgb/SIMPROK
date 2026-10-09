@@ -238,16 +238,25 @@ export class ProjectController {
     @Req() request: any,
     @Param('projectId') projectId: string,
     @UploadedFile() file: any,
+    @Body('intakeRequestId') intakeRequestId: string,
     @Body('importFingerprint') fingerprint: string,
     @Body('selectedSheet') selectedSheet?: string,
   ) {
-    return this.boqImportService.approve(
+    const actorAccountId = request.user?.id;
+    if (!actorAccountId) {
+      throw new InternalServerErrorException(
+        'Trusted account context is missing',
+      );
+    }
+    return this.boqImportService.approve({
       projectId,
-      request.projectAccess.workspaceId,
+      workspaceId: request.projectAccess.workspaceId,
+      actorAccountId,
+      intakeRequestId,
       fingerprint,
       file,
       selectedSheet,
-    );
+    });
   }
 
   @Post()
