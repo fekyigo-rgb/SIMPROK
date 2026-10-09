@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 
-export async function buildPortableBoqXlsx(options: { scaleViolations?: number; includeInvalid?: boolean; includeMissingUnit?: boolean } = {}): Promise<Buffer> {
+export async function buildPortableBoqXlsx(options: { scaleViolations?: number; includeInvalid?: boolean; includeMissingUnit?: boolean; secondQuantity?: string } = {}): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('RAB');
   sheet.getCell('B1').value = 'Uraian Pekerjaan';
@@ -10,7 +10,7 @@ export async function buildPortableBoqXlsx(options: { scaleViolations?: number; 
   sheet.addRow(['I', 'PEKERJAAN PERSIAPAN']);
   sheet.addRow(['1', 'Mobilisasi', '', '', 'LS', '1', 125000, 125000]);
   sheet.addRow(['II', 'PEKERJAAN TANAH']);
-  sheet.addRow(['2', 'Galian tanah', '', '', 'm3', '12', 999999, 11999988]);
+  sheet.addRow(['2', 'Galian tanah', '', '', 'm3', options.secondQuantity ?? '12', 999999, 11999988]);
   for (let index = 0; index < (options.scaleViolations ?? 0); index += 1) {
     sheet.addRow([`S${index + 1}`, `Item skala ${index + 1}`, '', '', 'm', `1.${String(index).padStart(3, '0')}`, 1, 1]);
   }

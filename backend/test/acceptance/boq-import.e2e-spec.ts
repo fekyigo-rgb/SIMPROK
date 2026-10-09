@@ -70,6 +70,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
       update: { status: 'ASSIGNED' }, create: { workspaceMembershipId: foremanMembership.id, projectId: PROJECT_A, roleInProject: 'FOREMAN', isPrimaryAssignment: false, status: 'ASSIGNED' },
     });
 
+    await cleanupBoqBusinessUse([PROJECT_A, PROJECT_B, PROJECT_C]);
     await prisma.boqStructure.deleteMany({ where: { id: { in: [DRAFT_A, DRAFT_B, DUPLICATE_DRAFT] } } });
     await prisma.boqStructure.createMany({ data: [
       { id: DRAFT_A, projectId: PROJECT_A, name: 'Working Draft', status: 'DRAFT', version: 1 },
@@ -81,12 +82,14 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   });
 
   beforeEach(async () => {
+    await cleanupBoqBusinessUse([PROJECT_A, PROJECT_B, PROJECT_C]);
     await prisma.boqItem.deleteMany({ where: { boqStructureId: { in: [DRAFT_A, DRAFT_B, DUPLICATE_DRAFT] } } });
     await prisma.boqStructure.deleteMany({ where: { id: DUPLICATE_DRAFT } });
     await prisma.boqStructure.update({ where: { id: DRAFT_A }, data: { name: 'Working Draft', status: 'DRAFT' } });
   });
 
   afterAll(async () => {
+    await cleanupBoqBusinessUse([PROJECT_A, PROJECT_B, PROJECT_C]);
     await cleanupBoqIntake([PROJECT_A, PROJECT_B, PROJECT_C]);
     await prisma.boqItem.deleteMany({ where: { boqStructureId: { in: [DRAFT_A, DRAFT_B, DUPLICATE_DRAFT] } } });
     await prisma.boqStructure.deleteMany({ where: { id: { in: [DRAFT_A, DRAFT_B, DUPLICATE_DRAFT] } } });
@@ -102,6 +105,21 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     .set('Authorization', `Bearer ${token}`).set('x-workspace-id', workspace)
     .attach('file', upload, { filename: fileName, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const preview = (token = assignedToken) => postFile(`/projects/${PROJECT_A}/boq/import/preview`, token).field('selectedSheet', 'RAB');
+
+  const cleanupBoqBusinessUse = async (projectIds: string[]) => {
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE boq_business_use_events DISABLE TRIGGER boq_business_use_events_immutable_trigger',
+    );
+    try {
+      await prisma.boqBusinessUseEvent.deleteMany({
+        where: { projectId: { in: projectIds } },
+      });
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'ALTER TABLE boq_business_use_events ENABLE TRIGGER boq_business_use_events_immutable_trigger',
+      );
+    }
+  };
 
   const cleanupBoqIntake = async (projectIds: string[]) => {
     const [requests, jobs] = await Promise.all([
@@ -190,9 +208,32 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   });
 
   it('previews without writes and reports the honest row-type breakdown', async () => {
+    const historicalItem = await prisma.boqItem.create({ data: {
+      boqStructureId: DRAFT_A, wbsCode: 'HIST-1', name: 'Historical un-attributed row',
+      itemType: 'WORK_ITEM', quantity: '1', unit: 'm2', sortOrder: 0,
+    } });
     const response = await preview().expect(201);
     expect(response.body).toMatchObject({ acceptedRows: 4, folderRows: 2, workItemRows: 2, noteRows: 0, rejectedRows: 0, canApprove: true });
-    expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(0);
+    expect(response.body.intakeRequestId).toEqual(expect.any(String));
+    const intakeRequest = await prisma.intakeRequest.findUniqueOrThrow({
+      where: { id: response.body.intakeRequestId },
+      include: { intakeJob: true, sourceDocument: true },
+    });
+    expect(intakeRequest).toMatchObject({
+      projectId: PROJECT_A,
+      workspaceId: WORKSPACE_A,
+      requestingAccountId: assignedAccountId,
+      requestedKnowledgeType: 'BOQ',
+    });
+    expect(intakeRequest.intakeJob).toMatchObject({
+      projectId: PROJECT_A,
+      workspaceId: WORKSPACE_A,
+      knowledgeType: 'BOQ',
+      selectedSheet: 'RAB',
+    });
+    expect(intakeRequest.sourceDocument.checksum.toUpperCase()).toBe(response.body.sourceSha256);
+    expect(await prisma.boqItem.findUnique({ where: { id: historicalItem.id } })).not.toBeNull();
+    expect(await prisma.boqBusinessUseEvent.count({ where: { projectId: PROJECT_A } })).toBe(0);
   });
 
   it('enforces account, tenant, workspace, project, and FOREMAN boundaries', async () => {
@@ -202,32 +243,108 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     await postFile('/projects/10000000-0000-4000-8000-000000000099/boq/import/preview', assignedToken).field('selectedSheet', 'RAB').expect(404);
   });
 
+  it('binds approve to the trusted actor own IntakeRequest', async () => {
+    const foremanPreview = await preview(foremanToken).expect(201);
+    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
+      .field('selectedSheet', 'RAB')
+      .field('intakeRequestId', foremanPreview.body.intakeRequestId)
+      .field('importFingerprint', foremanPreview.body.importFingerprint)
+      .expect(404);
+    expect(response.body.message).toBe('BOQ_INTAKE_REQUEST_NOT_FOUND');
+    expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(0);
+    expect(await prisma.boqBusinessUseEvent.count({ where: { projectId: PROJECT_A } })).toBe(0);
+  });
+
+  it('fails closed when the request canonical interpretation version no longer matches the approved file', async () => {
+    const p = await preview().expect(201);
+    const requestRow = await prisma.intakeRequest.findUniqueOrThrow({
+      where: { id: p.body.intakeRequestId },
+    });
+    const intakeJobId = requestRow.intakeJobId!;
+    const original = await prisma.intakeJob.findUniqueOrThrow({ where: { id: intakeJobId } });
+    await prisma.intakeJob.update({
+      where: { id: intakeJobId },
+      data: { semanticContractVersion: 'TAMPERED_VERSION' },
+    });
+    try {
+      const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
+        .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', p.body.intakeRequestId)
+        .field('importFingerprint', p.body.importFingerprint)
+        .expect(409);
+      expect(response.body.message).toBe('BOQ_INTAKE_PROVENANCE_MISMATCH');
+      expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(0);
+      expect(await prisma.boqBusinessUseEvent.count({ where: { projectId: PROJECT_A } })).toBe(0);
+    } finally {
+      await prisma.intakeJob.update({
+        where: { id: intakeJobId },
+        data: { semanticContractVersion: original.semanticContractVersion },
+      });
+    }
+  });
+
   it('imports only Project A and leaves same-workspace Project B untouched', async () => {
     const p = await preview().expect(201);
-    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('importFingerprint', p.body.importFingerprint).expect(201);
-    expect(response.body).toMatchObject({ structureId: DRAFT_A, importedRows: 4 });
+    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
+      .field('selectedSheet', 'RAB')
+      .field('intakeRequestId', p.body.intakeRequestId)
+      .field('importFingerprint', p.body.importFingerprint)
+      .field('approvedByAccountId', foremanAccountId)
+      .expect(201);
+    expect(response.body).toMatchObject({
+      structureId: DRAFT_A,
+      importedRows: 4,
+      businessUseEvent: {
+        workspaceId: WORKSPACE_A,
+        projectId: PROJECT_A,
+        boqStructureId: DRAFT_A,
+        intakeRequestId: p.body.intakeRequestId,
+        approvedByAccountId: assignedAccountId,
+        importFingerprint: p.body.importFingerprint,
+        previousUseEventId: null,
+        appliedItemCount: 4,
+        replacedItemCount: 0,
+      },
+    });
     const items = await prisma.boqItem.findMany({ where: { boqStructureId: DRAFT_A } });
     expect(items).toHaveLength(4);
     expect(items.filter((item) => item.itemType !== 'WORK_ITEM').every((item) => item.quantity.toString() === '0' && item.unit === '')).toBe(true);
     expect(items.every((item) => item.unitPrice === null && item.lineTotal === null)).toBe(true);
     expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_B } })).toBe(0);
+
+    const readbackClient = new PrismaClient();
+    try {
+      const durable = await readbackClient.boqBusinessUseEvent.findUniqueOrThrow({
+        where: { id: response.body.businessUseEvent.id },
+      });
+      expect(durable.intakeRequestId).toBe(p.body.intakeRequestId);
+      expect(durable.appliedItemCount).toBe(4);
+    } finally {
+      await readbackClient.$disconnect();
+    }
   });
 
   it('returns 404 for zero matching Working Draft', async () => {
     const p = await preview().expect(201); await prisma.boqStructure.update({ where: { id: DRAFT_A }, data: { name: 'Not Working Draft' } });
-    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('importFingerprint', p.body.importFingerprint).expect(404);
+    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', p.body.importFingerprint).expect(404);
     expect(response.body.message).toBe('WORKING_DRAFT_NOT_FOUND');
   });
 
   it('returns 409 rather than choosing duplicate Working Drafts', async () => {
     const p = await preview().expect(201);
     await prisma.boqStructure.create({ data: { id: DUPLICATE_DRAFT, projectId: PROJECT_A, name: 'Working Draft', status: 'DRAFT', version: 2 } });
-    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('importFingerprint', p.body.importFingerprint).expect(409);
+    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', p.body.importFingerprint).expect(409);
     expect(response.body.message).toBe('MULTIPLE_WORKING_DRAFTS');
   });
 
   it('rejects fingerprint mismatch and malformed/non-XLSX input', async () => {
-    await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('importFingerprint', 'BAD').expect(409);
+    const p = await preview().expect(201);
+    const missingRequest = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
+      .field('selectedSheet', 'RAB')
+      .field('importFingerprint', p.body.importFingerprint)
+      .expect(400);
+    expect(missingRequest.body.message).toBe('INTAKE_REQUEST_ID_REQUIRED');
+    await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', 'BAD').expect(409);
     await request(app.getHttpServer()).post(`/projects/${PROJECT_A}/boq/import/preview`).set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A).attach('file', Buffer.from('bad'), { filename: 'bad.txt' }).expect(400);
     await request(app.getHttpServer()).post(`/projects/${PROJECT_A}/boq/import/preview`).set('Authorization', `Bearer ${assignedToken}`).set('x-workspace-id', WORKSPACE_A).attach('file', Buffer.from('bad'), { filename: 'bad.xlsx' }).expect(400);
   });
@@ -244,13 +361,19 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(2);
 
     const p = await preview().expect(201);
-    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('importFingerprint', p.body.importFingerprint).expect(201);
+    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', p.body.importFingerprint).expect(201);
 
     expect(response.body).toMatchObject({
       structureId: DRAFT_A, workingDraftId: DRAFT_A,
       importedRows: 4, importedItemCount: 4,
       replacedExistingItemCount: 2, state: 'DRAFT',
       importFingerprint: p.body.importFingerprint,
+      businessUseEvent: {
+        intakeRequestId: p.body.intakeRequestId,
+        previousUseEventId: null,
+        appliedItemCount: 4,
+        replacedItemCount: 2,
+      },
     });
 
     const items = await prisma.boqItem.findMany({ where: { boqStructureId: DRAFT_A } });
@@ -259,6 +382,59 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     expect(items.every((item) => item.unitPrice === null && item.lineTotal === null)).toBe(true);
     expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_B } })).toBe(0);
     expect((await prisma.boqStructure.findUniqueOrThrow({ where: { id: DRAFT_A } })).status).toBe('DRAFT');
+  });
+
+  it('records a different BOQ replacement as a new event linked to the prior use', async () => {
+    const firstPreview = await preview().expect(201);
+    const firstApprove = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
+      .field('selectedSheet', 'RAB')
+      .field('intakeRequestId', firstPreview.body.intakeRequestId)
+      .field('importFingerprint', firstPreview.body.importFingerprint)
+      .expect(201);
+
+    const replacement = await buildPortableBoqXlsx({ secondQuantity: '13' });
+    const secondPreview = await postFile(
+      `/projects/${PROJECT_A}/boq/import/preview`,
+      assignedToken,
+      WORKSPACE_A,
+      replacement,
+      'replacement.xlsx',
+    ).field('selectedSheet', 'RAB').expect(201);
+    const secondApprove = await postFile(
+      `/projects/${PROJECT_A}/boq/import/approve`,
+      assignedToken,
+      WORKSPACE_A,
+      replacement,
+      'replacement.xlsx',
+    )
+      .field('selectedSheet', 'RAB')
+      .field('intakeRequestId', secondPreview.body.intakeRequestId)
+      .field('importFingerprint', secondPreview.body.importFingerprint)
+      .expect(201);
+
+    expect(secondPreview.body.importFingerprint).not.toBe(firstPreview.body.importFingerprint);
+    expect(secondApprove.body.businessUseEvent).toMatchObject({
+      previousUseEventId: firstApprove.body.businessUseEvent.id,
+      intakeRequestId: secondPreview.body.intakeRequestId,
+      appliedItemCount: 4,
+      replacedItemCount: 4,
+    });
+    const history = await prisma.boqBusinessUseEvent.findMany({
+      where: { boqStructureId: DRAFT_A },
+    });
+    expect(history).toHaveLength(2);
+    const replacedWorkItem = await prisma.boqItem.findFirstOrThrow({
+      where: { boqStructureId: DRAFT_A, wbsCode: '2' },
+    });
+    expect(replacedWorkItem.quantity.toString()).toBe('13');
+
+    await expect(prisma.boqBusinessUseEvent.update({
+      where: { id: firstApprove.body.businessUseEvent.id },
+      data: { appliedItemCount: 99 },
+    })).rejects.toThrow(/BOQ_BUSINESS_USE_APPEND_ONLY/);
+    await expect(prisma.boqBusinessUseEvent.delete({
+      where: { id: firstApprove.body.businessUseEvent.id },
+    })).rejects.toThrow(/BOQ_BUSINESS_USE_APPEND_ONLY/);
   });
 
   // Direct proof of the transaction primitive the fixed approve() depends on:
@@ -290,6 +466,48 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     expect(await prisma.boqItem.count({ where: { wbsCode: { in: ['NEW-1', 'NEW-2'] } } })).toBe(0);
   });
 
+  it('rolls back Working Draft replacement when business-use evidence cannot be written', async () => {
+    await prisma.boqItem.create({ data: {
+      boqStructureId: DRAFT_A, wbsCode: 'OLD-ATOMIC', name: 'Atomic old row',
+      itemType: 'WORK_ITEM', quantity: '2', unit: 'm2', sortOrder: 0,
+    } });
+    const p = await preview().expect(201);
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION reject_test_boq_business_use_insert() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'TEST_BOQ_BUSINESS_USE_WRITE_FAILURE';
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await prisma.$executeRawUnsafe(
+      'DROP TRIGGER IF EXISTS test_boq_business_use_insert_trigger ON boq_business_use_events',
+    );
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER test_boq_business_use_insert_trigger
+      BEFORE INSERT ON boq_business_use_events
+      FOR EACH ROW EXECUTE FUNCTION reject_test_boq_business_use_insert()
+    `);
+    try {
+      await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
+        .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', p.body.intakeRequestId)
+        .field('importFingerprint', p.body.importFingerprint)
+        .expect(500);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'DROP TRIGGER IF EXISTS test_boq_business_use_insert_trigger ON boq_business_use_events',
+      );
+      await prisma.$executeRawUnsafe(
+        'DROP FUNCTION IF EXISTS reject_test_boq_business_use_insert()',
+      );
+    }
+
+    const items = await prisma.boqItem.findMany({ where: { boqStructureId: DRAFT_A } });
+    expect(items).toHaveLength(1);
+    expect(items[0].wbsCode).toBe('OLD-ATOMIC');
+    expect(await prisma.boqBusinessUseEvent.count({ where: { projectId: PROJECT_A } })).toBe(0);
+  });
+
   it('fails closed and mutates nothing when an approved RAB already exists (RM-001 lifecycle guard)', async () => {
     const p = await preview().expect(201);
     const rab = await prisma.rabDocument.create({ data: {
@@ -298,9 +516,10 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     } });
     try {
       const before = await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } });
-      const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('importFingerprint', p.body.importFingerprint).expect(409);
+      const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', p.body.importFingerprint).expect(409);
       expect(response.body.message).toBe('APPROVED_RAB_EXISTS');
       expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(before);
+      expect(await prisma.boqBusinessUseEvent.count({ where: { projectId: PROJECT_A } })).toBe(0);
     } finally {
       await prisma.rabDocument.delete({ where: { id: rab.id } });
     }
@@ -311,7 +530,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   // against Project B's approve call must fail on that binding alone, before
   // any Working Draft lookup — proving cross-project (and, by the identical
   // mechanism, cross-workspace) preview reuse is structurally impossible.
-  it('fails closed and mutates nothing when a Project A preview fingerprint is replayed against Project B (RM-001)', async () => {
+  it('allows same-account use on an independent project but rejects Project A identity on Project B', async () => {
     // Grant the same user access to Project B too, so ProjectAccessGuard lets
     // the request through and this test isolates the fingerprint binding
     // specifically, rather than being satisfied by the (also correct, but
@@ -321,9 +540,30 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     const grant = await prisma.projectAssignment.create({ data: { workspaceMembershipId: assignedMembership.id, projectId: PROJECT_B, roleInProject: 'PROJECT_MANAGER', isPrimaryAssignment: false, status: 'ASSIGNED' } });
     try {
       const p = await preview().expect(201);
+      await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
+        .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', p.body.intakeRequestId)
+        .field('importFingerprint', p.body.importFingerprint)
+        .expect(201);
+      const projectBPreview = await postFile(`/projects/${PROJECT_B}/boq/import/preview`, assignedToken)
+        .field('selectedSheet', 'RAB')
+        .expect(201);
+      await postFile(`/projects/${PROJECT_B}/boq/import/approve`, assignedToken)
+        .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', projectBPreview.body.intakeRequestId)
+        .field('importFingerprint', projectBPreview.body.importFingerprint)
+        .expect(201);
+      const independentUses = await prisma.boqBusinessUseEvent.findMany({
+        where: { projectId: { in: [PROJECT_A, PROJECT_B] } },
+        orderBy: { projectId: 'asc' },
+      });
+      expect(independentUses).toHaveLength(2);
+      expect(independentUses.every((event) => event.previousUseEventId === null)).toBe(true);
+      expect(new Set(independentUses.map((event) => event.projectId))).toEqual(new Set([PROJECT_A, PROJECT_B]));
+
       const beforeA = await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } });
       const beforeB = await prisma.boqItem.count({ where: { boqStructureId: DRAFT_B } });
-      const response = await postFile(`/projects/${PROJECT_B}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('importFingerprint', p.body.importFingerprint).expect(409);
+      const response = await postFile(`/projects/${PROJECT_B}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', p.body.importFingerprint).expect(409);
       expect(response.body.message).toBe('IMPORT_FINGERPRINT_MISMATCH');
       expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(beforeA);
       expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_B } })).toBe(beforeB);
@@ -363,7 +603,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
         where: { projectId: PROJECT_A, knowledgeType: 'BOQ' },
         select: { id: true },
       })).map((row) => row.id);
-      await postFile(`/projects/${PROJECT_C}/boq/import/preview`, crosstenantToken, WORKSPACE_B)
+      const tenantPreview = await postFile(`/projects/${PROJECT_C}/boq/import/preview`, crosstenantToken, WORKSPACE_B)
         .field('selectedSheet', 'RAB')
         .expect(201);
       const tenantRequest = await prisma.intakeRequest.findFirstOrThrow({
@@ -373,17 +613,38 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
       expect(tenantRequest.intakeJob).not.toBeNull();
       expect(tenantRequest.sourceDocument.workspaceId).toBe(WORKSPACE_B);
       expect(workspaceAJobIds).not.toContain(tenantRequest.intakeJobId);
+      await postFile(`/projects/${PROJECT_C}/boq/import/approve`, crosstenantToken, WORKSPACE_B)
+        .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', tenantPreview.body.intakeRequestId)
+        .field('importFingerprint', tenantPreview.body.importFingerprint)
+        .expect(201);
+      const tenantUse = await prisma.boqBusinessUseEvent.findFirstOrThrow({
+        where: { projectId: PROJECT_C },
+      });
+      expect(tenantUse).toMatchObject({
+        workspaceId: WORKSPACE_B,
+        projectId: PROJECT_C,
+        approvedByAccountId: crosstenantAccount.id,
+        previousUseEventId: null,
+      });
 
       const p = await preview().expect(201);
+      const crossTenantRequest = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
+        .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', tenantPreview.body.intakeRequestId)
+        .field('importFingerprint', p.body.importFingerprint)
+        .expect(404);
+      expect(crossTenantRequest.body.message).toBe('BOQ_INTAKE_REQUEST_NOT_FOUND');
       const beforeA = await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } });
       const beforeC = await prisma.boqItem.count({ where: { boqStructureId: DRAFT_C } });
-      const response = await postFile(`/projects/${PROJECT_C}/boq/import/approve`, crosstenantToken, WORKSPACE_B).field('selectedSheet', 'RAB').field('importFingerprint', p.body.importFingerprint).expect(409);
+      const response = await postFile(`/projects/${PROJECT_C}/boq/import/approve`, crosstenantToken, WORKSPACE_B).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', p.body.importFingerprint).expect(409);
       expect(response.body.message).toBe('IMPORT_FINGERPRINT_MISMATCH');
       expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_A } })).toBe(beforeA);
       expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_C } })).toBe(beforeC);
       expect((await prisma.boqStructure.findUniqueOrThrow({ where: { id: DRAFT_A } })).status).toBe('DRAFT');
       expect((await prisma.boqStructure.findUniqueOrThrow({ where: { id: DRAFT_C } })).status).toBe('DRAFT');
     } finally {
+      await cleanupBoqBusinessUse([PROJECT_C]);
       await cleanupBoqIntake([PROJECT_C]);
       await prisma.projectAssignment.delete({ where: { id: assignment.id } });
       await prisma.membershipRole.delete({ where: { id: membershipRole.id } });
@@ -405,12 +666,21 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
   it('serializes concurrent approves via the Working Draft row lock into a deterministic final item set (RM-001)', async () => {
     const p = await preview().expect(201);
     const [first, second] = await Promise.all([
-      postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('importFingerprint', p.body.importFingerprint),
-      postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('importFingerprint', p.body.importFingerprint),
+      postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', p.body.importFingerprint),
+      postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', p.body.importFingerprint),
     ]);
     expect([first.status, second.status]).toEqual([201, 201]);
     const items = await prisma.boqItem.findMany({ where: { boqStructureId: DRAFT_A } });
     expect(items).toHaveLength(4);
     expect(new Set(items.map((item) => item.id)).size).toBe(4);
+    const uses = await prisma.boqBusinessUseEvent.findMany({
+      where: { boqStructureId: DRAFT_A },
+    });
+    expect(uses).toHaveLength(2);
+    const root = uses.find((event) => event.previousUseEventId === null);
+    expect(root).toBeDefined();
+    expect(uses.find((event) => event.previousUseEventId === root!.id)).toBeDefined();
+    expect(uses.map((event) => event.replacedItemCount).sort((a, b) => a - b)).toEqual([0, 4]);
+    expect(new Set(uses.map((event) => event.intakeRequestId))).toEqual(new Set([p.body.intakeRequestId]));
   });
 });

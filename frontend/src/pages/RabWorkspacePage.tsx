@@ -31,6 +31,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
+import { appendBoqImportApprovalIdentity } from '../utils/boqImportApproval';
 import {
   groupAhspComposition,
   hasAnyComponent,
@@ -224,7 +225,7 @@ type CapabilityState =
   | { kind: 'error' };
 
 interface BoqImportPreview {
-  importFingerprint: string; fileName: string; sheetName: string; totalSourceRows: number;
+  intakeRequestId: string; importFingerprint: string; fileName: string; sheetName: string; totalSourceRows: number;
   acceptedRows: number; warningRows: number; rejectedRows: number; displayedRowCount: number;
   folderRows: number; workItemRows: number; noteRows: number;
   previewTruncated: boolean; sourceQuantityMaxScale: number; sourceQuantityRowsExceedingScale2: number;
@@ -1771,7 +1772,7 @@ export function RabWorkspacePage() {
     if (!projectId || !canEditDraft || !importFile || !importPreview || isImporting) return;
     setIsImporting(true); setStatusMessage('Sedang mengimpor BOQ');
     try {
-      const body = new FormData(); body.append('file', importFile); body.append('selectedSheet', importPreview.sheetName); body.append('importFingerprint', importPreview.importFingerprint);
+      const body = new FormData(); body.append('file', importFile); appendBoqImportApprovalIdentity(body, importPreview);
       const response = await apiFetch(`/projects/${projectId}/boq/import/approve`, { method: 'POST', body });
       if (!response.ok) throw new Error(await response.text());
       await reloadDraft(); setImportPreview(null); setImportFile(null); setStatusMessage('BOQ berhasil diimpor ke Working Draft.');

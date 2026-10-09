@@ -51,6 +51,7 @@ model Account {
   /// ceremony; the Position receives the power. The two never collapse.
   authorityGovernanceCeremoniesExecuted       AuthorityGovernanceDecision[]        @relation("AuthorityGovernanceExecutor")
   intakeRequests                              IntakeRequest[]                      @relation("IntakeRequestRequester")
+  approvedBoqBusinessUseEvents                BoqBusinessUseEvent[]                @relation("BoqBusinessUseApprover")
 
   @@map("accounts")
 }
@@ -75,6 +76,7 @@ model Organization {
   intelligenceEvidence   IntelligenceEvidence[]
   ingestionConnectors    IngestionConnector[]
   intakeRequests        IntakeRequest[]
+  boqBusinessUseEvents  BoqBusinessUseEvent[]
 
   @@map("organizations")
 }
@@ -125,6 +127,7 @@ model Workspace {
   ahspImportUnitDecisions           AhspImportUnitDecision[]
   constructionClassificationNodes   ConstructionClassificationNode[]
   intakeRequests                    IntakeRequest[]
+  boqBusinessUseEvents              BoqBusinessUseEvent[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -389,6 +392,7 @@ model Project {
   executionPlans       ExecutionPlanVersion[]
   intakeJobs           IntakeJob[]
   intakeRequests       IntakeRequest[]
+  boqBusinessUseEvents BoqBusinessUseEvent[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -2036,6 +2040,7 @@ model SourceDocument {
 
   intakeJobs     IntakeJob[]
   intakeRequests IntakeRequest[]
+  boqBusinessUseEvents BoqBusinessUseEvent[]
 
   @@index([workspaceId])
   @@index([organizationId])
@@ -2070,6 +2075,7 @@ model IntakeJob {
   extractionArtifacts ExtractionArtifact[]
   candidates          KnowledgeCandidate[]
   intakeRequests      IntakeRequest[]
+  boqBusinessUseEvents BoqBusinessUseEvent[]
 
   @@unique([idempotencyKey])
   @@index([sourceDocumentId])
@@ -2100,6 +2106,7 @@ model IntakeRequest {
   workspace         Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   project           Project        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  boqBusinessUseEvents BoqBusinessUseEvent[]
 
   @@index([sourceDocumentId])
   @@index([intakeJobId])
@@ -3449,9 +3456,53 @@ model BoqStructure {
   project Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   items   BoqItem[]
   rabs    RabDocument[]
+  businessUseEvents BoqBusinessUseEvent[]
 
   @@index([projectId])
   @@map("boq_structures")
+}
+
+/// One successful application of one canonical BOQ intake request to one
+/// Working Draft. This is evidence, not a duplicate-rejection mechanism:
+/// every committed approve appends another event and may point to the prior
+/// successful use of the same Working Draft.
+model BoqBusinessUseEvent {
+  id                  String   @id @default(uuid()) @db.Uuid
+  workspaceId         String   @db.Uuid
+  organizationId      String   @db.Uuid
+  projectId           String   @db.Uuid
+  boqStructureId      String   @db.Uuid
+  sourceDocumentId    String   @db.Uuid
+  intakeRequestId     String   @db.Uuid
+  intakeJobId         String   @db.Uuid
+  approvedByAccountId String   @db.Uuid
+  importFingerprint   String   @db.VarChar(64)
+  previousUseEventId  String?  @unique @db.Uuid
+  appliedItemCount    Int
+  replacedItemCount   Int
+  usedAt              DateTime @default(now())
+
+  workspace         Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  project           Project              @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  boqStructure      BoqStructure         @relation(fields: [boqStructureId], references: [id], onDelete: Restrict)
+  sourceDocument    SourceDocument       @relation(fields: [sourceDocumentId], references: [id], onDelete: Restrict)
+  intakeRequest     IntakeRequest        @relation(fields: [intakeRequestId], references: [id], onDelete: Restrict)
+  intakeJob         IntakeJob            @relation(fields: [intakeJobId], references: [id], onDelete: Restrict)
+  approvedByAccount Account              @relation("BoqBusinessUseApprover", fields: [approvedByAccountId], references: [id], onDelete: Restrict)
+  previousUseEvent  BoqBusinessUseEvent? @relation("BoqBusinessUseLineage", fields: [previousUseEventId], references: [id], onDelete: Restrict)
+  nextUseEvent      BoqBusinessUseEvent? @relation("BoqBusinessUseLineage")
+
+  @@index([workspaceId, usedAt])
+  @@index([organizationId, usedAt])
+  @@index([projectId, usedAt])
+  @@index([boqStructureId, usedAt])
+  @@index([sourceDocumentId])
+  @@index([intakeRequestId, usedAt])
+  @@index([intakeJobId])
+  @@index([approvedByAccountId, usedAt])
+  @@index([importFingerprint])
+  @@map("boq_business_use_events")
 }
 
 enum BoqItemType {

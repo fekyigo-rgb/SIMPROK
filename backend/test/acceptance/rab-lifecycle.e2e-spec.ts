@@ -369,6 +369,18 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
       PROJECT_TOCTOU_APPROVED,
       PROJECT_TOCTOU_DUPLICATE,
     ];
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE boq_business_use_events DISABLE TRIGGER boq_business_use_events_immutable_trigger',
+    );
+    try {
+      await prisma.boqBusinessUseEvent.deleteMany({
+        where: { projectId: { in: createdProjectIds } },
+      });
+    } finally {
+      await prisma.$executeRawUnsafe(
+        'ALTER TABLE boq_business_use_events ENABLE TRIGGER boq_business_use_events_immutable_trigger',
+      );
+    }
     const [intakeRequests, intakeJobs] = await Promise.all([
       prisma.intakeRequest.findMany({
         where: { projectId: { in: createdProjectIds } },
@@ -658,6 +670,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         assignedToken,
       )
         .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', preview.body.intakeRequestId)
         .field('importFingerprint', preview.body.importFingerprint)
         .expect(409);
       expect(approve.body.message).toBe('ACTIVE_BASELINE_EXISTS');
@@ -705,6 +718,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         assignedToken,
       )
         .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', preview.body.intakeRequestId)
         .field('importFingerprint', preview.body.importFingerprint)
         .expect(409);
       expect(approve.body.message).toBe('APPROVED_RAB_EXISTS');
@@ -739,6 +753,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         assignedToken,
       )
         .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', preview.body.intakeRequestId)
         .field('importFingerprint', preview.body.importFingerprint)
         .expect(409);
       expect(approve.body.message).toBe('MULTIPLE_WORKING_DRAFTS');
@@ -778,6 +793,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         assignedToken,
       )
         .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', preview.body.intakeRequestId)
         .field('importFingerprint', preview.body.importFingerprint)
         .expect(201);
       expect(approve.body.importedRows).toBe(4);
@@ -818,6 +834,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         assignedToken,
       )
         .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', preview.body.intakeRequestId)
         .field('importFingerprint', preview.body.importFingerprint)
         .expect(201);
       expect(approve.body.importedRows).toBe(4);
@@ -916,6 +933,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         assignedToken,
       )
         .field('selectedSheet', 'RAB')
+        .field('intakeRequestId', preview.body.intakeRequestId)
         .field('importFingerprint', preview.body.importFingerprint)
         .expect(201);
       const items = approve.body.items as Array<{
