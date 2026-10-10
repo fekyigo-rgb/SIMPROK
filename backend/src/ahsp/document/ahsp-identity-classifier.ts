@@ -87,7 +87,10 @@ export interface AhspIdentityMatch {
   readonly signal: AhspIdentitySignal;
   /** Defined only when both sides supplied canonical recipe/context facts. */
   readonly formulaSame?: boolean;
+  /** Exact set equality, useful evidence for review. */
   readonly classificationSame?: boolean;
+  /** Every candidate path is already represented by the existing AHSP. */
+  readonly classificationCovered?: boolean;
   readonly currentVersionId?: string | null;
 }
 
@@ -135,6 +138,14 @@ function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
     left.length === right.length &&
     left.every((value, index) => value === right[index])
   );
+}
+
+function coversStringSet(
+  existing: readonly string[],
+  candidate: readonly string[],
+): boolean {
+  const held = new Set(sortedUnique(existing));
+  return sortedUnique(candidate).every((value) => held.has(value));
 }
 
 function sameFormula(
@@ -209,6 +220,13 @@ export function classifyAhspIdentity(
             exact.context.classificationLeafNodeIds,
           )
         : undefined;
+    const classificationCovered =
+      bothContextual && candidate.context && exact.context
+        ? coversStringSet(
+            exact.context.classificationLeafNodeIds,
+            candidate.context.classificationLeafNodeIds,
+          )
+        : undefined;
     const match: AhspIdentityMatch = {
       ahspId: exact.ahspId,
       workType: exact.workType,
@@ -216,11 +234,12 @@ export function classifyAhspIdentity(
       code: exact.code,
       deleted,
       signal:
-        bothContextual && !deleted && (!formulaSame || !classificationSame)
+        bothContextual && !deleted && (!formulaSame || !classificationCovered)
           ? 'EXACT_PARENT'
           : 'EXACT',
       ...(formulaSame !== undefined ? { formulaSame } : {}),
       ...(classificationSame !== undefined ? { classificationSame } : {}),
+      ...(classificationCovered !== undefined ? { classificationCovered } : {}),
       ...(exact.context?.versionId !== undefined
         ? { currentVersionId: exact.context.versionId }
         : {}),
@@ -233,7 +252,7 @@ export function classifyAhspIdentity(
     if (
       !deleted &&
       bothContextual &&
-      (formulaSame === false || classificationSame === false)
+      (formulaSame === false || classificationCovered === false)
     ) {
       return {
         verdict: 'POSSIBLY_IDENTICAL',
