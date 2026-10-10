@@ -2719,6 +2719,11 @@ body {
   background: #fbecea;
   border: 1px solid #c0392b;
 }
+.simprok-rab-validation-alert--info {
+  color: var(--simprok-authority-navy-900);
+  background: var(--simprok-bright-sky-blue-50);
+  border-color: var(--simprok-engineering-blue-200);
+}
 .simprok-rab-toolbar button[aria-disabled="true"] {
   cursor: not-allowed;
   filter: saturate(0.75);

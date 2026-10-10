@@ -31,7 +31,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
-import { appendBoqImportApprovalIdentity } from '../utils/boqImportApproval';
+import { appendBoqImportApprovalIdentity, dismissBoqImportPreview, requiresBoqImportConfirmation, type BoqImportDraftImpact } from '../utils/boqImportApproval';
 import {
   groupAhspComposition,
   hasAnyComponent,
@@ -229,7 +229,8 @@ interface BoqImportPreview {
   acceptedRows: number; warningRows: number; rejectedRows: number; displayedRowCount: number;
   folderRows: number; workItemRows: number; noteRows: number;
   previewTruncated: boolean; sourceQuantityMaxScale: number; sourceQuantityRowsExceedingScale2: number;
-  canApprove: boolean; displayedRows: Array<{ sourceRowNumber: number; description: string; quantityDecimalString: string | null; unitRaw: string | null; itemType: string; warnings: string[]; errors: string[] }>;
+  canApprove: boolean; draftImpact?: BoqImportDraftImpact | null;
+  displayedRows: Array<{ sourceRowNumber: number; description: string; quantityDecimalString: string | null; unitRaw: string | null; itemType: string; warnings: string[]; errors: string[] }>;
 }
 
 interface NumberedRabRow extends RabRow {
@@ -506,6 +507,7 @@ export function RabWorkspacePage() {
   const [retryToken, setRetryToken] = useState(0);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<BoqImportPreview | null>(null);
+  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const [draftDirty, setDraftDirty] = useState(false);
@@ -1757,7 +1759,7 @@ export function RabWorkspacePage() {
 
   const previewImport = async (file: File) => {
     if (!projectId || !canEditDraft) return;
-    setImportFile(file); setImportPreview(null); setIsImporting(true); setStatusMessage('Membaca BOQ...');
+    setImportFile(file); setImportPreview(null); setImportConfirmOpen(false); setIsImporting(true); setStatusMessage('Membaca BOQ...');
     try {
       const body = new FormData(); body.append('file', file); body.append('selectedSheet', 'RAB');
       const response = await apiFetch(`/projects/${projectId}/boq/import/preview`, { method: 'POST', body });
@@ -1778,6 +1780,28 @@ export function RabWorkspacePage() {
       await reloadDraft(); setImportPreview(null); setImportFile(null); setStatusMessage('BOQ berhasil diimpor ke Working Draft.');
     } catch { setStatusMessage('Import gagal. Preview tetap tersedia untuk dicoba kembali.'); }
     finally { setIsImporting(false); }
+  };
+
+  const clearImportPreview = () => {
+    dismissBoqImportPreview({
+      isImporting,
+      setConfirmOpen: setImportConfirmOpen,
+      setPreview: setImportPreview,
+      setFile: setImportFile,
+      fileInput: importInputRef.current,
+      setStatusMessage,
+    });
+  };
+
+  const requestApproveImport = () => {
+    if (!projectId || !canEditDraft || !importFile || !importPreview || isImporting || !importPreview.canApprove) return;
+    // Reuse the existing RAB confirmation presentation. A missing/stale
+    // impact payload cannot silence a warning for rows already visible.
+    if (requiresBoqImportConfirmation(importPreview.draftImpact, draftDirty, rows.length)) {
+      setImportConfirmOpen(true);
+      return;
+    }
+    void approveImport();
   };
 
   if (capabilityState.kind === 'loading') {
@@ -1928,7 +1952,7 @@ export function RabWorkspacePage() {
       */}
       {focusMode ? null : (
         <section className="simprok-rab-toolbar" aria-label="Aksi Ruang Kerja RAB">
-          <input ref={importInputRef} hidden type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void previewImport(file); }} />
+          <input ref={importInputRef} hidden type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ''; if (file) void previewImport(file); }} />
           <button onClick={() => importInputRef.current?.click()} disabled={!projectId || !canEditDraft || isImporting} title="Import BOQ XLSX" aria-label="Import BOQ">
             <FileInput size={17} /> Import BOQ
           </button>
@@ -2004,15 +2028,39 @@ export function RabWorkspacePage() {
         </section>
       )}
       {importPreview ? (
-        <section className="simprok-rab-validation-alert simprok-rab-validation-alert--info" aria-label="Preview Import BOQ">
+        <section className={`simprok-rab-validation-alert${importPreview.rejectedRows > 0 || importPreview.sourceQuantityRowsExceedingScale2 > 0 ? '' : ' simprok-rab-validation-alert--info'}`} aria-label="Preview Import BOQ">
           <strong>{importPreview.fileName} — sheet {importPreview.sheetName}</strong>
           <p>Valid {importPreview.acceptedRows}; peringatan {importPreview.warningRows}; error {importPreview.rejectedRows}. Skala quantity maksimum {importPreview.sourceQuantityMaxScale}.</p>
           <p>{importPreview.folderRows} bagian; {importPreview.workItemRows} item pekerjaan; {importPreview.noteRows} catatan.</p>
           <p>Menampilkan {importPreview.displayedRowCount} dari {importPreview.acceptedRows + importPreview.rejectedRows} baris{importPreview.previewTruncated ? ' (preview dibatasi)' : ''}.</p>
+          {importPreview.draftImpact?.previouslyAppliedToThisDraft ? (
+            <p>BOQ ini pernah digunakan pada Working Draft proyek ini. Penggunaan ulang tetap diizinkan.</p>
+          ) : null}
+          {importPreview.draftImpact && importPreview.draftImpact.existingItemCount > 0 ? (
+            <p>Working Draft memiliki {importPreview.draftImpact.existingItemCount} baris yang akan diganti jika import dilanjutkan.</p>
+          ) : null}
           <div style={{ maxHeight: 240, overflow: 'auto' }}>
             {importPreview.displayedRows.map((row) => <div key={row.sourceRowNumber}>Baris {row.sourceRowNumber}: {row.description}{formatBoqImportMeasurement(row.itemType, row.quantityDecimalString, row.unitRaw)}{row.errors.length ? ` [${row.errors.join(', ')}]` : ''}</div>)}
           </div>
-          <button onClick={() => void approveImport()} disabled={!importPreview.canApprove || !canEditDraft || isImporting}>{isImporting ? 'Sedang mengimpor BOQ' : 'Setujui dan Import'}</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+            <button onClick={requestApproveImport} disabled={!importPreview.canApprove || !canEditDraft || isImporting}>{isImporting ? 'Sedang mengimpor BOQ' : 'Setujui dan Import'}</button>
+            <button type="button" onClick={clearImportPreview} disabled={isImporting} title="Hapus hanya Preview BOQ, bukan isi RAB" aria-label="Hapus Preview BOQ">
+              <X size={14} aria-hidden="true" /> Hapus
+            </button>
+          </div>
+          {importConfirmOpen ? (
+            <div className="simprok-rab-confirm" role="alertdialog" aria-label="Konfirmasi penggantian Working Draft">
+              <strong>Ganti isi Working Draft?</strong>
+              <p>Import ini mengganti semua baris Working Draft saat ini. Harga dan hubungan AHSP pada baris lama tidak ikut dipindahkan.</p>
+              {draftDirty ? <p>Perubahan lokal yang belum disimpan juga dapat hilang.</p> : null}
+              <div className="simprok-rab-confirm__actions">
+                <button onClick={() => setImportConfirmOpen(false)}>Batal</button>
+                <button className="simprok-rab-confirm__primary" onClick={() => { setImportConfirmOpen(false); void approveImport(); }} disabled={isImporting || !canEditDraft}>
+                  Ganti Isi dan Import
+                </button>
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
       {hasNegativeValue ? (
