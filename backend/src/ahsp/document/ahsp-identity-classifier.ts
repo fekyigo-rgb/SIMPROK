@@ -42,9 +42,13 @@ export interface AhspIdentityResourceFact {
 export interface AhspIdentityContextFact {
   /** Stable path tips. Ancestors are derived by the existing classification service. */
   readonly classificationLeafNodeIds: readonly string[];
+  /** False means the caller cannot prove the full classification context yet. */
+  readonly classificationComplete?: boolean;
   /** Canonical UnitDefinition.code when known. */
   readonly outputUnitCode: string;
   readonly resources: readonly AhspIdentityResourceFact[];
+  /** False means at least one resource/output identity is still unresolved. */
+  readonly formulaComplete?: boolean;
   /** Current version identity, used only by callers that need to route a revision. */
   readonly versionId?: string | null;
 }
@@ -209,19 +213,35 @@ export function classifyAhspIdentity(
   if (exact) {
     const deleted = exact.deletedAt !== null;
     const bothContextual = Boolean(candidate.context && exact.context);
+    const formulaComparable =
+      Boolean(
+        bothContextual &&
+          candidate.context &&
+          exact.context &&
+          candidate.context.formulaComplete !== false &&
+          exact.context.formulaComplete !== false,
+      );
+    const classificationComparable =
+      Boolean(
+        bothContextual &&
+          candidate.context &&
+          exact.context &&
+          candidate.context.classificationComplete !== false &&
+          exact.context.classificationComplete !== false,
+      );
     const formulaSame =
-      bothContextual && candidate.context && exact.context
+      formulaComparable && candidate.context && exact.context
         ? sameFormula(candidate.context, exact.context)
         : undefined;
     const classificationSame =
-      bothContextual && candidate.context && exact.context
+      classificationComparable && candidate.context && exact.context
         ? sameStringSet(
             candidate.context.classificationLeafNodeIds,
             exact.context.classificationLeafNodeIds,
           )
         : undefined;
     const classificationCovered =
-      bothContextual && candidate.context && exact.context
+      classificationComparable && candidate.context && exact.context
         ? coversStringSet(
             exact.context.classificationLeafNodeIds,
             candidate.context.classificationLeafNodeIds,
@@ -234,7 +254,9 @@ export function classifyAhspIdentity(
       code: exact.code,
       deleted,
       signal:
-        bothContextual && !deleted && (!formulaSame || !classificationCovered)
+        bothContextual &&
+        !deleted &&
+        (formulaSame !== true || classificationCovered !== true)
           ? 'EXACT_PARENT'
           : 'EXACT',
       ...(formulaSame !== undefined ? { formulaSame } : {}),
@@ -252,7 +274,7 @@ export function classifyAhspIdentity(
     if (
       !deleted &&
       bothContextual &&
-      (formulaSame === false || classificationCovered === false)
+      (formulaSame !== true || classificationCovered !== true)
     ) {
       return {
         verdict: 'POSSIBLY_IDENTICAL',
