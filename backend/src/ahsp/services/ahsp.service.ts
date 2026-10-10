@@ -163,16 +163,58 @@ export class AhspService {
         methodName: true,
         code: true,
         deletedAt: true,
+        // Reuse the existing current-version and multi-path truth. No duplicate
+        // identity table: this is a read projection over the canonical rows.
+        classificationAssignments: {
+          where: { isActive: true },
+          select: { leafNodeId: true },
+        },
+        versions: {
+          orderBy: { versionNumber: 'desc' },
+          take: 1,
+          select: {
+            id: true,
+            outputUnit: true,
+            outputUnitDefinition: { select: { code: true } },
+            resources: {
+              select: {
+                resourceId: true,
+                resourceType: true,
+                baseUnit: true,
+                coefficient: true,
+              },
+            },
+          },
+        },
       },
     });
-    return rows.map((row) => ({
-      ahspId: row.id,
-      workspaceId: row.workspaceId,
-      workType: row.workType,
-      methodName: row.methodName,
-      code: row.code,
-      deletedAt: row.deletedAt,
-    }));
+    return rows.map((row) => {
+      const current = row.versions[0] ?? null;
+      return {
+        ahspId: row.id,
+        workspaceId: row.workspaceId,
+        workType: row.workType,
+        methodName: row.methodName,
+        code: row.code,
+        deletedAt: row.deletedAt,
+        context: current
+          ? {
+              classificationLeafNodeIds: row.classificationAssignments.map(
+                (assignment) => assignment.leafNodeId,
+              ),
+              outputUnitCode:
+                current.outputUnitDefinition?.code ?? current.outputUnit ?? '',
+              resources: current.resources.map((resource) => ({
+                resourceId: resource.resourceId,
+                resourceType: resource.resourceType,
+                baseUnit: resource.baseUnit,
+                coefficient: resource.coefficient.toString(),
+              })),
+              versionId: current.id,
+            }
+          : null,
+      };
+    });
   }
 
   async getById(id: string, workspaceId?: string) {
