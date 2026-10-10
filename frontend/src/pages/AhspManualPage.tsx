@@ -671,6 +671,7 @@ export function AhspManualPage(): ReactNode {
   const [equipmentFailed, setEquipmentFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const submitLock = useRef(false);
+  const explicitSave = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const runResourceSearch = async (
@@ -810,8 +811,30 @@ export function AhspManualPage(): ReactNode {
       </header>
 
       <form
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+          const target = event.target;
+          if (target instanceof HTMLTextAreaElement) return;
+          if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+          if (target instanceof HTMLInputElement && target.hasAttribute('list')) return;
+          event.preventDefault();
+          const controls = Array.from(event.currentTarget.elements).filter(
+            (element): element is HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement =>
+              (element instanceof HTMLInputElement ||
+                element instanceof HTMLTextAreaElement ||
+                element instanceof HTMLSelectElement) &&
+              !element.disabled &&
+              !(element instanceof HTMLInputElement && element.type === 'hidden'),
+          );
+          const currentIndex = controls.indexOf(target);
+          if (currentIndex < 0) return;
+          const next = controls[currentIndex + (event.shiftKey ? -1 : 1)];
+          if (next) next.focus();
+          else target.blur();
+        }}
         onSubmit={async (event: FormEvent) => {
           event.preventDefault();
+          if (!explicitSave.current) return;
           if (busy || submitLock.current) return;
           const uraian = methodName.trim();
           const unit = outputUnit.trim();
@@ -964,12 +987,13 @@ export function AhspManualPage(): ReactNode {
             </label>
             <label className="ahsp-field ahsp-manual-info-grid__keterangan">
               <span className="ahsp-field__label">Keterangan</span>
-              <input
+              <textarea
                 className="ahsp-field__control"
                 value={keterangan}
                 onChange={(e) => setKeterangan(e.target.value)}
                 placeholder="Catatan singkat (opsional)"
                 aria-label="Keterangan"
+                rows={3}
               />
             </label>
           </div>
@@ -1051,7 +1075,17 @@ export function AhspManualPage(): ReactNode {
           <Link to="/ahsp" className="ahsp-action ahsp-action--quiet">
             Batal
           </Link>
-          <button type="submit" className="ahsp-action ahsp-action--primary" disabled={busy} aria-busy={busy || undefined}>
+          <button
+            type="button"
+            className="ahsp-action ahsp-action--primary"
+            disabled={busy}
+            aria-busy={busy || undefined}
+            onClick={(event) => {
+              explicitSave.current = true;
+              event.currentTarget.form?.requestSubmit();
+              explicitSave.current = false;
+            }}
+          >
             <Check size={16} /> {busy ? 'Menyimpan\u2026' : 'Simpan AHSP'}
           </button>
         </div>

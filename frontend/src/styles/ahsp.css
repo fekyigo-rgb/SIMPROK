@@ -1468,6 +1468,12 @@ li.ahsp-completion:last-child {
   align-items: start;
 }
 
+.ahsp-manual-info-grid__keterangan textarea.ahsp-field__control {
+  height: auto;
+  min-height: 5.5rem;
+  resize: vertical;
+}
+
 .ahsp-required {
   color: #c0392b;
 }
