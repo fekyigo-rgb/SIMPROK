@@ -67,6 +67,32 @@ export class BoqImportService {
       readerContractVersion: BOQ_READER_CONTRACT_VERSION,
       semanticContractVersion: BOQ_PARSER_CONTRACT_VERSION,
     });
+    // Reuse the canonical fingerprint and append-only evidence already produced
+    // by approve(). Preview only reads this project's single Working Draft.
+    // Historical rows have no fabricated business-use attribution.
+    const importFingerprint = this.fingerprint(projectId, workspaceId, knowledge);
+    const drafts = await this.prisma.boqStructure.findMany({
+      where: { projectId, name: WORKING_DRAFT_NAME, status: 'DRAFT' },
+      select: { id: true },
+      take: 2,
+    });
+    const draftImpact = drafts.length === 1
+      ? await (async () => {
+          const [existingItemCount, priorUse] = await Promise.all([
+            this.prisma.boqItem.count({ where: { boqStructureId: drafts[0].id } }),
+            this.prisma.boqBusinessUseEvent.findFirst({
+              where: {
+                workspaceId,
+                projectId,
+                boqStructureId: drafts[0].id,
+                importFingerprint,
+              },
+              select: { id: true },
+            }),
+          ]);
+          return { existingItemCount, previouslyAppliedToThisDraft: priorUse !== null };
+        })()
+      : null;
     const prioritized = [...knowledge.rows].sort((a, b) => Number(b.errors.length > 0) - Number(a.errors.length > 0) || Number(b.warnings.length > 0) - Number(a.warnings.length > 0) || a.sortOrder - b.sortOrder);
     const rejectedRows = knowledge.rows.filter((row) => row.errors.length > 0).length;
     const warningRows = knowledge.rows.filter((row) => row.warnings.length > 0).length;
@@ -77,7 +103,7 @@ export class BoqImportService {
     const noteRows = accepted.filter((row) => row.itemType === 'NOTE').length;
     return {
       intakeRequestId: request.intakeRequestId,
-      importFingerprint: this.fingerprint(projectId, workspaceId, knowledge), sourceSha256: knowledge.sourceSha256,
+      importFingerprint, sourceSha256: knowledge.sourceSha256, draftImpact,
       fileName: knowledge.fileName, sheetName: knowledge.sheetName, totalSourceRows: knowledge.totalSourceRows,
       acceptedRows: folderRows + workItemRows + noteRows, folderRows, workItemRows, noteRows,
       warningRows, rejectedRows, displayedRows,
