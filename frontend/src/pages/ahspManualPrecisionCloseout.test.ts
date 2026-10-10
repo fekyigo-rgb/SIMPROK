@@ -11,6 +11,7 @@ import {
 import { manualAdmissionFailure } from '../utils/ahspManualAdmission.ts';
 
 const manual = readFileSync('src/pages/AhspManualPage.tsx', 'utf8');
+const css = readFileSync('src/styles/ahsp.css', 'utf8');
 const panel = readFileSync('src/components/AhspImportAssistedClassificationPanel.tsx', 'utf8');
 const version = readFileSync('../backend/src/ahsp/services/ahsp-version.service.ts', 'utf8');
 
@@ -135,4 +136,26 @@ test('Dasar and Penerbit keep a typed space while Escape still closes the menu',
   const keepTyped = (value: string) => (value.trim() === '' ? null : value);
   assert.equal(keepTyped('Kementerian PUPR'), 'Kementerian PUPR');
   assert.equal(keepTyped('Peraturan Menteri PUPR Nomor 1 Tahun 2025'), 'Peraturan Menteri PUPR Nomor 1 Tahun 2025');
+});
+
+test('manual keyboard input never implicitly saves and Keterangan stays multiline', () => {
+  assert.equal(manual.includes('const explicitSave = useRef(false);'), true);
+  assert.equal(manual.includes('if (!explicitSave.current) return;'), true);
+  assert.equal(manual.includes("if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;"), true);
+  assert.equal(manual.includes('if (target instanceof HTMLTextAreaElement) return;'), true);
+  assert.equal(manual.includes('event.shiftKey ? -1 : 1'), true);
+  assert.equal(manual.includes('event.currentTarget.form?.requestSubmit();'), true);
+  assert.equal(manual.includes('explicitSave.current = true;'), true);
+  assert.equal(manual.includes('explicitSave.current = false;'), true);
+  assert.equal(manual.includes('type="submit"'), false);
+
+  const keterangan = manual.slice(
+    manual.indexOf('<span className="ahsp-field__label">Keterangan</span>'),
+    manual.indexOf('</label>', manual.indexOf('<span className="ahsp-field__label">Keterangan</span>')),
+  );
+  assert.equal(keterangan.includes('<textarea'), true);
+  assert.equal(keterangan.includes('rows={3}'), true);
+  assert.equal(css.includes('.ahsp-manual-info-grid__keterangan textarea.ahsp-field__control'), true);
+  assert.equal(css.includes('min-height: 5.5rem;'), true);
+  assert.equal(css.includes('resize: vertical;'), true);
 });
