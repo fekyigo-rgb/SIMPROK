@@ -78,6 +78,7 @@ export interface AhspIdentityCandidate {
 export type AhspIdentitySignal =
   | 'EXACT'
   | 'EXACT_PARENT'
+  | 'CONTEXT_MATCH'
   | 'NORMALIZED_NAME'
   | 'CODE';
 
@@ -293,6 +294,90 @@ export function classifyAhspIdentity(
   const candidateWorkType = normalize.name(candidate.workType);
   const candidateMethodName = normalize.name(candidate.methodName);
   const candidateCode = normalize.code(candidate.code ?? '');
+
+  // Cross-door One-Truth: legacy workType is not a universal identity field
+  // (Manual uses its work context while document Import may carry a source code).
+  // When BOTH sides have complete canonical classification + formula facts, the
+  // same workspace + same normalized Uraian can be adjudicated by those existing
+  // truths even when legacy workType differs.
+  if (
+    candidate.context &&
+    candidate.context.formulaComplete !== false &&
+    candidate.context.classificationComplete !== false
+  ) {
+    const contextual = existing
+      .filter(
+        (row) =>
+          row.deletedAt === null &&
+          row.workspaceId === candidate.workspaceId &&
+          row.context &&
+          row.context.formulaComplete !== false &&
+          row.context.classificationComplete !== false &&
+          normalize.name(row.methodName) === candidateMethodName,
+      )
+      .map((row): AhspIdentityMatch => {
+        const rowContext = row.context as AhspIdentityContextFact;
+        const formulaSame = sameFormula(candidate.context as AhspIdentityContextFact, rowContext);
+        const classificationSame = sameStringSet(
+          candidate.context!.classificationLeafNodeIds,
+          rowContext.classificationLeafNodeIds,
+        );
+        const classificationCovered = coversStringSet(
+          rowContext.classificationLeafNodeIds,
+          candidate.context!.classificationLeafNodeIds,
+        );
+        return {
+          ahspId: row.ahspId,
+          workType: row.workType,
+          methodName: row.methodName,
+          code: row.code,
+          deleted: false,
+          signal: 'CONTEXT_MATCH',
+          formulaSame,
+          classificationSame,
+          classificationCovered,
+          ...(rowContext.versionId !== undefined
+            ? { currentVersionId: rowContext.versionId }
+            : {}),
+        };
+      })
+      .filter(
+        (match) =>
+          match.formulaSame === true ||
+          match.classificationCovered === true ||
+          match.classificationSame === true,
+      )
+      .sort((a, b) =>
+        a.ahspId < b.ahspId ? -1 : a.ahspId > b.ahspId ? 1 : 0,
+      );
+
+    if (contextual.length === 1) {
+      const match = contextual[0];
+      if (
+        match.formulaSame === true &&
+        match.classificationCovered === true
+      ) {
+        return {
+          verdict: 'IDENTICAL',
+          exactMatch: match,
+          possibleMatches: [],
+        };
+      }
+      return {
+        verdict: 'POSSIBLY_IDENTICAL',
+        exactMatch: null,
+        possibleMatches: contextual,
+      };
+    }
+    if (contextual.length > 1) {
+      return {
+        verdict: 'POSSIBLY_IDENTICAL',
+        exactMatch: null,
+        possibleMatches: contextual,
+      };
+    }
+  }
+
   const matches: AhspIdentityMatch[] = [];
   for (const row of existing) {
     if (row.deletedAt !== null) continue; // possible-match candidates are LIVE only
