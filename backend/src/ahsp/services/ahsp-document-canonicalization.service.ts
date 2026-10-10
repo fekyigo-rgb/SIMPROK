@@ -64,6 +64,7 @@ import {
 import { RealityNormalizationEngine } from './reality-normalization.engine';
 import {
   classifyAhspIdentity,
+  type AhspIdentityContextFact,
   type AhspIdentityRow,
 } from '../document/ahsp-identity-classifier';
 import { AhspImportAssistedClassificationService } from './ahsp-import-assisted-classification.service';
@@ -2514,9 +2515,10 @@ export class AhspDocumentCanonicalizationService {
     methodName: string,
     surface: readonly AhspIdentityRow[],
     workspaceId: string,
+    context?: AhspIdentityContextFact | null,
   ): Pick<AhspWorkItemKnowledge, 'identityVerdict' | 'identityMatches'> {
     const classification = classifyAhspIdentity(
-      { workspaceId, workType, methodName },
+      { workspaceId, workType, methodName, ...(context ? { context } : {}) },
       surface,
       {
         name: (raw) => this.norm.normalizeName(raw),
@@ -2534,6 +2536,124 @@ export class AhspDocumentCanonicalizationService {
       identityVerdict: classification.verdict,
       identityMatches: matches,
     };
+  }
+
+  /**
+   * Commit-time enrichment of the EXISTING AHSP identity classifier with facts
+   * the existing import pipeline has already proved: canonical classification
+   * leaf ids, output-unit identity and component resource/unit identities.
+   * Preview stays non-mutating and name-level; Confirm/Save has these facts.
+   */
+  private async refineKnowledgeIdentityForCommit(
+    knowledge: AhspDocumentKnowledge,
+    workspaceId: string,
+    assisted: AssistedClassificationContext | null | undefined,
+  ): Promise<AhspDocumentKnowledge> {
+    const classificationLeafNodeIds: string[] = [];
+    let classificationComplete = false;
+    if (assisted) {
+      classificationLeafNodeIds.push(
+        ...assisted.paths.map((path) => path.leafNodeId),
+      );
+      const pending = assisted.pendingPaths ?? [];
+      if (pending.length > 0 && assisted.jenisPengadaanRootId) {
+        for (const row of pending) {
+          const leaf = await this.assistedClassification.materializeWorkspacePath({
+            workspaceId,
+            rootId: assisted.jenisPengadaanRootId,
+            kategori: row.kategori,
+            subkategori: row.subkategori,
+            jenisPekerjaan: row.jenisPekerjaan,
+          });
+          classificationLeafNodeIds.push(leaf.id);
+        }
+      }
+      classificationComplete =
+        classificationLeafNodeIds.length > 0 &&
+        (pending.length === 0 || Boolean(assisted.jenisPengadaanRootId));
+    }
+
+    const surface = await this.ahspService.loadIdentitySurface(workspaceId);
+    const workItems: AhspWorkItemKnowledge[] = [];
+    for (const item of knowledge.workItems) {
+      if (!item.workType || !item.methodName) {
+        workItems.push(item);
+        continue;
+      }
+
+      let outputUnitCode = '';
+      let formulaComplete =
+        item.resources.length > 0 &&
+        Boolean(item.resolvedOutputUnit);
+      if (item.resolvedOutputUnit) {
+        const output = await this.units.resolve(
+          item.resolvedOutputUnit,
+          item.resolvedOutputUnit,
+        );
+        if (
+          output.status === UNIT_RESOLUTION_STATUS.RESOLVED &&
+          output.sourceUnitDefinition
+        ) {
+          outputUnitCode = output.sourceUnitDefinition.code;
+        } else {
+          formulaComplete = false;
+        }
+      }
+
+      const resources: AhspIdentityContextFact['resources'][number][] = [];
+      for (const resource of item.resources) {
+        if (
+          !resource.resolvedResourceCatalogId ||
+          !resource.group ||
+          !resource.resolvedBaseUnit ||
+          resource.coefficient === null
+        ) {
+          formulaComplete = false;
+          continue;
+        }
+        const unit = await this.units.resolve(
+          resource.resolvedBaseUnit,
+          resource.resolvedBaseUnit,
+          undefined,
+          GROUP_TO_CONTEXT[resource.group],
+        );
+        if (
+          unit.status !== UNIT_RESOLUTION_STATUS.RESOLVED ||
+          !unit.sourceUnitDefinition
+        ) {
+          formulaComplete = false;
+          continue;
+        }
+        resources.push({
+          resourceId: resource.resolvedResourceCatalogId,
+          resourceType: resource.group,
+          baseUnit: unit.sourceUnitDefinition.code,
+          coefficient: resource.coefficient,
+        });
+      }
+      if (resources.length !== item.resources.length) formulaComplete = false;
+
+      const context: AhspIdentityContextFact = {
+        classificationLeafNodeIds: [
+          ...new Set(classificationLeafNodeIds),
+        ],
+        classificationComplete,
+        outputUnitCode,
+        formulaComplete,
+        resources,
+      };
+      workItems.push({
+        ...item,
+        ...this.identityOf(
+          item.workType.raw,
+          item.methodName.raw,
+          surface,
+          workspaceId,
+          context,
+        ),
+      });
+    }
+    return { ...knowledge, workItems };
   }
 
   private async resolveWorkItem(
