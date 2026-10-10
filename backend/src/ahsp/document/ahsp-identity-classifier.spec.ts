@@ -344,6 +344,7 @@ describe('classifyAhspIdentity — AHSP-whole identity, not resource identity', 
       signal: 'EXACT',
       formulaSame: true,
       classificationSame: true,
+      classificationCovered: true,
       currentVersionId: 'version-1',
     });
   });
@@ -372,6 +373,35 @@ describe('classifyAhspIdentity — AHSP-whole identity, not resource identity', 
       signal: 'EXACT_PARENT',
       formulaSame: true,
       classificationSame: false,
+      classificationCovered: false,
+    });
+  });
+
+  it('K2b: candidate paths already covered by a multipath AHSP remain IDENTICAL', () => {
+    const existing = [
+      row({
+        ahspId: 'a1',
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context({
+          classificationLeafNodeIds: ['leaf-1', 'leaf-2'],
+        }),
+      }),
+    ];
+    const result = classifyAhspIdentity(
+      candidate({
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context({ classificationLeafNodeIds: ['leaf-1'] }),
+      }),
+      existing,
+      norm,
+    );
+    expect(result.verdict).toBe('IDENTICAL');
+    expect(result.exactMatch).toMatchObject({
+      classificationSame: false,
+      classificationCovered: true,
+      formulaSame: true,
     });
   });
 
