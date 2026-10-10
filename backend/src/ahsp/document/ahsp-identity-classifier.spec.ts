@@ -40,7 +40,9 @@ const context = (
   over: Partial<AhspIdentityContextFact> = {},
 ): AhspIdentityContextFact => ({
   classificationLeafNodeIds: ['leaf-1'],
+  classificationComplete: true,
   outputUnitCode: 'M3',
+  formulaComplete: true,
   resources: [
     {
       resourceId: 'resource-a',
@@ -491,6 +493,35 @@ describe('classifyAhspIdentity — AHSP-whole identity, not resource identity', 
       norm,
     );
     expect(result.verdict).toBe('IDENTICAL');
+  });
+
+  it('K4b: incomplete formula or classification context can never auto-claim IDENTICAL', () => {
+    const existing = [
+      row({
+        ahspId: 'a1',
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context(),
+      }),
+    ];
+    const result = classifyAhspIdentity(
+      candidate({
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context({
+          formulaComplete: false,
+          classificationComplete: false,
+        }),
+      }),
+      existing,
+      norm,
+    );
+    expect(result.verdict).toBe('POSSIBLY_IDENTICAL');
+    expect(result.possibleMatches[0]).toMatchObject({
+      signal: 'EXACT_PARENT',
+    });
+    expect(result.possibleMatches[0]?.formulaSame).toBeUndefined();
+    expect(result.possibleMatches[0]?.classificationCovered).toBeUndefined();
   });
 
   it('K5: multiplicity is formula truth — removing one repeated component is a revision', () => {
