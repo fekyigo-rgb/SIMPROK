@@ -113,12 +113,15 @@ test('manual output unit is resolved by the existing version writer', () => {
   assert.equal(version.includes('outputUnit: data.outputUnit'), true);
 });
 
-test('a formula row shows the selected unit display name and keeps the canonical code', () => {
+test('a formula row keeps the selected occurrence unit instead of the catalog reference unit', () => {
   assert.equal(manual.includes('unitSuggestionLabels({'), true);
   assert.equal(manual.includes('displayName: row.unitDisplayName'), true);
   assert.equal(manual.includes('code: row.baseUnit'), true);
-  assert.equal(manual.includes('baseUnit: resource.baseUnit'), true);
+  assert.equal(manual.includes('baseUnit: occurrenceUnit.code'), true);
+  assert.equal(manual.includes('baseUnit: resource.baseUnit'), false);
   assert.equal(manual.includes('unitDefinitionId: unit.id'), true);
+  assert.equal(manual.includes('chooseCatalogResource(item)'), true);
+  assert.equal(manual.includes('baseUnit: item.baseUnit'), false);
   assert.equal(manual.includes("baseUnit: 'PERSON_DAY'"), false);
 });
 

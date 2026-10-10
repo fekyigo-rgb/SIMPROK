@@ -68,6 +68,15 @@ describe('AhspController', () => {
 
   const resourceLookup = {
     searchResources: jest.fn().mockResolvedValue({ items: [], page: 1, limit: 12, total: 0 }),
+    searchUnits: jest.fn(async (dto: { q?: string }) => ({
+      items: dto.q
+        ? [{ id: `unit-${dto.q}`, code: dto.q, displayName: dto.q, symbol: dto.q, dimension: 'COUNT', kind: 'STANDARD' }]
+        : [],
+      page: 1,
+      limit: 12,
+      total: dto.q ? 1 : 0,
+      hasNext: false,
+    })),
   };
   const observations = {
     ensureHandBuiltObservations: jest.fn().mockResolvedValue({ ensured: 0 }),
@@ -220,6 +229,72 @@ describe('AhspController', () => {
           leafNodeIds: ['leaf-1'],
         }),
       ).rejects.toThrow('UNIT');
+    });
+
+    it('createManual preserves a lawful occurrence unit instead of the catalog reference unit', async () => {
+      ahspService.create.mockResolvedValue({ id: 'ahsp-unit', keterangan: null });
+      ahspVersionService.createVersion.mockResolvedValue({ id: 'ver-unit' });
+
+      await controller.createManual(requestWithContext as any, {
+        methodName: 'Mandor mingguan',
+        outputUnit: 'm3',
+        resources: [
+          {
+            resourceId: 'catalog-mandor',
+            resourceType: 'LABOR',
+            coefficient: 1,
+            baseUnit: 'PERSON_MONTH',
+          },
+        ],
+      });
+
+      expect(resourceLookup.searchUnits).toHaveBeenCalledWith({
+        q: 'PERSON_MONTH',
+        resourceType: 'LABOR',
+        page: 1,
+        limit: 12,
+      });
+      expect(ahspVersionService.createVersion).toHaveBeenCalledWith(
+        'ahsp-unit',
+        expect.objectContaining({
+          resources: [
+            expect.objectContaining({
+              resourceId: 'catalog-mandor',
+              resourceType: 'LABOR',
+              baseUnit: 'PERSON_MONTH',
+            }),
+          ],
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('createManual refuses a resource unit outside the shared catalog family', async () => {
+      resourceLookup.searchUnits.mockResolvedValueOnce({
+        items: [],
+        page: 1,
+        limit: 12,
+        total: 0,
+        hasNext: false,
+      });
+
+      await expect(
+        controller.createManual(requestWithContext as any, {
+          methodName: 'Tidak boleh salah keluarga',
+          outputUnit: 'm3',
+          resources: [
+            {
+              resourceId: 'catalog-mandor',
+              resourceType: 'LABOR',
+              coefficient: 1,
+              baseUnit: 'EQUIPMENT_HOUR',
+            },
+          ],
+        }),
+      ).rejects.toThrow('AHSP_RESOURCE_UNIT_UNRESOLVED');
+
+      expect(ahspService.create).not.toHaveBeenCalled();
+      expect(ahspVersionService.createVersion).not.toHaveBeenCalled();
     });
 
     it('keeps the committed Manual save successful when post-commit review preparation is temporarily unavailable', async () => {

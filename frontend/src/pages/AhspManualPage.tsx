@@ -88,6 +88,12 @@ type IntakeCandidate = {
   baseUnit: string;
 };
 
+type CatalogResourceChoice = {
+  id: string;
+  name: string;
+  baseUnit: string;
+};
+
 /**
  * The server's answer to "does this resource already exist?" — one verdict off one
  * identity reading. REVIEW_REQUIRED is the Two-Door door: nothing was minted, and
@@ -131,6 +137,8 @@ function ManualResourceGroupPanel(props: {
     candidates: IntakeCandidate[];
     candidateContextDigest: string;
   } | null>(null);
+  const [selectedCatalogResource, setSelectedCatalogResource] =
+    useState<CatalogResourceChoice | null>(null);
   const addLock = useRef(false);
 
   useEffect(() => {
@@ -190,11 +198,12 @@ function ManualResourceGroupPanel(props: {
     setAddError(null);
     setNameHits([]);
     setReview(null);
+    setSelectedCatalogResource(null);
   };
 
   const addBound = (
-    resource: { id: string; name: string; baseUnit: string },
-    display?: { unitDisplayName?: string | null; unitSymbol?: string | null },
+    resource: CatalogResourceChoice,
+    occurrenceUnit: UnitLookupItem,
   ) => {
     props.onChange([
       ...props.rows,
@@ -202,9 +211,12 @@ function ManualResourceGroupPanel(props: {
         key: newRowKey(),
         resourceId: resource.id,
         resourceName: resource.name,
-        baseUnit: resource.baseUnit,
-        unitDisplayName: display?.unitDisplayName ?? null,
-        unitSymbol: display?.unitSymbol ?? null,
+        // Resource identity and occurrence unit are separate truths. The
+        // catalog's baseUnit is only a default/reference; the unit the person
+        // selected for THIS AHSP line is what the recipe persists.
+        baseUnit: occurrenceUnit.code,
+        unitDisplayName: occurrenceUnit.displayName,
+        unitSymbol: occurrenceUnit.symbol,
         coefficient: newCoefficient,
         catalogBound: true,
       },
@@ -212,10 +224,19 @@ function ManualResourceGroupPanel(props: {
     resetAdd();
   };
 
-  const selectedUnitDisplay = (baseUnit: string) =>
-    unit && unit.code === baseUnit
-      ? { unitDisplayName: unit.displayName, unitSymbol: unit.symbol }
-      : undefined;
+  const chooseCatalogResource = (resource: CatalogResourceChoice) => {
+    setSelectedCatalogResource(resource);
+    setAddOpen(true);
+    setNewName(resource.name);
+    setNameHits([]);
+    setReview(null);
+    if (!unit) {
+      // Offer the catalog reference as the starting search, never as a lock.
+      setUnitQ(resource.baseUnit);
+      setUnitHits([]);
+    }
+    props.onSearchQ('');
+  };
 
   /**
    * One request carries the whole decision. An `examination` is sent only after a
@@ -225,6 +246,10 @@ function ManualResourceGroupPanel(props: {
   const submitNew = async (examined: boolean) => {
     const name = newName.trim();
     if (name === '' || !unit) return;
+    if (selectedCatalogResource) {
+      addBound(selectedCatalogResource, unit);
+      return;
+    }
     if (addBusy || addLock.current) return;
     addLock.current = true;
     setAddBusy(true);
@@ -254,7 +279,7 @@ function ManualResourceGroupPanel(props: {
         } | null;
         const verdict = manualAdmissionFailure(response.status, failure);
         if (verdict.kind === 'bind') {
-          addBound(verdict.resource, selectedUnitDisplay(verdict.resource.baseUnit));
+          addBound(verdict.resource, unit);
           return;
         }
         setAddError(verdict.text);
@@ -268,7 +293,7 @@ function ManualResourceGroupPanel(props: {
         });
         return;
       }
-      addBound(answer.resource, selectedUnitDisplay(answer.resource.baseUnit));
+      addBound(answer.resource, unit);
     } catch {
       setAddError('SIMPROK tidak dapat dihubungi. Sumber daya belum ditambahkan.');
     } finally {
@@ -277,18 +302,9 @@ function ManualResourceGroupPanel(props: {
     }
   };
   const addHit = (item: ResourceLookupItem) => {
-    props.onChange([
-      ...props.rows.filter((r) => r.resourceId.trim() !== '' || r.resourceName.trim() !== ''),
-      {
-        key: newRowKey(),
-        resourceId: item.id,
-        resourceName: item.name,
-        baseUnit: item.baseUnit,
-        coefficient: '',
-        catalogBound: true,
-      },
-    ]);
-    props.onSearchQ('');
+    // Choosing an existing identity must not silently choose its reference unit.
+    // Reuse the same Unit Catalog selector the Manual add flow already has.
+    chooseCatalogResource(item);
   };
 
   const keepPrivateName = () => {
@@ -383,11 +399,17 @@ function ManualResourceGroupPanel(props: {
               value={newName}
               onChange={(e) => {
                 setNewName(e.target.value);
+                setSelectedCatalogResource(null);
                 setReview(null);
               }}
               placeholder={`Nama ${props.title.toLowerCase()} baru\u2026`}
               aria-label={`Nama ${props.title} baru`}
             />
+            {selectedCatalogResource ? (
+              <span className="ahsp-line ahsp-line--abu">
+                Resource katalog dipilih. Satuan di bawah berlaku untuk baris AHSP ini; satuan katalog hanya referensi awal.
+              </span>
+            ) : null}
           </label>
           <label className="ahsp-field">
             <span className="ahsp-field__label">
@@ -476,7 +498,7 @@ function ManualResourceGroupPanel(props: {
                       type="button"
                       className="ahsp-manual-comp__hit"
                       onClick={() =>
-                        addBound({
+                        chooseCatalogResource({
                           id: c.resourceCatalogId,
                           name: c.name,
                           baseUnit: c.baseUnit,
