@@ -7,6 +7,7 @@ import { AhspOwnershipPolicy, OwnershipViolationError, AhspEntity } from '../dom
 import type { AhspIdentityRow } from '../document/ahsp-identity-classifier';
 import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
 import { neutralQuestionOfHandBuiltLine } from '../../resource-catalog/resource-observation.service';
+import { isResourceCatalogIdShape } from '../../resource-catalog/resource-identity-resolution.kernel';
 
 export interface CreateAhspDto {
   workspaceId?: string;
@@ -202,8 +203,15 @@ export class AhspService {
               classificationLeafNodeIds: row.classificationAssignments.map(
                 (assignment) => assignment.leafNodeId,
               ),
+              classificationComplete: row.classificationAssignments.length > 0,
               outputUnitCode:
                 current.outputUnitDefinition?.code ?? current.outputUnit ?? '',
+              formulaComplete:
+                Boolean(current.outputUnitDefinition?.code) &&
+                current.resources.length > 0 &&
+                current.resources.every((resource) =>
+                  isResourceCatalogIdShape(resource.resourceId),
+                ),
               resources: current.resources.map((resource) => ({
                 resourceId: resource.resourceId,
                 resourceType: resource.resourceType,
