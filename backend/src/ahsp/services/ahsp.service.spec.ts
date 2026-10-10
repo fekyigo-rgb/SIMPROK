@@ -357,7 +357,7 @@ describe('AhspService', () => {
             outputUnitDefinition: { code: 'M3' },
             resources: [
               {
-                resourceId: 'resource-1',
+                resourceId: '10000000-0000-4000-8000-000000000001',
                 resourceType: 'LABOR',
                 baseUnit: 'PERSON_DAY',
                 coefficient: { toString: () => '1.250000' },
@@ -416,7 +416,7 @@ describe('AhspService', () => {
           formulaComplete: true,
           resources: [
             {
-              resourceId: 'resource-1',
+              resourceId: '10000000-0000-4000-8000-000000000001',
               resourceType: 'LABOR',
               baseUnit: 'PERSON_DAY',
               coefficient: '1.250000',
