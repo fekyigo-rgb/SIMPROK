@@ -215,6 +215,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     const response = await preview().expect(201);
     expect(response.body).toMatchObject({ acceptedRows: 4, folderRows: 2, workItemRows: 2, noteRows: 0, rejectedRows: 0, canApprove: true });
     expect(response.body.intakeRequestId).toEqual(expect.any(String));
+    expect(response.body.draftImpact).toEqual({ existingItemCount: 1, previouslyAppliedToThisDraft: false });
     const intakeRequest = await prisma.intakeRequest.findUniqueOrThrow({
       where: { id: response.body.intakeRequestId },
       include: { intakeJob: true, sourceDocument: true },
@@ -285,6 +286,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
 
   it('imports only Project A and leaves same-workspace Project B untouched', async () => {
     const p = await preview().expect(201);
+    expect(p.body.draftImpact).toEqual({ existingItemCount: 0, previouslyAppliedToThisDraft: false });
     const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
       .field('selectedSheet', 'RAB')
       .field('intakeRequestId', p.body.intakeRequestId)
@@ -311,6 +313,10 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     expect(items.filter((item) => item.itemType !== 'WORK_ITEM').every((item) => item.quantity.toString() === '0' && item.unit === '')).toBe(true);
     expect(items.every((item) => item.unitPrice === null && item.lineTotal === null)).toBe(true);
     expect(await prisma.boqItem.count({ where: { boqStructureId: DRAFT_B } })).toBe(0);
+
+    const replayPreview = await preview().expect(201);
+    expect(replayPreview.body.draftImpact).toEqual({ existingItemCount: 4, previouslyAppliedToThisDraft: true });
+    expect(await prisma.boqBusinessUseEvent.count({ where: { projectId: PROJECT_A } })).toBe(1);
 
     const readbackClient = new PrismaClient();
     try {
@@ -413,6 +419,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
       .expect(201);
 
     expect(secondPreview.body.importFingerprint).not.toBe(firstPreview.body.importFingerprint);
+    expect(secondPreview.body.draftImpact).toEqual({ existingItemCount: 4, previouslyAppliedToThisDraft: false });
     expect(secondApprove.body.businessUseEvent).toMatchObject({
       previousUseEventId: firstApprove.body.businessUseEvent.id,
       intakeRequestId: secondPreview.body.intakeRequestId,
@@ -548,6 +555,7 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
       const projectBPreview = await postFile(`/projects/${PROJECT_B}/boq/import/preview`, assignedToken)
         .field('selectedSheet', 'RAB')
         .expect(201);
+      expect(projectBPreview.body.draftImpact).toEqual({ existingItemCount: 0, previouslyAppliedToThisDraft: false });
       await postFile(`/projects/${PROJECT_B}/boq/import/approve`, assignedToken)
         .field('selectedSheet', 'RAB')
         .field('intakeRequestId', projectBPreview.body.intakeRequestId)
