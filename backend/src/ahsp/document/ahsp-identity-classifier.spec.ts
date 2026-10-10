@@ -1,6 +1,7 @@
 import {
   classifyAhspIdentity,
   type AhspIdentityCandidate,
+  type AhspIdentityContextFact,
   type AhspIdentityNormalizers,
   type AhspIdentityRow,
 } from './ahsp-identity-classifier';
@@ -32,6 +33,29 @@ const candidate = (
   },
 ): AhspIdentityCandidate => ({
   workspaceId: 'ws-1',
+  ...over,
+});
+
+const context = (
+  over: Partial<AhspIdentityContextFact> = {},
+): AhspIdentityContextFact => ({
+  classificationLeafNodeIds: ['leaf-1'],
+  outputUnitCode: 'M3',
+  resources: [
+    {
+      resourceId: 'resource-a',
+      resourceType: 'LABOR',
+      baseUnit: 'PERSON_DAY',
+      coefficient: '1.000000',
+    },
+    {
+      resourceId: 'resource-b',
+      resourceType: 'MATERIAL',
+      baseUnit: 'KG',
+      coefficient: 2,
+    },
+  ],
+  versionId: 'version-1',
   ...over,
 });
 
@@ -289,5 +313,180 @@ describe('classifyAhspIdentity — AHSP-whole identity, not resource identity', 
     );
     expect(result.verdict).toBe('DISTINCT');
     expect(result.possibleMatches).toHaveLength(0);
+  });
+
+  it('K: exact parent + same canonical classification and formula is IDENTICAL', () => {
+    const existing = [
+      row({
+        ahspId: 'a1',
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context({
+          classificationLeafNodeIds: ['leaf-2', 'leaf-1'],
+        }),
+      }),
+    ];
+    const result = classifyAhspIdentity(
+      candidate({
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context({
+          classificationLeafNodeIds: ['leaf-1', 'leaf-2'],
+          resources: [...context().resources].reverse(),
+        }),
+      }),
+      existing,
+      norm,
+    );
+    expect(result.verdict).toBe('IDENTICAL');
+    expect(result.exactMatch).toMatchObject({
+      ahspId: 'a1',
+      signal: 'EXACT',
+      formulaSame: true,
+      classificationSame: true,
+      currentVersionId: 'version-1',
+    });
+  });
+
+  it('K2: exact parent + same formula but different classification is POSSIBLY, never a second parent', () => {
+    const existing = [
+      row({
+        ahspId: 'a1',
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context({ classificationLeafNodeIds: ['leaf-1'] }),
+      }),
+    ];
+    const result = classifyAhspIdentity(
+      candidate({
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context({ classificationLeafNodeIds: ['leaf-2'] }),
+      }),
+      existing,
+      norm,
+    );
+    expect(result.verdict).toBe('POSSIBLY_IDENTICAL');
+    expect(result.possibleMatches[0]).toMatchObject({
+      ahspId: 'a1',
+      signal: 'EXACT_PARENT',
+      formulaSame: true,
+      classificationSame: false,
+    });
+  });
+
+  it('K3: exact parent + changed coefficient is POSSIBLY revision evidence', () => {
+    const existing = [
+      row({
+        ahspId: 'a1',
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context(),
+      }),
+    ];
+    const result = classifyAhspIdentity(
+      candidate({
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context({
+          resources: [
+            {
+              resourceId: 'resource-a',
+              resourceType: 'LABOR',
+              baseUnit: 'PERSON_DAY',
+              coefficient: 1.1,
+            },
+            context().resources[1],
+          ],
+        }),
+      }),
+      existing,
+      norm,
+    );
+    expect(result.verdict).toBe('POSSIBLY_IDENTICAL');
+    expect(result.possibleMatches[0]).toMatchObject({
+      signal: 'EXACT_PARENT',
+      formulaSame: false,
+      classificationSame: true,
+    });
+  });
+
+  it('K4: coefficient formatting and row order do not create a false revision', () => {
+    const existingContext = context({
+      resources: [
+        {
+          resourceId: 'resource-a',
+          resourceType: 'LABOR',
+          baseUnit: 'PERSON_DAY',
+          coefficient: '01.500000',
+        },
+        {
+          resourceId: 'resource-b',
+          resourceType: 'MATERIAL',
+          baseUnit: 'kg',
+          coefficient: '2.000',
+        },
+      ],
+    });
+    const candidateContext = context({
+      resources: [
+        {
+          resourceId: 'resource-b',
+          resourceType: 'material',
+          baseUnit: 'KG',
+          coefficient: 2,
+        },
+        {
+          resourceId: 'resource-a',
+          resourceType: 'labor',
+          baseUnit: 'person_day',
+          coefficient: '1.5',
+        },
+      ],
+    });
+    const result = classifyAhspIdentity(
+      candidate({
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: candidateContext,
+      }),
+      [
+        row({
+          ahspId: 'a1',
+          workType: 'Galian Tanah',
+          methodName: 'Galian Tanah',
+          context: existingContext,
+        }),
+      ],
+      norm,
+    );
+    expect(result.verdict).toBe('IDENTICAL');
+  });
+
+  it('K5: multiplicity is formula truth — removing one repeated component is a revision', () => {
+    const repeated = {
+      resourceId: 'resource-a',
+      resourceType: 'LABOR',
+      baseUnit: 'PERSON_DAY',
+      coefficient: 1,
+    };
+    const result = classifyAhspIdentity(
+      candidate({
+        workType: 'Galian Tanah',
+        methodName: 'Galian Tanah',
+        context: context({ resources: [repeated] }),
+      }),
+      [
+        row({
+          ahspId: 'a1',
+          workType: 'Galian Tanah',
+          methodName: 'Galian Tanah',
+          context: context({ resources: [repeated, repeated] }),
+        }),
+      ],
+      norm,
+    );
+    expect(result.verdict).toBe('POSSIBLY_IDENTICAL');
+    expect(result.possibleMatches[0]?.formulaSame).toBe(false);
   });
 });
