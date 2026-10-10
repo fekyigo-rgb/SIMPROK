@@ -8,6 +8,12 @@ import type { AhspIdentityRow } from '../document/ahsp-identity-classifier';
 import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
 import { neutralQuestionOfHandBuiltLine } from '../../resource-catalog/resource-observation.service';
 import { isResourceCatalogIdShape } from '../../resource-catalog/resource-identity-resolution.kernel';
+import { BasicPriceImportLookupService } from '../../basic-price/basic-price-import-lookup.service';
+import { UnitKernelService } from '../../unit-kernel/unit-kernel.service';
+import {
+  trustedUnitContext,
+  UNIT_RESOLUTION_STATUS,
+} from '../../unit-kernel/unit-kernel.contracts';
 
 export interface CreateAhspDto {
   workspaceId?: string;
@@ -55,6 +61,10 @@ export class AhspService {
     private readonly prisma: PrismaService,
     private readonly audit: AhspAuditService,
     private readonly snapshots: AhspSnapshotService,
+    /** Existing shared unit catalogue search: exact canonical-code proof. */
+    private readonly unitLookup: BasicPriceImportLookupService,
+    /** Existing governed alias authority: source spellings -> canonical unit. */
+    private readonly units: UnitKernelService,
   ) {}
 
   private runPolicy(action: (policy: AhspOwnershipPolicy) => void) {
@@ -151,6 +161,42 @@ export class AhspService {
    * AHSP's names can reach the reader as a "this already exists" reference; the
    * display bars adopting it. Projection only; it mints, writes, decides nothing.
    */
+  /**
+   * Canonicalize a STORED occurrence unit for identity comparison without
+   * rewriting history. Manual rows often store UnitDefinition.code; Import
+   * deliberately preserves source spellings. Reuse BOTH existing authorities:
+   * exact code comes from the shared unit catalogue lookup, aliases from the
+   * Unit Kernel under the resource's governed family.
+   */
+  private async identityUnitCode(
+    raw: string,
+    resourceType?: string | null,
+  ): Promise<string | null> {
+    const value = raw.trim();
+    if (!value) return null;
+    const page = await this.unitLookup.searchUnits({
+      q: value,
+      ...(resourceType ? { resourceType: resourceType as any } : {}),
+      page: 1,
+      limit: 12,
+    });
+    const exactCode = page.items.find(
+      (item) => item.code.toLocaleLowerCase('en-US') === value.toLocaleLowerCase('en-US'),
+    );
+    if (exactCode) return exactCode.code;
+
+    const resolved = await this.units.resolve(
+      value,
+      value,
+      undefined,
+      trustedUnitContext(resourceType),
+    );
+    return resolved.status === UNIT_RESOLUTION_STATUS.RESOLVED &&
+      resolved.sourceUnitDefinition
+      ? resolved.sourceUnitDefinition.code
+      : null;
+  }
+
   async loadIdentitySurface(workspaceId: string): Promise<AhspIdentityRow[]> {
     const rows = await this.prisma.aHSP.findMany({
       where: { OR: [{ workspaceId }, { workspaceId: null }] },
@@ -189,40 +235,71 @@ export class AhspService {
         },
       },
     });
-    return rows.map((row) => {
-      const current = row.versions[0] ?? null;
-      return {
-        ahspId: row.id,
-        workspaceId: row.workspaceId,
-        workType: row.workType,
-        methodName: row.methodName,
-        code: row.code,
-        deletedAt: row.deletedAt,
-        context: current
-          ? {
-              classificationLeafNodeIds: row.classificationAssignments.map(
-                (assignment) => assignment.leafNodeId,
+    return Promise.all(
+      rows.map(async (row) => {
+        const current = row.versions[0] ?? null;
+        if (!current) {
+          return {
+            ahspId: row.id,
+            workspaceId: row.workspaceId,
+            workType: row.workType,
+            methodName: row.methodName,
+            code: row.code,
+            deletedAt: row.deletedAt,
+            context: null,
+          };
+        }
+
+        const outputUnitCode =
+          current.outputUnitDefinition?.code ??
+          (await this.identityUnitCode(current.outputUnit ?? null ?? ''));
+        const resources = await Promise.all(
+          current.resources.map(async (resource) => ({
+            resourceId: resource.resourceId,
+            resourceType: resource.resourceType,
+            baseUnit:
+              (await this.identityUnitCode(
+                resource.baseUnit,
+                resource.resourceType,
+              )) ?? resource.baseUnit,
+            coefficient: resource.coefficient.toString(),
+            canonicalUnitProven:
+              (await this.identityUnitCode(
+                resource.baseUnit,
+                resource.resourceType,
+              )) !== null,
+          })),
+        );
+        return {
+          ahspId: row.id,
+          workspaceId: row.workspaceId,
+          workType: row.workType,
+          methodName: row.methodName,
+          code: row.code,
+          deletedAt: row.deletedAt,
+          context: {
+            classificationLeafNodeIds: row.classificationAssignments.map(
+              (assignment) => assignment.leafNodeId,
+            ),
+            classificationComplete: row.classificationAssignments.length > 0,
+            outputUnitCode: outputUnitCode ?? current.outputUnit ?? '',
+            formulaComplete:
+              Boolean(outputUnitCode) &&
+              resources.length > 0 &&
+              resources.every(
+                (resource) =>
+                  isResourceCatalogIdShape(resource.resourceId) &&
+                  resource.canonicalUnitProven,
               ),
-              classificationComplete: row.classificationAssignments.length > 0,
-              outputUnitCode:
-                current.outputUnitDefinition?.code ?? current.outputUnit ?? '',
-              formulaComplete:
-                Boolean(current.outputUnitDefinition?.code) &&
-                current.resources.length > 0 &&
-                current.resources.every((resource) =>
-                  isResourceCatalogIdShape(resource.resourceId),
-                ),
-              resources: current.resources.map((resource) => ({
-                resourceId: resource.resourceId,
-                resourceType: resource.resourceType,
-                baseUnit: resource.baseUnit,
-                coefficient: resource.coefficient.toString(),
-              })),
-              versionId: current.id,
-            }
-          : null,
-      };
-    });
+            resources: resources.map(
+              ({ canonicalUnitProven: _canonicalUnitProven, ...resource }) =>
+                resource,
+            ),
+            versionId: current.id,
+          },
+        };
+      }),
+    );
   }
 
   async getById(id: string, workspaceId?: string) {
