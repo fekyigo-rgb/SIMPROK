@@ -1632,8 +1632,6 @@ export class AhspDocumentCanonicalizationService {
       lineId: string;
       decision: AhspImportDecisionAction | undefined;
       assistedClassification?: AssistedClassificationContext | null;
-      /** Existing same-parent identity; when set, append a version instead of creating a parent. */
-      existingParentId?: string | null;
     },
     tx: Prisma.TransactionClient,
   ): Promise<AhspImportItemOutcome> {
@@ -1911,6 +1909,8 @@ export class AhspDocumentCanonicalizationService {
       userId: string;
       lineId: string;
       assistedClassification?: AssistedClassificationContext | null;
+      /** Existing same-parent identity; when set, append a version instead of creating a parent. */
+      existingParentId?: string | null;
     },
     tx: Prisma.TransactionClient,
   ): Promise<{
