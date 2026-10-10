@@ -17,6 +17,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PERMISSIONS_KEY } from '../common/decorators/permissions.decorator';
 import { BasicPriceImportLookupService } from '../basic-price/basic-price-import-lookup.service';
 import { ResourceObservationService } from '../resource-catalog/resource-observation.service';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
+import { RealityNormalizationEngine } from './services/reality-normalization.engine';
 
 describe('AhspController', () => {
   let controller: AhspController;
@@ -33,6 +36,7 @@ describe('AhspController', () => {
     reject: jest.fn(),
     propose: jest.fn(),
     transfer: jest.fn(),
+    loadIdentitySurface: jest.fn().mockResolvedValue([]),
   };
 
   const ahspVersionService = {
@@ -81,6 +85,16 @@ describe('AhspController', () => {
   const observations = {
     ensureHandBuiltObservations: jest.fn().mockResolvedValue({ ensured: 0 }),
   };
+  const units = {
+    resolve: jest.fn().mockResolvedValue({
+      status: UNIT_RESOLUTION_STATUS.RESOLVED,
+      sourceUnitDefinition: { id: 'unit-m3', code: 'M3' },
+    }),
+  };
+  const norm = {
+    normalizeName: jest.fn((raw: string) => raw.trim().replace(/\s+/g, ' ').toLowerCase()),
+    normalizeCode: jest.fn((raw: string) => raw.trim().toUpperCase()),
+  };
   const TRUSTED_ACTOR_ID = 'trusted-user-a';
   const trustedActorService = {
     resolveActorUserId: jest.fn().mockResolvedValue(TRUSTED_ACTOR_ID),
@@ -108,6 +122,8 @@ describe('AhspController', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: BasicPriceImportLookupService, useValue: resourceLookup },
         { provide: ResourceObservationService, useValue: observations },
+        { provide: UnitKernelService, useValue: units },
+        { provide: RealityNormalizationEngine, useValue: norm },
         // PermissionsGuard requires Reflector + WorkspacePermissionResolverService at instantiation time.
         // We provide minimal stubs so NestJS DI can resolve the guard in unit test context.
         // Guard logic itself is not under test here — we only verify class-level metadata.
@@ -186,6 +202,198 @@ describe('AhspController', () => {
    */
   describe('actor provenance is server-derived, never client-supplied', () => {
     const SPOOFED = 'attacker-chosen-user-b';
+
+    it('createManual exact canonical formula + covered classification is a duplicate: no second parent or version', async () => {
+      ahspService.loadIdentitySurface.mockResolvedValueOnce([
+        {
+          ahspId: 'ahsp-existing',
+          workspaceId: 'ws-a',
+          workType: 'Galian',
+          methodName: 'Galian',
+          code: null,
+          deletedAt: null,
+          context: {
+            classificationLeafNodeIds: ['leaf-1', 'leaf-2'],
+            classificationComplete: true,
+            outputUnitCode: 'M3',
+            formulaComplete: true,
+            resources: [
+              {
+                resourceId: '10000000-0000-4000-8000-000000000099',
+                resourceType: 'LABOR',
+                baseUnit: 'PERSON_DAY',
+                coefficient: '1.000000',
+              },
+            ],
+            versionId: 'ver-existing',
+          },
+        },
+      ]);
+
+      await expect(
+        controller.createManual(requestWithContext as any, {
+          methodName: 'Galian',
+          outputUnit: 'm3',
+          leafNodeIds: ['leaf-1'],
+          resources: [
+            {
+              resourceId: '10000000-0000-4000-8000-000000000099',
+              resourceType: 'LABOR',
+              baseUnit: 'PERSON_DAY',
+              coefficient: 1,
+            },
+          ],
+        }),
+      ).rejects.toThrow('AHSP_SOURCE_IDENTITY_EXISTS');
+
+      expect(ahspService.create).not.toHaveBeenCalled();
+      expect(ahspVersionService.createVersion).not.toHaveBeenCalled();
+      expect(assignments.addAssignment).not.toHaveBeenCalled();
+    });
+
+    it('createManual exact parent + changed formula reuses the parent and appends the existing version path', async () => {
+      ahspService.loadIdentitySurface.mockResolvedValueOnce([
+        {
+          ahspId: 'ahsp-existing',
+          workspaceId: 'ws-a',
+          workType: 'Galian',
+          methodName: 'Galian',
+          code: null,
+          deletedAt: null,
+          context: {
+            classificationLeafNodeIds: ['leaf-1'],
+            classificationComplete: true,
+            outputUnitCode: 'M3',
+            formulaComplete: true,
+            resources: [
+              {
+                resourceId: '10000000-0000-4000-8000-000000000099',
+                resourceType: 'LABOR',
+                baseUnit: 'PERSON_DAY',
+                coefficient: '1.000000',
+              },
+            ],
+            versionId: 'ver-existing',
+          },
+        },
+      ]);
+      ahspVersionService.createVersion.mockResolvedValueOnce({ id: 'ver-revision' });
+      assignments.addAssignment.mockResolvedValue({ id: 'asg-1' });
+
+      const saved = await controller.createManual(requestWithContext as any, {
+        methodName: 'Galian',
+        outputUnit: 'm3',
+        leafNodeIds: ['leaf-1'],
+        resources: [
+          {
+            resourceId: '10000000-0000-4000-8000-000000000099',
+            resourceType: 'LABOR',
+            baseUnit: 'PERSON_DAY',
+            coefficient: 1.25,
+          },
+        ],
+      });
+
+      expect(ahspService.create).not.toHaveBeenCalled();
+      expect(ahspVersionService.createVersion).toHaveBeenCalledWith(
+        'ahsp-existing',
+        expect.objectContaining({
+          basedOnVersionId: 'ver-existing',
+          resources: [
+            expect.objectContaining({ resourceId: '10000000-0000-4000-8000-000000000099', coefficient: 1.25 }),
+          ],
+        }),
+        expect.anything(),
+      );
+      expect(saved).toMatchObject({
+        id: 'ahsp-existing',
+        versionId: 'ver-revision',
+        disposition: 'REVISION_CREATED',
+      });
+    });
+
+    it('createManual exact parent + same formula + new path reuses the parent without minting a version', async () => {
+      ahspService.loadIdentitySurface.mockResolvedValueOnce([
+        {
+          ahspId: 'ahsp-existing',
+          workspaceId: 'ws-a',
+          workType: 'Galian',
+          methodName: 'Galian',
+          code: null,
+          deletedAt: null,
+          context: {
+            classificationLeafNodeIds: ['leaf-1'],
+            classificationComplete: true,
+            outputUnitCode: 'M3',
+            formulaComplete: true,
+            resources: [
+              {
+                resourceId: '10000000-0000-4000-8000-000000000099',
+                resourceType: 'LABOR',
+                baseUnit: 'PERSON_DAY',
+                coefficient: '1.000000',
+              },
+            ],
+            versionId: 'ver-existing',
+          },
+        },
+      ]);
+      assignments.addAssignment.mockResolvedValue({ id: 'asg-2' });
+
+      const saved = await controller.createManual(requestWithContext as any, {
+        methodName: 'Galian',
+        outputUnit: 'm3',
+        leafNodeIds: ['leaf-2'],
+        resources: [
+          {
+            resourceId: '10000000-0000-4000-8000-000000000099',
+            resourceType: 'LABOR',
+            baseUnit: 'PERSON_DAY',
+            coefficient: 1,
+          },
+        ],
+      });
+
+      expect(ahspService.create).not.toHaveBeenCalled();
+      expect(ahspVersionService.createVersion).not.toHaveBeenCalled();
+      expect(assignments.addAssignment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ahspId: 'ahsp-existing',
+          leafNodeId: 'leaf-2',
+        }),
+        expect.anything(),
+      );
+      expect(saved).toMatchObject({
+        id: 'ahsp-existing',
+        versionId: 'ver-existing',
+        disposition: 'CLASSIFICATION_EXTENDED',
+      });
+    });
+
+    it('createManual normalized/code look-alike fails closed instead of creating a second parent', async () => {
+      ahspService.loadIdentitySurface.mockResolvedValueOnce([
+        {
+          ahspId: 'ahsp-lookalike',
+          workspaceId: 'ws-a',
+          workType: 'GALIAN',
+          methodName: 'GALIAN',
+          code: null,
+          deletedAt: null,
+          context: null,
+        },
+      ]);
+
+      await expect(
+        controller.createManual(requestWithContext as any, {
+          methodName: 'Galian',
+          outputUnit: 'm3',
+          resources: [],
+        }),
+      ).rejects.toThrow('AHSP_IDENTITY_REVIEW_REQUIRED');
+
+      expect(ahspService.create).not.toHaveBeenCalled();
+      expect(ahspVersionService.createVersion).not.toHaveBeenCalled();
+    });
 
     it('createManual is one transaction: version failure does not return success, and assignments are HUMAN_ADDED', async () => {
       ahspService.create.mockResolvedValue({ id: 'ahsp-new', keterangan: 'catatan' });

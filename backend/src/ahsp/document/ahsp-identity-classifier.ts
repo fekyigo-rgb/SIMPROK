@@ -28,6 +28,31 @@ export type AhspIdentityVerdict =
   | 'POSSIBLY_IDENTICAL'
   | 'DISTINCT';
 
+/**
+ * Canonical facts the EXISTING AHSP version/resource/classification schema already
+ * owns. They are inputs to the same classifier, not a second identity store.
+ */
+export interface AhspIdentityResourceFact {
+  readonly resourceId: string;
+  readonly resourceType: string;
+  readonly baseUnit: string;
+  readonly coefficient: string | number;
+}
+
+export interface AhspIdentityContextFact {
+  /** Stable path tips. Ancestors are derived by the existing classification service. */
+  readonly classificationLeafNodeIds: readonly string[];
+  /** False means the caller cannot prove the full classification context yet. */
+  readonly classificationComplete?: boolean;
+  /** Canonical UnitDefinition.code when known. */
+  readonly outputUnitCode: string;
+  readonly resources: readonly AhspIdentityResourceFact[];
+  /** False means at least one resource/output identity is still unresolved. */
+  readonly formulaComplete?: boolean;
+  /** Current version identity, used only by callers that need to route a revision. */
+  readonly versionId?: string | null;
+}
+
 /** One stored AHSP as the classifier sees it. deletedAt is NOT filtered by the loader — a soft-deleted twin still occupies the unique index and must be seen. */
 export interface AhspIdentityRow {
   readonly ahspId: string;
@@ -36,6 +61,8 @@ export interface AhspIdentityRow {
   readonly methodName: string;
   readonly code: string | null;
   readonly deletedAt: Date | null;
+  /** Present when the existing read surface can prove the current recipe/context. */
+  readonly context?: AhspIdentityContextFact | null;
 }
 
 /** The AHSP about to be admitted. code is optional — the document importer does not extract an AHSP code today, so the code signal is simply inert there. */
@@ -44,9 +71,16 @@ export interface AhspIdentityCandidate {
   readonly workType: string;
   readonly methodName: string;
   readonly code?: string | null;
+  /** Optional so legacy/read-only callers keep their previous semantics. */
+  readonly context?: AhspIdentityContextFact | null;
 }
 
-export type AhspIdentitySignal = 'EXACT' | 'NORMALIZED_NAME' | 'CODE';
+export type AhspIdentitySignal =
+  | 'EXACT'
+  | 'EXACT_PARENT'
+  | 'CONTEXT_MATCH'
+  | 'NORMALIZED_NAME'
+  | 'CODE';
 
 export interface AhspIdentityMatch {
   readonly ahspId: string;
@@ -56,6 +90,13 @@ export interface AhspIdentityMatch {
   /** True when the matched AHSP was soft-deleted — surfaced so a human is told, never silently revived. */
   readonly deleted: boolean;
   readonly signal: AhspIdentitySignal;
+  /** Defined only when both sides supplied canonical recipe/context facts. */
+  readonly formulaSame?: boolean;
+  /** Exact set equality, useful evidence for review. */
+  readonly classificationSame?: boolean;
+  /** Every candidate path is already represented by the existing AHSP. */
+  readonly classificationCovered?: boolean;
+  readonly currentVersionId?: string | null;
 }
 
 export interface AhspIdentityClassification {
@@ -70,6 +111,64 @@ export interface AhspIdentityClassification {
 export interface AhspIdentityNormalizers {
   readonly name: (raw: string) => string;
   readonly code: (raw: string) => string;
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort();
+}
+
+function canonicalCoefficient(value: string | number): string {
+  const raw = String(value).trim();
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(raw);
+  if (!match) return raw;
+  const sign = match[1] === '-' ? '-' : '';
+  const integer = match[2].replace(/^0+(?=\d)/, '') || '0';
+  const fraction = (match[3] ?? '').replace(/0+$/, '');
+  return `${sign}${integer}${fraction ? `.${fraction}` : ''}`;
+}
+
+function canonicalResourceFact(fact: AhspIdentityResourceFact): string {
+  return [
+    fact.resourceId.trim(),
+    fact.resourceType.trim().toUpperCase(),
+    fact.baseUnit.trim().toUpperCase(),
+    canonicalCoefficient(fact.coefficient),
+  ].join('\u001f');
+}
+
+function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
+  const left = sortedUnique(a);
+  const right = sortedUnique(b);
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function coversStringSet(
+  existing: readonly string[],
+  candidate: readonly string[],
+): boolean {
+  const held = new Set(sortedUnique(existing));
+  return sortedUnique(candidate).every((value) => held.has(value));
+}
+
+function sameFormula(
+  a: AhspIdentityContextFact,
+  b: AhspIdentityContextFact,
+): boolean {
+  if (
+    a.outputUnitCode.trim().toUpperCase() !==
+    b.outputUnitCode.trim().toUpperCase()
+  ) {
+    return false;
+  }
+  const left = a.resources.map(canonicalResourceFact).sort();
+  const right = b.resources.map(canonicalResourceFact).sort();
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 /**
@@ -113,16 +212,81 @@ export function classifyAhspIdentity(
       row.methodName === candidate.methodName,
   );
   if (exact) {
+    const deleted = exact.deletedAt !== null;
+    const bothContextual = Boolean(candidate.context && exact.context);
+    const formulaComparable =
+      Boolean(
+        bothContextual &&
+          candidate.context &&
+          exact.context &&
+          candidate.context.formulaComplete !== false &&
+          exact.context.formulaComplete !== false,
+      );
+    const classificationComparable =
+      Boolean(
+        bothContextual &&
+          candidate.context &&
+          exact.context &&
+          candidate.context.classificationComplete !== false &&
+          exact.context.classificationComplete !== false,
+      );
+    const formulaSame =
+      formulaComparable && candidate.context && exact.context
+        ? sameFormula(candidate.context, exact.context)
+        : undefined;
+    const classificationSame =
+      classificationComparable && candidate.context && exact.context
+        ? sameStringSet(
+            candidate.context.classificationLeafNodeIds,
+            exact.context.classificationLeafNodeIds,
+          )
+        : undefined;
+    const classificationCovered =
+      classificationComparable && candidate.context && exact.context
+        ? coversStringSet(
+            exact.context.classificationLeafNodeIds,
+            candidate.context.classificationLeafNodeIds,
+          )
+        : undefined;
+    const match: AhspIdentityMatch = {
+      ahspId: exact.ahspId,
+      workType: exact.workType,
+      methodName: exact.methodName,
+      code: exact.code,
+      deleted,
+      signal:
+        bothContextual &&
+        !deleted &&
+        (formulaSame !== true || classificationCovered !== true)
+          ? 'EXACT_PARENT'
+          : 'EXACT',
+      ...(formulaSame !== undefined ? { formulaSame } : {}),
+      ...(classificationSame !== undefined ? { classificationSame } : {}),
+      ...(classificationCovered !== undefined ? { classificationCovered } : {}),
+      ...(exact.context?.versionId !== undefined
+        ? { currentVersionId: exact.context.versionId }
+        : {}),
+    };
+
+    // A soft-deleted exact parent still occupies the unique key and can never be
+    // silently recreated. With no canonical content facts, preserve the legacy
+    // exact-parent verdict. When BOTH sides do carry those facts, only the same
+    // classification context AND same canonical formula is an exact duplicate.
+    if (
+      !deleted &&
+      bothContextual &&
+      (formulaSame !== true || classificationCovered !== true)
+    ) {
+      return {
+        verdict: 'POSSIBLY_IDENTICAL',
+        exactMatch: null,
+        possibleMatches: [match],
+      };
+    }
+
     return {
       verdict: 'IDENTICAL',
-      exactMatch: {
-        ahspId: exact.ahspId,
-        workType: exact.workType,
-        methodName: exact.methodName,
-        code: exact.code,
-        deleted: exact.deletedAt !== null,
-        signal: 'EXACT',
-      },
+      exactMatch: match,
       possibleMatches: [],
     };
   }
@@ -130,6 +294,90 @@ export function classifyAhspIdentity(
   const candidateWorkType = normalize.name(candidate.workType);
   const candidateMethodName = normalize.name(candidate.methodName);
   const candidateCode = normalize.code(candidate.code ?? '');
+
+  // Cross-door One-Truth: legacy workType is not a universal identity field
+  // (Manual uses its work context while document Import may carry a source code).
+  // When BOTH sides have complete canonical classification + formula facts, the
+  // same workspace + same normalized Uraian can be adjudicated by those existing
+  // truths even when legacy workType differs.
+  if (
+    candidate.context &&
+    candidate.context.formulaComplete !== false &&
+    candidate.context.classificationComplete !== false
+  ) {
+    const contextual = existing
+      .filter(
+        (row) =>
+          row.deletedAt === null &&
+          row.workspaceId === candidate.workspaceId &&
+          row.context &&
+          row.context.formulaComplete !== false &&
+          row.context.classificationComplete !== false &&
+          normalize.name(row.methodName) === candidateMethodName,
+      )
+      .map((row): AhspIdentityMatch => {
+        const rowContext = row.context as AhspIdentityContextFact;
+        const formulaSame = sameFormula(candidate.context as AhspIdentityContextFact, rowContext);
+        const classificationSame = sameStringSet(
+          candidate.context!.classificationLeafNodeIds,
+          rowContext.classificationLeafNodeIds,
+        );
+        const classificationCovered = coversStringSet(
+          rowContext.classificationLeafNodeIds,
+          candidate.context!.classificationLeafNodeIds,
+        );
+        return {
+          ahspId: row.ahspId,
+          workType: row.workType,
+          methodName: row.methodName,
+          code: row.code,
+          deleted: false,
+          signal: 'CONTEXT_MATCH',
+          formulaSame,
+          classificationSame,
+          classificationCovered,
+          ...(rowContext.versionId !== undefined
+            ? { currentVersionId: rowContext.versionId }
+            : {}),
+        };
+      })
+      .filter(
+        (match) =>
+          match.formulaSame === true ||
+          match.classificationCovered === true ||
+          match.classificationSame === true,
+      )
+      .sort((a, b) =>
+        a.ahspId < b.ahspId ? -1 : a.ahspId > b.ahspId ? 1 : 0,
+      );
+
+    if (contextual.length === 1) {
+      const match = contextual[0];
+      if (
+        match.formulaSame === true &&
+        match.classificationCovered === true
+      ) {
+        return {
+          verdict: 'IDENTICAL',
+          exactMatch: match,
+          possibleMatches: [],
+        };
+      }
+      return {
+        verdict: 'POSSIBLY_IDENTICAL',
+        exactMatch: null,
+        possibleMatches: contextual,
+      };
+    }
+    if (contextual.length > 1) {
+      return {
+        verdict: 'POSSIBLY_IDENTICAL',
+        exactMatch: null,
+        possibleMatches: contextual,
+      };
+    }
+  }
+
   const matches: AhspIdentityMatch[] = [];
   for (const row of existing) {
     if (row.deletedAt !== null) continue; // possible-match candidates are LIVE only

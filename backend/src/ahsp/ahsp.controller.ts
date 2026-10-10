@@ -13,6 +13,7 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -39,6 +40,11 @@ import { AhspClassificationAssignmentService, type AhspClassificationAssignmentV
 import { BasicPriceImportLookupService } from '../basic-price/basic-price-import-lookup.service';
 import { SearchResourceCatalogDto } from '../basic-price/dto/search-basic-price-import-lookups.dto';
 import { ResourceObservationService } from '../resource-catalog/resource-observation.service';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
+import { RealityNormalizationEngine } from './services/reality-normalization.engine';
+import { classifyAhspIdentity } from './document/ahsp-identity-classifier';
+import { isResourceCatalogIdShape } from '../resource-catalog/resource-identity-resolution.kernel';
 
 /**
  * Parse the optional multipart `decisions` field into import decisions, failing
@@ -103,6 +109,10 @@ export class AhspController {
     /** Read-only catalog search. Same service as Basic Price. Not a second engine. */
     private readonly resourceLookup: BasicPriceImportLookupService,
     private readonly observations: ResourceObservationService,
+    /** Existing canonical unit authority; Manual only asks it what outputUnit means. */
+    private readonly units: UnitKernelService,
+    /** Existing AHSP normalization home used by the existing pure identity classifier. */
+    private readonly norm: RealityNormalizationEngine,
   ) {}
 
   /**
@@ -681,7 +691,136 @@ export class AhspController {
     const workType =
       (typeof body.workType === 'string' && body.workType.trim()) || methodName;
 
+    // ONE-TRUTH: ask the existing unit authority for the canonical output unit,
+    // then ask the existing AHSP identity classifier against the existing
+    // classification + current-version projection. No second duplicate engine.
+    const outputResolution = await this.units.resolve(outputUnit, outputUnit);
+    if (
+      outputResolution.status !== UNIT_RESOLUTION_STATUS.RESOLVED ||
+      !outputResolution.sourceUnitDefinition
+    ) {
+      throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
+    }
+    const identity = classifyAhspIdentity(
+      {
+        workspaceId,
+        workType,
+        methodName,
+        code: body.code ?? null,
+        context: {
+          classificationLeafNodeIds: leafNodeIds,
+          classificationComplete: leafNodeIds.length > 0,
+          outputUnitCode: outputResolution.sourceUnitDefinition.code,
+          formulaComplete:
+            resources.length > 0 &&
+            resources.every((resource) =>
+              isResourceCatalogIdShape(resource.resourceId),
+            ),
+          resources: resources.map((resource) => ({
+            resourceId: resource.resourceId,
+            resourceType: resource.resourceType,
+            baseUnit: resource.baseUnit,
+            coefficient: resource.coefficient,
+          })),
+        },
+      },
+      await this.ahspService.loadIdentitySurface(workspaceId),
+      {
+        name: (raw) => this.norm.normalizeName(raw),
+        code: (raw) => this.norm.normalizeCode(raw),
+      },
+    );
+
+    if (identity.verdict === 'IDENTICAL') {
+      throw new ConflictException('AHSP_SOURCE_IDENTITY_EXISTS');
+    }
+
+    const reusableParent =
+      identity.verdict === 'POSSIBLY_IDENTICAL' &&
+      identity.possibleMatches.length === 1 &&
+      (identity.possibleMatches[0].signal === 'EXACT_PARENT' ||
+        identity.possibleMatches[0].signal === 'CONTEXT_MATCH')
+        ? identity.possibleMatches[0]
+        : null;
+
+    // A normalized-name/code look-alike is evidence, not permission to mint a
+    // second parent. Manual has no separate adjudication UI here, so fail closed.
+    if (identity.verdict === 'POSSIBLY_IDENTICAL' && !reusableParent) {
+      throw new ConflictException('AHSP_IDENTITY_REVIEW_REQUIRED');
+    }
+    if (
+      reusableParent &&
+      (reusableParent.formulaSame === undefined ||
+        reusableParent.classificationCovered === undefined)
+    ) {
+      throw new ConflictException('AHSP_IDENTITY_REVIEW_REQUIRED');
+    }
+    // Cross-door contextual evidence may route a revision only when the same
+    // classification path is already represented. A new path on a differently
+    // keyed legacy parent still needs a human decision; similarity is not truth.
+    if (
+      reusableParent?.signal === 'CONTEXT_MATCH' &&
+      reusableParent.formulaSame === true &&
+      reusableParent.classificationCovered === false
+    ) {
+      throw new ConflictException('AHSP_IDENTITY_REVIEW_REQUIRED');
+    }
+
     const saved = await this.prisma.$transaction(async (tx) => {
+      const assignments: AhspClassificationAssignmentView[] = [];
+
+      if (reusableParent) {
+        // Same parent, changed recipe => the EXISTING version writer appends a
+        // revision. Same recipe, new path => only the EXISTING assignment writer
+        // extends the multi-path context. No second parent can be minted.
+        let versionId = reusableParent.currentVersionId ?? null;
+        if (reusableParent.formulaSame !== true) {
+          const version = await this.ahspVersionService.createVersion(
+            reusableParent.ahspId,
+            {
+              workspaceId,
+              userId,
+              outputUnit,
+              regulationReference: body.regulationReference,
+              issuerInstitution: body.issuerInstitution,
+              resources,
+              ...(reusableParent.currentVersionId
+                ? { basedOnVersionId: reusableParent.currentVersionId }
+                : {}),
+            },
+            tx,
+          );
+          versionId = version.id;
+        }
+        if (!versionId) {
+          throw new ConflictException('AHSP_EXISTING_VERSION_REQUIRED');
+        }
+        for (const leafNodeId of leafNodeIds) {
+          assignments.push(
+            await this.assignments.addAssignment(
+              {
+                ahspId: reusableParent.ahspId,
+                leafNodeId,
+                provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
+                actingWorkspaceId: workspaceId,
+                actorAccountId: userId,
+              },
+              tx,
+            ),
+          );
+        }
+        return {
+          id: reusableParent.ahspId,
+          keterangan: null,
+          versionId,
+          assignments,
+          disposition:
+            reusableParent.formulaSame === true
+              ? 'CLASSIFICATION_EXTENDED'
+              : 'REVISION_CREATED',
+        };
+      }
+
       const ahsp = await this.ahspService.create(
         {
           workspaceId,
@@ -710,7 +849,6 @@ export class AhspController {
         },
         tx,
       );
-      const assignments: AhspClassificationAssignmentView[] = [];
       for (const leafNodeId of leafNodeIds) {
         assignments.push(
           await this.assignments.addAssignment(
@@ -725,7 +863,13 @@ export class AhspController {
           ),
         );
       }
-      return { id: ahsp.id, keterangan: ahsp.keterangan, versionId: version.id, assignments };
+      return {
+        id: ahsp.id,
+        keterangan: ahsp.keterangan,
+        versionId: version.id,
+        assignments,
+        disposition: 'CREATED',
+      };
     });
     // Formula/Manual acceptance is already committed above. Resource identity
     // enrichment is deliberately not a gate: if observation preparation is
