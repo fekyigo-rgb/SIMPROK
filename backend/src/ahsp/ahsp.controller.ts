@@ -735,22 +735,33 @@ export class AhspController {
       throw new ConflictException('AHSP_SOURCE_IDENTITY_EXISTS');
     }
 
-    const exactParent =
+    const reusableParent =
       identity.verdict === 'POSSIBLY_IDENTICAL' &&
       identity.possibleMatches.length === 1 &&
-      identity.possibleMatches[0].signal === 'EXACT_PARENT'
+      (identity.possibleMatches[0].signal === 'EXACT_PARENT' ||
+        identity.possibleMatches[0].signal === 'CONTEXT_MATCH')
         ? identity.possibleMatches[0]
         : null;
 
     // A normalized-name/code look-alike is evidence, not permission to mint a
     // second parent. Manual has no separate adjudication UI here, so fail closed.
-    if (identity.verdict === 'POSSIBLY_IDENTICAL' && !exactParent) {
+    if (identity.verdict === 'POSSIBLY_IDENTICAL' && !reusableParent) {
       throw new ConflictException('AHSP_IDENTITY_REVIEW_REQUIRED');
     }
     if (
-      exactParent &&
-      (exactParent.formulaSame === undefined ||
-        exactParent.classificationCovered === undefined)
+      reusableParent &&
+      (reusableParent.formulaSame === undefined ||
+        reusableParent.classificationCovered === undefined)
+    ) {
+      throw new ConflictException('AHSP_IDENTITY_REVIEW_REQUIRED');
+    }
+    // Cross-door contextual evidence may route a revision only when the same
+    // classification path is already represented. A new path on a differently
+    // keyed legacy parent still needs a human decision; similarity is not truth.
+    if (
+      reusableParent?.signal === 'CONTEXT_MATCH' &&
+      reusableParent.formulaSame === true &&
+      reusableParent.classificationCovered === false
     ) {
       throw new ConflictException('AHSP_IDENTITY_REVIEW_REQUIRED');
     }
@@ -758,14 +769,14 @@ export class AhspController {
     const saved = await this.prisma.$transaction(async (tx) => {
       const assignments: AhspClassificationAssignmentView[] = [];
 
-      if (exactParent) {
+      if (reusableParent) {
         // Same parent, changed recipe => the EXISTING version writer appends a
         // revision. Same recipe, new path => only the EXISTING assignment writer
         // extends the multi-path context. No second parent can be minted.
-        let versionId = exactParent.currentVersionId ?? null;
-        if (exactParent.formulaSame !== true) {
+        let versionId = reusableParent.currentVersionId ?? null;
+        if (reusableParent.formulaSame !== true) {
           const version = await this.ahspVersionService.createVersion(
-            exactParent.ahspId,
+            reusableParent.ahspId,
             {
               workspaceId,
               userId,
@@ -773,8 +784,8 @@ export class AhspController {
               regulationReference: body.regulationReference,
               issuerInstitution: body.issuerInstitution,
               resources,
-              ...(exactParent.currentVersionId
-                ? { basedOnVersionId: exactParent.currentVersionId }
+              ...(reusableParent.currentVersionId
+                ? { basedOnVersionId: reusableParent.currentVersionId }
                 : {}),
             },
             tx,
@@ -788,7 +799,7 @@ export class AhspController {
           assignments.push(
             await this.assignments.addAssignment(
               {
-                ahspId: exactParent.ahspId,
+                ahspId: reusableParent.ahspId,
                 leafNodeId,
                 provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
                 actingWorkspaceId: workspaceId,
@@ -799,12 +810,12 @@ export class AhspController {
           );
         }
         return {
-          id: exactParent.ahspId,
+          id: reusableParent.ahspId,
           keterangan: null,
           versionId,
           assignments,
           disposition:
-            exactParent.formulaSame === true
+            reusableParent.formulaSame === true
               ? 'CLASSIFICATION_EXTENDED'
               : 'REVISION_CREATED',
         };
