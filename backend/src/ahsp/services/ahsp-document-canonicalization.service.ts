@@ -1723,6 +1723,13 @@ export class AhspDocumentCanonicalizationService {
       // no recipe version is minted; outer ALREADY_PRESENT handling applies the
       // existing assisted-classification writer idempotently.
       if (reusableParent.formulaSame === true) {
+        await this.assistedClassification.applyToAhsp({
+          ahspId: adoptedAhspId,
+          actingWorkspaceId: workspaceId,
+          actorAccountId: userId,
+          context: context.assistedClassification,
+          client: tx,
+        });
         await this.journal.settleOrThrow(tx, {
           workspaceId,
           lineId,
@@ -1752,6 +1759,13 @@ export class AhspDocumentCanonicalizationService {
         },
         tx,
       );
+      await this.assistedClassification.applyToAhsp({
+        ahspId: adoptedAhspId,
+        actingWorkspaceId: workspaceId,
+        actorAccountId: userId,
+        context: context.assistedClassification,
+        client: tx,
+      });
       return {
         kind: 'WRITTEN',
         ahspId: revised.ahspId,
