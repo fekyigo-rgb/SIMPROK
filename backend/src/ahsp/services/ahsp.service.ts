@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException, ConflictException, 
 import { PrismaService } from '../../prisma/prisma.service';
 import { AhspAuditService } from './ahsp-audit.service';
 import { AhspSnapshotService } from './ahsp-snapshot.service';
-import { MethodType, LocationType, OwnershipType, ReviewStatus, Prisma } from '@prisma/client';
+import { MethodType, LocationType, OwnershipType, ReviewStatus, Prisma, ResourceType } from '@prisma/client';
 import { AhspOwnershipPolicy, OwnershipViolationError, AhspEntity } from '../domain/ahsp-ownership.policy';
 import type { AhspIdentityRow } from '../document/ahsp-identity-classifier';
 import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
@@ -176,7 +176,10 @@ export class AhspService {
     if (!value) return null;
     const page = await this.unitLookup.searchUnits({
       q: value,
-      ...(resourceType ? { resourceType: resourceType as any } : {}),
+      ...(resourceType &&
+      Object.values(ResourceType).includes(resourceType as ResourceType)
+        ? { resourceType: resourceType as ResourceType }
+        : {}),
       page: 1,
       limit: 12,
     });
@@ -252,23 +255,21 @@ export class AhspService {
 
         const outputUnitCode =
           current.outputUnitDefinition?.code ??
-          (await this.identityUnitCode(current.outputUnit ?? null ?? ''));
+          (await this.identityUnitCode(current.outputUnit ?? ''));
         const resources = await Promise.all(
-          current.resources.map(async (resource) => ({
-            resourceId: resource.resourceId,
-            resourceType: resource.resourceType,
-            baseUnit:
-              (await this.identityUnitCode(
-                resource.baseUnit,
-                resource.resourceType,
-              )) ?? resource.baseUnit,
-            coefficient: resource.coefficient.toString(),
-            canonicalUnitProven:
-              (await this.identityUnitCode(
-                resource.baseUnit,
-                resource.resourceType,
-              )) !== null,
-          })),
+          current.resources.map(async (resource) => {
+            const canonicalUnit = await this.identityUnitCode(
+              resource.baseUnit,
+              resource.resourceType,
+            );
+            return {
+              resourceId: resource.resourceId,
+              resourceType: resource.resourceType,
+              baseUnit: canonicalUnit ?? resource.baseUnit,
+              coefficient: resource.coefficient.toString(),
+              canonicalUnitProven: canonicalUnit !== null,
+            };
+          }),
         );
         return {
           ahspId: row.id,
