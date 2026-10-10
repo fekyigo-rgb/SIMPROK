@@ -214,10 +214,12 @@ describe('AhspController', () => {
           deletedAt: null,
           context: {
             classificationLeafNodeIds: ['leaf-1', 'leaf-2'],
+            classificationComplete: true,
             outputUnitCode: 'M3',
+            formulaComplete: true,
             resources: [
               {
-                resourceId: 'resource-1',
+                resourceId: '10000000-0000-4000-8000-000000000099',
                 resourceType: 'LABOR',
                 baseUnit: 'PERSON_DAY',
                 coefficient: '1.000000',
@@ -235,7 +237,7 @@ describe('AhspController', () => {
           leafNodeIds: ['leaf-1'],
           resources: [
             {
-              resourceId: 'resource-1',
+              resourceId: '10000000-0000-4000-8000-000000000099',
               resourceType: 'LABOR',
               baseUnit: 'PERSON_DAY',
               coefficient: 1,
@@ -260,10 +262,12 @@ describe('AhspController', () => {
           deletedAt: null,
           context: {
             classificationLeafNodeIds: ['leaf-1'],
+            classificationComplete: true,
             outputUnitCode: 'M3',
+            formulaComplete: true,
             resources: [
               {
-                resourceId: 'resource-1',
+                resourceId: '10000000-0000-4000-8000-000000000099',
                 resourceType: 'LABOR',
                 baseUnit: 'PERSON_DAY',
                 coefficient: '1.000000',
@@ -282,7 +286,7 @@ describe('AhspController', () => {
         leafNodeIds: ['leaf-1'],
         resources: [
           {
-            resourceId: 'resource-1',
+            resourceId: '10000000-0000-4000-8000-000000000099',
             resourceType: 'LABOR',
             baseUnit: 'PERSON_DAY',
             coefficient: 1.25,
@@ -296,7 +300,7 @@ describe('AhspController', () => {
         expect.objectContaining({
           basedOnVersionId: 'ver-existing',
           resources: [
-            expect.objectContaining({ resourceId: 'resource-1', coefficient: 1.25 }),
+            expect.objectContaining({ resourceId: '10000000-0000-4000-8000-000000000099', coefficient: 1.25 }),
           ],
         }),
         expect.anything(),
@@ -319,8 +323,17 @@ describe('AhspController', () => {
           deletedAt: null,
           context: {
             classificationLeafNodeIds: ['leaf-1'],
+            classificationComplete: true,
             outputUnitCode: 'M3',
-            resources: [],
+            formulaComplete: true,
+            resources: [
+              {
+                resourceId: '10000000-0000-4000-8000-000000000099',
+                resourceType: 'LABOR',
+                baseUnit: 'PERSON_DAY',
+                coefficient: '1.000000',
+              },
+            ],
             versionId: 'ver-existing',
           },
         },
@@ -331,7 +344,14 @@ describe('AhspController', () => {
         methodName: 'Galian',
         outputUnit: 'm3',
         leafNodeIds: ['leaf-2'],
-        resources: [],
+        resources: [
+          {
+            resourceId: '10000000-0000-4000-8000-000000000099',
+            resourceType: 'LABOR',
+            baseUnit: 'PERSON_DAY',
+            coefficient: 1,
+          },
+        ],
       });
 
       expect(ahspService.create).not.toHaveBeenCalled();
