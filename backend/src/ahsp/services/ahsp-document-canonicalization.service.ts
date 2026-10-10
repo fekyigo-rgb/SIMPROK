@@ -523,7 +523,7 @@ export class AhspDocumentCanonicalizationService {
         });
       }
     }
-    const knowledge = await this.resolveKnowledge(
+    const resolved = await this.resolveKnowledge(
       understood,
       envelope.workspaceId,
       {
@@ -533,6 +533,11 @@ export class AhspDocumentCanonicalizationService {
           journal.importJobId,
         ),
       },
+    );
+    const knowledge = await this.refineKnowledgeIdentityForCommit(
+      resolved,
+      envelope.workspaceId,
+      assisted,
     );
     return this.commitKnowledge(knowledge, {
       workspaceId: envelope.workspaceId,
@@ -590,7 +595,7 @@ export class AhspDocumentCanonicalizationService {
         importJobId: params.importJobId,
       });
     }
-    const knowledge = await this.resolveKnowledge(
+    const resolved = await this.resolveKnowledge(
       understood,
       params.workspaceId,
       {
@@ -600,6 +605,11 @@ export class AhspDocumentCanonicalizationService {
           params.importJobId,
         ),
       },
+    );
+    const knowledge = await this.refineKnowledgeIdentityForCommit(
+      resolved,
+      params.workspaceId,
+      assisted,
     );
     return this.commitKnowledge(knowledge, {
       workspaceId: params.workspaceId,
