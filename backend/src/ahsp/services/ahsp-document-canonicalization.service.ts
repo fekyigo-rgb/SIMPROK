@@ -215,6 +215,8 @@ type AhspImportItemOutcome =
       readonly identityPendingResources: number;
       /** Catalogue ids this save actually linked. Applied to the item only after commit. */
       readonly linkedResources: readonly AhspResourceKnowledge[];
+      /** True only when this write appended a version to an existing AHSP parent. */
+      readonly reusedParent?: boolean;
     }
   | {
       readonly kind: 'ALREADY_PRESENT';
@@ -1526,7 +1528,7 @@ export class AhspDocumentCanonicalizationService {
           });
           if (outcome.admission === 'PROVEN') counts.ready += 1;
           else counts.identityPending += 1;
-          if (verdict === 'POSSIBLY_IDENTICAL') {
+          if (verdict === 'POSSIBLY_IDENTICAL' && !outcome.reusedParent) {
             // Record that a possible twin was SHOWN and deliberately kept separate.
             // Best-effort and OUTSIDE the item's transaction: the row already carries
             // a durable AHSPCreated entry, so losing this note corrupts nothing and
@@ -1630,6 +1632,8 @@ export class AhspDocumentCanonicalizationService {
       lineId: string;
       decision: AhspImportDecisionAction | undefined;
       assistedClassification?: AssistedClassificationContext | null;
+      /** Existing same-parent identity; when set, append a version instead of creating a parent. */
+      existingParentId?: string | null;
     },
     tx: Prisma.TransactionClient,
   ): Promise<AhspImportItemOutcome> {
@@ -1683,6 +1687,79 @@ export class AhspDocumentCanonicalizationService {
       return representedBy
         ? { kind: 'ALREADY_PRESENT', reasonCodes, ahspId: representedBy }
         : { kind: 'HELD', reasonCodes };
+    }
+
+    // EXACT_PARENT is not a licence to create another parent: the schema already
+    // says there can be only one. The enriched EXISTING classifier tells us
+    // whether the canonical recipe/context is already represented or is a
+    // revision/extra-path candidate. Reuse the same human decision vocabulary.
+    const exactParent =
+      verdict === 'POSSIBLY_IDENTICAL' &&
+      item.identityMatches?.length === 1 &&
+      item.identityMatches[0]?.signal === 'EXACT_PARENT'
+        ? item.identityMatches[0]
+        : null;
+    if (exactParent) {
+      const reasonCodes = [AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH];
+      // Incomplete formula/classification facts never authorize a mutation.
+      if (
+        exactParent.formulaSame === undefined ||
+        exactParent.classificationCovered === undefined ||
+        decision !== 'USE_EXISTING'
+      ) {
+        return hold(reasonCodes);
+      }
+      const adoptedAhspId = await this.recordUseExisting(
+        item,
+        knowledge,
+        userId,
+        tx,
+      );
+      if (!adoptedAhspId) return hold(reasonCodes);
+
+      // Same formula, candidate context already covered => classifier would have
+      // said IDENTICAL. Reaching here with same formula means a new lawful path:
+      // no recipe version is minted; outer ALREADY_PRESENT handling applies the
+      // existing assisted-classification writer idempotently.
+      if (exactParent.formulaSame === true) {
+        await this.journal.settleOrThrow(tx, {
+          workspaceId,
+          lineId,
+          status: ImportStatus.COMPLETED,
+          reasonCodes,
+          ahspId: adoptedAhspId,
+          ahspVersionId: exactParent.currentVersionId ?? undefined,
+        });
+        return {
+          kind: 'ALREADY_PRESENT',
+          reasonCodes,
+          ahspId: adoptedAhspId,
+        };
+      }
+
+      // Same AHSP parent, changed canonical recipe: append through the EXISTING
+      // version writer. No parent duplicate and no second formula engine.
+      const revised = await this.writeItem(
+        item,
+        knowledge,
+        {
+          workspaceId,
+          userId,
+          lineId,
+          assistedClassification: context.assistedClassification ?? null,
+          existingParentId: adoptedAhspId,
+        },
+        tx,
+      );
+      return {
+        kind: 'WRITTEN',
+        ahspId: revised.ahspId,
+        versionId: revised.versionId,
+        admission: revised.admission,
+        identityPendingResources: revised.identityPendingResources,
+        linkedResources: revised.linkedResources,
+        reusedParent: true,
+      };
     }
 
     // POSSIBLY_IDENTICAL — a look-alike exists but identity is NOT proven. It
@@ -1860,30 +1937,33 @@ export class AhspDocumentCanonicalizationService {
     const admission: Exclude<AhspWorkItemAdmission, 'HELD'> =
       identityPendingResources === 0 ? 'PROVEN' : 'IDENTITY_PENDING';
     {
-      // AhspService.create returns an untyped row; only the new parent's id is read.
-      const parent = (await this.ahspService.create(
-        {
-          workspaceId,
-          workType: item.workType!.raw,
-          methodName: item.methodName!.raw,
-          methodType: AHSP_PARENT_IDENTITY_FILLER.methodType,
-          locationType: AHSP_PARENT_IDENTITY_FILLER.locationType,
-          // ACG-01 CLOSURE 2 — the source's own item code, recorded as the code
-          // it is. It already travels in `workType` because that is the column
-          // AHSP identity is keyed on, but a reader asking "what is this item's
-          // code?" had no column to read and no way to tell a code from a work
-          // type. Additive and evidential: identity is untouched, and nothing
-          // downstream treats this as a canonical key.
-          //
-          // Bidang / Divisi / Jenis Pekerjaan stay NULL here on purpose. The
-          // parser contract carries no such fact, so supplying one would mean
-          // inferring it from a document heading — context invented rather than
-          // read. Classification paths are persisted via AssignmentService.
-          code: item.workType!.raw,
-          userId,
-        },
-        tx,
-      )) as { id: string };
+      // Reuse the existing parent when identity already proved that this is a
+      // revision. Otherwise use the existing parent writer exactly as before.
+      const parent: { id: string } = context.existingParentId
+        ? { id: context.existingParentId }
+        : ((await this.ahspService.create(
+            {
+              workspaceId,
+              workType: item.workType!.raw,
+              methodName: item.methodName!.raw,
+              methodType: AHSP_PARENT_IDENTITY_FILLER.methodType,
+              locationType: AHSP_PARENT_IDENTITY_FILLER.locationType,
+              // ACG-01 CLOSURE 2 — the source's own item code, recorded as the code
+              // it is. It already travels in `workType` because that is the column
+              // AHSP identity is keyed on, but a reader asking "what is this item's
+              // code?" had no column to read and no way to tell a code from a work
+              // type. Additive and evidential: identity is untouched, and nothing
+              // downstream treats this as a canonical key.
+              //
+              // Bidang / Divisi / Jenis Pekerjaan stay NULL here on purpose. The
+              // parser contract carries no such fact, so supplying one would mean
+              // inferring it from a document heading — context invented rather than
+              // read. Classification paths are persisted via AssignmentService.
+              code: item.workType!.raw,
+              userId,
+            },
+            tx,
+          )) as { id: string });
       const dasarFromAssisted = context.assistedClassification?.dasarAcuan?.trim();
       const penerbitFromAssisted =
         context.assistedClassification?.penerbit?.trim();
