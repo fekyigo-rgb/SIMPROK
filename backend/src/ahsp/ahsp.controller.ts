@@ -33,7 +33,7 @@ import type { AhspImportDecision } from './services/ahsp-document-canonicalizati
 import { AhspImportAssistedClassificationService } from './services/ahsp-import-assisted-classification.service';
 import { parseAssistedClassificationContext } from './document/ahsp-assisted-classification';
 import { RetireAhspVersionDto } from './dto/retire-ahsp-version.dto';
-import { AhspClassificationAssignmentProvenance, ConstructionClassificationLevel, LocationType, MethodType, OwnershipType } from '@prisma/client';
+import { AhspClassificationAssignmentProvenance, ConstructionClassificationLevel, LocationType, MethodType, OwnershipType, ResourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AhspClassificationAssignmentService, type AhspClassificationAssignmentView } from './services/ahsp-classification-assignment.service';
 import { BasicPriceImportLookupService } from '../basic-price/basic-price-import-lookup.service';
@@ -627,6 +627,35 @@ export class AhspController {
     const outputUnit = typeof body?.outputUnit === 'string' ? body.outputUnit.trim() : '';
     if (!methodName) throw new BadRequestException('AHSP_METHOD_NAME_REQUIRED');
     if (!outputUnit) throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
+
+    // Resource identity and occurrence unit are separate facts. Manual rows
+    // carry the canonical UnitDefinition.code selected from the shared unit
+    // catalog. Validate that exact code against the same resource-family-filtered
+    // catalog; do not feed canonical codes back through the raw-alias resolver.
+    // ResourceCatalog.baseUnit remains a reference/default, never a hard lock.
+    const resources = Array.isArray(body.resources) ? body.resources : [];
+    for (const resource of resources) {
+      const resourceType = Object.values(ResourceType).includes(resource.resourceType as ResourceType)
+        ? (resource.resourceType as ResourceType)
+        : null;
+      if (!resourceType || typeof resource.baseUnit !== 'string' || resource.baseUnit.trim() === '') {
+        throw new BadRequestException('AHSP_RESOURCE_UNIT_UNRESOLVED');
+      }
+      const code = resource.baseUnit.trim();
+      const page = await this.resourceLookup.searchUnits({
+        q: code,
+        resourceType,
+        page: 1,
+        limit: 12,
+      });
+      const lawful = page.items.some(
+        (item) => item.code.toLocaleLowerCase('en-US') === code.toLocaleLowerCase('en-US'),
+      );
+      if (!lawful) {
+        throw new BadRequestException('AHSP_RESOURCE_UNIT_UNRESOLVED');
+      }
+    }
+
     const userId = await this.resolveActor(request);
     const declaredLeafIds = (Array.isArray(body.leafNodeIds) ? body.leafNodeIds : []).filter(
       (id): id is string => typeof id === 'string' && id.trim() !== '',
@@ -677,7 +706,7 @@ export class AhspController {
           outputUnit,
           regulationReference: body.regulationReference,
           issuerInstitution: body.issuerInstitution,
-          resources: Array.isArray(body.resources) ? body.resources : [],
+          resources,
         },
         tx,
       );
@@ -705,7 +734,7 @@ export class AhspController {
     try {
       await this.observations.ensureHandBuiltObservations(
         workspaceId,
-        Array.isArray(body.resources) ? body.resources : [],
+        resources,
       );
     } catch {
       resourceReviewPrepared = false;
