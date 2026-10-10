@@ -595,11 +595,9 @@ export function BasicPriceExplorerPage() {
                     data-bp-row-id={item.basicPriceId}
                   >
                     {/*
-                      NAME FIRST (§7). `resourceLabel` leads with the code,
-                      which is right for a one-line label and wrong for a table
-                      a person scans by name — so the same two facts are stacked
-                      rather than reordered, and the cell's accessible name
-                      still uses the canonical label.
+                      SIMPLE OUTSIDE: name and category are sufficient in the
+                      summary. The canonical code stays in the accessible name,
+                      record identity, search, and Detail, never discarded.
                     */}
                     <td
                       data-label="Item"
@@ -607,10 +605,7 @@ export function BasicPriceExplorerPage() {
                       aria-label={resourceLabel(item.resource)}
                     >
                       {item.resource.name}
-                      <small>
-                        {item.resource.code ? `${item.resource.code} · ` : ''}
-                        {resourceTypeLabel(item.resource.type)}
-                      </small>
+                      <small>{resourceTypeLabel(item.resource.type)}</small>
                     </td>
                     <td data-label="Harga" className="bp-cell-price">
                       {formatExplorerPrice(item.price)}

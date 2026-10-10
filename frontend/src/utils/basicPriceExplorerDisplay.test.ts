@@ -15,6 +15,7 @@ import {
   isAmbiguousTimeFilter,
   isInvalidDateRange,
   regionLabel,
+  basicPriceRegionLabel,
   resourceLabel,
   resourceTypeLabel,
   sourceFamilyLabel,
@@ -23,7 +24,7 @@ import {
   observationBasisLabel,
   workspaceScopeLabel,
 } from './basicPriceExplorerDisplay.ts';
-import type { ExplorerResourceIdentity } from './basicPriceExplorerDisplay.ts';
+import type { BasicPriceExplorerItem, ExplorerResourceIdentity } from './basicPriceExplorerDisplay.ts';
 
 test('buildExplorerQueryParams — only non-empty fields become query params', () => {
   const params = buildExplorerQueryParams({ search: '  Semen  ', page: 2, limit: undefined });
@@ -75,6 +76,34 @@ test('resourceLabel/regionLabel are re-exported and apply to the Explorer identi
   assert.equal(resourceLabel(explorerResource), 'MAT-01 — Semen');
   assert.equal(regionLabel({ id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' }), 'ID-JK — DKI Jakarta');
   assert.equal(regionLabel(null), 'Umum (tanpa wilayah)');
+});
+
+test('Basic Price list/detail shows region name without internal fixture code', () => {
+  const item: BasicPriceExplorerItem = {
+    basicPriceId: 'p1',
+    resource: { id: 'r1', code: 'BPOT-TEST-01', name: 'Tukang Besi', type: 'LABOR', baseUnit: 'Org/Hari' },
+    region: {
+      id: 'reg1',
+      code: 'BPOT-TEST-BAGUALA',
+      name: 'Kecamatan Teluk Ambon Baguala (DATA UJI)',
+    },
+    price: '167500.00',
+    effectiveDate: '2026-09-30',
+    validUntil: null,
+    sourceType: 'MARKET_SURVEY',
+    sourceOrigin: 'COMMUNITY_REPORT',
+    sourceName: 'Tim Simprok',
+    freshnessStatus: 'CURRENT',
+    workspaceScope: 'WORKSPACE',
+  };
+  assert.equal(basicPriceRegionLabel(item), 'Kecamatan Teluk Ambon Baguala (DATA UJI)');
+  assert.doesNotMatch(basicPriceRegionLabel(item), /BPOT-TEST-BAGUALA/);
+  assert.equal(
+    basicPriceRegionLabel({ ...item, regionCoverageSummary: '2 Desa/Kelurahan di Baguala' }),
+    '2 Desa/Kelurahan di Baguala',
+  );
+  assert.equal(basicPriceRegionLabel({ ...item, region: null }), 'Umum (tanpa wilayah)');
+  assert.equal(item.region?.code, 'BPOT-TEST-BAGUALA');
 });
 
 test('formatExplorerPrice — exact string formatting, no float math', () => {

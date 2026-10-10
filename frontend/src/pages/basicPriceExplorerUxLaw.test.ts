@@ -190,6 +190,18 @@ test("X-10. the table carries exactly the seven locked columns, in order", () =>
   ]);
 });
 
+test("BP-ONE-TRUTH-01 — summary shows resource name and category, while retaining the canonical code for accessibility", () => {
+  const at = renderable.indexOf('className="bp-cell-resource"');
+  assert.ok(at >= 0);
+  const resourceCell = renderable.slice(at, renderable.indexOf("</td>", at));
+  assert.match(resourceCell, /aria-label=\{resourceLabel\(item\.resource\)\}/u);
+  assert.match(resourceCell, /\{item\.resource\.name\}/u);
+  assert.match(resourceCell, /\{resourceTypeLabel\(item\.resource\.type\)\}/u);
+  assert.doesNotMatch(resourceCell, /item\.resource\.code/u);
+  const tableCss = readFileSync("src/styles/basicPrice.css", "utf8");
+  assert.match(tableCss, /\.bp-cell-resource\s*\{[^}]*min-width:\s*160px/u);
+});
+
 test("X-11. SUMBER shows the real source name, never its family", () => {
   // "Pemerintah" / "Supplier" / "Survei" are internal groupings. A person
   // reading a price needs to know it came from Dinas PUPR Provinsi Maluku.

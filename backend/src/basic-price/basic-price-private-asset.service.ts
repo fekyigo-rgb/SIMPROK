@@ -1661,6 +1661,13 @@ export class BasicPricePrivateAssetService {
             },
           },
         },
+        // Same-source observations keep the name in their birth audit, not
+        // in their predecessor's import document. Read only that name evidence.
+        provenanceCorrections: {
+          orderBy: { createdAt: 'asc' },
+          take: 1,
+          select: { after: true },
+        },
       },
     });
     if (!predecessor) throw new NotFoundException('BasicPrice not found');

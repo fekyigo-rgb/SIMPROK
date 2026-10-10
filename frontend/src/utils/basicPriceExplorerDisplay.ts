@@ -74,8 +74,11 @@ export interface BasicPriceExplorerItem {
   assetScope?: BasicPriceAssetScope;
 }
 
+// The Explorer and its Detail show the human place name, not the internal
+// region code. Keep the canonical region id/code in the payload for matching,
+// filters and disambiguation in region-pickers; do not weaken those paths.
 export const basicPriceRegionLabel = (item: BasicPriceExplorerItem): string =>
-  item.regionCoverageSummary?.trim() || regionLabel(item.region);
+  item.regionCoverageSummary?.trim() || item.region?.name || 'Umum (tanpa wilayah)';
 
 export type BasicPriceAssetScope = 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG';
 
