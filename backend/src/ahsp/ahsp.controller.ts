@@ -44,6 +44,7 @@ import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
 import { RealityNormalizationEngine } from './services/reality-normalization.engine';
 import { classifyAhspIdentity } from './document/ahsp-identity-classifier';
+import { isResourceCatalogIdShape } from '../resource-catalog/resource-identity-resolution.kernel';
 
 /**
  * Parse the optional multipart `decisions` field into import decisions, failing
@@ -708,7 +709,13 @@ export class AhspController {
         code: body.code ?? null,
         context: {
           classificationLeafNodeIds: leafNodeIds,
+          classificationComplete: leafNodeIds.length > 0,
           outputUnitCode: outputResolution.sourceUnitDefinition.code,
+          formulaComplete:
+            resources.length > 0 &&
+            resources.every((resource) =>
+              isResourceCatalogIdShape(resource.resourceId),
+            ),
           resources: resources.map((resource) => ({
             resourceId: resource.resourceId,
             resourceType: resource.resourceType,
@@ -738,6 +745,13 @@ export class AhspController {
     // A normalized-name/code look-alike is evidence, not permission to mint a
     // second parent. Manual has no separate adjudication UI here, so fail closed.
     if (identity.verdict === 'POSSIBLY_IDENTICAL' && !exactParent) {
+      throw new ConflictException('AHSP_IDENTITY_REVIEW_REQUIRED');
+    }
+    if (
+      exactParent &&
+      (exactParent.formulaSame === undefined ||
+        exactParent.classificationCovered === undefined)
+    ) {
       throw new ConflictException('AHSP_IDENTITY_REVIEW_REQUIRED');
     }
 
