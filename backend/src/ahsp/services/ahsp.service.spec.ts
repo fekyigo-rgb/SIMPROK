@@ -18,6 +18,9 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AhspAuditService } from './ahsp-audit.service';
 import { AhspSnapshotService } from './ahsp-snapshot.service';
 import { AhspService } from './ahsp.service';
+import { BasicPriceImportLookupService } from '../../basic-price/basic-price-import-lookup.service';
+import { UnitKernelService } from '../../unit-kernel/unit-kernel.service';
+import { UNIT_RESOLUTION_STATUS } from '../../unit-kernel/unit-kernel.contracts';
 
 describe('AhspService', () => {
   let service: AhspService;
@@ -46,6 +49,8 @@ describe('AhspService', () => {
     createSnapshot: jest.Mock;
     readProposalSubject: jest.Mock;
   };
+  let unitLookup: { searchUnits: jest.Mock };
+  let units: { resolve: jest.Mock };
 
   const ahsp = {
     id: 'ahsp-1',
@@ -100,6 +105,32 @@ describe('AhspService', () => {
       createSnapshot: jest.fn(),
       readProposalSubject: jest.fn(),
     };
+    unitLookup = {
+      searchUnits: jest.fn(async (dto: { q?: string }) => ({
+        items: dto.q
+          ? [
+              {
+                id: 'unit-by-code',
+                code: dto.q,
+                displayName: dto.q,
+                symbol: dto.q,
+                dimension: 'COUNT',
+                kind: 'STANDARD',
+              },
+            ]
+          : [],
+        page: 1,
+        limit: 12,
+        total: dto.q ? 1 : 0,
+        hasNext: false,
+      })),
+    };
+    units = {
+      resolve: jest.fn().mockResolvedValue({
+        status: UNIT_RESOLUTION_STATUS.RESOLVED,
+        sourceUnitDefinition: { id: 'unit-alias', code: 'M3' },
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -115,6 +146,14 @@ describe('AhspService', () => {
         {
           provide: AhspSnapshotService,
           useValue: snapshots,
+        },
+        {
+          provide: BasicPriceImportLookupService,
+          useValue: unitLookup,
+        },
+        {
+          provide: UnitKernelService,
+          useValue: units,
         },
       ],
     }).compile();
@@ -374,7 +413,7 @@ describe('AhspService', () => {
           classificationLeafNodeIds: ['leaf-b', 'leaf-a'],
           classificationComplete: true,
           outputUnitCode: 'M3',
-          formulaComplete: false,
+          formulaComplete: true,
           resources: [
             {
               resourceId: 'resource-1',
