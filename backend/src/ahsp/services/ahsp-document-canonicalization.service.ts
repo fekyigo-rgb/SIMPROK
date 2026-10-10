@@ -1691,18 +1691,21 @@ export class AhspDocumentCanonicalizationService {
     // says there can be only one. The enriched EXISTING classifier tells us
     // whether the canonical recipe/context is already represented or is a
     // revision/extra-path candidate. Reuse the same human decision vocabulary.
-    const exactParent =
+    const reusableParent =
       verdict === 'POSSIBLY_IDENTICAL' &&
       item.identityMatches?.length === 1 &&
-      item.identityMatches[0]?.signal === 'EXACT_PARENT'
+      (item.identityMatches[0]?.signal === 'EXACT_PARENT' ||
+        item.identityMatches[0]?.signal === 'CONTEXT_MATCH')
         ? item.identityMatches[0]
         : null;
-    if (exactParent) {
+    if (reusableParent) {
       const reasonCodes = [AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH];
       // Incomplete formula/classification facts never authorize a mutation.
+      // Import already has the existing USE_EXISTING human decision channel, so
+      // cross-door contextual matches use that same channel rather than a new one.
       if (
-        exactParent.formulaSame === undefined ||
-        exactParent.classificationCovered === undefined ||
+        reusableParent.formulaSame === undefined ||
+        reusableParent.classificationCovered === undefined ||
         decision !== 'USE_EXISTING'
       ) {
         return hold(reasonCodes);
@@ -1719,14 +1722,14 @@ export class AhspDocumentCanonicalizationService {
       // said IDENTICAL. Reaching here with same formula means a new lawful path:
       // no recipe version is minted; outer ALREADY_PRESENT handling applies the
       // existing assisted-classification writer idempotently.
-      if (exactParent.formulaSame === true) {
+      if (reusableParent.formulaSame === true) {
         await this.journal.settleOrThrow(tx, {
           workspaceId,
           lineId,
           status: ImportStatus.COMPLETED,
           reasonCodes,
           ahspId: adoptedAhspId,
-          ahspVersionId: exactParent.currentVersionId ?? undefined,
+          ahspVersionId: reusableParent.currentVersionId ?? undefined,
         });
         return {
           kind: 'ALREADY_PRESENT',
