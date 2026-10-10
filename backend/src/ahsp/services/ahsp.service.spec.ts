@@ -298,7 +298,7 @@ describe('AhspService', () => {
     expect(audit.logAction).not.toHaveBeenCalled();
   });
 
-  it('loadIdentitySurface reads the workspace + Official Repository WITHOUT filtering deletedAt', async () => {
+  it('loadIdentitySurface reads the workspace + Official Repository with canonical current recipe/context', async () => {
     prisma.aHSP.findMany.mockResolvedValue([
       {
         id: 'a1',
@@ -307,6 +307,25 @@ describe('AhspService', () => {
         methodName: 'Galian biasa',
         code: 'B.3',
         deletedAt: null,
+        classificationAssignments: [
+          { leafNodeId: 'leaf-b' },
+          { leafNodeId: 'leaf-a' },
+        ],
+        versions: [
+          {
+            id: 'ver-2',
+            outputUnit: 'm3',
+            outputUnitDefinition: { code: 'M3' },
+            resources: [
+              {
+                resourceId: 'resource-1',
+                resourceType: 'LABOR',
+                baseUnit: 'PERSON_DAY',
+                coefficient: { toString: () => '1.250000' },
+              },
+            ],
+          },
+        ],
       },
     ]);
     const surface = await service.loadIdentitySurface('workspace-1');
@@ -320,6 +339,27 @@ describe('AhspService', () => {
         methodName: true,
         code: true,
         deletedAt: true,
+        classificationAssignments: {
+          where: { isActive: true },
+          select: { leafNodeId: true },
+        },
+        versions: {
+          orderBy: { versionNumber: 'desc' },
+          take: 1,
+          select: {
+            id: true,
+            outputUnit: true,
+            outputUnitDefinition: { select: { code: true } },
+            resources: {
+              select: {
+                resourceId: true,
+                resourceType: true,
+                baseUnit: true,
+                coefficient: true,
+              },
+            },
+          },
+        },
       },
     });
     expect(surface).toEqual([
@@ -330,6 +370,19 @@ describe('AhspService', () => {
         methodName: 'Galian biasa',
         code: 'B.3',
         deletedAt: null,
+        context: {
+          classificationLeafNodeIds: ['leaf-b', 'leaf-a'],
+          outputUnitCode: 'M3',
+          resources: [
+            {
+              resourceId: 'resource-1',
+              resourceType: 'LABOR',
+              baseUnit: 'PERSON_DAY',
+              coefficient: '1.250000',
+            },
+          ],
+          versionId: 'ver-2',
+        },
       },
     ]);
   });
