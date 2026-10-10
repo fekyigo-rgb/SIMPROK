@@ -463,7 +463,7 @@
 .bp-cell-resource {
   font-weight: var(--weight-medium);
   color: var(--simprok-engineering-blue-900);
-  min-width: 220px;
+  min-width: 160px;
 }
 
 .bp-cell-resource small {
