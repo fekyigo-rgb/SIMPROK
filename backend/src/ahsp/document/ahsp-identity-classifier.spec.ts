@@ -524,6 +524,71 @@ describe('classifyAhspIdentity — AHSP-whole identity, not resource identity', 
     expect(result.possibleMatches[0]?.classificationCovered).toBeUndefined();
   });
 
+  it('K4c: same Uraian + same canonical path/formula is IDENTICAL across different legacy workType doors', () => {
+    const existing = [
+      row({
+        ahspId: 'manual-parent',
+        workType: 'Tanah',
+        methodName: 'Galian Tanah',
+        context: context(),
+      }),
+    ];
+    const result = classifyAhspIdentity(
+      candidate({
+        workType: '1.2.3 Source Code',
+        methodName: 'Galian   Tanah',
+        context: context(),
+      }),
+      existing,
+      norm,
+    );
+    expect(result.verdict).toBe('IDENTICAL');
+    expect(result.exactMatch).toMatchObject({
+      ahspId: 'manual-parent',
+      signal: 'CONTEXT_MATCH',
+      formulaSame: true,
+      classificationCovered: true,
+    });
+  });
+
+  it('K4d: same Uraian/path but changed formula is a cross-door revision candidate, not a duplicate parent', () => {
+    const existing = [
+      row({
+        ahspId: 'manual-parent',
+        workType: 'Tanah',
+        methodName: 'Galian Tanah',
+        context: context(),
+      }),
+    ];
+    const result = classifyAhspIdentity(
+      candidate({
+        workType: '1.2.3 Source Code',
+        methodName: 'Galian Tanah',
+        context: context({
+          resources: [
+            {
+              resourceId: 'resource-a',
+              resourceType: 'LABOR',
+              baseUnit: 'PERSON_DAY',
+              coefficient: 9,
+            },
+            context().resources[1],
+          ],
+        }),
+      }),
+      existing,
+      norm,
+    );
+    expect(result.verdict).toBe('POSSIBLY_IDENTICAL');
+    expect(result.possibleMatches).toHaveLength(1);
+    expect(result.possibleMatches[0]).toMatchObject({
+      ahspId: 'manual-parent',
+      signal: 'CONTEXT_MATCH',
+      formulaSame: false,
+      classificationCovered: true,
+    });
+  });
+
   it('K5: multiplicity is formula truth — removing one repeated component is a revision', () => {
     const repeated = {
       resourceId: 'resource-a',
