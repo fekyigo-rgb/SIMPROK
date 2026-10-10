@@ -372,7 +372,9 @@ describe('AhspService', () => {
         deletedAt: null,
         context: {
           classificationLeafNodeIds: ['leaf-b', 'leaf-a'],
+          classificationComplete: true,
           outputUnitCode: 'M3',
+          formulaComplete: false,
           resources: [
             {
               resourceId: 'resource-1',
