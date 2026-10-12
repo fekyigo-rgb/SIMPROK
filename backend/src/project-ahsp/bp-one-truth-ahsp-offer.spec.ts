@@ -6,7 +6,7 @@ describe('BP-ONE-TRUTH-01 — same observed offer reaches AHSP candidate read', 
   const predecessorId = '11111111-1111-4111-8111-111111111111';
   const descendantId = '22222222-2222-4222-8222-222222222222';
 
-  const run = async (accepted: boolean) => {
+  const run = async (accepted: boolean, withdrawn = false) => {
     const eligibility = new BasicPriceEligibilityPolicy();
     const identity = {
       loadEvidence: jest.fn().mockResolvedValue({
@@ -24,6 +24,7 @@ describe('BP-ONE-TRUTH-01 — same observed offer reaches AHSP candidate read', 
         findMany: jest
           .fn()
           .mockResolvedValueOnce(accepted ? [{ id: descendantId }] : [])
+          .mockResolvedValueOnce(withdrawn ? [{ id: descendantId }] : [])
           .mockResolvedValueOnce([]),
       },
     };
@@ -44,12 +45,12 @@ describe('BP-ONE-TRUTH-01 — same observed offer reaches AHSP candidate read', 
 
   it('filters old ID BEFORE the existing AHSP price resolver receives candidates', async () => {
     const tx = await run(true);
-    expect(tx.basicPrice.findMany).toHaveBeenCalledTimes(2);
+    expect(tx.basicPrice.findMany).toHaveBeenCalledTimes(3);
     const [eligibleArgs] = tx.basicPrice.findMany.mock.calls[0] as [
       { where: { id: { in: string[] } } },
     ];
     expect(eligibleArgs.where.id.in).toEqual([descendantId]);
-    const [offerArgs] = tx.basicPrice.findMany.mock.calls[1] as [
+    const [offerArgs] = tx.basicPrice.findMany.mock.calls[2] as [
       { where: { id: { notIn: string[] }; OR: unknown[] } },
     ];
     expect(offerArgs.where.id.notIn).toEqual([predecessorId]);
@@ -58,9 +59,29 @@ describe('BP-ONE-TRUTH-01 — same observed offer reaches AHSP candidate read', 
 
   it('does not suppress the old candidate when the new price is not eligible', async () => {
     const tx = await run(false);
-    const [offerArgs] = tx.basicPrice.findMany.mock.calls[1] as [
+    const [offerArgs] = tx.basicPrice.findMany.mock.calls[2] as [
       { where: { id?: { notIn: string[] } } },
     ];
     expect(offerArgs.where.id).toBeUndefined();
+  });
+
+  it('BP-CLEAN-01: AHSP refuses automatic old-price fallback after a governed withdrawal', async () => {
+    const tx = await run(false, true);
+    const [withdrawnArgs] = tx.basicPrice.findMany.mock.calls[1] as [
+      {
+        where: {
+          publicationAudits: {
+            some: { action: string; effectiveAt: { lte: Date } };
+          };
+        };
+      },
+    ];
+    expect(withdrawnArgs.where.publicationAudits.some.action).toBe('WITHDRAWN');
+    const [offerArgs] = tx.basicPrice.findMany.mock.calls[2] as [
+      {
+        where: { id: { notIn: string[] } };
+      },
+    ];
+    expect(offerArgs.where.id.notIn).toEqual([predecessorId]);
   });
 });

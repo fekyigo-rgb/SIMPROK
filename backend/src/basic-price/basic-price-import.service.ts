@@ -2856,6 +2856,14 @@ export class BasicPriceImportService {
       if (price.status === 'PUBLISHED' || publishedTrust === 'PUBLISHED') {
         throw new ConflictException('AUTO_PUBLISH_FORBIDDEN');
       }
+      // A private owner may remove their own unpublished price from active use.
+      // The same canonical withdrawal evidence that hides it from Explorer must
+      // prevent a direct/old browser session from submitting it afterwards.
+      const removed = await tx.basicPricePublicationAudit.findFirst({
+        where: { basicPriceId: price.id, action: 'WITHDRAWN' },
+        select: { id: true },
+      });
+      if (removed) throw new ConflictException('PRIVATE_PRICE_ALREADY_REMOVED');
 
       const successor = await tx.basicPrice.findFirst({
         where: { supersedesBasicPriceId: price.id },

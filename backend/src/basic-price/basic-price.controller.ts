@@ -1,4 +1,14 @@
-import { Controller, Get, Param, Req, UseGuards, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -6,6 +16,7 @@ import { Permissions } from '../common/decorators/permissions.decorator';
 import { BasicPriceService } from './basic-price.service';
 import { BasicPriceImportLookupService } from './basic-price-import-lookup.service';
 import { SearchRegionDto } from './dto/search-basic-price-import-lookups.dto';
+import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.service';
 
 /**
  * The one fact `PermissionsGuard` attaches to every request that reaches this
@@ -29,6 +40,7 @@ export class BasicPriceController {
   constructor(
     private readonly basicPriceService: BasicPriceService,
     private readonly lookupService: BasicPriceImportLookupService,
+    private readonly trustedActor: TrustedBasicPriceActorService,
   ) {}
 
   @Get('health')
@@ -59,9 +71,19 @@ export class BasicPriceController {
    */
   @Get()
   @Permissions('BASIC_PRICE_VIEW')
-  findAll(@Req() request: any, @Query() query: GetBasicPricesDto) {
-    const workspaceId: string = request.workspaceContext?.workspaceId;
-    return this.basicPriceService.findAllForWorkspace(workspaceId, query);
+  findAll(
+    @Req() request: WorkspaceScopedRequest & { user?: { id?: string } },
+    @Query() query: GetBasicPricesDto,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId)
+      throw new BadRequestException('BASIC_PRICE_WORKSPACE_CONTEXT_REQUIRED');
+    const accountId: string | undefined = request.user?.id;
+    return this.basicPriceService.findAllForWorkspace(
+      workspaceId,
+      query,
+      accountId,
+    );
   }
 
   /**
@@ -113,6 +135,28 @@ export class BasicPriceController {
    * GET /basic-prices/:id
    * Ambil satu BasicPrice by ID, scoped ke workspace aktif.
    */
+  /** A private owner's removal from active offers; never a physical deletion. */
+  @Delete(':id')
+  @Permissions('BASIC_PRICE_SUBMIT')
+  async removeOwnPrivatePrice(
+    @Req()
+    request: {
+      workspaceContext?: { workspaceId?: string; membershipId?: string };
+      user?: { id?: string };
+    },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext,
+      request.user?.id,
+    );
+    return this.basicPriceService.removeOwnPrivatePrice(
+      actor.workspaceId,
+      actor.accountId,
+      id,
+    );
+  }
+
   @Get(':id')
   @Permissions('BASIC_PRICE_VIEW')
   findOne(@Req() request: any, @Param('id') id: string) {

@@ -28,6 +28,7 @@ describe('BasicPriceService', () => {
   let service: BasicPriceService;
   let prisma: {
     $queryRaw: jest.Mock;
+    priceSubmissionAudit: { findMany: jest.Mock };
     basicPrice: {
       count: jest.Mock;
       findMany: jest.Mock;
@@ -99,6 +100,7 @@ describe('BasicPriceService', () => {
   beforeEach(async () => {
     prisma = {
       $queryRaw: jest.fn().mockResolvedValue([]),
+      priceSubmissionAudit: { findMany: jest.fn().mockResolvedValue([]) },
       basicPrice: {
         count: jest.fn(),
         findMany: jest.fn(),
@@ -121,6 +123,140 @@ describe('BasicPriceService', () => {
     expect(service).toBeDefined();
   });
 
+  describe('BP-MULTI-ACTION-01 — canonical proposal evidence', () => {
+    const privatePrice = {
+      ...mockPrice,
+      assetScope: 'WORKSPACE_PRIVATE',
+      status: 'UNPUBLISHED',
+      verificationStatus: 'UNVERIFIED',
+      sourceImportRow: { priceSubmissionId: null },
+    };
+
+    it('finds an existing proposal via the imported row without another audit read', async () => {
+      prisma.basicPrice.count.mockResolvedValue(1);
+      prisma.basicPrice.findMany.mockResolvedValue([
+        {
+          ...privatePrice,
+          sourceImportRow: { priceSubmissionId: 'old-submission' },
+        },
+      ]);
+      const result = await service.findAllForWorkspace(workspaceId);
+      expect(result.data[0].alreadyProposed).toBe(true);
+      expect(prisma.priceSubmissionAudit.findMany).not.toHaveBeenCalled();
+    });
+
+    it('finds manual private proposals through the existing submission audit scoped to workspace', async () => {
+      prisma.basicPrice.count.mockResolvedValue(1);
+      prisma.basicPrice.findMany.mockResolvedValue([privatePrice]);
+      prisma.priceSubmissionAudit.findMany.mockResolvedValue([
+        { reason: 'PRIVATE_PRICE_PROPOSAL; basicPriceId:bp-01' },
+      ]);
+      const result = await service.findAllForWorkspace(workspaceId);
+      expect(result.data[0].alreadyProposed).toBe(true);
+      expect(prisma.priceSubmissionAudit.findMany).toHaveBeenCalledWith({
+        where: {
+          reason: { in: ['PRIVATE_PRICE_PROPOSAL; basicPriceId:bp-01'] },
+          submission: { workspaceId },
+        },
+        select: { reason: true },
+      });
+    });
+
+    it('distinguishes a private price never proposed from a catalog price', async () => {
+      prisma.basicPrice.count.mockResolvedValue(1);
+      prisma.basicPrice.findMany.mockResolvedValue([privatePrice]);
+      expect(
+        (await service.findAllForWorkspace(workspaceId)).data[0]
+          .alreadyProposed,
+      ).toBe(false);
+      prisma.basicPrice.findMany.mockResolvedValue([
+        { ...mockPrice, assetScope: 'SIMPROK_CATALOG' },
+      ]);
+      expect(
+        (await service.findAllForWorkspace(workspaceId)).data[0]
+          .alreadyProposed,
+      ).toBe(null);
+    });
+  });
+
+  describe('BP-MULTI-ACTION-02 — caller-owned private removal offer', () => {
+    const privateOwned = {
+      ...mockPrice,
+      assetScope: 'WORKSPACE_PRIVATE',
+      status: 'UNPUBLISHED',
+      verificationStatus: 'UNVERIFIED',
+      reportedByAccountId: 'own-account',
+      sourceSubmissionId: null,
+      sourceImportRow: { priceSubmissionId: null },
+      projectAhspResourceResolutions: [],
+      promotedTo: null,
+      supersededBy: null,
+    };
+
+    it('exposes remove only to its reporter account, not a same-workspace teammate or catalog owner', async () => {
+      prisma.basicPrice.count.mockResolvedValue(1);
+      prisma.basicPrice.findMany.mockResolvedValue([privateOwned]);
+      expect(
+        (await service.findAllForWorkspace(workspaceId, {}, 'own-account'))
+          .data[0].canRemoveOwn,
+      ).toBe(true);
+      expect(
+        (await service.findAllForWorkspace(workspaceId, {}, 'other-account'))
+          .data[0].canRemoveOwn,
+      ).toBe(false);
+      prisma.basicPrice.findMany.mockResolvedValue([
+        {
+          ...privateOwned,
+          assetScope: 'SIMPROK_CATALOG',
+        },
+      ]);
+      expect(
+        (await service.findAllForWorkspace(workspaceId, {}, 'own-account'))
+          .data[0].canRemoveOwn,
+      ).toBe(false);
+    });
+
+    it('blocks a private predecessor already cited by a later observation', async () => {
+      prisma.basicPrice.count.mockResolvedValue(1);
+      prisma.basicPrice.findMany.mockResolvedValue([privateOwned]);
+      prisma.$queryRaw
+        .mockResolvedValueOnce([]) // existing observation lineage
+        .mockResolvedValueOnce([]) // existing repeated-import check
+        .mockResolvedValueOnce([{ id: privateOwned.id }]); // removal reference proof
+      const result = await service.findAllForWorkspace(
+        workspaceId,
+        {},
+        'own-account',
+      );
+      expect(result.data[0].canRemoveOwn).toBe(false);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(3);
+    });
+
+    it('removes eligibility when referenced or submitted, even for the account owner', async () => {
+      prisma.basicPrice.count.mockResolvedValue(1);
+      prisma.basicPrice.findMany.mockResolvedValue([
+        {
+          ...privateOwned,
+          projectAhspResourceResolutions: [{ id: 'rab-use' }],
+        },
+      ]);
+      expect(
+        (await service.findAllForWorkspace(workspaceId, {}, 'own-account'))
+          .data[0].canRemoveOwn,
+      ).toBe(false);
+      prisma.basicPrice.findMany.mockResolvedValue([
+        {
+          ...privateOwned,
+          sourceImportRow: { priceSubmissionId: 'review-pending' },
+        },
+      ]);
+      expect(
+        (await service.findAllForWorkspace(workspaceId, {}, 'own-account'))
+          .data[0].canRemoveOwn,
+      ).toBe(false);
+    });
+  });
+
   describe('findAllForWorkspace — public eligibility hard lock', () => {
     it('base where enforces the catalog publication predicate and this workspace own private assets', async () => {
       prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
@@ -133,7 +269,9 @@ describe('BasicPriceService', () => {
       );
       // count uses the SAME eligibility where → meta.total can never count a
       // row the page itself would not have shown.
-      expectTwoBranchEligibility(prisma.basicPrice.count.mock.calls[0][0].where);
+      expectTwoBranchEligibility(
+        prisma.basicPrice.count.mock.calls[0][0].where,
+      );
       expect(prisma.basicPrice.count.mock.calls[0][0].where).toEqual(
         prisma.basicPrice.findMany.mock.calls[0][0].where,
       );
@@ -173,6 +311,8 @@ describe('BasicPriceService', () => {
           // left for the reader to guess from workspaceScope (a curated
           // catalog price can be workspace-scoped too).
           assetScope: 'SIMPROK_CATALOG',
+          alreadyProposed: null,
+          canRemoveOwn: false,
         },
       ]);
       expect(result.meta).toEqual({
@@ -341,9 +481,7 @@ describe('BasicPriceService', () => {
           }),
         }),
       );
-      expect(
-        prisma.basicPrice.findMany.mock.calls[0][0].where.AND,
-      ).toEqual(
+      expect(prisma.basicPrice.findMany.mock.calls[0][0].where.AND).toEqual(
         expect.arrayContaining([
           {
             OR: [
@@ -902,7 +1040,9 @@ describe('BasicPriceService', () => {
                 { verificationStatus: { not: 'UNVERIFIED' } },
                 {
                   supersedes: {
-                    is: { publicationAudits: { none: { action: 'SUPERSEDED' } } },
+                    is: {
+                      publicationAudits: { none: { action: 'SUPERSEDED' } },
+                    },
                   },
                 },
               ],

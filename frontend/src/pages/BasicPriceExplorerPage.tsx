@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileInput, RefreshCw } from 'lucide-react';
+import { Download, FileInput, RefreshCw, Send, Trash2 } from 'lucide-react';
+import { submitPrivateBasicPrice } from '../api/basicPriceImport';
 import {
   BasicPriceExplorerError,
   fetchBasicPriceExplorer,
+  removeOwnBasicPrice,
   type BasicPriceExplorerItem,
   type ExplorerFilters,
   type ExplorerPageMeta,
@@ -26,6 +28,8 @@ import {
   explorerSourceNameLabel,
   formatExplorerPrice,
   basicPriceRegionLabel,
+  canProposePrivateExplorerItem,
+  privateProposalIsNotPublication,
   resourceLabel,
   resourceTypeLabel,
   sourceFamilyLabel,
@@ -187,6 +191,9 @@ export function BasicPriceExplorerPage() {
    * another Lihat, so a correction confirmation cannot stack.
    */
   const [detailNotice, setDetailNotice] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectionBusy, setSelectionBusy] = useState(false);
+  const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
   const requestGate = useRef(createLatestRequestGate());
 
   useEffect(() => {
@@ -271,6 +278,8 @@ export function BasicPriceExplorerPage() {
 
   const updateDraft = <K extends keyof DraftFilters>(key: K, value: DraftFilters[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
+    setSelectedIds(new Set());
+    setSelectionNotice(null);
     setPage(1);
     // A detail panel describes ONE row. When the list beneath it changes, the
     // row it describes may no longer be there, so the panel closes rather than
@@ -281,17 +290,183 @@ export function BasicPriceExplorerPage() {
 
   const resetFilters = () => {
     setDraft(EMPTY_DRAFT);
+    setSelectedIds(new Set());
+    setSelectionNotice(null);
     setPage(1);
     setOpenDetailId(null);
     setDetailNotice(null);
   };
 
-  const reload = () => setReloadNonce((n) => n + 1);
+  const reload = () => {
+    setSelectedIds(new Set());
+    setReloadNonce((n) => n + 1);
+  };
 
   const openDetailItem =
     state.kind === 'ready' && openDetailId
       ? (state.items.find((item) => item.basicPriceId === openDetailId) ?? null)
       : null;
+
+  const visibleRows = state.kind === 'ready' ? state.items : [];
+  const selectedRows = visibleRows.filter((item) => selectedIds.has(item.basicPriceId));
+  const allPageSelected =
+    visibleRows.length > 0 && visibleRows.every((item) => selectedIds.has(item.basicPriceId));
+  const canSubmit = hasPermission('BASIC_PRICE_SUBMIT');
+  const proposableRows = selectedRows.filter((item) => canProposePrivateExplorerItem(item, canSubmit));
+  const removableRows = selectedRows.filter((item) => item.canRemoveOwn === true);
+
+  const toggleOne = (id: string) => {
+    setSelectionNotice(null);
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const togglePage = () => {
+    setSelectionNotice(null);
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      for (const item of visibleRows) {
+        if (allPageSelected) next.delete(item.basicPriceId);
+        else next.add(item.basicPriceId);
+      }
+      return next;
+    });
+  };
+
+  const exportSelection = () => {
+    if (!selectedRows.length || selectionBusy) return;
+    // Reuse AHSP's Blob/CSV download pattern. No secondary price calculation:
+    // values are exact decimal strings from the canonical Explorer projection.
+    const values: string[][] = [
+      ['Item', 'Kategori', 'Kode', 'Harga (Rp)', 'Satuan', 'Wilayah', 'Sumber', 'Berlaku pada'],
+      ...selectedRows.map((item) => [
+        item.resource.name,
+        resourceTypeLabel(item.resource.type),
+        item.resource.code ?? '',
+        item.price,
+        item.resource.baseUnit,
+        basicPriceRegionLabel(item),
+        item.sourceName ?? '',
+        formatDate(item.effectiveDate),
+      ]),
+    ];
+    const safeCell = (value: string) => {
+      // Keep Excel from interpreting source-controlled content as a formula.
+      const protectedValue = /^[\s]*[=+\-@\t\r]/u.test(value) ? "'" + value : value;
+      return '"' + protectedValue.replace(/"/g, '""') + '"';
+    };
+    const csv = values.map((row) => row.map(safeCell).join(',')).join('\r\n');
+    const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'basic-price-terpilih.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setSelectionNotice(String(selectedRows.length) + ' harga diekspor dari halaman aktif.');
+  };
+
+  const removeSelection = async () => {
+    if (selectionBusy || !removableRows.length) return;
+    if (!window.confirm(
+      'Hapus ' + removableRows.length + ' harga privat milik Anda dari daftar aktif? ' +
+      'Riwayat tetap disimpan; harga publik dan yang terkait AHSP/RAB tidak dapat dihapus.',
+    )) return;
+    setSelectionBusy(true);
+    setSelectionNotice(null);
+    let removed = 0;
+    let blocked = 0;
+    const refusalReasons: string[] = [];
+    const remaining = new Set(selectedRows.filter(
+      (row) => row.canRemoveOwn !== true,
+    ).map((row) => row.basicPriceId));
+    try {
+      for (const item of removableRows) {
+        try {
+          await removeOwnBasicPrice(item.basicPriceId);
+          removed += 1;
+        } catch (error) {
+          blocked += 1;
+          remaining.add(item.basicPriceId);
+          let code = '';
+          if (error instanceof BasicPriceExplorerError) {
+            try {
+              const payload = JSON.parse(error.message) as { message?: string };
+              code = typeof payload.message === 'string' ? payload.message : '';
+            } catch { /* Unknown server response: do not guess. */ }
+          }
+          const why = code === 'BASIC_PRICE_REFERENCED_PROTECTED'
+            ? 'terkait harga lain, observasi, atau AHSP/RAB'
+            : code === 'PRICE_PROPOSAL_HISTORY_PROTECTED'
+              ? 'sudah memiliki riwayat pengajuan'
+              : error instanceof BasicPriceExplorerError && error.status === 404
+                ? 'tidak ditemukan atau bukan milik akun ini'
+                : error instanceof BasicPriceExplorerError && error.status === 403
+                  ? 'akses tidak diizinkan'
+                  : 'gagal diproses oleh server';
+          refusalReasons.push(item.resource.name + ': ' + why);
+        }
+      }
+    } finally {
+      setSelectedIds(remaining);
+      setSelectionBusy(false);
+      setReloadNonce((n) => n + 1);
+      setSelectionNotice(
+        removed + ' harga privat dikeluarkan dari daftar aktif. ' +
+        blocked + ' tidak dapat dihapus karena perlindungan atau perubahan status. ' +
+        (selectedRows.length - removableRows.length) +
+        ' item tidak memenuhi syarat (publik, bukan milik akun, atau mempunyai hubungan/riwayat yang dilindungi).' +
+        (refusalReasons.length ? ' Alasan: ' + refusalReasons.join('; ') + '.' : ''),
+      );
+    }
+  };
+
+  const submitSelection = async () => {
+    if (selectionBusy || !proposableRows.length) return;
+    if (!window.confirm('Usulkan ' + proposableRows.length + ' harga privat ke SIMPROK untuk ditinjau?')) return;
+    setSelectionBusy(true);
+    setSelectionNotice(null);
+    let submitted = 0;
+    let already = 0;
+    let failed = 0;
+    const stillSelected = new Set(
+      selectedRows.filter((row) => !proposableRows.some((p) => p.basicPriceId === row.basicPriceId))
+        .map((row) => row.basicPriceId),
+    );
+    try {
+      for (const item of proposableRows) {
+        try {
+          const result = await submitPrivateBasicPrice(item.basicPriceId);
+          if (!privateProposalIsNotPublication(result)) {
+            failed += 1;
+            stillSelected.add(item.basicPriceId);
+          } else if (result.alreadyProposed) {
+            already += 1;
+          } else {
+            submitted += 1;
+          }
+        } catch {
+          failed += 1;
+          stillSelected.add(item.basicPriceId);
+        }
+      }
+    } finally {
+      setSelectedIds(stillSelected);
+      setSelectionBusy(false);
+      setReloadNonce((n) => n + 1);
+      setSelectionNotice(
+        submitted + ' harga berhasil diusulkan. ' +
+        already + ' sudah pernah diusulkan. ' +
+        failed + ' gagal; tetap terpilih untuk ditinjau. ' +
+        (selectedRows.length - proposableRows.length) + ' tidak memenuhi syarat.',
+      );
+    }
+  };
 
   useEffect(() => {
     if (!openDetailId) return;
@@ -506,8 +681,10 @@ export function BasicPriceExplorerPage() {
             className="bp-select bp-select--inline"
             value={sortOrder}
             onChange={(event) => {
-              setSortOrder(event.target.value as 'asc' | 'desc');
-              setPage(1);
+               setSortOrder(event.target.value as 'asc' | 'desc');
+               setSelectedIds(new Set());
+               setSelectionNotice(null);
+               setPage(1);
             }}
             aria-label="Urutkan berdasarkan tanggal berlaku"
           >
@@ -516,6 +693,35 @@ export function BasicPriceExplorerPage() {
           </select>
         </label>
       </div>
+
+      {selectedRows.length > 0 ? (
+        <div className="bp-selectionbar" role="group" aria-label="Aksi Basic Price terpilih">
+          <span aria-live="polite">
+            {selectedRows.length} dari {visibleRows.length} harga di halaman ini dipilih
+          </span>
+          <button type="button" className="bp-btn bp-btn--sm bp-btn--proposal" disabled={selectionBusy || !proposableRows.length}
+            title="Hanya harga privat yang belum diusulkan dan memiliki izin pengajuan"
+            onClick={() => void submitSelection()}>
+            <Send size={14} /> {selectionBusy ? 'Memproses...' : 'Usulkan ke SIMPROK'}
+          </button>
+          <button type="button" className="bp-btn bp-btn--sm" disabled={selectionBusy} onClick={exportSelection}>
+            <Download size={14} /> Export
+          </button>
+          <button type="button" className="bp-btn bp-btn--sm"
+            disabled={selectionBusy || !removableRows.length}
+            title="Hanya harga privat milik akun ini yang belum diajukan dan tidak memiliki referensi terlindungi"
+            onClick={() => void removeSelection()}>
+            <Trash2 size={14} /> Hapus
+          </button>
+          <button type="button" className="bp-btn bp-btn--link" disabled={selectionBusy}
+            onClick={() => { setSelectedIds(new Set()); setSelectionNotice(null); }}>
+            Batal pilih
+          </button>
+        </div>
+      ) : null}
+      {selectionNotice ? (
+        <p className="bp-note bp-note--info" role="status" aria-live="polite">{selectionNotice}</p>
+      ) : null}
 
       {state.kind === 'FORBIDDEN' ||
       state.kind === 'INVALID_FILTER' ||
@@ -558,7 +764,7 @@ export function BasicPriceExplorerPage() {
             type="button"
             className="bp-btn bp-btn--sm"
             style={{ marginTop: '10px' }}
-            onClick={() => setPage(1)}
+onClick={() => { setSelectedIds(new Set()); setPage(1); }}
           >
             Kembali ke halaman 1
           </button>
@@ -574,6 +780,12 @@ export function BasicPriceExplorerPage() {
               </caption>
               <thead>
                 <tr>
+                  <th scope="col" className="bp-col-select">
+                    <input type="checkbox" aria-label="Pilih semua harga di halaman ini"
+                      checked={allPageSelected}
+                      ref={(node) => { if (node) node.indeterminate = selectedRows.length > 0 && !allPageSelected; }}
+                      onChange={togglePage} />
+                  </th>
                   <th scope="col" className="bp-col-item">Item</th>
                   <th scope="col" className="bp-th-right bp-col-price">
                     Harga
@@ -594,6 +806,11 @@ export function BasicPriceExplorerPage() {
                     className={openDetailId === item.basicPriceId ? 'bp-row--open' : undefined}
                     data-bp-row-id={item.basicPriceId}
                   >
+                    <td data-label="Pilih" className="bp-cell-select">
+                      <input type="checkbox" checked={selectedIds.has(item.basicPriceId)}
+                        aria-label={'Pilih harga ' + item.resource.name}
+                        onChange={() => toggleOne(item.basicPriceId)} />
+                    </td>
                     {/*
                       SIMPLE OUTSIDE: name and category are sufficient in the
                       summary. The canonical code stays in the accessible name,
@@ -668,7 +885,7 @@ export function BasicPriceExplorerPage() {
                   </tr>
                   {openDetailItem && openDetailId === item.basicPriceId ? (
                     <tr className="bp-detail-anchor">
-                      <td colSpan={7}>
+                       <td colSpan={8}>
                         {/*
                           BP-UX-DETAIL-ANCHOR-01 — Detail sits under THIS row,
                           not above the table. Same panel, same openDetailId,
@@ -705,7 +922,7 @@ export function BasicPriceExplorerPage() {
               className="bp-btn bp-btn--sm"
               disabled={state.meta.page <= 1}
               aria-disabled={state.meta.page <= 1}
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
+onClick={() => { setSelectedIds(new Set()); setSelectionNotice(null); setPage((current) => Math.max(1, current - 1)); }}
             >
               Sebelumnya
             </button>
@@ -717,7 +934,7 @@ export function BasicPriceExplorerPage() {
               className="bp-btn bp-btn--sm"
               disabled={state.meta.page >= state.meta.totalPages}
               aria-disabled={state.meta.page >= state.meta.totalPages}
-              onClick={() => setPage((current) => current + 1)}
+onClick={() => { setSelectedIds(new Set()); setSelectionNotice(null); setPage((current) => current + 1); }}
             >
               Berikutnya
             </button>

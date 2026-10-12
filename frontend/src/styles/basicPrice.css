@@ -1499,3 +1499,54 @@ tr.bp-detail-anchor > td {
     grid-template-columns: 76px 1fr auto;
   }
 }
+
+/* BP-MULTI-ACTION-01: selection changes no price, authority, or table lens. */
+.bp-col-select, .bp-table tbody td.bp-cell-select {
+  width: 38px;
+  min-width: 38px;
+  padding-left: 10px;
+  padding-right: 4px;
+  text-align: center;
+}
+.bp-col-select input, .bp-cell-select input {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--simprok-engineering-blue-700);
+}
+.bp-selectionbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-radius: var(--radius-md);
+  background: var(--simprok-engineering-blue-50);
+  padding: var(--space-2) var(--space-3);
+  color: var(--simprok-engineering-blue-700);
+  font-size: var(--text-xs);
+}
+.bp-selectionbar .bp-btn { display: inline-flex; align-items: center; gap: 5px; }
+.bp-selectionbar .bp-btn:disabled { opacity: 0.48; cursor: not-allowed; }
+@media (max-width: 720px) {
+  .bp-table tbody td.bp-cell-select {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+/* BP-MULTI-ACTION-01 Owner PASS: make proposal prominent without adding
+   a second primary header CTA or changing other Basic Price buttons. */
+.bp-selectionbar .bp-btn--proposal {
+  background: var(--simprok-trust-blue-500);
+  border-color: var(--simprok-trust-blue-500);
+  color: var(--simprok-white);
+  font-weight: var(--weight-semibold);
+}
+.bp-selectionbar .bp-btn--proposal:hover:not(:disabled),
+.bp-selectionbar .bp-btn--proposal:focus-visible:not(:disabled) {
+  background: var(--simprok-trust-blue-600);
+  border-color: var(--simprok-trust-blue-600);
+  color: var(--simprok-white);
+}
