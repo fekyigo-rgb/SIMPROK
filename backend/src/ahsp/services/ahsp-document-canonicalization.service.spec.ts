@@ -15,7 +15,7 @@ import {
 function resolvedUnit() {
   return {
     status: UNIT_RESOLUTION_STATUS.RESOLVED,
-    sourceUnitDefinition: { id: 'unit-1' },
+    sourceUnitDefinition: { id: 'unit-1', code: 'UNIT' },
   };
 }
 
@@ -306,6 +306,156 @@ describe('AhspDocumentCanonicalizationService', () => {
     code: null,
     deletedAt: null,
     ...over,
+  });
+
+  async function canonicalSurfaceFromOneWrite(
+    leafNodeIds: string[],
+    mutate?: (resources: Array<Record<string, unknown>>) => void,
+  ) {
+    ahspService.loadIdentitySurface.mockResolvedValue([]);
+    const first = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [],
+      {
+        jenisPengadaanRootId: 'root-1',
+        paths: leafNodeIds.map((leafNodeId) => ({
+          leafNodeId,
+          provenanceHint: 'FROM_USER' as const,
+        })),
+        pendingPaths: [],
+        dasarAcuan: null,
+        penerbit: null,
+      },
+    );
+    expect(first.written).toHaveLength(1);
+    const writtenResources = (
+      versionService.createVersion.mock.calls[0][1].resources as Array<
+        Record<string, unknown>
+      >
+    ).map((resource) => ({
+      resourceId: resource.resourceId,
+      resourceType: resource.resourceType,
+      baseUnit: 'UNIT',
+      coefficient: resource.coefficient,
+    }));
+    mutate?.(writtenResources);
+    const surface = [
+      surfaceRow({
+        context: {
+          classificationLeafNodeIds: leafNodeIds,
+          classificationComplete: true,
+          outputUnitCode: 'UNIT',
+          formulaComplete: true,
+          resources: writtenResources,
+          versionId: 'ver-existing',
+        },
+      }),
+    ];
+
+    journal = inMemoryImportJournal();
+    (service as any).journal = journal;
+    jest.clearAllMocks();
+    units.resolve.mockResolvedValue(resolvedUnit());
+    identity.loadEvidence.mockResolvedValue({
+      catalogCandidates: [],
+      sourceSightings: [],
+      reviewedMappings: [],
+    });
+    identity.resolve.mockResolvedValue({
+      status: 'RESOLVED',
+      resolvedResourceCatalogId: 'catalog-pekerja',
+    });
+    observations.decidedIdentityForSourceRows.mockResolvedValue(new Map());
+    observations.observeMany.mockResolvedValue(undefined);
+    audit.logAction.mockResolvedValue(undefined);
+    ahspService.create.mockResolvedValue({ id: 'ahsp-new' });
+    ahspService.loadIdentitySurface.mockResolvedValue(surface);
+    versionService.createVersion.mockResolvedValue({ id: 'ver-revision' });
+    return surface;
+  }
+
+  it('ONE-TRUTH: same parent + same canonical formula/context is ALREADY_PRESENT, never written twice', async () => {
+    await canonicalSurfaceFromOneWrite(['leaf-1']);
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [],
+      {
+        jenisPengadaanRootId: 'root-1',
+        paths: [{ leafNodeId: 'leaf-1', provenanceHint: 'FROM_USER' }],
+        pendingPaths: [],
+        dasarAcuan: null,
+        penerbit: null,
+      },
+    );
+    expect(result.summary.alreadyPresent).toBe(1);
+    expect(result.written).toEqual([]);
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(versionService.createVersion).not.toHaveBeenCalled();
+  });
+
+  it('ONE-TRUTH: same parent + changed canonical formula is held until USE_EXISTING, then appends a version to the existing parent', async () => {
+    await canonicalSurfaceFromOneWrite(['leaf-1'], (resources) => {
+      resources[0] = {
+        ...resources[0],
+        coefficient: Number(resources[0].coefficient) + 10,
+      };
+    });
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'USE_EXISTING' }],
+      {
+        jenisPengadaanRootId: 'root-1',
+        paths: [{ leafNodeId: 'leaf-1', provenanceHint: 'FROM_USER' }],
+        pendingPaths: [],
+        dasarAcuan: null,
+        penerbit: null,
+      },
+    );
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(versionService.createVersion).toHaveBeenCalledWith(
+      'existing-1',
+      expect.objectContaining({ resources: expect.any(Array) }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(result.written).toEqual([
+      expect.objectContaining({
+        ahspId: 'existing-1',
+        versionId: 'ver-revision',
+      }),
+    ]);
+  });
+
+  it('ONE-TRUTH: same formula + new canonical classification path reuses the parent without minting a recipe version', async () => {
+    await canonicalSurfaceFromOneWrite(['leaf-1']);
+    const result = await service.commit(
+      await envelopeFrom(await buildAhspAnalisaXlsx()),
+      'user-1',
+      [{ workType: FIXTURE_WORKTYPE, methodName: FIXTURE_METHOD, action: 'USE_EXISTING' }],
+      {
+        jenisPengadaanRootId: 'root-1',
+        paths: [{ leafNodeId: 'leaf-2', provenanceHint: 'FROM_USER' }],
+        pendingPaths: [],
+        dasarAcuan: null,
+        penerbit: null,
+      },
+    );
+    expect(ahspService.create).not.toHaveBeenCalled();
+    expect(versionService.createVersion).not.toHaveBeenCalled();
+    expect(result.summary.alreadyPresent).toBe(1);
+    expect(
+      (service as any).assistedClassification.applyToAhsp,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ahspId: 'existing-1',
+        context: expect.objectContaining({
+          paths: [expect.objectContaining({ leafNodeId: 'leaf-2' })],
+        }),
+      }),
+    );
   });
 
   it('attaches the IDENTICAL verdict to the preview so the human can decide before commit', async () => {

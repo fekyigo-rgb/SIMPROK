@@ -879,9 +879,19 @@ export function AhspManualPage(): ReactNode {
             });
             if (!response.ok) {
               if (response.status === 409) {
-                setError(
-                  'AHSP dengan uraian ini sudah ada. Tidak ada salinan kedua yang disimpan. Buka AHSP yang sudah tersimpan dari Ruang AHSP.',
-                );
+                const conflict = (await response
+                  .clone()
+                  .json()
+                  .catch(() => null)) as { message?: unknown } | null;
+                if (conflict?.message === 'AHSP_IDENTITY_REVIEW_REQUIRED') {
+                  setError(
+                    'SIMPROK menemukan AHSP yang mungkin sama. Tidak ada AHSP kedua yang disimpan. Tinjau AHSP yang sudah ada sebelum memutuskan revisi atau jalur klasifikasi tambahan.',
+                  );
+                } else {
+                  setError(
+                    'AHSP dengan konteks dan formula yang sama sudah ada. Tidak ada salinan kedua yang disimpan. Buka AHSP yang sudah tersimpan dari Ruang AHSP.',
+                  );
+                }
               } else {
                 setError(
                   'AHSP belum tersimpan. Tidak ada bagian yang dinyatakan berhasil — periksa satuan, formula, atau klasifikasi lalu coba lagi.',

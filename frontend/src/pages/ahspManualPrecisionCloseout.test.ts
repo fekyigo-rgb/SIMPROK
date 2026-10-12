@@ -138,6 +138,13 @@ test('Dasar and Penerbit keep a typed space while Escape still closes the menu',
   assert.equal(keepTyped('Peraturan Menteri PUPR Nomor 1 Tahun 2025'), 'Peraturan Menteri PUPR Nomor 1 Tahun 2025');
 });
 
+test('Manual distinguishes exact duplicate from identity review without creating a second save path', () => {
+  assert.equal(manual.includes("conflict?.message === 'AHSP_IDENTITY_REVIEW_REQUIRED'"), true);
+  assert.equal(manual.includes('SIMPROK menemukan AHSP yang mungkin sama.'), true);
+  assert.equal(manual.includes('AHSP dengan konteks dan formula yang sama sudah ada.'), true);
+  assert.equal(manual.includes("response.status === 409"), true);
+});
+
 test('manual keyboard input never implicitly saves and Keterangan stays multiline', () => {
   assert.equal(manual.includes('const explicitSave = useRef(false);'), true);
   assert.equal(manual.includes('if (!explicitSave.current) return;'), true);
