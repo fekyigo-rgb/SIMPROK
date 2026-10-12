@@ -269,6 +269,21 @@ type DetailClassificationPath = {
   jenisPekerjaan: string;
 };
 
+function groupedClassificationValue(
+  paths: readonly DetailClassificationPath[],
+  key: keyof DetailClassificationPath,
+): string {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const path of paths) {
+    const value = path[key].trim();
+    if (value === '' || seen.has(value)) continue;
+    seen.add(value);
+    values.push(value);
+  }
+  return values.join(', ');
+}
+
 function detailPathsFromAssignments(rows: unknown): DetailClassificationPath[] {
   if (!Array.isArray(rows)) return [];
   const paths: DetailClassificationPath[] = [];
@@ -974,23 +989,21 @@ export function AhspDetailPage() {
                 {/* ONE mapping with the room: a recorded source code is the code, never a work type. */}
                 {infoRow('Kode', orDash(presentAhspIdentity(ahsp).code))}
                 {infoRow('Keterangan', orDash(ahsp.keterangan))}
-                {classificationPaths.length > 0
-                  ? classificationPaths.map((path, index) => (
-                      <div key={'path-' + index}>
-                        {infoRow('Jenis Pengadaan', orDash(path.jenisPengadaan))}
-                        {infoRow('Kategori', orDash(path.kategori))}
-                        {infoRow('Subkategori', orDash(path.subkategori))}
-                        {infoRow('Jenis Pekerjaan', orDash(path.jenisPekerjaan))}
-                      </div>
-                    ))
-                  : (
-                      <>
-                        {infoRow('Jenis Pengadaan', orDash(ahsp.classification))}
-                        {infoRow('Kategori', orDash(ahsp.fieldCategory))}
-                        {infoRow('Subkategori', orDash(ahsp.subCategory))}
-                        {infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
-                      </>
-                    )}
+                {classificationPaths.length > 0 ? (
+                  <>
+                    {infoRow('Jenis Pengadaan', orDash(groupedClassificationValue(classificationPaths, 'jenisPengadaan')))}
+                    {infoRow('Kategori', orDash(groupedClassificationValue(classificationPaths, 'kategori')))}
+                    {infoRow('Subkategori', orDash(groupedClassificationValue(classificationPaths, 'subkategori')))}
+                    {infoRow('Jenis Pekerjaan', orDash(groupedClassificationValue(classificationPaths, 'jenisPekerjaan')))}
+                  </>
+                ) : (
+                  <>
+                    {infoRow('Jenis Pengadaan', orDash(ahsp.classification))}
+                    {infoRow('Kategori', orDash(ahsp.fieldCategory))}
+                    {infoRow('Subkategori', orDash(ahsp.subCategory))}
+                    {infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
+                  </>
+                )}
                 {infoRow('Uraian', orDash(ahsp.methodName))}
                 {infoRow('Satuan', orDash(presentedOutputUnit))}
                 {infoRow('Dasar AHSP', orDash(currentVersion?.regulationReference))}
