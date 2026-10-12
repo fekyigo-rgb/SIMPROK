@@ -673,6 +673,8 @@ export function AhspManualPage(): ReactNode {
   const submitLock = useRef(false);
   const explicitSave = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [identityConflict, setIdentityConflict] = useState(false);
+  const [conflictAhspId, setConflictAhspId] = useState<string | null>(null);
 
   const runResourceSearch = async (
     q: string,
@@ -836,6 +838,8 @@ export function AhspManualPage(): ReactNode {
           event.preventDefault();
           if (!explicitSave.current) return;
           if (busy || submitLock.current) return;
+          setIdentityConflict(false);
+          setConflictAhspId(null);
           const uraian = methodName.trim();
           const unit = outputUnit.trim();
           if (!uraian) {
@@ -879,10 +883,28 @@ export function AhspManualPage(): ReactNode {
             });
             if (!response.ok) {
               if (response.status === 409) {
-                setError(
-                  'AHSP dengan uraian ini sudah ada. Tidak ada salinan kedua yang disimpan. Buka AHSP yang sudah tersimpan dari Ruang AHSP.',
+                const conflict = (await response
+                  .clone()
+                  .json()
+                  .catch(() => null)) as { message?: unknown; existingAhspId?: unknown } | null;
+                setIdentityConflict(true);
+                setConflictAhspId(
+                  typeof conflict?.existingAhspId === 'string' && conflict.existingAhspId !== ''
+                    ? conflict.existingAhspId
+                    : null,
                 );
+                if (conflict?.message === 'AHSP_IDENTITY_REVIEW_REQUIRED') {
+                  setError(
+                    'SIMPROK menemukan AHSP yang mungkin sama. Tidak ada AHSP kedua yang disimpan. Tinjau AHSP yang sudah ada sebelum memutuskan revisi atau jalur klasifikasi tambahan.',
+                  );
+                } else {
+                  setError(
+                    'AHSP dengan konteks dan formula yang sama sudah ada. Tidak ada salinan kedua yang disimpan. Buka AHSP yang sudah tersimpan dari Ruang AHSP.',
+                  );
+                }
               } else {
+                setIdentityConflict(false);
+                setConflictAhspId(null);
                 setError(
                   'AHSP belum tersimpan. Tidak ada bagian yang dinyatakan berhasil — periksa satuan, formula, atau klasifikasi lalu coba lagi.',
                 );
@@ -897,6 +919,8 @@ export function AhspManualPage(): ReactNode {
             committed = true;
             navigate('/ahsp/' + created.id);
           } catch {
+            setIdentityConflict(false);
+            setConflictAhspId(null);
             setError('AHSP tidak dapat dihubungi.');
           } finally {
             if (!committed) {
@@ -1066,9 +1090,17 @@ export function AhspManualPage(): ReactNode {
         </section>
 
         {error ? (
-          <p role="alert" className="ahsp-line" style={{ color: '#c0392b' }}>
-            {error}
-          </p>
+          <div role="alert" className="ahsp-line" style={{ color: '#c0392b', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span>{error}</span>
+            {identityConflict ? (
+              <Link
+                to={conflictAhspId ? `/ahsp/${conflictAhspId}` : '/ahsp'}
+                className="ahsp-action ahsp-action--outline ahsp-action--compact"
+              >
+                {conflictAhspId ? 'Buka AHSP yang tersedia' : 'Buka Pustaka AHSP'}
+              </Link>
+            ) : null}
+          </div>
         ) : null}
 
         <div className="ahsp-manual-page__footer">

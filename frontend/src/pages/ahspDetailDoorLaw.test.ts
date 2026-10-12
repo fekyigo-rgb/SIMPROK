@@ -93,6 +93,17 @@ test("the Owner-approved fields and status are present, in human words", () => {
   assert.ok(!detail.includes('Jenis Pekerjaan (klasifikasi)'));
 });
 
+test("Informasi AHSP groups multi-path values by level instead of repeating four rows per path", () => {
+  assert.ok(detail.includes("groupedClassificationValue(classificationPaths, 'jenisPengadaan')"));
+  assert.ok(detail.includes("groupedClassificationValue(classificationPaths, 'kategori')"));
+  assert.ok(detail.includes("groupedClassificationValue(classificationPaths, 'subkategori')"));
+  assert.ok(detail.includes("groupedClassificationValue(classificationPaths, 'jenisPekerjaan')"));
+  const infoStart = detail.indexOf('aria-label="Informasi AHSP"');
+  const infoEnd = detail.indexOf('aria-label="Tentang AHSP Ini"', infoStart);
+  const info = detail.slice(infoStart, infoEnd);
+  assert.ok(!info.includes("classificationPaths.map("));
+});
+
 test("update AHSP is an editor of the current recipe, not a blank composer", () => {
   assert.ok(detail.includes("draftsFromVersion"));
   // "a coefficient must be greater than zero" still holds; it now lives in

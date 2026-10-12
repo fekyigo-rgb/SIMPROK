@@ -13,6 +13,7 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -39,6 +40,11 @@ import { AhspClassificationAssignmentService, type AhspClassificationAssignmentV
 import { BasicPriceImportLookupService } from '../basic-price/basic-price-import-lookup.service';
 import { SearchResourceCatalogDto } from '../basic-price/dto/search-basic-price-import-lookups.dto';
 import { ResourceObservationService } from '../resource-catalog/resource-observation.service';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
+import { RealityNormalizationEngine } from './services/reality-normalization.engine';
+import { classifyAhspIdentity } from './document/ahsp-identity-classifier';
+import { isResourceCatalogIdShape } from '../resource-catalog/resource-identity-resolution.kernel';
 
 /**
  * Parse the optional multipart `decisions` field into import decisions, failing
@@ -103,6 +109,8 @@ export class AhspController {
     /** Read-only catalog search. Same service as Basic Price. Not a second engine. */
     private readonly resourceLookup: BasicPriceImportLookupService,
     private readonly observations: ResourceObservationService,
+    private readonly units: UnitKernelService,
+    private readonly norm: RealityNormalizationEngine,
   ) {}
 
   /**
@@ -623,10 +631,13 @@ export class AhspController {
     if (!workspaceId) {
       throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
     }
-    const methodName = typeof body?.methodName === 'string' ? body.methodName.trim() : '';
-    const outputUnit = typeof body?.outputUnit === 'string' ? body.outputUnit.trim() : '';
+    const methodName =
+      typeof body?.methodName === 'string' ? body.methodName.trim() : '';
+    const outputUnit =
+      typeof body?.outputUnit === 'string' ? body.outputUnit.trim() : '';
     if (!methodName) throw new BadRequestException('AHSP_METHOD_NAME_REQUIRED');
-    if (!outputUnit) throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
+    if (!outputUnit)
+      throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
 
     // Resource identity and occurrence unit are separate facts. Manual rows
     // carry the canonical UnitDefinition.code selected from the shared unit
@@ -635,10 +646,16 @@ export class AhspController {
     // ResourceCatalog.baseUnit remains a reference/default, never a hard lock.
     const resources = Array.isArray(body.resources) ? body.resources : [];
     for (const resource of resources) {
-      const resourceType = Object.values(ResourceType).includes(resource.resourceType as ResourceType)
+      const resourceType = Object.values(ResourceType).includes(
+        resource.resourceType as ResourceType,
+      )
         ? (resource.resourceType as ResourceType)
         : null;
-      if (!resourceType || typeof resource.baseUnit !== 'string' || resource.baseUnit.trim() === '') {
+      if (
+        !resourceType ||
+        typeof resource.baseUnit !== 'string' ||
+        resource.baseUnit.trim() === ''
+      ) {
         throw new BadRequestException('AHSP_RESOURCE_UNIT_UNRESOLVED');
       }
       const code = resource.baseUnit.trim();
@@ -649,7 +666,9 @@ export class AhspController {
         limit: 12,
       });
       const lawful = page.items.some(
-        (item) => item.code.toLocaleLowerCase('en-US') === code.toLocaleLowerCase('en-US'),
+        (item) =>
+          item.code.toLocaleLowerCase('en-US') ===
+          code.toLocaleLowerCase('en-US'),
       );
       if (!lawful) {
         throw new BadRequestException('AHSP_RESOURCE_UNIT_UNRESOLVED');
@@ -657,31 +676,182 @@ export class AhspController {
     }
 
     const userId = await this.resolveActor(request);
-    const declaredLeafIds = (Array.isArray(body.leafNodeIds) ? body.leafNodeIds : []).filter(
-      (id): id is string => typeof id === 'string' && id.trim() !== '',
-    );
+    const declaredLeafIds = (
+      Array.isArray(body.leafNodeIds) ? body.leafNodeIds : []
+    ).filter((id): id is string => typeof id === 'string' && id.trim() !== '');
     const pending = Array.isArray(body.pendingPaths) ? body.pendingPaths : [];
     const materializedLeafIds: string[] = [];
     if (pending.length > 0) {
       const rootId =
-        typeof body.jenisPengadaanRootId === 'string' ? body.jenisPengadaanRootId.trim() : '';
-      if (!rootId) throw new BadRequestException('CLASSIFICATION_PATH_ROOT_REQUIRED');
+        typeof body.jenisPengadaanRootId === 'string'
+          ? body.jenisPengadaanRootId.trim()
+          : '';
+      if (!rootId)
+        throw new BadRequestException('CLASSIFICATION_PATH_ROOT_REQUIRED');
       for (const row of pending) {
-        const leaf = await this.assistedClassification.materializeWorkspacePath({
-          workspaceId,
-          rootId,
-          kategori: typeof row?.kategori === 'string' ? row.kategori : '',
-          subkategori: typeof row?.subkategori === 'string' ? row.subkategori : '',
-          jenisPekerjaan: typeof row?.jenisPekerjaan === 'string' ? row.jenisPekerjaan : '',
-        });
+        const leaf = await this.assistedClassification.materializeWorkspacePath(
+          {
+            workspaceId,
+            rootId,
+            kategori: typeof row?.kategori === 'string' ? row.kategori : '',
+            subkategori:
+              typeof row?.subkategori === 'string' ? row.subkategori : '',
+            jenisPekerjaan:
+              typeof row?.jenisPekerjaan === 'string' ? row.jenisPekerjaan : '',
+          },
+        );
         materializedLeafIds.push(leaf.id);
       }
     }
-    const leafNodeIds = [...new Set([...declaredLeafIds, ...materializedLeafIds])];
+    const leafNodeIds = [
+      ...new Set([...declaredLeafIds, ...materializedLeafIds]),
+    ];
     const workType =
       (typeof body.workType === 'string' && body.workType.trim()) || methodName;
 
+    // ONE-TRUTH: ask the existing unit authority for the canonical output unit,
+    // then ask the existing AHSP identity classifier against the existing
+    // classification + current-version projection. No second duplicate engine.
+    const outputResolution = await this.units.resolve(outputUnit, outputUnit);
+    if (
+      outputResolution.status !== UNIT_RESOLUTION_STATUS.RESOLVED ||
+      !outputResolution.sourceUnitDefinition
+    ) {
+      throw new BadRequestException('AHSP_OUTPUT_UNIT_UNRESOLVED');
+    }
+    const identity = classifyAhspIdentity(
+      {
+        workspaceId,
+        workType,
+        methodName,
+        code: body.code ?? null,
+        context: {
+          classificationLeafNodeIds: leafNodeIds,
+          classificationComplete: leafNodeIds.length > 0,
+          outputUnitCode: outputResolution.sourceUnitDefinition.code,
+          formulaComplete:
+            resources.length > 0 &&
+            resources.every((resource) =>
+              isResourceCatalogIdShape(resource.resourceId),
+            ),
+          resources: resources.map((resource) => ({
+            resourceId: resource.resourceId,
+            resourceType: resource.resourceType,
+            baseUnit: resource.baseUnit,
+            coefficient: resource.coefficient,
+          })),
+        },
+      },
+      await this.ahspService.loadIdentitySurface(workspaceId),
+      {
+        name: (raw) => this.norm.normalizeName(raw),
+        code: (raw) => this.norm.normalizeCode(raw),
+      },
+    );
+
+    if (identity.verdict === 'IDENTICAL') {
+      throw new ConflictException({
+        message: 'AHSP_SOURCE_IDENTITY_EXISTS',
+        existingAhspId: identity.exactMatch?.ahspId ?? null,
+      });
+    }
+
+    const identityReviewConflict = () =>
+      new ConflictException({
+        message: 'AHSP_IDENTITY_REVIEW_REQUIRED',
+        existingAhspId:
+          identity.possibleMatches.length === 1
+            ? identity.possibleMatches[0].ahspId
+            : null,
+        candidateAhspIds: identity.possibleMatches.map((match) => match.ahspId),
+      });
+
+    const reusableParent =
+      identity.verdict === 'POSSIBLY_IDENTICAL' &&
+      identity.possibleMatches.length === 1 &&
+      (identity.possibleMatches[0].signal === 'EXACT_PARENT' ||
+        identity.possibleMatches[0].signal === 'CONTEXT_MATCH')
+        ? identity.possibleMatches[0]
+        : null;
+
+    // A normalized-name/code look-alike is evidence, not permission to mint a
+    // second parent. Manual has no separate adjudication UI here, so fail closed.
+    if (identity.verdict === 'POSSIBLY_IDENTICAL' && !reusableParent) {
+      throw identityReviewConflict();
+    }
+    if (
+      reusableParent &&
+      (reusableParent.formulaSame === undefined ||
+        reusableParent.classificationCovered === undefined)
+    ) {
+      throw identityReviewConflict();
+    }
+    // Cross-door contextual evidence may route a revision only when the same
+    // classification path is already represented. A new path on a differently
+    // keyed legacy parent still needs a human decision; similarity is not truth.
+    if (
+      reusableParent?.signal === 'CONTEXT_MATCH' &&
+      reusableParent.formulaSame === true &&
+      reusableParent.classificationCovered === false
+    ) {
+      throw identityReviewConflict();
+    }
+
     const saved = await this.prisma.$transaction(async (tx) => {
+      const assignments: AhspClassificationAssignmentView[] = [];
+
+      if (reusableParent) {
+        // Same parent, changed recipe => the EXISTING version writer appends a
+        // revision. Same recipe, new path => only the EXISTING assignment writer
+        // extends the multi-path context. No second parent can be minted.
+        let versionId = reusableParent.currentVersionId ?? null;
+        if (reusableParent.formulaSame !== true) {
+          const version = await this.ahspVersionService.createVersion(
+            reusableParent.ahspId,
+            {
+              workspaceId,
+              userId,
+              outputUnit,
+              regulationReference: body.regulationReference,
+              issuerInstitution: body.issuerInstitution,
+              resources,
+              ...(reusableParent.currentVersionId
+                ? { basedOnVersionId: reusableParent.currentVersionId }
+                : {}),
+            },
+            tx,
+          );
+          versionId = version.id;
+        }
+        if (!versionId) {
+          throw new ConflictException('AHSP_EXISTING_VERSION_REQUIRED');
+        }
+        for (const leafNodeId of leafNodeIds) {
+          assignments.push(
+            await this.assignments.addAssignment(
+              {
+                ahspId: reusableParent.ahspId,
+                leafNodeId,
+                provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
+                actingWorkspaceId: workspaceId,
+                actorAccountId: userId,
+              },
+              tx,
+            ),
+          );
+        }
+        return {
+          id: reusableParent.ahspId,
+          keterangan: null,
+          versionId,
+          assignments,
+          disposition:
+            reusableParent.formulaSame === true
+              ? 'CLASSIFICATION_EXTENDED'
+              : 'REVISION_CREATED',
+        };
+      }
+
       const ahsp = await this.ahspService.create(
         {
           workspaceId,
@@ -710,7 +880,6 @@ export class AhspController {
         },
         tx,
       );
-      const assignments: AhspClassificationAssignmentView[] = [];
       for (const leafNodeId of leafNodeIds) {
         assignments.push(
           await this.assignments.addAssignment(
@@ -725,7 +894,13 @@ export class AhspController {
           ),
         );
       }
-      return { id: ahsp.id, keterangan: ahsp.keterangan, versionId: version.id, assignments };
+      return {
+        id: ahsp.id,
+        keterangan: ahsp.keterangan,
+        versionId: version.id,
+        assignments,
+        disposition: 'CREATED',
+      };
     });
     // Formula/Manual acceptance is already committed above. Resource identity
     // enrichment is deliberately not a gate: if observation preparation is
