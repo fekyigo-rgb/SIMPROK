@@ -108,3 +108,10 @@ export const searchExplorerRegions = async (q?: string, signal?: AbortSignal): P
   );
   return page.items;
 };
+
+// BP-MULTI-ACTION-01 — a private owner's governed withdrawal, not physical delete.
+// Reuses the canonical BasicPrice writer/authority and existing API credentials.
+export const removeOwnBasicPrice = async (
+  basicPriceId: string,
+): Promise<{ basicPriceId: string; removed: true; alreadyRemoved: boolean }> =>
+  requestJson(`/basic-prices/${encodeURIComponent(basicPriceId)}`, { method: 'DELETE' });

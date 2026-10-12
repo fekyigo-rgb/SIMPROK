@@ -29,6 +29,7 @@ import { promotionLineagePrecedenceWhere } from './basic-price-promotion-precede
 import {
   basicPriceCurrentnessWhere,
   mergeCurrentnessAnd,
+  WITHDRAWN_PUBLICATION_AUDIT_ACTION,
 } from './basic-price-currentness';
 import { basicPriceApplicabilityAnd } from './basic-price-applicability';
 import { basicPriceSourceNameWhere } from './basic-price-source-name.filter';
@@ -46,6 +47,13 @@ const EXPLORER_ROW_SELECT = {
   // visually indistinguishable from them, would be exactly the kind of
   // unlabelled claim SIMPROK does not make.
   assetScope: true,
+  status: true,
+  verificationStatus: true,
+  reportedByAccountId: true,
+  sourceSubmissionId: true,
+  promotedTo: { select: { id: true } },
+  supersededBy: { select: { id: true } },
+  projectAhspResourceResolutions: { take: 1, select: { id: true } },
   value: true,
   effectiveDate: true,
   validUntil: true,
@@ -93,6 +101,7 @@ const EXPLORER_ROW_SELECT = {
   // provenance subsystem, one link shorter — never a second one.
   sourceImportRow: {
     select: {
+      priceSubmissionId: true,
       batch: {
         select: {
           sourceOrganizationName: true,
@@ -149,6 +158,7 @@ const DETAIL_PROVENANCE_SELECT = {
   },
   sourceImportRow: {
     select: {
+      priceSubmissionId: true,
       sourceKdnHeaderText: true,
       batch: {
         select: {
@@ -396,7 +406,37 @@ export class BasicPriceService {
     const lawfulPairs = pairs.filter((pair) =>
       eligibleById.has(pair.descendantId),
     );
-    const omitted = new Set(lawfulPairs.map((pair) => pair.predecessorId));
+
+    // BP-CLEAN-01: withdrawing a proven later SAME-SOURCE observation is a
+    // decision to STOP its active offer, not consent to revive older money.
+    // Reuse the exact lineage above and its eligibility/temporal predicates.
+    // Historical reads before withdrawal and independent sources are untouched.
+    const withdrawnDescendants = descendantIds.length
+      ? await db.basicPrice.findMany({
+          where: {
+            id: { in: descendantIds },
+            ...eligibility.usableWhere(workspaceId),
+            ...precedence,
+            assetScope: 'WORKSPACE_PRIVATE',
+            workspaceId,
+            publicationAudits: {
+              some: {
+                action: WITHDRAWN_PUBLICATION_AUDIT_ACTION,
+                effectiveAt: { lte: asOf },
+              },
+            },
+            AND: [...basicPriceApplicabilityAnd({ asOf })],
+          },
+          select: { id: true },
+        })
+      : [];
+    const withdrawnById = new Set(withdrawnDescendants.map((row) => row.id));
+    const withdrawnPairs = pairs.filter((pair) =>
+      withdrawnById.has(pair.descendantId),
+    );
+    const omitted = new Set(
+      [...lawfulPairs, ...withdrawnPairs].map((pair) => pair.predecessorId),
+    );
 
     // The exact same import document row may have been interpreted again in a
     // separate import job. Import identities and their dates remain immutable.
@@ -630,9 +670,166 @@ export class BasicPriceService {
    * Ambil semua harga dasar yang berlaku untuk workspace ini.
    * Termasuk harga workspace-specific dan harga global (workspaceId = null, status PUBLISHED).
    */
+  /**
+   * BP-MULTI-ACTION-01: read EXISTING PriceSubmission audit facts for a page.
+   * One bounded read, no writer, no second review engine, no N+1 queries.
+   */
+  private async alreadyProposedPrivateIds(
+    rows: ReadonlyArray<{
+      id: string;
+      assetScope?: string;
+      sourceImportRow?: { priceSubmissionId?: string | null } | null;
+    }>,
+    workspaceId: string,
+  ): Promise<Set<string>> {
+    const privateRows = rows.filter(
+      (row) => row.assetScope === 'WORKSPACE_PRIVATE',
+    );
+    const proposed = new Set(
+      privateRows
+        .filter((row) => !!row.sourceImportRow?.priceSubmissionId)
+        .map((row) => row.id),
+    );
+    const toCheck = privateRows.filter((row) => !proposed.has(row.id));
+    if (!toCheck.length) return proposed;
+    const byReason = new Map(
+      toCheck.map((row) => [
+        'PRIVATE_PRICE_PROPOSAL; basicPriceId:' + row.id,
+        row.id,
+      ]),
+    );
+    const audits = await this.prisma.priceSubmissionAudit.findMany({
+      where: {
+        reason: { in: [...byReason.keys()] },
+        submission: { workspaceId },
+      },
+      select: { reason: true },
+    });
+    for (const audit of audits) {
+      const priceId = byReason.get(audit.reason ?? '');
+      if (priceId) proposed.add(priceId);
+    }
+    return proposed;
+  }
+
+  /**
+   * Owner-owned private removal reuses the canonical WITHDRAWN audit + currentness.
+   * Never hard-delete price, evidence, audit, or RAB decisions. No catalog writer.
+   * The trusted caller is established by the controller and rechecked here.
+   */
+  async removeOwnPrivatePrice(
+    workspaceId: string,
+    accountId: string,
+    basicPriceId: string,
+  ): Promise<{ basicPriceId: string; removed: true; alreadyRemoved: boolean }> {
+    if (!workspaceId || !accountId || !basicPriceId) {
+      throw new BadRequestException('BASIC_PRICE_OWNER_CONTEXT_REQUIRED');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "basic_prices"
+          WHERE "id" = ${basicPriceId}::uuid
+          AND "workspaceId" = ${workspaceId}::uuid
+          AND "reportedByAccountId" = ${accountId}::uuid
+          AND "assetScope" = 'WORKSPACE_PRIVATE'
+          FOR UPDATE`,
+      );
+      if (!locked.length) throw new NotFoundException('BasicPrice not found');
+      const price = await tx.basicPrice.findFirst({
+        where: {
+          id: basicPriceId,
+          workspaceId,
+          reportedByAccountId: accountId,
+          assetScope: 'WORKSPACE_PRIVATE',
+        },
+        select: {
+          status: true,
+          verificationStatus: true,
+          sourceSubmissionId: true,
+          sourceImportRow: { select: { priceSubmissionId: true } },
+        },
+      });
+      if (!price) throw new NotFoundException('BasicPrice not found');
+      if (
+        price.status === 'PUBLISHED' ||
+        price.verificationStatus === 'PUBLISHED'
+      ) {
+        throw new ConflictException('PUBLIC_BASIC_PRICE_PROTECTED');
+      }
+      const withdrawn = await tx.basicPricePublicationAudit.findFirst({
+        where: { basicPriceId, action: WITHDRAWN_PUBLICATION_AUDIT_ACTION },
+        select: { id: true },
+      });
+      if (withdrawn)
+        return { basicPriceId, removed: true, alreadyRemoved: true };
+      // Protect existing human review, even after correction/rejection.
+      if (
+        price.sourceSubmissionId ||
+        price.sourceImportRow?.priceSubmissionId
+      ) {
+        throw new ConflictException('PRICE_PROPOSAL_HISTORY_PROTECTED');
+      }
+      const priorProposal = await tx.priceSubmissionAudit.findFirst({
+        where: {
+          reason: 'PRIVATE_PRICE_PROPOSAL; basicPriceId:' + basicPriceId,
+          submission: { workspaceId },
+        },
+        select: { id: true },
+      });
+      if (priorProposal)
+        throw new ConflictException('PRICE_PROPOSAL_HISTORY_PROTECTED');
+
+      // Exact FK evidence: project RAB/AHSP resolved to this price, promoted
+      // catalog origins, and private/public successor chains must never be
+      // silently removed from active use.
+      const [projectUse, dependentPrice, observation] = await Promise.all([
+        tx.projectAhspResourceResolution.findFirst({
+          where: { selectedBasicPriceId: basicPriceId },
+          select: { id: true },
+        }),
+        tx.basicPrice.findFirst({
+          where: {
+            OR: [
+              { promotedFromBasicPriceId: basicPriceId },
+              { supersedesBasicPriceId: basicPriceId },
+            ],
+          },
+          select: { id: true },
+        }),
+        tx.basicPriceProvenanceCorrection.findFirst({
+          where: {
+            workspaceId,
+            before: {
+              path: ['observedAfterBasicPriceId'],
+              equals: basicPriceId,
+            },
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (projectUse || dependentPrice || observation) {
+        throw new ConflictException('BASIC_PRICE_REFERENCED_PROTECTED');
+      }
+      // Append-only: a private owner's withdrawal, effective at decision time.
+      // The unchanged canonical BasicPrice currentness suppresses the row
+      // from Explorer/AHSP/RAB candidate offers, preserving historical reads.
+      await tx.basicPricePublicationAudit.create({
+        data: {
+          basicPriceId,
+          actorAccountId: accountId,
+          action: WITHDRAWN_PUBLICATION_AUDIT_ACTION,
+          reason: 'PRIVATE_OWNER_REMOVE_FROM_ACTIVE',
+          effectiveAt: new Date(),
+        },
+      });
+      return { basicPriceId, removed: true, alreadyRemoved: false };
+    });
+  }
+
   async findAllForWorkspace(
     workspaceId: string,
     query: GetBasicPricesDto = {},
+    callerAccountId?: string,
   ): Promise<{
     data: BasicPriceExplorerItem[];
     meta: { total: number; page: number; limit: number; totalPages: number };
@@ -885,6 +1082,27 @@ export class BasicPriceService {
       explorerRows,
       workspaceId,
     );
+    const proposedIds = await this.alreadyProposedPrivateIds(
+      explorerRows,
+      workspaceId,
+    );
+    // Same existing provenance-reference law as removeOwnPrivatePrice.
+    // One bounded read for the visible page, never a per-row search.
+    const privateIds = explorerRows
+      .filter((row) => row.assetScope === 'WORKSPACE_PRIVATE')
+      .map((row) => row.id);
+    const observedPredecessors = new Set(
+      privateIds.length
+        ? (
+            await this.prisma.$queryRaw<Array<{ id: string }>>(
+              Prisma.sql`SELECT DISTINCT c.before->>'observedAfterBasicPriceId' AS id
+              FROM "basic_price_provenance_corrections" c
+              WHERE c."workspaceId" = ${workspaceId}::uuid
+                AND c.before->>'observedAfterBasicPriceId' IN (${Prisma.join(privateIds)})`,
+            )
+          ).map((row) => row.id)
+        : [],
+    );
 
     return {
       // Selection and display share the same temporal context. Source identity
@@ -893,9 +1111,27 @@ export class BasicPriceService {
       data: explorerRows.map((row) => {
         const item = mapExplorerItem(row, workspaceId, asOf);
         const inherited = inheritedNames.get(row.id);
-        return item.sourceName === null && inherited
-          ? { ...item, sourceName: inherited }
-          : item;
+        return {
+          ...item,
+          sourceName: item.sourceName ?? inherited ?? null,
+          alreadyProposed:
+            row.assetScope === 'WORKSPACE_PRIVATE'
+              ? proposedIds.has(row.id)
+              : null,
+          canRemoveOwn:
+            !!callerAccountId &&
+            row.assetScope === 'WORKSPACE_PRIVATE' &&
+            row.workspaceId === workspaceId &&
+            row.reportedByAccountId === callerAccountId &&
+            row.status !== 'PUBLISHED' &&
+            row.verificationStatus !== 'PUBLISHED' &&
+            !observedPredecessors.has(row.id) &&
+            !proposedIds.has(row.id) &&
+            !row.sourceSubmissionId &&
+            !row.promotedTo &&
+            !row.supersededBy &&
+            (row.projectAhspResourceResolutions?.length ?? 0) === 0,
+        };
       }),
       meta: {
         total,
@@ -991,14 +1227,22 @@ export class BasicPriceService {
     // The Detail and Explorer must project the same proven source identity.
     // Neither projection inherits the predecessor's MONEY or document bytes.
     const displayedPrice = mapExplorerItem(row, workspaceId, new Date());
+    const proposedIds = await this.alreadyProposedPrivateIds(
+      [row],
+      workspaceId,
+    );
     const inheritedName = (
       await this.inheritedExplorerSourceNames([row], workspaceId)
     ).get(row.id);
     return {
-      price:
-        displayedPrice.sourceName === null && inheritedName
-          ? { ...displayedPrice, sourceName: inheritedName }
-          : displayedPrice,
+      price: {
+        ...displayedPrice,
+        sourceName: displayedPrice.sourceName ?? inheritedName ?? null,
+        alreadyProposed:
+          row.assetScope === 'WORKSPACE_PRIVATE'
+            ? proposedIds.has(row.id)
+            : null,
+      },
       evidence: mapBasicPriceEvidence(row),
       // KDN ADDENDUM — a RESOURCE-level domestic-content fact, carried beside
       // the price and never folded into it. It changes no money, no currentness

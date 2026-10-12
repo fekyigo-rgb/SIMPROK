@@ -71,14 +71,26 @@ describe('BP-ONE-TRUTH-01 — same-source observation display, no money inherita
   const setup = async (...pages: unknown[][]) => {
     const prisma = {
       $queryRaw: jest.fn().mockResolvedValue([]),
+      // Existing PriceSubmission read introduced by the Basic Price bulk-action UI.
+      priceSubmissionAudit: { findMany: jest.fn().mockResolvedValue([]) },
       basicPrice: {
         count: jest.fn().mockResolvedValue(1),
         findMany: jest.fn(),
         findFirst: jest.fn(),
       },
     };
-    for (const page of pages)
-      prisma.basicPrice.findMany.mockResolvedValueOnce(page);
+    const originalPages = [...pages];
+    prisma.basicPrice.findMany.mockImplementation(
+      (args: {
+        where?: { publicationAudits?: { some?: { action?: string } } };
+      }) => {
+        // BP-CLEAN-01: the new WITHDRAWN lookup is a distinct evidence read,
+        // not a consumption of one of this test's existing price row pages.
+        if (args?.where?.publicationAudits?.some?.action === 'WITHDRAWN')
+          return Promise.resolve([]);
+        return Promise.resolve(originalPages.shift() ?? []);
+      },
+    );
     const module = await Test.createTestingModule({
       providers: [
         BasicPriceService,
@@ -103,6 +115,7 @@ describe('BP-ONE-TRUTH-01 — same-source observation display, no money inherita
     prisma.$queryRaw
       .mockResolvedValueOnce(provenLinks)
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]) // owner-removal reference read, no price mutations
       .mockResolvedValueOnce(provenLinks)
       .mockResolvedValueOnce([]);
     const result = await service.findAllForWorkspace(ws);
@@ -122,6 +135,7 @@ describe('BP-ONE-TRUTH-01 — same-source observation display, no money inherita
     prisma.basicPrice.findMany
       .mockReset()
       .mockResolvedValueOnce([{ id: latestId }])
+      .mockResolvedValueOnce([]) // withdrawn descendants: none
       .mockResolvedValueOnce([{ id: latestId, value: '167500.00' }]);
     const byResource = await service.findByResource(base.resource.id, ws);
     expect(byResource).toHaveLength(1);
@@ -131,6 +145,77 @@ describe('BP-ONE-TRUTH-01 — same-source observation display, no money inherita
     expect(lastCall[0].where.id.notIn).toEqual(
       expect.arrayContaining([middleId, ancestorId]),
     );
+  });
+
+  it('BP-CLEAN-01: withdrawn later SAME-SOURCE observation cannot revive older price', async () => {
+    const pair = {
+      predecessorId: ancestorId,
+      descendantId: latestId,
+      depth: 1,
+    };
+    const withdrawnAt = new Date('2026-10-12T07:06:21.908Z');
+    const run = async (asOf: Date) => {
+      const db = {
+        $queryRaw: jest
+          .fn()
+          .mockResolvedValueOnce([pair])
+          .mockResolvedValueOnce([]),
+        basicPrice: {
+          findMany: jest.fn().mockImplementation(
+            (args: {
+              where: {
+                publicationAudits?: {
+                  some?: {
+                    action?: string;
+                    effectiveAt?: { lte: Date };
+                  };
+                };
+              };
+            }) => {
+              const audit = args.where.publicationAudits?.some;
+              if (audit?.action !== 'WITHDRAWN') return Promise.resolve([]);
+              return Promise.resolve(
+                audit.effectiveAt?.lte.getTime() >= withdrawnAt.getTime()
+                  ? [{ id: latestId }]
+                  : [],
+              );
+            },
+          ),
+        },
+      };
+      const omitted =
+        await BasicPriceService.olderSameSourceObservationOfferIds(
+          db as never,
+          new BasicPriceEligibilityPolicy(),
+          ws,
+          asOf,
+          {},
+        );
+      return { omitted, db };
+    };
+    const before = await run(new Date('2026-10-12T07:06:21.907Z'));
+    expect(before.omitted).toEqual([]);
+    const after = await run(withdrawnAt);
+    expect(after.omitted).toEqual([ancestorId]);
+    type AuditQuery = {
+      where: {
+        assetScope: string;
+        workspaceId: string;
+        publicationAudits: {
+          some: { action: string; effectiveAt: { lte: Date } };
+        };
+      };
+    };
+    const calls = after.db.basicPrice.findMany.mock.calls as unknown as Array<
+      [AuditQuery]
+    >;
+    const auditWhere = calls[1][0];
+    expect(auditWhere.where.workspaceId).toBe(ws);
+    expect(auditWhere.where.assetScope).toBe('WORKSPACE_PRIVATE');
+    expect(auditWhere.where.publicationAudits.some).toEqual({
+      action: 'WITHDRAWN',
+      effectiveAt: { lte: withdrawnAt },
+    });
   });
 
   it('does not remove an older observation when its newer candidate is ineligible', async () => {
@@ -197,6 +282,7 @@ describe('BP-ONE-TRUTH-01 — same-source observation display, no money inherita
         .mockResolvedValueOnce([
           { id: descendantId, effectiveDate: new Date(date + 'T00:00:00Z') },
         ])
+        .mockResolvedValueOnce([]) // withdrawn descendants: none
         .mockResolvedValueOnce(importedRows.map((row) => ({ id: row.id })));
       return BasicPriceService.olderSameSourceObservationOfferIds(
         prisma as never,

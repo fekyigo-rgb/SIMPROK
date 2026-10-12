@@ -419,6 +419,10 @@ export interface BasicPriceExplorerItem {
    * data does not carry.
    */
   assetScope: BasicPriceAssetScopeLabel;
+  /** Server-authorized owner action on a currently unreferenced private row. */
+  canRemoveOwn?: boolean;
+  /** Server-side proposal read; null for catalog, false for unproposed private. */
+  alreadyProposed?: boolean | null;
 }
 
 /** An import batch's human-facing source identity, wherever it is reached from. */
@@ -432,6 +436,13 @@ export interface ExplorerRowSource {
   id: string;
   workspaceId: string | null;
   assetScope: string;
+  status?: string;
+  verificationStatus?: string;
+  reportedByAccountId?: string | null;
+  sourceSubmissionId?: string | null;
+  promotedTo?: { id: string } | null;
+  supersededBy?: { id: string } | null;
+  projectAhspResourceResolutions?: Array<{ id: string }>;
   value: Prisma.Decimal | string;
   effectiveDate: DateLike;
   validUntil: DateLike | null;
@@ -462,6 +473,8 @@ export interface ExplorerRowSource {
    * PriceSubmission in between — not a second provenance subsystem.
    */
   sourceImportRow?: {
+    /** Read-only proposal evidence; never emitted by mapExplorerItem. */
+    priceSubmissionId?: string | null;
     batch?: ImportBatchSourceNames | null;
   } | null;
   /**

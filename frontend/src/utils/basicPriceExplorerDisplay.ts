@@ -72,6 +72,10 @@ export interface BasicPriceExplorerItem {
    * not carry it — an absent value reads as unknown, never as catalog.
    */
   assetScope?: BasicPriceAssetScope;
+  /** Server-derived proposal fact; absence is unknown and must fail closed. */
+  alreadyProposed?: boolean | null;
+  /** Fail-closed owner-specific authorization hint. Server still re-checks. */
+  canRemoveOwn?: boolean;
 }
 
 // The Explorer and its Detail show the human place name, not the internal
@@ -81,6 +85,17 @@ export const basicPriceRegionLabel = (item: BasicPriceExplorerItem): string =>
   item.regionCoverageSummary?.trim() || item.region?.name || 'Umum (tanpa wilayah)';
 
 export type BasicPriceAssetScope = 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG';
+
+/** A UI offer, never an authority boundary; the existing server writer adjudicates. */
+export const canProposePrivateExplorerItem = (
+  item: BasicPriceExplorerItem,
+  hasSubmitPermission: boolean,
+): boolean =>
+  hasSubmitPermission && item.assetScope === 'WORKSPACE_PRIVATE' && item.alreadyProposed === false;
+
+/** Defense in depth: a proposal response must never claim publication. */
+export const privateProposalIsNotPublication = (reply: { status: string }): boolean =>
+  reply.status !== 'PUBLISHED';
 
 export interface ExplorerPageMeta {
   total: number;
@@ -456,9 +471,9 @@ export const EXPLORER_ERROR_MESSAGES: Record<ExplorerErrorState, string> = {
 export const explorerErrorMessageFromStatus = (status: number): string =>
   EXPLORER_ERROR_MESSAGES[explorerErrorStateFromStatus(status)];
 
-export const EXPLORER_EMPTY_STATE_TITLE = 'Belum ada Basic Price yang dipublikasikan.';
+export const EXPLORER_EMPTY_STATE_TITLE = 'Belum ada harga yang tersedia untuk saat ini.';
 export const EXPLORER_EMPTY_STATE_BODY =
-  'Harga yang telah melewati proses verifikasi dan publikasi akan tampil di sini.';
+  'Harga sebelumnya tetap tercatat sebagai riwayat. Gunakan “Berlaku pada” untuk melihat harga pada tanggal terdahulu, jika tersedia.';
 
 export const EXPLORER_NO_MATCH_TITLE = 'Tidak ada harga dasar yang cocok dengan filter ini.';
 

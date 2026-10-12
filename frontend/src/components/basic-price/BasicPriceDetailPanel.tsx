@@ -12,6 +12,7 @@ import {
   kdnLabel,
   observationBasisLabel,
   basicPriceRegionLabel,
+  privateProposalIsNotPublication,
   resourceLabel,
   resourceTypeLabel,
   sourceOriginLabel,
@@ -157,7 +158,7 @@ export function BasicPriceDetailPanel({
     canVerify: hasPermission('BASIC_PRICE_VERIFY'),
     canPromoteShared: hasPermission('BASIC_PRICE_PROMOTE_SHARED'),
     sourceOrigin: item.sourceOrigin,
-    alreadyProposed,
+    alreadyProposed: alreadyProposed || detail.kind !== 'ready' || detail.detail.price.alreadyProposed !== false,
   });
   const changeDoorLive = detailChangeDoorLive(changeOffers);
   const freshness = FRESHNESS_VIEW_LABELS[freshnessView(item)];
@@ -186,11 +187,12 @@ export function BasicPriceDetailPanel({
           </div>
         </div>
         <div className="bp-detail__head-actions">
-          {alreadyProposed ? (
+          {alreadyProposed || (detail.kind === 'ready' && detail.detail.price.alreadyProposed === true) ? (
             <p className="bp-field__help" role="status" aria-live="polite">
               {PROPOSAL_ALREADY_SENT}
             </p>
           ) : detail.kind === 'ready' &&
+            detail.detail.price.alreadyProposed === false &&
             changeOffers.some(
               (offer) =>
                 offer.subject === 'PROPOSAL' &&
@@ -598,7 +600,7 @@ function PrivateProposalButton({
     setRefusal(null);
     try {
       const result = await submitPrivateBasicPrice(basicPriceId);
-      if (result.status === 'PUBLISHED') {
+      if (!privateProposalIsNotPublication(result)) {
         setRefusal('Usulan tidak boleh menerbitkan harga secara otomatis.');
         return;
       }

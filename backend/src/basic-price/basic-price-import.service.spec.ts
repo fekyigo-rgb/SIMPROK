@@ -39,6 +39,7 @@ describe('BasicPriceImportService', () => {
     priceSubmission: { create: jest.Mock; update: jest.Mock };
     priceSubmissionRevision: { create: jest.Mock };
     priceSubmissionAudit: { create: jest.Mock; findFirst: jest.Mock };
+    basicPricePublicationAudit: { findFirst: jest.Mock };
     basicPrice: { findFirst: jest.Mock };
     $queryRaw: jest.Mock;
   };
@@ -95,6 +96,7 @@ describe('BasicPriceImportService', () => {
       priceSubmission: { create: jest.fn(), update: jest.fn() },
       priceSubmissionRevision: { create: jest.fn() },
       priceSubmissionAudit: { create: jest.fn(), findFirst: jest.fn() },
+      basicPricePublicationAudit: { findFirst: jest.fn().mockResolvedValue(null) },
       basicPrice: { findFirst: jest.fn() },
       $queryRaw: jest.fn(),
     };
@@ -1444,6 +1446,16 @@ describe('BasicPriceImportService', () => {
       await expect(
         service.submitPrivatePrice(WORKSPACE_ID, PRICE_ID, ACCOUNT_ID),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('refuses a private price that its owner already removed', async () => {
+      tx.basicPricePublicationAudit.findFirst.mockResolvedValue({
+        id: 'private-withdrawn-audit',
+      });
+      await expect(
+        service.submitPrivatePrice(WORKSPACE_ID, PRICE_ID, ACCOUNT_ID),
+      ).rejects.toMatchObject({ message: 'PRIVATE_PRICE_ALREADY_REMOVED' });
+      expect(tx.priceSubmission.create).not.toHaveBeenCalled();
     });
 
     it('refuses a superseded private price', async () => {

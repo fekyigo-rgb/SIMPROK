@@ -175,11 +175,13 @@ test("X-9. the date filter promises only what the query actually does", () => {
 
 /* ── §7 Table ──────────────────────────────────────────────────────────── */
 
-test("X-10. the table carries exactly the seven locked columns, in order", () => {
+test("X-10. Owner-approved checkbox precedes the same seven locked data columns", () => {
   // `<th\s` rather than `<th` — otherwise the opening `<thead>` matches the
   // same pattern and contributes a phantom empty column.
   const headers = [...tableHead.matchAll(/<th\s[^>]*>\s*([^<]+?)\s*</g)].map((m) => m[1].trim());
+  // Owner's BP-MULTI-ACTION-01 adds one selection control, no data-column changes.
   assert.deepEqual(headers, [
+    "",
     "Item",
     "Harga",
     "Satuan",
@@ -271,7 +273,7 @@ test("X-15b. BP-UX-DETAIL-ANCHOR-01 Detail sits under the opened row, not above 
   assert.ok(panelAt > tbodyAt, "the panel must be rendered inside the table body");
   assert.ok(panelAt < tbodyEnd, "the panel must close before the table body ends");
   assert.match(page, /className="bp-detail-anchor"/u);
-  assert.match(page, /colSpan=\{7\}/u);
+  assert.match(page, /colSpan=\{8\}/u);
   assert.match(
     renderable,
     /className=\{openDetailId === item\.basicPriceId \? 'bp-row--open' : undefined\}/u,
@@ -279,7 +281,8 @@ test("X-15b. BP-UX-DETAIL-ANCHOR-01 Detail sits under the opened row, not above 
   assert.match(renderable, /data-bp-row-id=\{item\.basicPriceId\}/u);
   assert.match(renderable, /aria-expanded=\{openDetailId === item\.basicPriceId\}/u);
   assert.match(renderable, /openDetailId === item\.basicPriceId \? 'Tutup' : 'Lihat'/u);
-  assert.doesNotMatch(page, /Set<string>|openDetailIds/u);
+  // A Set of checkbox selections is not a second Detail panel state.
+  assert.doesNotMatch(page, /openDetailIds|setOpenDetailIds/u);
   assert.match(renderable, /notice=\{detailNotice\}/u);
   assert.match(
     page,

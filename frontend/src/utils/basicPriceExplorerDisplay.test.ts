@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  EXPLORER_EMPTY_STATE_TITLE,
+  EXPLORER_EMPTY_STATE_BODY,
   KDN_PENDING_LABEL,
   KDN_UNAVAILABLE_LABEL,
   RESOURCE_TYPE_OPTIONS,
@@ -25,6 +27,14 @@ import {
   workspaceScopeLabel,
 } from './basicPriceExplorerDisplay.ts';
 import type { BasicPriceExplorerItem, ExplorerResourceIdentity } from './basicPriceExplorerDisplay.ts';
+
+test('BP-CLEAN-01: empty active offers do not claim all prices need publication', () => {
+  assert.equal(EXPLORER_EMPTY_STATE_TITLE, 'Belum ada harga yang tersedia untuk saat ini.');
+  assert.match(EXPLORER_EMPTY_STATE_BODY, /riwayat/u);
+  assert.match(EXPLORER_EMPTY_STATE_BODY, /Berlaku pada/u);
+  assert.match(EXPLORER_EMPTY_STATE_BODY, /jika tersedia/u);
+  assert.doesNotMatch(EXPLORER_EMPTY_STATE_TITLE + EXPLORER_EMPTY_STATE_BODY, /publikas/iu);
+});
 
 test('buildExplorerQueryParams — only non-empty fields become query params', () => {
   const params = buildExplorerQueryParams({ search: '  Semen  ', page: 2, limit: undefined });
