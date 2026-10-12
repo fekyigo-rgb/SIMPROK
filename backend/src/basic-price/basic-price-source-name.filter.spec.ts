@@ -20,7 +20,7 @@ describe('basicPriceSourceNameWhere', () => {
 
   it('is versioned, so a change to provenance reach is a visible change', () => {
     expect(BASIC_PRICE_SOURCE_NAME_FILTER_VERSION).toBe(
-      'BPUXFINAL01C_BASIC_PRICE_SOURCE_NAME_TWO_PATH_V1',
+      'BP_ONE_TRUTH_01_SOURCE_NAME_AUDIT_PATH_V2',
     );
   });
 
@@ -90,14 +90,12 @@ describe('basicPriceSourceNameWhere', () => {
     const serialised = JSON.stringify(basicPriceSourceNameWhere(NAME));
     expect(serialised.match(/sourceOrganizationName/g)).toHaveLength(2);
     expect(serialised.match(/sourceVendorName/g)).toHaveLength(2);
-    expect(serialised.match(/insensitive/g)).toHaveLength(4);
+    expect(serialised.match(/insensitive/g)).toHaveLength(5);
   });
 
-  it('reaches exactly the two chains the PROJECTION reads — no third path invented', () => {
-    // `deriveExplorerSourceName` is the function that decides what the SUMBER
-    // column says. If the filter ever reached a chain the projection does not
-    // read (or missed one it does), the column and the filter would disagree
-    // again — which is the whole defect.
+  it('preserves both import provenance paths already used by the projection', () => {
+    // The third audit path is additive. Neither established import pathway
+    // may disappear while source-name search learns about manual observations.
     const projection = readFileSync(
       join(__dirname, '..', 'common', 'basic-price-workflow.projection.ts'),
       'utf8',
@@ -114,6 +112,23 @@ describe('basicPriceSourceNameWhere', () => {
     expect(filter).toContain('sourceImportRow');
   });
 
+  it('BP-ONE-TRUTH-01 — finds a manual observation by audit source name, case-insensitively', () => {
+    const where = basicPriceSourceNameWhere('TIM SIMPROK') as {
+      OR: Array<Record<string, unknown>>;
+    };
+    expect(where.OR).toContainEqual({
+      provenanceCorrections: {
+        some: {
+          after: {
+            path: ['sourceIdentityName'],
+            string_contains: 'TIM SIMPROK',
+            mode: 'insensitive',
+          },
+        },
+      },
+    });
+  });
+
   it('the projection still refuses to fabricate a name for a row with no chain', () => {
     // A row that matches no provenance chain simply does not match the filter,
     // and the Explorer keeps saying "Sumber tidak tersedia" for it. Neither
@@ -122,7 +137,7 @@ describe('basicPriceSourceNameWhere', () => {
       deriveExplorerSourceName({
         sourceSubmission: null,
         sourceImportRow: null,
-      } as never),
+      }),
     ).toBeNull();
   });
 
@@ -136,7 +151,7 @@ describe('basicPriceSourceNameWhere', () => {
       OR: Array<Record<string, unknown>>;
     };
     expect(Object.keys(where)).toEqual(['OR']);
-    expect(where.OR).toHaveLength(2);
+    expect(where.OR).toHaveLength(3);
 
     const serialised = JSON.stringify(where);
     // Nothing about tenancy, publication or asset family may appear here.

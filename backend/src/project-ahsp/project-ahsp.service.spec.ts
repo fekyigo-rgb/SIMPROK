@@ -97,9 +97,11 @@ describe('ProjectAhspService E1A', () => {
     };
     const created: { data?: any } = {};
     const tx: any = {
-      $queryRaw: jest.fn().mockResolvedValue([
-        { id: selectionInput.projectId, status: 'PLANNED', workspaceId },
-      ]),
+      $queryRaw: jest.fn(async (query: { strings?: readonly string[] }) =>
+        query?.strings?.join('').includes('FROM "projects"')
+          ? [{ id: selectionInput.projectId, status: 'PLANNED', workspaceId }]
+          : [],
+      ),
       projectAhspOccurrence: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(async ({ data }: any) => {

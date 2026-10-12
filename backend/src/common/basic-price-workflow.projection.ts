@@ -470,7 +470,28 @@ export interface ExplorerRowSource {
    * source identity can survive when this price has no import-row pointer.
    * The JSON itself never reaches the browser.
    */
-  provenanceCorrections?: Array<{ after?: unknown }> | null;
+  provenanceCorrections?: Array<{ before?: unknown; after?: unknown }> | null;
+}
+
+/** A later observation may retain the SAME source without inheriting the earlier price evidence. */
+export function sameSourceObservationPredecessorId(
+  audit: { before?: unknown; after?: unknown } | null | undefined,
+): string | null {
+  const before = audit?.before;
+  const after = audit?.after;
+  if (!before || typeof before !== 'object' || Array.isArray(before))
+    return null;
+  if (!after || typeof after !== 'object' || Array.isArray(after)) return null;
+  const b = before as Record<string, unknown>;
+  const a = after as Record<string, unknown>;
+  if (b.semantic !== 'NEW_OBSERVATION' || a.semantic !== 'NEW_OBSERVATION')
+    return null;
+  if (a.sameSourceIdentity !== true) return null;
+  const id = b.observedAfterBasicPriceId;
+  return typeof id === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    ? id
+    : null;
 }
 
 function sourceNameFromBatch(

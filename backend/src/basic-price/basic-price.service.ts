@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -15,6 +16,8 @@ import {
   mapBasicPriceDomesticContent,
   mapBasicPriceEvidence,
   mapExplorerItem,
+  deriveExplorerSourceName,
+  sameSourceObservationPredecessorId,
   type BasicPriceDetail,
   type BasicPriceExplorerItem,
   type ExplorerRowSource,
@@ -110,7 +113,7 @@ const EXPLORER_ROW_SELECT = {
   provenanceCorrections: {
     orderBy: { createdAt: 'asc' },
     take: 1,
-    select: { after: true },
+    select: { before: true, after: true },
   },
 } satisfies Prisma.BasicPriceSelect;
 
@@ -235,6 +238,395 @@ export class BasicPriceService {
   ) {}
 
   /**
+   * Existing birth-audit lineage applied to source-name SEARCH, before count
+   * and skip/take. The list and Detail already inherit the identical evidence;
+   * this query only exposes exact descendants, never approximate same-names.
+   * A cap FAILS CLOSED rather than returning a falsely complete search.
+   */
+  private async sourceNameObservationDescendantIds(
+    workspaceId: string,
+    sourceName: string,
+  ): Promise<string[]> {
+    type LineageMatch = { id: string; depth: number };
+    const rows = await this.prisma.$queryRaw<LineageMatch[]>(
+      Prisma.sql`
+        WITH RECURSIVE source_chain AS (
+          SELECT root.id, root."workspaceId", root."resourceId",
+                 root."regionId", root."regionCoverageSetId",
+                 root."sourceType", root."sourceOrigin",
+                 0::integer AS depth
+          FROM "basic_prices" root
+          JOIN "basic_price_provenance_corrections" birth
+            ON birth."basicPriceId" = root.id
+           AND birth."workspaceId" = root."workspaceId"
+          WHERE root."workspaceId" = ${workspaceId}::uuid
+            AND root."assetScope" = 'WORKSPACE_PRIVATE'
+            AND strpos(lower(birth.after->>'sourceIdentityName'),
+                       lower(${sourceName})) > 0
+
+          UNION ALL
+
+          SELECT next.id, next."workspaceId", next."resourceId",
+                 next."regionId", next."regionCoverageSetId",
+                 next."sourceType", next."sourceOrigin",
+                 chain.depth + 1
+          FROM source_chain chain
+          JOIN "basic_price_provenance_corrections" audit
+            ON audit.before->>'observedAfterBasicPriceId' = chain.id::text
+           AND audit."workspaceId" = chain."workspaceId"
+          JOIN "basic_prices" next
+            ON next.id = audit."basicPriceId"
+           AND next."workspaceId" = chain."workspaceId"
+          WHERE next."assetScope" = 'WORKSPACE_PRIVATE'
+            AND next."recordsNewObservation" = TRUE
+            AND next."resourceId" = chain."resourceId"
+            AND next."regionId" IS NOT DISTINCT FROM chain."regionId"
+            AND next."regionCoverageSetId" IS NOT DISTINCT FROM chain."regionCoverageSetId"
+            AND next."sourceType" = chain."sourceType"
+            AND next."sourceOrigin" = chain."sourceOrigin"
+            AND audit.before->>'semantic' = 'NEW_OBSERVATION'
+            AND audit.after->>'semantic' = 'NEW_OBSERVATION'
+            AND audit.after->>'sameSourceIdentity' = 'true'
+            AND chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
+        )
+        SELECT DISTINCT id, depth
+        FROM source_chain
+        WHERE depth > 0
+        LIMIT 10001
+      `,
+    );
+    if (
+      rows.length > 10000 ||
+      rows.some((row) => row.depth >= BASIC_PRICE_HISTORY_MAX_GENERATIONS)
+    ) {
+      throw new ConflictException('SOURCE_IDENTITY_LINEAGE_SEARCH_INCOMPLETE');
+    }
+    return [...new Set(rows.map((row) => row.id))];
+  }
+
+  /**
+   * An explicit SAME-SOURCE NEW_OBSERVATION is a later observation, NOT a
+   * correction. Preserve all rows by ID and historical date; for the OFFER
+   * alone, omit a predecessor only when a genuinely LATER eligible observation
+   * in that exact audit chain applies on the requested date.
+   *
+   * Same-day prices stay competing candidates for human review. Source names,
+   * values and sourceOrigin categories NEVER establish an identity link.
+   * The existing eligibility/currentness/applicability laws must also accept
+   * the descendant before it can remove an older candidate from the offer.
+   */
+  static async olderSameSourceObservationOfferIds(
+    db: Pick<Prisma.TransactionClient, '$queryRaw' | 'basicPrice'>,
+    eligibility: BasicPriceEligibilityPolicy,
+    workspaceId: string,
+    asOf: Date,
+    precedence: Prisma.BasicPriceWhereInput,
+  ): Promise<string[]> {
+    type Pair = { predecessorId: string; descendantId: string; depth: number };
+    const pairs = await db.$queryRaw<Pair[]>(Prisma.sql`
+      WITH RECURSIVE edge AS (
+        SELECT child.id AS child_id, parent.id AS parent_id
+        FROM "basic_price_provenance_corrections" audit
+        JOIN "basic_prices" child
+          ON child.id = audit."basicPriceId"
+         AND child."workspaceId" = audit."workspaceId"
+        JOIN "basic_prices" parent
+          ON parent.id::text = audit.before->>'observedAfterBasicPriceId'
+         AND parent."workspaceId" = child."workspaceId"
+        WHERE child."workspaceId" = ${workspaceId}::uuid
+          AND child."assetScope" = 'WORKSPACE_PRIVATE'
+          AND parent."assetScope" = 'WORKSPACE_PRIVATE'
+          AND child."recordsNewObservation" = TRUE
+          AND audit.before->>'semantic' = 'NEW_OBSERVATION'
+          AND audit.after->>'semantic' = 'NEW_OBSERVATION'
+          AND audit.after->>'sameSourceIdentity' = 'true'
+          AND child."resourceId" = parent."resourceId"
+          AND child."regionId" IS NOT DISTINCT FROM parent."regionId"
+          AND child."regionCoverageSetId" IS NOT DISTINCT FROM parent."regionCoverageSetId"
+          AND child."sourceType" = parent."sourceType"
+          AND child."effectiveDate" >= parent."effectiveDate"
+          AND child."effectiveDate" <= ${asOf}
+      ),
+      lineage AS (
+        SELECT child_id AS descendant_id, parent_id AS predecessor_id,
+               parent_id AS cursor_id, 1::integer AS depth,
+               ARRAY[child_id, parent_id] AS visited
+        FROM edge
+        UNION ALL
+        SELECT chain.descendant_id, e.parent_id, e.parent_id,
+               chain.depth + 1, chain.visited || e.parent_id
+        FROM lineage chain
+        JOIN edge e ON e.child_id = chain.cursor_id
+        WHERE chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
+          AND NOT (e.parent_id = ANY(chain.visited))
+      )
+      SELECT DISTINCT chain.predecessor_id AS "predecessorId",
+                      chain.descendant_id AS "descendantId",
+                      chain.depth
+      FROM lineage chain
+      JOIN "basic_prices" ancestor ON ancestor.id = chain.predecessor_id
+      JOIN "basic_prices" newer ON newer.id = chain.descendant_id
+      WHERE newer."effectiveDate" > ancestor."effectiveDate"
+        AND newer."effectiveDate" <= ${asOf}
+      LIMIT 10001
+    `);
+    if (
+      pairs.length > 10000 ||
+      pairs.some((pair) => pair.depth >= BASIC_PRICE_HISTORY_MAX_GENERATIONS)
+    ) {
+      throw new ConflictException('OBSERVATION_OFFER_LINEAGE_INCOMPLETE');
+    }
+    const descendantIds = [...new Set(pairs.map((pair) => pair.descendantId))];
+    const eligibleDescendants = descendantIds.length
+      ? await db.basicPrice.findMany({
+          where: {
+            id: { in: descendantIds },
+            ...eligibility.usableWhere(workspaceId),
+            ...precedence,
+            ...mergeCurrentnessAnd(basicPriceCurrentnessWhere({ asOf }), [
+              ...basicPriceApplicabilityAnd({ asOf }),
+            ]),
+          },
+          select: { id: true, effectiveDate: true },
+        })
+      : [];
+    const eligibleById = new Map(
+      eligibleDescendants.map((row) => [row.id, row.effectiveDate]),
+    );
+    const lawfulPairs = pairs.filter((pair) =>
+      eligibleById.has(pair.descendantId),
+    );
+    const omitted = new Set(lawfulPairs.map((pair) => pair.predecessorId));
+
+    // The exact same import document row may have been interpreted again in a
+    // separate import job. Import identities and their dates remain immutable.
+    // For a current OFFER, comparable identical document-row readings must not
+    // masquerade as independent sellers or independent observations.
+    const repeatedImportIds = await BasicPriceService.repeatedImportOfferIds(
+      db,
+      eligibility,
+      workspaceId,
+      asOf,
+      precedence,
+      lawfulPairs,
+      eligibleById,
+    );
+    repeatedImportIds.forEach((id) => omitted.add(id));
+    return [...omitted];
+  }
+
+  /**
+   * A repeated interpretation of EXACT DOCUMENT BYTES + SHEET + SOURCE ROW
+   * is not a second independent market observation. Never merge import-job
+   * identities, rewrite dates, or infer equivalence from publisher/name alone.
+   * Source price disagreements and differing applicability remain untouched.
+   */
+  private static async repeatedImportOfferIds(
+    db: Pick<Prisma.TransactionClient, '$queryRaw' | 'basicPrice'>,
+    eligibility: BasicPriceEligibilityPolicy,
+    workspaceId: string,
+    asOf: Date,
+    precedence: Prisma.BasicPriceWhereInput,
+    lawfulPairs: Array<{ predecessorId: string; descendantId: string }>,
+    eligibleManualDates: Map<string, Date>,
+  ): Promise<string[]> {
+    type DocRow = {
+      id: string;
+      effectiveDate: Date;
+      amount: string;
+      kdnPercent: string | null;
+      docKey: string;
+    };
+    const docs = await db.$queryRaw<DocRow[]>(Prisma.sql`
+      WITH matching_source_rows AS (
+        SELECT p.id, p."effectiveDate", p.value::text AS amount,
+               p."kdnPercent"::text AS "kdnPercent",
+               jsonb_build_array(
+                 p."workspaceId", p."resourceId", p."regionId",
+                 p."regionCoverageSetId", p."sourceType", p."validUntil",
+                 b."sourceSha256", b."selectedSheetName", r."sourceRowNumber",
+                 r."sourceCodeCellAddress", r."sourceNameCellAddress",
+                 r."sourceUnitCellAddress", r."sourcePriceCellAddress",
+                 r."sourceKdnCellAddress",
+                 b."sourceOrganizationName", b."sourceVendorName",
+                 b."sourceObservationKey", b."sourcePeriodLabel",
+                 b."sourceObservedAt", b."effectiveDateProvenance",
+                 b."sourceRegionScopeLabel", b."sourceRegionScopeKind",
+                 b."sourceRegionScopeGeographicEvidence",
+                 b."regionScopeConfirmedRegionId",
+                 b."parserContractVersion", b."sourceLocatorDialect",
+                 b."ingestionExternalSourceId", b."ingestionExternalRecordId",
+                 b."ingestionExternalVersion"
+               )::text AS "docKey"
+        FROM "basic_prices" p
+        JOIN "basic_price_import_rows" r ON r.id = p."sourceImportRowId"
+        JOIN "basic_price_import_batches" b ON b.id = r."batchId"
+        WHERE p."workspaceId" = ${workspaceId}::uuid
+          AND p."assetScope" = 'WORKSPACE_PRIVATE'
+          AND p."effectiveDate" <= ${asOf}
+          AND (p."validUntil" IS NULL OR p."validUntil" >= ${asOf})
+          AND b."sourceSha256" ~ '^[0-9A-Fa-f]{64}$'
+          AND length(trim(b."selectedSheetName")) > 0
+          AND r."sourceRowNumber" > 0
+          AND (
+            length(trim(coalesce(b."sourceOrganizationName", ''))) > 0
+            OR length(trim(coalesce(b."sourceVendorName", ''))) > 0
+          )
+      ),
+      repeated AS (
+        SELECT "docKey"
+        FROM matching_source_rows
+        GROUP BY "docKey"
+        HAVING count(*) > 1
+      )
+      SELECT s.id, s."effectiveDate", s.amount, s."kdnPercent", s."docKey"
+      FROM matching_source_rows s
+      JOIN repeated r ON r."docKey" = s."docKey"
+      LIMIT 10001
+    `);
+    if (docs.length > 10000) {
+      throw new ConflictException('DOCUMENT_ROW_OFFER_SEARCH_INCOMPLETE');
+    }
+    if (docs.length === 0) return [];
+
+    const eligibleImports = await db.basicPrice.findMany({
+      where: {
+        id: { in: docs.map((row) => row.id) },
+        ...eligibility.usableWhere(workspaceId),
+        ...precedence,
+        ...mergeCurrentnessAnd(basicPriceCurrentnessWhere({ asOf }), [
+          ...basicPriceApplicabilityAnd({ asOf }),
+        ]),
+      },
+      select: { id: true },
+    });
+    const usable = new Set(eligibleImports.map((row) => row.id));
+    const byDocument = new Map<string, DocRow[]>();
+    for (const row of docs) {
+      const group = byDocument.get(row.docKey) ?? [];
+      group.push(row);
+      byDocument.set(row.docKey, group);
+    }
+    const omitted = new Set<string>();
+    for (const group of byDocument.values()) {
+      // Different prices from the same document row imply a contested reading.
+      // Never choose a monetary winner based on import date or insertion order.
+      if (new Set(group.map((row) => row.amount)).size !== 1) continue;
+      // KDN is an independent fact. An unknown percentage is NEVER 0 or 100,
+      // and no percentage is copied. Conflicting explicit percentages require
+      // review rather than a silent representative chosen by its import date.
+      const knownKdn = new Set(
+        group.map((row) => row.kdnPercent).filter((v) => v != null),
+      );
+      if (knownKdn.size > 1) continue;
+      const eligibleGroup = group.filter((row) => usable.has(row.id));
+      if (eligibleGroup.length === 0) continue;
+      const ids = new Set(group.map((row) => row.id));
+      const provenLaterObservations = lawfulPairs
+        .filter((pair) => ids.has(pair.predecessorId))
+        .map((pair) => eligibleManualDates.get(pair.descendantId))
+        .filter((date): date is Date => date instanceof Date);
+      const candidates = eligibleGroup.filter((row) => {
+        const supersededByLaterObservation = provenLaterObservations.some(
+          (date) => date.getTime() > row.effectiveDate.getTime(),
+        );
+        if (supersededByLaterObservation) omitted.add(row.id);
+        return !supersededByLaterObservation;
+      });
+      // Identical source money should appear once per source document. Favor
+      // the latest applicable reading, retaining original dates and row IDs.
+      candidates.sort(
+        (a, b) =>
+          b.effectiveDate.getTime() - a.effectiveDate.getTime() ||
+          b.id.localeCompare(a.id),
+      );
+      candidates.slice(1).forEach((row) => omitted.add(row.id));
+    }
+    return [...omitted];
+  }
+
+  /**
+   * BP-ONE-TRUTH-01 — recover a retained SOURCE IDENTITY, not old price evidence.
+   * The NEW_OBSERVATION birth audit may explicitly identify a predecessor as
+   * the same source while omitting sourceIdentityName on the newest row.
+   * Fetch only the page's missing-name ancestors, batched by generation.
+   * Never cross workspace/resource/region/coverage/source-type boundaries,
+   * and never infer identity from similar names, amounts or dates.
+   */
+  private async inheritedExplorerSourceNames(
+    rows: ExplorerRowSource[],
+    workspaceId: string,
+  ): Promise<Map<string, string>> {
+    type Cursor = {
+      root: ExplorerRowSource;
+      id: string;
+      visited: Set<string>;
+    };
+    const names = new Map<string, string>();
+    let pending: Cursor[] = rows.flatMap((root) => {
+      if (
+        root.workspaceId !== workspaceId ||
+        root.assetScope !== 'WORKSPACE_PRIVATE'
+      )
+        return [];
+      if (deriveExplorerSourceName(root)) return [];
+      const id = sameSourceObservationPredecessorId(
+        root.provenanceCorrections?.[0],
+      );
+      return id ? [{ root, id, visited: new Set([root.id]) }] : [];
+    });
+
+    for (
+      let generation = 0;
+      generation < BASIC_PRICE_HISTORY_MAX_GENERATIONS && pending.length > 0;
+      generation += 1
+    ) {
+      const ancestors = (await this.prisma.basicPrice.findMany({
+        where: {
+          id: { in: [...new Set(pending.map((cursor) => cursor.id))] },
+          workspaceId,
+          assetScope: 'WORKSPACE_PRIVATE',
+        },
+        select: EXPLORER_ROW_SELECT,
+      })) as ExplorerRowSource[];
+      const byId = new Map(ancestors.map((row) => [row.id, row]));
+      const next: Cursor[] = [];
+
+      for (const cursor of pending) {
+        if (cursor.visited.has(cursor.id)) continue;
+        cursor.visited.add(cursor.id);
+        const ancestor = byId.get(cursor.id);
+        if (!ancestor || ancestor.workspaceId !== workspaceId) continue;
+        if (ancestor.assetScope !== 'WORKSPACE_PRIVATE') continue;
+        if (ancestor.resource.id !== cursor.root.resource.id) continue;
+        if (
+          ancestor.sourceType !== cursor.root.sourceType ||
+          ancestor.sourceOrigin !== cursor.root.sourceOrigin
+        )
+          continue;
+        if (ancestor.region?.id !== cursor.root.region?.id) continue;
+        const coverage = (row: ExplorerRowSource) =>
+          (row.regionCoverageSet?.members ?? [])
+            .map((member) => member.regionId)
+            .sort()
+            .join('|');
+        if (coverage(ancestor) !== coverage(cursor.root)) continue;
+        const name = deriveExplorerSourceName(ancestor);
+        if (name) {
+          names.set(cursor.root.id, name);
+          continue;
+        }
+        const id = sameSourceObservationPredecessorId(
+          ancestor.provenanceCorrections?.[0],
+        );
+        if (id && !cursor.visited.has(id)) next.push({ ...cursor, id });
+      }
+      pending = next;
+    }
+    return names;
+  }
+
+  /**
    * Ambil semua harga dasar yang berlaku untuk workspace ini.
    * Termasuk harga workspace-specific dan harga global (workspaceId = null, status PUBLISHED).
    */
@@ -345,21 +737,33 @@ export class BasicPriceService {
      */
     const asOf = asOfInput ? parseDateOnlyUtc(asOfInput, 'asOf') : new Date();
 
+    const precedence = promotionLineagePrecedenceWhere(workspaceId);
     const where: Prisma.BasicPriceWhereInput = {
       ...this.eligibility.usableWhere(workspaceId),
-      ...promotionLineagePrecedenceWhere(workspaceId),
+      ...precedence,
       // BP-CORR-01B TEMPORAL + BP-UX-FINAL-01C + BP-DETAIL-MAINT-02R.
       // Currentness now owns an `AND` (private successor recorded-by-asOf).
       // Applicability also needs `AND`. A later `AND:` assignment would drop
       // the successor clause and resurrect the March-lens leak. Merge once.
-      ...mergeCurrentnessAnd(
-        basicPriceCurrentnessWhere({ asOf }),
-        [
-          ...basicPriceApplicabilityAnd({ asOf }),
-          ...(regionId ? [basicPriceRegionApplicabilityWhere(regionId)] : []),
-        ],
-      ),
+      ...mergeCurrentnessAnd(basicPriceCurrentnessWhere({ asOf }), [
+        ...basicPriceApplicabilityAnd({ asOf }),
+        ...(regionId ? [basicPriceRegionApplicabilityWhere(regionId)] : []),
+      ]),
     };
+
+    const olderOffers =
+      await BasicPriceService.olderSameSourceObservationOfferIds(
+        this.prisma,
+        this.eligibility,
+        workspaceId,
+        asOf,
+        precedence,
+      );
+    if (olderOffers.length > 0) {
+      (where.AND as Prisma.BasicPriceWhereInput[]).push({
+        id: { notIn: olderOffers },
+      });
+    }
 
     const resourceFilter: Prisma.ResourceCatalogWhereInput = {
       OR: [{ workspaceId }, { workspaceId: null }],
@@ -443,9 +847,17 @@ export class BasicPriceService {
      * narrowing the result. See basic-price-source-name.filter.ts.
      */
     if (sourceName) {
-      (where.AND as Prisma.BasicPriceWhereInput[]).push(
-        basicPriceSourceNameWhere(sourceName),
+      const fragment = basicPriceSourceNameWhere(sourceName);
+      const ids = await this.sourceNameObservationDescendantIds(
+        workspaceId,
+        sourceName,
       );
+      if (ids.length > 0) {
+        (fragment.OR as Prisma.BasicPriceWhereInput[]).push({
+          id: { in: ids },
+        });
+      }
+      (where.AND as Prisma.BasicPriceWhereInput[]).push(fragment);
     }
 
     if (freshnessStatus) {
@@ -468,14 +880,23 @@ export class BasicPriceService {
       }),
     ]);
 
+    const explorerRows = rows as ExplorerRowSource[];
+    const inheritedNames = await this.inheritedExplorerSourceNames(
+      explorerRows,
+      workspaceId,
+    );
+
     return {
-      // THE SAME `asOf` THE QUERY SELECTED ON. GAP-D: a row chosen because it
-      // applied on D must also be DESCRIBED as it stood on D — otherwise the
-      // list answers "which price applied then" and the chip beside it answers
-      // "is it stale now", and the screen carries two clocks without saying so.
-      data: (rows as ExplorerRowSource[]).map((row) =>
-        mapExplorerItem(row, workspaceId, asOf),
-      ),
+      // Selection and display share the same temporal context. Source identity
+      // is inherited only through a proved SAME-SOURCE observation audit;
+      // no old price/effective date/document is copied to the new observation.
+      data: explorerRows.map((row) => {
+        const item = mapExplorerItem(row, workspaceId, asOf);
+        const inherited = inheritedNames.get(row.id);
+        return item.sourceName === null && inherited
+          ? { ...item, sourceName: inherited }
+          : item;
+      }),
       meta: {
         total,
         page,
@@ -567,16 +988,17 @@ export class BasicPriceService {
       throw new NotFoundException('BasicPrice not found');
     }
 
-    // Structurally typed projections, so the select above satisfies them
-    // directly — no cast is needed, and adding one would only hide a future
-    // select/contract drift that TypeScript should be catching here.
+    // The Detail and Explorer must project the same proven source identity.
+    // Neither projection inherits the predecessor's MONEY or document bytes.
+    const displayedPrice = mapExplorerItem(row, workspaceId, new Date());
+    const inheritedName = (
+      await this.inheritedExplorerSourceNames([row], workspaceId)
+    ).get(row.id);
     return {
-      // PRESENT TENSE, EXPLICITLY. This route takes no `asOf`: it is a lawful
-      // read of one row by id, and the temporal law says an absent `asOf` MEANS
-      // the present. Resolved once here and passed, rather than left to a
-      // default, so the route's temporal context is stated rather than
-      // inherited.
-      price: mapExplorerItem(row, workspaceId, new Date()),
+      price:
+        displayedPrice.sourceName === null && inheritedName
+          ? { ...displayedPrice, sourceName: inheritedName }
+          : displayedPrice,
       evidence: mapBasicPriceEvidence(row),
       // KDN ADDENDUM — a RESOURCE-level domestic-content fact, carried beside
       // the price and never folded into it. It changes no money, no currentness
@@ -739,20 +1161,31 @@ export class BasicPriceService {
    * this list's order.
    */
   async findByResource(resourceId: string, workspaceId: string) {
+    const asOf = new Date();
+    const precedence = promotionLineagePrecedenceWhere(workspaceId);
+    const olderOffers =
+      await BasicPriceService.olderSameSourceObservationOfferIds(
+        this.prisma,
+        this.eligibility,
+        workspaceId,
+        asOf,
+        precedence,
+      );
     return this.prisma.basicPrice.findMany({
       where: {
         resourceId,
         ...this.eligibility.usableWhere(workspaceId),
+        ...(olderOffers.length > 0 ? { id: { notIn: olderOffers } } : {}),
         // BP-CAT-01E — a per-resource candidate list, so the same one-logical-
         // truth rule applies here as in the Explorer. `findOneForWorkspace`
         // below deliberately does NOT compose this: asking for a specific row
         // by id is a lawfulness question, not a selection one.
-        ...promotionLineagePrecedenceWhere(workspaceId),
+        ...precedence,
         // BP-CORR-01 — and for the same reason, a replaced price is not one of
         // this resource's current candidates. Same exemption applies:
         // `findOneForWorkspace` keeps returning it by id.
         // BP-CORR-01B TEMPORAL — present-tense read, so it states the present.
-        ...basicPriceCurrentnessWhere({ asOf: new Date() }),
+        ...basicPriceCurrentnessWhere({ asOf }),
       },
       // BP-CAT-01D — RICH INSIDE, SAFE OUTSIDE.
       //

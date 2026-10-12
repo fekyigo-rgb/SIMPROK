@@ -27,6 +27,7 @@ import { PrismaService } from '../prisma/prisma.service';
 describe('BasicPriceService', () => {
   let service: BasicPriceService;
   let prisma: {
+    $queryRaw: jest.Mock;
     basicPrice: {
       count: jest.Mock;
       findMany: jest.Mock;
@@ -97,6 +98,7 @@ describe('BasicPriceService', () => {
 
   beforeEach(async () => {
     prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       basicPrice: {
         count: jest.fn(),
         findMany: jest.fn(),
@@ -614,7 +616,48 @@ describe('BasicPriceService', () => {
         sourceImportRow: { is: { batch: batchNameMatch('Toko Jaya') } },
       });
 
-      expect(fragment.OR).toHaveLength(2);
+      expect(fragment.OR).toHaveLength(3);
+      expect(fragment.OR).toContainEqual({
+        provenanceCorrections: {
+          some: {
+            after: {
+              path: ['sourceIdentityName'],
+              string_contains: 'Toko Jaya',
+              mode: 'insensitive',
+            },
+          },
+        },
+      });
+    });
+
+    it('BP-ONE-TRUTH-01 — includes explicit audit descendants before count and pagination', async () => {
+      const descendantId = 'e50d3edc-be5f-418a-9aa3-82b35852f192';
+      prisma.$queryRaw
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: descendantId, depth: 1 }]);
+      prisma.basicPrice.findMany.mockResolvedValue([mockPrice]);
+      prisma.basicPrice.count.mockResolvedValue(1);
+
+      await service.findAllForWorkspace(workspaceId, {
+        sourceName: 'Tim Simprok',
+        page: 2,
+        limit: 1,
+      });
+
+      const fragment = sourceNameFragmentOf(listWhere());
+      expect(fragment.OR).toContainEqual({ id: { in: [descendantId] } });
+      expect(prisma.basicPrice.count).toHaveBeenCalledWith({
+        where: listWhere(),
+      });
+      const [queryArgs] = prisma.basicPrice.findMany.mock.calls[0] as [
+        { where: unknown; skip: number; take: number },
+      ];
+      expect(queryArgs).toMatchObject({
+        where: listWhere(),
+        skip: 1,
+        take: 1,
+      });
     });
 
     it('A5 — the sourceName filter cannot clobber the eligibility OR', async () => {

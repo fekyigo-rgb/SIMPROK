@@ -1,16 +1,16 @@
 import { Prisma } from '@prisma/client';
 
 export const BASIC_PRICE_SOURCE_NAME_FILTER_VERSION =
-  'BPUXFINAL01C_BASIC_PRICE_SOURCE_NAME_TWO_PATH_V1';
+  'BP_ONE_TRUTH_01_SOURCE_NAME_AUDIT_PATH_V2';
 
 /**
  * BP-UX-FINAL-01C GAP-A — FIND A PRICE BY THE NAME OF WHO ACTUALLY PUBLISHED IT.
  *
  * THE DEFECT, AND WHY IT WAS INVISIBLE.
  *
- * SIMPROK reaches a source name through TWO lawful provenance chains, and
- * `deriveExplorerSourceName` (common/basic-price-workflow.projection.ts:477)
- * has always read both:
+ * SIMPROK reaches imported names through TWO existing provenance chains;
+ * a Detail-born new observation retains its name in its birth audit.
+ * `deriveExplorerSourceName` reads these same sources:
  *
  *   CATALOG   BasicPrice.sourceSubmission -> PriceSubmission.importRow
  *                                         -> BasicPriceImportRow.batch
@@ -41,16 +41,18 @@ export const BASIC_PRICE_SOURCE_NAME_FILTER_VERSION =
  * fragment destined for `AND` makes that mistake unrepresentable: an `AND`
  * member can only ever remove rows, never add one.
  *
- * The `OR` inside is therefore strictly the two PROVENANCE ALTERNATIVES for one
- * row — and the database guarantees a row has at most one of them
+ * The `OR` inside is the two IMPORT PROVENANCE alternatives plus the
+ * pre-existing observation audit identity. The database guarantees a row
+ * has at most one of the import pointers
  * (`basic_prices_import_row_link_private_only_check` +
  * `basic_prices_private_not_submission_born_check`), so this can never match a
  * row through a chain it does not really have.
  *
  * WHAT IT DELIBERATELY DOES NOT DO. It does not touch workspace scope, asset
- * scope, publication state or eligibility. It does not invent a name for a row
- * that has no provenance chain — such a row simply does not match, which is the
- * honest answer, and the Explorer keeps saying "Sumber tidak tersedia" for it.
+ * scope, publication state or eligibility. It does not fabricate a source name
+ * or guess which independent document observations belong to one price stream.
+ * Exact predecessor-only legacy inheritance still requires a separate
+ * database-side lineage predicate; this direct audit branch does not claim it.
  */
 const batchNameMatch = (
   sourceName: string,
@@ -86,6 +88,21 @@ export const basicPriceSourceNameWhere = (
       // RM-03C — the private row reaches the very same batch directly, because
       // it has no PriceSubmission to travel through.
       sourceImportRow: { is: { batch: { is: batchNameMatch(sourceName) } } },
+    },
+    {
+      // BP-ONE-TRUTH-01: a NEW_OBSERVATION carries its source identity in
+      // provenance, not in a fabricated import-row link. Search the existing
+      // audit JSON in the DATABASE, before count and pagination. No client
+      // filtering, new identity engine, or widening of tenant eligibility.
+      provenanceCorrections: {
+        some: {
+          after: {
+            path: ['sourceIdentityName'],
+            string_contains: sourceName,
+            mode: 'insensitive',
+          },
+        },
+      },
     },
   ],
 });

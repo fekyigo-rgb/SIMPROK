@@ -149,6 +149,7 @@ function makeOrchestrator() {
 }
 
 const tx = {
+  $queryRaw: jest.fn().mockResolvedValue([]),
   basicPrice: {
     findMany: async () => [PRICE.pekerja, PRICE.excavator],
     findFirst: async ({ where }: any) =>
@@ -337,6 +338,7 @@ function makeRealIdentityOrchestrator() {
 const runReal = (resourceId: string) =>
   makeRealIdentityOrchestrator().resolveVersionResources(
     {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       basicPrice: {
         findMany: async () => [PRICE_UUID_PEKERJA],
         findFirst: async ({ where }: any) =>
@@ -449,7 +451,7 @@ describe('AHSP occurrence — source facts reach the identity question', () => {
     return { orchestrator, seen };
   }
 
-  const tx = { basicPrice: { findMany: async () => [] } } as any;
+  const tx = { $queryRaw: jest.fn().mockResolvedValue([]), basicPrice: { findMany: async () => [] } } as any;
 
   it('sends the code the SOURCE stated, not null, when the line carries one', async () => {
     const { orchestrator, seen } = spyOrchestrator();

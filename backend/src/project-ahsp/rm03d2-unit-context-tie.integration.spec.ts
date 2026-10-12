@@ -98,6 +98,7 @@ function makeTx(prices: typeof PRICES = PRICES) {
   return {
     unitAliasFindMany,
     tx: {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       unitAlias: { findMany: unitAliasFindMany },
       resourceCatalog: { findMany: async () => Object.values(CATALOG) },
       resourceSourceIdentity: { findMany: async () => [] },

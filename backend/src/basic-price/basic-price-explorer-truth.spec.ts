@@ -18,6 +18,7 @@ import { PrismaService } from '../prisma/prisma.service';
 describe('BasicPriceService — BP-UX-FINAL-01C truth closure', () => {
   let service: BasicPriceService;
   let prisma: {
+    $queryRaw: jest.Mock;
     basicPrice: {
       count: jest.Mock;
       findMany: jest.Mock;
@@ -127,6 +128,7 @@ describe('BasicPriceService — BP-UX-FINAL-01C truth closure', () => {
 
   beforeEach(async () => {
     prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       basicPrice: {
         count: jest.fn(),
         findMany: jest.fn(),

@@ -454,6 +454,58 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
       expect(tx.basicPrice.update).not.toHaveBeenCalled();
     });
 
+    it('BP-ONE-TRUTH-01 — another observation inherits a name from its predecessor birth audit, not its document', async () => {
+      tx.basicPrice.findFirst
+        .mockResolvedValueOnce({
+          ...PREDECESSOR,
+          sourceImportRow: null,
+          sourceImportRowId: null,
+          provenanceCorrections: [
+            {
+              after: {
+                semantic: 'NEW_OBSERVATION',
+                sourceIdentityName: 'Tim Simprok',
+                sameSourceIdentity: true,
+              },
+            },
+          ],
+        })
+        .mockResolvedValueOnce(null);
+      await service.observePrivatePrice({
+        basicPriceId: PREDECESSOR.id,
+        actor: ACTOR,
+        expectedValue: '62500.00',
+        proposedValue: '65000.00',
+        effectiveDate: '2026-08-28',
+        reason: 'pembaruan penerbit yang sama',
+        sameSource: true,
+      });
+      const lockRead = firstCallArg<{
+        include: {
+          provenanceCorrections: { take: number; select: { after: boolean } };
+        };
+      }>(tx.basicPrice.findFirst);
+      expect(lockRead.include.provenanceCorrections).toMatchObject({
+        orderBy: { createdAt: 'asc' },
+        take: 1,
+        select: { after: true },
+      });
+      const newAudit = firstCallArg<{
+        data: {
+          after: {
+            sourceIdentityName: string | null;
+            sameSourceIdentity: boolean;
+          };
+        };
+      }>(tx.basicPriceProvenanceCorrection.create).data;
+      expect(newAudit.after.sourceIdentityName).toBe('Tim Simprok');
+      expect(newAudit.after.sameSourceIdentity).toBe(true);
+      const inserted = firstCallArg<{ data: Record<string, unknown> }>(
+        tx.basicPrice.create,
+      ).data;
+      expect(inserted.sourceImportRowId).toBeUndefined();
+    });
+
     it('PRICE-EVID-02 — different source records a new identity and does not overwrite the predecessor', async () => {
       tx.basicPrice.findFirst
         .mockResolvedValueOnce(PREDECESSOR)

@@ -7,6 +7,7 @@ import {
 } from '@prisma/client';
 import { resolveAhspResourcePrice } from '../ahsp/price-resolution/ahsp-resource-price-resolution.kernel';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
+import { BasicPriceService } from '../basic-price/basic-price.service';
 import { promotionLineagePrecedenceWhere } from '../basic-price/basic-price-promotion-precedence';
 import { basicPriceRegionApplicabilityWhere } from '../basic-price/basic-price-region-applicability';
 import {
@@ -147,15 +148,35 @@ export class AhspResourceResolutionOrchestrator {
       { identicalQuestionKeys },
     );
 
+    // BP-ONE-TRUTH-01: same exact-link offer policy used by Explorer and
+    // /basic-prices/resource. The caller's tx is retained for one snapshot;
+    // a new observation never rewrites a previously decided RAB resolution.
+    const precedence = promotionLineagePrecedenceWhere(input.workspaceId);
+    // This orchestrator predates a typed transaction seam (`tx: any`).
+    // Narrow only the proven Prisma price-read surface, without changing its
+    // existing transaction, identity resolver or Cost Kernel contracts.
+    const offerReadClient = tx as Pick<
+      Prisma.TransactionClient,
+      '$queryRaw' | 'basicPrice'
+    >;
+    const olderOffers =
+      await BasicPriceService.olderSameSourceObservationOfferIds(
+        offerReadClient,
+        this.eligibility,
+        input.workspaceId,
+        asOf,
+        precedence,
+      );
     const priceRows = await tx.basicPrice.findMany({
       where: {
         ...this.eligibility.usableWhere(input.workspaceId),
+        ...(olderOffers.length > 0 ? { id: { notIn: olderOffers } } : {}),
         // BP-CAT-01E — this is the CANDIDATE offer, so the one-logical-truth rule
         // applies: a workspace must not be offered its own price twice, once as
         // the origin it owns and again as the descendant it donated, and then be
         // told the ambiguity NEEDS_REVIEW. The re-read below stays raw-lawful on
         // purpose — it is already bound to a row this offer contained.
-        ...promotionLineagePrecedenceWhere(input.workspaceId),
+        ...precedence,
         // BP-CORR-01 — a price a published correction has REPLACED is still lawful
         // and still readable, but it is no longer what this resource costs. Offering
         // it here would put the old money back into a new calculation, and offering
