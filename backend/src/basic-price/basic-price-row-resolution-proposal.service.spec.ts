@@ -1742,3 +1742,182 @@ describe('INT-CONNECT-01 — the outward proposal carries no internal explanatio
     expect(proposal.identityPairProven).toBe(false);
   });
 });
+
+describe('BP-SEMANTIC-01 — weak uploader family never erases canonical material identity', () => {
+  it('recognizes list-marked Air as MATERIAL when uploader marked the sheet LABOR', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: '- Air',
+        rawUnitText: 'ltr',
+      }),
+    );
+    expect(proposal.resource.status).toBe('RESOLVED');
+    expect(proposal.resource.resourceCatalogId).toBe('cat-air');
+    expect(proposal.resource.resourceType).toBe('MATERIAL');
+    expect(proposal.identityPairProven).toBe(true);
+  });
+
+  it('a category asserted by the source is not silently changed', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'SOURCE_ROW_CATEGORY',
+        rawResourceNameText: '- Air',
+        rawUnitText: 'ltr',
+      }),
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+  });
+
+  it('a global-only Pasir Beton stays unselectable for private Basic Price', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: '- Pasir Beton',
+        rawUnitText: 'm3',
+      }),
+    );
+    expect(proposal.resource.resourceCatalogId).toBe('cat-global-pasir');
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.blockingFacts).toContain(
+      'RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE',
+    );
+  });
+
+  it('identical names in two categories stay ambiguous', async () => {
+    const catalog: StubResourceCatalogRow[] = [
+      ...CATALOG,
+      {
+        id: 'cat-labor-air',
+        workspaceId: WORKSPACE,
+        code: null,
+        name: 'Air',
+        type: 'LABOR',
+        baseUnit: 'PERSON_HOUR',
+        status: 'ACTIVE',
+        specifications: null,
+      },
+    ];
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Air',
+        rawUnitText: 'ltr',
+      }),
+      catalog,
+    );
+    expect(proposal.resource.status).toBe('NEEDS_REVIEW');
+    expect(proposal.identityPairProven).toBe(false);
+  });
+
+  it('Batu Kali (15-30 cm) is not the unspecified Batu Kali', async () => {
+    const catalog: StubResourceCatalogRow[] = [
+      ...CATALOG,
+      {
+        id: 'cat-batu-kali',
+        workspaceId: WORKSPACE,
+        code: null,
+        name: 'Batu Kali',
+        type: 'MATERIAL',
+        baseUnit: 'M3',
+        status: 'ACTIVE',
+        specifications: null,
+      },
+    ];
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Batu Kali (15-30 cm)',
+        rawUnitText: 'm3',
+      }),
+      catalog,
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+    expect(proposal.resource.candidates.map((c) => c.name)).toContain(
+      'Batu Kali',
+    );
+    expect(proposal.resource.candidates[0].type).toBe('MATERIAL');
+  });
+});
+
+describe('BP-SEMANTIC-01 — related is not identical', () => {
+  const material = (id: string, name: string): StubResourceCatalogRow => ({
+    id,
+    workspaceId: WORKSPACE,
+    code: null,
+    name,
+    type: 'MATERIAL',
+    baseUnit: 'M3',
+    status: 'ACTIVE',
+    specifications: null,
+  });
+
+  it('generic Pasir offers four separate material candidates, never a single asserted identity', async () => {
+    const katalog = [
+      ...CATALOG.filter((candidate) => candidate.id !== 'cat-global-pasir'),
+      material('pasir-beton', 'Pasir Beton'),
+      material('pasir-pasang', 'Pasir Pasang'),
+      material('pasir-halus', 'Pasir Halus'),
+      material('pasir-urug', 'Pasir Urug'),
+    ];
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Pasir',
+        rawUnitText: 'm3',
+      }),
+      katalog,
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.status).toBe('NEEDS_REVIEW');
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+    expect(
+      proposal.resource.candidates
+        .filter((c) => c.name.startsWith('Pasir'))
+        .map((c) => c.name)
+        .sort(),
+    ).toEqual(['Pasir Beton', 'Pasir Halus', 'Pasir Pasang', 'Pasir Urug']);
+  });
+
+  it('Batu Pecah never becomes Agregat Kasar or Kerikil without a governed source link', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Batu Pecah',
+        rawUnitText: 'm3',
+      }),
+      [
+        ...CATALOG,
+        material('agregat', 'Agregat Kasar'),
+        material('kerikil', 'Kerikil'),
+      ],
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+    expect(proposal.resource.candidates).toHaveLength(0);
+  });
+
+  it('contradictory Batu Pecah sizes never become an actionable proposal', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Batu Pecah 2-3 cm',
+        rawUnitText: 'm3',
+      }),
+      [...CATALOG, material('batu-5-7', 'Batu Pecah 5-7 cm')],
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+    expect(proposal.resource.candidates).toHaveLength(0);
+  });
+});

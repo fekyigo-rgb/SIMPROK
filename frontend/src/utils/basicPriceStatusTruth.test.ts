@@ -35,7 +35,7 @@ import {
  *
  * THE VOCABULARY IS NOW FIXED, AND THESE TESTS ARE THE LOCK:
  *
- *   Dikenali otomatis        SIMPROK understands the row. Machine knowledge.
+ *   Sudah dikenali          SIMPROK understands the row. Machine knowledge.
  *   Siap disimpan            one press would turn it into a usable price.
  *   Tersimpan di ruang kerja the price EXISTS and is usable now.
  *   Usulkan ke SIMPROK       the separate, optional curation path.
@@ -266,7 +266,7 @@ test("S-6. mixed: eight stored, five still actionable — never thirteen", () =>
   // to store them. The test was pinning the contradiction rather than catching
   // it. It is now the regression lock for the repair.
   assert.equal(rowStateLabel(rows[0]), "Tersimpan di ruang kerja");
-  assert.equal(rowStateLabel(rows[8]), "Dikenali otomatis");
+  assert.equal(rowStateLabel(rows[8]), "Sudah dikenali");
   assert.notEqual(rowStateLabel(rows[8]), "Perlu konfirmasi");
 });
 
@@ -397,7 +397,7 @@ test("P-1. an already-stored price outranks everything, whatever the row status 
     machineProposal: proposal(true),
   });
   assert.equal(rowStateLabel(saved), "Tersimpan di ruang kerja");
-  assert.notEqual(rowStateLabel(saved), "Dikenali otomatis");
+  assert.notEqual(rowStateLabel(saved), "Sudah dikenali");
   assert.notEqual(rowStateLabel(saved), "Siap disimpan");
   // The persistence lifecycle is untouched — only the sentence changed.
   assert.equal(saved.status, "READY_FOR_SUBMISSION");
@@ -409,7 +409,7 @@ test("P-2. machine proof outranks the raw status when nothing is stored yet", ()
     savedAsPrivatePrice: false,
     machineProposal: proposal(true),
   });
-  assert.equal(rowStateLabel(proven), "Dikenali otomatis");
+  assert.equal(rowStateLabel(proven), "Sudah dikenali");
   // THE DEFECT, BANNED BY NAME. This is what the Owner's screen showed.
   assert.notEqual(rowStateLabel(proven), "Perlu konfirmasi");
   assert.equal(proven.status, "NEEDS_REVIEW");
@@ -424,7 +424,7 @@ test("P-3. the word claims proof and nothing more", () => {
     label,
     /[Ss]elesai|[Dd]isetujui|[Tt]ersimpan|diverifikasi|diusulkan|diajukan/u,
   );
-  assert.equal(label, "Dikenali otomatis");
+  assert.equal(label, "Sudah dikenali");
 });
 
 /* ── §13 THE FULL MATRIX ─────────────────────────────────────────────────── */
@@ -436,7 +436,7 @@ test("P-4. a row SIMPROK could not decide still asks for the human", () => {
     status: "NEEDS_REVIEW",
     machineProposal: proposal(false, 2, "LITER"),
   });
-  assert.equal(rowStateLabel(attention), "Perlu konfirmasi");
+  assert.equal(rowStateLabel(attention), "Perlu keputusan Anda");
 });
 
 test("P-5. a row SIMPROK could not recognise at all is still honest about it", () => {
@@ -488,7 +488,7 @@ test("P-6a. an explicit human rejection outranks an older machine proof", () => 
     machineProposal: proposal(true),
   });
   assert.equal(rowStateLabel(rejected), "Ditolak");
-  assert.notEqual(rowStateLabel(rejected), "Dikenali otomatis");
+  assert.notEqual(rowStateLabel(rejected), "Sudah dikenali");
   // The stored lifecycle is untouched — only the sentence is decided here.
   assert.equal(rejected.status, "REJECTED");
   assert.equal(rejected.machineProposal?.identityPairProven, true);
@@ -501,7 +501,7 @@ test("P-6b. a real submission record outranks an older machine proof", () => {
     machineProposal: proposal(true),
   });
   assert.equal(rowStateLabel(submitted), "Sudah diusulkan ke SIMPROK");
-  assert.notEqual(rowStateLabel(submitted), "Dikenali otomatis");
+  assert.notEqual(rowStateLabel(submitted), "Sudah dikenali");
   assert.equal(submitted.status, "SUBMISSION_CREATED");
   assert.equal(submitted.machineProposal?.identityPairProven, true);
 });
@@ -545,7 +545,7 @@ test("P-6c. the presentation precedence ladder holds top to bottom", () => {
         machineProposal: proposal(true),
       }),
       expected: "Ditolak",
-      beats: "Dikenali otomatis",
+      beats: "Sudah dikenali",
     },
     {
       rung: "2 HUMAN_TERMINAL (submitted)",
@@ -555,7 +555,7 @@ test("P-6c. the presentation precedence ladder holds top to bottom", () => {
         machineProposal: proposal(true),
       }),
       expected: "Sudah diusulkan ke SIMPROK",
-      beats: "Dikenali otomatis",
+      beats: "Sudah dikenali",
     },
     {
       rung: "3 MACHINE_PROVEN",
@@ -564,11 +564,11 @@ test("P-6c. the presentation precedence ladder holds top to bottom", () => {
         savedAsPrivatePrice: false,
         machineProposal: proposal(true),
       }),
-      expected: "Dikenali otomatis",
+      expected: "Sudah dikenali",
       beats: "Perlu konfirmasi",
     },
     {
-      rung: "4 RAW_STATUS",
+      rung: "4 MACHINE_ATTENTION",
       row: baseRow({
         status: "NEEDS_REVIEW",
         savedAsPrivatePrice: false,
@@ -576,8 +576,8 @@ test("P-6c. the presentation precedence ladder holds top to bottom", () => {
       }),
       // Nothing stronger is true, so the honest raw sentence survives — a row
       // SIMPROK could not decide must keep asking for the person.
-      expected: "Perlu konfirmasi",
-      beats: null,
+      expected: "Perlu keputusan Anda",
+      beats: "Perlu konfirmasi",
     },
   ];
 
@@ -599,8 +599,9 @@ test("P-6c. the presentation precedence ladder holds top to bottom", () => {
       "Tersimpan di ruang kerja",
       "Ditolak",
       "Sudah diusulkan ke SIMPROK",
-      "Dikenali otomatis",
+      "Sudah dikenali",
       "Perlu konfirmasi",
+      "Perlu keputusan Anda",
     ].filter((word) => word !== label);
     for (const other of others) {
       assert.doesNotMatch(label, new RegExp(other, "u"), `${rung}: two stories`);
@@ -651,10 +652,10 @@ test("P-8. pre-save: summary and rows tell the SAME story about the same thirtee
 
   // EVERY ONE of the thirteen agrees with the summary.
   for (const row of proven) {
-    assert.equal(rowStateLabel(row), "Dikenali otomatis");
+    assert.equal(rowStateLabel(row), "Sudah dikenali");
   }
   // And the rows that genuinely need a person still say so.
-  assert.equal(rowStateLabel(rows[13]), "Perlu konfirmasi");
+  assert.equal(rowStateLabel(rows[13]), "Perlu keputusan Anda");
 
   // One press would store exactly those thirteen, and nothing is stored yet.
   const view = oneActionAcceptanceView(batch, new Set());
@@ -724,7 +725,7 @@ test("P-10. mixed: stored rows and understood rows each keep their own sentence"
     assert.equal(rowStateLabel(row), "Tersimpan di ruang kerja");
   }
   for (const row of provenRows) {
-    assert.equal(rowStateLabel(row), "Dikenali otomatis");
+    assert.equal(rowStateLabel(row), "Sudah dikenali");
     assert.notEqual(rowStateLabel(row), "Perlu konfirmasi");
   }
   assert.equal(oneActionAcceptanceView(batch, new Set()).rowCount, 5);

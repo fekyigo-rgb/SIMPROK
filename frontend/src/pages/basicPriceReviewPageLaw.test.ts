@@ -273,22 +273,27 @@ test("HS-13e. the room never offers an action and denies it in the same breath",
   );
 });
 
-test("HS-15. Lengkapi Data is optional and does not gate Simpan or Usulkan", () => {
-  assert.match(page, /Lengkapi Data/u);
-  assert.match(page, /OPTIONAL_KDN_INCOMPLETE/u);
-  assert.match(page, /optionalRowKdnIncomplete/u);
-  assert.doesNotMatch(
-    page,
-    /optionalRowKdnIncomplete\(row\)\s*&&/u,
-    "missing optional KDN must not be combined into a gate",
-  );
+test("HS-15. optional KDN never masquerades as unfinished work", () => {
+  assert.match(page, /Informasi tambahan \(tidak wajib\)/u);
+  assert.match(page, /optionalRowCanEnrichKdnNow\(row\) && row\.privateBasicPriceId/u);
+  assert.doesNotMatch(page, /<summary>Lengkapi Data<\/summary>/u);
+  assert.doesNotMatch(page, /OPTIONAL_KDN_INCOMPLETE/u);
+  assert.doesNotMatch(page, /optionalRowKdnIncomplete\(row\)/u);
 });
 
-test("HS-17. Lengkapi Data names blocked capabilities instead of inventing fields", () => {
-  assert.match(page, /optionalEnrichmentBlockedCapabilities/);
-  assert.match(renderable, /gap\.reason/);
-  assert.doesNotMatch(renderable, /alamat sumber"/);
-  assert.doesNotMatch(renderable, /<input[^>]*alamat/i);
+test("HS-17. only live optional KDN is offered; absent features are not user tasks", () => {
+  assert.match(page, /ReviewOptionalKdnForm/u);
+  assert.doesNotMatch(page, /optionalEnrichmentBlockedCapabilities/u);
+  assert.doesNotMatch(renderable, /gap\.reason/u);
+  assert.doesNotMatch(renderable, /alamat sumber"/u);
+  assert.doesNotMatch(renderable, /<input[^>]*alamat/iu);
+});
+
+test("HS-15b. machine-proven rows need no confirmation; correction remains possible", () => {
+  assert.match(page, /reviewNeedsManualControls\(row, correctionOpen\)/u);
+  assert.match(page, /mutable && proven && !correctionOpen/u);
+  assert.match(page, /Ubah hasil/u);
+  assert.match(page, /setCorrectionRows/u);
 });
 
 test("HS-18. Tinjau Hasil offers the existing Tinjau wilayah confirm at the blocked Simpan, without loosening the gate", () => {
@@ -333,4 +338,12 @@ test("HS-16. Tinjau Hasil offers existing resource admission only when identity 
     /admitResourceForImportRow\([^)]*name/,
     "admission must not send a client-invented resource name",
   );
+});
+
+test("BP-UX-08: the review page uses one date notice and displays only a clean resource name", () => {
+  assert.match(page, /reviewDisplayResourceName\(row\.name\)/);
+  assert.match(page, /proposalDoor\.visible && !batch\.actions\.simprokProposal\.offered/);
+  assert.match(page, /proposalBlockSentence\(batch\.actions\.simprokProposal\.reasonCode\) !==/);
+  assert.match(page, /privateUseBlockSentence\(batch\.actions\.privateUse\.reasonCode\)/);
+  assert.match(page, /rowReviewFactsLine\(row\)/);
 });

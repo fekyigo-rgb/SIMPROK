@@ -535,7 +535,13 @@ export function isExactRepresentationTie(
  * boundary; consolidating all three is a separate, safe cleanup.
  */
 export function normalizeResourceName(raw: string): string {
-  return raw.trim().replace(/\s+/g, ' ').toLowerCase();
+  // Source list-marker only, never a designation or size range such as 15-30 cm.
+  // Preserve the original source text elsewhere; this is a matching key only.
+  return raw
+    .trim()
+    .replace(/^(?:[-•*]\s+)+/u, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
 }
 
 /** Source codes vary only by case and padding in practice (e.g. "M.60.a "). */

@@ -413,7 +413,7 @@ test("DISCLOSE-02: a single note is never hidden behind a toggle", () => {
 
 test("DISCLOSE-03: the row card renders the split, under the one 'Mengapa?' wording", () => {
   assert.equal(WHY_DISCLOSURE_TITLE, "Mengapa?");
-  assert.match(review, /rowNoteDisclosure\(notes\)/);
+  assert.match(review, /rowNoteDisclosure\(notes, row\.machineProposal\?\.identityPairProven === true\)/);
   assert.match(review, /noteDisclosure\.secondary\.length > 0/);
 });
 

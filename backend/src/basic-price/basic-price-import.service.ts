@@ -2570,6 +2570,7 @@ export class BasicPriceImportService {
         .map((row) => ({
           id: row.id,
           sourceSection: row.sourceSection,
+          sourceSectionProvenance: row.sourceSectionProvenance,
           rawResourceNameText: row.rawResourceNameText,
           rawResourceCodeText: row.rawResourceCodeText,
           rawUnitText: row.rawUnitText,

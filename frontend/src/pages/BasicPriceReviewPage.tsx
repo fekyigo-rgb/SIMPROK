@@ -31,11 +31,7 @@ import {
   machinePickedUnit,
   oneActionAcceptanceView,
   optionalRowCanEnrichKdnNow,
-  optionalRowKdnIncomplete,
-  optionalEnrichmentPanelOffered,
-  optionalEnrichmentBlockedCapabilities,
-  OPTIONAL_KDN_AFTER_KEEP,
-  OPTIONAL_KDN_INCOMPLETE,
+  reviewNeedsManualControls,
   OPTIONAL_ENRICHMENT_EMPTY,
   rowIdentityAdmissionOffered,
   rowIdentityAdmissionBlockReason,
@@ -48,9 +44,11 @@ import {
   metadataSaveFailureMessage,
   rowActionFailureMessage,
   rowMachineNarrative,
+  reviewResourceSearchFamily,
   rowNoteDisclosure,
   rowNoteLines,
   rowReviewFactsLine,
+  reviewDisplayResourceName,
   rowSectionDisplay,
   rowStateLabel,
   staleRowRecoveryMessage,
@@ -181,6 +179,8 @@ export function BasicPriceReviewPage() {
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
   /** Rows a person has edited by hand since this batch was loaded. */
   const [touchedRowIds, setTouchedRowIds] = useState<Set<string>>(new Set());
+  // A proven identity is read-only by default; humans may still correct it.
+  const [correctionRows, setCorrectionRows] = useState<Set<string>>(new Set());
   const [statusMessage, setStatusMessage] = useState('Memuat batch...');
   const [isBusy, setIsBusy] = useState(false);
 
@@ -765,7 +765,11 @@ export function BasicPriceReviewPage() {
           </div>
         </div>
       ) : null}
-      {!batch.actions.simprokProposal.offered && proposalBlockSentence(batch.actions.simprokProposal.reasonCode) ? (
+      {proposalDoor.visible && !batch.actions.simprokProposal.offered &&
+      proposalBlockSentence(batch.actions.simprokProposal.reasonCode) &&
+      (oneActionOffered ||
+        proposalBlockSentence(batch.actions.simprokProposal.reasonCode) !==
+          privateUseBlockSentence(batch.actions.privateUse.reasonCode)) ? (
         <p className="bp-note" role="status" aria-label="Status usulan ke SIMPROK">
           {proposalBlockSentence(batch.actions.simprokProposal.reasonCode)}
         </p>
@@ -775,13 +779,15 @@ export function BasicPriceReviewPage() {
         {batch.rows.map((row) => {
           const draft = draftFor(row.id);
           const mutable = isRowMutable(row);
+          const proven = row.machineProposal?.identityPairProven === true;
+          const correctionOpen = correctionRows.has(row.id);
           const collisionLabel = collisionWarningLabel(row.collisionType);
           // EVERY human-visible sentence of the machine block, derived once from
           // structured facts. The page prints these and composes none of its
           // own, so what the pure test asserts is what the reviewer reads.
           const narrative = rowMachineNarrative(row);
           const notes = rowNoteLines(row);
-          const noteDisclosure = rowNoteDisclosure(notes);
+          const noteDisclosure = rowNoteDisclosure(notes, row.machineProposal?.identityPairProven === true);
           const blockReason = completionBlockReason(row, {
             resource: draft.resource !== null,
             unit: draft.unit !== null,
@@ -805,7 +811,7 @@ export function BasicPriceReviewPage() {
             >
               <div className="bp-rowcard__head">
                 <span className="bp-rowcard__name">
-                  {row.name}{' '}
+                  {reviewDisplayResourceName(row.name)}{' '}
                   <span className="bp-rowcard__num">
                     #{row.sourceRowNumber} · {rowSectionDisplay(row)}
                   </span>
@@ -817,36 +823,20 @@ export function BasicPriceReviewPage() {
                 <p className="bp-rowcard__facts">
                   KDN: {row.proposedCanonicalKdn.replace('.', ',')}%
                 </p>
-              ) : optionalRowKdnIncomplete(row) ? (
-                <p className="bp-field__help">{OPTIONAL_KDN_INCOMPLETE}</p>
               ) : null}
-              {optionalEnrichmentPanelOffered(row) ? (
+              {optionalRowCanEnrichKdnNow(row) && row.privateBasicPriceId ? (
                 <details className="bp-details">
-                  <summary>Lengkapi Data</summary>
-                  {optionalRowCanEnrichKdnNow(row) && row.privateBasicPriceId ? (
-                    <>
-                      <p className="bp-field__help">{OPTIONAL_ENRICHMENT_EMPTY}</p>
-                      <ReviewOptionalKdnForm
-                        priceId={row.privateBasicPriceId}
-                        onSaved={() => {
-                          setStatusMessage(
-                            `Baris ${row.sourceRowNumber}: data opsional disimpan. Baris yang sudah siap tetap dapat diproses.`,
-                          );
-                          void loadBatch(false);
-                        }}
-                      />
-                    </>
-                  ) : optionalRowKdnIncomplete(row) ? (
-                    <>
-                      <p className="bp-field__help">{OPTIONAL_ENRICHMENT_EMPTY}</p>
-                      <p className="bp-field__help">{OPTIONAL_KDN_AFTER_KEEP}</p>
-                    </>
-                  ) : null}
-                  {optionalEnrichmentBlockedCapabilities().map((gap) => (
-                    <p key={gap.label} className="bp-field__help">
-                      {gap.label}: {gap.reason}
-                    </p>
-                  ))}
+                  <summary>Informasi tambahan (tidak wajib)</summary>
+                  <p className="bp-field__help">{OPTIONAL_ENRICHMENT_EMPTY}</p>
+                  <ReviewOptionalKdnForm
+                    priceId={row.privateBasicPriceId}
+                    onSaved={() => {
+                      setStatusMessage(
+                        `Baris ${row.sourceRowNumber}: informasi tambahan berhasil disimpan.`,
+                      );
+                      void loadBatch(false);
+                    }}
+                  />
                 </details>
               ) : null}
               {/*
@@ -934,13 +924,25 @@ export function BasicPriceReviewPage() {
                 </div>
               ) : null}
 
-              {mutable ? (
+              {mutable && proven && !correctionOpen ? (
+                <div className="bp-rowcard__actions">
+                  <button
+                    type="button"
+                    className="bp-btn bp-btn--sm"
+                    onClick={() => setCorrectionRows((current) => new Set(current).add(row.id))}
+                    disabled={isBusy}
+                  >
+                    Ubah hasil
+                  </button>
+                </div>
+              ) : null}
+              {reviewNeedsManualControls(row, correctionOpen) ? (
                 <div className="bp-rowcard__actions">
                   {/* A family SIMPROK could not map is passed as NO type filter,
                       never as one of the three it knows — see rowSectionDisplay. */}
                   <CatalogSearchSelect
                     mode="resource"
-                    initialResourceType={row.section ?? undefined}
+                    initialResourceType={reviewResourceSearchFamily(row)}
                     selected={draft.resource}
                     disabled={isBusy}
                     onSelect={(item) => updateDraft(row.id, { resource: item as ResourceLookupItem | null })}

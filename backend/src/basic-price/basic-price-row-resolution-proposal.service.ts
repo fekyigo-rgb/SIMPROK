@@ -269,6 +269,8 @@ export interface BasicPriceRowMachineProposal {
 export interface BasicPriceRowProposalInput {
   id: string;
   sourceSection: ResourceType | null;
+  /** Only UPLOADER_DECLARED may be corrected by exact contrary catalog proof. */
+  sourceSectionProvenance?: string | null;
   rawResourceNameText: string;
   rawResourceCodeText: string | null;
   rawUnitText: string | null;
@@ -332,8 +334,6 @@ export class BasicPriceRowResolutionProposalService {
     const proposals = new Map<string, BasicPriceRowMachineProposal>();
     if (rows.length === 0) return proposals;
 
-    const unitByRow = await this.proveUnits(rows);
-
     // The identity authority's evidence set for this workspace, loaded ONCE.
     // Its `unitIdentityCache` also lives for the whole batch, so the rare
     // representation-tie path re-uses a spelling it has already proved instead
@@ -348,6 +348,21 @@ export class BasicPriceRowResolutionProposalService {
     const admissible = await this.admissibleCatalogIds(client, workspaceId, [
       ...resourceByRow.values(),
     ]);
+
+    // A weak uploader-wide family is not document evidence. If the canonical
+    // authority proves exactly one cross-family identity, ask Unit Kernel in
+    // that proven family's context. The writer already governs this correction.
+    const unitRows = rows.map((row) => {
+      const proposal = resourceByRow.get(row.id);
+      return row.sourceSectionProvenance === 'UPLOADER_DECLARED' &&
+        proposal?.status === 'RESOLVED' &&
+        proposal.resourceType !== null &&
+        proposal.resourceCatalogId !== null &&
+        admissible.has(proposal.resourceCatalogId)
+        ? { ...row, sourceSection: proposal.resourceType as ResourceType }
+        : row;
+    });
+    const unitByRow = await this.proveUnits(unitRows);
 
     for (const row of rows) {
       const unit = unitByRow.get(row.id)!;
@@ -602,12 +617,115 @@ export class BasicPriceRowResolutionProposalService {
       };
     }
 
-    const verdict = await this.identity.resolve(evidence, {
+    const reference = {
       rawName: row.rawResourceNameText,
       rawCode: row.rawResourceCodeText,
       rawUnit: row.rawUnitText,
+    };
+    const firstVerdict = await this.identity.resolve(evidence, {
+      ...reference,
       resourceType: row.sourceSection,
     });
+    let verdict = firstVerdict;
+
+    // A workbook-wide declaration is a weak hint, NOT proof that each item is
+    // labor/material/equipment. Ask the SAME identity authority in the other
+    // families; only its UNIQUE exact canonical verdict may correct the hint.
+    // Shared names across families are never auto-bound. Family relatives and
+    // size variants remain candidates, never silently equated.
+    if (row.sourceSectionProvenance === 'UPLOADER_DECLARED') {
+      const otherFamilyVerdicts: (typeof firstVerdict)[] = [];
+      const exactAuthority = (authority: string | null) =>
+        authority === 'EXACT_CANONICAL_MATCH' ||
+        authority === 'EXACT_CANONICAL_MATCH_WITH_UNIT_CONTEXT';
+      const exact = [firstVerdict].filter(
+        (answer) =>
+          answer.status === 'RESOLVED' && exactAuthority(answer.authority),
+      );
+      for (const resourceType of ['LABOR', 'MATERIAL', 'EQUIPMENT'] as const) {
+        if (resourceType === row.sourceSection) continue;
+        const alternative = await this.identity.resolve(evidence, {
+          ...reference,
+          resourceType,
+        });
+        otherFamilyVerdicts.push(alternative);
+        if (
+          alternative.status === 'RESOLVED' &&
+          exactAuthority(alternative.authority)
+        ) {
+          exact.push(alternative);
+        }
+      }
+      if (
+        exact.length === 1 &&
+        (firstVerdict.status !== 'RESOLVED' ||
+          firstVerdict.resolvedResourceCatalogId ===
+            exact[0].resolvedResourceCatalogId)
+      ) {
+        verdict = exact[0];
+      } else if (
+        exact.length > 1 ||
+        (exact.length === 1 &&
+          firstVerdict.status === 'RESOLVED' &&
+          firstVerdict.resolvedResourceCatalogId !==
+            exact[0].resolvedResourceCatalogId)
+      ) {
+        return {
+          status: 'NEEDS_REVIEW',
+          authority: null,
+          resourceCatalogId: null,
+          resourceName: null,
+          resourceCode: null,
+          resourceType: null,
+          resourceBaseUnit: null,
+          candidates: exact.flatMap((answer) =>
+            answer.candidates.map(toBasicPriceSafeCandidate),
+          ),
+          reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
+          admissibleForResolve: false,
+          policyVersion: RESOURCE_IDENTITY_POLICY_VERSION,
+        };
+      } else if (exact.length === 0 && firstVerdict.status !== 'RESOLVED') {
+        // Never downgrade an already proved governed identity to a mere candidate.
+        // Reuse the canonical kernel's EXISTING candidate evidence in every
+        // family when an uploader assigned one weak category to a mixed sheet.
+        // This only makes related candidates VISIBLE. No family, identity,
+        // specification, or monetary selection is asserted from a resemblance.
+        const discovered = [firstVerdict, ...otherFamilyVerdicts]
+          .filter((answer) => answer.status === 'NEEDS_REVIEW')
+          .flatMap((answer) => answer.candidates)
+          .filter(
+            (candidate) =>
+              candidate.identityBasis !== 'RULED_OUT' &&
+              candidate.evidence.length > 0,
+          );
+        const byCatalogId = new Map(
+          discovered.map((candidate) => [
+            candidate.resourceCatalogId,
+            candidate,
+          ]),
+        );
+        const related = [...byCatalogId.values()].sort((a, b) =>
+          a.resourceCatalogId.localeCompare(b.resourceCatalogId),
+        );
+        if (related.length > 0) {
+          verdict = {
+            status: 'NEEDS_REVIEW',
+            authority: 'EVIDENCE_CANDIDATE',
+            resolvedResourceCatalogId: null,
+            candidates: related,
+            reasonCodes: [
+              related.length === 1
+                ? 'STRONG_CANDIDATE_NEEDS_REVIEW'
+                : 'MULTIPLE_CANDIDATES_NEEDS_REVIEW',
+            ],
+            explanation:
+              'Kemungkinan terkait ditemukan oleh Resource Identity. ' +
+              'Kesamaan identitas, kategori, dan spesifikasi tidak dinyatakan otomatis.',
+          };
+        }
+      }
+    }
 
     const resolved =
       verdict.resolvedResourceCatalogId === null
@@ -704,7 +822,11 @@ export class BasicPriceRowResolutionProposalService {
       const chosen = resource.candidates.find(
         (c) => c.resourceCatalogId === resource.resourceCatalogId,
       );
-      if (chosen && chosen.type !== row.sourceSection)
+      if (
+        chosen &&
+        chosen.type !== row.sourceSection &&
+        row.sourceSectionProvenance !== 'UPLOADER_DECLARED'
+      )
         blocking.push('RESOURCE_TYPE_MISMATCH');
     }
 

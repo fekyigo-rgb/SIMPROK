@@ -13,6 +13,24 @@ describe('normalizeResourceName', () => {
     );
     expect(normalizeResourceName('Semen Portland')).toBe('semen portland');
     expect(normalizeResourceName('SEMEN PORTLAND')).toBe('semen portland');
+    expect(normalizeResourceName(' - Pasir Beton')).toBe('pasir beton');
+    expect(normalizeResourceName('•   Batu Kali (15-30 cm)')).toBe(
+      'batu kali (15-30 cm)',
+    );
+    expect(normalizeResourceName('Batu Kali (15-30 cm)')).not.toBe(
+      normalizeResourceName('Batu Kali'),
+    );
+    expect(normalizeResourceName('Batu Pecah 5-7 cm')).not.toBe(
+      normalizeResourceName('Batu Pecah'),
+    );
+    expect(normalizeResourceName('Batu Pecah')).not.toBe(
+      normalizeResourceName('Kerikil'),
+    );
+    expect(normalizeResourceName('Pasir Beton')).not.toBe(
+      normalizeResourceName('Pasir Pasang'),
+    );
+    const pasir = ['Pasir Beton', 'Pasir Pasang', 'Pasir Halus', 'Pasir Urug'];
+    expect(new Set(pasir.map(normalizeResourceName)).size).toBe(4);
   });
 });
 

@@ -323,6 +323,7 @@ export class BasicPriceRowResolutionService {
         // the correct answer rather than a silent overwrite.
         version: true,
         sourceSection: true,
+        sourceSectionProvenance: true,
         rawResourceNameText: true,
         rawResourceCodeText: true,
         rawUnitText: true,
@@ -810,6 +811,7 @@ export class BasicPriceRowResolutionService {
                   {
                     id: rowId,
                     sourceSection: row.sourceSection,
+                    sourceSectionProvenance: row.sourceSectionProvenance,
                     rawResourceNameText: row.rawResourceNameText,
                     rawResourceCodeText: row.rawResourceCodeText,
                     rawUnitText: row.rawUnitText,

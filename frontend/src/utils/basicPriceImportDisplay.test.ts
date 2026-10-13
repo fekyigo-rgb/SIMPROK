@@ -19,7 +19,13 @@ import {
   resourceOptionLabel,
   rowActionFailureMessage,
   rowMachineNarrative,
+  rowNoteDisclosure,
+  reviewNeedsManualControls,
+  rowMachineStateLabel,
+  reviewResourceSearchFamily,
   rowNoteLines,
+  rowReviewFactsLine,
+  reviewDisplayResourceName,
   savedMetadataLines,
   unitDimensionLabel,
   unitKindLabel,
@@ -116,7 +122,7 @@ const baseBatch = (overrides: Partial<BasicPriceImportBatchSummary> = {}): Basic
 });
 
 test("batchStatusLabel names the destination whenever it says diajukan", () => {
-  assert.equal(batchStatusLabel("NEEDS_REVIEW"), "Perlu konfirmasi");
+  assert.equal(batchStatusLabel("NEEDS_REVIEW"), "Perlu keputusan Anda");
   // A bare "Diajukan" left the reader to guess where. The curation path is
   // the ONLY destination this word has, so it is said out loud.
   assert.equal(batchStatusLabel("SUBMITTED"), "Sudah diusulkan ke SIMPROK");
@@ -990,8 +996,9 @@ test("CASE B: a recognised row says so concisely, with no internal identity", ()
   assert.ok(narrative);
 
   assert.equal(narrative.state, "PROVEN");
-  assert.match(narrative.resource, /dikenali otomatis: Air/);
-  assert.match(narrative.unit, /dikenali sebagai Litre/);
+  assert.match(narrative.resource, /Item ditemukan: Air/);
+  assert.match(narrative.unit, /ltr sudah dikenali/);
+  assert.doesNotMatch(narrative.unit, /Cubic metre|Litre/);
   // A proven row is not asked to choose between anything.
   assert.equal(narrative.candidates.length, 0);
   for (const text of visibleText(narrative)) assertHumanSafe(text, "case B");
@@ -1592,4 +1599,163 @@ test("identity admission names the act and refuses to fire without a unit and a 
     }),
     null,
   );
+});
+
+test("BP-SEMANTIC-01: uploader's LABOR hint does not trap Material candidate search", () => {
+  const base = provenProposal();
+  const candidate = {
+    resourceCatalogId: "batu-kali",
+    name: "Batu Kali",
+    code: null,
+    type: "MATERIAL",
+    baseUnit: "M3",
+    evidence: ["NAME_TOKEN_CONTAINMENT"],
+    specificationUnproved: false,
+    unprovedSpecificationFacts: [],
+    hasPriorHumanDecision: false,
+  };
+  const unresolved: RowMachineProposal = {
+    ...base,
+    identityPairProven: false,
+    resource: {
+      ...base.resource,
+      status: "NEEDS_REVIEW",
+      authority: "EVIDENCE_CANDIDATE",
+      resourceCatalogId: null,
+      resourceType: null,
+      candidates: [candidate],
+    },
+  };
+  const uploader = baseRow({
+    section: "LABOR",
+    sectionProvenance: "UPLOADER_DECLARED",
+    machineProposal: unresolved,
+  });
+  assert.equal(reviewResourceSearchFamily(uploader), "MATERIAL");
+  assert.equal(machinePickedResource(uploader), null);
+  assert.equal(
+    reviewResourceSearchFamily(baseRow({
+      ...uploader,
+      sectionProvenance: "SOURCE_ROW_CATEGORY",
+    })),
+    "LABOR",
+  );
+  assert.equal(
+    reviewResourceSearchFamily(baseRow({
+      ...uploader,
+      machineProposal: {
+        ...unresolved,
+        resource: {
+          ...unresolved.resource,
+          candidates: [{ ...candidate, type: "LABOR", resourceCatalogId: "labor" }, candidate],
+        },
+      },
+    })),
+    "LABOR",
+  );
+});
+
+test("BP-UX-01: understood identity does not require repeated confirmation", () => {
+  const recognized = baseRow({
+    machineProposal: provenProposal(),
+    section: "LABOR",
+    sectionProvenance: "UPLOADER_DECLARED",
+  });
+  assert.equal(reviewNeedsManualControls(recognized, false), false);
+  assert.equal(reviewNeedsManualControls(recognized, true), true);
+  assert.equal(rowMachineStateLabel("PROVEN"), "Sudah dikenali");
+  assert.equal(rowMachineStateLabel("ATTENTION"), "Perlu keputusan Anda");
+  assert.equal(rowSectionDisplay(recognized), "Jenis yang dikenali: Bahan");
+  assert.equal(reviewNeedsManualControls(baseRow({ machineProposal: null }), false), true);
+});
+
+test("BP-UX-02: the source-proven family must not be silently overridden", () => {
+  const sourceProven = baseRow({
+    section: "LABOR",
+    sectionProvenance: "SOURCE_ROW_CATEGORY",
+    machineProposal: provenProposal(),
+  });
+  assert.equal(rowSectionDisplay(sourceProven), "Tenaga kerja");
+  assert.equal(
+    rowSectionDisplay(baseRow({ section: "LABOR", sectionProvenance: "UPLOADER_DECLARED" })),
+    "Kategori awal: Tenaga kerja",
+  );
+});
+
+test("BP-UX-03: missing source category is history, not unfinished work after proven identity", () => {
+  const verified = baseRow({
+    sourceRowNumber: 5,
+    section: "LABOR",
+    sectionProvenance: "UPLOADER_DECLARED",
+    reasonCodes: ["SECTION_DECLARED_BY_UPLOADER"],
+    machineProposal: provenProposal(),
+  });
+  const lines = rowNoteLines(verified);
+  const shown = rowNoteDisclosure(lines, true);
+  assert.equal(shown.primary, null);
+  assert.deepEqual(shown.secondary, [
+    "Berkas tidak mencantumkan kategori; jenis item sudah dikenali.",
+  ]);
+  assert.doesNotMatch(JSON.stringify(shown), /masih perlu dipastikan/u);
+
+  const pending = baseRow({
+    section: "LABOR",
+    sectionProvenance: "UPLOADER_DECLARED",
+    reasonCodes: ["SECTION_DECLARED_BY_UPLOADER"],
+    machineProposal: null,
+  });
+  assert.match(rowNoteDisclosure(rowNoteLines(pending)).primary ?? "", /masih perlu dipastikan/u);
+});
+
+test("BP-UX-04: a source-absent category does not mask another actionable warning", () => {
+  const verified = baseRow({
+    sectionProvenance: "UPLOADER_DECLARED",
+    reasonCodes: ["SECTION_DECLARED_BY_UPLOADER", "UNIT_REQUIRED"],
+    machineProposal: provenProposal(),
+  });
+  const shown = rowNoteDisclosure(rowNoteLines(verified), true);
+  assert.match(shown.primary ?? "", /satuan/iu);
+  assert.equal(shown.secondary.length, 1);
+});
+
+test("BP-UX-05: a list bullet vanishes from display, but size and source remain exact", () => {
+  assert.equal(reviewDisplayResourceName("- Pasir Beton"), "Pasir Beton");
+  assert.equal(reviewDisplayResourceName("•  Pasir Urug"), "Pasir Urug");
+  assert.equal(reviewDisplayResourceName("Batu Kali (15-30 cm)"), "Batu Kali (15-30 cm)");
+  assert.equal(reviewDisplayResourceName("- Batu Pecah 5-7 cm"), "Batu Pecah 5-7 cm");
+  assert.equal(reviewDisplayResourceName("Batu Pecah 2-3 cm"), "Batu Pecah 2-3 cm");
+  assert.equal(reviewDisplayResourceName("Pasir-Beton"), "Pasir-Beton");
+  const original = "- Pasir Beton";
+  assert.equal(reviewDisplayResourceName(original), "Pasir Beton");
+  assert.equal(original, "- Pasir Beton", "display transformation cannot rewrite source proof");
+});
+
+test("BP-UX-06: a missing optional resource code is not a blocker in primary facts", () => {
+  const withoutCode = rowReviewFactsLine(baseRow({
+    code: null,
+    unit: "M3",
+    proposedCanonicalPrice: "255000.00",
+  }));
+  assert.equal(withoutCode, "Satuan dari berkas: M3 · Harga Rp 255000.00");
+  assert.doesNotMatch(withoutCode, /Kode tidak tersedia/);
+  assert.match(
+    rowReviewFactsLine(baseRow({code: "MAT-01"})),
+    /^MAT-01 · Satuan dari berkas:/,
+  );
+});
+
+test("BP-UX-07: optional missing code remains in history, behind Mengapa", () => {
+  const history = "Dokumen sumber tidak mencantumkan kode pada baris ini.";
+  const actionable = "Satuan belum dikenali.";
+  const mixed = rowNoteDisclosure({human:[history, actionable]});
+  assert.equal(mixed.primary, actionable);
+  assert.deepEqual(mixed.secondary, [history]);
+  const onlyOptional = rowNoteDisclosure({human:[history]});
+  assert.equal(onlyOptional.primary, null);
+  assert.deepEqual(onlyOptional.secondary, [history]);
+  const proven = rowNoteDisclosure({
+    human:[history, "Berkas tidak mencantumkan kategori; jenis item sudah dikenali."],
+  }, true);
+  assert.equal(proven.primary, null);
+  assert.equal(proven.secondary.length, 2);
 });

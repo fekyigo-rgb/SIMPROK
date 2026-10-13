@@ -1,8 +1,13 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { Prisma, PrismaClient, ResourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { findProvenanceCandidate } from './basic-price-source-provenance.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
+import { normalizeResourceName as normalizeCanonicalResourceName } from '../resource-catalog/resource-identity-resolution.kernel';
 
 export interface MappingCandidate {
   resourceCatalogId: string;
@@ -38,7 +43,7 @@ export interface RowMappingCandidates {
 type QueryClient = PrismaClient | Prisma.TransactionClient;
 
 export function normalizeResourceName(raw: string): string {
-  return raw.trim().replace(/\s+/g, ' ').toLowerCase();
+  return normalizeCanonicalResourceName(raw);
 }
 
 /**
