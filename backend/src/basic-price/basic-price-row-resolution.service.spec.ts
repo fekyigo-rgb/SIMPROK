@@ -6,7 +6,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { ResourceAdmissionService } from '../resource-catalog/resource-admission.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
-import { BasicPriceRowResolutionProposalService } from './basic-price-row-resolution-proposal.service';
+import {
+  BasicPriceRowResolutionProposalService,
+  buildBasicPriceAdmissionReview,
+} from './basic-price-row-resolution-proposal.service';
 
 describe('BasicPriceRowResolutionService', () => {
   let service: BasicPriceRowResolutionService;
@@ -27,6 +30,8 @@ describe('BasicPriceRowResolutionService', () => {
   };
   let prisma: { $transaction: jest.Mock };
   let unitKernel: { resolve: jest.Mock };
+  let identityAuthority: ResourceIdentityResolutionService;
+  let proposalService: { proposeForRows: jest.Mock };
 
   /**
    * Evidence the REAL ResourceIdentityResolutionService loads. These tests use
@@ -138,6 +143,22 @@ describe('BasicPriceRowResolutionService', () => {
       ),
     };
 
+    proposalService = {
+      proposeForRows: jest.fn((_ws: string, rows: { id: string }[]) => {
+        const byRow = new Map<string, unknown>();
+        for (const row of rows) {
+          byRow.set(row.id, {
+            rowId: row.id,
+            resource: {
+              status: 'NEEDS_REVIEW',
+              resourceCatalogId: null,
+              candidates: candidateRows,
+            },
+          });
+        }
+        return Promise.resolve(byRow);
+      }),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BasicPriceRowResolutionService,
@@ -158,22 +179,7 @@ describe('BasicPriceRowResolutionService', () => {
         // front of them'. Only who says it has changed.
         {
           provide: BasicPriceRowResolutionProposalService,
-          useValue: {
-            proposeForRows: jest.fn((_ws: string, rows: { id: string }[]) => {
-              const byRow = new Map<string, unknown>();
-              for (const row of rows) {
-                byRow.set(row.id, {
-                  rowId: row.id,
-                  resource: {
-                    status: 'NEEDS_REVIEW',
-                    resourceCatalogId: null,
-                    candidates: candidateRows,
-                  },
-                });
-              }
-              return Promise.resolve(byRow);
-            }),
-          },
+          useValue: proposalService,
         },
         // THE one canonical mint authority the service now delegates admission
         // to. The real service over mocked evidence — never a stub of the mint.
@@ -184,6 +190,7 @@ describe('BasicPriceRowResolutionService', () => {
     service = module.get<BasicPriceRowResolutionService>(
       BasicPriceRowResolutionService,
     );
+    identityAuthority = module.get(ResourceIdentityResolutionService);
 
     // Default happy-path stubs; individual tests override as needed.
     tx.$queryRaw.mockImplementation(
@@ -995,10 +1002,12 @@ describe('BasicPriceRowResolutionService', () => {
         expect.objectContaining({
           data: expect.objectContaining({
             resourceCatalogId: 'resource-batu-kali',
-            sourceSection: 'MATERIAL',
             resolvedResourceType: 'MATERIAL',
           }),
         }),
+      );
+      expect(tx.basicPriceImportRow.update.mock.calls[0][0].data).not.toHaveProperty(
+        'sourceSection',
       );
     });
 
@@ -1050,10 +1059,12 @@ describe('BasicPriceRowResolutionService', () => {
         expect.objectContaining({
           data: expect.objectContaining({
             resourceCatalogId: 'resource-batu-belah',
-            sourceSection: 'MATERIAL',
             resolvedResourceType: 'MATERIAL',
           }),
         }),
+      );
+      expect(tx.basicPriceImportRow.update.mock.calls[0][0].data).not.toHaveProperty(
+        'sourceSection',
       );
     });
 
@@ -1107,6 +1118,7 @@ describe('BasicPriceRowResolutionService', () => {
       version: 0,
       unitDefinitionId: 'unit-01',
       reason: 'Tidak ada resource kanonik yang sepadan di workspace ini.',
+      confirmedResourceType: ResourceType.MATERIAL,
     };
 
     /** A catalog row exactly as ResourceIdentityResolutionService loads it. */
@@ -1141,17 +1153,144 @@ describe('BasicPriceRowResolutionService', () => {
       tx.unitDefinition.findFirst.mockResolvedValue({ id: 'unit-01', code: 'M3' });
     });
 
-    const admit = () =>
-      service.admitResourceForRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, ADMIT as any);
+    let activeAdmissionRow = {
+      ...baseRow,
+      sourceSectionProvenance: 'SOURCE_ROW_CATEGORY',
+    };
 
-    const rowsFrom = (row: Record<string, unknown>) =>
-      tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
+    const admit = async (
+      refusedCandidateIds?: string[],
+      dtoPatch: Record<string, unknown> = {},
+    ) => {
+      const evidence = await identityAuthority.loadEvidence(tx as any, WORKSPACE_ID);
+      const reference = {
+          rawName: activeAdmissionRow.rawResourceNameText,
+          rawCode: activeAdmissionRow.rawResourceCodeText,
+          rawUnit: activeAdmissionRow.rawUnitText,
+          sourceSha256: baseBatch.sourceSha256,
+        };
+      const requestedType =
+        (dtoPatch.confirmedResourceType as ResourceType | undefined) ??
+        (activeAdmissionRow.sourceSection as ResourceType);
+      const types =
+        activeAdmissionRow.sourceSectionProvenance === 'UPLOADER_DECLARED'
+          ? [ResourceType.LABOR, ResourceType.MATERIAL, ResourceType.EQUIPMENT]
+          : [activeAdmissionRow.sourceSection as ResourceType];
+      const verdicts = await Promise.all(
+        types.map((resourceType) =>
+          identityAuthority.resolve(
+            evidence,
+            { ...reference, resourceType },
+            tx as any,
+          ),
+        ),
+      );
+      const exact = verdicts.filter((verdict) => verdict.status === 'RESOLVED');
+      const related = verdicts
+        .filter((verdict) => verdict.status === 'NEEDS_REVIEW')
+        .flatMap((verdict) => verdict.candidates)
+        .filter((candidate) => candidate.identityBasis !== 'RULED_OUT');
+      const resolution = exact[0] ??
+        (related.length > 0
+          ? {
+              status: 'NEEDS_REVIEW' as const,
+              authority: 'EVIDENCE_CANDIDATE' as const,
+              resolvedResourceCatalogId: null,
+              candidates: [
+                ...new Map(
+                  related.map((candidate) => [
+                    candidate.resourceCatalogId,
+                    candidate,
+                  ]),
+                ).values(),
+              ],
+              reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
+              explanation: 'test combined cross-type verdict',
+            }
+          : verdicts[0]);
+      const workspaceIds = new Set(
+        identityCatalogRows
+          .filter((candidate) => candidate.workspaceId !== null)
+          .map((candidate) => candidate.id as string),
+      );
+      const question = {
+          workspaceId: WORKSPACE_ID,
+          batchId: BATCH_ID,
+          rowId: ROW_ID,
+          rowVersion: activeAdmissionRow.version,
+          sourceSha256: baseBatch.sourceSha256,
+          rawResourceNameText: activeAdmissionRow.rawResourceNameText,
+          rawResourceCodeText: activeAdmissionRow.rawResourceCodeText,
+          rawUnitText: activeAdmissionRow.rawUnitText,
+          sourceSection: activeAdmissionRow.sourceSection as ResourceType,
+          sourceSectionProvenance: activeAdmissionRow.sourceSectionProvenance,
+        };
+      const reviews = types.map((resourceType) =>
+        buildBasicPriceAdmissionReview(
+          question,
+          resolution,
+          workspaceIds,
+          resourceType,
+        ),
+      );
+      const review = reviews.find(
+        (candidate) => candidate.effectiveResourceType === requestedType,
+      ) ?? reviews[0];
+      review.offered = reviews.some((candidate) => candidate.offered);
+      review.typeConfirmations = reviews
+        .filter((candidate) => candidate.offered)
+        .map((candidate) => ({
+          resourceType: candidate.effectiveResourceType,
+          reviewBindingFingerprint: candidate.reviewBindingFingerprint,
+        }));
+      proposalService.proposeForRows.mockResolvedValueOnce(
+        new Map([
+          [
+            ROW_ID,
+            {
+              rowId: ROW_ID,
+              resource: {
+                status: resolution.status,
+                admissionReview: review,
+              },
+            },
+          ],
+        ]),
+      );
+      return service.admitResourceForRow(
+        WORKSPACE_ID,
+        BATCH_ID,
+        ROW_ID,
+        REVIEWER_ID,
+        {
+          ...ADMIT,
+          confirmedResourceType: requestedType,
+          refusedCandidateIds:
+            refusedCandidateIds ?? review.humanRefusableCandidateIds,
+          reviewBindingFingerprint: review.reviewBindingFingerprint,
+          ...dtoPatch,
+        },
+      );
+    };
+
+    const rowsFrom = (row: Record<string, unknown>) => {
+      activeAdmissionRow = {
+        ...baseRow,
+        sourceSectionProvenance: 'SOURCE_ROW_CATEGORY',
+        ...row,
+      } as typeof activeAdmissionRow;
+      return tx.$queryRaw.mockImplementation((query: { strings?: readonly string[] }) => {
         const sql = query?.strings?.join('') ?? '';
         if (sql.includes('basic_price_import_batches')) return Promise.resolve([baseBatch]);
-        if (sql.includes('basic_price_import_rows')) return Promise.resolve([{ ...baseRow, ...row }]);
+        if (sql.includes('basic_price_import_rows')) return Promise.resolve([activeAdmissionRow]);
         if (sql.includes('resource_catalogs')) return Promise.resolve(candidateRows);
         return Promise.resolve([]);
       });
+    };
+
+    beforeEach(() => {
+      rowsFrom({});
+    });
 
     const created = () => (tx as any).resourceCatalog.create.mock.calls[0][0].data;
     const nothingWasCreated = () => {
@@ -1163,7 +1302,7 @@ describe('BasicPriceRowResolutionService', () => {
 
     // ---------- ADMISSION IS ALLOWED ONLY WHEN THE AUTHORITY IS EXHAUSTED ----------
 
-    it('1. authoritative RESOURCE_NOT_FOUND with zero candidates is the one condition that admits', async () => {
+    it('1. authoritative RESOURCE_NOT_FOUND with zero candidates still admits', async () => {
       const result = await admit();
 
       expect((tx as any).resourceCatalog.create).toHaveBeenCalledTimes(1);
@@ -1189,21 +1328,110 @@ describe('BasicPriceRowResolutionService', () => {
       nothingWasCreated();
     });
 
-    it('3. A DIFFERENT SPELLING IS NOT A DIFFERENT RESOURCE — "Semen Portlan" against "Semen Portland" forbids admission', async () => {
-      // This is the whole blocker this remediation closes: the previous
-      // exact-name lookup saw zero candidates here and would have created a
-      // second canonical cement.
+    it('3. a source-proven NAME_SIMILARITY_ONLY candidate may be explicitly refused', async () => {
+      // The server binds the exact visible candidate set; the caller simulates
+      // the reviewer's explicit refusal of that one name-only possibility.
       identityCatalogRows = [catalogRow({ name: 'Semen Portlan' })];
 
-      const error = await admit().catch((e) => e);
-      expect(error.getResponse().resourceIdentity).toMatchObject({
-        status: 'NEEDS_REVIEW',
-        authority: 'EVIDENCE_CANDIDATE',
+      const result = await admit(['existing-01']);
+      expect(result.admittedResource.id).toBe('new-resource-01');
+      expect((tx as any).resourceCatalog.create).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['subset', []],
+      ['superset', ['existing-01', 'unknown-01']],
+      ['duplicates', ['existing-01', 'existing-01']],
+    ])('3b. rejects %s visible refusal ids with zero writes', async (_label, ids) => {
+      identityCatalogRows = [catalogRow({ name: 'Semen Portlan' })];
+      await expect(admit(ids)).rejects.toThrow(
+        'RESOURCE_ADMISSION_REFUSALS_INVALID',
+      );
+      nothingWasCreated();
+    });
+
+    it('3c. rejects a stale review binding with zero writes', async () => {
+      await expect(
+        admit([], { reviewBindingFingerprint: '0'.repeat(64) }),
+      ).rejects.toThrow('RESOURCE_ADMISSION_REVIEW_STALE');
+      nothingWasCreated();
+    });
+
+    it('3d. weak UPLOADER_DECLARED category cannot bypass a cross-type candidate', async () => {
+      rowsFrom({ sourceSectionProvenance: 'UPLOADER_DECLARED' });
+      identityCatalogRows = [
+        catalogRow({ id: 'labor-01', name: 'Semen Portland', type: 'LABOR' }),
+      ];
+      await expect(admit([])).rejects.toThrow(
+        'RESOURCE_IDENTITY_NOT_EXHAUSTED',
+      );
+      nothingWasCreated();
+    });
+
+    it('3e. weak category with no candidate across all types admits only after typed human confirmation and preserves source facts', async () => {
+      rowsFrom({ sourceSectionProvenance: 'UPLOADER_DECLARED' });
+
+      const result = await admit([], {
+        confirmedResourceType: ResourceType.EQUIPMENT,
       });
-      expect(error.getResponse().resourceIdentity.candidates[0]).toMatchObject({
-        resourceCatalogId: 'existing-01',
-        name: 'Semen Portlan',
+
+      expect(result.admittedResource.id).toBe('new-resource-01');
+      expect((tx as any).resourceCatalog.create.mock.calls[0][0].data.type).toBe(
+        'EQUIPMENT',
+      );
+      expect(
+        (tx as any).resourceSourceIdentity.create.mock.calls[0][0].data
+          .sourceSection,
+      ).toBe('MATERIAL');
+      expect(tx.basicPriceImportRow.update.mock.calls[0][0].data).toMatchObject({
+        resolvedResourceType: 'EQUIPMENT',
       });
+      expect(tx.basicPriceImportRow.update.mock.calls[0][0].data).not.toHaveProperty(
+        'sourceSection',
+      );
+    });
+
+    it('3f. changing the confirmed type with the old type fingerprint returns 409 with zero writes', async () => {
+      rowsFrom({ sourceSectionProvenance: 'UPLOADER_DECLARED' });
+      const materialFingerprint = buildBasicPriceAdmissionReview(
+        {
+          workspaceId: WORKSPACE_ID,
+          batchId: BATCH_ID,
+          rowId: ROW_ID,
+          rowVersion: 0,
+          sourceSha256: baseBatch.sourceSha256,
+          rawResourceNameText: baseRow.rawResourceNameText,
+          rawResourceCodeText: baseRow.rawResourceCodeText,
+          rawUnitText: baseRow.rawUnitText,
+          sourceSection: ResourceType.MATERIAL,
+          sourceSectionProvenance: 'UPLOADER_DECLARED',
+        },
+        {
+          status: 'UNRESOLVED',
+          authority: null,
+          resolvedResourceCatalogId: null,
+          candidates: [],
+          reasonCodes: ['RESOURCE_NOT_FOUND'],
+          explanation: 'test',
+        },
+        new Set(),
+        ResourceType.MATERIAL,
+      ).reviewBindingFingerprint;
+
+      await expect(
+        admit([], {
+          confirmedResourceType: ResourceType.EQUIPMENT,
+          reviewBindingFingerprint: materialFingerprint,
+        }),
+      ).rejects.toThrow('RESOURCE_ADMISSION_REVIEW_STALE');
+      nothingWasCreated();
+    });
+
+    it('3g. source-authoritative type override is blocked with zero writes', async () => {
+      rowsFrom({ sourceSectionProvenance: 'SOURCE_SECTION_TITLE' });
+      await expect(
+        admit([], { confirmedResourceType: ResourceType.EQUIPMENT }),
+      ).rejects.toThrow('SOURCE_TYPE_OVERRIDE_FORBIDDEN');
       nothingWasCreated();
     });
 
@@ -1414,6 +1642,7 @@ describe('BasicPriceRowResolutionService', () => {
         // the kernel's candidate cannot reach this response without this test
         // being read and changed.
         expect(Object.keys(candidate).sort()).toEqual([
+          'admissionDisposition',
           'baseUnit',
           'code',
           'evidence',
@@ -1488,7 +1717,9 @@ describe('BasicPriceRowResolutionService', () => {
     it('7. a GLOBAL catalog candidate forbids a workspace-local duplicate, and the loader really does look at global rows', async () => {
       // workspaceId null in the database — the loader's own tenant predicate is
       // what brings it into view, so that predicate is asserted here directly.
-      identityCatalogRows = [catalogRow({ id: 'global-01', name: 'Semen Portland' })];
+      identityCatalogRows = [
+        catalogRow({ id: 'global-01', name: 'Semen Portland', workspaceId: null }),
+      ];
 
       const error = await admit().catch((e) => e);
       expect(error.getResponse().resourceIdentity.resolvedResourceCatalogId).toBe('global-01');
@@ -1513,15 +1744,11 @@ describe('BasicPriceRowResolutionService', () => {
       nothingWasCreated();
     });
 
-    it('9. a same-name row of the WRONG type is reported as a type mismatch, and still forbids admission', async () => {
+    it('9. a machine RULED_OUT wrong-type row needs no human refusal', async () => {
       identityCatalogRows = [catalogRow({ name: 'Semen Portland', type: 'LABOR' })];
 
-      const error = await admit().catch((e) => e);
-      expect(error.getResponse().resourceIdentity).toMatchObject({
-        status: 'UNRESOLVED',
-        reasonCodes: ['RESOURCE_TYPE_MISMATCH'],
-      });
-      nothingWasCreated();
+      const result = await admit([]);
+      expect(result.admittedResource.id).toBe('new-resource-01');
     });
 
     // ---------- UNIT AUTHORITY ----------
@@ -1616,7 +1843,9 @@ describe('BasicPriceRowResolutionService', () => {
 
       // Pre-lock pass refuses cheaply; the lock serializes; the post-lock pass
       // is the only one that may authorize a create.
-      expect(order).toEqual(['identity', 'lock', 'identity']);
+      // GET-style review proof, POST pre-lock binding proof, then the shared
+      // admission lock and its authoritative under-lock re-proof.
+      expect(order).toEqual(['identity', 'identity', 'lock', 'identity']);
     });
 
     it('18. CONCURRENCY: a resource admitted by another transaction while this one waited is found on re-proof, and is never duplicated', async () => {
@@ -1629,10 +1858,7 @@ describe('BasicPriceRowResolutionService', () => {
       });
 
       const error = await admit().catch((e) => e);
-      expect(error.getResponse()).toMatchObject({
-        message: 'RESOURCE_IDENTITY_NOT_EXHAUSTED',
-        resourceIdentity: { resolvedResourceCatalogId: 'won-the-race-01' },
-      });
+      expect(error.message).toBe('RESOURCE_ADMISSION_REVIEW_STALE');
       nothingWasCreated();
     });
 
@@ -2427,6 +2653,276 @@ describe('BasicPriceRowResolutionService', () => {
       expect(written).not.toHaveProperty('proposedCanonicalPrice');
       expect(result.rawUnitText).toBe('U/J');
       expect(result.proposedCanonicalPrice?.toString()).toBe('1714285.71');
+    });
+  });
+
+  describe('admitSafeNewResources', () => {
+    const fingerprint = 'a'.repeat(64);
+    const unitId = '11111111-1111-4111-8111-111111111111';
+    const rowId = '22222222-2222-4222-8222-222222222222';
+
+    const selection = (overrides: Record<string, unknown> = {}) => ({
+      rowId,
+      version: 0,
+      unitDefinitionId: unitId,
+      confirmedResourceType: ResourceType.MATERIAL,
+      reviewBindingFingerprint: fingerprint,
+      ...overrides,
+    });
+    const bulkRow = (overrides: Record<string, unknown> = {}) => ({
+      id: rowId,
+      batchId: BATCH_ID,
+      version: 0,
+      status: 'NEEDS_REVIEW',
+      proposedCanonicalPrice: new Prisma.Decimal('100.00'),
+      sourceSection: ResourceType.MATERIAL,
+      sourceSectionProvenance: 'UPLOADER_DECLARED',
+      rawResourceNameText: 'Bahan baru',
+      rawResourceCodeText: null,
+      rawUnitText: 'kg',
+      ...overrides,
+    });
+    const safeProposal = (overrides: Record<string, unknown> = {}) => ({
+      rowId,
+      identityPairProven: false,
+      blockingFacts: ['RESOURCE_NOT_FOUND'],
+      unit: {
+        status: 'RESOLVED',
+        unitDefinitionId: unitId,
+      },
+      resource: {
+        candidates: [],
+        admissionReview: {
+          offered: true,
+          humanRefusableCandidateIds: [],
+          blockedCandidateIds: [],
+          typeConfirmations: [
+            {
+              resourceType: ResourceType.MATERIAL,
+              reviewBindingFingerprint: fingerprint,
+            },
+          ],
+        },
+      },
+      ...overrides,
+    });
+
+    function arrangeBulk(rows = [bulkRow()]) {
+      Object.assign(prisma, {
+        basicPriceImportBatch: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: BATCH_ID,
+            workspaceId: WORKSPACE_ID,
+            status: 'NEEDS_REVIEW',
+            uploadedByAccountId: REVIEWER_ID,
+            sourceSha256: 'f'.repeat(64),
+          }),
+        },
+        basicPriceImportRow: {
+          findMany: jest.fn().mockResolvedValue(rows),
+          count: jest.fn().mockResolvedValue(1),
+        },
+      });
+      proposalService.proposeForRows.mockResolvedValue(
+        new Map(rows.map((row) => [row.id, safeProposal({ rowId: row.id })])),
+      );
+      return jest
+        .spyOn(service, 'admitResourceForRow')
+        .mockImplementation(async (_ws, _batch, admittedRowId) => ({
+          admittedResource: { id: `resource-${admittedRowId}` },
+          row: {},
+        }) as never);
+    }
+
+    it('binds bulk review to the original source hash and exact current row version', async () => {
+      arrangeBulk([bulkRow({ version: 7 })]);
+      await service.admitSafeNewResources(WORKSPACE_ID, BATCH_ID, REVIEWER_ID, {
+        selections: [selection({ version: 7 })],
+        reason: 'Jenis dan satuan data uji telah dikonfirmasi',
+      });
+      expect(proposalService.proposeForRows).toHaveBeenCalledWith(
+        WORKSPACE_ID,
+        [
+          expect.objectContaining({
+            id: rowId,
+            rowVersion: 7,
+            sourceSha256: 'f'.repeat(64),
+          }),
+        ],
+      );
+    });
+    it('requires an explicit type for a weak uploader declaration and never invents MATERIAL', async () => {
+      const writer = arrangeBulk();
+      await expect(
+        service.admitSafeNewResources(WORKSPACE_ID, BATCH_ID, REVIEWER_ID, {
+          selections: [selection({ confirmedResourceType: undefined }) as any],
+          reason: 'Dipilih dan diperiksa bersama',
+        }),
+      ).resolves.toMatchObject({
+        acceptedCount: 0,
+        blocked: [{ rowId, reason: 'RESOURCE_ADMISSION_REVIEW_STALE' }],
+      });
+      expect(writer).not.toHaveBeenCalled();
+    });
+
+    it('blocks a cross-type/global candidate and a row without machine-proven unit while accepting another row', async () => {
+      const candidateRowId = '33333333-3333-4333-8333-333333333333';
+      const noUnitRowId = '44444444-4444-4444-8444-444444444444';
+      const rows = [
+        bulkRow(),
+        bulkRow({ id: candidateRowId }),
+        bulkRow({ id: noUnitRowId }),
+      ];
+      const writer = arrangeBulk(rows);
+      proposalService.proposeForRows.mockResolvedValue(
+        new Map([
+          [rowId, safeProposal()],
+          [
+            candidateRowId,
+            safeProposal({
+              rowId: candidateRowId,
+              resource: {
+                candidates: [
+                  {
+                    resourceCatalogId: 'global-labor-candidate',
+                    type: ResourceType.LABOR,
+                  },
+                ],
+                admissionReview: {
+                  offered: false,
+                  humanRefusableCandidateIds: [],
+                  blockedCandidateIds: ['global-labor-candidate'],
+                  typeConfirmations: [],
+                },
+              },
+            }),
+          ],
+          [
+            noUnitRowId,
+            safeProposal({
+              rowId: noUnitRowId,
+              unit: { status: 'NEEDS_REVIEW', unitDefinitionId: null },
+            }),
+          ],
+        ]),
+      );
+
+      const result = await service.admitSafeNewResources(
+        WORKSPACE_ID,
+        BATCH_ID,
+        REVIEWER_ID,
+        {
+          selections: [
+            selection(),
+            selection({ rowId: candidateRowId }),
+            selection({ rowId: noUnitRowId }),
+          ],
+          reason: 'Dipilih dan diperiksa bersama',
+        },
+      );
+
+      expect(result).toMatchObject({ acceptedCount: 1, blockedCount: 2 });
+      expect(result.blocked).toEqual(
+        expect.arrayContaining([
+          {
+            rowId: candidateRowId,
+            reason: 'RESOURCE_ADMISSION_REVIEW_STALE',
+          },
+          { rowId: noUnitRowId, reason: 'UNIT_NOT_MACHINE_PROVEN' },
+        ]),
+      );
+      expect(writer).toHaveBeenCalledTimes(1);
+      expect(writer).toHaveBeenCalledWith(
+        WORKSPACE_ID,
+        BATCH_ID,
+        rowId,
+        REVIEWER_ID,
+        expect.objectContaining({ refusedCandidateIds: [] }),
+      );
+    });
+
+    it('rejects a source-authoritative type override and a stale row independently', async () => {
+      const staleRowId = '55555555-5555-4555-8555-555555555555';
+      const rows = [
+        bulkRow({ sourceSectionProvenance: 'SOURCE_ROW_CATEGORY' }),
+        bulkRow({ id: staleRowId, version: 3 }),
+      ];
+      const writer = arrangeBulk(rows);
+      const result = await service.admitSafeNewResources(
+        WORKSPACE_ID,
+        BATCH_ID,
+        REVIEWER_ID,
+        {
+          selections: [
+            selection({ confirmedResourceType: ResourceType.LABOR }),
+            selection({ rowId: staleRowId, version: 2 }),
+          ],
+          reason: 'Dipilih dan diperiksa bersama',
+        },
+      );
+      expect(result.blocked).toEqual([
+        { rowId, reason: 'SOURCE_TYPE_OVERRIDE_FORBIDDEN' },
+        { rowId: staleRowId, reason: 'ROW_VERSION_STALE' },
+      ]);
+      expect(writer).not.toHaveBeenCalled();
+    });
+
+    it('sanitizes duplicate row ids and invokes the canonical writer exactly once', async () => {
+      const writer = arrangeBulk();
+      const result = await service.admitSafeNewResources(
+        WORKSPACE_ID,
+        BATCH_ID,
+        REVIEWER_ID,
+        {
+          selections: [selection(), selection()],
+          reason: 'Dipilih dan diperiksa bersama',
+        },
+      );
+      expect(result).toMatchObject({
+        acceptedCount: 1,
+        duplicateCount: 1,
+        readyForSubmissionCount: 1,
+        needsReviewCount: 1,
+      });
+      expect(writer).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails closed before proposals or writes for another tenant workspace', async () => {
+      const writer = arrangeBulk();
+      (prisma as any).basicPriceImportBatch.findUnique.mockResolvedValue({
+        id: BATCH_ID,
+        workspaceId: 'other-workspace',
+        status: 'NEEDS_REVIEW',
+        uploadedByAccountId: REVIEWER_ID,
+      });
+      await expect(
+        service.admitSafeNewResources(WORKSPACE_ID, BATCH_ID, REVIEWER_ID, {
+          selections: [selection()],
+          reason: 'Dipilih dan diperiksa bersama',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(proposalService.proposeForRows).not.toHaveBeenCalled();
+      expect(writer).not.toHaveBeenCalled();
+    });
+
+    it('is retry-safe when a selected row is already processed', async () => {
+      const writer = arrangeBulk([
+        bulkRow({ status: 'READY_FOR_SUBMISSION', version: 1 }),
+      ]);
+      const result = await service.admitSafeNewResources(
+        WORKSPACE_ID,
+        BATCH_ID,
+        REVIEWER_ID,
+        {
+          selections: [selection()],
+          reason: 'Dipilih dan diperiksa bersama',
+        },
+      );
+      expect(result).toMatchObject({
+        acceptedCount: 0,
+        skipped: [{ rowId, reason: 'ROW_ALREADY_PROCESSED' }],
+      });
+      expect(writer).not.toHaveBeenCalled();
     });
   });
 });

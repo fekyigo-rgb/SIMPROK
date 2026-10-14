@@ -382,8 +382,25 @@ test("STALE-UX-03: the local selection survives as a draft and an explicit recon
 // ── ACTION CLARITY (§15) ────────────────────────────────────────────────────
 
 test("ACTION-01: the row button names the act, not a finished outcome", () => {
-  assert.match(reviewText, /Konfirmasi pilihan/);
+  assert.match(reviewText, /Pilih Item yang Sesuai Padanan/);
+  assert.match(reviewText, /Tetapkan sebagai Item Baru/);
+  assert.match(reviewText, /Pilih Penyelesaian/);
+  assert.match(reviewText, /Perlu Tinjauan/);
   assert.doesNotMatch(reviewText, />\s*Selesaikan\s*</);
+});
+
+test("ROW-GRID-01: expanded review retains original facts within the approved two-area layout", () => {
+  for (const label of [
+    "Data Item",
+    "Jenis dan Satuan",
+    "Pilih Penyelesaian",
+  ]) {
+    assert.match(reviewText, new RegExp(label.replace(/[().]/g, "\\$&"), "u"));
+  }
+  assert.match(reviewText, /Data asli Excel tetap utuh/);
+  assert.match(reviewText, /Pencarian padanan dan penetapan item baru selalu memakai nama ini/);
+  assert.match(reviewText, /Apa yang perlu ditinjau\?/);
+  assert.doesNotMatch(reviewText, /Koreksi teks \(jika perlu\)|Hasil pencocokan|Kandidat yang ditemukan|Pratinjau sumber daya baru/);
 });
 
 // ── PROGRESSIVE DISCLOSURE (§17 / §20) ──────────────────────────────────────
@@ -455,4 +472,18 @@ test("STEPPER-01: the optional SIMPROK proposal is never drawn as required for p
   assert.match(journey, /'PROPOSE', 'NOT_OFFERED'/);
   assert.match(journey, /'VERIFY', 'NOT_OFFERED'/);
   assert.match(journey, /communityCurationPathApplies\(proposal, proposed\)/);
+});
+
+
+test("OWNER-HORIZONTAL-01: desktop review uses a wide 35:65 data/action composition", () => {
+  assert.match(basicPriceCss, /grid-template-columns:\s*minmax\(0, 35fr\) minmax\(0, 65fr\)/);
+  assert.match(basicPriceCss, /\.bp-rowcard__actions \{\s*grid-column: 2;\s*grid-row: 3 \/ span 2;/);
+  assert.match(basicPriceCss, /\.bp-rowcard__question \{\s*grid-column: 1 \/ -1;/);
+  const decisions = reviewText.slice(reviewText.indexOf('<div className="bp-rowcard__actions bp-rowcard__resolution">'));
+  assert.ok(decisions.indexOf("Pilih Item yang Sesuai Padanan") >= 0);
+  assert.ok(decisions.indexOf('bp-rowcard__lookup--contextual') > decisions.indexOf("Pilih Item yang Sesuai Padanan"));
+  assert.ok(decisions.indexOf("mode=\"resource\"") > decisions.indexOf('bp-rowcard__lookup--contextual'));
+  assert.match(decisions, /aria-expanded=\{lookupRows\.has\(row\.id\)\}/);
+  assert.match(decisions, /aria-expanded=\{draft\.admitOpen\}/);
+  assert.match(basicPriceCss, /\.bp-rowcard__resolution > \.bp-rowcard__choice:hover:not\(:disabled\)/);
 });

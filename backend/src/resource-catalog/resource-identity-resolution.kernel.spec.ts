@@ -128,6 +128,45 @@ const run = (
     ...over,
   });
 
+describe('BP-ROW8-COMPENSATION-01 — preserved history does not revive a retired identity', () => {
+  it('keeps original sighting and human mapping as history without resolving a RETIRED catalog', () => {
+    const oldId = 'preview-row8-original-catalog';
+    const originalName = '-  Agreg at  Kasar';
+    const result = run({
+      reference: {
+        rawName: originalName,
+        rawCode: null,
+        rawUnit: 'M3',
+        resourceType: 'MATERIAL',
+        sourceSha256: 'C'.repeat(64),
+      },
+      catalogCandidates: [{
+        id: oldId,
+        code: null,
+        name: originalName,
+        type: 'MATERIAL',
+        baseUnit: 'M3',
+        status: 'RETIRED',
+      }],
+      sourceSightings: [sighting({
+        resourceCatalogId: oldId,
+        rawName: originalName,
+        rawUnit: 'M3',
+        sourceSha256: 'C'.repeat(64),
+        sourceRowNumber: 8,
+      })],
+      reviewedMappings: [mapping({
+        resourceCatalogId: oldId,
+        rawName: originalName,
+        reviewerAccountId: 'acct-previous-human-decision',
+      })],
+    });
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.candidates).toEqual([]);
+  });
+});
+
 describe('resolveResourceIdentity — authority hierarchy', () => {
   // ---------- A. EXACT MATCH ----------
   it('A. an exact canonical match with one row auto-resolves, no human asked', () => {

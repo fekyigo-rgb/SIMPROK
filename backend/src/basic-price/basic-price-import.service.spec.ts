@@ -797,6 +797,7 @@ describe('BasicPriceImportService', () => {
       workspaceId: WORKSPACE_ID,
       status: 'NEEDS_REVIEW',
       uploadedByAccountId: ACCOUNT_ID,
+      sourceSha256: 'A'.repeat(64),
     };
 
     beforeEach(() => {
@@ -892,7 +893,11 @@ describe('BasicPriceImportService', () => {
       // Every fact comes from the row itself — nothing a client could steer.
       expect(rowsArg[0]).toEqual({
         id: 'r-open',
+        batchId: 'batch-01',
+        rowVersion: 0,
+        sourceSha256: 'A'.repeat(64),
         sourceSection: 'MATERIAL',
+        sourceSectionProvenance: undefined,
         rawResourceNameText: 'Air',
         rawResourceCodeText: null,
         rawUnitText: 'ltr',

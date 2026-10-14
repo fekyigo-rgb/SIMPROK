@@ -30,6 +30,7 @@ model Account {
   intelligenceEvidence                        IntelligenceEvidence[]
   verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]        @relation("BasicPriceSourceEquivalenceVerifiedBy")
   reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
+  basicPriceRowCompensations                  BasicPriceImportRowResolutionCompensation[] @relation("BasicPriceImportRowCompensationActor")
   basicPricePublicationAudits                 BasicPricePublicationAudit[]         @relation("BasicPricePublicationAuditActor")
   basicPriceProvenanceCorrections             BasicPriceProvenanceCorrection[]     @relation("BasicPriceProvenanceCorrectionActor")
   lockedRabDocuments                          RabDocument[]                        @relation("RabDocumentLockedBy")
@@ -118,6 +119,7 @@ model Workspace {
   resourceSourceIdentities          ResourceSourceIdentity[]
   basicPriceSourceEquivalences      BasicPriceSourceEquivalence[]
   basicPriceProvenanceCorrections   BasicPriceProvenanceCorrection[]
+  basicPriceRowCompensations          BasicPriceImportRowResolutionCompensation[]
   progressAuditEvents               ProgressAuditEvent[]               @relation("ProgressAuditWorkspace")
   projectTimeZoneEvents             ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions     AhspResourceIdentityDecision[]
@@ -1608,6 +1610,7 @@ model ResourceCatalog {
   basicPriceImportRows           BasicPriceImportRow[]
   sourceIdentities               ResourceSourceIdentity[]
   importRowResourceMappings      BasicPriceImportRowResourceMapping[]
+  basicPriceRowCompensations      BasicPriceImportRowResolutionCompensation[]
 
   ahspResourceIdentityDecisions     AhspResourceIdentityDecision[]
   observedResources                 ObservedResource[]
@@ -3126,6 +3129,7 @@ model BasicPriceImportRow {
   collisionOfRow    BasicPriceImportRow?                 @relation("RowCollision", fields: [collisionOfRowId], references: [id], onDelete: SetNull)
   collidingRows     BasicPriceImportRow[]                @relation("RowCollision")
   resourceMappings  BasicPriceImportRowResourceMapping[]
+  resolutionCompensations BasicPriceImportRowResolutionCompensation[]
 
   @@unique([batchId, sourceRowNumber])
   @@index([batchId])
@@ -3178,12 +3182,45 @@ model BasicPriceImportRowResourceMapping {
   resourceCatalog ResourceCatalog     @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
   unitDefinition  UnitDefinition      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
   reviewer        Account             @relation("BasicPriceImportRowResourceMappingReviewer", fields: [reviewerAccountId], references: [id], onDelete: Restrict, map: "fk_row_mapping_reviewer")
+  compensation    BasicPriceImportRowResolutionCompensation?
 
   @@index([rowId])
   @@index([resourceCatalogId])
   @@index([workspaceId])
   @@index([reviewerAccountId])
   @@map("basic_price_import_row_resource_mappings")
+}
+
+/// BP-ROW-COMPENSATION-01 — APPEND-ONLY reversal of a single human import-row
+/// identity decision. An original decision mapping is NEVER deleted or changed.
+/// This event records that its decision is no longer current, while retaining
+/// its actor, catalog, provenance, row version, and original decision record.
+/// The writer atomically retires an exclusively-owned catalog and reopens only
+/// the affected row, with full reference and ownership guards. No production
+/// backfill and no silent repair of historical data.
+model BasicPriceImportRowResolutionCompensation {
+  id                  String   @id(map: "bp_row_compensations_pkey") @default(uuid()) @db.Uuid
+  workspaceId         String   @db.Uuid
+  rowId               String   @db.Uuid
+  mappingId           String   @unique(map: "bp_row_compensations_mappingId_key") @db.Uuid
+  resourceCatalogId   String   @db.Uuid
+  actorAccountId      String   @db.Uuid
+  reason              String   @db.Text
+  priorRowVersion     Int
+  newRowVersion       Int
+  previousCatalogName String
+  compensatedAt       DateTime @default(now())
+
+  workspace       Workspace                          @relation(fields: [workspaceId], references: [id], onDelete: Restrict, map: "bp_row_compensations_workspace_fk")
+  row             BasicPriceImportRow                @relation(fields: [rowId], references: [id], onDelete: Restrict, map: "bp_row_compensations_row_fk")
+  mapping         BasicPriceImportRowResourceMapping @relation(fields: [mappingId], references: [id], onDelete: Restrict, map: "bp_row_compensations_mapping_fk")
+  resourceCatalog ResourceCatalog                    @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict, map: "bp_row_compensations_catalog_fk")
+  actor           Account                            @relation("BasicPriceImportRowCompensationActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "bp_row_compensations_actor_fk")
+
+  @@index([workspaceId, compensatedAt], map: "bp_row_compensations_workspace_time_idx")
+  @@index([rowId], map: "bp_row_compensations_row_idx")
+  @@index([resourceCatalogId], map: "bp_row_compensations_catalog_idx")
+  @@map("basic_price_import_row_resolution_compensations")
 }
 
 /// RM-02D1-REMEDIATION-V3.1: the ONLY authority that lets

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { ResourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
@@ -13,7 +14,180 @@ import {
   ResourceIdentityResolutionService,
   type EvidenceClient,
 } from '../resource-catalog/resource-identity-resolution.service';
-import { ResourceIdentityCandidate } from '../resource-catalog/resource-identity-resolution.kernel';
+import {
+  ResourceIdentityCandidate,
+  type ResourceIdentityResolution,
+} from '../resource-catalog/resource-identity-resolution.kernel';
+import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
+import { identicalQuestionKey } from '../resource-catalog/identical-question-key';
+
+export const BASIC_PRICE_ADMISSION_REVIEW_POLICY_VERSION =
+  'B02A_BASIC_PRICE_ADMISSION_REVIEW_V1';
+
+export type BasicPriceAdmissionCandidateDisposition =
+  | 'HUMAN_REFUSABLE'
+  | 'MACHINE_RULED_OUT'
+  | 'BLOCKED';
+
+export interface BasicPriceAdmissionReview {
+  offered: boolean;
+  reasonCode: string | null;
+  effectiveResourceType: ResourceType;
+  reviewBindingFingerprint: string;
+  candidateContextDigest: string;
+  humanRefusableCandidateIds: string[];
+  machineRuledOutCandidateIds: string[];
+  blockedCandidateIds: string[];
+  typeConfirmations: Array<{
+    resourceType: ResourceType;
+    reviewBindingFingerprint: string;
+  }>;
+  policyVersion: string;
+}
+
+export interface BasicPriceAdmissionQuestionInput {
+  workspaceId: string;
+  batchId: string;
+  rowId: string;
+  rowVersion: number;
+  sourceSha256: string;
+  rawResourceNameText: string;
+  rawResourceCodeText: string | null;
+  rawUnitText: string | null;
+  sourceSection: ResourceType;
+  sourceSectionProvenance: string | null;
+}
+
+/**
+ * Server-owned binding for the exact review question shown to a person.
+ * Existing question/digest authorities remain unchanged; this outer binding
+ * adds the import row, source document, type provenance, policy, and candidate
+ * classification snapshot. It is request integrity, never identity evidence.
+ */
+export function buildBasicPriceAdmissionReview(
+  question: BasicPriceAdmissionQuestionInput,
+  resolution: ResourceIdentityResolution,
+  workspaceCandidateIds: ReadonlySet<string>,
+  effectiveResourceType: ResourceType = question.sourceSection,
+): BasicPriceAdmissionReview {
+  const sourceTypeProven =
+    question.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
+    question.sourceSectionProvenance === 'SOURCE_SECTION_TITLE';
+  const uploaderMayConfirmType =
+    question.sourceSectionProvenance === 'UPLOADER_DECLARED';
+  const authoritativeOverride =
+    sourceTypeProven && effectiveResourceType !== question.sourceSection;
+  const digest = candidateContextDigest(
+    resolution.candidates.map((candidate) => ({
+      resourceCatalogId: candidate.resourceCatalogId,
+      name: candidate.name,
+      type: candidate.type,
+      baseUnit: candidate.baseUnit,
+      specifications: candidate.specifications,
+    })),
+  );
+  const dispositions = resolution.candidates
+    .map((candidate) => {
+      let disposition: BasicPriceAdmissionCandidateDisposition = 'BLOCKED';
+      const crossTypeWeakEvidence =
+        uploaderMayConfirmType && candidate.type !== effectiveResourceType;
+      if (
+        !crossTypeWeakEvidence &&
+        workspaceCandidateIds.has(candidate.resourceCatalogId)
+      ) {
+        if (candidate.identityBasis === 'NAME_SIMILARITY_ONLY') {
+          disposition = 'HUMAN_REFUSABLE';
+        } else if (candidate.identityBasis === 'RULED_OUT') {
+          disposition = 'MACHINE_RULED_OUT';
+        }
+      }
+      return {
+        resourceCatalogId: candidate.resourceCatalogId,
+        disposition,
+        identityBasis: candidate.identityBasis,
+        evidence: [...candidate.evidence].sort(),
+      };
+    })
+    .sort((a, b) => a.resourceCatalogId.localeCompare(b.resourceCatalogId));
+  const humanRefusableCandidateIds = dispositions
+    .filter((candidate) => candidate.disposition === 'HUMAN_REFUSABLE')
+    .map((candidate) => candidate.resourceCatalogId);
+  const machineRuledOutCandidateIds = dispositions
+    .filter((candidate) => candidate.disposition === 'MACHINE_RULED_OUT')
+    .map((candidate) => candidate.resourceCatalogId);
+  const blockedCandidateIds = dispositions
+    .filter((candidate) => candidate.disposition === 'BLOCKED')
+    .map((candidate) => candidate.resourceCatalogId);
+  const questionKey = identicalQuestionKey({
+    workspaceId: question.workspaceId,
+    resourceType: effectiveResourceType,
+    rawName: question.rawResourceNameText,
+    rawCode: question.rawResourceCodeText,
+    rawUnit: question.rawUnitText,
+  });
+  const reviewBindingFingerprint = createHash('sha256')
+    .update(
+      JSON.stringify([
+        BASIC_PRICE_ADMISSION_REVIEW_POLICY_VERSION,
+        question.workspaceId,
+        question.batchId,
+        question.rowId,
+        question.rowVersion,
+        question.sourceSha256,
+        question.rawResourceNameText,
+        question.rawResourceCodeText,
+        question.rawUnitText,
+        question.sourceSection,
+        question.sourceSectionProvenance,
+        effectiveResourceType,
+        RESOURCE_IDENTITY_POLICY_VERSION,
+        questionKey,
+        digest,
+        dispositions,
+      ]),
+      'utf8',
+    )
+    .digest('hex');
+
+  const machineExhausted =
+    resolution.status === 'UNRESOLVED' &&
+    resolution.authority === null &&
+    resolution.resolvedResourceCatalogId === null &&
+    resolution.candidates.length === 0 &&
+    resolution.reasonCodes.includes('RESOURCE_NOT_FOUND');
+  const examinedNameOnly =
+    resolution.status !== 'RESOLVED' &&
+    resolution.authority !== 'HUMAN_REVIEW_REQUIRED' &&
+    resolution.candidates.length > 0 &&
+    blockedCandidateIds.length === 0 &&
+    humanRefusableCandidateIds.length + machineRuledOutCandidateIds.length ===
+      resolution.candidates.length;
+  const typeAuthorityValid =
+    (sourceTypeProven && !authoritativeOverride) || uploaderMayConfirmType;
+  const offered = typeAuthorityValid && (machineExhausted || examinedNameOnly);
+  const reasonCode = offered
+    ? null
+    : authoritativeOverride
+      ? 'SOURCE_TYPE_OVERRIDE_FORBIDDEN'
+      : !typeAuthorityValid
+      ? 'SOURCE_TYPE_NOT_PROVEN'
+      : blockedCandidateIds.length > 0
+        ? 'IDENTITY_CANDIDATE_BLOCKED'
+        : 'RESOURCE_IDENTITY_NOT_ADMISSIBLE';
+
+  return {
+    offered,
+    reasonCode,
+    effectiveResourceType,
+    reviewBindingFingerprint,
+    candidateContextDigest: digest,
+    humanRefusableCandidateIds,
+    machineRuledOutCandidateIds,
+    blockedCandidateIds,
+    typeConfirmations: [],
+    policyVersion: BASIC_PRICE_ADMISSION_REVIEW_POLICY_VERSION,
+  };
+}
 
 /**
  * INT-CONNECT-01 — THE SEAM, NOT A SECOND AUTHORITY.
@@ -158,6 +332,7 @@ export interface BasicPriceRowResourceCandidate {
    * narrowed — which is where privacy belongs, not in making SIMPROK forget.
    */
   hasPriorHumanDecision: boolean;
+  admissionDisposition?: BasicPriceAdmissionCandidateDisposition;
 }
 
 /**
@@ -189,6 +364,7 @@ export const toBasicPriceSafeCandidate = (
   unprovedSpecificationFacts: [...candidate.unprovedSpecificationFacts],
   // The prior decision collapses to its EXISTENCE here and nowhere else.
   hasPriorHumanDecision: candidate.priorHumanDecision !== null,
+  admissionDisposition: 'BLOCKED',
 });
 
 /** What the Resource Identity authority proved about ONE row's raw name. */
@@ -214,6 +390,7 @@ export interface BasicPriceRowResourceProposal {
   candidates: BasicPriceRowResourceCandidate[];
   reasonCodes: string[];
   policyVersion: string;
+  admissionReview?: BasicPriceAdmissionReview | null;
   /**
    * WHETHER BASIC PRICE MAY ACT ON THE IDENTITY ABOVE — a NARROWER question than
    * whether the authority proved it, and deliberately a separate field.
@@ -274,6 +451,9 @@ export interface BasicPriceRowProposalInput {
   rawResourceNameText: string;
   rawResourceCodeText: string | null;
   rawUnitText: string | null;
+  batchId?: string;
+  rowVersion?: number;
+  sourceSha256?: string;
 }
 
 // This file used to carry its own copy of the class -> unit-context mapping,
@@ -341,13 +521,98 @@ export class BasicPriceRowResolutionProposalService {
     const evidence = await this.identity.loadEvidence(client, workspaceId);
 
     const resourceByRow = new Map<string, BasicPriceRowResourceProposal>();
+    const resolutionByRow = new Map<string, ResourceIdentityResolution>();
     for (const row of rows) {
-      resourceByRow.set(row.id, await this.proveResource(evidence, row));
+      resourceByRow.set(
+        row.id,
+        await this.proveResource(evidence, row, resolutionByRow),
+      );
     }
 
-    const admissible = await this.admissibleCatalogIds(client, workspaceId, [
-      ...resourceByRow.values(),
-    ]);
+    const candidateIds = [
+      ...new Set(
+        [...resolutionByRow.values()].flatMap((resolution) =>
+          resolution.candidates.map((candidate) => candidate.resourceCatalogId),
+        ),
+      ),
+    ];
+    const admissible = await this.admissibleCatalogIds(
+      client,
+      workspaceId,
+      [...resourceByRow.values()],
+      candidateIds,
+    );
+    for (const row of rows) {
+      const resource = resourceByRow.get(row.id)!;
+      const resolution = resolutionByRow.get(row.id);
+      if (
+        !resolution ||
+        !row.batchId ||
+        row.rowVersion === undefined ||
+        !row.sourceSha256 ||
+        row.sourceSection === null
+      ) {
+        resource.admissionReview = null;
+        continue;
+      }
+      const question = {
+          workspaceId,
+          batchId: row.batchId,
+          rowId: row.id,
+          rowVersion: row.rowVersion,
+          sourceSha256: row.sourceSha256,
+          rawResourceNameText: row.rawResourceNameText,
+          rawResourceCodeText: row.rawResourceCodeText,
+          rawUnitText: row.rawUnitText,
+          sourceSection: row.sourceSection,
+          sourceSectionProvenance: row.sourceSectionProvenance ?? null,
+        };
+      const sourceTypeProven =
+        question.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
+        question.sourceSectionProvenance === 'SOURCE_SECTION_TITLE';
+      const effectiveTypes: ResourceType[] = sourceTypeProven
+        ? [question.sourceSection]
+        : question.sourceSectionProvenance === 'UPLOADER_DECLARED'
+          ? [ResourceType.LABOR, ResourceType.MATERIAL, ResourceType.EQUIPMENT]
+          : [question.sourceSection];
+      const reviews = effectiveTypes.map((effectiveType) =>
+        buildBasicPriceAdmissionReview(
+          question,
+          resolution,
+          admissible,
+          effectiveType,
+        ),
+      );
+      const admissionReview =
+        reviews.find((review) => review.offered) ?? reviews[0];
+      admissionReview.offered = reviews.some((review) => review.offered);
+      admissionReview.reasonCode = admissionReview.offered
+        ? null
+        : reviews[0].reasonCode;
+      admissionReview.typeConfirmations = reviews
+        .filter((review) => review.offered)
+        .map((review) => ({
+          resourceType: review.effectiveResourceType,
+          reviewBindingFingerprint: review.reviewBindingFingerprint,
+        }));
+      const dispositionById = new Map<
+        string,
+        BasicPriceAdmissionCandidateDisposition
+      >([
+        ...admissionReview.humanRefusableCandidateIds.map(
+          (id) => [id, 'HUMAN_REFUSABLE'] as const,
+        ),
+        ...admissionReview.machineRuledOutCandidateIds.map(
+          (id) => [id, 'MACHINE_RULED_OUT'] as const,
+        ),
+      ]);
+      resource.candidates = resource.candidates.map((candidate) => ({
+        ...candidate,
+        admissionDisposition:
+          dispositionById.get(candidate.resourceCatalogId) ?? 'BLOCKED',
+      }));
+      resource.admissionReview = admissionReview;
+    }
 
     // A weak uploader-wide family is not document evidence. If the canonical
     // authority proves exactly one cross-family identity, ask Unit Kernel in
@@ -414,12 +679,16 @@ export class BasicPriceRowResolutionProposalService {
     client: EvidenceClient,
     workspaceId: string,
     resources: ReadonlyArray<BasicPriceRowResourceProposal>,
+    candidateIds: ReadonlyArray<string> = [],
   ): Promise<ReadonlySet<string>> {
     const proposed = [
       ...new Set(
-        resources
-          .map((r) => r.resourceCatalogId)
-          .filter((id): id is string => id !== null),
+        [
+          ...resources
+            .map((r) => r.resourceCatalogId)
+            .filter((id): id is string => id !== null),
+          ...candidateIds,
+        ],
       ),
     ];
     if (proposed.length === 0) return new Set<string>();
@@ -598,6 +867,7 @@ export class BasicPriceRowResolutionProposalService {
       ReturnType<ResourceIdentityResolutionService['loadEvidence']>
     >,
     row: BasicPriceRowProposalInput,
+    resolutionByRow: Map<string, ResourceIdentityResolution>,
   ): Promise<BasicPriceRowResourceProposal> {
     if (row.sourceSection === null) {
       return {
@@ -614,6 +884,7 @@ export class BasicPriceRowResolutionProposalService {
         // False here is the fail-closed default, not a verdict.
         admissibleForResolve: false,
         policyVersion: RESOURCE_IDENTITY_POLICY_VERSION,
+        admissionReview: null,
       };
     }
 
@@ -621,6 +892,7 @@ export class BasicPriceRowResolutionProposalService {
       rawName: row.rawResourceNameText,
       rawCode: row.rawResourceCodeText,
       rawUnit: row.rawUnitText,
+      sourceSha256: row.sourceSha256 ?? null,
     };
     const firstVerdict = await this.identity.resolve(evidence, {
       ...reference,
@@ -684,6 +956,7 @@ export class BasicPriceRowResolutionProposalService {
           reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
           admissibleForResolve: false,
           policyVersion: RESOURCE_IDENTITY_POLICY_VERSION,
+          admissionReview: null,
         };
       } else if (exact.length === 0 && firstVerdict.status !== 'RESOLVED') {
         // Never downgrade an already proved governed identity to a mere candidate.
@@ -734,6 +1007,8 @@ export class BasicPriceRowResolutionProposalService {
             (c) => c.resourceCatalogId === verdict.resolvedResourceCatalogId,
           ) ?? null);
 
+    resolutionByRow.set(row.id, verdict);
+
     return {
       status: verdict.status,
       authority: verdict.authority,
@@ -752,6 +1027,7 @@ export class BasicPriceRowResolutionProposalService {
       // Settled by the caller — see `admissibleCatalogIds`. Fail-closed default.
       admissibleForResolve: false,
       policyVersion: RESOURCE_IDENTITY_POLICY_VERSION,
+      admissionReview: null,
     };
   }
 

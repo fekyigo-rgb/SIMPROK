@@ -32,8 +32,12 @@ import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-
 import {
   ResolveBasicPriceImportRowDto,
   RejectBasicPriceImportRowDto,
+  CompensateBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
-import { AdmitResourceForImportRowDto } from './dto/admit-resource-for-import-row.dto';
+import {
+  AdmitResourceForImportRowDto,
+  BulkAdmitSafeNewResourcesDto,
+} from './dto/admit-resource-for-import-row.dto';
 import { AcceptMachineProvenRowsDto } from './dto/accept-machine-proven-rows.dto';
 import { BasicPriceSmartSaveService } from './basic-price-smart-save.service';
 import { CorrectPrivateProvenanceDto } from './dto/correct-private-provenance.dto';
@@ -138,6 +142,29 @@ export class BasicPriceImportController {
       dto,
       currentAccountId,
       providedKeys,
+    );
+  }
+
+  /**
+   * BP-ROW-COMPENSATION-01: owner-uploader may correct ONLY their own
+   * CURRENT, unused row identity decision. Server proves exclusivity and
+   * writes an append-only compensation event; previous mapping and source
+   * evidence survive. This is not a catalog delete or global undo.
+   */
+  @Post(':batchId/rows/:rowId/compensate-own-decision')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async compensateOwnDecision(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() dto: CompensateBasicPriceImportRowDto,
+  ) {
+    return this.resolutionService.compensateOwnDecision(
+      request.workspaceContext.workspaceId,
+      batchId,
+      rowId,
+      request.user.id,
+      dto,
     );
   }
 
@@ -301,6 +328,26 @@ export class BasicPriceImportController {
       batchId,
       rowId,
       reviewerAccountId,
+      dto,
+    );
+  }
+
+  /**
+   * One human type decision over an explicit, bounded selection of genuinely
+   * new rows. The service re-proves every row and delegates every write to the
+   * single-row admission authority above; ambiguous candidates cannot enter.
+   */
+  @Post(':batchId/admit-safe-new')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async admitSafeNewResources(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Body() dto: BulkAdmitSafeNewResourcesDto,
+  ) {
+    return this.resolutionService.admitSafeNewResources(
+      request.workspaceContext.workspaceId,
+      batchId,
+      request.user.id,
       dto,
     );
   }

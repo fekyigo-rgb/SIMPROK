@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
+import { BasicPriceRowResolutionService } from '../../src/basic-price/basic-price-row-resolution.service';
 import { ADMISSION_ROWS, buildBasicPriceXlsx } from '../fixtures/basic-price-xlsx.fixture';
 
 /**
@@ -32,7 +33,8 @@ const RESOURCE_RETIRED_ID = '43000000-0000-4000-8000-000000000003';
 const UNIT_WITHOUT_ALIAS_ID = '43000000-0000-4000-8000-000000000004';
 
 /** Every name this suite may ever bring into the catalog, for exact cleanup. */
-const ADMITTED_NAMES = Object.values(ADMISSION_ROWS).map((entry) => entry.name);
+const BP_CORRECTED_NAME_FIXTURE = 'BPNameCorrectionSyntheticUniqueQ7R9X2';
+const ADMITTED_NAMES = [...Object.values(ADMISSION_ROWS).map((entry) => entry.name), BP_CORRECTED_NAME_FIXTURE];
 
 describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
   let app: INestApplication;
@@ -46,6 +48,10 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
   beforeAll(async () => {
     app = (await Test.createTestingModule({ imports: [AppModule] }).compile()).createNestApplication();
     await app.init();
+    // Concurrent admission tests must share one stable listening socket.
+    // Supertest may otherwise open/close its ephemeral listener per request,
+    // racing independent POSTs and causing ECONNRESET/ECONNREFUSED noise.
+    await app.listen(0);
     prisma = new PrismaClient();
 
     const assignedAccount = await prisma.account.findUniqueOrThrow({ where: { email: 'assigned@test.local' } });
@@ -148,19 +154,83 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
       .field('sourceVendorName', sourceVendorName)
       .expect(201);
 
-  const admit = (
+  /**
+   * Read the server-issued admission question, exactly as the review UI does.
+   * The old fixture sent a three-field body and got DTO 400 before any business
+   * law ran. The review fingerprint is an authority binding, never invented
+   * by a test. Cache only for the deliberate replay case after row closure.
+   */
+  const admissionSnapshots = new Map<string, {
+    confirmedResourceType: 'LABOR' | 'MATERIAL' | 'EQUIPMENT';
+    reviewBindingFingerprint: string;
+    refusedCandidateIds: string[];
+  }>();
+  const admit = async (
     batchId: string,
     rowId: string,
     version: number,
     unitDefinitionId = unitM3Id,
     token = assignedToken,
     workspaceId = WORKSPACE_A,
-  ) =>
-    request(app.getHttpServer())
+    correctedCanonicalName?: string,
+  ) => {
+    const current = await request(app.getHttpServer())
+      .get(`/basic-price-imports/${batchId}`)
+      .set('Authorization', `Bearer ${assignedToken}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(200);
+    const row = current.body.rows.find((candidate: { id: string }) => candidate.id === rowId);
+    const review = row?.machineProposal?.resource?.admissionReview;
+    const previous = admissionSnapshots.get(rowId);
+    const confirmedResourceType = (
+      review?.typeConfirmations?.find(
+        (choice: { resourceType: string }) => choice.resourceType === row?.section,
+      )?.resourceType ??
+      review?.typeConfirmations?.[0]?.resourceType ??
+      previous?.confirmedResourceType ??
+      row?.section
+    ) as 'LABOR' | 'MATERIAL' | 'EQUIPMENT';
+    const reviewBindingFingerprint = (
+      review?.typeConfirmations?.find(
+        (choice: { resourceType: string }) => choice.resourceType === confirmedResourceType,
+      )?.reviewBindingFingerprint ??
+      review?.reviewBindingFingerprint ??
+      previous?.reviewBindingFingerprint
+    ) as string | undefined;
+    if (!reviewBindingFingerprint || !confirmedResourceType) {
+      throw new Error('TEST_REQUIRES_SERVER_ISSUED_ADMISSION_REVIEW');
+    }
+    // No person has refused any candidate in this fixture. Never silently
+    // turn a visible suggestion into a human rejection on their behalf.
+    const refusedCandidateIds: string[] = previous?.refusedCandidateIds ?? [];
+    admissionSnapshots.set(rowId, {
+      confirmedResourceType,
+      reviewBindingFingerprint,
+      refusedCandidateIds,
+    });
+    return request(app.getHttpServer())
       .post(`/basic-price-imports/${batchId}/rows/${rowId}/admit-resource`)
       .set('Authorization', `Bearer ${token}`)
       .set('x-workspace-id', workspaceId)
-      .send({ version, unitDefinitionId, reason: 'Tidak ada resource kanonik yang sepadan.' });
+      .send({
+        version,
+        unitDefinitionId,
+        reason: 'Tidak ada resource kanonik yang sepadan.',
+        confirmedResourceType,
+        refusedCandidateIds,
+        reviewBindingFingerprint,
+        ...(correctedCanonicalName ? { correctedCanonicalName } : {}),
+      });
+  };
+
+  const assertAdmissionResponse = async (
+    result: ReturnType<typeof admit>,
+    expectedStatus: number,
+  ) => {
+    const response = await result;
+    expect(response.status).toBe(expectedStatus);
+    return response;
+  };
 
   /** Preview once and hand back the parsed row for a fixture source row. */
   const previewWithRow = async (vendor: string, sourceRowNumber: number) => {
@@ -195,7 +265,7 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
     const { batchId, row } = await previewWithRow('d1-admit-happy', ADMISSION_ROWS.UNKNOWN.row);
     expect(row.name).toBe(ADMISSION_ROWS.UNKNOWN.name);
 
-    const response = await admit(batchId, row.id, row.version).expect(201);
+    const response = await assertAdmissionResponse(admit(batchId, row.id, row.version), 201);
     const admittedId = response.body.admittedResource.id;
 
     const catalogRows = await prisma.resourceCatalog.findMany({
@@ -264,19 +334,228 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
   });
 
   // ============================================================
+  // BP-NAME-CORRECTION-01. SAME SOURCE, CORRECTED CATALOG NAME
+  // ============================================================
+  it('NAME-1: admitted corrected catalog name is durable but source spelling remains unmodified provenance', async () => {
+    const { batchId, row } = await previewWithRow('d1-admit-name-correction', ADMISSION_ROWS.UNKNOWN.row);
+    const canonicalName = BP_CORRECTED_NAME_FIXTURE;
+    const response = await assertAdmissionResponse(
+      admit(batchId, row.id, row.version, unitM3Id, assignedToken, WORKSPACE_A, canonicalName),
+      201,
+    );
+    const resourceId = response.body.admittedResource.id;
+    const [catalog, provenance, persistedRow, mapping] = await Promise.all([
+      prisma.resourceCatalog.findUniqueOrThrow({ where: { id: resourceId } }),
+      prisma.resourceSourceIdentity.findFirstOrThrow({ where: { resourceCatalogId: resourceId } }),
+      prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } }),
+      prisma.basicPriceImportRowResourceMapping.findFirstOrThrow({ where: { rowId: row.id } }),
+    ]);
+    expect(catalog.name).toBe(canonicalName);
+    expect(provenance.rawName).toBe(row.name);
+    expect(persistedRow.rawResourceNameText).toBe(row.name);
+    expect(mapping.reviewerAccountId).toBe(assignedAccountId);
+    expect(mapping.resourceCatalogId).toBe(resourceId);
+    const refreshed = await request(app.getHttpServer())
+      .get(`/basic-price-imports/${batchId}`)
+      .set('Authorization', `Bearer ${assignedToken}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(200);
+    const readback = refreshed.body.rows.find((item: { id: string }) => item.id === row.id);
+    expect(readback.name).toBe(row.name);
+    expect(readback.canonicalResourceName).toBe(canonicalName);
+    expect(refreshed.body.reviewCapabilities.correctedCanonicalNameOnAdmission).toBe(true);
+    const savedUnit = await prisma.unitDefinition.findUniqueOrThrow({ where: { id: unitM3Id } });
+    expect(readback.canonicalUnit).toEqual({
+      code: savedUnit.code,
+      displayName: savedUnit.displayName,
+      symbol: savedUnit.symbol,
+    });
+  });
+
+  it('NAME-2: a corrected name already known to the global catalog cannot mint a duplicate', async () => {
+    const { batchId, row } = await previewWithRow('d1-admit-corrected-duplicate', ADMISSION_ROWS.UNKNOWN.row);
+    const before = await catalogCount();
+    const response = await assertAdmissionResponse(
+      admit(batchId, row.id, row.version, unitM3Id, assignedToken, WORKSPACE_A, ADMISSION_ROWS.GLOBAL_KNOWN.name),
+      409,
+    );
+    expect(response.body.message).toBe('RESOURCE_ADMISSION_REVIEW_STALE');
+    expect(await catalogCount()).toBe(before);
+    expect(await prisma.basicPriceImportRowResourceMapping.count({ where: { rowId: row.id } })).toBe(0);
+    const after = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+    expect(after.rawResourceNameText).toBe(row.name);
+    expect(after.status).toBe('NEEDS_REVIEW');
+  });
+
+  it('NAME-3: corrected spelling identical to existing WORKSPACE catalog is rejected without minting a twin', async () => {
+    const { batchId, row } = await previewWithRow('d1-corrected-same-workspace-block', ADMISSION_ROWS.UNKNOWN.row);
+    const beforeCount = await prisma.resourceCatalog.count({ where: { workspaceId: WORKSPACE_A } });
+    const response = await assertAdmissionResponse(
+      admit(batchId, row.id, row.version, unitM3Id, assignedToken, WORKSPACE_A, 'Semen Portlan'),
+      409,
+    );
+    expect(response.body.message).toBe('RESOURCE_ADMISSION_REVIEW_STALE');
+    expect(await prisma.resourceCatalog.count({ where: { workspaceId: WORKSPACE_A } })).toBe(beforeCount);
+    expect(await prisma.basicPriceImportRowResourceMapping.count({ where: { rowId: row.id } })).toBe(0);
+    const retained = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+    expect(retained.status).toBe('NEEDS_REVIEW');
+    expect(retained.rawResourceNameText).toBe(ADMISSION_ROWS.UNKNOWN.name);
+  });
+
+  it('NAME-4: selecting an existing catalog after correcting a matching name binds the existing ID and preserves the Excel name', async () => {
+    const { batchId, row } = await previewWithRow('d1-corrected-existing-choose', ADMISSION_ROWS.DIFFERENT_SPELLING.row);
+    const beforeCount = await prisma.resourceCatalog.count({ where: { workspaceId: WORKSPACE_A } });
+    await request(app.getHttpServer())
+      .post(`/basic-price-imports/${batchId}/rows/${row.id}/resolve`)
+      .set('Authorization', `Bearer ${assignedToken}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .send({ version: row.version, resourceCatalogId: RESOURCE_DIFFERENT_SPELLING_ID, unitDefinitionId: unitM3Id })
+      .expect(201);
+    const after = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+    expect(after.resourceCatalogId).toBe(RESOURCE_DIFFERENT_SPELLING_ID);
+    expect(after.rawResourceNameText).toBe(ADMISSION_ROWS.DIFFERENT_SPELLING.name);
+    const catalog = await prisma.resourceCatalog.findUniqueOrThrow({ where: { id: RESOURCE_DIFFERENT_SPELLING_ID } });
+    expect(catalog.name).toBe('Semen Portlan');
+    expect(await prisma.resourceCatalog.count({ where: { workspaceId: WORKSPACE_A } })).toBe(beforeCount);
+    const readback = await request(app.getHttpServer())
+      .get(`/basic-price-imports/${batchId}`)
+      .set('Authorization', `Bearer ${assignedToken}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(200);
+    const resolved = readback.body.rows.find((item: { id: string }) => item.id === row.id);
+    expect(resolved.name).toBe(ADMISSION_ROWS.DIFFERENT_SPELLING.name);
+    expect(resolved.canonicalResourceName).toBe('Semen Portlan');
+  });
+
+  // ============================================================
+  // BP-ROW8-COMPENSATION-01 — REAL DB TRANSACTION, GUARANTEED ROLLBACK
+  // The immutable audit cannot be "cleaned up" via DELETE. Instead this
+  // acceptance test proves the committed state INSIDE a real transaction,
+  // then intentionally rolls it back, leaving the E2E baseline untouched.
+  // ============================================================
+  it('COMP-1: real compensation retires only its admitted catalog, reopens one row, preserves mapping and source, and rolls back the fixture', async () => {
+    const { batchId, row } = await previewWithRow('d1-compensate-rollback-verified', ADMISSION_ROWS.UNKNOWN.row);
+    const admitted = await assertAdmissionResponse(admit(batchId, row.id, row.version), 201);
+    const resourceId = admitted.body.admittedResource.id as string;
+    const prior = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+    const priorMapping = await prisma.basicPriceImportRowResourceMapping.findFirstOrThrow({ where: { rowId: row.id } });
+    const provenance = await prisma.resourceSourceIdentity.findFirstOrThrow({ where: { resourceCatalogId: resourceId } });
+    const signal = 'COMPENSATION_E2E_INTENTIONAL_ROLLBACK';
+    await expect(prisma.$transaction(async (tx) => {
+      // Reuse the production writer against a transaction OWNED BY THIS TEST;
+      // do not let the writer commit outside the test's rollback boundary.
+      const writer = new BasicPriceRowResolutionService(
+        { $transaction: (work: (transaction: typeof tx) => Promise<unknown>) => work(tx) } as never,
+        {} as never, {} as never, {} as never, {} as never,
+      );
+      const result = await writer.compensateOwnDecision(WORKSPACE_A, batchId, row.id, assignedAccountId, {
+        version: prior.version,
+        reason: 'Kesalahan penetapan nama katalog pada peninjauan Basic Price; ulangi keputusan.',
+      });
+      expect(result.priorRowVersion).toBe(prior.version);
+      expect(result.newRowVersion).toBe(prior.version + 1);
+      const [compensation, reopened, catalog, mapping, source] = await Promise.all([
+        tx.basicPriceImportRowResolutionCompensation.findUniqueOrThrow({ where: { id: result.compensationEventId } }),
+        tx.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } }),
+        tx.resourceCatalog.findUniqueOrThrow({ where: { id: resourceId } }),
+        tx.basicPriceImportRowResourceMapping.findUniqueOrThrow({ where: { id: priorMapping.id } }),
+        tx.resourceSourceIdentity.findUniqueOrThrow({ where: { id: provenance.id } }),
+      ]);
+      expect(compensation.mappingId).toBe(priorMapping.id);
+      expect(compensation.actorAccountId).toBe(assignedAccountId);
+      expect(compensation.priorRowVersion).toBe(prior.version);
+      expect(reopened.status).toBe('NEEDS_REVIEW');
+      expect(reopened.resolutionStatus).toBe('UNRESOLVED');
+      expect(reopened.version).toBe(prior.version + 1);
+      expect(reopened.resourceCatalogId).toBeNull();
+      expect(reopened.unitDefinitionId).toBeNull();
+      expect(reopened.rawResourceNameText).toBe(prior.rawResourceNameText);
+      expect(reopened.proposedCanonicalPrice?.toString()).toBe(prior.proposedCanonicalPrice?.toString());
+      expect(catalog.status).toBe('RETIRED');
+      expect(mapping).toMatchObject({ id: priorMapping.id, resourceCatalogId: resourceId, reviewerAccountId: assignedAccountId });
+      expect(source.rawName).toBe(provenance.rawName);
+      // Never commit immutable fixture events. The database does the rollback.
+      throw new Error(signal);
+    }, { timeout: 20_000, maxWait: 20_000 })).rejects.toThrow(signal);
+    const [after, catalogAfter, originalMapping, originalSource, residue] = await Promise.all([
+      prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } }),
+      prisma.resourceCatalog.findUniqueOrThrow({ where: { id: resourceId } }),
+      prisma.basicPriceImportRowResourceMapping.findUniqueOrThrow({ where: { id: priorMapping.id } }),
+      prisma.resourceSourceIdentity.findUniqueOrThrow({ where: { id: provenance.id } }),
+      prisma.basicPriceImportRowResolutionCompensation.count({ where: { rowId: row.id } }),
+    ]);
+    expect(after.status).toBe(prior.status);
+    expect(after.version).toBe(prior.version);
+    expect(catalogAfter.status).toBe('ACTIVE');
+    expect(originalMapping.resourceCatalogId).toBe(resourceId);
+    expect(originalSource.rawName).toBe(provenance.rawName);
+    expect(residue).toBe(0);
+  });
+
+  it('COMP-2: exposed route denies another account and stale versions with zero mutation', async () => {
+    const { batchId, row } = await previewWithRow('d1-compensate-route-denied', ADMISSION_ROWS.UNKNOWN.row);
+    const admitted = await assertAdmissionResponse(admit(batchId, row.id, row.version), 201);
+    const catalogId = admitted.body.admittedResource.id as string;
+    const current = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+    const path = `/basic-price-imports/${batchId}/rows/${row.id}/compensate-own-decision`;
+    const payload = { version: current.version, reason: 'Bukti identitas katalog perlu dikoreksi oleh pelaku keputusan.' };
+    await request(app.getHttpServer()).post(path)
+      .set('Authorization', `Bearer ${foremanToken}`)
+      .set('x-workspace-id', WORKSPACE_A).send(payload).expect(404);
+    await request(app.getHttpServer()).post(path)
+      .set('Authorization', `Bearer ${assignedToken}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .send({ ...payload, version: current.version - 1 }).expect(409);
+    const [retainedRow, catalog, eventCount] = await Promise.all([
+      prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } }),
+      prisma.resourceCatalog.findUniqueOrThrow({ where: { id: catalogId } }),
+      prisma.basicPriceImportRowResolutionCompensation.count({ where: { rowId: row.id } }),
+    ]);
+    expect(retainedRow.status).toBe('READY_FOR_SUBMISSION');
+    expect(retainedRow.version).toBe(current.version);
+    expect(catalog.status).toBe('ACTIVE');
+    expect(eventCount).toBe(0);
+  });
+
+  it('COMP-3: database audit table is append-only and the mapping id is unique', async () => {
+    const triggers = await prisma.$queryRaw<Array<{ name: string; definition: string }>>`
+      SELECT t.tgname AS name, pg_get_triggerdef(t.oid) AS definition
+      FROM pg_trigger t
+      WHERE t.tgrelid = 'basic_price_import_row_resolution_compensations'::regclass
+        AND NOT t.tgisinternal
+    `;
+    expect(triggers.some((t) =>
+      t.name === 'bp_row_compensations_append_only' &&
+      /BEFORE (?:UPDATE OR DELETE|DELETE OR UPDATE)/i.test(t.definition),
+    )).toBe(true);
+    const indexes = await prisma.$queryRaw<Array<{ indexname: string }>>`
+      SELECT indexname FROM pg_indexes
+      WHERE tablename = 'basic_price_import_row_resolution_compensations'
+    `;
+    expect(indexes.some((index) => index.indexname === 'bp_row_compensations_mappingId_key')).toBe(true);
+  });
+
+  // ============================================================
   // B. SMART DIFFERENT-NAME PROTECTION (load-bearing)
   // ============================================================
   it('B: a resource SIMPROK already knows under a different spelling is never duplicated — the authoritative candidate is returned instead', async () => {
     const { batchId, row } = await previewWithRow('d1-admit-spelling', ADMISSION_ROWS.DIFFERENT_SPELLING.row);
     expect(row.name).toBe('Semen Portland');
 
-    const response = await admit(batchId, row.id, row.version).expect(409);
+    const response = await assertAdmissionResponse(admit(batchId, row.id, row.version), 409);
 
-    expect(response.body.message).toBe('RESOURCE_IDENTITY_NOT_EXHAUSTED');
-    expect(response.body.resourceIdentity.status).toBe('NEEDS_REVIEW');
-    expect(response.body.resourceIdentity.candidates.map((c: { resourceCatalogId: string }) => c.resourceCatalogId)).toContain(
-      RESOURCE_DIFFERENT_SPELLING_ID,
-    );
+    expect(response.body.message).toBe('RESOURCE_ADMISSION_REFUSALS_INVALID');
+    // The candidate appears in the refreshed SERVER review, not in a fabricated
+    // admission answer. Without a human expressly refusing it, nothing is made.
+    const refreshed = await request(app.getHttpServer())
+      .get(`/basic-price-imports/${batchId}`)
+      .set('Authorization', `Bearer ${assignedToken}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(200);
+    const candidateRow = refreshed.body.rows.find((item: { id: string }) => item.id === row.id);
+    expect(candidateRow.machineProposal.resource.candidates.map(
+      (candidate: { resourceCatalogId: string }) => candidate.resourceCatalogId,
+    )).toContain(RESOURCE_DIFFERENT_SPELLING_ID);
 
     expect(await catalogCount()).toBe(0);
     expect(await prisma.basicPriceImportRowResourceMapping.count({ where: { rowId: row.id } })).toBe(0);
@@ -291,7 +570,7 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
   it('C: a defensible GLOBAL resource is never duplicated into a workspace-local copy', async () => {
     const { batchId, row } = await previewWithRow('d1-admit-global', ADMISSION_ROWS.GLOBAL_KNOWN.row);
 
-    const response = await admit(batchId, row.id, row.version).expect(409);
+    const response = await assertAdmissionResponse(admit(batchId, row.id, row.version), 409);
 
     expect(response.body.message).toBe('RESOURCE_IDENTITY_NOT_EXHAUSTED');
     expect(response.body.resourceIdentity.resolvedResourceCatalogId).toBe(RESOURCE_GLOBAL_ID);
@@ -312,8 +591,8 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
     // Same workspace, holds BASIC_PRICE_RESOLVE via the active-membership
     // baseline, but did not upload this batch — denied as "not found", never
     // distinguishable from non-existence.
-    await admit(batchId, row.id, row.version, unitM3Id, foremanToken).expect(404);
-    await admit(batchId, row.id, row.version, unitM3Id, crosstenantToken, WORKSPACE_B).expect(404);
+    await assertAdmissionResponse(admit(batchId, row.id, row.version, unitM3Id, foremanToken), 404);
+    await assertAdmissionResponse(admit(batchId, row.id, row.version, unitM3Id, crosstenantToken, WORKSPACE_B), 404);
 
     expect(await catalogCount()).toBe(0);
     expect(await prisma.basicPriceImportRowResourceMapping.count({ where: { rowId: row.id } })).toBe(0);
@@ -325,8 +604,8 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
   it('E: replaying the same reviewed decision admits at most one resource', async () => {
     const { batchId, row } = await previewWithRow('d1-admit-replay', ADMISSION_ROWS.UNKNOWN.row);
 
-    await admit(batchId, row.id, row.version).expect(201);
-    await admit(batchId, row.id, row.version).expect(409);
+    await assertAdmissionResponse(admit(batchId, row.id, row.version), 201);
+    await assertAdmissionResponse(admit(batchId, row.id, row.version), 409);
 
     expect(await catalogCount()).toBe(1);
     expect(await prisma.basicPriceImportRowResourceMapping.count({ where: { rowId: row.id } })).toBe(1);
@@ -358,10 +637,28 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
     });
     expect(after - before).toBe(1);
 
-    // The loser was not merely rejected — it was shown the identity that won.
+    // The second request's earlier review is stale once the winner creates a
+    // catalog identity. No automatic replay. On a fresh GET, show the winner.
     const loser = a.status === 409 ? a : b;
-    expect(loser.body.message).toBe('RESOURCE_IDENTITY_NOT_EXHAUSTED');
-    expect(loser.body.resourceIdentity.resolvedResourceCatalogId).not.toBeNull();
+    const loserRow = a.status === 409 ? rowA : rowB;
+    expect([
+      'RESOURCE_ADMISSION_REVIEW_STALE',
+      'RESOURCE_IDENTITY_NOT_EXHAUSTED',
+    ]).toContain(loser.body.message);
+    const saved = await prisma.resourceCatalog.findFirstOrThrow({
+      where: { workspaceId: WORKSPACE_A, name: ADMISSION_ROWS.CONCURRENT_A.name },
+    });
+    const refreshed = await request(app.getHttpServer())
+      .get(`/basic-price-imports/${preview.body.batchId}`)
+      .set('Authorization', `Bearer ${assignedToken}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(200);
+    const current = refreshed.body.rows.find((item: { id: string }) => item.id === loserRow.id);
+    const resolution = current.machineProposal.resource;
+    expect([
+      resolution.resourceCatalogId,
+      ...resolution.candidates.map((candidate: { resourceCatalogId: string }) => candidate.resourceCatalogId),
+    ]).toContain(saved.id);
   });
 
   // ============================================================
@@ -405,14 +702,23 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
     const loserRow = a.status === 201 ? rowPortlan : rowPortland;
     const admittedId = winner.body.admittedResource.id;
 
-    // The loser did not merely lose a lock — after the post-lock re-proof it
-    // was shown the identity the winner had just created, by the SAME identity
-    // authority, as a candidate for a name spelled differently from it.
-    expect(loser.body.message).toBe('RESOURCE_IDENTITY_NOT_EXHAUSTED');
-    const identity = loser.body.resourceIdentity;
+    // The competing decision was bound to an earlier candidate question and
+    // must fail closed. A new GET (not an automatic retry) shows the identity
+    // which won, even when its spelling differs from the losing source row.
+    expect([
+      'RESOURCE_ADMISSION_REVIEW_STALE',
+      'RESOURCE_IDENTITY_NOT_EXHAUSTED',
+    ]).toContain(loser.body.message);
+    const refreshed = await request(app.getHttpServer())
+      .get(`/basic-price-imports/${preview.body.batchId}`)
+      .set('Authorization', `Bearer ${assignedToken}`)
+      .set('x-workspace-id', WORKSPACE_A)
+      .expect(200);
+    const current = refreshed.body.rows.find((item: { id: string }) => item.id === loserRow.id);
+    const identity = current.machineProposal.resource;
     const surfaced = [
-      identity.resolvedResourceCatalogId,
-      ...identity.candidates.map((c: { resourceCatalogId: string }) => c.resourceCatalogId),
+      identity.resourceCatalogId,
+      ...identity.candidates.map((candidate: { resourceCatalogId: string }) => candidate.resourceCatalogId),
     ];
     expect(surfaced).toContain(admittedId);
 
@@ -465,7 +771,7 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
       },
     });
 
-    const response = await admit(batchId, row.id, row.version).expect(409);
+    const response = await assertAdmissionResponse(admit(batchId, row.id, row.version), 409);
     expect(response.body.message).toBe('RESOURCE_PROVENANCE_ALREADY_BOUND');
 
     expect(
@@ -487,7 +793,7 @@ describe('RM03D1 Reviewed Resource Admission (e2e)', () => {
   it('H: a UnitDefinition the UnitKernel cannot represent admits nothing — no unprovable baseUnit ever reaches the catalog', async () => {
     const { batchId, row } = await previewWithRow('d1-admit-unit', ADMISSION_ROWS.UNKNOWN.row);
 
-    const response = await admit(batchId, row.id, row.version, UNIT_WITHOUT_ALIAS_ID).expect(409);
+    const response = await assertAdmissionResponse(admit(batchId, row.id, row.version, UNIT_WITHOUT_ALIAS_ID), 409);
 
     expect(response.body.message).toBe('UNIT_NOT_REPRESENTABLE_BY_UNIT_AUTHORITY');
     expect(response.body.unitResolution.reasonCodes).toContain('UNKNOWN_UNIT_ALIAS');

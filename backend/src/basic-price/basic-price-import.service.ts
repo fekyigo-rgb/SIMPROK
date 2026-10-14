@@ -1274,6 +1274,10 @@ export class BasicPriceImportService {
       resolutionStatus: string;
       rawResourceCodeText?: string | null;
       rawResourceNameText: string;
+      /** Canonical name is read back only on the review GET. */
+      resourceCatalog?: { name: string } | null;
+      /** Loaded for review GET only; the saved canonical unit is not a draft. */
+      unitDefinition?: { code: string; displayName: string; symbol: string } | null;
       rawUnitText?: string | null;
       rawPriceDisplayText?: string | null;
       proposedCanonicalPrice?: { toString(): string } | null;
@@ -1283,6 +1287,7 @@ export class BasicPriceImportService {
       // USI-01R — null when the source stated a category SIMPROK could not map.
       sourceSection: string | null;
       sourceSectionProvenance?: string | null;
+      resolvedResourceType?: string | null;
       rawSourceCategoryCode?: string | null;
       rawSourceCategoryName?: string | null;
       sourceRowNumber: number;
@@ -1487,6 +1492,10 @@ export class BasicPriceImportService {
         resolutionStatus: r.resolutionStatus,
         code: r.rawResourceCodeText ?? null,
         name: r.rawResourceNameText,
+        canonicalResourceName: r.resourceCatalog?.name ?? null,
+        canonicalUnit: r.unitDefinition
+          ? { code: r.unitDefinition.code, displayName: r.unitDefinition.displayName, symbol: r.unitDefinition.symbol }
+          : null,
         unit: r.rawUnitText ?? null,
         rawPriceDisplayText: r.rawPriceDisplayText ?? null,
         proposedCanonicalPrice: r.proposedCanonicalPrice
@@ -1503,6 +1512,7 @@ export class BasicPriceImportService {
         // USI-01R — the review UI must be able to show WHO decided a row's
         // resource family, and what the source itself called it.
         sectionProvenance: r.sourceSectionProvenance ?? null,
+        effectiveResourceType: r.resolvedResourceType ?? null,
         sourceCategoryCode: r.rawSourceCategoryCode ?? null,
         sourceCategoryName: r.rawSourceCategoryName ?? null,
         sourceRowNumber: r.sourceRowNumber,
@@ -2544,6 +2554,10 @@ export class BasicPriceImportService {
     const rows = await this.prisma.basicPriceImportRow.findMany({
       where: { batchId },
       orderBy: { sourceRowNumber: 'asc' },
+      include: {
+        resourceCatalog: { select: { name: true } },
+        unitDefinition: { select: { code: true, displayName: true, symbol: true } },
+      },
     });
 
     // INT-CONNECT-01 — THE REVIEW ROOM ASKS BEFORE IT ASKS THE HUMAN.
@@ -2569,6 +2583,9 @@ export class BasicPriceImportService {
         .filter((row) => row.status === 'NEEDS_REVIEW')
         .map((row) => ({
           id: row.id,
+          batchId: batch.id,
+          rowVersion: row.version,
+          sourceSha256: batch.sourceSha256,
           sourceSection: row.sourceSection,
           sourceSectionProvenance: row.sourceSectionProvenance,
           rawResourceNameText: row.rawResourceNameText,
@@ -2608,6 +2625,9 @@ export class BasicPriceImportService {
 
     return {
       ...this.summarize(batch, rows, proposals, privatePriceByRowId),
+      // An explicit runtime capability prevents a newer browser from silently
+      // sending a corrected name to an older API that discards the field.
+      reviewCapabilities: { correctedCanonicalNameOnAdmission: true },
       region: batch.region ?? null,
       coveredVillageRegions: this.coveredVillageRegionsOf(
         batch.regionCoverageSet,

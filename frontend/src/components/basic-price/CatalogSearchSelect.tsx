@@ -24,6 +24,8 @@ type SelectedItem = ResourceLookupItem | UnitLookupItem;
 interface CatalogSearchSelectProps {
   mode: 'resource' | 'unit';
   initialResourceType?: ResourceType;
+  /** Name currently shown in the row editor, not a parallel stale search seed. */
+  initialQuery?: string;
   selected: SelectedItem | null;
   disabled?: boolean;
   onSelect: (item: SelectedItem | null) => void;
@@ -59,20 +61,27 @@ const isResource = (item: SelectedItem): item is ResourceLookupItem => 'name' in
 export function CatalogSearchSelect({
   mode,
   initialResourceType,
+  initialQuery = '',
   selected,
   disabled = false,
   onSelect,
   onPendingChange,
 }: CatalogSearchSelectProps) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const [resourceType, setResourceType] = useState<ResourceType | ''>(initialResourceType ?? '');
   const [dimension, setDimension] = useState<UnitDimension | ''>('');
   const [kind, setKind] = useState<UnitKind | ''>('');
   const [results, setResults] = useState<SelectedItem[]>([]);
   const [state, setState] = useState<'idle' | 'loading' | 'empty' | 'ready' | 'error'>('idle');
-  const [hasInteracted, setHasInteracted] = useState(false);
+  // A reviewer-opened resource picker already has a deliberate row-name snapshot.
+  // Search that corrected name immediately; no second click or retyping needed.
+  // Unit pickers and generic empty queries retain their existing idle behavior.
+  const [hasInteracted, setHasInteracted] = useState(initialQuery.trim().length >= 2);
   const [open, setOpen] = useState(false);
   const requestGate = useRef(createLatestRequestGate());
+  // The parent remounts this picker whenever the edited row name changes.
+  // Old requests must not write a selection after that name snapshot changed.
+  useEffect(() => () => { requestGate.current.invalidate(); }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   const listId = useId();
 
@@ -175,7 +184,7 @@ export function CatalogSearchSelect({
           onFocus={() => {
             setHasInteracted(true);
             setOpen(true);
-            if (!selected && state === 'idle' && results.length === 0) void runSearch('');
+            if (!selected && state === 'idle' && results.length === 0 && query.trim().length < 2) void runSearch('');
           }}
           onChange={(event) => changeQuery(event.target.value)}
         />
