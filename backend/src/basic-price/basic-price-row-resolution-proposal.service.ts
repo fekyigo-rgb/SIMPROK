@@ -518,7 +518,36 @@ export class BasicPriceRowResolutionProposalService {
     // Its `unitIdentityCache` also lives for the whole batch, so the rare
     // representation-tie path re-uses a spelling it has already proved instead
     // of asking again per row.
-    const evidence = await this.identity.loadEvidence(client, workspaceId);
+    // Activate the existing IQL-01 exact-question memory in Basic Price.
+    // Only the row's own family may reuse a decision: a weak uploader category
+    // does not authorize borrowing an answer governed for a different type.
+    // Preserve source name/code/unit EXACTLY as read; never normalize the key.
+    // The shared identity kernel still guards approval, tenant, policy, current
+    // candidate context, specifications and source provenance before reuse.
+    // GHX/AHSP subject-specific decisions remain outside this review path.
+    const identicalQuestionKeys = [
+      ...new Set(
+        rows.flatMap((row) =>
+          row.sourceSection === null
+            ? []
+            : [
+                identicalQuestionKey({
+                  workspaceId,
+                  resourceType: row.sourceSection,
+                  rawName: row.rawResourceNameText,
+                  rawCode: row.rawResourceCodeText,
+                  rawUnit: row.rawUnitText,
+                }),
+              ],
+        ),
+      ),
+    ];
+    const evidence = await this.identity.loadEvidence(
+      client,
+      workspaceId,
+      undefined,
+      { identicalQuestionKeys },
+    );
 
     const resourceByRow = new Map<string, BasicPriceRowResourceProposal>();
     const resolutionByRow = new Map<string, ResourceIdentityResolution>();

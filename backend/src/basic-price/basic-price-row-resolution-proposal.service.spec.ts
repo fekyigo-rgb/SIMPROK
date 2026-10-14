@@ -17,6 +17,11 @@
  */
 import { PrismaService } from '../prisma/prisma.service';
 import { ResourceType } from '@prisma/client';
+import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
+import {
+  identicalQuestionKey,
+  IQL01_IDENTICAL_QUESTION_POLICY_VERSION,
+} from '../resource-catalog/identical-question-key';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
   ResourceIdentityResolutionService,
@@ -490,6 +495,167 @@ const row = (over: Partial<ProposalRow> = {}): ProposalRow => ({
   rawResourceCodeText: null,
   rawUnitText: 'ltr',
   ...over,
+});
+
+describe('BP-IQL-ACTIVATION-01: exact-question memory is activated only through canonical authority', () => {
+  const KERIKIL = {
+    id: 'cat-iql-kerikil',
+    workspaceId: WORKSPACE,
+    code: null,
+    name: 'Kerikil / Agregat',
+    type: 'MATERIAL',
+    baseUnit: 'Liter',
+    status: 'ACTIVE',
+    specifications: null,
+  };
+  const SOURCE_ROW: ProposalRow = {
+    id: 'row-iql-1',
+    sourceSection: 'MATERIAL',
+    sourceSectionProvenance: 'SOURCE_ROW_CATEGORY',
+    rawResourceNameText: 'Agregat kasar',
+    rawResourceCodeText: 'M03',
+    rawUnitText: 'ltr',
+  };
+
+  const setup = async () => {
+    const sourceSighting = {
+      resourceCatalogId: KERIKIL.id,
+      rawName: 'Kerikil',
+      rawCode: 'M03',
+      rawUnit: 'ltr',
+      sourceSection: 'MATERIAL',
+      sourceSha256: 'a'.repeat(64),
+      sheetName: 'Sheet1',
+      sourceRowNumber: 5,
+    };
+    const questionOf = (value: ProposalRow, workspaceId = WORKSPACE) => ({
+      workspaceId,
+      resourceType: value.sourceSection!,
+      rawName: value.rawResourceNameText,
+      rawCode: value.rawResourceCodeText,
+      rawUnit: value.rawUnitText,
+    });
+    let ledger: Record<string, unknown>[] = [];
+    const historyRead = jest.fn(async (query: {
+      where: { workspaceId: string; questionKey: { in: string[] } };
+    }) => ledger.filter((event) =>
+      query.where.workspaceId === WORKSPACE &&
+      query.where.questionKey.in.includes(event.questionKey as string),
+    ));
+    const standIn = {
+      ...createPrisma([KERIKIL]),
+      resourceSourceIdentity: {
+        findMany: jest.fn(async ({ where }: { where: { workspaceId: string } }) =>
+          where.workspaceId === WORKSPACE ? [sourceSighting] : [],
+        ),
+      },
+      resourceIdentityQuestionDecision: { findMany: historyRead },
+    };
+    const prisma = asPrismaClient(standIn as unknown as PrismaStandIn);
+    const unitAuthority = new UnitKernelService(prisma);
+    const identityAuthority = new ResourceIdentityResolutionService(prisma, unitAuthority);
+    const service = new BasicPriceRowResolutionProposalService(prisma, unitAuthority, identityAuthority);
+
+    const reference = {
+      rawName: SOURCE_ROW.rawResourceNameText,
+      rawCode: SOURCE_ROW.rawResourceCodeText,
+      rawUnit: SOURCE_ROW.rawUnitText,
+      resourceType: SOURCE_ROW.sourceSection!,
+    };
+    const before = await identityAuthority.resolve(
+      await identityAuthority.loadEvidence(prisma, WORKSPACE), reference,
+    );
+    expect(before.status).toBe('NEEDS_REVIEW');
+    expect(before.reasonCodes).toEqual(['STRONG_CANDIDATE_NEEDS_REVIEW']);
+    expect(before.candidates).toHaveLength(1);
+
+    const digest = candidateContextDigest(before.candidates.map((candidate) => ({
+      resourceCatalogId: candidate.resourceCatalogId,
+      name: candidate.name,
+      type: candidate.type,
+      baseUnit: candidate.baseUnit,
+      specifications: candidate.specifications,
+    })));
+    const question = questionOf(SOURCE_ROW);
+    const key = identicalQuestionKey(question);
+    const teaching = {
+      id: 'teach-iql',
+      generation: 1,
+      action: 'TEACH',
+      selectedResourceCatalogId: KERIKIL.id,
+      candidateContextDigest: digest,
+      resolutionPolicyVersion: IQL01_IDENTICAL_QUESTION_POLICY_VERSION,
+      decidedByAccountId: 'reviewer-1',
+      reason: 'Confirmed by governed review',
+      originObservation: question,
+    };
+    const approval = {
+      id: 'approve-iql',
+      questionKey: key,
+      generation: 2,
+      action: 'APPROVE',
+      selectedResourceCatalogId: null,
+      candidateContextDigest: null,
+      resolutionPolicyVersion: null,
+      decidedByAccountId: 'reviewer-2',
+      decidedAt: new Date('2026-10-14T08:00:00Z'),
+      previousDecision: teaching,
+    };
+    return {
+      service,
+      historyRead,
+      key,
+      approval,
+      useLedger: (events: Record<string, unknown>[]) => { ledger = events; },
+    };
+  };
+
+  it('reuses an APPROVED exact question; no human repeats a proven decision', async () => {
+    const t = await setup();
+    t.useLedger([t.approval]);
+    const proposal = (await t.service.proposeForRows(WORKSPACE, [SOURCE_ROW])).get(SOURCE_ROW.id)!;
+    expect(t.historyRead).toHaveBeenCalledTimes(1);
+    expect(t.historyRead.mock.calls[0][0].where).toEqual({
+      workspaceId: WORKSPACE, questionKey: { in: [t.key] },
+    });
+    expect(proposal.resource.status).toBe('RESOLVED');
+    expect(proposal.resource.authority).toBe('VERIFIED_IDENTICAL_QUESTION_REUSED');
+    expect(proposal.resource.resourceCatalogId).toBe(KERIKIL.id);
+    expect(proposal.identityPairProven).toBe(true);
+    // Rich ledger identity and private note do not escape to the review card.
+    expect(JSON.stringify(proposal)).not.toContain('Confirmed by governed review');
+    expect(JSON.stringify(proposal)).not.toContain('reviewer-2');
+  });
+
+  it('refuses an altered source question and a revoked approval', async () => {
+    const t = await setup();
+    t.useLedger([t.approval]);
+    const altered = { ...SOURCE_ROW, rawResourceNameText: 'Agregat kasar ' };
+    const changed = (await t.service.proposeForRows(WORKSPACE, [altered])).get(altered.id)!;
+    expect(changed.identityPairProven).toBe(false);
+    expect(changed.resource.authority).not.toBe('VERIFIED_IDENTICAL_QUESTION_REUSED');
+    expect(t.historyRead.mock.calls[0][0].where.questionKey.in).not.toContain(t.key);
+
+    t.useLedger([{ ...t.approval, action: 'REVOKE', generation: 3 }]);
+    const revoked = (await t.service.proposeForRows(WORKSPACE, [SOURCE_ROW])).get(SOURCE_ROW.id)!;
+    expect(revoked.identityPairProven).toBe(false);
+    expect(revoked.resource.authority).not.toBe('VERIFIED_IDENTICAL_QUESTION_REUSED');
+  });
+
+  it('deduplicates question preloads and never manufactures a question for unknown class', async () => {
+    const t = await setup();
+    t.useLedger([t.approval]);
+    const rows = [
+      SOURCE_ROW,
+      { ...SOURCE_ROW, id: 'row-iql-2' },
+      { ...SOURCE_ROW, id: 'row-no-type', sourceSection: null },
+    ];
+    const outcome = await t.service.proposeForRows(WORKSPACE, rows);
+    expect(t.historyRead).toHaveBeenCalledTimes(1);
+    expect(t.historyRead.mock.calls[0][0].where.questionKey.in).toEqual([t.key]);
+    expect(outcome.get('row-no-type')?.identityPairProven).toBe(false);
+    expect(outcome.get('row-iql-2')?.identityPairProven).toBe(true);
+  });
 });
 
 describe('B02A server-owned admission review binding', () => {
