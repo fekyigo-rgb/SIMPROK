@@ -9,8 +9,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   RejectBasicPriceImportRowDto,
   ResolveBasicPriceImportRowDto,
+  CompensateBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
-import { AdmitResourceForImportRowDto } from './dto/admit-resource-for-import-row.dto';
+import {
+  AdmitResourceForImportRowDto,
+  BulkAdmitSafeNewResourcesDto,
+} from './dto/admit-resource-for-import-row.dto';
 import {
   BasicPriceRowResolutionProposalService,
   type BasicPriceRowMachineProposal,
@@ -25,6 +29,7 @@ import {
   ResourceAdmissionNotExhaustedError,
   ResourceProvenanceAlreadyBoundError,
 } from '../resource-catalog/resource-admission.service';
+import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
   UNIT_KERNEL_POLICY_VERSION,
@@ -61,6 +66,7 @@ const ACCEPT_MACHINE_PROVEN_CHUNK = 10;
  * completes in exactly one command with `remainingEligible: 0`.
  */
 const ACCEPT_MACHINE_PROVEN_MAX_PER_CALL = 500;
+const ADMIT_SAFE_NEW_MAX_PER_CALL = 100;
 
 /**
  * WHY a mapping row exists, when it was not typed by a person.
@@ -323,6 +329,7 @@ export class BasicPriceRowResolutionService {
         // the correct answer rather than a silent overwrite.
         version: true,
         sourceSection: true,
+        sourceSectionProvenance: true,
         rawResourceNameText: true,
         rawResourceCodeText: true,
         rawUnitText: true,
@@ -733,9 +740,6 @@ export class BasicPriceRowResolutionService {
         data: {
           resourceCatalogId: dto.resourceCatalogId,
           resolvedResourceType: resourceCatalog.type,
-          // Correct a weak batch hint to the family the human confirmed.
-          // Document-proven families never reach here with a type mismatch.
-          ...(typeMismatch ? { sourceSection: effectiveSection } : {}),
           unitDefinitionId: dto.unitDefinitionId,
           collisionType,
           collisionOfRowId,
@@ -810,6 +814,7 @@ export class BasicPriceRowResolutionService {
                   {
                     id: rowId,
                     sourceSection: row.sourceSection,
+                    sourceSectionProvenance: row.sourceSectionProvenance,
                     rawResourceNameText: row.rawResourceNameText,
                     rawResourceCodeText: row.rawResourceCodeText,
                     rawUnitText: row.rawUnitText,
@@ -936,7 +941,7 @@ export class BasicPriceRowResolutionService {
    * exhausted every defensible avenue", and only the second one authorizes a
    * create.
    */
-  private static isIdentityExhausted(
+  static isIdentityExhausted(
     identity: ResourceIdentityResolution,
   ): boolean {
     // ONE predicate. The mint authority owns the definition of "exhausted"; this
@@ -973,7 +978,7 @@ export class BasicPriceRowResolutionService {
    * verdict, so the ADMISSION GATE is decided on the whole truth and only the
    * REPLY is narrowed. Privacy belongs in the projection, never in the memory.
    */
-  private static identityRefusal(
+  static identityRefusal(
     identity: ResourceIdentityResolution,
   ): ConflictException {
     return new ConflictException({
@@ -1008,6 +1013,7 @@ export class BasicPriceRowResolutionService {
       rawResourceCodeText: string | null;
       rawUnitText: string | null;
       sourceSection: ResourceType;
+      batch?: { sourceSha256: string };
     },
   ): Promise<ResourceIdentityResolution> {
     const evidence = await this.resourceIdentity.loadEvidence(tx, workspaceId);
@@ -1021,6 +1027,7 @@ export class BasicPriceRowResolutionService {
         rawCode: row.rawResourceCodeText,
         rawUnit: row.rawUnitText,
         resourceType: row.sourceSection,
+        sourceSha256: row.batch?.sourceSha256 ?? null,
       },
       tx,
     );
@@ -1047,8 +1054,9 @@ export class BasicPriceRowResolutionService {
    *
    *   - a real imported source row exists and is still mutable;
    *   - the batch belongs to this workspace and this caller;
-   *   - the resource TYPE comes from the row's own source section, never a
-   *     client claim;
+   *   - a source-authoritative TYPE comes from the row unchanged; a weak
+   *     uploader hint requires an explicit human type confirmation bound to
+   *     the server's current all-type review fingerprint;
    *   - the reviewer names an EXISTING UnitDefinition, and the UnitKernel can
    *     actually represent its canonical code;
    *   - the authoritative identity resolution is exhausted (see
@@ -1126,15 +1134,99 @@ export class BasicPriceRowResolutionService {
 
         // First authoritative pass — cheap refusal before anyone waits on a
         // lock. It never authorizes anything on its own.
-        const preLockIdentity = await this.resolveRowIdentity(
-          tx,
-          workspaceId,
-          row,
+        const proposal = (
+          await this.proposals.proposeForRows(
+            workspaceId,
+            [
+              {
+                id: rowId,
+                batchId,
+                rowVersion: row.version,
+                sourceSha256: row.batch.sourceSha256,
+                sourceSection: row.sourceSection,
+                sourceSectionProvenance: row.sourceSectionProvenance,
+                rawResourceNameText: row.rawResourceNameText,
+                rawResourceCodeText: row.rawResourceCodeText,
+                rawUnitText: row.rawUnitText,
+              },
+            ],
+            tx,
+          )
+        ).get(rowId);
+        const review = proposal?.resource.admissionReview;
+        const sourceTypeProven =
+          row.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
+          row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE';
+        if (
+          sourceTypeProven &&
+          dto.confirmedResourceType !== row.sourceSection
+        ) {
+          throw new ConflictException('SOURCE_TYPE_OVERRIDE_FORBIDDEN');
+        }
+        const typeConfirmation = review?.typeConfirmations.find(
+          (option) => option.resourceType === dto.confirmedResourceType,
+        );
+        if (!review?.offered || !typeConfirmation) {
+          const refusal = await this.resolveRowIdentity(tx, workspaceId, row);
+          throw BasicPriceRowResolutionService.identityRefusal(refusal);
+        }
+        if (
+          dto.reviewBindingFingerprint !==
+          typeConfirmation.reviewBindingFingerprint
+        ) {
+          throw new ConflictException('RESOURCE_ADMISSION_REVIEW_STALE');
+        }
+        const expectedRefusals = new Set(
+          review.humanRefusableCandidateIds,
         );
         if (
-          !BasicPriceRowResolutionService.isIdentityExhausted(preLockIdentity)
-        )
-          throw BasicPriceRowResolutionService.identityRefusal(preLockIdentity);
+          dto.refusedCandidateIds.length !== expectedRefusals.size ||
+          new Set(dto.refusedCandidateIds).size !==
+            dto.refusedCandidateIds.length ||
+          dto.refusedCandidateIds.some(
+            (candidateId) => !expectedRefusals.has(candidateId),
+          )
+        ) {
+          throw new ConflictException('RESOURCE_ADMISSION_REFUSALS_INVALID');
+        }
+        const selectedTypeIdentity = await this.resolveRowIdentity(
+          tx,
+          workspaceId,
+          { ...row, sourceSection: dto.confirmedResourceType },
+        );
+        const reviewedCandidateIds = new Set([
+          ...review.humanRefusableCandidateIds,
+          ...review.machineRuledOutCandidateIds,
+        ]);
+        const selectedTypeCandidatesSafe =
+          selectedTypeIdentity.status !== 'RESOLVED' &&
+          selectedTypeIdentity.authority !== 'HUMAN_REVIEW_REQUIRED' &&
+          selectedTypeIdentity.candidates.every(
+            (candidate) =>
+              (candidate.identityBasis === 'NAME_SIMILARITY_ONLY' ||
+                candidate.identityBasis === 'RULED_OUT') &&
+              reviewedCandidateIds.has(candidate.resourceCatalogId),
+          );
+        if (
+          !BasicPriceRowResolutionService.isIdentityExhausted(
+            selectedTypeIdentity,
+          ) &&
+          !selectedTypeCandidatesSafe
+        ) {
+          throw new ConflictException('RESOURCE_ADMISSION_REVIEW_STALE');
+        }
+        const examinationIds = selectedTypeIdentity.candidates.map(
+          (candidate) => candidate.resourceCatalogId,
+        );
+        const examinationDigest = candidateContextDigest(
+          selectedTypeIdentity.candidates.map((candidate) => ({
+            resourceCatalogId: candidate.resourceCatalogId,
+            name: candidate.name,
+            type: candidate.type,
+            baseUnit: candidate.baseUnit,
+            specifications: candidate.specifications,
+          })),
+        );
 
         // Full provenance needs two facts the mutability check does not carry:
         // the row's own cell addresses, and the batch's file name.
@@ -1159,9 +1251,12 @@ export class BasicPriceRowResolutionService {
           .admitObservedResource(tx, {
             workspaceId,
             rawName: row.rawResourceNameText,
+            ...(dto.correctedCanonicalName && dto.correctedCanonicalName !== row.rawResourceNameText
+              ? { canonicalName: dto.correctedCanonicalName }
+              : {}),
             rawCode: row.rawResourceCodeText,
             rawUnit: row.rawUnitText,
-            resourceType: row.sourceSection,
+            resourceType: dto.confirmedResourceType,
             baseUnit: unitDefinition.code,
             provenance: {
               sourceSha256: row.batch.sourceSha256,
@@ -1172,14 +1267,21 @@ export class BasicPriceRowResolutionService {
               sourceNameCellAddress: evidence.sourceNameCellAddress,
               sourceCodeCellAddress: evidence.sourceCodeCellAddress,
               sourceUnitCellAddress: evidence.sourceUnitCellAddress,
+              sourceSection: row.sourceSection,
             },
+            ...(examinationIds.length > 0
+              ? {
+                  examination: {
+                    refusedCandidateIds: examinationIds,
+                    candidateContextDigest: examinationDigest,
+                  },
+                }
+              : {}),
           })
           .catch((error: unknown) => {
             // Preserve Basic Price's exact external contract.
             if (error instanceof ResourceAdmissionNotExhaustedError)
-              throw BasicPriceRowResolutionService.identityRefusal(
-                error.resolution,
-              );
+              throw new ConflictException('RESOURCE_ADMISSION_REVIEW_STALE');
             if (error instanceof ResourceProvenanceAlreadyBoundError)
               throw new ConflictException('RESOURCE_PROVENANCE_ALREADY_BOUND');
             throw error;
@@ -1214,6 +1316,378 @@ export class BasicPriceRowResolutionService {
       // the truthful "SIMPROK already knows this now" answer.
       { timeout: 20_000, maxWait: 20_000 },
     );
+  }
+
+  /**
+   * Bounded orchestration of the existing single canonical writer.
+   *
+   * The preview is only a question offered to the human. At execution this
+   * method reloads the owned rows, recomputes the authoritative proposal, and
+   * admits only zero-candidate rows with a proven unit and canonical price.
+   * `admitResourceForRow` then repeats the decisive proof under its row and
+   * admission locks. Partial domain refusals are returned per row; database or
+   * programming failures still fail the request loudly.
+   */
+  async admitSafeNewResources(
+    workspaceId: string,
+    batchId: string,
+    reviewerAccountId: string,
+    dto: BulkAdmitSafeNewResourcesDto,
+  ): Promise<{
+    accepted: Array<{ rowId: string; resourceCatalogId: string }>;
+    skipped: Array<{ rowId: string; reason: string }>;
+    blocked: Array<{ rowId: string; reason: string }>;
+    acceptedCount: number;
+    skippedCount: number;
+    blockedCount: number;
+    duplicateCount: number;
+    readyForSubmissionCount: number;
+    needsReviewCount: number;
+  }> {
+    if (dto.selections.length > ADMIT_SAFE_NEW_MAX_PER_CALL)
+      throw new BadRequestException('BULK_ADMISSION_LIMIT_EXCEEDED');
+
+    const batch = await this.prisma.basicPriceImportBatch.findUnique({
+      where: { id: batchId },
+      select: {
+        id: true,
+        workspaceId: true,
+        status: true,
+        uploadedByAccountId: true,
+        sourceSha256: true,
+      },
+    });
+    if (!batch || batch.workspaceId !== workspaceId)
+      throw new NotFoundException('Batch not found');
+    assertBatchOwnedByCaller(batch, reviewerAccountId, 'Batch not found');
+    if (batch.status !== 'NEEDS_REVIEW' && batch.status !== 'READY_FOR_REVIEW')
+      throw new ConflictException('BATCH_NOT_MUTABLE');
+
+    const uniqueSelections: typeof dto.selections = [];
+    const seen = new Set<string>();
+    let duplicateCount = 0;
+    for (const selection of dto.selections) {
+      if (seen.has(selection.rowId)) {
+        duplicateCount += 1;
+        continue;
+      }
+      seen.add(selection.rowId);
+      uniqueSelections.push(selection);
+    }
+
+    const rows = await this.prisma.basicPriceImportRow.findMany({
+      where: { batchId, id: { in: uniqueSelections.map((item) => item.rowId) } },
+      select: {
+        id: true,
+        batchId: true,
+        version: true,
+        status: true,
+        proposedCanonicalPrice: true,
+        sourceSection: true,
+        sourceSectionProvenance: true,
+        rawResourceNameText: true,
+        rawResourceCodeText: true,
+        rawUnitText: true,
+      },
+    });
+    const rowById = new Map(rows.map((row) => [row.id, row]));
+    // Bind bulk review to the exact source and row version shown to the user.
+    const mutableRows = rows
+      .filter((row) => row.status === 'NEEDS_REVIEW')
+      .map((row) => ({
+        ...row,
+        rowVersion: row.version,
+        sourceSha256: batch.sourceSha256,
+      }));
+    const proposals = await this.proposals.proposeForRows(
+      workspaceId,
+      mutableRows,
+    );
+
+    const accepted: Array<{ rowId: string; resourceCatalogId: string }> = [];
+    const skipped: Array<{ rowId: string; reason: string }> = [];
+    const blocked: Array<{ rowId: string; reason: string }> = [];
+
+    for (const selection of uniqueSelections) {
+      const row = rowById.get(selection.rowId);
+      if (!row) {
+        blocked.push({ rowId: selection.rowId, reason: 'ROW_NOT_IN_BATCH' });
+        continue;
+      }
+      if (row.status !== 'NEEDS_REVIEW') {
+        skipped.push({ rowId: row.id, reason: 'ROW_ALREADY_PROCESSED' });
+        continue;
+      }
+      if (row.version !== selection.version) {
+        blocked.push({ rowId: row.id, reason: 'ROW_VERSION_STALE' });
+        continue;
+      }
+      if (row.proposedCanonicalPrice === null) {
+        blocked.push({ rowId: row.id, reason: 'CANONICAL_PRICE_REQUIRED' });
+        continue;
+      }
+
+      const proposal = proposals.get(row.id);
+      const review = proposal?.resource.admissionReview;
+      const typeConfirmation = review?.typeConfirmations.find(
+        (option) => option.resourceType === selection.confirmedResourceType,
+      );
+      const sourceTypeAuthoritative =
+        row.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
+        row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE';
+      if (
+        sourceTypeAuthoritative &&
+        selection.confirmedResourceType !== row.sourceSection
+      ) {
+        blocked.push({ rowId: row.id, reason: 'SOURCE_TYPE_OVERRIDE_FORBIDDEN' });
+        continue;
+      }
+      if (!proposal) {
+        blocked.push({ rowId: row.id, reason: 'MACHINE_PROPOSAL_UNAVAILABLE' });
+        continue;
+      }
+      if (!review?.offered) {
+        blocked.push({
+          rowId: row.id,
+          reason:
+            review?.reasonCode ??
+            proposal.resource.reasonCodes?.[0] ??
+            'RESOURCE_ADMISSION_REVIEW_STALE',
+        });
+        continue;
+      }
+      if (
+        !typeConfirmation ||
+        typeConfirmation.reviewBindingFingerprint !==
+          selection.reviewBindingFingerprint
+      ) {
+        blocked.push({ rowId: row.id, reason: 'RESOURCE_ADMISSION_REVIEW_STALE' });
+        continue;
+      }
+      if (
+        proposal.resource.candidates.length > 0 ||
+        review.humanRefusableCandidateIds.length > 0 ||
+        review.blockedCandidateIds.length > 0
+      ) {
+        blocked.push({ rowId: row.id, reason: 'CANDIDATE_REQUIRES_INDIVIDUAL_REVIEW' });
+        continue;
+      }
+      if (
+        proposal.unit.status !== UNIT_RESOLUTION_STATUS.RESOLVED ||
+        proposal.unit.unitDefinitionId !== selection.unitDefinitionId
+      ) {
+        blocked.push({ rowId: row.id, reason: 'UNIT_NOT_MACHINE_PROVEN' });
+        continue;
+      }
+
+      try {
+        const result = await this.admitResourceForRow(
+          workspaceId,
+          batchId,
+          row.id,
+          reviewerAccountId,
+          {
+            version: selection.version,
+            unitDefinitionId: selection.unitDefinitionId,
+            reason: dto.reason,
+            confirmedResourceType: selection.confirmedResourceType,
+            refusedCandidateIds: [],
+            reviewBindingFingerprint: selection.reviewBindingFingerprint,
+          },
+        );
+        accepted.push({
+          rowId: row.id,
+          resourceCatalogId: result.admittedResource.id,
+        });
+      } catch (error) {
+        if (
+          error instanceof ConflictException ||
+          error instanceof BadRequestException ||
+          error instanceof NotFoundException
+        ) {
+          const response = error.getResponse();
+          const reason =
+            typeof response === 'string'
+              ? response
+              : typeof response === 'object' && response !== null &&
+                  typeof (response as { message?: unknown }).message === 'string'
+                ? (response as { message: string }).message
+                : error.message;
+          blocked.push({ rowId: row.id, reason });
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    const [readyForSubmissionCount, needsReviewCount] = await Promise.all([
+      this.prisma.basicPriceImportRow.count({
+        where: { batchId, status: 'READY_FOR_SUBMISSION' },
+      }),
+      this.prisma.basicPriceImportRow.count({
+        where: { batchId, status: 'NEEDS_REVIEW' },
+      }),
+    ]);
+
+    return {
+      accepted,
+      skipped,
+      blocked,
+      acceptedCount: accepted.length,
+      skippedCount: skipped.length,
+      blockedCount: blocked.length,
+      duplicateCount,
+      readyForSubmissionCount,
+      needsReviewCount,
+    };
+  }
+
+  /**
+   * BP-ROW8-COMPENSATION-01 — a HUMAN can compensate their OWN mistaken
+   * row-scoped catalog admission, before any price or another consumer uses it.
+   * The original mapping and source sighting remain unchanged. A new durable
+   * event records the reversal. NOT a generic resource deletion or mass undo.
+   *
+   * The catalog row is RETIRED rather than deleted, so existing source audit
+   * remains referentially intact while Resource Identity Kernel's existing
+   * ACTIVE filter makes it ineligible as current evidence.
+   */
+  async compensateOwnDecision(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    actorAccountId: string,
+    dto: CompensateBasicPriceImportRowDto,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      if (!dto.reason || dto.reason.trim().length < 10 || dto.reason !== dto.reason.trim()) {
+        throw new BadRequestException('COMPENSATION_REASON_REQUIRED');
+      }
+      // Lock the row before reading its current verdict, never mutate a
+      // stale decision. PostgreSQL FK protection prevents new catalog
+      // consumers from sneaking in after the catalog row lock below.
+      const rowLock = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "basic_price_import_rows"
+          WHERE "id" = ${rowId}::uuid AND "batchId" = ${batchId}::uuid
+          FOR UPDATE`,
+      );
+      if (rowLock.length !== 1) throw new NotFoundException('Row not found');
+      const row = await tx.basicPriceImportRow.findUniqueOrThrow({
+        where: { id: rowId },
+        include: {
+          batch: true,
+          privateBasicPrice: { select: { id: true } },
+          resourceMappings: { include: { compensation: true } },
+        },
+      });
+      if (row.batch.workspaceId !== workspaceId) throw new NotFoundException('Batch not found');
+      assertBatchOwnedByCaller(row.batch, actorAccountId, 'Batch not found');
+      if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
+      if (
+        row.status !== 'READY_FOR_SUBMISSION' ||
+        row.resolutionStatus !== 'RESOLVED' ||
+        row.priceSubmissionId !== null ||
+        row.privateBasicPrice !== null ||
+        row.resourceCatalogId === null ||
+        row.unitDefinitionId === null ||
+        row.resolvedByAccountId !== actorAccountId
+      ) throw new ConflictException('COMPENSATION_ROW_INELIGIBLE');
+      const current = row.resourceMappings.filter((decision) => !decision.compensation);
+      if (current.length !== 1 || current[0].reviewerAccountId !== actorAccountId ||
+          current[0].resourceCatalogId !== row.resourceCatalogId ||
+          current[0].unitDefinitionId !== row.unitDefinitionId) {
+        throw new ConflictException('COMPENSATION_DECISION_AMBIGUOUS');
+      }
+      const catalogId = row.resourceCatalogId;
+      const catalogLock = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "resource_catalogs" WHERE "id" = ${catalogId}::uuid FOR UPDATE`,
+      );
+      if (catalogLock.length !== 1) throw new ConflictException('COMPENSATION_CATALOG_MISSING');
+      const catalog = await tx.resourceCatalog.findUniqueOrThrow({ where: { id: catalogId } });
+      if (catalog.workspaceId !== workspaceId || catalog.status !== 'ACTIVE') {
+        throw new ConflictException('COMPENSATION_CATALOG_NOT_OWNED_ACTIVE');
+      }
+      const sightings = await tx.resourceSourceIdentity.findMany({
+        where: { resourceCatalogId: catalogId },
+      });
+      if (sightings.length !== 1 ||
+          sightings[0].workspaceId !== workspaceId ||
+          sightings[0].sourceSha256 !== row.batch.sourceSha256 ||
+          sightings[0].sourceRowNumber !== row.sourceRowNumber ||
+          sightings[0].rawName !== row.rawResourceNameText ||
+          sightings[0].sourceNameCellAddress !== row.sourceNameCellAddress) {
+        throw new ConflictException('COMPENSATION_SOURCE_NOT_EXCLUSIVE');
+      }
+      // An exclusively-owned newly admitted catalog only. If it has ANY
+      // downstream consumer, do not retire it, even at the original reviewer's
+      // request. All counts are read while the catalog FK target is locked.
+      const counts = await Promise.all([
+        tx.basicPrice.count({ where: { resourceId: catalogId } }),
+        tx.priceSubmission.count({ where: { resourceId: catalogId } }),
+        tx.canonicalPricePoint.count({ where: { resourceCatalogId: catalogId } }),
+        tx.projectAhspResourceResolution.count({ where: { resourceCatalogId: catalogId } }),
+        tx.unitConversionRule.count({ where: { resourceCatalogId: catalogId } }),
+        tx.ahspResourceIdentityDecision.count({ where: { selectedResourceCatalogId: catalogId } }),
+        tx.observedResource.count({ where: { resolvedResourceCatalogId: catalogId } }),
+        tx.resourceIdentityQuestionDecision.count({ where: { selectedResourceCatalogId: catalogId } }),
+        tx.basicPriceImportRow.count({
+          where: { resourceCatalogId: catalogId, id: { not: rowId } },
+        }),
+        tx.basicPriceImportRowResourceMapping.count({
+          where: { resourceCatalogId: catalogId, rowId: { not: rowId } },
+        }),
+      ]);
+      if (counts.some((count) => count !== 0)) {
+        throw new ConflictException('COMPENSATION_CATALOG_IN_USE');
+      }
+      // Preserve the original decision and source evidence. A transaction
+      // commits the NEW audit and both current-state changes together.
+      const event = await tx.basicPriceImportRowResolutionCompensation.create({
+        data: {
+          workspaceId,
+          rowId,
+          mappingId: current[0].id,
+          resourceCatalogId: catalogId,
+          actorAccountId,
+          reason: dto.reason,
+          priorRowVersion: row.version,
+          newRowVersion: row.version + 1,
+          previousCatalogName: catalog.name,
+        },
+      });
+      const retired = await tx.resourceCatalog.updateMany({
+        where: { id: catalogId, workspaceId, status: 'ACTIVE' },
+        data: { status: 'RETIRED' },
+      });
+      if (retired.count !== 1) throw new ConflictException('COMPENSATION_CATALOG_STALE');
+      const reopened = await tx.basicPriceImportRow.updateMany({
+        where: {
+          id: rowId,
+          batchId,
+          version: row.version,
+          status: 'READY_FOR_SUBMISSION',
+          resourceCatalogId: catalogId,
+        },
+        data: {
+          status: 'NEEDS_REVIEW',
+          resolutionStatus: 'UNRESOLVED',
+          resourceCatalogId: null,
+          resolvedResourceType: null,
+          unitDefinitionId: null,
+          resolvedByAccountId: null,
+          resolvedAt: null,
+          version: { increment: 1 },
+        },
+      });
+      if (reopened.count !== 1) throw new ConflictException('COMPENSATION_ROW_STALE');
+      await this.recomputeBatchStatus(tx, batchId);
+      return {
+        rowId, batchId, priorRowVersion: row.version,
+        newRowVersion: row.version + 1,
+        compensationEventId: event.id, retiredResourceCatalogId: catalogId,
+        status: 'NEEDS_REVIEW' as const,
+      };
+    }, { timeout: 20_000, maxWait: 20_000, isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   /** Human rejection (state machine B, reason required, no automatic path). */

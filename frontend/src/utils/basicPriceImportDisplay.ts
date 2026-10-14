@@ -78,6 +78,23 @@ export interface RowResourceCandidate {
    * not appear on a colleague's screen even within the same workspace.
    */
   hasPriorHumanDecision: boolean;
+  admissionDisposition?: 'HUMAN_REFUSABLE' | 'MACHINE_RULED_OUT' | 'BLOCKED';
+}
+
+export interface RowAdmissionReview {
+  offered: boolean;
+  reasonCode: string | null;
+  effectiveResourceType: ResourceType;
+  reviewBindingFingerprint: string;
+  candidateContextDigest: string;
+  humanRefusableCandidateIds: string[];
+  machineRuledOutCandidateIds: string[];
+  blockedCandidateIds: string[];
+  typeConfirmations: Array<{
+    resourceType: ResourceType;
+    reviewBindingFingerprint: string;
+  }>;
+  policyVersion: string;
 }
 
 /** What the canonical Resource Identity authority proved about one row. */
@@ -98,6 +115,7 @@ export interface RowResourceProposal {
    * scoped catalog rows this workflow's resolve endpoint will not accept.
    */
   admissibleForResolve: boolean;
+  admissionReview?: RowAdmissionReview | null;
 }
 
 export interface RowMachineProposal {
@@ -122,6 +140,10 @@ export interface BasicPriceImportRowSummary {
   resolutionStatus: string;
   code: string | null;
   name: string;
+  /** Server-read catalog identity; null before resolution. Never overwrite source name. */
+  canonicalResourceName?: string | null;
+  /** Persisted canonical unit from GET, not a browser draft. */
+  canonicalUnit?: { code: string; displayName: string; symbol: string } | null;
   unit: string | null;
   rawPriceDisplayText: string | null;
   proposedCanonicalPrice: string | null;
@@ -146,6 +168,8 @@ export interface BasicPriceImportRowSummary {
     | 'SOURCE_SECTION_TITLE'
     | 'UPLOADER_DECLARED'
     | null;
+  /** Effective type proven/confirmed during review; source fields stay raw. */
+  effectiveResourceType?: ResourceType | null;
   /** The source's OWN category words, kept whether or not they could be mapped. */
   sourceCategoryCode: string | null;
   sourceCategoryName: string | null;
@@ -308,6 +332,8 @@ export interface BatchLifecycleActions {
 }
 
 export interface BasicPriceImportBatchSummary {
+  /** Versioned readback of backend support; absence means unsupported. */
+  reviewCapabilities?: { correctedCanonicalNameOnAdmission: boolean };
   batchId: string;
   status: 'PREVIEWED' | 'READY_FOR_REVIEW' | 'NEEDS_REVIEW' | 'APPROVED_FOR_SUBMISSION' | 'PARTIALLY_SUBMITTED' | 'SUBMITTED' | 'REJECTED' | 'SUPERSEDED';
   importFingerprint: string;
@@ -519,7 +545,7 @@ export const reimportDecisionView = (
 const BATCH_STATUS_LABELS: Record<BasicPriceImportBatchSummary['status'], string> = {
   PREVIEWED: 'Preview',
   READY_FOR_REVIEW: 'Siap ditinjau',
-  NEEDS_REVIEW: 'Perlu konfirmasi',
+  NEEDS_REVIEW: 'Perlu keputusan Anda',
   // THE CURATION PATH, NAMED. These three are the only batch states that mean
   // the SIMPROK curation door was actually used, and each one now says so —
   // a bare 'Diajukan' left the reader to guess the destination.
@@ -568,6 +594,25 @@ export const ROW_SAVED_PRIVATE_LABEL = 'Tersimpan di ruang kerja';
 
 export const rowStatusLabel = (status: BasicPriceImportRowSummary['status']): string =>
   ROW_STATUS_LABELS[status] ?? status;
+
+/**
+ * One exclusive bucket for the review-room tabs, from already-persisted server
+ * facts. A HUMAN-RESOLVED row is NOT an unrecognized row merely because the
+ * proposal engine is no longer consulted after that decision. A row that has
+ * already been kept privately or submitted is also not waiting for review.
+ */
+export type ReviewRowBucket = 'RECOGNIZED' | 'NEEDS_REVIEW' | 'DECIDED';
+
+export const reviewRowBucket = (row: BasicPriceImportRowSummary): ReviewRowBucket => {
+  if (
+    row.savedAsPrivatePrice ||
+    row.status === 'READY_FOR_SUBMISSION' ||
+    row.status === 'REJECTED' ||
+    row.status === 'SUBMISSION_CREATED'
+  ) return 'DECIDED';
+  if (row.machineProposal?.identityPairProven === true) return 'RECOGNIZED';
+  return 'NEEDS_REVIEW';
+};
 
 /**
  * THE TWO ROW STATUSES THAT RECORD SOMETHING WHICH ALREADY HAPPENED.
@@ -650,6 +695,17 @@ export const rowStateLabel = (
   // second literal is how two places start disagreeing.
   if (row.machineProposal?.identityPairProven === true) {
     return rowMachineStateLabel('PROVEN');
+  }
+  // Mirror the exact ATTENTION criterion used by the machine narrative:
+  // the card must not say "Perlu konfirmasi" while its body says the
+  // Owner-approved "Perlu keputusan Anda". Unknown stays unproven.
+  if (
+    row.status === 'NEEDS_REVIEW' &&
+    row.machineProposal &&
+    (row.machineProposal.resource.candidates.length > 0 ||
+      row.machineProposal.unit.unitCode !== null)
+  ) {
+    return rowMachineStateLabel('ATTENTION');
   }
   return rowStatusLabel(row.status);
 };
@@ -905,14 +961,20 @@ export const unitOptionLabel = (item: {
  * Row card facts line — one price spelling, ordinary Indonesian absences.
  */
 export const rowReviewFactsLine = (row: BasicPriceImportRowSummary): string => {
-  const code = row.code?.trim() ? row.code : 'Kode tidak tersedia';
+  // The code is optional. An absent one belongs in "Mengapa?", not the
+  // primary facts line where it reads like unfinished work.
+  const code = row.code?.trim();
   const unit = row.unit?.trim()
     ? `Satuan dari berkas: ${row.unit}`
     : 'Satuan dari berkas: tidak tercantum';
   const priceSource = row.proposedCanonicalPrice ?? row.rawPriceDisplayText;
   const price = priceSource ? `Harga Rp ${priceSource}` : 'Harga tidak tercantum';
-  return `${code} · ${unit} · ${price}`;
+  return [code, unit, price].filter(Boolean).join(' · ');
 };
+
+/** Display only: strip an actual leading list marker, never the '-' in a size. */
+export const reviewDisplayResourceName = (name: string): string =>
+  name.replace(/^\s*(?:[-•*]\s+)+/u, '').trim();
 
 export const OPTIONAL_KDN_INCOMPLETE =
   'Data opsional belum lengkap: %KDN. Kekosongan ini tidak menghalangi baris yang sudah siap.';
@@ -992,16 +1054,44 @@ export function rowIdentityAdmissionOffered(
   if (row.status !== 'NEEDS_REVIEW') return false;
   const resource = row.machineProposal?.resource;
   if (!resource) return false;
+  return resource.admissionReview?.offered === true;
+}
+
+/** Safe bulk-new rows have no candidate to examine and both source facts. */
+export function rowSafeNewAdmissionEligible(
+  row: Pick<
+    BasicPriceImportRowSummary,
+    'status' | 'proposedCanonicalPrice' | 'machineProposal'
+  >,
+): boolean {
+  const proposal = row.machineProposal;
   return (
-    resource.status === 'UNRESOLVED' &&
-    resource.reasonCodes.includes('RESOURCE_NOT_FOUND') &&
-    resource.candidates.length === 0 &&
-    resource.resourceCatalogId === null &&
-    resource.authority === null
+    row.status === 'NEEDS_REVIEW' &&
+    row.proposedCanonicalPrice !== null &&
+    proposal?.unit.status === 'RESOLVED' &&
+    proposal.unit.unitDefinitionId !== null &&
+    proposal.resource.admissionReview?.offered === true &&
+    proposal.resource.candidates.length === 0
   );
 }
 
-export const IDENTITY_ADMISSION_LABEL = 'Sahkan sebagai item baru';
+export function rowIdentityRefusalChoices(
+  row: Pick<BasicPriceImportRowSummary, 'machineProposal'>,
+): Array<{ key: string; name: string; code: string | null }> {
+  return (
+    row.machineProposal?.resource.candidates
+      .filter(
+        (candidate) => candidate.admissionDisposition === 'HUMAN_REFUSABLE',
+      )
+      .map((candidate) => ({
+        key: candidate.resourceCatalogId,
+        name: candidate.name,
+        code: candidate.code,
+      })) ?? []
+  );
+}
+
+export const IDENTITY_ADMISSION_LABEL = 'Tetapkan sebagai Item Baru';
 
 export const IDENTITY_ADMISSION_HELP =
   'Item ini belum ada sebagai Resource Identity kanonik. Pengesahan membentuk identitas baru dari nama sumber, bukan dari tebakan kecocokan katalog.';
@@ -1012,13 +1102,19 @@ export function rowIdentityAdmissionBlockReason(input: {
   reasonFilled: boolean;
   admitOpen: boolean;
   busy: boolean;
+  refusalsConfirmed?: boolean;
+  typeSelected?: boolean;
 }): string | null {
   if (input.busy) return 'Sedang memproses...';
   if (input.unitPending) return 'Tunggu pencarian satuan selesai.';
   if (!input.unitSelected)
     return 'Pilih satu Satuan standar sebelum mengesahkan item baru.';
+  if (input.admitOpen && input.typeSelected === false)
+    return 'Konfirmasikan jenis efektif item baru ini.';
+  if (input.admitOpen && input.refusalsConfirmed === false)
+    return 'Konfirmasikan penolakan setiap kandidat nama yang ditampilkan.';
   if (input.admitOpen && !input.reasonFilled)
-    return 'Tuliskan alasan mengapa item ini disahkan sebagai Resource Identity baru.';
+    return 'Catat alasan penetapan item baru berdasarkan hasil pemeriksaan.';
   return null;
 }
 
@@ -1430,6 +1526,12 @@ export const formatPrivateUseOutcome = (result: {
 
 export const isRowMutable = (row: BasicPriceImportRowSummary): boolean => row.status === 'NEEDS_REVIEW';
 
+/** Machine proof needs no second human confirmation; correction stays available on demand. */
+export const reviewNeedsManualControls = (
+  row: BasicPriceImportRowSummary,
+  correctionOpen: boolean,
+): boolean => isRowMutable(row) && (!row.machineProposal?.identityPairProven || correctionOpen);
+
 // ---------------------------------------------------------------------------
 // INT-CONNECT-01 — VISIBLE ACCOUNTABILITY
 //
@@ -1468,7 +1570,7 @@ export const rowMachineState = (row: BasicPriceImportRowSummary): RowMachineStat
 };
 
 const MACHINE_STATE_LABELS: Record<RowMachineState, string> = {
-  PROVEN: 'Dikenali otomatis',
+  PROVEN: 'Sudah dikenali',
   ATTENTION: 'Perlu keputusan Anda',
   UNKNOWN: 'Belum dikenali',
   NOT_ASKED: '',
@@ -1818,6 +1920,21 @@ export const machinePickedUnit = (
  * while printing "Bahan" there would simply be false.
  */
 export const rowSectionDisplay = (row: BasicPriceImportRowSummary): string => {
+  if (row.effectiveResourceType) {
+    return `Jenis dikonfirmasi: ${rowSectionLabel(row.effectiveResourceType)}`;
+  }
+  // A unique, workspace-admissible machine proof outranks a weak uploader-wide
+  // category *for display only*. Original source provenance stays unchanged.
+  const machine = row.machineProposal;
+  const family = machine?.resource.resourceType;
+  if (
+    row.sectionProvenance === 'UPLOADER_DECLARED' &&
+    machine?.identityPairProven === true &&
+    machine.resource.admissibleForResolve &&
+    (family === 'LABOR' || family === 'MATERIAL' || family === 'EQUIPMENT')
+  ) {
+    return `Jenis yang dikenali: ${rowSectionLabel(family)}`;
+  }
   if (row.section !== null) {
     const label = rowSectionLabel(row.section);
     /**
@@ -1832,11 +1949,11 @@ export const rowSectionDisplay = (row: BasicPriceImportRowSummary): string => {
      *
      * So a batch hint says it is a starting point until something stronger
      * confirms it, and `resourceCatalogId` is that something: once a human has
-     * chosen the Item SIMPROK, the family is theirs and the resolver has
-     * already corrected the row to the catalog's own type (see
+     * chosen the Item SIMPROK, the family is theirs. The resolver stores the
+     * effective type separately from the source/hint fields (see
      * `basic-price-row-resolution.service.ts` — a weak hint never defeats a
-     * confirmed catalog identity). That is why the resolved Batu Kali reads
-     * "Bahan" flat, with nothing hedged about it: by then it IS the fact.
+     * confirmed catalog identity). The effective family is projected separately;
+     * these original source/hint fields are never rewritten.
      *
      * The two document-proven provenances are untouched and never hedged.
      */
@@ -1937,13 +2054,11 @@ const unitNarrative = (unit: RowUnitProposal): string => {
   // Proven is exactly `unitDefinitionId !== null` — the same round-tripped pair
   // the resolve endpoint demands, and the same one `machinePickedUnit` offers.
   if (unit.unitDefinitionId !== null) {
-    const readable = unit.unitDisplayName ?? unit.unitCode;
-    const spelled = unit.rawUnit === null ? '' : '"' + unit.rawUnit + '" ';
+    // The original workbook unit is sufficient here; the unit picker shows
+    // the standardized spelling. Do not expose English names like "Cubic metre".
+    const shown = unit.rawUnit?.trim() || unit.unitSymbol || unit.unitCode;
     const scope = unit.contextScoped ? contextLabel(unit.trustedContext) : null;
-    return (
-      `Satuan ${spelled}dikenali sebagai ${readable}` +
-      (scope === null ? '.' : ` untuk pekerjaan ${scope}.`)
-    );
+    return `${shown} sudah dikenali${scope === null ? '.' : ` untuk pekerjaan ${scope}.`}`;
   }
   return humanFact(unit.reasonCode);
 };
@@ -1958,7 +2073,7 @@ const resourceNarrative = (resource: RowResourceProposal): string => {
       return humanFact('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
     }
     const code = resource.resourceCode === null ? '' : ` (${resource.resourceCode})`;
-    return `Sumber daya dikenali otomatis: ${resource.resourceName}${code}.`;
+    return `Item ditemukan: ${resource.resourceName}${code}.`;
   }
 
   const count = resource.candidates.length;
@@ -1966,8 +2081,8 @@ const resourceNarrative = (resource: RowResourceProposal): string => {
     count === 0
       ? 'SIMPROK belum menemukan sumber daya yang dapat dibuktikan.'
       : count === 1
-        ? 'SIMPROK menemukan satu pilihan yang sesuai dengan bukti yang tersedia. Tegaskan bila memang itu yang dimaksud sumber.'
-        : `SIMPROK menemukan ${count} pilihan yang sesuai dengan bukti yang tersedia. Pilih yang paling tepat.`;
+        ? 'SIMPROK menemukan satu pilihan kandidat terkait, tetapi belum membuktikan identitasnya sama. Periksa spesifikasi sebelum memilih.'
+        : `SIMPROK menemukan ${count} pilihan kandidat terkait, bukan otomatis setara. Periksa spesifikasi sebelum memilih.`;
   return why.length === 0 ? head : `${head} ${why.join(' ')}`;
 };
 
@@ -1975,7 +2090,7 @@ const candidateLine = (candidate: RowResourceCandidate): RowCandidateLine => ({
   // Internal, and internal only. It keys the list; it is not part of `text`.
   key: candidate.resourceCatalogId,
   text:
-    `${candidate.code ?? 'Tanpa kode'} — ${candidate.name} — ${candidate.baseUnit}` +
+    `${candidate.code ?? 'Tanpa kode'} — ${candidate.name} — ${contextLabel(candidate.type) ?? candidate.type} — ${candidate.baseUnit}` +
     (candidate.specificationUnproved && candidate.unprovedSpecificationFacts.length > 0
       ? ` · belum ditegaskan: ${candidate.unprovedSpecificationFacts.join(', ')}`
       : '') +
@@ -1984,6 +2099,57 @@ const candidateLine = (candidate: RowResourceCandidate): RowCandidateLine => ({
     // simply has nothing more to print.
     (candidate.hasPriorHumanDecision ? ' · pernah dipilih manusia sebelumnya' : ''),
 });
+
+/**
+ * A search filter is not proof of identity or resource type.
+ * A workbook-wide UPLOADER_DECLARED hint is weak; a merely similar candidate
+ * is also not authority. Start an unresolved search across ALL resource types
+ * rather than hiding materials behind a stray LABOR-only candidate (or vice
+ * versa). The reviewer may narrow the picker explicitly. Persisted decisions
+ * still pass through the existing backend identity and type guards.
+ */
+/**
+ * Review-only guard for a corrected canonical spelling that exactly matches a
+ * server-proposed candidate of the SAME human-confirmed type. This does not
+ * decide whether the identities are equivalent; it prevents the UI from
+ * treating a same-name candidate's refusal as permission to mint a duplicate.
+ * The Resource Identity Kernel remains the sole admission authority.
+ */
+export const correctedCatalogNameCandidateConflict = (
+  row: BasicPriceImportRowSummary,
+  correctedName: string,
+  confirmedType: ResourceType | null,
+): RowResourceCandidate | null => {
+  if (!confirmedType || !correctedName.trim()) return null;
+  // A workbook row may begin with a list marker (`-  Agreg at Kasar`).
+  // Strip that marker ONLY for comparison when the SOURCE has the same marker;
+  // do not rewrite the source or quietly edit the proposed catalog name.
+  const sourceHasListMarker = /^\s*[-•]\s+/u.test(row.name);
+  const comparable = (text: string) => {
+    const withoutSourceMarker = sourceHasListMarker
+      ? text.replace(/^\s*[-•]\s+/u, '')
+      : text;
+    return withoutSourceMarker.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('id-ID');
+  };
+  const target = comparable(correctedName);
+  return row.machineProposal?.resource.candidates.find((candidate) =>
+    candidate.type === confirmedType && comparable(candidate.name) === target,
+  ) ?? null;
+};
+
+export const reviewResourceSearchFamily = (
+  row: BasicPriceImportRowSummary,
+): 'LABOR' | 'MATERIAL' | 'EQUIPMENT' | undefined => {
+  const initial = row.section ?? undefined;
+  if (row.sectionProvenance !== 'UPLOADER_DECLARED') return initial;
+  const resource = row.machineProposal?.resource;
+  if (
+    resource?.status === 'RESOLVED' &&
+    resource.admissibleForResolve &&
+    (resource.resourceType === 'LABOR' || resource.resourceType === 'MATERIAL' || resource.resourceType === 'EQUIPMENT')
+  ) return resource.resourceType;
+  return undefined;
+};
 
 export const rowMachineNarrative = (
   row: BasicPriceImportRowSummary,
@@ -2103,6 +2269,25 @@ export const rowNoteLines = (row: BasicPriceImportRowSummary): RowNoteLines => {
       human.push(reason === '' ? 'Baris ini ditolak.' : `Ditolak: ${reason}`);
       continue;
     }
+    if (code === 'SECTION_DECLARED_BY_UPLOADER') {
+      const machineEstablished =
+        row.machineProposal?.identityPairProven === true &&
+        row.machineProposal.resource.admissibleForResolve;
+      const humanEstablished =
+        row.effectiveResourceType !== null &&
+        row.effectiveResourceType !== undefined &&
+        (row.status === 'READY_FOR_SUBMISSION' ||
+          row.status === 'SUBMISSION_CREATED' ||
+          row.savedAsPrivatePrice === true);
+      if (machineEstablished || humanEstablished) {
+        // The source's missing category remains historical evidence, but is no
+        // longer an instruction to re-decide a completed human resolution.
+        human.push(machineEstablished
+          ? 'Berkas tidak mencantumkan kategori; jenis item sudah dikenali.'
+          : 'Berkas tidak mencantumkan kategori; jenis item sudah dikonfirmasi.');
+        continue;
+      }
+    }
     // ROW vocabulary first, then the shared identity/unit table — one sentence
     // per code, and never two spellings of the same fact.
     const sentence = ROW_NOTE_LABELS[code] ?? knownFact(code);
@@ -2151,10 +2336,22 @@ export interface RowNoteDisclosure {
   secondary: string[];
 }
 
-export const rowNoteDisclosure = (notes: Pick<RowNoteLines, 'human'>): RowNoteDisclosure => ({
-  primary: notes.human[0] ?? null,
-  secondary: notes.human.slice(1),
-});
+export const rowNoteDisclosure = (
+  notes: Pick<RowNoteLines, 'human'>,
+  machineProven = false,
+): RowNoteDisclosure => {
+  const sourceHistory = 'Berkas tidak mencantumkan kategori; jenis item sudah dikenali.';
+  const decidedSourceHistory = 'Berkas tidak mencantumkan kategori; jenis item sudah dikonfirmasi.';
+  const optionalCodeHistory = ROW_NOTE_LABELS.RESOURCE_CODE_MISSING;
+  // All remain visible under "Mengapa?", none is unfinished review work.
+  const isBackgroundFact = (note: string): boolean =>
+    note === optionalCodeHistory ||
+    note === decidedSourceHistory ||
+    (machineProven && note === sourceHistory);
+  const actionable = notes.human.filter((note) => !isBackgroundFact(note));
+  const background = notes.human.filter(isBackgroundFact);
+  return { primary: actionable[0] ?? null, secondary: [...actionable.slice(1), ...background] };
+};
 
 /** The one wording for the on-demand reason toggle, so it reads the same everywhere. */
 export const WHY_DISCLOSURE_TITLE = 'Mengapa?';

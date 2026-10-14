@@ -66,22 +66,21 @@ test("HS-4. every machine sentence comes from the shared narrative", () => {
   assert.match(page, /rowNoteLines,/, "the note split must be imported");
   assert.match(renderable, /\{narrative\.unit\}/);
   assert.match(renderable, /\{narrative\.resource\}/);
-  assert.match(renderable, /\{narrative\.stateLabel\}/);
+  assert.match(renderable, /rowStateLabel\(row\)/);
 });
 
-test("HS-5. a candidate's id keys its row and is not its text", () => {
-  assert.match(renderable, /key=\{candidate\.key\}/);
-  assert.match(renderable, /\{candidate\.text\}/);
-  assert.doesNotMatch(renderable, /candidate\.resourceCatalogId/);
+test("HS-5. candidate selection stays inside the existing catalog picker", () => {
+  assert.match(renderable, /<CatalogSearchSelect[\s\S]*mode="resource"/u);
+  assert.match(renderable, /onSelect=\{\(item\) => updateDraft\(row\.id, \{ resource:/u);
+  assert.doesNotMatch(renderable, />\s*\{[^}]*resourceCatalogId[^}]*\}\s*</u);
 });
 
-test("HS-6. leftover technical vocabulary reuses the app's ONE Detail Teknis title", () => {
-  assert.match(page, /import \{ TECHNICAL_DETAIL_TITLE \} from '\.\.\/utils\/rabTraceDisplay'/);
-  assert.match(renderable, /<summary>\{TECHNICAL_DETAIL_TITLE\}<\/summary>/);
-  // And it is a disclosure, not the first thing read.
+test("HS-6. supporting machine detail stays under the row's one explanation disclosure", () => {
+  assert.match(renderable, /<summary>\{WHY_DISCLOSURE_TITLE\}<\/summary>/);
+  assert.match(renderable, /\{notes\.technicalNotice\}/);
   assert.ok(
-    renderable.indexOf("notes.human.map") < renderable.indexOf("TECHNICAL_DETAIL_TITLE"),
-    "plain sentences must precede the technical disclosure",
+    renderable.indexOf("Apa yang perlu ditinjau?") < renderable.indexOf("WHY_DISCLOSURE_TITLE"),
+    "the short review question must precede supporting detail",
   );
 });
 
@@ -106,6 +105,22 @@ test("HS-8. the review room still decides nothing — only a human resolve/rejec
   // page may not auto-submit a row it believes is proven.
   assert.doesNotMatch(renderable, /useEffect\([^)]*handleResolve/);
   assert.equal((page.match(/resolveBasicPriceImportRow\(/g) ?? []).length, 1);
+});
+
+test("HS-8b. bulk new-resource admission is explicit, bounded, and carries no catalog id", () => {
+  const api = readFileSync("src/api/basicPriceImport.ts", "utf8");
+  assert.match(page, /safeNewRowIds/);
+  assert.match(renderable, /Pilih jenis untuk baris terpilih/);
+  assert.match(renderable, /Tetapkan sebagai Item Baru/);
+  assert.match(api, /admit-safe-new/);
+  const requestStart = api.indexOf("export async function admitSafeNewBasicPriceResources");
+  const request = api.slice(
+    requestStart,
+    api.indexOf("\nexport async function", requestStart + 1),
+  );
+  assert.match(request, /selections/);
+  assert.doesNotMatch(request, /resourceCatalogId:\s*/);
+  assert.doesNotMatch(request, /force/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -273,22 +288,26 @@ test("HS-13e. the room never offers an action and denies it in the same breath",
   );
 });
 
-test("HS-15. Lengkapi Data is optional and does not gate Simpan or Usulkan", () => {
-  assert.match(page, /Lengkapi Data/u);
-  assert.match(page, /OPTIONAL_KDN_INCOMPLETE/u);
-  assert.match(page, /optionalRowKdnIncomplete/u);
-  assert.doesNotMatch(
-    page,
-    /optionalRowKdnIncomplete\(row\)\s*&&/u,
-    "missing optional KDN must not be combined into a gate",
-  );
+test("HS-15. optional KDN never masquerades as unfinished work", () => {
+  assert.match(page, /Informasi tambahan \(tidak wajib\)/u);
+  assert.match(page, /optionalRowCanEnrichKdnNow\(row\) && row\.privateBasicPriceId/u);
+  assert.doesNotMatch(page, /<summary>Lengkapi Data<\/summary>/u);
+  assert.doesNotMatch(page, /OPTIONAL_KDN_INCOMPLETE/u);
+  assert.doesNotMatch(page, /optionalRowKdnIncomplete\(row\)/u);
 });
 
-test("HS-17. Lengkapi Data names blocked capabilities instead of inventing fields", () => {
-  assert.match(page, /optionalEnrichmentBlockedCapabilities/);
-  assert.match(renderable, /gap\.reason/);
-  assert.doesNotMatch(renderable, /alamat sumber"/);
-  assert.doesNotMatch(renderable, /<input[^>]*alamat/i);
+test("HS-17. only live optional KDN is offered; absent features are not user tasks", () => {
+  assert.match(page, /ReviewOptionalKdnForm/u);
+  assert.doesNotMatch(page, /optionalEnrichmentBlockedCapabilities/u);
+  assert.doesNotMatch(renderable, /gap\.reason/u);
+  assert.doesNotMatch(renderable, /alamat sumber"/u);
+  assert.doesNotMatch(renderable, /<input[^>]*alamat/iu);
+});
+
+test("HS-15b. machine-proven rows expose no per-row identity resolution choice", () => {
+  assert.match(page, /\{proven \? \([\s\S]*Dikenali otomatis/u);
+  assert.match(page, /lookupRows\.has\(row\.id\) && mutable && !proven/u);
+  assert.doesNotMatch(page, /Ubah hasil|setCorrectionRows|reviewNeedsManualControls/u);
 });
 
 test("HS-18. Tinjau Hasil offers the existing Tinjau wilayah confirm at the blocked Simpan, without loosening the gate", () => {
@@ -333,4 +352,247 @@ test("HS-16. Tinjau Hasil offers existing resource admission only when identity 
     /admitResourceForImportRow\([^)]*name/,
     "admission must not send a client-invented resource name",
   );
+});
+
+test("UX-CALM-01. tabs partition actual rows into recognized, review, and human-decided without inventing counts", () => {
+  assert.match(renderable, /const recognizedRowCount = batch\.rows\.filter\(\(row\) => reviewRowBucket\(row\) === 'RECOGNIZED'\)\.length;/u);
+  assert.match(renderable, /const decidedRowCount = batch\.rows\.filter\(\(row\) => reviewRowBucket\(row\) === 'DECIDED'\)\.length;/u);
+  assert.match(renderable, /const needsReviewRowCount = batch\.rows\.filter\(\(row\) => reviewRowBucket\(row\) === 'NEEDS_REVIEW'\)\.length;/u);
+  assert.match(renderable, /rowFilter === 'ALL' \|\| reviewRowBucket\(row\) === rowFilter/u);
+  assert.match(renderable, /Sudah Diputuskan \(\{decidedRowCount\}\)/u);
+  assert.match(renderable, /Semua \(\{batch\.rows\.length\}\)/u);
+  assert.match(renderable, /Menampilkan \{visibleRows\.length\} dari \{filteredRows\.length\} baris yang dimuat/u);
+});
+
+test("UX-CALM-02. row forms are collapsed, explicitly opened, and limited to thirty at first", () => {
+  assert.match(page, /const REVIEW_ROW_PAGE_SIZE = 30;/);
+  assert.match(renderable, /\{visibleRows\.map\(\(row\) =>/);
+  assert.match(renderable, /aria-expanded=\{expanded\}/);
+  assert.match(renderable, /\{expanded \? \(\s*<>[\s\S]*bp-rowcard__column/);
+  assert.match(renderable, /Tampilkan berikutnya/);
+});
+
+test("UX-CALM-03. bulk save remains the one existing proven-row command, never a client bulk matcher", () => {
+  assert.match(page, /oneActionAcceptanceView\(batch, touchedRowIds\)/);
+  assert.equal((page.match(/smartSaveBatch\(/g) ?? []).length, 1);
+  assert.match(renderable, /smartSaveBatch\(batchId, editedRowIds\(\)\)/);
+  assert.match(renderable, /identityPairProven === true/);
+  assert.doesNotMatch(renderable, /Promise\.all\([\s\S]*handleResolve/);
+});
+
+test("BP-UX-08: the review page uses one date notice and displays only a clean resource name", () => {
+  assert.match(page, /reviewDisplayResourceName\(draft\.correctedCanonicalName \?\? row\.name\)/);
+  assert.match(page, /proposalDoor\.visible && !batch\.actions\.simprokProposal\.offered/);
+  assert.match(page, /proposalBlockSentence\(batch\.actions\.simprokProposal\.reasonCode\) !==/);
+  assert.match(page, /privateUseBlockSentence\(batch\.actions\.privateUse\.reasonCode\)/);
+  assert.match(page, /rowReviewFactsLine\(row\)/);
+});
+
+test("BP-HORIZONTAL-01. Owner-approved 35:65 layout keeps the contextual catalog picker on the decision side", () => {
+  const css = readFileSync("src/styles/basicPrice.css", "utf8");
+  const kindStart = renderable.indexOf('className="bp-rowcard__column bp-rowcard__kind-unit"');
+  const decisionStart = renderable.indexOf('className="bp-rowcard__actions bp-rowcard__resolution"');
+  assert.ok(kindStart >= 0 && decisionStart > kindStart, "left facts must precede the right-side decisions");
+  const leftFacts = renderable.slice(kindStart, decisionStart);
+  const decisionSide = renderable.slice(decisionStart);
+  assert.doesNotMatch(leftFacts, /<CatalogSearchSelect/u, "catalog search must never float beneath jenis/satuan");
+  assert.match(decisionSide, /className="bp-rowcard__lookup bp-rowcard__lookup--contextual"/u);
+  assert.match(decisionSide, /<CatalogSearchSelect\s+mode="resource"/u);
+  assert.match(decisionSide, /<CatalogSearchSelect\s+mode="unit"/u);
+  assert.match(decisionSide, /handleResolve\(row\)/u);
+  assert.match(decisionSide, /handleAdmit\(row\)/u);
+  assert.match(decisionSide, /handleReject\(row\)/u);
+  assert.match(css, /\.bp-rowcard\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*35fr\)\s+minmax\(0,\s*65fr\)/u);
+  assert.match(css, /\.bp-rowcard__question\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/u);
+  assert.match(css, /\.bp-rowcard__actions\s*\{[^}]*grid-column:\s*2/u);
+  assert.match(css, /\.bp-room \.bp-rowcard__resolution > \.bp-rowcard__choice:hover:not\(:disabled\)/u);
+  assert.match(css, /@media \(max-width: 860px\)\s*\{[\s\S]*?\.bp-rowcard\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/u);
+});
+
+test("BP-HORIZONTAL-02. contextual search results fill the right panel and remain readable", () => {
+  const css = readFileSync("src/styles/basicPrice.css", "utf8");
+  const prefix = ".bp-room .bp-rowcard__resolution .bp-rowcard__lookup--contextual ";
+  const rule = (suffix: string) => {
+    const start = css.lastIndexOf(`${prefix}${suffix} {`);
+    assert.ok(start >= 0, `missing scoped rule for ${suffix}`);
+    return css.slice(start, css.indexOf("}", start) + 1);
+  };
+  assert.match(rule(".bp-pop"), /display:\s*block;[\s\S]*width:\s*100%;/u);
+  const panel = rule(".bp-pop__panel--list");
+  assert.match(panel, /position:\s*relative;/u);
+  assert.match(panel, /width:\s*100%;/u);
+  assert.match(panel, /max-width:\s*100%;/u);
+  assert.match(rule(".bp-option"), /white-space:\s*normal;[\s\S]*overflow-wrap:\s*anywhere;/u);
+  assert.match(css, /\.bp-optionlist\s*\{[^}]*max-height:\s*220px;[^}]*overflow-y:\s*auto;/u);
+});
+
+test("BP-FUNCTION-01. safe-new selection never exceeds the backend's 100-row bound", () => {
+  assert.match(page, /const SAFE_NEW_SELECTION_LIMIT = 100;/u);
+  assert.match(renderable, /safeNewRowIds\.size >= SAFE_NEW_SELECTION_LIMIT/u);
+  assert.match(renderable, /current\.size >= SAFE_NEW_SELECTION_LIMIT/u);
+  assert.match(page, /if \(safeNewRowIds\.size > SAFE_NEW_SELECTION_LIMIT\)/u);
+  assert.match(renderable, /Maksimal \{SAFE_NEW_SELECTION_LIMIT\} pilihan per tindakan/u);
+  assert.match(renderable, /admitSafeNewBasicPriceResources\(/u);
+});
+
+test("BP-FUNCTION-02. Edit satuan opens the existing unit picker and confirms through the resolution writer", () => {
+  const start = renderable.indexOf('title="Pilih satuan standar SIMPROK yang sesuai."');
+  assert.ok(start > 0, "unit Edit control must be visible on mutable review rows");
+  const action = renderable.slice(start, start + 430);
+  assert.match(action, /updateDraft\(row\.id, \{ admitOpen: false \}\)/u);
+  assert.match(action, /setLookupRows/u);
+  assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id\)/u);
+  assert.match(renderable, /mode="unit"[\s\S]*?onSelect=\{\(item\) => updateDraft\(row\.id, \{ unit:/u);
+});
+
+test("BP-FUNCTION-02b. Edit jenis always opens an existing lawful choice rather than a dead message", () => {
+  const start = renderable.indexOf('title="Tentukan jenis melalui pilihan item SIMPROK yang sesuai');
+  assert.ok(start > 0);
+  const action = renderable.slice(start, start + 1250);
+  assert.match(action, /if \(!admissionOffered \|\| !admissionReview\)/u);
+  assert.match(action, /setLookupRows\(\(current\) => new Set\(current\)\.add\(row\.id\)\)/u);
+  assert.match(action, /admitOpen: true/u);
+  assert.match(action, /typeConfirmations/u);
+});
+
+test("BP-FUNCTION-03. Tetapkan Item Baru stays on server-offered review and passes the bound type, unit, and refusals", () => {
+  assert.match(renderable, /\{admissionOffered && admissionReview \? \(/u);
+  assert.match(renderable, /onClick=\{\(\) => void handleAdmit\(row\)\}/u);
+  assert.match(page, /await admitResourceForImportRow\([\s\S]*?draft\.unit\.id,[\s\S]*?draft\.admitReason\.trim\(\),[\s\S]*?draft\.admitResourceType,[\s\S]*?draft\.refusedCandidateIds,[\s\S]*?typeConfirmation\.reviewBindingFingerprint,/u);
+  assert.match(page, /rowIdentityAdmissionBlockReason\(/u);
+});
+
+test("BP-FUNCTION-04. Tolak is a deliberate reason-gated writer, never just a visual close", () => {
+  assert.match(renderable, /onClick=\{\(\) => void handleReject\(row\)\}/u);
+  assert.match(page, /if \(!draft\.rejectOpen\) \{[\s\S]*?rejectOpen: true/u);
+  assert.match(page, /if \(!draft\.reason\.trim\(\)\)/u);
+  assert.match(page, /await rejectBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.reason\.trim\(\)\)/u);
+  assert.match(page, /await recoverFromRowFailure\('REJECT', row, error\)/u);
+});
+
+test("BP-EDIT-SNAPSHOT-01. one corrected row name drives BOTH decision doors", () => {
+  const start = renderable.indexOf('aria-label={`Edit padanan nama pada baris');
+  assert.ok(start > 0);
+  const action = renderable.slice(start, start + 660);
+  assert.match(action, /editingName: !draft\.editingName/u);
+  assert.match(page, /const changeWorkingName = \(row: BasicPriceImportRowSummary, value: string\)/u);
+  assert.match(page, /correctedCanonicalName: value, resource: null, resourcePending: false/u);
+  assert.match(renderable, /onChange=\{\(event\) => changeWorkingName\(row, event\.target\.value\)\}/u);
+  assert.match(renderable, /initialQuery=\{\(draft\.correctedCanonicalName \?\? row\.name\)/u);
+  assert.match(renderable, /key=\{`\$\{row\.id\}:\$\{draft\.correctedCanonicalName \?\? row\.name\}`\}/u);
+  const search = readFileSync('src/components/basic-price/CatalogSearchSelect.tsx', 'utf8');
+  assert.match(search, /const \[query, setQuery\] = useState\(initialQuery\)/u);
+  assert.match(search, /const \[hasInteracted, setHasInteracted\] = useState\(initialQuery\.trim\(\)\.length >= 2\)/u);
+  assert.match(search, /if \(!hasInteracted \|\| query\.trim\(\)\.length < 2\) return/u);
+  assert.match(search, /requestGate\.current\.invalidate\(\)/u);
+  assert.match(page, /correctedCanonicalName: value, resource: null, resourcePending: false/u);
+  assert.match(page, /draftFor\(row\.id\)\.correctedCanonicalName === row\.name/u);
+  assert.match(page, /draft\.correctedCanonicalName\.trim\(\) !== row\.name/u);
+  assert.match(renderable, /Nama katalog tersimpan/u);
+  assert.doesNotMatch(renderable, /saveResourceName\(/u);
+});
+
+test("BP-REASON-UX-01. the new-item reason field asks for a factual note, not an answer to a question", () => {
+  const display = readFileSync("src/utils/basicPriceImportDisplay.ts", "utf8");
+  assert.match(renderable, /Alasan menetapkan item baru/u);
+  assert.match(renderable, /placeholder="Tuliskan alasan berdasarkan hasil pemeriksaan"/u);
+  assert.match(renderable, /Jika ada kandidat, catat perbedaan nyata seperti ukuran atau spesifikasi/u);
+  assert.match(display, /Catat alasan penetapan item baru berdasarkan hasil pemeriksaan/u);
+  assert.doesNotMatch(renderable, /Mengapa item ini belum ada\?/u);
+});
+
+test("BP-NAME-CORRECTION-01. catalog name edit is committed only by admission and read back from server", () => {
+  const api = readFileSync("src/api/basicPriceImport.ts", "utf8");
+  const service = readFileSync("../backend/src/basic-price/basic-price-import.service.ts", "utf8");
+  const writer = readFileSync("../backend/src/resource-catalog/resource-admission.service.ts", "utf8");
+  assert.match(renderable, /Nama item untuk kedua pilihan/u);
+  assert.match(renderable, /Nama item yang akan disimpan/u);
+  assert.match(page, /draft\.correctedCanonicalName\.trim\(\) !== row\.name/u);
+  assert.match(api, /correctedCanonicalName\?: string/u);
+  assert.match(writer, /name: canonicalName/u);
+  assert.match(writer, /rawName: input\.rawName/u);
+  assert.match(writer, /rawName: canonicalName/u);
+  assert.match(service, /canonicalResourceName: r\.resourceCatalog\?\.name \?\? null/u);
+  assert.match(renderable, /Nama katalog tersimpan:/u);
+});
+
+test("BP-NAME-VISUAL-01. matching a same-type candidate blocks new-item action and asks for review", () => {
+  assert.match(page, /const sameNameCandidate = draft\.admitOpen/u);
+  assert.match(page, /correctedCatalogNameCandidateConflict\(/u);
+  assert.match(page, /const admitBlock = sameNameCandidate\s*\? correctedNameCandidateNotice/u);
+  assert.match(page, /if \(sameNameCandidate\) \{\s*setStatusMessage\(correctedNameCandidateNotice/u);
+  assert.match(page, /\{sameNameCandidate \? \([\s\S]*?role="status"/u);
+  assert.match(page, /disabled=\{admitBlock !== null\}/u);
+});
+
+test("BP-BROWSER-READBACK-01. persisted unit is displayed before empty draft and backend capability is checked", () => {
+  const service = readFileSync("../backend/src/basic-price/basic-price-import.service.ts", "utf8");
+  assert.match(service, /unitDefinition: \{ select: \{ code: true, displayName: true, symbol: true \} \}/u);
+  assert.match(service, /canonicalUnit: r\.unitDefinition/u);
+  assert.match(service, /reviewCapabilities: \{ correctedCanonicalNameOnAdmission: true \}/u);
+  assert.match(page, /row\.canonicalUnit\s*\? `\$\{row\.canonicalUnit\.displayName\} \(\$\{row\.canonicalUnit\.symbol\}\)`/u);
+  assert.match(page, /row\.resolutionStatus === 'RESOLVED' && row\.status === 'READY_FOR_SUBMISSION'/u);
+  assert.match(page, /Satuan standar tersimpan/u);
+  assert.match(page, /batch\?\.reviewCapabilities\?\.correctedCanonicalNameOnAdmission !== true/u);
+  assert.match(page, /Backend preview belum mendukung penyimpanan koreksi nama/u);
+});
+
+test("BP-NAME-CORRECTION-02. completed human decisions clear only their own unsaved-exclusion flag", () => {
+  assert.match(page, /const editedRowIds = \(\): string\[\] => \[\.\.\.touchedRowIds\]/u);
+  assert.match(page, /const forgetCompletedEdit = \(rowId: string\)/u);
+  assert.match(page, /await resolveBasicPriceImportRow\([^;]+;\s*forgetCompletedEdit\(row\.id\)/u);
+  assert.match(page, /await rejectBasicPriceImportRow\([^;]+;\s*forgetCompletedEdit\(row\.id\)/u);
+  assert.match(page, /await admitResourceForImportRow\([\s\S]*?\);\s*forgetCompletedEdit\(row\.id\)/u);
+  assert.match(page, /smartSaveBatch\(batchId, editedRowIds\(\)\)/u);
+});
+
+/**
+ * BP-ACTIVATION-01 — the two real halves of the Owner's activation gate.
+ * Earlier pure presentation tests prove what a given server proposal means.
+ * These cross-stack source guards ensure the actual review screen consumes the
+ * real API payload, and that the real controller still consults the established
+ * kernels. Backend acceptance E2E separately proves writes and DB readback.
+ */
+test("BP-ACTIVATION-01. review facts flow from server kernel proposals to the visible room", () => {
+  const api = readFileSync("src/api/basicPriceImport.ts", "utf8");
+  const controller = readFileSync("../backend/src/basic-price/basic-price-import.controller.ts", "utf8");
+  const service = readFileSync("../backend/src/basic-price/basic-price-import.service.ts", "utf8");
+  const proposer = readFileSync("../backend/src/basic-price/basic-price-row-resolution-proposal.service.ts", "utf8");
+
+  assert.match(page, /const result = await getBasicPriceImportBatch\(batchId\);\s*setBatch\(result\)/u);
+  assert.ok(api.includes("apiFetch(`/basic-price-imports/${batchId}`)"));
+  assert.match(controller, /@Get\(':batchId'\)[\s\S]*?return this\.importService\.getBatch\(workspaceId, batchId, currentAccountId\)/u);
+  assert.match(service, /const proposals = await this\.proposals\.proposeForRows\(/u);
+  assert.match(service, /machineProposal: proposals\?\.get\(r\.id\) \?\? null/u);
+  assert.match(proposer, /private readonly units: UnitKernelService/u);
+  assert.match(proposer, /private readonly identity: ResourceIdentityResolutionService/u);
+  assert.match(renderable, /machinePickedResource\(row\)/u);
+  assert.match(renderable, /machinePickedUnit\(row\)/u);
+  assert.match(renderable, /rowMachineNarrative\(row\)/u);
+  assert.match(renderable, /const admissionReview = row\.machineProposal\?\.resource\.admissionReview/u);
+  assert.match(renderable, /typeConfirmation\.reviewBindingFingerprint/u);
+});
+
+test("BP-ACTIVATION-02. visible review actions reach their owned backend routes; server remains decision authority", () => {
+  const api = readFileSync("src/api/basicPriceImport.ts", "utf8");
+  const controller = readFileSync("../backend/src/basic-price/basic-price-import.controller.ts", "utf8");
+  const connections = [
+    ["resolveBasicPriceImportRow(", "/rows/${rowId}/resolve", "@Post(':batchId/rows/:rowId/resolve')", "this.resolutionService.resolveRow("],
+    ["rejectBasicPriceImportRow(", "/rows/${rowId}/reject", "@Post(':batchId/rows/:rowId/reject')", "this.resolutionService.rejectRow("],
+    ["admitResourceForImportRow(", "/rows/${rowId}/admit-resource", "@Post(':batchId/rows/:rowId/admit-resource')", "this.resolutionService.admitResourceForRow("],
+    ["admitSafeNewBasicPriceResources(", "/admit-safe-new", "@Post(':batchId/admit-safe-new')", "this.resolutionService.admitSafeNewResources("],
+    ["smartSaveBatch(", "/smart-save", "@Post(':batchId/smart-save')", "this.smartSaveService.acceptProvenAndKeepPrivate("],
+    ["updateBasicPriceImportBatch(", "/basic-price-imports/${batchId}", "@Patch(':batchId')", "this.importService.updateBatchMetadata("],
+    ["submitBasicPriceImportBatch(", "/submit", "@Post(':batchId/submit')", "this.importService.submitBatch("],
+  ] as const;
+  for (const [action, route, decorator, delegation] of connections) {
+    assert.ok(page.includes(action), `visible flow lost its ${action} client call`);
+    assert.ok(api.includes(route), `API client lost the route for ${action}`);
+    assert.ok(controller.includes(decorator), `backend lost the route for ${action}`);
+    assert.ok(controller.includes(delegation), `route lost server-owned service for ${action}`);
+  }
+  assert.match(page, /const outcome = await smartSaveBatch\(batchId, editedRowIds\(\)\);[\s\S]*?await loadBatch\(false\)/u);
+  assert.match(controller, /@PermissionsAll\(\s*PERMISSIONS\.BASIC_PRICE_RESOLVE,\s*PERMISSIONS\.BASIC_PRICE_SUBMIT,/u);
+  assert.match(page, /Nama kerja yang diedit menjadi acuan kedua pilihan/u);
+  assert.match(api, /correctedCanonicalName \? \{ correctedCanonicalName \} : \{\}/u);
 });

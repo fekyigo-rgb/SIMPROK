@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
+import { IsInt, IsOptional, IsString, IsUUID, MinLength, MaxLength } from 'class-validator';
 
 /**
  * Human resolution of one imported row: assigns the exact
@@ -25,4 +25,14 @@ export class RejectBasicPriceImportRowDto {
 
   // Required — state machine B: "NEEDS_REVIEW / READY_FOR_SUBMISSION -> REJECTED ... reason required".
   @IsString() @MinLength(1) reason!: string;
+}
+
+/** Compensate a CURRENT decision made by the same accountable reviewer.
+ * This is not a generic deletion or identity-edit endpoint: original mapping,
+ * provenance and source bytes remain, and a new append-only event records
+ * the reversal. Version is mandatory for stale-client refusal.
+ */
+export class CompensateBasicPriceImportRowDto {
+  @IsInt() version!: number;
+  @IsString() @MinLength(10) @MaxLength(1200) reason!: string;
 }

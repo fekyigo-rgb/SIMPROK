@@ -375,7 +375,10 @@ describe('ResourceAdmissionService — examination is re-proved under the lock',
   const build = (verdicts: ResourceIdentityResolution[]) => {
     const tx: any = {
       $executeRaw: jest.fn().mockResolvedValue(1),
-      resourceCatalog: { create: jest.fn().mockResolvedValue({ id: 'cat-tripleks-new' }) },
+      resourceCatalog: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'cat-tripleks-new' }),
+      },
       resourceSourceIdentity: { create: jest.fn().mockResolvedValue({ id: 's' }) },
     };
     const identity: any = {
@@ -404,7 +407,7 @@ describe('ResourceAdmissionService — examination is re-proved under the lock',
     ).resolves.toEqual({ id: 'cat-tripleks-new' });
     expect(tx.resourceCatalog.create).toHaveBeenCalledTimes(1);
     expect(tx.resourceSourceIdentity.create).toHaveBeenCalledTimes(1);
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
   });
 
   it('without an examination the machine-exhaustion law is unchanged: a candidate still refuses (Basic Price path)', async () => {
@@ -903,7 +906,10 @@ describe('B-1 — the admission re-proof is asked the same question', () => {
   it('carries the source digest into the under-lock re-resolution', async () => {
     const tx: any = {
       $executeRaw: jest.fn().mockResolvedValue(1),
-      resourceCatalog: { create: jest.fn().mockResolvedValue({ id: 'cat-new' }) },
+      resourceCatalog: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'cat-new' }),
+      },
       resourceSourceIdentity: { create: jest.fn().mockResolvedValue({ id: 's' }) },
     };
     const identity: any = {

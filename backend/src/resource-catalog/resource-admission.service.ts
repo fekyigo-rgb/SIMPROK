@@ -48,6 +48,16 @@ export const RESOURCE_ADMISSION_LOCK_NAMESPACE = resourceAdmissionLockKey(
   'RM03D1_REVIEWED_RESOURCE_ADMISSION',
 );
 
+/** Separate namespace; always acquired after the admission lock. */
+const RESOURCE_CATALOG_CODE_LOCK_NAMESPACE = resourceAdmissionLockKey(
+  'B03_RESOURCE_CATALOG_CODE_PLACEMENT',
+);
+
+function canonicalCatalogCode(rawCode: string | null): string | null {
+  const code = rawCode?.trim() ?? '';
+  return code === '' ? null : code;
+}
+
 /**
  * The identity authority still knows this resource (exact, candidate, or a prior
  * human decision), so minting a new one would be a duplicate. Carries the
@@ -90,6 +100,8 @@ export interface ResourceAdmissionProvenance {
   sourceNameCellAddress: string;
   sourceCodeCellAddress?: string | null;
   sourceUnitCellAddress?: string | null;
+  /** Original row/section classification; distinct from canonical catalog type. */
+  sourceSection?: ResourceType;
 }
 
 /**
@@ -131,9 +143,13 @@ export interface AdmitObservedResourceInput {
   workspaceId: string;
   /** The source facts, exactly as written. Never normalized or tidied. */
   rawName: string;
+  /** Optional human-confirmed catalog spelling. Never source provenance.
+   * Both original and corrected names must independently pass the existing
+   * identity authority under the same admission lock. */
+  canonicalName?: string;
   rawCode?: string | null;
   rawUnit?: string | null;
-  /** The source's own class; a LABOR source can never mint a MATERIAL. */
+  /** Canonical type proven or explicitly confirmed for the new identity. */
   resourceType: ResourceType;
   /** A canonical unit code the caller has already PROVEN via the Unit Kernel. */
   baseUnit: string;
@@ -207,7 +223,7 @@ export class ResourceAdmissionService {
         candidateContextDigest: string;
       };
     },
-  ): Promise<void> {
+  ): Promise<string | null> {
     const lockKey = resourceAdmissionLockKey(
       `${subject.workspaceId}|${subject.resourceType}`,
     );
@@ -215,6 +231,16 @@ export class ResourceAdmissionService {
     await tx.$executeRaw(
       Prisma.sql`SELECT pg_advisory_xact_lock(${RESOURCE_ADMISSION_LOCK_NAMESPACE}::int4, ${lockKey}::int4)`,
     );
+
+    const catalogCode = canonicalCatalogCode(subject.rawCode);
+    if (catalogCode !== null) {
+      const codeLockKey = resourceAdmissionLockKey(
+        `${subject.workspaceId}|${catalogCode}`,
+      );
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(${RESOURCE_CATALOG_CODE_LOCK_NAMESPACE}::int4, ${codeLockKey}::int4)`,
+      );
+    }
 
     const reference: RawResourceReference = {
       rawName: subject.rawName,
@@ -245,6 +271,7 @@ export class ResourceAdmissionService {
     if (!exhausted && !examined) {
       throw new ResourceAdmissionNotExhaustedError(resolution);
     }
+    return catalogCode;
   }
 
   /**
@@ -270,7 +297,7 @@ export class ResourceAdmissionService {
     tx: Prisma.TransactionClient,
     input: AdmitHumanDeclaredResourceInput,
   ) {
-    await this.lockAndProveAdmissible(tx, {
+    const catalogCode = await this.lockAndProveAdmissible(tx, {
       workspaceId: input.workspaceId,
       rawName: input.rawName,
       rawCode: input.rawCode ?? null,
@@ -291,7 +318,7 @@ export class ResourceAdmissionService {
     // The same normalized name of the same type is the same resource, so the
     // existing row is returned and no second insert is attempted. A different
     // type is a different resource even when the words match.
-    const placement = await this.catalogCodePlacement(tx, input);
+    const placement = await this.catalogCodePlacement(tx, input, catalogCode);
     if (placement.sameResource) return placement.sameResource;
 
     return tx.resourceCatalog.create({
@@ -326,7 +353,7 @@ export class ResourceAdmissionService {
       throw new ResourceAdmissionProvenanceIncompleteError(missing);
     }
 
-    await this.lockAndProveAdmissible(tx, {
+    const catalogCode = await this.lockAndProveAdmissible(tx, {
       workspaceId: input.workspaceId,
       rawName: input.rawName,
       rawCode: input.rawCode ?? null,
@@ -342,13 +369,53 @@ export class ResourceAdmissionService {
       examination: input.examination,
     });
 
+    // BP-NAME-CORRECTION-01: the source question was verified above against
+    // the ORIGINAL evidence. A human-corrected spelling is a SECOND identity
+    // question: re-use the same kernel and lock, with NO candidate refusals
+    // borrowed from a different spelling. A match or plausible candidate must
+    // be resolved first, never minted as a duplicate.
+    const canonicalName = input.canonicalName ?? input.rawName;
+    if (canonicalName !== input.rawName) {
+      if (!canonicalName.trim() || canonicalName !== canonicalName.trim()) {
+        throw new ResourceAdmissionNotExhaustedError(
+          await this.identity.resolve(
+            await this.identity.loadEvidence(tx, input.workspaceId),
+            {
+              rawName: input.rawName,
+              rawCode: input.rawCode ?? null,
+              rawUnit: input.rawUnit ?? null,
+              resourceType: input.resourceType,
+              sourceSha256: input.provenance.sourceSha256,
+            },
+            tx,
+          ),
+        );
+      }
+      await this.lockAndProveAdmissible(tx, {
+        workspaceId: input.workspaceId,
+        rawName: canonicalName,
+        rawCode: input.rawCode ?? null,
+        rawUnit: input.rawUnit ?? null,
+        resourceType: input.resourceType,
+        sourceSha256: input.provenance.sourceSha256,
+        // No rejected candidate from the ORIGINAL review is transferred.
+      });
+    }
+    const placement = await this.catalogCodePlacement(
+      tx, { ...input, rawName: canonicalName }, catalogCode,
+    );
+
     const catalog = await tx.resourceCatalog.create({
       data: {
         workspaceId: input.workspaceId,
-        name: input.rawName,
+        name: canonicalName,
         type: input.resourceType,
         baseUnit: input.baseUnit,
-        code: input.rawCode ?? null,
+        // Source code is provenance, not identity. Only a free canonical slot
+        // receives the trimmed spelling; an occupied slot yields NULL here.
+        // `sameResource` is deliberately not an observed-admission authority:
+        // the live Resource Identity Kernel proof above is the sole gate.
+        code: placement.code,
       },
     });
 
@@ -362,7 +429,7 @@ export class ResourceAdmissionService {
           parserContractVersion: input.provenance.parserContractVersion,
           sheetName: input.provenance.sheetName,
           sourceRowNumber: input.provenance.sourceRowNumber,
-          sourceSection: input.resourceType,
+          sourceSection: input.provenance.sourceSection ?? input.resourceType,
           sourceCodeCellAddress: input.provenance.sourceCodeCellAddress ?? null,
           sourceNameCellAddress: input.provenance.sourceNameCellAddress,
           sourceUnitCellAddress: input.provenance.sourceUnitCellAddress ?? null,
@@ -393,7 +460,11 @@ export class ResourceAdmissionService {
    */
   private async catalogCodePlacement(
     tx: Prisma.TransactionClient,
-    input: AdmitHumanDeclaredResourceInput,
+    input: Pick<
+      AdmitHumanDeclaredResourceInput,
+      'workspaceId' | 'rawName' | 'resourceType'
+    >,
+    code: string | null,
   ): Promise<{
     code: string | null;
     sameResource: {
@@ -405,7 +476,6 @@ export class ResourceAdmissionService {
       workspaceId: string | null;
     } | null;
   }> {
-    const code = input.rawCode?.trim() ? input.rawCode.trim() : null;
     if (code === null) return { code: null, sameResource: null };
     const existing = await tx.resourceCatalog.findFirst({
       where: { workspaceId: input.workspaceId, code },
@@ -423,7 +493,7 @@ export class ResourceAdmissionService {
       existing.type === input.resourceType &&
       normalizeResourceName(existing.name) === normalizeResourceName(input.rawName)
     ) {
-      return { code, sameResource: existing };
+      return { code: null, sameResource: existing };
     }
     return { code: null, sameResource: null };
   }

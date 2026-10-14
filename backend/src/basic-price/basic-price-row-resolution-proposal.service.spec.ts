@@ -16,6 +16,7 @@
  * file's, are what is asserted.
  */
 import { PrismaService } from '../prisma/prisma.service';
+import { ResourceType } from '@prisma/client';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
   ResourceIdentityResolutionService,
@@ -23,8 +24,13 @@ import {
 } from '../resource-catalog/resource-identity-resolution.service';
 import {
   BasicPriceRowResolutionProposalService,
+  buildBasicPriceAdmissionReview,
   type BasicPriceRowMachineProposal,
 } from './basic-price-row-resolution-proposal.service';
+import type {
+  CandidateIdentityBasis,
+  ResourceIdentityResolution,
+} from '../resource-catalog/resource-identity-resolution.kernel';
 
 /* ---------------------------------------------------------------------------
  * THE STAND-IN'S OWN SHAPES, DECLARED RATHER THAN ASSUMED.
@@ -484,6 +490,192 @@ const row = (over: Partial<ProposalRow> = {}): ProposalRow => ({
   rawResourceCodeText: null,
   rawUnitText: 'ltr',
   ...over,
+});
+
+describe('B02A server-owned admission review binding', () => {
+  const question = {
+    workspaceId: 'workspace-1',
+    batchId: 'batch-1',
+    rowId: 'row-1',
+    rowVersion: 7,
+    sourceSha256: 'a'.repeat(64),
+    rawResourceNameText: 'Tripleks',
+    rawResourceCodeText: 'M-01',
+    rawUnitText: 'Lbr',
+    sourceSection: 'MATERIAL' as const,
+    sourceSectionProvenance: 'SOURCE_ROW_CATEGORY',
+  };
+  const candidate = (
+    id: string,
+    identityBasis: CandidateIdentityBasis,
+  ) => ({
+    resourceCatalogId: id,
+    name: `Kandidat ${id}`,
+    code: null,
+    type: 'MATERIAL',
+    baseUnit: 'Lbr',
+    evidence:
+      identityBasis === 'RECORDED_FACT'
+        ? (['SOURCE_CODE_MATCH'] as const)
+        : (['NAME_TOKEN_CONTAINMENT'] as const),
+    identityBasis,
+    specificationUnproved: false,
+    unprovedSpecificationFacts: [],
+    specifications: null,
+    priorHumanDecision: null,
+  });
+  const verdict = (
+    candidates: ReturnType<typeof candidate>[],
+  ): ResourceIdentityResolution => ({
+    status: candidates.length === 0 ? 'UNRESOLVED' : 'NEEDS_REVIEW',
+    authority: candidates.length === 0 ? null : 'EVIDENCE_CANDIDATE',
+    resolvedResourceCatalogId: null,
+    candidates,
+    reasonCodes:
+      candidates.length === 0
+        ? ['RESOURCE_NOT_FOUND']
+        : ['STRONG_CANDIDATE_NEEDS_REVIEW'],
+    explanation: 'internal only',
+  });
+
+  it('offers only source-proven NAME_SIMILARITY_ONLY candidates for explicit human refusal', () => {
+    const weak = candidate('weak-1', 'NAME_SIMILARITY_ONLY');
+    const review = buildBasicPriceAdmissionReview(
+      question,
+      verdict([weak]),
+      new Set(['weak-1']),
+    );
+    expect(review.offered).toBe(true);
+    expect(review.humanRefusableCandidateIds).toEqual(['weak-1']);
+    expect(review.blockedCandidateIds).toEqual([]);
+  });
+
+  it('automatically includes machine RULED_OUT without asking a human to refuse it', () => {
+    const ruledOut = candidate('ruled-1', 'RULED_OUT');
+    const review = buildBasicPriceAdmissionReview(
+      question,
+      verdict([ruledOut]),
+      new Set(['ruled-1']),
+    );
+    expect(review.offered).toBe(true);
+    expect(review.humanRefusableCandidateIds).toEqual([]);
+    expect(review.machineRuledOutCandidateIds).toEqual(['ruled-1']);
+  });
+
+  it.each(['EXACT_NAME', 'RECORDED_FACT'] as const)(
+    'blocks strong %s candidates',
+    (basis) => {
+      const strong = candidate('strong-1', basis);
+      const review = buildBasicPriceAdmissionReview(
+        question,
+        verdict([strong]),
+        new Set(['strong-1']),
+      );
+      expect(review.offered).toBe(false);
+      expect(review.blockedCandidateIds).toEqual(['strong-1']);
+    },
+  );
+
+  it('blocks a global-only candidate even when it is name-only', () => {
+    const review = buildBasicPriceAdmissionReview(
+      question,
+      verdict([candidate('global-1', 'NAME_SIMILARITY_ONLY')]),
+      new Set(),
+    );
+    expect(review.offered).toBe(false);
+    expect(review.blockedCandidateIds).toEqual(['global-1']);
+  });
+
+  it('binds an explicit effective type for UPLOADER_DECLARED after all-type exhaustion', () => {
+    const weakQuestion = {
+      ...question,
+      sourceSectionProvenance: 'UPLOADER_DECLARED',
+    };
+    const material = buildBasicPriceAdmissionReview(
+      weakQuestion,
+      verdict([]),
+      new Set(),
+      ResourceType.MATERIAL,
+    );
+    const equipment = buildBasicPriceAdmissionReview(
+      weakQuestion,
+      verdict([]),
+      new Set(),
+      ResourceType.EQUIPMENT,
+    );
+    expect(material.offered).toBe(true);
+    expect(material.effectiveResourceType).toBe('MATERIAL');
+    expect(equipment.offered).toBe(true);
+    expect(equipment.reviewBindingFingerprint).not.toBe(
+      material.reviewBindingFingerprint,
+    );
+  });
+
+  it('does not let type confirmation bypass cross-type evidence', () => {
+    const weakQuestion = {
+      ...question,
+      sourceSectionProvenance: 'UPLOADER_DECLARED',
+    };
+    const materialCandidate = candidate('material-1', 'NAME_SIMILARITY_ONLY');
+    const asLabor = buildBasicPriceAdmissionReview(
+      weakQuestion,
+      verdict([materialCandidate]),
+      new Set(['material-1']),
+      ResourceType.LABOR,
+    );
+    const asMaterial = buildBasicPriceAdmissionReview(
+      weakQuestion,
+      verdict([materialCandidate]),
+      new Set(['material-1']),
+      ResourceType.MATERIAL,
+    );
+    expect(asLabor.offered).toBe(false);
+    expect(asLabor.blockedCandidateIds).toEqual(['material-1']);
+    expect(asMaterial.offered).toBe(true);
+    expect(asMaterial.humanRefusableCandidateIds).toEqual(['material-1']);
+  });
+
+  it('blocks overriding a source-authoritative type', () => {
+    const review = buildBasicPriceAdmissionReview(
+      question,
+      verdict([]),
+      new Set(),
+      ResourceType.EQUIPMENT,
+    );
+    expect(review.offered).toBe(false);
+    expect(review.reasonCode).toBe('SOURCE_TYPE_OVERRIDE_FORBIDDEN');
+  });
+
+  it('changes binding on candidate digest/question/source hash/row version changes', () => {
+    const baseline = buildBasicPriceAdmissionReview(
+      question,
+      verdict([candidate('weak-1', 'NAME_SIMILARITY_ONLY')]),
+      new Set(['weak-1']),
+    ).reviewBindingFingerprint;
+    const changed = [
+      buildBasicPriceAdmissionReview(
+        question,
+        verdict([candidate('weak-2', 'NAME_SIMILARITY_ONLY')]),
+        new Set(['weak-2']),
+      ).reviewBindingFingerprint,
+      buildBasicPriceAdmissionReview(
+        { ...question, rawResourceNameText: 'Tripleks baru' },
+        verdict([candidate('weak-1', 'NAME_SIMILARITY_ONLY')]),
+        new Set(['weak-1']),
+      ).reviewBindingFingerprint,
+      buildBasicPriceAdmissionReview(
+        { ...question, sourceSha256: 'b'.repeat(64) },
+        verdict([candidate('weak-1', 'NAME_SIMILARITY_ONLY')]),
+        new Set(['weak-1']),
+      ).reviewBindingFingerprint,
+      buildBasicPriceAdmissionReview(
+        { ...question, rowVersion: 8 },
+        verdict([candidate('weak-1', 'NAME_SIMILARITY_ONLY')]),
+        new Set(['weak-1']),
+      ).reviewBindingFingerprint,
+    ];
+    expect(new Set([baseline, ...changed]).size).toBe(5);
+  });
 });
 
 const proposeOne = async (
@@ -1711,6 +1903,7 @@ describe('INT-CONNECT-01 — the outward proposal carries no internal explanatio
     ]);
     expect(Object.keys(proposal.resource).sort()).toEqual([
       'admissibleForResolve',
+      'admissionReview',
       'authority',
       'candidates',
       'policyVersion',
@@ -1740,5 +1933,184 @@ describe('INT-CONNECT-01 — the outward proposal carries no internal explanatio
     expect(chosen.baseUnit).toBe('Liter');
     expect(chosen.hasPriorHumanDecision).toBe(true);
     expect(proposal.identityPairProven).toBe(false);
+  });
+});
+
+describe('BP-SEMANTIC-01 — weak uploader family never erases canonical material identity', () => {
+  it('recognizes list-marked Air as MATERIAL when uploader marked the sheet LABOR', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: '- Air',
+        rawUnitText: 'ltr',
+      }),
+    );
+    expect(proposal.resource.status).toBe('RESOLVED');
+    expect(proposal.resource.resourceCatalogId).toBe('cat-air');
+    expect(proposal.resource.resourceType).toBe('MATERIAL');
+    expect(proposal.identityPairProven).toBe(true);
+  });
+
+  it('a category asserted by the source is not silently changed', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'SOURCE_ROW_CATEGORY',
+        rawResourceNameText: '- Air',
+        rawUnitText: 'ltr',
+      }),
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+  });
+
+  it('a global-only Pasir Beton stays unselectable for private Basic Price', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: '- Pasir Beton',
+        rawUnitText: 'm3',
+      }),
+    );
+    expect(proposal.resource.resourceCatalogId).toBe('cat-global-pasir');
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.blockingFacts).toContain(
+      'RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE',
+    );
+  });
+
+  it('identical names in two categories stay ambiguous', async () => {
+    const catalog: StubResourceCatalogRow[] = [
+      ...CATALOG,
+      {
+        id: 'cat-labor-air',
+        workspaceId: WORKSPACE,
+        code: null,
+        name: 'Air',
+        type: 'LABOR',
+        baseUnit: 'PERSON_HOUR',
+        status: 'ACTIVE',
+        specifications: null,
+      },
+    ];
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Air',
+        rawUnitText: 'ltr',
+      }),
+      catalog,
+    );
+    expect(proposal.resource.status).toBe('NEEDS_REVIEW');
+    expect(proposal.identityPairProven).toBe(false);
+  });
+
+  it('Batu Kali (15-30 cm) is not the unspecified Batu Kali', async () => {
+    const catalog: StubResourceCatalogRow[] = [
+      ...CATALOG,
+      {
+        id: 'cat-batu-kali',
+        workspaceId: WORKSPACE,
+        code: null,
+        name: 'Batu Kali',
+        type: 'MATERIAL',
+        baseUnit: 'M3',
+        status: 'ACTIVE',
+        specifications: null,
+      },
+    ];
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Batu Kali (15-30 cm)',
+        rawUnitText: 'm3',
+      }),
+      catalog,
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+    expect(proposal.resource.candidates.map((c) => c.name)).toContain(
+      'Batu Kali',
+    );
+    expect(proposal.resource.candidates[0].type).toBe('MATERIAL');
+  });
+});
+
+describe('BP-SEMANTIC-01 — related is not identical', () => {
+  const material = (id: string, name: string): StubResourceCatalogRow => ({
+    id,
+    workspaceId: WORKSPACE,
+    code: null,
+    name,
+    type: 'MATERIAL',
+    baseUnit: 'M3',
+    status: 'ACTIVE',
+    specifications: null,
+  });
+
+  it('generic Pasir offers four separate material candidates, never a single asserted identity', async () => {
+    const katalog = [
+      ...CATALOG.filter((candidate) => candidate.id !== 'cat-global-pasir'),
+      material('pasir-beton', 'Pasir Beton'),
+      material('pasir-pasang', 'Pasir Pasang'),
+      material('pasir-halus', 'Pasir Halus'),
+      material('pasir-urug', 'Pasir Urug'),
+    ];
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Pasir',
+        rawUnitText: 'm3',
+      }),
+      katalog,
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.status).toBe('NEEDS_REVIEW');
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+    expect(
+      proposal.resource.candidates
+        .filter((c) => c.name.startsWith('Pasir'))
+        .map((c) => c.name)
+        .sort(),
+    ).toEqual(['Pasir Beton', 'Pasir Halus', 'Pasir Pasang', 'Pasir Urug']);
+  });
+
+  it('Batu Pecah never becomes Agregat Kasar or Kerikil without a governed source link', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Batu Pecah',
+        rawUnitText: 'm3',
+      }),
+      [
+        ...CATALOG,
+        material('agregat', 'Agregat Kasar'),
+        material('kerikil', 'Kerikil'),
+      ],
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+    expect(proposal.resource.candidates).toHaveLength(0);
+  });
+
+  it('contradictory Batu Pecah sizes never become an actionable proposal', async () => {
+    const proposal = await proposeOne(
+      row({
+        sourceSection: 'LABOR',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        rawResourceNameText: 'Batu Pecah 2-3 cm',
+        rawUnitText: 'm3',
+      }),
+      [...CATALOG, material('batu-5-7', 'Batu Pecah 5-7 cm')],
+    );
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.resource.resourceCatalogId).toBeNull();
+    expect(proposal.resource.candidates).toHaveLength(0);
   });
 });

@@ -3,7 +3,10 @@
 // as the rest of the app, just grouped by resource instead of inlined into
 // a page (the pages are large enough on their own already).
 import { apiFetch } from '../utils/apiClient';
-import type { BasicPriceImportBatchSummary } from '../utils/basicPriceImportDisplay';
+import type {
+  BasicPriceImportBatchSummary,
+  BasicPriceImportRowSummary,
+} from '../utils/basicPriceImportDisplay';
 // The catalog and unit vocabularies live at the bottom of the dependency chain
 // (see basicPriceImportDisplay) and are re-exported here so every existing
 // importer of this module keeps working against ONE definition of each.
@@ -298,9 +301,9 @@ export async function rejectBasicPriceImportRow(
 
 /**
  * RM-03D1 — existing admit-resource writer. The body must not name the
- * resource: name, type, and source code come from the import row. The reviewer
- * supplies only the canonical unit and the reason they are creating rather
- * than choosing.
+ * resource name or source code. For a weak uploader hint, the reviewer confirms
+ * the effective canonical type against server-issued, fingerprint-bound choices;
+ * authoritative source categories cannot be overridden.
  */
 export async function admitResourceForImportRow(
   batchId: string,
@@ -308,16 +311,87 @@ export async function admitResourceForImportRow(
   version: number,
   unitDefinitionId: string,
   reason: string,
+  confirmedResourceType: ResourceType,
+  refusedCandidateIds: string[],
+  reviewBindingFingerprint: string,
+  correctedCanonicalName?: string,
 ): Promise<void> {
   const response = await apiFetch(
     `/basic-price-imports/${batchId}/rows/${rowId}/admit-resource`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ version, unitDefinitionId, reason }),
+      body: JSON.stringify({
+        version,
+        unitDefinitionId,
+        reason,
+        confirmedResourceType,
+        refusedCandidateIds,
+        reviewBindingFingerprint,
+        ...(correctedCanonicalName ? { correctedCanonicalName } : {}),
+      }),
     },
   );
   if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+}
+
+export interface SafeNewResourceSelection {
+  rowId: string;
+  version: number;
+  unitDefinitionId: string;
+  confirmedResourceType: ResourceType;
+  reviewBindingFingerprint: string;
+}
+
+export interface SafeNewResourceAdmissionResult {
+  accepted: Array<{ rowId: string; resourceCatalogId: string }>;
+  skipped: Array<{ rowId: string; reason: string }>;
+  blocked: Array<{ rowId: string; reason: string }>;
+  acceptedCount: number;
+  skippedCount: number;
+  blockedCount: number;
+  duplicateCount: number;
+  readyForSubmissionCount: number;
+  needsReviewCount: number;
+}
+
+/**
+ * Human-confirmed bulk admission for zero-candidate rows. No catalog identity
+ * is accepted from the browser; the server re-proves each selected row.
+ */
+export async function admitSafeNewBasicPriceResources(
+  batchId: string,
+  rows: BasicPriceImportRowSummary[],
+  confirmedResourceType: ResourceType,
+): Promise<SafeNewResourceAdmissionResult> {
+  const selections = rows.map((row): SafeNewResourceSelection => {
+    const proposal = row.machineProposal;
+    const unitDefinitionId = proposal?.unit.unitDefinitionId;
+    const reviewBindingFingerprint =
+      proposal?.resource.admissionReview?.typeConfirmations.find(
+        (option) => option.resourceType === confirmedResourceType,
+      )?.reviewBindingFingerprint ??
+      proposal?.resource.admissionReview?.reviewBindingFingerprint;
+    if (!unitDefinitionId || !reviewBindingFingerprint)
+      throw new Error('SAFE_NEW_SELECTION_STALE');
+    return {
+      rowId: row.id,
+      version: row.version,
+      unitDefinitionId,
+      confirmedResourceType,
+      reviewBindingFingerprint,
+    };
+  });
+  const response = await apiFetch(`/basic-price-imports/${batchId}/admit-safe-new`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      selections,
+      reason: 'BULK_CONFIRMED_SAFE_NEW_RESOURCE_TYPE',
+    }),
+  });
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+  return response.json() as Promise<SafeNewResourceAdmissionResult>;
 }
 
 export async function submitBasicPriceImportBatch(batchId: string): Promise<BasicPriceImportBatchSummary> {

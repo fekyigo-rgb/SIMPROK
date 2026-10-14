@@ -111,7 +111,7 @@ describe('RM-02C1a Resource Identity Schema Foundation (e2e)', () => {
 
     it('5: partial unique index exists with the exact predicate', async () => {
       const result = await pg.query<{ indexdef: string }>(
-        `SELECT indexdef FROM pg_indexes WHERE indexname = 'resource_catalogs_workspace_code_nonnull_key'`,
+        `SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'resource_catalogs_workspace_code_nonnull_key'`,
       );
       expect(result.rows).toHaveLength(1);
       expect(result.rows[0].indexdef).toContain('WHERE (("workspaceId" IS NOT NULL) AND (code IS NOT NULL))');
@@ -119,14 +119,14 @@ describe('RM-02C1a Resource Identity Schema Foundation (e2e)', () => {
 
     it('6: old compound unique index is absent', async () => {
       const result = await pg.query(
-        `SELECT indexname FROM pg_indexes WHERE indexname = 'resource_catalogs_workspaceId_code_key'`,
+        `SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'resource_catalogs_workspaceId_code_key'`,
       );
       expect(result.rows).toHaveLength(0);
     });
 
     it('H1: both trigger functions and both triggers exist with exact expected names', async () => {
       const functions = await pg.query<{ proname: string }>(
-        `SELECT proname FROM pg_proc WHERE proname IN ('check_resource_source_identity_workspace_match', 'check_resource_catalog_workspace_immutable_with_provenance') ORDER BY proname`,
+        `SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('check_resource_source_identity_workspace_match', 'check_resource_catalog_workspace_immutable_with_provenance') ORDER BY p.proname`,
       );
       expect(functions.rows.map((r) => r.proname)).toEqual([
         'check_resource_catalog_workspace_immutable_with_provenance',
@@ -134,7 +134,7 @@ describe('RM-02C1a Resource Identity Schema Foundation (e2e)', () => {
       ]);
 
       const triggers = await pg.query<{ tgname: string }>(
-        `SELECT tgname FROM pg_trigger WHERE tgname IN ('resource_source_identity_workspace_match_trigger', 'resource_catalog_workspace_immutable_with_provenance_trigger') ORDER BY tgname`,
+        `SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND t.tgname IN ('resource_source_identity_workspace_match_trigger', 'resource_catalog_workspace_immutable_with_provenance_trigger') ORDER BY t.tgname`,
       );
       expect(triggers.rows.map((r) => r.tgname)).toEqual([
         'resource_catalog_workspace_immutable_with_provenance_trigger',

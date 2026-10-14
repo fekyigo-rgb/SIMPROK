@@ -4,6 +4,7 @@ import {
   ResourceAdmissionNotExhaustedError,
   ResourceAdmissionProvenanceIncompleteError,
   ResourceProvenanceAlreadyBoundError,
+  RESOURCE_ADMISSION_LOCK_NAMESPACE,
 } from './resource-admission.service';
 
 /**
@@ -52,6 +53,7 @@ describe('ResourceAdmissionService', () => {
     tx = {
       $executeRaw: jest.fn().mockResolvedValue(1),
       resourceCatalog: {
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'cat-new' }),
       },
       resourceSourceIdentity: {
@@ -69,7 +71,7 @@ describe('ResourceAdmissionService', () => {
     const catalog = await service.admitObservedResource(tx, input());
     expect(catalog).toEqual({ id: 'cat-new' });
     // Serialized under the advisory lock before the create.
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
     expect(tx.resourceCatalog.create).toHaveBeenCalledTimes(1);
     expect(tx.resourceCatalog.create.mock.calls[0][0].data).toMatchObject({
       workspaceId: 'ws-1',
@@ -87,7 +89,111 @@ describe('ResourceAdmissionService', () => {
       sourceNameCellAddress: 'B42',
       sourceSection: 'MATERIAL',
       rawName: 'Agregat XYZ Premium',
+      rawCode: 'AGX',
+      rawUnit: 'm3',
     });
+  });
+
+  it('places a trimmed observed code only when its workspace slot is free while preserving raw provenance', async () => {
+    await service.admitObservedResource(
+      tx,
+      input({ rawCode: '  AGX source  ', rawUnit: ' m3 source ' }),
+    );
+
+    expect(tx.resourceCatalog.create.mock.calls[0][0].data.code).toBe(
+      'AGX source',
+    );
+    expect(tx.resourceSourceIdentity.create.mock.calls[0][0].data).toMatchObject(
+      {
+        rawCode: '  AGX source  ',
+        rawName: 'Agregat XYZ Premium',
+        rawUnit: ' m3 source ',
+      },
+    );
+  });
+
+  it('mints a distinct observed identity with null catalog code when the same source code is occupied', async () => {
+    tx.resourceCatalog.findFirst.mockResolvedValue({
+      id: 'cat-existing',
+      name: 'Agregat Berbeda',
+      code: 'AGX',
+      type: 'MATERIAL',
+      baseUnit: 'M3',
+      workspaceId: 'ws-1',
+    });
+
+    await service.admitObservedResource(tx, input());
+
+    expect(tx.resourceCatalog.create.mock.calls[0][0].data).toMatchObject({
+      name: 'Agregat XYZ Premium',
+      code: null,
+    });
+    expect(
+      tx.resourceSourceIdentity.create.mock.calls[0][0].data.rawCode,
+    ).toBe('AGX');
+  });
+
+  it('keeps a cross-type observed code collision separate and fail-safe', async () => {
+    tx.resourceCatalog.findFirst.mockResolvedValue({
+      id: 'cat-material',
+      name: 'Stamper',
+      code: 'E25',
+      type: 'MATERIAL',
+      baseUnit: 'BUAH',
+      workspaceId: 'ws-1',
+    });
+
+    const catalog = await service.admitObservedResource(
+      tx,
+      input({
+        rawName: 'Stamper',
+        rawCode: 'E25',
+        resourceType: 'EQUIPMENT',
+        baseUnit: 'JAM',
+      }),
+    );
+
+    expect(catalog).toEqual({ id: 'cat-new' });
+    expect(tx.resourceCatalog.create.mock.calls[0][0].data).toMatchObject({
+      name: 'Stamper',
+      type: 'EQUIPMENT',
+      code: null,
+    });
+    expect(catalog.id).not.toBe('cat-material');
+  });
+
+  it('uses the same admission-then-code lock order for human and observed writers', async () => {
+    const sqlValues = (call: unknown[]) =>
+      (call[0] as { values: unknown[] }).values;
+
+    await service.admitHumanDeclaredResource(tx, {
+      workspaceId: 'ws-1',
+      rawName: 'Resource Human',
+      rawCode: ' SHARED-01 ',
+      rawUnit: 'OH',
+      resourceType: 'LABOR',
+      baseUnit: 'OH',
+    });
+    const humanLocks = tx.$executeRaw.mock.calls.map(sqlValues);
+
+    tx.$executeRaw.mockClear();
+    tx.resourceCatalog.create.mockClear();
+    await service.admitObservedResource(
+      tx,
+      input({
+        rawName: 'Resource Observed',
+        rawCode: 'SHARED-01',
+        resourceType: 'MATERIAL',
+      }),
+    );
+    const observedLocks = tx.$executeRaw.mock.calls.map(sqlValues);
+
+    expect(humanLocks).toHaveLength(2);
+    expect(observedLocks).toHaveLength(2);
+    expect(humanLocks[0][0]).toBe(RESOURCE_ADMISSION_LOCK_NAMESPACE);
+    expect(observedLocks[0][0]).toBe(RESOURCE_ADMISSION_LOCK_NAMESPACE);
+    expect(humanLocks[1]).toEqual(observedLocks[1]);
+    expect(humanLocks[1][0]).not.toBe(RESOURCE_ADMISSION_LOCK_NAMESPACE);
   });
 
   it('refuses to mint when identity is NOT exhausted — a candidate is not a new resource', async () => {
