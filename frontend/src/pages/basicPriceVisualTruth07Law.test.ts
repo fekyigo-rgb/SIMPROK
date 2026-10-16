@@ -162,10 +162,26 @@ test("REGION-05: the two questions no longer share one word on screen", () => {
   // The column question asks about a COLUMN and says the Region is asked
   // elsewhere; the Region control is titled plainly "Wilayah".
   assert.match(intakeText, /Pilih kolom harga\./);
-  assert.match(intakeText, /Wilayah resmi SIMPROK dipilih terpisah/);
+  assert.match(intakeText, /Lokasi tempat harga berlaku dipilih terpisah pada langkah tersebut/);
   assert.doesNotMatch(intakeText, /Wilayah mana yang ingin Anda proses/);
   assert.match(regionSelectText, /contextLabel="Wilayah"/);
   assert.match(regionSelectText, /<legend[^>]*>\{contextLabel\}<\/legend>/);
+});
+
+test("BP-INTAKE-COPY-01: users see a clear choice and know its consequence", () => {
+  assert.match(intakeText, /Daftar harga apa yang Anda unggah\?/u);
+  assert.match(intakeText, /semua pilihan kemudian menuju Lengkapi Sumber/u);
+  assert.match(intakeText, /Harga dari kolom mana yang ingin Anda gunakan\?/u);
+  assert.match(intakeText, /value: label, label: `Gunakan harga: \$\{label\}`/u);
+  assert.match(intakeText, /answerKey: 'selectedRegionLabel'/u);
+  assert.match(intakeText, /Kolom mana yang berisi nama barang, tenaga kerja, atau peralatan\?/u);
+  assert.match(intakeText, /Kolom mana yang berisi satuan\?/u);
+  assert.match(intakeText, /Pilih satu jawaban untuk melanjutkan/u);
+  assert.match(importPageText, /Berkas berhasil dibaca\. Pilih satu jawaban/u);
+  assert.match(importPageText, /batch\.sourceRegionScopeLabel\?\.trim\(\)/u);
+  assert.match(importPageText, /Harga yang dipilih dari berkas:/u);
+  assert.match(importPageText, /SIMPROK menggunakan angka harga dari kolom ini/u);
+  assert.doesNotMatch(intakeText, /Tentukan kolom nama item\. SIMPROK tidak menemukan judul kolom/u);
 });
 
 test("UI-RESTORE-01: five-level Region hierarchy exists only in Lengkapi Sumber", () => {

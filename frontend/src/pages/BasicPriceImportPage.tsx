@@ -236,7 +236,7 @@ export function BasicPriceImportPage() {
         // A question is not a failure, and is never worded as one.
         setStatusMessage(
           next
-            ? 'SIMPROK sudah membaca berkas ini dan menemukan satu hal yang harus Anda putuskan.'
+            ? 'Berkas berhasil dibaca. Pilih satu jawaban di bawah agar SIMPROK dapat melanjutkan impor.'
             : intakeRefusalMessage(error.code, error.details),
         );
       } else if (error instanceof ImportRequestError) {
@@ -521,10 +521,16 @@ export function BasicPriceImportPage() {
               from a grid of unexplained boxes.
             */}
             <p className="bp-field__help" style={{ marginBottom: '12px' }}>
-              SIMPROK sudah membaca angkanya. Yang belum diketahui adalah dari
-              mana harga ini berasal dan kapan berlaku — konteks itu tidak bisa
-              ditebak dari isi berkas.
+              Daftar harga sudah terbaca. Selanjutnya, lengkapi dari mana harga ini berasal,
+              di wilayah mana berlaku, dan sejak kapan digunakan.
             </p>
+
+            {batch.sourceRegionScopeLabel?.trim() ? (
+              <p className="bp-note bp-note--info" aria-label="Hasil pilihan kolom harga">
+                Harga yang dipilih dari berkas: <strong>{batch.sourceRegionScopeLabel.trim()}</strong>.
+                {' '}SIMPROK menggunakan angka harga dari kolom ini. Selanjutnya, lengkapi sumber dan wilayah berlakunya harga.
+              </p>
+            ) : null}
 
             <div className="bp-filters" style={{ border: 'none', padding: 0 }}>
               {/*
