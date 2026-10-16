@@ -31,6 +31,7 @@ import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import {
   ResolveBasicPriceImportRowDto,
+  ConfirmBasicPriceImportRowCategoryDto,
   RejectBasicPriceImportRowDto,
   CompensateBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
@@ -160,6 +161,24 @@ export class BasicPriceImportController {
     @Body() dto: CompensateBasicPriceImportRowDto,
   ) {
     return this.resolutionService.compensateOwnDecision(
+      request.workspaceContext.workspaceId,
+      batchId,
+      rowId,
+      request.user.id,
+      dto,
+    );
+  }
+
+  /** A human decides only an unproven row's category; no item is admitted. */
+  @Post(':batchId/rows/:rowId/confirm-category')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async confirmRowCategory(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() dto: ConfirmBasicPriceImportRowCategoryDto,
+  ) {
+    return this.resolutionService.confirmRowCategory(
       request.workspaceContext.workspaceId,
       batchId,
       rowId,

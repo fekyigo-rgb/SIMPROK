@@ -7,6 +7,7 @@ import {
   updateBasicPriceImportBatch,
   rejectBasicPriceImportRow,
   resolveBasicPriceImportRow,
+  confirmBasicPriceImportRowCategory,
   admitResourceForImportRow,
   admitSafeNewBasicPriceResources,
   submitBasicPriceImportBatch,
@@ -226,6 +227,7 @@ export function BasicPriceReviewPage() {
   const [statusMessage, setStatusMessage] = useState('Memuat batch...');
   /** Local acknowledgement stays beside the row, even when the page is scrolled. */
   const [rowNotice, setRowNotice] = useState<{ rowId: string; text: string } | null>(null);
+  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, ResourceType | ''>>({});
   const [isBusy, setIsBusy] = useState(false);
 
   /**
@@ -410,6 +412,36 @@ export function BasicPriceReviewPage() {
       }));
     }
     return staleRowRecoveryMessage(row.sourceRowNumber);
+  };
+
+  const handleConfirmCategory = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId) return;
+    const category = categoryDrafts[row.id] ?? row.section ?? '';
+    if (!category) {
+      setRowNotice({ rowId: row.id, text: 'Pilih jenis item terlebih dahulu.' });
+      return;
+    }
+    if (!window.confirm('Tetapkan jenis ' + (category === 'LABOR' ? 'Tenaga kerja' : category === 'MATERIAL' ? 'Bahan' : 'Peralatan') + ' untuk baris ' + row.sourceRowNumber + '? Keterangan asli Excel tetap disimpan.')) return;
+    setIsBusy(true);
+    try {
+      const result = await confirmBasicPriceImportRowCategory(batchId, row.id, row.version, category);
+      const refreshed = await loadBatch(false);
+      const notice = !refreshed
+        ? 'Keputusan diterima, tetapi tampilan belum dapat diperbarui. Muat ulang untuk memastikan hasil.'
+        : result.unchanged
+          ? 'Jenis pada baris ' + row.sourceRowNumber + ' sudah sesuai dan tidak diubah.'
+          : 'Berhasil: jenis baris ' + row.sourceRowNumber + ' telah ditetapkan. Lanjutkan memilih item dan satuannya.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } catch (error) {
+      const notice = error instanceof ImportRequestError
+        ? importRequestMessage(error.httpStatus)
+        : 'Jenis belum berhasil disimpan. Muat ulang baris lalu coba lagi.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const handleResolve = async (row: BasicPriceImportRowSummary) => {
@@ -1337,6 +1369,34 @@ export function BasicPriceReviewPage() {
                         </dd>
                       </div>
                     </dl>
+                    {mutable &&
+                     (row.section === null || row.sectionProvenance === 'UPLOADER_DECLARED') &&
+                     !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
+                      <div className="bp-note bp-note--info" aria-label={`Tentukan jenis baris ${row.sourceRowNumber}`}>
+                        <label className="bp-field">
+                          <span className="bp-field__label">Tentukan Jenis</span>
+                          <select
+                            className="bp-input"
+                            value={categoryDrafts[row.id] ?? row.section ?? ''}
+                            disabled={isBusy}
+                            onChange={(event) => setCategoryDrafts((current) => ({ ...current, [row.id]: event.target.value as ResourceType | '' }))}
+                            aria-label={`Jenis item pada baris ${row.sourceRowNumber}`}
+                          >
+                            <option value="">Pilih jenis item</option>
+                            <option value="LABOR">Tenaga kerja</option>
+                            <option value="MATERIAL">Bahan</option>
+                            <option value="EQUIPMENT">Peralatan</option>
+                          </select>
+                        </label>
+                        <p className="bp-field__help">Jenis ini akan digunakan untuk mencari padanan yang tepat. Nama, satuan, dan harga asli Excel tetap disimpan.</p>
+                        <button
+                          type="button"
+                          className="bp-btn bp-btn--primary bp-btn--sm"
+                          disabled={isBusy || !(categoryDrafts[row.id] ?? row.section)}
+                          onClick={() => void handleConfirmCategory(row)}
+                        >Konfirmasi Jenis</button>
+                      </div>
+                    ) : null}
                     {(noteDisclosure.secondary.length > 0 || notes.technicalNotice || narrative) ? (
                       <details className="bp-details bp-rowcard__proof">
                         <summary>{WHY_DISCLOSURE_TITLE}</summary>

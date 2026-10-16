@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, FileInput } from 'lucide-react';
+import { ArrowLeft, FileInput, FileText } from 'lucide-react';
 import {
   ImportRequestError,
   IntakeRefusalError,
@@ -47,6 +47,7 @@ import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
 import { RegionSearchSelect } from '../components/basic-price/RegionSearchSelect';
 import type { RegionLookupItem } from '../api/basicPriceWorkflow';
 import '../styles/basicPrice.css';
+import '../styles/bpMixedIntake.css';
 
 /** Replacing the file is a new reading, never a silent overwrite. */
 export const FILE_REPLACE_CONFIRMATION =
@@ -226,7 +227,9 @@ export function BasicPriceImportPage() {
       setStatusMessage(
         decision
           ? decision.title
-          : `SIMPROK mengenali daftar harga ini — ${result.totalRows} baris terbaca dari ${file.name}.`,
+          : answers.declaredSection === 'MIXED'
+            ? `Berkas Campuran berhasil dibaca: ${result.totalRows} baris dari ${file.name}. Item yang belum jelas jenisnya akan ditinjau satu per satu, tanpa kehilangan data aslinya.`
+            : `SIMPROK mengenali daftar harga ini — ${result.totalRows} baris terbaca dari ${file.name}.`,
       );
     } catch (error) {
       setBatch(null);
@@ -451,9 +454,14 @@ export function BasicPriceImportPage() {
       */}
       <BasicPriceJourneyStepper batch={batch} />
 
-      <p className="bp-note bp-note--info" aria-live="polite">
-        {statusMessage}
-      </p>
+      {question?.kind === 'file-composition' ? (
+        <p className="bp-mixed-decision__notice" aria-live="polite">
+          <FileText size={22} aria-hidden="true" />
+          <span><strong>Berkas berhasil dibaca.</strong> Pilih jawaban di bawah agar SIMPROK dapat melanjutkan impor.</span>
+        </p>
+      ) : (
+        <p className="bp-note bp-note--info" aria-live="polite">{statusMessage}</p>
+      )}
 
       {question ? (
         <IntakeQuestionPanel question={question} disabled={isBusy} onAnswer={(key, value) => void handleAnswer(key, value)} />

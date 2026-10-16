@@ -1957,6 +1957,9 @@ export const rowSectionDisplay = (row: BasicPriceImportRowSummary): string => {
      *
      * The two document-proven provenances are untouched and never hedged.
      */
+    if (row.sectionProvenance === 'UPLOADER_DECLARED' && row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER')) {
+      return `Jenis ditetapkan: ${label}`;
+    }
     const unconfirmedBatchHint =
       row.sectionProvenance === 'UPLOADER_DECLARED' && row.resourceCatalogId === null;
     return unconfirmedBatchHint ? `Kategori awal: ${label}` : label;

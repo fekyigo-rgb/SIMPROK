@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   RejectBasicPriceImportRowDto,
   ResolveBasicPriceImportRowDto,
+  ConfirmBasicPriceImportRowCategoryDto,
   CompensateBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import {
@@ -94,6 +95,81 @@ export class BasicPriceRowResolutionService {
     // and AHSP and BOQ all admit a genuinely-new resource through this.
     private readonly admission: ResourceAdmissionService,
   ) {}
+
+  /**
+   * One row, one accountable human category decision. This is NOT a catalog
+   * resolution or admission. Source Excel cells remain untouched; the existing
+   * UPLOADER_DECLARED provenance explicitly labels the effective human answer.
+   * Every change gets a separate append-only decision record.
+   */
+  async confirmRowCategory(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    actorAccountId: string,
+    dto: ConfirmBasicPriceImportRowCategoryDto,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const batches = await tx.$queryRaw<Array<{
+        id: string;
+        workspaceId: string;
+        uploadedByAccountId: string;
+        status: string;
+      }>>(Prisma.sql`SELECT "id", "workspaceId", "uploadedByAccountId", "status" FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`);
+      const batch = batches[0];
+      if (!batch || batch.workspaceId !== workspaceId) throw new NotFoundException('Batch not found');
+      assertBatchOwnedByCaller(batch, actorAccountId, 'Batch not found');
+      if (batch.status !== 'NEEDS_REVIEW' && batch.status !== 'READY_FOR_REVIEW') {
+        throw new ConflictException('BATCH_NOT_MUTABLE');
+      }
+      const rows = await tx.$queryRaw<Array<{
+        id: string;
+        batchId: string;
+        version: number;
+        status: string;
+        sourceSection: ResourceType | null;
+        sourceSectionProvenance: string | null;
+        rawSourceCategoryName: string | null;
+        rawSourceCategoryCode: string | null;
+      }>>(Prisma.sql`SELECT "id", "batchId", "version", "status", "sourceSection", "sourceSectionProvenance", "rawSourceCategoryName", "rawSourceCategoryCode" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`);
+      const row = rows[0];
+      if (!row || row.batchId !== batchId) throw new NotFoundException('Row not found');
+      if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
+      if (row.status !== 'NEEDS_REVIEW') throw new ConflictException('ROW_NOT_MUTABLE');
+      if (row.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' || row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE') {
+        throw new ConflictException('SOURCE_PROVEN_SECTION_LOCKED');
+      }
+      if (row.rawSourceCategoryName?.trim() || row.rawSourceCategoryCode?.trim()) {
+        throw new ConflictException('SOURCE_CATEGORY_REQUIRES_SEPARATE_REVIEW');
+      }
+      if (row.sourceSection === dto.resourceType && row.sourceSectionProvenance === 'UPLOADER_DECLARED') {
+        return { rowId: row.id, version: row.version, resourceType: row.sourceSection, unchanged: true };
+      }
+      const result = await tx.basicPriceImportRow.updateMany({
+        where: { id: rowId, batchId, version: row.version, status: 'NEEDS_REVIEW' },
+        data: {
+          sourceSection: dto.resourceType,
+          sourceSectionProvenance: 'UPLOADER_DECLARED',
+          reasonCodes: { push: 'ROW_CATEGORY_CONFIRMED_BY_REVIEWER' },
+          version: { increment: 1 },
+        },
+      });
+      if (result.count !== 1) throw new ConflictException('ROW_VERSION_STALE');
+      await tx.basicPriceImportRowCategoryDecision.create({
+        data: {
+          workspaceId,
+          rowId,
+          actorAccountId,
+          previousSection: row.sourceSection,
+          chosenSection: dto.resourceType,
+          previousVersion: row.version,
+          resultingVersion: row.version + 1,
+          reason: dto.reason?.trim() || null,
+        },
+      });
+      return { rowId: row.id, version: row.version + 1, resourceType: dto.resourceType, unchanged: false };
+    });
+  }
 
   private async assertBatchRowMutable(
     tx: Prisma.TransactionClient,

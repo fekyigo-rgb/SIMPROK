@@ -4,6 +4,7 @@ import type {
   ResourceType,
 } from '../../api/basicPriceImport';
 import { unitColumnOptions } from '../../utils/basicPriceColumnRole';
+import { BasicPriceMixedIntakeDecision } from './BasicPriceMixedIntakeDecision';
 
 /**
  * USI-01 §16/§17 — HOW SIMPROK SPEAKS WHEN IT WILL NOT GUESS.
@@ -36,6 +37,8 @@ export interface IntakeQuestionModel {
   prompt: string;
   answerKey: IntakeAnswerKey;
   options: { value: string; label: string }[];
+  /** Present only for the four-choice composition question. */
+  kind?: 'file-composition';
 }
 
 const SECTION_LABELS: Record<ResourceType, string> = {
@@ -72,6 +75,7 @@ export function intakeQuestionOf(
         prompt:
           'Daftar harga apa yang Anda unggah? Pilih Tenaga kerja, Bahan, atau Peralatan sesuai isi berkas. Pilihan ini membantu SIMPROK mengenali daftar Anda; jenis yang sudah jelas pada suatu baris tetap mengikuti keterangan berkas.',
         answerKey: 'declaredSection',
+        kind: 'file-composition',
         options: (details.acceptedSections ?? ['LABOR', 'MATERIAL', 'EQUIPMENT']).map(
           (section) => ({
             value: section,
@@ -231,6 +235,9 @@ export function IntakeQuestionPanel({
   disabled: boolean;
   onAnswer: (key: IntakeAnswerKey, value: string) => void;
 }) {
+  if (question.kind === 'file-composition') {
+    return <BasicPriceMixedIntakeDecision disabled={disabled} onContinue={(value) => onAnswer('declaredSection', value)} />;
+  }
   return (
     /*
       A QUESTION IS NOT AN ERROR, AND MUST NOT LOOK LIKE ONE (§15).

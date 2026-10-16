@@ -164,7 +164,7 @@ export class ImportRequestError extends Error {
   }
 }
 
-async function parseOrThrow(response: Response): Promise<BasicPriceImportBatchSummary> {
+async function parseOrThrow<T = BasicPriceImportBatchSummary>(response: Response): Promise<T> {
   if (!response.ok) {
     const raw = await response.text();
     let body: ({ message?: unknown } & IntakeRefusalDetails) | null;
@@ -182,7 +182,7 @@ async function parseOrThrow(response: Response): Promise<BasicPriceImportBatchSu
     }
     throw new ImportRequestError(response.status, raw);
   }
-  return response.json() as Promise<BasicPriceImportBatchSummary>;
+  return response.json() as Promise<T>;
 }
 
 export const buildResourceLookupPath = (query: ResourceLookupQuery) => buildLookupPath('resources', query);
@@ -225,7 +225,7 @@ export interface BasicPriceIntakeSelection {
   /** The source's OWN jurisdiction wording, e.g. "SIRIMAU". Not a Region id. */
   selectedRegionLabel?: string;
   /** Stated by a human when the source declares no sections of its own. */
-  declaredSection?: ResourceType;
+  declaredSection?: ResourceType | 'MIXED';
   /** For a source whose name/unit columns carry no header at all. */
   selectedNameColumn?: number;
   selectedUnitColumn?: number;
@@ -264,6 +264,21 @@ export async function updateBasicPriceImportBatch(
     body: JSON.stringify({ version, ...metadata }),
   });
   return parseOrThrow(response);
+}
+
+/** A human category decision on a row whose type was not proven by the source. */
+export async function confirmBasicPriceImportRowCategory(
+  batchId: string,
+  rowId: string,
+  version: number,
+  resourceType: ResourceType,
+): Promise<{ rowId: string; version: number; resourceType: ResourceType; unchanged: boolean }> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/confirm-category`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, resourceType }),
+  });
+  return parseOrThrow<{ rowId: string; version: number; resourceType: ResourceType; unchanged: boolean }>(response);
 }
 
 export async function resolveBasicPriceImportRow(
