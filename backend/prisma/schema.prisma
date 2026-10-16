@@ -31,6 +31,7 @@ model Account {
   verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]        @relation("BasicPriceSourceEquivalenceVerifiedBy")
   reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
   basicPriceRowCompensations                  BasicPriceImportRowResolutionCompensation[] @relation("BasicPriceImportRowCompensationActor")
+  basicPriceCategoryDecisions                  BasicPriceImportRowCategoryDecision[] @relation("BasicPriceImportRowCategoryActor")
   basicPricePublicationAudits                 BasicPricePublicationAudit[]         @relation("BasicPricePublicationAuditActor")
   basicPriceProvenanceCorrections             BasicPriceProvenanceCorrection[]     @relation("BasicPriceProvenanceCorrectionActor")
   lockedRabDocuments                          RabDocument[]                        @relation("RabDocumentLockedBy")
@@ -120,6 +121,7 @@ model Workspace {
   basicPriceSourceEquivalences      BasicPriceSourceEquivalence[]
   basicPriceProvenanceCorrections   BasicPriceProvenanceCorrection[]
   basicPriceRowCompensations          BasicPriceImportRowResolutionCompensation[]
+  basicPriceCategoryDecisions          BasicPriceImportRowCategoryDecision[]
   progressAuditEvents               ProgressAuditEvent[]               @relation("ProgressAuditWorkspace")
   projectTimeZoneEvents             ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions     AhspResourceIdentityDecision[]
@@ -3130,6 +3132,7 @@ model BasicPriceImportRow {
   collidingRows     BasicPriceImportRow[]                @relation("RowCollision")
   resourceMappings  BasicPriceImportRowResourceMapping[]
   resolutionCompensations BasicPriceImportRowResolutionCompensation[]
+  categoryDecisions BasicPriceImportRowCategoryDecision[]
 
   @@unique([batchId, sourceRowNumber])
   @@index([batchId])
@@ -3164,6 +3167,31 @@ enum BasicPriceImportRowMappingSuggestionSource {
   NORMALIZED_NAME_MULTIPLE_CANDIDATES
   SOURCE_ROW_PROVENANCE
   PROVENANCE_NAME_CONFLICT
+}
+
+/// Append-only account-owned decision that assigns a resource family ONLY to
+/// an import row lacking a source-proven family. Original Excel cells stay intact.
+model BasicPriceImportRowCategoryDecision {
+  id                String @id(map: "bp_row_category_decisions_pkey") @default(uuid()) @db.Uuid
+  workspaceId       String @db.Uuid
+  rowId             String @db.Uuid
+  actorAccountId    String @db.Uuid
+  previousSection   BasicPriceImportRowSection?
+  chosenSection     BasicPriceImportRowSection
+  previousVersion   Int
+  resultingVersion  Int
+  reason            String? @db.Text
+  decidedAt         DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, map: "bp_row_category_decisions_workspace_fk")
+  row BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Restrict, map: "bp_row_category_decisions_row_fk")
+  actor Account @relation("BasicPriceImportRowCategoryActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "bp_row_category_decisions_actor_fk")
+
+  @@index([rowId], map: "bp_row_category_decisions_rowId_idx")
+  @@index([workspaceId], map: "bp_row_category_decisions_workspaceId_idx")
+  @@index([actorAccountId], map: "bp_row_category_decisions_actorAccountId_idx")
+  @@unique([rowId, resultingVersion], map: "bp_row_category_decisions_rowId_resultingVersion_key")
+  @@map("basic_price_import_row_category_decisions")
 }
 
 model BasicPriceImportRowResourceMapping {

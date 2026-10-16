@@ -23,6 +23,7 @@ import {
   MAX_UPLOAD_BYTES,
 } from './basic-price-import.service';
 import { BasicPriceRowResolutionService } from './basic-price-row-resolution.service';
+import { BasicPriceIdentityReviewBridgeService, RequestIdentityReviewDto } from './basic-price-identity-review-bridge.service';
 import { BasicPriceRowMappingCandidatesService } from './basic-price-row-mapping-candidates.service';
 import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
 import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.service';
@@ -31,6 +32,7 @@ import { PreviewBasicPriceImportDto } from './dto/preview-basic-price-import.dto
 import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-batch.dto';
 import {
   ResolveBasicPriceImportRowDto,
+  ConfirmBasicPriceImportRowCategoryDto,
   RejectBasicPriceImportRowDto,
   CompensateBasicPriceImportRowDto,
 } from './dto/resolve-basic-price-import-row.dto';
@@ -90,6 +92,7 @@ export class BasicPriceImportController {
     private readonly trustedActor: TrustedBasicPriceActorService,
     private readonly smartSaveService: BasicPriceSmartSaveService,
     private readonly permissionResolver: WorkspacePermissionResolverService,
+    private readonly identityReview: BasicPriceIdentityReviewBridgeService,
   ) {}
 
   @Post('preview')
@@ -118,6 +121,33 @@ export class BasicPriceImportController {
     const workspaceId: string = request.workspaceContext?.workspaceId;
     const currentAccountId: string = request.user.id;
     return this.importService.getBatch(workspaceId, batchId, currentAccountId);
+  }
+
+  /** Read back this user's own imported rows' identity review status. */
+  @Get(':batchId/identity-reviews')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async identityReviewStatuses(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+  ) {
+    return this.identityReview.statuses(
+      request.workspaceContext.workspaceId, batchId, request.user.id,
+    );
+  }
+
+  /** Request an existing shared identity-curation decision, not admission. */
+  @Post(':batchId/rows/:rowId/request-identity-review')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async requestIdentityReview(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() dto: RequestIdentityReviewDto,
+  ) {
+    return this.identityReview.request(
+      request.workspaceContext.workspaceId,
+      batchId, rowId, request.user.id, dto.version,
+    );
   }
 
   @Patch(':batchId')
@@ -160,6 +190,24 @@ export class BasicPriceImportController {
     @Body() dto: CompensateBasicPriceImportRowDto,
   ) {
     return this.resolutionService.compensateOwnDecision(
+      request.workspaceContext.workspaceId,
+      batchId,
+      rowId,
+      request.user.id,
+      dto,
+    );
+  }
+
+  /** A human decides only an unproven row's category; no item is admitted. */
+  @Post(':batchId/rows/:rowId/confirm-category')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async confirmRowCategory(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() dto: ConfirmBasicPriceImportRowCategoryDto,
+  ) {
+    return this.resolutionService.confirmRowCategory(
       request.workspaceContext.workspaceId,
       batchId,
       rowId,

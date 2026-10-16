@@ -393,7 +393,7 @@ export interface BasicPriceImportKnowledgeObject {
    * How this reading decided resource families overall. Per-row provenance is
    * on each row; this is the summary a human sees first.
    */
-  sectionProvenance: SectionProvenance;
+  sectionProvenance: SectionProvenance | null;
   /** Verbatim source label of the jurisdiction this reading was scoped to. */
   regionScopeLabel: string | null;
   regionScopeKind: 'COLUMN' | 'ROW_VALUE' | null;
@@ -429,7 +429,7 @@ export interface BasicPriceIntakeSelection {
   /** Verbatim jurisdiction label, for sources covering more than one. */
   selectedRegionLabel?: string | null;
   /** A human's section declaration, for sources that declare none themselves. */
-  declaredSection?: BasicPriceSection | null;
+  declaredSection?: BasicPriceSection | 'MIXED' | null;
   /**
    * USI-01R2 §10 — which column holds the resource name / the unit, for a
    * source whose shape is proven but whose columns carry no header. Required
@@ -956,14 +956,16 @@ export function resolveStructureSelection(
 /** Strongest resource-family authority actually exercised in a reading. */
 function summarizeSectionProvenance(
   rows: BasicPriceImportKnowledgeRow[],
-): SectionProvenance {
+): SectionProvenance | null {
   if (rows.some((row) => row.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY'))
     return 'SOURCE_ROW_CATEGORY';
   if (
     rows.some((row) => row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE')
   )
     return 'SOURCE_SECTION_TITLE';
-  return 'UPLOADER_DECLARED';
+  return rows.some((row) => row.sourceSectionProvenance === 'UPLOADER_DECLARED')
+    ? 'UPLOADER_DECLARED'
+    : null;
 }
 
 /**
@@ -1261,7 +1263,10 @@ export class BasicPriceUniversalIntakeAdapter {
     excludedNonDataRows: number;
     interpretation: BasicPriceIntakeInterpretation | null;
   } {
-    const declaredSection = selection.declaredSection ?? null;
+    // MIXED states file composition only, never the identity of every row.
+    const mixedDeclaration = selection.declaredSection === 'MIXED';
+    const declaredSection: BasicPriceSection | null =
+      selection.declaredSection === 'MIXED' ? null : selection.declaredSection ?? null;
     const categoryNameColumn = structure.roleColumns.CATEGORY_NAME ?? null;
     const categoryCodeColumn = structure.roleColumns.CATEGORY_CODE ?? null;
     const sourceStatesCategory =
@@ -1274,7 +1279,7 @@ export class BasicPriceUniversalIntakeAdapter {
     // answers it far better than a single dropdown ever could, so asking anyway
     // would be both redundant and dangerous: whatever the human picked would
     // then be sitting next to contradicting row evidence.
-    if (!declaredSection && !sourceStatesCategory) {
+    if (!declaredSection && !sourceStatesCategory && !mixedDeclaration) {
       throw new IntakeError(INTAKE_ERRORS.SECTION_DECLARATION_REQUIRED, {
         tableName: table.name,
         structure: structure.structure,

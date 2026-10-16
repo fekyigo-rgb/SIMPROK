@@ -4,6 +4,7 @@ import type {
   ResourceType,
 } from '../../api/basicPriceImport';
 import { unitColumnOptions } from '../../utils/basicPriceColumnRole';
+import { BasicPriceMixedIntakeDecision } from './BasicPriceMixedIntakeDecision';
 
 /**
  * USI-01 §16/§17 — HOW SIMPROK SPEAKS WHEN IT WILL NOT GUESS.
@@ -36,6 +37,8 @@ export interface IntakeQuestionModel {
   prompt: string;
   answerKey: IntakeAnswerKey;
   options: { value: string; label: string }[];
+  /** Present only for the four-choice composition question. */
+  kind?: 'file-composition';
 }
 
 const SECTION_LABELS: Record<ResourceType, string> = {
@@ -70,8 +73,9 @@ export function intakeQuestionOf(
     case 'SECTION_DECLARATION_REQUIRED':
       return {
         prompt:
-          'Pilih jenis data. SIMPROK belum dapat memastikan kategori daftar harga ini dari berkas. Jenis data apa yang paling sesuai sebagai panduan awal? (Baris yang memiliki bukti sendiri tetap mengikuti bukti tersebut.)',
+          'Daftar harga apa yang Anda unggah? Pilih Tenaga kerja, Bahan, atau Peralatan sesuai isi berkas. Pilihan ini membantu SIMPROK mengenali daftar Anda; jenis yang sudah jelas pada suatu baris tetap mengikuti keterangan berkas.',
         answerKey: 'declaredSection',
+        kind: 'file-composition',
         options: (details.acceptedSections ?? ['LABOR', 'MATERIAL', 'EQUIPMENT']).map(
           (section) => ({
             value: section,
@@ -102,9 +106,9 @@ export function intakeQuestionOf(
          * confused is to say, at the moment of the first, that a second exists.
          */
         prompt:
-          'Pilih kolom harga. Berkas ini memuat kolom harga untuk lebih dari satu wilayah, dan satu impor membaca tepat satu kolom. Kolom mana yang ingin dibaca? Judul di bawah ini adalah tulisan berkas Anda sendiri — Wilayah resmi SIMPROK dipilih terpisah di Konteks Sumber.',
+          'Pilih kolom harga. Berkas ini memiliki beberapa kolom harga. Harga dari kolom mana yang ingin Anda gunakan? Pilihan Anda menentukan angka harga yang dibaca. Setelah seluruh pertanyaan berkas dijawab, langkah berikutnya tetap Lengkapi Sumber. Lokasi tempat harga berlaku dipilih terpisah pada langkah tersebut.',
         answerKey: 'selectedRegionLabel',
-        options: (details.choices ?? []).map((label) => ({ value: label, label })),
+        options: (details.choices ?? []).map((label) => ({ value: label, label: `Gunakan harga: ${label}` })),
       };
 
     case 'SOURCE_TABLE_AMBIGUOUS':
@@ -142,8 +146,8 @@ export function intakeQuestionOf(
         : offered;
       return {
         prompt: askingUnit
-          ? 'Tentukan kolom satuan. Pilih kolom yang berisi satuan ukuran — bukan nama item atau harga.'
-          : 'Tentukan kolom nama item. SIMPROK tidak menemukan judul kolom. Pilih kolom yang berisi nama barang, tenaga kerja, atau peralatan — bukan satuan, kode, atau harga.',
+          ? 'Kolom mana yang berisi satuan? Pilih kolom yang memuat ukuran atau jumlah, misalnya kg, m3, lembar, atau unit. Contoh isi setiap kolom ada di bawah.'
+          : 'Kolom mana yang berisi nama barang, tenaga kerja, atau peralatan? Judul kolom belum terbaca dengan jelas. Pilih berdasarkan contoh isi di bawah, bukan kolom kode, satuan, atau harga.',
         answerKey: askingUnit ? 'selectedUnitColumn' : 'selectedNameColumn',
         /**
          * BP-VISUAL-TRUTH-07 §13 — THIS QUESTION STAYS, AND IT READS LIKE THE
@@ -231,6 +235,9 @@ export function IntakeQuestionPanel({
   disabled: boolean;
   onAnswer: (key: IntakeAnswerKey, value: string) => void;
 }) {
+  if (question.kind === 'file-composition') {
+    return <BasicPriceMixedIntakeDecision disabled={disabled} onContinue={(value) => onAnswer('declaredSection', value)} />;
+  }
   return (
     /*
       A QUESTION IS NOT AN ERROR, AND MUST NOT LOOK LIKE ONE (§15).
@@ -240,7 +247,7 @@ export function IntakeQuestionPanel({
       has to take before anything can continue.
     */
     <section className="bp-decision" aria-label="Pertanyaan Impor Basic Price">
-      <strong className="bp-section-title">SIMPROK butuh satu keputusan Anda</strong>
+      <strong className="bp-section-title">Pilih satu jawaban untuk melanjutkan</strong>
       <p>{question.prompt}</p>
       <div className="bp-decision__options">
         {question.options.map((option) => (

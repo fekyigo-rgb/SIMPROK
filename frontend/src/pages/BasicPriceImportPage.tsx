@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, FileInput } from 'lucide-react';
+import { ArrowLeft, FileInput, FileText } from 'lucide-react';
 import {
   ImportRequestError,
   IntakeRefusalError,
@@ -47,6 +47,7 @@ import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
 import { RegionSearchSelect } from '../components/basic-price/RegionSearchSelect';
 import type { RegionLookupItem } from '../api/basicPriceWorkflow';
 import '../styles/basicPrice.css';
+import '../styles/bpMixedIntake.css';
 
 /** Replacing the file is a new reading, never a silent overwrite. */
 export const FILE_REPLACE_CONFIRMATION =
@@ -226,7 +227,9 @@ export function BasicPriceImportPage() {
       setStatusMessage(
         decision
           ? decision.title
-          : `SIMPROK mengenali daftar harga ini — ${result.totalRows} baris terbaca dari ${file.name}.`,
+          : answers.declaredSection === 'MIXED'
+            ? `Berkas Campuran berhasil dibaca: ${result.totalRows} baris dari ${file.name}. Item yang belum jelas jenisnya akan ditinjau satu per satu, tanpa kehilangan data aslinya.`
+            : `SIMPROK mengenali daftar harga ini — ${result.totalRows} baris terbaca dari ${file.name}.`,
       );
     } catch (error) {
       setBatch(null);
@@ -236,7 +239,7 @@ export function BasicPriceImportPage() {
         // A question is not a failure, and is never worded as one.
         setStatusMessage(
           next
-            ? 'SIMPROK sudah membaca berkas ini dan menemukan satu hal yang harus Anda putuskan.'
+            ? 'Berkas berhasil dibaca. Pilih satu jawaban di bawah agar SIMPROK dapat melanjutkan impor.'
             : intakeRefusalMessage(error.code, error.details),
         );
       } else if (error instanceof ImportRequestError) {
@@ -451,9 +454,14 @@ export function BasicPriceImportPage() {
       */}
       <BasicPriceJourneyStepper batch={batch} />
 
-      <p className="bp-note bp-note--info" aria-live="polite">
-        {statusMessage}
-      </p>
+      {question?.kind === 'file-composition' ? (
+        <p className="bp-mixed-decision__notice" aria-live="polite">
+          <FileText size={22} aria-hidden="true" />
+          <span><strong>Berkas berhasil dibaca.</strong> Pilih jawaban di bawah agar SIMPROK dapat melanjutkan impor.</span>
+        </p>
+      ) : (
+        <p className="bp-note bp-note--info" aria-live="polite">{statusMessage}</p>
+      )}
 
       {question ? (
         <IntakeQuestionPanel question={question} disabled={isBusy} onAnswer={(key, value) => void handleAnswer(key, value)} />
@@ -521,10 +529,16 @@ export function BasicPriceImportPage() {
               from a grid of unexplained boxes.
             */}
             <p className="bp-field__help" style={{ marginBottom: '12px' }}>
-              SIMPROK sudah membaca angkanya. Yang belum diketahui adalah dari
-              mana harga ini berasal dan kapan berlaku — konteks itu tidak bisa
-              ditebak dari isi berkas.
+              Daftar harga sudah terbaca. Selanjutnya, lengkapi dari mana harga ini berasal,
+              di wilayah mana berlaku, dan sejak kapan digunakan.
             </p>
+
+            {batch.sourceRegionScopeLabel?.trim() ? (
+              <p className="bp-note bp-note--info" aria-label="Hasil pilihan kolom harga">
+                Harga yang dipilih dari berkas: <strong>{batch.sourceRegionScopeLabel.trim()}</strong>.
+                {' '}SIMPROK menggunakan angka harga dari kolom ini. Selanjutnya, lengkapi sumber dan wilayah berlakunya harga.
+              </p>
+            ) : null}
 
             <div className="bp-filters" style={{ border: 'none', padding: 0 }}>
               {/*

@@ -1,4 +1,5 @@
-import { IsInt, IsOptional, IsString, IsUUID, MinLength, MaxLength } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, IsUUID, MinLength, MaxLength } from 'class-validator';
+import { ResourceType } from '@prisma/client';
 
 /**
  * Human resolution of one imported row: assigns the exact
@@ -18,6 +19,13 @@ export class ResolveBasicPriceImportRowDto {
   @IsUUID() unitDefinitionId!: string;
 
   @IsOptional() @IsString() @MinLength(1) reason?: string;
+}
+
+/** Human type decision is allowed only when the file did not prove the type. */
+export class ConfirmBasicPriceImportRowCategoryDto {
+  @IsInt() version!: number;
+  @IsEnum(ResourceType) resourceType!: ResourceType;
+  @IsOptional() @IsString() @MinLength(10) @MaxLength(1200) reason?: string;
 }
 
 export class RejectBasicPriceImportRowDto {
