@@ -224,6 +224,8 @@ export function BasicPriceReviewPage() {
   const [safeNewRowIds, setSafeNewRowIds] = useState<Set<string>>(new Set());
   const [safeNewResourceType, setSafeNewResourceType] = useState<ResourceType | ''>('');
   const [statusMessage, setStatusMessage] = useState('Memuat batch...');
+  /** Local acknowledgement stays beside the row, even when the page is scrolled. */
+  const [rowNotice, setRowNotice] = useState<{ rowId: string; text: string } | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
   /**
@@ -311,6 +313,7 @@ export function BasicPriceReviewPage() {
    * Previous catalog selections belong to the old spelling and must be cleared. */
   const changeWorkingName = (row: BasicPriceImportRowSummary, value: string) => {
     updateDraft(row.id, { correctedCanonicalName: value, resource: null, resourcePending: false });
+    setRowNotice((current) => current?.rowId === row.id ? null : current);
     setSafeNewRowIds((current) => {
       if (!current.has(row.id)) return current;
       const next = new Set(current);
@@ -421,6 +424,17 @@ export function BasicPriceReviewPage() {
       setStatusMessage('Pilih satu Item SIMPROK dan satu Satuan standar sebelum mengonfirmasi pilihan.');
       return;
     }
+    if (draft.correctedCanonicalName !== null && draft.correctedCanonicalName !== row.name) {
+      const confirmed = window.confirm(
+        'Anda yakin menggunakan pilihan padanan pada baris ' + row.sourceRowNumber + '?\n\n' +
+        'Nama Excel: ' + row.name + '\nNama kerja: ' + draft.correctedCanonicalName + '\n\n' +
+        'Yang disimpan adalah pilihan item dan satuan. Nama asli Excel dan nama katalog tidak diubah.',
+      );
+      if (!confirmed) {
+        setStatusMessage('Baris ' + row.sourceRowNumber + ': belum disimpan. Draft koreksi tetap tersedia.');
+        return;
+      }
+    }
     setIsBusy(true);
     try {
       await resolveBasicPriceImportRow(batchId, row.id, row.version, draft.resource.id, draft.unit.id);
@@ -430,10 +444,16 @@ export function BasicPriceReviewPage() {
         delete next[row.id];
         return next;
       });
-      await loadBatch();
-      setStatusMessage(`Baris ${row.sourceRowNumber} diperbarui.`);
+      const refreshed = await loadBatch(false);
+      const notice = refreshed
+        ? 'Berhasil: padanan dan satuan baris ' + row.sourceRowNumber + ' telah disimpan.'
+        : 'Baris ' + row.sourceRowNumber + ': pilihan diterima server, tetapi tampilan belum berhasil dimuat ulang. Muat ulang untuk verifikasi.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
     } catch (error) {
-      setStatusMessage(await recoverFromRowFailure('RESOLVE', row, error));
+      const notice = await recoverFromRowFailure('RESOLVE', row, error);
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
     } finally {
       setIsBusy(false);
     }
@@ -535,6 +555,17 @@ export function BasicPriceReviewPage() {
       setStatusMessage(block ?? IDENTITY_ADMISSION_HELP);
       return;
     }
+    if (draft.correctedCanonicalName !== null && draft.correctedCanonicalName !== row.name) {
+      const confirmed = window.confirm(
+        'Anda yakin menetapkan item privat baru pada baris ' + row.sourceRowNumber + '?\n\n' +
+        'Nama Excel: ' + row.name + '\nNama item baru: ' + draft.correctedCanonicalName.trim() + '\n\n' +
+        'Data Excel asli tetap tercatat. Status berhasil hanya diberikan setelah server menerima keputusan.',
+      );
+      if (!confirmed) {
+        setStatusMessage('Baris ' + row.sourceRowNumber + ': penetapan dibatalkan. Draft koreksi tetap tersedia.');
+        return;
+      }
+    }
     setIsBusy(true);
     try {
       await admitResourceForImportRow(
@@ -556,10 +587,16 @@ export function BasicPriceReviewPage() {
         delete next[row.id];
         return next;
       });
-      await loadBatch();
-      setStatusMessage(`Baris ${row.sourceRowNumber} disahkan sebagai item baru.`);
+      const refreshed = await loadBatch(false);
+      const notice = refreshed
+        ? 'Berhasil: item privat baru untuk baris ' + row.sourceRowNumber + ' telah disimpan.'
+        : 'Baris ' + row.sourceRowNumber + ': penetapan diterima server, tetapi tampilan belum berhasil dimuat ulang. Muat ulang untuk verifikasi.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
     } catch (error) {
-      setStatusMessage(await recoverFromRowFailure('ADMIT', row, error));
+      const notice = await recoverFromRowFailure('ADMIT', row, error);
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
     } finally {
       setIsBusy(false);
     }
@@ -1164,6 +1201,11 @@ export function BasicPriceReviewPage() {
                   </button>
                 </div>
               </div>
+              {rowNotice?.rowId === row.id ? (
+                <p className="bp-note bp-note--info" role="status" aria-live="polite">
+                  {rowNotice.text}
+                </p>
+              ) : null}
               {expanded ? (
                 <>
                   {reviewRowBucket(row) === 'NEEDS_REVIEW' && reviewQuestion ? (
@@ -1184,13 +1226,32 @@ export function BasicPriceReviewPage() {
                           type="button"
                           className="bp-rowcard__edit"
                           title="Edit nama yang menjadi acuan Pilih Padanan maupun Tetapkan Item Baru; nama Excel tetap utuh."
-                          aria-label={`Edit padanan nama pada baris ${row.sourceRowNumber}`}
+                          aria-label={draft.editingName
+                              ? `Selesaikan koreksi nama baris ${row.sourceRowNumber}`
+                              : `Edit padanan nama pada baris ${row.sourceRowNumber}`}
                           onClick={() => {
-                            updateDraft(row.id, { editingName: !draft.editingName });
-                            setStatusMessage('Nama kerja yang diedit menjadi acuan kedua pilihan. Nama asli Excel tetap tersimpan.');
+                            if (draft.editingName) {
+                              const workingName = draft.correctedCanonicalName ?? row.name;
+                              if (!workingName.trim() || workingName !== workingName.trim()) {
+                                setStatusMessage('Nama koreksi tidak boleh kosong atau memiliki spasi awal/akhir.');
+                                return;
+                              }
+                              setDrafts((current) => ({
+                                ...current,
+                                [row.id]: { ...(current[row.id] ?? emptyDraft), editingName: false },
+                              }));
+                              const notice = workingName === row.name
+                                ? 'Tidak ada perubahan nama pada baris ' + row.sourceRowNumber + '.'
+                                : 'Baris ' + row.sourceRowNumber + ': koreksi siap digunakan sebagai nama kerja. Ini masih draft, belum tersimpan permanen. Selesaikan pemilihan padanan atau penetapan item baru.';
+                              setRowNotice({ rowId: row.id, text: notice });
+                              setStatusMessage(notice);
+                            } else {
+                              updateDraft(row.id, { editingName: true });
+                              setStatusMessage('Nama kerja yang diedit menjadi acuan kedua pilihan. Nama asli Excel tetap tersimpan. Perubahan baru berupa draft.');
+                            }
                           }}
                         >
-                          &#9998; Edit
+                          &#9998; {draft.editingName ? 'Selesai Edit' : 'Edit'}
                         </button>
                       ) : null}
                     </div>
@@ -1205,10 +1266,10 @@ export function BasicPriceReviewPage() {
                           onChange={(event) => changeWorkingName(row, event.target.value)}
                           aria-label={`Nama koreksi baris ${row.sourceRowNumber}`}
                         />
-                        <span className="bp-field__help">Pencarian padanan dan penetapan item baru selalu memakai nama ini. Data asli Excel tetap utuh.</span>
+                        <span className="bp-field__help" role="status">Draft koreksi — belum tersimpan permanen. Tekan Selesai Edit untuk melanjutkan. Pencarian padanan dan penetapan item baru selalu memakai nama ini. Data asli Excel tetap utuh.</span>
                       </label>
                     ) : draft.correctedCanonicalName !== null && draft.correctedCanonicalName !== row.name ? (
-                      <p className="bp-rowcard__facts">Nama koreksi: <strong>{draft.correctedCanonicalName}</strong></p>
+                      <p className="bp-rowcard__facts" role="status">Nama kerja: <strong>{draft.correctedCanonicalName}</strong> — draft untuk pencarian; belum tersimpan permanen.</p>
                     ) : null}
                     <dl className="bp-rowcard__source-facts">
                       <div><dt>Satuan</dt><dd>{row.unit?.trim() || 'Tidak tercantum'}</dd></div>
@@ -1439,7 +1500,30 @@ export function BasicPriceReviewPage() {
                             ) : null}
                           </>
                         ) : null}
-                        {!admissionOffered && admissionReview?.reasonCode && admissionUnavailableReason(admissionReview.reasonCode) ? <p className="bp-field__help" role="status">Item baru belum tersedia: {admissionUnavailableReason(admissionReview.reasonCode)}</p> : null}
+                        {!admissionOffered && admissionReview?.reasonCode && admissionUnavailableReason(admissionReview.reasonCode) ? (
+                          <div className="bp-field__help" role="status">
+                            <p>Item baru belum tersedia: {admissionUnavailableReason(admissionReview.reasonCode)}</p>
+                            {admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED' ? (
+                              <details className="bp-details">
+                                <summary>Periksa kandidat yang menghalangi item baru</summary>
+                                {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED') ? (
+                                  <ul>
+                                    {row.machineProposal.resource.candidates
+                                      .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
+                                      .map((candidate, index) => (
+                                        <li key={index}>
+                                          <strong>{candidate.name}</strong>
+                                          {candidate.code ? ' (' + candidate.code + ')' : ''}
+                                          {' — '}kandidat ini belum boleh ditolak dari halaman ini.
+                                        </li>
+                                      ))}
+                                  </ul>
+                                ) : <p>Rincian kandidat belum tersedia pada respons ini; keputusan membuat item baru tetap ditahan.</p>}
+                                <p>Jika memang item yang sama, gunakan Pilih Item yang Sesuai Padanan. Jika berbeda, minta pengelola katalog memeriksa identitas dan kewenangannya. Pencarian manual yang kosong tidak menghapus bukti kandidat dari SIMPROK.</p>
+                              </details>
+                            ) : null}
+                          </div>
+                        ) : null}
                         {draft.rejectOpen ? (
                           <label className="bp-field">
                             <span className="bp-field__label">Alasan tolak</span>
