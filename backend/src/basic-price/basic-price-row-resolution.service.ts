@@ -109,7 +109,8 @@ export class BasicPriceRowResolutionService {
     actorAccountId: string,
     dto: ConfirmBasicPriceImportRowCategoryDto,
   ) {
-    return this.prisma.$transaction(async (tx) => {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
       const batches = await tx.$queryRaw<Array<{
         id: string;
         workspaceId: string;
@@ -131,7 +132,7 @@ export class BasicPriceRowResolutionService {
         sourceSectionProvenance: string | null;
         rawSourceCategoryName: string | null;
         rawSourceCategoryCode: string | null;
-      }>>(Prisma.sql`SELECT "id", "batchId", "version", "status", "sourceSection", "sourceSectionProvenance", "rawSourceCategoryName", "rawSourceCategoryCode" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`);
+      }>>(Prisma.sql`SELECT "id", "batchId", "version", "status", "sourceSection", "sourceSectionProvenance", "rawSourceCategoryName", "rawSourceCategoryCode" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE NOWAIT`);
       const row = rows[0];
       if (!row || row.batchId !== batchId) throw new NotFoundException('Row not found');
       if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
@@ -168,7 +169,20 @@ export class BasicPriceRowResolutionService {
         },
       });
       return { rowId: row.id, version: row.version + 1, resourceType: dto.resourceType, unchanged: false };
-    });
+      });
+    } catch (error) {
+      // The only wait-for cycle newly introduced by this command is a batch
+      // lock held while the existing resolver holds the row lock and later
+      // needs the batch. NOWAIT on this SECOND lock ends the new transaction
+      // instead of forming that cycle. PostgreSQL signals 55P03, surfaced by
+      // Prisma raw queries as P2010/meta.code=55P03.
+      const lockError = error as { code?: unknown; meta?: { code?: unknown } };
+      if (lockError.code === '55P03' ||
+          (lockError.code === 'P2010' && lockError.meta?.code === '55P03')) {
+        throw new ConflictException('ROW_BUSY_RETRY');
+      }
+      throw error;
+    }
   }
 
   private async assertBatchRowMutable(

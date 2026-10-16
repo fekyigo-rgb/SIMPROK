@@ -95,6 +95,40 @@ describe('BP-PR205 mixed row category governance', () => {
     await expect(harness(batch(), { ...row(), status: 'REJECTED' }).decide()).rejects.toThrow(ConflictException);
   });
 
+
+  it('takes the contested second row lock with NOWAIT, not an unbounded wait', async () => {
+    const { tx, decide } = harness();
+    await decide();
+    const lockQuery = tx.$queryRaw.mock.calls[1][0] as { strings: readonly string[] };
+    expect(lockQuery.strings.join(' ')).toContain('FOR UPDATE NOWAIT');
+    const batchQuery = tx.$queryRaw.mock.calls[0][0] as { strings: readonly string[] };
+    expect(batchQuery.strings.join(' ')).toContain('FOR UPDATE');
+  });
+
+  it('fails fast with a retryable 409 and no row write or audit when the row is busy', async () => {
+    const { tx, decide } = harness();
+    tx.$queryRaw.mockReset()
+      .mockResolvedValueOnce([batch()])
+      .mockRejectedValueOnce({ code: 'P2010', meta: { code: '55P03' } });
+    await expect(decide()).rejects.toThrow('ROW_BUSY_RETRY');
+    expect(tx.basicPriceImportRow.updateMany).not.toHaveBeenCalled();
+    expect(tx.basicPriceImportRowCategoryDecision.create).not.toHaveBeenCalled();
+    // After the other transaction completes, one normal retry can succeed.
+    const recovered = harness();
+    await expect(recovered.decide()).resolves.toMatchObject({
+      version: 4, resourceType: 'MATERIAL', unchanged: false,
+    });
+  });
+
+  it('does not disguise arbitrary database faults as a retryable row conflict', async () => {
+    const { tx, decide } = harness();
+    tx.$queryRaw.mockReset()
+      .mockResolvedValueOnce([batch()])
+      .mockRejectedValueOnce({ code: 'P2010', meta: { code: '42601' } });
+    await expect(decide()).rejects.toMatchObject({ code: 'P2010' });
+    expect(tx.basicPriceImportRow.updateMany).not.toHaveBeenCalled();
+  });
+
   it('rejects MIXED and unknown types at request-validation boundary', () => {
     for (const resourceType of ['MIXED', 'UNDEFINED']) {
       const dto = plainToInstance(ConfirmBasicPriceImportRowCategoryDto, { version: 3, resourceType });

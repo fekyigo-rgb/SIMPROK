@@ -47,4 +47,6 @@ test('BP205-UI-04 review offers auditable resolution for rows without source-pro
   assert.match(review, /row.section === null \|\| row.sectionProvenance === 'UPLOADER_DECLARED'/u);
   assert.match(review, /sourceCategoryName\?\.trim\(\)/u);
   assert.match(review, /Berhasil: jenis baris/u);
+  assert.match(review, /Baris ini sedang diproses\. Muat ulang hasil peninjauan/u);
+  assert.match(review, /ROW_BUSY_RETRY/u);
 });

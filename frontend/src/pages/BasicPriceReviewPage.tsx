@@ -434,9 +434,13 @@ export function BasicPriceReviewPage() {
       setRowNotice({ rowId: row.id, text: notice });
       setStatusMessage(notice);
     } catch (error) {
-      const notice = error instanceof ImportRequestError
-        ? importRequestMessage(error.httpStatus)
-        : 'Jenis belum berhasil disimpan. Muat ulang baris lalu coba lagi.';
+      const notice = error instanceof ImportRequestError && error.httpStatus === 409
+        ? error.detail.includes('ROW_BUSY_RETRY')
+          ? 'Baris ini sedang diproses. Muat ulang hasil peninjauan, lalu coba lagi. Tidak ada perubahan jenis yang disimpan.'
+          : 'Data baris telah berubah atau tidak dapat diedit lagi. Muat ulang hasil peninjauan sebelum melanjutkan.'
+        : error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Jenis belum berhasil disimpan. Muat ulang baris lalu coba lagi.';
       setRowNotice({ rowId: row.id, text: notice });
       setStatusMessage(notice);
     } finally {
