@@ -41,6 +41,30 @@ test('BP205-UI-03 only genuine preview can show success notice; example explicit
   assert.match(mixed, /aria-expanded=\{showExample\}/u);
 });
 
+test('BP205-EDIT-01: category edit opens the same-row type decision, not catalog or new-item admission', () => {
+  assert.match(review, /categoryEditRows\.has\(row\.id\)/u);
+  assert.match(review, /Tutup Pilihan Jenis/u);
+  assert.match(review, /Ubah Jenis/u);
+  assert.match(review, /id=\{`bp-category-editor-\$\{row\.id\}`\}/u);
+  assert.match(review, /categoryDrafts\[row\.id\] \?\? row\.section/u);
+  assert.match(review, /onClick=\{\(\) => void handleConfirmCategory\(row\)\}/u);
+  assert.match(review, /setCategoryEditRows\(\(current\)/u);
+  assert.match(review, /Data asli Excel tidak berubah/u);
+  assert.match(review, /resource: null, unit: null/u);
+  assert.match(review, /setTouchedRowIds\(\(current\) => new Set\(current\)\.add\(row\.id\)\)/u);
+});
+
+test('BP205-EDIT-02: unit edit focuses the existing decision-side picker and does not claim it is saved', () => {
+  assert.match(review, /Pilih\/Ubah Satuan/u);
+  assert.match(review, /pendingUnitFocusRow\.current = row\.id/u);
+  assert.match(review, /id=\{`bp-lookup-\$\{row\.id\}`\}/u);
+  assert.match(review, /target\.focus\(\)/u);
+  assert.match(review, /target\.scrollIntoView\(/u);
+  assert.match(review, /mode="unit"/u);
+  assert.match(review, /Pilihan baru masih draft/u);
+  assert.match(review, /Tekan Gunakan Pilihan atau Gunakan Satuan/u);
+});
+
 test('BP205-UI-04 review offers auditable resolution for rows without source-proven category', () => {
   assert.match(review, /Tentukan Jenis/u);
   assert.match(review, /confirmBasicPriceImportRowCategory/u);

@@ -78,6 +78,38 @@ describe('BP-PR205 mixed row category governance', () => {
     expect(tx.basicPriceImportRow.updateMany).not.toHaveBeenCalled();
   });
 
+  it('corrects legacy weak LABOR hint to MATERIAL for Pasir Beton without mutating original Excel evidence', async () => {
+    const legacy = {
+      ...row(),
+      sourceSection: 'LABOR' as const,
+      sourceSectionProvenance: 'UPLOADER_DECLARED',
+    };
+    const { tx, decide } = harness(batch(), legacy);
+    await expect(decide(3, account, 'MATERIAL')).resolves.toMatchObject({
+      resourceType: 'MATERIAL', version: 4, unchanged: false,
+    });
+    expect(tx.basicPriceImportRow.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        sourceSection: 'MATERIAL',
+        sourceSectionProvenance: 'UPLOADER_DECLARED',
+        reasonCodes: { push: 'ROW_CATEGORY_CONFIRMED_BY_REVIEWER' },
+      }),
+    }));
+    expect(tx.basicPriceImportRowCategoryDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        previousSection: 'LABOR',
+        chosenSection: 'MATERIAL',
+        previousVersion: 3,
+        resultingVersion: 4,
+      }),
+    });
+    const patch = tx.basicPriceImportRow.updateMany.mock.calls[0][0].data;
+    expect(patch.rawResourceNameText).toBeUndefined();
+    expect(patch.rawUnitText).toBeUndefined();
+    expect(patch.rawSourceCategoryName).toBeUndefined();
+    expect(patch.rawPriceDisplayText).toBeUndefined();
+  });
+
   it('refuses overriding document-proven categories', async () => {
     const { tx, decide } = harness(batch(), { ...row(), sourceSection: 'EQUIPMENT', sourceSectionProvenance: 'SOURCE_ROW_CATEGORY' });
     await expect(decide()).rejects.toThrow(ConflictException);

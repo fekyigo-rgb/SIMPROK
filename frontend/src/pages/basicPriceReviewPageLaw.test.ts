@@ -435,24 +435,29 @@ test("BP-FUNCTION-01. safe-new selection never exceeds the backend's 100-row bou
   assert.match(renderable, /admitSafeNewBasicPriceResources\(/u);
 });
 
-test("BP-FUNCTION-02. Edit satuan opens the existing unit picker and confirms through the resolution writer", () => {
-  const start = renderable.indexOf('title="Pilih satuan standar SIMPROK yang sesuai."');
+test("BP-FUNCTION-02. Pilih/Ubah Satuan visibly focuses the existing decision-side picker; only the writer saves", () => {
+  const start = renderable.indexOf('title="Buka dan fokuskan pemilih satuan standar di panel Pilih Penyelesaian."');
   assert.ok(start > 0, "unit Edit control must be visible on mutable review rows");
-  const action = renderable.slice(start, start + 430);
-  assert.match(action, /updateDraft\(row\.id, \{ admitOpen: false \}\)/u);
+  const action = renderable.slice(start, start + 1200);
+  assert.match(action, /pendingUnitFocusRow\.current = row\.id/u);
   assert.match(action, /setLookupRows/u);
+  assert.match(action, /Pilih\/Ubah Satuan/u);
+  assert.match(page, /target\.focus\(\)/u);
+  assert.match(page, /target\.scrollIntoView\(/u);
   assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id\)/u);
-  assert.match(renderable, /mode="unit"[\s\S]*?onSelect=\{\(item\) => updateDraft\(row\.id, \{ unit:/u);
+  assert.match(renderable, /mode="unit"[\s\S]*?onSelect=\{\(item\) => \{[\s\S]*?updateDraft\(row\.id, \{ unit:/u);
 });
 
-test("BP-FUNCTION-02b. Edit jenis always opens an existing lawful choice rather than a dead message", () => {
-  const start = renderable.indexOf('title="Tentukan jenis melalui pilihan item SIMPROK yang sesuai');
+test("BP-FUNCTION-02b. Ubah Jenis opens an auditable row category editor, not item admission", () => {
+  const start = renderable.indexOf('title="Ubah kategori awal impor untuk baris ini.');
   assert.ok(start > 0);
-  const action = renderable.slice(start, start + 1250);
-  assert.match(action, /if \(!admissionOffered \|\| !admissionReview\)/u);
-  assert.match(action, /setLookupRows\(\(current\) => new Set\(current\)\.add\(row\.id\)\)/u);
-  assert.match(action, /admitOpen: true/u);
-  assert.match(action, /typeConfirmations/u);
+  const action = renderable.slice(start, start + 1400);
+  assert.match(action, /setCategoryEditRows/u);
+  assert.match(action, /Ubah Jenis/u);
+  assert.ok(renderable.includes('id={`bp-category-editor-${row.id}`}'));
+  assert.match(renderable, /onClick=\{\(\) => void handleConfirmCategory\(row\)\}/u);
+  assert.match(page, /await confirmBasicPriceImportRowCategory\(batchId, row\.id, row\.version, category\)/u);
+  assert.match(page, /resource: null, unit: null/u);
 });
 
 test("BP-FUNCTION-03. Tetapkan Item Baru stays on server-offered review and passes the bound type, unit, and refusals", () => {

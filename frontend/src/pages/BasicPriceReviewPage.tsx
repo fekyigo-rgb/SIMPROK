@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import {
@@ -228,6 +228,9 @@ export function BasicPriceReviewPage() {
   /** Local acknowledgement stays beside the row, even when the page is scrolled. */
   const [rowNotice, setRowNotice] = useState<{ rowId: string; text: string } | null>(null);
   const [categoryDrafts, setCategoryDrafts] = useState<Record<string, ResourceType | ''>>({});
+  const [categoryEditRows, setCategoryEditRows] = useState<Set<string>>(new Set());
+  /** A unit edit scrolls/focuses the canonical picker in the 65% decision panel. */
+  const pendingUnitFocusRow = useRef<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
   /**
@@ -295,6 +298,19 @@ export function BasicPriceReviewPage() {
     void loadBatch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
+
+  // Keep the Owner-locked 35:65 layout: Edit Satuan focuses the existing
+  // picker on the decision side rather than duplicating a catalog picker
+  // beneath the left-hand source facts.
+  useEffect(() => {
+    const rowId = pendingUnitFocusRow.current;
+    if (!rowId) return;
+    const target = document.getElementById(`bp-lookup-${rowId}`);
+    if (!target) return;
+    pendingUnitFocusRow.current = null;
+    target.focus();
+    target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [lookupRows]);
 
   const draftFor = (rowId: string): RowDraft => drafts[rowId] ?? emptyDraft;
   const updateDraft = (rowId: string, patch: Partial<RowDraft>) => {
@@ -425,7 +441,23 @@ export function BasicPriceReviewPage() {
     setIsBusy(true);
     try {
       const result = await confirmBasicPriceImportRowCategory(batchId, row.id, row.version, category);
+      // A category change invalidates any previous catalog/unit draft, which may
+      // belong to another resource family. No old choice may silently survive.
+      if (!result.unchanged) {
+        setDrafts((current) => ({ ...current, [row.id]: {
+          ...(current[row.id] ?? emptyDraft), resource: null, unit: null,
+          resourcePending: false, unitPending: false, admitOpen: false,
+          admitResourceType: null, refusedCandidateIds: [],
+        } }));
+        setTouchedRowIds((current) => new Set(current).add(row.id));
+        setLookupRows((current) => { const next = new Set(current); next.delete(row.id); return next; });
+        pendingUnitFocusRow.current = null;
+      }
       const refreshed = await loadBatch(false);
+      if (refreshed) {
+        setCategoryEditRows((current) => { const next = new Set(current); next.delete(row.id); return next; });
+        setCategoryDrafts((current) => { const next = { ...current }; delete next[row.id]; return next; });
+      }
       const notice = !refreshed
         ? 'Keputusan diterima, tetapi tampilan belum dapat diperbarui. Muat ulang untuk memastikan hasil.'
         : result.unchanged
@@ -1324,28 +1356,24 @@ export function BasicPriceReviewPage() {
                             <button
                               type="button"
                               className="bp-rowcard__edit"
-                              title="Tentukan jenis melalui pilihan item SIMPROK yang sesuai, atau konfirmasi jenis saat membuat Item Baru yang diizinkan. Jenis asli berkas tetap utuh."
+                              title="Ubah kategori awal impor untuk baris ini. Keputusan baru disimpan setelah Konfirmasi Jenis berhasil."
+                              aria-expanded={categoryEditRows.has(row.id)}
+                              aria-controls={`bp-category-editor-${row.id}`}
                               onClick={() => {
-                                if (!admissionOffered || !admissionReview) {
-                                  updateDraft(row.id, { admitOpen: false });
-                                  setLookupRows((current) => new Set(current).add(row.id));
-                                  setStatusMessage('Pilih item katalog yang benar di panel kanan; jenis efektif mengikuti identitas yang sah. Jenis asli berkas tetap disimpan.');
-                                  return;
-                                }
-                                setLookupRows((current) => {
+                                const opening = !categoryEditRows.has(row.id);
+                                setCategoryEditRows((current) => {
                                   const next = new Set(current);
-                                  next.delete(row.id);
+                                  if (opening) next.add(row.id); else next.delete(row.id);
                                   return next;
                                 });
-                                updateDraft(row.id, {
-                                  admitOpen: true,
-                                  admitResourceType: admissionReview.typeConfirmations.length === 1
-                                    ? admissionReview.typeConfirmations[0].resourceType
-                                    : draft.admitResourceType,
-                                });
+                                const notice = opening
+                                  ? 'Pilihan jenis dibuka pada baris ini. Pilih Tenaga kerja, Bahan, atau Peralatan lalu tekan Konfirmasi Jenis. Data asli Excel tidak berubah.'
+                                  : 'Pemilih jenis ditutup. Tidak ada keputusan kategori baru yang disimpan.';
+                                setRowNotice({ rowId: row.id, text: notice });
+                                setStatusMessage(notice);
                               }}
                             >
-                              &#9998; Edit
+                              &#9998; {categoryEditRows.has(row.id) ? 'Tutup Pilihan Jenis' : 'Ubah Jenis'}
                             </button>
                           ) : null}
                         </dd>
@@ -1364,19 +1392,32 @@ export function BasicPriceReviewPage() {
                             <button
                               type="button"
                               className="bp-rowcard__edit"
-                              title="Pilih satuan standar SIMPROK yang sesuai."
-                              onClick={() => { updateDraft(row.id, { admitOpen: false }); setLookupRows((current) => new Set(current).add(row.id)); }}
+                              title="Buka dan fokuskan pemilih satuan standar di panel Pilih Penyelesaian."
+                              aria-expanded={lookupRows.has(row.id)}
+                              aria-controls={`bp-lookup-${row.id}`}
+                              onClick={() => {
+                                pendingUnitFocusRow.current = row.id;
+                                setDrafts((current) => ({
+                                  ...current,
+                                  [row.id]: { ...(current[row.id] ?? emptyDraft), admitOpen: false },
+                                }));
+                                setLookupRows((current) => new Set(current).add(row.id));
+                                const notice = 'Pemilih satuan tersedia pada panel Pilih Penyelesaian di sebelah kanan. Pilihan baru masih draft; tekan Gunakan Pilihan atau Gunakan Satuan setelah itemnya sesuai.';
+                                setRowNotice({ rowId: row.id, text: notice });
+                                setStatusMessage(notice);
+                              }}
                             >
-                              &#9998; Edit
+                              &#9998; Pilih/Ubah Satuan
                             </button>
                           ) : null}
                         </dd>
                       </div>
                     </dl>
                     {mutable &&
+                     (row.section === null || categoryEditRows.has(row.id)) &&
                      (row.section === null || row.sectionProvenance === 'UPLOADER_DECLARED') &&
                      !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
-                      <div className="bp-note bp-note--info" aria-label={`Tentukan jenis baris ${row.sourceRowNumber}`}>
+                      <div id={`bp-category-editor-${row.id}`} className="bp-note bp-note--info" aria-label={`Tentukan jenis baris ${row.sourceRowNumber}`}>
                         <label className="bp-field">
                           <span className="bp-field__label">Tentukan Jenis</span>
                           <select
@@ -1453,7 +1494,7 @@ export function BasicPriceReviewPage() {
                           </button>
                         ) : null}
                         {lookupRows.has(row.id) && mutable && !proven ? (
-                          <div className="bp-rowcard__lookup bp-rowcard__lookup--contextual" aria-label="Cari dan pilih item atau satuan">
+                          <div id={`bp-lookup-${row.id}`} tabIndex={-1} className="bp-rowcard__lookup bp-rowcard__lookup--contextual" aria-label="Cari dan pilih item atau satuan">
                             <strong className="bp-rowcard__lookup-heading">{resourceProven ? "Pilih satuan yang sesuai" : "Cari item yang sudah ada di SIMPROK"}</strong>
                             {!resourceProven ? (
                               <CatalogSearchSelect
@@ -1471,7 +1512,10 @@ export function BasicPriceReviewPage() {
                               mode="unit"
                               selected={draft.unit}
                               disabled={isBusy}
-                              onSelect={(item) => updateDraft(row.id, { unit: item as UnitLookupItem | null })}
+                              onSelect={(item) => {
+                                updateDraft(row.id, { unit: item as UnitLookupItem | null });
+                                setRowNotice({ rowId: row.id, text: 'Pilihan satuan masih draft. Tekan Gunakan Pilihan atau Gunakan Satuan setelah persyaratan item terpenuhi untuk menyimpannya.' });
+                              }}
                               onPendingChange={(unitPending) => updateDraft(row.id, { unitPending })}
                             />
                             <button
