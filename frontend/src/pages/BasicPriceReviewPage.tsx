@@ -8,12 +8,15 @@ import {
   rejectBasicPriceImportRow,
   resolveBasicPriceImportRow,
   confirmBasicPriceImportRowCategory,
+  getBasicPriceIdentityReviews,
+  requestBasicPriceIdentityReview,
   admitResourceForImportRow,
   admitSafeNewBasicPriceResources,
   submitBasicPriceImportBatch,
   enrichBasicPriceKdn,
   ImportRequestError,
 } from '../api/basicPriceImport';
+import type { BasicPriceIdentityReviewRow } from '../api/basicPriceImport';
 import type {
   ResourceLookupItem,
   ResourceType,
@@ -229,6 +232,7 @@ export function BasicPriceReviewPage() {
   const [rowNotice, setRowNotice] = useState<{ rowId: string; text: string } | null>(null);
   const [categoryDrafts, setCategoryDrafts] = useState<Record<string, ResourceType | ''>>({});
   const [categoryEditRows, setCategoryEditRows] = useState<Set<string>>(new Set());
+  const [identityReviewStatuses, setIdentityReviewStatuses] = useState<Record<string, BasicPriceIdentityReviewRow> | null>(null);
   /** A unit edit scrolls/focuses the canonical picker in the 65% decision panel. */
   const pendingUnitFocusRow = useRef<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
@@ -247,6 +251,20 @@ export function BasicPriceReviewPage() {
     try {
       const result = await getBasicPriceImportBatch(batchId);
       setBatch(result);
+      // The ONE shared curation lifecycle is read in a batch-scoped request,
+      // not once per item, and cannot be confused with a catalog admission.
+      let identityReviewReadNotice: string | null = null;
+      try {
+        const identityReviews = await getBasicPriceIdentityReviews(batchId);
+        setIdentityReviewStatuses(identityReviews.rows);
+      } catch (error) {
+        // UNKNOWN is not 'no request'. An authorization failure is not empty
+        // work either, so preserve the real refusal instead of silently hiding.
+        setIdentityReviewStatuses(null);
+        identityReviewReadNotice = error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Status pemeriksaan identitas belum dapat dibaca. Coba muat ulang.';
+      }
       // INT-CONNECT-01 — CARRY THE MACHINE'S PROVEN ANSWER INTO THE FORM.
       //
       // The previous version of this page discarded it: the payload already
@@ -270,7 +288,7 @@ export function BasicPriceReviewPage() {
         }
         return next;
       });
-      if (announceProgress) setStatusMessage(formatBatchProgress(result));
+      if (announceProgress) setStatusMessage(identityReviewReadNotice ? `${formatBatchProgress(result)} ${identityReviewReadNotice}` : formatBatchProgress(result));
       /**
        * BP-VISUAL-TRUTH-07 §14 — WHETHER THE READ ACTUALLY HAPPENED, ANSWERED.
        *
@@ -473,6 +491,33 @@ export function BasicPriceReviewPage() {
         : error instanceof ImportRequestError
           ? importRequestMessage(error.httpStatus)
           : 'Jenis belum berhasil disimpan. Muat ulang baris lalu coba lagi.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  /** An explicit review request, not an approval or a new ResourceCatalog. */
+  const handleRequestIdentityReview = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId) return;
+    setIsBusy(true);
+    try {
+      const result = await requestBasicPriceIdentityReview(batchId, row.id, row.version);
+      setIdentityReviewStatuses((current) => ({
+        ...(current ?? {}), [row.id]: { status: result.status, resource: null },
+      }));
+      const notice = result.status === 'OBSERVED'
+        ? 'Permintaan pemeriksaan identitas sudah tercatat. Pengelola yang berwenang akan memeriksa kandidat. Item baru belum disimpan.'
+        : 'Pemeriksaan identitas telah memiliki keputusan. Muat ulang peninjauan untuk melihat pilihan yang tersedia.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } catch (error) {
+      const notice = error instanceof ImportRequestError && error.httpStatus === 409
+        ? 'Permintaan belum dapat dikirim. Jenis atau bukti kandidat telah berubah; periksa kembali baris ini lalu coba lagi.'
+        : error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Belum berhasil mengirim permintaan pemeriksaan. Tidak ada keputusan item baru yang dibuat.';
       setRowNotice({ rowId: row.id, text: notice });
       setStatusMessage(notice);
     } finally {
@@ -1627,7 +1672,39 @@ export function BasicPriceReviewPage() {
                                       ))}
                                   </ul>
                                 ) : <p>Rincian kandidat belum tersedia pada respons ini; keputusan membuat item baru tetap ditahan.</p>}
-                                <p>Jika memang item yang sama, gunakan Pilih Item yang Sesuai Padanan. Jika berbeda, minta pengelola katalog memeriksa identitas dan kewenangannya. Pencarian manual yang kosong tidak menghapus bukti kandidat dari SIMPROK.</p>
+                                <p>Jika benar item yang sama, pilih padanan yang tersedia. Jika berbeda, minta pengelola katalog memeriksa identitas dan kewenangannya melalui tombol di bawah. Pencarian manual yang kosong tidak menghapus bukti kandidat dari SIMPROK.</p>
+                                {!(row.sectionProvenance === 'SOURCE_ROW_CATEGORY' ||
+                                    row.sectionProvenance === 'SOURCE_SECTION_TITLE' ||
+                                    row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER')) ? (
+                                  <p role="status">Pastikan jenis item terlebih dahulu melalui <strong>Ubah Jenis</strong> di sebelah kiri dan <strong>Konfirmasi Jenis</strong>. Kategori awal berkas belum cukup untuk mengirim pemeriksaan identitas.</p>
+                                ) : identityReviewStatuses?.[row.id]?.status === 'OBSERVED' ? (
+                                  <p role="status">Permintaan sudah tercatat dan menunggu keputusan pengelola. Belum ada item baru yang disimpan.</p>
+                                ) : identityReviewStatuses?.[row.id]?.status === 'RESOLVED_EXISTING' ||
+                                    identityReviewStatuses?.[row.id]?.status === 'ADMITTED_NEW' ? (
+                                  <div role="status">
+                                    <p>Pengelola telah memutuskan identitas; keputusan tersebut tidak otomatis menyimpan harga.</p>
+                                    {identityReviewStatuses?.[row.id]?.resource ? (
+                                      <p>Item yang diputuskan: <strong>{identityReviewStatuses[row.id].resource?.name}</strong>. Buka Pilih Item yang Sesuai Padanan, pilih item tersebut dan satuan yang tepat, lalu simpan melalui tombol yang sudah ada.</p>
+                                    ) : (
+                                      <p>Item keputusan belum tersedia sebagai katalog aktif dalam ruang kerja ini. Minta pengelola memastikan akses atau keputusan katalog, bukan membuat item duplikat.</p>
+                                    )}
+                                  </div>
+                                ) : identityReviewStatuses?.[row.id]?.status === 'DISMISSED' ? (
+                                  <p role="status">Pengelola menutup pemeriksaan ini. Periksa kembali data item dan sumbernya sebelum mengajukan keputusan berikutnya.</p>
+                                ) : (
+                                  <>
+                                    {identityReviewStatuses === null ? (
+                                      <p role="status">Status pemeriksaan sebelumnya belum dapat dibaca. Permintaan yang sama tidak akan menggandakan pemeriksaan.</p>
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      className="bp-btn bp-btn--primary bp-btn--sm"
+                                      disabled={isBusy}
+                                      onClick={() => void handleRequestIdentityReview(row)}
+                                    >Minta Pemeriksaan Identitas</button>
+                                    <p>Pengelola akan memeriksa apakah item ini sama dengan katalog atau benar-benar baru. Anda tetap dapat meninjau baris lain.</p>
+                                  </>
+                                )}
                               </details>
                             ) : null}
                           </div>

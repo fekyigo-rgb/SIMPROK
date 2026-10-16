@@ -281,6 +281,39 @@ export async function confirmBasicPriceImportRowCategory(
   return parseOrThrow<{ rowId: string; version: number; resourceType: ResourceType; unchanged: boolean }>(response);
 }
 
+export type BasicPriceIdentityReviewStatus =
+  | 'NOT_REQUESTED'
+  | 'OBSERVED'
+  | 'RESOLVED_EXISTING'
+  | 'ADMITTED_NEW'
+  | 'DISMISSED';
+
+export interface BasicPriceIdentityReviewRow {
+  status: BasicPriceIdentityReviewStatus;
+  /** Only an ACTIVE, workspace-visible catalog choice authorized by the curator. */
+  resource: ResourceLookupItem | null;
+}
+
+export async function getBasicPriceIdentityReviews(batchId: string):
+  Promise<{ rows: Record<string, BasicPriceIdentityReviewRow> }> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/identity-reviews`);
+  return parseOrThrow<{ rows: Record<string, BasicPriceIdentityReviewRow> }>(response);
+}
+
+/** Escalation to the EXISTING shared identity curator, not direct catalog creation. */
+export async function requestBasicPriceIdentityReview(
+  batchId: string, rowId: string, version: number,
+): Promise<{ rowId: string; status: BasicPriceIdentityReviewStatus; unchanged: boolean }> {
+  const response = await apiFetch(
+    `/basic-price-imports/${batchId}/rows/${rowId}/request-identity-review`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version }) },
+  );
+  return parseOrThrow<{
+    rowId: string; status: BasicPriceIdentityReviewStatus; unchanged: boolean;
+  }>(response);
+}
+
 export async function resolveBasicPriceImportRow(
   batchId: string,
   rowId: string,
