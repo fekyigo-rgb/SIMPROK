@@ -36,6 +36,17 @@ test('BP205-OBS-03 source-proven candidate review uses ONE existing lifecycle', 
   assert.match(bridge, /assertBatchOwnedByCaller/u);
 });
 
+test('BP205-OBS-05 curator outcome remains visible after an old blocking candidate disappears', () => {
+  const decisionBanner = page.indexOf('aria-label={`Hasil pemeriksaan identitas baris');
+  const candidatePanel = page.indexOf("!admissionOffered && admissionReview?.reasonCode");
+  assert.ok(decisionBanner > 0, 'curator outcome needs its own stable presentation');
+  assert.ok(candidatePanel > decisionBanner, 'outcome must not depend on old candidate blockade');
+  assert.match(page, /admissionReview\?\.reasonCode !== 'IDENTITY_CANDIDATE_BLOCKED'/u);
+  assert.match(page, /Identitas telah diputuskan pengelola/u);
+  assert.match(page, /Minta pengelola menuntaskan aksesnya/u);
+  assert.match(page, /Item baru belum disimpan/u);
+});
+
 test('BP205-OBS-04 one scoped status read, honest display after reloading', () => {
   assert.match(api, /getBasicPriceIdentityReviews/u);
   assert.match(page, /await getBasicPriceIdentityReviews\(batchId\)/u);

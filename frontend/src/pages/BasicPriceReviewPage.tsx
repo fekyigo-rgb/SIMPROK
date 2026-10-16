@@ -1513,6 +1513,22 @@ export function BasicPriceReviewPage() {
 
                   <div className="bp-rowcard__actions bp-rowcard__resolution">
                     <h3>Pilih Penyelesaian</h3>
+                    {identityReviewStatuses?.[row.id] &&
+                     identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' &&
+                     admissionReview?.reasonCode !== 'IDENTITY_CANDIDATE_BLOCKED' ? (
+                      <div className="bp-note bp-note--info" role="status" aria-label={`Hasil pemeriksaan identitas baris ${row.sourceRowNumber}`}>
+                        {identityReviewStatuses[row.id].status === 'OBSERVED'
+                          ? <p>Permintaan pemeriksaan identitas sedang menunggu keputusan pengelola. Item baru belum disimpan.</p>
+                          : identityReviewStatuses[row.id].status === 'RESOLVED_EXISTING' ||
+                            identityReviewStatuses[row.id].status === 'ADMITTED_NEW'
+                            ? <p>Identitas telah diputuskan pengelola.
+                              {identityReviewStatuses[row.id].resource
+                                ? <> Item katalog: <strong>{identityReviewStatuses[row.id].resource?.name}</strong>. Pilih item dan satuannya pada panel ini, lalu simpan melalui keputusan yang tersedia.</>
+                                : <> Item keputusan belum tersedia sebagai katalog aktif yang dapat diakses. Minta pengelola menuntaskan aksesnya.</>}
+                            </p>
+                            : <p>Permintaan pemeriksaan telah ditutup. Periksa data sumber sebelum melanjutkan.</p>}
+                      </div>
+                    ) : null}
                     {proven ? (
                       <p className="bp-field__help">Dikenali otomatis. Gunakan Simpan &amp; Gunakan di atas untuk menyimpan baris ini bersama baris pasti lainnya.</p>
                     ) : row.status === 'REJECTED' ? (
