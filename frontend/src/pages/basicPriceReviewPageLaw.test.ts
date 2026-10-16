@@ -471,10 +471,13 @@ test("BP-FUNCTION-04. Tolak is a deliberate reason-gated writer, never just a vi
 });
 
 test("BP-EDIT-SNAPSHOT-01. one corrected row name drives BOTH decision doors", () => {
-  const start = renderable.indexOf('aria-label={`Edit padanan nama pada baris');
+  const start = renderable.indexOf('aria-label={draft.editingName');
   assert.ok(start > 0);
-  const action = renderable.slice(start, start + 660);
-  assert.match(action, /editingName: !draft\.editingName/u);
+  const action = renderable.slice(start, start + 1700);
+  assert.match(action, /if \(draft\.editingName\)/u);
+  assert.match(action, /editingName: false/u);
+  assert.match(action, /editingName: true/u);
+  assert.match(action, /belum tersimpan permanen/u);
   assert.match(page, /const changeWorkingName = \(row: BasicPriceImportRowSummary, value: string\)/u);
   assert.match(page, /correctedCanonicalName: value, resource: null, resourcePending: false/u);
   assert.match(renderable, /onChange=\{\(event\) => changeWorkingName\(row, event\.target\.value\)\}/u);
@@ -595,4 +598,42 @@ test("BP-ACTIVATION-02. visible review actions reach their owned backend routes;
   assert.match(controller, /@PermissionsAll\(\s*PERMISSIONS\.BASIC_PRICE_RESOLVE,\s*PERMISSIONS\.BASIC_PRICE_SUBMIT,/u);
   assert.match(page, /Nama kerja yang diedit menjadi acuan kedua pilihan/u);
   assert.match(api, /correctedCanonicalName \? \{ correctedCanonicalName \} : \{\}/u);
+});
+
+test("BP-EDIT-TRUTH-01. completing an edit reports a draft, never a database save", () => {
+  assert.match(renderable, /draft\.editingName \? 'Selesai Edit' : 'Edit'/u);
+  assert.match(renderable, /Draft koreksi — belum tersimpan permanen/u);
+  assert.match(renderable, /draft untuk pencarian; belum tersimpan permanen/u);
+  assert.match(page, /if \(!workingName\.trim\(\) \|\| workingName !== workingName\.trim\(\)\)/u);
+  assert.doesNotMatch(page, /koreksi nama berhasil disimpan secara permanen/i);
+});
+
+test("BP-EDIT-TRUTH-02. material changes require confirmation before authoritative writes", () => {
+  const resolveConfirmation = page.indexOf("Anda yakin menggunakan pilihan padanan");
+  const resolveWriter = page.indexOf("await resolveBasicPriceImportRow(");
+  const admitConfirmation = page.indexOf("Anda yakin menetapkan item privat baru");
+  const admitWriter = page.indexOf("await admitResourceForImportRow(");
+  assert.ok(resolveConfirmation >= 0 && resolveConfirmation < resolveWriter);
+  assert.ok(admitConfirmation >= 0 && admitConfirmation < admitWriter);
+  assert.match(page, /if \(!confirmed\) \{[\s\S]*?Draft koreksi tetap tersedia/u);
+  assert.match(page, /Nama asli Excel dan nama katalog tidak diubah/u);
+});
+
+test("BP-CANDIDATE-DOOR-01. blocked admissions explain candidates without minting duplicate identities", () => {
+  assert.match(renderable, /Periksa kandidat yang menghalangi item baru/u);
+  assert.match(renderable, /candidate\.admissionDisposition === 'BLOCKED'/u);
+  assert.match(renderable, /Pencarian manual yang kosong tidak menghapus bukti kandidat/u);
+  assert.match(renderable, /minta pengelola katalog memeriksa identitas dan kewenangannya/u);
+  assert.match(page, /admissionOffered && admissionReview/u);
+});
+
+test("BP-EDIT-FEEDBACK-01. feedback is visible on the affected row and means what happened", () => {
+  assert.match(page, /const \[rowNotice, setRowNotice\] = useState/u);
+  assert.match(renderable, /rowNotice\?\.rowId === row\.id/u);
+  assert.match(renderable, /aria-live="polite"/u);
+  assert.match(page, /setRowNotice\(\{ rowId: row\.id, text: notice \}\)/u);
+  assert.match(page, /Berhasil: padanan dan satuan baris/u);
+  assert.match(page, /Berhasil: item privat baru untuk baris/u);
+  assert.match(page, /tampilan belum berhasil dimuat ulang/u);
+  assert.match(renderable, /Selesaikan koreksi nama baris/u);
 });
