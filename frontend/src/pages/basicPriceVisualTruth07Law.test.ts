@@ -170,7 +170,7 @@ test("REGION-05: the two questions no longer share one word on screen", () => {
 
 test("BP-INTAKE-COPY-01: users see a clear choice and know its consequence", () => {
   assert.match(intakeText, /Daftar harga apa yang Anda unggah\?/u);
-  assert.match(intakeText, /semua pilihan kemudian menuju Lengkapi Sumber/u);
+  assert.match(intakeText, /Setelah seluruh pertanyaan berkas dijawab, langkah berikutnya tetap Lengkapi Sumber/u);
   assert.match(intakeText, /Harga dari kolom mana yang ingin Anda gunakan\?/u);
   assert.match(intakeText, /value: label, label: `Gunakan harga: \$\{label\}`/u);
   assert.match(intakeText, /answerKey: 'selectedRegionLabel'/u);

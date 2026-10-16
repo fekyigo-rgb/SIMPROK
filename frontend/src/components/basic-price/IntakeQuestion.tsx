@@ -102,7 +102,7 @@ export function intakeQuestionOf(
          * confused is to say, at the moment of the first, that a second exists.
          */
         prompt:
-          'Pilih kolom harga. Berkas ini memiliki beberapa kolom harga. Harga dari kolom mana yang ingin Anda gunakan? Pilihan Anda menentukan angka harga yang dibaca; semua pilihan kemudian menuju Lengkapi Sumber. Lokasi tempat harga berlaku dipilih terpisah pada langkah tersebut.',
+          'Pilih kolom harga. Berkas ini memiliki beberapa kolom harga. Harga dari kolom mana yang ingin Anda gunakan? Pilihan Anda menentukan angka harga yang dibaca. Setelah seluruh pertanyaan berkas dijawab, langkah berikutnya tetap Lengkapi Sumber. Lokasi tempat harga berlaku dipilih terpisah pada langkah tersebut.',
         answerKey: 'selectedRegionLabel',
         options: (details.choices ?? []).map((label) => ({ value: label, label: `Gunakan harga: ${label}` })),
       };
