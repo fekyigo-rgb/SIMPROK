@@ -625,10 +625,10 @@ test("BP-EDIT-TRUTH-02. material changes require confirmation before authoritati
 });
 
 test("BP-CANDIDATE-DOOR-01. blocked admissions explain candidates without minting duplicate identities", () => {
-  assert.match(renderable, /Periksa kandidat yang menghalangi item baru/u);
+  assert.match(renderable, /Lihat item mirip yang perlu diperiksa/u);
   assert.match(renderable, /candidate\.admissionDisposition === 'BLOCKED'/u);
-  assert.match(renderable, /Pencarian manual yang kosong tidak menghapus bukti kandidat/u);
-  assert.match(renderable, /minta pengelola katalog memeriksa identitas dan kewenangannya/u);
+  assert.match(renderable, /Hasil pencarian kosong belum membuktikan bahwa item ini baru/u);
+  assert.match(renderable, /ajukan pemeriksaan untuk ruang kerja ini/u);
   assert.match(page, /admissionOffered && admissionReview/u);
 });
 

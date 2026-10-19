@@ -987,7 +987,7 @@ test("CASE A: an ambiguous resource is explained without ever printing a catalog
 
   // The reviewer keeps everything they can act on...
   assert.equal(narrative.state, "ATTENTION");
-  assert.match(narrative.resource, /2 pilihan/);
+  assert.match(narrative.resource, /2 item/);
   assert.equal(narrative.candidates.length, 2);
   assert.match(narrative.candidates[0].text, /Semen Portland 40 kg/);
   assert.match(narrative.candidates[0].text, /M-101/);
@@ -1089,7 +1089,7 @@ test("CASE C: an unrecognised row says so honestly, invents no candidate, blames
   assert.ok(narrative);
 
   assert.equal(narrative.state, "UNKNOWN");
-  assert.match(narrative.resource, /belum menemukan sumber daya yang dapat dibuktikan/);
+  assert.match(narrative.resource, /Belum ada item katalog yang terbukti sesuai/);
   assert.match(narrative.resource, /Item SIMPROK|Item belum dikenali/); // says WHY, without catalog jargon
   assert.equal(narrative.candidates.length, 0, "nothing may be invented");
   assert.match(narrative.unit, /belum dikenali/i);
@@ -1205,7 +1205,7 @@ test("row notes are said in words, and an untranslated code is COUNTED, never pr
   // The unexplained fact is neither dropped nor spelled out.
   assert.equal(notes.untranslatedCount, 1);
   assert.ok(notes.technicalNotice);
-  assert.match(notes.technicalNotice, /1 informasi teknis tambahan/);
+  assert.match(notes.technicalNotice, /Ada 1 catatan hasil pembacaan/);
   assert.doesNotMatch(notes.technicalNotice, RAW_ENUM_SHAPE);
   assert.equal(JSON.stringify(notes).includes("SOMETHING_NEW_FROM_INTAKE"), false);
 });
@@ -1220,7 +1220,7 @@ test("Detail Teknis is not a place where enums become acceptable — it counts t
   assert.deepEqual(notes.human, []);
   assert.equal(notes.untranslatedCount, 2, "de-duplicated, then counted");
   assert.ok(notes.technicalNotice);
-  assert.match(notes.technicalNotice, /^2 informasi teknis tambahan/);
+  assert.match(notes.technicalNotice, /^Ada 2 catatan hasil pembacaan/);
   const everythingVisible = [...notes.human, notes.technicalNotice].join(" | ");
   assert.doesNotMatch(everythingVisible, RAW_ENUM_SHAPE);
   for (const code of ["FUTURE_CODE_ONE", "FUTURE_CODE_TWO"]) {

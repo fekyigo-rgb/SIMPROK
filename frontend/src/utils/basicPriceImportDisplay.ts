@@ -1598,7 +1598,7 @@ const BLOCKING_FACT_LABELS: Record<string, string> = {
     'Satuan kanonik itu belum dapat dibuktikan oleh otoritas satuan.',
   RESOURCE_NOT_FOUND:
     'Item belum dikenali sebagai Resource Identity yang sudah ada. Pilih Item SIMPROK yang sesuai, sahkan sebagai item baru, atau tolak baris ini.',
-  MULTIPLE_CANDIDATES_NEEDS_REVIEW: 'Ada lebih dari satu kandidat yang sama kuat.',
+  MULTIPLE_CANDIDATES_NEEDS_REVIEW: 'Beberapa item terlihat sama-sama mungkin cocok. SIMPROK belum bisa memilih satu dengan pasti.',
   STRONG_CANDIDATE_NEEDS_REVIEW: 'Ada satu kandidat kuat yang masih perlu ditegaskan.',
   SPECIFICATION_UNPROVED: 'Entri katalog menyebut hal yang tidak disebut sumber.',
   SPECIFICATION_CONFLICT: 'Spesifikasi sumber dan katalog bertentangan.',
@@ -2082,10 +2082,10 @@ const resourceNarrative = (resource: RowResourceProposal): string => {
   const count = resource.candidates.length;
   const head =
     count === 0
-      ? 'SIMPROK belum menemukan sumber daya yang dapat dibuktikan.'
+      ? 'Belum ada item katalog yang terbukti sesuai dengan data ini.'
       : count === 1
-        ? 'SIMPROK menemukan satu pilihan kandidat terkait, tetapi belum membuktikan identitasnya sama. Periksa spesifikasi sebelum memilih.'
-        : `SIMPROK menemukan ${count} pilihan kandidat terkait, bukan otomatis setara. Periksa spesifikasi sebelum memilih.`;
+        ? 'Ada 1 item yang mungkin cocok. Belum terbukti sama; bandingkan spesifikasinya.'
+        : `Ada ${count} item yang mungkin cocok. Belum ada yang terbukti sama; bandingkan spesifikasinya.`;
   return why.length === 0 ? head : `${head} ${why.join(' ')}`;
 };
 
@@ -2307,7 +2307,7 @@ export const rowNoteLines = (row: BasicPriceImportRowSummary): RowNoteLines => {
     technicalNotice:
       untranslatedCount === 0
         ? null
-        : `${untranslatedCount} informasi teknis tambahan belum memiliki penjelasan pengguna.`,
+        : `Ada ${untranslatedCount} catatan hasil pembacaan yang belum dapat dijelaskan dengan jelas.`,
   };
 };
 
