@@ -1313,12 +1313,12 @@ export function BasicPriceReviewPage() {
                     {expanded ? 'Tutup' : 'Tinjau'}
                   </button>
                 </div>
+                {rowNotice?.rowId === row.id ? (
+                  <p className="bp-note bp-note--info bp-rowcard__notice" role="status" aria-live="polite">
+                    {rowNotice.text}
+                  </p>
+                ) : null}
               </div>
-              {rowNotice?.rowId === row.id ? (
-                <p className="bp-note bp-note--info" role="status" aria-live="polite">
-                  {rowNotice.text}
-                </p>
-              ) : null}
               {expanded ? (
                 <>
                   {reviewRowBucket(row) === 'NEEDS_REVIEW' && reviewQuestion ? (
