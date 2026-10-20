@@ -527,7 +527,8 @@ test("BP-NAME-CORRECTION-01. catalog name edit is committed only by admission an
 test("BP-NAME-VISUAL-01. matching a same-type candidate blocks new-item action and asks for review", () => {
   assert.match(page, /const sameNameCandidate = draft\.admitOpen/u);
   assert.match(page, /correctedCatalogNameCandidateConflict\(/u);
-  assert.match(page, /const admitBlock = sameNameCandidate\s*\? correctedNameCandidateNotice/u);
+  assert.match(page, /const admitBlock = row\.machineProposal\?\.blockingFacts\.includes\('SOURCE_SPECIFICATION_UNVERIFIED'\)/u);
+  assert.match(page, /:\s*sameNameCandidate\s*\? correctedNameCandidateNotice/u);
   assert.match(page, /if \(sameNameCandidate\) \{\s*setStatusMessage\(correctedNameCandidateNotice/u);
   assert.match(page, /\{sameNameCandidate \? \([\s\S]*?role="status"/u);
   assert.match(page, /disabled=\{admitBlock !== null\}/u);
@@ -625,10 +626,11 @@ test("BP-EDIT-TRUTH-02. material changes require confirmation before authoritati
 });
 
 test("BP-CANDIDATE-DOOR-01. blocked admissions explain candidates without minting duplicate identities", () => {
-  assert.match(renderable, /Lihat item mirip yang perlu diperiksa/u);
+  assert.match(renderable, /Bandingkan kandidat dan bukti identitas/u);
   assert.match(renderable, /candidate\.admissionDisposition === 'BLOCKED'/u);
   assert.match(renderable, /Hasil pencarian kosong belum membuktikan bahwa item ini baru/u);
-  assert.match(renderable, /ajukan pemeriksaan untuk ruang kerja ini/u);
+  assert.match(renderable, /memuat ulang halaman saja tidak membuktikan perbedaan tersebut/u);
+  assert.doesNotMatch(renderable, /Ajukan Pemeriksaan Item|handleRequestIdentityReview/u);
   assert.match(page, /admissionOffered && admissionReview/u);
 });
 

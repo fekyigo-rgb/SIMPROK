@@ -41,6 +41,7 @@ import {
   BulkAdmitSafeNewResourcesDto,
 } from './dto/admit-resource-for-import-row.dto';
 import { AcceptMachineProvenRowsDto } from './dto/accept-machine-proven-rows.dto';
+import { ConfirmBasicPriceRowSpecificationsDto } from './dto/confirm-basic-price-row-specifications.dto';
 import { BasicPriceSmartSaveService } from './basic-price-smart-save.service';
 import { CorrectPrivateProvenanceDto } from './dto/correct-private-provenance.dto';
 import { EnrichBasicPriceKdnDto } from './dto/enrich-basic-price-kdn.dto';
@@ -213,6 +214,21 @@ export class BasicPriceImportController {
       rowId,
       request.user.id,
       dto,
+    );
+  }
+
+  /** User-owned optional specification decision. Identity is NOT minted here. */
+  @Post(':batchId/rows/:rowId/confirm-specifications')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async confirmRowSpecifications(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() dto: ConfirmBasicPriceRowSpecificationsDto,
+  ) {
+    return this.resolutionService.confirmRowSpecifications(
+      request.workspaceContext.workspaceId, batchId, rowId,
+      request.user.id, dto,
     );
   }
 

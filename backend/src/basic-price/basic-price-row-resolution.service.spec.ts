@@ -307,7 +307,11 @@ describe('BasicPriceRowResolutionService', () => {
     );
     expect(result.status).toBe('READY_FOR_SUBMISSION');
     expect(tx.resourceCatalog.findFirst).toHaveBeenCalledWith({
-      where: { id: 'resource-01', workspaceId: WORKSPACE_ID, status: 'ACTIVE' },
+      where: {
+        id: 'resource-01',
+        status: 'ACTIVE',
+        OR: [{ workspaceId: WORKSPACE_ID }, { workspaceId: null }],
+      },
     });
     expect(tx.unitDefinition.findFirst).toHaveBeenCalledWith({
       where: { id: 'unit-01', isActive: true },

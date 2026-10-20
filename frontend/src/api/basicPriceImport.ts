@@ -281,6 +281,23 @@ export async function confirmBasicPriceImportRowCategory(
   return parseOrThrow<{ rowId: string; version: number; resourceType: ResourceType; unchanged: boolean }>(response);
 }
 
+/** Audited, workspace-owned optional specification decision on the existing import row. */
+export async function confirmBasicPriceRowSpecifications(
+  batchId: string,
+  rowId: string,
+  version: number,
+  confirmedSpecifications: Record<string, string>,
+  decisionKind: 'CONFIRM_SOURCE' | 'SUPPLEMENT' | 'CORRECT' = 'CONFIRM_SOURCE',
+  reason?: string,
+): Promise<{ rowId: string; version: number; decisionId: string }> {
+  const response = await apiFetch(
+    `/basic-price-imports/${batchId}/rows/${rowId}/confirm-specifications`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version, confirmedSpecifications, decisionKind, ...(reason ? { reason } : {}) }) },
+  );
+  return parseOrThrow(response);
+}
+
 export type BasicPriceIdentityReviewStatus =
   | 'NOT_REQUESTED'
   | 'OBSERVED'

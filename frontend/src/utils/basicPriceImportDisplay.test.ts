@@ -46,12 +46,14 @@ import {
   OPTIONAL_ENRICHMENT_EMPTY,
   OPTIONAL_ENRICHMENT_UNAVAILABLE_REASON,
   rowIdentityAdmissionOffered,
+  rowSafeNewAdmissionEligible,
   rowIdentityAdmissionBlockReason,
   IDENTITY_ADMISSION_LABEL,
   IDENTITY_ADMISSION_HELP,
   rowMachineState,
   rowSectionDisplay,
   rowSectionLabel,
+  candidateResourceTypeLabel,
   rowStatusLabel,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
@@ -143,6 +145,14 @@ test("rowSectionLabel translates workbook sections", () => {
   assert.equal(rowSectionLabel("LABOR"), "Tenaga kerja");
   assert.equal(rowSectionLabel("MATERIAL"), "Bahan");
   assert.equal(rowSectionLabel("EQUIPMENT"), "Peralatan");
+});
+
+test("candidate type displays known family but never raw unknown server tokens", () => {
+  assert.equal(candidateResourceTypeLabel("LABOR"), "Tenaga kerja");
+  assert.equal(candidateResourceTypeLabel("MATERIAL"), "Bahan");
+  assert.equal(candidateResourceTypeLabel("EQUIPMENT"), "Peralatan");
+  assert.equal(candidateResourceTypeLabel("FUTURE_RESOURCE_FAMILY"), "Jenis belum terverifikasi");
+  assert.equal(candidateResourceTypeLabel(""), "Jenis belum terverifikasi");
 });
 
 test("collisionWarningLabel is null for NONE — callers render no badge", () => {
@@ -1584,6 +1594,23 @@ test("identity admission is offered for exhaustion or explicitly refusable name-
   assert.equal(rowIdentityAdmissionOffered(baseRow({ machineProposal: oneCandidate })), true);
 });
 
+test("PR205-SPEC: an unverified source qualifier does not offer an unusable item-creation door", () => {
+  const withSpecification = unknownProposal();
+  withSpecification.unit = provenProposal().unit;
+  withSpecification.blockingFacts = ["SOURCE_SPECIFICATION_UNVERIFIED"];
+  const row = baseRow({ machineProposal: withSpecification });
+  assert.equal(withSpecification.resource.admissionReview?.offered, true);
+  assert.equal(rowIdentityAdmissionOffered(row), false);
+  assert.equal(rowSafeNewAdmissionEligible(row), false);
+
+  // Missing specifications never become an identity requirement.
+  const ordinaryProposal = unknownProposal();
+  ordinaryProposal.unit = provenProposal().unit;
+  const withoutSpecification = baseRow({ machineProposal: ordinaryProposal });
+  assert.equal(rowIdentityAdmissionOffered(withoutSpecification), true);
+  assert.equal(rowSafeNewAdmissionEligible(withoutSpecification), true);
+});
+
 test("identity admission does not invent a second gate over optional enrichment", () => {
   const exhausted = baseRow({
     machineProposal: unknownProposal(),
@@ -1756,6 +1783,55 @@ test("BP-NAME-VISUAL-01: corrected source typo cannot silently refuse an exact s
   assert.equal(correctedCatalogNameCandidateConflict(row, "Agreg at Kasar", "MATERIAL"), null);
   assert.equal(correctedCatalogNameCandidateConflict(row, "Agregat Kasar", null), null);
   assert.equal(correctedCatalogNameCandidateConflict(baseRow({ name: "Agreg at Kasar" }), "Agregat Kasar", "MATERIAL"), null);
+});
+
+test("PR205 SPEC: exact name is not duplicate evidence after canonical machine RULED_OUT", () => {
+  const proposal = provenProposal();
+  const candidate = {
+    resourceCatalogId: "existing-shimizu",
+    name: "Pompa Air Uji PR205",
+    code: null,
+    type: "MATERIAL",
+    baseUnit: "UNIT",
+    evidence: [],
+    specificationUnproved: false,
+    unprovedSpecificationFacts: [],
+    hasPriorHumanDecision: false,
+    admissionDisposition: "MACHINE_RULED_OUT" as const,
+  };
+  const resource = {
+    ...proposal.resource,
+    status: "UNRESOLVED" as const,
+    resourceCatalogId: null,
+    reasonCodes: ["SPECIFICATION_CONFLICT"],
+    candidates: [candidate],
+  };
+  const row = baseRow({ name: "Pompa Air Uji PR205", machineProposal: {
+    ...proposal, identityPairProven: false, resource,
+  } });
+  assert.equal(
+    correctedCatalogNameCandidateConflict(row, "Pompa Air Uji PR205", "MATERIAL"),
+    null,
+    "a canonical SPECIFICATION_CONFLICT and MACHINE_RULED_OUT are stronger than raw-name equality",
+  );
+  const uncertainRow = baseRow({ ...row, machineProposal: {
+    ...proposal, identityPairProven: false,
+    resource: { ...resource, reasonCodes: ["SPECIFICATION_UNPROVED"] },
+  } });
+  assert.equal(
+    correctedCatalogNameCandidateConflict(uncertainRow, "Pompa Air Uji PR205", "MATERIAL")?.resourceCatalogId,
+    candidate.resourceCatalogId,
+    "unknown specifications must never be treated as proven differences",
+  );
+  const blockedRow = baseRow({ ...row, machineProposal: {
+    ...proposal, identityPairProven: false,
+    resource: { ...resource, candidates: [{ ...candidate, admissionDisposition: "BLOCKED" as const }] },
+  } });
+  assert.equal(
+    correctedCatalogNameCandidateConflict(blockedRow, "Pompa Air Uji PR205", "MATERIAL")?.resourceCatalogId,
+    candidate.resourceCatalogId,
+    "even a specification conflict cannot override the server's BLOCKED candidate",
+  );
 });
 
 test("BP-UX-01: understood identity does not require repeated confirmation", () => {

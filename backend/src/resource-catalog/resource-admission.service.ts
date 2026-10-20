@@ -8,6 +8,7 @@ import {
 } from './resource-identity-resolution.kernel';
 import { ResourceIdentityResolutionService } from './resource-identity-resolution.service';
 import { candidateContextDigest } from './ghx-candidate-context';
+import { confirmedSpecifications as parseConfirmedSpecifications } from './resource-identity-specification.contract';
 
 /**
  * THE one canonical mint authority for a genuinely-new resource.
@@ -154,6 +155,8 @@ export interface AdmitObservedResourceInput {
   /** A canonical unit code the caller has already PROVEN via the Unit Kernel. */
   baseUnit: string;
   provenance: ResourceAdmissionProvenance;
+  /** PR205: audited optional product facts; never raw workbook context. */
+  confirmedSpecifications?: Readonly<Record<string, string>> | null;
   /**
    * OPTIONAL — a person examined the live nominations and refused every one of
    * them (see `isAdmissibleAfterExamination`). Absent, admission is exactly the
@@ -218,6 +221,7 @@ export class ResourceAdmissionService {
       rawUnit: string | null;
       resourceType: ResourceType;
       sourceSha256: string | null;
+      confirmedSpecifications?: Readonly<Record<string, string>> | null;
       examination?: {
         refusedCandidateIds: readonly string[];
         candidateContextDigest: string;
@@ -248,6 +252,9 @@ export class ResourceAdmissionService {
       rawUnit: subject.rawUnit,
       resourceType: subject.resourceType,
       sourceSha256: subject.sourceSha256,
+      ...(subject.confirmedSpecifications
+        ? { confirmedSpecifications: subject.confirmedSpecifications }
+        : {}),
     };
     const evidence = await this.identity.loadEvidence(tx, subject.workspaceId);
     const resolution = await this.identity.resolve(evidence, reference, tx);
@@ -345,6 +352,13 @@ export class ResourceAdmissionService {
     tx: Prisma.TransactionClient,
     input: AdmitObservedResourceInput,
   ) {
+    // Only the shared structured vocabulary may reach the canonical catalog.
+    const specs = input.confirmedSpecifications
+      ? parseConfirmedSpecifications(input.confirmedSpecifications)
+      : null;
+    if (input.confirmedSpecifications && !specs) {
+      throw new Error('RESOURCE_ADMISSION_SPECIFICATION_INVALID');
+    }
     const missing = PROVENANCE_REQUIRED.filter((key) => {
       const value = input.provenance[key];
       return value === undefined || value === null || value === '';
@@ -366,6 +380,7 @@ export class ResourceAdmissionService {
       // happened to be one-directional. That is an invariant, not a coincidence,
       // so it is stated rather than relied upon.
       sourceSha256: input.provenance.sourceSha256,
+      confirmedSpecifications: specs,
       examination: input.examination,
     });
 
@@ -386,6 +401,7 @@ export class ResourceAdmissionService {
               rawUnit: input.rawUnit ?? null,
               resourceType: input.resourceType,
               sourceSha256: input.provenance.sourceSha256,
+              ...(specs ? { confirmedSpecifications: specs } : {}),
             },
             tx,
           ),
@@ -398,6 +414,7 @@ export class ResourceAdmissionService {
         rawUnit: input.rawUnit ?? null,
         resourceType: input.resourceType,
         sourceSha256: input.provenance.sourceSha256,
+        confirmedSpecifications: specs,
         // No rejected candidate from the ORIGINAL review is transferred.
       });
     }
@@ -411,6 +428,7 @@ export class ResourceAdmissionService {
         name: canonicalName,
         type: input.resourceType,
         baseUnit: input.baseUnit,
+        ...(specs ? { specifications: specs } : {}),
         // Source code is provenance, not identity. Only a free canonical slot
         // receives the trimmed spelling; an occupied slot yields NULL here.
         // `sameResource` is deliberately not an observed-admission authority:

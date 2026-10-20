@@ -901,6 +901,8 @@ describe('BasicPriceImportService', () => {
         rawResourceNameText: 'Air',
         rawResourceCodeText: null,
         rawUnitText: 'ltr',
+        rawSourceContext: undefined,
+        confirmedSpecifications: null,
       });
     });
 

@@ -8,16 +8,16 @@ import {
   rejectBasicPriceImportRow,
   resolveBasicPriceImportRow,
   confirmBasicPriceImportRowCategory,
+  confirmBasicPriceRowSpecifications,
   getBasicPriceIdentityReviews,
-  requestBasicPriceIdentityReview,
   admitResourceForImportRow,
   admitSafeNewBasicPriceResources,
   submitBasicPriceImportBatch,
   enrichBasicPriceKdn,
   ImportRequestError,
 } from '../api/basicPriceImport';
-import type { BasicPriceIdentityReviewRow } from '../api/basicPriceImport';
 import type {
+  BasicPriceIdentityReviewRow,
   ResourceLookupItem,
   ResourceType,
   UnitLookupItem,
@@ -61,6 +61,7 @@ import {
   rowReviewFactsLine,
   reviewDisplayResourceName,
   rowSectionDisplay,
+  candidateResourceTypeLabel,
   rowStateLabel,
   reviewRowBucket,
   staleRowRecoveryMessage,
@@ -232,6 +233,7 @@ export function BasicPriceReviewPage() {
   const [rowNotice, setRowNotice] = useState<{ rowId: string; text: string } | null>(null);
   const [categoryDrafts, setCategoryDrafts] = useState<Record<string, ResourceType | ''>>({});
   const [categoryEditRows, setCategoryEditRows] = useState<Set<string>>(new Set());
+  // Read historical identity decisions; no external approval is required for private items.
   const [identityReviewStatuses, setIdentityReviewStatuses] = useState<Record<string, BasicPriceIdentityReviewRow> | null>(null);
   /** A unit edit scrolls/focuses the canonical picker in the 65% decision panel. */
   const pendingUnitFocusRow = useRef<string | null>(null);
@@ -251,19 +253,16 @@ export function BasicPriceReviewPage() {
     try {
       const result = await getBasicPriceImportBatch(batchId);
       setBatch(result);
-      // The ONE shared curation lifecycle is read in a batch-scoped request,
-      // not once per item, and cannot be confused with a catalog admission.
-      let identityReviewReadNotice: string | null = null;
+      let historicalReviewNotice: string | null = null;
       try {
-        const identityReviews = await getBasicPriceIdentityReviews(batchId);
-        setIdentityReviewStatuses(identityReviews.rows);
+        // Preserve visibility of prior decisions even though private users no longer request new curation.
+        const history = await getBasicPriceIdentityReviews(batchId);
+        setIdentityReviewStatuses(history.rows);
       } catch (error) {
-        // UNKNOWN is not 'no request'. An authorization failure is not empty
-        // work either, so preserve the real refusal instead of silently hiding.
         setIdentityReviewStatuses(null);
-        identityReviewReadNotice = error instanceof ImportRequestError
+        historicalReviewNotice = error instanceof ImportRequestError
           ? importRequestMessage(error.httpStatus)
-          : 'Status pemeriksaan identitas belum dapat dibaca. Coba muat ulang.';
+          : 'Riwayat pemeriksaan identitas belum dapat dibaca.';
       }
       // INT-CONNECT-01 — CARRY THE MACHINE'S PROVEN ANSWER INTO THE FORM.
       //
@@ -288,7 +287,7 @@ export function BasicPriceReviewPage() {
         }
         return next;
       });
-      if (announceProgress) setStatusMessage(identityReviewReadNotice ? `${formatBatchProgress(result)} ${identityReviewReadNotice}` : formatBatchProgress(result));
+      if (announceProgress) setStatusMessage(historicalReviewNotice ? `${formatBatchProgress(result)} ${historicalReviewNotice}` : formatBatchProgress(result));
       /**
        * BP-VISUAL-TRUTH-07 §14 — WHETHER THE READ ACTUALLY HAPPENED, ANSWERED.
        *
@@ -448,6 +447,42 @@ export function BasicPriceReviewPage() {
     return staleRowRecoveryMessage(row.sourceRowNumber);
   };
 
+  /** One explicit human decision; source facts remain immutable and no catalog is minted here. */
+  const handleConfirmSourceSpecifications = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId || !row.sourceSpecifications?.length) return;
+    const facts = row.sourceSpecifications;
+    if (facts.some((fact) => fact.value === null || !fact.value?.trim())) {
+      const message = 'Ada spesifikasi yang belum dapat dibaca. Perbaikan memerlukan alasan dan pemeriksaan tersendiri.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+      return;
+    }
+    const sourceFacts = Object.fromEntries(facts.map((fact) => [fact.label, fact.value!]));
+    setIsBusy(true);
+    try {
+      await confirmBasicPriceRowSpecifications(batchId, row.id, row.version, sourceFacts);
+      const refreshed = await loadBatch(false);
+      const message = refreshed
+        ? 'Spesifikasi baris ' + row.sourceRowNumber + ' telah dikonfirmasi dan dicatat dalam riwayat. SIMPROK memeriksa identitas kembali.'
+        : 'Konfirmasi diterima, tetapi pembacaan ulang gagal. Muat ulang sebelum memutuskan identitas.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+    } catch (error) {
+      if (error instanceof ImportRequestError && error.httpStatus === 409) {
+        await loadBatch(false);
+      }
+      const message = error instanceof ImportRequestError && error.httpStatus === 409
+        ? 'Konfirmasi belum disimpan: data telah berubah atau berbeda dari berkas. Tinjau kembali spesifikasi.'
+        : error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Konfirmasi belum berhasil; tidak ada keputusan identitas baru.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleConfirmCategory = async (row: BasicPriceImportRowSummary) => {
     if (!batchId) return;
     const category = categoryDrafts[row.id] ?? row.section ?? '';
@@ -491,33 +526,6 @@ export function BasicPriceReviewPage() {
         : error instanceof ImportRequestError
           ? importRequestMessage(error.httpStatus)
           : 'Jenis belum berhasil disimpan. Muat ulang baris lalu coba lagi.';
-      setRowNotice({ rowId: row.id, text: notice });
-      setStatusMessage(notice);
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  /** An explicit review request, not an approval or a new ResourceCatalog. */
-  const handleRequestIdentityReview = async (row: BasicPriceImportRowSummary) => {
-    if (!batchId) return;
-    setIsBusy(true);
-    try {
-      const result = await requestBasicPriceIdentityReview(batchId, row.id, row.version);
-      setIdentityReviewStatuses((current) => ({
-        ...(current ?? {}), [row.id]: { status: result.status, resource: null },
-      }));
-      const notice = result.status === 'OBSERVED'
-        ? 'Permintaan tercatat di ruang kerja ini. Pengguna yang memiliki izin pemeriksaan identitas dapat menanganinya. Belum ada item baru yang dibuat.'
-        : 'Pemeriksaan identitas telah memiliki keputusan. Muat ulang peninjauan untuk melihat pilihan yang tersedia.';
-      setRowNotice({ rowId: row.id, text: notice });
-      setStatusMessage(notice);
-    } catch (error) {
-      const notice = error instanceof ImportRequestError && error.httpStatus === 409
-        ? 'Permintaan belum dapat dikirim. Jenis atau bukti kandidat telah berubah; periksa kembali baris ini lalu coba lagi.'
-        : error instanceof ImportRequestError
-          ? importRequestMessage(error.httpStatus)
-          : 'Belum berhasil mengirim permintaan pemeriksaan. Tidak ada keputusan item baru yang dibuat.';
       setRowNotice({ rowId: row.id, text: notice });
       setStatusMessage(notice);
     } finally {
@@ -866,6 +874,7 @@ export function BasicPriceReviewPage() {
   // The bulk writer uses the raw workbook name: never include a row whose
   // reviewer corrected that name without passing the correction to the writer.
   const safeNewRows = batch.rows.filter((row) =>
+    !row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED') &&
     rowSafeNewAdmissionEligible(row) &&
     (draftFor(row.id).correctedCanonicalName === null ||
       draftFor(row.id).correctedCanonicalName === row.name)
@@ -1218,6 +1227,7 @@ export function BasicPriceReviewPage() {
             busy: isBusy || draft.resourcePending || draft.unitPending,
           });
           const admissionOffered = rowIdentityAdmissionOffered(row);
+          const sourceSpecUnverified = row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED') ?? false;
           const refusalChoices = rowIdentityRefusalChoices(row);
           const admissionReview = row.machineProposal?.resource.admissionReview;
           const refusalsConfirmed = admissionReview
@@ -1236,7 +1246,9 @@ export function BasicPriceReviewPage() {
             draft.correctedCanonicalName !== null &&
             draft.correctedCanonicalName !== row.name &&
             batch?.reviewCapabilities?.correctedCanonicalNameOnAdmission !== true;
-          const admitBlock = sameNameCandidate
+          const admitBlock = row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')
+            ? 'Spesifikasi pada berkas belum diperiksa bersama identitas item. Penetapan item baru belum tersedia.'
+            : sameNameCandidate
             ? correctedNameCandidateNotice(sameNameCandidate.name)
             : unsupportedNameCorrection
             ? 'Backend preview belum mendukung penyimpanan koreksi nama. Penetapan diblokir sampai versi backend diselaraskan.'
@@ -1388,6 +1400,32 @@ export function BasicPriceReviewPage() {
                       <div><dt>Satuan</dt><dd>{row.unit?.trim() || 'Tidak tercantum'}</dd></div>
                       <div><dt>Harga</dt><dd>{row.rawPriceDisplayText ? `Rp ${row.rawPriceDisplayText}` : 'Tidak tercantum'}</dd></div>
                     </dl>
+                    {row.sourceSpecifications && row.sourceSpecifications.length > 0 ? (
+                      <details className="bp-details">
+                        <summary>{row.specificationDecision ? 'Spesifikasi dari berkas · sudah diperiksa' : 'Spesifikasi dari berkas · perlu diperiksa'}</summary>
+                        <dl className="bp-rowcard__source-facts">
+                          {row.sourceSpecifications.map((fact, i) => (
+                            <div key={`${fact.label}-${i}`}><dt>{fact.label}</dt><dd>{fact.value ?? 'Format sumber belum dapat dibaca sebagai spesifikasi'}</dd></div>
+                          ))}
+                        </dl>
+                        <p className="bp-field__help">{row.specificationDecision
+                          ? 'Spesifikasi asli berkas sudah diperiksa dan keputusan tercatat. Ini bukan otomatis bukti bahwa dua item katalog identik; pencocokan identitas tetap dilakukan SIMPROK.'
+                          : 'Ini informasi asli berkas, belum menjadi bukti identitas kanonis. Item dengan spesifikasi yang belum diperiksa tidak boleh disimpan sebagai identitas yang terbukti sama.'}</p>
+                        {row.specificationDecision ? (
+                          <p className="bp-field__help" role="status">Spesifikasi telah dikonfirmasi pada versi {row.specificationDecision.resultingVersion}. Keputusan tersimpan dalam riwayat; pemeriksaan identitas tetap dilakukan SIMPROK.</p>
+                        ) : sourceSpecUnverified && mutable ? (
+                          <button
+                            type="button"
+                            className="bp-btn bp-btn--primary bp-btn--sm"
+                            disabled={isBusy || row.sourceSpecifications.some((fact) => !fact.value?.trim())}
+                            onClick={() => void handleConfirmSourceSpecifications(row)}
+                            title="Periksa nilai spesifikasi yang tertulis pada berkas lalu catat keputusan Anda. Ini bukan persetujuan katalog dan tidak menyimpan harga."
+                          >
+                            Saya sudah memeriksa — Konfirmasi spesifikasi berkas
+                          </button>
+                        ) : null}
+                      </details>
+                    ) : null}
                   </div>
 
                   <div className="bp-rowcard__column bp-rowcard__kind-unit">
@@ -1513,21 +1551,19 @@ export function BasicPriceReviewPage() {
 
                   <div className="bp-rowcard__actions bp-rowcard__resolution">
                     <h3>Pilih Penyelesaian</h3>
-                    {identityReviewStatuses?.[row.id] &&
-                     identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' &&
-                     admissionReview?.reasonCode !== 'IDENTITY_CANDIDATE_BLOCKED' ? (
-                      <div className="bp-note bp-note--info" role="status" aria-label={`Hasil pemeriksaan identitas baris ${row.sourceRowNumber}`}>
-                        {identityReviewStatuses[row.id].status === 'OBSERVED'
-                          ? <p>Permintaan tercatat untuk ruang kerja ini. Menunggu keputusan pengguna yang memiliki izin pemeriksaan identitas; belum ada item baru yang dibuat.</p>
-                          : identityReviewStatuses[row.id].status === 'RESOLVED_EXISTING' ||
-                            identityReviewStatuses[row.id].status === 'ADMITTED_NEW'
-                            ? <p>Identitas item sudah diputuskan oleh pengguna yang berwenang. Harga belum disimpan.
-                              {identityReviewStatuses[row.id].resource
-                                ? <> Item: <strong>{identityReviewStatuses[row.id].resource?.name}</strong>. Pilih item dan satuannya untuk melanjutkan.</>
-                                : <> Item hasil keputusan belum bisa dipilih di ruang kerja ini. Pengguna yang berwenang perlu memeriksa aksesnya sebelum Anda melanjutkan.</>}
-                            </p>
-                            : <p>Pemeriksaan selesai tanpa penetapan item. Periksa kembali nama dan spesifikasi sebelum melanjutkan.</p>}
-                      </div>
+                    {identityReviewStatuses?.[row.id] && identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' ? (
+                      <details className="bp-details" aria-label={`Riwayat identitas baris ${row.sourceRowNumber}`}>
+                        <summary>Riwayat keputusan identitas</summary>
+                        {identityReviewStatuses[row.id].status === 'OBSERVED' ? (
+                          <p>Riwayat: pemeriksaan identitas pernah diminta dan belum diputuskan. Persetujuan pihak lain bukan syarat pemakaian item privat.</p>
+                        ) : identityReviewStatuses[row.id].status === 'RESOLVED_EXISTING' || identityReviewStatuses[row.id].status === 'ADMITTED_NEW' ? (
+                          <p>Riwayat: identitas pernah diputuskan. Harga tidak otomatis disimpan.
+                            {identityReviewStatuses[row.id].resource
+                              ? <> Item: <strong>{identityReviewStatuses[row.id].resource?.name}</strong>. Pilih item dan satuan yang sesuai untuk melanjutkan.</>
+                              : <> Item keputusan tidak tersedia untuk dipilih di workspace ini. Jangan membuat identitas duplikat.</>}
+                          </p>
+                        ) : <p>Riwayat: pemeriksaan identitas sebelumnya ditutup tanpa penetapan item.</p>}
+                      </details>
                     ) : null}
                     {proven ? (
                       <p className="bp-field__help">Dikenali otomatis. Gunakan Simpan &amp; Gunakan di atas untuk menyimpan baris ini bersama baris pasti lainnya.</p>
@@ -1535,11 +1571,14 @@ export function BasicPriceReviewPage() {
                       <p className="bp-field__help">{noteDisclosure.primary ?? 'Baris ini telah ditolak.'}</p>
                     ) : mutable ? (
                       <>
-                        {resourceProven && !unitProven ? (
+                        {sourceSpecUnverified ? (
+                          <p className="bp-field__help" role="status">Spesifikasi pada berkas belum diperiksa sebagai bukti identitas. Pilihan item belum tersedia agar SIMPROK tidak menyamakan atau membuat barang yang salah. Data sumber tetap tersimpan; Anda dapat meninjau nanti.</p>
+                        ) : null}
+                        {!sourceSpecUnverified && resourceProven && !unitProven ? (
                           <button type="button" className="bp-btn bp-rowcard__choice" title="Pilih satuan standar untuk item yang sudah dikenali." aria-expanded={lookupRows.has(row.id)} onClick={() => { updateDraft(row.id, { admitOpen: false }); setLookupRows((current) => new Set(current).add(row.id)); }} disabled={isBusy}>
                             Pilih Satuan
                           </button>
-                        ) : !resourceProven ? (
+                        ) : !sourceSpecUnverified && !resourceProven ? (
                           <button
                             type="button"
                             className="bp-btn bp-rowcard__choice"
@@ -1554,7 +1593,7 @@ export function BasicPriceReviewPage() {
                             Pilih Item yang Sesuai Padanan
                           </button>
                         ) : null}
-                        {lookupRows.has(row.id) && mutable && !proven ? (
+                        {!sourceSpecUnverified && lookupRows.has(row.id) && mutable && !proven ? (
                           <div id={`bp-lookup-${row.id}`} tabIndex={-1} className="bp-rowcard__lookup bp-rowcard__lookup--contextual" aria-label="Cari dan pilih item atau satuan">
                             <strong className="bp-rowcard__lookup-heading">{resourceProven ? "Pilih satuan yang sesuai" : "Cari item yang sudah ada di SIMPROK"}</strong>
                             {!resourceProven ? (
@@ -1670,14 +1709,17 @@ export function BasicPriceReviewPage() {
                           </>
                         ) : null}
                         {!admissionOffered && admissionReview?.reasonCode && admissionUnavailableReason(admissionReview.reasonCode) ? (
-                          <div className="bp-field__help" role="status">
-                            <p>Item baru belum tersedia: {admissionUnavailableReason(admissionReview.reasonCode)}</p>
+                          <div className="bp-field__help">
+                            <p role="status">{row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')
+                              ? 'Spesifikasi dari berkas belum diperiksa. Item ini belum bisa disimpan atau dinyatakan identik.'
+                              : admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED'
+                              ? 'Item baru belum dapat ditetapkan: ada kandidat yang identitasnya belum terbukti berbeda.'
+                              : 'Item baru belum tersedia: ' + admissionUnavailableReason(admissionReview.reasonCode)}</p>
                             {admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED' ? (
                               <details className="bp-details">
-                                <summary>Lihat item mirip yang perlu diperiksa</summary>
+                                <summary>Bandingkan kandidat dan bukti identitas</summary>
                                 {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED') ? (
                                   <>
-                                    <p>Item berikut masih perlu diperiksa; belum dapat dinyatakan berbeda dari halaman ini.</p>
                                     <ul>
                                     {row.machineProposal.resource.candidates
                                       .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
@@ -1685,46 +1727,23 @@ export function BasicPriceReviewPage() {
                                         <li key={index}>
                                           <strong>{candidate.name}</strong>
                                           {candidate.code ? ' (' + candidate.code + ')' : ''}
+                                          {' — ' + candidateResourceTypeLabel(candidate.type) + ' · satuan ' + candidate.baseUnit}
+                                          {candidate.specificationUnproved && candidate.unprovedSpecificationFacts.length > 0
+                                            ? ' — bukti yang masih diperlukan: ' + candidate.unprovedSpecificationFacts.join(', ')
+                                            : ''}
                                         </li>
                                       ))}
                                     </ul>
                                   </>
                                 ) : <p>Daftar item yang mungkin sama belum dapat ditampilkan. Item baru belum dapat dibuat sebelum pemeriksaan.</p>}
-                                <p>Jika ada item yang benar-benar sama, pilih melalui <strong>Pilih Item yang Sesuai Padanan</strong>. Jika tidak ada, ajukan pemeriksaan untuk ruang kerja ini. Hasil pencarian kosong belum membuktikan bahwa item ini baru.</p>
+                                <p>Jika sesuai, gunakan <strong>Pilih Item yang Sesuai Padanan</strong> dan pilih satuan. Jika berbeda, jangan pilih padanan yang salah; perbedaan spesifikasi masih memerlukan bukti.</p>
+                                <p>Hasil pencarian kosong belum membuktikan bahwa item ini baru. Nama kerja bukan bukti spesifikasi; memuat ulang halaman saja tidak membuktikan perbedaan tersebut.</p>
+                                <p>Item privat tidak memerlukan persetujuan katalog resmi SIMPROK.</p>
                                 {!(row.sectionProvenance === 'SOURCE_ROW_CATEGORY' ||
                                     row.sectionProvenance === 'SOURCE_SECTION_TITLE' ||
                                     row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER')) ? (
-                                  <p role="status">Pastikan jenis item terlebih dahulu melalui <strong>Ubah Jenis</strong> di sebelah kiri dan <strong>Konfirmasi Jenis</strong>. Kategori awal berkas belum cukup untuk mengirim pemeriksaan identitas.</p>
-                                ) : identityReviewStatuses?.[row.id]?.status === 'OBSERVED' ? (
-                                  rowNotice?.rowId !== row.id ? (
-                                    <p role="status">Permintaan tercatat di ruang kerja ini. Menunggu keputusan pengguna yang memiliki izin pemeriksaan identitas. Belum ada item baru yang dibuat.</p>
-                                  ) : null
-                                ) : identityReviewStatuses?.[row.id]?.status === 'RESOLVED_EXISTING' ||
-                                    identityReviewStatuses?.[row.id]?.status === 'ADMITTED_NEW' ? (
-                                  <div role="status">
-                                    <p>Identitas item telah diputuskan oleh pengguna yang berwenang. Harga belum disimpan.</p>
-                                    {identityReviewStatuses?.[row.id]?.resource ? (
-                                      <p>Item yang diputuskan: <strong>{identityReviewStatuses[row.id].resource?.name}</strong>. Buka Pilih Item yang Sesuai Padanan, pilih item tersebut dan satuan yang tepat, lalu simpan melalui tombol yang sudah ada.</p>
-                                    ) : (
-                                      <p>Item hasil keputusan belum dapat dipilih di ruang kerja ini. Minta pengguna yang berwenang memeriksa akses item sebelum melanjutkan, bukan membuat item yang sama lagi.</p>
-                                    )}
-                                  </div>
-                                ) : identityReviewStatuses?.[row.id]?.status === 'DISMISSED' ? (
-                                  <p role="status">Pengelola menutup pemeriksaan ini. Periksa kembali data item dan sumbernya sebelum mengajukan keputusan berikutnya.</p>
-                                ) : (
-                                  <>
-                                    {identityReviewStatuses === null ? (
-                                      <p role="status">Status pemeriksaan sebelumnya belum dapat dibaca. Permintaan yang sama tidak akan menggandakan pemeriksaan.</p>
-                                    ) : null}
-                                    <button
-                                      type="button"
-                                      className="bp-btn bp-btn--primary bp-btn--sm"
-                                      disabled={isBusy}
-                                      onClick={() => void handleRequestIdentityReview(row)}
-                                    >Ajukan Pemeriksaan Item</button>
-                                    <p>Permintaan masuk ke daftar pemeriksaan ruang kerja ini. Hanya pengguna dengan izin pemeriksaan identitas yang dapat memutuskan. Jika belum ada yang diberi izin, kewenangannya harus ditetapkan terlebih dahulu.</p>
-                                  </>
-                                )}
+                                  <p role="status">Pastikan jenis item terlebih dahulu melalui <strong>Ubah Jenis</strong> di sebelah kiri dan <strong>Konfirmasi Jenis</strong>. Kategori awal berkas belum cukup sebagai bukti identitas.</p>
+                                ) : null}
                               </details>
                             ) : null}
                           </div>

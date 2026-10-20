@@ -32,6 +32,7 @@ model Account {
   reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
   basicPriceRowCompensations                  BasicPriceImportRowResolutionCompensation[] @relation("BasicPriceImportRowCompensationActor")
   basicPriceCategoryDecisions                  BasicPriceImportRowCategoryDecision[] @relation("BasicPriceImportRowCategoryActor")
+  basicPriceSpecificationDecisions             BasicPriceImportRowSpecificationDecision[] @relation("BasicPriceImportRowSpecificationActor")
   basicPricePublicationAudits                 BasicPricePublicationAudit[]         @relation("BasicPricePublicationAuditActor")
   basicPriceProvenanceCorrections             BasicPriceProvenanceCorrection[]     @relation("BasicPriceProvenanceCorrectionActor")
   lockedRabDocuments                          RabDocument[]                        @relation("RabDocumentLockedBy")
@@ -122,6 +123,7 @@ model Workspace {
   basicPriceProvenanceCorrections   BasicPriceProvenanceCorrection[]
   basicPriceRowCompensations          BasicPriceImportRowResolutionCompensation[]
   basicPriceCategoryDecisions          BasicPriceImportRowCategoryDecision[]
+  basicPriceSpecificationDecisions     BasicPriceImportRowSpecificationDecision[]
   progressAuditEvents               ProgressAuditEvent[]               @relation("ProgressAuditWorkspace")
   projectTimeZoneEvents             ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions     AhspResourceIdentityDecision[]
@@ -3133,6 +3135,7 @@ model BasicPriceImportRow {
   resourceMappings  BasicPriceImportRowResourceMapping[]
   resolutionCompensations BasicPriceImportRowResolutionCompensation[]
   categoryDecisions BasicPriceImportRowCategoryDecision[]
+  specificationDecisions BasicPriceImportRowSpecificationDecision[]
 
   @@unique([batchId, sourceRowNumber])
   @@index([batchId])
@@ -3192,6 +3195,36 @@ model BasicPriceImportRowCategoryDecision {
   @@index([actorAccountId], map: "bp_row_category_decisions_actorAccountId_idx")
   @@unique([rowId, resultingVersion], map: "bp_row_category_decisions_rowId_resultingVersion_key")
   @@map("basic_price_import_row_category_decisions")
+}
+
+/// PR205: append-only human specification decision about ONE owned import row.
+/// This is evidence for the ONE identity kernel; never a second catalog.
+model BasicPriceImportRowSpecificationDecision {
+  id String @id @default(uuid()) @db.Uuid
+  workspaceId String @db.Uuid
+  rowId String @db.Uuid
+  actorAccountId String @db.Uuid
+  previousDecisionId String? @db.Uuid
+  previousVersion Int
+  resultingVersion Int
+  /// CONFIRM_SOURCE, SUPPLEMENT, or CORRECT; never an automatic approval.
+  decisionKind String
+  sourceSha256 String @db.VarChar(64)
+  sourceSpecifications Json?
+  confirmedSpecifications Json
+  reason String? @db.Text
+  decidedAt DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, map: "bp_row_spec_workspace_fk")
+  row BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Restrict, map: "bp_row_spec_row_fk")
+  actor Account @relation("BasicPriceImportRowSpecificationActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "bp_row_spec_actor_fk")
+  previousDecision BasicPriceImportRowSpecificationDecision? @relation("BPRowSpecificationDecisionLineage", fields: [previousDecisionId], references: [id], onDelete: Restrict)
+  nextDecisions BasicPriceImportRowSpecificationDecision[] @relation("BPRowSpecificationDecisionLineage")
+
+  @@unique([rowId, resultingVersion], map: "bp_row_spec_row_version_key")
+  @@index([workspaceId, rowId, resultingVersion(sort: Desc)], map: "bp_row_spec_history_idx")
+  @@index([actorAccountId], map: "bp_row_spec_actor_idx")
+  @@map("basic_price_import_row_specification_decisions")
 }
 
 model BasicPriceImportRowResourceMapping {

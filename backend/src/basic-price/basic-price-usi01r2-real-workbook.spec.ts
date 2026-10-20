@@ -178,7 +178,7 @@ describeIf(WORKBOOK_B)('REAL Workbook B — Harga kota Ambon', () => {
       declaredSection: 'MATERIAL',
       selectedRegionLabel: label,
       selectedNameColumn: 2,
-      selectedUnitColumn: 4,
+      selectedUnitColumn: 3,
     });
 
   it('reports the source artifact exactly as it is', () => {
@@ -191,7 +191,7 @@ describeIf(WORKBOOK_B)('REAL Workbook B — Harga kota Ambon', () => {
       adapter.parse(testEnvelope(bytes, 'Harga kota Ambon.xlsx'), {
         declaredSection: 'MATERIAL',
         selectedNameColumn: 2,
-        selectedUnitColumn: 4,
+        selectedUnitColumn: 3,
       }),
     ).rejects.toMatchObject({
       code: 'REGION_COLUMN_SELECTION_REQUIRED',

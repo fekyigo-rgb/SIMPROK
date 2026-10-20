@@ -29,6 +29,8 @@ import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-
 import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import { toDecimalString2 } from '../common/money';
+import { sourceSpecificationEvidence } from './basic-price-source-specification-gate';
+import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
 import { batchTemporalQuestions } from './basic-price-temporal-question.law';
 import {
   assertTemporalProvenanceCoherent,
@@ -1279,6 +1281,7 @@ export class BasicPriceImportService {
       /** Loaded for review GET only; the saved canonical unit is not a draft. */
       unitDefinition?: { code: string; displayName: string; symbol: string } | null;
       rawUnitText?: string | null;
+      rawSourceContext?: unknown;
       rawPriceDisplayText?: string | null;
       proposedCanonicalPrice?: { toString(): string } | null;
       proposedCanonicalKdn?: { toString(): string } | null;
@@ -1327,6 +1330,11 @@ export class BasicPriceImportService {
      * OPTIONAL, AND ABSENCE MEANS NOT ASKED — same neutrality as `proposals`.
      */
     privatePriceByRowId?: ReadonlyMap<string, string>,
+    reviewedSpecsByRow?: ReadonlyMap<string, {
+      facts: Record<string, string>;
+      decisionKind: string;
+      resultingVersion: number;
+    }>,
   ) {
     // ONE FACT, TWO SHAPES. The count the action projection needs and the
     // per-row flag the row label needs are the SAME truth, so it is derived
@@ -1497,6 +1505,9 @@ export class BasicPriceImportService {
           ? { code: r.unitDefinition.code, displayName: r.unitDefinition.displayName, symbol: r.unitDefinition.symbol }
           : null,
         unit: r.rawUnitText ?? null,
+        // Source evidence only; no identity assertion or catalogue mutation.
+        sourceSpecifications: sourceSpecificationEvidence(r.rawSourceContext),
+        specificationDecision: reviewedSpecsByRow?.get(r.id) ?? null,
         rawPriceDisplayText: r.rawPriceDisplayText ?? null,
         proposedCanonicalPrice: r.proposedCanonicalPrice
           ? r.proposedCanonicalPrice.toString()
@@ -2577,6 +2588,35 @@ export class BasicPriceImportService {
     // Only mutable rows are asked about. A rejected or already-submitted row has
     // nothing left to decide, and proposing an identity for it would be advice
     // nobody can act on.
+    // PR205: read the append-only OWNER decisions in ONE batch-scoped query.
+    // Neither a raw spreadsheet cell nor the browser is identity authority.
+    // A stale decision or a different source digest is NEVER silently reused.
+    const decisions = rows.some((row) => sourceSpecificationEvidence(row.rawSourceContext).length > 0)
+      ? await this.prisma.$queryRaw<Array<{
+          rowId: string; resultingVersion: number; sourceSha256: string;
+          decisionKind: string; confirmedSpecifications: unknown;
+        }>>(Prisma.sql`
+          SELECT DISTINCT ON (d."rowId") d."rowId", d."resultingVersion",
+            d."sourceSha256", d."decisionKind", d."confirmedSpecifications"
+          FROM "basic_price_import_row_specification_decisions" d
+          JOIN "basic_price_import_rows" r ON r."id" = d."rowId"
+          WHERE d."workspaceId" = ${workspaceId}::uuid AND r."batchId" = ${batchId}::uuid
+          ORDER BY d."rowId", d."resultingVersion" DESC
+        `)
+      : [];
+    const rowVersions = new Map(rows.map((row) => [row.id, row.version]));
+    const reviewedSpecsByRow = new Map<string, {
+      facts: Record<string, string>; decisionKind: string; resultingVersion: number;
+    }>();
+    for (const decision of decisions) {
+      if (decision.sourceSha256 !== batch.sourceSha256 ||
+          decision.resultingVersion > (rowVersions.get(decision.rowId) ?? -1)) continue;
+      const facts = confirmedSpecifications(decision.confirmedSpecifications);
+      if (facts) reviewedSpecsByRow.set(decision.rowId, {
+        facts, decisionKind: decision.decisionKind,
+        resultingVersion: decision.resultingVersion,
+      });
+    }
     const proposals = await this.proposals.proposeForRows(
       workspaceId,
       rows
@@ -2591,6 +2631,8 @@ export class BasicPriceImportService {
           rawResourceNameText: row.rawResourceNameText,
           rawResourceCodeText: row.rawResourceCodeText,
           rawUnitText: row.rawUnitText,
+          rawSourceContext: row.rawSourceContext,
+          confirmedSpecifications: reviewedSpecsByRow.get(row.id)?.facts ?? null,
         })),
     );
 
@@ -2624,7 +2666,7 @@ export class BasicPriceImportService {
     );
 
     return {
-      ...this.summarize(batch, rows, proposals, privatePriceByRowId),
+      ...this.summarize(batch, rows, proposals, privatePriceByRowId, reviewedSpecsByRow),
       // An explicit runtime capability prevents a newer browser from silently
       // sending a corrected name to an older API that discards the field.
       reviewCapabilities: { correctedCanonicalNameOnAdmission: true },

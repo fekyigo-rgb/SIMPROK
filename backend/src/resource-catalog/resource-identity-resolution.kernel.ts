@@ -49,6 +49,11 @@
  * this kernel is TOLD, never something it works out.
  */
 
+import {
+  confirmedSpecifications as parseConfirmedSpecifications,
+  compareConfirmedSpecifications,
+} from './resource-identity-specification.contract';
+
 // ============================================================
 // INPUT TYPES
 // ============================================================
@@ -60,6 +65,8 @@ export interface RawResourceReference {
   readonly rawCode: string | null;
   readonly rawUnit: string | null;
   readonly resourceType: string;
+  /** PR205: audited, human-confirmed optional product facts. Never raw spreadsheet cells. */
+  readonly confirmedSpecifications?: Readonly<Record<string, string>> | null;
   /**
    * A canonical ResourceCatalog id the CALLER already holds, when the stored
    * fact IS an identity rather than a spelling.
@@ -1164,6 +1171,11 @@ function resolveByMachineEvidence(
   const normalizedName = normalizeResourceName(rawName);
   const normalizedCode = normalizeResourceCode(reference.rawCode);
   const type = reference.resourceType;
+  // No source specifications is the prior behavior, unchanged. Structured
+  // qualifiers are trusted ONLY if a caller supplies a validated decision.
+  const reviewedSourceSpecs = reference.confirmedSpecifications
+    ? parseConfirmedSpecifications(reference.confirmedSpecifications)
+    : null;
 
   const usable = catalogCandidates.filter(isActive);
   const byId = new Map(usable.map((candidate) => [candidate.id, candidate]));
@@ -1215,8 +1227,14 @@ function resolveByMachineEvidence(
     baseUnit: candidate.baseUnit,
     evidence,
     identityBasis,
-    specificationUnproved: specificationUnproved(rawName, candidate),
-    unprovedSpecificationFacts: unprovedSpecificationFacts(rawName, candidate),
+    specificationUnproved: reviewedSourceSpecs &&
+      compareConfirmedSpecifications(reviewedSourceSpecs, candidate.specifications) === 'MATCH'
+      ? false
+      : specificationUnproved(rawName, candidate),
+    unprovedSpecificationFacts: reviewedSourceSpecs &&
+      compareConfirmedSpecifications(reviewedSourceSpecs, candidate.specifications) === 'MATCH'
+      ? []
+      : unprovedSpecificationFacts(rawName, candidate),
     specifications: candidate.specifications ?? null,
     priorHumanDecision: priorDecisionFor(candidate.id),
   });
@@ -1255,12 +1273,81 @@ function resolveByMachineEvidence(
   const exactNameRows = usable.filter(
     (candidate) => normalizeResourceName(candidate.name) === normalizedName,
   );
-  const exactRows = exactNameRows.filter((candidate) =>
+  const exactRowsBeforeSpecification = exactNameRows.filter((candidate) =>
     typeMatches(candidate.type, type),
   );
+  // PR205: with several exact-name/type entries, only an explicitly confirmed
+  // technical CONFLICT may rule out a candidate. Reuse the single shared spec
+  // comparator; UNKNOWN remains a live candidate, never a guessed mismatch.
+  // A previously solitary exact name keeps its existing Level-1 behavior.
+  const exactSpecificationFacts =
+    exactRowsBeforeSpecification.length > 1 && reviewedSourceSpecs
+      ? exactRowsBeforeSpecification.map((candidate) => ({
+          candidate,
+          comparison: compareConfirmedSpecifications(
+            reviewedSourceSpecs,
+            candidate.specifications,
+          ),
+        }))
+      : null;
+  const exactRows = exactSpecificationFacts
+    ? exactSpecificationFacts
+        .filter(({ comparison }) => comparison !== 'CONFLICT')
+        .map(({ candidate }) => candidate)
+    : exactRowsBeforeSpecification;
+  if (exactSpecificationFacts && exactRows.length === 0) {
+    return {
+      status: 'UNRESOLVED',
+      authority: null,
+      resolvedResourceCatalogId: null,
+      candidates: exactRowsBeforeSpecification.map((candidate) =>
+        describeCandidate(candidate, [], 'RULED_OUT'),
+      ),
+      reasonCodes: ['SPECIFICATION_CONFLICT'],
+      explanation:
+        'Nama dan jenis ditemukan, tetapi setiap varian katalog memiliki ' +
+        'spesifikasi teknis yang terbukti bertentangan dengan sumber. ' +
+        'Tidak satu pun dapat dianggap identik.',
+    };
+  }
 
   if (exactRows.length === 1) {
     const only = exactRows[0];
+    if (reference.confirmedSpecifications && !reviewedSourceSpecs) {
+      return {
+        status: 'NEEDS_REVIEW',
+        authority: 'EVIDENCE_CANDIDATE',
+        resolvedResourceCatalogId: null,
+        candidates: [describeCandidate(only, [], 'EXACT_NAME')],
+        reasonCodes: ['SPECIFICATION_UNPROVED'],
+        explanation: 'Struktur spesifikasi sumber tidak sah; identitas belum dapat ditetapkan.',
+      };
+    }
+    if (reviewedSourceSpecs) {
+      const comparison = compareConfirmedSpecifications(
+        reviewedSourceSpecs, only.specifications,
+      );
+      if (comparison === 'CONFLICT') {
+        return {
+          status: 'UNRESOLVED',
+          authority: null,
+          resolvedResourceCatalogId: null,
+          candidates: [describeCandidate(only, [], 'RULED_OUT')],
+          reasonCodes: ['SPECIFICATION_CONFLICT'],
+          explanation: 'Spesifikasi terkonfirmasi berbeda dari identitas katalog; tidak digabungkan otomatis.',
+        };
+      }
+      if (comparison === 'UNKNOWN') {
+        return {
+          status: 'NEEDS_REVIEW',
+          authority: 'EVIDENCE_CANDIDATE',
+          resolvedResourceCatalogId: null,
+          candidates: [describeCandidate(only, [], 'EXACT_NAME')],
+          reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW', 'SPECIFICATION_UNPROVED'],
+          explanation: 'Spesifikasi terkonfirmasi tidak cukup untuk membuktikan kesamaan atau perbedaan.',
+        };
+      }
+    }
     if (contradictsSpecification(rawName, only)) {
       return {
         status: 'UNRESOLVED',
@@ -1277,7 +1364,7 @@ function resolveByMachineEvidence(
     // The names agree, but the catalog row claims something the source never
     // said — a diameter, a grade, a finish. An exact name is not licence to
     // assume the source meant it. Unknown is not agreement.
-    const unproved = unprovedSpecificationFacts(rawName, only);
+    const unproved = reviewedSourceSpecs ? [] : unprovedSpecificationFacts(rawName, only);
     if (unproved.length > 0) {
       return {
         status: 'NEEDS_REVIEW',

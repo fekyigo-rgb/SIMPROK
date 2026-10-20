@@ -627,6 +627,21 @@ describe('BP-IQL-ACTIVATION-01: exact-question memory is activated only through 
     expect(JSON.stringify(proposal)).not.toContain('reviewer-2');
   });
 
+  it('PR205-SPEC-SAFETY: even a governed matching name cannot silently ignore source Merek', async () => {
+    const t = await setup();
+    t.useLedger([t.approval]);
+    const withBrand = { ...SOURCE_ROW, rawSourceContext: { Merek: 'MEREK A' } };
+    const proposal = (await t.service.proposeForRows(WORKSPACE, [withBrand])).get(withBrand.id)!;
+    expect(proposal.resource.status).toBe('RESOLVED');
+    expect(proposal.identityPairProven).toBe(false);
+    expect(proposal.blockingFacts).toContain('SOURCE_SPECIFICATION_UNVERIFIED');
+
+    const ordinary = (await t.service.proposeForRows(WORKSPACE, [
+      { ...SOURCE_ROW, rawSourceContext: { Jenis: 'BAHAN' } },
+    ])).get(SOURCE_ROW.id)!;
+    expect(ordinary.identityPairProven).toBe(true);
+  });
+
   it('refuses an altered source question and a revoked approval', async () => {
     const t = await setup();
     t.useLedger([t.approval]);
@@ -1253,12 +1268,9 @@ describe('BP-INT-19 — an actionable proposal is never wider than what resolveR
     expect(proposal.blockingFacts).toEqual([]);
   });
 
-  it('refuses to make a GLOBAL identity actionable, under the endpoint own refusal code', async () => {
-    // The shared authority sees `{ OR: [{ workspaceId }, { workspaceId: null }] }`
-    // and will happily prove "Pasir Beton" against the global row — that answer is
-    // TRUE. But BasicPriceRowResolutionService looks the chosen row up with
-    // `{ id, workspaceId, status: 'ACTIVE' }`, strict equality, so pre-filling it
-    // would hand the reviewer a selection the endpoint answers 409 to.
+  it('reuses an ACTIVE GLOBAL identity for private Basic Price without duplicating the resource', async () => {
+    // The shared identity authority and the Basic Price resolve endpoint now
+    // agree: active GLOBAL rows are selectable, but a foreign workspace row is not.
     const proposal = await proposeOne(
       row({ rawResourceNameText: 'Pasir Beton', rawUnitText: 'kg' }),
     );
@@ -1267,12 +1279,8 @@ describe('BP-INT-19 — an actionable proposal is never wider than what resolveR
     expect(proposal.resource.status).toBe('RESOLVED');
     expect(proposal.resource.authority).toBe('EXACT_CANONICAL_MATCH');
     expect(proposal.resource.resourceCatalogId).toBe('cat-global-pasir');
-    // …but Basic Price may not act on it, and says so in the endpoint's own words.
-    expect(proposal.resource.admissibleForResolve).toBe(false);
-    expect(proposal.identityPairProven).toBe(false);
-    expect(proposal.blockingFacts).toContain(
-      'RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE',
-    );
+    expect(proposal.resource.admissibleForResolve).toBe(true);
+    expect(proposal.blockingFacts).not.toContain('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
   });
 
   it('leaves the shared authority untouched — the narrowing lives only in this seam', async () => {
@@ -1319,7 +1327,7 @@ describe('BP-INT-19 — an actionable proposal is never wider than what resolveR
     expect(admissibility).toHaveLength(1);
     // Exactly the predicate resolveWithinTransaction applies.
     expect(admissibility[0]).toMatchObject({
-      workspaceId: WORKSPACE,
+      OR: [{ workspaceId: WORKSPACE }, { workspaceId: null }],
       status: 'ACTIVE',
     });
     // Distinct ids only — three rows proposing one identity ask about one id.
@@ -1678,7 +1686,7 @@ describe('INT-CONNECT-01 SECURITY — a proposal never carries another tenant ev
     }
   });
 
-  it('CASE 5 — the admissible set stays workspace-strict for a foreign row too', async () => {
+  it('CASE 5 — only the current workspace and GLOBAL identities are selectable, never foreign private rows', async () => {
     // Belt and braces over BP-INT-19: even if a foreign row somehow reached the
     // resolved slot, admissibility mirrors resolveRow and would refuse it.
     const service = createService();
@@ -1694,7 +1702,7 @@ describe('INT-CONNECT-01 SECURITY — a proposal never carries another tenant ev
 
     expect(admissible.has('cat-air')).toBe(true);
     expect(admissible.has('cat-foreign-air')).toBe(false);
-    expect(admissible.has('cat-global-pasir')).toBe(false);
+    expect(admissible.has('cat-global-pasir')).toBe(true);
   });
 
   /**
@@ -2131,7 +2139,7 @@ describe('BP-SEMANTIC-01 — weak uploader family never erases canonical materia
     expect(proposal.resource.resourceCatalogId).toBeNull();
   });
 
-  it('a global-only Pasir Beton stays unselectable for private Basic Price', async () => {
+  it('global Pasir Beton is available, but an unproved source unit still blocks the pair', async () => {
     const proposal = await proposeOne(
       row({
         sourceSection: 'LABOR',
@@ -2142,9 +2150,9 @@ describe('BP-SEMANTIC-01 — weak uploader family never erases canonical materia
     );
     expect(proposal.resource.resourceCatalogId).toBe('cat-global-pasir');
     expect(proposal.identityPairProven).toBe(false);
-    expect(proposal.blockingFacts).toContain(
-      'RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE',
-    );
+    expect(proposal.resource.admissibleForResolve).toBe(true);
+    expect(proposal.blockingFacts).not.toContain('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
+    expect(proposal.blockingFacts).toContain('UNKNOWN_UNIT_ALIAS');
   });
 
   it('identical names in two categories stay ambiguous', async () => {

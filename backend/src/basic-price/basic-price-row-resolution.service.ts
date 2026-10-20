@@ -5,6 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, ResourceType } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { ConfirmBasicPriceRowSpecificationsDto } from './dto/confirm-basic-price-row-specifications.dto';
+import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   RejectBasicPriceImportRowDto,
@@ -31,6 +34,11 @@ import {
   ResourceProvenanceAlreadyBoundError,
 } from '../resource-catalog/resource-admission.service';
 import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
+import {
+  hasExplicitUnverifiedSourceSpecification,
+  sourceSpecificationEvidence,
+  SOURCE_SPECIFICATION_UNVERIFIED,
+} from './basic-price-source-specification-gate';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
   UNIT_KERNEL_POLICY_VERSION,
@@ -191,6 +199,7 @@ export class BasicPriceRowResolutionService {
     batchId: string,
     rowId: string,
     currentAccountId: string,
+    forSpecificationDecision = false,
   ) {
     const batchRows = await tx.$queryRaw<
       Array<{
@@ -230,9 +239,10 @@ export class BasicPriceRowResolutionService {
         rawResourceCodeText: string | null;
         rawResourceNameText: string;
         rawUnitText: string | null;
+        rawSourceContext: unknown;
       }>
     >(
-      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceSectionProvenance", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
+      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceSectionProvenance", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText", "rawSourceContext" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
     );
     const row = rowLock[0];
     if (!row || row.batchId !== batchId)
@@ -251,12 +261,30 @@ export class BasicPriceRowResolutionService {
       throw new ConflictException('ROW_SOURCE_SECTION_UNRESOLVED');
     if (row.status !== 'NEEDS_REVIEW')
       throw new ConflictException('ROW_NOT_MUTABLE');
+    // Refusal ONLY: the source states extra qualifiers the current identity
+    // question did not examine. No interpretation or canonical spec minting.
+    const hasSourceSpecs = hasExplicitUnverifiedSourceSpecification(row.rawSourceContext);
+    const decisions = hasSourceSpecs ? await tx.$queryRaw<Array<{
+      confirmedSpecifications: unknown; sourceSha256: string; resultingVersion: number;
+    }>>(Prisma.sql`SELECT "confirmedSpecifications", "sourceSha256", "resultingVersion"
+      FROM "basic_price_import_row_specification_decisions"
+      WHERE "workspaceId" = ${workspaceId}::uuid AND "rowId" = ${rowId}::uuid
+      ORDER BY "resultingVersion" DESC LIMIT 1`) : [];
+    const current = decisions[0];
+    const verified = current && current.sourceSha256 === batch.sourceSha256 &&
+      current.resultingVersion <= row.version
+      ? confirmedSpecifications(current.confirmedSpecifications)
+      : null;
+    if (!forSpecificationDecision &&
+        hasExplicitUnverifiedSourceSpecification(row.rawSourceContext) && !verified) {
+      throw new ConflictException(SOURCE_SPECIFICATION_UNVERIFIED);
+    }
     // A BINDING, NOT A CAST. Control-flow narrowing on a property is lost the
     // moment the row is handed to another function, and every helper downstream
     // genuinely requires a known family. Returning the narrowed value means the
     // check above lives in exactly one place and every caller — ordinary
     // resolve and reviewed admission alike — inherits it.
-    return { ...row, sourceSection: row.sourceSection, batch };
+    return { ...row, sourceSection: row.sourceSection, batch, confirmedSpecifications: verified };
   }
 
   /**
@@ -265,6 +293,89 @@ export class BasicPriceRowResolutionService {
    * explicitly rejected"). Only NEEDS_REVIEW/READY_FOR_REVIEW batches are
    * touched — a batch already past submission is never reopened here.
    */
+  /**
+   * PR205: a human confirms optional technical facts on THEIR OWN row.
+   * Append-only evidence, not an identity mint or an approval by an outsider.
+   * The already-shared ownership/row lock is reused, and the source bytes stay
+   * immutable. Only the separate identity kernel may subsequently decide.
+   */
+  async confirmRowSpecifications(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    actorAccountId: string,
+    dto: ConfirmBasicPriceRowSpecificationsDto,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await this.assertBatchRowMutable(
+        tx, workspaceId, batchId, rowId, actorAccountId, true,
+      );
+      if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
+      const confirmed = confirmedSpecifications(dto.confirmedSpecifications);
+      if (!confirmed) throw new BadRequestException('SPECIFICATION_FACTS_INVALID');
+
+      const sourceEvidence = sourceSpecificationEvidence(row.rawSourceContext);
+      const sourceValues = Object.fromEntries(
+        sourceEvidence.filter((fact) => fact.value !== null)
+          .map((fact) => [fact.label, fact.value as string]),
+      );
+      const sourceFacts = confirmedSpecifications(sourceValues);
+      const sourceComplete = sourceEvidence.length === Object.keys(sourceValues).length &&
+        (sourceEvidence.length === 0 || sourceFacts !== null);
+      if (!sourceComplete && dto.decisionKind !== 'CORRECT') {
+        throw new ConflictException('SOURCE_SPECIFICATION_NEEDS_EXPLICIT_CORRECTION');
+      }
+      if (dto.decisionKind === 'CONFIRM_SOURCE') {
+        if (!sourceFacts || JSON.stringify(sourceFacts) !== JSON.stringify(confirmed)) {
+          throw new ConflictException('SOURCE_SPECIFICATION_CONFIRMATION_MISMATCH');
+        }
+      } else if (dto.decisionKind === 'SUPPLEMENT' && sourceFacts) {
+        for (const [key, value] of Object.entries(sourceFacts)) {
+          if (confirmed[key] !== value) {
+            throw new ConflictException('SOURCE_SPECIFICATION_CORRECTION_REQUIRES_REASON');
+          }
+        }
+      }
+      const reason = dto.reason?.trim() ?? null;
+      if (dto.decisionKind === 'CORRECT' && !reason) {
+        throw new BadRequestException('SPECIFICATION_CORRECTION_REASON_REQUIRED');
+      }
+
+      const previous = await tx.$queryRaw<Array<{ id: string; resultingVersion: number }>>(
+        Prisma.sql`SELECT "id", "resultingVersion" FROM "basic_price_import_row_specification_decisions"
+          WHERE "workspaceId" = ${workspaceId}::uuid AND "rowId" = ${rowId}::uuid
+          ORDER BY "resultingVersion" DESC LIMIT 1`,
+      );
+      const current = previous[0] ?? null;
+      if (current && current.resultingVersion > row.version) {
+        throw new ConflictException('SPECIFICATION_DECISION_HISTORY_STALE');
+      }
+      const nextVersion = row.version + 1;
+      const write = await tx.basicPriceImportRow.updateMany({
+        where: { id: row.id, batchId, version: row.version, status: 'NEEDS_REVIEW' },
+        data: { version: { increment: 1 } },
+      });
+      if (write.count !== 1) throw new ConflictException('ROW_VERSION_STALE');
+      const decisionId = randomUUID();
+      const sourcePayload = JSON.stringify(sourceEvidence);
+      const confirmedPayload = JSON.stringify(confirmed);
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO "basic_price_import_row_specification_decisions"
+          ("id", "workspaceId", "rowId", "actorAccountId", "previousDecisionId",
+           "previousVersion", "resultingVersion", "decisionKind", "sourceSha256",
+           "sourceSpecifications", "confirmedSpecifications", "reason")
+        VALUES (${decisionId}::uuid, ${workspaceId}::uuid, ${rowId}::uuid,
+          ${actorAccountId}::uuid, ${current?.id ?? null}::uuid,
+          ${row.version}, ${nextVersion}, ${dto.decisionKind},
+          ${row.batch.sourceSha256}, ${sourcePayload}::jsonb,
+          ${confirmedPayload}::jsonb, ${reason})
+      `);
+      return { rowId, version: nextVersion, decisionId,
+        decisionKind: dto.decisionKind, confirmedSpecifications: confirmed };
+    }, { timeout: 20_000, maxWait: 20_000 });
+  }
+
+  /** Recompute only mutable batch states after a proven row transition. */
   private async recomputeBatchStatus(
     tx: Prisma.TransactionClient,
     batchId: string,
@@ -423,6 +534,7 @@ export class BasicPriceRowResolutionService {
         rawResourceNameText: true,
         rawResourceCodeText: true,
         rawUnitText: true,
+        rawSourceContext: true,
       },
     });
     const considered = rows.filter((row) => !excluded.has(row.id));
@@ -757,7 +869,11 @@ export class BasicPriceRowResolutionService {
         throw new ConflictException('ROW_VERSION_STALE');
 
       const resourceCatalog = await tx.resourceCatalog.findFirst({
-        where: { id: dto.resourceCatalogId, workspaceId, status: 'ACTIVE' },
+        where: {
+          id: dto.resourceCatalogId,
+          status: 'ACTIVE',
+          OR: [{ workspaceId }, { workspaceId: null }],
+        },
       });
       if (!resourceCatalog)
         throw new ConflictException('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
@@ -1103,6 +1219,7 @@ export class BasicPriceRowResolutionService {
       rawResourceCodeText: string | null;
       rawUnitText: string | null;
       sourceSection: ResourceType;
+      confirmedSpecifications?: Record<string, string> | null;
       batch?: { sourceSha256: string };
     },
   ): Promise<ResourceIdentityResolution> {
@@ -1118,6 +1235,7 @@ export class BasicPriceRowResolutionService {
         rawUnit: row.rawUnitText,
         resourceType: row.sourceSection,
         sourceSha256: row.batch?.sourceSha256 ?? null,
+        ...(row.confirmedSpecifications ? { confirmedSpecifications: row.confirmedSpecifications } : {}),
       },
       tx,
     );
@@ -1238,6 +1356,8 @@ export class BasicPriceRowResolutionService {
                 rawResourceNameText: row.rawResourceNameText,
                 rawResourceCodeText: row.rawResourceCodeText,
                 rawUnitText: row.rawUnitText,
+                rawSourceContext: row.rawSourceContext,
+                confirmedSpecifications: row.confirmedSpecifications,
               },
             ],
             tx,
@@ -1348,6 +1468,7 @@ export class BasicPriceRowResolutionService {
             rawUnit: row.rawUnitText,
             resourceType: dto.confirmedResourceType,
             baseUnit: unitDefinition.code,
+            confirmedSpecifications: row.confirmedSpecifications,
             provenance: {
               sourceSha256: row.batch.sourceSha256,
               sourceFileName: evidence.batch.sourceFileName,

@@ -6,65 +6,75 @@ const page = readFileSync('src/pages/BasicPriceReviewPage.tsx', 'utf8');
 const api = readFileSync('src/api/basicPriceImport.ts', 'utf8');
 const controller = readFileSync('../backend/src/basic-price/basic-price-import.controller.ts', 'utf8');
 const bridge = readFileSync('../backend/src/basic-price/basic-price-identity-review-bridge.service.ts', 'utf8');
-const module = readFileSync('../backend/src/basic-price/basic-price.module.ts', 'utf8');
+const moduleCode = readFileSync('../backend/src/basic-price/basic-price.module.ts', 'utf8');
 const shared = readFileSync('../backend/src/resource-catalog/resource-observation.service.ts', 'utf8');
+const admission = readFileSync('../backend/src/basic-price/basic-price-row-resolution.service.ts', 'utf8');
 
-test('BP205-OBS-01 blocked item has an actionable governed review request without direct admission', () => {
+test('BP205-PRIVATE-01 private review does not require a new external identity-approval request', () => {
   assert.match(page, /IDENTITY_CANDIDATE_BLOCKED/u);
-  assert.match(page, /Ajukan Pemeriksaan Item/u);
-  assert.match(page, /handleRequestIdentityReview\(row\)/u);
-  assert.match(page, /await requestBasicPriceIdentityReview\(batchId, row\.id, row\.version\)/u);
-  assert.match(api, /\/rows\/\$\{rowId\}\/request-identity-review/u);
-  assert.match(page, /Belum ada item baru yang dibuat/u);
+  assert.match(page, /Pilih Item yang Sesuai Padanan/u);
+  assert.match(page, /Tetapkan Item Baru/u);
+  assert.doesNotMatch(page, /Ajukan Pemeriksaan Item|handleRequestIdentityReview|requestBasicPriceIdentityReview/u);
+  assert.match(page, /Hasil pencarian kosong belum membuktikan bahwa item ini baru/u);
+  assert.match(page, /memuat ulang halaman saja tidak membuktikan perbedaan tersebut/u);
 });
 
-test('BP205-OBS-02 raw category guess must be confirmed before curation', () => {
-  assert.match(page, /ROW_CATEGORY_CONFIRMED_BY_REVIEWER/u);
-  assert.match(page, /Kategori awal berkas belum cukup/u);
-  assert.match(bridge, /CATEGORY_CONFIRMATION_REQUIRED/u);
-  assert.match(bridge, /ROW_VERSION_STALE/u);
-  assert.match(bridge, /IDENTITY_CANDIDATE_BLOCKED/u);
+test('BP205-PRIVATE-02 owner-owned private admission uses shared authoritative minting and source unit proof', () => {
+  assert.match(admission, /async admitResourceForRow\(/u);
+  assert.match(admission, /admitObservedResource\(tx/u);
+  assert.match(admission, /RESOURCE_ADMISSION_REVIEW_STALE/u);
+  assert.match(admission, /refusedCandidateIds/u);
+  assert.match(admission, /reviewBindingFingerprint/u);
+  assert.match(admission, /unitDefinitionId/u);
+  assert.match(page, /await admitResourceForImportRow\(/u);
 });
 
-test('BP205-OBS-03 source-proven candidate review uses ONE existing lifecycle', () => {
-  assert.match(module, /ResourceCatalogModule/u);
+test('BP205-PRIVATE-03 historical observations remain retrievable and never write prices themselves', () => {
+  assert.match(moduleCode, /BasicPriceIdentityReviewBridgeService/u);
+  assert.match(moduleCode, /ResourceCatalogModule/u);
+  assert.match(bridge, /async statuses\(/u);
+  assert.match(bridge, /observedResource\.findMany/u);
+  assert.match(bridge, /assertBatchOwnedByCaller/u);
+  assert.match(api, /getBasicPriceIdentityReviews/u);
+  assert.match(controller, /@Get\(':batchId\/identity-reviews'\)/u);
+  assert.match(page, /await getBasicPriceIdentityReviews\(batchId\)/u);
+  assert.match(page, /Riwayat: identitas pernah diputuskan/u);
+  assert.match(page, /Harga tidak otomatis disimpan/u);
+});
+
+test('BP205-PRIVATE-04 no second catalog engine or loss of existing observed-resource evidence', () => {
   assert.match(bridge, /this\.observations\.observeMany/u);
   assert.match(bridge, /origin: 'BASIC_PRICE'/u);
   assert.match(shared, /async observeMany/u);
   assert.doesNotMatch(bridge, /resourceCatalog\.create|resourceCatalog\.upsert/u);
-  assert.match(controller, /@Permissions\(PERMISSIONS\.BASIC_PRICE_RESOLVE\)/u);
-  assert.match(bridge, /assertBatchOwnedByCaller/u);
 });
 
-test('BP205-OBS-05 curator outcome remains visible after an old blocking candidate disappears', () => {
-  const decisionBanner = page.indexOf('aria-label={`Hasil pemeriksaan identitas baris');
-  const candidatePanel = page.indexOf("!admissionOffered && admissionReview?.reasonCode");
-  assert.ok(decisionBanner > 0, 'curator outcome needs its own stable presentation');
-  assert.ok(candidatePanel > decisionBanner, 'outcome must not depend on old candidate blockade');
-  assert.match(page, /admissionReview\?\.reasonCode !== 'IDENTITY_CANDIDATE_BLOCKED'/u);
-  assert.match(page, /Identitas item sudah diputuskan oleh pengguna yang berwenang/u);
-  assert.match(page, /Pengguna yang berwenang perlu memeriksa aksesnya/u);
-  assert.match(page, /Belum ada item baru yang dibuat/u);
+test('BP205-PRIVATE-05 pre-existing request API retained for audit compatibility, not as mandatory UI', () => {
+  assert.match(controller, /@Post\(':batchId\/rows\/:rowId\/request-identity-review'\)/u);
+  assert.match(bridge, /CATEGORY_CONFIRMATION_REQUIRED/u);
+  assert.match(bridge, /ROW_VERSION_STALE/u);
+  assert.match(bridge, /IDENTITY_CANDIDATE_BLOCKED/u);
+  assert.doesNotMatch(page, /requestBasicPriceIdentityReview\(/u);
 });
 
-test('BP205-OBS-04 one scoped status read, honest display after reloading', () => {
-  assert.match(api, /getBasicPriceIdentityReviews/u);
-  assert.match(page, /await getBasicPriceIdentityReviews\(batchId\)/u);
-  assert.match(page, /setIdentityReviewStatuses\(null\)/u);
-  assert.match(page, /Menunggu keputusan pengguna yang memiliki izin pemeriksaan identitas/u);
-  assert.match(page, /Identitas item telah diputuskan oleh pengguna yang berwenang/u);
-  assert.match(page, /Status pemeriksaan sebelumnya belum dapat dibaca/u);
-  assert.match(bridge, /async statuses\(/u);
-  assert.match(bridge, /observedResource\.findMany/u);
+test('BP205-PRIVATE-06 no private price auto-publishing through identity review', () => {
+  assert.match(page, /Item privat tidak memerlukan persetujuan katalog resmi SIMPROK/u);
+  assert.match(page, /Simpan &amp; Gunakan/u);
+  assert.match(page, /Persetujuan pihak lain bukan syarat pemakaian item privat/u);
 });
 
-test('BP205-OBS-06 private request names only the real workspace authority, not an imaginary assignee', () => {
-  assert.match(bridge, /workspaceId, origin: 'BASIC_PRICE'/u);
-  assert.match(page, /Ajukan Pemeriksaan Item/u);
-  assert.match(page, /Permintaan masuk ke daftar pemeriksaan ruang kerja ini/u);
-  assert.match(page, /Hanya pengguna dengan izin pemeriksaan identitas yang dapat memutuskan/u);
-  assert.match(page, /Jika belum ada yang diberi izin, kewenangannya harus ditetapkan terlebih dahulu/u);
-  assert.doesNotMatch(page, /pengelola katalog|Pengelola akan memeriksa|kandidat ini belum boleh ditolak dari halaman ini/u);
-  assert.match(page, /Hasil pencarian kosong belum membuktikan bahwa item ini baru/u);
-  assert.match(page, /Item hasil keputusan belum bisa dipilih di ruang kerja ini/u);
+test('BP205-CALM-01 blocked private identity shows one short result, with candidates disclosed on demand', () => {
+  assert.match(page, /<div className="bp-field__help">\s*<p role="status">\{row.machineProposal\?\.blockingFacts.includes\('SOURCE_SPECIFICATION_UNVERIFIED'\)/u);
+  assert.match(page, /Spesifikasi dari berkas belum diperiksa\. Item ini belum bisa disimpan atau dinyatakan identik\./u);
+  assert.match(page, /<details className="bp-details">\s*<summary>Bandingkan kandidat dan bukti identitas<\/summary>/u);
+  assert.match(page, /bukti yang masih diperlukan:/u);
+  assert.doesNotMatch(page, /Jika item itu berbeda, perbaiki nama atau kode sumber/u);
+  assert.match(page, /Nama kerja bukan bukti spesifikasi/u);
+});
+
+test('BP205-CALM-02 old identity decisions remain accessible without competing with the current action', () => {
+  assert.match(page, /<details className="bp-details" aria-label=\{`Riwayat identitas baris/u);
+  assert.match(page, /<summary>Riwayat keputusan identitas<\/summary>/u);
+  assert.match(page, /Riwayat: identitas pernah diputuskan/u);
+  assert.doesNotMatch(page, /<div className="bp-note bp-note--info" role="status" aria-label=\{`Riwayat identitas/u);
 });

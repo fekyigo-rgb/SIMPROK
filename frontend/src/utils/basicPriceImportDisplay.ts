@@ -145,6 +145,10 @@ export interface BasicPriceImportRowSummary {
   /** Persisted canonical unit from GET, not a browser draft. */
   canonicalUnit?: { code: string; displayName: string; symbol: string } | null;
   unit: string | null;
+  /** Source labels and literal values, NOT verified canonical specifications. */
+  sourceSpecifications?: Array<{ label: string; value: string | null }>;
+  /** Validated append-only decision on this row, or null before confirmation. */
+  specificationDecision?: { facts: Record<string, string>; decisionKind: string; resultingVersion: number } | null;
   rawPriceDisplayText: string | null;
   proposedCanonicalPrice: string | null;
   /**
@@ -727,6 +731,13 @@ const SECTION_LABELS: Record<KnownRowSection, string> = {
 export const rowSectionLabel = (section: KnownRowSection): string =>
   SECTION_LABELS[section] ?? section;
 
+// A machine candidate arrives as an untrusted string from a server response.
+// Never cast it into a known family or print an unknown internal token.
+export const candidateResourceTypeLabel = (type: string): string =>
+  type === 'LABOR' || type === 'MATERIAL' || type === 'EQUIPMENT'
+    ? rowSectionLabel(type)
+    : 'Jenis belum terverifikasi';
+
 const COLLISION_LABELS: Record<BasicPriceImportRowSummary['collisionType'], string | null> = {
   NONE: null,
   EXACT_DUPLICATE: 'Duplikat persis baris lain',
@@ -1052,9 +1063,12 @@ export function rowIdentityAdmissionOffered(
   row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
 ): boolean {
   if (row.status !== 'NEEDS_REVIEW') return false;
-  const resource = row.machineProposal?.resource;
-  if (!resource) return false;
-  return resource.admissionReview?.offered === true;
+  const proposal = row.machineProposal;
+  if (!proposal) return false;
+  // Same server-issued refusal as the writer. Do not invite a user into an
+  // action whose source qualifiers the identity question has not examined.
+  if (proposal.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')) return false;
+  return proposal.resource.admissionReview?.offered === true;
 }
 
 /** Safe bulk-new rows have no candidate to examine and both source facts. */
@@ -1068,6 +1082,7 @@ export function rowSafeNewAdmissionEligible(
   return (
     row.status === 'NEEDS_REVIEW' &&
     row.proposedCanonicalPrice !== null &&
+    !proposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED') &&
     proposal?.unit.status === 'RESOLVED' &&
     proposal.unit.unitDefinitionId !== null &&
     proposal.resource.admissionReview?.offered === true &&
@@ -1601,6 +1616,8 @@ const BLOCKING_FACT_LABELS: Record<string, string> = {
   MULTIPLE_CANDIDATES_NEEDS_REVIEW: 'Beberapa item terlihat sama-sama mungkin cocok. SIMPROK belum bisa memilih satu dengan pasti.',
   STRONG_CANDIDATE_NEEDS_REVIEW: 'Ada satu kandidat kuat yang masih perlu ditegaskan.',
   SPECIFICATION_UNPROVED: 'Entri katalog menyebut hal yang tidak disebut sumber.',
+  SOURCE_SPECIFICATION_UNVERIFIED:
+    'Berkas memuat spesifikasi tambahan yang belum diperiksa bersama identitas item. Belum bisa disimpan otomatis.',
   SPECIFICATION_CONFLICT: 'Spesifikasi sumber dan katalog bertentangan.',
   RESOURCE_TYPE_MISMATCH: 'Jenis sumber daya tidak cocok dengan kategori baris.',
   RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE:
@@ -2136,7 +2153,17 @@ export const correctedCatalogNameCandidateConflict = (
   };
   const target = comparable(correctedName);
   return row.machineProposal?.resource.candidates.find((candidate) =>
-    candidate.type === confirmedType && comparable(candidate.name) === target,
+    candidate.type === confirmedType &&
+    comparable(candidate.name) === target &&
+    // PR205: raw-name equality cannot overrule a *server-proven* identity
+    // difference. Do not compare specifications here or invent a second
+    // matcher. Only the canonical authority's explicit conflict + ruled-out
+    // disposition permits a differently specified item to reach the shared
+    // admission lock. Unknown, unproved, and blocked candidates still stop.
+    !(
+      row.machineProposal?.resource.reasonCodes.includes('SPECIFICATION_CONFLICT') &&
+      candidate.admissionDisposition === 'MACHINE_RULED_OUT'
+    ),
   ) ?? null;
 };
 
