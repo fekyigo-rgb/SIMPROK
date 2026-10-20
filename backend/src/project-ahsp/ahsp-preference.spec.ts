@@ -106,7 +106,7 @@ describe('RI-01K AHSP preference', () => {
     );
     expect(ranked[0].id).toBe('cipta-fit');
     expect(ranked[0].preference.band).toBe(AHSP_PREFERENCE_BAND.CROSS_CATEGORY_FALLBACK);
-    expect(ranked[0].preference.reason).toContain('Tidak ada kecocokan pada kategori pilihan');
+    expect(ranked[0].preference.reason).toContain('Di antara kandidat yang diperiksa, belum ada kecocokan pada kategori pilihan');
     expect(ranked[1].preference.recommended).toBe(false);
     expect(ranked[1].preference.band).toBe(AHSP_PREFERENCE_BAND.NOT_RECOMMENDED);
   });
@@ -247,5 +247,37 @@ describe('RI-01K AHSP preference', () => {
     );
     expect(ranked[0].preference.band).toBe(AHSP_PREFERENCE_BAND.INSUFFICIENT_CLASSIFICATION);
     expect(ranked[0].preference.recommended).toBe(false);
+  });
+});
+
+
+describe('RI-01 review: preserve dimensional evidence and bounded search claims', () => {
+  const assess = (boqName: string, workType: string) => rankAhspPreference([
+    candidate('pipe', workType, [path(BINA, JALAN, 'Pipa', 'Bina Marga / Jalan / Pipa')]),
+  ], { selectedKategoriIds: [BINA], selectedSubkategoriIds: [JALAN], boqName })[0];
+
+  it.each([
+    ['Pipa diameter 10 cm', 'Pipa diameter 20 cm'],
+    ['Pipa diameter 10 cm', 'Pipa diameter 10 mm'],
+    ['Pipa diameter 1.5 cm', 'Pipa diameter 1.6 cm'],
+    ['Pipa diameter 1.5 cm', 'Pipa diameter 5.1 cm'],
+  ])('does not recommend differing evidence: %s / %s', (boq, offered) => {
+    expect(assess(boq, offered).preference.recommended).toBe(false);
+  });
+
+  it.each(['Pipa diameter 10 cm', 'Pipa diameter 1.5 cm'])('retains identical dimensional evidence: %s', (name) => {
+    expect(assess(name, name).preference.recommended).toBe(true);
+  });
+
+  it('does not assert absence from the catalog based on one result page', () => {
+    const other = candidate('other', 'Pasangan batu', [path(CIPTA, GEDUNG, 'Pasangan batu', 'Cipta')]);
+    const preferred = candidate('preferred', 'Pasangan batu', [path(BINA, JALAN, 'Pasangan batu', 'Bina')]);
+    const ctx = { selectedKategoriIds: [BINA], selectedSubkategoriIds: [JALAN], boqName: 'Pasangan batu' };
+    const page = rankAhspPreference([other], ctx)[0];
+    const all = rankAhspPreference([other, preferred], ctx).find(row => row.id === 'other')!;
+    expect(page.preference.reason).toContain('Di antara kandidat yang diperiksa');
+    expect(page.preference.reason).not.toContain('Tidak ada kecocokan');
+    expect(all.preference.reason).toContain('Ada kandidat pada kategori pilihan');
+    expect(page.preference.band).toBe(all.preference.band);
   });
 });

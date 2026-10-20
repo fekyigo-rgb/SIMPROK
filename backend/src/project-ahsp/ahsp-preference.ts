@@ -68,7 +68,9 @@ const TOKEN_STOP = new Set([
 ]);
 
 function evidenceTokens(value: string): Set<string> {
-  const found = value.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [];
+  // Short dimensions and unit symbols are evidence too (10 vs 20, cm vs mm).
+  // Preserve decimal tokens literally; this is not numeric/unit normalization.
+  const found = value.toLowerCase().match(/[a-z0-9]+(?:[.,][0-9]+)?/g) ?? [];
   return new Set(found.filter((token) => !TOKEN_STOP.has(token)));
 }
 
@@ -205,7 +207,7 @@ export function rankAhspPreference<T extends AhspPreferenceCandidate>(
       recommended = true;
       reason = preferredAvailable
         ? 'Ada kandidat pada kategori pilihan. Ini alternatif dari kategori lain yang sesuai uraian.'
-        : 'Tidak ada kecocokan pada kategori pilihan. Kandidat dari kategori lain yang sesuai uraian.';
+        : 'Di antara kandidat yang diperiksa, belum ada kecocokan pada kategori pilihan. Kandidat dari kategori lain yang sesuai uraian.';
       order = 2;
     } else if (relation === 'NONE') {
       band = AHSP_PREFERENCE_BAND.INSUFFICIENT_CLASSIFICATION;

@@ -370,3 +370,9 @@ Supersedes prior statements that Owner BOQ import/save proof is pending, only wi
 - LOCAL_VALIDATION: frontend 1495/1495 PASS and build PASS; backend focused 38 suites/608 tests PASS.
 - STAGING_SCOPE: exact 47-file allowlist committed/pushed; backend/src/main.ts and historical local-only evidence remain uncommitted by design.
 - ACTIVE_DEBTS: UTANG-RI01-COST-PROOF-20261020 and UTANG-RI01-MERGE-GATES-20261020. NEXT: exact PR CI plus independent source review; no merge or permanent activation claimed.
+
+## RI-01 source review follow-up - 2026-10-20
+- Prior exact head dda0b5d CI: all 3 jobs SUCCESS; backend 4326 PASS/46 skipped plus bootstrap30; E2E841 PASS/57 skipped, residual PASS. Historical local external-workbook failures are not erased.
+- Executor reproduced and minimally repaired R1 short-number/unit evidence loss and R2 catalog-wide absence claim from one result page, in the RAB preference helper only. Focused tests 73/73 PASS. New exact-head CI required.
+- Supplementary independent Codex review found no confirmed defect in the assigned canonical-context/migration/test scope; not a formal Claude/Gemini verdict.
+- Formal review instructions and exact limitations: docs/implementation-gates/ri01-closeout-20261020/SOURCE-REVIEW.md. MERGE HOLD; permanent runtime unchanged.
