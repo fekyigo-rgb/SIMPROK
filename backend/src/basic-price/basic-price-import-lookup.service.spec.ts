@@ -206,6 +206,7 @@ describe('BasicPriceImportLookupService', () => {
             administrativeLevel: null,
             parentId: null,
             parentName: null,
+            hierarchyPath: ['DKI Jakarta'],
           },
         ],
         page: 1,
@@ -222,7 +223,22 @@ describe('BasicPriceImportLookupService', () => {
         name: true,
         administrativeLevel: true,
         parentId: true,
-        parent: { select: { name: true } },
+        parent: {
+          select: {
+            name: true,
+            parent: {
+              select: {
+                name: true,
+                parent: {
+                  select: {
+                    name: true,
+                    parent: { select: { name: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
       });
       expect(args.take).toBe(1);
       expect(args.skip).toBe(0);
@@ -250,7 +266,7 @@ describe('BasicPriceImportLookupService', () => {
           name: 'Jakarta Selatan',
           administrativeLevel: 'REGENCY_CITY',
           parentId: 'p1',
-          parent: { name: 'DKI Jakarta' },
+          parent: { name: 'DKI Jakarta', parent: { name: 'Indonesia', parent: null } },
         },
         {
           id: 'b',
@@ -267,6 +283,8 @@ describe('BasicPriceImportLookupService', () => {
       expect(page.items).toHaveLength(2);
       expect(page.items.map((item) => item.id).sort()).toEqual(['a', 'b']);
       expect(page.items.find((item) => item.id === 'a')?.parentName).toBe('DKI Jakarta');
+      expect(page.items.find((item) => item.id === 'a')?.hierarchyPath).toEqual(['Indonesia', 'DKI Jakarta', 'Jakarta Selatan']);
+      expect(page.items.find((item) => item.id === 'b')?.hierarchyPath).toEqual(['Jakarta Selatan']);
     });
 
     it('still resolves the live Permanent Region names', async () => {

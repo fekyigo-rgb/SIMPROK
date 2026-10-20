@@ -17,6 +17,8 @@ import {
   Permissions,
   PermissionsAll,
 } from '../common/decorators/permissions.decorator';
+import { BasicPriceImportLookupService } from '../basic-price/basic-price-import-lookup.service';
+import { SearchRegionDto } from '../basic-price/dto/search-basic-price-import-lookups.dto';
 import { SelectAhspForBoqItemDto } from './dto/create-project-ahsp-occurrence.dto';
 import { ProjectAhspService } from './project-ahsp.service';
 import { DecideResourceIdentityDto } from './dto/decide-resource-identity.dto';
@@ -33,6 +35,7 @@ export class ProjectAhspController {
   constructor(
     private readonly service: ProjectAhspService,
     private readonly ghx: GhxResourceIdentityDecisionService,
+    private readonly regionLookup: BasicPriceImportLookupService,
   ) {}
 
   /**
@@ -80,19 +83,44 @@ export class ProjectAhspController {
     });
   }
 
+  /** Search at source; never transfer thousands of eligible versions to a picker. */
+  @Get('eligible-versions/search')
+  @Permissions(PERMISSIONS.AHSP_VIEW)
+  searchEligibleVersions(
+    @Req() request: ProjectAhspRequest,
+    @Param('projectId') projectId: string,
+    @Query('businessPricingAsOfDate') asOf: string,
+    @Query('boqItemId') boqItemId?: string,
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.service.searchEligibleVersions(
+      this.workspaceId(request), asOf,
+      { projectId, boqItemId }, { q, page, limit },
+    );
+  }
+
   @Get('eligible-versions')
   @Permissions(PERMISSIONS.AHSP_VIEW)
   listEligibleVersions(
     @Req() request: ProjectAhspRequest,
+    @Param('projectId') projectId: string,
     @Query('businessPricingAsOfDate') asOf: string,
+    @Query('boqItemId') boqItemId?: string,
   ) {
-    return this.service.listEligibleVersions(this.workspaceId(request), asOf);
+    return this.service.listEligibleVersions(this.workspaceId(request), asOf, {
+      projectId,
+      boqItemId,
+    });
   }
 
   @Get('regions')
   @Permissions(PERMISSIONS.BASIC_PRICE_VIEW)
-  listRegions() {
-    return this.service.listActiveRegions();
+  listRegions(@Query() dto: SearchRegionDto) {
+    // Reuse the canonical bounded Region search without requiring import permission.
+    // The project and BASIC_PRICE_VIEW guards on this route remain unchanged.
+    return this.regionLookup.searchRegions(dto);
   }
 
   @Post('boq-items/:boqItemId/select-ahsp')

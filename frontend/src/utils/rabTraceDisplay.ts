@@ -179,12 +179,14 @@ export const resolvePriceOrigin = (
 /* ------------------------------------------------------------------ *
  * AHSP identity
  *
- * There is no AHSP code in the domain model: an AHSP is identified by its
- * work type, its method, and a version number. `wbsCode` is the RAB row's own
- * code and is not an AHSP identity, so it is never presented as one.
+ * AHSP.code is optional source truth. Work type, method and version still
+ * identify the analysis when no source code exists. `wbsCode` belongs to BOQ,
+ * never to an AHSP code cell.
  * ------------------------------------------------------------------ */
 
 export interface AhspIdentityWire {
+  /** Optional source code, distinct from BOQ/WBS position and AHSP method. */
+  code?: string | null;
   workType?: string | null;
   methodName?: string | null;
   versionNumber?: number | null;
@@ -200,15 +202,17 @@ export interface AhspIdentityView {
 }
 
 export const NOT_LINKED_AHSP = 'Belum terhubung';
+export const AHSP_CODE_UNAVAILABLE = 'Kode tidak tersedia';
 
 export const resolveAhspIdentity = (
   ahsp: AhspIdentityWire | null | undefined,
 ): AhspIdentityView => {
+  const code = ahsp?.code?.trim();
   const workType = ahsp?.workType?.trim();
   const methodName = ahsp?.methodName?.trim();
   const versionNumber = ahsp?.versionNumber;
 
-  if (!workType && !methodName && (versionNumber === undefined || versionNumber === null)) {
+  if (!code && !workType && !methodName && (versionNumber === undefined || versionNumber === null)) {
     return { linked: false, shortLabel: NOT_LINKED_AHSP, fullLabel: NOT_LINKED_AHSP };
   }
 
@@ -218,8 +222,10 @@ export const resolveAhspIdentity = (
 
   return {
     linked: true,
-    shortLabel: [methodName || workType, version].filter(Boolean).join(' · ') || 'AHSP',
-    fullLabel: [parts, version, unit].filter(Boolean).join(' · '),
+    // This compact label appears beneath the locked "Kode AHSP" column.
+    // Use ONLY the optional source code; never present a method name as a code.
+    shortLabel: code || AHSP_CODE_UNAVAILABLE,
+    fullLabel: [code ? `Kode ${code}` : '', parts, version, unit].filter(Boolean).join(' · '),
   };
 };
 

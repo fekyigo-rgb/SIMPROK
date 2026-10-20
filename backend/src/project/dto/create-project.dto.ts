@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import {
+  IsArray,
   IsString,
   IsNotEmpty,
   IsOptional,
@@ -43,4 +44,14 @@ export class CreateProjectDto {
   @IsOptional()
   @IsUUID()
   workspaceId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  classificationNodeIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  locationRegionIds?: string[];
 }

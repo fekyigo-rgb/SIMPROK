@@ -34,9 +34,31 @@ export const formatAhspVersionOption = (version: {
   origin?: AhspOrigin;
   versionNumber: number;
   outputUnit: string;
-  ahsp: { workType: string; methodName: string };
+  ahsp: { code?: string | null; workType: string; methodName: string };
 }): string =>
-  `[${describeAhspOrigin(version.origin)}] ${version.ahsp.workType} — ${version.ahsp.methodName} · ${version.outputUnit}`;
+  `[${describeAhspOrigin(version.origin)}] ${version.ahsp.code?.trim() ? `Kode ${version.ahsp.code.trim()} · ` : ''}${version.ahsp.workType} — ${version.ahsp.methodName} · ${version.outputUnit}`;
+
+export type AhspPreferenceBand =
+  | 'PREFERRED_SUBKATEGORI'
+  | 'PREFERRED_KATEGORI'
+  | 'CROSS_CATEGORY_FALLBACK'
+  | 'INSUFFICIENT_CLASSIFICATION'
+  | 'NOT_RECOMMENDED';
+
+export type AhspPreferenceView = {
+  band: AhspPreferenceBand;
+  recommended: boolean;
+  reason: string;
+  classificationPath: string | null;
+};
+
+/** Compact picker tag. The server owns the band; this only names it. */
+export const formatAhspPreferenceTag = (band: AhspPreferenceBand): string => {
+  if (band === 'PREFERRED_SUBKATEGORI' || band === 'PREFERRED_KATEGORI') return 'Konteks pilihan';
+  if (band === 'CROSS_CATEGORY_FALLBACK') return 'Cadangan kategori lain';
+  if (band === 'INSUFFICIENT_CLASSIFICATION') return 'Klasifikasi belum terbukti';
+  return 'Tidak direkomendasikan';
+};
 
 /**
  * True only for a genuinely private asset. Used to decide whether to show the

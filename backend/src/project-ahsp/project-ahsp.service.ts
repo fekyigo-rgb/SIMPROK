@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -34,6 +35,11 @@ import {
   AhspResourceResolutionOrchestrator,
   E1A_RESOLUTION_POLICY_VERSION,
 } from './ahsp-resource-resolution.orchestrator';
+import {
+  classificationPathsFromLeaves,
+  rankAhspPreference,
+  type ClassificationNodeLink,
+} from './ahsp-preference';
 
 /** Re-exported from the resolution orchestrator, its single definition. */
 export { E1A_RESOLUTION_POLICY_VERSION };
@@ -56,6 +62,30 @@ type ResolutionCreate =
 const sha256 = (value: unknown): string =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
+const CANONICAL_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const classificationNodeSelect = {
+  id: true,
+  name: true,
+  level: true,
+  parent: {
+    select: {
+      id: true,
+      name: true,
+      level: true,
+      parent: {
+        select: {
+          id: true,
+          name: true,
+          level: true,
+          parent: { select: { id: true, name: true, level: true } },
+        },
+      },
+    },
+  },
+} as const;
+
 @Injectable()
 export class ProjectAhspService {
   constructor(
@@ -68,8 +98,16 @@ export class ProjectAhspService {
     private readonly unitCompatibility: BoqUnitCompatibilityService,
   ) {}
 
-  async listEligibleVersions(workspaceId: string, asOfRaw: string) {
+  async listEligibleVersions(
+    workspaceId: string,
+    asOfRaw: string,
+    context?: { projectId: string; boqItemId?: string },
+  ) {
     const asOf = parseDateOnlyUtc(asOfRaw, 'businessPricingAsOfDate');
+    const boqItemId = context?.boqItemId?.trim();
+    const preferenceItem = boqItemId
+      ? await this.loadPreferenceBoqItem(workspaceId, context?.projectId ?? '', boqItemId)
+      : null;
     const versions = await this.prisma.aHSPVersion.findMany({
       where: buildEligibleAhspVersionWhere(workspaceId, asOf),
       select: {
@@ -105,7 +143,7 @@ export class ProjectAhspService {
     // of one parent may still be lawful formulas, but new use is offered only
     // the current one. The WHERE above is unchanged so RAB lock can still
     // recognise a historical binding as a lawful formula.
-    return pickCurrentApplicableAhspVersions(versions).map(({ ahsp, ...version }) => ({
+    const listed = pickCurrentApplicableAhspVersions(versions).map(({ ahsp, ...version }) => ({
       ...version,
       origin: classifyAhspOrigin({ status: version.status, ahsp }, workspaceId),
       ahsp: {
@@ -114,6 +152,186 @@ export class ProjectAhspService {
         methodName: ahsp.methodName,
       },
     }));
+    if (!preferenceItem || !context?.projectId) return listed;
+    return this.attachProjectPreference(context.projectId, preferenceItem, listed);
+  }
+
+  /**
+   * RI-01K search-only view of the SAME eligibility/currentness and preference
+   * kernels. One AHSP parent per result; DB returns only a bounded parent page
+   * with the highest eligible version as-of. Never hydrate every version when
+   * the workspace eventually has thousands of AHSP.
+   */
+  async searchEligibleVersions(
+    workspaceId: string,
+    asOfRaw: string,
+    context: { projectId: string; boqItemId?: string },
+    search: { q?: string; page?: string; limit?: string },
+  ) {
+    const asOf = parseDateOnlyUtc(asOfRaw, 'businessPricingAsOfDate');
+    const q = (search.q ?? '').trim();
+    const page = search.page === undefined ? 1 : Number(search.page);
+    const limit = search.limit === undefined ? 25 : Number(search.limit);
+    if ((q.length > 0 && q.length < 2) || q.length > 120 ||
+      !Number.isInteger(page) || page < 1 || page > 10000 ||
+      !Number.isInteger(limit) || limit < 1 || limit > 50) {
+      throw new BadRequestException('AHSP_SEARCH_QUERY_INVALID');
+    }
+    const preferenceItem = context.boqItemId?.trim()
+      ? await this.loadPreferenceBoqItem(workspaceId, context.projectId, context.boqItemId.trim())
+      : null;
+    const eligibility = buildEligibleAhspVersionWhere(workspaceId, asOf);
+    const parents = await this.prisma.aHSP.findMany({
+      where: {
+        versions: { some: eligibility },
+        ...(q ? {
+          OR: [
+            { code: { contains: q, mode: 'insensitive' } },
+            { workType: { contains: q, mode: 'insensitive' } },
+            { methodName: { contains: q, mode: 'insensitive' } },
+          ],
+        } : {}),
+      },
+      select: {
+        id: true,
+        code: true,
+        workType: true,
+        methodName: true,
+        workspaceId: true,
+        ownershipType: true,
+        versions: {
+          where: eligibility,
+          orderBy: [{ versionNumber: 'desc' }, { id: 'asc' }],
+          take: 1,
+          select: {
+            id: true,
+            versionNumber: true,
+            status: true,
+            outputUnit: true,
+            effectiveDate: true,
+            expiredDate: true,
+            _count: { select: { resources: true } },
+          },
+        },
+      },
+      orderBy: [{ workType: 'asc' }, { methodName: 'asc' }, { id: 'asc' }],
+      skip: (page - 1) * limit,
+      take: limit + 1,
+    });
+    const hasNext = parents.length > limit;
+    const items = parents.slice(0, limit).flatMap(({ versions, ...ahsp }) => {
+      const version = versions[0];
+      if (!version) return [];
+      return [{
+        ...version,
+        origin: classifyAhspOrigin({ status: version.status, ahsp }, workspaceId),
+        ahsp: {
+          id: ahsp.id, code: ahsp.code,
+          workType: ahsp.workType, methodName: ahsp.methodName,
+        },
+      }];
+    });
+    const ranked = preferenceItem
+      ? await this.attachProjectPreference(context.projectId, preferenceItem, items)
+      : items;
+    return { items: ranked, page, limit, hasNext, query: q };
+  }
+
+  private async loadPreferenceBoqItem(
+    workspaceId: string,
+    projectId: string,
+    boqItemId: string,
+  ) {
+    if (!CANONICAL_UUID.test(boqItemId) || !CANONICAL_UUID.test(projectId)) {
+      throw new BadRequestException('BOQ_ITEM_ID_INVALID');
+    }
+    const item = await this.prisma.boqItem.findFirst({
+      where: {
+        id: boqItemId,
+        itemType: 'WORK_ITEM',
+        boqStructure: {
+          projectId,
+          name: WORKING_DRAFT_STRUCTURE_NAME,
+          status: 'DRAFT',
+          project: { workspaceId },
+        },
+      },
+      select: { id: true, name: true, unit: true },
+    });
+    if (!item) throw new NotFoundException('BOQ_ITEM_NOT_FOUND');
+    return item;
+  }
+
+  /**
+   * Orders the eligible list for one BOQ item. The stored project
+   * classification is read and never rewritten. Versions that failed the
+   * eligibility query are not added here.
+   */
+  private async attachProjectPreference(
+    projectId: string,
+    item: { name: string; unit: string },
+    listed: Array<{
+      outputUnit: string | null;
+      ahsp: { id: string; workType: string; methodName: string };
+    }>,
+  ) {
+    const selections = await this.prisma.projectClassificationSelection.findMany({
+      where: { projectId },
+      select: {
+        classificationNode: { select: { id: true, level: true, parentId: true } },
+      },
+    });
+    const selectedKategoriIds = selections
+      .filter((row) => row.classificationNode.level === 'KATEGORI')
+      .map((row) => row.classificationNode.id);
+    const kategoriIds = new Set(selectedKategoriIds);
+    const selectedSubkategoriIds = selections
+      .filter(
+        (row) =>
+          row.classificationNode.level === 'SUBKATEGORI' &&
+          row.classificationNode.parentId != null &&
+          kategoriIds.has(row.classificationNode.parentId),
+      )
+      .map((row) => row.classificationNode.id);
+    const assignments =
+      listed.length === 0
+        ? []
+        : await this.prisma.ahspClassificationAssignment.findMany({
+            where: {
+              ahspId: { in: listed.map((version) => version.ahsp.id) },
+              isActive: true,
+            },
+            select: { ahspId: true, leafNode: { select: classificationNodeSelect } },
+          });
+    const leavesByAhsp = new Map<string, ClassificationNodeLink[]>();
+    for (const assignment of assignments) {
+      const leaves = leavesByAhsp.get(assignment.ahspId) ?? [];
+      if (assignment.leafNode) leaves.push(assignment.leafNode);
+      leavesByAhsp.set(assignment.ahspId, leaves);
+    }
+    const annotated = await Promise.all(
+      listed.map(async (version) => {
+        const compatibility = await this.unitCompatibility.evaluate(
+          version.outputUnit,
+          item.unit,
+        );
+        const monetary = monetaryUnitIdentity(item.unit, version.outputUnit);
+        return {
+          ...version,
+          workType: version.ahsp.workType,
+          methodName: version.ahsp.methodName,
+          unitCompatible:
+            compatibility.status === BOQ_UNIT_COMPATIBILITY.COMPATIBLE_EXACT &&
+            monetary.admissible,
+          paths: classificationPathsFromLeaves(leavesByAhsp.get(version.ahsp.id) ?? []),
+        };
+      }),
+    );
+    return rankAhspPreference(annotated, {
+      selectedKategoriIds,
+      selectedSubkategoriIds,
+      boqName: item.name,
+    }).map(({ workType: _workType, methodName: _methodName, unitCompatible: _unitCompatible, paths: _paths, ...version }) => version);
   }
 
   listActiveRegions() {

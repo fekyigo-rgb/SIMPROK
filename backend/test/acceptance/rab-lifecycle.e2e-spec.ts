@@ -250,24 +250,16 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
       },
     });
 
-    // PROJECT_DUPLICATE: two Working Drafts — ambiguous authority.
-    await prisma.boqStructure.createMany({
-      data: [
-        {
-          id: STRUCTURE_DUPLICATE_1,
-          projectId: PROJECT_DUPLICATE,
-          name: 'Working Draft',
-          version: 1,
-          status: 'DRAFT',
-        },
-        {
-          id: STRUCTURE_DUPLICATE_2,
-          projectId: PROJECT_DUPLICATE,
-          name: 'Working Draft',
-          version: 2,
-          status: 'DRAFT',
-        },
-      ],
+    // Lawful single-draft fixture. Duplicate persistence must be blocked
+    // by the database; see the focused P2002 assertion below.
+    await prisma.boqStructure.create({
+      data: {
+        id: STRUCTURE_DUPLICATE_1,
+        projectId: PROJECT_DUPLICATE,
+        name: 'Working Draft',
+        version: 1,
+        status: 'DRAFT',
+      },
     });
 
     // PROJECT_LAWFUL_IMPORT: exactly one empty Working Draft — the positive path.
@@ -531,7 +523,6 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
   describe.each([
     ['ACTIVE_BASELINE_EXISTS', PROJECT_ACTIVE_BASELINE],
     ['APPROVED_RAB_EXISTS', PROJECT_APPROVED_RAB],
-    ['MULTIPLE_WORKING_DRAFTS', PROJECT_DUPLICATE],
     ['PROJECT_NOT_DRAFT', undefined], // resolved to accXProjectId at test time — see beforeAll
   ])('blocked project — %s', (reasonCode, staticProjectId) => {
     const projectId = () => staticProjectId ?? accXProjectId;
@@ -620,6 +611,34 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         .field('importFingerprint', 'x')
         .expect(409);
       expect(response.body.message).toBe(reasonCode);
+    });
+  });
+
+  it('DB rejects a second Working Draft and preserves the canonical editable draft', async () => {
+    await expect(prisma.boqStructure.create({
+      data: {
+        id: STRUCTURE_DUPLICATE_2,
+        projectId: PROJECT_DUPLICATE,
+        name: 'Second Alternative BOQ',
+        version: 2,
+        status: 'DRAFT',
+      },
+    })).rejects.toMatchObject({ code: 'P2002' });
+    const remaining = await prisma.boqStructure.findMany({
+      where: { projectId: PROJECT_DUPLICATE, status: 'DRAFT' },
+      select: { id: true },
+    });
+    expect(remaining).toEqual([{ id: STRUCTURE_DUPLICATE_1 }]);
+    const readback = await request(app.getHttpServer())
+      .get(`/projects/${PROJECT_DUPLICATE}/boq/draft`)
+      .set('Authorization', `Bearer ${assignedToken}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    expect(readback.body.capability).toMatchObject({
+      canEnterEditableDraftWorkspace: true,
+      canEditDraft: true,
+      workingDraftCount: 1,
+      reasonCode: null,
     });
   });
 
@@ -729,7 +748,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
       ).toBe(0);
     });
 
-    it('re-evaluates lifecycle inside the approve transaction: a second Working Draft appearing before approve still 409s MULTIPLE_WORKING_DRAFTS', async () => {
+    it('DB prevents a second draft after preview while approval reuses the original draft', async () => {
       const preview = await postFile(
         `/projects/${PROJECT_TOCTOU_DUPLICATE}/boq/import/preview`,
         assignedToken,
@@ -738,15 +757,15 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         .expect(201);
 
       const secondDraftId = '36000000-0000-4000-8000-000000000018';
-      await prisma.boqStructure.create({
+      await expect(prisma.boqStructure.create({
         data: {
           id: secondDraftId,
           projectId: PROJECT_TOCTOU_DUPLICATE,
-          name: 'Working Draft',
+          name: 'Second Alternative Draft',
           version: 2,
           status: 'DRAFT',
         },
-      });
+      })).rejects.toMatchObject({ code: 'P2002' });
 
       const approve = await postFile(
         `/projects/${PROJECT_TOCTOU_DUPLICATE}/boq/import/approve`,
@@ -755,13 +774,12 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         .field('selectedSheet', 'RAB')
         .field('intakeRequestId', preview.body.intakeRequestId)
         .field('importFingerprint', preview.body.importFingerprint)
-        .expect(409);
-      expect(approve.body.message).toBe('MULTIPLE_WORKING_DRAFTS');
-      expect(
-        await prisma.boqItem.count({
-          where: { boqStructureId: DRAFT_TOCTOU_DUPLICATE },
-        }),
-      ).toBe(0);
+        .expect(201);
+      expect(approve.body.workingDraftId).toBe(DRAFT_TOCTOU_DUPLICATE);
+      expect(approve.body.importedRows).toBe(4);
+      expect(await prisma.boqStructure.count({
+        where: { projectId: PROJECT_TOCTOU_DUPLICATE, status: 'DRAFT' },
+      })).toBe(1);
     });
   });
 
@@ -1183,7 +1201,7 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
       ).toMatchObject({ status: 'PLANNED' });
     });
 
-    it('initiateSetup rejects two DRAFT containers regardless of their names and creates no setup artifacts', async () => {
+    it('initiateSetup reuses the lawful draft after DB rejects an alternative-name second DRAFT', async () => {
       const createResponse = await request(app.getHttpServer())
         .post('/projects')
         .set('Authorization', `Bearer ${createOnlyToken}`)
@@ -1196,14 +1214,14 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         where: { projectId },
         data: { name: 'First Arbitrary Draft Name' },
       });
-      await prisma.boqStructure.create({
+      await expect(prisma.boqStructure.create({
         data: {
           projectId,
           name: 'Second Unrelated Draft Name',
           version: 2,
           status: 'DRAFT',
         },
-      });
+      })).rejects.toMatchObject({ code: 'P2002' });
       await prisma.projectAssignment.create({
         data: {
           workspaceMembershipId: assignedMembershipId,
@@ -1218,14 +1236,15 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         .set('Authorization', `Bearer ${assignedToken}`)
         .set('x-workspace-id', workspaceAId)
         .send({ items: [] })
-        .expect(409);
+        .expect(201);
 
-      expect(response.body.message).toBe('MULTIPLE_DRAFT_BOQ_STRUCTURES');
+      expect(response.body).toBeDefined();
       expect(
-        await prisma.boqStructure.count({
+        await prisma.boqStructure.findMany({
           where: { projectId, status: 'DRAFT' },
+          select: { name: true },
         }),
-      ).toBe(2);
+      ).toEqual([{ name: 'First Arbitrary Draft Name' }]);
       expect(
         await prisma.boqItem.count({ where: { boqStructure: { projectId } } }),
       ).toBe(0);
@@ -1289,8 +1308,9 @@ describe('PR-35 canonical RAB lifecycle (e2e)', () => {
         reasonCode: 'APPROVED_RAB_EXISTS',
       });
       expect(byId.get(PROJECT_DUPLICATE)?.rabLifecycle).toMatchObject({
-        canEnterEditableDraftWorkspace: false,
-        reasonCode: 'MULTIPLE_WORKING_DRAFTS',
+        canEnterEditableDraftWorkspace: true,
+        reasonCode: null,
+        workingDraftCount: 1,
       });
       expect(byId.get(PROJECT_ZERO)?.rabLifecycle).toMatchObject({
         canEnterEditableDraftWorkspace: true,

@@ -377,3 +377,9 @@ Owner/PM-authored instruction, not this executor's own finding);
 NEEDS_REVIEW for their exact closure conditions and originating SHA/PR.
 
 ## Soli Deo Gloria. Haleluya. Amin.
+
+## UTANG-RI01-COST-PROOF-20261020 - OPEN
+Owner PASS is bounded to preparation/workspace, BOQ import and draft reload. Real AHSP linkage, authoritative pricing and final RAB proof remain unproven. AHSP/Basic Price import work is owned by another chat. Close only with lawful Owner UI input and end-to-end persisted cost evidence. No invented price, permission grant or data injection is allowed.
+
+## UTANG-RI01-MERGE-GATES-20261020 - OPEN
+Draft PR #206 product source 0438e8cd961f4a15021aa5a3c03559a3ef286faa requires exact-head CI and architecture/constitution/source review before merge. Historical local full backend failures (15 in two external Ambon workbook suites) are disclosed, not waived. Historical split E2E is not fresh cleaned-package proof. Production preflight must assess duplicate DRAFT rows before the unique index, backup/restore readiness, and the two RAB migrations. No automatic deduplication. Permanent activation is separately gated.

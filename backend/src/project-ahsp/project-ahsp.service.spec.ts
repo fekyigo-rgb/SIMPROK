@@ -401,6 +401,134 @@ describe('ProjectAhspService E1A', () => {
     );
   });
 
+  it('RI-01K: a BOQ context orders eligible versions and does not widen the eligibility query', async () => {
+    const projectId = '10000000-0000-4000-8000-000000000001';
+    const boqItemId = '60000000-0000-4000-8000-000000000001';
+    const bina = 'd110bb4a-5afc-4a37-8ce9-b054e99c9c6f';
+    const jalan = 'b5c0cfb1-0849-47d9-93e7-88e6bc36c2c4';
+    const cipta = 'ce984cc4-30ed-4bd5-ba38-5dea74b57d36';
+    prisma.boqItem = {
+      findFirst: jest.fn().mockResolvedValue({
+        id: boqItemId,
+        name: 'Pasangan batu',
+        unit: 'm2',
+      }),
+    };
+    prisma.projectClassificationSelection = {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          classificationNode: {
+            id: bina,
+            level: 'KATEGORI',
+            parentId: '75a57ee7-bec5-46ec-bc8a-aa728caa47d8',
+          },
+        },
+        { classificationNode: { id: jalan, level: 'SUBKATEGORI', parentId: bina } },
+      ]),
+      update: jest.fn(),
+      create: jest.fn(),
+    };
+    const leaf = (kategoriId: string, kategoriName: string, subId: string, subName: string) => ({
+      id: `11111111-1111-4111-8111-${subId.replace(/-/g, '').slice(0, 12)}`,
+      name: 'Pasangan batu',
+      level: 'JENIS_PEKERJAAN',
+      parent: {
+        id: subId,
+        name: subName,
+        level: 'SUBKATEGORI',
+        parent: {
+          id: kategoriId,
+          name: kategoriName,
+          level: 'KATEGORI',
+          parent: {
+            id: '75a57ee7-bec5-46ec-bc8a-aa728caa47d8',
+            name: 'Pekerjaan Konstruksi',
+            level: 'JENIS_PENGADAAN',
+          },
+        },
+      },
+    });
+    prisma.ahspClassificationAssignment = {
+      findMany: jest.fn().mockResolvedValue([
+        { ahspId: 'ahsp-bina', leafNode: leaf(bina, 'Bina Marga', jalan, 'Jalan') },
+        {
+          ahspId: 'ahsp-cipta',
+          leafNode: leaf(cipta, 'Cipta Karya', 'ae7b03ba-6794-4208-9ecd-69be6a4c03b6', 'Gedung'),
+        },
+      ]),
+    };
+    const row = (id: string, parentId: string, workType: string, outputUnit: string) => ({
+      id,
+      versionNumber: 1,
+      status: 'PUBLISHED',
+      outputUnit,
+      effectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+      expiredDate: null,
+      ahsp: {
+        id: parentId,
+        workType,
+        methodName: 'Metode standar',
+        workspaceId: null,
+        ownershipType: 'SIMPROK_ASSET',
+      },
+      _count: { resources: 1 },
+    });
+    prisma.aHSPVersion.findMany.mockResolvedValue([
+      row('cipta-v', 'ahsp-cipta', 'Pasangan batu gedung', 'm2'),
+      row('bina-v', 'ahsp-bina', 'Pasangan batu kali', 'm2'),
+      row('unit-v', 'ahsp-unit', 'Pasangan batu kali', 'm3'),
+      row('bare-v', 'ahsp-bare', 'Pasangan batu', 'm2'),
+    ]);
+
+    const unscoped = await service.listEligibleVersions(workspaceId, '2026-08-04');
+    expect(unscoped.map((item: { id: string }) => item.id)).toEqual([
+      'cipta-v',
+      'bina-v',
+      'unit-v',
+      'bare-v',
+    ]);
+    expect(unscoped[0]).not.toHaveProperty('preference');
+
+    const listed = await service.listEligibleVersions(workspaceId, '2026-08-04', {
+      projectId,
+      boqItemId,
+    });
+    expect(listed.map((item: { id: string }) => item.id)).toEqual([
+      'bina-v',
+      'cipta-v',
+      'bare-v',
+      'unit-v',
+    ]);
+    expect(listed[0].preference).toEqual(
+      expect.objectContaining({
+        band: 'PREFERRED_SUBKATEGORI',
+        recommended: true,
+      }),
+    );
+    expect(listed[1].preference.band).toBe('CROSS_CATEGORY_FALLBACK');
+    expect(listed[2].preference).toEqual(
+      expect.objectContaining({
+        band: 'INSUFFICIENT_CLASSIFICATION',
+        classificationPath: null,
+        recommended: false,
+      }),
+    );
+    expect(listed[3].preference.recommended).toBe(false);
+    expect(listed[3].preference.reason).toContain('Satuan');
+    const where = prisma.aHSPVersion.findMany.mock.calls.at(-1)[0].where;
+    expect(ahspOriginClause(where)).toEqual(
+      expect.objectContaining({ OR: expect.any(Array) }),
+    );
+    expect(JSON.stringify(where)).not.toContain('fieldCategory');
+    expect(prisma.ahspClassificationAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ isActive: true }),
+      }),
+    );
+    expect(prisma.projectClassificationSelection.update).not.toHaveBeenCalled();
+    expect(prisma.projectClassificationSelection.create).not.toHaveBeenCalled();
+  });
+
   it('region query returns active regions only', async () => {
     await service.listActiveRegions();
     expect(prisma.region.findMany).toHaveBeenCalledWith(

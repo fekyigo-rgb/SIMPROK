@@ -5,6 +5,7 @@ import {
   resolveAhspIdentity,
   resolvePriceOrigin,
   NOT_LINKED_AHSP,
+  AHSP_CODE_UNAVAILABLE,
   PRICE_TRACE_ACTION,
   PRICE_TRACE_ROW_ACTION,
   PRICE_TRACE_TITLE,
@@ -150,7 +151,7 @@ test("O-5. exactly three origins exist, and no contradicting category axis", () 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AHSP IDENTITY — an AHSP has no code in this domain
+// AHSP IDENTITY — source-provided code is optional; method is never a code
 // ─────────────────────────────────────────────────────────────────────────────
 
 test("A-1. a linked AHSP is named by its own work type, method and version", () => {
@@ -166,6 +167,17 @@ test("A-1. a linked AHSP is named by its own work type, method and version", () 
   assert.match(identity.fullLabel, /Pemadatan secara Manual/);
   assert.match(identity.fullLabel, /v4/);
   assert.match(identity.fullLabel, /m3/);
+  assert.equal(identity.shortLabel, AHSP_CODE_UNAVAILABLE);
+});
+
+test('A-1b. source AHSP code is displayed verbatim, independently of method and WBS', () => {
+  const identity = resolveAhspIdentity({
+    code: 'BM.05.012', workType: 'Pasangan batu', methodName: 'Metode uji Bina Marga', versionNumber: 1, outputUnit: 'm3',
+  });
+  assert.equal(identity.shortLabel, 'BM.05.012');
+  assert.match(identity.fullLabel, /Pasangan batu/);
+  assert.match(identity.fullLabel, /Kode BM\.05\.012/);
+  assert.doesNotMatch(identity.shortLabel, /Bina Marga/);
 });
 
 test("A-2. a row with no AHSP is honest, never given an invented one", () => {
@@ -408,7 +420,8 @@ test("R-1. the row's code and its AHSP identity are independent facts", () => {
   assert.equal(row.ahsp.linked, true);
   assert.doesNotMatch(row.ahsp.shortLabel, /R75/);
   assert.doesNotMatch(row.ahsp.fullLabel, /R75/);
-  assert.match(row.ahsp.shortLabel, /Pemadatan secara Manual/);
+  assert.equal(row.ahsp.shortLabel, AHSP_CODE_UNAVAILABLE);
+  assert.match(row.ahsp.fullLabel, /Pemadatan secara Manual/);
   // Three distinct values.
   assert.notEqual(row.number, row.code);
   assert.notEqual(row.code, row.ahsp.shortLabel);
