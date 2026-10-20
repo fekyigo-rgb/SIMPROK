@@ -2591,8 +2591,9 @@ export class BasicPriceImportService {
     // PR205: read the append-only OWNER decisions in ONE batch-scoped query.
     // Neither a raw spreadsheet cell nor the browser is identity authority.
     // A stale decision or a different source digest is NEVER silently reused.
-    const decisions = rows.some((row) => sourceSpecificationEvidence(row.rawSourceContext).length > 0)
-      ? await this.prisma.$queryRaw<Array<{
+    // Read manual decisions too: an Excel without specification columns can have
+    // OWNER-confirmed SUPPLEMENT/CORRECT facts that must reach the identity kernel.
+    const decisions = await this.prisma.$queryRaw<Array<{
           rowId: string; resultingVersion: number; sourceSha256: string;
           decisionKind: string; confirmedSpecifications: unknown;
         }>>(Prisma.sql`
@@ -2602,8 +2603,7 @@ export class BasicPriceImportService {
           JOIN "basic_price_import_rows" r ON r."id" = d."rowId"
           WHERE d."workspaceId" = ${workspaceId}::uuid AND r."batchId" = ${batchId}::uuid
           ORDER BY d."rowId", d."resultingVersion" DESC
-        `)
-      : [];
+        `);
     const rowVersions = new Map(rows.map((row) => [row.id, row.version]));
     const reviewedSpecsByRow = new Map<string, {
       facts: Record<string, string>; decisionKind: string; resultingVersion: number;

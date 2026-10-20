@@ -23,6 +23,8 @@ import type {
   UnitLookupItem,
 } from '../api/basicPriceImport';
 import { CatalogSearchSelect } from '../components/basic-price/CatalogSearchSelect';
+import { BasicPriceSpecificationEditor } from '../components/basic-price/BasicPriceSpecificationEditor';
+import type { SpecDecisionKind } from '../utils/basicPriceSpecificationForm';
 import { BasicPriceJourneyStepper } from '../components/basic-price/BasicPriceJourneyStepper';
 import { ROW_TONE_CLASS, reviewCounters, rowTone } from '../utils/basicPriceJourney';
 import {
@@ -478,6 +480,55 @@ export function BasicPriceReviewPage() {
           : 'Konfirmasi belum berhasil; tidak ada keputusan identitas baru.';
       setRowNotice({ rowId: row.id, text: message });
       setStatusMessage(message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  /** Existing audit writer: manual facts re-enter the canonical identity pathway on readback. */
+  const handleSaveManualSpecifications = async (
+    row: BasicPriceImportRowSummary,
+    facts: Record<string, string>,
+    kind: SpecDecisionKind,
+    reason?: string,
+  ): Promise<boolean> => {
+    if (!batchId || !isRowMutable(row) || isBusy) return false;
+    const existingDraft = drafts[row.id];
+    if ((existingDraft?.resource || existingDraft?.admitOpen) &&
+        !window.confirm('Keputusan spesifikasi dapat mengubah kecocokan identitas. Batalkan pilihan padanan/item baru yang belum disimpan dan lanjutkan?')) {
+      return false;
+    }
+    setIsBusy(true);
+    try {
+      await confirmBasicPriceRowSpecifications(batchId, row.id, row.version, facts, kind, reason);
+      // Never reuse a resource selection made before the specification decision.
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      setLookupRows((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+      const readback = await loadBatch(false);
+      const message = readback
+        ? 'Spesifikasi baris ' + row.sourceRowNumber + ' tercatat. Identitas dan kandidat diperiksa ulang; pilih padanan atau item baru berdasarkan bukti terbaru.'
+        : 'Keputusan tercatat, tetapi pembacaan ulang gagal. Muat ulang sebelum memilih identitas.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+      return readback;
+    } catch (error) {
+      if (error instanceof ImportRequestError && error.httpStatus === 409) await loadBatch(false);
+      const message = error instanceof ImportRequestError && error.httpStatus === 409
+        ? 'Spesifikasi belum disimpan: versi atau bukti bertentangan. Muat ulang dan periksa keputusan sebelumnya.'
+        : error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Keputusan spesifikasi belum berhasil disimpan.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+      return false;
     } finally {
       setIsBusy(false);
     }
@@ -1425,6 +1476,17 @@ export function BasicPriceReviewPage() {
                           </button>
                         ) : null}
                       </details>
+                    ) : null}
+                    {(mutable || row.specificationDecision) ? (
+                      <BasicPriceSpecificationEditor
+                        key={row.id + ':' + (row.specificationDecision?.resultingVersion ?? 'none')}
+                        rowNumber={row.sourceRowNumber}
+                        sourceSpecifications={row.sourceSpecifications}
+                        specificationDecision={row.specificationDecision}
+                        mutable={mutable}
+                        disabled={isBusy}
+                        onSave={(facts, kind, reason) => handleSaveManualSpecifications(row, facts, kind, reason)}
+                      />
                     ) : null}
                   </div>
 

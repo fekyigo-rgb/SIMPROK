@@ -263,13 +263,14 @@ export class BasicPriceRowResolutionService {
       throw new ConflictException('ROW_NOT_MUTABLE');
     // Refusal ONLY: the source states extra qualifiers the current identity
     // question did not examine. No interpretation or canonical spec minting.
-    const hasSourceSpecs = hasExplicitUnverifiedSourceSpecification(row.rawSourceContext);
-    const decisions = hasSourceSpecs ? await tx.$queryRaw<Array<{
+    // Manual SUPPLEMENT/CORRECT decisions must be consumed even when the workbook has
+    // no explicit specification columns. Otherwise the audited decision is dormant.
+    const decisions = await tx.$queryRaw<Array<{
       confirmedSpecifications: unknown; sourceSha256: string; resultingVersion: number;
     }>>(Prisma.sql`SELECT "confirmedSpecifications", "sourceSha256", "resultingVersion"
       FROM "basic_price_import_row_specification_decisions"
       WHERE "workspaceId" = ${workspaceId}::uuid AND "rowId" = ${rowId}::uuid
-      ORDER BY "resultingVersion" DESC LIMIT 1`) : [];
+      ORDER BY "resultingVersion" DESC LIMIT 1`);
     const current = decisions[0];
     const verified = current && current.sourceSha256 === batch.sourceSha256 &&
       current.resultingVersion <= row.version
@@ -341,14 +342,27 @@ export class BasicPriceRowResolutionService {
         throw new BadRequestException('SPECIFICATION_CORRECTION_REASON_REQUIRED');
       }
 
-      const previous = await tx.$queryRaw<Array<{ id: string; resultingVersion: number }>>(
-        Prisma.sql`SELECT "id", "resultingVersion" FROM "basic_price_import_row_specification_decisions"
+      const previous = await tx.$queryRaw<Array<{
+        id: string; resultingVersion: number; sourceSha256: string;
+        confirmedSpecifications: unknown;
+      }>>(
+        Prisma.sql`SELECT "id", "resultingVersion", "sourceSha256", "confirmedSpecifications"
+          FROM "basic_price_import_row_specification_decisions"
           WHERE "workspaceId" = ${workspaceId}::uuid AND "rowId" = ${rowId}::uuid
           ORDER BY "resultingVersion" DESC LIMIT 1`,
       );
       const current = previous[0] ?? null;
-      if (current && current.resultingVersion > row.version) {
+      if (current && (current.resultingVersion > row.version ||
+          current.sourceSha256 !== row.batch.sourceSha256)) {
         throw new ConflictException('SPECIFICATION_DECISION_HISTORY_STALE');
+      }
+      // A supplement adds missing facts; it cannot silently revise an earlier
+      // reviewed human decision. Only CORRECT with a reason may do that.
+      if (current && dto.decisionKind !== 'CORRECT') {
+        const priorFacts = confirmedSpecifications(current.confirmedSpecifications);
+        if (!priorFacts || Object.entries(priorFacts).some(([key, value]) => confirmed[key] !== value)) {
+          throw new ConflictException('SPECIFICATION_CORRECTION_REQUIRES_REASON');
+        }
       }
       const nextVersion = row.version + 1;
       const write = await tx.basicPriceImportRow.updateMany({

@@ -2929,4 +2929,66 @@ describe('BasicPriceRowResolutionService', () => {
       expect(writer).not.toHaveBeenCalled();
     });
   });
+
+  describe('BP-SPEC-ACTIVATION: existing append-only manual decision law', () => {
+    const arrange = (previous: Record<string, unknown> | null) => {
+      jest.spyOn(service as never, 'assertBatchRowMutable' as never).mockResolvedValue({
+        ...baseRow,
+        rawSourceContext: null,
+        version: 1,
+        batch: baseBatch,
+      } as never);
+      tx.$queryRaw.mockResolvedValueOnce(previous ? [previous] : []);
+      const updated = jest.fn().mockResolvedValue({ count: 1 });
+      (tx.basicPriceImportRow as unknown as { updateMany: jest.Mock }).updateMany = updated;
+      return updated;
+    };
+    const previous = {
+      id: 'previous-spec-decision',
+      resultingVersion: 1,
+      sourceSha256: 'batch-sha',
+      confirmedSpecifications: { merek: 'LAMA' },
+    };
+
+    it('accepts the first manual supplement when the Excel contains no spec columns', async () => {
+      const update = arrange(null);
+      const saved = await service.confirmRowSpecifications(
+        WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID,
+        { version: 1, decisionKind: 'SUPPLEMENT', confirmedSpecifications: { merek: 'UJI-SINTETIS', tipe: 'T-1' } },
+      );
+      expect(saved).toMatchObject({
+        rowId: ROW_ID, version: 2, decisionKind: 'SUPPLEMENT',
+        confirmedSpecifications: { merek: 'UJI-SINTETIS', tipe: 'T-1' },
+      });
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('never permits changing an earlier human fact through SUPPLEMENT', async () => {
+      const update = arrange(previous);
+      await expect(service.confirmRowSpecifications(
+        WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID,
+        { version: 1, decisionKind: 'SUPPLEMENT', confirmedSpecifications: { merek: 'BARU' } },
+      )).rejects.toThrow('SPECIFICATION_CORRECTION_REQUIRES_REASON');
+      expect(update).not.toHaveBeenCalled();
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('requires a reason for CORRECT and appends a new version without rewriting history', async () => {
+      const update = arrange(previous);
+      await expect(service.confirmRowSpecifications(
+        WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID,
+        { version: 1, decisionKind: 'CORRECT', confirmedSpecifications: { merek: 'BARU' } },
+      )).rejects.toThrow('SPECIFICATION_CORRECTION_REASON_REQUIRED');
+      expect(update).not.toHaveBeenCalled();
+      const saved = await service.confirmRowSpecifications(
+        WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID,
+        { version: 1, decisionKind: 'CORRECT', confirmedSpecifications: { merek: 'BARU' }, reason: 'Pemeriksaan fakta sintetis' },
+      );
+      expect(saved).toMatchObject({ version: 2, decisionKind: 'CORRECT' });
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+  });
+
 });
