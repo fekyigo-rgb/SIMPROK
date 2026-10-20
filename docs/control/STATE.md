@@ -364,3 +364,9 @@ Supersedes prior statements that Owner BOQ import/save proof is pending, only wi
 - CONTINUITY: all 54 pre-closeout files SHA-256 archived; 45 candidate files plus closeout documentation. Local HOST binding and eight local evidence/launcher files retained outside PR.
 - GATE_STATE: DRAFT_REVIEW_PREPARATION; MERGE=HOLD; PRODUCTION_ACTIVATION=NO. Historical external-workbook failures and new exact-source CI/review obligations remain disclosed.
 - DETAILS: docs/implementation-gates/ri01-closeout-20261020/READINESS.md and file-disposition.json.
+
+- PR_NUMBER: 206; URL: https://github.com/fekyigo-rgb/SIMPROK/pull/206; GITHUB_STATE: OPEN_DRAFT.
+- PRODUCT_SOURCE_SHA: 0438e8cd961f4a15021aa5a3c03559a3ef286faa. Live PR_HEAD_SHA must be read from GitHub after this documentation commit.
+- LOCAL_VALIDATION: frontend 1495/1495 PASS and build PASS; backend focused 38 suites/608 tests PASS.
+- STAGING_SCOPE: exact 47-file allowlist committed/pushed; backend/src/main.ts and historical local-only evidence remain uncommitted by design.
+- ACTIVE_DEBTS: UTANG-RI01-COST-PROOF-20261020 and UTANG-RI01-MERGE-GATES-20261020. NEXT: exact PR CI plus independent source review; no merge or permanent activation claimed.

@@ -1,6 +1,6 @@
 # RI-01 bounded closeout - 20 October 2026
 
-Status: PREPARED FOR DRAFT REVIEW. MERGE HOLD. PERMANENT ACTIVATION HOLD.
+Status: PUBLISHED AS DRAFT PR #206 (https://github.com/fekyigo-rgb/SIMPROK/pull/206). MERGE HOLD. PERMANENT ACTIVATION HOLD.
 
 ## Owner decision and acceptance boundary
 Owner explicitly passed the interaction/preparation rooms through Ruang Kerja RAB on 20 October and authorized clean continuous PR preparation. AHSP import and Basic Price improvements are owned by another chat. This decision does not claim completed AHSP linkage, monetary calculation, final RAB, or permanent deployment.
