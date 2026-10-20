@@ -395,11 +395,49 @@ model Project {
   intakeJobs           IntakeJob[]
   intakeRequests       IntakeRequest[]
   boqBusinessUseEvents BoqBusinessUseEvent[]
+  classificationSelections ProjectClassificationSelection[]
+  regionSelections     ProjectRegionSelection[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
   @@index([organizationId])
   @@map("projects")
+}
+
+/// RI-01B — current canonical classification selections for one Project.
+/// Identity only. Name, code, level, and parent stay on ConstructionClassificationNode.
+model ProjectClassificationSelection {
+  id                   String   @id @default(uuid()) @db.Uuid
+  projectId            String   @db.Uuid
+  classificationNodeId String   @db.Uuid
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  project            Project                        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  classificationNode ConstructionClassificationNode @relation(fields: [classificationNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([projectId, classificationNodeId])
+  @@index([projectId])
+  @@index([classificationNodeId])
+  @@map("project_classification_selections")
+}
+
+/// RI-01B — current canonical Region selections for one Project.
+/// Identity only. Name, code, level, and parent stay on Region.
+model ProjectRegionSelection {
+  id        String   @id @default(uuid()) @db.Uuid
+  projectId String   @db.Uuid
+  regionId  String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  region  Region  @relation(fields: [regionId], references: [id], onDelete: Restrict)
+
+  @@unique([projectId, regionId])
+  @@index([projectId])
+  @@index([regionId])
+  @@map("project_region_selections")
 }
 
 model ProjectTimeZoneEvent {
@@ -2484,6 +2522,7 @@ model ConstructionClassificationNode {
   workspace Workspace?                       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   ahspClassificationAssignments         AhspClassificationAssignment[]
   snapshotClassificationAssignments AhspSnapshotClassificationAssignment[]
+  projectClassificationSelections   ProjectClassificationSelection[]
 
   @@index([parentId])
   @@index([workspaceId])
@@ -2570,6 +2609,7 @@ model Region {
   projectAhspOccurrences  ProjectAhspOccurrence[]
   basicPriceCoverageAnchors BasicPriceRegionCoverageSet[]    @relation("BasicPriceRegionCoverageAnchor")
   basicPriceCoverageMembers BasicPriceRegionCoverageMember[] @relation("BasicPriceRegionCoverageMemberRegion")
+  projectRegionSelections  ProjectRegionSelection[]
 
   @@index([parentId])
   @@map("regions")

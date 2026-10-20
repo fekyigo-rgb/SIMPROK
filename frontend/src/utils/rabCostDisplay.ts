@@ -761,10 +761,10 @@ export const describeCostEngineStatus = (
   }
   if (!ahspCodePresent) {
     return {
-      statusLabel: 'Engine belum aktif',
+      statusLabel: 'AHSP belum terhubung',
       sourceLabel: 'Belum tersambung',
-      frameBadge: 'Engine belum aktif',
-      frameMessage: AHSP_ENGINE_INACTIVE_FRAME_MESSAGE,
+      frameBadge: 'AHSP belum terhubung',
+      frameMessage: 'Pilih AHSP untuk baris pekerjaan ini. Komponen dan harga belum tersedia sampai analisis serta sumber harga yang sah dapat dibuktikan.',
     };
   }
   if (!costRowStatus) {

@@ -23,7 +23,7 @@ describe('AHSP identity projection', () => {
           id: LIVE_VERSION,
           versionNumber: 4,
           outputUnit: 'm3',
-          ahsp: { workType: 'Timbunan dan Pemadatan Sirtu', methodName: 'Pemadatan secara Manual' },
+          ahsp: { code: 'AHSP-TEST-001', workType: 'Timbunan dan Pemadatan Sirtu', methodName: 'Pemadatan secara Manual' },
         },
       ]),
     },
@@ -31,6 +31,7 @@ describe('AHSP identity projection', () => {
       findMany: jest.fn().mockResolvedValue([
         {
           id: SNAPSHOT,
+          code: null,
           workType: 'Timbunan Historis',
           methodName: 'Pemadatan Alat Berat',
           versionNumber: 2,
@@ -64,6 +65,7 @@ describe('AHSP identity projection', () => {
     const items = await serviceWith(prisma).getBoq('project-1');
 
     expect(items[0].ahsp).toEqual({
+      code: 'AHSP-TEST-001',
       workType: 'Timbunan dan Pemadatan Sirtu',
       methodName: 'Pemadatan secara Manual',
       versionNumber: 4,
@@ -83,12 +85,15 @@ describe('AHSP identity projection', () => {
     // The snapshot is the row's binding truth, so it answers — not the live
     // version it was taken from.
     expect(items[0].ahsp).toMatchObject({
+      code: null,
       workType: 'Timbunan Historis',
       methodName: 'Pemadatan Alat Berat',
       versionNumber: 2,
       source: 'SNAPSHOT',
     });
     expect(prisma.aHSPVersion.findMany).not.toHaveBeenCalled();
+    // A frozen null code must not borrow a later live AHSP code.
+    expect(items[0].ahsp.code).toBeNull();
   });
 
   it('a row with no AHSP is null — nothing is invented from the wbsCode', async () => {

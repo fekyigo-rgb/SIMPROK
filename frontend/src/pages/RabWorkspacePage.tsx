@@ -16,6 +16,8 @@ import {
   ArrowUp,
   ChevronsLeft,
   ChevronsRight,
+  ChevronDown,
+  ChevronUp,
   FileDown,
   FileInput,
   FolderOpen,
@@ -32,6 +34,10 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import { appendBoqImportApprovalIdentity, dismissBoqImportPreview, requiresBoqImportConfirmation, type BoqImportDraftImpact } from '../utils/boqImportApproval';
+import {
+  projectFieldContextView,
+  type ProjectFieldContextView,
+} from '../utils/projectIntakeSelection';
 import {
   groupAhspComposition,
   hasAnyComponent,
@@ -75,10 +81,31 @@ import {
 
 /** Which question the side panel is answering. */
 type DrawerMode = 'AHSP_ANALYSIS' | 'PRICE_TRACE';
+
+/** Canonical Region levels already supported by SearchRegionDto. ALL also covers
+ * legacy Region rows whose administrativeLevel was never established. */
+const REGION_LEVEL_LABELS = {
+  COUNTRY: 'Negara',
+  PROVINCE: 'Provinsi',
+  REGENCY_CITY: 'Kabupaten / Kota',
+  DISTRICT: 'Kecamatan',
+  VILLAGE: 'Desa / Kelurahan',
+} as const;
+type RegionLevelChoice = keyof typeof REGION_LEVEL_LABELS | 'ALL';
+const REGION_LEVEL_OPTIONS: Array<{ value: RegionLevelChoice; label: string }> = [
+  { value: 'PROVINCE', label: 'Provinsi' },
+  { value: 'REGENCY_CITY', label: 'Kabupaten / Kota' },
+  { value: 'DISTRICT', label: 'Kecamatan' },
+  { value: 'VILLAGE', label: 'Desa / Kelurahan' },
+  { value: 'COUNTRY', label: 'Negara' },
+  { value: 'ALL', label: 'Semua tingkat' },
+];
 import {
+  formatAhspPreferenceTag,
   formatAhspVersionOption,
   isWorkspacePrivateAhsp,
   type AhspOrigin,
+  type AhspPreferenceView,
 } from '../utils/ahspOriginDisplay';
 import {
   applyBatchResults,
@@ -98,6 +125,7 @@ import {
   isDraftDirtyForSource,
   isDraftPricingComplete,
   isDraftRevisionCurrent,
+  isTerminalPersistedKernelRow,
   isPersistResultFresh,
   markRequestFailed,
   resolveCostRowStatus,
@@ -503,6 +531,17 @@ export function RabWorkspacePage() {
   const [marginPercent, setMarginPercent] = useState(10);
   const [ppnPercent, setPpnPercent] = useState(11);
   const [statusMessage, setStatusMessage] = useState(projectId ? 'Memuat draft...' : 'Tidak ada project aktif.');
+  const [fieldContextLoad, setFieldContextLoad] = useState<
+    { phase: 'loading' } | { phase: 'ready'; view: ProjectFieldContextView }
+  >(projectId ? { phase: 'loading' } : {
+    phase: 'ready',
+    view: projectFieldContextView({
+      projectId: null,
+      httpStatus: null,
+      description: null,
+      failed: false,
+    }),
+  });
   const [capabilityState, setCapabilityState] = useState<CapabilityState>(projectId ? { kind: 'loading' } : { kind: 'no-project' });
   const [retryToken, setRetryToken] = useState(0);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -519,11 +558,36 @@ export function RabWorkspacePage() {
    * tenancy rules it does not own. Optional on the type so a stale payload
    * degrades to the honest catalog label rather than crashing.
    */
-  const [eligibleAhspVersions, setEligibleAhspVersions] = useState<Array<{ id: string; versionNumber: number; outputUnit: string; origin?: AhspOrigin; ahsp: { workType: string; methodName: string } }>>([]);
-  const [activeRegions, setActiveRegions] = useState<Array<{ id: string; code: string; name: string }>>([]);
+  const [eligibleAhspVersions, setEligibleAhspVersions] = useState<Array<{ id: string; versionNumber: number; outputUnit: string; origin?: AhspOrigin; preference?: AhspPreferenceView; ahsp: { code?: string | null; workType: string; methodName: string } }>>([]);
+  const [ahspQuery, setAhspQuery] = useState('');
+  const [ahspPickerOpen, setAhspPickerOpen] = useState(false);
+  const [ahspActiveIndex, setAhspActiveIndex] = useState(0);
+  const ahspPickerInputRef = useRef<HTMLInputElement>(null);
+  const [debouncedAhspQuery, setDebouncedAhspQuery] = useState('');
+  const [ahspPage, setAhspPage] = useState(1);
+  const [ahspHasNext, setAhspHasNext] = useState(false);
+  const [showAhspRecommendationReason, setShowAhspRecommendationReason] = useState(false);
+  // A request failure is not an empty AHSP catalog: make the distinction visible.
+  const [ahspListLoad, setAhspListLoad] = useState<
+    | { kind: 'idle' | 'loading' }
+    | { kind: 'ready'; count: number }
+    | { kind: 'error'; httpStatus: number | null }
+  >({ kind: 'idle' });
+  const [ahspListRetry, setAhspListRetry] = useState(0);
+  const [activeRegions, setActiveRegions] = useState<Array<{ id: string; code: string; name: string; administrativeLevel?: string | null; parentName?: string | null; hierarchyPath?: string[] }>>([]);
+  const [regionQuery, setRegionQuery] = useState('');
+  const [regionLevel, setRegionLevel] = useState<RegionLevelChoice>('PROVINCE');
+  const [regionListRetry, setRegionListRetry] = useState(0);
+  const [regionListLoad, setRegionListLoad] = useState<
+    | { kind: 'idle' | 'loading' }
+    | { kind: 'ready'; total: number }
+    | { kind: 'error'; httpStatus: number | null }
+  >({ kind: 'idle' });
   const [selectedAhspVersionId, setSelectedAhspVersionId] = useState('');
   const [selectedRegionId, setSelectedRegionId] = useState('');
   const [isSelectingAhsp, setIsSelectingAhsp] = useState(false);
+  // The analysis remains primary; the editor is opened only by explicit user intent.
+  const [showAhspSelection, setShowAhspSelection] = useState(false);
   const persistGenerationRef = useRef(0);
   /**
    * C-BLOCKER-02: monotonic, synchronous — never coerced, never reset
@@ -578,6 +642,62 @@ export function RabWorkspacePage() {
   useLayoutEffect(() => {
     currentProjectIdRef.current = projectId;
     persistGenerationRef.current += 1;
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) {
+      setFieldContextLoad({
+        phase: 'ready',
+        view: projectFieldContextView({
+          projectId: null,
+          httpStatus: null,
+          description: null,
+          failed: false,
+        }),
+      });
+      return;
+    }
+    const controller = new AbortController();
+    let cancelled = false;
+    setFieldContextLoad({ phase: 'loading' });
+    void (async () => {
+      try {
+        const response = await apiFetch(`/projects/${projectId}`, { signal: controller.signal });
+        if (cancelled) return;
+        let description: unknown = null;
+        if (response.ok) {
+          const body: unknown = await response.json();
+          description = body && typeof body === 'object' && 'description' in body
+            ? (body as { description: unknown }).description
+            : null;
+        }
+        if (cancelled) return;
+        setFieldContextLoad({
+          phase: 'ready',
+          view: projectFieldContextView({
+            projectId,
+            httpStatus: response.status,
+            description,
+            failed: false,
+          }),
+        });
+      } catch {
+        if (cancelled) return;
+        setFieldContextLoad({
+          phase: 'ready',
+          view: projectFieldContextView({
+            projectId,
+            httpStatus: null,
+            description: null,
+            failed: true,
+          }),
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [projectId]);
 
   /**
@@ -789,38 +909,132 @@ export function RabWorkspacePage() {
   }, [projectId, retryToken]);
 
   useEffect(() => {
-    if (!projectId || !calculationAsOfDate) {
-      setEligibleAhspVersions([]);
+    // No unrequested full-catalogue browse. Search starts only with a
+    // specific name/code; the stored pricing Region is a separate read-only fact.
+    if (!showAhspSelection || !projectId || !calculationAsOfDate || regionQuery.trim().length < 2) {
       setActiveRegions([]);
+      setRegionListLoad({ kind: 'idle' });
       return;
     }
     let cancelled = false;
-    Promise.all([
-      apiFetch(`/projects/${projectId}/ahsp-occurrences/eligible-versions?businessPricingAsOfDate=${encodeURIComponent(calculationAsOfDate)}`),
-      apiFetch(`/projects/${projectId}/ahsp-occurrences/regions`),
-    ])
-      .then(async ([versionsResponse, regionsResponse]) => {
-        if (!versionsResponse.ok || !regionsResponse.ok) throw new Error('selector-load-failed');
-        const [versions, regions] = await Promise.all([versionsResponse.json(), regionsResponse.json()]);
-        if (cancelled) return;
-        setEligibleAhspVersions(Array.isArray(versions) ? versions : []);
-        setActiveRegions(Array.isArray(regions) ? regions : []);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setEligibleAhspVersions([]);
-        setActiveRegions([]);
-      });
+    let httpStatus: number | null = null;
+    setActiveRegions([]);
+    setRegionListLoad({ kind: 'loading' });
+    // Only one bounded page is requested; typing narrows the canonical server search.
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams({ q: regionQuery.trim(), page: '1', limit: '25' });
+      if (regionLevel !== 'ALL') params.set('administrativeLevel', regionLevel);
+      apiFetch(`/projects/${projectId}/ahsp-occurrences/regions?${params.toString()}`)
+        .then(async (response) => {
+          if (!response.ok) {
+            httpStatus = response.status;
+            throw new Error('region-search-failed');
+          }
+          const payload: unknown = await response.json();
+          if (!payload || typeof payload !== 'object' || !('items' in payload)
+            || !Array.isArray(payload.items)
+            || !payload.items.every((item: unknown) => item && typeof item === 'object'
+              && 'id' in item && typeof item.id === 'string'
+              && 'code' in item && typeof item.code === 'string'
+              && 'name' in item && typeof item.name === 'string')) {
+            throw new Error('region-search-invalid-response');
+          }
+          if (cancelled) return;
+          setActiveRegions(payload.items);
+          setRegionListLoad({
+            kind: 'ready',
+            total: 'total' in payload && typeof payload.total === 'number'
+              ? payload.total : payload.items.length,
+          });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setActiveRegions([]);
+          setRegionListLoad({ kind: 'error', httpStatus });
+        });
+    }, 250);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [projectId, calculationAsOfDate]);
+  }, [showAhspSelection, projectId, calculationAsOfDate, regionQuery, regionLevel, regionListRetry]);
 
   const numberedRows = useMemo(() => buildNumberedRows(rows), [rows]);
   const selectedItem = useMemo(() => {
     const row = numberedRows.find((item) => item.id === selectedRowId);
     return row?.type === 'item' ? row : null;
   }, [numberedRows, selectedRowId]);
+  useEffect(() => {
+    // A chooser selection must never bleed into another BOQ row/project.
+    setSelectedRegionId('');
+    setRegionQuery('');
+    setRegionLevel('PROVINCE');
+    setSelectedAhspVersionId('');
+    setAhspPickerOpen(false);
+    setAhspActiveIndex(0);
+    setShowAhspSelection(false);
+    setAhspQuery('');
+    setDebouncedAhspQuery('');
+    setAhspPage(1);
+    setAhspHasNext(false);
+    setShowAhspRecommendationReason(false);
+  }, [projectId, selectedItem?.id]);
+  const preferenceBoqItemId =
+    selectedItem && !selectedItem.id.startsWith('local-') ? selectedItem.id : '';
+  const selectedAhspPreference = eligibleAhspVersions.find(
+    (version) => version.id === selectedAhspVersionId,
+  )?.preference;
+
+  useEffect(() => {
+    // Debounce user search so thousands of AHSP never become client-side options.
+    const handle = window.setTimeout(() => setDebouncedAhspQuery(ahspQuery.trim()), 320);
+    return () => window.clearTimeout(handle);
+  }, [ahspQuery]);
+
+  useEffect(() => {
+    // RAB AHSP search is read only, only when the chooser is explicitly open.
+    // q is matched by the server on code/work type/method, never filtered
+    // against a preloaded whole-workspace array.
+    if (!showAhspSelection || !projectId || !calculationAsOfDate || !selectedItem ||
+      ahspQuery.trim() !== debouncedAhspQuery || debouncedAhspQuery.length === 1) {
+      setEligibleAhspVersions([]);
+      setAhspHasNext(false);
+      setAhspListLoad({ kind: 'idle' });
+      return;
+    }
+    let cancelled = false;
+    let failureStatus: number | null = null;
+    setAhspListLoad({ kind: 'loading' });
+    const params = new URLSearchParams({
+      businessPricingAsOfDate: calculationAsOfDate, page: String(ahspPage), limit: '25',
+    });
+    if (preferenceBoqItemId) params.set('boqItemId', preferenceBoqItemId);
+    if (debouncedAhspQuery) params.set('q', debouncedAhspQuery);
+    apiFetch(`/projects/${projectId}/ahsp-occurrences/eligible-versions/search?${params.toString()}`)
+      .then(async (response) => {
+        if (!response.ok) {
+          failureStatus = response.status;
+          throw new Error('selector-search-failed');
+        }
+        const data: unknown = await response.json();
+        if (!data || typeof data !== 'object' || !('items' in data) ||
+          !Array.isArray(data.items) || !('hasNext' in data) ||
+          typeof data.hasNext !== 'boolean') throw new Error('selector-invalid-response');
+        if (cancelled) return;
+        const next = data.items as typeof eligibleAhspVersions;
+        setEligibleAhspVersions((previous) => ahspPage === 1
+          ? next : [...previous, ...next.filter((item) => !previous.some((existing) => existing.id === item.id))]);
+        setAhspHasNext(data.hasNext);
+        setAhspListLoad({ kind: 'ready', count: next.length });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        if (ahspPage === 1) setEligibleAhspVersions([]);
+        setAhspListLoad({ kind: 'error', httpStatus: failureStatus });
+      });
+    return () => { cancelled = true; };
+  }, [showAhspSelection, projectId, calculationAsOfDate, selectedItem?.id,
+    preferenceBoqItemId, ahspQuery, debouncedAhspQuery, ahspPage, ahspListRetry]);
   /**
    * RAW live status — what the LIVE batch answered, nothing else. Persist
    * reachability reads this one, because persisting stores a live result and
@@ -954,6 +1168,21 @@ export function RabWorkspacePage() {
    * One presenter over the authoritative proof, shared with Ruang Hidup, so
    * the two rooms cannot tell two stories about one number.
    */
+  /** The AHSP chooser gets only two context labels, never the rich price proof.
+   * All resource breakdown, recomputation and provenance remain in PRICE_TRACE. */
+  const storedPriceContext = selectedItem?.priceOrigin === 'SERVER_COST_KERNEL' && persistedProofDisplay?.provenance
+    ? {
+        regionName: persistedProofDisplay.provenance.regionName,
+        sourceLabel: (persistedProofDisplay.sourceAuthority?.privateBasicPriceCount ?? 0) > 0
+          ? (persistedProofDisplay.sourceAuthority?.catalogBasicPriceCount ?? 0) > 0
+            ? 'Basic Price privat dan katalog'
+            : 'Basic Price privat ruang kerja'
+          : (persistedProofDisplay.sourceAuthority?.catalogBasicPriceCount ?? 0) > 0
+            ? 'Basic Price katalog SIMPROK'
+            : 'Asal belum dapat dipastikan',
+      }
+    : null;
+
   const priceTrace = useMemo(
     () =>
       buildPriceTrace({
@@ -1089,6 +1318,7 @@ export function RabWorkspacePage() {
   const DRAWER_MIN = 320;
   const DRAWER_MAX = 720;
   const DRAWER_DEFAULT = 420;
+  const DRAWER_EXPANDED = 540;
   const [drawerWidth, setDrawerWidth] = useState(DRAWER_DEFAULT);
   const workspaceBodyRef = useRef<HTMLElement | null>(null);
   const dragWidthRef = useRef(DRAWER_DEFAULT);
@@ -1167,6 +1397,15 @@ export function RabWorkspacePage() {
     return () => query.removeEventListener('change', apply);
   }, []);
 
+  // One-click preset for the existing bounded drag-resizer; presentation only.
+  const toggleDrawerExpanded = () => {
+    const next = drawerWidth > DRAWER_DEFAULT
+      ? DRAWER_DEFAULT
+      : Math.min(DRAWER_MAX, DRAWER_EXPANDED);
+    dragWidthRef.current = next;
+    setDrawerWidth(next);
+  };
+
   const startDrawerResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (isMobileViewport) return;
     event.preventDefault();
@@ -1233,11 +1472,27 @@ export function RabWorkspacePage() {
     setStatusMessage(`${action}: fitur disiapkan, belum aktif.`);
   };
 
+  const cancelAhspSelection = () => {
+    if (isSelectingAhsp) return;
+    setShowAhspSelection(false);
+    setSelectedAhspVersionId('');
+    setAhspPickerOpen(false);
+    setAhspActiveIndex(0);
+    setAhspQuery('');
+    setDebouncedAhspQuery('');
+    setAhspPage(1);
+    setAhspHasNext(false);
+    setShowAhspRecommendationReason(false);
+    setSelectedRegionId('');
+    setRegionQuery('');
+    setRegionLevel('PROVINCE');
+  };
+
   const handlePickAhsp = () => {
     // The control is disabled while frozen; the command refuses as well, so a
     // frozen RAB is protected by the code and not only by the screen.
     if (!canEditDraft) return;
-    if (!projectId || !selectedItem || !selectedAhspVersionId || !selectedRegionId) {
+    if (!showAhspSelection || !projectId || !selectedItem || !selectedAhspVersionId || !selectedRegionId) {
       setStatusMessage('Pilih AHSP dan Region terlebih dahulu.');
       return;
     }
@@ -1256,6 +1511,13 @@ export function RabWorkspacePage() {
       .then((occurrence: E1aOccurrenceResponse) => {
         const view = describeE1aOccurrence(occurrence);
         setStatusMessage(`AHSP dipilih. ${view.label}.`);
+        setShowAhspSelection(false);
+        setSelectedAhspVersionId('');
+        setAhspPickerOpen(false);
+        setAhspActiveIndex(0);
+        setSelectedRegionId('');
+        setRegionQuery('');
+        setRegionLevel('PROVINCE');
         setRetryToken((value) => value + 1);
       })
       .catch(() => setStatusMessage('Pemilihan AHSP gagal dan tidak mengubah baris.'))
@@ -1302,6 +1564,9 @@ export function RabWorkspacePage() {
   };
 
   const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft;
+  // Existing Gate-2A lifecycle: a terminal stored price has no working occurrence to persist.
+  // Only a new, explicit AHSP/Region selection can open a new calculation journey.
+  const selectedPriceAlreadyStored = selectedItem ? isTerminalPersistedKernelRow(selectedItem) : false;
 
   /**
    * TRUE FOCUS. The shell owns the state (RAB-FOCUS-01); this page decides how
@@ -1761,12 +2026,22 @@ export function RabWorkspacePage() {
     if (!projectId || !canEditDraft) return;
     setImportFile(file); setImportPreview(null); setImportConfirmOpen(false); setIsImporting(true); setStatusMessage('Membaca BOQ...');
     try {
-      const body = new FormData(); body.append('file', file); body.append('selectedSheet', 'RAB');
+      const body = new FormData(); body.append('file', file);
       const response = await apiFetch(`/projects/${projectId}/boq/import/preview`, { method: 'POST', body });
       if (!response.ok) throw new Error(await response.text());
       const preview = await response.json() as BoqImportPreview;
       setImportPreview(preview); setStatusMessage(`Preview BOQ siap: ${preview.acceptedRows} baris valid.`);
-    } catch { setStatusMessage('Preview BOQ gagal. Periksa file dan coba lagi.'); }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '';
+      const reasons: Record<string, string> = {
+        WORKBOOK_SHEET_AMBIGUOUS_OR_NOT_FOUND: 'Sheet BOQ tidak ditemukan atau ada lebih dari satu sheet BOQ yang cocok. Gunakan file berisi satu sheet BOQ yang ingin diimpor.',
+        BOQ_HEADER_NOT_FOUND: 'Kolom Uraian, Volume, dan Satuan belum dapat dikenali pada satu baris header.',
+        BOQ_HEADER_AMBIGUOUS: 'Ada lebih dari satu pemetaan kolom BOQ yang cocok. Perjelas header Uraian, Volume, dan Satuan.',
+        SOURCE_ROW_LIMIT_EXCEEDED: 'Jumlah baris BOQ melebihi batas yang didukung.',
+      };
+      const reason = Object.entries(reasons).find(([code]) => detail.includes(code))?.[1];
+      setStatusMessage(reason ? `Preview BOQ gagal. ${reason}` : 'Preview BOQ gagal. Penyebab belum teridentifikasi; periksa koneksi dan hak akses atau hubungi pengelola.');
+    }
     finally { setIsImporting(false); }
   };
 
@@ -1939,6 +2214,14 @@ export function RabWorkspacePage() {
                 ? `Project: ${projectId}. Ruang kerja RAB terkunci — baca dan telusuri hasil RAB.`
                 : `Project: ${projectId}. Ruang kerja draft RAB — edit dan simpan sebelum baseline resmi.`}
             </p>
+            <p aria-live="polite">
+              {fieldContextLoad.phase === 'loading'
+                ? 'Memuat keterangan proyek.'
+                : fieldContextLoad.view.message}
+            </p>
+            {fieldContextLoad.phase === 'ready' && fieldContextLoad.view.kind === 'present' ? (
+              <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{fieldContextLoad.view.text}</p>
+            ) : null}
           </div>
           <span className="simprok-rab-workspace__status">{statusMessage}</span>
         </header>
@@ -2338,7 +2621,7 @@ export function RabWorkspacePage() {
                   {/* The analysis actually used for this row — not the row's
                       own WBS code, which is machine identity and stays on the
                       row object for ordering, persistence and routing. */}
-                  <th className="simprok-rab-col-kode">Kode AHSP</th>
+                  <th className="simprok-rab-col-kode" title="Kolom identitas analisa AHSP yang dipakai untuk pekerjaan ini. Kode sumber AHSP opsional dan tidak direka dari nama metode.">Kode AHSP</th>
                   <th className="simprok-rab-col-uraian">Uraian Pekerjaan</th>
                   <th className="simprok-rab-col-volume">Volume</th>
                   <th className="simprok-rab-col-satuan">Satuan</th>
@@ -2487,7 +2770,7 @@ export function RabWorkspacePage() {
                         {row.type === 'item' ? (
                           <span
                             className={ahspIdentity.linked ? undefined : 'simprok-rab-ahsp-code--unlinked'}
-                            title={ahspIdentity.fullLabel}
+                            title={`${ahspIdentity.fullLabel}. ${row.ahsp?.code?.trim() ? 'Kode sumber AHSP.' : 'Kode sumber AHSP tidak tersedia; nama metode ada pada Analisa AHSP.'}`}
                           >
                             {ahspIdentity.shortLabel}
                           </span>
@@ -2725,9 +3008,23 @@ export function RabWorkspacePage() {
               <div>
                 <h2>{drawerMode === 'PRICE_TRACE' ? PRICE_TRACE_TITLE : 'Detail Analisa AHSP'}</h2>
               </div>
-              <button onClick={() => activateRow('')} title="Tutup panel" aria-label="Tutup panel">
-                <X size={17} />
-              </button>
+              <div className="simprok-ahsp-drawer__header-actions">
+                {!isMobileViewport ? (
+                  <button
+                    type="button"
+                    onClick={toggleDrawerExpanded}
+                    aria-label={drawerWidth > DRAWER_DEFAULT ? 'Kembalikan lebar panel' : 'Perlebar panel detail'}
+                    title={drawerWidth > DRAWER_DEFAULT ? 'Kembalikan lebar panel' : 'Perlebar panel detail'}
+                    aria-pressed={drawerWidth > DRAWER_DEFAULT}
+                    className="simprok-ahsp-drawer__expand"
+                  >
+                    {drawerWidth > DRAWER_DEFAULT ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+                  </button>
+                ) : null}
+                <button onClick={() => activateRow('')} title="Tutup panel" aria-label="Tutup panel">
+                  <X size={17} />
+                </button>
+              </div>
             </div>
             <div className="simprok-ahsp-drawer__selected">
               <strong>{selectedItem.name}</strong>
@@ -2953,9 +3250,8 @@ export function RabWorkspacePage() {
             <>
             <div className="simprok-ahsp-meta">
               <div>
-                {/* There is no AHSP code in this domain — an AHSP is its work
-                    type, its method and a version. This used to show the row's
-                    wbsCode under an "AHSP" label, which named the wrong thing. */}
+                {/* Source AHSP code is optional; the identity also preserves work
+                    type, method and version. Never substitute BOQ/WBS code. */}
                 <span>Analisa AHSP</span>
                 <strong>{resolveAhspIdentity(selectedItem.ahsp).fullLabel}</strong>
               </div>
@@ -2964,9 +3260,21 @@ export function RabWorkspacePage() {
                 <strong>{costEngineStatus.statusLabel}</strong>
               </div>
               <div>
-                <span>Sumber Harga</span>
+                <span>Mesin / cara harga dibentuk</span>
                 <strong>{costEngineStatus.sourceLabel}</strong>
               </div>
+              {selectedItem.priceOrigin === 'SERVER_COST_KERNEL' ? (
+                <div>
+                  <span>Asal Basic Price</span>
+                  <strong>{storedPriceContext?.sourceLabel ?? 'Menunggu bukti harga tersimpan'}</strong>
+                </div>
+              ) : null}
+              {selectedPriceAlreadyStored ? (
+                <div>
+                  <span>Region dasar harga tersimpan</span>
+                  <strong>{storedPriceContext?.regionName ?? 'Menunggu bukti harga tersimpan'}</strong>
+                </div>
+              ) : null}
               <div>
                 <span>Persistensi</span>
                 <strong>{!projectId ? 'Belum ada project aktif' : rabLocked ? 'Terkunci, tersimpan di server' : 'Draft tersimpan di server'}</strong>
@@ -3080,7 +3388,10 @@ export function RabWorkspacePage() {
             </button>
             <div className="simprok-ahsp-total">
               <span>Total Harga Satuan</span>
-              <strong>{selectedCostDisplay?.unitPrice ?? formatRupiah(unitPrices[selectedItem.id] ?? selectedItem.unitPrice)}</strong>
+              <strong>{selectedCostDisplay?.unitPrice ??
+                ((selectedItem.manualUnitPrice || selectedItem.priceOrigin === 'MANUAL_CLIENT')
+                  ? formatRupiah(unitPrices[selectedItem.id] ?? selectedItem.unitPrice)
+                  : 'Belum dihitung')}</strong>
             </div>
             <div className="simprok-persist-action" aria-label="Hitung dan Simpan Harga SIMPROK">
               <label htmlFor="simprok-calculation-as-of-date">Tanggal perhitungan harga</label>
@@ -3102,12 +3413,21 @@ export function RabWorkspacePage() {
               <button
                 className="simprok-ahsp-drawer__primary"
                 onClick={handlePersistCalculation}
-                disabled={persistReachability !== 'READY'}
-                title={PERSIST_REACHABILITY_TITLE[persistReachability]}
-                aria-label="Hitung & Simpan Harga SIMPROK"
+                disabled={selectedPriceAlreadyStored || persistReachability !== 'READY'}
+                title={selectedPriceAlreadyStored
+                  ? 'Harga sudah tersimpan. Pilih/ganti AHSP dan Region untuk membuka perhitungan baru.'
+                  : PERSIST_REACHABILITY_TITLE[persistReachability]}
+                aria-label={selectedPriceAlreadyStored ? 'Harga sudah tersimpan' : 'Hitung & Simpan Harga SIMPROK'}
               >
-                <Save size={17} /> {isPersistBusy ? 'Menghitung & menyimpan...' : 'Hitung & Simpan Harga SIMPROK'}
+                <Save size={17} /> {selectedPriceAlreadyStored ? 'Harga sudah tersimpan'
+                  : isPersistBusy ? 'Menghitung & menyimpan...' : 'Hitung & Simpan Harga SIMPROK'}
               </button>
+              {selectedPriceAlreadyStored ? (
+                <p className="simprok-rab-recap__incomplete-note" role="status">
+                  Harga telah disimpan. Untuk perhitungan baru, buka mode penggantian AHSP di bawah.
+                  Hasil lama tetap tersimpan sebagai jejak perhitungan.
+                </p>
+              ) : null}
               {persistState.kind === 'success' && isPersistResultFresh(persistState.target, currentPersistIdentity) ? (
                 <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="status">
                   <p>Harga SIMPROK berhasil dihitung dan disimpan.</p>
@@ -3131,21 +3451,186 @@ export function RabWorkspacePage() {
                 </div>
               ) : null}
             </div>
-            <div className="simprok-persist-action" aria-label="Pilihan AHSP kontekstual">
-              <label htmlFor="simprok-ahsp-version-selector">AHSP</label>
-              <select
-                id="simprok-ahsp-version-selector"
-                value={selectedAhspVersionId}
-                onChange={(event) => setSelectedAhspVersionId(event.target.value)}
-                disabled={!canEditDraft || isSelectingAhsp}
+            <div className="simprok-ahsp-change-action">
+              {!showAhspSelection ? (
+                <button
+                  type="button"
+                  className="simprok-ahsp-drawer__primary"
+                  onClick={() => { setShowAhspSelection(true); setAhspPage(1); setAhspQuery(''); setDebouncedAhspQuery(''); setAhspPickerOpen(false); setAhspActiveIndex(0); }}
+                  disabled={!canEditDraft || isSelectingAhsp}
+                  aria-label="Pilih / Ganti AHSP"
+                  aria-expanded={false}
+                  aria-controls="simprok-ahsp-change-form"
+                  data-route="/?ruang=pilih-ganti-ahsp"
+                >
+                  <ListChecks size={17} /> Pilih / Ganti AHSP
+                </button>
+              ) : (
+                <div className="simprok-ahsp-change-action__header">
+                  <strong>Pilih AHSP dan Region Harga baru</strong>
+                  <button
+                    type="button"
+                    className="simprok-ahsp-change-action__cancel"
+                    onClick={cancelAhspSelection}
+                    disabled={isSelectingAhsp}
+                  >
+                    Batal
+                  </button>
+                </div>
+              )}
+            </div>
+            {showAhspSelection ? (
+            <div className="simprok-persist-action" id="simprok-ahsp-change-form" aria-label="Pilihan AHSP kontekstual">
+              <label htmlFor="simprok-ahsp-version-selector">Pilih AHSP</label>
+              <div
+                className="simprok-ahsp-combobox"
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    setAhspPickerOpen(false);
+                  }
+                }}
               >
-                <option value="">Pilih AHSP</option>
-                {eligibleAhspVersions.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    {formatAhspVersionOption(version)}
-                  </option>
-                ))}
-              </select>
+                <div className="simprok-ahsp-combobox__field">
+                  <input
+                    ref={ahspPickerInputRef}
+                    id="simprok-ahsp-version-selector"
+                    type="text"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={ahspPickerOpen}
+                    aria-controls="simprok-ahsp-options"
+                    aria-activedescendant={ahspPickerOpen && eligibleAhspVersions[ahspActiveIndex]
+                      ? `simprok-ahsp-option-${eligibleAhspVersions[ahspActiveIndex].id}` : undefined}
+                    aria-describedby="simprok-ahsp-list-status"
+                    value={selectedAhspVersionId
+                      ? formatAhspVersionOption(eligibleAhspVersions.find((v) => v.id === selectedAhspVersionId)!)
+                      : ahspQuery}
+                    placeholder="Pilih atau ketik kode / nama AHSP…"
+                    title={selectedAhspVersionId
+                      ? formatAhspVersionOption(eligibleAhspVersions.find((v) => v.id === selectedAhspVersionId)!)
+                      : 'Cari berdasarkan kode, nama pekerjaan atau metode AHSP'}
+                    autoComplete="off"
+                    maxLength={120}
+                    disabled={!canEditDraft || isSelectingAhsp}
+                    onFocus={() => setAhspPickerOpen(true)}
+                    onClick={(event) => {
+                      setAhspPickerOpen(true);
+                      if (selectedAhspVersionId) event.currentTarget.select();
+                    }}
+                    onChange={(event) => {
+                      setAhspQuery(event.target.value);
+                      setAhspPage(1);
+                      setEligibleAhspVersions([]);
+                      setAhspHasNext(false);
+                      setSelectedAhspVersionId('');
+                      setAhspActiveIndex(0);
+                      setAhspPickerOpen(true);
+                      setShowAhspRecommendationReason(false);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        setAhspPickerOpen(false);
+                      } else if (event.key === 'ArrowDown') {
+                        event.preventDefault();
+                        if (!ahspPickerOpen) setAhspPickerOpen(true);
+                        else setAhspActiveIndex((i) => Math.min(i + 1, eligibleAhspVersions.length - 1 < 0 ? 0 : eligibleAhspVersions.length - 1));
+                      } else if (event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        if (!ahspPickerOpen) setAhspPickerOpen(true);
+                        else setAhspActiveIndex((i) => Math.max(0, i - 1));
+                      } else if (event.key === 'Enter' && ahspPickerOpen && eligibleAhspVersions[ahspActiveIndex]) {
+                        event.preventDefault();
+                        setSelectedAhspVersionId(eligibleAhspVersions[ahspActiveIndex].id);
+                        setAhspPickerOpen(false);
+                        setShowAhspRecommendationReason(false);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="simprok-ahsp-combobox__toggle"
+                    aria-label={ahspPickerOpen ? 'Tutup daftar AHSP' : 'Buka daftar AHSP'}
+                    aria-controls="simprok-ahsp-options"
+                    aria-expanded={ahspPickerOpen}
+                    disabled={!canEditDraft || isSelectingAhsp}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      if (ahspPickerOpen) setAhspPickerOpen(false);
+                      else {
+                        setAhspPickerOpen(true);
+                        ahspPickerInputRef.current?.focus();
+                      }
+                    }}
+                  >
+                    {ahspPickerOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                  </button>
+                </div>
+                {ahspPickerOpen ? (
+                  <div className="simprok-ahsp-combobox__popup">
+                    <div id="simprok-ahsp-options" className="simprok-ahsp-combobox__options" role="listbox" aria-label="Hasil pencarian AHSP">
+                      {eligibleAhspVersions.map((version, index) => (
+                        <button
+                          id={`simprok-ahsp-option-${version.id}`}
+                          key={version.id}
+                          type="button"
+                          role="option"
+                          aria-selected={selectedAhspVersionId === version.id}
+                          className={`simprok-ahsp-combobox__option${index === ahspActiveIndex ? ' simprok-ahsp-combobox__option--active' : ''}`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setAhspActiveIndex(index)}
+                          onClick={() => {
+                            setSelectedAhspVersionId(version.id);
+                            setAhspActiveIndex(index);
+                            setAhspPickerOpen(false);
+                            setShowAhspRecommendationReason(false);
+                          }}
+                        >
+                          <span>{formatAhspVersionOption(version)}</span>
+                          {version.preference ? <small>{formatAhspPreferenceTag(version.preference.band)}</small> : null}
+                        </button>
+                      ))}
+                      {ahspListLoad.kind === 'loading' ? <p className="simprok-ahsp-combobox__message">Mencari AHSP…</p> : null}
+                      {ahspListLoad.kind === 'ready' && eligibleAhspVersions.length === 0
+                        ? <p className="simprok-ahsp-combobox__message">AHSP tidak ditemukan. Coba kode atau nama lain.</p>
+                        : null}
+                      {ahspListLoad.kind === 'idle' && ahspQuery.trim().length === 1
+                        ? <p className="simprok-ahsp-combobox__message">Ketik minimal 2 karakter.</p>
+                        : null}
+                    </div>
+                    {ahspHasNext && ahspListLoad.kind === 'ready' ? (
+                      <button
+                        type="button"
+                        className="simprok-ahsp-load-more"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => setAhspPage((page) => page + 1)}
+                        disabled={isSelectingAhsp}
+                      >
+                        Tampilkan 25 hasil berikutnya
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+              <div id="simprok-ahsp-list-status" className="simprok-rab-recap__incomplete-note" role={ahspListLoad.kind === 'error' ? 'alert' : 'status'}>
+                {ahspListLoad.kind === 'idle' ? 'Ketik kode/nama (min. 2 karakter) atau buka daftar AHSP.' : null}
+                {ahspListLoad.kind === 'loading' ? 'Mencari AHSP pada katalog…' : null}
+                {ahspListLoad.kind === 'ready' && eligibleAhspVersions.length > 0
+                  ? `${eligibleAhspVersions.length} AHSP tersedia${ahspHasNext ? ' · Ada hasil berikutnya' : ''}.`
+                  : null}
+                {ahspListLoad.kind === 'ready' && eligibleAhspVersions.length === 0
+                  ? 'Tidak ada AHSP yang cocok.'
+                  : null}
+                {ahspListLoad.kind === 'error' ? (
+                  <>
+                    Gagal memuat kandidat AHSP{ahspListLoad.httpStatus ? ` (HTTP ${ahspListLoad.httpStatus})` : ' (koneksi atau respons tidak valid)'}. Ini bukan bukti bahwa katalog AHSP kosong.
+                    {' '}
+                    <button type="button" onClick={() => setAhspListRetry((value) => value + 1)}>
+                      Coba Muat Ulang AHSP
+                    </button>
+                  </>
+                ) : null}
+              </div>
               {isWorkspacePrivateAhsp(
                 eligibleAhspVersions.find(
                   (version) => version.id === selectedAhspVersionId,
@@ -3166,29 +3651,135 @@ export function RabWorkspacePage() {
                   Harga dasarnya tetap berasal dari Basic Price yang sah.
                 </p>
               ) : null}
-              <label htmlFor="simprok-region-selector">Region harga</label>
+              {selectedAhspPreference ? (
+                <div className="simprok-ahsp-recommendation">
+                  <span>{formatAhspPreferenceTag(selectedAhspPreference.band)}</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowAhspRecommendationReason((shown) => !shown)}
+                    aria-expanded={showAhspRecommendationReason}
+                  >
+                    {showAhspRecommendationReason ? 'Tutup alasan' : 'Lihat alasan rekomendasi'}
+                  </button>
+                  {showAhspRecommendationReason ? (
+                    <p className="simprok-rab-recap__incomplete-note" role="status">
+                      {selectedAhspPreference.classificationPath
+                        ? `${selectedAhspPreference.classificationPath}. ` : ''}
+                      {selectedAhspPreference.reason}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {selectedPriceAlreadyStored ? (
+                <p className="simprok-rab-recap__incomplete-note" role="status">
+                  <strong>Region dasar harga tersimpan: </strong>
+                  {storedPriceContext?.regionName ?? 'Menunggu bukti harga tersimpan'}.
+                  Pilihan Region di bawah hanya berlaku untuk pilihan AHSP/perhitungan baru.
+                </p>
+              ) : null}
+              <fieldset className="simprok-region-chooser">
+                <legend>Region Acuan Harga</legend>
+                <p className="simprok-region-chooser__hint">
+                  Pilih tingkat wilayah tempat Basic Price berlaku, lalu cari nama atau kodenya.
+                  {selectedPriceAlreadyStored ? ' Harga tersimpan tidak berubah sampai ada perhitungan baru.' : ''}
+                </p>
+                <label htmlFor="simprok-region-level">1. Tingkat wilayah</label>
+                <select
+                  id="simprok-region-level"
+                  className="simprok-region-chooser__control"
+                  value={regionLevel}
+                  onChange={(event) => {
+                    setRegionLevel(event.target.value as RegionLevelChoice);
+                    setRegionQuery('');
+                    setSelectedRegionId('');
+                  }}
+                  disabled={!canEditDraft || isSelectingAhsp}
+                >
+                  {REGION_LEVEL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <label htmlFor="simprok-region-search">2. Nama atau kode wilayah</label>
+              <input
+                id="simprok-region-search"
+                className="simprok-region-chooser__control"
+                type="search"
+                autoComplete="off"
+                placeholder={regionLevel === 'PROVINCE' ? 'Contoh: Aceh atau Maluku'
+                  : regionLevel === 'REGENCY_CITY' ? 'Contoh: Kota Ambon'
+                  : regionLevel === 'DISTRICT' ? 'Ketik nama kecamatan'
+                  : regionLevel === 'VILLAGE' ? 'Ketik nama desa atau kelurahan'
+                  : regionLevel === 'COUNTRY' ? 'Contoh: Indonesia'
+                  : 'Ketik nama atau kode wilayah'}
+                value={regionQuery}
+                onChange={(event) => {
+                  setRegionQuery(event.target.value);
+                  setSelectedRegionId('');
+                }}
+                disabled={!canEditDraft || isSelectingAhsp}
+                style={{ width: '100%', boxSizing: 'border-box' }}
+              />
+              <label htmlFor="simprok-region-selector">
+                3. Pilih satu wilayah dari hasil
+              </label>
               <select
                 id="simprok-region-selector"
+                className="simprok-region-chooser__control"
                 value={selectedRegionId}
                 onChange={(event) => setSelectedRegionId(event.target.value)}
-                disabled={!canEditDraft || isSelectingAhsp}
+                disabled={!canEditDraft || isSelectingAhsp || regionListLoad.kind !== 'ready'}
               >
-                <option value="">Pilih Region</option>
+                <option value="">
+                  {regionListLoad.kind === 'loading' ? 'Mencari Region…'
+                    : regionListLoad.kind === 'error' ? 'Region gagal dimuat'
+                    : regionListLoad.kind === 'idle' ? 'Cari Region terlebih dahulu' : 'Pilih Region'}
+                </option>
                 {activeRegions.map((region) => (
-                  <option key={region.id} value={region.id}>{region.code} — {region.name}</option>
+                  <option key={region.id} value={region.id}>
+                    {region.name} — {region.administrativeLevel
+                      ? REGION_LEVEL_LABELS[region.administrativeLevel as keyof typeof REGION_LEVEL_LABELS] ?? region.administrativeLevel
+                      : 'Tingkat belum tercatat'}
+                    {region.hierarchyPath?.length && region.hierarchyPath.length > 1
+                      ? ` · ${region.hierarchyPath.slice(0, -1).join(' / ')}`
+                      : region.parentName ? ` · Induk: ${region.parentName}` : ''} · {region.code}
+                  </option>
                 ))}
               </select>
+              {selectedRegionId ? (
+                <p className="simprok-region-chooser__selection" role="status">
+                  <strong>Wilayah dipilih: </strong>
+                  {activeRegions.find((region) => region.id === selectedRegionId)?.hierarchyPath?.join(' / ')
+                    ?? activeRegions.find((region) => region.id === selectedRegionId)?.name}
+                  . Ini pilihan untuk perhitungan AHSP baru, bukan perubahan otomatis harga tersimpan.
+                </p>
+              ) : null}
+              <p role="status" aria-live="polite" style={{ margin: '4px 0 10px', fontSize: '0.82rem', color: 'var(--simprok-catatan-muted)' }}>
+                {regionListLoad.kind === 'idle' ? 'Ketik sedikitnya 2 karakter nama atau kode wilayah. Tidak ada Region yang dipilih otomatis.'
+                  : regionListLoad.kind === 'loading' ? 'Mencari wilayah yang sesuai…'
+                  : regionListLoad.kind === 'error'
+                    ? `Pencarian Region gagal${regionListLoad.httpStatus ? ` (HTTP ${regionListLoad.httpStatus})` : ''}.`
+                    : regionListLoad.kind === 'ready'
+                      ? regionListLoad.total === 0 ? 'Region tidak ditemukan. Coba nama atau kode lain.'
+                        : `Menampilkan ${activeRegions.length} dari ${regionListLoad.total} Region. ${regionListLoad.total > activeRegions.length ? 'Ketik lebih spesifik untuk mempersempit pilihan.' : ''}`
+                      : ''}
+              </p>
+              {regionListLoad.kind === 'error' ? (
+                <button type="button" onClick={() => setRegionListRetry((value) => value + 1)}>
+                  Coba lagi
+                </button>
+              ) : null}
+              </fieldset>
               <button
                 className="simprok-ahsp-drawer__primary"
                 onClick={handlePickAhsp}
                 disabled={!canEditDraft || !selectedAhspVersionId || !selectedRegionId || isSelectingAhsp}
-                title="Pilih / Ganti AHSP"
-                aria-label="Pilih / Ganti AHSP"
-                data-route="/?ruang=pilih-ganti-ahsp"
+                title="Simpan pilihan AHSP dan Region untuk perhitungan baru"
+                aria-label="Terapkan pilihan AHSP dan Region"
               >
-                <ListChecks size={17} /> {isSelectingAhsp ? 'Memproses...' : 'Pilih / Ganti AHSP'}
+                <ListChecks size={17} /> {isSelectingAhsp ? 'Memproses...' : 'Terapkan pilihan AHSP'}
               </button>
             </div>
+            ) : null}
             </>
             ) : null}
           </aside>

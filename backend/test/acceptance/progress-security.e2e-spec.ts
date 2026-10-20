@@ -2404,8 +2404,8 @@ describe('Progress Security (e2e)', () => {
 
   it('10. MON-03 wrong-project item and invalid quantity leave zero partial mutation', async () => {
     const token = await login(userSubmitEmail);
-    const foreignBoq = await prisma.boqStructure.create({
-      data: { projectId: projectBId, name: 'Foreign BOQ', version: 1 },
+    const foreignBoq = await prisma.boqStructure.findFirstOrThrow({
+      where: { projectId: projectBId, status: 'DRAFT' },
     });
     const foreignItem = await prisma.boqItem.create({
       data: {
@@ -4369,6 +4369,7 @@ describe('Progress Security (e2e)', () => {
         projectId: projectAId,
         name: `MON04 old ${randomUUID()}`,
         version: 99,
+        status: 'LOCKED', // historical BOQ; not another mutable draft
       },
     });
     const oldItem = await prisma.boqItem.create({
@@ -5305,6 +5306,7 @@ describe('Progress Security (e2e)', () => {
         projectId: projectAId,
         name: 'MON04 LAW3 canonical E2E BOQ',
         version: 2,
+        status: 'LOCKED', // historical BOQ; not another mutable draft
       },
     });
     const folder = await prisma.boqItem.create({
@@ -5658,6 +5660,7 @@ describe('Progress Security (e2e)', () => {
         projectId: projectAId,
         name: 'MON04 temporal consumer E2E BOQ',
         version: 101,
+        status: 'LOCKED', // historical BOQ; not another mutable draft
       },
     });
     const createTemporalItem = async (params: {

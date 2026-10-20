@@ -611,8 +611,25 @@ describe('AHSP Slice 1 — Shared Classification Foundation', () => {
       'ProjectSetupPage.tsx',
     );
     const pageSrc = readFileSync(pagePath, 'utf8');
-    expect(pageSrc).toContain('jenisPengadaanVocabulary');
-    expect(pageSrc).toContain('JENIS_PENGADAAN_OPTIONS');
+    const classificationSrc = readFileSync(
+      join(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        'frontend',
+        'src',
+        'components',
+        'project',
+        'ProjectIntakeClassificationFields.tsx',
+      ),
+      'utf8',
+    );
+    expect(pageSrc).toContain('classificationNodeIds');
+    expect(pageSrc).not.toContain('jenisPengadaanVocabulary');
+    expect(classificationSrc).toContain(
+      '/project-intake/classification/roots',
+    );
     expect(pageSrc).not.toMatch(
       /const kategoriOptions = \[\s*'Pengadaan Barang'/,
     );

@@ -504,7 +504,8 @@ test("C-16: a persist result becomes stale when project, item, calculation date,
 
 test("C-17: describeCostEngineStatus never claims Engine belum aktif / Belum tersambung while a real Cost Kernel result exists for an AHSP-linked item", () => {
   const noAhsp = describeCostEngineStatus(false, undefined);
-  assert.equal(noAhsp.statusLabel, "Engine belum aktif");
+  assert.equal(noAhsp.statusLabel, "AHSP belum terhubung");
+  assert.equal(noAhsp.frameBadge, "AHSP belum terhubung");
   assert.equal(noAhsp.sourceLabel, "Belum tersambung");
 
   const calculated = describeCostEngineStatus(true, { kind: "calculated", response: calculatedResponse });

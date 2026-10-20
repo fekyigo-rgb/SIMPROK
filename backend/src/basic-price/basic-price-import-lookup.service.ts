@@ -20,6 +20,9 @@ export interface ResourceLookupRow {
   status: string;
 }
 
+/** Read-only ancestor labels from the canonical Region parent chain. */
+type RegionNameAncestor = { name: string; parent?: RegionNameAncestor | null };
+
 export interface UnitLookupRow {
   id: string;
   code: string;
@@ -173,20 +176,46 @@ export class BasicPriceImportLookupService {
           name: true,
           administrativeLevel: true,
           parentId: true,
-          parent: { select: { name: true } },
+          // Bounded canonical ancestors: village → district → regency/city → province → country.
+          parent: {
+            select: {
+              name: true,
+              parent: {
+                select: {
+                  name: true,
+                  parent: {
+                    select: {
+                      name: true,
+                      parent: { select: { name: true } },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       }),
       this.prisma.region.count({ where }),
     ]);
 
-    const items = rows.map((row) => ({
-      id: row.id,
-      code: row.code,
-      name: row.name,
-      administrativeLevel: row.administrativeLevel,
-      parentId: row.parentId,
-      parentName: row.parent?.name ?? null,
-    }));
+    const items = rows.map((row) => {
+      const hierarchyPath = [row.name];
+      let ancestor: RegionNameAncestor | null = row.parent;
+      // Each ancestor comes from the canonical FK, never inferred from codes.
+      while (ancestor) {
+        hierarchyPath.unshift(ancestor.name);
+        ancestor = ancestor.parent ?? null;
+      }
+      return {
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        administrativeLevel: row.administrativeLevel,
+        parentId: row.parentId,
+        parentName: row.parent?.name ?? null,
+        hierarchyPath,
+      };
+    });
 
     return { items, page, limit, total, hasNext: offset + items.length < total };
   }
