@@ -1914,7 +1914,36 @@ test("BP-UX-03: missing source category is history, not unfinished work after pr
     reasonCodes: ["SECTION_DECLARED_BY_UPLOADER"],
     machineProposal: null,
   });
-  assert.match(rowNoteDisclosure(rowNoteLines(pending)).primary ?? "", /masih perlu dipastikan/u);
+  assert.match(rowNoteDisclosure(rowNoteLines(pending)).primary ?? "", /Pilih jenis di panel Penyelesaian dan tekan Konfirmasi Jenis/u);
+  assert.doesNotMatch(rowNoteDisclosure(rowNoteLines(pending)).primary ?? "", /kategori belum tercantum di berkas dan masih perlu dipastikan/iu);
+});
+
+test("BP-UX-OWNER: human-confirmed category is history even while item identity is still unresolved", () => {
+  const confirmed = baseRow({
+    sourceRowNumber: 11,
+    status: "NEEDS_REVIEW",
+    resolutionStatus: "UNRESOLVED",
+    section: "MATERIAL",
+    sectionProvenance: "UPLOADER_DECLARED",
+    reasonCodes: ["SECTION_DECLARED_BY_UPLOADER", "ROW_CATEGORY_CONFIRMED_BY_REVIEWER", "RESOURCE_CODE_MISSING"],
+    machineProposal: null,
+  });
+  assert.equal(rowSectionDisplay(confirmed), "Jenis ditetapkan: Bahan");
+  assert.equal(rowNoteLines(confirmed).untranslatedCount, 0);
+  assert.equal(rowNoteLines(confirmed).technicalNotice, null);
+  const note = rowNoteDisclosure(rowNoteLines(confirmed));
+  assert.equal(note.primary, null, "source category omission is no longer an active blocker");
+  assert.deepEqual(note.secondary, [
+    "Berkas tidak mencantumkan kategori; jenis item sudah dikonfirmasi.",
+    "Dokumen sumber tidak mencantumkan kode pada baris ini.",
+  ]);
+  assert.doesNotMatch(JSON.stringify(note), /masih perlu dipastikan|Pilih jenis di panel/u);
+  const anotherBlocker = baseRow({
+    ...confirmed,
+    reasonCodes: ["SECTION_DECLARED_BY_UPLOADER", "ROW_CATEGORY_CONFIRMED_BY_REVIEWER", "UNIT_REQUIRED"],
+  });
+  const next = rowNoteDisclosure(rowNoteLines(anotherBlocker));
+  assert.match(next.primary ?? "", /satuan/iu, "actual remaining issue stays primary");
 });
 
 test("BP-STATUS-READBACK-01: human-resolved rows are decided, not counted as unrecognized unfinished work", () => {

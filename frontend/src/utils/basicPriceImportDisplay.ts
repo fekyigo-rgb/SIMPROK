@@ -2307,7 +2307,7 @@ const ROW_NOTE_LABELS: Record<string, string> = {
     'Kategori yang ditulis baris ini berbeda dengan kategori judul bagiannya.',
   SOURCE_CATEGORY_UNRECOGNIZED: 'Kategori yang ditulis sumber belum dikenali SIMPROK.',
   SECTION_DECLARED_BY_UPLOADER:
-    'Kategori belum tercantum di berkas dan masih perlu dipastikan.',
+    'Berkas awal tidak mencantumkan kategori. Pengguna dapat melengkapinya dalam peninjauan SIMPROK.',
   UNIT_TEXT_FROM_SIMPROK_UNIT_CANDIDATE:
     'Satuan diambil dari kolom yang ditunjuk saat impor, bukan dari kolom satuan bertajuk.',
 };
@@ -2334,20 +2334,30 @@ export const rowNoteLines = (row: BasicPriceImportRowSummary): RowNoteLines => {
       const machineEstablished =
         row.machineProposal?.identityPairProven === true &&
         row.machineProposal.resource.admissibleForResolve;
+      const reviewerConfirmed = row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER');
       const humanEstablished =
         row.effectiveResourceType !== null &&
         row.effectiveResourceType !== undefined &&
         (row.status === 'READY_FOR_SUBMISSION' ||
           row.status === 'SUBMISSION_CREATED' ||
           row.savedAsPrivatePrice === true);
-      if (machineEstablished || humanEstablished) {
-        // The source's missing category remains historical evidence, but is no
-        // longer an instruction to re-decide a completed human resolution.
-        human.push(machineEstablished
-          ? 'Berkas tidak mencantumkan kategori; jenis item sudah dikenali.'
-          : 'Berkas tidak mencantumkan kategori; jenis item sudah dikonfirmasi.');
+      if (reviewerConfirmed || machineEstablished || humanEstablished) {
+        // Missing source category remains audit history, never unfinished work
+        // once the reviewer has confirmed the category of this specific row.
+        human.push(reviewerConfirmed || humanEstablished
+          ? 'Berkas tidak mencantumkan kategori; jenis item sudah dikonfirmasi.'
+          : 'Berkas tidak mencantumkan kategori; jenis item sudah dikenali.');
         continue;
       }
+      // The source is not a prison. State the action the uploader can take NOW
+      // rather than treating a missing Excel column as a permanent defect.
+      human.push('Jenis item belum dikonfirmasi. Pilih jenis di panel Penyelesaian dan tekan Konfirmasi Jenis; berkas Excel asli tetap tercatat.');
+      continue;
+    }
+    if (code === 'ROW_CATEGORY_CONFIRMED_BY_REVIEWER') {
+      // Historical reviewer decision is already projected into the category
+      // display and source-history sentence, not an unexplained technical note.
+      continue;
     }
     // ROW vocabulary first, then the shared identity/unit table — one sentence
     // per code, and never two spellings of the same fact.
