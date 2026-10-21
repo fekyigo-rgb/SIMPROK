@@ -10,6 +10,7 @@ import {
   staleRowRecoveryMessage,
   isStaleRowConflict,
   isAdmissionCandidateRefreshRequired,
+  isAdmissionReviewFingerprintStale,
   rowNonStaleConflictMessage,
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
@@ -380,6 +381,8 @@ test("ADMISSION-RECOVERY: candidate refusal reloads evidence, clears stale refus
   assert.equal(isAdmissionCandidateRefreshRequired('{"message":"RESOURCE_ADMISSION_REVIEW_STALE"}'), true);
   assert.equal(isAdmissionCandidateRefreshRequired('{"message":"RESOURCE_ADMISSION_REFUSALS_INVALID"}'), true);
   assert.equal(isAdmissionCandidateRefreshRequired('{"message":"ROW_VERSION_STALE"}'), false);
+  assert.equal(isAdmissionReviewFingerprintStale('{"message":"RESOURCE_ADMISSION_REVIEW_STALE"}'), true);
+  assert.equal(isAdmissionReviewFingerprintStale('{"message":"RESOURCE_ADMISSION_REFUSALS_INVALID"}'), false);
   assert.equal(isAdmissionCandidateRefreshRequired('{"message":"IDENTITY_CANDIDATE_BLOCKED"}'), false);
   const path = review.slice(review.indexOf('const recoverFromRowFailure'), review.indexOf('const handleConfirmSourceSpecifications'));
   assert.match(path, /action === 'ADMIT'[\s\S]*isAdmissionCandidateRefreshRequired\(error\.detail\)/u);
@@ -388,6 +391,7 @@ test("ADMISSION-RECOVERY: candidate refusal reloads evidence, clears stale refus
   assert.match(path, /\.\.\.\(current\[row\.id\] \?\? emptyDraft\)/u);
   assert.match(path, /freshReview && previousReview && freshReview\.reviewBindingFingerprint === previousReview\.reviewBindingFingerprint/u);
   assert.match(path, /Jangan ulangi tombol/u);
+  assert.match(path, /Daftar kandidat tetap sama, tetapi tanda penolakan yang dikirim belum sesuai/u);
   assert.match(path, /Kandidat terkini sudah dimuat/u);
   assert.match(path, /Daftar kandidat terbaru sudah dimuat/u);
   assert.doesNotMatch(path, /admitResourceForImportRow\(/u);

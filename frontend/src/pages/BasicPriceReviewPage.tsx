@@ -69,6 +69,7 @@ import {
   staleRowRecoveryMessage,
   isStaleRowConflict,
   isAdmissionCandidateRefreshRequired,
+  isAdmissionReviewFingerprintStale,
   rowNonStaleConflictMessage,
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
@@ -430,7 +431,10 @@ export function BasicPriceReviewPage() {
         },
       }));
       if (freshReview && previousReview && freshReview.reviewBindingFingerprint === previousReview.reviewBindingFingerprint) {
-        return `Baris ${row.sourceRowNumber} belum disimpan. SIMPROK sudah memeriksa ulang, tetapi bukti kandidat tetap sama dan server masih menolak. Jangan ulangi tombol: ini perlu pemeriksaan konsistensi keputusan dan backend.`;
+        if (isAdmissionReviewFingerprintStale(error.detail)) {
+          return `Baris ${row.sourceRowNumber} belum disimpan. SIMPROK sudah memeriksa ulang, tetapi bukti kandidat tetap sama dan server masih menolak. Jangan ulangi tombol: ini perlu pemeriksaan konsistensi keputusan dan backend.`;
+        }
+        return `Baris ${row.sourceRowNumber} belum disimpan. Daftar kandidat tetap sama, tetapi tanda penolakan yang dikirim belum sesuai. Silakan tandai kembali kandidat yang memang sudah Anda periksa; alasan dan satuan tetap sebagai draf.`;
       }
       if (!freshReview?.offered) {
         const blocked = currentRow.machineProposal?.resource.candidates

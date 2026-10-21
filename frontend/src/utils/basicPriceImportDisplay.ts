@@ -1418,8 +1418,11 @@ export const isStaleRowConflict = (rawBody: string): boolean =>
   namedCodeOf(rawBody) === 'ROW_VERSION_STALE';
 
 /** Refresh candidate evidence after refusal; never retry or approve a decision automatically. */
+export const isAdmissionReviewFingerprintStale = (rawBody: string): boolean =>
+  namedCodeOf(rawBody) === 'RESOURCE_ADMISSION_REVIEW_STALE';
+
 export const isAdmissionCandidateRefreshRequired = (rawBody: string): boolean =>
-  namedCodeOf(rawBody) === 'RESOURCE_ADMISSION_REVIEW_STALE' ||
+  isAdmissionReviewFingerprintStale(rawBody) ||
   namedCodeOf(rawBody) === 'RESOURCE_ADMISSION_REFUSALS_INVALID';
 
 export const rowNonStaleConflictMessage = (sourceRowNumber: number, rawBody: string): string => {
