@@ -444,7 +444,7 @@ test("BP-FUNCTION-02. source unit stays visible but is edited only through the e
   assert.match(renderable, /Belum bisa disimpan: \{blockReason\}/u);
   assert.match(renderable, /Langkah berikutnya ada di atas: tekan <strong>Konfirmasi Jenis<\/strong>/u);
   assert.match(renderable, /Teks dalam kotak hanya kata pencarian, belum menjadi pilihan/u);
-  assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id\)/u);
+  assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id, nomenclatureAuditReason\)/u);
 });
 test("BP-ROW-UX-OWNER: new item has the same canonical unit picker without changing decision paths", () => {
   const admission = renderable.slice(renderable.indexOf('className="bp-rowcard__admission"'));
@@ -537,6 +537,21 @@ test("BP-NAME-CORRECTION-01. catalog name edit is committed only by admission an
   assert.match(writer, /rawName: canonicalName/u);
   assert.match(service, /canonicalResourceName: r\.resourceCatalog\?\.name \?\? null/u);
   assert.match(renderable, /Nama katalog tersimpan:/u);
+});
+
+test("BP-NOMENCLATURE-ROW-AUDIT-01. corrected search name is persisted with the existing human mapping, and read back without renaming a catalog", () => {
+  const api = readFileSync("src/api/basicPriceImport.ts", "utf8");
+  const service = readFileSync("../backend/src/basic-price/basic-price-import.service.ts", "utf8");
+  const resolver = readFileSync("../backend/src/basic-price/basic-price-row-resolution.service.ts", "utf8");
+  assert.match(page, /KOREKSI_NOMENKLATUR: /u);
+  assert.match(page, /nomenclatureAuditReason/u);
+  assert.match(api, /\.\.\.\(nomenclatureAuditReason \? \{ reason: nomenclatureAuditReason \} : \{\}\)/u);
+  assert.match(resolver, /reason: dto\.reason \?\? null/u);
+  assert.match(service, /resourceMappings: \{/u);
+  assert.match(service, /nomenclatureCorrectionName: r\.resourceCatalogId/u);
+  assert.match(service, /r\.resourceMappings\[0\]\.reason\.slice/u);
+  assert.match(renderable, /Koreksi nomenklatur tercatat:/u);
+  assert.match(renderable, /bukan penggantian nama katalog/u);
 });
 
 test("BP-NAME-VISUAL-01. matching a same-type candidate blocks new-item action and asks for review", () => {

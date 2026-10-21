@@ -645,7 +645,14 @@ export function BasicPriceReviewPage() {
     }
     setIsBusy(true);
     try {
-      await resolveBasicPriceImportRow(batchId, row.id, row.version, draft.resource.id, draft.unit.id);
+      // Existing server-owned mapping audit records the reviewer's working
+      // nomenclature. It does NOT rename the selected catalog resource, and
+      // cannot turn one row decision into a global AHSP alias.
+      const nomenclatureAuditReason = draft.correctedCanonicalName !== null &&
+        draft.correctedCanonicalName !== row.name
+          ? 'KOREKSI_NOMENKLATUR: ' + draft.correctedCanonicalName.trim()
+          : undefined;
+      await resolveBasicPriceImportRow(batchId, row.id, row.version, draft.resource.id, draft.unit.id, nomenclatureAuditReason);
       forgetCompletedEdit(row.id);
       setDrafts((current) => {
         const next = { ...current };
@@ -654,7 +661,8 @@ export function BasicPriceReviewPage() {
       });
       const refreshed = await loadBatch(false);
       const notice = refreshed
-        ? 'Berhasil: padanan dan satuan baris ' + row.sourceRowNumber + ' telah disimpan.'
+        ? 'Berhasil: padanan dan satuan baris ' + row.sourceRowNumber + ' telah disimpan.' +
+          (nomenclatureAuditReason ? ' Koreksi nomenklatur dicatat pada keputusan baris, bukan mengubah nama katalog.' : '')
         : 'Baris ' + row.sourceRowNumber + ': pilihan diterima server, tetapi tampilan belum berhasil dimuat ulang. Muat ulang untuk verifikasi.';
       setRowNotice({ rowId: row.id, text: notice });
       setStatusMessage(notice);
@@ -1432,6 +1440,9 @@ export function BasicPriceReviewPage() {
                       <p className="bp-rowcard__source-name">{row.name}</p>
                       {row.canonicalResourceName && row.canonicalResourceName !== row.name ? (
                         <p className="bp-rowcard__facts">Nama katalog tersimpan: <strong>{row.canonicalResourceName}</strong></p>
+                      ) : null}
+                      {row.nomenclatureCorrectionName ? (
+                        <p className="bp-rowcard__facts" role="status">Koreksi nomenklatur tercatat: <strong>{row.nomenclatureCorrectionName}</strong>. Ini catatan padanan baris, bukan penggantian nama katalog.</p>
                       ) : null}
                       {!proven && mutable ? (
                         <button

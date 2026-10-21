@@ -337,11 +337,15 @@ export async function resolveBasicPriceImportRow(
   version: number,
   resourceCatalogId: string,
   unitDefinitionId: string,
+  nomenclatureAuditReason?: string,
 ): Promise<void> {
   const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ version, resourceCatalogId, unitDefinitionId }),
+    body: JSON.stringify({
+      version, resourceCatalogId, unitDefinitionId,
+      ...(nomenclatureAuditReason ? { reason: nomenclatureAuditReason } : {}),
+    }),
   });
   // `ImportRequestError`, not a bare `Error`: it carries the status and body the
   // page needs to say WHY. A plain Error forced the caller to guess, and the

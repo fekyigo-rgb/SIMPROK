@@ -142,6 +142,8 @@ export interface BasicPriceImportRowSummary {
   name: string;
   /** Server-read catalog identity; null before resolution. Never overwrite source name. */
   canonicalResourceName?: string | null;
+  /** Audited human search nomenclature read from the chosen row mapping, not a global resource alias. */
+  nomenclatureCorrectionName?: string | null;
   /** Persisted canonical unit from GET, not a browser draft. */
   canonicalUnit?: { code: string; displayName: string; symbol: string } | null;
   unit: string | null;
