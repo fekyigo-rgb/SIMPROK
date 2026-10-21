@@ -549,7 +549,7 @@ test("BP-NOMENCLATURE-ROW-AUDIT-01. corrected search name is persisted with the 
   assert.match(resolver, /reason: dto\.reason \?\? null/u);
   assert.match(service, /resourceMappings: \{/u);
   assert.match(service, /nomenclatureCorrectionName: r\.resourceCatalogId/u);
-  assert.match(service, /r\.resourceMappings\[0\]\.reason\.slice/u);
+  assert.match(service, /r\.resourceMappings\[0\]\.reason\s*\.slice\('KOREKSI_NOMENKLATUR: '\.length\)/u);
   assert.match(service, /\.split\(/u);
   assert.match(page, /KOREKSI_SATUAN_SUMBER: /u);
   assert.match(page, /nomenclatureAuditReason,[\s\S]*?unitCorrectionAuditNote\(row, draft\.unit, draft\.unitCorrectionReason\)/u);
