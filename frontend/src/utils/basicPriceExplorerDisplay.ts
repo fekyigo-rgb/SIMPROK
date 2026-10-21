@@ -194,6 +194,8 @@ export interface BasicPriceDomesticContent {
 
 export interface BasicPriceDetail {
   price: BasicPriceExplorerItem;
+  /** Status from the existing workspace-scoped submission, never guessed. */
+  proposalStatus?: string | null;
   evidence: BasicPriceEvidenceFacts;
   corrections: BasicPriceCorrectionHistory;
   domesticContent: BasicPriceDomesticContent;

@@ -5,6 +5,8 @@ import {
   canProposePrivateExplorerItem,
   type BasicPriceExplorerItem,
 } from '../utils/basicPriceExplorerDisplay.ts';
+import { submissionStatusLabel } from '../utils/basicPriceWorkflowDisplay.ts';
+import { PROPOSAL_ALREADY_SENT } from '../utils/basicPriceDetailChange.ts';
 
 const price = (assetScope: BasicPriceExplorerItem['assetScope'], alreadyProposed?: boolean | null) =>
   ({ assetScope, alreadyProposed } as BasicPriceExplorerItem);
@@ -50,4 +52,17 @@ test('BP-MULTI-ACTION-01: proposal uses original writer and persisted status on 
   assert.match(explorer, /submitPrivateBasicPrice\(item\.basicPriceId\)/u);
   assert.match(detail, /detail\.detail\.price\.alreadyProposed === true/u);
   assert.match(detail, /detail\.detail\.price\.alreadyProposed === false/u);
+});
+
+test('BP-PROPOSER-STATUS-01: use the canonical submission label, never a curator-only door', () => {
+  assert.equal(submissionStatusLabel('UNDER_REVIEW'), 'Sedang ditinjau');
+  assert.equal(submissionStatusLabel('NEEDS_CORRECTION'), 'Perlu koreksi');
+  assert.equal(submissionStatusLabel('RESUBMITTED'), 'Diajukan ulang');
+  assert.equal(submissionStatusLabel('ACCEPTED'), 'Diterima untuk verifikasi');
+  assert.equal(submissionStatusLabel('PUBLISHED'), 'Diterbitkan');
+  assert.match(PROPOSAL_ALREADY_SENT, /sudah diusulkan ke SIMPROK/u);
+  assert.doesNotMatch(PROPOSAL_ALREADY_SENT, /Pengajuan harga/u);
+  assert.match(detail, /detail\.detail\.proposalStatus/u);
+  assert.match(detail, /submissionStatusLabel\(detail\.detail\.proposalStatus\)/u);
+  assert.match(detail, /setDetailEpoch\(\(epoch\) => epoch \+ 1\)/u);
 });

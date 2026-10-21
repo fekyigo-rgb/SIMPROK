@@ -179,6 +179,9 @@ const SUBMISSION_STATUS_LABELS: Record<string, string> = {
   VERIFIED: 'Terverifikasi',
   REJECTED: 'Ditolak',
   NEEDS_CORRECTION: 'Perlu koreksi',
+  RESUBMITTED: 'Diajukan ulang',
+  ACCEPTED: 'Diterima untuk verifikasi',
+  PUBLISHED: 'Diterbitkan',
 };
 export const submissionStatusLabel = (status: string): string =>
   SUBMISSION_STATUS_LABELS[status] ?? status;
