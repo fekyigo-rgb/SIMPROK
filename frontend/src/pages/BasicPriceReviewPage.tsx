@@ -68,6 +68,7 @@ import {
   reviewRowBucket,
   staleRowRecoveryMessage,
   isStaleRowConflict,
+  isAdmissionCandidateRefreshRequired,
   rowNonStaleConflictMessage,
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
@@ -75,6 +76,8 @@ import {
 } from '../utils/basicPriceImportDisplay';
 import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
 import '../styles/basicPrice.css';
+
+type BatchReadback = (value: BasicPriceImportBatchSummary) => void;
 
 interface RowDraft {
   resource: ResourceLookupItem | null;
@@ -250,11 +253,12 @@ export function BasicPriceReviewPage() {
    * would erase the only acknowledgement they get — the exact silence this
    * whole repair exists to remove.
    */
-  const loadBatch = async (announceProgress = true): Promise<boolean> => {
+  const loadBatch = async (announceProgress = true, onReadback?: BatchReadback): Promise<boolean> => {
     if (!batchId) return false;
     try {
       const result = await getBasicPriceImportBatch(batchId);
       setBatch(result);
+      onReadback?.(result);
       let historicalReviewNotice: string | null = null;
       try {
         // Preserve visibility of prior decisions even though private users no longer request new curation.
@@ -399,6 +403,44 @@ export function BasicPriceReviewPage() {
   ): Promise<string> => {
     const httpStatus = error instanceof ImportRequestError ? error.httpStatus : 0;
     if (httpStatus !== 409) return rowFailure(action, row.sourceRowNumber, error);
+    // A changed candidate-review fingerprint is an evidence readback, NOT a
+    // human decision and NOT proof that someone edited this row. Never replay.
+    if (action === 'ADMIT' && error instanceof ImportRequestError &&
+        isAdmissionCandidateRefreshRequired(error.detail)) {
+      const candidateReadback: { row?: BasicPriceImportRowSummary } = {};
+      const readBack = await loadBatch(false, (latest) => {
+        candidateReadback.row = latest.rows.find((candidate) => candidate.id === row.id);
+      });
+      const currentRow = candidateReadback.row;
+      if (!readBack || !currentRow) {
+        return `Baris ${row.sourceRowNumber} belum disimpan. SIMPROK belum berhasil memuat bukti kandidat terkini. Jangan mengulangi keputusan lama; periksa koneksi dan muat kembali baris ini.`;
+      }
+      const freshReview = currentRow.machineProposal?.resource.admissionReview;
+      const previousReview = row.machineProposal?.resource.admissionReview;
+      // Preserve human-written reason/name/unit. Refusal checkmarks only apply
+      // to the exact old candidate set; clear them and ask for human re-review.
+      setDrafts((current) => ({
+        ...current,
+        [row.id]: {
+          ...(current[row.id] ?? emptyDraft),
+          refusedCandidateIds: [],
+          admitResourceType: freshReview?.typeConfirmations.length === 1
+            ? freshReview.typeConfirmations[0].resourceType
+            : current[row.id]?.admitResourceType ?? null,
+        },
+      }));
+      if (freshReview && previousReview && freshReview.reviewBindingFingerprint === previousReview.reviewBindingFingerprint) {
+        return `Baris ${row.sourceRowNumber} belum disimpan. SIMPROK sudah memeriksa ulang, tetapi bukti kandidat tetap sama dan server masih menolak. Jangan ulangi tombol: ini perlu pemeriksaan konsistensi keputusan dan backend.`;
+      }
+      if (!freshReview?.offered) {
+        const blocked = currentRow.machineProposal?.resource.candidates
+          .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
+          .map((candidate) => candidate.name) ?? [];
+        return `Baris ${row.sourceRowNumber} belum disimpan. Kandidat terkini sudah dimuat. Item Baru kini tertahan oleh pemeriksaan identitas${blocked.length ? ': ' + blocked.join(', ') : ''}. Buka Bandingkan kandidat dan bukti identitas pada baris ini; alasan dan satuan Anda tetap sebagai draf.`;
+      }
+      const count = freshReview.humanRefusableCandidateIds.length;
+      return `Baris ${row.sourceRowNumber} belum disimpan. Daftar kandidat terbaru sudah dimuat di baris ini. Periksa ${count} kandidat yang dapat Anda tolak jika memang berbeda, lalu tandai kembali kandidat yang telah diperiksa dan tekan Tetapkan Item Baru. Alasan dan satuan Anda tetap sebagai draf; tidak ada penetapan otomatis.`;
+    }
     // Only an explicit ROW_VERSION_STALE is proof of an obsolete row version.
     if (error instanceof ImportRequestError && !isStaleRowConflict(error.detail)) {
       return rowNonStaleConflictMessage(row.sourceRowNumber, error.detail);

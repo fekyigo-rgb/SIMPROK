@@ -1417,6 +1417,11 @@ const namedCodeOf = (rawBody: string): string | null => {
 export const isStaleRowConflict = (rawBody: string): boolean =>
   namedCodeOf(rawBody) === 'ROW_VERSION_STALE';
 
+/** Refresh candidate evidence after refusal; never retry or approve a decision automatically. */
+export const isAdmissionCandidateRefreshRequired = (rawBody: string): boolean =>
+  namedCodeOf(rawBody) === 'RESOURCE_ADMISSION_REVIEW_STALE' ||
+  namedCodeOf(rawBody) === 'RESOURCE_ADMISSION_REFUSALS_INVALID';
+
 export const rowNonStaleConflictMessage = (sourceRowNumber: number, rawBody: string): string => {
   const prefix = `Baris ${sourceRowNumber} belum disimpan. `;
   switch (namedCodeOf(rawBody)) {

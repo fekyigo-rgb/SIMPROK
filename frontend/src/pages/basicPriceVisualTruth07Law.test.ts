@@ -9,6 +9,7 @@ import {
   savedMetadataLines,
   staleRowRecoveryMessage,
   isStaleRowConflict,
+  isAdmissionCandidateRefreshRequired,
   rowNonStaleConflictMessage,
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
@@ -373,6 +374,23 @@ test("CONFLICT-UX: business-rule 409 does not claim another editor changed the r
   assert.doesNotMatch(rowNonStaleConflictMessage(13, '{"message":"UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE"}'), /perubahan lain|versi lebih baru/u);
   assert.match(review, /!isStaleRowConflict\(error\.detail\)/u);
   assert.match(review, /rowNonStaleConflictMessage\(row\.sourceRowNumber, error\.detail\)/u);
+});
+
+test("ADMISSION-RECOVERY: candidate refusal reloads evidence, clears stale refusals, keeps draft, never auto-writes", () => {
+  assert.equal(isAdmissionCandidateRefreshRequired('{"message":"RESOURCE_ADMISSION_REVIEW_STALE"}'), true);
+  assert.equal(isAdmissionCandidateRefreshRequired('{"message":"RESOURCE_ADMISSION_REFUSALS_INVALID"}'), true);
+  assert.equal(isAdmissionCandidateRefreshRequired('{"message":"ROW_VERSION_STALE"}'), false);
+  assert.equal(isAdmissionCandidateRefreshRequired('{"message":"IDENTITY_CANDIDATE_BLOCKED"}'), false);
+  const path = review.slice(review.indexOf('const recoverFromRowFailure'), review.indexOf('const handleConfirmSourceSpecifications'));
+  assert.match(path, /action === 'ADMIT'[\s\S]*isAdmissionCandidateRefreshRequired\(error\.detail\)/u);
+  assert.match(path, /loadBatch\(false, \(latest\) => \{/u);
+  assert.match(path, /refusedCandidateIds: \[\]/u);
+  assert.match(path, /\.\.\.\(current\[row\.id\] \?\? emptyDraft\)/u);
+  assert.match(path, /freshReview && previousReview && freshReview\.reviewBindingFingerprint === previousReview\.reviewBindingFingerprint/u);
+  assert.match(path, /Jangan ulangi tombol/u);
+  assert.match(path, /Kandidat terkini sudah dimuat/u);
+  assert.match(path, /Daftar kandidat terbaru sudah dimuat/u);
+  assert.doesNotMatch(path, /admitResourceForImportRow\(/u);
 });
 
 test("STALE-UX-02b: SIMPROK only claims to have loaded the newest version when the read actually succeeded", () => {
