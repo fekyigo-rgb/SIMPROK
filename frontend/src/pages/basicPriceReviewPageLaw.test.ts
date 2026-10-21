@@ -435,19 +435,17 @@ test("BP-FUNCTION-01. safe-new selection never exceeds the backend's 100-row bou
   assert.match(renderable, /admitSafeNewBasicPriceResources\(/u);
 });
 
-test("BP-FUNCTION-02. Pilih/Ubah Satuan visibly focuses the existing decision-side picker; only the writer saves", () => {
-  const start = renderable.indexOf('title="Buka dan fokuskan pemilih satuan standar di panel Pilih Penyelesaian."');
-  assert.ok(start > 0, "unit Edit control must be visible on mutable review rows");
-  const action = renderable.slice(start, start + 1200);
-  assert.match(action, /pendingUnitFocusRow\.current = row\.id/u);
-  assert.match(action, /setLookupRows/u);
-  assert.match(action, /Pilih\/Ubah Satuan/u);
-  assert.match(page, /target\.focus\(\)/u);
-  assert.match(page, /target\.scrollIntoView\(/u);
-  assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id\)/u);
+test("BP-FUNCTION-02. source unit stays visible but is edited only through the existing decision-side selector", () => {
+  assert.doesNotMatch(renderable, /Pilih\/Ubah Satuan|pendingUnitFocusRow/u);
   assert.match(renderable, /mode="unit"[\s\S]*?onSelect=\{\(item\) => \{[\s\S]*?updateDraft\(row\.id, \{ unit:/u);
+  assert.match(renderable, /Pilih Satuan/u);
+  assert.match(renderable, /Gunakan Satuan/u);
+  assert.match(renderable, /Gunakan Pilihan/u);
+  assert.match(renderable, /Belum bisa disimpan: \{blockReason\}/u);
+  assert.match(renderable, /Mulai dari <strong>Ubah Jenis<\/strong>/u);
+  assert.match(renderable, /Teks dalam kotak hanya kata pencarian, belum menjadi pilihan/u);
+  assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id\)/u);
 });
-
 test("BP-FUNCTION-02b. Ubah Jenis opens an auditable row category editor, not item admission", () => {
   const start = renderable.indexOf('title="Ubah kategori awal impor untuk baris ini.');
   assert.ok(start > 0);

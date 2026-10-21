@@ -263,13 +263,22 @@ export function CatalogSearchSelect({
                 Mencari...
               </p>
             ) : null}
-            {state === 'empty' ? <p className="bp-pop__body">Tidak ada kandidat yang cocok.</p> : null}
+            {state === 'empty' ? (
+              <p className="bp-pop__body">
+                {mode === 'resource'
+                  ? 'Tidak ada item katalog yang cocok. Teks pencarian bukan pilihan; periksa nama dan spesifikasi, atau tinjau item baru jika memang berbeda.'
+                  : 'Tidak ada satuan standar yang cocok. Periksa tulisan atau simbol satuan; jangan memilih satuan yang tidak sesuai sumber.'}
+              </p>
+            ) : null}
             {state === 'error' ? (
               <p className="bp-pop__body" role="alert">
                 Pencarian gagal. Silakan coba lagi.
               </p>
             ) : null}
             {state === 'ready' ? (
+              <div>
+                <p className="bp-pop__body">Klik satu hasil berikut untuk memilih; mengetik nama saja tidak menyimpan pilihan.</p>
+
               <ul id={listId} role="listbox" aria-label={`Hasil pencarian ${label}`} className="bp-optionlist">
                 {results.map((item) => (
                   <li key={item.id} role="option" aria-selected={selected?.id === item.id}>
@@ -288,6 +297,7 @@ export function CatalogSearchSelect({
                   </li>
                 ))}
               </ul>
+              </div>
             ) : null}
           </div>
         ) : null}

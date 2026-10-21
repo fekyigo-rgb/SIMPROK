@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import {
@@ -237,8 +237,6 @@ export function BasicPriceReviewPage() {
   const [categoryEditRows, setCategoryEditRows] = useState<Set<string>>(new Set());
   // Read historical identity decisions; no external approval is required for private items.
   const [identityReviewStatuses, setIdentityReviewStatuses] = useState<Record<string, BasicPriceIdentityReviewRow> | null>(null);
-  /** A unit edit scrolls/focuses the canonical picker in the 65% decision panel. */
-  const pendingUnitFocusRow = useRef<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
   /**
@@ -317,19 +315,6 @@ export function BasicPriceReviewPage() {
     void loadBatch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
-
-  // Keep the Owner-locked 35:65 layout: Edit Satuan focuses the existing
-  // picker on the decision side rather than duplicating a catalog picker
-  // beneath the left-hand source facts.
-  useEffect(() => {
-    const rowId = pendingUnitFocusRow.current;
-    if (!rowId) return;
-    const target = document.getElementById(`bp-lookup-${rowId}`);
-    if (!target) return;
-    pendingUnitFocusRow.current = null;
-    target.focus();
-    target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [lookupRows]);
 
   const draftFor = (rowId: string): RowDraft => drafts[rowId] ?? emptyDraft;
   const updateDraft = (rowId: string, patch: Partial<RowDraft>) => {
@@ -555,7 +540,6 @@ export function BasicPriceReviewPage() {
         } }));
         setTouchedRowIds((current) => new Set(current).add(row.id));
         setLookupRows((current) => { const next = new Set(current); next.delete(row.id); return next; });
-        pendingUnitFocusRow.current = null;
       }
       const refreshed = await loadBatch(false);
       if (refreshed) {
@@ -1533,28 +1517,7 @@ export function BasicPriceReviewPage() {
                               : draft.unit
                                 ? `${draft.unit.displayName} (${draft.unit.symbol})`
                                 : 'Belum dipilih'}</span>
-                          {!proven && mutable ? (
-                            <button
-                              type="button"
-                              className="bp-rowcard__edit"
-                              title="Buka dan fokuskan pemilih satuan standar di panel Pilih Penyelesaian."
-                              aria-expanded={lookupRows.has(row.id)}
-                              aria-controls={`bp-lookup-${row.id}`}
-                              onClick={() => {
-                                pendingUnitFocusRow.current = row.id;
-                                setDrafts((current) => ({
-                                  ...current,
-                                  [row.id]: { ...(current[row.id] ?? emptyDraft), admitOpen: false },
-                                }));
-                                setLookupRows((current) => new Set(current).add(row.id));
-                                const notice = 'Pemilih satuan tersedia pada panel Pilih Penyelesaian di sebelah kanan. Pilihan baru masih draft; tekan Gunakan Pilihan atau Gunakan Satuan setelah itemnya sesuai.';
-                                setRowNotice({ rowId: row.id, text: notice });
-                                setStatusMessage(notice);
-                              }}
-                            >
-                              &#9998; Pilih/Ubah Satuan
-                            </button>
-                          ) : null}
+
                         </dd>
                       </div>
                     </dl>
@@ -1613,6 +1576,13 @@ export function BasicPriceReviewPage() {
 
                   <div className="bp-rowcard__actions bp-rowcard__resolution">
                     <h3>Pilih Penyelesaian</h3>
+                    {mutable && !proven &&
+                      (row.section === null || row.sectionProvenance === 'UPLOADER_DECLARED') &&
+                      !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
+                        <p className="bp-field__help" role="status">
+                          Mulai dari <strong>Ubah Jenis</strong> di kiri, lalu <strong>Konfirmasi Jenis</strong>. Sesudah itu pilih item yang sudah ada atau periksa kebutuhan item baru.
+                        </p>
+                      ) : null}
                     {identityReviewStatuses?.[row.id] && identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' ? (
                       <details className="bp-details" aria-label={`Riwayat identitas baris ${row.sourceRowNumber}`}>
                         <summary>Riwayat keputusan identitas</summary>
@@ -1670,6 +1640,11 @@ export function BasicPriceReviewPage() {
                                 onPendingChange={(resourcePending) => updateDraft(row.id, { resourcePending })}
                               />
                             ) : null}
+                            {!resourceProven && !draft.resource ? (
+                              <p className="bp-field__help">
+                                Teks dalam kotak hanya kata pencarian, belum menjadi pilihan. Klik item yang sesuai di daftar hasil. Jika tidak ada, jangan gunakan padanan yang salah; periksa jalur item baru.
+                              </p>
+                            ) : null}
                             <CatalogSearchSelect
                               mode="unit"
                               selected={draft.unit}
@@ -1690,6 +1665,11 @@ export function BasicPriceReviewPage() {
                             >
                               {resourceProven ? 'Gunakan Satuan' : 'Gunakan Pilihan'}
                             </button>
+                            {blockReason && !isBusy ? (
+                              <p className="bp-field__help" role="status">
+                                Belum bisa disimpan: {blockReason}
+                              </p>
+                            ) : null}
                           </div>
                         ) : null}
                         {admissionOffered && admissionReview ? (

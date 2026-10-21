@@ -54,17 +54,16 @@ test('BP205-EDIT-01: category edit opens the same-row type decision, not catalog
   assert.match(review, /setTouchedRowIds\(\(current\) => new Set\(current\)\.add\(row\.id\)\)/u);
 });
 
-test('BP205-EDIT-02: unit edit focuses the existing decision-side picker and does not claim it is saved', () => {
-  assert.match(review, /Pilih\/Ubah Satuan/u);
-  assert.match(review, /pendingUnitFocusRow\.current = row\.id/u);
-  assert.match(review, /id=\{`bp-lookup-\$\{row\.id\}`\}/u);
-  assert.match(review, /target\.focus\(\)/u);
-  assert.match(review, /target\.scrollIntoView\(/u);
-  assert.match(review, /mode="unit"/u);
-  assert.match(review, /Pilihan baru masih draft/u);
-  assert.match(review, /Tekan Gunakan Pilihan atau Gunakan Satuan/u);
+test('BP205-EDIT-02: source unit is read-only; the existing decision-side picker is the only selector and writer', () => {
+  assert.doesNotMatch(review, /Pilih\/Ubah Satuan|pendingUnitFocusRow/u);
+  assert.match(review, /<CatalogSearchSelect[\s\S]*?mode="unit"/u);
+  assert.match(review, /Pilih Satuan/u);
+  assert.match(review, /Pilih Item yang Sesuai Padanan/u);
+  assert.match(review, /Gunakan Satuan/u);
+  assert.match(review, /Gunakan Pilihan/u);
+  assert.match(review, /Belum bisa disimpan: \{blockReason\}/u);
+  assert.match(review, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id\)/u);
 });
-
 test('BP205-UI-04 review offers auditable resolution for rows without source-proven category', () => {
   assert.match(review, /Tentukan Jenis/u);
   assert.match(review, /confirmBasicPriceImportRowCategory/u);
