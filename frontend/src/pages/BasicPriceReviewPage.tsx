@@ -67,6 +67,8 @@ import {
   rowStateLabel,
   reviewRowBucket,
   staleRowRecoveryMessage,
+  isStaleRowConflict,
+  rowNonStaleConflictMessage,
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
@@ -397,6 +399,10 @@ export function BasicPriceReviewPage() {
   ): Promise<string> => {
     const httpStatus = error instanceof ImportRequestError ? error.httpStatus : 0;
     if (httpStatus !== 409) return rowFailure(action, row.sourceRowNumber, error);
+    // Only an explicit ROW_VERSION_STALE is proof of an obsolete row version.
+    if (error instanceof ImportRequestError && !isStaleRowConflict(error.detail)) {
+      return rowNonStaleConflictMessage(row.sourceRowNumber, error.detail);
+    }
     /**
      * `false` because THIS function owns the sentence. `loadBatch` would
      * otherwise announce the batch's progress tally, which would be overwritten
@@ -1722,7 +1728,16 @@ export function BasicPriceReviewPage() {
                                     </select>
                                   </label>
                                 ) : null}
-                                {!draft.unit ? <button type="button" className="bp-btn bp-btn--sm" onClick={() => { updateDraft(row.id, { admitOpen: false }); setLookupRows((current) => new Set(current).add(row.id)); }}>Pilih satuan</button> : null}
+                                <div className="bp-field">
+                                   <p className="bp-field__help">Pilih satuan yang benar untuk harga ini. Satuan Excel tetap tercatat sebagai sumber; jika salah baca atau salah tulis, pilihan Anda harus diperiksa sebelum disimpan.</p>
+                                   <CatalogSearchSelect
+                                     mode="unit"
+                                     selected={draft.unit}
+                                     disabled={isBusy}
+                                     onSelect={(item) => updateDraft(row.id, { unit: item as UnitLookupItem | null })}
+                                     onPendingChange={(unitPending) => updateDraft(row.id, { unitPending })}
+                                   />
+                                 </div>
                                 {refusalChoices.map((choice) => (
                                   <label className="bp-field__help" key={choice.key}>
                                     <input

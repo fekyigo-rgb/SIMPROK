@@ -8,6 +8,8 @@ import {
   rowSectionDisplay,
   savedMetadataLines,
   staleRowRecoveryMessage,
+  isStaleRowConflict,
+  rowNonStaleConflictMessage,
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
@@ -352,13 +354,25 @@ test("STALE-UX-01: the version is still sent and a stale write is still refused 
   assert.doesNotMatch(reviewText, /setTimeout|retry|Retry/);
 });
 
-test("STALE-UX-02: a 409 refreshes the current truth itself instead of sending the reviewer to reload", () => {
+test("STALE-UX-02: only a confirmed stale version triggers automatic readback", () => {
   assert.match(review, /httpStatus !== 409/);
   assert.match(review, /recoverFromRowFailure/);
   const message = staleRowRecoveryMessage(8);
-  assert.match(message, /^Baris 8 baru saja diperbarui/);
+  assert.match(message, /^Baris 8 memiliki versi lebih baru/);
   assert.match(message, /SIMPROK sudah memuat versi terbaru/);
   assert.ok(!message.includes("muat ulang halaman"));
+});
+
+test("CONFLICT-UX: business-rule 409 does not claim another editor changed the row", () => {
+  assert.equal(isStaleRowConflict('{"message":"ROW_VERSION_STALE"}'), true);
+  assert.equal(isStaleRowConflict('{"message":"UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE"}'), false);
+  assert.equal(isStaleRowConflict('{"message":"ROW_SOURCE_SECTION_UNRESOLVED"}'), false);
+  assert.equal(isStaleRowConflict('{}'), false);
+  assert.match(rowNonStaleConflictMessage(13, '{"message":"UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE"}'), /Satuan pilihan belum dapat dibuktikan/u);
+  assert.match(rowNonStaleConflictMessage(13, '{"message":"ROW_SOURCE_SECTION_UNRESOLVED"}'), /Ubah Jenis dan Konfirmasi Jenis/u);
+  assert.doesNotMatch(rowNonStaleConflictMessage(13, '{"message":"UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE"}'), /perubahan lain|versi lebih baru/u);
+  assert.match(review, /!isStaleRowConflict\(error\.detail\)/u);
+  assert.match(review, /rowNonStaleConflictMessage\(row\.sourceRowNumber, error\.detail\)/u);
 });
 
 test("STALE-UX-02b: SIMPROK only claims to have loaded the newest version when the read actually succeeded", () => {

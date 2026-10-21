@@ -446,6 +446,14 @@ test("BP-FUNCTION-02. source unit stays visible but is edited only through the e
   assert.match(renderable, /Teks dalam kotak hanya kata pencarian, belum menjadi pilihan/u);
   assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id\)/u);
 });
+test("BP-ROW-UX-OWNER: new item has the same canonical unit picker without changing decision paths", () => {
+  const admission = renderable.slice(renderable.indexOf('className="bp-rowcard__admission"'));
+  assert.match(admission, /<CatalogSearchSelect[\s\S]*?mode="unit"[\s\S]*?selected=\{draft\.unit\}/u);
+  assert.doesNotMatch(admission, /admitOpen: false[\s\S]*?Pilih satuan/u);
+  assert.match(renderable, /Belum bisa disimpan: \{blockReason\}/u);
+  assert.match(renderable, /admitBlock \? <p className="bp-field__help"/u);
+});
+
 test("BP-FUNCTION-02b. Ubah Jenis opens an auditable row category editor, not item admission", () => {
   const start = renderable.indexOf('title="Ubah kategori awal impor untuk baris ini.');
   assert.ok(start > 0);

@@ -1399,7 +1399,7 @@ export const rowActionFailureMessage = (
  * now displayed.
  */
 export const staleRowRecoveryMessage = (sourceRowNumber: number): string =>
-  `Baris ${sourceRowNumber} baru saja diperbarui oleh perubahan lain, jadi keputusan Anda belum tersimpan. ` +
+  `Baris ${sourceRowNumber} memiliki versi lebih baru dari keputusan yang dikirim. Keputusan belum tersimpan. ` +
   `SIMPROK sudah memuat versi terbaru baris ini — pilihan Anda masih tersimpan sebagai draf. ` +
   `Periksa kembali, lalu konfirmasi ulang untuk menyimpan.`;
 
@@ -1410,6 +1410,37 @@ const namedCodeOf = (rawBody: string): string | null => {
     return typeof parsed.message === 'string' ? parsed.message : null;
   } catch {
     return null; // Not JSON. The status below is still more honest than a guess.
+  }
+};
+
+/** A business refusal (also HTTP 409) is not proof that another person edited this row. */
+export const isStaleRowConflict = (rawBody: string): boolean =>
+  namedCodeOf(rawBody) === 'ROW_VERSION_STALE';
+
+export const rowNonStaleConflictMessage = (sourceRowNumber: number, rawBody: string): string => {
+  const prefix = `Baris ${sourceRowNumber} belum disimpan. `;
+  switch (namedCodeOf(rawBody)) {
+    case 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE':
+      return prefix + 'Satuan pilihan belum dapat dibuktikan dari satuan Excel. Penginput boleh mengoreksi satuan, tetapi satuan harga harus diverifikasi; data sumber tetap dicatat.';
+    case 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION':
+      return prefix + 'Perubahan satuan memerlukan konversi harga yang belum tersedia pada jalur ini. Jangan menggunakan nilai harga lama dengan satuan berbeda.';
+    case 'UNIT_NOT_REPRESENTABLE_BY_UNIT_AUTHORITY':
+      return prefix + 'Satuan pilihan belum dikenali oleh otoritas satuan SIMPROK.';
+    case 'ROW_SOURCE_SECTION_UNRESOLVED':
+    case 'CATEGORY_CONFIRMATION_REQUIRED':
+      return prefix + 'Jenis item belum dipastikan. Gunakan Ubah Jenis dan Konfirmasi Jenis sebelum menyimpan.';
+    case 'IDENTITY_CANDIDATE_BLOCKED':
+      return prefix + 'Ada kandidat item yang belum terbukti berbeda. Periksa padanan dan spesifikasi terlebih dahulu.';
+    case 'RESOURCE_ADMISSION_REVIEW_STALE':
+      return prefix + 'Daftar kandidat berubah. Periksa bukti kandidat terbaru sebelum menetapkan item baru.';
+    case 'RESOURCE_ADMISSION_REFUSALS_INVALID':
+      return prefix + 'Keputusan penolakan kandidat belum lengkap atau tidak sesuai hasil pemeriksaan terbaru.';
+    case 'ROW_BUSY_RETRY':
+      return prefix + 'Baris sedang diproses. Tunggu sebentar, lalu periksa kembali.';
+    case 'ROW_NOT_MUTABLE':
+      return prefix + 'Baris sudah tidak menerima perubahan. Periksa status baris saat ini.';
+    default:
+      return prefix + 'SIMPROK menolak keputusan karena prasyarat belum terpenuhi. Periksa jenis, satuan, dan bukti padanan; tidak perlu mengulang seluruh impor.';
   }
 };
 

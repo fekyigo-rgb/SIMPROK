@@ -267,7 +267,7 @@ export function CatalogSearchSelect({
               <p className="bp-pop__body">
                 {mode === 'resource'
                   ? 'Tidak ada item katalog yang cocok. Teks pencarian bukan pilihan; periksa nama dan spesifikasi, atau tinjau item baru jika memang berbeda.'
-                  : 'Tidak ada satuan standar yang cocok. Periksa tulisan atau simbol satuan; jangan memilih satuan yang tidak sesuai sumber.'}
+                  : 'Tidak ada satuan pada hasil pencarian ini. Coba kode atau nama lain, atau ubah filter. Penginput boleh mengoreksi satuan dari Excel; SIMPROK tetap memeriksa kecocokan satuan dan harga sebelum menyimpan.'}
               </p>
             ) : null}
             {state === 'error' ? (
