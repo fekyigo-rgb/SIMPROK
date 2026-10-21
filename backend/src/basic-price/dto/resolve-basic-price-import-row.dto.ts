@@ -40,6 +40,12 @@ export class RejectBasicPriceImportRowDto {
  * provenance and source bytes remain, and a new append-only event records
  * the reversal. Version is mandatory for stale-client refusal.
  */
+/** Clarifies an old unit-correction reason without rewriting the original mapping. */
+export class ClarifyBasicPriceRowUnitReasonDto {
+  @IsInt() version!: number;
+  @IsString() @MinLength(30) @MaxLength(900) reason!: string;
+}
+
 export class CompensateBasicPriceImportRowDto {
   @IsInt() version!: number;
   @IsString() @MinLength(10) @MaxLength(1200) reason!: string;

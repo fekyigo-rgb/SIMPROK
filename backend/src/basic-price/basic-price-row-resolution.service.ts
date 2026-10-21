@@ -14,6 +14,7 @@ import {
   ResolveBasicPriceImportRowDto,
   ConfirmBasicPriceImportRowCategoryDto,
   CompensateBasicPriceImportRowDto,
+  ClarifyBasicPriceRowUnitReasonDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import {
   AdmitResourceForImportRowDto,
@@ -708,6 +709,7 @@ export class BasicPriceRowResolutionService {
     row: { rawUnitText: string | null; sourceSection: ResourceType },
     unitDefinition: { id: string; code: string },
     resourceCatalogId?: string,
+    humanDecisionReason?: string,
   ): Promise<void> {
     const rawSourceUnit = row.rawUnitText?.trim() ?? '';
 
@@ -792,6 +794,25 @@ export class BasicPriceRowResolutionService {
       proof.targetUnitDefinition?.id === unitDefinition.id &&
       proof.priceOperation === null;
 
+    // Unknown source-unit spelling requires an audited, explicit HUMAN interpretation.
+    // No change to source bytes, unit dictionary, resource identity, or price.
+    if (humanInterpretedUnknownSource) {
+      const marker =
+        'KOREKSI_SATUAN_SUMBER: ' +
+        rawSourceUnit +
+        ' -> ' +
+        unitDefinition.code +
+        '; ';
+      const explanation =
+        humanDecisionReason?.split(marker)[1]?.split(' | ')[0]?.trim() ?? '';
+      if (
+        !humanDecisionReason?.includes(marker) ||
+        explanation.length < 10 ||
+        explanation.length > 900
+      ) {
+        throw new ConflictException('UNIT_INTERPRETATION_REASON_REQUIRED');
+      }
+    }
     if (proof.status !== UNIT_RESOLUTION_STATUS.RESOLVED && !humanInterpretedUnknownSource)
       throw new ConflictException({
         statusCode: 409,
@@ -932,6 +953,7 @@ export class BasicPriceRowResolutionService {
         { ...row, sourceSection: effectiveSection },
         unitDefinition,
         dto.resourceCatalogId,
+        dto.reason,
       );
 
       const priorSameIdentity = await tx.basicPriceImportRow.findFirst({
@@ -1357,7 +1379,12 @@ export class BasicPriceRowResolutionService {
         // The shared body asks again with the created id — same helper, same
         // law, and by construction the new identity carries no rules that could
         // change the answer.
-        await this.assertSelectedUnitProvenBySourceUnit(row, unitDefinition);
+        await this.assertSelectedUnitProvenBySourceUnit(
+          row,
+          unitDefinition,
+          undefined,
+          dto.reason,
+        );
 
         // First authoritative pass — cheap refusal before anyone waits on a
         // lock. It never authorizes anything on its own.
@@ -1782,6 +1809,99 @@ export class BasicPriceRowResolutionService {
    * remains referentially intact while Resource Identity Kernel's existing
    * ACTIVE filter makes it ineligible as current evidence.
    */
+  /** Append-only reason correction for an existing mapping; never reinterpret identity. */
+  async clarifyUnitCorrectionReason(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    actorAccountId: string,
+    dto: ClarifyBasicPriceRowUnitReasonDto,
+  ) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        if (
+          dto.reason.trim() !== dto.reason ||
+          dto.reason.length < 30 ||
+          dto.reason.length > 900
+        )
+          throw new BadRequestException('UNIT_CLARIFICATION_REASON_REQUIRED');
+        const locked = await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT "id" FROM "basic_price_import_rows"
+          WHERE "id" = ${rowId}::uuid AND "batchId" = ${batchId}::uuid FOR UPDATE`,
+        );
+        if (locked.length !== 1) throw new NotFoundException('Row not found');
+        const row = await tx.basicPriceImportRow.findUniqueOrThrow({
+          where: { id: rowId },
+          include: {
+            batch: true,
+            privateBasicPrice: { select: { id: true } },
+            resourceMappings: { include: { reasonClarification: true } },
+          },
+        });
+        if (row.batch.workspaceId !== workspaceId)
+          throw new NotFoundException('Batch not found');
+        assertBatchOwnedByCaller(row.batch, actorAccountId, 'Batch not found');
+        if (row.version !== dto.version)
+          throw new ConflictException('ROW_VERSION_STALE');
+        if (
+          row.status !== 'READY_FOR_SUBMISSION' ||
+          row.resolutionStatus !== 'RESOLVED' ||
+          row.priceSubmissionId !== null ||
+          row.privateBasicPrice !== null ||
+          !row.resourceCatalogId ||
+          !row.unitDefinitionId ||
+          !row.rawUnitText
+        )
+          throw new ConflictException('UNIT_CLARIFICATION_ROW_INELIGIBLE');
+        if (row.resourceMappings.length !== 1)
+          throw new ConflictException('UNIT_CLARIFICATION_DECISION_AMBIGUOUS');
+        const original = row.resourceMappings[0];
+        if (
+          original.reviewerAccountId !== actorAccountId ||
+          original.reasonClarification ||
+          original.resourceCatalogId !== row.resourceCatalogId ||
+          original.unitDefinitionId !== row.unitDefinitionId ||
+          !original.reason?.includes('KOREKSI_SATUAN_SUMBER: ')
+        )
+          throw new ConflictException('UNIT_CLARIFICATION_MAPPING_INELIGIBLE');
+        const unit = await tx.unitDefinition.findUniqueOrThrow({
+          where: { id: row.unitDefinitionId },
+          select: { code: true },
+        });
+        if (
+          row.rawUnitText.trim().toUpperCase() === unit.code.toUpperCase() ||
+          !dto.reason
+            .toUpperCase()
+            .includes(row.rawUnitText.trim().toUpperCase()) ||
+          !dto.reason.toUpperCase().includes(unit.code.toUpperCase())
+        )
+          throw new BadRequestException(
+            'UNIT_CLARIFICATION_SOURCE_AND_TARGET_REQUIRED',
+          );
+        return tx.basicPriceImportRowMappingReasonClarification.create({
+          data: {
+            mappingId: original.id,
+            workspaceId,
+            actorAccountId,
+            originalReason: original.reason,
+            clarifiedReason: dto.reason,
+          },
+          select: {
+            id: true,
+            originalReason: true,
+            clarifiedReason: true,
+            recordedAt: true,
+          },
+        });
+      },
+      {
+        timeout: 20_000,
+        maxWait: 20_000,
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+  }
+
   async compensateOwnDecision(
     workspaceId: string,
     batchId: string,

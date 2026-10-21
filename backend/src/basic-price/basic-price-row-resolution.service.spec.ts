@@ -2141,11 +2141,12 @@ describe('BasicPriceRowResolutionService', () => {
       );
     };
 
-    const resolve = () =>
+    const resolve = (reason?: string) =>
       service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
         version: 0,
         resourceCatalogId: 'resource-01',
         unitDefinitionId: 'unit-01',
+        ...(reason ? { reason } : {}),
       });
 
     const nothingWasWritten = () => {
@@ -2247,9 +2248,20 @@ describe('BasicPriceRowResolutionService', () => {
         targetUnitDefinition: { id: 'unit-01', code: 'UNIT' },
       });
 
-      const result = await resolve();
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_INTERPRETATION_REASON_REQUIRED',
+      });
+      nothingWasWritten();
 
+      const reason =
+        'KOREKSI_SATUAN_SUMBER: Batang -> UNIT; Reviewer confirms each wooden pole equals one unit.';
+      const result = await resolve(reason);
       expect(result.status).toBe('READY_FOR_SUBMISSION');
+      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledWith(
+        {
+          data: expect.objectContaining({ reason }) as Record<string, unknown>,
+        },
+      );
       expect(unitKernel.resolve).toHaveBeenCalledWith(
         'Batang',
         'UNIT',
@@ -2269,11 +2281,60 @@ describe('BasicPriceRowResolutionService', () => {
       });
       expect(written).not.toHaveProperty('rawUnitText');
       expect(written).not.toHaveProperty('proposedCanonicalPrice');
-      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledTimes(
-        1,
-      );
+      expect(
+        tx.basicPriceImportRowResourceMapping.create,
+      ).toHaveBeenCalledTimes(1);
     });
 
+    it('GRADE-A M5/M3 — Owner correction is explicit, reason-tagged and does not mutate source', async () => {
+      rowIs({
+        rawUnitText: 'M5',
+        rawResourceNameText: 'Batu Pecah 2-3 cm (Split Stone Crusher)',
+        proposedCanonicalPrice: 781000,
+      });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-01',
+        code: 'M3',
+      });
+      kernelAnswers({
+        status: 'NEEDS_REVIEW',
+        priceOperation: null,
+        reasonCodes: ['UNKNOWN_UNIT_ALIAS'],
+        explanation: 'M5 belum dikenal',
+        sourceUnitDefinition: null,
+        targetUnitDefinition: { id: 'unit-01', code: 'M3' },
+      });
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_INTERPRETATION_REASON_REQUIRED',
+      });
+      expect(
+        await refusalOf(() => resolve('M5 berubah jadi M3 saja')),
+      ).toMatchObject({
+        message: 'UNIT_INTERPRETATION_REASON_REQUIRED',
+      });
+      nothingWasWritten();
+      const reason =
+        'KOREKSI_SATUAN_SUMBER: M5 -> M3; Owner memastikan satuan M5 salah ketik, benar M3.';
+      const result = await resolve(reason);
+      expect(result.status).toBe('READY_FOR_SUBMISSION');
+      expect(result.rawUnitText).toBe('M5');
+      expect(result.proposedCanonicalPrice).toBe(781000);
+      expect(unitKernel.resolve).toHaveBeenCalledWith(
+        'M5',
+        'M3',
+        'resource-01',
+        'MATERIAL',
+      );
+      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledWith(
+        {
+          data: expect.objectContaining({
+            reason,
+            resourceCatalogId: 'resource-01',
+            unitDefinitionId: 'unit-01',
+          }) as Record<string, unknown>,
+        },
+      );
+    });
     it('T2i — unknown source still refuses when the kernel represented a DIFFERENT target than the one the human selected', async () => {
       kernelAnswers({
         status: 'NEEDS_REVIEW',

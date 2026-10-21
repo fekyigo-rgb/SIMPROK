@@ -35,6 +35,7 @@ import {
   ConfirmBasicPriceImportRowCategoryDto,
   RejectBasicPriceImportRowDto,
   CompensateBasicPriceImportRowDto,
+  ClarifyBasicPriceRowUnitReasonDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import {
   AdmitResourceForImportRowDto,
@@ -229,6 +230,24 @@ export class BasicPriceImportController {
     return this.resolutionService.confirmRowSpecifications(
       request.workspaceContext.workspaceId, batchId, rowId,
       request.user.id, dto,
+    );
+  }
+
+  /** Authenticated addendum to an existing private row-mapping audit; not another mapping. */
+  @Post(':batchId/rows/:rowId/clarify-unit-reason')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async clarifyUnitReason(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() dto: ClarifyBasicPriceRowUnitReasonDto,
+  ) {
+    return this.resolutionService.clarifyUnitCorrectionReason(
+      request.workspaceContext.workspaceId,
+      batchId,
+      rowId,
+      request.user.id,
+      dto,
     );
   }
 

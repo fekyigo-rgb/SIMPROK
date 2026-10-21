@@ -354,6 +354,16 @@ export async function resolveBasicPriceImportRow(
   if (!response.ok) throw new ImportRequestError(response.status, await response.text());
 }
 
+export async function clarifyBasicPriceRowUnitReason(
+  batchId: string, rowId: string, version: number, reason: string,
+): Promise<void> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/clarify-unit-reason`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, reason }),
+  });
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+}
+
 export async function rejectBasicPriceImportRow(
   batchId: string,
   rowId: string,

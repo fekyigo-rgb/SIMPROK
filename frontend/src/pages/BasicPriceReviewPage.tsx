@@ -7,6 +7,7 @@ import {
   updateBasicPriceImportBatch,
   rejectBasicPriceImportRow,
   resolveBasicPriceImportRow,
+  clarifyBasicPriceRowUnitReason,
   confirmBasicPriceImportRowCategory,
   confirmBasicPriceRowSpecifications,
   getBasicPriceIdentityReviews,
@@ -86,6 +87,7 @@ interface RowDraft {
   resourcePending: boolean;
   unitPending: boolean;
   reason: string;
+  unitCorrectionReason: string;
   /** Reason field stays hidden until the reviewer opens Tolak. */
   rejectOpen: boolean;
   /** Reason field stays hidden until the reviewer opens admission. */
@@ -104,12 +106,17 @@ const REVIEW_ROW_PAGE_SIZE = 30;
 /** The existing backend admission contract accepts at most 100 explicit choices. */
 const SAFE_NEW_SELECTION_LIMIT = 100;
 
+const unitCorrectionAuditNote = (row: BasicPriceImportRowSummary, unit: UnitLookupItem | null, rationale: string): string | null =>
+  row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' && unit
+    ? 'KOREKSI_SATUAN_SUMBER: ' + (row.unit ?? '') + ' -> ' + unit.code + '; ' + rationale.trim()
+    : null;
 const emptyDraft: RowDraft = {
   resource: null,
   unit: null,
   resourcePending: false,
   unitPending: false,
   reason: '',
+  unitCorrectionReason: '',
   rejectOpen: false,
   admitOpen: false,
   admitReason: '',
@@ -240,6 +247,7 @@ export function BasicPriceReviewPage() {
   /** Local acknowledgement stays beside the row, even when the page is scrolled. */
   const [rowNotice, setRowNotice] = useState<{ rowId: string; text: string } | null>(null);
   const [categoryDrafts, setCategoryDrafts] = useState<Record<string, ResourceType | ''>>({});
+  const [reasonClarificationDrafts, setReasonClarificationDrafts] = useState<Record<string, string>>({});
   const [categoryEditRows, setCategoryEditRows] = useState<Set<string>>(new Set());
   // Read historical identity decisions; no external approval is required for private items.
   const [identityReviewStatuses, setIdentityReviewStatuses] = useState<Record<string, BasicPriceIdentityReviewRow> | null>(null);
@@ -620,6 +628,35 @@ export function BasicPriceReviewPage() {
     }
   };
 
+  const handleClarifyUnitReason = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId || !row.mappingReasonAudit || !row.canonicalUnit || !row.unit) return;
+    const reason = (reasonClarificationDrafts[row.id] ?? '').trim();
+    if (reason.length < 30 || !reason.toUpperCase().includes(row.unit.toUpperCase()) ||
+        !reason.toUpperCase().includes(row.canonicalUnit.code.toUpperCase())) {
+      setRowNotice({ rowId: row.id, text: 'Jelaskan fakta koreksi satuan sumber dan satuan yang benar (minimal 30 karakter).' });
+      return;
+    }
+    setIsBusy(true);
+    try {
+      await clarifyBasicPriceRowUnitReason(batchId, row.id, row.version, reason);
+      let verified = false;
+      const loaded = await loadBatch(false, (fresh) => {
+        verified = fresh.rows.find((entry) => entry.id === row.id)?.mappingReasonAudit?.clarification === reason;
+      });
+      const notice = loaded && verified
+        ? `Baris ${row.sourceRowNumber}: klarifikasi alasan tersimpan, cocok dengan database, dan alasan lama tetap tercatat.`
+        : `Baris ${row.sourceRowNumber}: server menerima klarifikasi, tetapi pembacaan ulang belum terverifikasi. Muat ulang sebelum melanjutkan.`;
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } catch (error) {
+      const notice = error instanceof ImportRequestError
+        ? `Klarifikasi belum tersimpan: ${importRequestMessage(error.httpStatus)}`
+        : 'Klarifikasi belum terbukti tersimpan. Muat ulang untuk memeriksa.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } finally { setIsBusy(false); }
+  };
+
   const handleResolve = async (row: BasicPriceImportRowSummary) => {
     if (!batchId) return;
     const draft = draftFor(row.id);
@@ -643,6 +680,11 @@ export function BasicPriceReviewPage() {
         return;
       }
     }
+    if (row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' &&
+        draft.unitCorrectionReason.trim().length < 10) {
+      setStatusMessage('Tuliskan alasan koreksi satuan sumber (minimal 10 karakter) sebelum menyimpan.');
+      return;
+    }
     setIsBusy(true);
     try {
       // Existing server-owned mapping audit records the reviewer's working
@@ -652,7 +694,11 @@ export function BasicPriceReviewPage() {
         draft.correctedCanonicalName !== row.name
           ? 'KOREKSI_NOMENKLATUR: ' + draft.correctedCanonicalName.trim()
           : undefined;
-      await resolveBasicPriceImportRow(batchId, row.id, row.version, draft.resource.id, draft.unit.id, nomenclatureAuditReason);
+      const resolutionAuditReason = [
+        nomenclatureAuditReason,
+        unitCorrectionAuditNote(row, draft.unit, draft.unitCorrectionReason),
+      ].filter(Boolean).join(' | ');
+      await resolveBasicPriceImportRow(batchId, row.id, row.version, draft.resource.id, draft.unit.id, resolutionAuditReason || undefined);
       forgetCompletedEdit(row.id);
       setDrafts((current) => {
         const next = { ...current };
@@ -782,6 +828,11 @@ export function BasicPriceReviewPage() {
         return;
       }
     }
+    if (row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' &&
+        draft.unitCorrectionReason.trim().length < 10) {
+      setStatusMessage('Tuliskan alasan koreksi satuan sumber (minimal 10 karakter) sebelum menetapkan item.');
+      return;
+    }
     setIsBusy(true);
     try {
       await admitResourceForImportRow(
@@ -789,7 +840,7 @@ export function BasicPriceReviewPage() {
         row.id,
         row.version,
         draft.unit.id,
-        draft.admitReason.trim(),
+        [unitCorrectionAuditNote(row, draft.unit, draft.unitCorrectionReason), draft.admitReason.trim()].filter(Boolean).join(' | '),
         draft.admitResourceType,
         draft.refusedCandidateIds,
         typeConfirmation.reviewBindingFingerprint,
@@ -1316,6 +1367,8 @@ export function BasicPriceReviewPage() {
           const notes = rowNoteLines(row);
           const noteDisclosure = rowNoteDisclosure(notes, row.machineProposal?.identityPairProven === true);
           const reviewQuestion = noteDisclosure.primary ?? collisionLabel;
+          const unitCorrectionMissing = row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' &&
+            draft.unit !== null && draft.unitCorrectionReason.trim().length < 10;
           const blockReason = completionBlockReason(row, {
             resource: draft.resource !== null,
             unit: draft.unit !== null,
@@ -1759,19 +1812,26 @@ export function BasicPriceReviewPage() {
                               }}
                               onPendingChange={(unitPending) => updateDraft(row.id, { unitPending })}
                             />
+                            {row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' && draft.unit ? (
+                              <label className="bp-field">
+                                <span className="bp-field__label">Alasan koreksi satuan Excel (wajib)</span>
+                                <input className="bp-input" type="text" maxLength={900} value={draft.unitCorrectionReason} onChange={(event) => updateDraft(row.id, { unitCorrectionReason: event.target.value })} placeholder="Jelaskan bukti salah ketik atau interpretasi satuan" />
+                                <span className="bp-field__help">Excel tetap menyimpan {row.unit ?? "satuan tak tertulis"}. Pilihan Anda: {draft.unit.code}. Perubahan hanya sah jika alasannya tercatat.</span>
+                              </label>
+                            ) : null}
                             <button
                               type="button"
                               className="bp-btn bp-btn--primary bp-btn--sm"
                               onClick={() => void handleResolve(row)}
-                              disabled={blockReason !== null}
-                              aria-disabled={blockReason !== null}
-                              title={blockReason ?? 'Gunakan Item SIMPROK dan Satuan yang dipilih'}
+                              disabled={blockReason !== null || unitCorrectionMissing}
+                              aria-disabled={blockReason !== null || unitCorrectionMissing}
+                              title={unitCorrectionMissing ? 'Alasan koreksi satuan Excel wajib diisi.' : (blockReason ?? 'Gunakan Item SIMPROK dan Satuan yang dipilih')}
                             >
                               {resourceProven ? 'Gunakan Satuan' : 'Gunakan Pilihan'}
                             </button>
-                            {blockReason && !isBusy ? (
+                            {(blockReason || unitCorrectionMissing) && !isBusy ? (
                               <p className="bp-field__help" role="status">
-                                Belum bisa disimpan: {blockReason}
+                                Belum bisa disimpan: {unitCorrectionMissing ? "Alasan koreksi satuan Excel wajib diisi." : blockReason}
                               </p>
                             ) : null}
                           </div>
@@ -1836,6 +1896,13 @@ export function BasicPriceReviewPage() {
                                      onPendingChange={(unitPending) => updateDraft(row.id, { unitPending })}
                                    />
                                  </div>
+                                {row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' && draft.unit ? (
+                                  <label className="bp-field">
+                                    <span className="bp-field__label">Alasan koreksi satuan Excel (wajib)</span>
+                                    <input className="bp-input" type="text" maxLength={900} value={draft.unitCorrectionReason} onChange={(event) => updateDraft(row.id, { unitCorrectionReason: event.target.value })} placeholder="Jelaskan bukti salah ketik atau interpretasi satuan" />
+                                    <span className="bp-field__help">Excel: {row.unit ?? "tidak tercantum"}. Pilihan: {draft.unit.code}. Sumber asli tidak diubah.</span>
+                                  </label>
+                                ) : null}
                                 {refusalChoices.map((choice) => (
                                   <label className="bp-field__help" key={choice.key}>
                                     <input
@@ -1855,7 +1922,7 @@ export function BasicPriceReviewPage() {
                                   <input className="bp-input" type="text" placeholder="Tuliskan alasan berdasarkan hasil pemeriksaan" value={draft.admitReason} onChange={(event) => updateDraft(row.id, { admitReason: event.target.value })} />
                                   <span className="bp-field__help">Jika ada kandidat, catat perbedaan nyata seperti ukuran atau spesifikasi.</span>
                                 </label>
-                                <button type="button" className="bp-btn bp-btn--primary" onClick={() => void handleAdmit(row)} disabled={admitBlock !== null} aria-disabled={admitBlock !== null} title={admitBlock ?? IDENTITY_ADMISSION_LABEL}>
+                                <button type="button" className="bp-btn bp-btn--primary" onClick={() => void handleAdmit(row)} disabled={admitBlock !== null || unitCorrectionMissing} aria-disabled={admitBlock !== null || unitCorrectionMissing} title={unitCorrectionMissing ? "Alasan koreksi satuan Excel wajib diisi." : (admitBlock ?? IDENTITY_ADMISSION_LABEL)}>
                                   Tetapkan Item Baru
                                 </button>
                                 {admitBlock ? <p className="bp-field__help" role="status">{admitBlock}</p> : null}
@@ -1872,6 +1939,31 @@ export function BasicPriceReviewPage() {
                         <button type="button" className="bp-btn bp-btn--danger-quiet" onClick={() => void handleReject(row)} disabled={isBusy} aria-disabled={isBusy}>Tolak</button>
                       </>
                     ) : <p className="bp-field__help">{rowStateLabel(row)}</p>}
+                    {row.mappingReasonAudit ? (
+                      <details className="bp-details" aria-label={`Audit koreksi satuan baris ${row.sourceRowNumber}`}>
+                        <summary>Audit koreksi satuan</summary>
+                        <p className="bp-field__help">Alasan keputusan semula (tidak dapat diubah): {row.mappingReasonAudit.originalReason}</p>
+                        {row.mappingReasonAudit.clarification ? (
+                          <p className="bp-field__help" role="status">Klarifikasi tersimpan: {row.mappingReasonAudit.clarification}</p>
+                        ) : row.status === "READY_FOR_SUBMISSION" && row.canonicalUnit && row.unit ? (
+                          <>
+                            <label className="bp-field">
+                              <span className="bp-field__label">Klarifikasi alasan satuan (catatan tambahan)</span>
+                              <textarea className="bp-input" rows={3} maxLength={900}
+                                value={reasonClarificationDrafts[row.id] ?? ""}
+                                onChange={(event) => setReasonClarificationDrafts((current) => ({ ...current, [row.id]: event.target.value }))}
+                                placeholder={`Tuliskan alasan benar perubahan ${row.unit} menjadi ${row.canonicalUnit.code}`} />
+                              <span className="bp-field__help">Excel, ResourceCatalog, nominal harga, dan catatan awal tidak berubah.</span>
+                            </label>
+                            <button type="button" className="bp-btn bp-btn--primary"
+                              disabled={isBusy || (reasonClarificationDrafts[row.id] ?? "").trim().length < 30}
+                              onClick={() => void handleClarifyUnitReason(row)}>
+                              Simpan Klarifikasi Audit
+                            </button>
+                          </>
+                        ) : null}
+                      </details>
+                    ) : null}
                     <button type="button" className="bp-btn bp-btn--link bp-btn--sm" onClick={() => toggleExpandedRow(row.id)}>Tinjau nanti</button>
                   </div>
                 </>

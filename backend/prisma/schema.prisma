@@ -30,6 +30,7 @@ model Account {
   intelligenceEvidence                        IntelligenceEvidence[]
   verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]        @relation("BasicPriceSourceEquivalenceVerifiedBy")
   reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
+  basicPriceMappingReasonClarifications BasicPriceImportRowMappingReasonClarification[] @relation("BasicPriceMappingReasonClarificationActor")
   basicPriceRowCompensations                  BasicPriceImportRowResolutionCompensation[] @relation("BasicPriceImportRowCompensationActor")
   basicPriceCategoryDecisions                  BasicPriceImportRowCategoryDecision[] @relation("BasicPriceImportRowCategoryActor")
   basicPriceSpecificationDecisions             BasicPriceImportRowSpecificationDecision[] @relation("BasicPriceImportRowSpecificationActor")
@@ -3244,12 +3245,29 @@ model BasicPriceImportRowResourceMapping {
   unitDefinition  UnitDefinition      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
   reviewer        Account             @relation("BasicPriceImportRowResourceMappingReviewer", fields: [reviewerAccountId], references: [id], onDelete: Restrict, map: "fk_row_mapping_reviewer")
   compensation    BasicPriceImportRowResolutionCompensation?
+  reasonClarification BasicPriceImportRowMappingReasonClarification?
 
   @@index([rowId])
   @@index([resourceCatalogId])
   @@index([workspaceId])
   @@index([reviewerAccountId])
   @@map("basic_price_import_row_resource_mappings")
+}
+
+/// BP-ROW11-GRADEA: one append-only explanation of an already-decided mapping.
+/// A mapping reason never changes; a clarification is not a second mapping.
+model BasicPriceImportRowMappingReasonClarification {
+  id String @id @default(uuid()) @db.Uuid
+  mappingId String @unique @db.Uuid
+  workspaceId String @db.Uuid
+  actorAccountId String @db.Uuid
+  originalReason String? @db.Text
+  clarifiedReason String @db.Text
+  recordedAt DateTime @default(now())
+  mapping BasicPriceImportRowResourceMapping @relation(fields: [mappingId], references: [id], onDelete: Restrict)
+  actor Account @relation("BasicPriceMappingReasonClarificationActor", fields: [actorAccountId], references: [id], onDelete: Restrict)
+  @@index([workspaceId])
+  @@map("basic_price_import_row_mapping_reason_clarifications")
 }
 
 /// BP-ROW-COMPENSATION-01 — APPEND-ONLY reversal of a single human import-row

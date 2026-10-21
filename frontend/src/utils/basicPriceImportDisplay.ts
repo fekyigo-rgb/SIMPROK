@@ -144,6 +144,8 @@ export interface BasicPriceImportRowSummary {
   canonicalResourceName?: string | null;
   /** Audited human search nomenclature read from the chosen row mapping, not a global resource alias. */
   nomenclatureCorrectionName?: string | null;
+  /** Original mapping reason is immutable; a later clarification is a separate audit. */
+  mappingReasonAudit?: { originalReason: string; clarification: string | null; clarifiedAt: string | null } | null;
   /** Persisted canonical unit from GET, not a browser draft. */
   canonicalUnit?: { code: string; displayName: string; symbol: string } | null;
   unit: string | null;

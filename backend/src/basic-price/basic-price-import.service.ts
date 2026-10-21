@@ -1279,7 +1279,16 @@ export class BasicPriceImportService {
       /** Canonical name is read back only on the review GET. */
       resourceCatalog?: { name: string } | null;
       /** Current append-only human mapping only, for nomenclature correction readback. */
-      resourceMappings?: Array<{ resourceCatalogId: string; reason: string | null }>;
+      resourceMappings?: Array<{
+        resourceCatalogId: string;
+        unitDefinitionId: string;
+        reason: string | null;
+        reasonClarification?: {
+          originalReason: string | null;
+          clarifiedReason: string;
+          recordedAt: Date;
+        } | null;
+      }>;
       /** Loaded for review GET only; the saved canonical unit is not a draft. */
       unitDefinition?: { code: string; displayName: string; symbol: string } | null;
       rawUnitText?: string | null;
@@ -1508,7 +1517,25 @@ export class BasicPriceImportService {
         nomenclatureCorrectionName: r.resourceCatalogId &&
           r.resourceMappings?.[0]?.resourceCatalogId === r.resourceCatalogId &&
           r.resourceMappings[0].reason?.startsWith('KOREKSI_NOMENKLATUR: ')
-            ? r.resourceMappings[0].reason.slice('KOREKSI_NOMENKLATUR: '.length)
+            ? r.resourceMappings[0].reason
+                .slice('KOREKSI_NOMENKLATUR: '.length)
+                .split(' | KOREKSI_SATUAN_SUMBER:')[0]
+            : null,
+        mappingReasonAudit:
+          r.resourceCatalogId &&
+          r.unitDefinitionId &&
+          r.resourceMappings?.[0] &&
+          r.resourceMappings[0].resourceCatalogId === r.resourceCatalogId &&
+          r.resourceMappings[0].unitDefinitionId === r.unitDefinitionId &&
+          r.resourceMappings[0].reason?.includes('KOREKSI_SATUAN_SUMBER: ')
+            ? {
+                originalReason: r.resourceMappings[0].reason,
+                clarification:
+                  r.resourceMappings[0].reasonClarification?.clarifiedReason ??
+                  null,
+                clarifiedAt:
+                  r.resourceMappings[0].reasonClarification?.recordedAt ?? null,
+              }
             : null,
         canonicalUnit: r.unitDefinition
           ? { code: r.unitDefinition.code, displayName: r.unitDefinition.displayName, symbol: r.unitDefinition.symbol }
@@ -2579,7 +2606,18 @@ export class BasicPriceImportService {
         resourceMappings: {
           orderBy: [{ decidedAt: 'desc' }, { id: 'desc' }],
           take: 1,
-          select: { resourceCatalogId: true, reason: true },
+          select: {
+            resourceCatalogId: true,
+            unitDefinitionId: true,
+            reason: true,
+            reasonClarification: {
+              select: {
+                originalReason: true,
+                clarifiedReason: true,
+                recordedAt: true,
+              },
+            },
+          },
         },
         unitDefinition: { select: { code: true, displayName: true, symbol: true } },
       },

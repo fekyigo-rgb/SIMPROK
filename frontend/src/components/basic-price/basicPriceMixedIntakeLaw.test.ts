@@ -62,8 +62,8 @@ test('BP205-EDIT-02: source unit is read-only; the existing decision-side picker
   assert.match(review, /Pilih Item yang Sesuai Padanan/u);
   assert.match(review, /Gunakan Satuan/u);
   assert.match(review, /Gunakan Pilihan/u);
-  assert.match(review, /Belum bisa disimpan: \{blockReason\}/u);
-  assert.match(review, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id, nomenclatureAuditReason\)/u);
+  assert.match(review, /Belum bisa disimpan: \{unitCorrectionMissing \?[^}]+: blockReason\}/u);
+  assert.match(review, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id, resolutionAuditReason \|\| undefined\)/u);
 });
 test('BP205-UI-04 review offers auditable resolution for rows without source-proven category', () => {
   assert.match(review, /Tentukan Jenis/u);
