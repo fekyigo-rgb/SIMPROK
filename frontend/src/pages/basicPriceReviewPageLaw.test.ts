@@ -442,7 +442,7 @@ test("BP-FUNCTION-02. source unit stays visible but is edited only through the e
   assert.match(renderable, /Gunakan Satuan/u);
   assert.match(renderable, /Gunakan Pilihan/u);
   assert.match(renderable, /Belum bisa disimpan: \{blockReason\}/u);
-  assert.match(renderable, /Mulai dari <strong>Ubah Jenis<\/strong>/u);
+  assert.match(renderable, /Langkah berikutnya ada di atas: tekan <strong>Konfirmasi Jenis<\/strong>/u);
   assert.match(renderable, /Teks dalam kotak hanya kata pencarian, belum menjadi pilihan/u);
   assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id\)/u);
 });
@@ -455,15 +455,24 @@ test("BP-ROW-UX-OWNER: new item has the same canonical unit picker without chang
 });
 
 test("BP-FUNCTION-02b. Ubah Jenis opens an auditable row category editor, not item admission", () => {
-  const start = renderable.indexOf('title="Ubah kategori awal impor untuk baris ini.');
+  const start = renderable.indexOf('title="Pemilih jenis ada di panel penyelesaian sebelah kanan.');
   assert.ok(start > 0);
   const action = renderable.slice(start, start + 1400);
   assert.match(action, /setCategoryEditRows/u);
   assert.match(action, /Ubah Jenis/u);
   assert.ok(renderable.includes('id={`bp-category-editor-${row.id}`}'));
+  assert.ok(renderable.indexOf('className="bp-rowcard__actions bp-rowcard__resolution"') < renderable.indexOf('id={`bp-category-editor-${row.id}`}'), 'type decision must live in the right-side resolution panel');
+  assert.match(renderable, /row\.reasonCodes\.includes\('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'\)/u);
   assert.match(renderable, /onClick=\{\(\) => void handleConfirmCategory\(row\)\}/u);
   assert.match(page, /await confirmBasicPriceImportRowCategory\(batchId, row\.id, row\.version, category\)/u);
   assert.match(page, /resource: null, unit: null/u);
+});
+
+test("BP-NEW-ITEM-NO-DEADEND: when admission is not offered, candidate reason is before the action choices", () => {
+  const problem = renderable.indexOf('!admissionOffered && admissionReview?.reasonCode');
+  const choices = renderable.indexOf('Pilih Item yang Sesuai Padanan');
+  assert.ok(problem > 0 && problem < choices);
+  assert.match(renderable, /Item Baru BELUM dapat disimpan/u);
 });
 
 test("BP-FUNCTION-03. Tetapkan Item Baru stays on server-offered review and passes the bound type, unit, and refusals", () => {

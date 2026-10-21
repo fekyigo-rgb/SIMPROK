@@ -1491,7 +1491,7 @@ export function BasicPriceReviewPage() {
                             <button
                               type="button"
                               className="bp-rowcard__edit"
-                              title="Ubah kategori awal impor untuk baris ini. Keputusan baru disimpan setelah Konfirmasi Jenis berhasil."
+                              title="Pemilih jenis ada di panel penyelesaian sebelah kanan. Keputusan tercatat setelah Konfirmasi Jenis."
                               aria-expanded={categoryEditRows.has(row.id)}
                               aria-controls={`bp-category-editor-${row.id}`}
                               onClick={() => {
@@ -1502,13 +1502,13 @@ export function BasicPriceReviewPage() {
                                   return next;
                                 });
                                 const notice = opening
-                                  ? 'Pilihan jenis dibuka pada baris ini. Pilih Tenaga kerja, Bahan, atau Peralatan lalu tekan Konfirmasi Jenis. Data asli Excel tidak berubah.'
-                                  : 'Pemilih jenis ditutup. Tidak ada keputusan kategori baru yang disimpan.';
+                                  ? 'Pemilih jenis ada di panel penyelesaian sebelah kanan. Pilih Tenaga kerja, Bahan, atau Peralatan lalu tekan Konfirmasi Jenis.'
+                                  : 'Belum ada keputusan jenis baru yang disimpan.';
                                 setRowNotice({ rowId: row.id, text: notice });
                                 setStatusMessage(notice);
                               }}
                             >
-                              &#9998; {categoryEditRows.has(row.id) ? 'Tutup Pilihan Jenis' : 'Ubah Jenis'}
+                              &#9998; Ubah Jenis
                             </button>
                           ) : null}
                         </dd>
@@ -1527,8 +1527,35 @@ export function BasicPriceReviewPage() {
                         </dd>
                       </div>
                     </dl>
+                    {(noteDisclosure.secondary.length > 0 || notes.technicalNotice || narrative) ? (
+                      <details className="bp-details bp-rowcard__proof">
+                        <summary>{WHY_DISCLOSURE_TITLE}</summary>
+                        {narrative ? <><p>{narrative.resource}</p><p>{narrative.unit}</p></> : null}
+                        {noteDisclosure.secondary.map((note) => <p key={note}>{note}</p>)}
+                        {notes.technicalNotice ? <p>{notes.technicalNotice}</p> : null}
+                      </details>
+                    ) : null}
+                    {row.proposedCanonicalKdn ? <p className="bp-rowcard__facts">KDN: {row.proposedCanonicalKdn.replace('.', ',')}%</p> : null}
+                    {optionalRowCanEnrichKdnNow(row) && row.privateBasicPriceId ? (
+                      <details className="bp-details">
+                        <summary>Informasi tambahan (tidak wajib)</summary>
+                        <p className="bp-field__help">{OPTIONAL_ENRICHMENT_EMPTY}</p>
+                        <ReviewOptionalKdnForm
+                          priceId={row.privateBasicPriceId}
+                          onSaved={() => {
+                            setStatusMessage(`Baris ${row.sourceRowNumber}: informasi tambahan berhasil disimpan.`);
+                            void loadBatch(false);
+                          }}
+                        />
+                      </details>
+                    ) : null}
+                  </div>
+
+                  <div className="bp-rowcard__actions bp-rowcard__resolution">
+                    <h3>Pilih Penyelesaian</h3>
+                    {/* Reuse the sole canonical category editor in the decision panel. */}
                     {mutable &&
-                     (row.section === null || categoryEditRows.has(row.id)) &&
+                     (row.section === null || categoryEditRows.has(row.id) || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'))) &&
                      (row.section === null || row.sectionProvenance === 'UPLOADER_DECLARED') &&
                      !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
                       <div id={`bp-category-editor-${row.id}`} className="bp-note bp-note--info" aria-label={`Tentukan jenis baris ${row.sourceRowNumber}`}>
@@ -1556,39 +1583,53 @@ export function BasicPriceReviewPage() {
                         >Konfirmasi Jenis</button>
                       </div>
                     ) : null}
-                    {(noteDisclosure.secondary.length > 0 || notes.technicalNotice || narrative) ? (
-                      <details className="bp-details bp-rowcard__proof">
-                        <summary>{WHY_DISCLOSURE_TITLE}</summary>
-                        {narrative ? <><p>{narrative.resource}</p><p>{narrative.unit}</p></> : null}
-                        {noteDisclosure.secondary.map((note) => <p key={note}>{note}</p>)}
-                        {notes.technicalNotice ? <p>{notes.technicalNotice}</p> : null}
-                      </details>
-                    ) : null}
-                    {row.proposedCanonicalKdn ? <p className="bp-rowcard__facts">KDN: {row.proposedCanonicalKdn.replace('.', ',')}%</p> : null}
-                    {optionalRowCanEnrichKdnNow(row) && row.privateBasicPriceId ? (
-                      <details className="bp-details">
-                        <summary>Informasi tambahan (tidak wajib)</summary>
-                        <p className="bp-field__help">{OPTIONAL_ENRICHMENT_EMPTY}</p>
-                        <ReviewOptionalKdnForm
-                          priceId={row.privateBasicPriceId}
-                          onSaved={() => {
-                            setStatusMessage(`Baris ${row.sourceRowNumber}: informasi tambahan berhasil disimpan.`);
-                            void loadBatch(false);
-                          }}
-                        />
-                      </details>
-                    ) : null}
-                  </div>
-
-                  <div className="bp-rowcard__actions bp-rowcard__resolution">
-                    <h3>Pilih Penyelesaian</h3>
                     {mutable && !proven &&
-                      (row.section === null || row.sectionProvenance === 'UPLOADER_DECLARED') &&
+                      (row.section === null || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'))) &&
                       !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
                         <p className="bp-field__help" role="status">
-                          Mulai dari <strong>Ubah Jenis</strong> di kiri, lalu <strong>Konfirmasi Jenis</strong>. Sesudah itu pilih item yang sudah ada atau periksa kebutuhan item baru.
+                          Langkah berikutnya ada di atas: tekan <strong>Konfirmasi Jenis</strong>. Pilihan Bahan yang sama dengan Excel tetap dihitung sebagai keputusan Anda dan tercatat.
                         </p>
                       ) : null}
+                        {!admissionOffered && admissionReview?.reasonCode && admissionUnavailableReason(admissionReview.reasonCode) ? (
+                          <div className="bp-field__help">
+                            <p role="status">{row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')
+                              ? 'Spesifikasi dari berkas belum diperiksa. Item ini belum bisa disimpan atau dinyatakan identik.'
+                              : admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED'
+                              ? 'Item Baru BELUM dapat disimpan: SIMPROK menemukan calon padanan yang belum terbukti berbeda. Periksa daftar kandidat di bawah sebelum menetapkan identitas baru.'
+                              : 'Item baru belum tersedia: ' + admissionUnavailableReason(admissionReview.reasonCode)}</p>
+                            {admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED' ? (
+                              <details className="bp-details">
+                                <summary>Bandingkan kandidat dan bukti identitas</summary>
+                                {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED') ? (
+                                  <>
+                                    <ul>
+                                    {row.machineProposal.resource.candidates
+                                      .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
+                                      .map((candidate, index) => (
+                                        <li key={index}>
+                                          <strong>{candidate.name}</strong>
+                                          {candidate.code ? ' (' + candidate.code + ')' : ''}
+                                          {' — ' + candidateResourceTypeLabel(candidate.type) + ' · satuan ' + candidate.baseUnit}
+                                          {candidate.specificationUnproved && candidate.unprovedSpecificationFacts.length > 0
+                                            ? ' — bukti yang masih diperlukan: ' + candidate.unprovedSpecificationFacts.join(', ')
+                                            : ''}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </>
+                                ) : <p>Daftar item yang mungkin sama belum dapat ditampilkan. Item baru belum dapat dibuat sebelum pemeriksaan.</p>}
+                                <p>Jika sesuai, gunakan <strong>Pilih Item yang Sesuai Padanan</strong> dan pilih satuan. Jika berbeda, jangan pilih padanan yang salah; perbedaan spesifikasi masih memerlukan bukti.</p>
+                                <p>Hasil pencarian kosong belum membuktikan bahwa item ini baru. Nama kerja bukan bukti spesifikasi; memuat ulang halaman saja tidak membuktikan perbedaan tersebut.</p>
+                                <p>Item privat tidak memerlukan persetujuan katalog resmi SIMPROK.</p>
+                                {!(row.sectionProvenance === 'SOURCE_ROW_CATEGORY' ||
+                                    row.sectionProvenance === 'SOURCE_SECTION_TITLE' ||
+                                    row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER')) ? (
+                                  <p role="status">Konfirmasi Jenis pada panel penyelesaian ini sebelum memutuskan padanan atau item baru.</p>
+                                ) : null}
+                              </details>
+                            ) : null}
+                          </div>
+                        ) : null}
                     {identityReviewStatuses?.[row.id] && identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' ? (
                       <details className="bp-details" aria-label={`Riwayat identitas baris ${row.sourceRowNumber}`}>
                         <summary>Riwayat keputusan identitas</summary>
@@ -1764,46 +1805,6 @@ export function BasicPriceReviewPage() {
                               </div>
                             ) : null}
                           </>
-                        ) : null}
-                        {!admissionOffered && admissionReview?.reasonCode && admissionUnavailableReason(admissionReview.reasonCode) ? (
-                          <div className="bp-field__help">
-                            <p role="status">{row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')
-                              ? 'Spesifikasi dari berkas belum diperiksa. Item ini belum bisa disimpan atau dinyatakan identik.'
-                              : admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED'
-                              ? 'Item baru belum dapat ditetapkan: ada kandidat yang identitasnya belum terbukti berbeda.'
-                              : 'Item baru belum tersedia: ' + admissionUnavailableReason(admissionReview.reasonCode)}</p>
-                            {admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED' ? (
-                              <details className="bp-details">
-                                <summary>Bandingkan kandidat dan bukti identitas</summary>
-                                {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED') ? (
-                                  <>
-                                    <ul>
-                                    {row.machineProposal.resource.candidates
-                                      .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
-                                      .map((candidate, index) => (
-                                        <li key={index}>
-                                          <strong>{candidate.name}</strong>
-                                          {candidate.code ? ' (' + candidate.code + ')' : ''}
-                                          {' — ' + candidateResourceTypeLabel(candidate.type) + ' · satuan ' + candidate.baseUnit}
-                                          {candidate.specificationUnproved && candidate.unprovedSpecificationFacts.length > 0
-                                            ? ' — bukti yang masih diperlukan: ' + candidate.unprovedSpecificationFacts.join(', ')
-                                            : ''}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  </>
-                                ) : <p>Daftar item yang mungkin sama belum dapat ditampilkan. Item baru belum dapat dibuat sebelum pemeriksaan.</p>}
-                                <p>Jika sesuai, gunakan <strong>Pilih Item yang Sesuai Padanan</strong> dan pilih satuan. Jika berbeda, jangan pilih padanan yang salah; perbedaan spesifikasi masih memerlukan bukti.</p>
-                                <p>Hasil pencarian kosong belum membuktikan bahwa item ini baru. Nama kerja bukan bukti spesifikasi; memuat ulang halaman saja tidak membuktikan perbedaan tersebut.</p>
-                                <p>Item privat tidak memerlukan persetujuan katalog resmi SIMPROK.</p>
-                                {!(row.sectionProvenance === 'SOURCE_ROW_CATEGORY' ||
-                                    row.sectionProvenance === 'SOURCE_SECTION_TITLE' ||
-                                    row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER')) ? (
-                                  <p role="status">Pastikan jenis item terlebih dahulu melalui <strong>Ubah Jenis</strong> di sebelah kiri dan <strong>Konfirmasi Jenis</strong>. Kategori awal berkas belum cukup sebagai bukti identitas.</p>
-                                ) : null}
-                              </details>
-                            ) : null}
-                          </div>
                         ) : null}
                         {draft.rejectOpen ? (
                           <label className="bp-field">

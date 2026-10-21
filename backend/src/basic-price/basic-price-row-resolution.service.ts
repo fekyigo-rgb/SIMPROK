@@ -140,7 +140,8 @@ export class BasicPriceRowResolutionService {
         sourceSectionProvenance: string | null;
         rawSourceCategoryName: string | null;
         rawSourceCategoryCode: string | null;
-      }>>(Prisma.sql`SELECT "id", "batchId", "version", "status", "sourceSection", "sourceSectionProvenance", "rawSourceCategoryName", "rawSourceCategoryCode" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE NOWAIT`);
+        reasonCodes: string[];
+      }>>(Prisma.sql`SELECT "id", "batchId", "version", "status", "sourceSection", "sourceSectionProvenance", "rawSourceCategoryName", "rawSourceCategoryCode", "reasonCodes" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE NOWAIT`);
       const row = rows[0];
       if (!row || row.batchId !== batchId) throw new NotFoundException('Row not found');
       if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
@@ -151,7 +152,11 @@ export class BasicPriceRowResolutionService {
       if (row.rawSourceCategoryName?.trim() || row.rawSourceCategoryCode?.trim()) {
         throw new ConflictException('SOURCE_CATEGORY_REQUIRES_SEPARATE_REVIEW');
       }
-      if (row.sourceSection === dto.resourceType && row.sourceSectionProvenance === 'UPLOADER_DECLARED') {
+      // A matching weak uploader hint is NOT a human decision. The first explicit
+      // confirmation must record actor and append-only event even when the type
+      // stays MATERIAL; only an already-confirmed value is idempotent.
+      const alreadyConfirmed = row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER');
+      if (row.sourceSection === dto.resourceType && row.sourceSectionProvenance === 'UPLOADER_DECLARED' && alreadyConfirmed) {
         return { rowId: row.id, version: row.version, resourceType: row.sourceSection, unchanged: true };
       }
       const result = await tx.basicPriceImportRow.updateMany({
@@ -159,7 +164,7 @@ export class BasicPriceRowResolutionService {
         data: {
           sourceSection: dto.resourceType,
           sourceSectionProvenance: 'UPLOADER_DECLARED',
-          reasonCodes: { push: 'ROW_CATEGORY_CONFIRMED_BY_REVIEWER' },
+          ...(!alreadyConfirmed ? { reasonCodes: { push: 'ROW_CATEGORY_CONFIRMED_BY_REVIEWER' } } : {}),
           version: { increment: 1 },
         },
       });

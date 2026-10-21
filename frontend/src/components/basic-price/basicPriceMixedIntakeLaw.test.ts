@@ -43,13 +43,14 @@ test('BP205-UI-03 only genuine preview can show success notice; example explicit
 
 test('BP205-EDIT-01: category edit opens the same-row type decision, not catalog or new-item admission', () => {
   assert.match(review, /categoryEditRows\.has\(row\.id\)/u);
-  assert.match(review, /Tutup Pilihan Jenis/u);
+  assert.doesNotMatch(review, /Tutup Pilihan Jenis/u);
+  assert.match(review, /Pemilih jenis ada di panel penyelesaian sebelah kanan/u);
   assert.match(review, /Ubah Jenis/u);
   assert.match(review, /id=\{`bp-category-editor-\$\{row\.id\}`\}/u);
   assert.match(review, /categoryDrafts\[row\.id\] \?\? row\.section/u);
   assert.match(review, /onClick=\{\(\) => void handleConfirmCategory\(row\)\}/u);
   assert.match(review, /setCategoryEditRows\(\(current\)/u);
-  assert.match(review, /Data asli Excel tidak berubah/u);
+  assert.match(review, /Nama, satuan, dan harga asli Excel tetap disimpan/u);
   assert.match(review, /resource: null, unit: null/u);
   assert.match(review, /setTouchedRowIds\(\(current\) => new Set\(current\)\.add\(row\.id\)\)/u);
 });

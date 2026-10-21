@@ -15,6 +15,7 @@ describe('BP-PR205 mixed row category governance', () => {
   const row = () => ({
     id: rowId, batchId, version: 3, status: 'NEEDS_REVIEW', sourceSection: null,
     sourceSectionProvenance: null, rawSourceCategoryName: null, rawSourceCategoryCode: null,
+    reasonCodes: [] as string[],
   });
 
   function harness(b = batch(), r = row()) {
@@ -54,10 +55,37 @@ describe('BP-PR205 mixed row category governance', () => {
     expect(patch.rawPriceDisplayText).toBeUndefined();
   });
 
-  it('returns unchanged for same human-assigned category, without a new audit event', async () => {
+  it('records the first human confirmation even when it agrees with the uploader MATERIAL hint', async () => {
     const { tx, decide } = harness(batch(), { ...row(), sourceSection: 'MATERIAL', sourceSectionProvenance: 'UPLOADER_DECLARED' });
+    expect(await decide()).toMatchObject({ version: 4, unchanged: false, resourceType: 'MATERIAL' });
+    expect(tx.basicPriceImportRowCategoryDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ previousSection: 'MATERIAL', chosenSection: 'MATERIAL', previousVersion: 3, resultingVersion: 4 }),
+    });
+    expect(tx.basicPriceImportRow.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ reasonCodes: { push: 'ROW_CATEGORY_CONFIRMED_BY_REVIEWER' } }),
+    }));
+  });
+
+  it('returns unchanged only for an already confirmed same category, without duplicate audit', async () => {
+    const { tx, decide } = harness(batch(), {
+      ...row(), sourceSection: 'MATERIAL', sourceSectionProvenance: 'UPLOADER_DECLARED',
+      reasonCodes: ['ROW_CATEGORY_CONFIRMED_BY_REVIEWER'],
+    });
     expect(await decide()).toMatchObject({ version: 3, unchanged: true });
+    expect(tx.basicPriceImportRow.updateMany).not.toHaveBeenCalled();
     expect(tx.basicPriceImportRowCategoryDecision.create).not.toHaveBeenCalled();
+  });
+
+  it('a later category correction keeps the existing confirmation marker but adds a new human audit event', async () => {
+    const { tx, decide } = harness(batch(), {
+      ...row(), sourceSection: 'MATERIAL', sourceSectionProvenance: 'UPLOADER_DECLARED',
+      reasonCodes: ['ROW_CATEGORY_CONFIRMED_BY_REVIEWER'],
+    });
+    expect(await decide(3, account, 'EQUIPMENT')).toMatchObject({ version: 4, unchanged: false });
+    expect(tx.basicPriceImportRow.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.not.objectContaining({ reasonCodes: expect.anything() }),
+    }));
+    expect(tx.basicPriceImportRowCategoryDecision.create).toHaveBeenCalledTimes(1);
   });
 
   it('rejects stale edits before writes', async () => {
