@@ -1,8 +1,8 @@
 import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
 
-export const BOQ_PARSER_CONTRACT_VERSION = 'IMPORT_FIRST_01_V2';
-export const BOQ_READER_CONTRACT_VERSION = 'BOQ_XLSX_INTAKE_ADAPTER_V1';
+export const BOQ_PARSER_CONTRACT_VERSION = 'IMPORT_FIRST_01_V3';
+export const BOQ_READER_CONTRACT_VERSION = 'BOQ_XLSX_INTAKE_ADAPTER_V2';
 export const MAX_SOURCE_ROWS = 20_000;
 
 export interface BoqImportKnowledgeRow {
@@ -50,22 +50,50 @@ function normalizeDecimal(raw: string): string | null {
   return fraction === undefined ? integer : `${integer}.${fraction}`;
 }
 
+
+type BoqHeader = { row: number; description: number; quantity: number; unit: number; code: number | null };
+
+function findBoqHeader(sheet: ExcelJS.Worksheet): BoqHeader | null {
+  const headers: BoqHeader[] = [];
+  sheet.eachRow((row, rowNumber) => {
+    const columns = { description: [] as number[], quantity: [] as number[], unit: [] as number[], code: [] as number[] };
+    row.eachCell((cell, column) => {
+      if (cell.isMerged && cell.master.address !== cell.address) return;
+      const label = cellText(cell).toLowerCase().replace(/\s+/g, ' ').trim().replace(/[.:]$/, '');
+      if (/^uraian(?: pekerjaan)?$/.test(label)) columns.description.push(column);
+      if (/^(volume|kuantitas|quantity)$/.test(label)) columns.quantity.push(column);
+      if (/^(satuan|unit)$/.test(label)) columns.unit.push(column);
+      if (/^(no|nomor|kode)$/.test(label)) columns.code.push(column);
+    });
+    if (!columns.description.length || !columns.quantity.length || !columns.unit.length) return;
+    if (Object.values(columns).some((values) => values.length > 1)) throw new Error('BOQ_HEADER_AMBIGUOUS');
+    const { description: [description], quantity: [quantity], unit: [unit], code: [code] } = columns;
+    headers.push({ row: rowNumber, description, quantity, unit,
+      code: code ?? (![description, quantity, unit].includes(1) ? 1 : null) });
+  });
+  if (headers.length > 1) throw new Error('BOQ_HEADER_AMBIGUOUS');
+  return headers[0] ?? null;
+}
+
 export class BoqXlsxIntakeAdapter {
   async parse(buffer: Buffer, fileName: string, selectedSheet?: string): Promise<BoqImportKnowledgeObject> {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer as any);
     if (workbook.worksheets.length === 0) throw new Error('WORKBOOK_HAS_NO_SHEETS');
-    const sheet = selectedSheet ? workbook.getWorksheet(selectedSheet) : workbook.worksheets.length === 1 ? workbook.worksheets[0] : undefined;
-    if (!sheet) throw new Error('WORKBOOK_SHEET_AMBIGUOUS_OR_NOT_FOUND');
-
+    const selected = selectedSheet ? workbook.getWorksheet(selectedSheet) : undefined;
+    if (selectedSheet && !selected) throw new Error('WORKBOOK_SHEET_AMBIGUOUS_OR_NOT_FOUND');
+    const candidates = (selected ? [selected] : workbook.worksheets)
+      .map((sheet) => ({ sheet, header: findBoqHeader(sheet) }))
+      .filter((candidate): candidate is { sheet: ExcelJS.Worksheet; header: BoqHeader } => candidate.header !== null);
+    if (!candidates.length) throw new Error('BOQ_HEADER_NOT_FOUND');
+    if (candidates.length !== 1) throw new Error('WORKBOOK_SHEET_AMBIGUOUS_OR_NOT_FOUND');
+    const { sheet, header } = candidates[0];
     const meaningful: number[] = [];
-    for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
-      if ([1, 2, 3, 4, 5, 6].some((column) => cellText(sheet.getCell(rowNumber, column)) !== '')) meaningful.push(rowNumber);
-    }
+    sheet.eachRow((row, rowNumber) => {
+      if ([header.description, header.quantity, header.unit, ...(header.code ? [header.code] : [])]
+        .some((column) => cellText(row.getCell(column)) !== '')) meaningful.push(rowNumber);
+    });
     if (meaningful.length > MAX_SOURCE_ROWS) throw new Error('SOURCE_ROW_LIMIT_EXCEEDED');
-
-    const headerRow = meaningful.find((row) => /uraian pekerjaan/i.test(cellText(sheet.getCell(row, 2))));
-    if (!headerRow) throw new Error('BOQ_HEADER_NOT_FOUND');
 
     const rows: BoqImportKnowledgeRow[] = [];
     let activeFolder: string | null = null;
@@ -73,12 +101,16 @@ export class BoqXlsxIntakeAdapter {
     let rowsExceedingScale2 = 0;
     const examples: BoqImportKnowledgeObject['sourceQuantityEvidence']['examples'] = [];
 
-    for (const sourceRowNumber of meaningful.filter((row) => row > headerRow + 1)) {
-      const code = cellText(sheet.getCell(sourceRowNumber, 1));
-      const description = cellText(sheet.getCell(sourceRowNumber, 2));
-      const unit = cellText(sheet.getCell(sourceRowNumber, 5));
-      const rawQuantity = cellText(sheet.getCell(sourceRowNumber, 6));
+    for (const sourceRowNumber of meaningful.filter((row) => row > header.row)) {
+      const code = header.code ? cellText(sheet.getCell(sourceRowNumber, header.code)) : '';
+      const description = cellText(sheet.getCell(sourceRowNumber, header.description));
+      const unit = cellText(sheet.getCell(sourceRowNumber, header.unit));
+      const rawQuantity = cellText(sheet.getCell(sourceRowNumber, header.quantity));
       if (!description || SUMMARY.test(description.trim())) continue;
+      // Some BOQs include a column-number guide immediately below the header.
+      if (sourceRowNumber === header.row + 1 &&
+          [description, unit, rawQuantity].every((value) => /^\d+$/.test(value)) &&
+          (!code || /^\d+$/.test(code))) continue;
 
       const normalizedQuantity = rawQuantity ? normalizeDecimal(rawQuantity) : null;
       const errors: string[] = [];

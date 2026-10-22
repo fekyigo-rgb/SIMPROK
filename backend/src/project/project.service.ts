@@ -7,10 +7,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import {
+  ConstructionClassificationLevel,
   ExecutionPlanStatus,
   Prisma,
   ProgressAuditOutcome,
   ProjectStatus,
+  RegionAdministrativeLevel,
 } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseDateOnlyUtc } from '../common/date-only.util';
@@ -20,6 +22,7 @@ import {
 } from '../common/project-time-zone.util';
 import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import { PERMISSIONS } from '../common/constants/permissions';
+import { ConstructionClassificationService } from '../construction-classification/construction-classification.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProgressAuthorityService } from '../progress/progress-authority.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -83,10 +86,11 @@ import {
 } from './work-period-anchor.policy';
 
 /**
- * RAB-TRACE-01 — what an AHSP actually is in this domain. There is no AHSP
- * code column anywhere; identity is work type, method and version.
+ * RAB-TRACE-01 — AHSP identity has work type, method and version; the
+ * source-provided code is OPTIONAL and must never be inferred from WBS/method.
  */
 export interface AhspIdentityProjection {
+  code: string | null;
   workType: string;
   methodName: string;
   versionNumber: number;
@@ -134,6 +138,32 @@ interface ProjectExecutionStartAuditMetadata {
   explicitConfirmation: true;
 }
 
+const PROJECT_CLASSIFICATION_LEVELS = new Set<ConstructionClassificationLevel>([
+  ConstructionClassificationLevel.JENIS_PENGADAAN,
+  ConstructionClassificationLevel.KATEGORI,
+  ConstructionClassificationLevel.SUBKATEGORI,
+]);
+
+const PROJECT_REGION_LEVELS = new Set<RegionAdministrativeLevel>([
+  RegionAdministrativeLevel.COUNTRY,
+  RegionAdministrativeLevel.PROVINCE,
+  RegionAdministrativeLevel.REGENCY_CITY,
+  RegionAdministrativeLevel.DISTRICT,
+  RegionAdministrativeLevel.VILLAGE,
+]);
+
+function uniqueCanonicalIds(ids: readonly string[] | undefined): string[] {
+  if (!ids || ids.length === 0) return [];
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  return unique;
+}
+
 @Injectable()
 export class ProjectService {
   constructor(
@@ -146,6 +176,7 @@ export class ProjectService {
     private authority: ProgressAuthorityService = new ProgressAuthorityService(
       prisma,
     ),
+    private classification?: ConstructionClassificationService,
   ) {}
 
   private buildDraftRecap = buildDraftRecap;
@@ -216,11 +247,126 @@ export class ProjectService {
     return new Prisma.Decimal(value);
   }
 
+  private async assertProjectClassificationSelections(
+    workspaceId: string,
+    classificationNodeIds: readonly string[],
+  ): Promise<void> {
+    if (classificationNodeIds.length === 0) return;
+    if (!this.classification) {
+      throw new BadRequestException('PROJECT_CLASSIFICATION_SERVICE_UNAVAILABLE');
+    }
+
+    const rootIds = new Set<string>();
+    for (const id of classificationNodeIds) {
+      const lineage = await this.classification.getLineage({ id, workspaceId });
+      if (!PROJECT_CLASSIFICATION_LEVELS.has(lineage.node.level)) {
+        throw new BadRequestException('PROJECT_CLASSIFICATION_LEVEL_FORBIDDEN');
+      }
+      const root = lineage.path.find(
+        (node) => node.level === ConstructionClassificationLevel.JENIS_PENGADAAN,
+      );
+      if (!root) {
+        throw new BadRequestException('PROJECT_CLASSIFICATION_ROOT_UNRESOLVED');
+      }
+      rootIds.add(root.id);
+    }
+
+    if (rootIds.size !== 1) {
+      throw new BadRequestException('PROJECT_CLASSIFICATION_MULTIPLE_ROOTS');
+    }
+  }
+
+  private async assertProjectRegionSelections(
+    regionIds: readonly string[],
+  ): Promise<void> {
+    if (regionIds.length === 0) return;
+
+    const rows = await this.prisma.region.findMany({
+      where: { id: { in: [...regionIds] } },
+      select: {
+        id: true,
+        isActive: true,
+        administrativeLevel: true,
+        parentId: true,
+      },
+    });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const selected = regionIds.map((id) => {
+      const row = byId.get(id);
+      if (!row) throw new BadRequestException('PROJECT_REGION_NOT_FOUND');
+      if (!row.isActive) throw new BadRequestException('PROJECT_REGION_INACTIVE');
+      if (
+        !row.administrativeLevel ||
+        !PROJECT_REGION_LEVELS.has(row.administrativeLevel)
+      ) {
+        throw new BadRequestException('PROJECT_REGION_LEVEL_REQUIRED');
+      }
+      return row;
+    });
+
+    const explicitCountries = selected.filter(
+      (row) => row.administrativeLevel === RegionAdministrativeLevel.COUNTRY,
+    );
+    if (explicitCountries.length > 1) {
+      throw new BadRequestException('PROJECT_REGION_MULTIPLE_COUNTRIES');
+    }
+
+    const countryIds = new Set<string>();
+    for (const row of selected) {
+      countryIds.add(await this.resolveCountryRegionId(row));
+    }
+    if (
+      countryIds.size !== 1 ||
+      (explicitCountries.length === 1 && !countryIds.has(explicitCountries[0].id))
+    ) {
+      throw new BadRequestException('PROJECT_REGION_COUNTRY_MISMATCH');
+    }
+  }
+
+  private async resolveCountryRegionId(start: {
+    id: string;
+    administrativeLevel: RegionAdministrativeLevel | null;
+    parentId: string | null;
+  }): Promise<string> {
+    if (start.administrativeLevel === RegionAdministrativeLevel.COUNTRY) {
+      return start.id;
+    }
+
+    const seen = new Set<string>([start.id]);
+    let parentId = start.parentId;
+    while (parentId) {
+      if (seen.has(parentId)) {
+        throw new BadRequestException('PROJECT_REGION_LINEAGE_CYCLE');
+      }
+      seen.add(parentId);
+      const parent = await this.prisma.region.findUnique({
+        where: { id: parentId },
+        select: {
+          id: true,
+          administrativeLevel: true,
+          parentId: true,
+        },
+      });
+      if (!parent) {
+        throw new BadRequestException('PROJECT_REGION_LINEAGE_BROKEN');
+      }
+      if (parent.administrativeLevel === RegionAdministrativeLevel.COUNTRY) {
+        return parent.id;
+      }
+      parentId = parent.parentId;
+    }
+
+    throw new BadRequestException('PROJECT_REGION_COUNTRY_UNRESOLVED');
+  }
+
   async create(
     data: CreateProjectDto,
     workspaceId: string,
     creatorAccountId?: string,
   ) {
+    const classificationNodeIds = uniqueCanonicalIds(data.classificationNodeIds);
+    const locationRegionIds = uniqueCanonicalIds(data.locationRegionIds);
+
     try {
       const workspace = await this.prisma.workspace.findUnique({
         where: { id: workspaceId },
@@ -232,6 +378,12 @@ export class ProjectService {
       }
 
       return await this.prisma.$transaction(async (tx) => {
+        await this.assertProjectClassificationSelections(
+          workspaceId,
+          classificationNodeIds,
+        );
+        await this.assertProjectRegionSelections(locationRegionIds);
+
         const project = await tx.project.create({
           data: {
             name: data.name,
@@ -282,6 +434,24 @@ export class ProjectService {
             status: 'DRAFT',
           },
         });
+
+        if (classificationNodeIds.length > 0) {
+          await tx.projectClassificationSelection.createMany({
+            data: classificationNodeIds.map((classificationNodeId) => ({
+              projectId: project.id,
+              classificationNodeId,
+            })),
+          });
+        }
+
+        if (locationRegionIds.length > 0) {
+          await tx.projectRegionSelection.createMany({
+            data: locationRegionIds.map((regionId) => ({
+              projectId: project.id,
+              regionId,
+            })),
+          });
+        }
 
         return project;
       });
@@ -337,7 +507,8 @@ export class ProjectService {
         (await tx.boqStructure.create({
           data: {
             projectId,
-            name: 'Main BOQ',
+            // Compatibility endpoint must never create a second BOQ storage identity.
+            name: WORKING_DRAFT_STRUCTURE_NAME,
             version: 1,
             status: 'DRAFT',
           },
@@ -599,6 +770,57 @@ export class ProjectService {
       where: { id: projectId },
       data,
     });
+  }
+
+  async getIntakeContext(projectId: string) {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        budgetBaseline: true,
+        mainMaterialSpec: true,
+        classificationSelections: {
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: {
+            classificationNode: {
+              select: {
+                id: true,
+                level: true,
+                name: true,
+                code: true,
+                parentId: true,
+              },
+            },
+          },
+        },
+        regionSelections: {
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: {
+            region: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                administrativeLevel: true,
+                parentId: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!project) throw new NotFoundException('Project not found');
+
+    return {
+      budgetBaseline: project.budgetBaseline,
+      mainMaterialSpec: project.mainMaterialSpec,
+      classificationSelections: project.classificationSelections.map(
+        (selection) => selection.classificationNode,
+      ),
+      locationSelections: project.regionSelections.map(
+        (selection) => selection.region,
+      ),
+    };
   }
 
   async updateProjectTimeZone(
@@ -1675,6 +1897,7 @@ export class ProjectService {
             where: { id: { in: snapshotIds } },
             select: {
               id: true,
+              code: true,
               workType: true,
               methodName: true,
               versionNumber: true,
@@ -1689,7 +1912,7 @@ export class ProjectService {
               id: true,
               versionNumber: true,
               outputUnit: true,
-              ahsp: { select: { workType: true, methodName: true } },
+              ahsp: { select: { code: true, workType: true, methodName: true } },
             },
           })
         : Promise.resolve([]),
@@ -1699,6 +1922,7 @@ export class ProjectService {
       snapshots.map((snapshot): [string, AhspIdentityProjection] => [
         snapshot.id,
         {
+          code: snapshot.code,
           workType: snapshot.workType,
           methodName: snapshot.methodName,
           versionNumber: snapshot.versionNumber,
@@ -1711,6 +1935,7 @@ export class ProjectService {
       versions.map((version): [string, AhspIdentityProjection] => [
         version.id,
         {
+          code: version.ahsp.code,
           workType: version.ahsp.workType,
           methodName: version.ahsp.methodName,
           versionNumber: version.versionNumber,

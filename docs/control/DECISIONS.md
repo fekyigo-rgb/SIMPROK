@@ -251,3 +251,18 @@ RAW_SOURCE_NUMERIC_EVIDENCE=RETAINED
 - SCHEMA_CHANGE=NO. MIGRATION_CHANGE=NO. PERMISSION_SEED_CHANGE=NO.
 
 ## Soli Deo Gloria. Haleluya. Amin.
+
+
+## OD-RI01-ONE-TRUTH-SCOPE-20261016 - Owner reaffirmation
+Source: Owner instructions in this session, 16 October 2026 (Asia/Tokyo).
+Decision: SIMPROK has one canonical truth shared by all intelligence/capabilities. Multiple engines do not authorize competing identity, price, context, persistence or decision authorities.
+Applies to: RI-01 Ruang Persiapan RAB and Ruang Kerja RAB; reuse existing Project/BOQ/AHSP/Resource Identity/Unit/Basic Price/Cost Kernel and persisted readback.
+Scope: PR #203 is already present in permanent runtime. RI-01 must preserve it. Repairing Basic Price header/KDN parsing is not authorized under this task; findings remain recorded and do not become a claimed PASS.
+Owner inputs business AHSP, Basic Price and RAB files through UI. Agents must not inject those files' business data.
+No new architecture, duplicate engine, production migration, merge or permanent runtime activation is authorized by this entry. Existing isolated-test authorization remains scoped to simprok_e2e with official guards.
+
+## OD-RI01-BOQ-PREVIEW-20261020
+Owner authorized the bounded repair of BOQ sheet/header recognition and preview failure messages on 20 October 2026. Reuse the existing importer, retain prior formats, validate RAB 1.xlsx, and activate only the integration runtime. Owner enters/approves business data through UI. No permission for permanent promotion or Basic Price repair is inferred.
+
+## OD-RI01-BOUNDED-PASS-CLOSEOUT-20261020
+Owner passed interaction/preparation through Ruang Kerja RAB and authorized clean PR preparation on 20 October 2026. AHSP import and Basic Price improvements continue in another chat. Preserve all RI-01 work and existing main #203/#204. Acceptance covers BOQ import and saved draft readback; AHSP linkage, calculation and final RAB are not passed. Prepare a reviewable draft; merge requires actual quality/review results, and permanent activation is a separate gate.

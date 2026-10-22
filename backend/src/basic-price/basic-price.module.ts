@@ -68,6 +68,6 @@ import { BasicPriceSourceArchiveService } from './basic-price-source-archive.ser
     // so the same code admits a new resource for AHSP and BOQ too.
     ResourceAdmissionService,
   ],
-  exports: [BasicPriceService, BasicPriceEligibilityPolicy],
+  exports: [BasicPriceService, BasicPriceEligibilityPolicy, BasicPriceImportLookupService],
 })
 export class BasicPriceModule {}

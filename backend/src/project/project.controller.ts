@@ -423,6 +423,13 @@ export class ProjectController {
     return this.projectService.getIntakeMode(projectId);
   }
 
+  @Get(':projectId/intake-context')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @Permissions(PERMISSIONS.PROJECT_VIEW)
+  async getIntakeContext(@Param('projectId') projectId: string) {
+    return this.projectService.getIntakeContext(projectId);
+  }
+
   @Patch(':projectId/intake-context')
   @UseGuards(ProjectAccessGuard, PermissionsGuard)
   // TODO(P7C-PERMISSION-DEBT): Replace PROJECT_CREATE with a dedicated project intake-context edit permission after Identity/Permission design approval.

@@ -467,6 +467,25 @@ describe('ProjectService initiateSetup collision guard', () => {
     return { service, tx };
   }
 
+  it('creates the canonical Working Draft rather than a second legacy Main BOQ when absent', async () => {
+    const { service, tx } = createSetupHarness([]);
+    tx.boqItem.count.mockResolvedValue(0);
+
+    await service.initiateSetup('project-1', { items: [] });
+
+    expect(tx.boqStructure.create).toHaveBeenCalledTimes(1);
+    expect(tx.boqStructure.create).toHaveBeenCalledWith({
+      data: {
+        projectId: 'project-1',
+        name: 'Working Draft',
+        version: 1,
+        status: 'DRAFT',
+      },
+    });
+    expect(tx.rabDocument.create).not.toHaveBeenCalled();
+    expect(tx.projectBaseline.create).not.toHaveBeenCalled();
+  });
+
   it('reuses one arbitrarily named DRAFT and makes a second initiate call a no-op', async () => {
     const { service, tx } = createSetupHarness([
       { id: 'owner-draft', name: 'Nama Bebas Owner', status: 'DRAFT' },

@@ -336,11 +336,19 @@ describe('IMPORT-FIRST-01 BOQ import (e2e)', () => {
     expect(response.body.message).toBe('WORKING_DRAFT_NOT_FOUND');
   });
 
-  it('returns 409 rather than choosing duplicate Working Drafts', async () => {
+  it('rejects a duplicate Working Draft at database level and keeps the canonical import usable', async () => {
     const p = await preview().expect(201);
-    await prisma.boqStructure.create({ data: { id: DUPLICATE_DRAFT, projectId: PROJECT_A, name: 'Working Draft', status: 'DRAFT', version: 2 } });
-    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken).field('selectedSheet', 'RAB').field('intakeRequestId', p.body.intakeRequestId).field('importFingerprint', p.body.importFingerprint).expect(409);
-    expect(response.body.message).toBe('MULTIPLE_WORKING_DRAFTS');
+    await expect(prisma.boqStructure.create({
+      data: { id: DUPLICATE_DRAFT, projectId: PROJECT_A, name: 'Working Draft', status: 'DRAFT', version: 2 },
+    })).rejects.toMatchObject({ code: 'P2002' });
+    expect(await prisma.boqStructure.count({ where: { projectId: PROJECT_A, status: 'DRAFT' } })).toBe(1);
+    const response = await postFile(`/projects/${PROJECT_A}/boq/import/approve`, assignedToken)
+      .field('selectedSheet', 'RAB')
+      .field('intakeRequestId', p.body.intakeRequestId)
+      .field('importFingerprint', p.body.importFingerprint)
+      .expect(201);
+    expect(response.body.importedRows).toBe(4);
+    expect(response.body.workingDraftId).toBe(DRAFT_A);
   });
 
   it('rejects fingerprint mismatch and malformed/non-XLSX input', async () => {

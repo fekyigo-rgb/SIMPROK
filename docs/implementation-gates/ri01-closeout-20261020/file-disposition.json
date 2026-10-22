@@ -1,0 +1,326 @@
+[
+  {
+    "path": "backend/prisma/schema.prisma",
+    "sha256": "7EDC1D4B5B0F0A4F8B98BE77B65AE2746E75F646EB469379B2B7AA4BD84B4CBE",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "7edc1d4b5b0f0a4f8b98be77b65ae2746e75f646eb469379b2b7aa4bd84b4cbe"
+  },
+  {
+    "path": "backend/src/basic-price/basic-price-import-lookup.service.spec.ts",
+    "sha256": "AF7FD303B4A3B0A8F68B5F0F9F0F59B95F4766A17A52F42CA1AED04882A59732",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "af7fd303b4a3b0a8f68b5f0f9f0f59b95f4766a17a52f42ca1aed04882a59732"
+  },
+  {
+    "path": "backend/src/basic-price/basic-price-import-lookup.service.ts",
+    "sha256": "1F78CCA715DCF5E0F0AC8E007A8CE2367A023B35C78CD1F96671FE1F83D696E2",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "1f78cca715dcf5e0f0ac8e007a8ce2367a023b35c78cd1f96671fe1f83d696e2"
+  },
+  {
+    "path": "backend/src/basic-price/basic-price.module.ts",
+    "sha256": "A069D0F2B8D326157C9D1BD2C432F123B9ABB88793B71F197DEDEBA7E1E17AD1",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "a069d0f2b8d326157c9d1bd2c432f123b9abb88793b71f197dedeba7e1e17ad1"
+  },
+  {
+    "path": "backend/src/construction-classification/construction-classification.service.spec.ts",
+    "sha256": "AE8E2E272BF523A33CB1AD43DB915A9207BEA417521855545EA47362BB799DA4",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "ae8e2e272bf523a33cb1ad43db915a9207bea417521855545ea47362bb799da4"
+  },
+  {
+    "path": "backend/src/main.ts",
+    "sha256": "DDA4E773AFAC50F6C9EF5534BE1376594DC01DFCD23FA20BF3809D400B782BF3",
+    "disposition": "PRESERVED_LOCAL_RUNTIME_ONLY",
+    "currentSha256": "dda4e773afac50f6c9ef5534be1376594dc01dfcd23fa20bf3809d400b782bf3"
+  },
+  {
+    "path": "backend/src/project-ahsp/project-ahsp.controller.ts",
+    "sha256": "0095D567D0368EFED1A07FCAEA4FDA0A0061FDDB33CAE1C06C80AE6EA024A288",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "0095d567d0368efed1a07fcaea4fda0a0061fddb33cae1c06c80ae6ea024a288"
+  },
+  {
+    "path": "backend/src/project-ahsp/project-ahsp.service.spec.ts",
+    "sha256": "31A4283DDAEC71C02BC149B000143BA26BCA288F81A9764B2B9420D7BB988C61",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "31a4283ddaec71c02bc149b000143ba26bca288f81a9764b2b9420d7bb988c61"
+  },
+  {
+    "path": "backend/src/project-ahsp/project-ahsp.service.ts",
+    "sha256": "D0DBD3D8DC59F29FBAD63947E0DE4546880CFD16F178C2C7B53013EAC9EA0CC3",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "d0dbd3d8dc59f29fbad63947e0de4546880cfd16f178c2c7b53013eac9ea0cc3"
+  },
+  {
+    "path": "backend/src/project/ahsp-identity-projection.spec.ts",
+    "sha256": "19F4527ADCDCCAF223D001072AF7C5E0660E4E1BA85AAEE662CA2D136E9F3AE4",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "19f4527adcdccaf223d001072af7c5e0660e4e1ba85aaee662ca2d136e9f3ae4"
+  },
+  {
+    "path": "backend/src/project/boq-xlsx-intake.adapter.spec.ts",
+    "sha256": "518D231D7AF03049D73AA81AFD419F0631A81BB7859050DC6A9226DBA5D8235E",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "518d231d7af03049d73aa81afd419f0631a81bb7859050dc6a9226dba5d8235e"
+  },
+  {
+    "path": "backend/src/project/boq-xlsx-intake.adapter.ts",
+    "sha256": "80C42C7B3A109F77DC688A55293136A799919B9C64E3F51E9F7DCC09F0B923F1",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "80c42c7b3a109f77dc688a55293136a799919b9c64e3f51e9f7dcc09f0b923f1"
+  },
+  {
+    "path": "backend/src/project/dto/create-project.dto.ts",
+    "sha256": "25E7E7B549DDA5641C4786845960105E93A115B943F43616503AA4E3C1D4795C",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "25e7e7b549dda5641c4786845960105e93a115b943f43616503aa4e3c1d4795c"
+  },
+  {
+    "path": "backend/src/project/project.controller.ts",
+    "sha256": "5EC64F43929B47CF247B39ECD3F7C97A7D2FAD7CE3AE7AAD49FCD31AC6A602E0",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "5ec64f43929b47cf247b39ecd3f7c97a7d2fad7ce3ae7aad49fcd31ac6a602e0"
+  },
+  {
+    "path": "backend/src/project/project.module.ts",
+    "sha256": "CA29C2DBC0F96CB62D2D4099FE00AEEBE70D01E826CD87A7571928F86302C5E6",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "ca29c2dbc0f96cb62d2d4099fe00aeebe70d01e826cd87a7571928f86302c5e6"
+  },
+  {
+    "path": "backend/src/project/project.service.spec.ts",
+    "sha256": "2FD07011444F37B10C48B365388DD35E53E7072729A5165F4CE9473AA9E7989D",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "2fd07011444f37b10c48b365388dd35e53e7072729a5165f4ce9473aa9e7989d"
+  },
+  {
+    "path": "backend/src/project/project.service.ts",
+    "sha256": "AC4333EF477B2FC07DFD29B5B852B51C11CC6908D843F6C6747916A927F53021",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "ac4333ef477b2fc07dfd29b5b852b51c11cc6908d843f6c6747916a927f53021"
+  },
+  {
+    "path": "backend/test/acceptance/boq-import.e2e-spec.ts",
+    "sha256": "F4B9C4A4DE842FDD952655125F99C1D91C5B2C30BE51FE440891BD9FA246BE47",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "f4b9c4a4de842fdd952655125f99c1d91c5b2c30be51fe440891bd9fa246be47"
+  },
+  {
+    "path": "backend/test/acceptance/progress-security.e2e-spec.ts",
+    "sha256": "BF5D42F20A0F23B8864C559B4363850A386FAA8A332CACA0EDBEE8E82D51879C",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "97156a20cbd14350324b6631422feb9b863cca766a511f3c93780e2a8ff0eb4f"
+  },
+  {
+    "path": "backend/test/acceptance/rab-lifecycle.e2e-spec.ts",
+    "sha256": "E2DF6F69C6BFC641875023CF6B0A247B379F88856C5B702B029471C58A2045BE",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "e2df6f69c6bfc641875023cf6b0a247b379f88856c5b702b029471c58a2045be"
+  },
+  {
+    "path": "docs/control/DECISIONS.md",
+    "sha256": "712EC3E693492168192C752D6218B2F9F5B3417C8A59AF660F467A86719AADC5",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "1dc25b955d5ccb618df6190f4a6d5496af3ba8223b60dd48e53373fbf6650378"
+  },
+  {
+    "path": "docs/control/STATE.md",
+    "sha256": "944E1453ABC35672F3A033656A4B545C6D16ED8B1EF0FD599840A14966B4AB82",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "d6c4d0d8cfa1bdddc5a8ce5fe340ee38c7b17d46380932a8540749540a1c7202"
+  },
+  {
+    "path": "frontend/src/index.css",
+    "sha256": "07044C2DE3867D246EDD2841207C6205B3D6F58D61DC1FD0106B1E1053BFB153",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "07044c2de3867d246edd2841207c6205b3d6f58d61dc1fd0106b1e1053bfb153"
+  },
+  {
+    "path": "frontend/src/pages/ProjectSetupPage.tsx",
+    "sha256": "6B5592FADEFC1F1377183BDD41EC45B5B2390BAE6F40F418895DA06D943B0F10",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "6b5592fadefc1f1377183bdd41ec45b5b2390bae6f40f418895da06d943b0f10"
+  },
+  {
+    "path": "frontend/src/pages/RabWorkspacePage.tsx",
+    "sha256": "09A9E72D49766F6307C78D37A50D9C90E9B7B046DA4599324370663DF4EB4F89",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "09a9e72d49766f6307c78d37a50d9c90e9b7b046da4599324370663df4eb4f89"
+  },
+  {
+    "path": "frontend/src/utils/ahspOriginDisplay.test.ts",
+    "sha256": "D47768E1BB567C8534487C5B231712E6EF83CC348B682D5C5E18827090D41A4E",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "d47768e1bb567c8534487c5b231712e6ef83cc348b682d5c5e18827090d41a4e"
+  },
+  {
+    "path": "frontend/src/utils/ahspOriginDisplay.ts",
+    "sha256": "3A718C648895797D72923DD60610134C85EFEE741DEBF189A96EB7F5525BFE21",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "3a718c648895797d72923dd60610134c85efee741debf189a96eb7f5525bfe21"
+  },
+  {
+    "path": "frontend/src/utils/rabCostDisplay.test.ts",
+    "sha256": "F074EFDD2FCDFF037E22C7353F4271F84CB0494FBD53F32EEE91CFA22728599C",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "f074efdd2fcdff037e22c7353f4271f84cb0494fbd53f32eee91cfa22728599c"
+  },
+  {
+    "path": "frontend/src/utils/rabCostDisplay.ts",
+    "sha256": "0859CF3E1A5DB3A6B76E7FF09E497B01C705792CB97CAE305952C809A45BC93C",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "0859cf3e1a5db3a6b76e7ff09e497b01c705792cb97cae305952c809a45bc93c"
+  },
+  {
+    "path": "frontend/src/utils/rabTraceDisplay.test.ts",
+    "sha256": "B58CD3F2290F72B64D43259926F1F3875D395E36D95D83257C84BA734A069AD0",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "b58cd3f2290f72b64d43259926f1f3875d395e36d95d83257c84ba734a069ad0"
+  },
+  {
+    "path": "frontend/src/utils/rabTraceDisplay.ts",
+    "sha256": "A2998A9A5A80C95117AB636133B62B81AF1A6DE7924270CCEC4F2BDD4E0E5BB7",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "a2998a9a5a80c95117ab636133b62b81af1a6de7924270ccec4f2bdd4e0e5bb7"
+  },
+  {
+    "path": "backend/prisma/migrations/20261007140000_ri01b_project_canonical_context/migration.sql",
+    "sha256": "1A669019387139AA546B989A857CA23578702284D5DE1D70AB23322AA4AE3927",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "1a669019387139aa546b989a857ca23578702284d5de1d70ab23322aa4ae3927"
+  },
+  {
+    "path": "backend/prisma/migrations/20261014211500_boq_one_draft_per_project/migration.sql",
+    "sha256": "E4835B963FFA512B0BFF5E260E9A6D437AB2C64DE34DE0AAA3427FC60CDF33E6",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "e4835b963ffa512b0bff5e260e9a6d437ab2c64de34de0aaa3427fc60cdf33e6"
+  },
+  {
+    "path": "backend/src/project-ahsp/ahsp-preference.spec.ts",
+    "sha256": "7C575F2ADE19DDA345DC101737FDCB84DF22352E41F855F2F5EAF0B957856382",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "7c575f2ade19dda345dc101737fdcb84df22352e41f855f2f5eaf0b957856382"
+  },
+  {
+    "path": "backend/src/project-ahsp/ahsp-preference.ts",
+    "sha256": "D66FC4A6F9C1EB996631310084932DC141791796074080C601A20634443E77F9",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "d66fc4a6f9c1eb996631310084932dc141791796074080c601a20634443e77f9"
+  },
+  {
+    "path": "backend/src/project-ahsp/project-ahsp-region-search.spec.ts",
+    "sha256": "9A643C3000A3779CD4B4B5AC8C93BD3841D0E637A6412C86734F3C9EA8DF70BA",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "9a643c3000a3779cd4b4b5ac8c93bd3841d0e637a6412c86734f3c9ea8df70ba"
+  },
+  {
+    "path": "backend/src/project-ahsp/project-ahsp-search.spec.ts",
+    "sha256": "A9FCFF4689C6FECEA869E6FB2832362410A7F728C86BB3FFFE6E33432ECDEF3D",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "a9fcff4689c6fecea869e6fb2832362410a7f728c86bb3fffe6e33432ecdef3d"
+  },
+  {
+    "path": "backend/src/project/project-canonical-context.spec.ts",
+    "sha256": "C83BDEFA869C7230B56BEC07030EAAFB788FC21C6E5E11233A3F96CF2BA4BC07",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "c83bdefa869c7230b56bec07030eaafb788fc21c6e5e11233a3f96cf2ba4bc07"
+  },
+  {
+    "path": "backend/src/project/project-intake-reference.controller.spec.ts",
+    "sha256": "C1B24A48DAC2BA289057B12E290B7D3D78C13A3ED50AC4EA67E0F795CCBFCF73",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "c1b24a48dac2ba289057b12e290b7d3d78c13a3ed50ac4ea67e0f795ccbfcf73"
+  },
+  {
+    "path": "backend/src/project/project-intake-reference.controller.ts",
+    "sha256": "ED5FFEF5AC74BD5137DD7054A22FB3A546BE440EF6AA6E40DEBE10858355BD95",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "ed5ffef5ac74bd5137dd7054a22fb3a546be440ef6aa6e40debe10858355bd95"
+  },
+  {
+    "path": "docs/implementation-gates/ri01-main-reconciliation-20261016/RAB-RUNTIME-READINESS.md",
+    "sha256": "1C136DAA7A53A981155AC3D3A544A2C293ECCF1AD0D36AD83C34C023895BC1BD",
+    "disposition": "PRESERVED_LOCAL_EVIDENCE",
+    "currentSha256": "1c136daa7a53a981155ac3d3a544a2c293eccf1ad0d36ad83c34c023895bc1bd"
+  },
+  {
+    "path": "docs/implementation-gates/ri01-main-reconciliation-20261016/READINESS.md",
+    "sha256": "E65712561872288B021E11A9F0152EEDCCB36EB5E1D9329A1415F7AC20A4F17D",
+    "disposition": "PRESERVED_LOCAL_EVIDENCE",
+    "currentSha256": "e65712561872288b021e11a9f0152eedccb36eb5e1d9329a1415f7ac20a4f17d"
+  },
+  {
+    "path": "docs/implementation-gates/ri01-main-reconciliation-20261016/progress-successor-guarded.ts",
+    "sha256": "A360054442F6282B0A44B31739D1209EE6072BCC4E42945C8BA7B723688DE7AA",
+    "disposition": "PRESERVED_LOCAL_EVIDENCE",
+    "currentSha256": "a360054442f6282b0a44b31739d1209ee6072bcc4e42945c8ba7b723688de7aa"
+  },
+  {
+    "path": "docs/implementation-gates/ri01-main-reconciliation-20261016/reproduce-ambon-intake.cjs",
+    "sha256": "DB07B8A72C6452F22D8C32F8435147208FE7ACCF13779DAB3DE2741A4FAA7977",
+    "disposition": "PRESERVED_LOCAL_EVIDENCE",
+    "currentSha256": "db07b8a72c6452f22d8c32f8435147208fe7accf13779dab3de2741a4faa7977"
+  },
+  {
+    "path": "docs/implementation-gates/ri01-main-reconciliation-20261016/successor-api-launcher.cjs",
+    "sha256": "AB48A35477245B73D94A9319389094B0C12D6A1E32938C666683601A617E1A91",
+    "disposition": "PRESERVED_LOCAL_EVIDENCE",
+    "currentSha256": "ab48a35477245b73d94a9319389094b0c12d6a1e32938c666683601a617e1a91"
+  },
+  {
+    "path": "docs/implementation-gates/ri01-main-reconciliation-20261016/successor-rab-browser-readonly.json",
+    "sha256": "F1B7C5818E709A7D79E0076CF34C3251A64BBE88471FB04711FAEB27203FD3CC",
+    "disposition": "PRESERVED_LOCAL_EVIDENCE",
+    "currentSha256": "f1b7c5818e709a7d79e0076cf34c3251a64bbe88471fb04711faeb27203fd3cc"
+  },
+  {
+    "path": "docs/implementation-gates/ri01-main-reconciliation-20261016/successor-rab-unpriced-readonly.json",
+    "sha256": "3DD6EC1D7F8019600D29334CF702ABF1FC6EE757B8B911B8CA17A762F1493B36",
+    "disposition": "PRESERVED_LOCAL_EVIDENCE",
+    "currentSha256": "3dd6ec1d7f8019600d29334cf702abf1fc6ee757b8b911b8ca17a762f1493b36"
+  },
+  {
+    "path": "docs/implementation-gates/ri01-main-reconciliation-20261016/successor-rab-workspace-reload.json",
+    "sha256": "C3F260768B10B95AD42B0F1B82CEB28554D70CF192054481D2DD42D66D8C0CFA",
+    "disposition": "PRESERVED_LOCAL_EVIDENCE",
+    "currentSha256": "c3f260768b10b95ad42b0f1b82ceb28554d70cf192054481d2dd42d66d8c0cfa"
+  },
+  {
+    "path": "frontend/src/components/project/ProjectIntakeClassificationFields.tsx",
+    "sha256": "745C81404F3CFF12713C4F8280DD2B4A6F92E538A16BF49749BD5E3A47130C72",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "745c81404f3cff12713c4f8280dd2b4a6f92e538a16bf49749bd5e3a47130c72"
+  },
+  {
+    "path": "frontend/src/components/project/ProjectIntakeLocationFields.tsx",
+    "sha256": "00DD77BCCFB561A9A95BDCC9CEB1745F426D345036B080DECEC22166553D02D3",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "00dd77bccfb561a9a95bdcc9ceb1745f426d345036b080decec22166553d02d3"
+  },
+  {
+    "path": "frontend/src/pages/projectSetupRooms.test.ts",
+    "sha256": "8A3A1E719ABFDD622F419F167CCADA68C03B3C49E07997087564848F6C03DBA1",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "8a3a1e719abfdd622f419f167ccada68c03b3c49e07997087564848f6c03dba1"
+  },
+  {
+    "path": "frontend/src/utils/boqOneDoorLaw.test.ts",
+    "sha256": "92BB7DB39A15CC93C9ECB7FB2C48F6A82DF455D052DB0233535EFE0C2E9B789B",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "92bb7db39a15cc93c9ecb7fb2c48f6a82df455d052db0233535efe0c2e9b789b"
+  },
+  {
+    "path": "frontend/src/utils/projectIntakeSelection.test.ts",
+    "sha256": "46F75CA3A36611F29F728BFF2226C02BF859FD6C5843B8049E6F7A2C2FD69E2D",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "46f75ca3a36611f29f728bff2226c02bf859fd6c5843b8049e6f7a2c2fd69e2d"
+  },
+  {
+    "path": "frontend/src/utils/projectIntakeSelection.ts",
+    "sha256": "E51E50439EABBBD86FD93001B484ACF460F6685256866AEBF2266F219826F677",
+    "disposition": "INCLUDE_RAB_PR",
+    "currentSha256": "e51e50439eabbbd86fd93001b484acf460f6685256866aebf2266f219826f677"
+  }
+]
