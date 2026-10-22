@@ -959,6 +959,7 @@ describe('BasicPriceImportService', () => {
         sourceSha256: 'A'.repeat(64),
         sourceSection: 'MATERIAL',
         sourceSectionProvenance: undefined,
+        rowCategoryConfirmedByReviewer: false,
         rawResourceNameText: 'Air',
         rawResourceCodeText: null,
         rawUnitText: 'ltr',
