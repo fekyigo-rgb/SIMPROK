@@ -68,6 +68,7 @@ const EXACT_ALIASES: Record<ColumnRole, readonly string[]> = {
     'nama item',
     'nama sumber daya',
     'uraian',
+    'uraian bahan',
     'material',
     'bahan',
     'tenaga kerja',

@@ -46,12 +46,14 @@ import {
   OPTIONAL_ENRICHMENT_EMPTY,
   OPTIONAL_ENRICHMENT_UNAVAILABLE_REASON,
   rowIdentityAdmissionOffered,
+  rowSafeNewAdmissionEligible,
   rowIdentityAdmissionBlockReason,
   IDENTITY_ADMISSION_LABEL,
   IDENTITY_ADMISSION_HELP,
   rowMachineState,
   rowSectionDisplay,
   rowSectionLabel,
+  candidateResourceTypeLabel,
   rowStatusLabel,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
@@ -143,6 +145,14 @@ test("rowSectionLabel translates workbook sections", () => {
   assert.equal(rowSectionLabel("LABOR"), "Tenaga kerja");
   assert.equal(rowSectionLabel("MATERIAL"), "Bahan");
   assert.equal(rowSectionLabel("EQUIPMENT"), "Peralatan");
+});
+
+test("candidate type displays known family but never raw unknown server tokens", () => {
+  assert.equal(candidateResourceTypeLabel("LABOR"), "Tenaga kerja");
+  assert.equal(candidateResourceTypeLabel("MATERIAL"), "Bahan");
+  assert.equal(candidateResourceTypeLabel("EQUIPMENT"), "Peralatan");
+  assert.equal(candidateResourceTypeLabel("FUTURE_RESOURCE_FAMILY"), "Jenis belum terverifikasi");
+  assert.equal(candidateResourceTypeLabel(""), "Jenis belum terverifikasi");
 });
 
 test("collisionWarningLabel is null for NONE — callers render no badge", () => {
@@ -987,7 +997,7 @@ test("CASE A: an ambiguous resource is explained without ever printing a catalog
 
   // The reviewer keeps everything they can act on...
   assert.equal(narrative.state, "ATTENTION");
-  assert.match(narrative.resource, /2 pilihan/);
+  assert.match(narrative.resource, /2 item/);
   assert.equal(narrative.candidates.length, 2);
   assert.match(narrative.candidates[0].text, /Semen Portland 40 kg/);
   assert.match(narrative.candidates[0].text, /M-101/);
@@ -1089,7 +1099,7 @@ test("CASE C: an unrecognised row says so honestly, invents no candidate, blames
   assert.ok(narrative);
 
   assert.equal(narrative.state, "UNKNOWN");
-  assert.match(narrative.resource, /belum menemukan sumber daya yang dapat dibuktikan/);
+  assert.match(narrative.resource, /Belum ada item katalog yang terbukti sesuai/);
   assert.match(narrative.resource, /Item SIMPROK|Item belum dikenali/); // says WHY, without catalog jargon
   assert.equal(narrative.candidates.length, 0, "nothing may be invented");
   assert.match(narrative.unit, /belum dikenali/i);
@@ -1205,7 +1215,7 @@ test("row notes are said in words, and an untranslated code is COUNTED, never pr
   // The unexplained fact is neither dropped nor spelled out.
   assert.equal(notes.untranslatedCount, 1);
   assert.ok(notes.technicalNotice);
-  assert.match(notes.technicalNotice, /1 informasi teknis tambahan/);
+  assert.match(notes.technicalNotice, /Ada 1 catatan hasil pembacaan/);
   assert.doesNotMatch(notes.technicalNotice, RAW_ENUM_SHAPE);
   assert.equal(JSON.stringify(notes).includes("SOMETHING_NEW_FROM_INTAKE"), false);
 });
@@ -1220,7 +1230,7 @@ test("Detail Teknis is not a place where enums become acceptable — it counts t
   assert.deepEqual(notes.human, []);
   assert.equal(notes.untranslatedCount, 2, "de-duplicated, then counted");
   assert.ok(notes.technicalNotice);
-  assert.match(notes.technicalNotice, /^2 informasi teknis tambahan/);
+  assert.match(notes.technicalNotice, /^Ada 2 catatan hasil pembacaan/);
   const everythingVisible = [...notes.human, notes.technicalNotice].join(" | ");
   assert.doesNotMatch(everythingVisible, RAW_ENUM_SHAPE);
   for (const code of ["FUTURE_CODE_ONE", "FUTURE_CODE_TWO"]) {
@@ -1584,6 +1594,23 @@ test("identity admission is offered for exhaustion or explicitly refusable name-
   assert.equal(rowIdentityAdmissionOffered(baseRow({ machineProposal: oneCandidate })), true);
 });
 
+test("PR205-SPEC: an unverified source qualifier does not offer an unusable item-creation door", () => {
+  const withSpecification = unknownProposal();
+  withSpecification.unit = provenProposal().unit;
+  withSpecification.blockingFacts = ["SOURCE_SPECIFICATION_UNVERIFIED"];
+  const row = baseRow({ machineProposal: withSpecification });
+  assert.equal(withSpecification.resource.admissionReview?.offered, true);
+  assert.equal(rowIdentityAdmissionOffered(row), false);
+  assert.equal(rowSafeNewAdmissionEligible(row), false);
+
+  // Missing specifications never become an identity requirement.
+  const ordinaryProposal = unknownProposal();
+  ordinaryProposal.unit = provenProposal().unit;
+  const withoutSpecification = baseRow({ machineProposal: ordinaryProposal });
+  assert.equal(rowIdentityAdmissionOffered(withoutSpecification), true);
+  assert.equal(rowSafeNewAdmissionEligible(withoutSpecification), true);
+});
+
 test("identity admission does not invent a second gate over optional enrichment", () => {
   const exhausted = baseRow({
     machineProposal: unknownProposal(),
@@ -1758,6 +1785,55 @@ test("BP-NAME-VISUAL-01: corrected source typo cannot silently refuse an exact s
   assert.equal(correctedCatalogNameCandidateConflict(baseRow({ name: "Agreg at Kasar" }), "Agregat Kasar", "MATERIAL"), null);
 });
 
+test("PR205 SPEC: exact name is not duplicate evidence after canonical machine RULED_OUT", () => {
+  const proposal = provenProposal();
+  const candidate = {
+    resourceCatalogId: "existing-shimizu",
+    name: "Pompa Air Uji PR205",
+    code: null,
+    type: "MATERIAL",
+    baseUnit: "UNIT",
+    evidence: [],
+    specificationUnproved: false,
+    unprovedSpecificationFacts: [],
+    hasPriorHumanDecision: false,
+    admissionDisposition: "MACHINE_RULED_OUT" as const,
+  };
+  const resource = {
+    ...proposal.resource,
+    status: "UNRESOLVED" as const,
+    resourceCatalogId: null,
+    reasonCodes: ["SPECIFICATION_CONFLICT"],
+    candidates: [candidate],
+  };
+  const row = baseRow({ name: "Pompa Air Uji PR205", machineProposal: {
+    ...proposal, identityPairProven: false, resource,
+  } });
+  assert.equal(
+    correctedCatalogNameCandidateConflict(row, "Pompa Air Uji PR205", "MATERIAL"),
+    null,
+    "a canonical SPECIFICATION_CONFLICT and MACHINE_RULED_OUT are stronger than raw-name equality",
+  );
+  const uncertainRow = baseRow({ ...row, machineProposal: {
+    ...proposal, identityPairProven: false,
+    resource: { ...resource, reasonCodes: ["SPECIFICATION_UNPROVED"] },
+  } });
+  assert.equal(
+    correctedCatalogNameCandidateConflict(uncertainRow, "Pompa Air Uji PR205", "MATERIAL")?.resourceCatalogId,
+    candidate.resourceCatalogId,
+    "unknown specifications must never be treated as proven differences",
+  );
+  const blockedRow = baseRow({ ...row, machineProposal: {
+    ...proposal, identityPairProven: false,
+    resource: { ...resource, candidates: [{ ...candidate, admissionDisposition: "BLOCKED" as const }] },
+  } });
+  assert.equal(
+    correctedCatalogNameCandidateConflict(blockedRow, "Pompa Air Uji PR205", "MATERIAL")?.resourceCatalogId,
+    candidate.resourceCatalogId,
+    "even a specification conflict cannot override the server's BLOCKED candidate",
+  );
+});
+
 test("BP-UX-01: understood identity does not require repeated confirmation", () => {
   const recognized = baseRow({
     machineProposal: provenProposal(),
@@ -1838,7 +1914,36 @@ test("BP-UX-03: missing source category is history, not unfinished work after pr
     reasonCodes: ["SECTION_DECLARED_BY_UPLOADER"],
     machineProposal: null,
   });
-  assert.match(rowNoteDisclosure(rowNoteLines(pending)).primary ?? "", /masih perlu dipastikan/u);
+  assert.match(rowNoteDisclosure(rowNoteLines(pending)).primary ?? "", /Pilih jenis di panel Penyelesaian dan tekan Konfirmasi Jenis/u);
+  assert.doesNotMatch(rowNoteDisclosure(rowNoteLines(pending)).primary ?? "", /kategori belum tercantum di berkas dan masih perlu dipastikan/iu);
+});
+
+test("BP-UX-OWNER: human-confirmed category is history even while item identity is still unresolved", () => {
+  const confirmed = baseRow({
+    sourceRowNumber: 11,
+    status: "NEEDS_REVIEW",
+    resolutionStatus: "UNRESOLVED",
+    section: "MATERIAL",
+    sectionProvenance: "UPLOADER_DECLARED",
+    reasonCodes: ["SECTION_DECLARED_BY_UPLOADER", "ROW_CATEGORY_CONFIRMED_BY_REVIEWER", "RESOURCE_CODE_MISSING"],
+    machineProposal: null,
+  });
+  assert.equal(rowSectionDisplay(confirmed), "Jenis ditetapkan: Bahan");
+  assert.equal(rowNoteLines(confirmed).untranslatedCount, 0);
+  assert.equal(rowNoteLines(confirmed).technicalNotice, null);
+  const note = rowNoteDisclosure(rowNoteLines(confirmed));
+  assert.equal(note.primary, null, "source category omission is no longer an active blocker");
+  assert.deepEqual(note.secondary, [
+    "Berkas tidak mencantumkan kategori; jenis item sudah dikonfirmasi.",
+    "Dokumen sumber tidak mencantumkan kode pada baris ini.",
+  ]);
+  assert.doesNotMatch(JSON.stringify(note), /masih perlu dipastikan|Pilih jenis di panel/u);
+  const anotherBlocker = baseRow({
+    ...confirmed,
+    reasonCodes: ["SECTION_DECLARED_BY_UPLOADER", "ROW_CATEGORY_CONFIRMED_BY_REVIEWER", "UNIT_REQUIRED"],
+  });
+  const next = rowNoteDisclosure(rowNoteLines(anotherBlocker));
+  assert.match(next.primary ?? "", /satuan/iu, "actual remaining issue stays primary");
 });
 
 test("BP-STATUS-READBACK-01: human-resolved rows are decided, not counted as unrecognized unfinished work", () => {

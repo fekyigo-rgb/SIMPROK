@@ -26,6 +26,8 @@ const BASIC_PRICE_SECTIONS = {
   LABOR: 'LABOR',
   MATERIAL: 'MATERIAL',
   EQUIPMENT: 'EQUIPMENT',
+  /** Describes the FILE, never a fourth ResourceType. */
+  MIXED: 'MIXED',
 } as const;
 
 /**
@@ -132,7 +134,7 @@ export class PreviewBasicPriceImportDto {
 
   @IsOptional() @IsString() @Matches(NON_BLANK) selectedRegionLabel?: string;
 
-  @IsOptional() @IsEnum(BASIC_PRICE_SECTIONS) declaredSection?: BasicPriceSection;
+  @IsOptional() @IsEnum(BASIC_PRICE_SECTIONS) declaredSection?: BasicPriceSection | 'MIXED';
 
   /**
    * USI-01R2 §10 — WHICH COLUMN IS THE RESOURCE NAME, AND WHICH IS THE UNIT.

@@ -19,6 +19,10 @@ import {
   type ResourceIdentityResolution,
 } from '../resource-catalog/resource-identity-resolution.kernel';
 import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
+import {
+  hasExplicitUnverifiedSourceSpecification,
+  SOURCE_SPECIFICATION_UNVERIFIED,
+} from './basic-price-source-specification-gate';
 import { identicalQuestionKey } from '../resource-catalog/identical-question-key';
 
 export const BASIC_PRICE_ADMISSION_REVIEW_POLICY_VERSION =
@@ -67,7 +71,7 @@ export interface BasicPriceAdmissionQuestionInput {
 export function buildBasicPriceAdmissionReview(
   question: BasicPriceAdmissionQuestionInput,
   resolution: ResourceIdentityResolution,
-  workspaceCandidateIds: ReadonlySet<string>,
+  selectableCandidateIds: ReadonlySet<string>,
   effectiveResourceType: ResourceType = question.sourceSection,
 ): BasicPriceAdmissionReview {
   const sourceTypeProven =
@@ -93,7 +97,7 @@ export function buildBasicPriceAdmissionReview(
         uploaderMayConfirmType && candidate.type !== effectiveResourceType;
       if (
         !crossTypeWeakEvidence &&
-        workspaceCandidateIds.has(candidate.resourceCatalogId)
+        selectableCandidateIds.has(candidate.resourceCatalogId)
       ) {
         if (candidate.identityBasis === 'NAME_SIMILARITY_ONLY') {
           disposition = 'HUMAN_REFUSABLE';
@@ -451,6 +455,10 @@ export interface BasicPriceRowProposalInput {
   rawResourceNameText: string;
   rawResourceCodeText: string | null;
   rawUnitText: string | null;
+  /** Original source qualifiers, never an identity decision. */
+  rawSourceContext?: unknown;
+  /** Optional audited decision, scoped to this row and supplied only by server. */
+  confirmedSpecifications?: Record<string, string> | null;
   batchId?: string;
   rowVersion?: number;
   sourceSha256?: string;
@@ -722,7 +730,11 @@ export class BasicPriceRowResolutionProposalService {
     ];
     if (proposed.length === 0) return new Set<string>();
     const rows = await client.resourceCatalog.findMany({
-      where: { id: { in: proposed }, workspaceId, status: 'ACTIVE' },
+      where: {
+        id: { in: proposed },
+        status: 'ACTIVE',
+        OR: [{ workspaceId }, { workspaceId: null }],
+      },
       select: { id: true },
     });
     return new Set(rows.map((row) => row.id));
@@ -922,6 +934,7 @@ export class BasicPriceRowResolutionProposalService {
       rawCode: row.rawResourceCodeText,
       rawUnit: row.rawUnitText,
       sourceSha256: row.sourceSha256 ?? null,
+      ...(row.confirmedSpecifications ? { confirmedSpecifications: row.confirmedSpecifications } : {}),
     };
     const firstVerdict = await this.identity.resolve(evidence, {
       ...reference,
@@ -1103,6 +1116,10 @@ export class BasicPriceRowResolutionProposalService {
     resource: BasicPriceRowResourceProposal,
   ): BasicPriceRowMachineProposal {
     const blocking: string[] = [];
+    if (hasExplicitUnverifiedSourceSpecification(row.rawSourceContext) &&
+        !row.confirmedSpecifications) {
+      blocking.push(SOURCE_SPECIFICATION_UNVERIFIED);
+    }
 
     if (row.sourceSection === null)
       blocking.push('ROW_SOURCE_SECTION_UNRESOLVED');

@@ -5,11 +5,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, ResourceType } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { ConfirmBasicPriceRowSpecificationsDto } from './dto/confirm-basic-price-row-specifications.dto';
+import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   RejectBasicPriceImportRowDto,
   ResolveBasicPriceImportRowDto,
+  ConfirmBasicPriceImportRowCategoryDto,
   CompensateBasicPriceImportRowDto,
+  ClarifyBasicPriceRowUnitReasonDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import {
   AdmitResourceForImportRowDto,
@@ -30,6 +35,11 @@ import {
   ResourceProvenanceAlreadyBoundError,
 } from '../resource-catalog/resource-admission.service';
 import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
+import {
+  hasExplicitUnverifiedSourceSpecification,
+  sourceSpecificationEvidence,
+  SOURCE_SPECIFICATION_UNVERIFIED,
+} from './basic-price-source-specification-gate';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import {
   UNIT_KERNEL_POLICY_VERSION,
@@ -95,12 +105,107 @@ export class BasicPriceRowResolutionService {
     private readonly admission: ResourceAdmissionService,
   ) {}
 
+  /**
+   * One row, one accountable human category decision. This is NOT a catalog
+   * resolution or admission. Source Excel cells remain untouched; the existing
+   * UPLOADER_DECLARED provenance explicitly labels the effective human answer.
+   * Every change gets a separate append-only decision record.
+   */
+  async confirmRowCategory(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    actorAccountId: string,
+    dto: ConfirmBasicPriceImportRowCategoryDto,
+  ) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+      const batches = await tx.$queryRaw<Array<{
+        id: string;
+        workspaceId: string;
+        uploadedByAccountId: string;
+        status: string;
+      }>>(Prisma.sql`SELECT "id", "workspaceId", "uploadedByAccountId", "status" FROM "basic_price_import_batches" WHERE "id" = ${batchId}::uuid FOR UPDATE`);
+      const batch = batches[0];
+      if (!batch || batch.workspaceId !== workspaceId) throw new NotFoundException('Batch not found');
+      assertBatchOwnedByCaller(batch, actorAccountId, 'Batch not found');
+      if (batch.status !== 'NEEDS_REVIEW' && batch.status !== 'READY_FOR_REVIEW') {
+        throw new ConflictException('BATCH_NOT_MUTABLE');
+      }
+      const rows = await tx.$queryRaw<Array<{
+        id: string;
+        batchId: string;
+        version: number;
+        status: string;
+        sourceSection: ResourceType | null;
+        sourceSectionProvenance: string | null;
+        rawSourceCategoryName: string | null;
+        rawSourceCategoryCode: string | null;
+        reasonCodes: string[];
+      }>>(Prisma.sql`SELECT "id", "batchId", "version", "status", "sourceSection", "sourceSectionProvenance", "rawSourceCategoryName", "rawSourceCategoryCode", "reasonCodes" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE NOWAIT`);
+      const row = rows[0];
+      if (!row || row.batchId !== batchId) throw new NotFoundException('Row not found');
+      if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
+      if (row.status !== 'NEEDS_REVIEW') throw new ConflictException('ROW_NOT_MUTABLE');
+      if (row.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' || row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE') {
+        throw new ConflictException('SOURCE_PROVEN_SECTION_LOCKED');
+      }
+      if (row.rawSourceCategoryName?.trim() || row.rawSourceCategoryCode?.trim()) {
+        throw new ConflictException('SOURCE_CATEGORY_REQUIRES_SEPARATE_REVIEW');
+      }
+      // A matching weak uploader hint is NOT a human decision. The first explicit
+      // confirmation must record actor and append-only event even when the type
+      // stays MATERIAL; only an already-confirmed value is idempotent.
+      const alreadyConfirmed = row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER');
+      if (row.sourceSection === dto.resourceType && row.sourceSectionProvenance === 'UPLOADER_DECLARED' && alreadyConfirmed) {
+        return { rowId: row.id, version: row.version, resourceType: row.sourceSection, unchanged: true };
+      }
+      const result = await tx.basicPriceImportRow.updateMany({
+        where: { id: rowId, batchId, version: row.version, status: 'NEEDS_REVIEW' },
+        data: {
+          sourceSection: dto.resourceType,
+          sourceSectionProvenance: 'UPLOADER_DECLARED',
+          ...(!alreadyConfirmed ? { reasonCodes: { push: 'ROW_CATEGORY_CONFIRMED_BY_REVIEWER' } } : {}),
+          version: { increment: 1 },
+        },
+      });
+      if (result.count !== 1) throw new ConflictException('ROW_VERSION_STALE');
+      await tx.basicPriceImportRowCategoryDecision.create({
+        data: {
+          workspaceId,
+          rowId,
+          actorAccountId,
+          previousSection: row.sourceSection,
+          chosenSection: dto.resourceType,
+          previousVersion: row.version,
+          resultingVersion: row.version + 1,
+          reason: dto.reason?.trim() || null,
+        },
+      });
+      return { rowId: row.id, version: row.version + 1, resourceType: dto.resourceType, unchanged: false };
+      });
+    } catch (error) {
+      // The only wait-for cycle newly introduced by this command is a batch
+      // lock held while the existing resolver holds the row lock and later
+      // needs the batch. NOWAIT on this SECOND lock ends the new transaction
+      // instead of forming that cycle. PostgreSQL signals 55P03, surfaced by
+      // Prisma raw queries as P2010/meta.code=55P03.
+      const lockError = error as { code?: unknown; meta?: { code?: unknown } };
+      if (lockError.code === '55P03' ||
+          (lockError.code === 'P2010' && lockError.meta?.code === '55P03')) {
+        throw new ConflictException('ROW_BUSY_RETRY');
+      }
+      throw error;
+    }
+  }
+
   private async assertBatchRowMutable(
     tx: Prisma.TransactionClient,
     workspaceId: string,
     batchId: string,
     rowId: string,
     currentAccountId: string,
+    forSpecificationDecision = false,
   ) {
     const batchRows = await tx.$queryRaw<
       Array<{
@@ -140,9 +245,10 @@ export class BasicPriceRowResolutionService {
         rawResourceCodeText: string | null;
         rawResourceNameText: string;
         rawUnitText: string | null;
+        rawSourceContext: unknown;
       }>
     >(
-      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceSectionProvenance", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
+      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceSectionProvenance", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText", "rawSourceContext" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
     );
     const row = rowLock[0];
     if (!row || row.batchId !== batchId)
@@ -161,12 +267,31 @@ export class BasicPriceRowResolutionService {
       throw new ConflictException('ROW_SOURCE_SECTION_UNRESOLVED');
     if (row.status !== 'NEEDS_REVIEW')
       throw new ConflictException('ROW_NOT_MUTABLE');
+    // Refusal ONLY: the source states extra qualifiers the current identity
+    // question did not examine. No interpretation or canonical spec minting.
+    // Manual SUPPLEMENT/CORRECT decisions must be consumed even when the workbook has
+    // no explicit specification columns. Otherwise the audited decision is dormant.
+    const decisions = await tx.$queryRaw<Array<{
+      confirmedSpecifications: unknown; sourceSha256: string; resultingVersion: number;
+    }>>(Prisma.sql`SELECT "confirmedSpecifications", "sourceSha256", "resultingVersion"
+      FROM "basic_price_import_row_specification_decisions"
+      WHERE "workspaceId" = ${workspaceId}::uuid AND "rowId" = ${rowId}::uuid
+      ORDER BY "resultingVersion" DESC LIMIT 1`);
+    const current = decisions[0];
+    const verified = current && current.sourceSha256 === batch.sourceSha256 &&
+      current.resultingVersion <= row.version
+      ? confirmedSpecifications(current.confirmedSpecifications)
+      : null;
+    if (!forSpecificationDecision &&
+        hasExplicitUnverifiedSourceSpecification(row.rawSourceContext) && !verified) {
+      throw new ConflictException(SOURCE_SPECIFICATION_UNVERIFIED);
+    }
     // A BINDING, NOT A CAST. Control-flow narrowing on a property is lost the
     // moment the row is handed to another function, and every helper downstream
     // genuinely requires a known family. Returning the narrowed value means the
     // check above lives in exactly one place and every caller — ordinary
     // resolve and reviewed admission alike — inherits it.
-    return { ...row, sourceSection: row.sourceSection, batch };
+    return { ...row, sourceSection: row.sourceSection, batch, confirmedSpecifications: verified };
   }
 
   /**
@@ -175,6 +300,102 @@ export class BasicPriceRowResolutionService {
    * explicitly rejected"). Only NEEDS_REVIEW/READY_FOR_REVIEW batches are
    * touched — a batch already past submission is never reopened here.
    */
+  /**
+   * PR205: a human confirms optional technical facts on THEIR OWN row.
+   * Append-only evidence, not an identity mint or an approval by an outsider.
+   * The already-shared ownership/row lock is reused, and the source bytes stay
+   * immutable. Only the separate identity kernel may subsequently decide.
+   */
+  async confirmRowSpecifications(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    actorAccountId: string,
+    dto: ConfirmBasicPriceRowSpecificationsDto,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await this.assertBatchRowMutable(
+        tx, workspaceId, batchId, rowId, actorAccountId, true,
+      );
+      if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
+      const confirmed = confirmedSpecifications(dto.confirmedSpecifications);
+      if (!confirmed) throw new BadRequestException('SPECIFICATION_FACTS_INVALID');
+
+      const sourceEvidence = sourceSpecificationEvidence(row.rawSourceContext);
+      const sourceValues = Object.fromEntries(
+        sourceEvidence.filter((fact) => fact.value !== null)
+          .map((fact) => [fact.label, fact.value as string]),
+      );
+      const sourceFacts = confirmedSpecifications(sourceValues);
+      const sourceComplete = sourceEvidence.length === Object.keys(sourceValues).length &&
+        (sourceEvidence.length === 0 || sourceFacts !== null);
+      if (!sourceComplete && dto.decisionKind !== 'CORRECT') {
+        throw new ConflictException('SOURCE_SPECIFICATION_NEEDS_EXPLICIT_CORRECTION');
+      }
+      if (dto.decisionKind === 'CONFIRM_SOURCE') {
+        if (!sourceFacts || JSON.stringify(sourceFacts) !== JSON.stringify(confirmed)) {
+          throw new ConflictException('SOURCE_SPECIFICATION_CONFIRMATION_MISMATCH');
+        }
+      } else if (dto.decisionKind === 'SUPPLEMENT' && sourceFacts) {
+        for (const [key, value] of Object.entries(sourceFacts)) {
+          if (confirmed[key] !== value) {
+            throw new ConflictException('SOURCE_SPECIFICATION_CORRECTION_REQUIRES_REASON');
+          }
+        }
+      }
+      const reason = dto.reason?.trim() ?? null;
+      if (dto.decisionKind === 'CORRECT' && !reason) {
+        throw new BadRequestException('SPECIFICATION_CORRECTION_REASON_REQUIRED');
+      }
+
+      const previous = await tx.$queryRaw<Array<{
+        id: string; resultingVersion: number; sourceSha256: string;
+        confirmedSpecifications: unknown;
+      }>>(
+        Prisma.sql`SELECT "id", "resultingVersion", "sourceSha256", "confirmedSpecifications"
+          FROM "basic_price_import_row_specification_decisions"
+          WHERE "workspaceId" = ${workspaceId}::uuid AND "rowId" = ${rowId}::uuid
+          ORDER BY "resultingVersion" DESC LIMIT 1`,
+      );
+      const current = previous[0] ?? null;
+      if (current && (current.resultingVersion > row.version ||
+          current.sourceSha256 !== row.batch.sourceSha256)) {
+        throw new ConflictException('SPECIFICATION_DECISION_HISTORY_STALE');
+      }
+      // A supplement adds missing facts; it cannot silently revise an earlier
+      // reviewed human decision. Only CORRECT with a reason may do that.
+      if (current && dto.decisionKind !== 'CORRECT') {
+        const priorFacts = confirmedSpecifications(current.confirmedSpecifications);
+        if (!priorFacts || Object.entries(priorFacts).some(([key, value]) => confirmed[key] !== value)) {
+          throw new ConflictException('SPECIFICATION_CORRECTION_REQUIRES_REASON');
+        }
+      }
+      const nextVersion = row.version + 1;
+      const write = await tx.basicPriceImportRow.updateMany({
+        where: { id: row.id, batchId, version: row.version, status: 'NEEDS_REVIEW' },
+        data: { version: { increment: 1 } },
+      });
+      if (write.count !== 1) throw new ConflictException('ROW_VERSION_STALE');
+      const decisionId = randomUUID();
+      const sourcePayload = JSON.stringify(sourceEvidence);
+      const confirmedPayload = JSON.stringify(confirmed);
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO "basic_price_import_row_specification_decisions"
+          ("id", "workspaceId", "rowId", "actorAccountId", "previousDecisionId",
+           "previousVersion", "resultingVersion", "decisionKind", "sourceSha256",
+           "sourceSpecifications", "confirmedSpecifications", "reason")
+        VALUES (${decisionId}::uuid, ${workspaceId}::uuid, ${rowId}::uuid,
+          ${actorAccountId}::uuid, ${current?.id ?? null}::uuid,
+          ${row.version}, ${nextVersion}, ${dto.decisionKind},
+          ${row.batch.sourceSha256}, ${sourcePayload}::jsonb,
+          ${confirmedPayload}::jsonb, ${reason})
+      `);
+      return { rowId, version: nextVersion, decisionId,
+        decisionKind: dto.decisionKind, confirmedSpecifications: confirmed };
+    }, { timeout: 20_000, maxWait: 20_000 });
+  }
+
+  /** Recompute only mutable batch states after a proven row transition. */
   private async recomputeBatchStatus(
     tx: Prisma.TransactionClient,
     batchId: string,
@@ -333,6 +554,7 @@ export class BasicPriceRowResolutionService {
         rawResourceNameText: true,
         rawResourceCodeText: true,
         rawUnitText: true,
+        rawSourceContext: true,
       },
     });
     const considered = rows.filter((row) => !excluded.has(row.id));
@@ -487,6 +709,7 @@ export class BasicPriceRowResolutionService {
     row: { rawUnitText: string | null; sourceSection: ResourceType },
     unitDefinition: { id: string; code: string },
     resourceCatalogId?: string,
+    humanDecisionReason?: string,
   ): Promise<void> {
     const rawSourceUnit = row.rawUnitText?.trim() ?? '';
 
@@ -571,6 +794,25 @@ export class BasicPriceRowResolutionService {
       proof.targetUnitDefinition?.id === unitDefinition.id &&
       proof.priceOperation === null;
 
+    // Unknown source-unit spelling requires an audited, explicit HUMAN interpretation.
+    // No change to source bytes, unit dictionary, resource identity, or price.
+    if (humanInterpretedUnknownSource) {
+      const marker =
+        'KOREKSI_SATUAN_SUMBER: ' +
+        rawSourceUnit +
+        ' -> ' +
+        unitDefinition.code +
+        '; ';
+      const explanation =
+        humanDecisionReason?.split(marker)[1]?.split(' | ')[0]?.trim() ?? '';
+      if (
+        !humanDecisionReason?.includes(marker) ||
+        explanation.length < 10 ||
+        explanation.length > 900
+      ) {
+        throw new ConflictException('UNIT_INTERPRETATION_REASON_REQUIRED');
+      }
+    }
     if (proof.status !== UNIT_RESOLUTION_STATUS.RESOLVED && !humanInterpretedUnknownSource)
       throw new ConflictException({
         statusCode: 409,
@@ -667,7 +909,11 @@ export class BasicPriceRowResolutionService {
         throw new ConflictException('ROW_VERSION_STALE');
 
       const resourceCatalog = await tx.resourceCatalog.findFirst({
-        where: { id: dto.resourceCatalogId, workspaceId, status: 'ACTIVE' },
+        where: {
+          id: dto.resourceCatalogId,
+          status: 'ACTIVE',
+          OR: [{ workspaceId }, { workspaceId: null }],
+        },
       });
       if (!resourceCatalog)
         throw new ConflictException('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
@@ -707,6 +953,7 @@ export class BasicPriceRowResolutionService {
         { ...row, sourceSection: effectiveSection },
         unitDefinition,
         dto.resourceCatalogId,
+        dto.reason,
       );
 
       const priorSameIdentity = await tx.basicPriceImportRow.findFirst({
@@ -1013,6 +1260,7 @@ export class BasicPriceRowResolutionService {
       rawResourceCodeText: string | null;
       rawUnitText: string | null;
       sourceSection: ResourceType;
+      confirmedSpecifications?: Record<string, string> | null;
       batch?: { sourceSha256: string };
     },
   ): Promise<ResourceIdentityResolution> {
@@ -1028,6 +1276,7 @@ export class BasicPriceRowResolutionService {
         rawUnit: row.rawUnitText,
         resourceType: row.sourceSection,
         sourceSha256: row.batch?.sourceSha256 ?? null,
+        ...(row.confirmedSpecifications ? { confirmedSpecifications: row.confirmedSpecifications } : {}),
       },
       tx,
     );
@@ -1130,7 +1379,12 @@ export class BasicPriceRowResolutionService {
         // The shared body asks again with the created id — same helper, same
         // law, and by construction the new identity carries no rules that could
         // change the answer.
-        await this.assertSelectedUnitProvenBySourceUnit(row, unitDefinition);
+        await this.assertSelectedUnitProvenBySourceUnit(
+          row,
+          unitDefinition,
+          undefined,
+          dto.reason,
+        );
 
         // First authoritative pass — cheap refusal before anyone waits on a
         // lock. It never authorizes anything on its own.
@@ -1148,6 +1402,8 @@ export class BasicPriceRowResolutionService {
                 rawResourceNameText: row.rawResourceNameText,
                 rawResourceCodeText: row.rawResourceCodeText,
                 rawUnitText: row.rawUnitText,
+                rawSourceContext: row.rawSourceContext,
+                confirmedSpecifications: row.confirmedSpecifications,
               },
             ],
             tx,
@@ -1258,6 +1514,7 @@ export class BasicPriceRowResolutionService {
             rawUnit: row.rawUnitText,
             resourceType: dto.confirmedResourceType,
             baseUnit: unitDefinition.code,
+            confirmedSpecifications: row.confirmedSpecifications,
             provenance: {
               sourceSha256: row.batch.sourceSha256,
               sourceFileName: evidence.batch.sourceFileName,
@@ -1552,6 +1809,99 @@ export class BasicPriceRowResolutionService {
    * remains referentially intact while Resource Identity Kernel's existing
    * ACTIVE filter makes it ineligible as current evidence.
    */
+  /** Append-only reason correction for an existing mapping; never reinterpret identity. */
+  async clarifyUnitCorrectionReason(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    actorAccountId: string,
+    dto: ClarifyBasicPriceRowUnitReasonDto,
+  ) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        if (
+          dto.reason.trim() !== dto.reason ||
+          dto.reason.length < 30 ||
+          dto.reason.length > 900
+        )
+          throw new BadRequestException('UNIT_CLARIFICATION_REASON_REQUIRED');
+        const locked = await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT "id" FROM "basic_price_import_rows"
+          WHERE "id" = ${rowId}::uuid AND "batchId" = ${batchId}::uuid FOR UPDATE`,
+        );
+        if (locked.length !== 1) throw new NotFoundException('Row not found');
+        const row = await tx.basicPriceImportRow.findUniqueOrThrow({
+          where: { id: rowId },
+          include: {
+            batch: true,
+            privateBasicPrice: { select: { id: true } },
+            resourceMappings: { include: { reasonClarification: true } },
+          },
+        });
+        if (row.batch.workspaceId !== workspaceId)
+          throw new NotFoundException('Batch not found');
+        assertBatchOwnedByCaller(row.batch, actorAccountId, 'Batch not found');
+        if (row.version !== dto.version)
+          throw new ConflictException('ROW_VERSION_STALE');
+        if (
+          row.status !== 'READY_FOR_SUBMISSION' ||
+          row.resolutionStatus !== 'RESOLVED' ||
+          row.priceSubmissionId !== null ||
+          row.privateBasicPrice !== null ||
+          !row.resourceCatalogId ||
+          !row.unitDefinitionId ||
+          !row.rawUnitText
+        )
+          throw new ConflictException('UNIT_CLARIFICATION_ROW_INELIGIBLE');
+        if (row.resourceMappings.length !== 1)
+          throw new ConflictException('UNIT_CLARIFICATION_DECISION_AMBIGUOUS');
+        const original = row.resourceMappings[0];
+        if (
+          original.reviewerAccountId !== actorAccountId ||
+          original.reasonClarification ||
+          original.resourceCatalogId !== row.resourceCatalogId ||
+          original.unitDefinitionId !== row.unitDefinitionId ||
+          !original.reason?.includes('KOREKSI_SATUAN_SUMBER: ')
+        )
+          throw new ConflictException('UNIT_CLARIFICATION_MAPPING_INELIGIBLE');
+        const unit = await tx.unitDefinition.findUniqueOrThrow({
+          where: { id: row.unitDefinitionId },
+          select: { code: true },
+        });
+        if (
+          row.rawUnitText.trim().toUpperCase() === unit.code.toUpperCase() ||
+          !dto.reason
+            .toUpperCase()
+            .includes(row.rawUnitText.trim().toUpperCase()) ||
+          !dto.reason.toUpperCase().includes(unit.code.toUpperCase())
+        )
+          throw new BadRequestException(
+            'UNIT_CLARIFICATION_SOURCE_AND_TARGET_REQUIRED',
+          );
+        return tx.basicPriceImportRowMappingReasonClarification.create({
+          data: {
+            mappingId: original.id,
+            workspaceId,
+            actorAccountId,
+            originalReason: original.reason,
+            clarifiedReason: dto.reason,
+          },
+          select: {
+            id: true,
+            originalReason: true,
+            clarifiedReason: true,
+            recordedAt: true,
+          },
+        });
+      },
+      {
+        timeout: 20_000,
+        maxWait: 20_000,
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+  }
+
   async compensateOwnDecision(
     workspaceId: string,
     batchId: string,

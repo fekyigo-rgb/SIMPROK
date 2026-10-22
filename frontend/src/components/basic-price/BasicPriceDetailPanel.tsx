@@ -68,6 +68,7 @@ import {
   type TemporalContext,
 } from '../../utils/basicPriceFreshness';
 import { forgetBasicPriceDetail, useBasicPriceDetail } from './useBasicPriceDetail';
+import { submissionStatusLabel } from '../../utils/basicPriceWorkflowDisplay';
 
 interface BasicPriceDetailPanelProps {
   item: BasicPriceExplorerItem;
@@ -190,6 +191,9 @@ export function BasicPriceDetailPanel({
           {alreadyProposed || (detail.kind === 'ready' && detail.detail.price.alreadyProposed === true) ? (
             <p className="bp-field__help" role="status" aria-live="polite">
               {PROPOSAL_ALREADY_SENT}
+              {detail.kind === 'ready' && detail.detail.proposalStatus
+                ? ` Status usulan: ${submissionStatusLabel(detail.detail.proposalStatus)}.`
+                : ' Status terbaru belum tersedia; muat ulang Detail Harga.'}
             </p>
           ) : detail.kind === 'ready' &&
             detail.detail.price.alreadyProposed === false &&
@@ -201,7 +205,10 @@ export function BasicPriceDetailPanel({
             ) ? (
             <PrivateProposalButton
               basicPriceId={item.basicPriceId}
-              onProposed={() => setAlreadyProposed(true)}
+              onProposed={() => {
+                setAlreadyProposed(true);
+                setDetailEpoch((epoch) => epoch + 1);
+              }}
             />
           ) : null}
           {detail.kind === 'ready' && changeOffers.length > 0 ? (

@@ -1072,7 +1072,7 @@ const POSITIVE_PATHS = [
 // counts below now describe the file as it stands; the guard's purpose — this
 // test speaks for ONE known file, not for any spreadsheet — is unchanged.
 const POSITIVE_SHA256 =
-  'dc30dd94c921fb612d4b6c6cb2d9e6b29241d2b8dd12714223624b9039f74552';
+  '2c42868ecba1c19b31c869f2939ffadaad0d779f35c870fe778bb5bdcffd286f';
 const positivePath = POSITIVE_PATHS.find((path) => existsSync(path)) ?? '';
 const describePositiveCommit = positivePath ? describe : describe.skip;
 

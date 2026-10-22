@@ -785,6 +785,8 @@ export interface BasicPriceDomesticContent {
 
 export interface BasicPriceDetail {
   price: BasicPriceExplorerItem;
+  /** Existing, workspace-scoped submission status. Null means not proven. */
+  proposalStatus: string | null;
   evidence: BasicPriceEvidenceFacts;
   corrections: BasicPriceCorrectionHistory;
   domesticContent: BasicPriceDomesticContent;

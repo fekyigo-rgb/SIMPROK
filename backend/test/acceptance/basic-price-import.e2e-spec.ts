@@ -179,7 +179,7 @@ describe('RM02B Basic Price import (e2e)', () => {
     await prisma.resourceCatalog.createMany({
       data: [
         { id: RESOURCE_WORKSPACE_B_ID, workspaceId: WORKSPACE_B, code: 'B-SECRET', name: 'Workspace B Secret', type: 'MATERIAL', baseUnit: 'M3' },
-        { id: RESOURCE_GLOBAL_ID, workspaceId: null, code: 'GLOBAL-HIDDEN', name: 'Global Hidden', type: 'MATERIAL', baseUnit: 'M3' },
+        { id: RESOURCE_GLOBAL_ID, workspaceId: null, code: 'GLOBAL-SHARED', name: 'Global Shared Material', type: 'MATERIAL', baseUnit: 'M3' },
         { id: RESOURCE_INACTIVE_ID, workspaceId: WORKSPACE_A, code: 'INACTIVE-HIDDEN', name: 'Inactive Hidden', type: 'MATERIAL', baseUnit: 'M3', status: 'INACTIVE' },
       ],
       skipDuplicates: true,
@@ -297,7 +297,7 @@ describe('RM02B Basic Price import (e2e)', () => {
       await lookup('resources', assignedToken).expect(200);
     });
 
-    it('returns only active resources owned by the active workspace', async () => {
+    it('lists only ACTIVE workspace-owned or canonical GLOBAL resources, never another workspace or inactive rows', async () => {
       const first = await lookup('resources', assignedToken).query({ q: 'Acceptance', page: 1, limit: 1 }).expect(200);
       const second = await lookup('resources', assignedToken).query({ q: 'Acceptance', page: 2, limit: 1 }).expect(200);
       expect(first.body).toEqual(expect.objectContaining({ page: 1, limit: 1, total: 2, hasNext: true }));
@@ -306,11 +306,15 @@ describe('RM02B Basic Price import (e2e)', () => {
       expect(second.body.items).toHaveLength(1);
       expect(second.body.items[0].id).not.toBe(first.body.items[0].id);
 
-      const hidden = await lookup('resources', assignedToken).query({ q: 'Hidden' }).expect(200);
-      expect(hidden.body.items).toEqual([]);
-      expect(JSON.stringify(hidden.body)).not.toContain(RESOURCE_GLOBAL_ID);
-      expect(JSON.stringify(hidden.body)).not.toContain(RESOURCE_INACTIVE_ID);
-      expect(JSON.stringify(hidden.body)).not.toContain(RESOURCE_WORKSPACE_B_ID);
+      const shared = await lookup('resources', assignedToken).query({ q: 'Global Shared Material' }).expect(200);
+      expect(shared.body.items).toEqual([
+        expect.objectContaining({ id: RESOURCE_GLOBAL_ID, name: 'Global Shared Material', type: 'MATERIAL', status: 'ACTIVE' }),
+      ]);
+
+      const inactive = await lookup('resources', assignedToken).query({ q: 'Inactive Hidden' }).expect(200);
+      expect(inactive.body.items).toEqual([]);
+      const foreign = await lookup('resources', assignedToken).query({ q: 'Workspace B Secret' }).expect(200);
+      expect(foreign.body.items).toEqual([]);
     });
 
     it('keeps Workspace-A candidates undiscoverable from authorized Workspace-B', async () => {
@@ -520,15 +524,15 @@ describe('RM02B Basic Price import (e2e)', () => {
     });
 
     it.each([
-      ['cross-workspace', RESOURCE_WORKSPACE_B_ID],
-      ['global', RESOURCE_GLOBAL_ID],
-      ['inactive', RESOURCE_INACTIVE_ID],
-    ])('rejects direct %s resource IDs even when the UI is bypassed', async (_label, resourceId) => {
+      ['cross-workspace', RESOURCE_WORKSPACE_B_ID, 'RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE'],
+      ['global-cross-type', RESOURCE_GLOBAL_ID, 'RESOURCE_TYPE_MISMATCH'],
+      ['inactive', RESOURCE_INACTIVE_ID, 'RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE'],
+    ])('rejects unsafe direct %s resource IDs even when the UI is bypassed', async (_label, resourceId, expectedRefusal) => {
       const preview = await previewFile(await buildBasicPriceXlsx(), `blocked-${_label}`).expect(201);
       const row = preview.body.rows.find((candidate: { sourceRowNumber: number }) => candidate.sourceRowNumber === 9);
       const before = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
       const response = await resolveRow(preview.body.batchId, row.id, row.version, resourceId, personDayUnitId).expect(409);
-      expect(response.body.message).toBe('RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE');
+      expect(response.body.message).toBe(expectedRefusal);
       const after = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
       expect(after.version).toBe(before.version);
       expect(after.resourceCatalogId).toBe(before.resourceCatalogId);

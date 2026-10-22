@@ -57,6 +57,7 @@ describe('BasicPriceImportService', () => {
      */
     basicPrice: { findMany: jest.Mock };
     $transaction: jest.Mock;
+    $queryRaw: jest.Mock;
   };
   let reviewService: { createReviewWithinTransaction: jest.Mock };
   /** INT-CONNECT-01 — the seam the review read path consults. */
@@ -115,6 +116,7 @@ describe('BasicPriceImportService', () => {
       // Nothing kept yet, which is the ordinary state of every batch these
       // tests build. Cases about already-stored rows set it explicitly.
       basicPrice: { findMany: jest.fn().mockResolvedValue([]) },
+      $queryRaw: jest.fn().mockResolvedValue([]),
       $transaction: jest.fn((callback: (tx: unknown) => unknown) =>
         callback(tx),
       ),
@@ -814,6 +816,65 @@ describe('BasicPriceImportService', () => {
       expect(result.batchId).toBe('batch-01');
     });
 
+    it('manual specification without an Excel column reaches readback AND canonical identity proposals', async () => {
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([{
+        id: 'r-manual-spec',
+        status: 'NEEDS_REVIEW',
+        resolutionStatus: 'UNRESOLVED',
+        rawResourceNameText: 'Pompa Air',
+        rawResourceCodeText: null,
+        rawUnitText: 'unit',
+        rawSourceContext: null,
+        sourceSection: 'EQUIPMENT',
+        sourceRowNumber: 12,
+        reasonCodes: [],
+        version: 1,
+      }]);
+      prisma.$queryRaw.mockResolvedValue([{
+        rowId: 'r-manual-spec',
+        resultingVersion: 1,
+        sourceSha256: 'A'.repeat(64),
+        decisionKind: 'SUPPLEMENT',
+        confirmedSpecifications: { merek: 'Panasonic', tipe: 'P-01' },
+      }]);
+      const result = await service.getBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(result.rows[0].sourceSpecifications).toEqual([]);
+      expect(result.rows[0].specificationDecision).toEqual({
+        facts: { merek: 'Panasonic', tipe: 'P-01' },
+        decisionKind: 'SUPPLEMENT', resultingVersion: 1,
+      });
+      const proposed = proposals.proposeForRows.mock.calls[0][1] as Array<{ confirmedSpecifications: Record<string, string> | null }>;
+      expect(proposed[0].confirmedSpecifications).toEqual({ merek: 'Panasonic', tipe: 'P-01' });
+    });
+
+    it('refuses to reuse a manual specification decision from a different document hash', async () => {
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([{
+        id: 'r-manual-spec',
+        status: 'NEEDS_REVIEW',
+        resolutionStatus: 'UNRESOLVED',
+        rawResourceNameText: 'Pompa Air',
+        rawResourceCodeText: null,
+        rawUnitText: 'unit',
+        rawSourceContext: null,
+        sourceSection: 'EQUIPMENT',
+        sourceRowNumber: 12,
+        reasonCodes: [],
+        version: 1,
+      }]);
+      prisma.$queryRaw.mockResolvedValue([{
+        rowId: 'r-manual-spec',
+        resultingVersion: 1,
+        sourceSha256: 'DIFFERENT_SOURCE_HASH',
+        decisionKind: 'SUPPLEMENT',
+        confirmedSpecifications: { merek: 'Panasonic' },
+      }]);
+      const result = await service.getBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID);
+      expect(result.rows[0].specificationDecision).toBeNull();
+      const proposed = proposals.proposeForRows.mock.calls[0][1] as Array<{ confirmedSpecifications: Record<string, string> | null }>;
+      expect(proposed[0].confirmedSpecifications).toBeNull();
+    });
+
     it('negative: a different workspace is denied (404)', async () => {
       prisma.basicPriceImportBatch.findUnique.mockResolvedValue({
         ...storedBatch,
@@ -901,6 +962,8 @@ describe('BasicPriceImportService', () => {
         rawResourceNameText: 'Air',
         rawResourceCodeText: null,
         rawUnitText: 'ltr',
+        rawSourceContext: undefined,
+        confirmedSpecifications: null,
       });
     });
 

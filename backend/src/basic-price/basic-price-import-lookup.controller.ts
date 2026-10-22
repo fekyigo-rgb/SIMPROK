@@ -26,6 +26,7 @@ export class BasicPriceImportLookupController {
     return this.lookupService.searchResources(
       request.workspaceContext.workspaceId,
       dto,
+      'WORKSPACE_PLUS_GLOBAL',
     );
   }
 

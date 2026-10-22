@@ -8,6 +8,10 @@ import {
   rowSectionDisplay,
   savedMetadataLines,
   staleRowRecoveryMessage,
+  isStaleRowConflict,
+  isAdmissionCandidateRefreshRequired,
+  isAdmissionReviewFingerprintStale,
+  rowNonStaleConflictMessage,
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
@@ -162,10 +166,26 @@ test("REGION-05: the two questions no longer share one word on screen", () => {
   // The column question asks about a COLUMN and says the Region is asked
   // elsewhere; the Region control is titled plainly "Wilayah".
   assert.match(intakeText, /Pilih kolom harga\./);
-  assert.match(intakeText, /Wilayah resmi SIMPROK dipilih terpisah/);
+  assert.match(intakeText, /Lokasi tempat harga berlaku dipilih terpisah pada langkah tersebut/);
   assert.doesNotMatch(intakeText, /Wilayah mana yang ingin Anda proses/);
   assert.match(regionSelectText, /contextLabel="Wilayah"/);
   assert.match(regionSelectText, /<legend[^>]*>\{contextLabel\}<\/legend>/);
+});
+
+test("BP-INTAKE-COPY-01: users see a clear choice and know its consequence", () => {
+  assert.match(intakeText, /Daftar harga apa yang Anda unggah\?/u);
+  assert.match(intakeText, /Setelah seluruh pertanyaan berkas dijawab, langkah berikutnya tetap Lengkapi Sumber/u);
+  assert.match(intakeText, /Harga dari kolom mana yang ingin Anda gunakan\?/u);
+  assert.match(intakeText, /value: label, label: `Gunakan harga: \$\{label\}`/u);
+  assert.match(intakeText, /answerKey: 'selectedRegionLabel'/u);
+  assert.match(intakeText, /Kolom mana yang berisi nama barang, tenaga kerja, atau peralatan\?/u);
+  assert.match(intakeText, /Kolom mana yang berisi satuan\?/u);
+  assert.match(intakeText, /Pilih satu jawaban untuk melanjutkan/u);
+  assert.match(importPageText, /Berkas berhasil dibaca\. Pilih satu jawaban/u);
+  assert.match(importPageText, /batch\.sourceRegionScopeLabel\?\.trim\(\)/u);
+  assert.match(importPageText, /Harga yang dipilih dari berkas:/u);
+  assert.match(importPageText, /SIMPROK menggunakan angka harga dari kolom ini/u);
+  assert.doesNotMatch(intakeText, /Tentukan kolom nama item\. SIMPROK tidak menemukan judul kolom/u);
 });
 
 test("UI-RESTORE-01: five-level Region hierarchy exists only in Lengkapi Sumber", () => {
@@ -336,13 +356,45 @@ test("STALE-UX-01: the version is still sent and a stale write is still refused 
   assert.doesNotMatch(reviewText, /setTimeout|retry|Retry/);
 });
 
-test("STALE-UX-02: a 409 refreshes the current truth itself instead of sending the reviewer to reload", () => {
+test("STALE-UX-02: only a confirmed stale version triggers automatic readback", () => {
   assert.match(review, /httpStatus !== 409/);
   assert.match(review, /recoverFromRowFailure/);
   const message = staleRowRecoveryMessage(8);
-  assert.match(message, /^Baris 8 baru saja diperbarui/);
+  assert.match(message, /^Baris 8 memiliki versi lebih baru/);
   assert.match(message, /SIMPROK sudah memuat versi terbaru/);
   assert.ok(!message.includes("muat ulang halaman"));
+});
+
+test("CONFLICT-UX: business-rule 409 does not claim another editor changed the row", () => {
+  assert.equal(isStaleRowConflict('{"message":"ROW_VERSION_STALE"}'), true);
+  assert.equal(isStaleRowConflict('{"message":"UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE"}'), false);
+  assert.equal(isStaleRowConflict('{"message":"ROW_SOURCE_SECTION_UNRESOLVED"}'), false);
+  assert.equal(isStaleRowConflict('{}'), false);
+  assert.match(rowNonStaleConflictMessage(13, '{"message":"UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE"}'), /Satuan pilihan belum dapat dibuktikan/u);
+  assert.match(rowNonStaleConflictMessage(13, '{"message":"ROW_SOURCE_SECTION_UNRESOLVED"}'), /Ubah Jenis dan Konfirmasi Jenis/u);
+  assert.doesNotMatch(rowNonStaleConflictMessage(13, '{"message":"UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE"}'), /perubahan lain|versi lebih baru/u);
+  assert.match(review, /!isStaleRowConflict\(error\.detail\)/u);
+  assert.match(review, /rowNonStaleConflictMessage\(row\.sourceRowNumber, error\.detail\)/u);
+});
+
+test("ADMISSION-RECOVERY: candidate refusal reloads evidence, clears stale refusals, keeps draft, never auto-writes", () => {
+  assert.equal(isAdmissionCandidateRefreshRequired('{"message":"RESOURCE_ADMISSION_REVIEW_STALE"}'), true);
+  assert.equal(isAdmissionCandidateRefreshRequired('{"message":"RESOURCE_ADMISSION_REFUSALS_INVALID"}'), true);
+  assert.equal(isAdmissionCandidateRefreshRequired('{"message":"ROW_VERSION_STALE"}'), false);
+  assert.equal(isAdmissionReviewFingerprintStale('{"message":"RESOURCE_ADMISSION_REVIEW_STALE"}'), true);
+  assert.equal(isAdmissionReviewFingerprintStale('{"message":"RESOURCE_ADMISSION_REFUSALS_INVALID"}'), false);
+  assert.equal(isAdmissionCandidateRefreshRequired('{"message":"IDENTITY_CANDIDATE_BLOCKED"}'), false);
+  const path = review.slice(review.indexOf('const recoverFromRowFailure'), review.indexOf('const handleConfirmSourceSpecifications'));
+  assert.match(path, /action === 'ADMIT'[\s\S]*isAdmissionCandidateRefreshRequired\(error\.detail\)/u);
+  assert.match(path, /loadBatch\(false, \(latest\) => \{/u);
+  assert.match(path, /refusedCandidateIds: \[\]/u);
+  assert.match(path, /\.\.\.\(current\[row\.id\] \?\? emptyDraft\)/u);
+  assert.match(path, /freshReview && previousReview && freshReview\.reviewBindingFingerprint === previousReview\.reviewBindingFingerprint/u);
+  assert.match(path, /Jangan ulangi tombol/u);
+  assert.match(path, /Daftar kandidat tetap sama, tetapi tanda penolakan yang dikirim belum sesuai/u);
+  assert.match(path, /Kandidat terkini sudah dimuat/u);
+  assert.match(path, /Daftar kandidat terbaru sudah dimuat/u);
+  assert.doesNotMatch(path, /admitResourceForImportRow\(/u);
 });
 
 test("STALE-UX-02b: SIMPROK only claims to have loaded the newest version when the read actually succeeded", () => {

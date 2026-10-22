@@ -1,10 +1,12 @@
 import { SourceRow, SourceTable, textAt } from '../readers/source-table';
 import {
   ColumnRole,
+  foldHeader,
   matchHeaderRole,
   statesResourceFamilyExactly,
 } from './header-vocabulary';
 import { interpretPriceLiteral } from './price-literal';
+import { matchKdnHeading } from './kdn-heading';
 
 /**
  * USI-01 §5 — STRUCTURE DETECTION. FORMAT != TABLE SHAPE.
@@ -403,6 +405,32 @@ function readHeaderRow(row: SourceRow, columnCount: number): HeaderReading {
     seen.set(role, [...(seen.get(role) ?? []), columnNumber]);
   }
 
+  // PR205 browser proof: "Jenis" is ambiguous when the SAME document also
+  // supplies a specific resource-name heading ("Uraian Bahan", "Uraian", ...).
+  // Preserve the Jenis cell as raw source context; never promote it to a
+  // category or silently discard it. A standalone "Jenis" remains supported.
+  const nameClaims = seen.get('RESOURCE_NAME') ?? [];
+  if (nameClaims.length > 1) {
+    const namedColumns = nameClaims.filter(
+      (number) =>
+        foldHeader(
+          columns.find((column) => column.columnNumber === number)!.headerText,
+        ) !== 'jenis',
+    );
+    if (namedColumns.length > 0) {
+      for (const number of nameClaims) {
+        const column = columns.find(
+          (candidate) => candidate.columnNumber === number,
+        )!;
+        if (foldHeader(column.headerText) === 'jenis') {
+          column.role = null;
+          unlabelledColumns.push(number);
+        }
+      }
+      seen.set('RESOURCE_NAME', namedColumns);
+    }
+  }
+
   const roleColumns: Partial<Record<ColumnRole, number>> = {};
   const duplicatedRoles: ColumnRole[] = [];
   for (const [role, occurrences] of seen) {
@@ -636,6 +664,7 @@ function detectUnheadedRegionalMatrix(
    */
   let geographicEvidence: string | null = null;
   for (const row of scanRows) {
+    const precedingRow = scanRows.find((prior) => prior.number === row.number - 1);
     const labelled: DetectedColumn[] = [];
     for (
       let columnNumber = 1;
@@ -644,6 +673,14 @@ function detectUnheadedRegionalMatrix(
     ) {
       const text = textAt(row, columnNumber);
       if (text === null) continue;
+      // The source's preceding banner explicitly groups these cells under
+      // KDN, not KECAMATAN. Reuse the existing KDN heading authority, ONLY to
+      // rule out a non-region column; KDN remains optional and its values are
+      // never interpreted here. No geography or percentage is guessed.
+      if (
+        precedingRow &&
+        matchKdnHeading(textAt(precedingRow, columnNumber)) === 'CLEAR'
+      ) continue;
       const role = matchHeaderRole(text);
       if (role === 'REGION_LABEL' && geographicEvidence === null) {
         geographicEvidence = text;

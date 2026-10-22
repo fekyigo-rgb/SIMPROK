@@ -1313,6 +1313,17 @@ tr.bp-detail-anchor > td {
   border-bottom: 1px solid var(--simprok-engineering-blue-100);
 }
 
+/* A row acknowledgement belongs to the full-width heading flex line,
+   NEVER as a third CSS-grid child of the Owner-locked 35:65 two-column card. */
+.bp-rowcard__head > .bp-rowcard__notice {
+  flex: 0 0 100%;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0;
+  overflow-wrap: break-word;
+}
+
 .bp-rowcard__summary-actions {
   display: flex;
   align-items: center;

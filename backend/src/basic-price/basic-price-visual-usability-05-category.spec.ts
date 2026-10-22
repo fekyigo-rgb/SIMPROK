@@ -37,6 +37,32 @@ describe('BP-VISUAL-USABILITY-05 category truth', () => {
     });
   });
 
+  describe('MIXED file composition — no fourth ResourceType and no false type', () => {
+    it('preserves every real row of a category-silent workbook without forcing a family', async () => {
+      const bytes = await buildSemanticHeaderXlsx();
+      const baseline = await parse(bytes, { declaredSection: 'LABOR' });
+      const mixed = await parse(bytes, { declaredSection: 'MIXED' });
+      expect(mixed.rows.length).toBe(baseline.rows.length);
+      expect(mixed.rows.length).toBeGreaterThan(0);
+      expect(mixed.rows.every((row) => row.sourceSection === null)).toBe(true);
+      expect(mixed.rows.every((row) => row.sourceSectionProvenance === null)).toBe(true);
+      expect(mixed.sectionProvenance).toBeNull();
+      expect(mixed.rows.map((row) => row.rawResourceNameText)).toEqual(
+        baseline.rows.map((row) => row.rawResourceNameText),
+      );
+    });
+
+    it('does not override source-proven category rows even when MIXED is selected', async () => {
+      const bytes = await buildSemanticHeaderXlsx({ includeRowCategories: true });
+      const plain = await parse(bytes);
+      const mixed = await parse(bytes, { declaredSection: 'MIXED' });
+      expect(mixed.rows.map((row) => row.sourceSection)).toEqual(
+        plain.rows.map((row) => row.sourceSection),
+      );
+      expect(mixed.interpretation).toEqual(plain.interpretation);
+    });
+  });
+
   describe('CAT-04 / CAT-05 — labor and equipment names keep their families', () => {
     it('Pekerja remains LABOR on source authority', async () => {
       const bytes = await buildSemanticHeaderXlsx({ includeRowCategories: true });

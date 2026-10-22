@@ -7,6 +7,10 @@ import {
   updateBasicPriceImportBatch,
   rejectBasicPriceImportRow,
   resolveBasicPriceImportRow,
+  clarifyBasicPriceRowUnitReason,
+  confirmBasicPriceImportRowCategory,
+  confirmBasicPriceRowSpecifications,
+  getBasicPriceIdentityReviews,
   admitResourceForImportRow,
   admitSafeNewBasicPriceResources,
   submitBasicPriceImportBatch,
@@ -14,11 +18,14 @@ import {
   ImportRequestError,
 } from '../api/basicPriceImport';
 import type {
+  BasicPriceIdentityReviewRow,
   ResourceLookupItem,
   ResourceType,
   UnitLookupItem,
 } from '../api/basicPriceImport';
 import { CatalogSearchSelect } from '../components/basic-price/CatalogSearchSelect';
+import { BasicPriceSpecificationEditor } from '../components/basic-price/BasicPriceSpecificationEditor';
+import type { SpecDecisionKind } from '../utils/basicPriceSpecificationForm';
 import { BasicPriceJourneyStepper } from '../components/basic-price/BasicPriceJourneyStepper';
 import { ROW_TONE_CLASS, reviewCounters, rowTone } from '../utils/basicPriceJourney';
 import {
@@ -57,9 +64,14 @@ import {
   rowReviewFactsLine,
   reviewDisplayResourceName,
   rowSectionDisplay,
+  candidateResourceTypeLabel,
   rowStateLabel,
   reviewRowBucket,
   staleRowRecoveryMessage,
+  isStaleRowConflict,
+  isAdmissionCandidateRefreshRequired,
+  isAdmissionReviewFingerprintStale,
+  rowNonStaleConflictMessage,
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
@@ -67,12 +79,15 @@ import {
 import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
 import '../styles/basicPrice.css';
 
+type BatchReadback = (value: BasicPriceImportBatchSummary) => void;
+
 interface RowDraft {
   resource: ResourceLookupItem | null;
   unit: UnitLookupItem | null;
   resourcePending: boolean;
   unitPending: boolean;
   reason: string;
+  unitCorrectionReason: string;
   /** Reason field stays hidden until the reviewer opens Tolak. */
   rejectOpen: boolean;
   /** Reason field stays hidden until the reviewer opens admission. */
@@ -91,12 +106,17 @@ const REVIEW_ROW_PAGE_SIZE = 30;
 /** The existing backend admission contract accepts at most 100 explicit choices. */
 const SAFE_NEW_SELECTION_LIMIT = 100;
 
+const unitCorrectionAuditNote = (row: BasicPriceImportRowSummary, unit: UnitLookupItem | null, rationale: string): string | null =>
+  row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' && unit
+    ? 'KOREKSI_SATUAN_SUMBER: ' + (row.unit ?? '') + ' -> ' + unit.code + '; ' + rationale.trim()
+    : null;
 const emptyDraft: RowDraft = {
   resource: null,
   unit: null,
   resourcePending: false,
   unitPending: false,
   reason: '',
+  unitCorrectionReason: '',
   rejectOpen: false,
   admitOpen: false,
   admitReason: '',
@@ -113,7 +133,7 @@ const admissionUnavailableReason = (reasonCode: string | null): string | null =>
     case 'SOURCE_TYPE_NOT_PROVEN':
       return 'Jenis sumber daya belum terbukti, sehingga item baru belum boleh disimpan.';
     case 'IDENTITY_CANDIDATE_BLOCKED':
-      return 'Masih ada kandidat identitas yang wajib diperiksa sebelum item baru dapat disimpan.';
+      return 'Ada item lain yang mungkin sama. Periksa perbedaannya sebelum membuat item baru.';
     case 'RESOURCE_IDENTITY_NOT_ADMISSIBLE':
       return 'Pemeriksaan identitas belum memenuhi syarat untuk membuat sumber daya baru.';
     default:
@@ -226,6 +246,11 @@ export function BasicPriceReviewPage() {
   const [statusMessage, setStatusMessage] = useState('Memuat batch...');
   /** Local acknowledgement stays beside the row, even when the page is scrolled. */
   const [rowNotice, setRowNotice] = useState<{ rowId: string; text: string } | null>(null);
+  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, ResourceType | ''>>({});
+  const [reasonClarificationDrafts, setReasonClarificationDrafts] = useState<Record<string, string>>({});
+  const [categoryEditRows, setCategoryEditRows] = useState<Set<string>>(new Set());
+  // Read historical identity decisions; no external approval is required for private items.
+  const [identityReviewStatuses, setIdentityReviewStatuses] = useState<Record<string, BasicPriceIdentityReviewRow> | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
   /**
@@ -237,11 +262,23 @@ export function BasicPriceReviewPage() {
    * would erase the only acknowledgement they get — the exact silence this
    * whole repair exists to remove.
    */
-  const loadBatch = async (announceProgress = true): Promise<boolean> => {
+  const loadBatch = async (announceProgress = true, onReadback?: BatchReadback): Promise<boolean> => {
     if (!batchId) return false;
     try {
       const result = await getBasicPriceImportBatch(batchId);
       setBatch(result);
+      onReadback?.(result);
+      let historicalReviewNotice: string | null = null;
+      try {
+        // Preserve visibility of prior decisions even though private users no longer request new curation.
+        const history = await getBasicPriceIdentityReviews(batchId);
+        setIdentityReviewStatuses(history.rows);
+      } catch (error) {
+        setIdentityReviewStatuses(null);
+        historicalReviewNotice = error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Riwayat pemeriksaan identitas belum dapat dibaca.';
+      }
       // INT-CONNECT-01 — CARRY THE MACHINE'S PROVEN ANSWER INTO THE FORM.
       //
       // The previous version of this page discarded it: the payload already
@@ -265,7 +302,7 @@ export function BasicPriceReviewPage() {
         }
         return next;
       });
-      if (announceProgress) setStatusMessage(formatBatchProgress(result));
+      if (announceProgress) setStatusMessage(historicalReviewNotice ? `${formatBatchProgress(result)} ${historicalReviewNotice}` : formatBatchProgress(result));
       /**
        * BP-VISUAL-TRUTH-07 §14 — WHETHER THE READ ACTUALLY HAPPENED, ANSWERED.
        *
@@ -375,6 +412,51 @@ export function BasicPriceReviewPage() {
   ): Promise<string> => {
     const httpStatus = error instanceof ImportRequestError ? error.httpStatus : 0;
     if (httpStatus !== 409) return rowFailure(action, row.sourceRowNumber, error);
+    // A changed candidate-review fingerprint is an evidence readback, NOT a
+    // human decision and NOT proof that someone edited this row. Never replay.
+    if (action === 'ADMIT' && error instanceof ImportRequestError &&
+        isAdmissionCandidateRefreshRequired(error.detail)) {
+      const candidateReadback: { row?: BasicPriceImportRowSummary } = {};
+      const readBack = await loadBatch(false, (latest) => {
+        candidateReadback.row = latest.rows.find((candidate) => candidate.id === row.id);
+      });
+      const currentRow = candidateReadback.row;
+      if (!readBack || !currentRow) {
+        return `Baris ${row.sourceRowNumber} belum disimpan. SIMPROK belum berhasil memuat bukti kandidat terkini. Jangan mengulangi keputusan lama; periksa koneksi dan muat kembali baris ini.`;
+      }
+      const freshReview = currentRow.machineProposal?.resource.admissionReview;
+      const previousReview = row.machineProposal?.resource.admissionReview;
+      // Preserve human-written reason/name/unit. Refusal checkmarks only apply
+      // to the exact old candidate set; clear them and ask for human re-review.
+      setDrafts((current) => ({
+        ...current,
+        [row.id]: {
+          ...(current[row.id] ?? emptyDraft),
+          refusedCandidateIds: [],
+          admitResourceType: freshReview?.typeConfirmations.length === 1
+            ? freshReview.typeConfirmations[0].resourceType
+            : current[row.id]?.admitResourceType ?? null,
+        },
+      }));
+      if (freshReview && previousReview && freshReview.reviewBindingFingerprint === previousReview.reviewBindingFingerprint) {
+        if (isAdmissionReviewFingerprintStale(error.detail)) {
+          return `Baris ${row.sourceRowNumber} belum disimpan. SIMPROK sudah memeriksa ulang, tetapi bukti kandidat tetap sama dan server masih menolak. Jangan ulangi tombol: ini perlu pemeriksaan konsistensi keputusan dan backend.`;
+        }
+        return `Baris ${row.sourceRowNumber} belum disimpan. Daftar kandidat tetap sama, tetapi tanda penolakan yang dikirim belum sesuai. Silakan tandai kembali kandidat yang memang sudah Anda periksa; alasan dan satuan tetap sebagai draf.`;
+      }
+      if (!freshReview?.offered) {
+        const blocked = currentRow.machineProposal?.resource.candidates
+          .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
+          .map((candidate) => candidate.name) ?? [];
+        return `Baris ${row.sourceRowNumber} belum disimpan. Kandidat terkini sudah dimuat. Item Baru kini tertahan oleh pemeriksaan identitas${blocked.length ? ': ' + blocked.join(', ') : ''}. Buka Bandingkan kandidat dan bukti identitas pada baris ini; alasan dan satuan Anda tetap sebagai draf.`;
+      }
+      const count = freshReview.humanRefusableCandidateIds.length;
+      return `Baris ${row.sourceRowNumber} belum disimpan. Daftar kandidat terbaru sudah dimuat di baris ini. Periksa ${count} kandidat yang dapat Anda tolak jika memang berbeda, lalu tandai kembali kandidat yang telah diperiksa dan tekan Tetapkan Item Baru. Alasan dan satuan Anda tetap sebagai draf; tidak ada penetapan otomatis.`;
+    }
+    // Only an explicit ROW_VERSION_STALE is proof of an obsolete row version.
+    if (error instanceof ImportRequestError && !isStaleRowConflict(error.detail)) {
+      return rowNonStaleConflictMessage(row.sourceRowNumber, error.detail);
+    }
     /**
      * `false` because THIS function owns the sentence. `loadBatch` would
      * otherwise announce the batch's progress tally, which would be overwritten
@@ -412,6 +494,169 @@ export function BasicPriceReviewPage() {
     return staleRowRecoveryMessage(row.sourceRowNumber);
   };
 
+  /** One explicit human decision; source facts remain immutable and no catalog is minted here. */
+  const handleConfirmSourceSpecifications = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId || !row.sourceSpecifications?.length) return;
+    const facts = row.sourceSpecifications;
+    if (facts.some((fact) => fact.value === null || !fact.value?.trim())) {
+      const message = 'Ada spesifikasi yang belum dapat dibaca. Perbaikan memerlukan alasan dan pemeriksaan tersendiri.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+      return;
+    }
+    const sourceFacts = Object.fromEntries(facts.map((fact) => [fact.label, fact.value!]));
+    setIsBusy(true);
+    try {
+      await confirmBasicPriceRowSpecifications(batchId, row.id, row.version, sourceFacts);
+      const refreshed = await loadBatch(false);
+      const message = refreshed
+        ? 'Spesifikasi baris ' + row.sourceRowNumber + ' telah dikonfirmasi dan dicatat dalam riwayat. SIMPROK memeriksa identitas kembali.'
+        : 'Konfirmasi diterima, tetapi pembacaan ulang gagal. Muat ulang sebelum memutuskan identitas.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+    } catch (error) {
+      if (error instanceof ImportRequestError && error.httpStatus === 409) {
+        await loadBatch(false);
+      }
+      const message = error instanceof ImportRequestError && error.httpStatus === 409
+        ? 'Konfirmasi belum disimpan: data telah berubah atau berbeda dari berkas. Tinjau kembali spesifikasi.'
+        : error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Konfirmasi belum berhasil; tidak ada keputusan identitas baru.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  /** Existing audit writer: manual facts re-enter the canonical identity pathway on readback. */
+  const handleSaveManualSpecifications = async (
+    row: BasicPriceImportRowSummary,
+    facts: Record<string, string>,
+    kind: SpecDecisionKind,
+    reason?: string,
+  ): Promise<boolean> => {
+    if (!batchId || !isRowMutable(row) || isBusy) return false;
+    const existingDraft = drafts[row.id];
+    if ((existingDraft?.resource || existingDraft?.admitOpen) &&
+        !window.confirm('Keputusan spesifikasi dapat mengubah kecocokan identitas. Batalkan pilihan padanan/item baru yang belum disimpan dan lanjutkan?')) {
+      return false;
+    }
+    setIsBusy(true);
+    try {
+      await confirmBasicPriceRowSpecifications(batchId, row.id, row.version, facts, kind, reason);
+      // Never reuse a resource selection made before the specification decision.
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      setLookupRows((current) => {
+        const next = new Set(current);
+        next.delete(row.id);
+        return next;
+      });
+      const readback = await loadBatch(false);
+      const message = readback
+        ? 'Spesifikasi baris ' + row.sourceRowNumber + ' tercatat. Identitas dan kandidat diperiksa ulang; pilih padanan atau item baru berdasarkan bukti terbaru.'
+        : 'Keputusan tercatat, tetapi pembacaan ulang gagal. Muat ulang sebelum memilih identitas.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+      return readback;
+    } catch (error) {
+      if (error instanceof ImportRequestError && error.httpStatus === 409) await loadBatch(false);
+      const message = error instanceof ImportRequestError && error.httpStatus === 409
+        ? 'Spesifikasi belum disimpan: versi atau bukti bertentangan. Muat ulang dan periksa keputusan sebelumnya.'
+        : error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Keputusan spesifikasi belum berhasil disimpan.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+      return false;
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleConfirmCategory = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId) return;
+    const category = categoryDrafts[row.id] ?? row.section ?? '';
+    if (!category) {
+      setRowNotice({ rowId: row.id, text: 'Pilih jenis item terlebih dahulu.' });
+      return;
+    }
+    if (!window.confirm('Tetapkan jenis ' + (category === 'LABOR' ? 'Tenaga kerja' : category === 'MATERIAL' ? 'Bahan' : 'Peralatan') + ' untuk baris ' + row.sourceRowNumber + '? Keterangan asli Excel tetap disimpan.')) return;
+    setIsBusy(true);
+    try {
+      const result = await confirmBasicPriceImportRowCategory(batchId, row.id, row.version, category);
+      // A category change invalidates any previous catalog/unit draft, which may
+      // belong to another resource family. No old choice may silently survive.
+      if (!result.unchanged) {
+        setDrafts((current) => ({ ...current, [row.id]: {
+          ...(current[row.id] ?? emptyDraft), resource: null, unit: null,
+          resourcePending: false, unitPending: false, admitOpen: false,
+          admitResourceType: null, refusedCandidateIds: [],
+        } }));
+        setTouchedRowIds((current) => new Set(current).add(row.id));
+        setLookupRows((current) => { const next = new Set(current); next.delete(row.id); return next; });
+      }
+      const refreshed = await loadBatch(false);
+      if (refreshed) {
+        setCategoryEditRows((current) => { const next = new Set(current); next.delete(row.id); return next; });
+        setCategoryDrafts((current) => { const next = { ...current }; delete next[row.id]; return next; });
+      }
+      const notice = !refreshed
+        ? 'Keputusan diterima, tetapi tampilan belum dapat diperbarui. Muat ulang untuk memastikan hasil.'
+        : result.unchanged
+          ? 'Jenis pada baris ' + row.sourceRowNumber + ' sudah sesuai dan tidak diubah.'
+          : 'Berhasil: jenis baris ' + row.sourceRowNumber + ' telah ditetapkan. Lanjutkan memilih item dan satuannya.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } catch (error) {
+      const notice = error instanceof ImportRequestError && error.httpStatus === 409
+        ? error.detail.includes('ROW_BUSY_RETRY')
+          ? 'Baris ini sedang diproses. Muat ulang hasil peninjauan, lalu coba lagi. Tidak ada perubahan jenis yang disimpan.'
+          : 'Data baris telah berubah atau tidak dapat diedit lagi. Muat ulang hasil peninjauan sebelum melanjutkan.'
+        : error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Jenis belum berhasil disimpan. Muat ulang baris lalu coba lagi.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleClarifyUnitReason = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId || !row.mappingReasonAudit || !row.canonicalUnit || !row.unit) return;
+    const reason = (reasonClarificationDrafts[row.id] ?? '').trim();
+    if (reason.length < 30 || !reason.toUpperCase().includes(row.unit.toUpperCase()) ||
+        !reason.toUpperCase().includes(row.canonicalUnit.code.toUpperCase())) {
+      setRowNotice({ rowId: row.id, text: 'Jelaskan fakta koreksi satuan sumber dan satuan yang benar (minimal 30 karakter).' });
+      return;
+    }
+    setIsBusy(true);
+    try {
+      await clarifyBasicPriceRowUnitReason(batchId, row.id, row.version, reason);
+      let verified = false;
+      const loaded = await loadBatch(false, (fresh) => {
+        verified = fresh.rows.find((entry) => entry.id === row.id)?.mappingReasonAudit?.clarification === reason;
+      });
+      const notice = loaded && verified
+        ? `Baris ${row.sourceRowNumber}: klarifikasi alasan tersimpan, cocok dengan database, dan alasan lama tetap tercatat.`
+        : `Baris ${row.sourceRowNumber}: server menerima klarifikasi, tetapi pembacaan ulang belum terverifikasi. Muat ulang sebelum melanjutkan.`;
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } catch (error) {
+      const notice = error instanceof ImportRequestError
+        ? `Klarifikasi belum tersimpan: ${importRequestMessage(error.httpStatus)}`
+        : 'Klarifikasi belum terbukti tersimpan. Muat ulang untuk memeriksa.';
+      setRowNotice({ rowId: row.id, text: notice });
+      setStatusMessage(notice);
+    } finally { setIsBusy(false); }
+  };
+
   const handleResolve = async (row: BasicPriceImportRowSummary) => {
     if (!batchId) return;
     const draft = draftFor(row.id);
@@ -435,9 +680,25 @@ export function BasicPriceReviewPage() {
         return;
       }
     }
+    if (row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' &&
+        draft.unitCorrectionReason.trim().length < 10) {
+      setStatusMessage('Tuliskan alasan koreksi satuan sumber (minimal 10 karakter) sebelum menyimpan.');
+      return;
+    }
     setIsBusy(true);
     try {
-      await resolveBasicPriceImportRow(batchId, row.id, row.version, draft.resource.id, draft.unit.id);
+      // Existing server-owned mapping audit records the reviewer's working
+      // nomenclature. It does NOT rename the selected catalog resource, and
+      // cannot turn one row decision into a global AHSP alias.
+      const nomenclatureAuditReason = draft.correctedCanonicalName !== null &&
+        draft.correctedCanonicalName !== row.name
+          ? 'KOREKSI_NOMENKLATUR: ' + draft.correctedCanonicalName.trim()
+          : undefined;
+      const resolutionAuditReason = [
+        nomenclatureAuditReason,
+        unitCorrectionAuditNote(row, draft.unit, draft.unitCorrectionReason),
+      ].filter(Boolean).join(' | ');
+      await resolveBasicPriceImportRow(batchId, row.id, row.version, draft.resource.id, draft.unit.id, resolutionAuditReason || undefined);
       forgetCompletedEdit(row.id);
       setDrafts((current) => {
         const next = { ...current };
@@ -446,7 +707,8 @@ export function BasicPriceReviewPage() {
       });
       const refreshed = await loadBatch(false);
       const notice = refreshed
-        ? 'Berhasil: padanan dan satuan baris ' + row.sourceRowNumber + ' telah disimpan.'
+        ? 'Berhasil: padanan dan satuan baris ' + row.sourceRowNumber + ' telah disimpan.' +
+          (nomenclatureAuditReason ? ' Koreksi nomenklatur dicatat pada keputusan baris, bukan mengubah nama katalog.' : '')
         : 'Baris ' + row.sourceRowNumber + ': pilihan diterima server, tetapi tampilan belum berhasil dimuat ulang. Muat ulang untuk verifikasi.';
       setRowNotice({ rowId: row.id, text: notice });
       setStatusMessage(notice);
@@ -566,6 +828,11 @@ export function BasicPriceReviewPage() {
         return;
       }
     }
+    if (row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' &&
+        draft.unitCorrectionReason.trim().length < 10) {
+      setStatusMessage('Tuliskan alasan koreksi satuan sumber (minimal 10 karakter) sebelum menetapkan item.');
+      return;
+    }
     setIsBusy(true);
     try {
       await admitResourceForImportRow(
@@ -573,7 +840,7 @@ export function BasicPriceReviewPage() {
         row.id,
         row.version,
         draft.unit.id,
-        draft.admitReason.trim(),
+        [unitCorrectionAuditNote(row, draft.unit, draft.unitCorrectionReason), draft.admitReason.trim()].filter(Boolean).join(' | '),
         draft.admitResourceType,
         draft.refusedCandidateIds,
         typeConfirmation.reviewBindingFingerprint,
@@ -753,6 +1020,7 @@ export function BasicPriceReviewPage() {
   // The bulk writer uses the raw workbook name: never include a row whose
   // reviewer corrected that name without passing the correction to the writer.
   const safeNewRows = batch.rows.filter((row) =>
+    !row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED') &&
     rowSafeNewAdmissionEligible(row) &&
     (draftFor(row.id).correctedCanonicalName === null ||
       draftFor(row.id).correctedCanonicalName === row.name)
@@ -1099,12 +1367,15 @@ export function BasicPriceReviewPage() {
           const notes = rowNoteLines(row);
           const noteDisclosure = rowNoteDisclosure(notes, row.machineProposal?.identityPairProven === true);
           const reviewQuestion = noteDisclosure.primary ?? collisionLabel;
+          const unitCorrectionMissing = row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' &&
+            draft.unit !== null && draft.unitCorrectionReason.trim().length < 10;
           const blockReason = completionBlockReason(row, {
             resource: draft.resource !== null,
             unit: draft.unit !== null,
             busy: isBusy || draft.resourcePending || draft.unitPending,
           });
           const admissionOffered = rowIdentityAdmissionOffered(row);
+          const sourceSpecUnverified = row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED') ?? false;
           const refusalChoices = rowIdentityRefusalChoices(row);
           const admissionReview = row.machineProposal?.resource.admissionReview;
           const refusalsConfirmed = admissionReview
@@ -1123,7 +1394,9 @@ export function BasicPriceReviewPage() {
             draft.correctedCanonicalName !== null &&
             draft.correctedCanonicalName !== row.name &&
             batch?.reviewCapabilities?.correctedCanonicalNameOnAdmission !== true;
-          const admitBlock = sameNameCandidate
+          const admitBlock = row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')
+            ? 'Spesifikasi pada berkas belum diperiksa bersama identitas item. Penetapan item baru belum tersedia.'
+            : sameNameCandidate
             ? correctedNameCandidateNotice(sameNameCandidate.name)
             : unsupportedNameCorrection
             ? 'Backend preview belum mendukung penyimpanan koreksi nama. Penetapan diblokir sampai versi backend diselaraskan.'
@@ -1200,12 +1473,12 @@ export function BasicPriceReviewPage() {
                     {expanded ? 'Tutup' : 'Tinjau'}
                   </button>
                 </div>
+                {rowNotice?.rowId === row.id ? (
+                  <p className="bp-note bp-note--info bp-rowcard__notice" role="status" aria-live="polite">
+                    {rowNotice.text}
+                  </p>
+                ) : null}
               </div>
-              {rowNotice?.rowId === row.id ? (
-                <p className="bp-note bp-note--info" role="status" aria-live="polite">
-                  {rowNotice.text}
-                </p>
-              ) : null}
               {expanded ? (
                 <>
                   {reviewRowBucket(row) === 'NEEDS_REVIEW' && reviewQuestion ? (
@@ -1220,6 +1493,9 @@ export function BasicPriceReviewPage() {
                       <p className="bp-rowcard__source-name">{row.name}</p>
                       {row.canonicalResourceName && row.canonicalResourceName !== row.name ? (
                         <p className="bp-rowcard__facts">Nama katalog tersimpan: <strong>{row.canonicalResourceName}</strong></p>
+                      ) : null}
+                      {row.nomenclatureCorrectionName ? (
+                        <p className="bp-rowcard__facts" role="status">Koreksi nomenklatur tercatat: <strong>{row.nomenclatureCorrectionName}</strong>. Ini catatan padanan baris, bukan penggantian nama katalog.</p>
                       ) : null}
                       {!proven && mutable ? (
                         <button
@@ -1275,6 +1551,43 @@ export function BasicPriceReviewPage() {
                       <div><dt>Satuan</dt><dd>{row.unit?.trim() || 'Tidak tercantum'}</dd></div>
                       <div><dt>Harga</dt><dd>{row.rawPriceDisplayText ? `Rp ${row.rawPriceDisplayText}` : 'Tidak tercantum'}</dd></div>
                     </dl>
+                    {row.sourceSpecifications && row.sourceSpecifications.length > 0 ? (
+                      <details className="bp-details">
+                        <summary>{row.specificationDecision ? 'Spesifikasi dari berkas · sudah diperiksa' : 'Spesifikasi dari berkas · perlu diperiksa'}</summary>
+                        <dl className="bp-rowcard__source-facts">
+                          {row.sourceSpecifications.map((fact, i) => (
+                            <div key={`${fact.label}-${i}`}><dt>{fact.label}</dt><dd>{fact.value ?? 'Format sumber belum dapat dibaca sebagai spesifikasi'}</dd></div>
+                          ))}
+                        </dl>
+                        <p className="bp-field__help">{row.specificationDecision
+                          ? 'Spesifikasi asli berkas sudah diperiksa dan keputusan tercatat. Ini bukan otomatis bukti bahwa dua item katalog identik; pencocokan identitas tetap dilakukan SIMPROK.'
+                          : 'Ini informasi asli berkas, belum menjadi bukti identitas kanonis. Item dengan spesifikasi yang belum diperiksa tidak boleh disimpan sebagai identitas yang terbukti sama.'}</p>
+                        {row.specificationDecision ? (
+                          <p className="bp-field__help" role="status">Spesifikasi telah dikonfirmasi pada versi {row.specificationDecision.resultingVersion}. Keputusan tersimpan dalam riwayat; pemeriksaan identitas tetap dilakukan SIMPROK.</p>
+                        ) : sourceSpecUnverified && mutable ? (
+                          <button
+                            type="button"
+                            className="bp-btn bp-btn--primary bp-btn--sm"
+                            disabled={isBusy || row.sourceSpecifications.some((fact) => !fact.value?.trim())}
+                            onClick={() => void handleConfirmSourceSpecifications(row)}
+                            title="Periksa nilai spesifikasi yang tertulis pada berkas lalu catat keputusan Anda. Ini bukan persetujuan katalog dan tidak menyimpan harga."
+                          >
+                            Saya sudah memeriksa — Konfirmasi spesifikasi berkas
+                          </button>
+                        ) : null}
+                      </details>
+                    ) : null}
+                    {(mutable || row.specificationDecision) ? (
+                      <BasicPriceSpecificationEditor
+                        key={row.id + ':' + (row.specificationDecision?.resultingVersion ?? 'none')}
+                        rowNumber={row.sourceRowNumber}
+                        sourceSpecifications={row.sourceSpecifications}
+                        specificationDecision={row.specificationDecision}
+                        mutable={mutable}
+                        disabled={isBusy}
+                        onSave={(facts, kind, reason) => handleSaveManualSpecifications(row, facts, kind, reason)}
+                      />
+                    ) : null}
                   </div>
 
                   <div className="bp-rowcard__column bp-rowcard__kind-unit">
@@ -1288,28 +1601,24 @@ export function BasicPriceReviewPage() {
                             <button
                               type="button"
                               className="bp-rowcard__edit"
-                              title="Tentukan jenis melalui pilihan item SIMPROK yang sesuai, atau konfirmasi jenis saat membuat Item Baru yang diizinkan. Jenis asli berkas tetap utuh."
+                              title="Pemilih jenis ada di panel penyelesaian sebelah kanan. Keputusan tercatat setelah Konfirmasi Jenis."
+                              aria-expanded={categoryEditRows.has(row.id)}
+                              aria-controls={`bp-category-editor-${row.id}`}
                               onClick={() => {
-                                if (!admissionOffered || !admissionReview) {
-                                  updateDraft(row.id, { admitOpen: false });
-                                  setLookupRows((current) => new Set(current).add(row.id));
-                                  setStatusMessage('Pilih item katalog yang benar di panel kanan; jenis efektif mengikuti identitas yang sah. Jenis asli berkas tetap disimpan.');
-                                  return;
-                                }
-                                setLookupRows((current) => {
+                                const opening = !categoryEditRows.has(row.id);
+                                setCategoryEditRows((current) => {
                                   const next = new Set(current);
-                                  next.delete(row.id);
+                                  if (opening) next.add(row.id); else next.delete(row.id);
                                   return next;
                                 });
-                                updateDraft(row.id, {
-                                  admitOpen: true,
-                                  admitResourceType: admissionReview.typeConfirmations.length === 1
-                                    ? admissionReview.typeConfirmations[0].resourceType
-                                    : draft.admitResourceType,
-                                });
+                                const notice = opening
+                                  ? 'Pemilih jenis ada di panel penyelesaian sebelah kanan. Pilih Tenaga kerja, Bahan, atau Peralatan lalu tekan Konfirmasi Jenis.'
+                                  : 'Belum ada keputusan jenis baru yang disimpan.';
+                                setRowNotice({ rowId: row.id, text: notice });
+                                setStatusMessage(notice);
                               }}
                             >
-                              &#9998; Edit
+                              &#9998; Ubah Jenis
                             </button>
                           ) : null}
                         </dd>
@@ -1324,16 +1633,7 @@ export function BasicPriceReviewPage() {
                               : draft.unit
                                 ? `${draft.unit.displayName} (${draft.unit.symbol})`
                                 : 'Belum dipilih'}</span>
-                          {!proven && mutable ? (
-                            <button
-                              type="button"
-                              className="bp-rowcard__edit"
-                              title="Pilih satuan standar SIMPROK yang sesuai."
-                              onClick={() => { updateDraft(row.id, { admitOpen: false }); setLookupRows((current) => new Set(current).add(row.id)); }}
-                            >
-                              &#9998; Edit
-                            </button>
-                          ) : null}
+
                         </dd>
                       </div>
                     </dl>
@@ -1363,17 +1663,111 @@ export function BasicPriceReviewPage() {
 
                   <div className="bp-rowcard__actions bp-rowcard__resolution">
                     <h3>Pilih Penyelesaian</h3>
+                    {/* Reuse the sole canonical category editor in the decision panel. */}
+                    {mutable &&
+                     (row.section === null || categoryEditRows.has(row.id) || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'))) &&
+                     (row.section === null || row.sectionProvenance === 'UPLOADER_DECLARED') &&
+                     !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
+                      <div id={`bp-category-editor-${row.id}`} className="bp-note bp-note--info" aria-label={`Tentukan jenis baris ${row.sourceRowNumber}`}>
+                        <label className="bp-field">
+                          <span className="bp-field__label">Tentukan Jenis</span>
+                          <select
+                            className="bp-input"
+                            value={categoryDrafts[row.id] ?? row.section ?? ''}
+                            disabled={isBusy}
+                            onChange={(event) => setCategoryDrafts((current) => ({ ...current, [row.id]: event.target.value as ResourceType | '' }))}
+                            aria-label={`Jenis item pada baris ${row.sourceRowNumber}`}
+                          >
+                            <option value="">Pilih jenis item</option>
+                            <option value="LABOR">Tenaga kerja</option>
+                            <option value="MATERIAL">Bahan</option>
+                            <option value="EQUIPMENT">Peralatan</option>
+                          </select>
+                        </label>
+                        <p className="bp-field__help">Jenis ini akan digunakan untuk mencari padanan yang tepat. Nama, satuan, dan harga asli Excel tetap disimpan.</p>
+                        <button
+                          type="button"
+                          className="bp-btn bp-btn--primary bp-btn--sm"
+                          disabled={isBusy || !(categoryDrafts[row.id] ?? row.section)}
+                          onClick={() => void handleConfirmCategory(row)}
+                        >Konfirmasi Jenis</button>
+                      </div>
+                    ) : null}
+                    {mutable && !proven &&
+                      (row.section === null || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'))) &&
+                      !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
+                        <p className="bp-field__help" role="status">
+                          Langkah berikutnya ada di atas: tekan <strong>Konfirmasi Jenis</strong>. Pilihan Bahan yang sama dengan Excel tetap dihitung sebagai keputusan Anda dan tercatat.
+                        </p>
+                      ) : null}
+                        {!admissionOffered && admissionReview?.reasonCode && admissionUnavailableReason(admissionReview.reasonCode) ? (
+                          <div className="bp-field__help">
+                            <p role="status">{row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')
+                              ? 'Spesifikasi dari berkas belum diperiksa. Item ini belum bisa disimpan atau dinyatakan identik.'
+                              : admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED'
+                              ? 'Item Baru BELUM dapat disimpan: SIMPROK menemukan calon padanan yang belum terbukti berbeda. Periksa daftar kandidat di bawah sebelum menetapkan identitas baru.'
+                              : 'Item baru belum tersedia: ' + admissionUnavailableReason(admissionReview.reasonCode)}</p>
+                            {admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED' ? (
+                              <details className="bp-details">
+                                <summary>Bandingkan kandidat dan bukti identitas</summary>
+                                {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED') ? (
+                                  <>
+                                    <ul>
+                                    {row.machineProposal.resource.candidates
+                                      .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
+                                      .map((candidate, index) => (
+                                        <li key={index}>
+                                          <strong>{candidate.name}</strong>
+                                          {candidate.code ? ' (' + candidate.code + ')' : ''}
+                                          {' — ' + candidateResourceTypeLabel(candidate.type) + ' · satuan ' + candidate.baseUnit}
+                                          {candidate.specificationUnproved && candidate.unprovedSpecificationFacts.length > 0
+                                            ? ' — bukti yang masih diperlukan: ' + candidate.unprovedSpecificationFacts.join(', ')
+                                            : ''}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </>
+                                ) : <p>Daftar item yang mungkin sama belum dapat ditampilkan. Item baru belum dapat dibuat sebelum pemeriksaan.</p>}
+                                <p>Jika sesuai, gunakan <strong>Pilih Item yang Sesuai Padanan</strong> dan pilih satuan. Jika berbeda, jangan pilih padanan yang salah; perbedaan spesifikasi masih memerlukan bukti.</p>
+                                <p>Hasil pencarian kosong belum membuktikan bahwa item ini baru. Nama kerja bukan bukti spesifikasi; memuat ulang halaman saja tidak membuktikan perbedaan tersebut.</p>
+                                <p>Item privat tidak memerlukan persetujuan katalog resmi SIMPROK.</p>
+                                {!(row.sectionProvenance === 'SOURCE_ROW_CATEGORY' ||
+                                    row.sectionProvenance === 'SOURCE_SECTION_TITLE' ||
+                                    row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER')) ? (
+                                  <p role="status">Konfirmasi Jenis pada panel penyelesaian ini sebelum memutuskan padanan atau item baru.</p>
+                                ) : null}
+                              </details>
+                            ) : null}
+                          </div>
+                        ) : null}
+                    {identityReviewStatuses?.[row.id] && identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' ? (
+                      <details className="bp-details" aria-label={`Riwayat identitas baris ${row.sourceRowNumber}`}>
+                        <summary>Riwayat keputusan identitas</summary>
+                        {identityReviewStatuses[row.id].status === 'OBSERVED' ? (
+                          <p>Riwayat: pemeriksaan identitas pernah diminta dan belum diputuskan. Persetujuan pihak lain bukan syarat pemakaian item privat.</p>
+                        ) : identityReviewStatuses[row.id].status === 'RESOLVED_EXISTING' || identityReviewStatuses[row.id].status === 'ADMITTED_NEW' ? (
+                          <p>Riwayat: identitas pernah diputuskan. Harga tidak otomatis disimpan.
+                            {identityReviewStatuses[row.id].resource
+                              ? <> Item: <strong>{identityReviewStatuses[row.id].resource?.name}</strong>. Pilih item dan satuan yang sesuai untuk melanjutkan.</>
+                              : <> Item keputusan tidak tersedia untuk dipilih di workspace ini. Jangan membuat identitas duplikat.</>}
+                          </p>
+                        ) : <p>Riwayat: pemeriksaan identitas sebelumnya ditutup tanpa penetapan item.</p>}
+                      </details>
+                    ) : null}
                     {proven ? (
                       <p className="bp-field__help">Dikenali otomatis. Gunakan Simpan &amp; Gunakan di atas untuk menyimpan baris ini bersama baris pasti lainnya.</p>
                     ) : row.status === 'REJECTED' ? (
                       <p className="bp-field__help">{noteDisclosure.primary ?? 'Baris ini telah ditolak.'}</p>
                     ) : mutable ? (
                       <>
-                        {resourceProven && !unitProven ? (
+                        {sourceSpecUnverified ? (
+                          <p className="bp-field__help" role="status">Spesifikasi pada berkas belum diperiksa sebagai bukti identitas. Pilihan item belum tersedia agar SIMPROK tidak menyamakan atau membuat barang yang salah. Data sumber tetap tersimpan; Anda dapat meninjau nanti.</p>
+                        ) : null}
+                        {!sourceSpecUnverified && resourceProven && !unitProven ? (
                           <button type="button" className="bp-btn bp-rowcard__choice" title="Pilih satuan standar untuk item yang sudah dikenali." aria-expanded={lookupRows.has(row.id)} onClick={() => { updateDraft(row.id, { admitOpen: false }); setLookupRows((current) => new Set(current).add(row.id)); }} disabled={isBusy}>
                             Pilih Satuan
                           </button>
-                        ) : !resourceProven ? (
+                        ) : !sourceSpecUnverified && !resourceProven ? (
                           <button
                             type="button"
                             className="bp-btn bp-rowcard__choice"
@@ -1388,8 +1782,8 @@ export function BasicPriceReviewPage() {
                             Pilih Item yang Sesuai Padanan
                           </button>
                         ) : null}
-                        {lookupRows.has(row.id) && mutable && !proven ? (
-                          <div className="bp-rowcard__lookup bp-rowcard__lookup--contextual" aria-label="Cari dan pilih item atau satuan">
+                        {!sourceSpecUnverified && lookupRows.has(row.id) && mutable && !proven ? (
+                          <div id={`bp-lookup-${row.id}`} tabIndex={-1} className="bp-rowcard__lookup bp-rowcard__lookup--contextual" aria-label="Cari dan pilih item atau satuan">
                             <strong className="bp-rowcard__lookup-heading">{resourceProven ? "Pilih satuan yang sesuai" : "Cari item yang sudah ada di SIMPROK"}</strong>
                             {!resourceProven ? (
                               <CatalogSearchSelect
@@ -1403,23 +1797,43 @@ export function BasicPriceReviewPage() {
                                 onPendingChange={(resourcePending) => updateDraft(row.id, { resourcePending })}
                               />
                             ) : null}
+                            {!resourceProven && !draft.resource ? (
+                              <p className="bp-field__help">
+                                Teks dalam kotak hanya kata pencarian, belum menjadi pilihan. Klik item yang sesuai di daftar hasil. Jika tidak ada, jangan gunakan padanan yang salah; periksa jalur item baru.
+                              </p>
+                            ) : null}
                             <CatalogSearchSelect
                               mode="unit"
                               selected={draft.unit}
                               disabled={isBusy}
-                              onSelect={(item) => updateDraft(row.id, { unit: item as UnitLookupItem | null })}
+                              onSelect={(item) => {
+                                updateDraft(row.id, { unit: item as UnitLookupItem | null });
+                                setRowNotice({ rowId: row.id, text: 'Pilihan satuan masih draft. Tekan Gunakan Pilihan atau Gunakan Satuan setelah persyaratan item terpenuhi untuk menyimpannya.' });
+                              }}
                               onPendingChange={(unitPending) => updateDraft(row.id, { unitPending })}
                             />
+                            {row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' && draft.unit ? (
+                              <label className="bp-field">
+                                <span className="bp-field__label">Alasan koreksi satuan Excel (wajib)</span>
+                                <input className="bp-input" type="text" maxLength={900} value={draft.unitCorrectionReason} onChange={(event) => updateDraft(row.id, { unitCorrectionReason: event.target.value })} placeholder="Jelaskan bukti salah ketik atau interpretasi satuan" />
+                                <span className="bp-field__help">Excel tetap menyimpan {row.unit ?? "satuan tak tertulis"}. Pilihan Anda: {draft.unit.code}. Perubahan hanya sah jika alasannya tercatat.</span>
+                              </label>
+                            ) : null}
                             <button
                               type="button"
                               className="bp-btn bp-btn--primary bp-btn--sm"
                               onClick={() => void handleResolve(row)}
-                              disabled={blockReason !== null}
-                              aria-disabled={blockReason !== null}
-                              title={blockReason ?? 'Gunakan Item SIMPROK dan Satuan yang dipilih'}
+                              disabled={blockReason !== null || unitCorrectionMissing}
+                              aria-disabled={blockReason !== null || unitCorrectionMissing}
+                              title={unitCorrectionMissing ? 'Alasan koreksi satuan Excel wajib diisi.' : (blockReason ?? 'Gunakan Item SIMPROK dan Satuan yang dipilih')}
                             >
                               {resourceProven ? 'Gunakan Satuan' : 'Gunakan Pilihan'}
                             </button>
+                            {(blockReason || unitCorrectionMissing) && !isBusy ? (
+                              <p className="bp-field__help" role="status">
+                                Belum bisa disimpan: {unitCorrectionMissing ? "Alasan koreksi satuan Excel wajib diisi." : blockReason}
+                              </p>
+                            ) : null}
                           </div>
                         ) : null}
                         {admissionOffered && admissionReview ? (
@@ -1472,7 +1886,23 @@ export function BasicPriceReviewPage() {
                                     </select>
                                   </label>
                                 ) : null}
-                                {!draft.unit ? <button type="button" className="bp-btn bp-btn--sm" onClick={() => { updateDraft(row.id, { admitOpen: false }); setLookupRows((current) => new Set(current).add(row.id)); }}>Pilih satuan</button> : null}
+                                <div className="bp-field">
+                                   <p className="bp-field__help">Pilih satuan yang benar untuk harga ini. Satuan Excel tetap tercatat sebagai sumber; jika salah baca atau salah tulis, pilihan Anda harus diperiksa sebelum disimpan.</p>
+                                   <CatalogSearchSelect
+                                     mode="unit"
+                                     selected={draft.unit}
+                                     disabled={isBusy}
+                                     onSelect={(item) => updateDraft(row.id, { unit: item as UnitLookupItem | null })}
+                                     onPendingChange={(unitPending) => updateDraft(row.id, { unitPending })}
+                                   />
+                                 </div>
+                                {row.machineProposal?.unit.reasonCode === 'UNKNOWN_UNIT_ALIAS' && draft.unit ? (
+                                  <label className="bp-field">
+                                    <span className="bp-field__label">Alasan koreksi satuan Excel (wajib)</span>
+                                    <input className="bp-input" type="text" maxLength={900} value={draft.unitCorrectionReason} onChange={(event) => updateDraft(row.id, { unitCorrectionReason: event.target.value })} placeholder="Jelaskan bukti salah ketik atau interpretasi satuan" />
+                                    <span className="bp-field__help">Excel: {row.unit ?? "tidak tercantum"}. Pilihan: {draft.unit.code}. Sumber asli tidak diubah.</span>
+                                  </label>
+                                ) : null}
                                 {refusalChoices.map((choice) => (
                                   <label className="bp-field__help" key={choice.key}>
                                     <input
@@ -1492,37 +1922,13 @@ export function BasicPriceReviewPage() {
                                   <input className="bp-input" type="text" placeholder="Tuliskan alasan berdasarkan hasil pemeriksaan" value={draft.admitReason} onChange={(event) => updateDraft(row.id, { admitReason: event.target.value })} />
                                   <span className="bp-field__help">Jika ada kandidat, catat perbedaan nyata seperti ukuran atau spesifikasi.</span>
                                 </label>
-                                <button type="button" className="bp-btn bp-btn--primary" onClick={() => void handleAdmit(row)} disabled={admitBlock !== null} aria-disabled={admitBlock !== null} title={admitBlock ?? IDENTITY_ADMISSION_LABEL}>
+                                <button type="button" className="bp-btn bp-btn--primary" onClick={() => void handleAdmit(row)} disabled={admitBlock !== null || unitCorrectionMissing} aria-disabled={admitBlock !== null || unitCorrectionMissing} title={unitCorrectionMissing ? "Alasan koreksi satuan Excel wajib diisi." : (admitBlock ?? IDENTITY_ADMISSION_LABEL)}>
                                   Tetapkan Item Baru
                                 </button>
                                 {admitBlock ? <p className="bp-field__help" role="status">{admitBlock}</p> : null}
                               </div>
                             ) : null}
                           </>
-                        ) : null}
-                        {!admissionOffered && admissionReview?.reasonCode && admissionUnavailableReason(admissionReview.reasonCode) ? (
-                          <div className="bp-field__help" role="status">
-                            <p>Item baru belum tersedia: {admissionUnavailableReason(admissionReview.reasonCode)}</p>
-                            {admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED' ? (
-                              <details className="bp-details">
-                                <summary>Periksa kandidat yang menghalangi item baru</summary>
-                                {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED') ? (
-                                  <ul>
-                                    {row.machineProposal.resource.candidates
-                                      .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
-                                      .map((candidate, index) => (
-                                        <li key={index}>
-                                          <strong>{candidate.name}</strong>
-                                          {candidate.code ? ' (' + candidate.code + ')' : ''}
-                                          {' — '}kandidat ini belum boleh ditolak dari halaman ini.
-                                        </li>
-                                      ))}
-                                  </ul>
-                                ) : <p>Rincian kandidat belum tersedia pada respons ini; keputusan membuat item baru tetap ditahan.</p>}
-                                <p>Jika memang item yang sama, gunakan Pilih Item yang Sesuai Padanan. Jika berbeda, minta pengelola katalog memeriksa identitas dan kewenangannya. Pencarian manual yang kosong tidak menghapus bukti kandidat dari SIMPROK.</p>
-                              </details>
-                            ) : null}
-                          </div>
                         ) : null}
                         {draft.rejectOpen ? (
                           <label className="bp-field">
@@ -1533,6 +1939,31 @@ export function BasicPriceReviewPage() {
                         <button type="button" className="bp-btn bp-btn--danger-quiet" onClick={() => void handleReject(row)} disabled={isBusy} aria-disabled={isBusy}>Tolak</button>
                       </>
                     ) : <p className="bp-field__help">{rowStateLabel(row)}</p>}
+                    {row.mappingReasonAudit ? (
+                      <details className="bp-details" aria-label={`Audit koreksi satuan baris ${row.sourceRowNumber}`}>
+                        <summary>Audit koreksi satuan</summary>
+                        <p className="bp-field__help">Alasan keputusan semula (tidak dapat diubah): {row.mappingReasonAudit.originalReason}</p>
+                        {row.mappingReasonAudit.clarification ? (
+                          <p className="bp-field__help" role="status">Klarifikasi tersimpan: {row.mappingReasonAudit.clarification}</p>
+                        ) : row.status === "READY_FOR_SUBMISSION" && row.canonicalUnit && row.unit ? (
+                          <>
+                            <label className="bp-field">
+                              <span className="bp-field__label">Klarifikasi alasan satuan (catatan tambahan)</span>
+                              <textarea className="bp-input" rows={3} maxLength={900}
+                                value={reasonClarificationDrafts[row.id] ?? ""}
+                                onChange={(event) => setReasonClarificationDrafts((current) => ({ ...current, [row.id]: event.target.value }))}
+                                placeholder={`Tuliskan alasan benar perubahan ${row.unit} menjadi ${row.canonicalUnit.code}`} />
+                              <span className="bp-field__help">Excel, ResourceCatalog, nominal harga, dan catatan awal tidak berubah.</span>
+                            </label>
+                            <button type="button" className="bp-btn bp-btn--primary"
+                              disabled={isBusy || (reasonClarificationDrafts[row.id] ?? "").trim().length < 30}
+                              onClick={() => void handleClarifyUnitReason(row)}>
+                              Simpan Klarifikasi Audit
+                            </button>
+                          </>
+                        ) : null}
+                      </details>
+                    ) : null}
                     <button type="button" className="bp-btn bp-btn--link bp-btn--sm" onClick={() => toggleExpandedRow(row.id)}>Tinjau nanti</button>
                   </div>
                 </>

@@ -164,7 +164,7 @@ export class ImportRequestError extends Error {
   }
 }
 
-async function parseOrThrow(response: Response): Promise<BasicPriceImportBatchSummary> {
+async function parseOrThrow<T = BasicPriceImportBatchSummary>(response: Response): Promise<T> {
   if (!response.ok) {
     const raw = await response.text();
     let body: ({ message?: unknown } & IntakeRefusalDetails) | null;
@@ -182,7 +182,7 @@ async function parseOrThrow(response: Response): Promise<BasicPriceImportBatchSu
     }
     throw new ImportRequestError(response.status, raw);
   }
-  return response.json() as Promise<BasicPriceImportBatchSummary>;
+  return response.json() as Promise<T>;
 }
 
 export const buildResourceLookupPath = (query: ResourceLookupQuery) => buildLookupPath('resources', query);
@@ -225,7 +225,7 @@ export interface BasicPriceIntakeSelection {
   /** The source's OWN jurisdiction wording, e.g. "SIRIMAU". Not a Region id. */
   selectedRegionLabel?: string;
   /** Stated by a human when the source declares no sections of its own. */
-  declaredSection?: ResourceType;
+  declaredSection?: ResourceType | 'MIXED';
   /** For a source whose name/unit columns carry no header at all. */
   selectedNameColumn?: number;
   selectedUnitColumn?: number;
@@ -266,22 +266,101 @@ export async function updateBasicPriceImportBatch(
   return parseOrThrow(response);
 }
 
+/** A human category decision on a row whose type was not proven by the source. */
+export async function confirmBasicPriceImportRowCategory(
+  batchId: string,
+  rowId: string,
+  version: number,
+  resourceType: ResourceType,
+): Promise<{ rowId: string; version: number; resourceType: ResourceType; unchanged: boolean }> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/confirm-category`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, resourceType }),
+  });
+  return parseOrThrow<{ rowId: string; version: number; resourceType: ResourceType; unchanged: boolean }>(response);
+}
+
+/** Audited, workspace-owned optional specification decision on the existing import row. */
+export async function confirmBasicPriceRowSpecifications(
+  batchId: string,
+  rowId: string,
+  version: number,
+  confirmedSpecifications: Record<string, string>,
+  decisionKind: 'CONFIRM_SOURCE' | 'SUPPLEMENT' | 'CORRECT' = 'CONFIRM_SOURCE',
+  reason?: string,
+): Promise<{ rowId: string; version: number; decisionId: string }> {
+  const response = await apiFetch(
+    `/basic-price-imports/${batchId}/rows/${rowId}/confirm-specifications`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version, confirmedSpecifications, decisionKind, ...(reason ? { reason } : {}) }) },
+  );
+  return parseOrThrow(response);
+}
+
+export type BasicPriceIdentityReviewStatus =
+  | 'NOT_REQUESTED'
+  | 'OBSERVED'
+  | 'RESOLVED_EXISTING'
+  | 'ADMITTED_NEW'
+  | 'DISMISSED';
+
+export interface BasicPriceIdentityReviewRow {
+  status: BasicPriceIdentityReviewStatus;
+  /** Only an ACTIVE, workspace-visible catalog choice authorized by the curator. */
+  resource: ResourceLookupItem | null;
+}
+
+export async function getBasicPriceIdentityReviews(batchId: string):
+  Promise<{ rows: Record<string, BasicPriceIdentityReviewRow> }> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/identity-reviews`);
+  return parseOrThrow<{ rows: Record<string, BasicPriceIdentityReviewRow> }>(response);
+}
+
+/** Escalation to the EXISTING shared identity curator, not direct catalog creation. */
+export async function requestBasicPriceIdentityReview(
+  batchId: string, rowId: string, version: number,
+): Promise<{ rowId: string; status: BasicPriceIdentityReviewStatus; unchanged: boolean }> {
+  const response = await apiFetch(
+    `/basic-price-imports/${batchId}/rows/${rowId}/request-identity-review`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version }) },
+  );
+  return parseOrThrow<{
+    rowId: string; status: BasicPriceIdentityReviewStatus; unchanged: boolean;
+  }>(response);
+}
+
 export async function resolveBasicPriceImportRow(
   batchId: string,
   rowId: string,
   version: number,
   resourceCatalogId: string,
   unitDefinitionId: string,
+  nomenclatureAuditReason?: string,
 ): Promise<void> {
   const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ version, resourceCatalogId, unitDefinitionId }),
+    body: JSON.stringify({
+      version, resourceCatalogId, unitDefinitionId,
+      ...(nomenclatureAuditReason ? { reason: nomenclatureAuditReason } : {}),
+    }),
   });
   // `ImportRequestError`, not a bare `Error`: it carries the status and body the
   // page needs to say WHY. A plain Error forced the caller to guess, and the
   // guess it printed was always "the row may have changed" — which is one of
   // several possible causes and the wrong one for a 401, 403 or 500.
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+}
+
+export async function clarifyBasicPriceRowUnitReason(
+  batchId: string, rowId: string, version: number, reason: string,
+): Promise<void> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/clarify-unit-reason`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, reason }),
+  });
   if (!response.ok) throw new ImportRequestError(response.status, await response.text());
 }
 

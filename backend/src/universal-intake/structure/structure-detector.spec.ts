@@ -100,6 +100,24 @@ describe('structure detection — USI-01 §5 FORMAT != TABLE SHAPE', () => {
       ]);
     });
 
+    it('PR205: KDN group beneath its explicit banner is not a fourth jurisdiction', async () => {
+      const table = await readCsvTable(
+        Buffer.from(
+          'No,URAIAN BAHAN,,KECAMATAN,KECAMATAN,KECAMATAN,KDN,KDN,KDN,KDN\n' +
+            'No,URAIAN BAHAN,Satuan,SIRIMAU,TELUK AMBON,BAGUALA,Tenaga,Bahan,Peralatan,Jumlah KDN\n' +
+            '1,Batu Belah,M3,398000,344000,314000,1,1,0.2,0.95\n' +
+            '2,Pasir,M3,200000,210000,220000,1,1,0.2,0.95\n',
+          'utf8',
+        ),
+      );
+      const [candidate] = detectTableStructures(table).candidates;
+      expect(candidate.structure).toBe('REGIONAL_MATRIX');
+      expect(candidate.regionScope.choices.map((choice) => choice.label)).toEqual([
+        'SIRIMAU', 'TELUK AMBON', 'BAGUALA',
+      ]);
+      expect(candidate.regionScope.geographicEvidence).toBe('KECAMATAN');
+    });
+
     it('a matrix has NO price-role column — that is precisely what identifies it', async () => {
       const [table] = await readXlsxTables(await buildRegionalMatrixXlsx());
       const [candidate] = detectTableStructures(table).candidates;

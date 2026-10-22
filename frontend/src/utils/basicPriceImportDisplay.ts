@@ -142,9 +142,17 @@ export interface BasicPriceImportRowSummary {
   name: string;
   /** Server-read catalog identity; null before resolution. Never overwrite source name. */
   canonicalResourceName?: string | null;
+  /** Audited human search nomenclature read from the chosen row mapping, not a global resource alias. */
+  nomenclatureCorrectionName?: string | null;
+  /** Original mapping reason is immutable; a later clarification is a separate audit. */
+  mappingReasonAudit?: { originalReason: string; clarification: string | null; clarifiedAt: string | null } | null;
   /** Persisted canonical unit from GET, not a browser draft. */
   canonicalUnit?: { code: string; displayName: string; symbol: string } | null;
   unit: string | null;
+  /** Source labels and literal values, NOT verified canonical specifications. */
+  sourceSpecifications?: Array<{ label: string; value: string | null }>;
+  /** Validated append-only decision on this row, or null before confirmation. */
+  specificationDecision?: { facts: Record<string, string>; decisionKind: string; resultingVersion: number } | null;
   rawPriceDisplayText: string | null;
   proposedCanonicalPrice: string | null;
   /**
@@ -727,6 +735,13 @@ const SECTION_LABELS: Record<KnownRowSection, string> = {
 export const rowSectionLabel = (section: KnownRowSection): string =>
   SECTION_LABELS[section] ?? section;
 
+// A machine candidate arrives as an untrusted string from a server response.
+// Never cast it into a known family or print an unknown internal token.
+export const candidateResourceTypeLabel = (type: string): string =>
+  type === 'LABOR' || type === 'MATERIAL' || type === 'EQUIPMENT'
+    ? rowSectionLabel(type)
+    : 'Jenis belum terverifikasi';
+
 const COLLISION_LABELS: Record<BasicPriceImportRowSummary['collisionType'], string | null> = {
   NONE: null,
   EXACT_DUPLICATE: 'Duplikat persis baris lain',
@@ -1052,9 +1067,12 @@ export function rowIdentityAdmissionOffered(
   row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
 ): boolean {
   if (row.status !== 'NEEDS_REVIEW') return false;
-  const resource = row.machineProposal?.resource;
-  if (!resource) return false;
-  return resource.admissionReview?.offered === true;
+  const proposal = row.machineProposal;
+  if (!proposal) return false;
+  // Same server-issued refusal as the writer. Do not invite a user into an
+  // action whose source qualifiers the identity question has not examined.
+  if (proposal.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')) return false;
+  return proposal.resource.admissionReview?.offered === true;
 }
 
 /** Safe bulk-new rows have no candidate to examine and both source facts. */
@@ -1068,6 +1086,7 @@ export function rowSafeNewAdmissionEligible(
   return (
     row.status === 'NEEDS_REVIEW' &&
     row.proposedCanonicalPrice !== null &&
+    !proposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED') &&
     proposal?.unit.status === 'RESOLVED' &&
     proposal.unit.unitDefinitionId !== null &&
     proposal.resource.admissionReview?.offered === true &&
@@ -1384,7 +1403,7 @@ export const rowActionFailureMessage = (
  * now displayed.
  */
 export const staleRowRecoveryMessage = (sourceRowNumber: number): string =>
-  `Baris ${sourceRowNumber} baru saja diperbarui oleh perubahan lain, jadi keputusan Anda belum tersimpan. ` +
+  `Baris ${sourceRowNumber} memiliki versi lebih baru dari keputusan yang dikirim. Keputusan belum tersimpan. ` +
   `SIMPROK sudah memuat versi terbaru baris ini — pilihan Anda masih tersimpan sebagai draf. ` +
   `Periksa kembali, lalu konfirmasi ulang untuk menyimpan.`;
 
@@ -1395,6 +1414,45 @@ const namedCodeOf = (rawBody: string): string | null => {
     return typeof parsed.message === 'string' ? parsed.message : null;
   } catch {
     return null; // Not JSON. The status below is still more honest than a guess.
+  }
+};
+
+/** A business refusal (also HTTP 409) is not proof that another person edited this row. */
+export const isStaleRowConflict = (rawBody: string): boolean =>
+  namedCodeOf(rawBody) === 'ROW_VERSION_STALE';
+
+/** Refresh candidate evidence after refusal; never retry or approve a decision automatically. */
+export const isAdmissionReviewFingerprintStale = (rawBody: string): boolean =>
+  namedCodeOf(rawBody) === 'RESOURCE_ADMISSION_REVIEW_STALE';
+
+export const isAdmissionCandidateRefreshRequired = (rawBody: string): boolean =>
+  isAdmissionReviewFingerprintStale(rawBody) ||
+  namedCodeOf(rawBody) === 'RESOURCE_ADMISSION_REFUSALS_INVALID';
+
+export const rowNonStaleConflictMessage = (sourceRowNumber: number, rawBody: string): string => {
+  const prefix = `Baris ${sourceRowNumber} belum disimpan. `;
+  switch (namedCodeOf(rawBody)) {
+    case 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE':
+      return prefix + 'Satuan pilihan belum dapat dibuktikan dari satuan Excel. Penginput boleh mengoreksi satuan, tetapi satuan harga harus diverifikasi; data sumber tetap dicatat.';
+    case 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION':
+      return prefix + 'Perubahan satuan memerlukan konversi harga yang belum tersedia pada jalur ini. Jangan menggunakan nilai harga lama dengan satuan berbeda.';
+    case 'UNIT_NOT_REPRESENTABLE_BY_UNIT_AUTHORITY':
+      return prefix + 'Satuan pilihan belum dikenali oleh otoritas satuan SIMPROK.';
+    case 'ROW_SOURCE_SECTION_UNRESOLVED':
+    case 'CATEGORY_CONFIRMATION_REQUIRED':
+      return prefix + 'Jenis item belum dipastikan. Gunakan Ubah Jenis dan Konfirmasi Jenis sebelum menyimpan.';
+    case 'IDENTITY_CANDIDATE_BLOCKED':
+      return prefix + 'Ada kandidat item yang belum terbukti berbeda. Periksa padanan dan spesifikasi terlebih dahulu.';
+    case 'RESOURCE_ADMISSION_REVIEW_STALE':
+      return prefix + 'Daftar kandidat berubah. Periksa bukti kandidat terbaru sebelum menetapkan item baru.';
+    case 'RESOURCE_ADMISSION_REFUSALS_INVALID':
+      return prefix + 'Keputusan penolakan kandidat belum lengkap atau tidak sesuai hasil pemeriksaan terbaru.';
+    case 'ROW_BUSY_RETRY':
+      return prefix + 'Baris sedang diproses. Tunggu sebentar, lalu periksa kembali.';
+    case 'ROW_NOT_MUTABLE':
+      return prefix + 'Baris sudah tidak menerima perubahan. Periksa status baris saat ini.';
+    default:
+      return prefix + 'SIMPROK menolak keputusan karena prasyarat belum terpenuhi. Periksa jenis, satuan, dan bukti padanan; tidak perlu mengulang seluruh impor.';
   }
 };
 
@@ -1598,9 +1656,11 @@ const BLOCKING_FACT_LABELS: Record<string, string> = {
     'Satuan kanonik itu belum dapat dibuktikan oleh otoritas satuan.',
   RESOURCE_NOT_FOUND:
     'Item belum dikenali sebagai Resource Identity yang sudah ada. Pilih Item SIMPROK yang sesuai, sahkan sebagai item baru, atau tolak baris ini.',
-  MULTIPLE_CANDIDATES_NEEDS_REVIEW: 'Ada lebih dari satu kandidat yang sama kuat.',
+  MULTIPLE_CANDIDATES_NEEDS_REVIEW: 'Beberapa item terlihat sama-sama mungkin cocok. SIMPROK belum bisa memilih satu dengan pasti.',
   STRONG_CANDIDATE_NEEDS_REVIEW: 'Ada satu kandidat kuat yang masih perlu ditegaskan.',
   SPECIFICATION_UNPROVED: 'Entri katalog menyebut hal yang tidak disebut sumber.',
+  SOURCE_SPECIFICATION_UNVERIFIED:
+    'Berkas memuat spesifikasi tambahan yang belum diperiksa bersama identitas item. Belum bisa disimpan otomatis.',
   SPECIFICATION_CONFLICT: 'Spesifikasi sumber dan katalog bertentangan.',
   RESOURCE_TYPE_MISMATCH: 'Jenis sumber daya tidak cocok dengan kategori baris.',
   RESOURCE_UNKNOWN_OR_OUTSIDE_WORKSPACE:
@@ -1957,6 +2017,9 @@ export const rowSectionDisplay = (row: BasicPriceImportRowSummary): string => {
      *
      * The two document-proven provenances are untouched and never hedged.
      */
+    if (row.sectionProvenance === 'UPLOADER_DECLARED' && row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER')) {
+      return `Jenis ditetapkan: ${label}`;
+    }
     const unconfirmedBatchHint =
       row.sectionProvenance === 'UPLOADER_DECLARED' && row.resourceCatalogId === null;
     return unconfirmedBatchHint ? `Kategori awal: ${label}` : label;
@@ -2079,10 +2142,10 @@ const resourceNarrative = (resource: RowResourceProposal): string => {
   const count = resource.candidates.length;
   const head =
     count === 0
-      ? 'SIMPROK belum menemukan sumber daya yang dapat dibuktikan.'
+      ? 'Belum ada item katalog yang terbukti sesuai dengan data ini.'
       : count === 1
-        ? 'SIMPROK menemukan satu pilihan kandidat terkait, tetapi belum membuktikan identitasnya sama. Periksa spesifikasi sebelum memilih.'
-        : `SIMPROK menemukan ${count} pilihan kandidat terkait, bukan otomatis setara. Periksa spesifikasi sebelum memilih.`;
+        ? 'Ada 1 item yang mungkin cocok. Belum terbukti sama; bandingkan spesifikasinya.'
+        : `Ada ${count} item yang mungkin cocok. Belum ada yang terbukti sama; bandingkan spesifikasinya.`;
   return why.length === 0 ? head : `${head} ${why.join(' ')}`;
 };
 
@@ -2133,7 +2196,17 @@ export const correctedCatalogNameCandidateConflict = (
   };
   const target = comparable(correctedName);
   return row.machineProposal?.resource.candidates.find((candidate) =>
-    candidate.type === confirmedType && comparable(candidate.name) === target,
+    candidate.type === confirmedType &&
+    comparable(candidate.name) === target &&
+    // PR205: raw-name equality cannot overrule a *server-proven* identity
+    // difference. Do not compare specifications here or invent a second
+    // matcher. Only the canonical authority's explicit conflict + ruled-out
+    // disposition permits a differently specified item to reach the shared
+    // admission lock. Unknown, unproved, and blocked candidates still stop.
+    !(
+      row.machineProposal?.resource.reasonCodes.includes('SPECIFICATION_CONFLICT') &&
+      candidate.admissionDisposition === 'MACHINE_RULED_OUT'
+    ),
   ) ?? null;
 };
 
@@ -2246,7 +2319,7 @@ const ROW_NOTE_LABELS: Record<string, string> = {
     'Kategori yang ditulis baris ini berbeda dengan kategori judul bagiannya.',
   SOURCE_CATEGORY_UNRECOGNIZED: 'Kategori yang ditulis sumber belum dikenali SIMPROK.',
   SECTION_DECLARED_BY_UPLOADER:
-    'Kategori belum tercantum di berkas dan masih perlu dipastikan.',
+    'Berkas awal tidak mencantumkan kategori. Pengguna dapat melengkapinya dalam peninjauan SIMPROK.',
   UNIT_TEXT_FROM_SIMPROK_UNIT_CANDIDATE:
     'Satuan diambil dari kolom yang ditunjuk saat impor, bukan dari kolom satuan bertajuk.',
 };
@@ -2273,20 +2346,30 @@ export const rowNoteLines = (row: BasicPriceImportRowSummary): RowNoteLines => {
       const machineEstablished =
         row.machineProposal?.identityPairProven === true &&
         row.machineProposal.resource.admissibleForResolve;
+      const reviewerConfirmed = row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER');
       const humanEstablished =
         row.effectiveResourceType !== null &&
         row.effectiveResourceType !== undefined &&
         (row.status === 'READY_FOR_SUBMISSION' ||
           row.status === 'SUBMISSION_CREATED' ||
           row.savedAsPrivatePrice === true);
-      if (machineEstablished || humanEstablished) {
-        // The source's missing category remains historical evidence, but is no
-        // longer an instruction to re-decide a completed human resolution.
-        human.push(machineEstablished
-          ? 'Berkas tidak mencantumkan kategori; jenis item sudah dikenali.'
-          : 'Berkas tidak mencantumkan kategori; jenis item sudah dikonfirmasi.');
+      if (reviewerConfirmed || machineEstablished || humanEstablished) {
+        // Missing source category remains audit history, never unfinished work
+        // once the reviewer has confirmed the category of this specific row.
+        human.push(reviewerConfirmed || humanEstablished
+          ? 'Berkas tidak mencantumkan kategori; jenis item sudah dikonfirmasi.'
+          : 'Berkas tidak mencantumkan kategori; jenis item sudah dikenali.');
         continue;
       }
+      // The source is not a prison. State the action the uploader can take NOW
+      // rather than treating a missing Excel column as a permanent defect.
+      human.push('Jenis item belum dikonfirmasi. Pilih jenis di panel Penyelesaian dan tekan Konfirmasi Jenis; berkas Excel asli tetap tercatat.');
+      continue;
+    }
+    if (code === 'ROW_CATEGORY_CONFIRMED_BY_REVIEWER') {
+      // Historical reviewer decision is already projected into the category
+      // display and source-history sentence, not an unexplained technical note.
+      continue;
     }
     // ROW vocabulary first, then the shared identity/unit table — one sentence
     // per code, and never two spellings of the same fact.
@@ -2304,7 +2387,7 @@ export const rowNoteLines = (row: BasicPriceImportRowSummary): RowNoteLines => {
     technicalNotice:
       untranslatedCount === 0
         ? null
-        : `${untranslatedCount} informasi teknis tambahan belum memiliki penjelasan pengguna.`,
+        : `Ada ${untranslatedCount} catatan hasil pembacaan yang belum dapat dijelaskan dengan jelas.`,
   };
 };
 

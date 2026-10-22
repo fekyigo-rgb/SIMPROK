@@ -19,6 +19,8 @@ import { BasicPricePrivateAssetService } from './basic-price-private-asset.servi
 import { TrustedBasicPriceActorService } from './trusted-basic-price-actor.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { ResourceAdmissionService } from '../resource-catalog/resource-admission.service';
+import { ResourceCatalogModule } from '../resource-catalog/resource-catalog.module';
+import { BasicPriceIdentityReviewBridgeService } from './basic-price-identity-review-bridge.service';
 import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 import { UniversalIntakeModule } from '../universal-intake/universal-intake.module';
 import { BasicPriceSupplierBridgeService } from './basic-price-supplier-bridge.service';
@@ -32,7 +34,7 @@ import { BasicPriceSourceArchiveService } from './basic-price-source-archive.ser
   // UniversalIntakeModule: the connector authorization boundary. It is imported
   // for IngestionConnectorService alone — the readers, structure detector and
   // source envelope are stateless and need no container.
-  imports: [PrismaModule, RealityIntakeModule, UnitKernelModule, UniversalIntakeModule],
+  imports: [PrismaModule, RealityIntakeModule, UnitKernelModule, UniversalIntakeModule, ResourceCatalogModule],
   controllers: [BasicPriceController, BasicPriceImportController, BasicPricePublicationController, BasicPriceImportLookupController],
   providers: [
     BasicPriceService,
@@ -44,6 +46,7 @@ import { BasicPriceSourceArchiveService } from './basic-price-source-archive.ser
     // authorizes, then calls the SAME intake door the browser upload calls.
     BasicPriceSupplierBridgeService,
     BasicPriceRowResolutionService,
+    BasicPriceIdentityReviewBridgeService,
     BasicPricePublicationService,
     BasicPricePromotionService,
     BasicPriceImportLookupService,

@@ -307,7 +307,11 @@ describe('BasicPriceRowResolutionService', () => {
     );
     expect(result.status).toBe('READY_FOR_SUBMISSION');
     expect(tx.resourceCatalog.findFirst).toHaveBeenCalledWith({
-      where: { id: 'resource-01', workspaceId: WORKSPACE_ID, status: 'ACTIVE' },
+      where: {
+        id: 'resource-01',
+        status: 'ACTIVE',
+        OR: [{ workspaceId: WORKSPACE_ID }, { workspaceId: null }],
+      },
     });
     expect(tx.unitDefinition.findFirst).toHaveBeenCalledWith({
       where: { id: 'unit-01', isActive: true },
@@ -2137,11 +2141,12 @@ describe('BasicPriceRowResolutionService', () => {
       );
     };
 
-    const resolve = () =>
+    const resolve = (reason?: string) =>
       service.resolveRow(WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID, {
         version: 0,
         resourceCatalogId: 'resource-01',
         unitDefinitionId: 'unit-01',
+        ...(reason ? { reason } : {}),
       });
 
     const nothingWasWritten = () => {
@@ -2243,9 +2248,20 @@ describe('BasicPriceRowResolutionService', () => {
         targetUnitDefinition: { id: 'unit-01', code: 'UNIT' },
       });
 
-      const result = await resolve();
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_INTERPRETATION_REASON_REQUIRED',
+      });
+      nothingWasWritten();
 
+      const reason =
+        'KOREKSI_SATUAN_SUMBER: Batang -> UNIT; Reviewer confirms each wooden pole equals one unit.';
+      const result = await resolve(reason);
       expect(result.status).toBe('READY_FOR_SUBMISSION');
+      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledWith(
+        {
+          data: expect.objectContaining({ reason }) as Record<string, unknown>,
+        },
+      );
       expect(unitKernel.resolve).toHaveBeenCalledWith(
         'Batang',
         'UNIT',
@@ -2265,11 +2281,60 @@ describe('BasicPriceRowResolutionService', () => {
       });
       expect(written).not.toHaveProperty('rawUnitText');
       expect(written).not.toHaveProperty('proposedCanonicalPrice');
-      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledTimes(
-        1,
-      );
+      expect(
+        tx.basicPriceImportRowResourceMapping.create,
+      ).toHaveBeenCalledTimes(1);
     });
 
+    it('GRADE-A M5/M3 — Owner correction is explicit, reason-tagged and does not mutate source', async () => {
+      rowIs({
+        rawUnitText: 'M5',
+        rawResourceNameText: 'Batu Pecah 2-3 cm (Split Stone Crusher)',
+        proposedCanonicalPrice: 781000,
+      });
+      tx.unitDefinition.findFirst.mockResolvedValue({
+        id: 'unit-01',
+        code: 'M3',
+      });
+      kernelAnswers({
+        status: 'NEEDS_REVIEW',
+        priceOperation: null,
+        reasonCodes: ['UNKNOWN_UNIT_ALIAS'],
+        explanation: 'M5 belum dikenal',
+        sourceUnitDefinition: null,
+        targetUnitDefinition: { id: 'unit-01', code: 'M3' },
+      });
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_INTERPRETATION_REASON_REQUIRED',
+      });
+      expect(
+        await refusalOf(() => resolve('M5 berubah jadi M3 saja')),
+      ).toMatchObject({
+        message: 'UNIT_INTERPRETATION_REASON_REQUIRED',
+      });
+      nothingWasWritten();
+      const reason =
+        'KOREKSI_SATUAN_SUMBER: M5 -> M3; Owner memastikan satuan M5 salah ketik, benar M3.';
+      const result = await resolve(reason);
+      expect(result.status).toBe('READY_FOR_SUBMISSION');
+      expect(result.rawUnitText).toBe('M5');
+      expect(result.proposedCanonicalPrice).toBe(781000);
+      expect(unitKernel.resolve).toHaveBeenCalledWith(
+        'M5',
+        'M3',
+        'resource-01',
+        'MATERIAL',
+      );
+      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledWith(
+        {
+          data: expect.objectContaining({
+            reason,
+            resourceCatalogId: 'resource-01',
+            unitDefinitionId: 'unit-01',
+          }) as Record<string, unknown>,
+        },
+      );
+    });
     it('T2i — unknown source still refuses when the kernel represented a DIFFERENT target than the one the human selected', async () => {
       kernelAnswers({
         status: 'NEEDS_REVIEW',
@@ -2925,4 +2990,66 @@ describe('BasicPriceRowResolutionService', () => {
       expect(writer).not.toHaveBeenCalled();
     });
   });
+
+  describe('BP-SPEC-ACTIVATION: existing append-only manual decision law', () => {
+    const arrange = (previous: Record<string, unknown> | null) => {
+      jest.spyOn(service as never, 'assertBatchRowMutable' as never).mockResolvedValue({
+        ...baseRow,
+        rawSourceContext: null,
+        version: 1,
+        batch: baseBatch,
+      } as never);
+      tx.$queryRaw.mockResolvedValueOnce(previous ? [previous] : []);
+      const updated = jest.fn().mockResolvedValue({ count: 1 });
+      (tx.basicPriceImportRow as unknown as { updateMany: jest.Mock }).updateMany = updated;
+      return updated;
+    };
+    const previous = {
+      id: 'previous-spec-decision',
+      resultingVersion: 1,
+      sourceSha256: 'batch-sha',
+      confirmedSpecifications: { merek: 'LAMA' },
+    };
+
+    it('accepts the first manual supplement when the Excel contains no spec columns', async () => {
+      const update = arrange(null);
+      const saved = await service.confirmRowSpecifications(
+        WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID,
+        { version: 1, decisionKind: 'SUPPLEMENT', confirmedSpecifications: { merek: 'UJI-SINTETIS', tipe: 'T-1' } },
+      );
+      expect(saved).toMatchObject({
+        rowId: ROW_ID, version: 2, decisionKind: 'SUPPLEMENT',
+        confirmedSpecifications: { merek: 'UJI-SINTETIS', tipe: 'T-1' },
+      });
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('never permits changing an earlier human fact through SUPPLEMENT', async () => {
+      const update = arrange(previous);
+      await expect(service.confirmRowSpecifications(
+        WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID,
+        { version: 1, decisionKind: 'SUPPLEMENT', confirmedSpecifications: { merek: 'BARU' } },
+      )).rejects.toThrow('SPECIFICATION_CORRECTION_REQUIRES_REASON');
+      expect(update).not.toHaveBeenCalled();
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('requires a reason for CORRECT and appends a new version without rewriting history', async () => {
+      const update = arrange(previous);
+      await expect(service.confirmRowSpecifications(
+        WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID,
+        { version: 1, decisionKind: 'CORRECT', confirmedSpecifications: { merek: 'BARU' } },
+      )).rejects.toThrow('SPECIFICATION_CORRECTION_REASON_REQUIRED');
+      expect(update).not.toHaveBeenCalled();
+      const saved = await service.confirmRowSpecifications(
+        WORKSPACE_ID, BATCH_ID, ROW_ID, REVIEWER_ID,
+        { version: 1, decisionKind: 'CORRECT', confirmedSpecifications: { merek: 'BARU' }, reason: 'Pemeriksaan fakta sintetis' },
+      );
+      expect(saved).toMatchObject({ version: 2, decisionKind: 'CORRECT' });
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+  });
+
 });

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { BasicPriceUniversalIntakeAdapter } from './basic-price-universal-intake.adapter';
 import { XlsxSourceReader } from '../universal-intake/readers/xlsx.reader';
@@ -10,11 +11,10 @@ import { testEnvelope } from '../../test/fixtures/source-envelope.fixture';
 /**
  * USI-01R3 §4–6 — ROW IDENTITY AND PER-ROW REGION ISOLATION, ON THE REAL FILE.
  *
- * USI-01R3A REVISED THE ROW-KIND LAW THAT PART OF THIS SUITE MEASURED, and the
- * expectations here moved with it — see ROW-03 / ROW-03A. The isolation proofs
- * below are untouched, and now run over a LARGER candidate set (934 rows per
- * jurisdiction, not 894), because the forty rows the old rule deleted as
- * "headings" were never proven to be headings at all.
+ * USI-01R3A revised the row-kind law; historic runs counted 894/934
+ * candidates before later source and policy changes. The Owner-approved
+ * 12 October 2026 source is now SHA-pinned. ROW-03 / ROW-03A independently
+ * enumerate source cells, rather than inheriting historic row totals.
  *
  * The portable twin of this suite lives in
  * `basic-price-usi01r3a-portable-regional.spec.ts` and cannot skip. This one is
@@ -44,8 +44,27 @@ describeIf('REAL Workbook B — row identity and per-row region isolation', () =
   let regionColumns: Map<string, number>;
   const byRegion = new Map<string, Awaited<ReturnType<typeof adapter.parse>>>();
 
+  // The 12 October Owner-approved source is pinned. Never silently update
+  // source-derived assertions when a file changes again.
+  const APPROVED_SHA256 =
+    'c1ef977209bfd9c7fd841805e5222717210b79e75c506ac24fdcde06ea2ce3e8';
+
+  const namedSourceRows = () =>
+    table.rows.filter(
+      (row) => row.number > 2 && (row.cells[1] ?? null)?.text != null,
+    );
+
+  // Independently classify directly from source cell presence. This MUST NOT
+  // call the importer's row-kind classifier, or the test could prove itself.
+  const hasNoCommercialEvidence = (row: SourceTable['rows'][number]) =>
+    (row.cells[0] ?? null)?.text == null &&
+    (row.cells[2] ?? null)?.text == null &&
+    [...regionColumns.values()].every((column) => row.cells[column - 1] == null);
+
+
   beforeAll(async () => {
     bytes = readFileSync(WORKBOOK_B);
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(APPROVED_SHA256);
 
     // The RAW grid, read independently of the domain adapter. Every assertion
     // below compares the adapter's output against the SOURCE, never against
@@ -66,7 +85,7 @@ describeIf('REAL Workbook B — row identity and per-row region isolation', () =
           declaredSection: 'MATERIAL',
           selectedRegionLabel: label,
           selectedNameColumn: 2,
-          selectedUnitColumn: 4,
+          selectedUnitColumn: 3,
         }),
       );
     }
@@ -138,13 +157,10 @@ describeIf('REAL Workbook B — row identity and per-row region isolation', () =
     expect(excluded[1]).toBe(excluded[0]);
     expect(excluded[2]).toBe(excluded[0]);
 
-      // FORTY ROWS ARE EXCLUDED, AND THE REASON IS NOT THE ONE USI-01R3 GAVE.
-      //
-      // USI-01R3 excluded these forty by calling them titles, which it could not
-      // prove. USI-01R3A then kept all forty as candidates, and the Owner's
-      // browser showed what that costs: the review room filled with rows like
-      // "[Upah] — BATU" carrying unit "-", and the real exceptions were buried
-      // under banners.
+      // Earlier snapshots excluded forty by treating them as titles without
+      // proof. The 12 October source contains 33 demonstrably unpriced,
+      // unnumbered, unitless named rows. The independent source-cell
+      // enumeration below protects that result; a title word never decides it.
       //
       // They are excluded again, on a different and provable ground. Every one is
       // a row with NO unit, NO price under ANY jurisdiction, and NO number in the
@@ -164,19 +180,30 @@ describeIf('REAL Workbook B — row identity and per-row region isolation', () =
       // left a unit in its cell, so it still carries commercial evidence and the
       // rule declines to guess past it. That row is the proof this is evidence
       // and not a vocabulary.
-      expect(excluded[0]).toBe(40);
+      const rawExcluded = namedSourceRows().filter(hasNoCommercialEvidence);
+      expect(rawExcluded).toHaveLength(33);
+      expect(excluded[0]).toBe(rawExcluded.length);
   });
 
-    it('ROW-03A: the 40 excluded rows are banners, are counted, and are gone from every region', () => {
-      // COUNTED, NEVER SILENT. Every physical named row the reader saw is either
-      // a candidate or part of this count — the batch still accounts for all of
-      // them, and the raw bytes are untouched.
+    it('ROW-03A: raw-source exclusions are counted and no candidate is lost', () => {
+      // Independently calculate every candidate's physical source row number.
+      // This cannot be made green by modifying a single expected count.
+      const named = namedSourceRows();
+      const expectedSourceNumbers = named
+        .filter((row) => !hasNoCommercialEvidence(row))
+        .map((row) => row.number);
       for (const label of REGIONS) {
         const knowledge = byRegion.get(label)!;
+        expect(knowledge.excludedNonDataRows).toBe(
+          named.length - expectedSourceNumbers.length,
+        );
+        expect(knowledge.rows.map((row) => row.sourceRowNumber)).toEqual(
+          expectedSourceNumbers,
+        );
         expect(knowledge.rows.length + knowledge.excludedNonDataRows).toBe(
-          knowledge.rows.length + 40,
-      );
-    }
+          named.length,
+        );
+      }
 
       // NONE of them reaches the review room, in ANY region — the DOCUMENT
       // decides this, not the importer, so the answer cannot move with the
@@ -275,7 +302,12 @@ describeIf('REAL Workbook B — row identity and per-row region isolation', () =
     expect(checked).toBe(
       REGIONS.reduce((total, label) => total + byRegion.get(label)!.rows.length, 0),
     );
-    expect(checked).toBeGreaterThan(2500);
+    // Match the approved source's independently enumerated candidates, not
+    // a threshold inherited from an older version of this workbook.
+    expect(checked).toBe(
+      namedSourceRows().filter((row) => !hasNoCommercialEvidence(row)).length *
+        REGIONS.length,
+    );
   });
 
   it('REGION-02: dirty text stays THIS region’s own evidence', () => {

@@ -643,6 +643,45 @@ describe('BasicPriceService — BP-UX-FINAL-01C truth closure', () => {
       sourceImportRow: null,
     };
 
+    it('PROPOSER-STATUS: reads only the linked submission status in the owning Workspace', async () => {
+      const localPrice = {
+        ...detailRow,
+        assetScope: 'WORKSPACE_PRIVATE',
+        status: 'UNPUBLISHED',
+        verificationStatus: 'UNVERIFIED',
+        supersedesBasicPriceId: null,
+        sourceImportRow: {
+          priceSubmissionId: 'sub-1',
+          priceSubmission: { status: 'UNDER_REVIEW', workspaceId },
+          batch: null,
+        },
+      };
+      prisma.basicPrice.findFirst.mockResolvedValue(localPrice);
+      prisma.basicPrice.findMany.mockResolvedValue([]);
+      const own = await service.findDetailForWorkspace('bp-01', workspaceId);
+      expect(own.price.alreadyProposed).toBe(true);
+      expect(own.proposalStatus).toBe('UNDER_REVIEW');
+      const select = firstArgs().select as Record<string, unknown>;
+      expect(JSON.stringify(select)).toContain('priceSubmission');
+
+      prisma.basicPrice.findFirst.mockResolvedValue({
+        ...localPrice,
+        sourceImportRow: {
+          ...localPrice.sourceImportRow,
+          priceSubmission: { status: 'VERIFIED', workspaceId: 'foreign-workspace' },
+        },
+      });
+      const foreign = await service.findDetailForWorkspace('bp-01', workspaceId);
+      expect(foreign.proposalStatus).toBeNull();
+
+      prisma.basicPrice.findFirst.mockResolvedValue({
+        ...localPrice,
+        sourceImportRow: { ...localPrice.sourceImportRow, priceSubmission: null },
+      });
+      const unknown = await service.findDetailForWorkspace('bp-01', workspaceId);
+      expect(unknown.proposalStatus).toBeNull();
+    });
+
     const lineage = (
       id: string,
       value: string,

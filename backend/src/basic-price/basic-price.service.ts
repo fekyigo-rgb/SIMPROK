@@ -159,6 +159,7 @@ const DETAIL_PROVENANCE_SELECT = {
   sourceImportRow: {
     select: {
       priceSubmissionId: true,
+      priceSubmission: { select: { status: true, workspaceId: true } },
       sourceKdnHeaderText: true,
       batch: {
         select: {
@@ -1243,6 +1244,12 @@ export class BasicPriceService {
             ? proposedIds.has(row.id)
             : null,
       },
+      proposalStatus:
+        row.assetScope === 'WORKSPACE_PRIVATE' &&
+        proposedIds.has(row.id) &&
+        row.sourceImportRow?.priceSubmission?.workspaceId === workspaceId
+          ? row.sourceImportRow.priceSubmission.status
+          : null,
       evidence: mapBasicPriceEvidence(row),
       // KDN ADDENDUM — a RESOURCE-level domestic-content fact, carried beside
       // the price and never folded into it. It changes no money, no currentness

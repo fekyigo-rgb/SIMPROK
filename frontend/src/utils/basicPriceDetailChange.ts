@@ -96,7 +96,7 @@ export const PROPOSAL_PRIVATE_NO_AUTHORITY =
   'Mengusulkan harga ke SIMPROK membutuhkan kewenangan pengajuan Basic Price di ruang kerja ini.';
 
 export const PROPOSAL_ALREADY_SENT =
-  'Harga ini sudah diusulkan ke SIMPROK. Status usulan ada di Pengajuan harga.';
+  'Harga ini sudah diusulkan ke SIMPROK.';
 
 export const IDENTITY_NO_PATCH =
   'Satuan, sumber daya, dan wilayah tidak diubah lewat patch generik. Itu observasi atau identitas baru.';

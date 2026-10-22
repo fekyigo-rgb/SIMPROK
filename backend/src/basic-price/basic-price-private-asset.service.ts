@@ -23,6 +23,11 @@ import type { TrustedBasicPriceActor } from './trusted-basic-price-actor.service
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { expectedKdnMatchesStored } from './basic-price-detail-change.policy';
 import { privateUseBlockReason } from './basic-price-batch-actions.policy';
+import { confirmedSpecifications, compareConfirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
+import {
+  hasExplicitUnverifiedSourceSpecification,
+  SOURCE_SPECIFICATION_UNVERIFIED,
+} from './basic-price-source-specification-gate';
 import {
   sourceClassificationIssue,
   temporalProvenanceIssue,
@@ -285,6 +290,7 @@ export class BasicPricePrivateAssetService {
             id: string;
             workspaceId: string;
             organizationId: string;
+            sourceSha256: string;
             status: string;
             effectiveDate: Date | null;
             regionId: string | null;
@@ -308,7 +314,7 @@ export class BasicPricePrivateAssetService {
                           "sourcePeriodLabel", "sourcePeriodGranularity", "effectiveDateProvenance", "effectiveDateDerivationRule",
                           "reviewDate",
                           "sourceRegionScopeLabel", "sourceRegionScopeGeographicEvidence",
-                          "regionScopeConfirmedRegionId"
+                          "regionScopeConfirmedRegionId", "sourceSha256"
                      FROM "basic_price_import_batches"
                     WHERE "id" = ${batchId}::uuid
                     FOR UPDATE`,
@@ -401,6 +407,38 @@ export class BasicPricePrivateAssetService {
           const row = await tx.basicPriceImportRow.findUniqueOrThrow({
             where: { id: rowId },
           });
+          // A reviewed SOURCE specification is not enough on its own: the
+          // selected canonical catalog identity must assert the same facts.
+          // Otherwise a qualified workbook could price an unqualified item.
+          if (hasExplicitUnverifiedSourceSpecification(row.rawSourceContext)) {
+            const decisions = await tx.$queryRaw<Array<{
+              confirmedSpecifications: unknown; sourceSha256: string; resultingVersion: number;
+            }>>(Prisma.sql`SELECT "confirmedSpecifications", "sourceSha256", "resultingVersion"
+              FROM "basic_price_import_row_specification_decisions"
+              WHERE "workspaceId" = ${batch.workspaceId}::uuid
+                AND "rowId" = ${row.id}::uuid
+              ORDER BY "resultingVersion" DESC LIMIT 1`);
+            const proof = decisions[0];
+            const reviewed = proof && proof.sourceSha256 === batch.sourceSha256 &&
+              proof.resultingVersion <= row.version
+              ? confirmedSpecifications(proof.confirmedSpecifications)
+              : null;
+            if (!reviewed) throw new ConflictException(SOURCE_SPECIFICATION_UNVERIFIED);
+            const catalog = row.resourceCatalogId
+              ? await tx.resourceCatalog.findFirst({
+                  where: {
+                    id: row.resourceCatalogId,
+                    status: 'ACTIVE',
+                    OR: [{ workspaceId: batch.workspaceId }, { workspaceId: null }],
+                  },
+                  select: { specifications: true },
+                })
+              : null;
+            if (!catalog ||
+                compareConfirmedSpecifications(reviewed, catalog.specifications) !== 'MATCH') {
+              throw new ConflictException('CATALOG_SPECIFICATION_IDENTITY_UNPROVED');
+            }
+          }
           // Resource identity and the canonical price are the two facts this
           // writer may not proceed without — and it never derives either.
           if (!row.resourceCatalogId || !row.proposedCanonicalPrice) {

@@ -435,30 +435,50 @@ test("BP-FUNCTION-01. safe-new selection never exceeds the backend's 100-row bou
   assert.match(renderable, /admitSafeNewBasicPriceResources\(/u);
 });
 
-test("BP-FUNCTION-02. Edit satuan opens the existing unit picker and confirms through the resolution writer", () => {
-  const start = renderable.indexOf('title="Pilih satuan standar SIMPROK yang sesuai."');
-  assert.ok(start > 0, "unit Edit control must be visible on mutable review rows");
-  const action = renderable.slice(start, start + 430);
-  assert.match(action, /updateDraft\(row\.id, \{ admitOpen: false \}\)/u);
-  assert.match(action, /setLookupRows/u);
-  assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id\)/u);
-  assert.match(renderable, /mode="unit"[\s\S]*?onSelect=\{\(item\) => updateDraft\(row\.id, \{ unit:/u);
+test("BP-FUNCTION-02. source unit stays visible but is edited only through the existing decision-side selector", () => {
+  assert.doesNotMatch(renderable, /Pilih\/Ubah Satuan|pendingUnitFocusRow/u);
+  assert.match(renderable, /mode="unit"[\s\S]*?onSelect=\{\(item\) => \{[\s\S]*?updateDraft\(row\.id, \{ unit:/u);
+  assert.match(renderable, /Pilih Satuan/u);
+  assert.match(renderable, /Gunakan Satuan/u);
+  assert.match(renderable, /Gunakan Pilihan/u);
+  assert.match(renderable, /Belum bisa disimpan: \{unitCorrectionMissing \?[^}]+: blockReason\}/u);
+  assert.match(renderable, /Langkah berikutnya ada di atas: tekan <strong>Konfirmasi Jenis<\/strong>/u);
+  assert.match(renderable, /Teks dalam kotak hanya kata pencarian, belum menjadi pilihan/u);
+  assert.match(page, /await resolveBasicPriceImportRow\(batchId, row\.id, row\.version, draft\.resource\.id, draft\.unit\.id, resolutionAuditReason \|\| undefined\)/u);
+});
+test("BP-ROW-UX-OWNER: new item has the same canonical unit picker without changing decision paths", () => {
+  const admission = renderable.slice(renderable.indexOf('className="bp-rowcard__admission"'));
+  assert.match(admission, /<CatalogSearchSelect[\s\S]*?mode="unit"[\s\S]*?selected=\{draft\.unit\}/u);
+  assert.doesNotMatch(admission, /admitOpen: false[\s\S]*?Pilih satuan/u);
+  assert.match(renderable, /Belum bisa disimpan: \{unitCorrectionMissing \?[^}]+: blockReason\}/u);
+  assert.match(renderable, /admitBlock \? <p className="bp-field__help"/u);
 });
 
-test("BP-FUNCTION-02b. Edit jenis always opens an existing lawful choice rather than a dead message", () => {
-  const start = renderable.indexOf('title="Tentukan jenis melalui pilihan item SIMPROK yang sesuai');
+test("BP-FUNCTION-02b. Ubah Jenis opens an auditable row category editor, not item admission", () => {
+  const start = renderable.indexOf('title="Pemilih jenis ada di panel penyelesaian sebelah kanan.');
   assert.ok(start > 0);
-  const action = renderable.slice(start, start + 1250);
-  assert.match(action, /if \(!admissionOffered \|\| !admissionReview\)/u);
-  assert.match(action, /setLookupRows\(\(current\) => new Set\(current\)\.add\(row\.id\)\)/u);
-  assert.match(action, /admitOpen: true/u);
-  assert.match(action, /typeConfirmations/u);
+  const action = renderable.slice(start, start + 1400);
+  assert.match(action, /setCategoryEditRows/u);
+  assert.match(action, /Ubah Jenis/u);
+  assert.ok(renderable.includes('id={`bp-category-editor-${row.id}`}'));
+  assert.ok(renderable.indexOf('className="bp-rowcard__actions bp-rowcard__resolution"') < renderable.indexOf('id={`bp-category-editor-${row.id}`}'), 'type decision must live in the right-side resolution panel');
+  assert.match(renderable, /row\.reasonCodes\.includes\('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'\)/u);
+  assert.match(renderable, /onClick=\{\(\) => void handleConfirmCategory\(row\)\}/u);
+  assert.match(page, /await confirmBasicPriceImportRowCategory\(batchId, row\.id, row\.version, category\)/u);
+  assert.match(page, /resource: null, unit: null/u);
+});
+
+test("BP-NEW-ITEM-NO-DEADEND: when admission is not offered, candidate reason is before the action choices", () => {
+  const problem = renderable.indexOf('!admissionOffered && admissionReview?.reasonCode');
+  const choices = renderable.indexOf('Pilih Item yang Sesuai Padanan');
+  assert.ok(problem > 0 && problem < choices);
+  assert.match(renderable, /Item Baru BELUM dapat disimpan/u);
 });
 
 test("BP-FUNCTION-03. Tetapkan Item Baru stays on server-offered review and passes the bound type, unit, and refusals", () => {
   assert.match(renderable, /\{admissionOffered && admissionReview \? \(/u);
   assert.match(renderable, /onClick=\{\(\) => void handleAdmit\(row\)\}/u);
-  assert.match(page, /await admitResourceForImportRow\([\s\S]*?draft\.unit\.id,[\s\S]*?draft\.admitReason\.trim\(\),[\s\S]*?draft\.admitResourceType,[\s\S]*?draft\.refusedCandidateIds,[\s\S]*?typeConfirmation\.reviewBindingFingerprint,/u);
+  assert.match(page, /await admitResourceForImportRow\([\s\S]*?draft\.unit\.id,[\s\S]*?unitCorrectionAuditNote\(row, draft\.unit, draft\.unitCorrectionReason\)[\s\S]*?draft\.admitReason\.trim\(\)[\s\S]*?draft\.admitResourceType,[\s\S]*?draft\.refusedCandidateIds,[\s\S]*?typeConfirmation\.reviewBindingFingerprint,/u);
   assert.match(page, /rowIdentityAdmissionBlockReason\(/u);
 });
 
@@ -519,13 +539,32 @@ test("BP-NAME-CORRECTION-01. catalog name edit is committed only by admission an
   assert.match(renderable, /Nama katalog tersimpan:/u);
 });
 
+test("BP-NOMENCLATURE-ROW-AUDIT-01. corrected search name is persisted with the existing human mapping, and read back without renaming a catalog", () => {
+  const api = readFileSync("src/api/basicPriceImport.ts", "utf8");
+  const service = readFileSync("../backend/src/basic-price/basic-price-import.service.ts", "utf8");
+  const resolver = readFileSync("../backend/src/basic-price/basic-price-row-resolution.service.ts", "utf8");
+  assert.match(page, /KOREKSI_NOMENKLATUR: /u);
+  assert.match(page, /nomenclatureAuditReason/u);
+  assert.match(api, /\.\.\.\(nomenclatureAuditReason \? \{ reason: nomenclatureAuditReason \} : \{\}\)/u);
+  assert.match(resolver, /reason: dto\.reason \?\? null/u);
+  assert.match(service, /resourceMappings: \{/u);
+  assert.match(service, /nomenclatureCorrectionName: r\.resourceCatalogId/u);
+  assert.match(service, /r\.resourceMappings\[0\]\.reason\s*\.slice\('KOREKSI_NOMENKLATUR: '\.length\)/u);
+  assert.match(service, /\.split\(/u);
+  assert.match(page, /KOREKSI_SATUAN_SUMBER: /u);
+  assert.match(page, /nomenclatureAuditReason,[\s\S]*?unitCorrectionAuditNote\(row, draft\.unit, draft\.unitCorrectionReason\)/u);
+  assert.match(renderable, /Koreksi nomenklatur tercatat:/u);
+  assert.match(renderable, /bukan penggantian nama katalog/u);
+});
+
 test("BP-NAME-VISUAL-01. matching a same-type candidate blocks new-item action and asks for review", () => {
   assert.match(page, /const sameNameCandidate = draft\.admitOpen/u);
   assert.match(page, /correctedCatalogNameCandidateConflict\(/u);
-  assert.match(page, /const admitBlock = sameNameCandidate\s*\? correctedNameCandidateNotice/u);
+  assert.match(page, /const admitBlock = row\.machineProposal\?\.blockingFacts\.includes\('SOURCE_SPECIFICATION_UNVERIFIED'\)/u);
+  assert.match(page, /:\s*sameNameCandidate\s*\? correctedNameCandidateNotice/u);
   assert.match(page, /if \(sameNameCandidate\) \{\s*setStatusMessage\(correctedNameCandidateNotice/u);
   assert.match(page, /\{sameNameCandidate \? \([\s\S]*?role="status"/u);
-  assert.match(page, /disabled=\{admitBlock !== null\}/u);
+  assert.match(page, /disabled=\{admitBlock !== null \|\| unitCorrectionMissing\}/u);
 });
 
 test("BP-BROWSER-READBACK-01. persisted unit is displayed before empty draft and backend capability is checked", () => {
@@ -620,10 +659,11 @@ test("BP-EDIT-TRUTH-02. material changes require confirmation before authoritati
 });
 
 test("BP-CANDIDATE-DOOR-01. blocked admissions explain candidates without minting duplicate identities", () => {
-  assert.match(renderable, /Periksa kandidat yang menghalangi item baru/u);
+  assert.match(renderable, /Bandingkan kandidat dan bukti identitas/u);
   assert.match(renderable, /candidate\.admissionDisposition === 'BLOCKED'/u);
-  assert.match(renderable, /Pencarian manual yang kosong tidak menghapus bukti kandidat/u);
-  assert.match(renderable, /minta pengelola katalog memeriksa identitas dan kewenangannya/u);
+  assert.match(renderable, /Hasil pencarian kosong belum membuktikan bahwa item ini baru/u);
+  assert.match(renderable, /memuat ulang halaman saja tidak membuktikan perbedaan tersebut/u);
+  assert.doesNotMatch(renderable, /Ajukan Pemeriksaan Item|handleRequestIdentityReview/u);
   assert.match(page, /admissionOffered && admissionReview/u);
 });
 
@@ -636,4 +676,20 @@ test("BP-EDIT-FEEDBACK-01. feedback is visible on the affected row and means wha
   assert.match(page, /Berhasil: item privat baru untuk baris/u);
   assert.match(page, /tampilan belum berhasil dimuat ulang/u);
   assert.match(renderable, /Selesaikan koreksi nama baris/u);
+});
+
+test("GRADE-A: unknown source-unit spelling demands explicit reviewer reason and preserves Excel value", () => {
+  assert.match(renderable, /unitCorrectionReason/);
+  assert.match(renderable, /Alasan koreksi satuan Excel \(wajib\)/);
+  assert.match(renderable, /unit\.reasonCode === 'UNKNOWN_UNIT_ALIAS'/);
+  assert.match(page, /unitCorrectionAuditNote\(row, draft\.unit, draft\.unitCorrectionReason\)/);
+  assert.match(page, /resolutionAuditReason/);
+});
+
+test("GRADE-A: immutable mapping reason can be clarified and read back without a second identity", () => {
+  assert.match(page, /clarifyBasicPriceRowUnitReason\(batchId, row\.id, row\.version, reason\)/u);
+  assert.match(page, /mappingReasonAudit\.originalReason/u);
+  assert.match(page, /mappingReasonAudit\.clarification/u);
+  assert.match(page, /Simpan Klarifikasi Audit/u);
+  assert.match(page, /loadBatch\(false, \(fresh\) =>/u);
 });
