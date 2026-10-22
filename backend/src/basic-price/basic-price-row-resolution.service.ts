@@ -156,7 +156,7 @@ export class BasicPriceRowResolutionService {
       // A matching weak uploader hint is NOT a human decision. The first explicit
       // confirmation must record actor and append-only event even when the type
       // stays MATERIAL; only an already-confirmed value is idempotent.
-      const alreadyConfirmed = row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER');
+      const alreadyConfirmed = row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true;
       if (row.sourceSection === dto.resourceType && row.sourceSectionProvenance === 'UPLOADER_DECLARED' && alreadyConfirmed) {
         return { rowId: row.id, version: row.version, resourceType: row.sourceSection, unchanged: true };
       }
@@ -241,6 +241,7 @@ export class BasicPriceRowResolutionService {
         // document truth. Resolve must be able to tell that apart from a
         // source-proven family before applying the type boundary.
         sourceSectionProvenance: string | null;
+        reasonCodes: string[];
         sourceRowNumber: number;
         rawResourceCodeText: string | null;
         rawResourceNameText: string;
@@ -248,7 +249,7 @@ export class BasicPriceRowResolutionService {
         rawSourceContext: unknown;
       }>
     >(
-      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceSectionProvenance", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText", "rawSourceContext" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
+      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceSectionProvenance", "reasonCodes", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText", "rawSourceContext" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
     );
     const row = rowLock[0];
     if (!row || row.batchId !== batchId)
@@ -1062,6 +1063,7 @@ export class BasicPriceRowResolutionService {
                     id: rowId,
                     sourceSection: row.sourceSection,
                     sourceSectionProvenance: row.sourceSectionProvenance,
+                    rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
                     rawResourceNameText: row.rawResourceNameText,
                     rawResourceCodeText: row.rawResourceCodeText,
                     rawUnitText: row.rawUnitText,
@@ -1399,6 +1401,7 @@ export class BasicPriceRowResolutionService {
                 sourceSha256: row.batch.sourceSha256,
                 sourceSection: row.sourceSection,
                 sourceSectionProvenance: row.sourceSectionProvenance,
+                rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
                 rawResourceNameText: row.rawResourceNameText,
                 rawResourceCodeText: row.rawResourceCodeText,
                 rawUnitText: row.rawUnitText,

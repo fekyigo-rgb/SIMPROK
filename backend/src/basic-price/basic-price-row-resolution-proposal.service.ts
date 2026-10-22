@@ -26,7 +26,7 @@ import {
 import { identicalQuestionKey } from '../resource-catalog/identical-question-key';
 
 export const BASIC_PRICE_ADMISSION_REVIEW_POLICY_VERSION =
-  'B02A_BASIC_PRICE_ADMISSION_REVIEW_V1';
+  'B02A_BASIC_PRICE_ADMISSION_REVIEW_V2_ROW_REVIEW';
 
 export type BasicPriceAdmissionCandidateDisposition =
   | 'HUMAN_REFUSABLE'
@@ -60,6 +60,8 @@ export interface BasicPriceAdmissionQuestionInput {
   rawUnitText: string | null;
   sourceSection: ResourceType;
   sourceSectionProvenance: string | null;
+  /** Audited reviewer confirmation for THIS source row, not the workbook. */
+  rowCategoryConfirmedByReviewer?: boolean;
 }
 
 /**
@@ -79,6 +81,8 @@ export function buildBasicPriceAdmissionReview(
     question.sourceSectionProvenance === 'SOURCE_SECTION_TITLE';
   const uploaderMayConfirmType =
     question.sourceSectionProvenance === 'UPLOADER_DECLARED';
+  const reviewedRowCategory =
+    uploaderMayConfirmType && question.rowCategoryConfirmedByReviewer === true;
   const authoritativeOverride =
     sourceTypeProven && effectiveResourceType !== question.sourceSection;
   const digest = candidateContextDigest(
@@ -95,8 +99,14 @@ export function buildBasicPriceAdmissionReview(
       let disposition: BasicPriceAdmissionCandidateDisposition = 'BLOCKED';
       const crossTypeWeakEvidence =
         uploaderMayConfirmType && candidate.type !== effectiveResourceType;
+      // Only an audited per-row type confirmation may permit explicit human
+      // refusal of cross-family NAME-ONLY hints. Exact/recorded facts still BLOCK.
+      const reviewedWeakCrossType =
+        reviewedRowCategory &&
+        effectiveResourceType === question.sourceSection &&
+        candidate.identityBasis === 'NAME_SIMILARITY_ONLY';
       if (
-        !crossTypeWeakEvidence &&
+        (!crossTypeWeakEvidence || reviewedWeakCrossType) &&
         selectableCandidateIds.has(candidate.resourceCatalogId)
       ) {
         if (candidate.identityBasis === 'NAME_SIMILARITY_ONLY') {
@@ -143,6 +153,7 @@ export function buildBasicPriceAdmissionReview(
         question.rawUnitText,
         question.sourceSection,
         question.sourceSectionProvenance,
+        reviewedRowCategory,
         effectiveResourceType,
         RESOURCE_IDENTITY_POLICY_VERSION,
         questionKey,
@@ -167,7 +178,8 @@ export function buildBasicPriceAdmissionReview(
     humanRefusableCandidateIds.length + machineRuledOutCandidateIds.length ===
       resolution.candidates.length;
   const typeAuthorityValid =
-    (sourceTypeProven && !authoritativeOverride) || uploaderMayConfirmType;
+    ((sourceTypeProven && !authoritativeOverride) || uploaderMayConfirmType) &&
+    (!reviewedRowCategory || effectiveResourceType === question.sourceSection);
   const offered = typeAuthorityValid && (machineExhausted || examinedNameOnly);
   const reasonCode = offered
     ? null
@@ -452,6 +464,8 @@ export interface BasicPriceRowProposalInput {
   sourceSection: ResourceType | null;
   /** Only UPLOADER_DECLARED may be corrected by exact contrary catalog proof. */
   sourceSectionProvenance?: string | null;
+  /** Server-owned audited category confirmation for this row. */
+  rowCategoryConfirmedByReviewer?: boolean;
   rawResourceNameText: string;
   rawResourceCodeText: string | null;
   rawUnitText: string | null;
@@ -603,11 +617,15 @@ export class BasicPriceRowResolutionProposalService {
           rawUnitText: row.rawUnitText,
           sourceSection: row.sourceSection,
           sourceSectionProvenance: row.sourceSectionProvenance ?? null,
-        };
+          rowCategoryConfirmedByReviewer: row.rowCategoryConfirmedByReviewer === true,
+         };
       const sourceTypeProven =
         question.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
         question.sourceSectionProvenance === 'SOURCE_SECTION_TITLE';
-      const effectiveTypes: ResourceType[] = sourceTypeProven
+      const categoryPinnedByAudit =
+        question.sourceSectionProvenance === 'UPLOADER_DECLARED' &&
+        question.rowCategoryConfirmedByReviewer === true;
+      const effectiveTypes: ResourceType[] = sourceTypeProven || categoryPinnedByAudit
         ? [question.sourceSection]
         : question.sourceSectionProvenance === 'UPLOADER_DECLARED'
           ? [ResourceType.LABOR, ResourceType.MATERIAL, ResourceType.EQUIPMENT]

@@ -2680,6 +2680,7 @@ export class BasicPriceImportService {
           sourceSha256: batch.sourceSha256,
           sourceSection: row.sourceSection,
           sourceSectionProvenance: row.sourceSectionProvenance,
+          rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
           rawResourceNameText: row.rawResourceNameText,
           rawResourceCodeText: row.rawResourceCodeText,
           rawUnitText: row.rawUnitText,

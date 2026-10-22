@@ -154,7 +154,7 @@ export class BasicPriceIdentityReviewBridgeService {
     const sourceProven = ['SOURCE_ROW_CATEGORY', 'SOURCE_SECTION_TITLE'].includes(
       row.sourceSectionProvenance ?? '',
     );
-    const humanConfirmed = row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER');
+    const humanConfirmed = row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true;
     if (!sourceProven && !humanConfirmed) {
       throw new ConflictException('CATEGORY_CONFIRMATION_REQUIRED');
     }
@@ -172,6 +172,7 @@ export class BasicPriceIdentityReviewBridgeService {
       sourceSha256: batch.sourceSha256,
       sourceSection: row.sourceSection,
       sourceSectionProvenance: row.sourceSectionProvenance,
+      rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
       rawResourceNameText: row.rawResourceNameText,
       rawResourceCodeText: row.rawResourceCodeText,
       rawUnitText: row.rawUnitText,
