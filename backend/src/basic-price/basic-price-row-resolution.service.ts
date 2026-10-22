@@ -28,7 +28,7 @@ import { toBasicPriceSafeCandidate } from './basic-price-row-resolution-proposal
 import { findProvenanceCandidate } from './basic-price-source-provenance.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
-import { ResourceIdentityResolution } from '../resource-catalog/resource-identity-resolution.kernel';
+import { ResourceIdentityResolution, isEvidenceBoundSpecificVariantOfGeneral } from '../resource-catalog/resource-identity-resolution.kernel';
 import {
   ResourceAdmissionService,
   ResourceAdmissionNotExhaustedError,
@@ -1463,7 +1463,16 @@ export class BasicPriceRowResolutionService {
           selectedTypeIdentity.candidates.every(
             (candidate) =>
               (candidate.identityBasis === 'NAME_SIMILARITY_ONLY' ||
-                candidate.identityBasis === 'RULED_OUT') &&
+                candidate.identityBasis === 'RULED_OUT' ||
+                ((sourceTypeProven ||
+                    row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true) &&
+                  isEvidenceBoundSpecificVariantOfGeneral({
+                    rawName: row.rawResourceNameText,
+                    rawCode: row.rawResourceCodeText,
+                    rawUnit: row.rawUnitText,
+                    resourceType: dto.confirmedResourceType,
+                    confirmedSpecifications: row.confirmedSpecifications,
+                  }, candidate))) &&
               reviewedCandidateIds.has(candidate.resourceCatalogId),
           );
         if (

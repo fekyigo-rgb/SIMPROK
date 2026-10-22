@@ -1,5 +1,5 @@
 import { ResourceType } from '@prisma/client';
-import { resolveResourceIdentity } from '../resource-catalog/resource-identity-resolution.kernel';
+import { resolveResourceIdentity, isAdmissibleAfterExamination, isEvidenceBoundSpecificVariantOfGeneral } from '../resource-catalog/resource-identity-resolution.kernel';
 import { buildBasicPriceAdmissionReview } from './basic-price-row-resolution-proposal.service';
 
 const reviewQuestion = (rawName: string, rawUnit: string, rawCode: string | null = null) => ({
@@ -68,11 +68,129 @@ describe('BP general-versus-specific product law — real kernel and existing pr
     expect(verdict.resolvedResourceCatalogId).toBeNull();
     expect(verdict.candidates[0].identityBasis).toBe('RECORDED_FACT');
     const review = buildBasicPriceAdmissionReview(
-      reviewQuestion('Paku 5-7 cm', 'Kg', 'M18'),
+      { ...reviewQuestion('Paku 5-7 cm', 'Kg', 'M18'),
+        confirmedSpecifications: { ukuran: '5-7 cm' } },
       verdict, new Set([genericPaku.id]),
     );
-    expect(review.offered).toBe(false);
-    expect(review.blockedCandidateIds).toEqual([genericPaku.id]);
+    expect(review.offered).toBe(true);
+    expect(review.humanRefusableCandidateIds).toEqual([genericPaku.id]);
+  });
+
+
+  it('the shared locked gate needs an explicit, current human refusal of a broad M18 nail candidate', () => {
+    const candidate = genericPaku;
+    const reference = specificPakuReference('M18');
+    const verdict = resolveResourceIdentity({
+      reference, catalogCandidates: [candidate],
+      sourceSightings: [{
+        resourceCatalogId: candidate.id, rawName: 'Paku Biasa Segala Ukuran',
+        rawCode: 'M18', rawUnit: 'Kg', sourceSection: 'MATERIAL',
+        sourceSha256: 'e'.repeat(64), sheetName: 'Daftar Komponen', sourceRowNumber: 12,
+      }], reviewedMappings: [],
+    });
+    expect(verdict.status).toBe('NEEDS_REVIEW');
+    expect(verdict.candidates[0].identityBasis).toBe('RECORDED_FACT');
+    const review = buildBasicPriceAdmissionReview(
+      { ...reviewQuestion('Paku 5-7 cm', 'Kg', 'M18'),
+        confirmedSpecifications: { ukuran: '5-7 cm' } },
+      verdict, new Set([candidate.id]),
+    );
+    expect(review.offered).toBe(true);
+    expect(review.humanRefusableCandidateIds).toEqual([candidate.id]);
+    const witness = { refusedCandidateIds: [candidate.id], candidateContextDigest: review.candidateContextDigest };
+    expect(isAdmissibleAfterExamination(verdict, witness, review.candidateContextDigest)).toBe(false);
+    expect(isAdmissibleAfterExamination(verdict, witness, review.candidateContextDigest, reference)).toBe(true);
+    expect(isAdmissibleAfterExamination(verdict, witness, 'stale-context', reference)).toBe(false);
+    expect(isAdmissibleAfterExamination(verdict, { ...witness, refusedCandidateIds: [] }, review.candidateContextDigest, reference)).toBe(false);
+  });
+
+  it('does not permit a historical strong candidate to be refused without confirmed specifications or with a same-name scope', () => {
+    const source = specificPakuReference('M18');
+    const candidate = {
+      ...genericPaku, id: 'paku-specific-alias', name: 'Paku 5-7 cm',
+      specifications: null,
+    };
+    const verdict = resolveResourceIdentity({
+      reference: source, catalogCandidates: [candidate],
+      sourceSightings: [{
+        resourceCatalogId: candidate.id, rawName: 'Paku 5-7 cm', rawCode: 'M18',
+        rawUnit: 'Kg', sourceSection: 'MATERIAL',
+        sourceSha256: 'e'.repeat(64), sheetName: 'Sheet1', sourceRowNumber: 1,
+      }], reviewedMappings: [],
+    });
+    expect(isEvidenceBoundSpecificVariantOfGeneral(source, {
+      resourceCatalogId: candidate.id, name: candidate.name, type: candidate.type,
+      code: null, baseUnit: 'Kg', evidence: [], identityBasis: 'RECORDED_FACT',
+      specifications: null, specificationUnproved: false, unprovedSpecificationFacts: [],
+      priorHumanDecision: null,
+    })).toBe(false);
+    const broadCandidate = { ...candidate, name: 'Paku Biasa Segala Ukuran' };
+    expect(isEvidenceBoundSpecificVariantOfGeneral(
+      { ...source, confirmedSpecifications: null },
+      { resourceCatalogId: broadCandidate.id, name: broadCandidate.name, type: broadCandidate.type,
+        code: null, baseUnit: 'Kg', evidence: [], identityBasis: 'RECORDED_FACT',
+        specifications: null, specificationUnproved: false, unprovedSpecificationFacts: [],
+        priorHumanDecision: null },
+    )).toBe(false);
+    expect(verdict.status).not.toBe('RESOLVED');
+  });
+
+  it('permits different specific cement brand against strongly recorded generic Semen, without forcing identity', () => {
+    const general = {
+      id: 'catalog-semen-umum', name: 'Semen', type: ResourceType.MATERIAL,
+      baseUnit: 'Zak', code: null, status: 'ACTIVE', specifications: null,
+    };
+    const ref = {
+      rawName: 'Semen Tonasa', rawCode: 'M31', rawUnit: 'Zak',
+      resourceType: ResourceType.MATERIAL,
+      confirmedSpecifications: { merek: 'Tonasa' },
+    };
+    const verdict = resolveResourceIdentity({
+      reference: ref, catalogCandidates: [general],
+      sourceSightings: [{
+        resourceCatalogId: general.id, rawName: 'Semen', rawCode: 'M31',
+        rawUnit: 'Zak', sourceSection: 'MATERIAL', sourceSha256: 'e'.repeat(64),
+        sheetName: 'Harga', sourceRowNumber: 3,
+      }], reviewedMappings: [],
+    });
+    expect(verdict.resolvedResourceCatalogId).toBeNull();
+    expect(verdict.candidates[0].identityBasis).toBe('RECORDED_FACT');
+    const review = buildBasicPriceAdmissionReview(
+      { ...reviewQuestion('Semen Tonasa', 'Zak', 'M31'),
+        confirmedSpecifications: { merek: 'Tonasa' } },
+      verdict, new Set([general.id]),
+    );
+    expect(review.offered).toBe(true);
+    expect(review.humanRefusableCandidateIds).toEqual([general.id]);
+  });
+
+  it('refuses a strong recorded candidate with unproved scope or inaccessible identity', () => {
+    const reference = specificPakuReference('M18');
+    const candidate = {
+      id: 'catalog-paku', code: null, name: 'Paku Biasa Segala Ukuran',
+      type: ResourceType.MATERIAL, baseUnit: 'Kg', status: 'ACTIVE',
+      specifications: null,
+    };
+    const verdict = resolveResourceIdentity({
+      reference, catalogCandidates: [candidate],
+      sourceSightings: [{
+        resourceCatalogId: candidate.id, rawName: 'Paku Segala Ukuran', rawCode: 'M18',
+        rawUnit: 'Kg', sourceSection: 'MATERIAL', sourceSha256: 'e'.repeat(64),
+        sheetName: 'Harga', sourceRowNumber: 3,
+      }], reviewedMappings: [],
+    });
+    const unproved = buildBasicPriceAdmissionReview(
+      reviewQuestion('Paku 5-7 cm', 'Kg', 'M18'), verdict, new Set([candidate.id]),
+    );
+    expect(unproved.offered).toBe(false);
+    expect(unproved.blockedCandidateIds).toEqual([candidate.id]);
+    const outside = buildBasicPriceAdmissionReview(
+      { ...reviewQuestion('Paku 5-7 cm', 'Kg', 'M18'),
+        confirmedSpecifications: { ukuran: '5-7 cm' } },
+      verdict, new Set(),
+    );
+    expect(outside.offered).toBe(false);
+    expect(outside.blockedCandidateIds).toEqual([candidate.id]);
   });
 
   it('generic Semen is not silently identified with branded Semen Tonasa', () => {

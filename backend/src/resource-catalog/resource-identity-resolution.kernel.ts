@@ -1018,6 +1018,60 @@ export function selectionRefusal(
  *   - the candidate context they were shown is the live one (digest equality).
  * A candidate that appears after the screen was loaded therefore reopens (a).
  */
+
+/**
+ * Evidence-bound product-scope distinction, within the ONE Resource Identity
+ * authority. Positive audited source specifications and demonstrably broader
+ * catalog wording are required. Missing catalog facts alone prove nothing.
+ *
+ * A source code used historically for a generic resource is NOT a guarantee
+ * that a named, narrower-price variant has the same canonical identity.
+ * Humans still have to refuse the exact live candidate and supply a reason.
+ */
+export function isEvidenceBoundSpecificVariantOfGeneral(
+  reference: RawResourceReference,
+  candidate: ResourceIdentityCandidate,
+): boolean {
+  const source = parseConfirmedSpecifications(reference.confirmedSpecifications);
+  if (!source || !Object.keys(source).length) return false;
+  if (candidate.type !== reference.resourceType ||
+      candidate.identityBasis !== 'RECORDED_FACT') return false;
+  const sourceName = normalizeResourceName(reference.rawName);
+  const catalogName = normalizeResourceName(candidate.name);
+  if (!sourceName || !catalogName || sourceName === catalogName) return false;
+
+  const stored = parseConfirmedSpecifications(candidate.specifications);
+  if (candidate.specifications != null && !stored) return false;
+  if (compareConfirmedSpecifications(source, candidate.specifications) === 'CONFLICT') {
+    return true; // Two positive statements about one attribute differ.
+  }
+  // Supported explicit generality terms are deliberately bounded. This is
+  // scope proof, not a dictionary of resource aliases or a fuzzy matcher.
+  const genericWords: Record<string, readonly string[]> = {
+    ukuran: ['segala ukuran', 'semua ukuran', 'berbagai ukuran'],
+    merek: ['segala merek', 'semua merek', 'berbagai merek'],
+    tipe: ['segala tipe', 'semua tipe', 'berbagai tipe', 'semua jenis'],
+    mutu: ['segala mutu', 'semua mutu', 'berbagai mutu'],
+    diameter: ['segala diameter', 'semua diameter', 'berbagai diameter'],
+    kapasitas: ['segala kapasitas', 'semua kapasitas', 'berbagai kapasitas'],
+  };
+  return Object.entries(source).some(([key, rawValue]) => {
+    if (!Object.hasOwn(genericWords, key)) return false;
+    if (stored && Object.hasOwn(stored, key)) return false;
+    const value = normalizeResourceName(rawValue);
+    if (!value || catalogName.includes(value)) return false;
+    if (genericWords[key].some((phrase) => catalogName.includes(phrase))) return true;
+    // E.g., Semen Tonasa -> Semen; Paku 5-7 cm -> Paku.
+    // 'Paku 5-7' is NOT a demonstrated generic 'Paku'.
+    const pos = sourceName.indexOf(value);
+    if (pos < 0) return false;
+    const remainder = normalizeResourceName(
+      sourceName.slice(0, pos) + ' ' + sourceName.slice(pos + value.length),
+    );
+    return !!remainder && remainder === catalogName;
+  });
+}
+
 export function isAdmissibleAfterExamination(
   verdict: ResourceIdentityResolution,
   examination: {
@@ -1025,6 +1079,7 @@ export function isAdmissibleAfterExamination(
     readonly candidateContextDigest: string;
   },
   liveCandidateContextDigest: string,
+  reference?: RawResourceReference,
 ): boolean {
   if (verdict.status === 'RESOLVED') return false;
   if (verdict.authority === 'HUMAN_REVIEW_REQUIRED') return false;
@@ -1033,7 +1088,8 @@ export function isAdmissibleAfterExamination(
     !verdict.candidates.every(
       (candidate) =>
         candidate.identityBasis === 'RULED_OUT' ||
-        candidate.identityBasis === 'NAME_SIMILARITY_ONLY',
+        candidate.identityBasis === 'NAME_SIMILARITY_ONLY' ||
+        (reference !== undefined && isEvidenceBoundSpecificVariantOfGeneral(reference, candidate)),
     )
   ) {
     return false;

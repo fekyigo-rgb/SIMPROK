@@ -16,6 +16,7 @@ import {
 } from '../resource-catalog/resource-identity-resolution.service';
 import {
   ResourceIdentityCandidate,
+  isEvidenceBoundSpecificVariantOfGeneral,
   type ResourceIdentityResolution,
 } from '../resource-catalog/resource-identity-resolution.kernel';
 import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
@@ -26,7 +27,7 @@ import {
 import { identicalQuestionKey } from '../resource-catalog/identical-question-key';
 
 export const BASIC_PRICE_ADMISSION_REVIEW_POLICY_VERSION =
-  'B02A_BASIC_PRICE_ADMISSION_REVIEW_V2_ROW_REVIEW';
+  'B02A_BASIC_PRICE_ADMISSION_REVIEW_V3_SCOPE';
 
 export type BasicPriceAdmissionCandidateDisposition =
   | 'HUMAN_REFUSABLE'
@@ -62,6 +63,8 @@ export interface BasicPriceAdmissionQuestionInput {
   sourceSectionProvenance: string | null;
   /** Audited reviewer confirmation for THIS source row, not the workbook. */
   rowCategoryConfirmedByReviewer?: boolean;
+  /** Server-owned, audited product facts — not workbook assumptions. */
+  confirmedSpecifications?: Record<string, string> | null;
 }
 
 /**
@@ -101,6 +104,15 @@ export function buildBasicPriceAdmissionReview(
         uploaderMayConfirmType && candidate.type !== effectiveResourceType;
       // Only an audited per-row type confirmation may permit explicit human
       // refusal of cross-family NAME-ONLY hints. Exact/recorded facts still BLOCK.
+      const verifiedSpecificScope =
+        (sourceTypeProven || reviewedRowCategory) &&
+        isEvidenceBoundSpecificVariantOfGeneral({
+          rawName: question.rawResourceNameText,
+          rawCode: question.rawResourceCodeText,
+          rawUnit: question.rawUnitText,
+          resourceType: effectiveResourceType,
+          confirmedSpecifications: question.confirmedSpecifications ?? null,
+        }, candidate);
       const reviewedWeakCrossType =
         reviewedRowCategory &&
         effectiveResourceType === question.sourceSection &&
@@ -109,7 +121,7 @@ export function buildBasicPriceAdmissionReview(
         (!crossTypeWeakEvidence || reviewedWeakCrossType) &&
         selectableCandidateIds.has(candidate.resourceCatalogId)
       ) {
-        if (candidate.identityBasis === 'NAME_SIMILARITY_ONLY') {
+        if (candidate.identityBasis === 'NAME_SIMILARITY_ONLY' || verifiedSpecificScope) {
           disposition = 'HUMAN_REFUSABLE';
         } else if (candidate.identityBasis === 'RULED_OUT') {
           disposition = 'MACHINE_RULED_OUT';
@@ -154,6 +166,7 @@ export function buildBasicPriceAdmissionReview(
         question.sourceSection,
         question.sourceSectionProvenance,
         reviewedRowCategory,
+        question.confirmedSpecifications ?? null,
         effectiveResourceType,
         RESOURCE_IDENTITY_POLICY_VERSION,
         questionKey,
@@ -618,6 +631,7 @@ export class BasicPriceRowResolutionProposalService {
           sourceSection: row.sourceSection,
           sourceSectionProvenance: row.sourceSectionProvenance ?? null,
           rowCategoryConfirmedByReviewer: row.rowCategoryConfirmedByReviewer === true,
+          confirmedSpecifications: row.confirmedSpecifications ?? null,
          };
       const sourceTypeProven =
         question.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
