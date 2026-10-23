@@ -602,7 +602,7 @@ test("BP-ACTIVATION-01. review facts flow from server kernel proposals to the vi
   const proposer = readFileSync("../backend/src/basic-price/basic-price-row-resolution-proposal.service.ts", "utf8");
 
   assert.match(page, /const result = await getBasicPriceImportBatch\(batchId\);\s*setBatch\(result\)/u);
-  assert.ok(api.includes("apiFetch(`/basic-price-imports/${batchId}`)"));
+  assert.ok(api.includes("apiFetch(`/basic-price-imports/${batchId}`, { cache: 'no-store' })"));
   assert.match(controller, /@Get\(':batchId'\)[\s\S]*?return this\.importService\.getBatch\(workspaceId, batchId, currentAccountId\)/u);
   assert.match(service, /const proposals = await this\.proposals\.proposeForRows\(/u);
   assert.match(service, /machineProposal: proposals\?\.get\(r\.id\) \?\? null/u);

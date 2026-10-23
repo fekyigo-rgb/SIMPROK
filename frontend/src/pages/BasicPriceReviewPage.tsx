@@ -331,6 +331,18 @@ export function BasicPriceReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
 
+  // A reviewer may return to a still-open tab after QA restart or another
+  // reviewed decision. Refresh the SAME server read without erasing drafts.
+  // No background polling and no client-side identity decision.
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') void loadBatch(false);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchId]);
+
   const draftFor = (rowId: string): RowDraft => drafts[rowId] ?? emptyDraft;
   const updateDraft = (rowId: string, patch: Partial<RowDraft>) => {
     setDrafts((current) => ({
