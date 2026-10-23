@@ -23,6 +23,10 @@ import {
 import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import { PERMISSIONS } from '../common/constants/permissions';
 import { ConstructionClassificationService } from '../construction-classification/construction-classification.service';
+import {
+  APPROVED_KATEGORI,
+  approvedSubkategoriFor,
+} from '../construction-classification/construction-taxonomy.vocabulary';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProgressAuthorityService } from '../progress/progress-authority.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -247,9 +251,64 @@ export class ProjectService {
     return new Prisma.Decimal(value);
   }
 
+  /**
+   * Reuse the existing classification service and the existing AHSP-approved
+   * vocabulary. A selection is only materialized when the human commits their
+   * project; no speculative writes on dropdown opening or checking a box.
+   * All writes share the project-creation transaction.
+   */
+  private async materializeProjectVocabularyPaths(
+    workspaceId: string,
+    selectedIds: readonly string[],
+    paths: readonly { kategori: string; subkategori?: string }[],
+    tx: Prisma.TransactionClient,
+  ): Promise<string[]> {
+    if (!paths.length) return [...selectedIds];
+    if (!this.classification) {
+      throw new BadRequestException('PROJECT_CLASSIFICATION_SERVICE_UNAVAILABLE');
+    }
+    const rootId = selectedIds[0];
+    if (!rootId) throw new BadRequestException('PROJECT_CLASSIFICATION_ROOT_REQUIRED');
+    const root = await this.classification.getById({ id: rootId, workspaceId }, tx);
+    if (root.level !== ConstructionClassificationLevel.JENIS_PENGADAAN) {
+      throw new BadRequestException('PROJECT_CLASSIFICATION_ROOT_REQUIRED');
+    }
+    const resolved = [...selectedIds];
+    for (const path of paths) {
+      const kategori = path.kategori?.trim();
+      const subkategori = path.subkategori?.trim() || null;
+      if (!kategori || !APPROVED_KATEGORI.includes(kategori)) {
+        throw new BadRequestException('PROJECT_CLASSIFICATION_KATEGORI_NOT_APPROVED');
+      }
+      if (subkategori && !approvedSubkategoriFor(kategori).includes(subkategori)) {
+        throw new BadRequestException('PROJECT_CLASSIFICATION_SUBKATEGORI_NOT_APPROVED');
+      }
+      const categoryNode = await this.classification.createNode({
+        workspaceId,
+        parentId: root.id,
+        level: ConstructionClassificationLevel.KATEGORI,
+        name: kategori,
+        allowIdempotentReuse: true,
+      }, tx);
+      resolved.push(categoryNode.id);
+      if (subkategori) {
+        const subNode = await this.classification.createNode({
+          workspaceId,
+          parentId: categoryNode.id,
+          level: ConstructionClassificationLevel.SUBKATEGORI,
+          name: subkategori,
+          allowIdempotentReuse: true,
+        }, tx);
+        resolved.push(subNode.id);
+      }
+    }
+    return [...new Set(resolved)];
+  }
+
   private async assertProjectClassificationSelections(
     workspaceId: string,
     classificationNodeIds: readonly string[],
+    client?: Prisma.TransactionClient,
   ): Promise<void> {
     if (classificationNodeIds.length === 0) return;
     if (!this.classification) {
@@ -258,7 +317,9 @@ export class ProjectService {
 
     const rootIds = new Set<string>();
     for (const id of classificationNodeIds) {
-      const lineage = await this.classification.getLineage({ id, workspaceId });
+      const lineage = client
+        ? await this.classification.getLineage({ id, workspaceId }, client)
+        : await this.classification.getLineage({ id, workspaceId });
       if (!PROJECT_CLASSIFICATION_LEVELS.has(lineage.node.level)) {
         throw new BadRequestException('PROJECT_CLASSIFICATION_LEVEL_FORBIDDEN');
       }
@@ -364,7 +425,8 @@ export class ProjectService {
     workspaceId: string,
     creatorAccountId?: string,
   ) {
-    const classificationNodeIds = uniqueCanonicalIds(data.classificationNodeIds);
+    const selectedClassificationIds = uniqueCanonicalIds(data.classificationNodeIds);
+    const vocabularyPaths = data.classificationVocabularyPaths ?? [];
     const locationRegionIds = uniqueCanonicalIds(data.locationRegionIds);
 
     try {
@@ -378,9 +440,13 @@ export class ProjectService {
       }
 
       return await this.prisma.$transaction(async (tx) => {
+        const classificationNodeIds = await this.materializeProjectVocabularyPaths(
+          workspaceId, selectedClassificationIds, vocabularyPaths, tx,
+        );
         await this.assertProjectClassificationSelections(
           workspaceId,
           classificationNodeIds,
+          vocabularyPaths.length ? tx : undefined,
         );
         await this.assertProjectRegionSelections(locationRegionIds);
 
@@ -453,7 +519,7 @@ export class ProjectService {
           });
         }
 
-        return project;
+        return { ...project, classificationNodeIds };
       });
     } catch (error) {
       if (

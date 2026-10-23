@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiFetch } from '../utils/apiClient';
 import { ProjectIntakeClassificationFields } from '../components/project/ProjectIntakeClassificationFields';
 import { ProjectIntakeLocationFields } from '../components/project/ProjectIntakeLocationFields';
+import type { ProjectVocabularyPath } from '../utils/projectIntakeVocabulary';
 import {
   beginProjectCreate,
   composeDraftDescription,
@@ -35,6 +36,7 @@ export function ProjectSetupPage() {
   const [interactionText, setInteractionText] = useState('');
   const [interactionStatus, setInteractionStatus] = useState('Engine belum aktif');
   const [classificationNodeIds, setClassificationNodeIds] = useState<string[] | null>(null);
+  const [classificationVocabularyPaths, setClassificationVocabularyPaths] = useState<ProjectVocabularyPath[]>([]);
   const [classificationBlocked, setClassificationBlocked] = useState<string | null>('Memuat klasifikasi resmi.');
   const [selectedLocationRegionIds, setSelectedLocationRegionIds] = useState<string[]>([]);
   const [locationBlocked, setLocationBlocked] = useState<string | null>('Memuat wilayah resmi.');
@@ -50,8 +52,9 @@ export function ProjectSetupPage() {
   const navigatedProjectId = useRef<string | null>(null);
 
   const handleClassificationChange = useCallback(
-    (state: { classificationNodeIds: string[] | null; blockedReason: string | null }) => {
+    (state: { classificationNodeIds: string[] | null; classificationVocabularyPaths: ProjectVocabularyPath[]; blockedReason: string | null }) => {
       setClassificationNodeIds(state.classificationNodeIds);
+      setClassificationVocabularyPaths(state.classificationVocabularyPaths);
       setClassificationBlocked(state.blockedReason);
     },
     [],
@@ -223,6 +226,7 @@ export function ProjectSetupPage() {
         description: buildDraftDescription(),
         workspaceId,
         classificationNodeIds: selectedClassificationIds,
+        classificationVocabularyPaths,
         locationRegionIds: selectedLocationRegionIds,
         ...(normalizedBudget ? { budgetBaseline: normalizedBudget } : {}),
         ...(normalizedSpec ? { mainMaterialSpec: normalizedSpec } : {}),
@@ -250,7 +254,7 @@ export function ProjectSetupPage() {
         return;
       }
 
-      let project: { id?: string; projectId?: string } | null = null;
+      let project: { id?: string; projectId?: string; classificationNodeIds?: string[] } | null = null;
       try {
         project = await response.json();
       } catch {
@@ -266,9 +270,16 @@ export function ProjectSetupPage() {
         return;
       }
 
+      // New vocabulary choices become canonical UUID nodes inside the same
+      // project transaction. Never compare a synthetic UI id with saved truth.
+      const persistedIds = project?.classificationNodeIds;
+      if (classificationVocabularyPaths.length && (!Array.isArray(persistedIds) || !persistedIds.every((id) => /^[0-9a-f-]{36}$/i.test(id)))) {
+        rememberCreateSafety(projectCreateUncertain(PROJECT_CREATE_UNCERTAIN_MESSAGE));
+        return;
+      }
       await readProjectContext({
         projectId,
-        classificationNodeIds: selectedClassificationIds,
+        classificationNodeIds: persistedIds ?? selectedClassificationIds,
         locationRegionIds: selectedLocationRegionIds,
       });
     } catch {
