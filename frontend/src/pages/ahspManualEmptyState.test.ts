@@ -34,7 +34,9 @@ test('Tenaga, Bahan, and Peralatan share one accessible table and adapt to the a
   assert.match(css, /container: ahsp-manual-formula \/ inline-size/);
   assert.match(css, /@container ahsp-manual-formula/);
   assert.match(css, /\.ahsp-manual-comp__table-scroll \{[^}]*overflow-x: auto/s);
-  assert.match(css, /\.ahsp-resource-columns th \{[^}]*white-space: nowrap/s);
+  assert.match(css, /\.ahsp-manual-comp__table\.ahsp-resource-columns th \{[^}]*white-space: nowrap/s);
+  assert.match(css, /\.ahsp-resource-columns \.ahsp-col-unit,\s*\.ahsp-resource-columns \.ahsp-col-coef \{\s*width: 7\.5rem;/);
+  assert.match(css, /\.ahsp-manual-comp__table\.ahsp-resource-columns \.ahsp-col-unit,\s*\.ahsp-manual-comp__table\.ahsp-resource-columns \.ahsp-col-coef \{\s*width: 5\.5rem;/);
   assert.match(manual, /<div className="ahsp-manual-comp__table-scroll">[\s\S]*?<table className="ahsp-manual-comp__table ahsp-resource-columns">/);
   assert.equal(manual.includes('Tambah Resource'), true);
   assert.equal(manual.includes('Cari sumber daya'), true);

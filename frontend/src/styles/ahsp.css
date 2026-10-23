@@ -1761,22 +1761,38 @@ li.ahsp-completion:last-child {
   border-collapse: collapse;
 }
 
+/* Preserve the existing shared Detail AHSP column contract. */
+.ahsp-resource-columns .ahsp-col-no {
+  width: 3rem;
+}
+
 .ahsp-resource-columns .ahsp-col-unit,
 .ahsp-resource-columns .ahsp-col-coef {
-  width: 5.5rem;
+  width: 7.5rem;
 }
 
 .ahsp-resource-columns .ahsp-col-action {
+  width: 4.5rem;
+}
+
+.ahsp-resource-columns th,
+.ahsp-resource-columns td {
+  overflow-wrap: anywhere;
+}
+
+/* Narrower widths and nonbroken headings apply ONLY in Manual AHSP. */
+.ahsp-manual-comp__table.ahsp-resource-columns .ahsp-col-unit,
+.ahsp-manual-comp__table.ahsp-resource-columns .ahsp-col-coef {
+  width: 5.5rem;
+}
+
+.ahsp-manual-comp__table.ahsp-resource-columns .ahsp-col-action {
   width: 3.25rem;
 }
 
-.ahsp-resource-columns th {
+.ahsp-manual-comp__table.ahsp-resource-columns th {
   white-space: nowrap;
   overflow-wrap: normal;
-}
-
-.ahsp-resource-columns td {
-  overflow-wrap: anywhere;
 }
 
 /* The empty sentence spans the row. anywhere on the cell itself wraps
