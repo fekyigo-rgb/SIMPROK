@@ -22,10 +22,10 @@ test('three doors open one unit resolution surface', () => {
   assert.equal(panel.includes('searchUnitDefinitions'), true);
 });
 
-test('manual unit search follows the resource family and the formula stays three columns', () => {
+test('manual unit search follows the resource family and the formula adapts to available width', () => {
   assert.equal(manual.includes('resourceType: props.resourceType'), true);
   assert.equal(manual.includes('LEGACY_INVALID_FOR_RESOURCE_TYPE'), true);
-  assert.match(css, /\.ahsp-manual-comp-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/u);
+  assert.match(css, /\.ahsp-manual-comp-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*23rem\),\s*1fr\)\)/u);
 });
 
 test('summary, review, and one AHSP filter the same issue id', () => {

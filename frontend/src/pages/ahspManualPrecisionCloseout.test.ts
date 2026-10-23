@@ -166,8 +166,8 @@ test('manual keyboard input never implicitly saves and Keterangan stays multilin
     manual.indexOf('</label>', manual.indexOf('<span className="ahsp-field__label">Keterangan</span>')),
   );
   assert.equal(keterangan.includes('<textarea'), true);
-  assert.equal(keterangan.includes('rows={3}'), true);
+  assert.equal(keterangan.includes('rows={1}'), true);
   assert.equal(css.includes('.ahsp-manual-info-grid__keterangan textarea.ahsp-field__control'), true);
-  assert.equal(css.includes('min-height: 5.5rem;'), true);
+  assert.equal(css.includes('min-height: 2.5rem;'), true);
   assert.equal(css.includes('resize: vertical;'), true);
 });

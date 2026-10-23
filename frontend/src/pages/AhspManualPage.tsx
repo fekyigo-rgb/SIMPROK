@@ -552,7 +552,8 @@ function ManualResourceGroupPanel(props: {
         </div>
       ) : null}
 
-      <table className="ahsp-manual-comp__table ahsp-resource-columns">
+      <div className="ahsp-manual-comp__table-scroll">
+        <table className="ahsp-manual-comp__table ahsp-resource-columns">
         <colgroup>
           <col className="ahsp-col-name" />
           <col className="ahsp-col-unit" />
@@ -641,7 +642,8 @@ function ManualResourceGroupPanel(props: {
             ))
           )}
         </tbody>
-      </table>
+        </table>
+      </div>
     </section>
   );
 }
@@ -1021,7 +1023,7 @@ export function AhspManualPage(): ReactNode {
                 onChange={(e) => setKeterangan(e.target.value)}
                 placeholder="Catatan singkat (opsional)"
                 aria-label="Keterangan"
-                rows={3}
+                rows={1}
               />
             </label>
           </div>
