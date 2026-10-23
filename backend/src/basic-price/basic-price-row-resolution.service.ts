@@ -529,6 +529,7 @@ export class BasicPriceRowResolutionService {
         workspaceId: true,
         status: true,
         uploadedByAccountId: true,
+        sourceSha256: true,
       },
     });
     if (!batch || batch.workspaceId !== workspaceId)
@@ -560,10 +561,15 @@ export class BasicPriceRowResolutionService {
         rawSourceCategoryCode: true,
         rawSourceContext: true,
         reasonCodes: true,
+        collisionType: true,
         specificationDecisions: { select: { id: true }, take: 1 },
       },
     });
-    const considered = rows.filter((row) => !excluded.has(row.id));
+    // A previously recorded identity collision is human review, not another
+    // candidate for silent re-acceptance on every retry.
+    const considered = rows.filter(
+      (row) => !excluded.has(row.id) && row.collisionType === 'NONE',
+    );
 
     // THE SAME PROPOSAL AUTHORITY THE ROOM READ, asked again at execution time
     // so a stale screen cannot bind anything. Batched internally — one evidence
@@ -572,6 +578,12 @@ export class BasicPriceRowResolutionService {
       workspaceId,
       considered.map(row => ({
         ...row,
+        // EXACTLY the audited question context supplied by the review room.
+        // Without the source fingerprint and current version, proven private
+        // category/identity memory is shown in UI but lost on Simpan & Gunakan.
+        batchId,
+        rowVersion: row.version,
+        sourceSha256: batch.sourceSha256,
         hasAuditedSpecifications: (row.specificationDecisions?.length ?? 0) > 0,
         rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
       })),
@@ -627,7 +639,7 @@ export class BasicPriceRowResolutionService {
         async (tx) => {
           for (const item of chunk) {
             try {
-              await this.resolveWithinTransaction(
+              const resolved = await this.resolveWithinTransaction(
                 tx,
                 workspaceId,
                 batchId,
@@ -649,7 +661,17 @@ export class BasicPriceRowResolutionService {
                 // The batch-wide verdict taken at the instant the human pressed.
                 item.proposal,
               );
-              acceptedRowIds.push(item.rowId);
+              // The existing resolver may lawfully persist a collision as
+              // NEEDS_REVIEW rather than throwing. That is not an accepted
+              // price; only a READY+RESOLVED row counts as a success.
+              if (
+                resolved.status === 'READY_FOR_SUBMISSION' &&
+                resolved.resolutionStatus === 'RESOLVED'
+              ) {
+                acceptedRowIds.push(item.rowId);
+              } else {
+                skippedCount += 1;
+              }
             } catch (error) {
               // A ROW MAY LAWFULLY REFUSE. A same-identity collision with a row
               // bound moments ago, a stale version because someone edited it in
