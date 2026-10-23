@@ -16,10 +16,8 @@ test('Tenaga, Bahan, and Peralatan share one column geometry', () => {
   assert.equal(manual.includes('ahsp-col-unit'), true);
   assert.equal(manual.includes('ahsp-col-coef'), true);
   assert.equal(css.includes('table-layout: fixed'), true);
-  assert.equal(
-    css.includes('.ahsp-manual-comp-grid {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));'),
-    true,
-  );
+  assert.match(css, /\.ahsp-manual-comp-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*23rem\),\s*1fr\)\)/u);
+  assert.match(css, /\.ahsp-manual-comp__table-scroll\s*\{[^}]*overflow-x:\s*auto/u);
   assert.equal(css.includes('@media (max-width: 1100px)'), true);
   const tenaga = manual.indexOf('title="Tenaga Kerja"');
   const bahan = manual.indexOf('title="Bahan"');

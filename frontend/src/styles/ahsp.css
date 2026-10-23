@@ -1594,8 +1594,8 @@ li.ahsp-completion:last-child {
 }
 
 .ahsp-manual-info-grid__keterangan textarea.ahsp-field__control {
-  height: auto;
-  min-height: 5.5rem;
+  height: 2.5rem;
+  min-height: 2.5rem;
   resize: vertical;
 }
 
@@ -1615,10 +1615,22 @@ li.ahsp-completion:last-child {
   min-height: 2.5rem;
 }
 
+/* Respect usable content width, including an expanded sidebar. */
+.ahsp-manual-card[aria-label='Komposisi formula AHSP'] {
+  container: ahsp-manual-formula / inline-size;
+}
+
 .ahsp-manual-comp-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 23rem), 1fr));
   gap: var(--space-3);
+}
+
+/* In the two-column state, the final group fills the remaining row. */
+@container ahsp-manual-formula (min-width: 47rem) and (max-width: 70.5rem) {
+  .ahsp-manual-comp-grid > .ahsp-manual-comp:last-child {
+    grid-column: 1 / -1;
+  }
 }
 
 .ahsp-manual-comp {
@@ -1728,20 +1740,28 @@ li.ahsp-completion:last-child {
   color: var(--simprok-engineering-blue-500);
 }
 
+.ahsp-manual-comp__table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
 .ahsp-manual-comp__table {
   width: 100%;
+  min-width: 22rem;
   border-collapse: collapse;
   font-size: var(--text-sm);
 }
 
-/* One column contract for Tenaga, Bahan, and Peralatan.
-   table-layout:fixed plus these widths, not content in each table. */
+/* All groups share the same readable columns; scroll the table, not the card. */
 .ahsp-resource-columns {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
 }
 
+/* Preserve the existing shared Detail AHSP column contract. */
 .ahsp-resource-columns .ahsp-col-no {
   width: 3rem;
 }
@@ -1758,6 +1778,21 @@ li.ahsp-completion:last-child {
 .ahsp-resource-columns th,
 .ahsp-resource-columns td {
   overflow-wrap: anywhere;
+}
+
+/* Narrower widths and nonbroken headings apply ONLY in Manual AHSP. */
+.ahsp-manual-comp__table.ahsp-resource-columns .ahsp-col-unit,
+.ahsp-manual-comp__table.ahsp-resource-columns .ahsp-col-coef {
+  width: 5.5rem;
+}
+
+.ahsp-manual-comp__table.ahsp-resource-columns .ahsp-col-action {
+  width: 3.25rem;
+}
+
+.ahsp-manual-comp__table.ahsp-resource-columns th {
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 /* The empty sentence spans the row. anywhere on the cell itself wraps
@@ -1780,7 +1815,9 @@ li.ahsp-completion:last-child {
 }
 
 .ahsp-manual-comp__coef {
+  box-sizing: border-box;
   width: 4.5rem;
+  max-width: 100%;
   min-height: 1.9rem;
   padding: 0.2rem 0.4rem;
   border: 1px solid var(--simprok-engineering-blue-100);
@@ -1796,8 +1833,7 @@ li.ahsp-completion:last-child {
 }
 
 @media (max-width: 1100px) {
-  .ahsp-manual-info-grid,
-  .ahsp-manual-comp-grid {
+  .ahsp-manual-info-grid {
     grid-template-columns: 1fr;
   }
 }
