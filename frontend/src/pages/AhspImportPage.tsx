@@ -5,10 +5,10 @@ import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import {
   AhspImportAssistedClassificationPanel,
-  emptyAssistedContext,
   type AssistedClassificationContext,
 } from '../components/AhspImportAssistedClassificationPanel';
 import { AhspUnitResolutionPanel } from '../components/AhspUnitResolutionPanel';
+import { emptyAssistedContext } from '../utils/ahspAssistedContext';
 import { explainWaitingItemReasons } from '../utils/ahspDocumentUserCopy';
 import {
   EXISTING_RESOURCE_LINE,
@@ -31,6 +31,7 @@ import {
   type ImportJobView,
   type ImportWaitingItemView,
   type IntakeSummaryWire,
+  type UnitResolutionIssue,
 } from '../utils/ahspImportIntakeDisplay';
 import {
   IQL_COPY,
@@ -1452,6 +1453,20 @@ export function AhspImportPage() {
   const jobEntries = placeOutcomes(waitingImports, (job) => job.key, jobOutcomes);
   const dismissJob = (key: string) => setJobOutcomes((prev) => prev.filter((outcome) => outcome.key !== key));
 
+  // These handlers are invoked ONLY by the user's buttons, never by renderUnitWorkspace.
+  // Keep the original server writers, job identity lookup, and authorization guards.
+  const recheckUnitJobOnClick = () => {
+    if (unitDoor?.source !== 'job' || !unitDoor.jobKey) return;
+    const at = waitingImports.findIndex((job) => job.key === unitDoor.jobKey);
+    const job = waitingImports[at];
+    if (job) recheckImport(job, at);
+  };
+  const confirmUnitJobOnClick = (issue: UnitResolutionIssue, unitDefinitionId: string) => {
+    if (unitDoor?.source !== 'job' || !unitDoor.jobKey) return;
+    const job = waitingImports.find((item) => item.key === unitDoor.jobKey);
+    if (job) void confirmUnitDecision(job, issue, unitDefinitionId);
+  };
+
   const renderUnitWorkspace = (source: 'preview' | 'job', jobKey: string | null): ReactNode => {
     if (!unitDoor || unitDoor.source !== source) return null;
     if (source === 'job' && unitDoor.jobKey !== jobKey) return null;
@@ -1469,20 +1484,11 @@ export function AhspImportPage() {
         lineKey={unitDoor.lineKey}
         onClose={() => setUnitDoor(null)}
         onRecheck={
-          unitDoor.source === 'job' && unitDoor.jobKey
-            ? () => {
-                const at = waitingImports.findIndex((job) => job.key === unitDoor.jobKey);
-                const job = waitingImports[at];
-                if (job) recheckImport(job, at);
-              }
-            : null
+          unitDoor.source === 'job' && unitDoor.jobKey ? recheckUnitJobOnClick : null
         }
         onConfirm={
           unitDoor.source === 'job' && unitDoor.jobKey
-            ? (issue, unitDefinitionId) => {
-                const job = waitingImports.find((item) => item.key === unitDoor.jobKey);
-                if (job) void confirmUnitDecision(job, issue, unitDefinitionId);
-              }
+            ? confirmUnitJobOnClick
             : unitDoor.source === 'preview'
               ? (issue, unitDefinitionId) => {
                   void confirmPreviewUnit(issue, unitDefinitionId);

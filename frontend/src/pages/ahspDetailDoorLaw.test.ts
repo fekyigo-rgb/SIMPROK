@@ -85,7 +85,7 @@ test("official-domain names and interpretation are never hardcoded as fact", () 
 });
 
 test("the Owner-approved fields and status are present, in human words", () => {
-  for (const field of ['Kode', 'Jenis Pengadaan', 'Kategori', 'Subkategori', 'Jenis Pekerjaan', 'Dasar AHSP', 'Status Usulan', 'Dibuat oleh', 'Tanggal dibuat', 'Informasi AHSP', 'Komponen Pembentuk AHSP', 'Tentang AHSP Ini']) {
+  for (const field of ['Kode', 'Jenis Pengadaan', 'Kategori', 'Subkategori', 'Jenis Pekerjaan', 'Dasar AHSP', 'Status Usulan', 'Dibuat oleh', 'Tanggal input', 'Informasi AHSP', 'Komponen Pembentuk AHSP', 'Tentang AHSP Ini']) {
     assert.ok(detail.includes(field), `missing "${field}"`);
   }
   // Status Usulan is translated, not an enum.
@@ -184,7 +184,7 @@ test("a component the form cannot read STOPS the save — it is never silently d
 
 test("an untouched form does not write a revision — history states real changes only", () => {
   assert.ok(detail.includes("const unchanged ="));
-  assert.ok(detail.includes("Belum ada perubahan untuk disimpan"));
+  assert.ok(detail.includes("Belum ada perubahan pada Informasi Sumber atau Komponen"));
   // Fail-open: only an exact match counts as unchanged, so doubt never blocks a save.
   assert.ok(detail.includes("stored.length === resources.length"));
 });

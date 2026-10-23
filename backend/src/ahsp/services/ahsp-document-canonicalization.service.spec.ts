@@ -1071,6 +1071,8 @@ const POSITIVE_PATHS = [
 // so its bytes changed and this guard fired exactly as designed. The pin and the
 // counts below now describe the file as it stands; the guard's purpose — this
 // test speaks for ONE known file, not for any spreadsheet — is unchanged.
+// Owner confirmed the corrected 2026-10-19 Copy of AHSP ok(1).xlsx as the
+// single canonical fixture on 2026-10-21. Older bytes must fail closed.
 const POSITIVE_SHA256 =
   '2c42868ecba1c19b31c869f2939ffadaad0d779f35c870fe778bb5bdcffd286f';
 const positivePath = POSITIVE_PATHS.find((path) => existsSync(path)) ?? '';

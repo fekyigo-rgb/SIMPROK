@@ -25,15 +25,23 @@ describe('AhspImportAssistedClassificationService', () => {
   };
 
   const assignments = {
+    lockAhsp: jest.fn().mockResolvedValue(undefined),
+    assertPrivateTarget: jest.fn().mockResolvedValue(undefined),
     addAssignment: jest.fn().mockResolvedValue({ id: 'asg-1' }),
   };
 
   const prisma = {
+    $transaction: jest.fn(),
     aHSPImportJob: {
       findFirst: jest.fn(),
       update: jest.fn(),
     },
   };
+  // Construct the mock before wiring its transaction callback, so the client
+  // retains a concrete type instead of becoming an implicit recursive `any`.
+  prisma.$transaction.mockImplementation(
+    (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma),
+  );
 
   let service: AhspImportAssistedClassificationService;
 
@@ -138,12 +146,14 @@ describe('AhspImportAssistedClassificationService', () => {
         leafNodeId: 'leaf-src',
         provenance: AhspClassificationAssignmentProvenance.SOURCE_DERIVED,
       }),
+      prisma,
     );
     expect(assignments.addAssignment).toHaveBeenCalledWith(
       expect.objectContaining({
         leafNodeId: 'leaf-human',
         provenance: AhspClassificationAssignmentProvenance.HUMAN_ADDED,
       }),
+      prisma,
     );
   });
 

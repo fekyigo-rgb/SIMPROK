@@ -83,12 +83,17 @@ function UnitOccurrenceChoice(props: {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   useEffect(() => {
     const spelling = props.issue.spelling.trim();
-    setSelectedId(null);
-    if (spelling === '') {
-      setCandidates([]);
-      return;
-    }
     let cancelled = false;
+    // Reset the previous occurrence's selection after the effect, never after cleanup.
+    void Promise.resolve().then(() => {
+      if (!cancelled) setSelectedId(null);
+    });
+    if (spelling === '') {
+      void Promise.resolve().then(() => {
+        if (!cancelled) setCandidates([]);
+      });
+      return () => { cancelled = true; };
+    }
     void searchUnitDefinitions({
       q: spelling,
       page: 1,

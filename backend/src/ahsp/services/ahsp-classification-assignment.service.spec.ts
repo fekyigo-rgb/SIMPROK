@@ -3,6 +3,8 @@ import {
   AhspClassificationAssignmentProvenance,
   ConstructionClassificationLevel,
 } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { AhspImportAssistedClassificationService } from './ahsp-import-assisted-classification.service';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConstructionClassificationService } from '../../construction-classification/construction-classification.service';
@@ -28,6 +30,8 @@ type AhspRow = {
   subCategory: string | null;
   classification: string | null;
   deletedAt: Date | null;
+  archivedAt: Date | null;
+  ownershipType: string;
 };
 
 type AssignmentRow = {
@@ -143,13 +147,18 @@ function createHarness() {
   );
 
   const prisma = {
+    ...classificationPrisma,
+    $queryRaw: jest.fn().mockResolvedValue([]),
     aHSP: {
       findFirst: async (args: {
-        where: { id: string; deletedAt: null };
+        where: { id: string; deletedAt: null; workspaceId?: string; archivedAt?: null; ownershipType?: string };
         select?: Record<string, boolean>;
       }) => {
         const row = ahsps.find(
-          (a) => a.id === args.where.id && a.deletedAt === null,
+          (a) => a.id === args.where.id && a.deletedAt === null &&
+            (args.where.workspaceId === undefined || a.workspaceId === args.where.workspaceId) &&
+            (args.where.archivedAt === undefined || a.archivedAt === args.where.archivedAt) &&
+            (args.where.ownershipType === undefined || a.ownershipType === args.where.ownershipType),
         );
         return row ?? null;
       },
@@ -224,7 +233,16 @@ function createHarness() {
         return row;
       },
     },
-    $transaction: async <T>(fn: (tx: typeof prisma) => Promise<T>) => fn(prisma),
+    $transaction: async <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>) => {
+      const snapshot = structuredClone({ nodes, assignments, audits });
+      try { return await fn(prisma as unknown as Prisma.TransactionClient); }
+      catch (error) {
+        nodes.splice(0, nodes.length, ...snapshot.nodes);
+        assignments.splice(0, assignments.length, ...snapshot.assignments);
+        audits.splice(0, audits.length, ...snapshot.audits);
+        throw error;
+      }
+    },
   };
 
   const audits: Array<{ action: string; who: string }> = [];
@@ -292,6 +310,8 @@ function createHarness() {
       subCategory: input.subCategory ?? 'LEGACY_SUB',
       classification: input.classification ?? 'LEGACY_CLASS',
       deletedAt: null,
+      archivedAt: null,
+      ownershipType: input.workspaceId === null ? 'SIMPROK_ASSET' : 'USER_ASSET',
     };
     ahsps.push(row);
     return row;
@@ -299,6 +319,8 @@ function createHarness() {
 
   return {
     service,
+    prisma,
+    audit,
     classification,
     nodes,
     ahsps,
@@ -965,6 +987,147 @@ describe('AhspClassificationAssignmentService (path assignment foundation)', () 
         actingWorkspaceId: 'other-workspace',
         actorAccountId: 'actor-account',
       }),
-    ).rejects.toThrow('AHSP_CLASSIFICATION_ASSIGNMENT_WORKSPACE_MISMATCH');
+    ).rejects.toThrow('AHSP_PRIVATE_CLASSIFICATION_ONLY');
+  });
+});
+describe('Atomic classification save regression (transactional in-memory harness)', () => {
+  const WS = '11111111-1111-1111-1111-111111111111';
+  const valid = {
+    kategori: 'Cipta Karya',
+    subkategori: 'Bangunan Gedung',
+    jenisPekerjaan: 'Beton',
+  };
+  async function setup() {
+    const h = createHarness();
+    const ahsp = h.seedAhsp({ workspaceId: WS });
+    const path = await h.seedPath({
+      workspaceId: null,
+      rootName: 'Pekerjaan Konstruksi',
+      kategori: 'Bina Marga',
+      sub: 'Jalan',
+      jp: 'Perkerasan',
+    });
+    const assisted = new AhspImportAssistedClassificationService(
+      h.prisma as never,
+      h.classification,
+      h.service,
+    );
+    const input = {
+      ahspId: ahsp.id,
+      actingWorkspaceId: WS,
+      actorAccountId: 'actor',
+      privateOnly: true,
+      context: {
+        jenisPengadaanRootId: path.root.id,
+        paths: [] as Array<{ leafNodeId: string; provenanceHint: 'FROM_USER' }>,
+        pendingPaths: [valid],
+        dasarAcuan: null,
+        penerbit: null,
+      },
+    };
+    return { h, ahsp, path, assisted, input };
+  }
+  it.each(['mixed', 'multi-pending'])(
+    '%s late failure restores nodes, assignments and audit',
+    async (kind) => {
+      const { h, path, assisted, input } = await setup();
+      const before = structuredClone({
+        nodes: h.nodes,
+        assignments: h.assignments,
+        audits: h.audits,
+      });
+      if (kind === 'mixed')
+        input.context.paths = [
+          { leafNodeId: path.jp.id, provenanceHint: 'FROM_USER' },
+        ];
+      input.context.pendingPaths.push({ ...valid, kategori: 'INVALID' });
+      await expect(assisted.applyToAhsp(input)).rejects.toThrow(
+        'CLASSIFICATION_PATH_KATEGORI_NOT_IN_VOCABULARY',
+      );
+      expect({
+        nodes: h.nodes,
+        assignments: h.assignments,
+        audits: h.audits,
+      }).toEqual(before);
+    },
+  );
+  it('audit failure rolls back materialization and assignment; a later retry succeeds exactly once', async () => {
+    const { h, assisted, input } = await setup();
+    const before = h.nodes.length;
+    const audit = jest
+      .spyOn(h.audit, 'logAction')
+      .mockRejectedValueOnce(new Error('AUDIT_FAILURE'));
+    await expect(assisted.applyToAhsp(input)).rejects.toThrow('AUDIT_FAILURE');
+    expect(h.nodes).toHaveLength(before);
+    expect(h.assignments).toHaveLength(0);
+    await assisted.applyToAhsp(input);
+    await assisted.applyToAhsp(input);
+    expect(h.nodes).toHaveLength(before + 3);
+    expect(h.assignments).toHaveLength(1);
+    expect(h.audits).toHaveLength(1);
+    expect(audit).toHaveBeenLastCalledWith(expect.anything(), h.prisma);
+  });
+  it.each(['P2002', 'P2034'])(
+    'retries the entire transaction after %s; no duplicate audit',
+    async (code) => {
+      const { h, assisted, input } = await setup();
+      jest
+        .spyOn(h.audit, 'logAction')
+        .mockRejectedValueOnce(
+          new Prisma.PrismaClientKnownRequestError('injected conflict', {
+            code,
+            clientVersion: 'test',
+          }),
+        );
+      await assisted.applyToAhsp(input);
+      expect(h.assignments).toHaveLength(1);
+      expect(h.audits).toHaveLength(1);
+    },
+  );
+  it('bounds conflict retries to three attempts and leaves no writes', async () => {
+    const { h, assisted, input } = await setup();
+    const audit = jest
+      .spyOn(h.audit, 'logAction')
+      .mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('injected conflict', {
+          code: 'P2034',
+          clientVersion: 'test',
+        }),
+      );
+    await expect(assisted.applyToAhsp(input)).rejects.toThrow(
+      'injected conflict',
+    );
+    expect(audit).toHaveBeenCalledTimes(3);
+    expect(h.assignments).toHaveLength(0);
+    expect(h.audits).toHaveLength(0);
+  });
+  it.each(['official', 'foreign', 'archived'])(
+    'private API refuses %s for both save and deactivate',
+    async (kind) => {
+      const { h, ahsp, assisted, input } = await setup();
+      if (kind === 'official') {
+        ahsp.workspaceId = null;
+        ahsp.ownershipType = 'SIMPROK_ASSET';
+      }
+      if (kind === 'foreign')
+        ahsp.workspaceId = '22222222-2222-2222-2222-222222222222';
+      if (kind === 'archived') ahsp.archivedAt = new Date();
+      await expect(assisted.applyToAhsp(input)).rejects.toThrow(
+        'AHSP_PRIVATE_CLASSIFICATION_ONLY',
+      );
+      await expect(
+        h.service.deactivateAssignment({ ...input, assignmentId: 'missing' }),
+      ).rejects.toThrow('AHSP_PRIVATE_CLASSIFICATION_ONLY');
+      expect(h.assignments).toHaveLength(0);
+      expect(h.audits).toHaveLength(0);
+    },
+  );
+  it('reads newly materialized lineage on the supplied transaction client', async () => {
+    const { h, assisted, input } = await setup();
+    const lineage = jest.spyOn(h.classification, 'getLineage');
+    await assisted.applyToAhsp(input);
+    expect(lineage.mock.calls.length).toBeGreaterThan(1);
+    expect(lineage.mock.calls.every((call) => call[1] === h.prisma)).toBe(true);
+    expect(h.prisma.$queryRaw).toHaveBeenCalled();
   });
 });

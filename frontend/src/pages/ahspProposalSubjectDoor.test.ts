@@ -18,7 +18,9 @@ test('proposal subject reuses the detail unit label and does not invent one', ()
   assert.equal(detail.includes('stored: row.baseUnit'), true);
   assert.equal(detail.includes("(row.resourceName ?? '').trim() || row.resourceId"), true);
   assert.equal(detail.includes('presentedUnitLabel'), true);
-  assert.equal(detail.includes('Nama sumber daya belum tersedia'), false);
+  const proposalView = detail.slice(detail.indexOf('function ProposalSubjectView('), detail.indexOf('type DetailState ='));
+  assert.ok(proposalView.length > 0, 'proposal view source must be present');
+  assert.equal(proposalView.includes('Nama sumber daya belum tersedia'), false);
   assert.equal(detail.includes('Cubic metre'), false);
   assert.equal(detail.includes('Orang-hari'), false);
   assert.equal(detail.includes("baseUnit: 'OH'"), false);

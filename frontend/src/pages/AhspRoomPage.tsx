@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { BookOpen, Plus, Search, RefreshCw, Eye, MoreHorizontal, Trash2, Send, Download, X, ChevronsUpDown } from 'lucide-react';
+import { BookOpen, Plus, Search, RefreshCw, Eye, Trash2, Send, Download, X, ChevronsUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import { canProposeAhsp } from '../utils/ahspProposalStatus';
@@ -23,6 +23,7 @@ import {
   type ListClassificationPath,
 } from '../utils/ahspListClassification';
 import { JENIS_PENGADAAN_OPTIONS } from '../jenisPengadaanVocabulary';
+import { sortAhspListRows, type AhspListSortDirection } from '../utils/ahspListSort';
 import '../styles/ahsp.css';
 
 /**
@@ -64,7 +65,9 @@ const MUTED = 'var(--simprok-engineering-blue-500)';
 const HAIRLINE = '1px solid var(--simprok-engineering-blue-100)';
 const CARD: CSSProperties = { background: '#FFFFFF', border: HAIRLINE, borderRadius: '12px', padding: 'var(--space-4)' };
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
+type AhspListSortKey = 'CODE' | 'WORK_TYPE' | 'DESCRIPTION' | 'UNIT' | 'CATEGORY';
+type AhspListSortState = { key: AhspListSortKey; direction: AhspListSortDirection };
 const ownershipLabel = (workspaceId: string | null) => (workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya');
 const orDash = (v: string | null | undefined) => (v == null || v === '' ? <span style={{ color: MUTED }}>—</span> : String(v));
 
@@ -74,6 +77,8 @@ export function AhspRoomPage() {
   const canManage = hasPermission('AHSP_MANAGE');
   const canCurate = hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE');
   const [state, setState] = useState<RoomState>({ phase: 'LOADING' });
+  // Keep editing separate from applied search: Cari/Enter commits the query.
+  const [draftQuery, setDraftQuery] = useState('');
   const [query, setQuery] = useState('');
   const [source, setSource] = useState<'ALL' | 'SIMPROK' | 'MINE'>('ALL');
   const [jenisPengadaan, setJenisPengadaan] = useState('');
@@ -82,6 +87,7 @@ export function AhspRoomPage() {
   const [jenis, setJenis] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(0);
+  const [sort, setSort] = useState<AhspListSortState | null>(null);
   // Which bulk request is running, so each button tells the truth about itself.
   const [selectionAction, setSelectionAction] = useState<'PROPOSE' | 'DELETE' | null>(null);
   const selectionBusy = selectionAction !== null;
@@ -182,13 +188,56 @@ export function AhspRoomPage() {
     });
   }, [allRows, query, source, jenisPengadaan, kategori, subkategori, jenis]);
 
-  const pageCount = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
+  // Filter first, sort the entire matching result set, then paginate.
+  // Keeping the untouched server order until a column is chosen is intentional.
+  const sortedRows = useMemo(() => {
+    if (!sort) return visibleRows;
+    return sortAhspListRows(visibleRows, (row) => {
+      const paths = canonicalPaths(row);
+      const identity = presentAhspIdentity(row);
+      switch (sort.key) {
+        case 'CODE': return identity.code;
+        case 'WORK_TYPE': return paths.length > 0
+          ? paths.map((path) => path.jenisPekerjaan).filter(Boolean).join(' · ')
+          : identity.workType;
+        case 'DESCRIPTION': return row.methodName;
+        case 'UNIT': return row.versions?.[0]?.outputUnit;
+        case 'CATEGORY': return paths.length > 0
+          ? paths.map((path) => path.kategori).filter(Boolean).join(' · ')
+          : row.fieldCategory;
+      }
+    }, sort.direction);
+  }, [visibleRows, sort]);
+  const toggleSort = (key: AhspListSortKey) => {
+    setSort((current) => ({
+      key,
+      direction: current?.key === key && current.direction === 'asc' ? 'desc' : 'asc',
+    }));
+    setPage(0);
+  };
+  const headerSort = (key: AhspListSortKey) =>
+    sort?.key === key ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none';
+  const sortButton = (key: AhspListSortKey, label: string) => (
+    <button
+      type="button"
+      className="ahsp-action ahsp-action--quiet ahsp-room__sort-button"
+      data-active={sort?.key === key ? 'true' : 'false'}
+      aria-label={`Urutkan ${label} ${sort?.key === key && sort.direction === 'asc' ? 'turun' : 'naik'}`}
+      onClick={() => toggleSort(key)}
+    >
+      {label} {sort?.key === key
+        ? (sort.direction === 'asc' ? <ArrowUp size={12} aria-hidden="true" /> : <ArrowDown size={12} aria-hidden="true" />)
+        : <ChevronsUpDown size={12} aria-hidden="true" />}
+    </button>
+  );
+  const pageCount = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
-  const pageRows = visibleRows.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+  const pageRows = sortedRows.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
   const rangeStart = visibleRows.length === 0 ? 0 : safePage * PAGE_SIZE + 1;
   const rangeEnd = safePage * PAGE_SIZE + pageRows.length;
 
   const resetFilters = () => {
+    setDraftQuery('');
     setQuery('');
     setSource('ALL');
     setJenisPengadaan('');
@@ -218,6 +267,9 @@ export function AhspRoomPage() {
   const clearSelection = () => setSelected(new Set());
 
   const selectedRows = allRows.filter((r) => selected.has(r.id));
+  // Selection deliberately persists across filters/pages; disclose the off-page scope.
+  const selectedOnPageCount = pageRows.filter((r) => selected.has(r.id)).length;
+  const selectedOutsidePageCount = Math.max(0, selectedRows.length - selectedOnPageCount);
   const proposableCount = selectedRows.filter((r) => canProposeAhsp(r)).length;
 
   // After a bulk action the list is re-read, and only the rows that did NOT go
@@ -307,7 +359,10 @@ export function AhspRoomPage() {
 
   const bulkDelete = async () => {
     if (selectionBusy || selectedRows.length === 0) return;
-    const reason = window.prompt(`Hapus ${selectedRows.length} AHSP terpilih? Tuliskan alasan penghapusan:`);
+    const outsideNote = selectedOutsidePageCount > 0
+      ? ` Termasuk ${selectedOutsidePageCount} AHSP yang tidak terlihat pada halaman ini.`
+      : '';
+    const reason = window.prompt(`Hapus ${selectedRows.length} AHSP terpilih?${outsideNote} Tuliskan alasan penghapusan:`);
     if (reason == null || reason.trim() === '') return;
     setSelectionAction('DELETE');
     setSelectionOutcome(null);
@@ -351,9 +406,7 @@ export function AhspRoomPage() {
     URL.revokeObjectURL(url);
   };
 
-  const sortHint = <ChevronsUpDown size={12} style={{ verticalAlign: 'middle', opacity: 0.5 }} />;
-
-  return (
+   return (
     <main className="ahsp-room" aria-label="Ruang AHSP">
       {/* Header + primary actions — Owner order: Panduan | Buat AHSP Manual | + Import AHSP */}
       <header className="ahsp-room__header">
@@ -371,7 +424,7 @@ export function AhspRoomPage() {
               </a>
             ) : null}
             {canManage ? (
-              <Link to="/ahsp/manual" className="ahsp-action ahsp-action--outline">
+              <Link to="/ahsp/manual" className="ahsp-action ahsp-action--primary">
                 Buat AHSP Manual
               </Link>
             ) : null}
@@ -395,22 +448,30 @@ export function AhspRoomPage() {
         <>
           {/* Search + filter control area — Owner: no dedicated Dasar AHSP primary filter */}
           <section aria-label="Pencarian dan saringan AHSP" className="ahsp-room__filters">
-            <div className="ahsp-search-row">
+            <form
+              className="ahsp-search-row"
+              role="search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setQuery(draftQuery);
+                setPage(0);
+              }}
+            >
               <div className="ahsp-search-row__field">
                 <Search size={16} className="ahsp-search-row__icon" aria-hidden />
                 <input
-                  value={query}
-                  onChange={(event) => { setQuery(event.target.value); setPage(0); }}
+                  value={draftQuery}
+                  onChange={(event) => setDraftQuery(event.target.value)}
                   aria-label="Cari AHSP"
                   placeholder="Cari kode atau uraian pekerjaan..."
                   className="ahsp-search-row__input"
                 />
               </div>
-              <button type="button" className="ahsp-action ahsp-action--primary" onClick={() => setPage(0)}>Cari</button>
+              <button type="submit" className="ahsp-action ahsp-action--primary">Cari</button>
               <button type="button" onClick={resetFilters} className="ahsp-action ahsp-action--quiet ahsp-search-row__reset">
                 <RefreshCw size={14} /> Reset Filter
               </button>
-            </div>
+            </form>
             <div className="ahsp-room__filter-grid">
               <label className="ahsp-field">
                 <span className="ahsp-field__label">Sumber</span>
@@ -454,7 +515,14 @@ export function AhspRoomPage() {
           {/* Selection action bar */}
           {selected.size > 0 ? (
             <section aria-label="Tindakan AHSP terpilih" style={{ ...CARD, marginBottom: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 600, color: NAVY }}>{selected.size} AHSP dipilih</span>
+              <div className="ahsp-room__selection-summary">
+                <span style={{ fontWeight: 600, color: NAVY }}>{selected.size} AHSP dipilih</span>
+                {selectedOutsidePageCount > 0 ? (
+                  <span role="note" className="ahsp-room__selection-scope">
+                    {selectedOutsidePageCount} pilihan berada di luar halaman ini. Hapus, Usulkan, dan Export berlaku untuk semua AHSP terpilih.
+                  </span>
+                ) : null}
+              </div>
               <div className="ahsp-action-row" style={{ marginLeft: 'auto' }}>
                 <button type="button" className="ahsp-action ahsp-action--danger" disabled={selectionBusy} aria-busy={selectionAction === 'DELETE' || undefined} onClick={() => void bulkDelete()}>
                   {selectionAction === 'DELETE' ? null : <Trash2 size={14} />} {selectionAction === 'DELETE' ? 'Menghapus…' : 'Hapus'}
@@ -495,11 +563,11 @@ export function AhspRoomPage() {
                         <th style={{ width: '2.5rem' }}>
                           <input type="checkbox" aria-label="Pilih semua di halaman ini" checked={pageAllSelected} onChange={toggleSelectPage} />
                         </th>
-                        <th>Kode {sortHint}</th>
-                        <th>Jenis Pekerjaan {sortHint}</th>
-                        <th>Uraian {sortHint}</th>
-                        <th>Satuan {sortHint}</th>
-                        <th>Kategori {sortHint}</th>
+                        <th aria-sort={headerSort('CODE')}>{sortButton('CODE', 'Kode')}</th>
+                        <th aria-sort={headerSort('WORK_TYPE')}>{sortButton('WORK_TYPE', 'Jenis Pekerjaan')}</th>
+                        <th aria-sort={headerSort('DESCRIPTION')}>{sortButton('DESCRIPTION', 'Uraian')}</th>
+                        <th aria-sort={headerSort('UNIT')}>{sortButton('UNIT', 'Satuan')}</th>
+                        <th aria-sort={headerSort('CATEGORY')}>{sortButton('CATEGORY', 'Kategori')}</th>
                         <th>Aksi</th>
                       </tr>
                     </thead>
@@ -528,12 +596,9 @@ export function AhspRoomPage() {
                             <td>{orDash(row.versions?.[0]?.outputUnit)}</td>
                             <td>{orDash(kategoriLabel)}</td>
                             <td style={{ whiteSpace: 'nowrap' }}>
-                              <Link to={'/ahsp/' + row.id} className="ahsp-action ahsp-action--outline ahsp-action--compact">
+                              <Link to={'/ahsp/' + row.id} className="ahsp-action ahsp-action--outline ahsp-action--compact ahsp-action--view">
                                 <Eye size={14} /> Lihat
                               </Link>
-                              <button type="button" aria-label="Tindakan lain" className="ahsp-action ahsp-action--outline ahsp-action--compact" style={{ marginLeft: 'var(--space-2)' }} disabled>
-                                <MoreHorizontal size={14} />
-                              </button>
                             </td>
                           </tr>
                         );

@@ -73,7 +73,8 @@ export class ConstructionClassificationService {
     parentId?: string | null;
     workspaceId: string | null;
     allowIdempotentReuse?: boolean;
-  }): Promise<ClassificationNodeView> {
+  }, client?: Prisma.TransactionClient): Promise<ClassificationNodeView> {
+    const db = client ?? this.prisma;
     const name = input.name?.trim() ?? '';
     if (!name) {
       throw new BadRequestException('CLASSIFICATION_EMPTY_NAME');
@@ -120,7 +121,7 @@ export class ConstructionClassificationService {
 
     let parent: ConstructionClassificationNode | null = null;
     if (parentId) {
-      parent = await this.prisma.constructionClassificationNode.findUnique({
+      parent = await db.constructionClassificationNode.findUnique({
         where: { id: parentId },
       });
       if (!parent) {
@@ -143,7 +144,7 @@ export class ConstructionClassificationService {
       normalizedName,
       parentId,
       workspaceId,
-    });
+    }, client);
     if (existing) {
       if (input.allowIdempotentReuse) {
         return this.toView(existing);
@@ -160,14 +161,14 @@ export class ConstructionClassificationService {
         normalizedName,
         parentId,
         workspaceId: null,
-      });
+      }, client);
       if (globalTwin) {
         return this.toView(globalTwin);
       }
     }
 
     try {
-      const created = await this.prisma.constructionClassificationNode.create({
+      const created = await db.constructionClassificationNode.create({
         data: {
           level: input.level,
           name,
@@ -180,6 +181,8 @@ export class ConstructionClassificationService {
       });
       return this.toView(created);
     } catch (err) {
+      // The outer owner retries the whole transaction after rollback.
+      if (client) throw err;
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
@@ -190,7 +193,7 @@ export class ConstructionClassificationService {
             normalizedName,
             parentId,
             workspaceId,
-          });
+          }, client);
           if (twin) return this.toView(twin);
         }
         throw new ConflictException('CLASSIFICATION_DUPLICATE_IN_SCOPE');
@@ -202,8 +205,9 @@ export class ConstructionClassificationService {
   async getById(input: {
     id: string;
     workspaceId: string;
-  }): Promise<ClassificationNodeView> {
-    const node = await this.prisma.constructionClassificationNode.findFirst({
+  }, client?: Prisma.TransactionClient): Promise<ClassificationNodeView> {
+    const db = client ?? this.prisma;
+    const node = await db.constructionClassificationNode.findFirst({
       where: {
         id: input.id,
         ...visibilityWhere(input.workspaceId),
@@ -218,10 +222,11 @@ export class ConstructionClassificationService {
   async listChildren(input: {
     parentId: string;
     workspaceId: string;
-  }): Promise<ClassificationNodeView[]> {
+  }, client?: Prisma.TransactionClient): Promise<ClassificationNodeView[]> {
+    const db = client ?? this.prisma;
     // Parent must be visible in scope.
-    await this.getById({ id: input.parentId, workspaceId: input.workspaceId });
-    const rows = await this.prisma.constructionClassificationNode.findMany({
+    await this.getById({ id: input.parentId, workspaceId: input.workspaceId }, client);
+    const rows = await db.constructionClassificationNode.findMany({
       where: {
         parentId: input.parentId,
         ...visibilityWhere(input.workspaceId),
@@ -282,8 +287,9 @@ export class ConstructionClassificationService {
   async getLineage(input: {
     id: string;
     workspaceId: string;
-  }): Promise<ClassificationLineage> {
-    const node = await this.getById(input);
+  }, client?: Prisma.TransactionClient): Promise<ClassificationLineage> {
+    const db = client ?? this.prisma;
+    const node = await this.getById(input, client);
     const ancestors: ClassificationNodeView[] = [];
     let cursorParentId = node.parentId;
     const guard = new Set<string>([node.id]);
@@ -293,7 +299,7 @@ export class ConstructionClassificationService {
         throw new BadRequestException('CLASSIFICATION_LINEAGE_CYCLE');
       }
       guard.add(cursorParentId);
-      const parent = await this.prisma.constructionClassificationNode.findFirst({
+      const parent = await db.constructionClassificationNode.findFirst({
         where: {
           id: cursorParentId,
           ...visibilityWhere(input.workspaceId),
@@ -331,8 +337,9 @@ export class ConstructionClassificationService {
     normalizedName: string;
     parentId: string | null;
     workspaceId: string | null;
-  }): Promise<ConstructionClassificationNode | null> {
-    return this.prisma.constructionClassificationNode.findFirst({
+  }, client?: Prisma.TransactionClient): Promise<ConstructionClassificationNode | null> {
+    const db = client ?? this.prisma;
+    return db.constructionClassificationNode.findFirst({
       where: {
         level: input.level,
         normalizedName: input.normalizedName,

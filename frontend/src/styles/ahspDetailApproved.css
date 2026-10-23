@@ -1,0 +1,339 @@
+/*
+ * SIMPROK AHSP Detail — Owner-approved color mockup, UI only.
+ * Scope is intentionally limited to this detail page. No global design token
+ * is overwritten and no resource/price/BOQ capability is implemented here.
+ */
+.ahsp-detail-primary-card {
+  background: #fff;
+  border: 1.5px solid #a8d7ff;
+  border-radius: 12px;
+  padding: var(--space-5, 1.25rem);
+  box-shadow: 0 2px 10px rgba(22, 89, 150, 0.065);
+}
+
+/* Read-only source-row similarity note: no deduplication, no data mutation. */
+.ahsp-detail-repeated-note {
+  padding: 9px 11px;
+  margin-bottom: 14px;
+  border: 1px solid #b7dcff;
+  border-radius: 8px;
+  background: #f5fbff;
+  color: #15365f;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.ahsp-detail-repeated-note ul { margin: 5px 0; padding-left: 20px; }
+.ahsp-detail-repeated-note li { overflow-wrap: anywhere; }
+/* Status help is contextual: hover the valid card, keyboard-focus or tap the info icon. */
+/* Higher specificity than the later base .ahsp-detail-action-card { overflow: hidden }. */
+.ahsp-detail-action-card.ahsp-detail-action-card--valid {
+  position: relative;
+  overflow: visible;
+  z-index: 2;
+}
+.ahsp-detail-action-card--valid > .ahsp-detail-action__face {
+  border-radius: 12px;
+}
+.ahsp-detail-status-help {
+  flex: 0 0 auto;
+}
+.ahsp-detail-status-help__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  cursor: pointer;
+}
+.ahsp-detail-status-help__trigger:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+.ahsp-detail-status-help__tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  width: max-content;
+  max-width: min(29rem, calc(100vw - 2rem));
+  margin: 0;
+  padding: 10px 13px;
+  border: 1px solid #b7dcff;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 7px 23px rgba(22, 55, 98, 0.18);
+  color: #15365f;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.ahsp-detail-action-card--valid:hover .ahsp-detail-status-help__tooltip,
+.ahsp-detail-status-help__trigger:focus-visible + .ahsp-detail-status-help__tooltip,
+.ahsp-detail-status-help__tooltip[data-open='true'] {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ahsp-detail-status-help__tooltip { transition: none; }
+}
+/* Exactly the SAME token used by the blue "Usulkan ke SIMPROK" button.
+   No blue text on the source resource rows: only the table HEAD is colored. */
+.ahsp-resource-columns .ahsp-detail-resource-heading th {
+  background: var(--simprok-trust-blue-500);
+  color: #fff;
+  font-weight: 700;
+  text-shadow: 0 1px 1px rgba(10, 54, 99, 0.35);
+}
+.ahsp-resource-columns .ahsp-detail-resource-heading th:first-child {
+  border-top-left-radius: 7px;
+}
+.ahsp-resource-columns .ahsp-detail-resource-heading th:last-child {
+  border-top-right-radius: 7px;
+}
+
+.ahsp-detail-action-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3, 12px);
+  align-items: start;
+  margin-top: var(--space-4);
+}
+.ahsp-detail-action-card {
+  min-width: 0;
+  border-radius: 13px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(30, 59, 110, 0.12);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+.ahsp-detail-action-card:hover,
+.ahsp-detail-action-card:focus-within {
+  box-shadow: 0 7px 20px rgba(21, 67, 125, 0.2);
+  transform: translateY(-2px);
+}
+.ahsp-detail-action-card--valid {
+  --ahsp-action-accent: #0a995e;
+  --ahsp-action-fill: linear-gradient(110deg, #088d53, #26bc79);
+}
+.ahsp-detail-action-card--update {
+  --ahsp-action-accent: var(--simprok-trust-blue-500);
+  --ahsp-action-fill: linear-gradient(110deg, #167bd6, var(--simprok-trust-blue-500));
+}
+.ahsp-detail-action-card--history {
+  --ahsp-action-accent: #792dec;
+  --ahsp-action-fill: linear-gradient(110deg, #7627dc, #9a4cf5);
+}
+/* A draft without a recipe and an inactive AHSP must NEVER look like a
+   green 'valid' status, even though the section's heading is retained. */
+.ahsp-detail-action-card--neutral {
+  --ahsp-action-accent: #576b84;
+  --ahsp-action-fill: linear-gradient(110deg, #5d7089, #8191a7);
+}
+.ahsp-detail-action__face {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3, 12px);
+  min-height: 86px;
+  padding: var(--space-3, 12px) var(--space-4, 16px);
+  background: var(--ahsp-action-fill);
+  color: #fff;
+}
+.ahsp-detail-action-card > summary {
+  cursor: pointer;
+  list-style: none;
+  transition: filter 160ms ease;
+}
+.ahsp-detail-action-card > summary::-webkit-details-marker {
+  display: none;
+}
+.ahsp-detail-action-card > summary:hover {
+  filter: brightness(1.06);
+}
+.ahsp-detail-action-card > summary:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: -5px;
+  box-shadow: inset 0 0 0 6px rgba(15, 42, 81, 0.5);
+}
+.ahsp-detail-action__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--ahsp-action-accent);
+}
+.ahsp-detail-action__copy {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ahsp-detail-action__title {
+  display: block;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 3px;
+}
+.ahsp-detail-action__description {
+  display: block;
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: #fff;
+  opacity: 0.96;
+}
+.ahsp-detail-action__arrow {
+  flex: 0 0 auto;
+  color: #fff;
+  transition: transform 160ms ease;
+}
+.ahsp-detail-action-card[open] {
+  grid-column: 1 / -1;
+  border-color: #bfd8f2;
+  background: #fff;
+}
+.ahsp-detail-action-card[open] > summary .ahsp-detail-action__arrow {
+  transform: rotate(90deg);
+}
+.ahsp-detail-action-card > form {
+  padding: 0 var(--space-4, 16px) var(--space-4, 16px);
+}
+.ahsp-detail-action-card > table {
+  width: calc(100% - 2 * var(--space-4, 16px));
+  margin: var(--space-4, 16px);
+}
+/* Existing historical recipe versions: read-only, scoped to the Detail door. */
+.ahsp-detail-action-card--history .ahsp-detail-history__content {
+  padding: 0 var(--space-4, 16px) var(--space-4, 16px);
+}
+.ahsp-detail-history__note {
+  margin: var(--space-3, 12px) 0;
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.ahsp-detail-history__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #cfe5f7;
+  border-radius: 8px;
+}
+.ahsp-detail-history__scroll:focus-visible {
+  outline: 2px solid var(--simprok-trust-blue-500);
+  outline-offset: 2px;
+}
+.ahsp-detail-history__table {
+  width: 100%;
+  min-width: 610px;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  color: var(--simprok-authority-navy-800);
+}
+.ahsp-detail-history__table th,
+.ahsp-detail-history__table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid #e4eef7;
+  text-align: left;
+  vertical-align: top;
+}
+.ahsp-detail-history__table th {
+  background: #eaf5ff;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.ahsp-detail-history__table tr:last-child td {
+  border-bottom: 0;
+}
+@media (max-width: 920px) {
+  .ahsp-detail-action-strip {
+    grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ahsp-detail-action-card,
+  .ahsp-detail-action-card > summary,
+  .ahsp-detail-action__arrow {
+    transition: none;
+  }
+}
+
+/* Parent AHSP note/title editor: reuse audited parent PATCH, independent from
+   immutable version recipe. No new persistence model or resource matcher. */
+.ahsp-detail-metadata-editor {
+  padding: var(--space-4, 16px);
+  margin: var(--space-4, 16px) var(--space-4, 16px) 0;
+  border: 1px solid #b9ddf9;
+  border-radius: 12px;
+  background: #f6fbff;
+  display: grid;
+  gap: var(--space-3, 12px);
+}
+.ahsp-detail-metadata-editor__title {
+  margin: 0;
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-base);
+  font-weight: 700;
+}
+.ahsp-detail-metadata-editor__hint {
+  margin: 0;
+  color: var(--simprok-engineering-blue-700);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.ahsp-detail-metadata-editor__field {
+  display: grid;
+  gap: 6px;
+  color: var(--simprok-authority-navy-800);
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+.ahsp-detail-metadata-editor__field textarea,
+.ahsp-detail-metadata-editor__field input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid #aabdd1;
+  border-radius: 8px;
+  background: white;
+  color: var(--simprok-authority-navy-800);
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.ahsp-detail-metadata-editor__field textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+.ahsp-detail-metadata-editor__field :is(textarea, input):focus-visible {
+  outline: 2px solid var(--simprok-trust-blue-500);
+  outline-offset: 2px;
+}
+.ahsp-detail-metadata-editor__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2, 8px);
+}
+.ahsp-detail-metadata-editor__feedback {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: #e7f3ff;
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-sm);
+}

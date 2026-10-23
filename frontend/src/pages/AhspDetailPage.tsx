@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Layers, Users, Package, Wrench, FileText, Info, Pencil, History, ArrowLeft, Send, MoreHorizontal, BadgeCheck } from 'lucide-react';
+import { Layers, Users, Package, Wrench, FileText, Info, Pencil, History, ArrowLeft, Send, BadgeCheck, ChevronRight } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
+import { verifySavedVersion } from '../utils/ahspSaveReadback';
 import { useAuth } from '../contexts/AuthContext';
 import {
   groupAhspDefinitionResources,
@@ -14,6 +15,9 @@ import {
 import { describeAhspProposalStatus, canProposeAhsp, formatIndoDate } from '../utils/ahspProposalStatus';
 import { USULKAN_TOOLTIP } from '../utils/ahspProposalCopy';
 import { presentAhspIdentity } from '../utils/ahspIdentityDisplay';
+import '../styles/ahsp.css';
+import '../styles/ahspDetailApproved.css';
+import '../styles/ahspDetailUpdateResponsive.css';
 import { presentedUnitLabel } from '../utils/unitSuggestionLabel';
 import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
 import { AhspClassificationRevisionPanel } from '../components/AhspClassificationRevisionPanel';
@@ -322,20 +326,73 @@ export function AhspDetailPage() {
   const canCurate = hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE');
   const [state, setState] = useState<DetailState>({ phase: 'LOADING' });
   const [classificationPaths, setClassificationPaths] = useState<DetailClassificationPath[]>([]);
+  const onClassificationAssignmentsChange = useCallback((rows: readonly unknown[]) => {
+    setClassificationPaths(detailPathsFromAssignments(rows));
+  }, []);
+  const actionInFlight = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [metadataFeedback, setMetadataFeedback] = useState<string | null>(null);
+  const clearSaveFeedback = useCallback(() => {
+    setActionSuccess(null);
+    setActionError(null);
+    setActionNotice(null);
+    setMetadataFeedback(null);
+  }, []);
+  const onClassificationSaveAttempt = useCallback(() => {
+    if (actionInFlight.current) return false;
+    actionInFlight.current = true;
+    clearSaveFeedback();
+    return true;
+  }, [clearSaveFeedback]);
+  const onSaveFinished = useCallback(() => { actionInFlight.current = false; }, []);
+  const onClassificationSaved = useCallback(() => {
+    setActionError(null);
+    setMetadataFeedback(null);
+    setActionSuccess('Perubahan klasifikasi berhasil disimpan.');
+  }, []);
+  const onClassificationCancelled = useCallback(() => {
+    clearSaveFeedback();
+    setActionNotice('Penambahan klasifikasi dibatalkan.');
+  }, [clearSaveFeedback]);
+  // A verified success is transient; an error remains visible until the next action.
+  // Cleanup prevents an earlier save's timer from dismissing a newer result.
+  useEffect(() => {
+    if (!actionSuccess) return;
+    const timeoutId = window.setTimeout(() => setActionSuccess(null), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [actionSuccess]);
+  // Informational cancellation expires, while genuine save errors stay visible.
+  useEffect(() => {
+    if (!actionNotice) return;
+    const timeoutId = window.setTimeout(() => setActionNotice(null), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [actionNotice]);
   const [busy, setBusy] = useState(false);
   const [proposing, setProposing] = useState(false);
   const [showProposeConfirm, setShowProposeConfirm] = useState(false);
+  const [showValidStatusNote, setShowValidStatusNote] = useState(false);
   const [proposalSubject, setProposalSubject] = useState<
     | { phase: 'READY'; subject: ProposalSubjectWire }
     | { phase: 'FAILED' }
     | null
   >(null);
+  // Parent metadata belongs to the existing audited PATCH /ahsp/:id door.
+  // It is NOT a version recipe field and is saved independently from components.
+  const [editMethodName, setEditMethodName] = useState('');
+  const [editCode, setEditCode] = useState('');
+  const [editKeterangan, setEditKeterangan] = useState('');
+  const [metadataReason, setMetadataReason] = useState('');
+  const [metadataBusy, setMetadataBusy] = useState(false);
   const [outputUnit, setOutputUnit] = useState('');
   const [regulationReference, setRegulationReference] = useState('');
   const [issuerInstitution, setIssuerInstitution] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
   const [resourceDrafts, setResourceDrafts] = useState<ResourceDraft[]>([emptyResource()]);
+  const [editingResourceIndex, setEditingResourceIndex] = useState<number | null>(null);
+  const [editingResourceOriginal, setEditingResourceOriginal] = useState<ResourceDraft | null>(null);
+  const [componentRemovalNotice, setComponentRemovalNotice] = useState(false);
   // STAGE 2A Door B — scoped open observations for THIS AHSP only.
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewRows, setReviewRows] = useState<readonly CuratableObservationWire[]>([]);
@@ -346,22 +403,31 @@ export function AhspDetailPage() {
 
   const applyPayload = useCallback((data: AhspDetail) => {
     setState({ phase: 'READY', ahsp: data });
+    setEditMethodName(data.methodName ?? '');
+    setEditCode(data.code ?? '');
+    setEditKeterangan(data.keterangan ?? '');
     const current = (data.versions ?? [])[0] ?? null;
     setOutputUnit(current?.outputUnit ?? '');
     setRegulationReference(current?.regulationReference ?? '');
     setIssuerInstitution(current?.issuerInstitution ?? '');
     setEffectiveDate(toDateInput(current?.effectiveDate));
     setResourceDrafts(draftsFromVersion(current));
+    setComponentRemovalNotice(false);
+    setEditingResourceIndex(null);
+    setEditingResourceOriginal(null);
   }, []);
 
   useEffect(() => {
     let active = true;
     if (!ahspId) {
-      setState({
-        phase: 'FAILED',
-        message: 'AHSP ini tidak dapat dibuka karena identitasnya tidak ada di alamat.',
+      // Invalid-route feedback is deferred beyond this effect, but never after cleanup.
+      void Promise.resolve().then(() => {
+        if (active) setState({
+          phase: 'FAILED',
+          message: 'AHSP ini tidak dapat dibuka karena identitasnya tidak ada di alamat.',
+        });
       });
-      return;
+      return () => { active = false; };
     }
     const load = async () => {
       try {
@@ -401,11 +467,14 @@ export function AhspDetailPage() {
   }, [ahspId, applyPayload]);
 
   useEffect(() => {
-    if (state.phase !== 'READY' || !ahspId || !state.ahsp.proposedAt) {
-      setProposalSubject(null);
-      return;
-    }
     let active = true;
+    if (state.phase !== 'READY' || !ahspId || !state.ahsp.proposedAt) {
+      // Clear obsolete proposal results asynchronously, guarded against a new AHSP.
+      void Promise.resolve().then(() => {
+        if (active) setProposalSubject(null);
+      });
+      return () => { active = false; };
+    }
     const loadSubject = async () => {
       try {
         const response = await apiFetch('/ahsp/' + ahspId + '/proposal-subject');
@@ -439,6 +508,21 @@ export function AhspDetailPage() {
     () => groupAhspDefinitionResources(currentVersion?.resources),
     [currentVersion],
   );
+  // Appearance-only hint: never collapse two recipe rows or infer that either is wrong.
+  const repeatedComponentLabels = useMemo(() => groups.flatMap((group) => {
+    const seen = new Map<string, { name: string; unit: string; count: number }>();
+    for (const row of group.rows) {
+      const name = row.name.trim();
+      const unit = row.unit.trim();
+      if (!name || ['Tanpa nama', 'Nama sumber daya belum tersedia'].includes(name)) continue;
+      const key = name.toLocaleLowerCase('id-ID') + '\u0000' + unit.toLocaleLowerCase('id-ID');
+      const prior = seen.get(key);
+      if (prior) prior.count += 1;
+      else seen.set(key, { name, unit, count: 1 });
+    }
+    return [...seen.values()].filter((row) => row.count > 1)
+      .map((row) => `${group.label}: ${row.name} (${row.count} baris, satuan ${row.unit || 'tidak tercatat'})`);
+  }), [groups]);
 
   const presentedComponentUnit = (storedUnit: string) => {
     const source = (currentVersion?.resources ?? []).find(
@@ -459,14 +543,15 @@ export function AhspDetailPage() {
     code: currentVersion?.outputUnitCode,
   });
 
-  const reload = async () => {
-    if (!ahspId) return;
+  const reload = async (): Promise<boolean> => {
+    if (!ahspId) return false;
     const response = await apiFetch('/ahsp/' + ahspId);
     if (!response.ok) {
       setActionError('AHSP tidak dapat dibaca ulang. Coba lagi sebentar.');
-      return;
+      return false;
     }
     applyPayload((await response.json()) as AhspDetail);
+    return true;
   };
 
   /** Door B — EXISTING list, scoped by ahspId. Read only. */
@@ -495,13 +580,22 @@ export function AhspDetailPage() {
   }, [ahspId, canCurate]);
 
   useEffect(() => {
+    let active = true;
     if (state.phase !== 'READY' || !canCurate || !ahspId) {
-      setReviewRows([]);
-      setReviewPhase('IDLE');
-      setReviewOpen(false);
-      return;
+      // Drop obsolete review state only after the effect; respect identity cleanup.
+      void Promise.resolve().then(() => {
+        if (!active) return;
+        setReviewRows([]);
+        setReviewPhase('IDLE');
+        setReviewOpen(false);
+      });
+      return () => { active = false; };
     }
-    void loadResourceReview();
+    void Promise.resolve().then(() => {
+      if (active) return loadResourceReview();
+      return null;
+    });
+    return () => { active = false; };
   }, [state.phase, canCurate, ahspId, loadResourceReview]);
 
   const openResourceReview = async () => {
@@ -563,9 +657,99 @@ export function AhspDetailPage() {
     setShowProposeConfirm(false);
   };
 
+  // A single atomic parent change: Uraian, optional Kode and Keterangan.
+  // Existing AHSP PATCH owns all three columns and one audit transaction.
+  const saveBasicInfo = async () => {
+    if (!ahspId || metadataBusy || busy || actionInFlight.current || state.phase !== 'READY') return;
+    clearSaveFeedback();
+    const prior = state.ahsp;
+    if (prior.workspaceId === null || prior.ownershipType !== 'USER_ASSET' || prior.archivedAt) {
+      setMetadataFeedback('Hanya AHSP privat aktif milik Workspace ini yang dapat diubah.');
+      return;
+    }
+    const methodName = editMethodName.trim();
+    const code = editCode.trim();
+    const keterangan = editKeterangan.trim();
+    const reason = metadataReason.trim();
+    if (!methodName) {
+      setMetadataFeedback('Uraian/Judul AHSP tidak boleh kosong.');
+      return;
+    }
+    const nameChanged = methodName !== (prior.methodName ?? '').trim();
+    const codeChanged = code !== (prior.code ?? '').trim();
+    const noteChanged = keterangan !== (prior.keterangan ?? '').trim();
+    if (!nameChanged && !codeChanged && !noteChanged) {
+      setMetadataFeedback('Belum ada perubahan Informasi Dasar.');
+      return;
+    }
+    if (codeChanged && prior.proposedAt) {
+      setMetadataFeedback('Kode yang sudah diusulkan telah dibekukan. Batalkan koreksi kode sebelum menyimpan.');
+      return;
+    }
+    if (!reason) {
+      setMetadataFeedback('Tuliskan alasan perubahan untuk catatan audit.');
+      return;
+    }
+    if (!onClassificationSaveAttempt()) return;
+    setMetadataBusy(true);
+    setMetadataFeedback(null);
+    setActionSuccess(null);
+    try {
+      const response = await apiFetch('/ahsp/' + encodeURIComponent(ahspId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(nameChanged ? { methodName } : {}),
+          ...(codeChanged ? { code: code || null } : {}),
+          ...(noteChanged ? { keterangan } : {}),
+          reason,
+        }),
+      });
+      if (!response.ok) {
+        setMetadataFeedback(response.status === 409
+          ? 'Kode pada usulan yang sudah dibekukan tidak boleh diganti.'
+          : response.status === 401 || response.status === 403
+          ? 'Workspace tidak berwenang memperbarui Informasi Dasar ini.'
+          : 'Informasi Dasar belum dapat disimpan. Periksa data dan dukungan backend.');
+        return;
+      }
+      const readBack = await apiFetch('/ahsp/' + encodeURIComponent(ahspId));
+      if (!readBack.ok) {
+        setMetadataFeedback('Permintaan telah dikirim, tetapi hasilnya belum dapat diverifikasi. Muat ulang halaman.');
+        return;
+      }
+      const updated = (await readBack.json()) as AhspDetail;
+      if (updated.id !== ahspId || (updated.methodName ?? '').trim() !== methodName ||
+          (updated.code ?? '').trim() !== code ||
+          (updated.keterangan ?? '').trim() !== keterangan) {
+        setMetadataFeedback('Nilai di server belum cocok dengan Informasi Dasar. Jangan anggap tersimpan; muat ulang untuk memeriksa.');
+        return;
+      }
+      // Keep unsaved recipe/version changes intact, including resource drafts.
+      setState({ phase: 'READY', ahsp: updated });
+      setEditMethodName(updated.methodName ?? '');
+      setEditCode(updated.code ?? '');
+      setEditKeterangan(updated.keterangan ?? '');
+      setMetadataReason('');
+      setMetadataFeedback('Informasi Dasar tersimpan dan sesuai dengan data AHSP.');
+      setActionError(null);
+      setActionSuccess('Perubahan berhasil disimpan.');
+    } catch {
+      setMetadataFeedback('Status penyimpanan belum dapat dipastikan. Muat ulang sebelum mencoba lagi.');
+    } finally {
+      setMetadataBusy(false);
+      onSaveFinished();
+    }
+  };
+
   const addVersion = async (event: FormEvent) => {
     event.preventDefault();
-    if (!ahspId || busy) return;
+    if (!ahspId || busy || metadataBusy || actionInFlight.current) return;
+    clearSaveFeedback();
+    if (editingResourceIndex !== null) {
+      setActionError('Selesaikan atau batalkan edit komponen sebelum menyimpan versi AHSP.');
+      return;
+    }
     const unit = outputUnit.trim();
     // AN UPDATE SENDS THE WHOLE RECIPE, so a row this form cannot read would be
     // stored as a component that no longer exists. Dropping it silently is the
@@ -631,16 +815,19 @@ export function AhspDetailPage() {
         const sent = resources[index];
         return (
           (row.resourceId ?? '').trim() === sent.resourceId &&
+          row.resourceType === sent.resourceType &&
           (row.baseUnit ?? '').trim() === sent.baseUnit &&
           parseCoefficientInput(row.coefficient) === sent.coefficient
         );
       });
     if (unchanged) {
-      setActionError('Belum ada perubahan untuk disimpan.');
+      setActionError('Belum ada perubahan pada Informasi Sumber atau Komponen. Informasi Dasar dan Klasifikasi disimpan melalui tombol masing-masing.');
       return;
     }
+    if (!onClassificationSaveAttempt()) return;
     setBusy(true);
     setActionError(null);
+    setActionSuccess(null);
     try {
       const response = await apiFetch('/ahsp/' + ahspId + '/versions', {
         method: 'POST',
@@ -665,11 +852,24 @@ export function AhspDetailPage() {
         );
         return;
       }
-      await reload();
+      const receipt = (await response.json()) as { id?: unknown };
+      const readBack = await apiFetch('/ahsp/' + ahspId);
+      const detail: unknown = readBack.ok ? await readBack.json() : null;
+      if (typeof receipt?.id !== 'string' || !verifySavedVersion(detail, ahspId, receipt.id, {
+        outputUnit: unit, regulationReference: regulationReference.trim(),
+        issuerInstitution: issuerInstitution.trim(), effectiveDate: effectiveDate.trim(), resources,
+      })) {
+        setActionError('Permintaan telah dikirim, tetapi versi tersimpan belum terbukti sesuai. Muat ulang sebelum mencoba lagi.');
+        return;
+      }
+      applyPayload(detail as AhspDetail);
+      setActionError(null);
+      setActionSuccess('Perubahan Komponen berhasil disimpan.');
     } catch {
       setActionError('Pembaruan AHSP tidak dapat dihubungi.');
     } finally {
       setBusy(false);
+      onSaveFinished();
     }
   };
 
@@ -779,17 +979,20 @@ export function AhspDetailPage() {
                   <Send size={16} /> {proposing ? 'Mengirim…' : 'Usulkan ke SIMPROK'}
                 </button>
               ) : null}
-              {canManage ? (
-                <button type="button" aria-label="Tindakan lain" style={{ ...outlineButton, padding: 'var(--space-2)' }} disabled>
-                  <MoreHorizontal size={16} />
-                </button>
-              ) : null}
             </div>
           </header>
 
           {actionError ? (
-            <p role="alert" style={{ color: '#C0392B', fontSize: 'var(--text-sm)', margin: '0 0 var(--space-3)' }}>
+            <p role="alert" aria-atomic="true" style={{ position: 'fixed' as const, top: '5rem', right: '1rem', zIndex: 1100, maxWidth: 'min(28rem, calc(100vw - 2rem))', padding: '0.85rem 1rem', borderRadius: '0.5rem', boxShadow: '0 4px 16px #0002', pointerEvents: 'none' as const, background: '#FFF1F1', border: '1px solid #C0392B', color: '#C0392B', fontSize: 'var(--text-sm)', margin: 0 }}>
               {actionError}
+            </p>
+          ) : actionSuccess ? (
+            <p role="status" aria-live="polite" aria-atomic="true" style={{ position: 'fixed' as const, top: '5rem', right: '1rem', zIndex: 1100, maxWidth: 'min(28rem, calc(100vw - 2rem))', padding: '0.85rem 1rem', borderRadius: '0.5rem', boxShadow: '0 4px 16px #0002', pointerEvents: 'none' as const, background: '#EAF8EF', border: '1px solid #16803C', color: '#16803C', fontWeight: 700, fontSize: 'var(--text-sm)', margin: 0 }}>
+              {actionSuccess}
+            </p>
+          ) : actionNotice ? (
+            <p role="status" aria-live="polite" aria-atomic="true" style={{ position: 'fixed' as const, top: '5rem', right: '1rem', zIndex: 1100, maxWidth: 'min(28rem, calc(100vw - 2rem))', padding: '0.85rem 1rem', borderRadius: '0.5rem', boxShadow: '0 4px 16px #0002', pointerEvents: 'none' as const, background: '#F5FBFF', border: '1px solid #B7DCFF', color: '#15365F', fontSize: 'var(--text-sm)', margin: 0 }}>
+              {actionNotice}
             </p>
           ) : null}
 
@@ -915,7 +1118,7 @@ export function AhspDetailPage() {
 
           {/* Two columns: components (left) + information (right) */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-5)', alignItems: 'flex-start' }}>
-            <section aria-label="Komponen Pembentuk AHSP" style={{ ...CARD, flex: '1 1 30rem', minWidth: 0 }}>
+            <section aria-label="Komponen Pembentuk AHSP" className="ahsp-detail-primary-card" style={{ flex: '1 1 30rem', minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
                 <span style={ICON_TILE}><Layers size={16} /></span>
                 <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: 0 }}>Komponen Pembentuk AHSP</h2>
@@ -931,7 +1134,15 @@ export function AhspDetailPage() {
                   <p>AHSP ini belum menyatakan komponen tenaga, bahan, atau peralatan.</p>
                 </section>
               ) : (
-                groups.map((group) => (
+                <>
+                {repeatedComponentLabels.length > 0 ? (
+                  <aside role="note" aria-label="Periksa komponen dengan uraian berulang" className="ahsp-detail-repeated-note">
+                    <strong>Periksa komponen yang tampak berulang</strong>
+                    <ul>{repeatedComponentLabels.map((label) => <li key={label}>{label}</li>)}</ul>
+                    <span>Uraian dan satuannya sama. Baris serta koefisien tetap ditampilkan apa adanya; periksa apakah ini memang disengaja.</span>
+                  </aside>
+                ) : null}
+                {groups.map((group) => (
                   <section key={group.key} aria-label={group.label} style={{ marginBottom: 'var(--space-5)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-2)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
@@ -951,7 +1162,7 @@ export function AhspDetailPage() {
                           <col className="ahsp-col-coef" />
                         </colgroup>
                         <thead>
-                          <tr style={{ textAlign: 'left', color: MUTED, background: 'var(--simprok-engineering-blue-100)' }}>
+                          <tr className="ahsp-detail-resource-heading" style={{ textAlign: 'left' }}>
                             <th style={{ padding: 'var(--space-1) var(--space-2)' }}>No.</th>
                             <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Uraian</th>
                             <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Satuan</th>
@@ -976,19 +1187,21 @@ export function AhspDetailPage() {
                       </table>
                     )}
                   </section>
-                ))
+                ))}
+                </>
               )}
             </section>
 
             <aside style={{ flex: '1 1 20rem', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-              <section aria-label="Informasi AHSP" style={CARD}>
+              <section aria-label="Informasi AHSP" className="ahsp-detail-primary-card">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
                   <span style={ICON_TILE}><FileText size={16} /></span>
                   <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: 0 }}>Informasi AHSP</h2>
                 </div>
                 {/* ONE mapping with the room: a recorded source code is the code, never a work type. */}
                 {infoRow('Kode', orDash(presentAhspIdentity(ahsp).code))}
-                {infoRow('Keterangan', orDash(ahsp.keterangan))}
+                {infoRow('Uraian', orDash(ahsp.methodName))}
+                {infoRow('Satuan', orDash(presentedOutputUnit))}
                 {classificationPaths.length > 0 ? (
                   <>
                     {infoRow('Jenis Pengadaan', orDash(groupedClassificationValue(classificationPaths, 'jenisPengadaan')))}
@@ -1004,10 +1217,10 @@ export function AhspDetailPage() {
                     {infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
                   </>
                 )}
-                {infoRow('Uraian', orDash(ahsp.methodName))}
-                {infoRow('Satuan', orDash(presentedOutputUnit))}
+                {infoRow('Keterangan', orDash(ahsp.keterangan))}
                 {infoRow('Dasar AHSP', orDash(currentVersion?.regulationReference))}
                 {infoRow('Penerbit', orDash(currentVersion?.issuerInstitution))}
+                {infoRow('Tanggal berlaku versi', currentVersion?.effectiveDate ? formatIndoDate(currentVersion.effectiveDate) : '—')}
                 {infoRow('Sumber', ahsp.workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya')}
                 {infoRow(
                   'Status Usulan',
@@ -1023,8 +1236,10 @@ export function AhspDetailPage() {
                     {proposalStatus}
                   </span>,
                 )}
-                {infoRow('Dibuat oleh', orDash(ahsp.createdByEmail))}
-                {infoRow('Tanggal dibuat', formatIndoDate(ahsp.createdAt))}
+                {ahsp.workspaceId === null
+                  ? infoRow('Diusulkan oleh', orDash(ahsp.proposedByName ?? 'Tidak tercatat'))
+                  : infoRow('Dibuat oleh', orDash(ahsp.createdByEmail))}
+                {infoRow('Tanggal input', formatIndoDate(ahsp.createdAt))}
                 {infoRow('Terakhir diperbarui', formatIndoDate(ahsp.updatedAt))}
               </section>
 
@@ -1057,168 +1272,410 @@ export function AhspDetailPage() {
             reserved for a withdrawn or superseded definition (currentness law).
             No expiry date is invented for any state.
           */}
-          <section aria-label="AHSP yang berlaku" style={{ ...CARD, marginTop: 'var(--space-4)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
-              <span style={ICON_TILE}><BadgeCheck size={16} /></span>
-              <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: 0 }}>AHSP yang berlaku</h2>
+          <div className="ahsp-detail-action-strip">
+          <section
+            aria-label="AHSP yang berlaku"
+            className={
+              currentVersion && !outOfForce
+                ? 'ahsp-detail-action-card ahsp-detail-action-card--valid'
+                : 'ahsp-detail-action-card ahsp-detail-action-card--neutral'
+            }
+          >
+            <div className="ahsp-detail-action__face">
+              <span className="ahsp-detail-action__icon"><BadgeCheck size={22} /></span>
+              <div className="ahsp-detail-action__copy">
+                <h2 className="ahsp-detail-action__title">AHSP yang berlaku</h2>
+                {!currentVersion ? (
+                  <div aria-label="AHSP belum memiliki rumus">
+                    <span className="simprok-honest-frame__badge">Belum ada rumus</span>
+                    <p className="ahsp-detail-action__description">
+                      AHSP ini belum memiliki rumus yang tersimpan. Yang belum ada adalah rumusnya —
+                      keberlakuannya tidak sedang dinyatakan gugur.
+                    </p>
+                  </div>
+                ) : outOfForce ? (
+                  <div aria-label="AHSP tidak berlaku">
+                    <span className="simprok-honest-frame__badge">Tidak berlaku</span>
+                    <p className="ahsp-detail-action__description">
+                      AHSP ini tidak digunakan untuk pilihan baru.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="ahsp-detail-action__description">AHSP yang saat ini digunakan SIMPROK.</p>
+                )}
+              </div>
+              {workspaceOwned && currentVersion && !outOfForce ? (
+                <div className="ahsp-detail-status-help">
+                  <button
+                    type="button"
+                    className="ahsp-detail-status-help__trigger"
+                    aria-label="Keterangan status AHSP yang berlaku"
+                    aria-controls="ahsp-validity-note"
+                    aria-describedby="ahsp-validity-note"
+                    aria-expanded={showValidStatusNote}
+                    onClick={() => setShowValidStatusNote((open) => !open)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') setShowValidStatusNote(false);
+                    }}
+                  >
+                    <Info size={16} aria-hidden="true" />
+                  </button>
+                  <p
+                    id="ahsp-validity-note"
+                    role="tooltip"
+                    className="ahsp-detail-status-help__tooltip"
+                    data-open={showValidStatusNote ? 'true' : 'false'}
+                  >
+                    Berlaku sebagai versi AHSP saat ini; bukan pernyataan bahwa AHSP telah disetujui untuk pustaka SIMPROK. Periksa Status Usulan pada Informasi AHSP.
+                  </p>
+                </div>
+              ) : null}
             </div>
-            {!currentVersion ? (
-              <div aria-label="AHSP belum memiliki rumus">
-                <span className="simprok-honest-frame__badge">Belum ada rumus</span>
-                <p style={{ color: MUTED, fontSize: 'var(--text-sm)', margin: 'var(--space-1) 0 0' }}>
-                  AHSP ini belum memiliki rumus yang tersimpan. Yang belum ada adalah rumusnya —
-                  keberlakuannya tidak sedang dinyatakan gugur.
-                </p>
-              </div>
-            ) : outOfForce ? (
-              <div aria-label="AHSP tidak berlaku">
-                <span className="simprok-honest-frame__badge">Tidak berlaku</span>
-                <p style={{ color: MUTED, fontSize: 'var(--text-sm)', margin: 'var(--space-1) 0 0' }}>
-                  AHSP ini tidak digunakan untuk pilihan baru.
-                </p>
-              </div>
-            ) : (
-              <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 0 }}>
-                AHSP yang saat ini digunakan SIMPROK.
-              </p>
-            )}
           </section>
 
           {/* Lower accordions: Update AHSP + Riwayat AHSP */}
           {workspaceOwned && canManage && !archived ? (
-            <details style={{ ...CARD, marginTop: 'var(--space-4)' }}>
-              <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                <span style={ICON_TILE}><Pencil size={16} /></span>
-                <span>
-                  <span style={{ display: 'block', fontWeight: 600, color: NAVY }}>Update AHSP</span>
-                  <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>
+            <details className="ahsp-detail-action-card ahsp-detail-action-card--update">
+              <summary className="ahsp-detail-action__face">
+                <span className="ahsp-detail-action__icon"><Pencil size={22} /></span>
+                <span className="ahsp-detail-action__copy">
+                  <span className="ahsp-detail-action__title">Update AHSP</span>
+                  <span className="ahsp-detail-action__description">
                     Klik untuk mengubah informasi AHSP (detail, komponen, dan lainnya).
                   </span>
                 </span>
+                <ChevronRight className="ahsp-detail-action__arrow" size={20} aria-hidden="true" />
               </summary>
-              <form aria-label="Update AHSP" onSubmit={addVersion} style={{ marginTop: 'var(--space-4)' }}>
-                <AhspClassificationRevisionPanel ahspId={ahsp.id} enabled={canManage} />
-                <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-2)' }}>
-                  Satuan
-                  <input required value={outputUnit} onChange={(e) => setOutputUnit(e.target.value)} aria-label="Satuan AHSP" style={{ display: 'block', color: NAVY }} />
-                </label>
-                <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
-                  Sumber / peraturan
-                  <input value={regulationReference} onChange={(e) => setRegulationReference(e.target.value)} aria-label="Sumber peraturan AHSP" style={{ display: 'block', width: '100%', maxWidth: '36rem', color: NAVY }} />
-                </label>
-                <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
-                  Penerbit
-                  <input value={issuerInstitution} onChange={(e) => setIssuerInstitution(e.target.value)} aria-label="Penerbit AHSP" style={{ display: 'block', width: '100%', maxWidth: '36rem', color: NAVY }} />
-                </label>
-                <label style={{ display: 'block', fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
-                  Tanggal sumber
-                  <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} aria-label="Tanggal sumber" style={{ display: 'block', color: NAVY }} />
-                </label>
-                {resourceDrafts.map((row, index) => (
-                  <fieldset key={index} style={{ border: HAIRLINE, borderRadius: '8px', marginBottom: 'var(--space-2)', padding: 'var(--space-3)' }}>
-                    <legend style={{ color: NAVY, fontSize: 'var(--text-sm)' }}>Komponen {index + 1}</legend>
-                    {row.stored ? (
-                      <span aria-label={'Sumber daya ' + (index + 1)} style={{ marginRight: 'var(--space-2)', color: NAVY }}>
-                        {resolveDefinitionResourceName({ resourceId: row.resourceId, resourceName: row.resourceName })}
-                      </span>
+              {ahsp.ownershipType === 'USER_ASSET' ? (
+                <section className="ahsp-detail-metadata-editor" aria-label="Informasi dasar AHSP">
+                  <h3 className="ahsp-detail-metadata-editor__title">Informasi dasar AHSP</h3>
+                  <p className="ahsp-detail-metadata-editor__hint">
+                    Uraian, Kode, dan Keterangan tersimpan bersama pada AHSP privat, tanpa membuat versi rumus baru.
+                  </p>
+                  <div className="ahsp-detail-basic-grid">
+                  <label className="ahsp-detail-metadata-editor__field">
+                    <span>Uraian / Judul AHSP</span>
+                    <textarea
+                      rows={2}
+                      required
+                      aria-label="Uraian / Judul AHSP"
+                      value={editMethodName}
+                      onChange={(event) => { setEditMethodName(event.target.value); setMetadataFeedback(null); }}
+                      disabled={metadataBusy || busy}
+                    />
+                  </label>
+                  <label className="ahsp-detail-metadata-editor__field">
+                    <span>Kode (opsional)</span>
+                    <input
+                      type="text"
+                      aria-label="Kode"
+                      value={editCode}
+                      onChange={(event) => { setEditCode(event.target.value);  }}
+                      disabled={metadataBusy || busy || Boolean(ahsp.proposedAt)}
+                      placeholder="Contoh: B.13"
+                    />
+                    {ahsp.proposedAt ? (
+                      <span className="ahsp-detail-metadata-editor__hint">Kode pada usulan yang sudah diajukan tidak dapat diganti di sini.</span>
                     ) : (
-                      <input
-                        placeholder="Sumber daya"
-                        aria-label={'Sumber daya ' + (index + 1)}
-                        value={row.resourceId}
-                        onChange={(e) => {
-                          const next = [...resourceDrafts];
-                          next[index] = { ...row, resourceId: e.target.value };
-                          setResourceDrafts(next);
-                        }}
-                        style={{ marginRight: 'var(--space-2)', color: NAVY }}
-                      />
+                      <span className="ahsp-detail-metadata-editor__hint">Kode bukan identitas utama AHSP. Koreksi ini tidak mengubah ID atau kode resource.</span>
                     )}
-                    <select
-                      aria-label={'Kelompok ' + (index + 1)}
-                      value={row.resourceType}
-                      onChange={(e) => {
-                        const next = [...resourceDrafts];
-                        next[index] = { ...row, resourceType: e.target.value as ResourceDraft['resourceType'] };
-                        setResourceDrafts(next);
-                      }}
-                      style={{ marginRight: 'var(--space-2)', color: NAVY }}
-                    >
-                      <option value="LABOR">Tenaga</option>
-                      <option value="MATERIAL">Bahan</option>
-                      <option value="EQUIPMENT">Peralatan</option>
-                    </select>
-                    <input
-                      placeholder="Satuan"
-                      aria-label={'Satuan komponen ' + (index + 1)}
-                      value={row.baseUnit}
-                      onChange={(e) => {
-                        const next = [...resourceDrafts];
-                        next[index] = { ...row, baseUnit: e.target.value };
-                        setResourceDrafts(next);
-                      }}
-                      style={{ marginRight: 'var(--space-2)', color: NAVY }}
+                  </label>
+                  <label className="ahsp-detail-metadata-editor__field">
+                    <span>Keterangan (opsional)</span>
+                    <textarea
+                      rows={3}
+                      aria-label="Keterangan AHSP"
+                      value={editKeterangan}
+                      onChange={(event) => { setEditKeterangan(event.target.value); setMetadataFeedback(null); }}
+                      disabled={metadataBusy || busy}
+                      placeholder="Catatan AHSP jika tersedia"
                     />
+                  </label>
+                  <label className="ahsp-detail-metadata-editor__field">
+                    <span>Alasan perubahan (untuk audit)</span>
                     <input
-                      placeholder="Koefisien"
-                      aria-label={'Koefisien ' + (index + 1)}
-                      value={row.coefficient}
-                      onChange={(e) => {
-                        const next = [...resourceDrafts];
-                        next[index] = { ...row, coefficient: e.target.value };
-                        setResourceDrafts(next);
-                      }}
-                      style={{ color: NAVY }}
+                      type="text"
+                      aria-label="Alasan perubahan informasi AHSP"
+                      value={metadataReason}
+                      onChange={(event) => { setMetadataReason(event.target.value); setMetadataFeedback(null); }}
+                      disabled={metadataBusy || busy}
+                      placeholder="Contoh: koreksi penulisan judul dari dokumen sumber"
                     />
+                  </label>
+                  </div>
+                  <div className="ahsp-detail-metadata-editor__actions">
                     <button
                       type="button"
-                      aria-label={'Hapus komponen ' + (index + 1)}
-                      onClick={() => setResourceDrafts(resourceDrafts.filter((_, i) => i !== index))}
-                      style={{ ...outlineButton, marginLeft: 'var(--space-2)' }}
+                      className="ahsp-detail-update__save"
+                      disabled={metadataBusy || busy}
+                      onClick={() => void saveBasicInfo()}
                     >
-                      Hapus
+                      {metadataBusy ? 'Menyimpan…' : 'Simpan Informasi Dasar'}
                     </button>
-                  </fieldset>
-                ))}
-                <button type="button" onClick={() => setResourceDrafts([...resourceDrafts, emptyResource()])} style={{ ...outlineButton, marginRight: 'var(--space-2)' }}>
-                  Tambah baris komponen
-                </button>
-                <button type="submit" disabled={busy} style={primaryButton}>Update AHSP</button>
+                    <button
+                      type="button"
+                      className="ahsp-detail-update__cancel"
+                      disabled={metadataBusy || busy}
+                      onClick={() => {
+                        setEditCode(ahsp.code ?? '');
+                        setEditMethodName(ahsp.methodName ?? '');
+                        setEditKeterangan(ahsp.keterangan ?? '');
+                        setMetadataReason('');
+                        clearSaveFeedback();
+                        setActionNotice('Perubahan Informasi Dasar dibatalkan.');
+                      }}
+                    >
+                      Batal
+                    </button>
+                  </div>
+                  {metadataFeedback ? (
+                    <p
+                      role={metadataFeedback === 'Informasi Dasar tersimpan dan sesuai dengan data AHSP.' ? 'status' : 'alert'}
+                      className="ahsp-detail-metadata-editor__feedback"
+                      style={{
+                        color: metadataFeedback === 'Informasi Dasar tersimpan dan sesuai dengan data AHSP.' ? '#16803C' : '#C0392B',
+                        background: metadataFeedback === 'Informasi Dasar tersimpan dan sesuai dengan data AHSP.' ? '#EAF8EF' : '#FFF1F1',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {metadataFeedback}
+                    </p>
+                  ) : null}
+                </section>
+              ) : null}
+              <form aria-label="Update AHSP" onSubmit={addVersion} style={{ marginTop: 'var(--space-4)' }}>
+                <AhspClassificationRevisionPanel
+                  ahspId={ahsp.id}
+                  enabled={canManage && ahsp.ownershipType === 'USER_ASSET' && ahsp.workspaceId !== null && !ahsp.archivedAt && !busy && !metadataBusy}
+                  onAssignmentsChange={onClassificationAssignmentsChange}
+                  onSaved={onClassificationSaved}
+                  onSaveAttempt={onClassificationSaveAttempt}
+                  onSaveFinished={onSaveFinished}
+                  onCancelled={onClassificationCancelled}
+                />
+
+                <section className="ahsp-detail-update__section" aria-label="Informasi sumber AHSP">
+                  <h3 className="ahsp-detail-update__heading"><Layers size={18} aria-hidden="true" />Informasi sumber</h3>
+                  <div className="ahsp-detail-update__source-grid">
+                    <label className="ahsp-detail-update__field">
+                      <span>Satuan AHSP</span>
+                      <input required value={outputUnit} onChange={(e) => setOutputUnit(e.target.value)} aria-label="Satuan AHSP" />
+                    </label>
+                    <label className="ahsp-detail-update__field">
+                      <span>Dasar AHSP</span>
+                      <input value={regulationReference} onChange={(e) => setRegulationReference(e.target.value)} aria-label="Dasar AHSP" />
+                    </label>
+                    <label className="ahsp-detail-update__field">
+                      <span>Penerbit</span>
+                      <input value={issuerInstitution} onChange={(e) => setIssuerInstitution(e.target.value)} aria-label="Penerbit AHSP" />
+                    </label>
+                    <label className="ahsp-detail-update__field">
+                      <span>Tanggal berlaku versi AHSP</span>
+                      <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} aria-label="Tanggal berlaku versi AHSP" />
+                    </label>
+                  </div>
+                  <p className="ahsp-detail-update__source-hint">
+                    Tanggal berlaku adalah tanggal versi AHSP, bukan tanggal penerbitan dokumen. Perubahan Informasi Sumber disimpan bersama Komponen sebagai versi rumus baru melalui tombol <strong>Simpan Perubahan Komponen</strong> di bawah tabel.
+                  </p>
+                </section>
+
+                <section className="ahsp-detail-update__section" aria-label="Edit komponen pembentuk AHSP">
+                  <header className="ahsp-detail-update__toolbar">
+                    <h3 className="ahsp-detail-update__heading"><Layers size={18} aria-hidden="true" />Komponen Pembentuk AHSP</h3>
+                  </header>
+                  <div className="ahsp-detail-update__table-wrap">
+                    <table className="ahsp-detail-update__table">
+                      <thead>
+                        <tr><th>No.</th><th>Uraian</th><th>Jenis</th><th>Satuan</th><th>Koefisien</th><th>Aksi</th></tr>
+                      </thead>
+                      <tbody>
+                        {resourceDrafts.map((row, index) => {
+                          const isEditing = editingResourceIndex === index;
+                          const active = isEditing || !row.stored;
+                          return (
+                            <tr key={row.lineId ?? 'new-' + index} className={isEditing ? 'ahsp-detail-update__editing-row' : ''}>
+                              <td data-label="No.">{index + 1}</td>
+                              <td data-label="Uraian">
+                                {row.stored ? (
+                                  <span aria-label={'Sumber daya ' + (index + 1)} className="ahsp-detail-update__resource">
+                                    {resolveDefinitionResourceName({ resourceId: row.resourceId, resourceName: row.resourceName })}
+                                  </span>
+                                ) : (
+                                  <input
+                                    placeholder="Identitas sumber daya"
+                                    aria-label={'Sumber daya ' + (index + 1)}
+                                    value={row.resourceId}
+                                    onChange={(e) => setResourceDrafts((current) =>
+                                      current.map((item, i) => i === index ? { ...item, resourceId: e.target.value } : item))}
+                                  />
+                                )}
+                                {isEditing && row.stored ? (
+                                  <span className="ahsp-detail-update__identity-note">
+                                    Nama mengikuti identitas sumber daya tersimpan. Penggantian nama perlu pemadanan Resource Identity.
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td data-label="Jenis">
+                                {active ? (
+                                  <select aria-label={'Kelompok ' + (index + 1)} value={row.resourceType}
+                                    onChange={(e) => setResourceDrafts((current) =>
+                                      current.map((item, i) => i === index
+                                        ? { ...item, resourceType: e.target.value as ResourceDraft['resourceType'] } : item))}>
+                                    <option value="LABOR">Tenaga</option>
+                                    <option value="MATERIAL">Bahan</option>
+                                    <option value="EQUIPMENT">Peralatan</option>
+                                  </select>
+                                ) : (row.resourceType === 'LABOR' ? 'Tenaga' : row.resourceType === 'MATERIAL' ? 'Bahan' : 'Peralatan')}
+                              </td>
+                              <td data-label="Satuan">
+                                {active ? (
+                                  <input aria-label={'Satuan komponen ' + (index + 1)} value={row.baseUnit}
+                                    onChange={(e) => setResourceDrafts((current) =>
+                                      current.map((item, i) => i === index ? { ...item, baseUnit: e.target.value } : item))}
+                                  />
+                                ) : row.baseUnit}
+                              </td>
+                              <td data-label="Koefisien">
+                                {active ? (
+                                  <input inputMode="decimal" aria-label={'Koefisien ' + (index + 1)} value={row.coefficient}
+                                    onChange={(e) => setResourceDrafts((current) =>
+                                      current.map((item, i) => i === index ? { ...item, coefficient: e.target.value } : item))}
+                                  />
+                                ) : row.coefficient}
+                              </td>
+                              <td data-label="Aksi">
+                                <div className="ahsp-detail-update__row-actions">
+                                  {row.stored ? (
+                                    <button type="button" className="ahsp-detail-update__edit"
+                                      disabled={busy || (editingResourceIndex !== null && !isEditing)}
+                                      aria-label={(isEditing ? 'Selesai edit komponen ' : 'Edit komponen ') + (index + 1)}
+                                      onClick={() => {
+                                        if (isEditing) {
+                                          setEditingResourceIndex(null);
+                                          setEditingResourceOriginal(null);
+                                        } else {
+                                          setEditingResourceIndex(index);
+                                          setEditingResourceOriginal({ ...row });
+                                          setActionError(null);
+                                        }
+                                      }}>
+                                      <Pencil size={14} aria-hidden="true" />{isEditing ? 'Selesai' : 'Edit'}
+                                    </button>
+                                  ) : <span className="ahsp-detail-update__new-label">Baru</span>}
+                                  {isEditing && editingResourceOriginal ? (
+                                    <button type="button" className="ahsp-detail-update__cancel"
+                                      onClick={() => {
+                                        const original = editingResourceOriginal;
+                                        setResourceDrafts((current) => current.map((item, i) => i === index ? original : item));
+                                        setEditingResourceIndex(null);
+                                        setEditingResourceOriginal(null);
+                                      }}>Batal</button>
+                                  ) : null}
+                                  <button type="button" className="ahsp-detail-update__delete"
+                                    disabled={busy || (editingResourceIndex !== null && !isEditing)}
+                                    aria-label={'Hapus komponen ' + (index + 1)}
+                                    title="Hapus hanya dari draft. Tekan Simpan Perubahan Komponen untuk menyimpan."
+                                    onClick={() => {
+                                      setResourceDrafts((current) => current.filter((_, i) => i !== index));
+                                      setComponentRemovalNotice(true);
+                                      setEditingResourceIndex(null);
+                                      setEditingResourceOriginal(null);
+                                    }}>Hapus</button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {componentRemovalNotice ? (
+                    <p className="ahsp-detail-update__draft-removal-notice" role="status" aria-live="polite">
+                      Baris telah dihapus dari draft saja, belum dari AHSP tersimpan. Tekan <strong>Simpan Perubahan Komponen</strong> untuk menyimpan atau <strong>Batal Perubahan</strong> untuk mengembalikan daftar.
+                    </p>
+                  ) : null}
+                  <div className="ahsp-detail-update__footer">
+                    <button type="button" className="ahsp-detail-update__add ahsp-detail-update__add--primary"
+                      disabled={busy || editingResourceIndex !== null}
+                      onClick={() => setResourceDrafts((current) => [...current, emptyResource()])}>
+                      + Tambah Baris Komponen
+                    </button>
+                    <div className="ahsp-detail-update__footer-actions">
+                      <button type="button" className="ahsp-detail-update__cancel"
+                        disabled={busy}
+                        aria-label="Batal Perubahan"
+                        title="Kembalikan semua perubahan draft sumber dan komponen ke versi tersimpan"
+                        onClick={() => {
+                          setResourceDrafts(draftsFromVersion(currentVersion));
+                          setComponentRemovalNotice(false);
+                          setOutputUnit(currentVersion?.outputUnit ?? '');
+                          setRegulationReference(currentVersion?.regulationReference ?? '');
+                          setIssuerInstitution(currentVersion?.issuerInstitution ?? '');
+                          setEffectiveDate(toDateInput(currentVersion?.effectiveDate));
+                          setEditingResourceIndex(null);
+                          setEditingResourceOriginal(null);
+                          clearSaveFeedback();
+                          setActionNotice('Perubahan Informasi Sumber dan Komponen dibatalkan.');
+                        }}>
+                        Batal Perubahan
+                      </button>
+                      <button type="submit" className="ahsp-detail-update__save"
+                        disabled={busy || editingResourceIndex !== null}
+                        aria-label="Simpan Perubahan Komponen"
+                        title="Simpan seluruh perubahan sumber dan komponen dalam satu versi AHSP">
+                        {busy ? 'Menyimpan komponen…' : 'Simpan Perubahan Komponen'}
+                      </button>
+                    </div>
+                  </div>
+                </section>
               </form>
             </details>
           ) : null}
 
           {historicalVersions.length > 0 ? (
-            <details style={{ ...CARD, marginTop: 'var(--space-3)' }}>
-              <summary aria-label="Riwayat AHSP" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                <span style={ICON_TILE}><History size={16} /></span>
-                <span>
-                  <span style={{ display: 'block', fontWeight: 600, color: NAVY }}>Riwayat AHSP</span>
-                  <span style={{ display: 'block', color: MUTED, fontSize: 'var(--text-sm)' }}>
-                    Lihat daftar perubahan yang pernah dilakukan pada AHSP ini.
+            <details className="ahsp-detail-action-card ahsp-detail-action-card--history">
+              <summary aria-label="Riwayat AHSP" className="ahsp-detail-action__face">
+                <span className="ahsp-detail-action__icon"><History size={22} /></span>
+                <span className="ahsp-detail-action__copy">
+                  <span className="ahsp-detail-action__title">Riwayat AHSP</span>
+                  <span className="ahsp-detail-action__description">
+                    Lihat versi rumus terdahulu yang tersedia untuk AHSP ini.
                   </span>
                 </span>
+                <ChevronRight className="ahsp-detail-action__arrow" size={20} aria-hidden="true" />
               </summary>
-              <table style={{ width: '100%', maxWidth: '48rem', borderCollapse: 'collapse', fontSize: 'var(--text-sm)', marginTop: 'var(--space-3)' }}>
+              <div className="ahsp-detail-history__content">
+                <p className="ahsp-detail-history__note">
+                  Riwayat ini memuat versi rumus terdahulu yang tersedia, bukan seluruh perubahan Informasi Dasar atau Klasifikasi.
+                </p>
+                <div className="ahsp-detail-history__scroll" role="region" aria-label="Tabel riwayat versi rumus AHSP" tabIndex={0}>
+                  <table className="ahsp-detail-history__table">
                 <thead>
                   <tr style={{ textAlign: 'left', color: MUTED, background: 'var(--simprok-engineering-blue-100)' }}>
-                    <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Sumber / Peraturan</th>
-                    <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Berlaku dari</th>
-                    <th style={{ padding: 'var(--space-1) var(--space-2)' }}>Status</th>
+                    <th scope="col">Versi</th>
+                    <th scope="col">Sumber / Peraturan</th>
+                    <th scope="col">Satuan output</th>
+                    <th scope="col">Tanggal berlaku</th>
+                    <th scope="col">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {historicalVersions.map((version) => (
                     <tr key={version.id}>
-                      <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE, color: NAVY }}>{version.regulationReference || '—'}</td>
-                      <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{formatIndoDate(version.effectiveDate)}</td>
-                      <td style={{ padding: 'var(--space-1) var(--space-2)', borderBottom: HAIRLINE }}>{historyStatusLabel(version.status)}</td>
+                      <td>{version.versionNumber != null ? `Versi ${version.versionNumber}` : '—'}</td>
+                      <td>{version.regulationReference || '—'}</td>
+                      <td>{presentedUnitLabel({ stored: version.outputUnit, displayName: version.outputUnitDisplayName, symbol: version.outputUnitSymbol, code: version.outputUnitCode }) || '—'}</td>
+                      <td>{version.effectiveDate ? formatIndoDate(version.effectiveDate) : '—'}</td>
+                      <td>{historyStatusLabel(version.status)}</td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
+                  </table>
+                </div>
+              </div>
             </details>
           ) : null}
+          </div>
         </>
       ) : null}
 

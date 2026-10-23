@@ -938,43 +938,45 @@ export class AhspController {
   async addClassificationAssignments(
     @Req() request: WorkspaceScopedRequest,
     @Param('id') id: string,
-    @Body() body: { leafNodeIds?: string[] },
+    @Body() body: {
+      leafNodeIds?: string[];
+      jenisPengadaanRootId?: string | null;
+      pendingPaths?: Array<{ kategori: string; subkategori: string; jenisPekerjaan: string }>;
+    },
   ) {
     const workspaceId = request.workspaceContext?.workspaceId;
     if (!workspaceId) {
       throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
     }
     const actorAccountId = await this.resolveActor(request);
-    const leafNodeIds = [
-      ...new Set(
-        (Array.isArray(body?.leafNodeIds) ? body.leafNodeIds : []).filter(
-          (leafNodeId): leafNodeId is string =>
-            typeof leafNodeId === 'string' && leafNodeId.trim() !== '',
-        ),
-      ),
-    ];
-    if (leafNodeIds.length === 0) {
-      throw new BadRequestException(
-        'AHSP_CLASSIFICATION_ASSIGNMENT_LEAF_REQUIRED',
-      );
+    const pendingPaths = body?.pendingPaths ?? [];
+    const ids = body?.leafNodeIds ?? [];
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || !id.trim()) ||
+        !Array.isArray(pendingPaths) || ids.length + pendingPaths.length > 20 ||
+        pendingPaths.some((p) => !p || typeof p.kategori !== 'string' ||
+          typeof p.subkategori !== 'string' || typeof p.jenisPekerjaan !== 'string' ||
+          !p.kategori.trim() || !p.subkategori.trim() || !p.jenisPekerjaan.trim())) {
+      throw new BadRequestException('AHSP_CLASSIFICATION_PENDING_PATHS_INVALID');
     }
-    return this.prisma.$transaction(async (tx) =>
-      Promise.all(
-        leafNodeIds.map((leafNodeId) =>
-          this.assignments.addAssignment(
-            {
-              ahspId: id,
-              leafNodeId,
-              provenance:
-                AhspClassificationAssignmentProvenance.HUMAN_ADDED,
-              actingWorkspaceId: workspaceId,
-              actorAccountId,
-            },
-            tx,
-          ),
-        ),
-      ),
-    );
+    if (pendingPaths.length && (typeof body.jenisPengadaanRootId !== 'string' || !body.jenisPengadaanRootId.trim())) {
+      throw new BadRequestException('CLASSIFICATION_PATH_ROOT_REQUIRED');
+    }
+    if (body.jenisPengadaanRootId != null && typeof body.jenisPengadaanRootId !== 'string') {
+      throw new BadRequestException('CLASSIFICATION_PATH_ROOT_REQUIRED');
+    }
+    const leafNodeIds = [...new Set(ids.map((id) => id.trim()))];
+    if (!leafNodeIds.length && !pendingPaths.length) {
+      throw new BadRequestException('AHSP_CLASSIFICATION_ASSIGNMENT_LEAF_REQUIRED');
+    }
+    await this.assistedClassification.applyToAhsp({
+      ahspId: id, actingWorkspaceId: workspaceId, actorAccountId, privateOnly: true,
+      context: {
+        jenisPengadaanRootId: body.jenisPengadaanRootId ?? null,
+        paths: leafNodeIds.map((leafNodeId) => ({ leafNodeId, provenanceHint: 'FROM_USER' as const })),
+        pendingPaths, dasarAcuan: null, penerbit: null,
+      },
+    });
+    return this.assignments.listAssignments({ ahspId: id, actingWorkspaceId: workspaceId });
   }
 
   @Post(':id/classification-assignments/:assignmentId/deactivate')

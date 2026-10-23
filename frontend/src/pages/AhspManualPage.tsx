@@ -29,7 +29,6 @@ import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
 import {
   AhspImportAssistedClassificationPanel,
-  emptyAssistedContext,
   type AssistedClassificationContext,
 } from '../components/AhspImportAssistedClassificationPanel';
 import {
@@ -39,6 +38,7 @@ import {
   type UnitLookupItem,
 } from '../api/basicPriceImport';
 import { parseCoefficientInput } from '../utils/ahspCompositionDisplay';
+import { emptyAssistedContext } from '../utils/ahspAssistedContext';
 import { manualAdmissionFailure } from '../utils/ahspManualAdmission';
 import { unitSuggestionLabels } from '../utils/unitSuggestionLabel';
 import '../styles/ahsp.css';
@@ -145,8 +145,12 @@ function ManualResourceGroupPanel(props: {
     if (!addOpen) return;
     const q = newName.trim();
     if (q.length < 2) {
-      setNameHits([]);
-      return;
+      // Clear stale suggestions after the effect; do not apply after cleanup.
+      let active = true;
+      void Promise.resolve().then(() => {
+        if (active) setNameHits([]);
+      });
+      return () => { active = false; };
     }
     const timer = window.setTimeout(async () => {
       try {

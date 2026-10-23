@@ -81,7 +81,8 @@ test('two leaves stay two paths and do not become a cartesian product', () => {
 });
 
 test('outside click and Escape dismiss the open menu without clearing selection', () => {
-  assert.equal(panel.includes("if (event.key === 'Escape') props.onDismiss()"), true);
+  assert.equal(panel.includes("const { open, onDismiss } = props;"), true);
+  assert.equal(panel.includes("if (event.key === 'Escape') onDismiss()"), true);
   assert.equal(panel.includes('rootRef.current?.contains(event.target as Node)'), true);
   assert.equal(panel.includes('document.addEventListener(\'pointerdown\', onPointerDown)'), true);
   assert.equal(panel.includes('onDismiss={() => setOpenMenu(null)}'), true);
@@ -131,7 +132,8 @@ test('Dasar and Penerbit keep a typed space while Escape still closes the menu',
   assert.equal(panel.includes('penerbit: e.target.value.trim() || null'), false);
   assert.equal(panel.includes("dasarAcuan: next.trim() === '' ? null : next"), true);
   assert.equal(panel.includes("penerbit: next.trim() === '' ? null : next"), true);
-  assert.equal(panel.includes("if (event.key === 'Escape') props.onDismiss()"), true);
+  assert.equal(panel.includes("const { open, onDismiss } = props;"), true);
+  assert.equal(panel.includes("if (event.key === 'Escape') onDismiss()"), true);
   assert.equal(panel.includes('document.addEventListener(\'pointerdown\', onPointerDown)'), true);
   const keepTyped = (value: string) => (value.trim() === '' ? null : value);
   assert.equal(keepTyped('Kementerian PUPR'), 'Kementerian PUPR');
