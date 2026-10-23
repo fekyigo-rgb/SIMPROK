@@ -22,7 +22,7 @@ const local: ProjectClassificationNode = {
 };
 
 test('RAB reuses the canonical AHSP vocabulary, preserving local identity', () => {
-  const options = projectKategoriOptions([local], ROOT);
+  const options = projectKategoriOptions([local], ROOT, 'Pekerjaan Konstruksi');
   assert.equal(options.length, 20);
   assert.equal(options.filter((o) => o.name === 'Bina Marga').length, 1);
   assert.equal(options.find((o) => o.name === 'Bina Marga')?.id, BINA);
@@ -31,8 +31,8 @@ test('RAB reuses the canonical AHSP vocabulary, preserving local identity', () =
 });
 
 test('RAB only materializes vocabulary on explicit create, never sends a synthetic id', () => {
-  const choice = projectKategoriOptions([local], ROOT).find((o) => o.name === 'Cipta Karya')!;
-  const sub = projectSubkategoriOptions([], choice).find((o) => o.name === 'Bangunan Gedung')!;
+  const choice = projectKategoriOptions([local], ROOT, 'Pekerjaan Konstruksi').find((o) => o.name === 'Cipta Karya')!;
+  const sub = projectSubkategoriOptions([], choice, 'Pekerjaan Konstruksi').find((o) => o.name === 'Bangunan Gedung')!;
   let selection = setIntakeClassificationRoot(emptyIntakeClassification(), { id: ROOT, name: 'Pekerjaan Konstruksi' });
   selection = toggleProjectClassification(selection, { ...choice, level: 'KATEGORI', parentId: ROOT });
   const children = { [choice.id]: { loaded: true, nodes: [sub] } };
@@ -45,8 +45,8 @@ test('RAB only materializes vocabulary on explicit create, never sends a synthet
 
 test('RAB keeps an already saved custom subcategory without relabeling it as vocabulary', () => {
   const sub: ProjectClassificationNode = { id: JEMBATAN, parentId: BINA, level: 'SUBKATEGORI', name: 'Gorong-Gorong' };
-  const category = projectKategoriOptions([local], ROOT).find((o) => o.name === 'Bina Marga')!;
-  const list = projectSubkategoriOptions([sub], category);
+  const category = projectKategoriOptions([local], ROOT, 'Pekerjaan Konstruksi').find((o) => o.name === 'Bina Marga')!;
+  const list = projectSubkategoriOptions([sub], category, 'Pekerjaan Konstruksi');
   assert.ok(list.some((o) => o.id === JEMBATAN && o.name === 'Gorong-Gorong'));
   let selection = setIntakeClassificationRoot(emptyIntakeClassification(), { id: ROOT, name: 'Pekerjaan Konstruksi' });
   selection = toggleProjectClassification(selection, { ...category, level: 'KATEGORI', parentId: ROOT });
@@ -59,14 +59,14 @@ test('RAB keeps an already saved custom subcategory without relabeling it as voc
 test('No selected category is a hard stop, and changing root resets pending choices', () => {
   const root = setIntakeClassificationRoot(emptyIntakeClassification(), { id: ROOT, name: 'Pekerjaan Konstruksi' });
   assert.equal(projectClassificationCreateSelection(root, {}).classificationNodeIds, null);
-  const choice = projectKategoriOptions([], ROOT)[2];
+  const choice = projectKategoriOptions([], ROOT, 'Pekerjaan Konstruksi')[2];
   const selected = toggleProjectClassification(root, { ...choice, level: 'KATEGORI', parentId: ROOT });
   const changed = setIntakeClassificationRoot(selected, { id: '44444444-4444-4444-8444-444444444444', name: 'Pekerjaan Konstruksi Terintegrasi' });
   assert.deepEqual(changed.picks, []);
   assert.equal(projectClassificationCreateSelection(changed, {}).classificationNodeIds, null);
 });
 test('mixed existing UUID and virtual categories remain selected together', () => {
-  const options = projectKategoriOptions([local], ROOT);
+  const options = projectKategoriOptions([local], ROOT, 'Pekerjaan Konstruksi');
   const virtual = options.find((item) => item.name === 'Cipta Karya')!;
   let selected = setIntakeClassificationRoot(emptyIntakeClassification(), { id: ROOT, name: 'Pekerjaan Konstruksi' });
   selected = toggleProjectClassification(selected, { ...virtual, level: 'KATEGORI', parentId: ROOT });
@@ -81,9 +81,26 @@ test('mixed existing UUID and virtual categories remain selected together', () =
 });
 
 test('category loading identity round-trips a vocabulary ID containing || without splitting', () => {
-  const category = projectKategoriOptions([local], ROOT).find((item) => item.name === 'Cipta Karya')!;
+  const category = projectKategoriOptions([local], ROOT, 'Pekerjaan Konstruksi').find((item) => item.name === 'Cipta Karya')!;
   const key = projectKategoriSelectionKey([
     { id: BINA, level: 'KATEGORI' }, { id: category.id, level: 'KATEGORI' },
   ]);
   assert.deepEqual(projectKategoriIdsFromKey(key), [BINA, category.id]);
+});
+
+test('nonconstruction has no construction suggestions but keeps AHSP local nodes', () => {
+  assert.deepEqual(projectKategoriOptions([], ROOT, 'Pengadaan Barang'), []);
+  const existing = { ...local, name: 'Komponen Elektronik' };
+  assert.deepEqual(projectKategoriOptions([existing], ROOT, 'Pengadaan Barang'), [existing]);
+  const sub = { id: JEMBATAN, name: 'Sensor', parentId: BINA, level: 'SUBKATEGORI' };
+  assert.deepEqual(projectSubkategoriOptions([sub], existing, 'Pengadaan Barang'), [sub]);
+  assert.deepEqual(projectSubkategoriOptions([], existing, 'Pengadaan Barang'), []);
+});
+
+test('construction integrated root keeps all 20 baseline options and local additions', () => {
+  const existing = { ...local, name: 'Konstruksi Lokal' };
+  const options = projectKategoriOptions([existing], ROOT, 'Pekerjaan Konstruksi Terintegrasi');
+  assert.equal(options.length, 21);
+  assert.ok(options.some((node) => node.id === BINA && node.name === 'Konstruksi Lokal'));
+  assert.ok(options.some((node) => node.name === 'Bina Marga'));
 });

@@ -23,7 +23,7 @@ function harness() {
     $transaction: jest.fn((fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
   };
   const classification = {
-    getById: jest.fn().mockResolvedValue({ id: ROOT, level: Level.JENIS_PENGADAAN }),
+    getById: jest.fn().mockResolvedValue({ id: ROOT, name: 'Pekerjaan Konstruksi', level: Level.JENIS_PENGADAAN }),
     createNode: jest.fn().mockImplementation(async ({ level }: { level: Level }) => ({
       id: level === Level.KATEGORI ? CAT : SUB,
       level,
@@ -65,6 +65,35 @@ describe('RI-01 classification vocabulary activation (no new engine)', () => {
     expect(h.classification.getLineage).toHaveBeenCalledWith(
       { id: CAT, workspaceId: 'workspace-1' }, h.tx,
     );
+  });
+
+  it('blocks construction vocabulary under Pengadaan Barang with no writes', async () => {
+    const h = harness();
+    h.classification.getById.mockResolvedValueOnce({ id: ROOT, name: 'Pengadaan Barang', level: Level.JENIS_PENGADAAN });
+    await expect(h.service.create({
+      name: 'Pekerjaan', code: 'PRJVOC-GOODS',
+      classificationNodeIds: [ROOT],
+      classificationVocabularyPaths: [{ kategori: 'Bina Marga' }],
+    }, 'workspace-1')).rejects.toMatchObject({
+      message: 'PROJECT_CLASSIFICATION_BASELINE_ROOT_UNSUPPORTED',
+    });
+    expect(h.classification.createNode).not.toHaveBeenCalled();
+    expect(h.tx.project.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps an AHSP-created canonical category under Pengadaan Barang', async () => {
+    const h = harness();
+    const response = await h.service.create({
+      name: 'Pekerjaan', code: 'PRJVOC-GOODS-CANONICAL',
+      classificationNodeIds: [ROOT, CAT],
+    }, 'workspace-1');
+    expect(response.classificationNodeIds).toEqual([ROOT, CAT]);
+    expect(h.classification.createNode).not.toHaveBeenCalled();
+    expect(h.tx.projectClassificationSelection.createMany).toHaveBeenCalledWith({
+      data: [ROOT, CAT].map((classificationNodeId) => ({
+        classificationNodeId, projectId: 'project-created',
+      })),
+    });
   });
 
   it('does not write a project or any unapproved category', async () => {

@@ -51,7 +51,7 @@ export function ProjectIntakeClassificationFields({
   ): Promise<ProjectClassificationNode[]> {
     if (level === 'SUBKATEGORI' && parentId && isVocabularyOptionId(parentId)) {
       const parent = kategoriOptions.find((node) => node.id === parentId);
-      return parent ? projectSubkategoriOptions([], parent) : [];
+      return parent ? projectSubkategoriOptions([], parent, selection.root?.name ?? '') : [];
     }
     const response = await apiFetch(
       parentId
@@ -63,10 +63,10 @@ export function ProjectIntakeClassificationFields({
     const stored = visibleProjectClassificationNodes(readClassificationNodes(body), level).filter(
       (node) => isPersistedNode(node),
     );
-    if (level === 'KATEGORI' && parentId) return projectKategoriOptions(stored, parentId);
+    if (level === 'KATEGORI' && parentId) return projectKategoriOptions(stored, parentId, roots.find((node) => node.id === parentId)?.name ?? '');
     if (level === 'SUBKATEGORI' && parentId) {
       const parent = kategoriOptions.find((node) => node.id === parentId);
-      return parent ? projectSubkategoriOptions(stored, parent) : stored;
+      return parent ? projectSubkategoriOptions(stored, parent, selection.root?.name ?? '') : stored;
     }
     return stored;
   }

@@ -23,6 +23,7 @@ import {
 import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import { PERMISSIONS } from '../common/constants/permissions';
 import { ConstructionClassificationService } from '../construction-classification/construction-classification.service';
+import { JENIS_PENGADAAN_WITH_BIDANG } from '../construction-classification/jenis-pengadaan.vocabulary';
 import {
   APPROVED_KATEGORI,
   approvedSubkategoriFor,
@@ -272,6 +273,11 @@ export class ProjectService {
     const root = await this.classification.getById({ id: rootId, workspaceId }, tx);
     if (root.level !== ConstructionClassificationLevel.JENIS_PENGADAAN) {
       throw new BadRequestException('PROJECT_CLASSIFICATION_ROOT_REQUIRED');
+    }
+    // Never materialize a construction baseline under nonconstruction roots.
+    // Existing AHSP-created workspace node IDs are independently allowed.
+    if (!JENIS_PENGADAAN_WITH_BIDANG.includes(root.name)) {
+      throw new BadRequestException('PROJECT_CLASSIFICATION_BASELINE_ROOT_UNSUPPORTED');
     }
     const resolved = [...selectedIds];
     for (const path of paths) {

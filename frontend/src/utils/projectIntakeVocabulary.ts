@@ -1,3 +1,4 @@
+import { JENIS_PENGADAAN_WITH_BIDANG } from '../jenisPengadaanVocabulary.ts';
 import {
   baselineKategoriOptions,
   baselineSubkategoriOptions,
@@ -39,17 +40,22 @@ function asProject(nodes: readonly VocabularyOption[]): ProjectClassificationNod
 
 // The AHSP picker owns this already-proven vocabulary merge. RAB reuses it;
 // synthetic option ids are ONLY display choices, never persisted as node IDs.
+/** Scope only suggested construction baselines; preserve canonical workspace nodes. */
 export function projectKategoriOptions(
   stored: readonly ProjectClassificationNode[],
   rootId: string,
+  rootName: string,
 ): ProjectClassificationNode[] {
+  if (!JENIS_PENGADAAN_WITH_BIDANG.includes(rootName)) return [...stored];
   return asProject(baselineKategoriOptions(asVocabulary(stored), rootId));
 }
 
 export function projectSubkategoriOptions(
   stored: readonly ProjectClassificationNode[],
   kategori: ProjectClassificationNode,
+  rootName: string,
 ): ProjectClassificationNode[] {
+  if (!JENIS_PENGADAAN_WITH_BIDANG.includes(rootName)) return [...stored];
   return asProject(baselineSubkategoriOptions({
     kategoriName: kategori.name,
     kategoriOptionId: kategori.id,

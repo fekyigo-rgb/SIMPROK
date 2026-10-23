@@ -8,7 +8,7 @@
  * that single file. Do not edit option lists here.
  */
 
-import vocabulary from '../../shared/jenis-pengadaan.vocabulary.json';
+import vocabulary from '../../shared/jenis-pengadaan.vocabulary.json' with { type: 'json' };
 
 export const JENIS_PENGADAAN_OPTIONS: readonly string[] =
   vocabulary.jenisPengadaanOptions;
