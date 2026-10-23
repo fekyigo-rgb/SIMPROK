@@ -2009,6 +2009,9 @@ export const rowSectionDisplay = (row: BasicPriceImportRowSummary): string => {
   }
   if (row.section !== null) {
     const label = rowSectionLabel(row.section);
+    if (row.machineProposal?.categoryReusedFromPriorReview === true) {
+      return 'Kategori dikenali dari konfirmasi sebelumnya: ' + label;
+    }
     /**
      * BP-VISUAL-TRUTH-07 §12 — A WEAK HINT MUST NOT BE DRESSED AS A FACT.
      *
@@ -2358,6 +2361,10 @@ export const rowNoteLines = (row: BasicPriceImportRowSummary): RowNoteLines => {
       const machineEstablished =
         row.machineProposal?.identityPairProven === true &&
         row.machineProposal.resource.admissibleForResolve;
+      // Read-only historical category proof is not a fresh actor decision.
+      // The separate review panel already displays its provenance and never
+      // presents a forged confirmation on the current row.
+      if (row.machineProposal?.categoryReusedFromPriorReview === true) continue;
       const reviewerConfirmed = row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER');
       const humanEstablished =
         row.effectiveResourceType !== null &&

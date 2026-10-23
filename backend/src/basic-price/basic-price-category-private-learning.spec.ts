@@ -60,9 +60,20 @@ describe('BP category memory: exact source + append-only human confirmation only
     expect(prove({ ...source, resourceType: null })).toBe(false);
   });
 
-  it('refuses specifications on old or current source', () => {
-    expect(prove({ ...source, hasAuditedSpecifications: true })).toBe(false);
-    expect(prove(source, [{ ...prior, hasAuditedSourceSpecifications: true }])).toBe(false);
+  it('recalls the independently audited category of a size-specific resource', () => {
+    // Exact historical Paku 5-7 cm: the SAME file/row/category was confirmed,
+    // even though a separate size specification was also audited. This does
+    // NOT prove an arbitrary catalog identity or allow reuse of generic nails.
+    const nails = { ...source, rawName: 'Paku 5-7 cm', rawCode: 'M18', sourceRowNumber: 27, hasAuditedSpecifications: false };
+    const priorNails = {
+      ...prior, rawName: nails.rawName, rawCode: nails.rawCode,
+      sourceRowNumber: nails.sourceRowNumber,
+      resourceCatalogId: 'distinct-specialized-nails', hasAuditedSourceSpecifications: true,
+    };
+    expect(prove(nails, [priorNails])).toBe(true);
+    expect(prove({ ...nails, hasAuditedSpecifications: true }, [priorNails])).toBe(true);
+    expect(prove({ ...nails, resourceType: ResourceType.LABOR }, [priorNails])).toBe(false);
+    expect(prove(nails, [{ ...priorNails, priorCategoryHistoryConflicted: true }])).toBe(false);
   });
 
   it('refuses contradictory historical category and catalog answers', () => {

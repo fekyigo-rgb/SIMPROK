@@ -1678,7 +1678,7 @@ export function BasicPriceReviewPage() {
                     <h3>Pilih Penyelesaian</h3>
                     {/* Reuse the sole canonical category editor in the decision panel. */}
                     {mutable &&
-                     (row.section === null || categoryEditRows.has(row.id) || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'))) &&
+                     (row.section === null || categoryEditRows.has(row.id) || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') && row.machineProposal?.categoryReusedFromPriorReview !== true)) &&
                      (row.section === null || row.sectionProvenance === 'UPLOADER_DECLARED') &&
                      !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
                       <div id={`bp-category-editor-${row.id}`} className="bp-note bp-note--info" aria-label={`Tentukan jenis baris ${row.sourceRowNumber}`}>
@@ -1707,7 +1707,7 @@ export function BasicPriceReviewPage() {
                       </div>
                     ) : null}
                     {mutable && !proven &&
-                      (row.section === null || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'))) &&
+                      (row.section === null || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') && row.machineProposal?.categoryReusedFromPriorReview !== true)) &&
                       !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
                         <p className="bp-field__help" role="status">
                           Langkah berikutnya ada di atas: tekan <strong>Konfirmasi Jenis</strong>. Pilihan Bahan yang sama dengan Excel tetap dihitung sebagai keputusan Anda dan tercatat.
@@ -1746,13 +1746,19 @@ export function BasicPriceReviewPage() {
                                 <p>Item privat tidak memerlukan persetujuan katalog resmi SIMPROK.</p>
                                 {!(row.sectionProvenance === 'SOURCE_ROW_CATEGORY' ||
                                     row.sectionProvenance === 'SOURCE_SECTION_TITLE' ||
-                                    row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER')) ? (
+                                    row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') ||
+                                    row.machineProposal?.categoryReusedFromPriorReview === true) ? (
                                   <p role="status">Konfirmasi Jenis pada panel penyelesaian ini sebelum memutuskan padanan atau item baru.</p>
                                 ) : null}
                               </details>
                             ) : null}
                           </div>
                         ) : null}
+                    {row.machineProposal?.categoryReusedFromPriorReview === true && !proven ? (
+                      <p className="bp-field__help" role="status">
+                        Kategori dari keputusan terdahulu sudah dikenali. Tidak perlu Konfirmasi Jenis ulang. Identitas, ukuran, dan spesifikasi tetap diperiksa sebelum harga disimpan.
+                      </p>
+                    ) : null}
                     {identityReviewStatuses?.[row.id] && identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' ? (
                       <details className="bp-details" aria-label={`Riwayat identitas baris ${row.sourceRowNumber}`}>
                         <summary>Riwayat keputusan identitas</summary>

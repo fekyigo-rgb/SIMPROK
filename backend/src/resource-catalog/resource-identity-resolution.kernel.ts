@@ -1120,9 +1120,10 @@ export function categoryProvenByExactPriorReview(
   },
   reviewedMappings: ReadonlyArray<ReviewedMappingEvidence>,
 ): boolean {
+  // Audited CATEGORY truth is distinct from grade/size/identity truth.
+  // An item having verified specifications does not erase its known family.
   if (!question.resourceType || !question.sourceSha256 ||
-      question.sourceRowNumber === undefined ||
-      question.hasAuditedSpecifications !== false) return false;
+      question.sourceRowNumber === undefined) return false;
   const history = reviewedMappings.filter(item =>
     item.sourceSha256 === question.sourceSha256 &&
     item.sourceRowNumber === question.sourceRowNumber &&
@@ -1137,7 +1138,7 @@ export function categoryProvenByExactPriorReview(
       item.resourceType === question.resourceType &&
       item.priorCategoryConfirmed === true &&
       item.priorCategoryHistoryConflicted === false &&
-      item.hasAuditedSourceSpecifications === false &&
+      // Prior specification remains identity evidence, not category refusal.
       Boolean(item.reviewerAccountId) &&
       (item.originatingRowStatus === 'READY_FOR_SUBMISSION' ||
         item.originatingRowStatus === 'SUBMISSION_CREATED' ||

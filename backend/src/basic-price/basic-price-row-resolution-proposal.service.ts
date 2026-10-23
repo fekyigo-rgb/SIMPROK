@@ -778,9 +778,9 @@ export class BasicPriceRowResolutionProposalService {
       });
       // The old human audit informs the machine, but never pretends a new
       // reviewer confirmed the receiving row in this read-only request.
-      if (previousCategoryProven &&
-          remembered?.authority === 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED' &&
-          proposed.identityPairProven) {
+      if (previousCategoryProven) {
+        // Category may be proven even if identity stays under human review.
+        // Never turn this flag into resourceCatalogId or a forged row decision.
         proposed.categoryReusedFromPriorReview = true;
       }
       proposals.set(row.id, proposed);
