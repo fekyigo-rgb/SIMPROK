@@ -46,6 +46,7 @@ import {
   OPTIONAL_ENRICHMENT_EMPTY,
   rowIdentityAdmissionOffered,
   privateMappingReuseNotice,
+  basicPriceReviewCompass,
   rowSafeNewAdmissionEligible,
   rowIdentityRefusalChoices,
   rowIdentityAdmissionBlockReason,
@@ -1369,6 +1370,7 @@ export function BasicPriceReviewPage() {
           const draft = draftFor(row.id);
           const mutable = isRowMutable(row);
           const proven = row.machineProposal?.identityPairProven === true;
+          const reviewCompass = basicPriceReviewCompass(row);
           const expanded = expandedRows.has(row.id);
           const resourceProven = machinePickedResource(row) !== null;
           const unitProven = machinePickedUnit(row) !== null;
@@ -1757,6 +1759,11 @@ export function BasicPriceReviewPage() {
                     {row.machineProposal?.categoryReusedFromPriorReview === true && !proven ? (
                       <p className="bp-field__help" role="status">
                         Kategori dari keputusan terdahulu sudah dikenali. Tidak perlu Konfirmasi Jenis ulang. Identitas, ukuran, dan spesifikasi tetap diperiksa sebelum harga disimpan.
+                      </p>
+                    ) : null}
+                    {mutable && reviewCompass ? (
+                      <p className="bp-field__help" role="status" aria-label="Panduan langkah berikutnya">
+                        {reviewCompass}
                       </p>
                     ) : null}
                     {identityReviewStatuses?.[row.id] && identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' ? (

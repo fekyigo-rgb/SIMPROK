@@ -1075,6 +1075,47 @@ export function privateMappingReuseNotice(
     : null;
 }
 
+/**
+ * A clear NEXT ACTION from facts the canonical engine ALREADY supplied.
+ * Presentation ONLY. Never ranks candidates as canonical matches, guesses
+ * missing specifications, changes resource IDs, or records a human decision.
+ * Prior-human metadata means a candidate was chosen SOMETIME in this
+ * workspace, not that it was approved for this source or this specification.
+ */
+export function basicPriceReviewCompass(
+  row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
+): string | null {
+  if (row.status !== 'NEEDS_REVIEW' || !row.machineProposal ||
+      row.machineProposal.identityPairProven) return null;
+  const facts = row.machineProposal;
+  const candidates = facts.resource.candidates;
+  if (facts.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')) {
+    return 'Langkah berikutnya: periksa spesifikasi yang tertulis di Excel. Kategori yang dikenali belum membuktikan bahwa dua item identik.';
+  }
+  if (candidates.length === 1 && candidates[0].specificationUnproved) {
+    const candidate = candidates[0];
+    const missing = candidate.unprovedSpecificationFacts;
+    const description = missing.length > 0
+      ? 'Spesifikasi yang belum terbukti: ' + missing.join(', ') + '. '
+      : 'Spesifikasi kandidat belum seluruhnya terbukti. ';
+    return 'SIMPROK menemukan kandidat ' + candidate.name + ', tetapi belum menetapkan identitas. ' +
+      description + 'Langkah berikutnya: bandingkan spesifikasi sumber dan katalog; hanya pilih jika benar-benar sama.';
+  }
+  if (candidates.length > 1) {
+    const previouslyChosen = candidates.filter((item) => item.hasPriorHumanDecision);
+    const priorNotice = previouslyChosen.length > 0
+      ? ' ' + previouslyChosen.length + ' kandidat memiliki riwayat pilihan manusia, bukan bukti otomatis untuk item ini.'
+      : '';
+    return 'SIMPROK menemukan ' + candidates.length + ' kandidat yang belum terbukti identik.' +
+      priorNotice +
+      ' Langkah berikutnya: bandingkan jenis, satuan, merek, ukuran, atau mutu; pilih hanya kandidat yang sesuai.';
+  }
+  if (candidates.length === 1) {
+    return 'SIMPROK telah menemukan satu kandidat tetapi buktinya belum cukup. Langkah berikutnya: periksa informasi kandidat sebelum memilih atau menolaknya.';
+  }
+  return 'Belum ada identitas yang terbukti. Langkah berikutnya: periksa nama, kategori, satuan, serta spesifikasi sumber. Jangan membuat item baru sebelum memastikan tidak ada padanan yang sama.';
+}
+
 export function rowIdentityAdmissionOffered(
   row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
 ): boolean {
